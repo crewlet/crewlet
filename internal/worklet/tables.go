@@ -51,7 +51,7 @@ var ReproducibleTables = []string{
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",
 	"tracker_tags", "tracker_views",
 	"tracker_persons", "tracker_rank_orders", "tracker_log_generations",
-	"tracker_evictions", "tracker_files",
+	"tracker_evictions", "tracker_files", "tracker_rosters",
 
 	// The exploded child tables. Each one exists because a FILTER or a
 	// FIGURE reads it: a collection inside a document cannot be indexed,
@@ -62,6 +62,8 @@ var ReproducibleTables = []string{
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",
 	"tracker_relations", "tracker_task_deps", "tracker_task_dependents",
 	"tracker_references", "tracker_checklist_items",
+	// The roster's places, which `sort=assignee` joins on the seat's key.
+	"tracker_seat_places",
 
 	// The history tables.
 	"tracker_history", "tracker_turns",

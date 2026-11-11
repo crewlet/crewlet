@@ -39,11 +39,15 @@ import (
 // turn worked for whoever this turn works for ([types.WorkingFor], composed
 // from this call's own ceiling by [workingForOf]), and the answer back wakes
 // the seat in a turn worked for them too, so a chain of asks never widens.
-// The ceiling's current edge is a WRITE that wakes another seat (an item filed
-// or assigned, a work-item comment, a page or a mention in it, a Chatlet
-// message): the turn it wakes works for the writing seat, which crewlet#798's
-// fourth piece carries the requester through. Until then the docs say where
-// the bound ends (docs/concepts/gitlet.md, "Reads made for somebody else").
+// So does a WRITE that wakes another seat on the engine's own surfaces (an
+// item filed or assigned, a work-item comment, a page or a comment on one, a
+// Chatlet message): every actor a seat's turn builds states whom it writes
+// for ([writtenForTurn], from the same binding), the store refuses an agent's
+// write that states nothing (types.WrittenFor), and the record carries it to
+// the turn its wake starts. The ceiling's edges are what carries no
+// requester: a vendor's surface, whose wake comes back by webhook, and
+// Gitlet's records until crewlet#798's piece 4c; the docs say where the bound
+// ends (docs/concepts/gitlet.md, "Reads made for somebody else").
 
 // Requesters composes the principal a seat's turn is acting for.
 type Requesters interface {
@@ -261,7 +265,8 @@ func workingForCeiling(ctx context.Context, w types.WorkingFor, seat string, r R
 }
 
 // workingForOf is who a turn's work handed on to a colleague works for
-// ([types.WorkingFor]), from the turn's own ceiling, which the caller reads
+// ([types.WorkingFor]), on an ask and on every write the turn makes
+// ([writtenForTurn]), from the turn's own ceiling, which the caller reads
 // from the call's binding ([ceilingOf]): nil for a turn that works for its own
 // seat; the requester's seat for a person or a colleague seat; the credential
 // with the apps the ceiling holds it to, already narrowed by this node; a

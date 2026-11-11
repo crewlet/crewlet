@@ -262,8 +262,8 @@ func (accessVendor) Reach(c *config.Company, _ *org.Organization, _ seataccess.L
 	return seataccess.Reach{Scope: channels, Open: len(channels) == 0}
 }
 
-// Options is Mattermost's four accesses and the company's channels.
-func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+// FixedLevels is Mattermost's four accesses, in its order ([seataccess.FixedLevels]).
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	levels := make([]seataccess.Level, 0, len(roleOptions))
 	for _, option := range roleOptions {
 		levels = append(levels, seataccess.Level{
@@ -271,9 +271,14 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 			Administers: option.Administration,
 		})
 	}
+	return levels
+}
+
+// Options is Mattermost's four accesses and the company's channels.
+func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	scope := s.companyChannels()
 	return seataccess.Options{
-		Lane: lane, Levels: levels, Scope: scope, ScopeOpen: len(scope) == 0,
+		Lane: lane, Levels: accessVendor{}.FixedLevels(lane), Scope: scope, ScopeOpen: len(scope) == 0,
 	}, nil
 }
 

@@ -49,6 +49,24 @@ func TestAnEdgeDeltaIsAboutMembershipRatherThanOrder(t *testing.T) {
 	}
 }
 
+// A WAIT'S REASON IS A DELTA OF ITS OWN: restating a wait on the same date with
+// another reason moves no date, and a row recording only the date recorded
+// nothing at all, so the write read as no change of the item.
+//
+// Mutation: drop `wait_reason` from TaskDeltas, and the restated reason
+// records nil.
+func TestARestatedWaitReasonIsRecorded(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2031, 4, 20, 0, 0, 0, 0, time.UTC)
+	before := Task{StartAt: &start, WaitReason: "until the vendor's window"}
+	after := Task{StartAt: &start, WaitReason: "until the release is cut"}
+	got := TaskDeltas(before, after, nil)
+	if want := (Delta{From: before.WaitReason, To: after.WaitReason}); len(got) != 1 ||
+		!sameDelta(got["wait_reason"], want) {
+		t.Errorf("a reason restated on the same date recorded %+v, want only %+v", got, want)
+	}
+}
+
 // EVERY RELATION KIND IS ITS OWN FIELD, derived from [RelationKinds].
 //
 // The kinds are unrelated facts — `waiting_on` is work somebody has to clear

@@ -27,7 +27,7 @@ func catalogue() []events.Payload {
 		// config.go
 		ConfigRevisionActivated{}, ConfigRevisionApplied{},
 		// task.go
-		TaskAssigned{}, WorkPickup{},
+		TaskAssigned{}, WorkPickup{}, DelegatedReview{},
 		// schedule.go
 		ScheduledTaskFired{},
 		ScheduledFireSuperseded{},
@@ -209,6 +209,7 @@ var wireTypes = []string{
 	"turn_trigger_skipped",
 	"wake_held",
 	"work_pickup",
+	"delegated_review",
 }
 
 func TestRegistryMatchesWireTypes(t *testing.T) {
@@ -371,7 +372,8 @@ var wireTags = map[string][]string{
 		"dry_run", "failed", "key", "mcp_server", "operator_id", "outcome", "refusal", "seat", "tool", "variable"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
-	"work_pickup":                   {"agent_id", "item", "key", "moved", "progressed", "ready", "ready_capped", "role", "status", "why", "working_for"},
+	"work_pickup":                   {"agent_id", "item", "key", "moved", "progressed", "quiet", "ready", "ready_capped", "role", "status", "submitted_by", "waits_on", "why", "working_for"},
+	"delegated_review":              {"agent_handle", "agent_id", "at", "held_launch", "held_turn", "kind", "panel", "request", "requester", "rule"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
 	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
@@ -398,7 +400,7 @@ var wireTags = map[string][]string{
 	"seat_provider_released":        {"agent_handle", "agent_id", "reason", "role"},
 	"agent_turn_started":            {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_turn_completed":          {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_file", "error_function", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
-	"turn_completed":                {"acted", "agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
+	"turn_completed":                {"acted", "agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "pickup_answer", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_phase_started":           {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
 	"agent_phase_completed":         {"agent_id", "cache_read_tokens", "cache_write_tokens", "calls_elided", "harness", "conversation_key", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "elided_calls", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
 	"agent_turn_progress":           {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "invocations", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "run_started_at", "running_calls", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
@@ -417,7 +419,7 @@ var wireTags = map[string][]string{
 	"code_mirror_pushed":            {"as", "deleted", "deleted_count", "repo_id", "repo_name", "updated", "updated_count", "url", "waiting", "waiting_count"},
 	"code_imported":                 {"bytes", "chunks", "default_branch", "error", "mirrored", "position", "refs", "repo_id", "repo_name", "url"},
 	"code_expunged":                 {"dropped_bytes", "dropped_objects", "expunge", "position", "repo_id", "repo_name", "request", "store_until"},
-	"prefetch_summary":              {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
+	"prefetch_summary":              {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "open_asks_bytes", "open_asks_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
 	"counterparty_profile_updated":  {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
 	"skill_synthesized":             {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id", "work_key"},
 	"skill_refined":                 {"agent_handle", "agent_id", "refinement_kind", "role", "skill_id", "skill_name", "skill_version", "turn_id", "work_key"},
@@ -441,8 +443,8 @@ var wireTags = map[string][]string{
 	"agent_capability_told":         {"agent_handle", "baseline", "changes", "digest", "lines", "revision_from", "revision_to", "told_at"},
 	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
-	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "launch_id", "operator_id", "turn_id"},
-	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
+	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "launch_id", "operator_id", "turn_id"},
+	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "delegated_rule", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                   {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
 	"turn.guard_breach":             {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},

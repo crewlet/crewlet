@@ -807,15 +807,16 @@ func (l *EventLog) TurnShares(ctx context.Context, q TurnQuery) (TurnShares, err
 	}
 	at := q.at()
 	err := l.db.Read(ctx, func(tx *sql.Tx) error {
-		partials, err := turnPartials(ctx, tx, q, readShare, len(q.IDs))
+		partials, err := turnPartials(ctx, tx, q, readShare, len(q.IDs), time.Time{})
 		if err != nil {
 			return err
 		}
-		listed, err := turnPartials(ctx, tx, q, readListed, len(q.IDs))
+		listed, err := turnPartials(ctx, tx, q, readListed, len(q.IDs), time.Time{})
 		if err != nil {
 			return err
 		}
-		where, args := q.turnWhere(at.Add(-EventHistory), readShare)
+		history := at.Add(-EventHistory)
+		where, args := q.turnWhere(history, history, readShare)
 		named, err := readUnsettled(ctx, tx, where, args)
 		if err != nil {
 			return fmt.Errorf("store: list turns: %w", err)
@@ -905,12 +906,87 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 		// turns and is asking for all of them.
 		read, limit, probe = readShare, len(q.IDs), len(q.IDs)
 	}
-	out, err := turnPartials(ctx, l.db.sql, q, read, probe)
+	var out []TurnPartial
+	if read == readPage {
+		out, err = l.pageOfTurns(ctx, q, probe)
+	} else {
+		out, err = turnPartials(ctx, l.db.sql, q, read, probe, time.Time{})
+	}
 	if err != nil {
 		return nil, false, err
 	}
 	out, more = pastPage(out, limit)
 	return out, more, nil
+}
+
+// pageOfTurns reads a page of `probe` turns, newest start first, from the
+// newest edge of the window back, one span at a time ([spansBack]), so the read
+// costs the rows of the turns on the page rather than every row of the window.
+// Folded over the whole window, a seat's newest three turns cost each of its
+// rows of the last week, payloads included: seconds on a store of a few GiB.
+//
+// EXACT, not an estimate: a span's statement lists the turns whose rows the
+// page reads all lie inside it ([TurnQuery.partialsSQL]), so a span that fills
+// the page holds its newest turns, and every turn outside it started earlier.
+// A page ranked by its tokens, or selected by a term that reads the turn's rows
+// across the whole window ([TurnQuery.readsBack]), is read over the window.
+func (l *EventLog) pageOfTurns(ctx context.Context, q TurnQuery, probe int) ([]TurnPartial, error) {
+	// ONE INSTANT for every span, so they are cuts of one window.
+	q.At = q.at()
+	if !q.readsBack() {
+		return turnPartials(ctx, l.db.sql, q, readPage, probe, time.Time{})
+	}
+	floor, until := q.Window(q.At)
+	top := q.At
+	if !until.IsZero() && until.Before(top) {
+		top = until
+	}
+	if q.Before != nil && q.Before.Start.Before(top) {
+		top = q.Before.Start
+	}
+	var out []TurnPartial
+	err := spansBack(top, floor, func(from time.Time) (bool, error) {
+		var err error
+		out, err = turnPartials(ctx, l.db.sql, q, readPage, probe, from)
+		return len(out) >= probe, err
+	})
+	return out, err
+}
+
+// firstTurnSpan is how far back from its top edge a page of turns reads first.
+//
+// AN HOUR: a seat at work starts several turns an hour, so the boot seed's
+// three and most of a first page are inside it. A span the page does not fill
+// is doubled, so a quiet seat costs at most ten more reads at the thirty-day
+// ceiling, each over its own span's rows, and the whole at most twice the
+// window, which is the doubling's bound.
+const firstTurnSpan = time.Hour
+
+// spansBack calls read with the start of a span reaching back from top, the
+// span doubled after each read that did not fill the page, until one does or
+// the span reaches floor, where read is called with floor itself: the whole
+// window, as a page read without spans would read it.
+func spansBack(top, floor time.Time, read func(from time.Time) (full bool, err error)) error {
+	for span := firstTurnSpan; ; span *= 2 {
+		from := top.Add(-span)
+		if !from.After(floor) {
+			_, err := read(floor)
+			return err
+		}
+		if full, err := read(from); err != nil || full {
+			return err
+		}
+	}
+}
+
+// readsBack reports whether a page can be read span by span from its newest
+// edge ([EventLog.pageOfTurns]). Not a page ranked by its tokens, which is a
+// ranking of the whole window, and not one selected by a model, an origin, an
+// MCP server or a work item: those are subqueries over the whole window, which
+// every span would read again.
+func (q TurnQuery) readsBack() bool {
+	return q.Sort != TurnSortTokens &&
+		q.Model == "" && q.Origin == "" && q.Server == "" && q.WorkItem == ""
 }
 
 // ListedTurns answers which of [TurnQuery.IDs] this log's PAGE selects: its
@@ -934,7 +1010,7 @@ func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, erro
 	if !q.Sort.Valid() {
 		return nil, fmt.Errorf("%w: sort %q is not one of %s", ErrTurnSort, q.Sort, words.Or(TurnSorts))
 	}
-	listed, err := turnPartials(ctx, l.db.sql, q, readListed, len(q.IDs))
+	listed, err := turnPartials(ctx, l.db.sql, q, readListed, len(q.IDs), time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -945,9 +1021,12 @@ func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, erro
 }
 
 // turnPartials runs one of the turn reads on one connection and folds what it
-// answers.
-func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, probe int) ([]TurnPartial, error) {
-	query, args := q.partialsSQL(q.at(), read, probe)
+// answers: a page's from the start of a span (`from`, zero for the whole window;
+// see [TurnQuery.partialsSQL]).
+func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, probe int,
+	from time.Time) ([]TurnPartial, error) {
+
+	query, args := q.partialsSQL(q.at(), read, probe, from)
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list turns: %w", err)
@@ -1038,7 +1117,12 @@ const turnColumns = `turn_id, work_key, agent_id, agent_role, event_time, event_
 // [EventLog]. Grouped over the table itself, the turn list narrowed to a unit
 // of work — the turn page's attempts, on every node — intersected
 // schema/0029's index with every row id of the thirty-day floor's range.
-func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, []any) {
+//
+// A PAGE READ FROM A SPAN reads the rows from `from` rather than from the
+// window's floor, and lists only the turns whose folded rows all lie in the span
+// ([EventLog.pageOfTurns]); a zero `from`, or one at or below the floor, is the
+// whole window.
+func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int, from time.Time) (string, []any) {
 	shares := read == readShare
 	// A SHARE IS NOT A WINDOW: the turns were selected where they were
 	// listed, and applying the window again here would drop the half of a
@@ -1049,10 +1133,26 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 	if shares {
 		floor, until = history, time.Time{}
 	}
+	spanned := read == readPage && from.After(floor)
+	if !spanned {
+		from = floor
+	}
 
-	where, args := q.turnWhere(floor, read)
+	where, args := q.turnWhere(from, floor, read)
 
 	having := []string{}
+	if spanned {
+		// A TURN WHOSE FOLDED ROWS BEGIN BEFORE THE SPAN is left to a wider
+		// one, or its group here would hold only its later rows. Asked of
+		// the rows the fold reads ([TurnQuery.rowWhere]), on schema/0018's
+		// (turn_id, event_time) index, beside the floor's own probe below.
+		rows, rowArgs := q.rowWhere("older")
+		having = append(having, `NOT EXISTS (SELECT 1 FROM crewlet_events AS older
+		        WHERE older.turn_id = turn_rows.turn_id
+		          AND older.event_time < ? AND older.event_time >= ?`+
+			strings.Join(append([]string{""}, rows...), " AND ")+`)`)
+		args = append(append(args, EncodeTime(from), EncodeTime(floor)), rowArgs...)
+	}
 	if !shares {
 		// A TURN IS IN THE WINDOW WHEN IT STARTED THERE, and the row floor
 		// alone cannot say so: a turn that began a minute before the floor
@@ -1178,28 +1278,22 @@ var ErrTurnSort = errors.New("store: unknown turn sort")
 // back for the terms that run (see TestEveryTurnFilterSeeksItsIndex). Named
 // turns are read for a share and for which of them a page selects; the
 // turn-level narrowing applies to a page and to the second, never to a share.
-func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
+//
+// The rows are read from `from`, the window's floor or the start of a page's
+// span ([EventLog.pageOfTurns]); a turn-level term selects over the whole
+// window, from `floor`.
+func (q TurnQuery) turnWhere(from, floor time.Time, read turnRead) ([]string, []any) {
 	shares := read == readShare
 	where := []string{"turn_id != ''", "event_time >= ?"}
-	args := []any{EncodeTime(floor)}
+	args := []any{EncodeTime(from)}
 	if read != readPage {
 		where = append(where, "turn_id IN (?"+strings.Repeat(",?", len(q.IDs)-1)+")")
 		for _, id := range q.IDs {
 			args = append(args, id)
 		}
 	}
-	// ONLY AN ID THE CALLER HOLDS — binding an empty one matches every row
-	// that carries none, which is every non-agent event in the window.
-	if q.AgentID != "" {
-		where = append(where, "agent_id = ?")
-		args = append(args, q.AgentID)
-	}
-	if q.WorkKey != "" {
-		// WITH THE PARTIAL INDEX'S OWN PREDICATE, which is what lets the
-		// planner use schema/0029's index — see [ListQuery.predicate].
-		where = append(where, "work_key = ?", "work_key <> ''")
-		args = append(args, q.WorkKey)
-	}
+	rows, rowArgs := q.rowWhere("")
+	where, args = append(where, rows...), append(args, rowArgs...)
 	if q.Model != "" && !shares {
 		// ON THE TURN, not on the row: a turn is selected when ANY of
 		// its phases or its in-turn auxiliary calls used the model, which
@@ -1249,6 +1343,31 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 			"turn_id IN (SELECT turn_id FROM crewlet_events "+
 				"WHERE work_item = ? AND work_item <> '' AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.WorkItem, EncodeTime(floor))
+	}
+	return where, args
+}
+
+// rowWhere is the terms that narrow which of a turn's rows are folded, the seat
+// and the unit of work, on columns qualified by `alias` (empty for none): the
+// derived table's and the span probe's ([TurnQuery.partialsSQL]), one list so
+// the probe asks of a turn's earlier rows exactly what the fold reads.
+func (q TurnQuery) rowWhere(alias string) ([]string, []any) {
+	if alias != "" {
+		alias += "."
+	}
+	var where []string
+	var args []any
+	// ONLY AN ID THE CALLER HOLDS: binding an empty one matches every row
+	// that carries none, which is every non-agent event in the window.
+	if q.AgentID != "" {
+		where = append(where, alias+"agent_id = ?")
+		args = append(args, q.AgentID)
+	}
+	if q.WorkKey != "" {
+		// WITH THE PARTIAL INDEX'S OWN PREDICATE, which is what lets the
+		// planner use schema/0029's index (see [ListQuery.predicate]).
+		where = append(where, alias+"work_key = ?", alias+"work_key <> ''")
+		args = append(args, q.WorkKey)
 	}
 	return where, args
 }

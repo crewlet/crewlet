@@ -111,7 +111,6 @@ type MemberMCPServerAnswer struct {
 	Nodes         []MCPStatusNode             `json:"nodes"`
 	Listed        []MCPServerListing          `json:"listed"`
 	Tools         []MemberMCPToolView         `json:"tools"`
-	ToolCount     int                         `json:"tool_count"`
 	ServerInfo    *MemberMCPServerInfo        `json:"server_info"`
 	Instances     []MemberMCPInstanceView     `json:"instances"`
 	InstanceNodes []MemberMCPInstanceNodeView `json:"instance_nodes"`
@@ -245,7 +244,7 @@ func MemberMCPStatus(a MCPStatusAnswer) MemberMCPStatusAnswer {
 // answer, copied field by field into the member's types.
 func MemberMCPServer(a MCPServerAnswer) MemberMCPServerAnswer {
 	out := MemberMCPServerAnswer{Reading: ReadingMember, Server: memberRow(a.Server), Nodes: nonNil(a.Nodes),
-		Listed: nonNil(a.Listed), Tools: make([]MemberMCPToolView, 0, len(a.Tools)), ToolCount: a.ToolCount,
+		Listed: nonNil(a.Listed), Tools: make([]MemberMCPToolView, 0, len(a.Tools)),
 		Instances:     make([]MemberMCPInstanceView, 0, len(a.Instances)),
 		InstanceNodes: make([]MemberMCPInstanceNodeView, 0, len(a.InstanceNodes)),
 		LastSuccess:   a.LastSuccess, LastFailure: memberFailure(a.LastFailure),

@@ -212,6 +212,10 @@ type ViewerAssistant struct {
 	// Model is what a [ViewerModelNotReady] reason means for this person,
 	// absent for every other reason.
 	Model *ModelNotice `json:"model,omitempty"`
+	// ReadsImages is whether a question's images are read: only deep work
+	// reads them, so false where the company has none, and the composer
+	// does not take them.
+	ReadsImages bool `json:"reads_images,omitempty"`
 }
 
 // ModelNotice is the model problem a person is told before they ask: the

@@ -38,7 +38,7 @@ vi.mock("~/lib/store-hooks.ts", async () => {
   return {
     ...actual,
     useClient: () => ({ socket: { query: vi.fn() } }),
-    useOrg: () => ({ name: "FairSplit", seats: [], units: [] }),
+    useOrg: () => ({ name: "Acme", seats: [], units: [] }),
   };
 });
 vi.mock("~/lib/viewer.ts", async () => {
@@ -238,7 +238,7 @@ describe("the Folders section", () => {
     mount(<ArtifactFolders />, "#/artifacts/folders");
     fireEvent.click(screen.getByRole("button", { name: "New folder" }));
     const dialog = screen.getByRole("dialog", { name: "New folder" });
-    expect(within(dialog).getByRole("radio", { name: /Everyone at FairSplit/ })).toHaveProperty(
+    expect(within(dialog).getByRole("radio", { name: /Everyone at Acme/ })).toHaveProperty(
       "checked",
       true,
     );
@@ -612,7 +612,7 @@ describe("Move to…", () => {
     const widen = await screen.findByRole("dialog", { name: "Let more people see “Board”?" });
     // Every step keeps the one shape, so the dialog does not change size between them.
     expect(widen.closest(".crewlet-modal-overlay--phone-sheet")).not.toBeNull();
-    expect(widen.textContent).toContain("Everyone at FairSplit");
+    expect(widen.textContent).toContain("Everyone at Acme");
     fireEvent.click(within(widen).getByRole("button", { name: "Move it" }));
     await waitFor(() => expect(onMoved).toHaveBeenCalled());
     expect(sent.map((r) => r.body)).toEqual([

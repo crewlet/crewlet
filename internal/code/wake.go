@@ -257,14 +257,18 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 // made as a seat — an agent's, or a person's through the token bound to them —
 // and a token bound to nobody asks nothing of this domain (LifecycleRequest's
 // Actor), so a writer here is never one a turn is worked for by its apps.
+//
+// AND NOBODY AN AGENT WROTE FOR, yet: a change's routing carries no carrier,
+// so the turn a seat's code record wakes works for that seat (ADR-0109's edge
+// until crewlet#798's piece 4c carries one on code's records).
 func writerOf(r *ChangeRouting) *types.NotificationWriter {
 	switch {
 	case r.Actor == "":
-		return notify.FirstPartyWriter(iam.ActorSystem, "", nil)
+		return notify.FirstPartyWriter(iam.ActorSystem, "", nil, nil)
 	case r.Person(r.Actor):
-		return notify.FirstPartyWriter(iam.ActorHuman, r.Actor, nil)
+		return notify.FirstPartyWriter(iam.ActorHuman, r.Actor, nil, nil)
 	}
-	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor, nil)
+	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor, nil, nil)
 }
 
 // wakeText is what a woken seat reads of what the record says about change:

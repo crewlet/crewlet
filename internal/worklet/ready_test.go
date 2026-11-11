@@ -78,7 +78,7 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 	// THE LAST CHANGE THAT WOULD HAVE WOKEN THE SEAT: its own comment does
 	// not move it, and a person's does.
 	before := got.Items[3].Moved
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	comment := func(w *worklet.Writer, op, author string, kind worklet.AuthorKind) {
 		t.Helper()
 		c := worklet.Comment{ID: op, Task: "low", Author: author, AuthorKind: kind,
@@ -110,8 +110,8 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 
 // READY WORK LEAVES OUT WHAT CANNOT START NOW: work waiting on an open
 // blocker, work whose start date is ahead, work held on a question the seat
-// asked and nobody answered, work in review the seat submitted itself, and work
-// in the trash or done.
+// asked and nobody answered (a review it submitted and asked a person to make
+// among them), and work in the trash or done.
 func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -121,8 +121,8 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	submitted := newTask("review")
 	submitted.Assignee, submitted.Status = "ana", worklet.StatusInReview
 	submitted.StatusGroup = worklet.StatusInReview.Group()
-	if _, err := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}).CreateTask(t.Context(),
-		"op-review", submitted, nil); err != nil {
+	if _, err := r.writer.As("ana", worklet.AuthorAgent, aTurnNobodyWoke()).
+		CreateTask(t.Context(), "op-review", submitted, nil); err != nil {
 		t.Fatalf("CreateTask review: %v", err)
 	}
 	r.drain()
@@ -142,13 +142,17 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 		t.Fatalf("Depend: %v", err)
 	}
 	r.drain()
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
-	ask := worklet.Comment{ID: "q-1", Task: "asked", Author: "ana",
-		AuthorKind: worklet.AuthorAgent, Body: "which environment?", Ask: "pm",
-		CreatedAt: wednesday}
-	if _, err := ana.UpdateTask(t.Context(), "op-ask", "asked", "ENG", worklet.NoIfMatch,
-		worklet.TaskPatch{Comment: &ask}, worklet.ChangeComment, nil); err != nil {
-		t.Fatalf("ask: %v", err)
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
+	for _, q := range []worklet.Comment{
+		{ID: "q-1", Task: "asked", Author: "ana", AuthorKind: worklet.AuthorAgent,
+			Body: "which environment?", Ask: "pm", CreatedAt: wednesday},
+		{ID: "q-2", Task: "review", Author: "ana", AuthorKind: worklet.AuthorAgent,
+			Body: "approve the release notes?", Ask: "jo", CreatedAt: wednesday},
+	} {
+		if _, err := ana.UpdateTask(t.Context(), "op-"+q.ID, q.Task, "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Comment: &q}, worklet.ChangeComment, nil); err != nil {
+			t.Fatalf("ask on %s: %v", q.Task, err)
+		}
 	}
 	r.drain()
 
@@ -170,17 +174,21 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 
 // READY WORK SAYS WHOM EACH ITEM'S WORK IS FOR (ADR-0109): the writer of its
 // last assignment by somebody else, else the writer that filed it, a
-// credential with the apps it wrote under; nobody for the seat's own work.
+// credential with the apps it wrote under; nobody for the seat's own work. A
+// token's reassertion to the seat that already holds its item moves nothing,
+// so its row keeps no apps and the pickup reads the move before it, which did.
 //
 // Mutation: read the reporter column, and the item a token filed already
-// assigned is for a seat named `token:ci` that no directory holds.
+// assigned is for a seat named `token:ci` that no directory holds; read the
+// assignment by its kind, and the token's reassertion makes it a credential
+// holding no app.
 func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
 	token := r.writer.As("token:ci", worklet.AuthorOperator,
 		worklet.Provenance{Apps: []iam.Grant{iam.GrantWorklet}})
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	file := func(w *worklet.Writer, id, assignee string) {
 		t.Helper()
 		task := newTask(id)
@@ -207,6 +215,17 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	}
 	file(pm, "by-token", "")
 	assign(token, "by-token")
+	// THE REASSERTION, with the wake the tool builds for one: the item as it
+	// is held on both sides, which names nobody to wake.
+	held := newTask("by-token")
+	held.Assignee = "ana"
+	again := held.Assignee
+	if _, err := token.UpdateTask(t.Context(), "op-reassert-by-token", "by-token", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Assignee: &again}, worklet.ChangeAssignee,
+		worklet.Wake{Kind: worklet.ChangeAssignee, Before: held, After: held}.Notify(nil)); err != nil {
+		t.Fatalf("token:ci reasserts by-token: %v", err)
+	}
+	r.drain()
 	file(token, "filed-by-token", "ana")
 	file(pm, "filed-by-pm", "")
 	assign(ana, "filed-by-pm")
@@ -229,6 +248,83 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	}
 }
 
+// THE PICKUP READS AN ASSIGNMENT BY ITS ASSIGNEE DELTA, WHATEVER KIND ITS
+// RECORD ENDED WITH (ADR-0112, #930). A write that hands an item over and moves
+// another field in the same call is filed under the other change's kind, and
+// the turn the pickup starts works for that write's writer, not for whoever
+// assigned the item before it. Another agent's reassertion to the seat that
+// already holds the item moves nothing, so whom the work is for stays put.
+//
+// Mutation: select the assignment by `h.kind = 'assignee'`, and each hand-off
+// reads the assigner before it while the reassertion reads the agent that made
+// it.
+func TestAPickupReadsTheAssignmentWhateverKindItsRecordEndsWith(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
+	lead := r.writer.As("lead", worklet.AuthorHuman, worklet.Provenance{})
+	ops := r.writer.As("ops", worklet.AuthorHuman, worklet.Provenance{})
+	cy := r.writer.As("cy", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
+	ana, bo := "ana", "bo"
+	started := worklet.StatusInProgress
+	write := func(w *worklet.Writer, op, id string, patch worklet.TaskPatch, kind worklet.ChangeKind) {
+		t.Helper()
+		if _, err := w.UpdateTask(t.Context(), op, id, "ENG", worklet.NoIfMatch, patch, kind,
+			nil); err != nil {
+			t.Fatalf("%s on %s: %v", op, id, err)
+		}
+		r.drain()
+	}
+	file := func(id string) {
+		t.Helper()
+		task := newTask(id)
+		task.Key = "ENG-" + id
+		if _, err := pm.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	handOffs := []struct {
+		id    string
+		patch worklet.TaskPatch
+		kind  worklet.ChangeKind
+	}{
+		{"with-status", worklet.TaskPatch{Assignee: &ana, Status: &started}, worklet.ChangeStatus},
+		{"with-tags", worklet.TaskPatch{Assignee: &ana, Tags: &[]string{"handed-over"}}, worklet.ChangeTags},
+		{"with-watchers", worklet.TaskPatch{Assignee: &ana, Watchers: &[]string{"pm"}},
+			worklet.ChangeWatchers},
+	}
+	if _, err := r.writer.WriteTags(t.Context(), "op-tags-handed-over", "ENG",
+		worklet.TagEdit{Add: []worklet.Tag{{Slug: "handed-over", Label: "Handed over"}}},
+		worklet.TagAuthority{}); err != nil {
+		t.Fatalf("declare ENG's tag: %v", err)
+	}
+	r.drain()
+	for _, h := range handOffs {
+		file(h.id)
+		write(lead, "op-lead-"+h.id, h.id, worklet.TaskPatch{Assignee: &bo}, worklet.ChangeAssignee)
+		write(ops, "op-ops-"+h.id, h.id, h.patch, h.kind)
+	}
+	file("reasserted")
+	write(ops, "op-ops-reasserted", "reasserted", worklet.TaskPatch{Assignee: &ana}, worklet.ChangeAssignee)
+	write(cy, "op-cy-reasserted", "reasserted", worklet.TaskPatch{Assignee: &ana}, worklet.ChangeAssignee)
+
+	got := map[string]string{}
+	for _, item := range r.readyWork("ana").Items {
+		got[item.ID] = "nobody"
+		if w := item.For; w != nil {
+			got[item.ID] = string(w.Kind) + " " + w.Seat + w.Login
+		}
+	}
+	byOps := string(types.WorkingForSeat) + " ops"
+	want := map[string]string{
+		"with-status": byOps, "with-tags": byOps, "with-watchers": byOps, "reasserted": byOps,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the work is for %v, want every item worked for ops, whose write handed it to ana", got)
+	}
+}
+
 // THE WAKE INSTANT IS THE CHANGE THE KEY NAMES, and the seat's progress on
 // started work is its own change other than a comment: a comment moves
 // neither, a field it sets moves the progress alone.
@@ -240,7 +336,7 @@ func TestReadyWorkTimesAndProgressFollowTheKey(t *testing.T) {
 	if first.MovedAt.IsZero() {
 		t.Fatal("an item somebody else filed has no instant for the change its key names")
 	}
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	c := worklet.Comment{ID: "c-1", Task: "started", Author: "ana", AuthorKind: worklet.AuthorAgent,
 		Body: "on it", CreatedAt: wednesday}
 	if _, err := ana.UpdateTask(t.Context(), "op-c", "started", "ENG", worklet.NoIfMatch,
@@ -297,15 +393,19 @@ func TestReadyWorkIsPaged(t *testing.T) {
 }
 
 // A REVIEW IS READY FOR THE SEAT THAT HOLDS IT WHEN SOMEBODY ELSE ASKED FOR IT:
-// it comes after started work and before work not started, and a seat never
-// reviews what it moved into review itself, whoever holds it after.
+// it comes after started work and before work not started, naming who asked.
+// A seat's own submission is ready for it only while nobody reviews it (no
+// question of its own holds it), after its reviews (ADR-0124).
+//
+// Mutation: list a self-submitted review as a review and ana reviews her own
+// work; drop the open-question hold and she is handed it while jo reviews.
 func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	fileFor(t, r, "queued", "ana", worklet.StatusTodo, worklet.PriorityUrgent)
 	fileFor(t, r, "started", "ana", worklet.StatusInProgress, worklet.PriorityLow)
 	fileFor(t, r, "asked", "ana", worklet.StatusInReview, worklet.PriorityLow)
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, aTurnNobodyWoke())
 	mine := newTask("mine")
 	mine.Assignee, mine.Status, mine.StatusGroup = "ana", worklet.StatusTodo, worklet.StatusTodo.Group()
 	if _, err := ana.CreateTask(t.Context(), "op-mine", mine, nil); err != nil {
@@ -319,19 +419,36 @@ func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
 	}
 	r.drain()
 
+	// HER OWN SUBMISSION, WITH NOBODY REVIEWING IT, comes back to her after
+	// the reviews she holds: not to review, but because nobody does.
 	got := r.readyWork("ana")
-	if ids := readyIDs(got); !slices.Equal(ids, []string{"started", "asked", "queued"}) {
-		t.Fatalf("ana's ready work = %v, want started, then the review she was asked for, then the queue", ids)
+	if ids := readyIDs(got); !slices.Equal(ids, []string{"started", "asked", "mine", "queued"}) {
+		t.Fatalf("ana's ready work = %v, want started, the review she was asked for, her own "+
+			"review nobody holds, then the queue", ids)
 	}
-	if got.Items[1].Why != types.PickupReview {
-		t.Errorf("the review sits there because %q, want %q", got.Items[1].Why, types.PickupReview)
+	if it := got.Items[1]; it.Why != types.PickupReview || it.SubmittedBy != "pm" {
+		t.Errorf("the review sits there because %q, submitted by %q; want %q by pm", it.Why,
+			it.SubmittedBy, types.PickupReview)
+	}
+	if it := got.Items[2]; it.Why != types.PickupUnreviewed || it.SubmittedBy != "ana" {
+		t.Errorf("her own review sits there because %q, submitted by %q; want %q by ana", it.Why,
+			it.SubmittedBy, types.PickupUnreviewed)
+	}
+	// A QUESTION SHE PUT TO A PERSON REVIEWING IT holds it until they answer.
+	askOn(t, r, "op-ask-jo", "mine", worklet.Comment{ID: "c-review", Task: "mine", Author: "ana",
+		AuthorKind: worklet.AuthorAgent, Body: "Approve?", Ask: "jo", CreatedAt: wednesday})
+	if ids := readyIDs(r.readyWork("ana")); slices.Contains(ids, "mine") {
+		t.Errorf("ana's ready work = %v, want her review held on her question to jo", ids)
 	}
 	if _, err := ana.UpdateTask(t.Context(), "op-hand", "mine", "ENG", worklet.NoIfMatch,
 		worklet.TaskPatch{Assignee: &bob}, worklet.ChangeAssignee, nil); err != nil {
 		t.Fatalf("hand to bob: %v", err)
 	}
 	r.drain()
-	if ids := readyIDs(r.readyWork("bob")); !slices.Equal(ids, []string{"mine"}) {
-		t.Errorf("bob's ready work = %v, want the review ana handed him", ids)
+	forBob := r.readyWork("bob")
+	if ids := readyIDs(forBob); !slices.Equal(ids, []string{"mine"}) ||
+		forBob.Items[0].Why != types.PickupReview || forBob.Items[0].SubmittedBy != "ana" {
+		t.Errorf("bob's ready work = %v (%+v), want the review ana handed him, submitted by ana",
+			ids, forBob.Items)
 	}
 }

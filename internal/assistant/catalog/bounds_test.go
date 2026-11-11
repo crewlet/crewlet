@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // bound is how one read's default answer is held to a size that does not
@@ -46,6 +47,13 @@ const (
 	// configuration rather than with the work.
 	boundConfig = "config"
 )
+
+// ONE AGENT'S LANE, a card per lane, named in the path by the agent's handle.
+func init() {
+	for _, lane := range seataccess.Lanes() {
+		readBounds["get_seat_access/"+string(lane)] = bound{kind: boundRecord, record: "handle"}
+	}
+}
 
 // readBounds is every read tool's card variant and its bound. A NEW READ IS
 // DECLARED HERE OR THE BUILD FAILS: a read that reads a route whole (the

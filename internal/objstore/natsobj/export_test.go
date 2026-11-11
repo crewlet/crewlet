@@ -57,6 +57,14 @@ func SetWindow(b *Backend, n int) { b.window = newWindow(n) }
 // end as stalled, so a case sees a stall without waiting [objstore.Stall].
 func SetStall(b *Backend, d time.Duration) { b.stall = d }
 
+// SetBeginPace gives b's listings d a mebibyte of bucket to begin, so a case
+// can give a bucket of a few bytes the beginning a large one is given.
+func SetBeginPace(b *Backend, d time.Duration) { b.beginPace = d }
+
+// ListBegin is how long a listing of a bucket of bytes is given to begin
+// ([Backend.listBegin]).
+func ListBegin(b *Backend, bytes uint64) time.Duration { return b.listBegin(bytes) }
+
 // LeaderTerm is how long one of b's leader message reads of what filter names
 // is given before it is asked again ([Backend.leaderFor]).
 func LeaderTerm(b *Backend, filter string) time.Duration { return b.leaderFor(filter).Term() }

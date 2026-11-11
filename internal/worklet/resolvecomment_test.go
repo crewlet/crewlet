@@ -41,7 +41,7 @@ func TestOnlyACommentsAuthorMayResolveIt(t *testing.T) {
 	end := r.logEnd(t)
 	bob := r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
 	if _, err := bob.ResolveComment(t.Context(), "op-bob", rollback.ID, "ENG",
-		"cm-1", nil); !errors.Is(err, worklet.ErrNotAuthor) {
+		"cm-1", nil, nil); !errors.Is(err, worklet.ErrNotAuthor) {
 		t.Fatalf("bob resolving ana's question answered %v, want not its author", err)
 	}
 	r.drain()
@@ -56,7 +56,7 @@ func TestOnlyACommentsAuthorMayResolveIt(t *testing.T) {
 	// THE AUTHOR: resolved as herself, at her writer's clock.
 	r.at = wednesday.Add(time.Hour)
 	if _, err := r.writer.ResolveComment(t.Context(), "op-ana", rollback.ID, "ENG",
-		"cm-1", nil); err != nil {
+		"cm-1", nil, nil); err != nil {
 		t.Fatalf("ana's own resolve: %v", err)
 	}
 	r.drain()
@@ -70,7 +70,7 @@ func TestOnlyACommentsAuthorMayResolveIt(t *testing.T) {
 	// one nobody posted, and another item's.
 	for _, id := range []string{"cm-9", "cm-2"} {
 		if _, err := r.writer.ResolveComment(t.Context(), "op-resolve-"+id,
-			rollback.ID, "ENG", id, nil); !errors.Is(err, worklet.ErrNoComment) {
+			rollback.ID, "ENG", id, nil, nil); !errors.Is(err, worklet.ErrNoComment) {
 			t.Errorf("a resolve of %s on %s answered %v, want no such comment",
 				id, rollback.ID, err)
 		}
@@ -165,7 +165,7 @@ func TestAResolveKeepsTheAnswerTheWordsAndTheEdit(t *testing.T) {
 		t.Helper()
 		r.at = at
 		if _, err := r.writer.ResolveComment(t.Context(), opID, created.ID, "ENG",
-			"cm-1", nil); err != nil {
+			"cm-1", nil, nil); err != nil {
 			t.Fatalf("%s: %v", opID, err)
 		}
 		r.drain()

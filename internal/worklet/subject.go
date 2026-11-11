@@ -126,6 +126,13 @@
 // approval chain, a quorum or a state machine. decision.go holds the type and
 // the rules; the ADR says why the engine stops there.
 //
+// # A question and a review say whom they wait on
+//
+// ADR-0124 is the record: an asker withdraws a question saying why and what
+// covers it ([Withdrawal]), an item in review its holder submitted itself is
+// held by a question to its reviewer or comes back to it, and `holding_up`
+// counts the agent work waiting on a person through what they hold or are asked.
+//
 // # What a day costs the log, measured
 //
 // The reference company — 100 000 tasks a year, 300 000 comments, 1 000 edits
@@ -280,6 +287,12 @@ const (
 	// deletion rests on there being none of.
 	KindFile ObjectKind = "file"
 
+	// KindRoster is the order of the org chart's seats by their names, on
+	// ONE subject ([RosterSubject]), reconciled from the chart by
+	// [Writer.ApplyChart] and read by `sort=assignee` through
+	// `tracker_seat_places`. Machinery: no audience and no history row.
+	KindRoster ObjectKind = "roster"
+
 	// KindTrimmed is the trim's record that removes the arbitration
 	// anchors below what the log no longer holds — [statelog.TrimmedKind],
 	// ADR-0080 — on one subject per floor, which the subject's id names.
@@ -303,7 +316,7 @@ var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
-	KindFile, KindTrimmed,
+	KindFile, KindTrimmed, KindRoster,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -420,6 +433,9 @@ func PersonSubject(handle string) Subject {
 func RankOrderSubject(key string) Subject {
 	return Subject{Kind: KindRankOrder, ID: key}
 }
+
+// RosterSubject names the org chart's seat order, the one object of its kind.
+func RosterSubject() Subject { return Subject{Kind: KindRoster, ID: "seats"} }
 
 // EvictionSubject names one node's eviction or readmission by its node id.
 // A record here installs an apply gate, which is why it is addressed to the

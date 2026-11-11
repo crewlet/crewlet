@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -32,7 +33,14 @@ import (
 //   - 1: every shape this domain has.
 //   - 2: an agent's statement that its message asks something, the seats a
 //     message held back and asked, and the asks it answers (ADR-0113).
-const RecordVersion = 2
+//   - 3: whom an agent's message that wakes somebody was written for
+//     ([MutationRecord.WorkingFor], ADR-0109).
+const RecordVersion = 3
+
+// WorkingForVersion is the version from which a record carries whom it was
+// written for ([MutationRecord.WorkingFor]), which the applier keeps on the
+// message a post writes ([Message.WorkingFor]); an older record keeps none.
+const WorkingForVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -68,6 +76,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Notify.Held", Since: 2, Path: []string{"notify", "held"}},
 	{Name: "Notify.Asked", Since: 2, Path: []string{"notify", "asked"}},
 	{Name: "Notify.Answering", Since: 2, Path: []string{"notify", "answering"}},
+	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -205,6 +214,23 @@ type MutationRecord struct {
 	OperatorID string     `json:"operator_id,omitempty"`
 	TurnID     string     `json:"turn_id,omitempty"`
 	Chain      []string   `json:"chain,omitempty"`
+
+	// WorkingFor is whom an [AuthorAgent] record that routes to somebody
+	// ([Notify.Recipients]) was written for (ADR-0109): whoever the turn that
+	// wrote it worked for, composed from that turn's own bound ceiling, and
+	// absent on every other record: an agent's write made for nobody else,
+	// every other author's, and one that routes to nobody, a silent message
+	// whose named seats were all held back included (an erase and a prune
+	// among them, which no
+	// versioned field may ride). The change feed reads it, and the turn the
+	// record wakes works for them (notify.FirstPartyWriter), never for the
+	// writing seat, which holds every app. KEPT ON THE MESSAGE A POST WRITES
+	// ([Message.WorkingFor], [WorkingForVersion]), applied on every node from
+	// the carrier's first build on, which the engine's turn-start thread
+	// read alone takes ([Reader.TurnThread]). Version 3:
+	// an older build retains a record carrying it rather than waking a seat
+	// for the writing agent.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"
 	// means.

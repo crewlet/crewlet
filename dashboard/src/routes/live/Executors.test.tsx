@@ -639,12 +639,12 @@ test("a parked run's question heads the banner and its dialog reads the context 
           question: "Which retry ceiling?",
           question_context:
             "The API allows **five**. See https://evil.example.net/c?q=secret and " +
-            "https://github.com/gophrase/backend/pull/11.",
+            "https://github.com/acme/backend/pull/11.",
           audience_handles: ["jane"],
         }),
       ],
     },
-    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }] },
     turn: { turn_id: "turn-1", events: [] },
   });
   await settle();
@@ -659,7 +659,7 @@ test("a parked run's question heads the banner and its dialog reads the context 
   const prose = dialog.querySelector(".prose") as HTMLElement;
   expect(prose.querySelector("strong")?.textContent).toBe("five");
   expect([...prose.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-    "https://github.com/gophrase/backend/pull/11",
+    "https://github.com/acme/backend/pull/11",
   ]);
   expect(prose.textContent).toContain("https://evil.example.net/c?q=secret");
   fireEvent.change(within(dialog).getByLabelText("Your answer"), {
@@ -768,7 +768,7 @@ test("a parked run's question opens only what the dashboard built", async () => 
           question: "Which retry ceiling?",
           question_context:
             "The client used three. See https://evil.example.net/c?q=secret and " +
-            "https://github.com/gophrase/backend/pull/11?x=1.",
+            "https://github.com/acme/backend/pull/11?x=1.",
           decision: {
             question: "Which retry ceiling?",
             options: [
@@ -784,7 +784,7 @@ test("a parked run's question opens only what the dashboard built", async () => 
       ],
     },
     turn: { turn_id: "turn-1", events: [] },
-    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }] },
   });
   await settle();
   const banner = document.querySelector(".run-awaiting") as HTMLElement;
@@ -798,7 +798,7 @@ test("a parked run's question opens only what the dashboard built", async () => 
     return found;
   });
   expect(hrefs.filter((href) => href?.includes("evil.example.net"))).toEqual([]);
-  expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
+  expect(hrefs).toContain("https://github.com/acme/backend/pull/11");
   expect(dialog.textContent).toContain("https://evil.example.net/c?q=secret");
   expect(dialog.textContent).toContain("https://evil.example.net/r?q=secret");
 });
@@ -1209,4 +1209,88 @@ test("an executor closed by a reply too long to take is not drawn as answered", 
   );
   expect(doingLine(row("answered", null))).toBe("Answered. Resuming.");
   expect(doingLine(row("resumed", null))).toBe("Resuming after an answer.");
+});
+
+/** A held SSH command, put to its delegate first (ADR-0125); `escalated` once it reached people. */
+function delegatedRun(escalated: boolean): ExecutorRow {
+  return run({
+    status: "awaiting_clarification",
+    launch_id: "q1",
+    question: "Run `systemctl restart api` on web-1?",
+    audience_handles: ["jane"],
+    held_call: {
+      id: "held-1",
+      server: "crewlet",
+      tool: "ssh_operate",
+      raw: "ssh_operate",
+      digest: "sha256:0f",
+      held_at: "2026-06-15T12:00:00Z",
+      fixed: true,
+      approvers: "ssh",
+      act: "ssh_operate",
+      delegation: {
+        rule: 1,
+        delegates: ["security-engineer"],
+        given: [],
+        escalated: escalated
+          ? { overruled: ["deadline"], engine: ["No delegate answered in time."], at: "" }
+          : null,
+      },
+    },
+  });
+}
+
+// A CALL WITH ITS DELEGATE WAITS ON NO PERSON: the page says who has it and
+// under which rule, and draws no "put to" banner. Escalated, it is a person's
+// again. Mutation: count a delegated call as waiting on a person, and the
+// banner names Jane.
+test("a held call with its delegate says so rather than waiting on a person", async () => {
+  mountPage({
+    executors: { runs: [delegatedRun(false)] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getByText(/With delegate security-engineer \(rule 1\)/)).toBeTruthy();
+  expect(screen.queryByText(/Put to Jane Founder/)).toBeNull();
+  cleanup();
+  mountPage({
+    executors: { runs: [delegatedRun(true)] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getByText(/Put to Jane Founder/)).toBeTruthy();
+  expect(screen.queryByText(/With delegate/)).toBeNull();
+});
+
+// AN ANSWER A DELEGATE GAVE IS MARKED WITH ITS RULE, off the turn's own
+// `executor_answered`; a person's answer carries no mark. Mutation: read the
+// mark off any answer, and the person's reads as delegated.
+test("an executor a delegate answered is marked as decided under delegation", async () => {
+  const answered = (rule?: number) => ({
+    id: "a-1",
+    type: "executor_answered",
+    timestamp: "2026-06-15T12:05:00Z",
+    source: "SWE",
+    actor: "SWE",
+    summary: "SWE's executor was answered",
+    category: "task",
+    trace_id: "tr-1",
+    span_id: "",
+    parent_span_id: "",
+    topic: "",
+    payload: { turn_id: "turn-1", ...(rule ? { delegated_rule: rule } : {}) },
+  });
+  mountPage({
+    executors: { runs: [run()] },
+    turn: { turn_id: "turn-1", events: [answered(2)] },
+  });
+  await settle();
+  expect(screen.getByText("Decided under delegation, rule 2")).toBeTruthy();
+  cleanup();
+  mountPage({
+    executors: { runs: [run()] },
+    turn: { turn_id: "turn-1", events: [answered()] },
+  });
+  await settle();
+  expect(screen.queryByText(/Decided under delegation/)).toBeNull();
 });

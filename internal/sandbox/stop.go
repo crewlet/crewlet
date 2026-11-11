@@ -223,10 +223,15 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 // THE SESSION IS CLOSED BEFORE IT, by the ending ([Coordinator.finishEnding]).
 // The run's harness is still working until the read ends it, and every tool
 // call it makes through the bridge acts as the seat: closed first, the stop
-// takes effect on the seat's surface at once — no post, no write, no submission
-// after it — rather than after a read of the box that ends the job and can take
-// as long as the box's host takes to answer. Closing a closed session is
-// nothing, which is what the reclaim that follows does again.
+// takes effect on the seat's surface at once — no call the box makes after it
+// is run, so no post, write or submission is asked for after it — rather than
+// after a read of the box that ends the job and can take as long as the box's
+// host takes to answer. A CALL ADMITTED BEFORE IT RUNS ON to its own end: the
+// close answers it that the run has ended and the call is still running, and
+// waits for none (internal/api/mcpbridge, "An opening ends without waiting for
+// its calls"), so what such a call does lands after this read, and is in no
+// collection of the stop's. Closing a closed session is nothing, which is what
+// the reclaim that follows does again.
 //
 // ONCE PER ENDING, for the reason a release records its charge: the collection
 // is recorded with the charge and the publish it made, so an attempt after a

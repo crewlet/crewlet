@@ -567,7 +567,7 @@ give it to them.
 |---|---|
 | nobody: a schedule, a watch, the agent's own work | every app |
 | a colleague agent seat working for nobody but itself | every app |
-| a colleague agent seat's ask, or the answer to the agent's own ask, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask and answer |
+| a colleague agent seat's ask, the answer to the agent's own ask, or what that seat wrote on Worklet, Doclet or Chatlet, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask, answer and write |
 | a person of the company | the apps their permissions name (`admin` includes every app) |
 | a person who may not act now: invited and not yet enrolled, suspended or removed | none |
 | a person on a human seat nobody holds in the directory: known to the chart by their contacts alone | none |
@@ -598,9 +598,52 @@ never from the ask's words. The colleague's turn uses only what they use,
 composed again on its own node, so a person revoked since the ask uses
 nothing and a credential is narrowed again, never widened. The answer wakes
 the asking agent in a turn worked for them too, through every ask of a chain.
-What an agent writes that wakes another agent (a work item, a comment, a page
-or a chat message) still wakes it in a turn worked for the writing agent;
-crewlet#798's fourth piece carries the requester through those too.
+
+**So does what an agent writes.** A work item an agent files or assigns, a
+comment on one, a page or a comment on it, and a Chatlet message, each written
+in a turn somebody woke, carries that somebody: the engine composes them from
+the writing turn's own ceiling, never from the tool's arguments, and records
+them on every write a later turn reads: a work item's creation and every move
+of its assignee, whatever they wake, since an idle agent's pickup of its next
+work item reads both, and any other write where it may wake another agent.
+The agent it wakes works for them, composed again on its own node, and so does
+every agent a chain of writes reaches; two writes one agent makes for two
+different people wake its colleague in two turns wherever the wake asks
+something of the colleague. The pickup of an item filed or assigned for
+somebody works for them too, a turn works through only the waiting messages
+in its thread written for whom it works for, and a parked run's question is
+answered only by a reply written for whom the run works for. A wake that asks nothing of it, arriving after a
+turn of its already read past the change, is dropped whoever it was written
+for, and runs nothing for anybody
+([ADR-0120](../../adr/0120-a-wake-a-completed-turn-already-read-past-starts-no-turn.md)).
+An agent writing in a turn nobody woke writes for itself, and the agent it
+wakes works for it, as before.
+
+**Where the bound ends.** What an agent writes on a vendor's surface (Slack,
+Mattermost, Jira, GitHub, GitLab, Confluence) comes back as that vendor's
+webhook, which carries nobody, so the agent it wakes works for the agent that
+wrote it. Gitlet's changes, reviews and comments do not carry the requester
+yet either (crewlet#798's piece 4c), nor does the merge queue's close of a
+landed change's work item. To keep the bound, keep agents' work for each other
+on the engine's own surfaces: Worklet, Doclet, Chatlet and `a2a_ask`. During a
+rolling upgrade a node of the older build ignores the requester on what it
+reads, so for the minutes of the roll a write can wake its agent in a turn
+worked for the agent that wrote it
+([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+An older data node refuses a routed write whose actor carries a requester,
+naming the key (`actor.provenance.WrittenFor` for Worklet,
+`args.Actor.WrittenFor` for Doclet and Chatlet), and runs none of it. The
+router asks the next data node, so a data node of the newer build serves it.
+Where none does, the agent's tool answers `fleet_builds_differ` and nothing is
+written: `save_work_view`'s prior read is refused alike, and
+`code_merge_change` merges and leaves its item open, saying so. A write that
+carries nobody (a turn for its own seat, the engine's own write as a seat, a
+person's, a credential's or the engine's) crosses without the key, and either
+build serves it. Upgrading the data nodes first avoids the refusal, and
+[crewlet-operator](https://github.com/crewlet/crewlet-operator/blob/main/docs/concepts/runtime.md#the-seat-pods-follow-the-data-pods)
+rolls the data pods first. An older seat node composes no requester, so a newer
+data node reads its write as made for nobody, and that write wakes its
+colleague in a turn worked for the writing agent until the roll completes.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet
@@ -633,8 +676,9 @@ for them.
 the identity directory once per tool call, never once per turn, so an
 administrator who takes an app away stops the turn's very next call. A node
 that cannot read the directory refuses the call and says to try again; it never
-guesses. The bound is the turn's own: a colleague the agent asks answers in a
-turn the agent woke, and what the agent already knows it may still say.
+guesses. The bound is the turn's and every turn it hands on to: a colleague the
+agent asks, and a colleague its writes wake on the engine's own surfaces, work
+for the same person; what the agent already knows it may still say.
 
 ### Nobody confers what they do not hold
 
@@ -2622,8 +2666,25 @@ where the block is on with a server, `ssh_operate` where it is at `operate`.
 In a turn somebody woke, whoever woke it is decided on `ssh.requester.read`, a row
 everybody of the company holds, so a turn a stranger woke reaches no server.
 Answering an `ssh_operate` call is `ssh.operate.approve`, **human-only**: an
-administrator, or a person `integrations.ssh.approvers` names, at a fresh
-step-up. See [SSH](../integrations/ssh.md#the-agents-tools).
+administrator, or a person `integrations.ssh.approvers` or the `ssh_operate`
+rule's `escalate_to` names, at a fresh step-up; choosing the approving option
+of an `ask_to_operate` decision is decided on the same row. `ask_to_operate`
+is admin's with the `ssh_operate` seat grant. See [SSH](../integrations/ssh.md#the-agents-tools).
+
+**And a delegate's verdict.** `review_delegated` is admin's, and its row names
+the `delegated_decisions` seat grant an enabled rule of the company's
+`delegated_decisions` gives each seat it names a delegate; what its allow
+carries out is bounded by the engine's own limits, not by this row. Reading
+what delegates decided is `delegated_decisions.read`, **human-only**, named:
+an administrator, or a person a rule's `escalate_to` names. See
+[Delegated Decisions](../guides/delegated-decisions.md).
+
+**And a merge or a deploy asked for.** `ask_to_merge` and `ask_to_deploy` are
+everybody's: asking changes nothing, and what an approval carries out is the
+agent's own credential's and its target's rules'. Answering one is
+`release.approve`, **human-only**, at a fresh step-up: an administrator, a
+lead of the agent, or a person the kind's rule names in `escalate_to`
+(`own_or_lead`, whose object names those people beside the leads).
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat

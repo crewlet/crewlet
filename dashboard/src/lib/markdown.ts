@@ -576,7 +576,7 @@ export function shownImage(src: string): string | null {
  * NO TOKEN EITHER, because a token's mark says what its words are and a
  * label's words are not what the link is. `[https://github.com/a/b/pull/1]
  * (https://evil.example.net)` read as an address drew a GitHub mark and
- * "a/b#1" inside a link to another host, and `[gophrase/backend#14](...)`
+ * "a/b#1" inside a link to another host, and `[acme/backend#14](...)`
  * read as a reference did the same. Where a link goes is its address alone,
  * which [LabelledLink] reads.
  */

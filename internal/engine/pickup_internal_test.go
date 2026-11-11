@@ -56,8 +56,21 @@ func TestAPickupIsAWakeOfItsOwnType(t *testing.T) {
 	if !inbox.Ledgered(ev.Type) {
 		t.Error("the completion ledger does not record a pickup, so a redelivery runs it again")
 	}
-	if got := ReplyFor([]*events.Event{ev}); !reflect.DeepEqual(got, turn.ToolReply("")) {
-		t.Errorf("a pickup's turn owes %+v, want a tool's answer", got)
+	// A TYPED ANSWER ON ITS OWN ITEM (ADR-0122), which an assignment's turn
+	// does not owe; and a merge with another tool obligation keeps the item.
+	owed := turn.ToolReply("")
+	owed.Item = "t-1"
+	if got := ReplyFor([]*events.Event{ev}); !reflect.DeepEqual(got, owed) {
+		t.Errorf("a pickup's turn owes %+v, want a typed answer on t-1", got)
+	}
+	assigned := events.New(types.TaskAssigned{Agent: "a1", RoleName: "Engineer"}, events.TraceContext{})
+	if got := ReplyFor([]*events.Event{assigned}); got.Item != "" {
+		t.Errorf("an assignment's turn owes a typed answer on %q", got.Item)
+	}
+	for _, order := range [][]*events.Event{{assigned, ev}, {ev, assigned}} {
+		if got := ReplyFor(order); !reflect.DeepEqual(got, owed) {
+			t.Errorf("a pickup merged with an assignment owes %+v, want the typed answer on t-1", got)
+		}
 	}
 	fire := events.New(types.TaskAssigned{Schedule: "standup"}, events.TraceContext{})
 	if _, merged := mergeScheduledFires([]*events.Event{fire, ev}); merged {

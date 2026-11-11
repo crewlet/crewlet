@@ -590,6 +590,9 @@ type TurnCompleted struct {
 	// the engine (a vendor's post included), which the tally's outcome, of
 	// the engine's own committed changes only, does not see.
 	Acted bool `json:"acted,omitempty"`
+	// PickupAnswer is how a work pickup's turn left the item it was handed,
+	// as the delivery checks last read it (ADR-0122); empty on any other turn.
+	PickupAnswer PickupAnswer `json:"pickup_answer,omitempty"`
 	// Interactions carries each trigger message's sender and body when
 	// identifiable. Usually one entry; a coalesced trigger carries one per
 	// constituent, possibly from several senders. Empty for internal triggers.

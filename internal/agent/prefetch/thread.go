@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -204,8 +205,9 @@ type threadBlock struct {
 	// message. See [notify.Transcript.StoppedShort].
 	stoppedShort bool
 	// answered are the messages the block showed that were waiting for this
-	// turn. See [Blocks.ThreadContextAnswered].
-	answered []string
+	// turn, each at the version it was shown at. See
+	// [Blocks.ThreadContextAnswered].
+	answered []Answered
 }
 
 // threadContext renders the block.
@@ -261,21 +263,23 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // the block whose items are somebody else's prose.
 //
 // AND IT SAYS WHICH WAITING MESSAGES IT SHOWED ([Blocks.ThreadContextAnswered])
-// — the waking message's writer's, after this seat's own last reply and before
-// the message that woke the turn ([waitingMessages]) — kept in step with the
+// — the waking message's writer's, written for whom the turn works for, after
+// this seat's own last reply and before the message that woke the turn
+// ([waitingMessages]) — kept in step with the
 // lines through every bound. Only a
 // message rendered VERBATIM counts: one left out was never seen, and one
 // condensed into the middle's account was seen as a model's paraphrase, and a
 // message recorded as answered is one a later delivery of it is dropped for.
 func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
-	// waiting runs beside lines: the id of the message a line rendered when
-	// that message was waiting for this turn, and "" for every other line.
-	waiting := make([]string, 0, len(read.Messages))
+	// waiting runs beside lines: the message a line rendered, by its id and
+	// the version it was shown at, when that message was waiting for this
+	// turn, and the zero Answered for every other line.
+	waiting := make([]Answered, 0, len(read.Messages))
 	// authors runs beside them too: who said each line, so the fence names
 	// the speakers of what it holds and nobody whose message was left out.
 	authors := make([]provenance.Author, 0, len(read.Messages))
-	waitingFor := waitingMessages(read, r.Message)
+	waitingFor := waitingMessages(read, r.Message, r.WorkingFor)
 	// rootSlot says the read carried a root at all; rootShown says it
 	// rendered as a message rather than as its stand-in. The two are apart
 	// because the message count reports what was HANDED OVER, and a notice
@@ -288,7 +292,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 				// THE ENGINE'S WORDS in the root's slot, so the engine is
 				// their author.
 				lines = append(lines, UnrenderableRootLine)
-				waiting = append(waiting, "")
+				waiting = append(waiting, Answered{})
 				authors = append(authors, provenance.Author{Kind: iam.ActorSystem})
 				continue
 			}
@@ -330,11 +334,11 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	lines, middle := splitThread(lines)
 	// The same split, beside the lines: splitThread keeps the root's slot
 	// and the newest, so a middle is lines[1 : 1+len(middle)].
-	var waitingMiddle []string
+	var waitingMiddle []Answered
 	var authorsMiddle []provenance.Author
 	if len(middle) > 0 {
 		waitingMiddle = waiting[1 : 1+len(middle)]
-		waiting = append(append([]string{}, waiting[0]), waiting[1+len(middle):]...)
+		waiting = append(append([]Answered{}, waiting[0]), waiting[1+len(middle):]...)
 		authorsMiddle = authors[1 : 1+len(middle)]
 		authors = append(append([]provenance.Author{}, authors[0]), authors[1+len(middle):]...)
 	}
@@ -362,7 +366,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			// verbatim, unlabelled. Calling it condensed would be a lie
 			// about text nobody rewrote.
 			lines = append(append(append([]string{}, lines[0]), middle...), lines[1:]...)
-			waiting = append(append(append([]string{}, waiting[0]), waitingMiddle...), waiting[1:]...)
+			waiting = append(append(append([]Answered{}, waiting[0]), waitingMiddle...), waiting[1:]...)
 			authors = append(append(append([]provenance.Author{}, authors[0]), authorsMiddle...), authors[1:]...)
 			posts += len(middle)
 			middle = nil
@@ -412,10 +416,10 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			"thread are not shown; read the thread itself with your chat tools if " +
 			"you need them.)_")
 	}
-	var answered []string
-	for _, id := range waiting {
-		if id != "" {
-			answered = append(answered, id)
+	var answered []Answered
+	for _, a := range waiting {
+		if a.ID != "" {
+			answered = append(answered, a)
 		}
 	}
 	return threadBlock{
@@ -426,8 +430,11 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 }
 
 // waitingMessages marks, by position in the read, the messages that were
-// waiting for the turn trigger woke: the trigger's own writer's, after this
-// seat's own last reply, before the trigger itself.
+// waiting for the turn trigger woke: the trigger's own writer's, written for
+// whom the turn works for (workingFor), after this seat's own last reply,
+// before the trigger itself. Each is named by its id and the version it was
+// read at ([notify.Message.Version]), so its mark drops the wake of the edit
+// the turn was shown and never a later one.
 //
 // NOTHING, unless the read reached the trigger: a read that stopped short is
 // missing the newest messages — the trigger among them — and a trigger the
@@ -444,8 +451,17 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 // price, accepted: when another writer's turn failed and its message comes
 // back behind this one, that turn answers it even where this turn already
 // spoke to it.
-func waitingMessages(read notify.Transcript, trigger string) map[int]string {
-	if trigger == "" || read.StoppedShort {
+//
+// AND ONLY THOSE WRITTEN FOR WHOM THIS TURN WORKS FOR, as the partition keys a
+// carrier ([notify.WorkingForKey]): one agent's message written for another
+// requester is that requester's work, owed a turn of its own held to their
+// apps, as another writer's message is. Compared with the turn's own carrier,
+// never the trigger message's document, which keeps its post's carrier across
+// an edit made for somebody else. NOTHING where the read could not say whom
+// its messages were written for ([notify.Transcript.WorkingForUnread]): it then
+// cannot tell one requester's message from another's.
+func waitingMessages(read notify.Transcript, trigger string, workingFor *types.WorkingFor) map[int]Answered {
+	if trigger == "" || read.StoppedShort || read.WorkingForUnread {
 		return nil
 	}
 	at := -1
@@ -461,14 +477,16 @@ func waitingMessages(read notify.Transcript, trigger string) map[int]string {
 	if writer == "" {
 		return nil
 	}
-	out := map[int]string{}
+	whom := notify.WorkingForKey(workingFor)
+	out := map[int]Answered{}
 	for i := at - 1; i >= 0; i-- {
 		m := read.Messages[i]
 		if m.Own {
 			break
 		}
-		if m.ID != "" && m.ID != trigger && m.SenderID == writer {
-			out[i] = m.ID
+		if m.ID != "" && m.ID != trigger && m.SenderID == writer &&
+			notify.WorkingForKey(m.WorkingFor) == whom {
+			out[i] = Answered{ID: m.ID, Version: m.Version}
 		}
 	}
 	return out

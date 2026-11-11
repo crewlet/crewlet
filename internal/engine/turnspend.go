@@ -436,7 +436,12 @@ func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharg
 	charge = e.withCards(ctx, charge)
 	return cardedCharge{segmentCharge: charge, write: halves.as(builtin.Actor{
 		Handle: charge.record.Seat, Kind: worklet.AuthorAgent,
-		TurnID: charge.record.TurnID,
+		// THE ENGINE'S OWN BOOKKEEPING, made as the seat ([types.ForNobody]):
+		// what a turn spent is charged once the turn's segment ends, by no
+		// call of the turn, and the charge wakes nobody (worklet's
+		// RecordTurn writes it quiet), so it carries nobody it was made for.
+		WrittenFor: types.ForNobody(),
+		TurnID:     charge.record.TurnID,
 	})}
 }
 

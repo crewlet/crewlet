@@ -1,6 +1,7 @@
 package queries
 
 import (
+	"bytes"
 	"context"
 	"slices"
 	"strings"
@@ -106,6 +107,11 @@ type MCPChangeView struct {
 	// the definition a change moved (`title`, `description`, `schema`,
 	// `annotations`). ALWAYS A LIST.
 	Kinds []string `json:"kinds"`
+	// Unshown are the parts in Kinds this answer cannot show the change
+	// of ([unshownParts]): a definition the fleet keeps no record of, so
+	// only a listing's cut words are known. A reader says each changed and
+	// is not shown, never that nothing changed. ALWAYS A LIST.
+	Unshown []string `json:"unshown"`
 	// Before is the definition its level was decided on, null for a tool
 	// the server added; After is the one listed now, null for a removed
 	// one.
@@ -121,15 +127,24 @@ type MCPChangeView struct {
 	// accepts the change ([mcpreview.Holds]).
 	Held bool `json:"held"`
 	// SeenAt is when the fleet first stored the definition listed now,
-	// null for a removal and for a definition whose schemas are not stored.
+	// null for a removal and for a definition whose record is not stored.
 	SeenAt *time.Time `json:"seen_at"`
 }
 
 // MCPDefinitionView is one definition of a tool, in the server's words.
 type MCPDefinitionView struct {
 	// Digest names it (internal/mcp's digest.go).
-	Digest      string `json:"digest"`
+	Digest string `json:"digest"`
+	// Whole is a definition read from its record ([coord.MCPToolDefinition]):
+	// its words and schemas here are the server's whole. False where the
+	// fleet keeps none, and Title and Description are a listing's cut
+	// words.
+	Whole bool `json:"whole"`
+	// Title is the tool's own title, and HintsTitle the title its hints
+	// carry ("" where Whole is false): the words its title part covers.
+	// Description is what the model is told it does.
 	Title       string `json:"title"`
+	HintsTitle  string `json:"hints_title"`
 	Description string `json:"description"`
 	// Annotations are the hints the server declared, no override applied:
 	// the server's own claim, which is what a change is judged by; Risk,
@@ -161,16 +176,20 @@ type MCPListedView struct {
 	Instances int `json:"instances"`
 }
 
-// definitionView is one definition's words and reading.
+// definitionView is one definition's words and reading: whole from its record
+// where the fleet keeps one, else the title and description a listing or an
+// accepted record names.
 func definitionView(digest, title, description string, declared coord.MCPToolHints,
-	schema *coord.MCPToolSchema) MCPDefinitionView {
+	record *coord.MCPToolDefinition) MCPDefinitionView {
 
 	hints := mcpreview.Annotations(declared)
 	risk := mcp.RiskOf(hints)
 	out := MCPDefinitionView{Digest: digest, Title: title, Description: description,
 		Annotations: toolHintsOf(hints), Risk: risk.Risk, RiskDeclared: risk.Declared, External: risk.External}
-	if schema != nil {
-		out.InputSchema, out.OutputSchema = schemaObject(schema.Input), schemaObject(schema.Output)
+	if record != nil {
+		out.Whole = true
+		out.Title, out.HintsTitle, out.Description = record.Title, record.HintsTitle, record.Description
+		out.InputSchema, out.OutputSchema = schemaObject(record.Input), schemaObject(record.Output)
 	}
 	return out
 }
@@ -182,14 +201,18 @@ func toolHintsOf(h mcp.Annotations) ToolHints {
 }
 
 // changeDigests is every digest a review's changes name, before and after, for
-// the schemas shown beside them.
+// the definitions shown beside them. A listed one is read whatever its listing
+// says it kept: a digest names one definition, which another node's listing
+// may have kept. A digest the store holds nothing under costs one read, which
+// the engine remembers until a listing says it was kept
+// (internal/engine's MCPToolDefinitions), not one on every read of the page.
 func changeDigests(changes []mcpreview.Change) []string {
 	var out []string
 	for _, c := range changes {
 		if c.Before != nil && !c.Before.Removed {
 			out = append(out, c.Before.Digest)
 		}
-		if c.After != nil && c.After.SchemaKept {
+		if c.After != nil {
 			out = append(out, c.After.Digest)
 		}
 	}
@@ -197,13 +220,19 @@ func changeDigests(changes []mcpreview.Change) []string {
 	return slices.Compact(out)
 }
 
-// changeViews is a review's changes as the detail answers them, with the
-// schemas stored under their digests.
-func changeViews(r MCPReview, schemas map[string]coord.MCPToolSchema) []MCPChangeView {
+// changeViews is a review's changes as the detail answers them, each
+// definition whole from its record.
+func changeViews(r MCPReview, definitions map[string]coord.MCPToolDefinition) []MCPChangeView {
 	out := make([]MCPChangeView, 0, len(r.Changes))
 	policy := r.policy()
+	record := func(digest string) *coord.MCPToolDefinition {
+		if d, ok := definitions[digest]; ok {
+			return &d
+		}
+		return nil
+	}
 	for _, c := range r.Changes {
-		view := MCPChangeView{Tool: c.Tool, Kinds: []string{}, Loosened: c.Loosened,
+		view := MCPChangeView{Tool: c.Tool, Kinds: []string{}, Unshown: []string{}, Loosened: c.Loosened,
 			Held: mcpreview.Holds(policy, c)}
 		switch c.Kind {
 		case mcpreview.KindAdded, mcpreview.KindRemoved:
@@ -214,12 +243,8 @@ func changeViews(r MCPReview, schemas map[string]coord.MCPToolSchema) []MCPChang
 			}
 		}
 		if b := c.Before; b != nil {
-			var schema *coord.MCPToolSchema
-			if s, ok := schemas[b.Digest]; ok {
-				schema = &s
-			}
 			before := &MCPAcceptedView{
-				MCPDefinitionView: definitionView(b.Digest, b.Title, b.Description, b.Hints, schema),
+				MCPDefinitionView: definitionView(b.Digest, b.Title, b.Description, b.Hints, record(b.Digest)),
 				AcceptedAt:        b.At, FirstListing: b.First,
 			}
 			if !b.First {
@@ -229,18 +254,59 @@ func changeViews(r MCPReview, schemas map[string]coord.MCPToolSchema) []MCPChang
 			view.Before = before
 		}
 		if a := c.After; a != nil {
-			var schema *coord.MCPToolSchema
-			if s, ok := schemas[a.Digest]; ok && a.SchemaKept {
-				schema = &s
-				seen := s.At
+			kept := record(a.Digest)
+			if kept != nil {
+				seen := kept.At
 				view.SeenAt = &seen
 			}
 			view.After = &MCPListedView{
-				MCPDefinitionView: definitionView(a.Digest, a.Title, a.Description, a.Declared, schema),
+				MCPDefinitionView: definitionView(a.Digest, a.Title, a.Description, a.Declared, kept),
 				Instances:         a.Instances,
 			}
 		}
+		if c.Kind == mcpreview.KindChanged {
+			for _, p := range unshownParts(c.Parts, record(c.Before.Digest), record(c.After.Digest),
+				c.Before.Hints, c.After.Declared) {
+				view.Unshown = append(view.Unshown, string(p))
+			}
+		}
 		out = append(out, view)
+	}
+	return out
+}
+
+// unshownParts is every part a change moved that its two definitions as served
+// cannot show: a part read from a record the fleet does not keep for either
+// side (the words of a listing are cut, and a schema is not named at all), or
+// one whose two sides read alike, which a digest that moved says is not the
+// whole of either. The hints are always whole, but are held to the same check.
+func unshownParts(moved []mcpreview.Part, before, after *coord.MCPToolDefinition,
+	beforeHints, afterHints coord.MCPToolHints) []mcpreview.Part {
+
+	var out []mcpreview.Part
+	for _, p := range moved {
+		if p == mcpreview.PartAnnotations {
+			if beforeHints == afterHints {
+				out = append(out, p)
+			}
+			continue
+		}
+		if before == nil || after == nil {
+			out = append(out, p)
+			continue
+		}
+		var alike bool
+		switch p {
+		case mcpreview.PartTitle:
+			alike = before.Title == after.Title && before.HintsTitle == after.HintsTitle
+		case mcpreview.PartDescription:
+			alike = before.Description == after.Description
+		case mcpreview.PartSchema:
+			alike = bytes.Equal(before.Input, after.Input) && bytes.Equal(before.Output, after.Output)
+		}
+		if alike {
+			out = append(out, p)
+		}
 	}
 	return out
 }
@@ -249,7 +315,7 @@ func changeViews(r MCPReview, schemas map[string]coord.MCPToolSchema) []MCPChang
 // answers its level as approve and says it is held, and each tool the server
 // stopped listing keeps its row, named by what was accepted of it and marked
 // removed.
-func reviewTools(tools []MCPToolView, r MCPReview, schemas map[string]coord.MCPToolSchema) []MCPToolView {
+func reviewTools(tools []MCPToolView, r MCPReview, definitions map[string]coord.MCPToolDefinition) []MCPToolView {
 	held := map[string]struct{}{}
 	policy := r.policy()
 	for _, c := range r.Changes {
@@ -271,15 +337,16 @@ func reviewTools(tools []MCPToolView, r MCPReview, schemas map[string]coord.MCPT
 			continue
 		}
 		b := c.Before
-		var schema *coord.MCPToolSchema
-		if s, ok := schemas[b.Digest]; ok {
-			schema = &s
+		var record *coord.MCPToolDefinition
+		if d, ok := definitions[b.Digest]; ok {
+			record = &d
 		}
-		def := definitionView(b.Digest, b.Title, b.Description, b.Hints, schema)
+		def := definitionView(b.Digest, b.Title, b.Description, b.Hints, record)
 		starting := config.MCPToolLevel(mcp.StartingLevel(mcp.RiskOf(mcpreview.Annotations(b.Hints))))
 		level, custom := policy.Level(b.Tool, starting)
 		tools = append(tools, MCPToolView{
-			Name: prefix + b.Tool, Raw: b.Tool, Title: def.Title, Description: def.Description,
+			// A ROW'S WORDS ARE A LIST'S, as every listed tool's are.
+			Name: prefix + b.Tool, Raw: b.Tool, Title: b.Title, Description: b.Description,
 			Annotations: def.Annotations, Risk: def.Risk, RiskDeclared: def.RiskDeclared,
 			External: def.External, Digest: b.Digest, Nodes: []string{},
 			InputSchema: def.InputSchema, OutputSchema: def.OutputSchema,

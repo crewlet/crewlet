@@ -561,7 +561,9 @@ func TestAWatchCommitRecordsTheHandlesThatMoved(t *testing.T) {
 
 // A CUSTOM FIELD IS RESOLVED TO ITS SLUG INSIDE THE APPLY.
 //
-// This is the one delta the WRITER cannot compute, and the case that holds the
+// This is the one delta a caller's wake cannot compute, since it holds no
+// catalogue (an update's decide restates its card with one,
+// [worklet.Notify]'s restatement), and the case that holds the applier's
 // wiring for it: values are keyed by field ID, the applier reads the project's
 // declarations to write the value rows, and the same map is what turns the key
 // back into the word somebody typed. Without it the row would have read

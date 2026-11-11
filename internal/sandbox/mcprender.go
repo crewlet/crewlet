@@ -3,6 +3,7 @@ package sandbox
 import (
 	"maps"
 	"slices"
+	"time"
 )
 
 // The scoped MCP surface the in-box harness gets.
@@ -74,6 +75,20 @@ type MCPServer struct {
 	// harness keeps theirs: a seat with 150 MCP tools sends their definitions
 	// on no request it does not need them for.
 	AlwaysLoaded bool
+
+	// CallTimeout is how long the harness waits for one call to the server
+	// before it gives the call up and cancels its request: Claude Code's
+	// per-server `timeout`, OpenCode's `timeout.execution`. Zero leaves the
+	// harness its own.
+	//
+	// SET ON THE BRIDGE'S SERVERS ALONE, to the longest the bridge can take
+	// to answer a call (internal/api/mcpbridge's Bridge.CallTimeout). The
+	// bridge keeps a running call's answer going, which answers every silence
+	// check a harness keeps on a call, so without it a call that hangs keeps
+	// its run waiting the harness's own default out: Claude Code's 1e8 ms,
+	// OpenCode's twelve hours (by reading 2.1.310's and 2.1.4's bundles). A
+	// server that runs in the box is the harness's to time.
+	CallTimeout time.Duration
 }
 
 // Transport is how the in-box agent reaches one server.

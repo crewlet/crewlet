@@ -55,8 +55,15 @@ func TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant(t *testing.T) {
 // the catalogue does not name, a person who is not one, or no reason.
 func TestAnAccessRequestNobodyCouldGrantIsRefused(t *testing.T) {
 	t.Parallel()
+	workflows := advisor.GitHubAccessKey("workflows", "write")
+	says := map[string]string{
+		"an unknown access": "Settings, Integrations, then the integration's Agents tab",
+		"no GitHub App":     "Settings, Integrations, GitHub, Agents",
+	}
 	for name, args := range map[string]map[string]any{
 		"an unknown access": {"item": "ENG-1", "ask": "founder", "access": "grant-everything",
+			"why": "x"},
+		"no GitHub App": {"item": "ENG-1", "ask": "founder", "access": string(workflows),
 			"why": "x"},
 		"asked of an agent": {"item": "ENG-1", "ask": "agent-ceo",
 			"access": string(advisor.AccessHealth), "why": "x"},
@@ -80,7 +87,32 @@ func TestAnAccessRequestNobodyCouldGrantIsRefused(t *testing.T) {
 				t.Errorf("result = %+v with %d writes, want a refusal and nothing posted",
 					got, len(trk.patched))
 			}
+			if want := says[name]; !strings.Contains(got.Output, want) {
+				t.Errorf("refusal %q does not say where an administrator grants it (%q)",
+					got.Output, want)
+			}
 		})
+	}
+}
+
+// THE TOOL OFFERS EVERY GITHUB PERMISSION A SEAT CAN HOLD, and says the access
+// is the Crewlet grant an administrator sets, so an agent never improvises a
+// path at the vendor for a gap the catalogue names.
+func TestRequestAccessOffersWhatASeatCanHoldAndWhereItIsSet(t *testing.T) {
+	t.Parallel()
+	reg := workRegistry(t, accessDeps(newFakeTracker()))
+	entry, ok := reg.Lookup(builtin.RequestAccessTool)
+	if !ok {
+		t.Fatal("request_access is not registered")
+	}
+	desc := entry.Tool.Description()
+	for _, want := range []string{"`" + string(advisor.GitHubAccessKey("workflows", "write")) + "`",
+		"`" + string(advisor.GitHubAccessKey("deployments", "read")) + "`",
+		"your Crewlet grant, which an administrator sets in Crewlet, never at the vendor",
+		"Settings, Integrations, then the integration's Agents tab"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("the description lacks %q:\n%s", want, desc)
+		}
 	}
 }
 
@@ -140,5 +172,39 @@ func TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt(t *testing.T) {
 				t.Errorf("answer = %+v with %d writes, want posted %v", got, len(trk.patched), tc.want)
 			}
 		})
+	}
+}
+
+// A GRANT THIS BUILD NO LONGER OFFERS IS NEVER ANSWERED AS A YES: a request
+// asked before the catalogue changed still offers its old key, and choosing it
+// would tell the agent yes with nothing granted. Every reserved choice is a
+// grant, so one whose key is not valid is refused, whatever the seat holds.
+//
+// Mutation: admit a reserved choice by its key's validity alone and this posts.
+func TestARetiredGrantIsNeverAnsweredAsAYes(t *testing.T) {
+	t.Parallel()
+	const retired = "grant-github-contents"
+	trk := newFakeTracker()
+	trk.thread.AnswersDecision = &decision.Decision{Options: []decision.Option{
+		{ID: retired, Label: "Allow it"}, {ID: "decline", Label: "Not now"}}}
+	trk.thread.AnsweredAuthor = "agent-cto"
+	reg := tools.NewRegistry()
+	holdsEverything := func(context.Context, string) (*org.Role, error) {
+		return &org.Role{HealthTools: true}, nil
+	}
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Work: builtin.WorkDeps{
+		Reader: trk, Writer: trk.as, FleetSeat: holdsEverything}})); err != nil {
+		t.Fatal(err)
+	}
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
+		"item": "ENG-1", "answers": "c-ask", "choice": retired})
+	if !got.Failed || len(trk.patched) != 0 || !strings.Contains(got.Output, "no longer offers") {
+		t.Errorf("answer = %+v with %d writes, want it refused as a grant no longer offered",
+			got, len(trk.patched))
+	}
+	declined := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
+		"item": "ENG-1", "answers": "c-ask", "choice": "decline"})
+	if declined.Failed || len(trk.patched) != 1 {
+		t.Errorf("declining = %+v with %d writes, want it posted", declined, len(trk.patched))
 	}
 }

@@ -772,7 +772,9 @@ export function ItemsView({
         load: paged.loadMore,
         note: paged.pageError
           ? "Couldn’t load more. Try again."
-          : loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped),
+          : paged.restarted
+            ? "This list changed since it was loaded, so it starts again from the top."
+            : loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped),
       }
     : undefined;
   // A BUSY CALENDAR DAY, as this list narrowed to that day and drawn as a
@@ -937,6 +939,7 @@ export function ItemsView({
               arrange={phone ? arrangement(false) : undefined}
               shape={shape}
               workspace={!project}
+              assigneeFixed={lockedAssignee !== ""}
               trash={inTrash}
               viewShape={savedShape}
               groupBy={axis}
@@ -1061,6 +1064,7 @@ export function ItemsView({
                 // one.
                 foot={foot}
                 seats={seats}
+                assigneeFixed={lockedAssignee !== ""}
                 more={pageMore}
                 sort={sort === EXPLICIT_NONE ? containerOrder : sort}
                 defaultSort={gridDefaultOrder}

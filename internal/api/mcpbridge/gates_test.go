@@ -308,18 +308,21 @@ func TestClosingOneRunLeavesAnotherServing(t *testing.T) {
 // A CALL NOBODY WAITED FOR IS RECORDED SO. The bridge runs a call under its
 // run's context, so a call goes on once its harness cancels it — Claude
 // Code cancels the request at its tool timeout and discards a late answer — and
-// once the opening it was made on ends, its box's sessions closed behind it.
-// Either way its effect happens and no harness is handed its answer: the session
-// of the job that made it holds it with no outcome or a failed one, so its
-// record says nobody waited (mcpbridge.Call.Abandoned), as read the moment its
-// tool returned. A call returned to a harness still waiting for it, and one no
-// request carries, are recorded as ever.
+// once the opening it was made on ends, which answers it at once that it is
+// still running and closes the box's sessions behind that answer. Either way its
+// effect happens and no harness is handed its answer: the session of the job
+// that made it holds it with no outcome, a failed one or the end's, so its
+// record says nobody waited (mcpbridge.Call.Abandoned), as decided the moment
+// its tool returned. A call returned to a harness still waiting for it, and one
+// no request carries, are recorded as ever.
 //
 // Mutation: read nothing of whether the harness still waits, or nothing of the
 // opening's end, and a call nobody was handed the answer of is recorded as one
 // its harness had.
 func TestACallNobodyWaitedForIsRecordedSo(t *testing.T) {
 	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 	held := newHeldTool("delegate")
 	g := newGated(t, held)
 	t.Cleanup(held.free)
@@ -333,17 +336,26 @@ func TestACallNobodyWaitedForIsRecordedSo(t *testing.T) {
 	<-held.entered
 
 	// THE OPENING ENDS while a call runs on it: the run settles, or its next
-	// job's opening replaces it.
-	returned := make(chan struct{})
+	// job's opening replaces it. The call is answered at once, and recorded
+	// once its tool returns.
+	returned := make(chan toolsession.Result, 1)
 	go func() {
-		defer close(returned)
-		opened.Call(toolsession.Call{Name: "delegate", Arguments: map[string]any{"value": "hold"},
+		returned <- opened.Call(toolsession.Call{Name: "delegate", Arguments: map[string]any{"value": "hold"},
 			Abandoned: make(chan struct{})})
 	}()
 	<-held.entered
 	g.bridge.Close("run-1")
+	select {
+	case res := <-returned:
+		if res.Failed || res.Output != mcpbridge.EndedRunningNote {
+			t.Errorf("the call still running as its opening ended was answered %v %q, want %q",
+				res.Failed, res.Output, mcpbridge.EndedRunningNote)
+		}
+	case <-ctx.Done():
+		t.Fatal("the call still running as its opening ended was not answered")
+	}
 	held.free()
-	<-returned
+	g.bridge.AwaitCalls(ctx)
 
 	rows := g.ledger.rows()
 	if len(rows) != 4 {

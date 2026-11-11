@@ -258,6 +258,75 @@ func TestSyncRefusesASinkTheCompanyNames(t *testing.T) {
 	}
 }
 
+// A DRY RUN THAT FINDS A SINK SOMETHING ELSE NAMES REPORTS IT AND KEEPS THE LAST
+// SYNC: the refusal is said on the integration, since the seat's record does
+// not carry it, and the lane's result and its clock stay the writing sync's.
+//
+// Mutation: refuse the shared sink before the dry-run branch again and the
+// lane reads refused at the dry run's instant.
+func TestADryRunReportsASharedSinkAndKeepsTheLastSync(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.sync(t, company(&config.RoleDatadog{Enabled: no(), Role: "a"}), nil)
+	written := h.record(t).Lanes[dd].Sync
+	if written == nil {
+		t.Fatal("the writing sync recorded no result")
+	}
+	c := company(&config.RoleDatadog{Enabled: yes(), Role: "a"})
+	c.Integrations.Datadog = &config.Datadog{Enabled: true, Provisioning: &config.DatadogProvisioning{
+		AppKey: "${DATADOG_APP_KEY_SRE}",
+	}}
+	dry := at.Add(10 * time.Minute)
+	report, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: h.v, Open: seataccess.OpenInput{Config: c}, Ledger: h.ledger,
+		Now: func() time.Time { return dry },
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	lane := h.record(t).Lanes[dd]
+	if lane.Sync == nil || lane.Sync.Outcome != written.Outcome || !lane.Sync.At.Equal(written.At) ||
+		!lane.ObservedAt.Equal(dry) {
+		t.Fatalf("lane = %+v, want the writing sync's result kept and the check moved to %v", lane, dry)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Seat ||
+		!strings.Contains(report.Findings[0].Detail, "DATADOG_APP_KEY_SRE") {
+		t.Fatalf("findings = %+v, want the shared name reported on the integration", report.Findings)
+	}
+	if len(h.v.Applied) != 0 {
+		t.Fatalf("a dry run applied %v", h.v.Applied)
+	}
+}
+
+// A WRITING SYNC RECORDS THE VENDOR'S NAMES FOR THE GRANT, as it read the
+// vendor's offer, so a turn names the level with no vendor asked; a dry run
+// keeps them, and a level the document moves is named as the next writing sync
+// reads it.
+//
+// Mutation: drop the words from the lane's record and a turn is told the id.
+func TestAWritingSyncRecordsTheVendorsNamesForTheGrant(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "c"}), nil)
+	words := h.record(t).Lanes[dd].Words
+	if words == nil || len(words.Levels) != 1 || words.Levels[0].ID != "c" || words.Levels[0].Name != "C" ||
+		words.Levels[0].Administers {
+		t.Fatalf("words = %+v, want the vendor's name for level c alone", words)
+	}
+	if _, err := seataccess.Sync(t.Context(), seataccess.SyncInput{Vendor: h.v,
+		Open:   seataccess.OpenInput{Config: company(&config.RoleDatadog{Enabled: yes(), Role: "c"})},
+		Ledger: h.ledger, Now: func() time.Time { return at.Add(time.Minute) }}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if kept := h.record(t).Lanes[dd].Words; kept == nil || kept.Levels[0].Name != "C" {
+		t.Fatalf("a dry run left words %+v, want the writing sync's kept", kept)
+	}
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "b"}), nil)
+	if moved := h.record(t).Lanes[dd].Words; moved == nil || moved.Levels[0].Name != "B" {
+		t.Fatalf("after the level moved, words = %+v, want level b's name", moved)
+	}
+}
+
 // A SINK SOMETHING ELSE NAMES REFUSES ONLY THE STEPS THAT SEAL: turning the
 // agent off takes access away and clears nothing another reader holds, so it
 // goes ahead, and the shared name stays sealed for its other reader.
@@ -435,6 +504,59 @@ func TestSyncWithNoSinkIsADryRun(t *testing.T) {
 	}
 	if len(h.v.Applied) != 0 {
 		t.Fatalf("a dry run applied %v", h.v.Applied)
+	}
+}
+
+// TWO CLOCKS, EACH MOVED BY ITS OWN PASS: every pass that reads the vendor
+// moves ObservedAt, a dry run included, and only a writing sync moves Sync, so
+// a row can say it was just checked without claiming it was just applied.
+func TestEveryPassMovesTheCheckAndOnlyAWritingSyncMovesTheSync(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	c := company(&config.RoleDatadog{Enabled: yes(), Role: "a"})
+	pass := func(write bool, now time.Time, vendor seataccess.Vendor) {
+		t.Helper()
+		in := seataccess.SyncInput{
+			Vendor: vendor, Open: seataccess.OpenInput{Config: c}, Ledger: h.ledger,
+			Pass: "pass", By: "reconcile loop", Now: func() time.Time { return now },
+		}
+		if write {
+			in.Sink = h.sink
+		}
+		if _, err := seataccess.Sync(t.Context(), in); err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+	}
+	clocks := func() (observed, synced time.Time) {
+		t.Helper()
+		lr := h.record(t).Lanes[dd]
+		if lr.Sync == nil {
+			t.Fatalf("lane = %+v, want a sync recorded", lr)
+		}
+		return lr.ObservedAt, lr.Sync.At
+	}
+
+	pass(true, at, h.v)
+	if observed, synced := clocks(); !observed.Equal(at) || !synced.Equal(at) {
+		t.Fatalf("a writing sync: checked %v, synced %v; want both %v", observed, synced, at)
+	}
+	dry := at.Add(10 * time.Minute)
+	pass(false, dry, h.v)
+	if observed, synced := clocks(); !observed.Equal(dry) || !synced.Equal(at) {
+		t.Fatalf("a dry run: checked %v, synced %v; want checked %v and synced %v",
+			observed, synced, dry, at)
+	}
+	unreadDry := dry.Add(10 * time.Minute)
+	pass(false, unreadDry, faultingVendor{Vendor: h.v, fault: "sre"})
+	if observed, synced := clocks(); !observed.Equal(dry) || !synced.Equal(at) {
+		t.Fatalf("a dry run that could not read the seat: checked %v, synced %v; want "+
+			"neither moved (%v, %v)", observed, synced, dry, at)
+	}
+	unread := unreadDry.Add(10 * time.Minute)
+	pass(true, unread, faultingVendor{Vendor: h.v, fault: "sre"})
+	if observed, synced := clocks(); !observed.Equal(dry) || !synced.Equal(unread) {
+		t.Fatalf("a writing sync that could not read the seat: checked %v, synced %v; want "+
+			"the check kept at %v and the failure recorded at %v", observed, synced, dry, unread)
 	}
 }
 

@@ -1189,9 +1189,13 @@ func (q *Query) parseGrouping(p Params) error {
 // spend_tokens:sum`). It was `spend`, which stopped naming one number the day
 // a row could carry `fields=spend` — an object of five — and a sort on "spend"
 // would have had to pick which of them it meant without saying so.
+//
+// The last four order by what a value means rather than how it is spelled, so
+// each compiles to terms of its own ([derivedOrders]) rather than a column.
 var sortKeys = []string{
 	"rank", "updated", "due", "start", "priority", "created", "title",
 	"estimate", "points", "spend_tokens", "reopens", "status_entered", "removed",
+	"key", "status", "assignee", "type",
 }
 
 func (q *Query) parseSort(p Params) error {

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -195,7 +196,9 @@ func TestAnAgentsMentionThatAsksNothingWakesNoAgent(t *testing.T) {
 		wake := worklet.Wake{Kind: worklet.ChangeComment, Before: created, After: created,
 			Comment: &comment, Mentions: comment.Mentions, Asks: c.asks,
 			MentionedAgents: agents}.Notify(nil)
-		if _, err := r.writer.As(c.author, c.kind, worklet.Provenance{}).UpdateTask(t.Context(),
+		// IN A TURN NOBODY WOKE, so the comment carries nobody it was made for.
+		writer := r.writer.As(c.author, c.kind, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
+		if _, err := writer.UpdateTask(t.Context(),
 			"op-"+comment.ID, created.ID, "ENG", worklet.NoIfMatch,
 			worklet.TaskPatch{Comment: &comment}, worklet.ChangeComment, wake); err != nil {
 			t.Fatalf("%s's comment: %v", c.author, err)

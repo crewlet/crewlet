@@ -412,6 +412,12 @@ alone, and what the seat may do on GitHub is this list:
 - **Narrowing applies on the next token.** Every token is minted with the seat's
   permissions and repositories, so lowering a level or removing a repository
   needs nothing at GitHub.
+- **The app may hold more than the agent uses.** A permission the app is
+  registered with that the agent's grant in Crewlet leaves out, or holds at a
+  lower level, is never drift, since every token is narrowed to the grant. The
+  Agents tab says so under the agent's row ("The app also holds Workflows; this
+  agent does not use it"), and the agent gets it only once an administrator
+  adds it to the grant on that tab.
 - **A raise past the registration waits for two people.** The app's owner adds
   the permission on the app's permissions page, and GitHub then asks an
   organization owner to accept it on the installation. The Agents tab shows the
@@ -426,6 +432,16 @@ alone, and what the seat may do on GitHub is this list:
   run a workflow it rewrote with the secrets the repository hands its runs, so
   pair it with branch protection on the default and release branches and keep
   deployment credentials in environment-scoped secrets.
+- **A merge or deploy request reads GitHub as the agent's own app.** Merging a
+  pull request through `ask_to_merge` needs Contents (Read and write), which is
+  GitHub's rule for a merge, and the base branch's protection or rulesets must
+  still let the app merge. A required check counts only as a check run the app
+  may read (Checks, Read-only) or a commit status, and only where an app other
+  than one of the company's own agents reported it, so an agent never reports
+  its own change as passing. Agent apps are not offered Commit statuses, so a
+  required check that external CI reports as a commit status reads as unread
+  in a private repository, and the merge or deploy goes to people rather than
+  to a delegate. See [Delegated Decisions](../guides/delegated-decisions.md).
 - **Seats migrated from tiers** keep exactly what their tier granted,
   permission by permission: `read_only` holds Contents, Issues, Pull requests,
   Checks, Actions and Deployments at Read-only; `review` raises Issues and Pull

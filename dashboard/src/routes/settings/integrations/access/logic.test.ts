@@ -21,6 +21,7 @@ import {
   digitaloceanWaitingAnswer,
   expoAnswer,
   expoWaitingAnswer,
+  githubAnswer,
   neutralAnswer,
   offLane,
   onLane,
@@ -38,7 +39,9 @@ import {
   levelName,
   boxSettings,
   boxSettingsFact,
+  ceilingNote,
   changeSummary,
+  clockValue,
   credentialNote,
   noToolRemedy,
   onlyScope,
@@ -57,55 +60,133 @@ import {
   toolWords,
   type Lane,
 } from "./logic.ts";
-import type { AccessSeatLane, AccessStep } from "~/contract/access.ts";
+import type { AccessLaneStatus, AccessSeatLane, AccessStep } from "~/contract/access.ts";
 import { laneWords } from "./words.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
 
 describe("a row's status", () => {
   test("a draft reads Not saved before anything the engine said", () => {
-    expect(statusOf(DATADOG_LANE, sre(), true, false).label).toBe("Not saved");
+    expect(statusOf(DATADOG_LANE, { ...sre(), status: "refused" }, true).label).toBe("Not saved");
   });
 
-  test("an on seat with nothing to do is in sync, an off one is off", () => {
-    expect(statusOf(DATADOG_LANE, sre(), false, false)).toMatchObject({
-      label: "In sync",
-      tone: "success",
+  // THE RULE IS THE ENGINE'S (`status`); the tab only words it and picks its tone.
+  test("each status the engine sends reads in the tab's words and tone", () => {
+    const cases: [AccessLaneStatus, string, string][] = [
+      ["syncing", "Syncing", "info"],
+      ["refused", "Refused", "danger"],
+      ["changed_at_vendor", "Changed at Datadog", "warning"],
+      ["needs_you", "Needs you", "warning"],
+      ["next_sync", "Next sync", "info"],
+      ["in_sync", "In sync", "success"],
+      ["off_account_kept", "Off, account kept", "neutral"],
+      ["off", "Off", "neutral"],
+      ["departed", "Agent left", "warning"],
+    ];
+    for (const [status, label, tone] of cases) {
+      expect(statusOf(DATADOG_LANE, { ...sre(), status }, false)).toMatchObject({ label, tone });
+    }
+    expect(statusOf(DATADOG_LANE, { ...sre(), status: "syncing" }, false).busy).toBe(true);
+    expect(statusOf(DATADOG_LANE, offLane(), false).label).toBe("Off");
+  });
+
+  // A NEWER OR OLDER ENGINE may send a status this bundle has no words for, or
+  // none: the row reads the engine's own label, neutral, and the tab still draws.
+  test("a status the tab does not know reads the engine's label, neutral", () => {
+    const unknown = { ...sre(), status: "quarantined", status_label: "Quarantined" };
+    expect(statusOf(DATADOG_LANE, unknown as unknown as AccessSeatLane, false)).toEqual({
+      label: "Quarantined",
+      tone: "neutral",
     });
-    expect(statusOf(DATADOG_LANE, offLane(), false, false).label).toBe("Off");
-  });
-
-  test("a refusal, a person's step and a change made by hand each say so", () => {
-    const failed = { ...sre(), sync: { at: "", outcome: "failed" as const, steps: [] } };
-    expect(statusOf(DATADOG_LANE, failed, false, false).label).toBe("Refused");
-    const waiting = {
-      ...sre(),
-      plan: [
-        { op: "create" as const, verb: "approve" as const, text: "Accept", by: "you" as const },
-      ],
-    };
-    expect(statusOf(DATADOG_LANE, waiting, false, false).label).toBe("Needs you");
-    const drift = {
-      ...sre(),
-      observed: { ...sre().observed, changed_by_hand_at: "2026-10-29T10:00:00Z" },
-      plan: [
-        { op: "level" as const, verb: "restore" as const, text: "Restore", by: "crewlet" as const },
-      ],
-    };
-    expect(statusOf(DATADOG_LANE, drift, false, false).label).toBe("Changed at Datadog");
-  });
-
-  test("a pending plan reads Syncing while a sync runs", () => {
-    const pending = {
-      ...sre(),
-      plan: [
-        { op: "level" as const, verb: "rerole" as const, text: "Change", by: "crewlet" as const },
-      ],
-    };
-    expect(statusOf(DATADOG_LANE, pending, false, true)).toMatchObject({
-      label: "Syncing",
-      busy: true,
+    const missing: Partial<AccessSeatLane> = { ...sre() };
+    delete missing.status;
+    delete missing.status_label;
+    expect(statusOf(DATADOG_LANE, missing as unknown as AccessSeatLane, false)).toEqual({
+      label: "Status unknown",
+      tone: "neutral",
     });
+  });
+});
+
+describe("a row's clocks", () => {
+  const now = Date.parse("2026-11-10T12:00:00Z");
+  const at = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
+
+  // TWO CLOCKS IN ONE VALUE: Check now moves the first and never the second, so
+  // a row just checked is never read as just applied.
+  test("a lane says when it was checked and when a sync last applied it", () => {
+    const lane = {
+      ...sre(),
+      observed_at: at(1),
+      sync: { at: at(10), outcome: "ok" as const, steps: [] },
+    };
+    expect(clockValue(lane, now)).toBe("Checked 1m ago, last applied 10m ago");
+    const refused = { ...lane, sync: { ...lane.sync, outcome: "failed" as const } };
+    expect(clockValue(refused, now)).toBe("Checked 1m ago, refused 10m ago");
+    const waiting = { ...lane, sync: { ...lane.sync, outcome: "waiting" as const } };
+    expect(clockValue(waiting, now)).toBe("Checked 1m ago, waiting on a person since 10m ago");
+    const { sync: _, ...unsynced } = lane;
+    expect(clockValue(unsynced, now)).toBe("Checked 1m ago, never applied");
+  });
+
+  test("a lane no pass has checked says so, or what its last sync did", () => {
+    const { observed_at: _o, sync: _s, ...never } = sre();
+    expect(clockValue(never, now)).toBe("Not checked yet");
+    const { observed_at: _, ...applied } = {
+      ...sre(),
+      sync: { at: at(10), outcome: "ok" as const, steps: [] },
+    };
+    expect(clockValue(applied, now)).toBe("Last applied 10m ago");
+  });
+});
+
+describe("what the app holds past the grant", () => {
+  const qa = () => githubAnswer().seats[0]!.lanes.github!;
+  const withCeiling = (ceiling: Record<string, "read" | "write">) => ({
+    ...qa().observed,
+    ceiling,
+  });
+
+  test("a permission the app holds and the grant lacks is one the agent does not use", () => {
+    const want = qa().desired;
+    expect(
+      ceilingNote(GITHUB_LANE, want, withCeiling({ ...want.permissions, workflows: "write" })),
+    ).toBe("The app also holds Workflows; this agent does not use it.");
+    expect(
+      ceilingNote(
+        GITHUB_LANE,
+        { enabled: true, permissions: { issues: "write" } },
+        withCeiling({ issues: "write", workflows: "write", deployments: "read" }),
+      ),
+    ).toBe("The app also holds Deployments and Workflows; this agent does not use them.");
+  });
+
+  test("a level the app holds above the grant names the level the agent uses", () => {
+    const want = qa().desired;
+    expect(
+      ceilingNote(GITHUB_LANE, want, withCeiling({ ...want.permissions, contents: "write" })),
+    ).toBe("The app also holds Contents Read and write; this agent uses Read-only.");
+    expect(
+      ceilingNote(
+        GITHUB_LANE,
+        { enabled: true, permissions: { contents: "read", checks: "read" } },
+        withCeiling({ contents: "write", checks: "write" }),
+      ),
+    ).toBe(
+      "The app also holds Contents and Checks Read and write; this agent uses them Read-only.",
+    );
+  });
+
+  test("nothing past the grant, an off agent or another vendor says nothing", () => {
+    const want = qa().desired;
+    expect(ceilingNote(GITHUB_LANE, want, withCeiling({ ...want.permissions }))).toBeNull();
+    expect(ceilingNote(GITHUB_LANE, want, { ...qa().observed, ceiling: undefined })).toBeNull();
+    expect(
+      ceilingNote(GITHUB_LANE, { ...want, enabled: false }, withCeiling({ workflows: "write" })),
+    ).toBeNull();
+    expect(
+      ceilingNote(DATADOG_LANE, sre().desired, withCeiling({ workflows: "write" })),
+    ).toBeNull();
   });
 });
 
@@ -202,7 +283,7 @@ test("a credential provided externally is never rotated by Crewlet", () => {
 });
 
 test("an agent that left the company reads as such, whatever its sync", () => {
-  expect(statusOf(DATADOG_LANE, sre(), false, false, true)).toMatchObject({
+  expect(statusOf(DATADOG_LANE, { ...sre(), status: "departed" }, true)).toMatchObject({
     label: "Agent left",
     tone: "warning",
   });
@@ -663,7 +744,7 @@ test("a tool waiting with the engine's reason says the reason", () => {
   expect(toolWords(NEUTRAL_LANE, waiting)).toBe(
     "Waiting for the credential, Its tool server, one per agent",
   );
-  expect(statusOf(NEUTRAL_LANE, waiting, false, false).label).toBe("In sync");
+  expect(statusOf(NEUTRAL_LANE, waiting, false).label).toBe("In sync");
 });
 
 // DIGITALOCEAN'S TOOL IS ITS MCP SERVER OR DOCTL IN THE BOX, and the variable

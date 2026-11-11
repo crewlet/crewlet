@@ -1357,12 +1357,18 @@ const (
 	// (the attention queue's notice rows and each unread source's sentence), the
 	// alarm words already in the shell's engine panel and no screen's module in
 	// the entry. So it moved to 401 KiB, 2.19 seconds.
+	// Delegated decisions took it to 401.0 KiB, past that by bytes (+251
+	// gzipped): the new Settings section's row, route, crumb and lazy screen
+	// and one storage key, +207 over the entry and its shared chunks, and the
+	// one sheet the escalation note's rules, +44; every screen's module of it
+	// is lazy. So it moved to 402 KiB, 2.20 seconds.
 	// Every page action's arguments held to the engine's bounds for a schema
-	// before a page context is sent took it from 400.8 KiB to 401.3 KiB: the
-	// chunk the assistant's page registry is built in +404 bytes gzipped (the
-	// guard, and the words it names an action it leaves out in), since every
-	// page context is built there, and the rest within a few bytes, with no
-	// screen's module in the entry. So it moved to 402 KiB, 2.20 seconds.
+	// before a page context is sent took it from 400.8 KiB to 401.3 KiB on the
+	// tree it was built on: the chunk the assistant's page registry is built
+	// in +404 bytes gzipped (the guard, and the words it names an action it
+	// leaves out in), since every page context is built there, with no
+	// screen's module in the entry. Merged on top of delegated decisions it
+	// measured 401.7 KiB, inside 402 KiB.
 	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2196,24 +2202,52 @@ const (
 	// merged on top of it, took it to 5712.5 KiB (5,849,583 bytes, +428, all
 	// script): still 5713 KiB. An agent's permissions and scope read as their
 	// values beside a pencil, the scope changed in a dialog of its own, took it
-	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB. An open
-	// draft held to what the engine takes (draft.set's arguments declared only
-	// while one schema holds them, and sizes counted as the engine encodes
-	// them) took it to 5716.3 KiB (5,853,532 bytes, +538 over the tree it was
-	// built on, all script): 5717 KiB. Ask Crewlet reading and proposing to
-	// the agents' access draft (an integration's Agents tab and an agent's
-	// Access tab, one draft over its tabs) and draft.set written in its fields'
-	// order took it to 5725.3 KiB (5,862,652 bytes, +9,120, all script):
-	// 5726 KiB. Every page action's arguments held to the engine's bounds
-	// for a schema before a page context is sent, the page context's own
-	// bounds held to the engine's, and the Budgets ceiling's seat held to a
-	// handle's grammar past an enum's 64 took it to 5726.6 KiB (5,864,019
-	// bytes, +1,367, all script): 5727 KiB. The org builder's identities and
-	// a mention held to the engine's (+131), a new project's key checked by
-	// its grammar (+92) and a deck's title held to its bytes, with Save held
-	// past it or past a slide's notes (+589), took it to 5727.4 KiB (5,864,831
-	// bytes, all script): 5728 KiB.
-	treeBudget = 5<<20 + 608<<10
+	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB. The work
+	// grid's Key, Status, Type and Assignee sort heads, merged with a session's
+	// relaunch note on Executors, took it to 5716.1 KiB (5,853,244 bytes, +431,
+	// all script): 5717 KiB. A tool change reviewed whole, a part it cannot
+	// show said rather than drawn as unchanged, and wording changes to
+	// read-only tools listed and accepted together, merged on top of it, took
+	// it to 5718.9 KiB (5,856,204 bytes, +2,960, all script): 5719 KiB. A
+	// withdrawn question read with its asker's reason and what covers it, and
+	// the Inbox leading with the agent work a person holds up, merged on top of
+	// it, took it to 5720.6 KiB (5,857,851 bytes, +1,647, all script): 5721 KiB.
+	// An agent's two access clocks, the note on what its GitHub App holds past
+	// its grant, the engine's status word and Ask Crewlet taking images only
+	// where deep work reads them, merged on top of it, took it to 5721.9 KiB
+	// (5,859,202 bytes, +1,351, all script): 5722 KiB. Delegated decisions
+	// (an escalated call's delegates read before the call, an answer a
+	// delegate gave marked with its rule, Settings › Delegated decisions and
+	// Home's digest notices) took it to 5737.3 KiB (5,874,972 bytes, +15,770:
+	// script +15,542, the sheets +228): 5738 KiB. Merges and deploys decided
+	// under delegation (a held merge's and a deploy's request drawn as text,
+	// who may answer it, a rule's always-escalate paths and the merge and
+	// deploy conditions' words) took it to 5741.6 KiB (5,879,381 bytes,
+	// +4,409: script +4,310, the sheets +99): 5742 KiB. A lane status this
+	// bundle does not know drawn in the engine's words, an image dropped where
+	// none is taken refused in place, a server's tools drawn a page at a time,
+	// a tool change's schema always drawn whole, the wording list frozen at its
+	// first press, a decision written in part said as such and a work list
+	// starting again from its first page when the engine refuses its cursor,
+	// merged on top of it, took it to 5743.0 KiB (5,880,861 bytes, +1,480, all
+	// script): 5744 KiB.
+	// An open draft held to what the engine takes (draft.set's arguments
+	// declared only while one schema holds them, and sizes counted as the
+	// engine encodes them), Ask Crewlet reading and proposing to the agents'
+	// access draft (an integration's Agents tab and an agent's Access tab, one
+	// draft over its tabs) with draft.set written in its fields' order, every
+	// page action's arguments and the page context held to the engine's
+	// bounds, the Budgets ceiling's seat held to a handle's grammar past an
+	// enum's 64, and the org builder's identities and a mention held to the
+	// engine's, +11,156 bytes on the tree they were built on, merged on top of
+	// it, took it to 5753.9 KiB (5,892,019 bytes, +11,158, all script):
+	// 5754 KiB. A new project's key checked by the engine's grammar (+92), a
+	// deck's title held to its bytes with Save held past it or past a slide's
+	// notes (+589), a model's secret named by the secret store's grammar (+19)
+	// and every other copied engine bound held to the engine's own (+202),
+	// +902 bytes on the tree they were built on, merged on top of it, took it
+	// to 5754.8 KiB (5,892,941 bytes, +922, all script): 5755 KiB.
+	treeBudget = 5<<20 + 635<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

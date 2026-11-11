@@ -26,6 +26,7 @@
 
 import type { Coverage } from "./coverage.ts";
 import type { ToolAnnotations, ToolRow } from "./tools.ts";
+import type { DelegatedAct, HeldDelegation } from "./delegated.ts";
 
 /**
  * A server's condition across the fleet, decided by the engine. `disabled`:
@@ -772,10 +773,8 @@ export interface McpServerAnswer {
   server: McpServerStatus;
   nodes: McpStatusNode[];
   listed: McpServerListing[];
-  /** Every tool a live node's instances list, by name. */
+  /** Every tool a live node's instances list, by name: a listing names every one. */
   tools: McpToolView[];
-  /** How many tools the server lists; never fewer than `tools` holds. */
-  tool_count: number;
   /**
    * The level of every tool `tools.levels` does not name, or null where the
    * entry sets no default, which leaves each such tool at the level its hints
@@ -814,7 +813,15 @@ export interface McpServerAnswer {
 /** One definition of a tool, in the server's words, read off the hints it declared. */
 interface McpDefinitionView {
   digest: string;
+  /**
+   * Read from the definition's record, so its words and schemas are whole.
+   * False where the fleet keeps none: the title and description are a
+   * listing's cut words.
+   */
+  whole: boolean;
+  /** The tool's own title, and the one its hints carry ("" where `whole` is false). */
   title: string;
+  hints_title: string;
   description: string;
   annotations: ToolAnnotations;
   risk: McpRisk;
@@ -846,6 +853,11 @@ interface McpListedView extends McpDefinitionView {
 export interface McpChangeView {
   tool: string;
   kinds: string[];
+  /**
+   * The parts in `kinds` this answer cannot show the change of: say each
+   * changed and is not shown, never that nothing changed.
+   */
+  unshown: string[];
   before: McpAcceptedView | null;
   after: McpListedView | null;
   /** Its declared hints claim less risk than the accepted ones. */
@@ -981,7 +993,6 @@ export interface McpMemberServerAnswer {
   nodes: McpStatusNode[];
   listed: McpServerListing[];
   tools: McpToolView[];
-  tool_count: number;
   server_info: McpServerInfo | null;
   instances: McpMemberInstanceView[];
   instance_nodes: McpMemberInstanceNodeView[];
@@ -1320,10 +1331,27 @@ export interface McpHeldCall {
   digest: string;
   /** When the call was held; "" where the row does not say. */
   held_at: string;
-  /** A call its tool asks about every time (an SSH operate command): answered Allow once or Deny alone. */
+  /**
+   * A call its tool asks about every time (an SSH operate command, a merge, a
+   * deploy): answered Allow once or Deny alone.
+   */
   fixed?: boolean;
-  /** Who answers it where not the seat's lead: `ssh` for an SSH operate command's approvers. */
+  /**
+   * Who answers it where not the seat's lead: `ssh` for an SSH operate
+   * command's approvers, `release` for a merge's or a deploy's.
+   */
   approvers?: string;
+  /**
+   * What approving it does (ADR-0125): `ssh_operate`, `pr_merge`, `deploy`, or
+   * `other`, which is never delegated.
+   */
+  act: DelegatedAct;
+  /**
+   * The delegates it went to first, their answers and why it reached people;
+   * null for a call put to people at once. Set with `escalated` null, it
+   * waits on its delegates and is in nobody's decisions.
+   */
+  delegation: HeldDelegation | null;
 }
 
 /** `GET /mcp-approvals/{id}`: the held call whole, for whoever may answer it. */
@@ -1380,4 +1408,17 @@ export interface McpChangesAnswer {
   moved: string[];
   /** The configuration's answer to the levels a block wrote; null where nothing was blocked. */
   revision: Record<string, unknown> | null;
+}
+
+/**
+ * The `503` of a decision written in part: the decisions are written one by
+ * one, and the store failed one. Beside the detail, what was decided and what
+ * was not, by the server's own tool names.
+ */
+export interface McpChangesPartial {
+  accepted: string[];
+  blocked: string[];
+  moved: string[];
+  /** The decision the store failed, then each one not tried after it. */
+  undecided: string[];
 }

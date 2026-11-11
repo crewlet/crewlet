@@ -105,6 +105,11 @@ type Work struct {
 	// Rescued marks an outcome the ENGINE synthesised because the executor
 	// never submitted one. See [OutcomeIncomplete].
 	Rescued bool
+
+	// Answer is the engine's own reading of how the turn has left the item
+	// its [Reply.Item] names, read after the phase off the tracker's rows
+	// (ADR-0122). Unread, and empty, where the reply names no item.
+	Answer types.PickupAnswer
 }
 
 // RefusedReply is a reply to a question the round's run asked that the engine
@@ -431,6 +436,11 @@ type Result struct {
 	// follow-up asking "did you do it?" was answered against a fiction.
 	Delivered bool
 
+	// PickupAnswer is how a work pickup's turn left its item, as the last
+	// round read it ([Work.Answer]): what the turn's ending record states.
+	// Empty where the reply names no item, and assigned like Delivered.
+	PickupAnswer types.PickupAnswer
+
 	// WorkedThrough are completion-ledger keys for EARLIER triggers this
 	// turn answered without being woken for them: the chat messages its
 	// thread block showed it that were still waiting for an answer.
@@ -591,7 +601,8 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.
-		res.Delivered = Answered(work.Called(), surface, in.Reply)
+		res.Delivered = Answered(work.Called(), surface, in.Reply) && !UntypedPickup(work, in.Reply)
+		res.PickupAnswer = work.Answer
 		if err != nil {
 			return broke(res, fmt.Errorf("turn: %s round %d: %w", entered, round, err))
 		}

@@ -170,10 +170,12 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints, publishPoints,
 		[]codefault.Point{codefault.WriteAfterBuild, codefault.MergeAfterBuild, codefault.ChainAfterBuild},
 		[]codefault.Point{codefault.CheckAfterClaim}, expungePoints, importPoints,
-		mirrorPoints, []codefault.Point{codefault.CommitterBeforeAdmit}); !slices.Equal(got, wantAll) {
+		mirrorPoints, []codefault.Point{codefault.CommitterBeforeAdmit},
+		[]codefault.Point{codefault.MaintainBeforeStep, codefault.WriteJoined}); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's, the compaction's and the publication's, "+
 			"then the write's own, the merge's and the chain's, then a check's run's, then the expunge's, "+
-			"an import's and a pull mirror's sync's, then the committer's admission: %v", got, wantAll)
+			"an import's and a pull mirror's sync's, then the committer's admission, then a maintenance "+
+			"run's step and an engine write's join: %v", got, wantAll)
 	}
 
 	seen := map[codefault.Point]bool{}

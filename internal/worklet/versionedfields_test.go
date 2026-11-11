@@ -32,6 +32,9 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		9:  {"TaskPatch.WaitReason"},
 		10: {"TaskPatch.ClearDue", "TaskPatch.ClearStart"},
 		11: {"TaskPatch.ChangeSettled"},
+		12: {"Comment.Withdrawal"},
+		13: {"MutationRecord.WorkingFor"},
+		14: {"Comment.Act"},
 	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {

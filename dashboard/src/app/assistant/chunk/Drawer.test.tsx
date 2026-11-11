@@ -26,7 +26,12 @@ import { withDerived } from "~/test/org.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
 import { queueQuestion, takeQueuedQuestion } from "../control.ts";
-import type { AssistantModelProblem, AssistantUnavailable } from "../availability.ts";
+import {
+  attachClosedFor,
+  type AssistantModelProblem,
+  type AssistantUnavailable,
+  type AttachClosed,
+} from "../availability.ts";
 import { Drawer } from "./Drawer.tsx";
 import { conversation, resetSessionForTest } from "./session.ts";
 
@@ -123,6 +128,7 @@ function mount(
   unavailable: AssistantUnavailable | null = null,
   model: AssistantModelProblem | null = null,
   admin = false,
+  attach: AttachClosed | null = null,
 ) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
@@ -138,6 +144,7 @@ function mount(
               <Drawer
                 unavailable={unavailable}
                 model={model}
+                attach={attach}
                 admin={admin}
                 onClose={() => {}}
                 initialFocus="composer"
@@ -371,6 +378,56 @@ test("a ready model draws no notice", () => {
   expect(screen.getByRole("button", { name: /send/i }).getAttribute("aria-disabled")).not.toBe(
     "true",
   );
+});
+
+// ONLY DEEP WORK READS AN IMAGE: where the company runs none, Attach image is
+// drawn disabled with that reason, and a pasted screenshot is refused in words
+// that say what works, never uploaded and kept unread.
+test("a company without deep work takes no image, and says what works instead", () => {
+  const sent = engine();
+  const closed = attachClosedFor({ assistantReadsImages: false })!;
+  mount(null, null, false, closed);
+  const attachButton = screen.getByRole("button", { name: /Attach image/ });
+  expect(attachButton.getAttribute("aria-disabled")).toBe("true");
+  expect(document.body.textContent).toContain(closed.short);
+
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  const shot = new File([new Uint8Array([137, 80, 78, 71])], "settings.png", { type: "image/png" });
+  fireEvent.paste(box, { clipboardData: { files: [shot], getData: () => "" } });
+  expect(screen.getByText(closed.body)).toBeDefined();
+  expect(sent.some((r) => new URL(r.url).pathname.endsWith("/files"))).toBe(false);
+  expect(attachClosedFor({ assistantReadsImages: true })).toBeNull();
+});
+
+// A DROPPED IMAGE IS REFUSED IN PLACE where none is taken: the drag and the
+// drop are both taken, so the browser never opens the file in the tab in place
+// of the dashboard and its draft, and the refusal says why as Attach does.
+// Mutation: disable the drop target again and the drop is not cancelled.
+test("an image dropped where none is taken is refused in place, never opened in the tab", async () => {
+  const sent = engine();
+  const closed = attachClosedFor({ assistantReadsImages: false })!;
+  mount(null, null, false, closed);
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  const shot = new File([new Uint8Array([137, 80, 78, 71])], "settings.png", { type: "image/png" });
+  const carried = { types: ["Files"], files: [shot], items: [] };
+  expect(fireEvent.dragOver(box, { dataTransfer: carried })).toBe(false);
+  expect(fireEvent.drop(box, { dataTransfer: carried })).toBe(false);
+  await waitFor(() => expect(screen.getByText(closed.body)).toBeDefined());
+  expect(sent.some((r) => new URL(r.url).pathname.endsWith("/files"))).toBe(false);
+});
+
+// AND WHERE NOTHING MAY BE ASKED NOW, a drop says why in the composer's own words.
+test("an image dropped while the composer is closed is refused with the composer's reason", async () => {
+  const sent = engine();
+  mount(null, SIGNED_OUT);
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  const shot = new File([new Uint8Array([137, 80, 78, 71])], "settings.png", { type: "image/png" });
+  const carried = { types: ["Files"], files: [shot], items: [] };
+  expect(fireEvent.drop(box, { dataTransfer: carried })).toBe(false);
+  await waitFor(() =>
+    expect(screen.getByText(`${SIGNED_OUT.short}, so nothing was attached.`)).toBeDefined(),
+  );
+  expect(sent.some((r) => new URL(r.url).pathname.endsWith("/files"))).toBe(false);
 });
 
 test("the history offers Clear only for a conversation with something in it", async () => {

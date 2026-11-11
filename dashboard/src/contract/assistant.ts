@@ -886,6 +886,8 @@ export interface AssistantViewerAssistant {
   reason?: AssistantViewerReason;
   /** What a `model_not_ready` reason means for this person; absent for every other reason. */
   model?: AssistantModelNotice;
+  /** A question's images are read: only deep work reads them, so absent where the company has none. */
+  reads_images?: boolean;
 }
 
 /**

@@ -161,6 +161,15 @@ func (e *Engine) MCPAccepted(context.Context) ([]coord.MCPAcceptedTool, error) {
 	return out, nil
 }
 
+// acceptedRecords is every accepted definition in this node's copy, answered
+// or not.
+func (e *Engine) acceptedRecords() []coord.MCPAcceptedTool {
+	r := &e.reviews
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Collect(maps.Values(r.records))
+}
+
 // reviewIndex is this node's copy by server and tool, and whether it has been
 // answered.
 func (e *Engine) reviewIndex() (mcpreview.Index, bool) {
@@ -243,8 +252,8 @@ func (e *Engine) baselineMCPTools(ctx context.Context, desired map[string]nodeLi
 	}
 }
 
-// acceptedDigests is every digest an accepted definition names: a schema the
-// sweep keeps for as long as a change is shown beside it.
+// acceptedDigests is every digest an accepted definition names: a definition
+// the sweep keeps for as long as a change is shown beside it.
 func acceptedDigests(accepted []coord.MCPAcceptedTool) map[string]struct{} {
 	out := make(map[string]struct{}, len(accepted))
 	for _, a := range accepted {
@@ -345,7 +354,7 @@ func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []stat
 				continue
 			}
 			holding = append(holding, pending{&conds[j], change})
-			if change.After.SchemaKept {
+			if change.After.DefinitionKept {
 				digests = append(digests, change.After.Digest)
 			}
 		}
@@ -367,19 +376,19 @@ func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []stat
 }
 
 // seenAt is when the fleet first stored each definition digest names, by its
-// schema record's stamp: what a change's `seen_at` is. A digest whose schema
-// is not stored is left out.
+// definition record's stamp: what a change's `seen_at` is. A digest whose
+// definition is not stored is left out.
 func (e *Engine) seenAt(ctx context.Context, digests []string) map[string]time.Time {
 	out := make(map[string]time.Time, len(digests))
 	if len(digests) == 0 {
 		return out
 	}
-	schemas, err := e.MCPToolSchemas(ctx, slices.Compact(slices.Sorted(slices.Values(digests))))
+	definitions, err := e.MCPToolDefinitions(ctx, slices.Compact(slices.Sorted(slices.Values(digests))))
 	if err != nil {
-		log.WarnContext(ctx, "mcp_change_schemas_unread", "error", err,
-			"detail", "the changes are dated by the schemas this node holds")
+		log.WarnContext(ctx, "mcp_change_definitions_unread", "error", err,
+			"detail", "the changes are dated by the definitions this node holds")
 	}
-	for digest, s := range schemas {
+	for digest, s := range definitions {
 		out[digest] = s.At
 	}
 	return out

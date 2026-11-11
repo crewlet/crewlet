@@ -59,6 +59,7 @@ import type {
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
+import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
 import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
@@ -207,6 +208,16 @@ export interface EventRecord {
    * published.
    */
   node?: string;
+}
+
+/**
+ * What a screen reads off an `executor_answered` or `executor_answer_given`
+ * payload beyond its summary (`types.ExecutorAnswered`): the
+ * delegated-decisions rule a delegate answered under (ADR-0125). Absent,
+ * never 0, on a person's answer.
+ */
+export interface ExecutorAnswerPayload {
+  delegated_rule?: number;
 }
 
 export interface EventsPage {
@@ -5543,6 +5554,21 @@ export interface WorkHoldingRow extends WorkSummary {
   holders: string[];
   /** When it was last assigned, or filed already assigned. */
   held_since: string;
+  /** The open question to the person this row is held by, its comment id,
+   *  where they hold the item by being asked: the item itself waits on them. */
+  asked?: string;
+  /** How many agent items wait on the person through this row. */
+  agent_waiting: number;
+}
+
+/** `holding_up` summed over agent work, across every held item walked. */
+export interface WorkHoldingAgents {
+  /** Held items that agent items wait on. */
+  items: number;
+  /** Distinct agent items waiting on the person. */
+  agent_items: number;
+  /** A walk stopped at its bound, so both counts are floors. */
+  capped?: boolean;
 }
 
 /** Everything one person is expected to look at — eight different CLAIMS on
@@ -5560,6 +5586,8 @@ export interface WorkMyWork {
   unblocked_recent: WorkSummary[];
   /** What they hold that other open work waits on, the most waited on first. */
   holding_up: WorkHoldingRow[];
+  /** `holding_up` summed over agent work: what the Inbox leads with. */
+  holding_agents: WorkHoldingAgents;
   /** Every block counted in FULL, by the predicate that drew its page and in
    *  the same transaction. A block is a page of at most twenty rows; its total
    *  is the claim — so a count is drawn from here, never from a length. */
@@ -5751,6 +5779,18 @@ export interface WorkAskView {
   /** The option the answer chose, by id. */
   choice?: string;
   decision?: WorkDecision;
+  /** Why its asker withdrew it, where the withdrawal recorded it. */
+  withdrawn?: WorkWithdrawn;
+}
+
+/** Why an asker withdrew their question (`worklet.Withdrawn`), and what now
+ *  covers it. */
+export interface WorkWithdrawn {
+  /** The reason's words as they stand; empty where it was since removed. */
+  reason: string;
+  reason_comment: string;
+  /** What covers it: another work item, or a link. */
+  replaced_by?: { item?: WorkTaskRef; url?: string };
 }
 
 /** A page of one person's inbox. */
@@ -5951,8 +5991,9 @@ export interface TurnRow {
  *  `work_item` (`id` the item's key, `reason` the tracker's), `schedule` (`id`
  *  its name), `colleague_ask` (`id` the colleague channel's), `code_change`
  *  (`id` the change as the Gitlet screens name it, `web!42`, `reason` the code
- *  notice's) or `alarm` (`id` the alarm instance as the alarms page names it,
- *  `reason` its transition: `fired` or `cleared`). OPEN, for
+ *  notice's), `alarm` (`id` the alarm instance as the alarms page names it,
+ *  `reason` its transition: `fired` or `cleared`) or `delegated_request`
+ *  (`id` the request a delegate decides, `reason` its act). OPEN, for
  *  a kind a newer engine adds. */
 export interface TurnOrigin {
   kind:
@@ -5962,6 +6003,7 @@ export interface TurnOrigin {
     | "colleague_ask"
     | "code_change"
     | "alarm"
+    | "delegated_request"
     | (string & {});
   id: string;
   reason?: string;
@@ -6339,8 +6381,10 @@ export interface WorkAskAnswer {
   choice?: string;
   /** The answer's words: the option's label where nothing else was written. */
   body: string;
-  /** Closed without an answer. */
+  /** Closed without an answer: withdrawn by its asker. */
   resolved?: boolean;
+  /** Why the asker withdrew it, where the withdrawal recorded it. */
+  withdrawn?: WorkWithdrawn;
 }
 
 /** The asker's first record on the task after the ask closed
@@ -7892,6 +7936,9 @@ export interface QueryMap {
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
+  /** The rules delegates decide by, and what they decided: an administrator's
+   *  and the people a rule escalates to (ADR-0125). */
+  delegated_decisions: DelegatedDecisionsAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;

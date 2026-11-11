@@ -1850,6 +1850,9 @@ type httpSurface struct {
 	// and must stop before the engine its writes go to does.
 	auth *authapi.Service
 	runs *observe.SandboxReconciler
+	// seeding is the boot seeds still being read, which write into the
+	// projection and so stop before the app does.
+	seeding *observe.Seeding
 	// drainGit waits for the git requests the API is serving — the app's
 	// [api.App.DrainGit] — and is nil on a node without the ingress role,
 	// which serves no git.
@@ -1962,7 +1965,9 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	if s.projector != nil {
 		s.projector.Stop(grace)
 	}
-	// Nil-safe, and nil on a node without ingress: it has no panel to keep.
+	// Nil-safe, and nil on a node without ingress: it has no panel to keep,
+	// and no projection to seed.
+	s.seeding.Stop()
 	s.runs.Stop()
 	if s.app != nil {
 		s.app.Stop(grace)
@@ -2058,9 +2063,10 @@ func shutdownListener(ctx context.Context, l *apiListener, listener string, log 
 const apiShutdownGrace = 5 * time.Second
 
 // seedPauses puts every paused seat on the live projection, by the agent id the
-// projection keys seats by. A pause whose seat the company no longer has is
-// skipped: the activation that removed the seat clears it.
-func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState) error {
+// projection keys seats by, and pushes the seats it moved to every open socket.
+// A pause whose seat the company no longer has is skipped: the activation that
+// removed the seat clears it.
+func seedPauses(ctx context.Context, e *engine.Engine, live *stream.Service) error {
 	pauses, err := e.Backends().Fleet.ListSeatPauses(ctx)
 	if err != nil {
 		return err
@@ -2866,51 +2872,54 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// After the subscription above, so an event published between the read
 	// and the subscribe cannot fall into the gap; the projection counts one
 	// that arrives both ways once. Before the handover, so the first socket
-	// to open sees the seeded snapshot rather than an empty one it will never
-	// be sent a correction for.
+	// to open sees the seeded snapshot; a seed that lands after it sends every
+	// open socket its snapshot again ([stream.Service.Seed]).
 	//
 	// THE FLEET'S HISTORY, read from every live data node's store through
 	// the engine's history reader: each one holds what that node published
 	// and the custody batches it keeps, so a seed read from this one alone
 	// showed a restarted node only its own share of the company.
-	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
-	_, composed := companyConfig(e)
-	err = observe.Seed(seedCtx, e.History(), composed, app.Stream().State())
-	if err != nil {
-		// NOT FATAL, and said out loud rather than swallowed: what a
-		// failed seed costs is a feed, a spend window and a seat's last
-		// turn that start now, which is invisible on the screen itself.
-		log.WarnContext(ctx, "live_projection_not_seeded", "error", err,
-			"hint", "the activity feed, the spend rollup and each seat's last "+
-				"turn start at this process's boot; older history is still "+
-				"answered by the events, turns and tokens queries")
-	}
-	// AND WHICH SEATS A PERSON PAUSED, from the record itself, for the
-	// same reason: a pause taken last week is in no event this process
-	// will hear, and a seat drawn as working while it is paused is the
-	// one state a person pausing it must not be shown.
-	if err = seedPauses(seedCtx, e, app.Stream().State()); err != nil {
-		log.WarnContext(ctx, "seat_pauses_not_seeded", "error", err,
-			"hint", "a seat paused before this process started shows as paused "+
-				"from its next pause or resume; the pause itself is in force")
-	}
+	//
+	// AND WHICH SEATS A PERSON PAUSED, from the record itself, for the same
+	// reason: a pause taken last week is in no event this process will hear,
+	// and a seat drawn as working while it is paused is the one state a
+	// person pausing it must not be shown.
+	//
 	// AND THE EXECUTORS OUT IN THEIR BOXES, from the durable record every
-	// node opens, before the handover for the seed's reason: an executor
-	// parked on a question for days is exactly the one the events of this
-	// process's lifetime will never mention. Then every interval, which is
-	// what corrects a panel whose completion event never arrived.
+	// node opens: an executor parked on a question for days is exactly the
+	// one the events of this process's lifetime will never mention. Then
+	// every interval, which is what corrects a panel whose completion event
+	// never arrived.
+	//
+	// SIDE BY SIDE, EACH READ UNTIL IT LANDS ([observe.Seeding]): one after
+	// another under one budget, a history seed slow on a large store spent
+	// the budget and failed the other two on an expired context, every boot,
+	// and none was read again for the life of the process.
 	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
-	if err = runs.Reconcile(seedCtx); err != nil {
-		log.WarnContext(ctx, "sandbox_panel_not_seeded", "error", err,
-			"hint", "the running-runs panel starts from what this process "+
-				"hears; the durable run record is read again every "+
-				livestate.ReconcileInterval.String())
-	}
-	cancelSeed()
+	seeding := observe.StartSeeding(ctx,
+		observe.HistorySeed(e.History(), func() *org.Organization {
+			_, composed := companyConfig(e)
+			return composed
+		}, app.Stream()),
+		observe.BootSeed{
+			Name:      "the paused seats",
+			NotSeeded: "seat_pauses_not_seeded", Seeded: "seat_pauses_seeded",
+			Hint: "a seat paused before this process started shows as paused once " +
+				"the seed lands, or from its next pause or resume; the pause itself is in force",
+			Attempt: func(ctx context.Context) error { return seedPauses(ctx, e, app.Stream()) },
+		},
+		observe.BootSeed{
+			Name:      "the executors in flight",
+			NotSeeded: "sandbox_panel_not_seeded", Seeded: "sandbox_panel_seeded",
+			Hint: "the running-runs panel starts from what this process hears until " +
+				"the durable run record is read",
+			Attempt: runs.Reconcile,
+		})
+	seeding.Wait(ctx, projectionSeedBudget)
 	runs.Start(ctx)
 
 	surface := &httpSurface{
-		app: app, projector: projector, runs: runs, auth: humans.SignIn,
+		app: app, projector: projector, runs: runs, seeding: seeding, auth: humans.SignIn,
 		drainGit: app.DrainGit, assistant: assistantSvc, bridge: e.Bridge(),
 	}
 	// THE PUBLIC LISTENER WAS BOUND BY THE SAME RULE THE APP SERVES ONE BY
@@ -3189,25 +3198,22 @@ func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Han
 // against a listener — costs one slot for ten seconds rather than for ever.
 const apiReadHeaderTimeout = 10 * time.Second
 
-// projectionSeedBudget bounds the fleet reads that seed the live projection and
-// the first read of the durable run record.
+// projectionSeedBudget is how long the handover waits for the boot seeds: the
+// fleet reads that seed the live projection, the pause record and the first
+// read of the durable run record ([observe.Seeding]).
 //
-// The reads run side by side, so the budget is the slowest of them rather than
+// The reads run side by side, so the wait is the slowest of them rather than
 // their sum. On a healthy fleet each is milliseconds: indexed range scans of
 // every node's own file, stopping at the projection's own bounds (the newest
 // 400 event rows without their payloads, the newest 24 000 spend records of
-// one day, three turns a seat), plus one listing of the run record. What sizes
-// the budget is a peer that does NOT answer, which every scatter waits
-// [eventfan.FleetReadBudget] for — and a seat's turn read is two scatters, so
-// five seconds is those two and a second of headroom. The spend read is one
-// scatter per [eventfan.PhaseTokenPage] records, six at the cap; with a peer
-// silent each of them waits that budget, so the read stops where the budget
-// ends and seeds the window's newest records, its coverage saying it is short.
-// It stays a ceiling on the one case that matters: a fleet that will not
-// answer must not hold the handover back, since until it every webhook is
-// answered `503 starting` and nothing on this node accepts one. A seed that
-// times out costs history on a screen, never a delivery, and the warning it
-// logs says which reads it cost.
+// one day, three turns a seat read back from the newest), plus two listings of
+// the coordination store. What sizes the wait is a peer that does NOT answer,
+// which every scatter waits [eventfan.FleetReadBudget] for, and a seat's turn
+// read is two scatters, so five seconds is those two and a second of headroom.
+// It is a ceiling on the handover, never on a seed: until the handover every
+// webhook is answered `503 starting`, so a fleet that will not answer must not
+// hold it back, and a seed still being read past it lands when it completes,
+// on every screen already open.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between

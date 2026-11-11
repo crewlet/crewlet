@@ -58,7 +58,7 @@ func settledCopy(ctx context.Context, n Node, repoID string) (cache.Synced, cach
 		if chainSettled(ch) {
 			return s, ch, nil
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: it answers errNotSettled, which fails every caller
 			return s, ch, fmt.Errorf("%w: layer %s of a chain of %d, %d installed, a minute on", errNotSettled,
 				ch.Rows[ch.Installed].Layer.LayerID, len(ch.Rows), ch.Installed)
 		}
@@ -66,7 +66,7 @@ func settledCopy(ctx context.Context, n Node, repoID string) (cache.Synced, cach
 		select {
 		case <-ctx.Done():
 			return cache.Synced{}, cache.Chain{}, ctx.Err()
-		case <-time.After(20 * time.Millisecond):
+		case <-time.After(20 * time.Millisecond): //fixedwait:liveness
 		}
 	}
 }
@@ -286,10 +286,10 @@ func tryPublishOn(ctx context.Context, n Node, cand code.PublicationCandidate) (
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := n.Compactor().Publish(ctx, cand)
-		if out != compact.OutcomeBusy || time.Now().After(deadline) {
+		if out != compact.OutcomeBusy || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: it answers the last outcome, which every caller holds
 			return out, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -300,13 +300,13 @@ func publishOn(c *Case, n Node) compact.Outcome {
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := n.Compactor().Publish(c.Ctx, publicationOf(c, n))
-		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) {
+		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: it answers the last outcome, which every caller holds
 			if err != nil && out != compact.OutcomeApplied {
 				c.T.Logf("%s's publication of %s: %s, %v", n.ID(), RepoName, out, err)
 			}
 			return out
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

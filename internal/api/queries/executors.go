@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -239,7 +240,7 @@ func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 	reach := s.runReach(ctx)
 	out := make([]any, 0, len(runs))
 	for _, run := range runs {
-		if filtered && !putTo(run, who) {
+		if filtered && !putTo(run, who, s.delegating) {
 			continue
 		}
 		r := reach(run)
@@ -302,9 +303,34 @@ func (s Sources) runReach(ctx context.Context) func(sandbox.PendingRun) livestat
 // handles, and the name a caller asked about is resolved to the one record it
 // names before anything is compared ([Sources.audienceOf], [iam.OwnerOf]). An
 // empty record — a login nobody holds a seat by — is put nothing.
-func putTo(run sandbox.PendingRun, record string) bool {
+func putTo(run sandbox.PendingRun, record string, delegating func(sandbox.PendingRun) bool) bool {
 	return record != "" && run.Ending == nil && slices.Contains(sandbox.Awaiting, run.Status) &&
-		slices.Contains(run.AudienceHandles, record)
+		slices.Contains(run.AudienceHandles, record) && !delegating(run)
+}
+
+// delegating reports whether a run's held call still waits on its delegates
+// alone (ADR-0125): put to delegates, not escalated, and still delegated by
+// the running document to those seats. TURNING DELEGATION OFF puts the call
+// in front of people on the next read, before the sweep records why.
+func (s Sources) delegating(run sandbox.PendingRun) bool {
+	held := run.HeldCall
+	if held == nil || !held.Delegated() || s.Company == nil {
+		return false
+	}
+	company, _ := s.Company()
+	if company == nil {
+		return false
+	}
+	rule, _, ok := company.DelegatedDecisions.RuleFor(delegated.Kind(held.Act))
+	if !ok {
+		return false
+	}
+	for _, d := range held.Delegation.Delegates {
+		if !slices.Contains(rule.Delegates, d) {
+			return false
+		}
+	}
+	return true
 }
 
 // audienceOf resolves the name `audience=` filters by to the record it names —
@@ -668,10 +694,43 @@ func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[
 			// A CALL ITS TOOL ASKS ABOUT EVERY TIME, answered once or deny
 			// alone, and who answers it where not the seat's lead.
 			"fixed": held.Fixed, "approvers": held.Approvers,
+			// WHAT IT IS FOR, and the delegates it went to first: their
+			// answers and why it reached people, which an escalation's
+			// card shows before the call itself (ADR-0125).
+			"act": held.Act, "delegation": delegationOf(held.Delegation),
 		}
 		row["held_arguments"] = opened.heldArgs
 	}
 	return row
+}
+
+// delegationOf is a held call's delegation as the board carries it, or an
+// untyped nil, sent as null, for a call put to people at once.
+func delegationOf(d *sandbox.HeldDelegation) any {
+	if d == nil {
+		return nil
+	}
+	given := make([]map[string]any, 0, len(d.Given))
+	for _, g := range d.Given {
+		given = append(given, map[string]any{"by": g.By, "verdict": g.Verdict, "confidence": g.Confidence,
+			"reason": g.Reason, "findings": nonNilStrings(g.Findings), "at": isoOrEmpty(g.At)})
+	}
+	out := map[string]any{"rule": d.Rule, "delegates": nonNilStrings(d.Delegates), "given": given,
+		"escalated": nil}
+	if e := d.Escalated; e != nil {
+		out["escalated"] = map[string]any{"overruled": nonNilStrings(e.Overruled),
+			"engine": nonNilStrings(e.Engine), "at": isoOrEmpty(e.At)}
+	}
+	return out
+}
+
+// nonNilStrings is xs, or an empty list where it is nil, so a board reads a
+// list it can map over.
+func nonNilStrings(xs []string) []string {
+	if xs == nil {
+		return []string{}
+	}
+	return xs
 }
 
 // endingOf is a run's decided ending as the board carries it — when it was

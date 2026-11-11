@@ -70,6 +70,10 @@ type LaneRecord struct {
 	// Observed is what the vendor showed on the last sync.
 	Observed Observed `json:"observed"`
 
+	// ObservedAt is when a pass last read Observed from the vendor: every
+	// pass, a dry run included, where Sync moves only on a writing sync.
+	ObservedAt time.Time `json:"observed_at,omitzero"`
+
 	// Sync is what the last sync did.
 	Sync *SyncResult `json:"sync,omitempty"`
 
@@ -77,6 +81,46 @@ type LaneRecord struct {
 	// applying, kept fleet-wide until it ends and cleared by the first
 	// write after; nil where none is ([StepResult.Settling]).
 	Settling *Settling `json:"settling,omitempty"`
+
+	// Words is the grant in the vendor's own names as the last writing sync
+	// read its offer, nil where none has: what a turn names its level in,
+	// since a turn's dispatch asks no vendor anything.
+	Words *GrantWords `json:"words,omitempty"`
+}
+
+// GrantWords is one seat's grant at a lane in its vendor's names: the levels
+// its level is (one, or each of a set), and the names of its scope entries the
+// vendor names apart from their ids.
+type GrantWords struct {
+	Levels     []Level           `json:"levels,omitempty"`
+	ScopeNames map[string]string `json:"scope_names,omitempty"`
+}
+
+// GrantWordsOf is d's words in offer, nil where offer names neither its level
+// nor any of its scope entries. Only a level's id, name and note are kept.
+func GrantWordsOf(offer Options, d Desired) *GrantWords {
+	var out GrantWords
+	found, ok := offer.LevelsOf(d.Level)
+	if !ok && d.Level != "" {
+		found, ok = Options{Levels: offer.Levels, Multiple: true}.LevelsOf(d.Level)
+	}
+	if ok {
+		for _, l := range found {
+			out.Levels = append(out.Levels, Level{ID: l.ID, Name: l.Name, Note: l.Note})
+		}
+	}
+	for _, entry := range d.Scope {
+		if name := offer.ScopeNames[entry]; name != "" && name != entry {
+			if out.ScopeNames == nil {
+				out.ScopeNames = map[string]string{}
+			}
+			out.ScopeNames[entry] = name
+		}
+	}
+	if len(out.Levels) == 0 && len(out.ScopeNames) == 0 {
+		return nil
+	}
+	return &out
 }
 
 // Record is the ledger's record for one seat at one kind: the account, if the

@@ -105,6 +105,9 @@ import type {
   ExecutorStatus,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { DelegateWaitNote, DelegatedMark } from "~/components/Delegation.tsx";
+import { delegatedRuleOf, delegationWaiting, withDelegateWords } from "~/lib/delegation.ts";
+import type { HeldDelegation } from "~/contract/delegated.ts";
 
 /**
  * THE ENGINE'S OWN SEVEN WORDS, and only those.
@@ -142,7 +145,16 @@ const AWAITING: ExecutorStatus[] = ["awaiting_clarification", "reseed"];
  * to its question has nowhere to go.
  */
 function waitsOnAPerson(run: ExecutorRow): boolean {
-  return !run.ending && AWAITING.includes(run.status);
+  return !run.ending && AWAITING.includes(run.status) && !delegationWaiting(run.held_call);
+}
+
+/**
+ * The delegation a parked run's held call waits on, or null: put to its
+ * delegates first and to no person until they escalate it (ADR-0125). A
+ * person who may answer it still can, so its answer stays on the banner.
+ */
+function withDelegate(run: ExecutorRow): HeldDelegation | null {
+  return run.ending || !AWAITING.includes(run.status) ? null : delegationWaiting(run.held_call);
 }
 
 /**
@@ -399,6 +411,30 @@ export function AwaitingBanner({
 }
 
 /**
+ * A parked run whose held call is with its delegates: who has it and under
+ * which rule, and the answer a person who may give one still can.
+ */
+export function DelegateBanner({
+  run,
+  delegation,
+  nameOf,
+}: {
+  run: ExecutorRow;
+  delegation: HeldDelegation;
+  nameOf: NameOf;
+}) {
+  const seat = nameOf(run.agent_handle) || run.role || run.agent_handle;
+  return (
+    <span className="col gap-2">
+      <DelegateWaitNote delegation={delegation} name={(h) => nameOf(h) || h} />
+      <span className="row gap-2">
+        <AnswerRunButton run={run} seat={seat} />
+      </span>
+    </span>
+  );
+}
+
+/**
  * What the executor is doing, for one nobody is being waited on by.
  *
  * A REFUSED REPLY IS NO ANSWER: a reply too long for the executor to take
@@ -556,10 +592,16 @@ export function RunPeek({ turnId }: { turnId: string }) {
             <div className="col gap-3">
               <section className="col gap-2">
                 <div className="t-label">
-                  {waitsOnAPerson(run) ? "Waiting on a person" : "Doing now"}
+                  {waitsOnAPerson(run)
+                    ? "Waiting on a person"
+                    : withDelegate(run)
+                      ? "Waiting on its delegate"
+                      : "Doing now"}
                 </div>
                 {waitsOnAPerson(run) ? (
                   <AwaitingBanner run={run} now={now} nameOf={nameOf} />
+                ) : withDelegate(run) ? (
+                  <DelegateBanner run={run} delegation={withDelegate(run)!} nameOf={nameOf} />
                 ) : (
                   <p className="t-body">{doingLine(run)}</p>
                 )}
@@ -605,6 +647,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
 
 export function Executors() {
   const seatBadge = useSeatBadgeOf();
+  const nameOf = useNameOf();
   const live = useExecutors();
   const now = useNow();
   // The durable rows have no push behind them, so this is the one place a poll
@@ -723,7 +766,18 @@ export function Executors() {
                 // vocabulary rather than two lifecycle states, and this is the
                 // pill the Inbox and Live now draw for the same executor — a third
                 // rendering of one status is a third thing to keep in step.
-                cell: (r) => <RunStatus status={r.status} ending={r.ending} />,
+                cell: (r) => {
+                  // WITH ITS DELEGATE, nobody asked yet (ADR-0125): the board
+                  // says who has it rather than that a person is waited on.
+                  const delegation = withDelegate(r);
+                  return delegation ? (
+                    <Tag variant="info" dot title={withDelegateWords(delegation, nameOf)}>
+                      with delegate
+                    </Tag>
+                  ) : (
+                    <RunStatus status={r.status} ending={r.ending} />
+                  );
+                },
               },
               {
                 key: "seat",
@@ -882,6 +936,9 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
     [board.data, live, turnId],
   );
   const collected = useMemo(() => collectedRuns(turn.data?.events), [turn.data]);
+  // AN ANSWER A DELEGATE GAVE is marked with its rule, off the turn's own
+  // `executor_answered` (ADR-0125): the newest answer, as the run took it.
+  const delegated = useMemo(() => answeredUnderRule(turn.data?.events), [turn.data]);
 
   const status = run?.status ?? "";
   const moved = useRef(status);
@@ -955,12 +1012,13 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
         }
         facts={
           run
-            ? runFacts(run, nameOf)
+            ? [...runFacts(run, nameOf), ...delegatedFact(delegated)]
             : settled
               ? [
                   { label: "Seat", value: nameOf(seat) },
                   { label: "Harness", value: last?.harness ?? "" },
                   { label: "Launches", value: String(collected.length) },
+                  ...delegatedFact(delegated),
                 ]
               : []
         }
@@ -1006,9 +1064,12 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
           />
         )}
         {run && waitsOnAPerson(run) && <AwaitingBanner run={run} now={now} nameOf={nameOf} />}
+        {run && withDelegate(run) && (
+          <DelegateBanner run={run} delegation={withDelegate(run)!} nameOf={nameOf} />
+        )}
         {/* WHAT IT IS DOING, for an executor nobody is being waited on by: a
             parked executor's banner above already says what it is waiting for. */}
-        {run && !waitsOnAPerson(run) && (
+        {run && !waitsOnAPerson(run) && !withDelegate(run) && (
           <Card>
             <Card.Header icon={<SquareTerminalGlyph size="sm" />}>
               <Card.Title>Doing now</Card.Title>
@@ -1079,6 +1140,22 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
       </QueryState>
     </>
   );
+}
+
+/**
+ * The rule the turn's newest answer was given under by a delegate, or null
+ * where a person answered it or nothing has.
+ */
+export function answeredUnderRule(events: readonly EventRecord[] | undefined): number | null {
+  const answered = (events ?? [])
+    .filter((e) => e.type === "executor_answered")
+    .sort((a, b) => tsKey(b.timestamp) - tsKey(a.timestamp))[0];
+  return answered ? delegatedRuleOf(answered) : null;
+}
+
+/** The header's fact for an answer a delegate gave, or none. */
+function delegatedFact(rule: number | null): Fact[] {
+  return rule === null ? [] : [{ label: "Answered", value: <DelegatedMark rule={rule} /> }];
 }
 
 /**

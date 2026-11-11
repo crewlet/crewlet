@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pickup"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/workkey"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -22,7 +23,7 @@ import (
 type fleet struct {
 	mu     sync.Mutex
 	now    time.Time
-	worked map[string]bool
+	worked map[string]time.Time
 	claims map[string]time.Time
 	down   bool
 	reads  int
@@ -30,17 +31,17 @@ type fleet struct {
 
 func newFleet() *fleet {
 	return &fleet{now: time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC),
-		worked: map[string]bool{}, claims: map[string]time.Time{}}
+		worked: map[string]time.Time{}, claims: map[string]time.Time{}}
 }
 
-func (f *fleet) Worked(_ context.Context, _ string, keys []string) map[string]bool {
+func (f *fleet) WorkedAt(_ context.Context, _ string, keys []string) map[string]time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads += len(keys)
-	out := map[string]bool{}
+	out := map[string]time.Time{}
 	for _, k := range keys {
-		if f.worked[k] {
-			out[k] = true
+		if at, ok := f.worked[k]; ok {
+			out[k] = at
 		}
 	}
 	return out
@@ -79,18 +80,15 @@ func (f *fleet) advance(d time.Duration) {
 }
 
 // turnOn records what a turn on the pickup does in the ledger: the work key of
-// its one event.
+// its one event, worked now.
 func (f *fleet) turnOn(ev *events.Event) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.worked[pickupWorkKey(ev)] = true
+	f.worked[pickupWorkKey(ev)] = f.now
 }
 
-func pickupWorkKey(ev *events.Event) string {
-	assigned, _ := events.DataAs[*types.WorkPickup](ev)
-	return pickup.Key{Seat: seat, Item: assigned.Item, Moved: assigned.Moved,
-		Status: assigned.Status, Progressed: assigned.Progressed}.WorkKey()
-}
+// pickupWorkKey is the work key a turn on ev alone records: its event's.
+func pickupWorkKey(ev *events.Event) string { return workkey.Derive([]string{ev.ID.String()}) }
 
 // tracker is the seat's ready work, as the read answers it, page by page.
 type tracker struct {
@@ -103,9 +101,11 @@ func (t *tracker) ReadyWork(_ context.Context, q worklet.ReadyWorkQuery, _ time.
 	defer t.mu.Unlock()
 	from := min(q.Page*worklet.ReadyRows, len(t.items))
 	to := min(from+worklet.ReadyRows, len(t.items))
+	// A WORD ON AN ITEM IS A NEW VERSION of it, which the real fingerprint
+	// reads; here, its quiet instant stands for that.
 	fp := ""
 	for _, it := range t.items {
-		fp += fmt.Sprintf("%s:%s:%d:%d;", it.ID, it.Status, it.Moved, it.Progressed)
+		fp += fmt.Sprintf("%s:%s:%d:%d:%d;", it.ID, it.Status, it.Moved, it.Progressed, it.Quiet.Unix())
 	}
 	return worklet.ReadyWork{Items: append([]worklet.ReadyItem(nil), t.items[from:to]...),
 		Total: len(t.items), More: to < len(t.items), Fingerprint: fp}, nil
@@ -272,7 +272,7 @@ func TestThePickupReadsPastTheFirstPageAndRemembersAnAllOfferedSet(t *testing.T)
 		tr.items = append(tr.items, item(fmt.Sprintf("t%02d", i), worklet.StatusTodo, uint64(i+1)))
 	}
 	for _, it := range tr.items[:worklet.ReadyRows] {
-		f.worked[pickup.KeyOf(seat, it).WorkKey()] = true
+		f.worked[pickup.KeyOf(seat, it, f.clock()).WorkKey()] = f.clock()
 	}
 	p := node(f, tr, in, idleHolder())
 	pass(p)
@@ -280,7 +280,7 @@ func TestThePickupReadsPastTheFirstPageAndRemembersAnAllOfferedSet(t *testing.T)
 		t.Fatalf("with the first page offered = %+v, want the first item of the second", out)
 	}
 	for _, it := range tr.items {
-		f.worked[pickup.KeyOf(seat, it).WorkKey()] = true
+		f.worked[pickup.KeyOf(seat, it, f.clock()).WorkKey()] = f.clock()
 	}
 	f.advance(31 * time.Minute)
 	if out := pass(p); out.Skip != pickup.SkipOffered {
@@ -456,7 +456,7 @@ func TestAPassTakesTheSeatsCooldownOnce(t *testing.T) {
 	}
 	f.turnOn(in.got[0])
 	handed := item("w", worklet.StatusInProgress, 39)
-	f.turnOn(pickup.Event(seat, "Engineer", handed, pickup.KeyOf(seat, handed), 1, false,
+	f.turnOn(pickup.Event(seat, "Engineer", handed, pickup.KeyOf(seat, handed, f.clock()), 1, false,
 		events.TraceContext{}))
 	tr.mu.Lock()
 	tr.items[0].Progressed = 55
@@ -483,5 +483,115 @@ func TestARequesterNoLongerHeldIsWorkedForAsAStranger(t *testing.T) {
 	assigned, _ := events.DataAs[*types.WorkPickup](in.got[0])
 	if w := assigned.WorkingFor; w == nil || w.Kind != types.WorkingForStranger {
 		t.Errorf("the pickup is worked for %+v, want a stranger", w)
+	}
+}
+
+// AN UNTYPED ANSWER HOLDS AN ITEM FOR A DAY, NOT FOR GOOD (ADR-0122): an item
+// handed and answered in words only is not handed again before a day has
+// passed since those words, is handed once when it has, and not again that day;
+// the memory of an all-offered set, which spares the ledger, expires with it;
+// and an edit that leaves the item ready is the seat's last word as words are,
+// so the item comes back a day on it rather than being held for good.
+//
+// Mutation: remember an all-offered set with no expiry, and the recheck is
+// never handed until something else about the item changes.
+func TestAnUntypedAnswerComesBackOnceADay(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	it := item("a", worklet.StatusInProgress, 40)
+	it.Quiet = f.clock()
+	tr := &tracker{items: []worklet.ReadyItem{it}}
+	p := node(f, tr, in, idleHolder())
+	pass(p)
+	if out := pass(p); !out.Woken {
+		t.Fatalf("the item = %+v, want it handed over", out)
+	}
+	f.turnOn(in.got[0])
+
+	// THE SEAT ANSWERS IN WORDS: its comment is when the item went quiet.
+	f.advance(time.Minute)
+	answered := f.clock()
+	tr.mu.Lock()
+	tr.items[0].Quiet = answered
+	tr.mu.Unlock()
+	if out := pass(p); out.Woken || out.Skip != pickup.SkipOffered {
+		t.Fatalf("right after the words = %+v, want the item already offered", out)
+	}
+	f.advance(pickup.RecheckAfter - 2*time.Second)
+	before := f.reads
+	if out := pass(p); out.Woken || out.Skip != pickup.SkipOffered || f.reads != before {
+		t.Fatalf("a second short of a day = %+v after %d ledger reads, want it still offered "+
+			"from memory", out, f.reads-before)
+	}
+	f.advance(2 * time.Second)
+	out := pass(p)
+	if !out.Woken || in.count() != 2 {
+		t.Fatalf("a day after the words = %+v with %d sent, want the item handed back once", out, in.count())
+	}
+	if handed, _ := events.DataAs[*types.WorkPickup](in.got[1]); handed.Quiet == nil ||
+		!handed.Quiet.Equal(answered) {
+		t.Errorf("the recheck says the item went quiet at %v, want %s", handed.Quiet, answered)
+	}
+	f.turnOn(in.got[1])
+	f.advance(31 * time.Minute)
+	if out := pass(p); out.Woken || in.count() != 2 {
+		t.Fatalf("the same day after the recheck = %+v, want nothing more", out)
+	}
+
+	// AN EDIT THAT LEAVES THE ITEM READY answers the recheck, and a day on
+	// it the item comes back once more.
+	f.advance(time.Hour)
+	tr.mu.Lock()
+	tr.items[0].Quiet = f.clock()
+	tr.mu.Unlock()
+	if out := pass(p); out.Woken || in.count() != 2 {
+		t.Fatalf("right after the edit = %+v, want nothing handed", out)
+	}
+	f.advance(pickup.RecheckAfter)
+	if out := pass(p); !out.Woken || in.count() != 3 {
+		t.Errorf("a day after an edit that left the item ready = %+v with %d sent, want it "+
+			"handed back once", out, in.count())
+	}
+}
+
+// A RECHECK WAITS A DAY FROM THE ITEM'S LAST PICKUP (ADR-0122): an item quiet
+// for days before it was first handed is handed under the recheck that came
+// due last, and when the next one falls due an hour later the pickup holds it
+// until a whole day has passed since that first pickup's turn ended, then
+// hands it once; a set held so is not read again before the hold ends.
+//
+// Mutation: count the recheck from the item's quiet alone, and the item is
+// handed twice within the hour.
+func TestARecheckWaitsADayFromTheItemsLastPickup(t *testing.T) {
+	t.Parallel()
+	f, in := newFleet(), &inbox{}
+	quiet := item("a", worklet.StatusTodo, 40)
+	quiet.Quiet = f.clock().Add(-3*pickup.RecheckAfter - pickup.RecheckAfter + time.Hour)
+	tr := &tracker{items: []worklet.ReadyItem{quiet}}
+	p := node(f, tr, in, idleHolder())
+	pass(p)
+	first := pass(p)
+	if !first.Woken {
+		t.Fatalf("an item quiet for days = %+v, want it handed", first)
+	}
+	f.turnOn(in.got[0])
+	f.advance(2 * time.Hour)
+	if out := pass(p); out.Woken || out.Skip != pickup.SkipOffered {
+		t.Fatalf("an hour after the next recheck fell due = %+v, want it held a day from the "+
+			"first pickup", out)
+	}
+	before := f.reads
+	f.advance(pickup.RecheckAfter - 3*time.Hour)
+	if out := pass(p); out.Woken || f.reads != before {
+		t.Errorf("before the day was out = %+v after %d ledger reads, want it held unread",
+			out, f.reads-before)
+	}
+	f.advance(time.Hour)
+	if out := pass(p); !out.Woken || in.count() != 2 {
+		t.Fatalf("a day after the first pickup's turn = %+v, want the recheck handed", out)
+	}
+	recheck, _ := events.DataAs[*types.WorkPickup](in.got[1])
+	if recheck.Quiet == nil || !recheck.Quiet.Equal(quiet.Quiet) {
+		t.Errorf("the recheck says it is quiet since %v, want %s", recheck.Quiet, quiet.Quiet)
 	}
 }

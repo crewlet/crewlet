@@ -24,5 +24,6 @@ func (h heldActs) DecisionAnswered(ctx context.Context, answers []string, asker 
 		return nil, err
 	}
 	return &sandbox.HeldAct{Item: acted.Task, Key: acted.Key, Ask: acted.Ask, Question: acted.Question,
-		Choice: acted.Choice, AnsweredBy: acted.AnsweredBy, AnsweredAt: acted.AnsweredAt}, nil
+		Choice: acted.Choice, ChoiceID: acted.ChoiceID, Act: acted.Act,
+		AnsweredBy: acted.AnsweredBy, AnsweredAt: acted.AnsweredAt}, nil
 }

@@ -110,7 +110,25 @@ offered only to a person who could make the same change on its screen:
 | Pause or resume an agent, steer a running turn, answer an executor | Whoever may do it on the seat's screen | The operator control the screen sends |
 | Post in a chat room, reply in a thread, send a direct message, edit or delete a message, change a room's topic, purpose or archive, change who is in a room, leave a room | People holding Chatlet | Chat's own write, as the person: the card names the room and who will read it, a membership change shows who joins and who leaves and takes out only the people Ask Crewlet names, deleting a message or taking somebody out of a room (yourself included) is marked destructive with what goes at the top, and a change made meanwhile to the room's settings or members, or to the message, makes the proposal stale (**Prepare it again**); a message said in the room does not |
 | Change the company's mission, vision or standing policies | Administrators | `PUT /config/charter`, the route Company › Principles saves through: the card shows a word diff of the mission and vision and one row per policy, the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change made to the principles meanwhile makes the proposal stale (**Prepare it again**) |
+| Turn an agent on or off at one integration, or change its role, its GitHub permissions or its scope there | Administrators | The save the integration's Agents tab sends (`PUT /setup/integrations/{kind}/access`), held to the tab as it was read: the card shows what changes and each step the next sync will take at the vendor, and a change that could give the agent an administration role there asks the administrator to confirm it is them |
 | Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
+
+**An agent's access to an integration** is one read away for an
+administrator (`get_seat_access`, on
+`GET /setup/integrations/{kind}/access/seats/{handle}/{lane}`): the agent's
+grant in Crewlet, what its credential holds at the vendor now, for GitHub what
+the agent's app is registered with and which of that the grant leaves unused,
+its scope, its status, what the next sync will take, and two clocks. Ask
+Crewlet reads it whenever an agent says it lacks a permission, or somebody
+asks whether an integration is set up right for an agent, and proposes the
+change with `set_seat_access`. Crewlet narrows every agent's credential to its
+grant in Crewlet, so a permission the agent's GitHub App holds and its grant
+leaves out is changed in Crewlet, never at GitHub; "In sync" compares only the
+grant's own permissions, so such a gap is not drift. The integration's
+**Last check** (`list_integrations`, and the Integrations header) moves on
+every pass, Check now included, which reads the vendor and changes nothing; an
+agent's **last applied** moves only when a sync writes its grant, and its own
+**last check** with every pass.
 
 A change to the screen the person has open (a filter, a range, a draft in an
 open editor) is applied by the page itself and saves nothing. Each screen tells
@@ -295,6 +313,15 @@ assistant:
     max_tokens: 3000000      # 10000..20000000 tokens a task may spend
 ```
 
+Deep work is also the only path that reads the images a person attaches to a
+question. Without it, the dashboard draws Attach image disabled with that
+reason, says it while an image is dragged over the composer, and refuses a
+pasted or dropped image in place (`/viewer` answers
+`reads_images` only where deep work is configured), and a quick answer told of
+an attachment says it cannot see it and offers what works: pasting the text,
+or asking an administrator to turn on deep work, or asking again shortly where
+deep work is configured and cannot run on this node now.
+
 The entry must be Claude Code: a run on the engine host is confined around that
 harness's own install and temporary directories, which no other harness has been
 measured against, and a run parked on a proposal is continued in that harness's own
@@ -459,7 +486,13 @@ whether this model, given an instruction hidden in a task, declines it. The
 `brief-*` cases (`mode: brief`) measure the brief: an Inbox brief whose two
 needs the engine checks and counts, an all-clear page that nothing needs, an instruction injected in a task, a
 record gone before the brief, an over-long first answer whose one rewrite is
-drawn, and an answer written exactly at its caps that is accepted first time. The flags and the suite format are in the
+drawn, and an answer written exactly at its caps that is accepted first time.
+Three cases measure the access questions: an agent saying it lacks a GitHub
+permission (`agent-lacks-a-github-permission`, which reads the agent's access
+and proposes the grant in Crewlet), whether an integration is set up right
+for one agent (`integration-set-up-for-an-agent`), and why an integration's
+last check and an agent's last applied differ (`two-access-clocks`, which
+proposes nothing). The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

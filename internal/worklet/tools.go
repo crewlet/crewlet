@@ -23,6 +23,7 @@ const (
 	CreateWorkItemTool = toolname.CreateWorkItem
 	UpdateWorkItemTool = toolname.UpdateWorkItem
 	CommentOnWorkTool  = toolname.CommentOnWorkItem
+	WithdrawAskTool    = toolname.WithdrawAsk
 
 	// MergeWorkItemTool folds one item into another, and it is a SEAT's
 	// for the reason the trash tools are not.

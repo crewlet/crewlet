@@ -124,6 +124,7 @@ const (
 	ToolServerFailLaunchesEnv  = "CREWLET_ENGINE_TEST_FAIL_LAUNCHES"
 	ToolServerCrashLaunchesEnv = "CREWLET_ENGINE_TEST_CRASH_LAUNCHES"
 	ToolServerDescribeEnv      = "CREWLET_ENGINE_TEST_DESCRIBE"
+	ToolServerDescribedEnv     = "CREWLET_ENGINE_TEST_DESCRIBED"
 	ToolServerTTLEnv           = "CREWLET_ENGINE_TEST_TTL_MS"
 	ToolServerCrashCode        = 3
 	ToolServerLaunchToken      = "{launch}"

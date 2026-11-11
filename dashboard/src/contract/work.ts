@@ -51,8 +51,12 @@ export type WorkViewShape = "list" | "board" | "calendar" | "timeline" | "table"
  * are the same declaration the table's are held against.
  */
 export const COLUMN_SORT_KEYS = [
+  "key",
   "title",
+  "status",
   "priority",
+  "assignee",
+  "type",
   "due",
   "start",
   "points",

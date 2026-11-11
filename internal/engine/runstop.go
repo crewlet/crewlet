@@ -177,7 +177,7 @@ func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun,
 	// once: the end this answers is owed on the row, and a repeat of the
 	// ending finds it there.
 	answered := e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, stop)
-	return e.runEnding(company, run, bridged, answered), nil
+	return e.runEnding(ctx, company, run, bridged, answered), nil
 }
 
 // closeParkedTurn closes ON THE RECORD the turn that was parked on a run a

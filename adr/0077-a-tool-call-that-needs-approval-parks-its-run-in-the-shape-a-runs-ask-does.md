@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallNamesTheDecisionItsTurnWasWokenFor`, `internal/worklet.TestAnAnswerGivesTheSeatADecisionOnlyWhereAPersonAnswered`, `internal/engine.TestTheAnswerThatWokeATurnIsStillItsAnswerWhenItResumes`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`, `internal/sandbox.TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation`, `internal/sandbox.TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked`, `internal/sandbox.TestAQuestionsSeatAnswersOnlyWhileItsHolderMayAct`, `internal/engine.TestAReplysWriterIsTheSeatTheRegistryNames`, `internal/engine.TestASeatAnswersOnlyWhileItsHolderMayAct`
+- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/sandbox.TestAReplyAnswersOnlyARunWorkingForWhomItWasWrittenFor`, `internal/sandbox.TestAReplyWrittenForSomebodyElseLeavesTheRunParked`, `internal/engine.TestAReplyCarriesWhomItsAgentWroteItFor`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallNamesTheDecisionItsTurnWasWokenFor`, `internal/worklet.TestAnAnswerGivesTheSeatADecisionOnlyWhereAPersonAnswered`, `internal/engine.TestTheAnswerThatWokeATurnIsStillItsAnswerWhenItResumes`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`, `internal/sandbox.TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation`, `internal/sandbox.TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked`, `internal/sandbox.TestAQuestionsSeatAnswersOnlyWhileItsHolderMayAct`, `internal/engine.TestAReplysWriterIsTheSeatTheRegistryNames`, `internal/engine.TestASeatAnswersOnlyWhileItsHolderMayAct`
 - **Cost-when-tried:** with only `allow` and `blocked`, an operator who wanted a person to look at each call to a destructive tool had one choice, blocking it, and the agent then could not do the work at all; and the executor's harness runs fully permissioned in its box, so its own permission prompts were never an option to fall back on.
 - **Tag-status:** unreleased
 
@@ -119,3 +119,40 @@ reply's place rather than spending it either way.
 The answer is what the run carries on with, inside a turn worked for its requester and held to their
 apps. A reply from somebody the question was never put to would steer a run working for somebody
 else, with that somebody's apps.
+
+**And a reply answers only a run working for whom it was written for.** An agent's write in a turn
+somebody woke carries that somebody
+([ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)'s amendment "a requester rides
+on what a seat writes"), so a colleague's reply written for somebody else is that somebody's work,
+owed a turn of its own held to their apps, never the answer to a question the run asked for another.
+A reply written for nobody else always qualifies, since its writer spoke for itself. That covers
+every vendor's reply, every person's and credential's, an agent's own work, and a reply written on a
+seat node of a build before the carrier. This rests on ADR-0109's guard: a record skips its carrier
+only where its decide proves that no agent but the writer may start a turn, and a wake held back
+delivers nothing.
+
+Otherwise what the reply carries must name the run's principal, read in the order the run's ceiling
+is composed: its `WorkingFor`, else its requester where that is not the run's own seat, else its
+requesting credential, else the run's own work. Both sides are read as the ceiling reads them
+before it asks the directory:
+- a seat naming the run's own seat is its own work;
+- a seat with no handle, a kind this build does not know, and a credential carrying no apps are a
+  stranger.
+
+They are compared by kind and by the seat's handle or the credential's login, never by a
+credential's apps. The resumed run composes its ceiling from its own row and narrows its apps again
+on every call, so a reply's apps grant it nothing. Comparing them would refuse a genuine reply
+whenever its writer's node had narrowed them again.
+
+What a node's directory decides is left out on purpose, because it differs by node, and its edges
+are the safe direction:
+- **A node that cannot place the run's credential.** A colleague there works for a stranger, and a
+  stranger is refused every app row before the asked arm, so it writes no first-party reply. The run
+  waits, and a vendor's reply, carrying nobody, still answers it.
+- **A node that narrows every carried app away.** It leaves a colleague a work comment under the
+  asked arm. That comment carries a credential with no apps, which reads as a stranger and leaves
+  the run parked.
+
+A run woken by a stranger on a first-party thread arises only where the engine cannot name a
+writer, never from a suspended or removed person, whose seat still resolves by its handle. Such a
+run, like the seat's own work, takes a reply written for nobody else or for what it works for.

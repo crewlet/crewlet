@@ -146,7 +146,7 @@ func (r engineRuntime) Tools() []queries.ToolRow {
 	// answered adds nothing, and the engine re-sends the catalogue when it
 	// is.
 	if live, ok := r.engine.LiveMCPListings(); ok {
-		out = append(out, queries.ListedRows(out, live, r.engine.HeldMCPToolSchemas())...)
+		out = append(out, queries.ListedRows(out, live, r.engine.HeldMCPToolDefinitions())...)
 	}
 	return out
 }
@@ -186,6 +186,16 @@ func (r engineRuntime) SeatPauses() queries.SeatPauseLister {
 }
 
 // AgentAccess is the engine's read of each agent's access ([engine.Engine.AgentCapabilities]).
+// delegatedRuntime is a runtime whose access log the delegated-decisions read
+// answers from: the engine's, and no test runtime that keeps none.
+type delegatedRuntime interface {
+	DelegatedReads() queries.DelegatedReads
+}
+
+// DelegatedReads is the engine's access log, as the delegated-decisions read
+// takes it.
+func (r engineRuntime) DelegatedReads() queries.DelegatedReads { return r.engine.SSHAccess() }
+
 func (r engineRuntime) AgentAccess() queries.AgentAccess {
 	return func(ctx context.Context) ([]queries.AgentAccessRow, error) {
 		agents, err := r.engine.AgentCapabilities(ctx)

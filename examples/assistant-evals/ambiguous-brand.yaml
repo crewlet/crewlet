@@ -18,9 +18,9 @@ answers:
   - route: GET /artifacts
     body:
       contents:
-        - {id: 0f8fad5b-d9cb-469f-a165-70867728950e, title: FairSplit brand kit (draft), kind: document, owner: miles, role: owner, updated_at: "2026-10-23T18:00:00Z"}
+        - {id: 0f8fad5b-d9cb-469f-a165-70867728950e, title: Acme brand kit (draft), kind: document, owner: morgan, role: owner, updated_at: "2026-10-23T18:00:00Z"}
   - route: GET /artifacts/{id}
-    body: {id: 0f8fad5b-d9cb-469f-a165-70867728950e, title: FairSplit brand kit (draft), kind: document, owner: miles, role: owner, status: draft, head_number: 4, share_count: 0}
+    body: {id: 0f8fad5b-d9cb-469f-a165-70867728950e, title: Acme brand kit (draft), kind: document, owner: morgan, role: owner, status: draft, head_number: 4, share_count: 0}
 script:
   - call: list_artifacts
   - say: >-

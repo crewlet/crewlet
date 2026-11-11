@@ -20,7 +20,10 @@
  * that row, picked with Attach image, dropped on the composer or pasted into
  * it (a screenshot): each is uploaded at once and drawn as a chip with its
  * thumbnail, and one the engine would refuse is refused above the composer
- * in words that say what to do. Above it, while the
+ * in words that say what to do. Where the company runs no deep work, the one
+ * path that reads an image, Attach image is drawn disabled with that reason
+ * and a dropped or pasted image is refused in words that say what works.
+ * Above it, while the
  * engine knows the model cannot answer (signed out, its plan spent, its harness
  * unable to start), a notice says so in the engine's words and Send stays off
  * with that reason: the reader is told before they ask, never after a wait.
@@ -93,7 +96,7 @@ import {
   useQueuedQuestion,
   type AssistantFocus,
 } from "../control.ts";
-import type { AssistantModelProblem, AssistantUnavailable } from "../availability.ts";
+import type { AssistantModelProblem, AssistantUnavailable, AttachClosed } from "../availability.ts";
 import { readTab } from "../tab.ts";
 import { useToastInset } from "../../toastInset.tsx";
 import { useKeyHints, type AssistantShape } from "../../layout.ts";
@@ -129,6 +132,8 @@ export interface DrawerProps {
   unavailable: AssistantUnavailable | null;
   /** Why the assistant's model cannot answer now, or null when nothing is known to be wrong. */
   model: AssistantModelProblem | null;
+  /** Why a question cannot carry images, or null where it can. */
+  attach: AttachClosed | null;
   /** The reader holds admin: the model notice also opens the models' settings. */
   admin: boolean;
   /** Close the panel; focus goes back to the Ask button. */
@@ -164,6 +169,7 @@ interface Recent {
 export function Drawer({
   unavailable,
   model,
+  attach,
   admin,
   onClose,
   initialFocus,
@@ -189,7 +195,7 @@ export function Drawer({
   // the time when it slowed: an answer that ended between two ticks read
   // "in 1s" beside Copy, and the history "in 5s", for up to a minute.
   const now = useNow();
-  const attachments = useAttachments(view.id);
+  const attachments = useAttachments(view.id, attach?.body ?? null);
 
   // ON A PHONE THE PANEL IS THE WHOLE WINDOW, and its foot (the composer and
   // the line under it) is where a toast would land: the stack stands above it.
@@ -276,6 +282,9 @@ export function Drawer({
     if (waitSeconds > 0) return `You can ask again ${fmtWait(waitSeconds)}`;
     return undefined;
   }, [view.fault, model, view.stream, waitSeconds]);
+
+  // WHY NO IMAGE IS TAKEN NOW, as the Attach button and the drop overlay say it.
+  const dropClosed = disabledReason ?? attach?.short;
 
   // THE PERSON'S OWN QUESTION IS ALWAYS SHOWN: the thread follows only while
   // it is read at its end, so a question sent while scrolled up would land out
@@ -517,12 +526,18 @@ export function Drawer({
                 </RefusalStrip>
               ) : null}
               {/* IMAGES DROPPED ANYWHERE ON THE COMPOSER are attached; the
-                  button in its foot is the keyboard's way to the same. */}
+                  button in its foot is the keyboard's way to the same. THE DROP
+                  IS ALWAYS TAKEN, so a file never replaces the dashboard in the
+                  tab: where none may be attached, the overlay and the refusal say
+                  why, as the Attach button does. */}
               <FileDrop
-                title="Drop images to attach them"
-                hint={ATTACH_HINT}
-                disabled={disabledReason !== undefined}
-                onFiles={(dropped) => attachments.add(dropped.map((d) => d.file))}
+                title={dropClosed ?? "Drop images to attach them"}
+                hint={dropClosed === undefined ? ATTACH_HINT : undefined}
+                onFiles={(dropped) =>
+                  disabledReason === undefined
+                    ? attachments.add(dropped.map((d) => d.file))
+                    : attachments.refuse(`${disabledReason}, so nothing was attached.`)
+                }
               >
                 <AskComposer
                   ref={composer}
@@ -587,7 +602,7 @@ export function Drawer({
                       variant="ghost"
                       leadingIcon={<PaperclipGlyph size="sm" />}
                       accept={ATTACH_ACCEPT}
-                      disabledReason={disabledReason}
+                      disabledReason={dropClosed}
                       onFiles={(picked) => attachments.add(picked.map((p) => p.file))}
                     >
                       Attach image

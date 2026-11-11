@@ -25,7 +25,7 @@ var exampleValues = map[string]any{
 	"screen":       "item",
 	"mission":      "Help friends share costs fairly.",
 	"vision":       "Settling up takes seconds.",
-	"policies":     []any{"Miles is the final authority."},
+	"policies":     []any{"Morgan is the final authority."},
 	"channel":      RecordID,
 	"message_id":   RecordID,
 	"reply_to":     RecordID,

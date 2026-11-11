@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -133,9 +134,9 @@ func TestAnAskResolvedWithoutAnAnswerIsListedAsResolved(t *testing.T) {
 	// BY ITS ASKER, the one who may resolve it, at the writer's clock.
 	resolvedAt := wednesday.Add(-time.Hour)
 	r.at = resolvedAt
-	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	if _, err := bo.ResolveComment(t.Context(), "op-resolve", "a", "ENG", "c-1",
-		nil); err != nil {
+		nil, nil); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	r.drain()
@@ -170,7 +171,7 @@ func TestAnsweredAsksSayWhatTheAskerDidNext(t *testing.T) {
 	// A COLLEAGUE'S CHANGE IS NOT THE ASKER'S.
 	askOn(t, r, "op-other", "a", worklet.Comment{ID: "c-3", Task: "a", Author: "cy",
 		AuthorKind: worklet.AuthorAgent, Body: "noted", CreatedAt: wednesday.Add(-90 * time.Minute)})
-	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	done := worklet.StatusInProgress
 	if _, err := bo.UpdateTask(t.Context(), "op-move", "a", "ENG", worklet.NoIfMatch,
 		worklet.TaskPatch{Status: &done}, worklet.ChangeStatus, nil); err != nil {
@@ -211,7 +212,7 @@ func TestAResolvedAskIsFollowedUpFromItsResolve(t *testing.T) {
 			AuthorKind: worklet.AuthorAgent, Body: "still needed?", Ask: "jane",
 			CreatedAt: asked})
 	}
-	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	move := func(opID string, status worklet.Status) {
 		t.Helper()
 		if _, err := bo.UpdateTask(t.Context(), opID, "a", "ENG", worklet.NoIfMatch,
@@ -223,7 +224,7 @@ func TestAResolvedAskIsFollowedUpFromItsResolve(t *testing.T) {
 	resolve := func(opID, id string) {
 		t.Helper()
 		if _, err := bo.ResolveComment(t.Context(), opID, "a", "ENG", id,
-			nil); err != nil {
+			nil, nil); err != nil {
 			t.Fatalf("%s: %v", opID, err)
 		}
 		r.drain()

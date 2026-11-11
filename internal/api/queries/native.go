@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -278,11 +279,13 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	q.Units = s.chartUnits()
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
-	case errors.Is(err, worklet.ErrTooBroad):
+	case errors.Is(err, worklet.ErrTooBroad), errors.Is(err, worklet.ErrBadCursor):
 		// A REFUSAL ABOUT THE REQUEST, so it is [ErrBadParams] and not
 		// [ErrUnavailable]: the caller narrows and asks again, where
 		// "unavailable" tells a polling screen to send the identical
-		// query back every few seconds for ever.
+		// query back every few seconds for ever. A cursor this listing
+		// cannot resume is one: the caller starts again from the first
+		// page, which is what the dashboard's pager does on it.
 		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
@@ -509,6 +512,8 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):
 		return nil, ErrNotFound
+	case errors.Is(err, worklet.ErrBadCursor):
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -1214,6 +1219,12 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var agents []string
+	if s.Company != nil {
+		if company, _ := s.Company(); company != nil {
+			agents = advisor.AgentHandles(company)
+		}
+	}
 	out, err := s.Work.MyWork(ctx, worklet.MyWorkQuery{
 		Handle: handle,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
@@ -1221,6 +1232,8 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		// see [Freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		Floors: fresh.Floors,
+		// THE AGENT SEATS, so holding up counts the agent work a person holds.
+		Agents: agents,
 	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err

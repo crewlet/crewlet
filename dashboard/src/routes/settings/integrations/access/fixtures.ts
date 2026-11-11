@@ -355,7 +355,10 @@ export function onLane(over: Partial<AccessSeatLane> & { variable: string }): Ac
       credential: { variable, minted_at: ago(DAY) },
       created_at: ago(DAY),
     },
+    observed_at: ago(MIN),
     sync: { at: ago(DAY), outcome: "ok", steps: [] },
+    status: "in_sync",
+    status_label: "In sync",
     plan: [],
     tool: "live",
     ...rest,
@@ -367,6 +370,8 @@ export function offLane(level?: string): AccessSeatLane {
   return {
     desired: { enabled: false, ...(level ? { level } : {}) },
     observed: { exists: false, enabled: false },
+    status: "off",
+    status_label: "Off",
     plan: [],
     tool: "off",
   };
@@ -652,6 +657,8 @@ export function expoWaitingAnswer(
           action_url: EXPO_TOKENS_PAGE,
         },
       },
+      status: "needs_you",
+      status_label: "Needs you",
       plan: [],
       tool: "off",
     },
@@ -676,6 +683,7 @@ export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswe
       action_url: EXPO_TOKENS_PAGE,
     },
   };
+  qa.status = "needs_you";
   return answer;
 }
 
@@ -826,6 +834,8 @@ export function digitaloceanWaitingAnswer(
           actor: "you",
         },
       },
+      status: "needs_you",
+      status_label: "Needs you",
       plan: [],
       tool: "off",
       box: doBox("PM"),

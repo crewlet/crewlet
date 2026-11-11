@@ -110,9 +110,9 @@ type Fleet struct {
 	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
 
 	// listings are each node's listing of each MCP server, by its key, and
-	// schemas each definition's schemas by its digest.
-	listings entryRecords[coord.MCPListing, coord.MCPListingUpdate]
-	schemas  map[string]coord.MCPToolSchema
+	// definitions each tool definition by its digest.
+	listings    entryRecords[coord.MCPListing, coord.MCPListingUpdate]
+	definitions map[string]coord.MCPToolDefinition
 
 	// restarts are the MCP restarts people asked for, by entry
 	// ([coord.MCPRestartEntry]).
@@ -297,6 +297,21 @@ func (f *Fleet) Worked(_ context.Context, scope string, keys []string) (map[stri
 	for _, key := range keys {
 		if _, done := f.worked[scope+"\x00"+key]; done {
 			out[key] = true
+		}
+	}
+	return out, nil
+}
+
+// WorkedAt returns the keys already recorded under scope, each with the
+// instant its first record stated.
+func (f *Fleet) WorkedAt(_ context.Context, scope string, keys []string) (map[string]time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[string]time.Time, len(keys))
+	for _, key := range keys {
+		if entry, done := f.worked[scope+"\x00"+key]; done {
+			out[key] = entry.at
 		}
 	}
 	return out, nil

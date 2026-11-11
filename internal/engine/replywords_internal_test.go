@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -12,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -160,5 +163,49 @@ func TestOnlyWordsAddressedToTheConversationAnswerAParkedQuestion(t *testing.T) 
 		notice(worklet.Source, string(worklet.ChangeComment))}
 	if !replySays(prompts, nil, "app", mixed) {
 		t.Error("a comment beside a status change in one delivery says nothing; the comment is words")
+	}
+}
+
+// A REPLY CARRIES WHOM ITS AGENT WROTE IT FOR (ADR-0109), read off the newest
+// event by the rule a wake is read by: an agent's carrier; nil for a person's,
+// a credential's or the engine's writer even with a carrier forged on, and
+// for a vendor's notice, which states no writer. It is read whether or not
+// there is a party registry: it is stated on the write, never looked up.
+//
+// Mutation: read the carrier off any writer kind, or off the oldest event, and
+// a row goes red.
+func TestAReplyCarriesWhomItsAgentWroteItFor(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	omar := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "omar"}
+	at := time.Unix(1_700_000_000, 0).UTC()
+	by := func(kind iam.ActorKind, whom *types.WorkingFor, posted time.Time) *events.Event {
+		ev := events.New(types.ExternalNotification{NotificationSource: "chat", SourceEventType: "post",
+			Body: "use main", Metadata: map[string]string{},
+			Writer: &types.NotificationWriter{Kind: kind, Seat: "bea", Login: "token:ci", WorkingFor: whom}},
+			events.TraceContext{})
+		ev.Timestamp = posted
+		return ev
+	}
+	vendor := events.New(types.ExternalNotification{NotificationSource: "slack", SourceEventType: "message",
+		Body: "use main", Metadata: map[string]string{}}, events.TraceContext{})
+	for _, tc := range []struct {
+		name string
+		evs  []*events.Event
+		want *types.WorkingFor
+	}{
+		{"an agent's write for ada", []*events.Event{by(iam.ActorAgent, ada, at)}, ada},
+		{"an agent's write for nobody else", []*events.Event{by(iam.ActorAgent, nil, at)}, nil},
+		{"a person's, a carrier forged on", []*events.Event{by(iam.ActorHuman, ada, at)}, nil},
+		{"a credential's, a carrier forged on", []*events.Event{by(iam.ActorOperator, ada, at)}, nil},
+		{"the engine's, a carrier forged on", []*events.Event{by(iam.ActorSystem, ada, at)}, nil},
+		{"a vendor's notice", []*events.Event{vendor}, nil},
+		{"two events, the newer written for omar",
+			[]*events.Event{by(iam.ActorAgent, ada, at), by(iam.ActorAgent, omar, at.Add(time.Second))}, omar},
+	} {
+		got := replyOf(notify.NewPrompts(), nil, "swe", sandbox.ConversationRef{}, tc.evs).WorkingFor
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: the reply carries %+v, want %+v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -36,6 +36,20 @@ func (m *MemoryCompletions) Worked(_ context.Context, handle string, keys []stri
 	return out
 }
 
+// WorkedAt returns the keys already recorded for this seat, each with when.
+func (m *MemoryCompletions) WorkedAt(_ context.Context, handle string, keys []string) map[string]time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]time.Time, len(keys))
+	seat := m.rows[handle]
+	for _, k := range keys {
+		if at, ok := seat[k]; ok && k != "" {
+			out[k] = at
+		}
+	}
+	return out
+}
+
 // Record marks a key worked.
 func (m *MemoryCompletions) Record(_ context.Context, handle, key, _ string, at time.Time) error {
 	if key == "" {

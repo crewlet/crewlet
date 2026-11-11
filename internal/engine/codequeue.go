@@ -167,10 +167,16 @@ func workItemName(item types.WorkItem) string {
 // through beside it. A credential bound to no seat enqueues nothing (a merge
 // is a bound principal's act), so one here is refused rather than given a
 // name of its own.
+//
+// A SEAT'S CLOSE IS MADE FOR NOBODY ELSE ([types.ForNobody]): the queue lands
+// the change after the turn that enqueued it ended, outside any turn, and a
+// queued change carries nobody it was made for, so the turn this close wakes
+// works for the seat. That is Gitlet's edge of ADR-0109 until crewlet#798's
+// piece 4c carries a carrier on code's records, and this close with it.
 func enqueuerActor(p code.Principal) (builtin.Actor, error) {
 	switch {
 	case p.Kind == code.PrincipalAgent && p.Seat != "":
-		return builtin.Actor{Handle: p.Seat, Kind: worklet.AuthorAgent}, nil
+		return builtin.Actor{Handle: p.Seat, Kind: worklet.AuthorAgent, WrittenFor: types.ForNobody()}, nil
 	case p.Kind == code.PrincipalOperator && p.Seat != "":
 		return builtin.Actor{Handle: p.Seat, Kind: worklet.AuthorHuman, OperatorID: p.OperatorID}, nil
 	}

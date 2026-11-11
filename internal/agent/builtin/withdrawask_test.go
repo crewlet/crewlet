@@ -19,8 +19,9 @@ import (
 
 // resolverFake records the questions resolved through it, and as whom.
 type resolverFake struct {
-	resolved []string
-	by       []string
+	resolved    []string
+	by          []string
+	withdrawals []*worklet.Withdrawal
 }
 
 func (r *resolverFake) as(actor builtin.Actor) builtin.AskResolver {
@@ -29,8 +30,9 @@ func (r *resolverFake) as(actor builtin.Actor) builtin.AskResolver {
 }
 
 func (r *resolverFake) ResolveComment(_ context.Context, _, _, _, commentID string,
-	_ *worklet.Notify) (worklet.WriteResult, error) {
+	withdrawal *worklet.Withdrawal, _ *worklet.Notify) (worklet.WriteResult, error) {
 	r.resolved = append(r.resolved, commentID)
+	r.withdrawals = append(r.withdrawals, withdrawal)
 	return worklet.WriteResult{Outcome: statelog.OutcomeApplied, Version: 13}, nil
 }
 
@@ -134,6 +136,66 @@ func TestASeatWithdrawsItsOwnQuestionSayingWhy(t *testing.T) {
 	}
 	if len(res.resolved) != 1 || res.resolved[0] != "c-ask" || res.by[0] != "agent-cto" {
 		t.Errorf("resolved %v as %v, want the question as its author", res.resolved, res.by)
+	}
+}
+
+// A WITHDRAWAL NAMES WHAT NOW COVERS THE QUESTION: the resolve carries the
+// reason the seat posted and the link or other item it named, and a link that
+// is not one, an item that does not exist, the question's own item, or a run
+// with a replacement is refused before anything is written.
+//
+// Mutation: drop the withdrawal from the resolve and the person's card has no
+// reason; drop the same-item check and a question is covered by itself.
+func TestAWithdrawalNamesWhatNowCoversTheQuestion(t *testing.T) {
+	t.Parallel()
+	pr := "https://github.com/acme/web/pull/62"
+	for _, c := range []struct {
+		name, replaced string
+		want           *worklet.Replacement
+	}{
+		{"nothing named", "", nil},
+		{"a pull request", pr, &worklet.Replacement{URL: pr}},
+		{"another item", "ENG-2", &worklet.Replacement{Item: "id-2"}},
+	} {
+		tool, trk, res, _ := withdrawRig(t, nil)
+		args := map[string]any{"item": "ENG-1", "ask": "c-ask", "reason": "Covered by a pull request."}
+		if c.replaced != "" {
+			args["replaced_by"] = c.replaced
+		}
+		got := callFor(t, tool, turnFor(t, "agent-cto"), args)
+		if got.Failed {
+			t.Fatalf("%s: the withdrawal answered %s", c.name, got.Output)
+		}
+		if len(res.withdrawals) != 1 || res.withdrawals[0] == nil {
+			t.Fatalf("%s: resolved with %v, want a withdrawal", c.name, res.withdrawals)
+		}
+		w := res.withdrawals[0]
+		if len(trk.patched) != 1 || w.Reason != trk.patched[0].Comment.ID {
+			t.Errorf("%s: the withdrawal names reason %q, want the reply posted (%+v)", c.name,
+				w.Reason, trk.patched)
+		}
+		if (w.ReplacedBy == nil) != (c.want == nil) || (c.want != nil && *w.ReplacedBy != *c.want) {
+			t.Errorf("%s: replaced by %+v, want %+v", c.name, w.ReplacedBy, c.want)
+		}
+	}
+	for _, c := range []struct{ name, replaced string }{
+		{"not a link", "ftp://files.example.com/x"},
+		{"no such item", "ENG-99"},
+		{"the question's own item", "ENG-1"},
+	} {
+		tool, trk, res, _ := withdrawRig(t, nil)
+		got := callFor(t, tool, turnFor(t, "agent-cto"), map[string]any{"item": "ENG-1",
+			"ask": "c-ask", "reason": "Covered.", "replaced_by": c.replaced})
+		if !got.Failed || len(trk.patched) != 0 || len(res.resolved) != 0 {
+			t.Errorf("%s: answered %s, wrote %+v and resolved %v, want a refusal before any write",
+				c.name, got.Output, trk.patched, res.resolved)
+		}
+	}
+	tool, _, _, desk := withdrawRig(t, nil)
+	if got := callFor(t, tool, turnFor(t, "agent-cto"), map[string]any{"run": "turn-1",
+		"reason": "Covered.", "replaced_by": pr}); !got.Failed || len(desk.delivered) != 0 {
+		t.Errorf("a run's withdrawal with a replacement answered %s and delivered %d", got.Output,
+			len(desk.delivered))
 	}
 }
 

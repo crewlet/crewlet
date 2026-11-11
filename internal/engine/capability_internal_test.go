@@ -15,6 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/capability"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -294,7 +298,7 @@ func TestAToldRecordWhoseChangesDoNotDecodeIsSaidOnce(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	good, _ := json.Marshal([]capability.Change{{Kind: capability.ChangeLevel, Vendor: "Cloudflare",
-		Lane: "cloudflare", Line: "Cloudflare: your level is now Secure (was Operate)."}})
+		Lane: "cloudflare", Line: "Cloudflare: your Crewlet grant now sets your level to Secure (was Operate)."}})
 	rows := []accessdomain.ToldRow{
 		{Handle: "ceo", Turn: "t-bad", Changes: json.RawMessage(`{"not":"a list"}`)},
 		{Handle: "ceo", Turn: "t-good", Changes: good},
@@ -357,5 +361,67 @@ func TestATurnHoldsItsNotesAgainstWhatTheSeatWasLastTold(t *testing.T) {
 	changed, _ := dispatchTurn(t, e, capabilityCompany(t, "Ship small changes.", "Only the SRE deploys."))
 	if changed.changes == "" || changed.accessAt.Before(before) {
 		t.Errorf("a turn telling a change holds against %v, want its own instant", changed.accessAt)
+	}
+}
+
+// A TURN NAMES A LEVEL AS ITS VENDOR DOES, from what the integration's last
+// writing sync recorded, with no vendor asked at dispatch: a Datadog role is
+// its name, never its id; and a fixed level this build names (SSH's Operate)
+// is its name before any sync recorded one.
+//
+// Mutation: drop the recorded words from the snapshot's input and the seat is
+// told the role's id.
+func TestATurnNamesALevelAsItsVendorDoes(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := &Engine{backends: &Backends{Fleet: coordmemory.NewFleet()}}
+	const role = "90b75548-0000-4000-8000-000000000002"
+	on := true
+	cfg := &config.Company{Name: "Example", Mission: "Ship it.",
+		Integrations:       config.Integrations{Datadog: &config.Datadog{}},
+		SeatAccessMigrated: []string{"datadog"},
+		Roles: []config.Role{{Name: "Site Reliability Engineer", Handle: "sre", Kind: org.KindAgent,
+			Integrations: config.RoleIntegrations{Datadog: &config.RoleDatadog{Enabled: &on, Role: role}}}}}
+	told := func() string {
+		t.Helper()
+		in, err := e.capabilityInputOf(ctx, cfg, nil, "sre")
+		if err != nil {
+			t.Fatalf("capabilityInputOf: %v", err)
+		}
+		return capability.YourAccess(capability.Take(in))
+	}
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		t.Fatalf("SeatAccessLedger: %v", err)
+	}
+	account := seataccess.Observed{Exists: true, Enabled: true, Level: role}
+	if err := ledger.Put(ctx, seataccess.Record{Kind: integration.KindDatadog, Handle: "sre",
+		Lanes: map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneDatadog: {Observed: account}}}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got := told(); !strings.Contains(got, "- Datadog: "+role+".") {
+		t.Fatalf("before any sync recorded its name the seat is told\n%s", got)
+	}
+	if err := ledger.Put(ctx, seataccess.Record{Kind: integration.KindDatadog, Handle: "sre",
+		Lanes: map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneDatadog: {Observed: account,
+			Words: &seataccess.GrantWords{Levels: []seataccess.Level{{ID: role, Name: "Datadog Admin Role"}}}}}}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got := told(); !strings.Contains(got, "- Datadog: Datadog Admin Role.") || strings.Contains(got, role) {
+		t.Errorf("once a sync recorded the role's name the seat is told\n%s", got)
+	}
+
+	cfg.Integrations = config.Integrations{SSH: &config.SSH{Enabled: true}}
+	cfg.SeatAccessMigrated = []string{"ssh"}
+	cfg.Roles[0].Integrations = config.RoleIntegrations{SSH: &config.RoleSSH{Enabled: &on,
+		Level: config.SSHLevelOperate, Hosts: []string{"db-1"}}}
+	if err := ledger.Put(ctx, seataccess.Record{Kind: integration.KindSSH, Handle: "sre",
+		Lanes: map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneSSH: {Observed: seataccess.Observed{
+			Exists: true, Enabled: true, Level: config.SSHLevelOperate}}}}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got := told(); !strings.Contains(got, "- SSH (db-1): Operate.") ||
+		strings.Contains(got, "no tool server") {
+		t.Errorf("an SSH seat at Operate is told\n%s", got)
 	}
 }

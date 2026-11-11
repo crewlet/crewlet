@@ -466,7 +466,12 @@ type CoordinatorOptions struct {
 	// as it ends (internal/api/mcpbridge's Ledger.End, the session's last
 	// carry of its own, made once any carry [CoordinatorOptions.Settle] asked
 	// for is done), so the reads and the deletes that follow an ending see
-	// it.
+	// it. IT WAITS FOR NO CALL STILL RUNNING: the session answers each that
+	// it is still running and closes behind those answers, and the call runs
+	// on and records itself as its tool returns, which may be after this has
+	// returned — and after the reads and the delete that follow it, which then
+	// hold nothing of it (internal/api/mcpbridge, "An opening ends without
+	// waiting for its calls").
 	Ended func(runID string)
 
 	// Settle asks the bridge session serving a run's job to carry into the
@@ -574,6 +579,12 @@ type CoordinatorOptions struct {
 	// is about the turn, and is keyed on the seat and turn a caller addresses
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
+
+	// Parked is told every run whose question just landed on its row as
+	// awaiting, as the park wrote it: what a held call put to delegates
+	// wakes them from (ADR-0125). After the durable write, so a delegate
+	// woken by it always finds the call waiting; nil tells nobody.
+	Parked func(ctx context.Context, run PendingRun)
 
 	// CloseStopped ends the turn of a run a person stopped
 	// ([Coordinator.StopSeat]) and answers how it ended, for the executor log
@@ -974,6 +985,7 @@ type Coordinator struct {
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
+	parked    func(ctx context.Context, run PendingRun)
 	// unresumable is [CoordinatorOptions.Unresumable].
 	unresumable func(ctx context.Context, run PendingRun) (*Unresumable, error)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
@@ -1194,6 +1206,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		recovered:     opts.Recovered,
 		unresumable:   opts.Unresumable,
 		stopped:       opts.Stopped,
+		parked:        opts.Parked,
 		closeStopped:  opts.CloseStopped,
 		turnLost:      opts.TurnLost,
 		steersExpired: opts.SteersExpired,
@@ -2781,6 +2794,9 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// Whatever the engine holds up while a turn works comes down here — see
 	// [CoordinatorOptions.Stopped].
 	c.reportStopped(ctx, run)
+	if c.parked != nil {
+		c.parked(ctx, run)
+	}
 
 	if run.PauseTTLSeconds == 0 {
 		c.teardown(ctx, run)
@@ -3143,6 +3159,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome, answerer{
 			by: given.AnsweredBy, kind: given.AnsweredByKind, operatorID: given.OperatorID,
 			choice: given.Choice, said: redact.Secrets(strings.TrimSpace(given.Answer)),
+			delegatedRule: given.DelegatedRule,
 		})
 	}
 	if given.LaunchID == "" {
@@ -3484,6 +3501,8 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 type answerer struct {
 	by, kind, operatorID string
 	choice, said         string
+	// delegatedRule is the rule a delegate answered under, 0 for a person.
+	delegatedRule int
 	// answerBytes is what an answer refused as too large came to, and
 	// answerMaxBytes what an answer may, on the measure it was refused on
 	// ([types.AnswerTooLarge]); zero on every other outcome.
@@ -3524,6 +3543,7 @@ func (c *Coordinator) announceAnsweredAs(ctx context.Context, run PendingRun,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
 		Via: via, Outcome: outcome,
 		AnsweredBy: by.by, AnsweredByKind: by.kind, OperatorID: by.operatorID,
+		DelegatedRule: by.delegatedRule,
 		// THE QUESTION AND ITS ANSWER, which the run's row forgets once the
 		// run moves on: this record is the one account of what a person was
 		// asked and what they chose that outlives the run, and a person's
@@ -3723,7 +3743,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	//
 	// AND THE RUN'S CALLS, read from its log here — after the collection
 	// stopped or read back its box, so a call the run made up to its end is
-	// in them — and never "no calls" for a log the store could not read:
+	// in them, but for one still running as its job's session on the bridge
+	// ended, which the end answered and did not wait for, and which lands as
+	// its tool returns, after this read where it returns later
+	// (internal/api/mcpbridge, "An opening ends without waiting for its
+	// calls") — and never "no calls" for a log the store could not read:
 	// that read failing is a resume that failed, handed back like any other.
 	// Read INSIDE the frame, so an ending decided while it is read waits for
 	// the frame as it would for the resumer ([Coordinator.framing]). WITH THE

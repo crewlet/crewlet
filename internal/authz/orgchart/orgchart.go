@@ -282,6 +282,8 @@ func carries(role *org.Role, grant authz.SeatGrant) bool {
 		return role.SSHLevel != ""
 	case authz.SeatGrantSSHOperate:
 		return role.SSHLevel == "operate"
+	case authz.SeatGrantDelegate:
+		return role.Delegate
 	}
 	return false
 }

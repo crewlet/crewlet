@@ -83,7 +83,7 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 		{"an MCP server's tool", TurnQuery{Server: "github", Tool: "github_get_issue"},
 			"crewlet_events_type_time_idx"},
 	} {
-		query, args := c.q.partialsSQL(now(), readPage, DefaultTurnPage+1)
+		query, args := c.q.partialsSQL(now(), readPage, DefaultTurnPage+1, time.Time{})
 		plan := planOf(t, db, query, args)
 		if !strings.Contains(plan, c.index) {
 			t.Errorf("%s: the turn list's plan is %q — it does not seek %s", c.name, plan, c.index)
@@ -173,7 +173,7 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		{"the named turns a page lists", TurnQuery{IDs: []string{"tn-1", "tn-2"}, Failed: &failed},
 			readListed, "crewlet_events_turn_idx"},
 	} {
-		q, a := c.q.partialsSQL(at, c.kind, DefaultTurnPage+1)
+		q, a := c.q.partialsSQL(at, c.kind, DefaultTurnPage+1, time.Time{})
 		reads = append(reads, read{c.name, q, a, c.index, false})
 	}
 	type filter struct {
@@ -304,7 +304,7 @@ func TestTheCustodyReadsSeekTheLogByIdentity(t *testing.T) {
 		}{fmt.Sprintf("the axis by %s", h.Bucket), where, args})
 	}
 	share := TurnQuery{IDs: []string{"t-1", "t-2"}, AgentID: "a-1", WorkKey: "k-1"}
-	where, args = share.turnWhere(at.Add(-EventHistory), readShare)
+	where, args = share.turnWhere(at.Add(-EventHistory), at.Add(-EventHistory), readShare)
 	reads = append(reads, struct {
 		name  string
 		where []string

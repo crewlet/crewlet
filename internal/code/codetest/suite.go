@@ -215,16 +215,40 @@ func equalRefs(a, b map[string]string) bool {
 	return true
 }
 
-// within polls ok until it holds or d passes.
+// within polls ok until it holds or d passes, and answers whether it held.
+//
+// EVERY CALLER'S d BOUNDS A WAIT FOR SOMETHING THAT MUST COME, and its firing
+// only fails the case: a condition a broken build never meets, or meets past a
+// claim another suite decides with no clock — the cache janitor running at
+// its start and at a kick rather than at its next tick, which cache's own
+// TestAStartedCacheEmptiesTrashWhenKicked holds with no tick ever delivered.
+// So no caller's bound is a claim, and none is shorter than what it waits for
+// may take on a loaded runner (cleanupWait).
 func within(d time.Duration, ok func() bool) bool {
 	deadline := time.Now().Add(d)
 	for {
 		if ok() {
 			return true
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline; the janitor's promptness is TestAStartedCacheEmptiesTrashWhenKicked's
 			return false
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
+
+// cleanupWait is how long a case waits for cleanup the code owes it: the
+// janitor emptying trash/ of what a restart's boot moved there or a release
+// retired, and a request's handler letting its scratch or an incarnation go
+// once its client is done.
+//
+// A LIVENESS BOUND THAT ONLY A HUNG JANITOR OR HANDLER REACHES, never a
+// claim. The janitor runs at its start and at a kick, in milliseconds, and
+// whether it does so rather than at its next tick (cache.EvictInterval on) is
+// cache's own claim, decided there with no tick ever delivered
+// (TestAStartedCacheEmptiesTrashWhenKicked). So no case here turns on how soon
+// it comes. A MINUTE, the suite's bound on every wait that must end (homeWait,
+// layerSettle): far past what a loaded runner adds to the milliseconds the
+// work takes, and short enough that a janitor that never runs fails its case
+// rather than the whole binary's timeout.
+const cleanupWait = time.Minute

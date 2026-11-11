@@ -3,6 +3,7 @@ package estate
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -129,6 +131,18 @@ func (w Work) MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
 func (w Work) ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
 	worklet.ReadyWork, error) {
 	return call(ctx, w.r, opReadyWork, nil, readyWorkArgs{Query: q, Now: now})
+}
+
+// PickupAnswer answers how a seat's turn left the item a work pickup handed it
+// (ADR-0122), from whichever data node serves the tracker.
+func (w Work) PickupAnswer(ctx context.Context, q worklet.PickupAnswerQuery) (types.PickupAnswer, error) {
+	return call(ctx, w.r, opPickupAnswer, nil, q)
+}
+
+// OwnAsks answers a seat's open asks to one person: what a turn the seat
+// holds with that person is handed at its start.
+func (w Work) OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time) (worklet.OwnAsks, error) {
+	return call(ctx, w.r, opOwnAsks, nil, ownAsksArgs{Query: q, Now: now})
 }
 
 // Projects lists the company's projects.
@@ -425,11 +439,12 @@ func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, comm
 }
 
 // ResolveComment resolves the writer's own remark on a work item: an open
-// question its asker withdraws.
+// question its asker withdraws, saying why where withdrawal is set.
 func (w WorkWriter) ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
-	notify *worklet.Notify) (worklet.WriteResult, error) {
+	withdrawal *worklet.Withdrawal, notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opResolveTaskComment, &w.actor, resolveCommentOnTaskArgs{
-		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Notify: notify,
+		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID,
+		Withdrawal: withdrawal, Notify: notify,
 	})
 	w.settled(out.Result)
 	return out, err
@@ -631,8 +646,6 @@ type Chat struct{ r *Router }
 // Chat answers the engine's own chat.
 func (r *Router) Chat() Chat { return Chat{r: r} }
 
-var _ chatlet.ThreadSource = Chat{}
-
 // Channels answers the rooms a viewer is in.
 func (c Chat) Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
 	fresh statelog.Freshness) (chatlet.ChannelListing, error) {
@@ -680,6 +693,70 @@ func (c Chat) Messages(ctx context.Context, viewer string, q chatlet.TranscriptQ
 func (c Chat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 	fresh statelog.Freshness) (chatlet.Thread, error) {
 	return call(ctx, c.r, opChatThread, nil, chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// TurnThreads is the engine's own turn-start thread read, over the router: a
+// thread with whom each of its messages was written for
+// ([chatlet.TurnThread]), by which a turn works through only the waiting
+// messages written for whom it works for (ADR-0109).
+//
+// A FACADE OF ITS OWN, never a method on [Chat]: the API, the assistant and
+// the agents' tools hold [Chat], so a method there would leave every reader's
+// surface one call away from whom a message was written for, which no reader
+// may see. Only the engine builds it, and the engine-class guard in this
+// package's tests refuses it, and every road to it, in the packages that serve
+// a person or a model.
+type TurnThreads struct{ r *Router }
+
+// TurnThreads is the engine's own turn-start thread read ([TurnThreads]).
+func (r *Router) TurnThreads() TurnThreads { return TurnThreads{r: r} }
+
+var _ chatlet.ThreadSource = TurnThreads{}
+
+// TurnThread answers one thread with whom each of its messages was written
+// for.
+//
+// AND FALLS BACK TO THE PLAIN THREAD where no data node ran the turn's own read
+// and none went silent: an older data node, during a rolling upgrade, does not
+// declare the operation and answers it unserved. The plain thread says it
+// carried nothing ([chatlet.TurnThread.Carried]), and the turn marks no waiting
+// message as worked through. Never on any other refusal: a viewer who may not
+// read the room, a thread that is not there, a walk in which a node went silent,
+// or a node refusing keys its build does not declare is returned as it is, and
+// nothing is asked again.
+//
+// BROADER THAN THE ROLL IT IS FOR, and said so: an unserved refusal carries no
+// structured reason, and an older node reports an operation it does not
+// declare as unserved in words, so this cannot tell "no node knows the
+// operation" from "every node is behind or out of service". In a degraded
+// estate the second walk is asked too, and is usually refused too. At most one
+// read RUNS either way: the second is asked only after no node ran the first.
+func (t TurnThreads) TurnThread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+	fresh statelog.Freshness) (chatlet.TurnThread, error) {
+
+	args := chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh}
+	out, err := call(ctx, t.r, opChatTurnThread, nil, args)
+	if !servedByNobody(err) {
+		return out, err
+	}
+	thread, err := call(ctx, t.r, opChatThread, nil, args)
+	if err != nil {
+		return chatlet.TurnThread{}, err
+	}
+	return chatlet.TurnThread{Thread: thread}, nil
+}
+
+// servedByNobody reports whether err is a walk in which no data node ran the
+// operation and none went silent ([ErrUnserved]), refused for nothing else:
+// never one inside a refusal of keys a node's build does not declare
+// ([ErrUnknownKeys]), which unwraps to the walk it found unserved.
+func servedByNobody(err error) bool {
+	var unknown *ErrUnknownKeys
+	if err == nil || errors.As(err, &unknown) {
+		return false
+	}
+	var unserved *ErrUnserved
+	return errors.As(err, &unserved) && !unserved.Silent()
 }
 
 // RoomNames answers the names of every room a viewer may read.

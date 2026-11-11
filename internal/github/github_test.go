@@ -2282,7 +2282,7 @@ func TestAnAddressGitHubCannotReachRegistersNothingAndIsAnAdvisory(t *testing.T)
 		Config: &config.GitHub{
 			Enabled: true, WebhookSecret: "s3cret",
 			Provisioning: &config.GitHubProvisioning{
-				Org: "gophrase", OrgWebhook: "true",
+				Org: "acme", OrgWebhook: "true",
 			},
 		},
 		Value:          func(v string) string { return v },

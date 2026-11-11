@@ -27,7 +27,7 @@ func namedWorld() map[string]any {
 	world := assistanttest.World()
 	world["/containers"] = map[string]any{"containers": []any{
 		map[string]any{"key": "HOME", "name": "Company"},
-		map[string]any{"key": "FAIR", "name": "FairSplit"}}}
+		map[string]any{"key": "FAIR", "name": "Acme"}}}
 	world["/worklet/projects"] = map[string]any{"projects": []any{
 		map[string]any{"key": "ENG", "name": "Engineering"},
 		map[string]any{"key": "MKT", "name": "Marketing"}}}
@@ -67,7 +67,7 @@ func TestANameResolvesToItsKeyOrIsRefusedWithTheChoices(t *testing.T) {
 			map[string]any{"handle": "former-qa"}, "handle", "former-qa", ""},
 		"a key guessed from a space's name": {page, map[string]any{"container": "COMPANY"}, "container", "HOME", ""},
 		"a write to a space nobody declares": {page, map[string]any{"container": "WIKI"}, "", "",
-			"The spaces are: Company (HOME), FairSplit (FAIR)."},
+			"The spaces are: Company (HOME), Acme (FAIR)."},
 		"a read naming a seat that is not there": {tasks, map[string]any{"assignee": "Head of Fun"}, "",
 			"", `"Head of Fun" is not one of the seats you can see.`},
 		"a name two seats share": {tasks, map[string]any{"assignee": "qa engineer"}, "", "",
@@ -119,7 +119,7 @@ func TestAnUnreadableDirectoryResolvesNothingAndIsAskedOnce(t *testing.T) {
 	}
 	reads.Store(0)
 	r = catalog.NewResolver(counted)
-	for _, v := range []string{"Company", "FairSplit", "HOME"} {
+	for _, v := range []string{"Company", "Acme", "HOME"} {
 		if _, err := r.Resolve(t.Context(), page, map[string]any{"container": v}); err != nil {
 			t.Fatal(err)
 		}

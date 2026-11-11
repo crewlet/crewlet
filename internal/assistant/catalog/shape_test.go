@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -432,6 +433,10 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 			provenance.TrustExternal},
 		{"list_executors", `{"runs":[{"agent_handle":"dev","status":"running"}]}`,
 			provenance.TrustColleague},
+		// A VENDOR'S WORDS: its refusal, its level, account and scope names.
+		{"get_seat_access", `{"handle":"sre","name":"SRE","integration":"GitHub",` +
+			`"status_label":"Refused","refusal":"Resource not accessible by integration"}`,
+			provenance.TrustExternal},
 		{"list_decisions", `{"items":[{"kind":"run","run":{"agent_handle":"dev","question":"Merge it?"}}]}`,
 			provenance.TrustExternal},
 		{"list_decisions", `{"items":[{"kind":"ask","ask":{"key":"ENG-1","title":"Ship it","body":"Which day?"}}]}`,
@@ -453,6 +458,43 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 		if res.Trust != tc.want || !strings.Contains(res.Model, "trust="+string(tc.want)) {
 			t.Errorf("%s answering %s is fenced at %q, want %q", tc.tool, tc.body, res.Trust, tc.want)
 		}
+	}
+}
+
+// AN INTEGRATION'S FINDINGS CELL NAMES EVERY FINDING, a titled one by its
+// title and one without by its label: an agent's refused sync carries no title,
+// and the cell read "" beside "Needs attention". Mutation: drop the label from
+// the integrations answer, or read the cell from titles alone, and this fails.
+func TestAnIntegrationsFindingsCellNamesEveryFinding(t *testing.T) {
+	t.Parallel()
+	refused := integration.Finding{Kind: integration.FindingIdentityFailed, Subject: "sre", Seat: true,
+		Detail: "Resource not accessible by integration"}
+	blocked := integration.Finding{Kind: integration.FindingIngressBlocked, Title: "GitHub can't reach this engine"}
+	finding := func(f integration.Finding) map[string]any {
+		row := map[string]any{"kind": string(f.Kind), "subject": f.Subject, "detail": f.Detail,
+			"seat": f.Seat, "label": f.Label()}
+		if f.Title != "" {
+			row["title"] = f.Title
+		}
+		return row
+	}
+	body, err := json.Marshal(map[string]any{"integrations": []any{map[string]any{
+		"key": "github", "enabled": true, "inbound": 0,
+		"reconcile": map[string]any{"phase_label": "Needs attention",
+			"findings": []any{finding(refused), finding(blocked)}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := catalog.Shape(mustTool(t, "list_integrations"), nil, exec.Response{Status: 200, Body: body},
+		provenance.NewBoundary(), evals.Epoch, cards.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := refused.Label() + ", " + blocked.Title
+	if len(res.Cards) != 1 || res.Cards[0].Table == nil || len(res.Cards[0].Table.Rows) != 1 ||
+		!slices.Contains(res.Cards[0].Table.Rows[0], any(want)) {
+		t.Fatalf("the findings cell does not read %q: %+v", want, res.Cards)
 	}
 }
 

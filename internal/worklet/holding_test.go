@@ -135,3 +135,66 @@ func TestAHandOverInAStatusChangeIsOneInstantForEveryReader(t *testing.T) {
 			work.IdleReviews, held[0].HeldSince)
 	}
 }
+
+// myWorkWith is [roundTrip.myWork] told the company's agent seats.
+func (r *roundTrip) myWorkWith(handle string, agents []string) worklet.MyWork {
+	r.t.Helper()
+	out, err := r.reader.MyWork(r.t.Context(), worklet.MyWorkQuery{
+		Handle: handle, Level: statelog.ReadStale, Agents: agents,
+	}, wednesday, time.UTC)
+	if err != nil {
+		r.t.Fatalf("MyWork(%s): %v", handle, err)
+	}
+	return out
+}
+
+// WHAT A PERSON HOLDS UP COUNTS THE AGENT WORK BEHIND IT (ADR-0124): an item
+// assigned to them, and an item an agent asked them about, which itself waits
+// on their answer; through each, the agent items waiting in the chains behind
+// it; and across both, each agent item once.
+//
+// Mutation: leave out the items held by an ask and q's chain is missing; count
+// per row in the summary and z is counted twice.
+func TestHoldingUpCountsTheAgentWorkWaitingOnAPerson(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for id, holder := range map[string]string{
+		"a": "owner", "b": "pm", "c": "lena", "q": "backend", "rr": "qa", "s": "lena", "z": "pm",
+	} {
+		assign(t, r, id, holder)
+	}
+	waitsOn(t, r, "b", "a")
+	waitsOn(t, r, "c", "a")
+	waitsOn(t, r, "z", "a")
+	waitsOn(t, r, "rr", "q")
+	waitsOn(t, r, "s", "q")
+	waitsOn(t, r, "z", "q")
+	askOn(t, r, "op-ask", "q", worklet.Comment{ID: "c-ask", Task: "q", Author: "backend",
+		AuthorKind: worklet.AuthorAgent, Body: "Merge it?", Ask: "owner", CreatedAt: wednesday})
+
+	agents := []string{"pm", "backend", "qa"}
+	got := r.myWorkWith("owner", agents)
+	if len(got.HoldingUp) != 2 {
+		t.Fatalf("holding_up = %+v, want a, held by assignment, and q, held by a question", got.HoldingUp)
+	}
+	q, a := got.HoldingUp[0], got.HoldingUp[1]
+	if q.ID != "q" || q.Asked != "c-ask" || q.Blocks != 3 || q.AgentWaiting != 3 ||
+		!slices.Equal(q.Holders, []string{"backend", "lena", "pm", "qa"}) {
+		t.Errorf("first row = %s asked %q blocking %d with %d agent items held by %v; want q, "+
+			"held by c-ask, blocking 3, with 3 agent items (q itself, rr, z), held by backend, "+
+			"lena, pm and qa", q.ID, q.Asked, q.Blocks, q.AgentWaiting, q.Holders)
+	}
+	if a.ID != "a" || a.Asked != "" || a.Blocks != 3 || a.AgentWaiting != 2 {
+		t.Errorf("second row = %s asked %q blocking %d with %d agent items; want a, assigned, "+
+			"blocking 3 with 2 agent items (b, z)", a.ID, a.Asked, a.Blocks, a.AgentWaiting)
+	}
+	if want := (worklet.HoldingAgents{Items: 2, AgentItems: 4}); got.HoldingAgents != want {
+		t.Errorf("the summary = %+v, want %+v: b, z, q and rr, z once", got.HoldingAgents, want)
+	}
+	if got.Totals.HoldingUp.Total != 2 {
+		t.Errorf("the block's total = %+v, want both held items", got.Totals.HoldingUp)
+	}
+	if none := r.myWorkWith("owner", nil); none.HoldingAgents != (worklet.HoldingAgents{}) {
+		t.Errorf("with no agent seats named the summary = %+v, want nothing counted", none.HoldingAgents)
+	}
+}

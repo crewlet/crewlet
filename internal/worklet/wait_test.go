@@ -17,7 +17,7 @@ func TestAnItemWaitsUntilItsDateAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	fileFor(t, r, "w", "app", worklet.StatusTodo, worklet.PriorityLow)
-	app := r.writer.As("app", worklet.AuthorAgent, worklet.Provenance{})
+	app := r.writer.As("app", worklet.AuthorAgent, aTurnNobodyWoke())
 	until, reason := wednesday.Add(48*time.Hour), "the vendor's window opens then"
 	patch := func(op string, as *worklet.Writer, p worklet.TaskPatch) error {
 		t.Helper()

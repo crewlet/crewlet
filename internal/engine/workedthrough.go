@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -35,13 +37,16 @@ import (
 // # What counts as worked through
 //
 // Exactly the messages the turn's thread block SHOWED it that were waiting for
-// an answer — its own writer's, after the seat's own last reply in the thread,
-// before the message that woke the turn ([prefetch.Blocks.ThreadContextAnswered]).
-// Not a message a bound dropped (the turn never saw it), not anything up to the
-// seat's last reply (answered already), not ANOTHER WRITER'S (one turn works
-// for one writer, ADR-0109, so their message is owed a turn of its own, held
-// to their apps), and nothing at all when the read stopped short or did not
-// reach the trigger (nothing then says which messages came before it).
+// an answer — its own writer's, written for whom the turn works for, after the
+// seat's own last reply in the thread, before the message that woke the turn
+// ([prefetch.Blocks.ThreadContextAnswered]). Not a message a bound dropped (the
+// turn never saw it), not anything up to the seat's last reply (answered
+// already), not ANOTHER WRITER'S nor one WRITTEN FOR ANOTHER REQUESTER (one
+// turn works for one writer and one whom, ADR-0109, so such a message is owed
+// a turn of its own, held to its requester's apps), and nothing at all when the
+// read stopped short, did not reach the trigger, or could not say whom its
+// messages were written for (nothing then says which messages are this
+// turn's).
 // Recorded only when the turn COMPLETES, with the turn's own triggers: a turn
 // that failed answered nothing.
 //
@@ -51,6 +56,32 @@ import (
 // saw. A trigger that is not a chat message in a thread has no such key and
 // is untouched: a top-level direct message has no thread block, so a later
 // turn never saw it and its retry is still owed an answer.
+//
+// # An edit is a version of the message, not the message
+//
+// A message's id names every version of it, and an edit's wake carries that
+// same id as its `ts`. Keyed on the id alone, a mark dropped every later wake
+// of the message — the wake of an edit made after the marking turn read the
+// thread among them, whose words no turn ever saw, an edit that newly names
+// the seat included. So an edited message is recorded at the version the block
+// showed it ([notify.Message.Version]: on Chatlet, the log position of the
+// record that last wrote it) and for whom the marking turn worked
+// ([chatEditKey]), and an edit's wake is dropped by that key alone, built from
+// its own trigger position and the carrier its writer stated: never by the
+// message's key, which a mark of any earlier version holds. An edit made after
+// the read, one made for another requester, and an earlier edit the turn saw
+// only through a later one each run as a turn of their own, the last a
+// duplicate, which is the safe direction. No writer is in the key: only a
+// message's author edits it, and a mark covers only the trigger's writer's
+// messages.
+//
+// The two halves are spelled alike ([statelog.Position.String]): the read's
+// position is the row's, which the applier stamped from its checkpoint, and
+// the wake's is the change feed's trigger, from the delivery and the
+// generation its writer stamped. They differ only across a reanchor of the
+// chat log, when the edit's wake runs again. NOT THE INSTANT THE LOG STORED
+// THE EDIT, which an applier holds in two shapes by the path it applied on,
+// where the position survives both.
 
 // chatMessageKey is the completion-ledger key for one chat message, by its
 // backend, its channel and the backend's own id for it.
@@ -58,24 +89,53 @@ func chatMessageKey(backend, channel, id string) string {
 	return workkey.Derive([]string{"chat-message", backend, channel, id})
 }
 
+// chatEditKey is the completion-ledger key for one version of an edited chat
+// message, worked for one whom: its backend, its channel, the backend's own id
+// for it, the version ([notify.Message.Version], which is an edit's wake's
+// trigger position) and whom the turn worked for, as the partition keys it
+// ([notify.WorkingForKey]).
+func chatEditKey(backend, channel, id, version string, workingFor *types.WorkingFor) string {
+	return workkey.Derive([]string{"chat-edit", backend, channel, id, version,
+		notify.WorkingForKey(workingFor)})
+}
+
 // chatKeyOf is the completion-ledger key for the chat message a trigger
-// carries, and whether it carries one: the message's `ts` in a thread on a
-// chat backend, read off the notification's own metadata — the same address
-// the thread block is read at.
-func chatKeyOf(ev *events.Event) (string, bool) {
+// carries, whether that key is an edit's, and whether the trigger carries one
+// at all: the message's `ts` in a thread on a chat backend, read off the
+// notification's own metadata — the same address the thread block is read at.
+//
+// AN EDIT'S WAKE IS KEYED BY ITS VERSION ALONE ([chatEditKey]): its own
+// trigger position and the carrier its writer stated (writtenForIn), never
+// the message's key. One that carries no trigger position has no key, and
+// runs.
+func chatKeyOf(ev *events.Event) (key string, edit, ok bool) {
 	if ev == nil {
-		return "", false
+		return "", false, false
 	}
-	n, ok := events.DataAs[*types.ExternalNotification](ev)
-	if !ok || n == nil {
-		return "", false
+	n, isNotice := events.DataAs[*types.ExternalNotification](ev)
+	if !isNotice || n == nil {
+		return "", false, false
 	}
-	thread, ok := notify.ThreadOf(n.Metadata)
-	id := n.Metadata["ts"]
-	if !ok || id == "" {
-		return "", false
+	thread, inThread := notify.ThreadOf(n.Metadata)
+	id := n.Metadata[notify.MessageIDField]
+	if !inThread || id == "" {
+		return "", false, false
 	}
-	return chatMessageKey(thread.Backend, thread.Channel, id), true
+	if chatletEdit(n) {
+		version := notify.TriggerOf(ev)
+		if version == "" {
+			return "", true, false
+		}
+		return chatEditKey(thread.Backend, thread.Channel, id, version, writtenForIn(n)), true, true
+	}
+	return chatMessageKey(thread.Backend, thread.Channel, id), false, true
+}
+
+// chatletEdit says a notification is the wake of an edit to a Chatlet
+// message, as Chatlet's parser states it: its source, and its record's own op
+// as the event type.
+func chatletEdit(n *types.ExternalNotification) bool {
+	return n.NotificationSource == chatlet.Source && n.SourceEventType == string(chatlet.OpEdit)
 }
 
 // triggerMessageOf is the backend's own id for the newest chat message a
@@ -97,14 +157,22 @@ func triggerMessageOf(evs []*events.Event) string {
 }
 
 // workedThroughKeys are the completion-ledger keys for the messages a turn's
-// thread block showed it that were waiting for an answer.
-func workedThroughKeys(thread notify.Thread, answered []string) []string {
+// thread block showed it that were waiting for an answer: each message's own
+// key, and for an edited one the key of the version it was shown at, for whom
+// the turn worked ([chatEditKey]).
+func workedThroughKeys(thread notify.Thread, answered []prefetch.Answered,
+	workingFor *types.WorkingFor) []string {
+
 	if thread.Backend == "" || thread.Channel == "" || len(answered) == 0 {
 		return nil
 	}
 	keys := make([]string, 0, len(answered))
-	for _, id := range answered {
-		keys = append(keys, chatMessageKey(thread.Backend, thread.Channel, id))
+	for _, a := range answered {
+		keys = append(keys, chatMessageKey(thread.Backend, thread.Channel, a.ID))
+		if a.Version != "" {
+			keys = append(keys, chatEditKey(thread.Backend, thread.Channel, a.ID, a.Version,
+				workingFor))
+		}
 	}
 	return keys
 }

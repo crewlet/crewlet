@@ -167,6 +167,12 @@ type Config struct {
 	// See [turn.Reply].
 	Reply turn.Reply
 
+	// PickupAnswer reads, off the tracker's rows, how this turn has left
+	// the item a work pickup handed it ([turn.Reply.Item], ADR-0122).
+	// Required where Reply names an item, and read by the submission check
+	// and after every phase.
+	PickupAnswer func(ctx context.Context) (types.PickupAnswer, error)
+
 	// Context is what this seat remembers, what its company has written
 	// down, what it has done before, and who it is talking to — rendered
 	// by the caller BEFORE the turn.
@@ -505,10 +511,12 @@ type BridgedCall struct {
 
 	// Abandoned is a call nobody waited for by the time it returned
 	// (sandbox.BridgeCall.Abandoned): its harness had cancelled it — Claude
-	// Code cancels a call at its tool timeout and discards a late answer — or
-	// its job's session on the bridge had ended. It ran and its effect
-	// happened, while the session of the job that made it shows it with no
-	// outcome or a failed one. HELD BY NO SAVE POINT, as a late call is
+	// Code and OpenCode cancel a call at its server's timeout and discard a
+	// late answer — or hung up on the response the bridge kept its answer
+	// going on, or its job's session on the bridge ended while it ran and
+	// answered it as still running. It ran and its effect happened, while the
+	// session of the job that made it shows it with no outcome, a failed one
+	// or that "still running". HELD BY NO SAVE POINT, as a late call is
 	// ([heldAt]): every continuation of the round built after it landed is
 	// told it, under the late calls' words, and no rebuilt guard counts a load
 	// it made. Unlike a late call it may be the round's submission
@@ -779,7 +787,38 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 		}
 	}
-	return r.executeAsAgentRun(ctx, round, notes, history)
+	work, surface, ran := r.executeAsAgentRun(ctx, round, notes, history)
+	if ran == nil && !work.Suspended && r.cfg.Reply.Item != "" {
+		work.Answer = r.pickupAnswer(ctx)
+	}
+	return work, surface, ran
+}
+
+// pickupAnswer reads how the turn has left the item its reply names
+// (ADR-0122). A read that fails answers [types.PickupUnread], LOGGED, which the
+// checks accept: the turn falls back to the delivery every turn owes rather
+// than loop on a store it cannot reach, and an item left in words comes back
+// on its recheck. An item that left the seat is said once it is read so.
+func (r *Runner) pickupAnswer(ctx context.Context) types.PickupAnswer {
+	if r.cfg.PickupAnswer == nil {
+		return types.PickupUnread
+	}
+	answer, err := r.cfg.PickupAnswer(ctx)
+	if err == nil && !answer.Valid() {
+		err = fmt.Errorf("the read answered %q, which this build does not know", answer)
+	}
+	if err != nil {
+		log.WarnContext(ctx, "pickup_answer_unread", "item", r.cfg.Reply.Item,
+			"error", err.Error(), "detail", "how the pickup's turn left its item could not be "+
+				"read, so any delivery counts for this check")
+		return types.PickupUnread
+	}
+	if answer.Moot() {
+		log.InfoContext(ctx, "pickup_moot", "item", r.cfg.Reply.Item, "answer", string(answer),
+			"detail", "the item left the seat while its pickup's turn ran, so no typed "+
+				"answer is owed on it")
+	}
+	return answer
 }
 
 // executorPrompt is the executor's opening: its system prompt and the turn's
@@ -813,6 +852,7 @@ func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
 		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
+		OpenAsks:            r.cfg.Context.OpenAsks,
 		Workers:             r.workerCatalogue(),
 		Access:              r.cfg.Access,
 	})

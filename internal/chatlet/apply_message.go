@@ -168,6 +168,10 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		// what it reached, and a node that routed it again here
 		// would answer from a roster the writer did not have.
 		Reach: reachOf(p.AuthorKind, at.record.Notify),
+		// AND WHOM IT WAS WRITTEN FOR, from the record too: the
+		// carrier the writer's turn composed, never one this node
+		// would compose again.
+		WorkingFor: workingForOf(at.record),
 	}
 	document, err := EncodeMessage(message)
 	if err != nil {

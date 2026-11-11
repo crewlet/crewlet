@@ -1,0 +1,399 @@
+package chatlet_test
+
+import (
+	"database/sql"
+	"encoding/json"
+	jsonv2 "encoding/json/v2"
+	"errors"
+	"reflect"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// AN AGENT'S MESSAGE THAT WAKES SOMEBODY CARRIES WHOM IT WAS WRITTEN FOR, AND
+// NOTHING ELSE DOES (ADR-0109), on chat's store as on the tracker's. An
+// agent's message asking a colleague in the room, said in a turn ada woke,
+// records that the turn worked for ada, at the version that carries it, which
+// an older build retains rather than waking the colleague for the agent; and
+// the wake the parser derives from it names the agent's seat as its writer,
+// carrying ada, so the partition keys it as a seat's (`seat:`, as every
+// first-party writer's). The room the same agent makes wakes nobody and
+// carries nobody, at the base version, and the same ask a turn nobody woke
+// says carries nobody either, at the version its ask alone needs.
+//
+// AND THE TYPE REFUSES THE ACTOR THAT FORGOT: an agent that states nobody it
+// writes for says nothing, and a person handed a carrier says nothing either.
+// An actor decoded off the estate's wire states it already.
+//
+// Mutation: leave the carrier off the record the store builds, and ada's
+// message carries nobody; leave the writer off the inbound the parser builds,
+// and the wake names no writer; drop the refusal in recordedFor, and the
+// unstated agent's message lands.
+func TestAnAgentsMessageThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	forAda := seat("pm", "run-1")
+	forAda.WrittenFor = types.ForTurn(ada)
+
+	room := r.room(forAda, "launch", "pm", "eng", "jane")
+	if got := r.lastRecord(); got.WorkingFor != nil || got.V != 1 {
+		t.Errorf("the room ada's turn made is recorded written for %+v at version %d, want "+
+			"nobody at 1: a room wakes nobody", got.WorkingFor, got.V)
+	}
+
+	ask := chatlet.NewMessage{Body: "@eng is the deploy done?", Mentions: []string{"eng"}, Asks: true}
+	if _, err := r.store.Post(t.Context(), keyed(forAda, requested("k-for-ada")), room.Channel.ID,
+		ask); err != nil {
+		t.Fatalf("pm asks for ada: %v", err)
+	}
+	r.drain()
+	rec := r.lastRecord()
+	if !reflect.DeepEqual(rec.WorkingFor, ada) || rec.V != 3 || rec.Notify == nil {
+		t.Fatalf("pm's ask for ada is recorded written for %+v at version %d waking %v, want ada "+
+			"at 3", rec.WorkingFor, rec.V, rec.Notify)
+	}
+	routed := wakes(t, rec, company(t, []string{"pm", "eng", "jane"}, "jane"))
+	want := types.NotificationWriter{Kind: iam.ActorAgent, Seat: "pm", WorkingFor: ada}
+	if len(routed) != 1 || routed[0].Inbound.Writer == nil || !reflect.DeepEqual(*routed[0].Inbound.Writer, want) {
+		t.Fatalf("the ask woke %+v, want eng woken by %+v", routed, want)
+	}
+
+	if _, err := r.store.Post(t.Context(), keyed(seat("pm", "run-2"), requested("k-own")), room.Channel.ID,
+		ask); err != nil {
+		t.Fatalf("pm asks in a turn nobody woke: %v", err)
+	}
+	r.drain()
+	// VERSION 2, THE ASK'S OWN (MessagePost.Asks), and never the carrier's.
+	if got := r.lastRecord(); got.WorkingFor != nil || got.V != 2 {
+		t.Errorf("the ask of a turn nobody woke is recorded written for %+v at version %d, want "+
+			"nobody at 2", got.WorkingFor, got.V)
+	}
+
+	unstated := seat("pm", "run-3")
+	unstated.WrittenFor = types.WrittenFor{}
+	handed := person("jane")
+	handed.WrittenFor = types.ForTurn(ada)
+	for name, c := range map[string]struct {
+		actor chatlet.Actor
+		cause error
+	}{
+		"an agent that states nobody": {unstated, types.ErrWrittenForUnstated},
+		"a person handed a carrier":   {handed, types.ErrWrittenForNotAnAgents},
+	} {
+		if _, err := r.store.Post(t.Context(), keyed(c.actor, requested("k-"+name)), room.Channel.ID,
+			ask); !errors.Is(err, c.cause) {
+			t.Errorf("%s posts: %v, want refused for %v", name, err, c.cause)
+		}
+	}
+
+	// AN ACTOR THAT CROSSED THE WIRE carrying nobody is stated: the node
+	// that built it decided, and an older node sends exactly this.
+	var crossed chatlet.Actor
+	if err := json.Unmarshal([]byte(`{"Handle":"pm","Kind":"agent"}`), &crossed); err != nil {
+		t.Fatalf("decode an actor: %v", err)
+	}
+	if _, err := r.store.Post(t.Context(), keyed(crossed, requested("k-crossed")), room.Channel.ID,
+		ask); err != nil {
+		t.Errorf("an agent's message that crossed the wire carrying nobody was refused: %v", err)
+	}
+}
+
+// A CHAT ACTOR CROSSES THE WIRE AS IT WAS STATED (ADR-0109), under the rule of
+// the arguments it crosses in, as the estate's wire encodes and decodes them
+// (crewlet#910). Through the caller's own encoder every field at its zero is
+// left off, so an agent's actor stated for nobody goes out without the key,
+// byte for byte as a build without the field sends it, and one stated for
+// somebody carries them. Through the caller's own decoder it arrives stated,
+// whatever members did, so an older node's actor, which knows no carrier,
+// arrives as stated nobody; and a member nothing declares, in the actor or in
+// its carrier, is refused where it is rather than dropped below where that
+// rule can see. (That no node asks a chat write whose actor may write nothing
+// is internal/estate's, and held there.)
+//
+// Mutation: give the actor an UnmarshalJSON over encoding/json in place of
+// its UnmarshalJSONFrom, and the member inside it is dropped; state the actor
+// only where a carrier arrives, and the older node's actor arrives stating
+// nothing.
+func TestAChatActorCrossesTheWireAsItWasStated(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	wire := jsonv2.OmitZeroStructFields(true)
+	for name, c := range map[string]struct {
+		writtenFor types.WrittenFor
+		want       string
+	}{
+		"an agent stated for nobody": {types.ForTurn(nil), `{"Handle":"pm","Kind":"agent"}`},
+		"an agent stated for ada": {types.ForTurn(ada),
+			`{"Handle":"pm","Kind":"agent","WrittenFor":{"kind":"seat","seat":"ada"}}`},
+	} {
+		got, err := jsonv2.Marshal(chatlet.Actor{Handle: "pm", Kind: chatlet.AuthorAgent,
+			WrittenFor: c.writtenFor}, wire)
+		var back chatlet.Actor
+		if err == nil {
+			err = jsonv2.Unmarshal(got, &back, jsonv2.RejectUnknownMembers(true))
+		}
+		if err != nil || string(got) != c.want || !back.WrittenFor.Stated() ||
+			!reflect.DeepEqual(back.WrittenFor.Carrier(), c.writtenFor.Carrier()) {
+			t.Errorf("%s goes out as %s and arrives written for %+v, stated %v (%v), want %s, stated",
+				name, got, back.WrittenFor.Carrier(), back.WrittenFor.Stated(), err, c.want)
+		}
+	}
+
+	var older chatlet.Actor
+	if err := jsonv2.Unmarshal([]byte(`{"Handle":"pm","Kind":"agent"}`), &older,
+		jsonv2.RejectUnknownMembers(true)); err != nil || !older.WrittenFor.Stated() ||
+		older.WrittenFor.Carrier() != nil {
+		t.Errorf("an older node's actor arrives written for %+v, stated %v (%v), want nobody, stated",
+			older.WrittenFor.Carrier(), older.WrittenFor.Stated(), err)
+	}
+
+	for _, c := range []struct{ raw, at string }{
+		{`{"Actor":{"Handle":"pm","Kind":"agent","Later":1}}`, "/Actor/Later"},
+		{`{"Actor":{"Handle":"pm","Kind":"agent","WrittenFor":{"kind":"seat","seat":"ada","later":1}}}`,
+			"/Actor/WrittenFor/later"},
+	} {
+		var args struct{ Actor chatlet.Actor }
+		err := jsonv2.Unmarshal([]byte(c.raw), &args, jsonv2.RejectUnknownMembers(true))
+		var semantic *jsonv2.SemanticError
+		if !errors.As(err, &semantic) || !errors.Is(err, jsonv2.ErrUnknownName) ||
+			string(semantic.JSONPointer) != c.at {
+			t.Errorf("%s decoded as %v, want it refused at %s", c.raw, err, c.at)
+		}
+	}
+}
+
+// A POST KEEPS WHOM AN AGENT'S MESSAGE WAS WRITTEN FOR (ADR-0109), on its
+// document and the same on every node: the carrier a version-3 record rode,
+// and nobody for a record that carries none or one below the carrier's
+// version, whatever it holds, since an older build's applier wrote that
+// post's document with no such field. Kept from the carrier's first build on,
+// before the turn-start read took it, because the applier writes a message's document
+// once, at its post's position: a field a later build began to fill would
+// differ between a node that applied the post before it upgraded and one that
+// applied it after.
+//
+// Mutation: drop the fill, and the post made for ada keeps nobody on both
+// nodes; fill a carrier into a post whose record carries none, and that post
+// keeps one; drop the fill's version arm, and the post below the carrier's
+// version keeps ada.
+func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	for name, c := range map[string]struct {
+		v                int
+		carried, applied *types.WorkingFor
+	}{
+		"made for ada":                        {chatlet.WorkingForVersion, ada, ada},
+		"made for nobody":                     {chatlet.WorkingForVersion, nil, nil},
+		"below the carrier's version for ada": {chatlet.WorkingForVersion - 1, ada, nil},
+	} {
+		documents := map[string]string{}
+		for _, node := range []string{"node-a", "node-b"} {
+			h := newApplyHarness(t)
+			if _, _, err := h.apply(applyCreateRoom("room-1", "shipping")); err != nil {
+				t.Fatalf("%s on %s: create the room: %v", name, node, err)
+			}
+			post := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpPost, "op-post-m-1",
+				chatlet.MessagePost{V: chatlet.DocumentVersion, MessageID: "m-1", Body: "is this current?",
+					Author: "dev", AuthorKind: chatlet.AuthorAgent}, chatlet.ScopeSet{Subject: true})
+			post.V, post.Actor, post.ActorKind = c.v, "dev", chatlet.AuthorAgent
+			post.WorkingFor = c.carried
+			// A RECORD BELOW THE CARRIER'S VERSION THAT HOLDS ONE is one this
+			// build's encoder would never stamp so low: as another writer sent it.
+			h.unstamped = c.v < chatlet.WorkingForVersion
+			if _, _, err := h.apply(post); err != nil {
+				t.Fatalf("%s on %s: apply the post: %v", name, node, err)
+			}
+			document := h.scalar(`SELECT document FROM chat_messages WHERE id = ?`, "m-1")
+			message, err := chatlet.DecodeMessage([]byte(document))
+			if err != nil {
+				t.Fatalf("%s on %s: decode the message: %v", name, node, err)
+			}
+			if !reflect.DeepEqual(message.WorkingFor, c.applied) {
+				t.Errorf("the post %s keeps written for %+v on %s, want %+v", name, message.WorkingFor, node,
+					c.applied)
+			}
+			documents[node] = document
+		}
+		if documents["node-a"] != documents["node-b"] {
+			t.Errorf("the post %s is two documents on two nodes:\n%s\n%s", name, documents["node-a"],
+				documents["node-b"])
+		}
+	}
+}
+
+// A MESSAGE CARRIES WHOM IT WAS WRITTEN FOR WHERE IT ROUTES TO SOMEBODY, AND
+// NOWHERE ELSE (ADR-0109): the records a later turn reads to learn whom it
+// works for are the ones it wakes, and which seats it wakes is its record's
+// recipients, never whether the message was silent. An agent's silent message
+// that names a colleague holds the colleague back and wakes nobody, so it
+// carries nothing and stays at the version every older build reads, held
+// seats and all; a silent reply that answers the colleague's open ask wakes
+// the asker, so it carries; and an edit that adds a mention to a silent
+// message wakes nobody either.
+//
+// Mutation: decide by silent() rather than by the recipients, and the answer
+// carries nobody; carry on every Notify, and the silent message and its edit
+// carry ada.
+func TestAMessageCarriesWhomItWasWrittenForWhereItRoutesToSomebody(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	forAda := seat("pm", "run-1")
+	forAda.WrittenFor = types.ForTurn(ada)
+	room := r.room(forAda, "launch", "pm", "eng", "jane")
+	ctx := t.Context()
+
+	if _, err := r.store.Post(ctx, keyed(forAda, requested("k-silent")), room.Channel.ID,
+		chatlet.NewMessage{Body: "@eng for the record", Mentions: []string{"eng"}}); err != nil {
+		t.Fatalf("pm says something silent for ada: %v", err)
+	}
+	r.drain()
+	if rec := r.lastRecord(); rec.WorkingFor != nil || rec.V > 2 || rec.Notify == nil || len(rec.Notify.Held) == 0 {
+		t.Errorf("pm's silent message is recorded written for %+v at version %d, holding %v, want nobody "+
+			"at 2 or below, holding eng", rec.WorkingFor, rec.V, rec.Notify)
+	}
+
+	plain, err := r.store.Post(ctx, keyed(forAda, requested("k-plain")), room.Channel.ID,
+		chatlet.NewMessage{Body: "for the record"})
+	if err != nil {
+		t.Fatalf("pm says something for ada: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.Edit(ctx, keyed(forAda, requested("k-edit")), room.Channel.ID, plain.Message.ID,
+		chatlet.EditMessage{Body: "@eng for the record", Mentions: []string{"eng"}}); err != nil {
+		t.Fatalf("pm edits a mention into its silent message: %v", err)
+	}
+	r.drain()
+	if rec := r.lastRecord(); rec.WorkingFor != nil || rec.V > 2 {
+		t.Errorf("pm's edit naming eng, which wakes nobody, is recorded written for %+v at version %d, "+
+			"want nobody at 2 or below", rec.WorkingFor, rec.V)
+	}
+
+	ask, err := r.store.Post(ctx, keyed(seat("eng", "run-e"), requested("k-ask")), room.Channel.ID,
+		chatlet.NewMessage{Body: "@pm is the deploy done?", Mentions: []string{"pm"}, Asks: true})
+	if err != nil {
+		t.Fatalf("eng asks pm: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.Reply(ctx, keyed(forAda, requested("k-answer")), room.Channel.ID, ask.Message.ID,
+		chatlet.NewMessage{Body: "yes, it is out"}); err != nil {
+		t.Fatalf("pm answers eng for ada: %v", err)
+	}
+	r.drain()
+	if rec := r.lastRecord(); !reflect.DeepEqual(rec.WorkingFor, ada) || rec.V != 3 {
+		t.Errorf("pm's silent answer to eng's ask is recorded written for %+v at version %d, want ada at 3",
+			rec.WorkingFor, rec.V)
+	}
+}
+
+// WHOM A MESSAGE WAS WRITTEN FOR STAYS OFF ITS READS (ADR-0109): the document
+// keeps it for the engine's own reads, and a room's transcript hands the
+// message to its reader without it, as every read and every write's answer
+// does. A room's reader needs no requester's seat, nor a credential's login
+// and apps, to read what was said.
+//
+// Mutation: hand the transcript the document as it is stored, and the view
+// carries ada.
+func TestWhomAMessageWasWrittenForStaysOffItsReads(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	h := newReadHarness(t)
+	h.apply(readCreateRoom("room-1", "eng", chatlet.KindPublic, "ada", "dev"))
+	post := readPost("room-1", "msg-1", "dev", "for the record")
+	post.V, post.ActorKind, post.WorkingFor = chatlet.WorkingForVersion, chatlet.AuthorAgent, ada
+	at := h.apply(post)
+
+	got, err := h.reader().Messages(t.Context(), "ada", chatlet.TranscriptQuery{ChannelID: "room-1"},
+		statelog.FloorAt(statelog.ReadSession, at))
+	if err != nil {
+		t.Fatalf("read the room: %v", err)
+	}
+	views := said(got.Messages)
+	if len(views) != 1 || views[0].Message.ID != "msg-1" || views[0].Message.WorkingFor != nil {
+		t.Errorf("the room's transcript hands over %+v, want msg-1 with nobody it was written for", views)
+	}
+	var document []byte
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT document FROM chat_messages WHERE id = ?`,
+			"msg-1").Scan(&document)
+	}); err != nil {
+		t.Fatalf("read msg-1's document: %v", err)
+	}
+	if stored, err := chatlet.DecodeMessage(document); err != nil || !reflect.DeepEqual(stored.WorkingFor, ada) {
+		t.Errorf("msg-1's document keeps written for %+v (%v), want ada", stored.WorkingFor, err)
+	}
+}
+
+// A WRITE'S ANSWER HANDS ITS MESSAGE OVER WITHOUT WHOM IT WAS WRITTEN FOR, as
+// every read does (ADR-0109), while the stored document keeps it all along:
+// the answer of a post, of a repeat the ledger answers by reading the document
+// back, of an edit and of a removal, the last three of which read the stored
+// message itself.
+//
+// Mutation: answer a collapsed repeat with the document as it is stored
+// (Store.answer), or drop the strip from an edit's or a removal's answer, and
+// that answer carries ada.
+func TestAWritesAnswerHandsItsMessageOverWithoutWhomItWasWrittenFor(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	forAda := seat("pm", "run-1")
+	forAda.WrittenFor = types.ForTurn(ada)
+	room := r.room(forAda, "launch", "pm", "eng", "jane")
+	kept := func(step, id string) {
+		t.Helper()
+		var document []byte
+		if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(), `SELECT document FROM chat_messages WHERE id = ?`,
+				id).Scan(&document)
+		}); err != nil {
+			t.Fatalf("%s: read %s's document: %v", step, id, err)
+		}
+		if stored, err := chatlet.DecodeMessage(document); err != nil || !reflect.DeepEqual(stored.WorkingFor, ada) {
+			t.Errorf("after %s, %s's document keeps written for %+v (%v), want ada", step, id,
+				stored.WorkingFor, err)
+		}
+	}
+	handed := func(step string, w chatlet.Written, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if w.Message.WorkingFor != nil {
+			t.Errorf("%s answered its message written for %+v, want nobody", step, w.Message.WorkingFor)
+		}
+	}
+
+	ask := chatlet.NewMessage{Body: "@eng is the deploy done?", Mentions: []string{"eng"}, Asks: true}
+	posted, err := r.store.Post(t.Context(), keyed(forAda, requested("k-ask")), room.Channel.ID, ask)
+	handed("the post", posted, err)
+	r.drain()
+	id := posted.Message.ID
+	kept("the post", id)
+
+	again, err := r.store.Post(t.Context(), keyed(forAda, requested("k-ask")), room.Channel.ID, ask)
+	handed("the repeat", again, err)
+	if !again.Outcome.Collapsed {
+		t.Fatalf("the repeat under the same key answered %+v, want the ledger's collapsed answer",
+			again.Outcome)
+	}
+	kept("the repeat", id)
+
+	edited, err := r.store.Edit(t.Context(), keyed(forAda, requested("k-edit")), room.Channel.ID, id,
+		chatlet.EditMessage{Body: "@eng is the deploy done yet?", Mentions: []string{"eng"}})
+	handed("the edit", edited, err)
+	r.drain()
+	kept("the edit", id)
+
+	removed, err := r.store.Delete(t.Context(), keyed(forAda, requested("k-remove")), room.Channel.ID, id,
+		chatlet.MessageAuthority{})
+	handed("the removal", removed, err)
+	r.drain()
+	kept("the removal", id)
+}

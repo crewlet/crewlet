@@ -3,7 +3,10 @@ package coord_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -58,15 +61,50 @@ func TestAListingKeyReadsBackItsServerAndNode(t *testing.T) {
 	if !ok || server != "github" || node != "node.a" {
 		t.Fatalf("MCPListingOf(%q) = %q, %q, %v", key, server, node, ok)
 	}
-	for _, other := range []string{coord.PositionKey("node-a"), coord.MCPSchemaKey(digestOf("x")), "mcp_listing.github"} {
+	for _, other := range []string{coord.PositionKey("node-a"), coord.MCPDefinitionKey(digestOf("x")), "mcp_listing.github"} {
 		if _, _, ok := coord.MCPListingOf(other); ok {
 			t.Errorf("%q read as a listing key", other)
 		}
 	}
-	if d, ok := coord.MCPSchemaDigest(coord.MCPSchemaKey(digestOf("x"))); !ok || d != digestOf("x") {
+	if d, ok := coord.MCPDefinitionDigest(coord.MCPDefinitionKey(digestOf("x"))); !ok || d != digestOf("x") {
 		t.Errorf("a schema key read back %q, %v", d, ok)
 	}
-	if _, ok := coord.MCPSchemaDigest(coord.DocumentKey(coord.MCPSchemaClass, "nope")); ok {
+	if _, ok := coord.MCPDefinitionDigest(coord.DocumentKey(coord.MCPDefinitionClass, "nope")); ok {
 		t.Error("a schema key naming no digest read as one")
+	}
+}
+
+// A DEFINITION IS BOUNDED AS IT IS STORED, encoded: `<`, `>` and `&` each take
+// six bytes, so words or a schema well inside their bound as raw text can be
+// several times past it in the record.
+//
+// Mutation: measure the raw bytes in Fits or Size, and this is red.
+func TestADefinitionIsBoundedAsItIsStored(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	plain := coord.MCPToolDefinition{Digest: digestOf("plain"), Description: "Read one issue.",
+		Input: json.RawMessage(`{"type": "object"}`), At: at}
+	if !plain.Fits() || plain.Size() != len("Read one issue.")+len(`{"type":"object"}`) {
+		t.Fatalf("a plain definition fits %v at %d bytes", plain.Fits(), plain.Size())
+	}
+	words := plain
+	words.Description = strings.Repeat("<", coord.MaxMCPToolWordsBytes/4)
+	schema := plain
+	schema.Input = json.RawMessage(`{"description": "` + strings.Repeat("&", coord.MaxMCPToolSchemaBytes/4) + `"}`)
+	for name, d := range map[string]coord.MCPToolDefinition{"words": words, "schema": schema} {
+		if d.Fits() {
+			t.Errorf("a definition whose %s are a quarter of their bound as raw text, and past it "+
+				"as stored, fits", name)
+		}
+		raw, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Size() > len(raw) || d.Size() < len(raw)-256 {
+			t.Errorf("the %s definition weighs %d bytes, and is stored in %d", name, d.Size(), len(raw))
+		}
+		if err := d.Validate(); err == nil {
+			t.Errorf("the %s definition past its bound as stored is written", name)
+		}
 	}
 }

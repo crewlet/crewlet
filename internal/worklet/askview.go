@@ -60,8 +60,13 @@ type AskView struct {
 	AnsweredAt *time.Time `json:"answered_at,omitempty"`
 
 	// Resolved says it was closed by a resolve rather than an answer, so a
-	// card does not report a choice nobody made.
+	// card does not report a choice nobody made. Only its asker resolves a
+	// question, so a resolved question is one its asker withdrew.
 	Resolved bool `json:"resolved,omitempty"`
+
+	// Withdrawn is why its asker withdrew it and what covers it now, where
+	// the withdrawal recorded them ([Withdrawal]).
+	Withdrawn *Withdrawn `json:"withdrawn,omitempty"`
 
 	// Choice is the option the answer chose, by id — see [Comment.Choice].
 	Choice string `json:"choice,omitempty"`
@@ -84,7 +89,7 @@ type AskView struct {
 const askViewsStatement = `
 	SELECT c.id, a.id, a.ask, a.resolved, a.removed,
 	       a.answered_by IS NOT NULL, a.resolved_by, a.resolved_at,
-	       a.document, ans.author, ans.created_at, ans.document, a.overtaken
+	       a.document, ans.author, ans.created_at, ans.document, a.overtaken, a.task_id
 	  FROM tracker_comments c
 	  JOIN tracker_comments a
 	    ON a.id = CASE WHEN c.ask <> '' THEN c.id ELSE c.answers END
@@ -115,16 +120,22 @@ func readAskViews(ctx context.Context, tx *sql.Tx, comments []string) (
 		return nil, fmt.Errorf("worklet: read the asks a page is about: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	type withdrawnAsk struct {
+		view       *AskView
+		task       string
+		withdrawal *Withdrawal
+	}
+	var withdrawn []withdrawnAsk
 	for rows.Next() {
 		var view AskView
-		var comment string
+		var comment, task string
 		var resolved, removed, answered int
 		var resolvedBy, answerAuthor sql.NullString
 		var resolvedAt, answeredAt sql.NullInt64
 		var askDocument, answerDocument []byte
 		if err := rows.Scan(&comment, &view.Comment, &view.AskedOf, &resolved,
 			&removed, &answered, &resolvedBy, &resolvedAt, &askDocument,
-			&answerAuthor, &answeredAt, &answerDocument, &view.Overtaken); err != nil {
+			&answerAuthor, &answeredAt, &answerDocument, &view.Overtaken, &task); err != nil {
 
 			return nil, fmt.Errorf("worklet: scan an ask: %w", err)
 		}
@@ -159,11 +170,23 @@ func readAskViews(ctx context.Context, tx *sql.Tx, comments []string) (
 					view.Comment, err)
 			}
 			view.Decision = ask.Decision
+			if view.Resolved && ask.Withdrawal != nil {
+				withdrawn = append(withdrawn, withdrawnAsk{&view, task, ask.Withdrawal})
+			}
 		}
 		out[comment] = &view
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("worklet: read the asks a page is about: %w", err)
+	}
+	// AFTER THE PAGE IS READ, one key read each: withdrawn questions are few,
+	// and a statement inside the page's would hold two cursors on one handle.
+	_ = rows.Close()
+	for _, w := range withdrawn {
+		var err error
+		if w.view.Withdrawn, err = readWithdrawn(ctx, tx, w.task, w.withdrawal); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

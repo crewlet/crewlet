@@ -137,8 +137,8 @@ func TestALevelChangeAsksForExactlyOneReview(t *testing.T) {
 	t.Parallel()
 	m, owed := measured(sreSnapshot(sreAccess("read")), toldAs("t-told", sreSnapshot(sreAccess("operate"))))
 	if !owed || m.base.Turn != "t-told" || len(m.seatLines) != 1 ||
-		!strings.Contains(m.seatLines[0], "Cloudflare: your level is now") ||
-		!strings.Contains(m.personLines[0], "Cloudflare: its level is now") {
+		!strings.Contains(m.seatLines[0], "Cloudflare: your Crewlet grant now sets your level to") ||
+		!strings.Contains(m.personLines[0], "Cloudflare: its Crewlet grant now sets its level to") {
 		t.Fatalf("a lowered level measures %+v (%v), want one line in each voice", m, owed)
 	}
 
@@ -443,7 +443,7 @@ func TestTheSaveDryRunCountsOpenItems(t *testing.T) {
 		t.Fatalf("draftReviews: %v", err)
 	}
 	if len(reviews) != 1 || reviews[0].Handle != "sre" || reviews[0].Open != 2 ||
-		len(reviews[0].Changes) != 1 || !strings.Contains(reviews[0].Changes[0], "its level is now") {
+		len(reviews[0].Changes) != 1 || !strings.Contains(reviews[0].Changes[0], "its Crewlet grant now sets its level to") {
 		t.Fatalf("the dry run of a lowered level names %+v, want the SRE with 2 open items", reviews)
 	}
 	if reviews, err := e.draftReviews(t.Context(), cfg, roster, current, draftOf("read"), noWork); err != nil || len(reviews) != 0 {
@@ -604,5 +604,36 @@ func TestATurnHasEndedOnlyWhereNothingOfItRuns(t *testing.T) {
 	}
 	if ended("ghost") {
 		t.Error("a seat this node does not hold reads as ended")
+	}
+}
+
+// WORDS BESIDE THE ACCESS LEAVE A PENDING REVIEW AS IT WAS MEASURED: the vendor
+// renaming a level while a real change waits on its review measures to the same
+// digest, so the pending record keeps its instant, no second review turn is
+// asked, and the settle check still reads the change as told once it is.
+//
+// Mutation: digest the snapshot's words again and the two measures differ.
+func TestWordsBesideTheAccessLeaveAPendingReviewAsMeasured(t *testing.T) {
+	t.Parallel()
+	before, after := sreAccess("secure"), sreAccess("operate")
+	told := toldAs("t-told", sreSnapshot(before))
+	first, owed := measured(sreSnapshot(after), told)
+	if !owed {
+		t.Fatal("a lowered level owes no review")
+	}
+	renamed := capability.Take(capability.Input{Company: after, Handle: "sre", Observed: sreObserved,
+		Words: map[seataccess.Lane]capability.Words{seataccess.LaneCloudflare: {Levels: []seataccess.Level{
+			{ID: "operate", Name: "Operator", Note: "Renamed at the vendor."}}}}})
+	second, owed := measured(renamed, told)
+	if !owed || second.digest != first.digest {
+		t.Fatalf("a renamed level measures to %s (owed %v), want the change's own %s",
+			second.digest, owed, first.digest)
+	}
+	pending := accessreview.Pending{Baseline: first.base.Turn, Digest: first.digest}
+	if !pending.Same(second.base.Turn, second.digest) {
+		t.Error("a renamed level reads as a new change, which restarts the pending review")
+	}
+	if _, owed := measured(renamed, toldAs("t-renamed", sreSnapshot(after))); owed {
+		t.Error("once the change is told, a renamed level alone owes a review")
 	}
 }

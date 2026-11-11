@@ -37,11 +37,17 @@ func (t *requestAccess) Name() string { return RequestAccessTool }
 
 func (t *requestAccess) Description() string {
 	return "Ask a person for one more kind of access your work needs, on the work item " +
-		"that needs it: " + accessList() + ". The person sees the exact change to your " +
-		"access and decides; nothing changes until they apply it, and you are told your " +
-		"new access on your next turn. Ask an administrator, who can grant it, and say " +
-		"in `why` what you tried and what the access is for."
+		"that needs it: " + accessList() + ". Your access is your Crewlet grant, which an " +
+		"administrator sets in Crewlet, never at the vendor. The person sees the exact " +
+		"change to your access and decides; nothing changes until they apply it, and you " +
+		"are told your new access on your next turn. Ask an administrator, who can grant " +
+		"it, and say in `why` what you tried and what the access is for. " + outsideList
 }
+
+// outsideList is what a seat does for access the catalogue does not name.
+const outsideList = "For access this list does not name (another integration, a level " +
+	"or a scope), ask an administrator in words with " + CommentOnWorkTool + ", naming " +
+	"where they set it: Settings, Integrations, then the integration's Agents tab."
 
 func (t *requestAccess) Parameters() map[string]any {
 	keys := make([]any, 0, len(advisor.AccessKeys()))
@@ -80,13 +86,15 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	why := strings.TrimSpace(argString(args, "why"))
 	switch err := advisor.CanAsk(turn.Seat, key); {
 	case errors.Is(err, advisor.ErrAccessUnknown):
-		return failed(RequestAccessTool + ": `access` is one of " + accessList() + "."), nil
+		return failed(RequestAccessTool + ": `access` is one of " + accessList() + ". " +
+			outsideList), nil
 	case errors.Is(err, advisor.ErrAccessHeld):
 		return failed(RequestAccessTool + ": you can already " + key.Does() +
 			"; read Your access."), nil
 	case errors.Is(err, advisor.ErrAccessNotTakable):
-		return failed(RequestAccessTool + ": you have no GitHub App to add this to; ask " +
-			"for it in words with " + CommentOnWorkTool + "."), nil
+		return failed(RequestAccessTool + ": you have no GitHub App to add this to, which " +
+			"an administrator turns on for you under " + key.Place() + "; ask for it in " +
+			"words with " + CommentOnWorkTool + ", naming that place."), nil
 	}
 	switch asked := turn.Org.Role(person); {
 	case asked == nil || asked.Kind != org.KindHuman:
@@ -132,13 +140,25 @@ func accessList() string {
 
 // grantChosen refuses an answer that chooses a grant its asker does not hold
 // yet: the grant is saved first and only then answered (ADR-0118), whoever sends it.
+//
+// EVERY CHOICE UNDER THE RESERVED PREFIX IS A GRANT, the engine's own options
+// alone carrying one, so a key this build no longer grants (a request asked
+// before its catalogue changed) is refused rather than answered as a plain yes.
 func (d WorkDeps) grantChosen(ctx context.Context, choice string,
 	thread worklet.ResolvedThread) *tools.Result {
 
-	if thread.AnswersDecision == nil || !advisor.IsAccessOption(choice) {
+	if thread.AnswersDecision == nil || !strings.HasPrefix(choice, advisor.AccessPrefix) {
 		return nil
 	}
 	key := advisor.AccessKey(choice)
+	if !key.Valid() {
+		refused := failed(fmt.Sprintf("%s: %q is a grant Crewlet no longer offers, so the "+
+			"answer was not posted and the agent was not told yes. Answer \"Not now\" and let "+
+			"the agent ask again, which offers the grants there are now; an administrator "+
+			"grants anything else under Settings, Integrations, then the integration's Agents tab.",
+			CommentOnWorkTool, choice))
+		return &refused
+	}
 	if d.FleetSeat == nil {
 		refused := failed(CommentOnWorkTool + ": this server cannot confirm the grant, so " +
 			"the answer was not posted. Answer from the dashboard, which applies it first.")

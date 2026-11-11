@@ -33,7 +33,7 @@ func (h *fleetHarness) listing(server, node string, epoch int64, tools ...string
 			Idempotent: coord.HintUnknown, OpenWorld: coord.HintYes}
 		l.Tools = append(l.Tools, coord.MCPListedTool{
 			Name: name, Raw: name, Description: "does " + name, Hints: hints, Declared: hints,
-			Digest: aDigest(server + "/" + name), SchemaKept: true, Instances: 2,
+			Digest: aDigest(server + "/" + name), DefinitionKept: true, Instances: 2,
 			Parts: aParts(server + "/" + name),
 		})
 	}
@@ -115,19 +115,21 @@ var mcpListingCases = []fleetCase{{
 		}
 	},
 }, {
-	// A LISTING IS SOMEBODY ELSE'S WORDS, BOUNDED BY THE STORE: a server
-	// lists as many tools as it likes with descriptions as long as it
-	// likes, and whatever the writer hands over, the record holds at most
-	// MaxMCPListedTools, the first by name, each text cut, with the count
-	// travelling whole.
-	name: "a listing is held to its bounds and counted whole",
+	// A LISTING NAMES EVERY TOOL, BOUNDED BY THE BYTES IT IS STORED AS: a
+	// server lists as many tools as it likes with descriptions as long as
+	// it likes, and whatever the writer hands over, the record holds every
+	// tool by name, each text cut and the words cut further, marked, until
+	// the record encodes within MaxMCPListingBytes. A tool a listing did not
+	// name could never be reviewed, so a call to it would ask for ever.
+	name: "a listing names every tool, its words cut to fit its bytes",
 	fn: func(h *fleetHarness) {
 		l := h.listing("big", "node-a", 1)
-		total := coord.MaxMCPListedTools + 9
+		const total = 1000
 		for i := range total {
 			name := fmt.Sprintf("tool_%04d", total-i)
 			l.Tools = append(l.Tools, coord.MCPListedTool{
-				Name: name, Raw: name, Description: strings.Repeat("d", 3*coord.MaxMCPToolDescriptionBytes),
+				// `<` is stored as six bytes: the bound is on what is stored.
+				Name: name, Raw: name, Description: strings.Repeat("<", 3*coord.MaxMCPToolDescriptionBytes),
 				Title: strings.Repeat("t", 3*coord.MaxMCPToolTitleBytes),
 				Hints: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
 					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
@@ -144,17 +146,19 @@ var mcpListingCases = []fleetCase{{
 			h.t.Fatalf("listed %+v", got)
 		}
 		read := got[0]
-		if len(read.Tools) != coord.MaxMCPListedTools || read.ToolCount != total {
-			h.t.Fatalf("stored %d tools of %d, want %d of %d",
-				len(read.Tools), read.ToolCount, coord.MaxMCPListedTools, total)
+		if len(read.Tools) != total {
+			h.t.Fatalf("stored %d tools of %d", len(read.Tools), total)
 		}
-		if read.Tools[0].Name != "tool_0001" {
-			h.t.Errorf("the first tool kept is %q, want the first by name", read.Tools[0].Name)
+		for i, tool := range read.Tools {
+			if want := fmt.Sprintf("tool_%04d", i+1); tool.Name != want || tool.Digest != aDigest(want) {
+				h.t.Fatalf("tool %d is %q, want %q by name with its digest", i, tool.Name, want)
+			}
 		}
-		if n := len(read.Tools[0].Description); n > coord.MaxMCPToolDescriptionBytes {
-			h.t.Errorf("a description travelled as %d bytes", n)
+		first := read.Tools[0]
+		if n := len(first.Description); n > coord.MaxMCPToolDescriptionBytes || !strings.HasSuffix(first.Description, "…") {
+			h.t.Errorf("a description travelled as %d bytes, %q", n, first.Description)
 		}
-		if n := len(read.Tools[0].Title); n > coord.MaxMCPToolTitleBytes {
+		if n := len(first.Title); n > coord.MaxMCPToolTitleBytes {
 			h.t.Errorf("a title travelled as %d bytes", n)
 		}
 		if n := len(read.Instructions); n > coord.MaxMCPInstructionsBytes {
@@ -170,8 +174,39 @@ var mcpListingCases = []fleetCase{{
 		if err != nil {
 			h.t.Fatal(err)
 		}
-		if len(raw) > 512<<10 {
-			h.t.Errorf("the largest listing a node can write encodes to %d bytes, past half a mebibyte", len(raw))
+		if len(raw) > coord.MaxMCPListingBytes {
+			h.t.Errorf("the listing encodes to %d bytes, past %d", len(raw), coord.MaxMCPListingBytes)
+		}
+
+		// A FEW TOOLS KEEP THEIR WORDS to their own bounds.
+		few := h.listing("small", "node-a", 1)
+		few.Tools = append(few.Tools, l.Tools[:3]...)
+		if kept := h.putListing(h.f, few).Tools[0]; len(kept.Description) != coord.MaxMCPToolDescriptionBytes {
+			h.t.Errorf("three tools' descriptions kept %d bytes, want %d", len(kept.Description),
+				coord.MaxMCPToolDescriptionBytes)
+		}
+	},
+}, {
+	// A LISTING WHOSE TOOLS' IDENTITIES ALONE ARE PAST ITS BYTES IS REFUSED,
+	// saying so, never cut: what it would leave out could never be reviewed.
+	name: "a listing whose identities alone are past its bytes is refused, never cut",
+	fn: func(h *fleetHarness) {
+		l := h.listing("huge", "node-a", 1)
+		for i := range 4000 {
+			name := fmt.Sprintf("%s%04d", strings.Repeat("<", 100), i)
+			l.Tools = append(l.Tools, coord.MCPListedTool{Name: name, Raw: name, Description: "d",
+				Hints: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
+					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
+				Declared: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
+					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
+				Digest: aDigest(name), Instances: 1, Parts: aParts(name)})
+		}
+		_, err := h.f.PutMCPListing(h.ctx, l)
+		if err == nil || !strings.Contains(err.Error(), "refused rather than cut") {
+			h.t.Fatalf("a listing past its bytes was answered %v, want a refusal saying it is not cut", err)
+		}
+		if got := h.listings(); len(got) != 0 {
+			h.t.Errorf("a refused listing left %d records", len(got))
 		}
 	},
 }, {
@@ -252,58 +287,62 @@ var mcpListingCases = []fleetCase{{
 		}
 	},
 }, {
-	// A SCHEMA IS STORED ONCE, under its digest, whoever lists the tool:
-	// the first write stores it and every later one is told it is held,
-	// leaving it as it was.
-	name: "a tool's schemas are stored once under their digest",
+	// A DEFINITION IS STORED ONCE, under its digest, whoever lists the
+	// tool: the first write stores it and every later one is told it is
+	// held, leaving it as it was. Its words are kept whole, past the cut a
+	// listing makes of them, since a change is shown by them.
+	name: "a tool's definition is stored once under its digest, its words whole",
 	fn: func(h *fleetHarness) {
 		digest := aDigest("github/get_issue")
-		schema := coord.MCPToolSchema{
+		schema := coord.MCPToolDefinition{
 			Digest: digest, At: h.now(),
 			Input:  json.RawMessage(`{"properties":{"number":{"type":"integer"}},"type":"object"}`),
 			Output: json.RawMessage(`{"type":"object"}`),
 		}
 		nodes := h.nodes(2)
-		if created, err := nodes[0].CreateMCPToolSchema(h.ctx, schema); err != nil || !created {
+		if created, err := nodes[0].CreateMCPToolDefinition(h.ctx, schema); err != nil || !created {
 			h.t.Fatalf("the first store = (%v, %v), want it stored", created, err)
 		}
 		again := schema
 		again.At = h.now().Add(time.Hour)
-		if created, err := nodes[1].CreateMCPToolSchema(h.ctx, again); err != nil || created {
+		if created, err := nodes[1].CreateMCPToolDefinition(h.ctx, again); err != nil || created {
 			h.t.Fatalf("a second store = (%v, %v), want it held already", created, err)
 		}
-		read, found, err := nodes[1].MCPToolSchema(h.ctx, digest)
+		read, found, err := nodes[1].MCPToolDefinition(h.ctx, digest)
 		if err != nil || !found || !read.At.Equal(h.now()) || read.Version == 0 ||
 			string(read.Input) != string(schema.Input) || string(read.Output) != string(schema.Output) {
-			h.t.Fatalf("MCPToolSchema = %+v (found %v, %v), want the first store's", read, found, err)
+			h.t.Fatalf("MCPToolDefinition = %+v (found %v, %v), want the first store's", read, found, err)
 		}
-		all, err := h.f.ListMCPToolSchemas(h.ctx)
+		all, err := h.f.ListMCPToolDefinitions(h.ctx)
 		if err != nil || len(all) != 1 || all[0].Digest != digest {
-			h.t.Fatalf("ListMCPToolSchemas = %+v, %v", all, err)
+			h.t.Fatalf("ListMCPToolDefinitions = %+v, %v", all, err)
 		}
-		if _, found, err := h.f.MCPToolSchema(h.ctx, aDigest("nothing")); err != nil || found {
+		if _, found, err := h.f.MCPToolDefinition(h.ctx, aDigest("nothing")); err != nil || found {
 			h.t.Fatalf("a digest nothing stored read as (%v, %v)", found, err)
 		}
-		if gone, err := h.f.DeleteMCPToolSchema(h.ctx, digest, read.Version); err != nil || !gone {
-			h.t.Fatalf("DeleteMCPToolSchema = (%v, %v)", gone, err)
+		if gone, err := h.f.DeleteMCPToolDefinition(h.ctx, digest, read.Version); err != nil || !gone {
+			h.t.Fatalf("DeleteMCPToolDefinition = (%v, %v)", gone, err)
 		}
-		if _, found, _ := h.f.MCPToolSchema(h.ctx, digest); found {
+		if _, found, _ := h.f.MCPToolDefinition(h.ctx, digest); found {
 			h.t.Fatal("a deleted schema is still read")
 		}
 	},
 }, {
-	// A SCHEMA PAST ITS BOUND IS NEVER STORED, and one that is not JSON or
-	// is filed under something that is not a digest neither.
-	name: "a schema past its bound, not JSON or under no digest is refused",
+	// A DEFINITION PAST ITS BOUNDS IS NEVER STORED, its schemas or its
+	// words, and one that is not JSON or is filed under something that is
+	// not a digest neither.
+	name: "a definition past its bounds, not JSON or under no digest is refused",
 	fn: func(h *fleetHarness) {
 		big := `{"type":"object","description":"` + strings.Repeat("x", coord.MaxMCPToolSchemaBytes) + `"}`
-		for name, s := range map[string]coord.MCPToolSchema{
+		for name, s := range map[string]coord.MCPToolDefinition{
 			"too large": {Digest: aDigest("big"), At: h.now(), Input: json.RawMessage(big)},
+			"too wordy": {Digest: aDigest("wordy"), At: h.now(), Input: json.RawMessage(`{}`),
+				Description: strings.Repeat("d", coord.MaxMCPToolWordsBytes-1), Title: "ab"},
 			"not JSON":  {Digest: aDigest("bad"), At: h.now(), Input: json.RawMessage(`{`)},
 			"no digest": {Digest: "abc", At: h.now(), Input: json.RawMessage(`{}`)},
 		} {
-			if created, err := h.f.CreateMCPToolSchema(h.ctx, s); err == nil || created {
-				h.t.Errorf("a schema %s was stored (%v, %v)", name, created, err)
+			if created, err := h.f.CreateMCPToolDefinition(h.ctx, s); err == nil || created {
+				h.t.Errorf("a definition %s was stored (%v, %v)", name, created, err)
 			}
 		}
 	},

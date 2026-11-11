@@ -23,10 +23,10 @@ import (
 // fakeListings is the fleet's listings as a node's watched copy holds them,
 // and what was accepted of them.
 type fakeListings struct {
-	listings []coord.MCPListing
-	schemas  map[string]coord.MCPToolSchema
-	accepted []coord.MCPAcceptedTool
-	err      error
+	listings    []coord.MCPListing
+	definitions map[string]coord.MCPToolDefinition
+	accepted    []coord.MCPAcceptedTool
+	err         error
 }
 
 func (f fakeListings) MCPAccepted(context.Context) ([]coord.MCPAcceptedTool, error) {
@@ -37,10 +37,10 @@ func (f fakeListings) MCPListings(context.Context) ([]coord.MCPListing, error) {
 	return f.listings, f.err
 }
 
-func (f fakeListings) MCPToolSchemas(_ context.Context, digests []string) (map[string]coord.MCPToolSchema, error) {
-	out := map[string]coord.MCPToolSchema{}
+func (f fakeListings) MCPToolDefinitions(_ context.Context, digests []string) (map[string]coord.MCPToolDefinition, error) {
+	out := map[string]coord.MCPToolDefinition{}
 	for _, d := range digests {
-		if s, ok := f.schemas[d]; ok {
+		if s, ok := f.definitions[d]; ok {
 			out[d] = s
 		}
 	}
@@ -70,7 +70,7 @@ func epochs(t *testing.T, backend coord.Backend) map[string]int64 {
 // listed is one tool as a listing names it.
 func listed(name, description string, hints coord.MCPToolHints, instances int) coord.MCPListedTool {
 	return coord.MCPListedTool{Name: name, Raw: name[len("gh_"):], Description: description, Hints: hints,
-		Digest: digestFor(name + description), SchemaKept: true, Instances: instances}
+		Digest: digestFor(name + description), DefinitionKept: true, Instances: instances}
 }
 
 var (
@@ -103,26 +103,26 @@ func TestTwoNodesListingsOfAServerMergeIntoItsDetail(t *testing.T) {
 		{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at, Instances: 2,
 			Info:         &coord.MCPServerInfo{Name: "github-mcp", Version: "1.3.0", Protocol: "2026-07-28"},
 			Instructions: "old words",
-			Tools:        []coord.MCPListedTool{createIssue, getIssue}, ToolCount: 2},
+			Tools:        []coord.MCPListedTool{createIssue, getIssue}},
 		{Server: "github", Node: "node-b", Epoch: live["node-b"], At: at.Add(time.Minute), Instances: 3,
 			Info:         &coord.MCPServerInfo{Name: "github-mcp", Title: "GitHub", Version: "1.4.0", Protocol: "2026-07-28"},
 			Instructions: "Search before you create.",
-			Tools:        []coord.MCPListedTool{createIssueNew}, ToolCount: 1},
+			Tools:        []coord.MCPListedTool{createIssueNew}},
 		// A NODE THAT DRAINED, and node-a's previous incarnation: neither
 		// counts, though each record is still there.
 		{Server: "github", Node: "node-gone", Epoch: 4, At: at, Instances: 1,
-			Tools: []coord.MCPListedTool{listed("gh_delete_repo", "Delete a repository", unannotated, 1)}, ToolCount: 1},
+			Tools: []coord.MCPListedTool{listed("gh_delete_repo", "Delete a repository", unannotated, 1)}},
 		{Server: "docs", Node: "node-a", Epoch: live["node-a"] + 1, At: at, Instances: 1,
-			Tools: []coord.MCPListedTool{listed("gh_search", "Search", readOnly, 1)}, ToolCount: 1},
+			Tools: []coord.MCPListedTool{listed("gh_search", "Search", readOnly, 1)}},
 	}
-	schemas := map[string]coord.MCPToolSchema{
+	schemas := map[string]coord.MCPToolDefinition{
 		getIssue.Digest: {Digest: getIssue.Digest, Input: json.RawMessage(`{"type":"object","required":["number"]}`),
 			Output: json.RawMessage(`{"type":"object"}`)},
 		createIssueNew.Digest: {Digest: createIssueNew.Digest, Input: json.RawMessage(`{"type":"object"}`)},
 	}
 	surface, _ := configSurface(t, mcpCompany)
 	s := mcpSources(t, backend)
-	s.Config, s.MCPListings = surface, fakeListings{listings: listings, schemas: schemas}
+	s.Config, s.MCPListings = surface, fakeListings{listings: listings, definitions: schemas}
 	s, _ = withHistory(t, s)
 
 	got, err := s.MCPServer(t.Context(), "github")
@@ -146,9 +146,8 @@ func TestTwoNodesListingsOfAServerMergeIntoItsDetail(t *testing.T) {
 	if got.ServerInfo == nil || got.ServerInfo.Version != "1.4.0" || got.Instructions != "Search before you create." {
 		t.Errorf("identity = %+v, %q, want the listing changed last", got.ServerInfo, got.Instructions)
 	}
-	if len(got.Tools) != 2 || got.ToolCount != 2 {
-		t.Fatalf("tools = %+v (count %d), want create_issue and get_issue, the drained node's left out",
-			got.Tools, got.ToolCount)
+	if len(got.Tools) != 2 {
+		t.Fatalf("tools = %+v, want create_issue and get_issue, the drained node's left out", got.Tools)
 	}
 	create, read := got.Tools[0], got.Tools[1]
 	if create.Name != "gh_create_issue" || create.Digest != createIssueNew.Digest ||
@@ -206,7 +205,7 @@ func TestAServersDetailNamesNoCredential(t *testing.T) {
 		if err := json.Unmarshal(raw, &shape); err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{"server", "nodes", "listed", "tools", "tool_count",
+		for _, key := range []string{"server", "nodes", "listed", "tools",
 			"server_info", "instructions", "dependants", "usage", "calls"} {
 			if _, ok := shape[key]; !ok {
 				t.Errorf("%s's detail has no %q", server, key)
@@ -333,7 +332,7 @@ func TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds(t *testing.T) {
 			listed("gh_create_issue", "Open an issue", unannotated, 1), getIssue}},
 		{Server: "github", Node: "node-b", Tools: []coord.MCPListedTool{getIssue}},
 	}
-	schemas := map[string]coord.MCPToolSchema{
+	schemas := map[string]coord.MCPToolDefinition{
 		getIssue.Digest: {Digest: getIssue.Digest, Input: json.RawMessage(`{"type":"object"}`)},
 	}
 	rows := queries.ListedRows(taken, listings, schemas)

@@ -51,6 +51,11 @@ const alarmGauge = metrics.AlarmActive
 // restart says only what changed: a standing instance is not raised again, and
 // one that cleared while the node was down is cleared with its original instant.
 //
+// # A flap is one run
+//
+// An instance raised again within [RelapseWindow] of clearing is logged and
+// handed on as a new raise, but its age counts from its run's first raise.
+//
 // A Tracker is safe for concurrent use: the heartbeat evaluates every
 // [AlarmInterval], the trim tick evaluates again the moment its own
 // measurements land, on a different goroutine, and the health envelope reads
@@ -65,6 +70,10 @@ type Tracker struct {
 
 	mu     sync.Mutex
 	firing map[instance]firing
+	// lapsed is every instance that cleared within the last [RelapseWindow],
+	// with its run's first raise, which a raise of it again inside the window
+	// resumes.
+	lapsed map[instance]lapse
 
 	// node and handOn are who is told of every transition, and as which
 	// node ([Tracker.OnTransition]); a nil handOn tells nobody.
@@ -80,8 +89,8 @@ type Tracker struct {
 	// latest is the latest evaluation's alarms, for [Tracker.Latest].
 	latest []Alarm
 
-	// kept is where the instances up are kept across a restart, nil
-	// for a tracker that keeps them in memory alone.
+	// kept is where the instances up, and the lapses, are kept across a
+	// restart, nil for a tracker that keeps them in memory alone.
 	kept *store.DB
 }
 
@@ -113,10 +122,19 @@ type instance struct {
 
 // firing is one instance currently up, and told whether whoever is handed its
 // transitions has taken its raise: only a told instance is kept across a restart.
+// run is its run's first raise: since, or an earlier raise of the instance that
+// cleared less than [RelapseWindow] before this one, which every age reads.
 type firing struct {
 	since  time.Time
+	run    time.Time
 	detail string
 	told   bool
+}
+
+// lapse is an instance that cleared at an instant, and the first raise of the
+// run it ended.
+type lapse struct {
+	run, cleared time.Time
 }
 
 // instancesOf is an alarm's instances, each with the detail its lines carry:
@@ -164,7 +182,8 @@ func NewTracker(rec *metrics.Recorder, now func() time.Time) *Tracker {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Tracker{rec: rec, now: now, logger: log, firing: map[instance]firing{}}
+	return &Tracker{rec: rec, now: now, logger: log, firing: map[instance]firing{},
+		lapsed: map[instance]lapse{}}
 }
 
 // Remember makes the tracker keep the instances it has up in db, this node's
@@ -263,17 +282,30 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm, unjudged ...Alarm
 			t.order = append(t.order, a.Kind)
 		}
 	}
+	for key, l := range t.lapsed {
+		if now.Sub(l.cleared) >= RelapseWindow {
+			delete(t.lapsed, key)
+		}
+	}
 	for _, r := range up {
 		if was, already := t.firing[r.key]; already {
 			// Still up. The detail may have moved (a lag grows), and
 			// that is not a transition.
-			t.firing[r.key] = firing{since: was.since, detail: r.detail, told: was.told}
+			was.detail = r.detail
+			t.firing[r.key] = was
 			continue
 		}
-		t.firing[r.key] = firing{since: now, detail: r.detail, told: t.handOn == nil}
+		run, attrs := now, []any{"detail", r.detail, "remedy", r.remedy}
+		if l, relapsed := t.lapsed[r.key]; relapsed {
+			// RAISED AGAIN INSIDE THE WINDOW: one run, aged from its first
+			// raise, so a flapping condition still reaches a person.
+			run = l.run
+			delete(t.lapsed, r.key)
+			attrs = append(attrs, "first_raised", run)
+		}
+		t.firing[r.key] = firing{since: now, run: run, detail: r.detail, told: t.handOn == nil}
 		moved = true
-		t.logger.WarnContext(ctx, "alarm_raised", r.key.attrs(
-			"detail", r.detail, "remedy", r.remedy)...)
+		t.logger.WarnContext(ctx, "alarm_raised", r.key.attrs(attrs...)...)
 		if t.handOn != nil {
 			made = append(made, t.transition(r.key, TransitionFired, r.detail, now, now))
 		}
@@ -291,6 +323,7 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm, unjudged ...Alarm
 		}
 		was := t.firing[key]
 		delete(t.firing, key)
+		t.lapsed[key] = lapse{run: was.run, cleared: now}
 		moved = true
 		t.logger.WarnContext(ctx, "alarm_cleared", key.attrs(
 			"for", spoken(now.Sub(was.since)), "detail", was.detail)...)
@@ -325,16 +358,17 @@ func judgedNot(key instance, unjudged []AlarmRef) bool {
 	})
 }
 
-// recall reads back the instances that stood when this node last kept them.
-// A file that cannot be read leaves nothing recalled, said once, and every
-// standing instance is raised again.
+// recall reads back the instances that stood when this node last kept them,
+// and the ones that had cleared within the relapse window. A file that cannot
+// be read leaves nothing recalled, said once, and every standing instance is
+// raised again.
 func (t *Tracker) recall(ctx context.Context) {
 	if t.kept == nil {
 		return
 	}
 	err := t.kept.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
-			`SELECT kind, domain, entry, since, detail FROM alarm_standing`)
+			`SELECT kind, domain, entry, since, run, cleared, detail FROM alarm_standing`)
 		if err != nil {
 			return err
 		}
@@ -343,11 +377,19 @@ func (t *Tracker) recall(ctx context.Context) {
 			var key instance
 			var kind string
 			var since int64
+			var run, cleared sql.NullInt64
 			var was firing
-			if err := rows.Scan(&kind, &key.domain, &key.entry, &since, &was.detail); err != nil {
+			if err := rows.Scan(&kind, &key.domain, &key.entry, &since, &run, &cleared, &was.detail); err != nil {
 				return err
 			}
-			key.kind, was.since, was.told = Kind(kind), store.DecodeTime(since), true
+			key.kind, was.since, was.run, was.told = Kind(kind), store.DecodeTime(since), store.DecodeTime(since), true
+			if run.Valid {
+				was.run = store.DecodeTime(run.Int64)
+			}
+			if cleared.Valid {
+				t.lapsed[key] = lapse{run: was.run, cleared: store.DecodeTime(cleared.Int64)}
+				continue
+			}
 			t.firing[key] = was
 		}
 		return rows.Err()
@@ -374,8 +416,9 @@ func (t *Tracker) Told(ctx context.Context, id string) {
 	}
 }
 
-// keep writes the told instances up now over the ones kept before. An untold
-// raise is not kept, so a restart before it is taken raises it again.
+// keep writes the told instances up now, and the ones that cleared within the
+// relapse window, over the ones kept before. An untold raise is not kept, so a
+// restart before it is taken raises it again.
 func (t *Tracker) keep(ctx context.Context) {
 	if t.kept == nil {
 		return
@@ -384,13 +427,26 @@ func (t *Tracker) keep(ctx context.Context) {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM alarm_standing`); err != nil {
 			return err
 		}
+		insert := func(key instance, since, run time.Time, cleared sql.NullInt64, detail string) error {
+			var first sql.NullInt64
+			if !run.Equal(since) {
+				first = sql.NullInt64{Int64: store.EncodeTime(run), Valid: true}
+			}
+			_, err := tx.ExecContext(ctx, `INSERT INTO alarm_standing
+				(kind, domain, entry, since, run, cleared, detail) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				string(key.kind), key.domain, key.entry, store.EncodeTime(since), first, cleared, detail)
+			return err
+		}
 		for key, was := range t.firing {
 			if !was.told {
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO alarm_standing
-				(kind, domain, entry, since, detail) VALUES (?, ?, ?, ?, ?)`,
-				string(key.kind), key.domain, key.entry, store.EncodeTime(was.since), was.detail); err != nil {
+			if err := insert(key, was.since, was.run, sql.NullInt64{}, was.detail); err != nil {
+				return err
+			}
+		}
+		for key, l := range t.lapsed {
+			if err := insert(key, l.run, l.run, sql.NullInt64{Int64: store.EncodeTime(l.cleared), Valid: true}, ""); err != nil {
 				return err
 			}
 		}
@@ -468,8 +524,8 @@ func (t *Tracker) Standing() ([]Kind, bool) {
 
 // Marks is [Tracker.Standing] with each kind's start: the kinds the latest
 // evaluation found firing, one mark per kind, the longest-standing first, each
-// dated by the instant it was raised — its oldest instance's, for a kind
-// standing on several logs — and false before any evaluation has run.
+// dated by the first raise of its run ([RelapseWindow]), its oldest instance's
+// for a kind standing on several logs, and false before any evaluation has run.
 //
 // For the fifth surface, the node's presence heartbeat
 // ([coord.NodeStatus.Alarms]), which every peer reads, so that "what is wrong
@@ -493,8 +549,9 @@ func (t *Tracker) Marks() ([]coord.AlarmMark, bool) {
 // first, with the instant each has stood since, and whether any evaluation has
 // run.
 //
-// A kind has stood since its OLDEST instance was raised: one cause standing on
-// four logs is one alarm, and a log joining it does not make it newer.
+// A kind has stood since its OLDEST instance's run began: one cause standing on
+// four logs is one alarm, and a log joining it does not make it newer; nor does
+// a raise inside the relapse window, which continues its run.
 func (t *Tracker) standing() ([]Kind, map[Kind]time.Time, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -503,8 +560,8 @@ func (t *Tracker) standing() ([]Kind, map[Kind]time.Time, bool) {
 	}
 	since := make(map[Kind]time.Time, len(t.order))
 	for key, f := range t.firing {
-		if at, seen := since[key.kind]; !seen || f.since.Before(at) {
-			since[key.kind] = f.since
+		if at, seen := since[key.kind]; !seen || f.run.Before(at) {
+			since[key.kind] = f.run
 		}
 	}
 	out := append(make([]Kind, 0, len(t.order)), t.order...)
@@ -525,7 +582,7 @@ func (t *Tracker) Firing() map[Kind]time.Duration {
 	defer t.mu.Unlock()
 	out := make(map[Kind]time.Duration, len(t.firing))
 	for key, f := range t.firing {
-		out[key.kind] = max(out[key.kind], now.Sub(f.since))
+		out[key.kind] = max(out[key.kind], now.Sub(f.run))
 	}
 	return out
 }

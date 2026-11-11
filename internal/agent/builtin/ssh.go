@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -82,6 +83,14 @@ type SSHServers interface {
 	Operate(ctx context.Context, call SSHCall) (sshint.Result, error)
 	// Denied records that a person denied call.
 	Denied(ctx context.Context, call SSHCall) error
+	// RecordVerdict records v in the access log before it acts, answering
+	// whether it is (Request, By)'s first: a second is never recorded, and
+	// never acts.
+	RecordVerdict(ctx context.Context, v DelegatedVerdict) (bool, error)
+	// MayApprove reports whether the person holding seat may approve an
+	// operate command now, as an administrator or a person the integration
+	// names; their proof's age is not asked, since it was at their answer.
+	MayApprove(ctx context.Context, seat string) (bool, error)
 }
 
 // SSHCall is one command a seat's call runs on one of its hosts; for an
@@ -98,7 +107,7 @@ type SSHCall struct {
 var ErrSSHUnreached = errors.New("builtin: the seat does not reach this server over SSH now")
 
 // SSHDeps are what the SSH tools act through. Servers, Requesters and Chart
-// are all required; any nil omits both tools.
+// are all required; any nil omits every SSH tool.
 type SSHDeps struct {
 	Servers SSHServers
 	// Requesters and Chart decide whoever a turn is acting for
@@ -109,7 +118,8 @@ type SSHDeps struct {
 
 func (d SSHDeps) serves() bool { return d.Servers != nil && d.Requesters != nil && d.Chart != nil }
 
-// sshCandidates are the SSH tools as a registry's candidates.
+// sshCandidates are the SSH tools as a registry's candidates, but
+// ask_to_operate, which posts through the tracker's tools ([Register]).
 func sshCandidates(deps SSHDeps) []candidate {
 	on := deps.serves()
 	return []candidate{{&sshRead{deps: deps}, on}, {&sshOperate{deps: deps}, on}}
@@ -423,8 +433,9 @@ var (
 func (t *sshOperate) Name() string { return SSHOperateTool }
 
 func (t *sshOperate) Description() string {
-	return "Run any command on one of your servers over SSH, as its operate user, once a person " +
-		"approves it. Every call is put to an administrator or a named approver, who reads the " +
+	return "Run any command on one of your servers over SSH, as its operate user, once it is " +
+		"approved. Every call is put to the company's delegate for such commands where it names one, " +
+		"or else to an administrator or a named approver, who reads the " +
 		"server, the command exactly as you wrote it, the stdin's size, digest and start, and your " +
 		"reason, and answers Allow once or Deny. Your run is parked until then: end your turn when " +
 		"this says the call was put to a person. Once approved, the engine runs exactly that command " +
@@ -468,6 +479,9 @@ func (t *sshOperate) Digest() string { return operateDigest() }
 // Approvers is who answers a call: an administrator, or an approver the SSH
 // integration names, at a fresh step-up.
 func (t *sshOperate) Approvers() string { return sandbox.HeldApproversSSH }
+
+// Act is what an operate call is for (ADR-0125).
+func (t *sshOperate) Act() delegated.Kind { return delegated.KindSSHOperate }
 
 // Binding is the host's address, port, operate user and keys as the person is
 // shown them, digested; "" for a host the seat does not operate.

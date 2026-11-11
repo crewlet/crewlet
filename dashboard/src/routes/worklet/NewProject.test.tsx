@@ -22,10 +22,10 @@ import {
 } from "./NewProject.tsx";
 
 const doc: CompanyDocument = {
-  name: "FairSplit",
+  name: "Acme",
   roles: [
     { name: "Product Manager", handle: "pm" },
-    { name: "Founder", handle: "miles", project: "FAIR" },
+    { name: "Founder", handle: "morgan", project: "FAIR" },
     { name: "Software Engineer", handle: "swe", unit: "engineering" },
     { name: "Ada Founder", handle: "ada", kind: "human" },
   ],

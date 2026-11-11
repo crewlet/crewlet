@@ -27,3 +27,7 @@ const (
 	ListedSessionsMax = listedSessionsMax
 	ListedProseBytes  = listedProseBytes
 )
+
+// OperateCallDigest is [operateCallDigest], so the cases that compose an
+// approved decision bind it to the call they will make.
+var OperateCallDigest = operateCallDigest

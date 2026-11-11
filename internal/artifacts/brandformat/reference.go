@@ -102,7 +102,7 @@ func Reference() string {
 		"leading or trailing white space, no `<` or `>`, no control or invisible character, " +
 		"and no link or address (no scheme, `www.`, mail address, Markdown link or " +
 		"`host/path`). A bare domain is refused too, except the brand's own name: for the " +
-		"brand `GoPhrase`, `GoPhrase.me` may be written, and `promo.gophrase.me` may not.\n")
+		"brand `Acme`, `Acme.me` may be written, and `promo.acme.me` may not.\n")
 	b.WriteString("\n## The files it names\n\n")
 	fmt.Fprintf(&b, "- A logo is SVG (at most %s), PNG or WebP (at most %s, %d px a side, "+
 		"%d pixels in all), with a width over height from 1:%d to %d:1. It is stored "+

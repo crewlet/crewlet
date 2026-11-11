@@ -97,6 +97,8 @@ export interface Attachments {
   /** Some image is still on its way up. */
   uploading: boolean;
   add: (files: readonly File[]) => void;
+  /** Refuse what was brought, in these words, attaching nothing. */
+  refuse: (why: string) => void;
   remove: (key: string) => void;
   dismiss: () => void;
   /** The stored images, for the question being sent; the composer is emptied. */
@@ -131,9 +133,13 @@ let nextKey = 0;
  * The composer's attachments. `conversationId` is the conversation the drawer
  * shows: images uploaded to another one (the person started a new one, or
  * opened another, meanwhile) are dropped, since a question may only carry its
- * own conversation's files.
+ * own conversation's files. `closed` is why no image is taken at all, every
+ * one refused in those words, or null where images are read.
  */
-export function useAttachments(conversationId: string | null): Attachments {
+export function useAttachments(
+  conversationId: string | null,
+  closed: string | null = null,
+): Attachments {
   const [drafts, setDrafts] = useState<AttachmentDraft[]>([]);
   const [refusal, setRefusal] = useState<string | null>(null);
   /**
@@ -156,6 +162,10 @@ export function useAttachments(conversationId: string | null): Attachments {
 
   const add = useCallback(
     (files: readonly File[]) => {
+      if (closed !== null) {
+        setRefusal(files.length > 0 ? closed : null);
+        return;
+      }
       const held = [...live.current.values()].filter((entry) => !entry.failed).length;
       const { admitted, refusals } = admit(files, held);
       setRefusal(refusals.length > 0 ? refusals.join(" ") : null);
@@ -191,7 +201,7 @@ export function useAttachments(conversationId: string | null): Attachments {
         );
       }
     },
-    [drop],
+    [closed, drop],
   );
 
   // ANOTHER CONVERSATION'S IMAGES never ride along with this one's question.
@@ -228,6 +238,7 @@ export function useAttachments(conversationId: string | null): Attachments {
     refusal,
     uploading: drafts.some((d) => d.state === "uploading"),
     add,
+    refuse: setRefusal,
     remove: (key) => drop([key]),
     dismiss: () => setRefusal(null),
     take,

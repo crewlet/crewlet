@@ -146,6 +146,7 @@ const ServiceAccounts = lazyScreen("settings", (m) => m.ServiceAccounts);
 const ApiTokens = lazyScreen("settings", (m) => m.ApiTokens);
 const SignInPolicy = lazyScreen("settings", (m) => m.SignInPolicy);
 const Audit = lazyScreen("settings", (m) => m.Audit);
+const DelegatedDecisions = lazyScreen("settings", (m) => m.DelegatedDecisions);
 const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
@@ -344,6 +345,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Advisor />;
     case "audit":
       return <Audit />;
+    case "delegated-decisions":
+      return <DelegatedDecisions />;
     case "account":
       return <Account />;
   }

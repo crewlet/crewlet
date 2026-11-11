@@ -38,7 +38,7 @@ func (b *budgetRoutes) read(_ context.Context, r exec.Request) (exec.Response, e
 		return answer(`"rev-9"`, map[string]any{"handle": "qa", "name": "QA Engineer",
 			"backstory": "Reads tests before code.", "token_budget": map[string]any{"day": 1000000}}), nil
 	case r.Method == http.MethodGet && r.Path == "/config":
-		return answer(`"rev-9"`, map[string]any{"name": "FairSplit",
+		return answer(`"rev-9"`, map[string]any{"name": "Acme",
 			"token_budget": map[string]any{"day": 10000000, "month": 120000000}}), nil
 	case r.Method == http.MethodGet:
 		return exec.Response{Status: http.StatusNotFound, Body: []byte(`{"error":"not_found",` +

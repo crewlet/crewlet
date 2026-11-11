@@ -37,15 +37,31 @@ var elapsed = map[string]bool{
 	"Until": true,
 }
 
-// timeSub is the one method this walk counts by its receiver's type, as
-// [types.Func.FullName] names it: a time.Time's Sub, which reads the wall
-// clock between two instants as Since reads it between one and now. Its name
-// alone is every other type's Sub too (a big.Int's, a set's), and its shape
-// is any call, so it is told apart by type and nothing else.
-const timeSub = "(time.Time).Sub"
+// instantMethods is the methods of time.Time this walk counts by their
+// receiver's type, each a comparison of two instants: Sub reads the wall
+// clock between them as Since reads it between one and now, and Before,
+// After and Compare decide on that same span — time.Now().Before(deadline)
+// is time.Until(deadline) > 0, and t.Compare(d) < 0 and !t.After(d) are the
+// claim t.Before(d) is. Their names alone are every other type's too (a
+// big.Int's Sub, a set's, a version's Compare, a page's After), and their
+// shape is any call, so each is told apart by type and nothing else
+// ([timeMethod]). Equal is not one: equality decides nothing about elapsed
+// time.
+var instantMethods = map[string]bool{
+	"Sub":     true,
+	"Before":  true,
+	"After":   true,
+	"Compare": true,
+}
 
-// subName is how a reference to [timeSub] is named in [Ref.Name].
-const subName = "Time.Sub"
+// timeMethod is how [types.Func.FullName] names the time.Time method of the
+// given name, (time.Time).Sub for Sub: what tells it from every other type's
+// method of that name.
+func timeMethod(name string) string { return "(time.Time)." + name }
+
+// methodPrefix opens how [Ref.Name] names a reference to one of
+// [instantMethods]: Time.Sub, which the listing prints as time.Time.Sub.
+const methodPrefix = "Time."
 
 // markerPrefix opens every marker, written as a directive is: no space after
 // the slashes, so prose that mentions a marker is never one.
@@ -67,12 +83,14 @@ const (
 	// reported, or it is a poll's own deadline — and the marker says why.
 	// It covers any elapsed reading, and no fixed wait.
 	Measure Kind = "measure"
-	// Stated says a time.Time's Sub reads no wall clock between its two
-	// instants — the test stated both, or a clock the test controls stamped
-	// them — so whatever it decides, it decides exactly, and the marker says
-	// which instants or which clock. It covers a Sub alone: time.Since and
-	// time.Until read the wall clock at the call, so nothing about them is
-	// stated.
+	// Stated says a comparison of two instants — a time.Time's Sub, Before,
+	// After or Compare — reads no wall clock between them: the test stated
+	// both, a clock the test controls stamped them, or the code under test
+	// derived one from the other by its own arithmetic, computed once. So
+	// whatever it decides, it decides exactly, and the marker says which
+	// instants, which clock or which derivation. It covers those four alone:
+	// time.Since and time.Until read the wall clock at the call, so nothing
+	// about them is stated.
 	Stated Kind = "stated"
 	// Bubble declares a bubble-only helper, on a function's doc only.
 	Bubble Kind = "bubble"
@@ -89,38 +107,39 @@ func (k Kind) Valid() bool {
 
 // shape is which of the class's references a reference is, as a set of
 // bits so a marker can cover more than one: a fixed wait, a reading of the
-// wall clock against now (time.Since, time.Until), or a time.Time's Sub
-// between two instants, whichever clock stamped them.
+// wall clock against now (time.Since, time.Until), or a comparison of two
+// instants (a time.Time's Sub, Before, After or Compare), whichever clock
+// stamped them.
 type shape uint8
 
 const (
 	waitShape shape = 1 << iota
 	clockShape
-	subShape
+	instantsShape
 )
 
 // shapeOf is the shape of a reference by what of package time it names, as
 // [Ref.Name] spells it.
 func shapeOf(name string) shape {
-	switch {
-	case name == subName:
-		return subShape
-	case elapsed[name]:
+	if method, ok := strings.CutPrefix(name, methodPrefix); ok && instantMethods[method] {
+		return instantsShape
+	}
+	if elapsed[name] {
 		return clockShape
 	}
 	return waitShape
 }
 
 // covers is the shapes a marker of kind k takes out of the class: measure
-// any elapsed reading, stated a Sub alone, and every other kind a fixed
-// wait. A wait is not a measurement nor a measurement a wait, and a reading
-// of now is never stated.
+// any elapsed reading, stated a comparison of two instants alone, and every
+// other kind a fixed wait. A wait is not a measurement nor a measurement a
+// wait, and a reading of now is never stated.
 func (k Kind) covers() shape {
 	switch k {
 	case Measure:
-		return clockShape | subShape
+		return clockShape | instantsShape
 	case Stated:
-		return subShape
+		return instantsShape
 	}
 	return waitShape
 }
@@ -136,12 +155,13 @@ type Ref struct {
 	// method's as Type.Method, a package-level variable's own name.
 	Func string
 	// Name is what of package time it names: Sleep for time.Sleep, Since for
-	// time.Since, and Time.Sub for a time.Time's Sub.
+	// time.Since, and Time.Sub, Time.Before, Time.After or Time.Compare for a
+	// time.Time's method.
 	Name string
 }
 
 // Elapsed reports whether r reads elapsed time rather than waiting for it:
-// time.Since, time.Until or a time.Time's Sub.
+// time.Since, time.Until, or a time.Time's Sub, Before, After or Compare.
 func (r Ref) Elapsed() bool { return shapeOf(r.Name) != waitShape }
 
 // String is the reference as the gate lists it, one per line:
@@ -161,8 +181,9 @@ type Tree struct {
 	// Decls is, for every test-code file read, the top-level declarations
 	// it holds, by the names [Ref.Func] gives them: what an inventory entry
 	// naming a function that is gone is told apart by. It is nil for a file
-	// importing neither time nor synctest and spelling no Sub, which was not
-	// parsed because it can hold no reference.
+	// importing neither time nor synctest and spelling none of
+	// [instantMethods], which was not parsed because it can hold no
+	// reference.
 	Decls map[string]map[string]bool
 	// TestFiles counts the test-code files read, so a walk that read
 	// nothing cannot pass.
@@ -337,10 +358,11 @@ func Scan(root string) (*Tree, error) {
 		}
 	}
 
-	// THE TYPED PASS: a time.Time's Sub is told from every other Sub by its
-	// receiver's type, so the packages whose test code spells Sub are
-	// type-checked, and what that parses is parsed here.
-	subs, untyped, typeErr := typedSubs(root, fset, files, parse)
+	// THE TYPED PASS: a time.Time's Sub, Before, After and Compare are told
+	// from every other method of their names by the receiver's type, so the
+	// packages whose test code may hold one are type-checked, and what that
+	// parses is parsed here.
+	typed, untyped, typeErr := typedReadings(root, fset, files, parse)
 	if typeErr != nil {
 		return nil, typeErr
 	}
@@ -350,13 +372,13 @@ func Scan(root string) (*Tree, error) {
 		if s.file == nil {
 			continue
 		}
-		scanFile(fset, s, pkgs, subs[s], tree)
+		scanFile(fset, s, pkgs, typed[s], tree)
 	}
 	for dir, p := range pkgs {
 		for _, h := range p.helperDecls {
 			tree.Findings = append(tree.Findings,
 				verifyHelper(fset, dir, h, files, module, pkgs)...)
-			if !holdsWait(h, pkgs, module, subs[h.src]) {
+			if !holdsWait(h, pkgs, module, typed[h.src]) {
 				tree.Findings = append(tree.Findings, Finding{
 					Rule: StaleMarker, File: h.src.rel, Line: fset.Position(bubbleMarker(h.decl).Pos()).Line,
 					Func: declName(h.decl),
@@ -441,16 +463,16 @@ func unverifiable(fn *ast.FuncDecl) bool {
 }
 
 // holdsWait reports whether a bubble-only helper's body holds a counted
-// reference of its own — a wait, or a reading of elapsed time, of which subs
-// is its file's typed Subs — or refers to another bubble-only helper: what its
-// declaration takes out of the class. One holding neither binds every caller
-// for nothing.
-func holdsWait(h helperDecl, pkgs map[string]*pkgDecls, module string, subs []token.Pos) bool {
+// reference of its own — a wait, or a reading of elapsed time, of which typed
+// is its file's typed comparisons of instants — or refers to another
+// bubble-only helper: what its declaration takes out of the class. One
+// holding neither binds every caller for nothing.
+func holdsWait(h helperDecl, pkgs map[string]*pkgDecls, module string, typed []candidate) bool {
 	f, fn := h.src.file, h.decl
 	if timeName := importName(f, "time"); timeName != "" && len(timeRefs(fn, timeName)) > 0 {
 		return true
 	}
-	if slices.ContainsFunc(subs, func(p token.Pos) bool { return fn.Pos() <= p && p < fn.End() }) {
+	if slices.ContainsFunc(typed, func(c candidate) bool { return fn.Pos() <= c.pos && c.pos < fn.End() }) {
 		return true
 	}
 	// The other helpers it can name: its own package's by name, another
@@ -754,9 +776,9 @@ type candidate struct {
 }
 
 // scanFile reads one parsed file: its references, its markers and its
-// bubble declarations. subs is the file's typed references to a time.Time's
-// Sub ([typedSubs]).
-func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, subs []token.Pos, tree *Tree) {
+// bubble declarations. typed is the file's references to a time.Time's
+// method of [instantMethods], read from its types ([typedReadings]).
+func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, typed []candidate, tree *Tree) {
 	f := s.file
 	line := func(pos token.Pos) int { return fset.Position(pos).Line }
 
@@ -774,9 +796,9 @@ func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, subs []
 			if timeName != "" {
 				refs = timeRefs(d, timeName)
 			}
-			for _, p := range subs {
-				if d.Pos() <= p && p < d.End() {
-					refs = append(refs, candidate{pos: p, name: subName})
+			for _, c := range typed {
+				if d.Pos() <= c.pos && c.pos < d.End() {
+					refs = append(refs, c)
 				}
 			}
 			for _, r := range refs {
@@ -799,7 +821,8 @@ func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, subs []
 	// that covers no counted reference is stale.
 	//
 	// AND EACH COVERS ITS OWN SHAPE ([Kind.covers]): measure a reading of
-	// elapsed time, stated a time.Time's Sub, every other kind a fixed wait.
+	// elapsed time, stated a comparison of two instants (a time.Time's Sub,
+	// Before, After or Compare), every other kind a fixed wait.
 	// A wait is not a measurement nor a measurement a wait, and a reading of
 	// now is never stated, so a marker over only what it does not cover is
 	// refused rather than taken as stale or, worse, as covering it. A line
@@ -854,9 +877,9 @@ func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, subs []
 					Rule: BadMarker, File: s.rel, Line: at,
 					Detail: fmt.Sprintf("%q is not a marker's kind: a fixed wait's is liveness, "+
 						"simulated <what it stands in for> or bench, a measured elapsed "+
-						"time's is measure <why it decides nothing>, and a time.Time's Sub "+
-						"between instants no wall clock separates is stated <which instants "+
-						"or clock>", string(kind)),
+						"time's is measure <why it decides nothing>, and a time.Time's Sub, "+
+						"Before, After or Compare between instants no wall clock separates "+
+						"is stated <which instants or clock>", string(kind)),
 				})
 			case kind == Simulated && rest == "":
 				tree.Findings = append(tree.Findings, Finding{
@@ -875,9 +898,11 @@ func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, subs []
 			case kind == Stated && rest == "":
 				tree.Findings = append(tree.Findings, Finding{
 					Rule: BadMarker, File: s.rel, Line: at,
-					Detail: "a stated marker says which instants or which clock its Sub reads " +
+					Detail: "a stated marker says which instants or which clock its comparison " +
+						"reads — the case's own constants, a clock the case controls, or one " +
+						"instant the code derives from the other, computed once " +
 						"(//fixedwait:stated both on the case's stepped clock): it is where a " +
-						"Sub of an instant the code stamped from the wall clock would hide",
+						"comparison of instants the code stamped from the wall clock would hide",
 				})
 			case kind == Bench && !inBenchmark(f, c.Pos()):
 				tree.Findings = append(tree.Findings, Finding{
@@ -929,20 +954,22 @@ func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, subs []
 				"line it covers holds a fixed wait and no elapsed reading: a fixed wait that "+
 				"decides nothing is liveness, simulated <what it stands in for> or bench"
 		case m.kind == Stated && other&clockShape != 0:
-			rule, detail = BadMarker, "a stated marker is a time.Time's Sub's, and the line it "+
-				"covers reads the wall clock through time.Since or time.Until and holds no Sub: "+
-				"each reads now at the call, so nothing about it is stated — decide its claim "+
-				"by a signal, or mark it //fixedwait:measure <why it decides nothing>"
+			rule, detail = BadMarker, "a stated marker covers a comparison of two instants — a "+
+				"time.Time's Sub, Before, After or Compare — and the line it covers reads the "+
+				"wall clock through time.Since or time.Until and holds no such comparison: each "+
+				"reads now at the call, so nothing about it is stated — decide its claim by a "+
+				"signal, or mark it //fixedwait:measure <why it decides nothing>"
 		case m.kind == Stated:
-			rule, detail = BadMarker, "a stated marker is a time.Time's Sub's, and the line it "+
-				"covers holds a fixed wait and no Sub: a fixed wait that decides nothing is "+
-				"liveness, simulated <what it stands in for> or bench"
+			rule, detail = BadMarker, "a stated marker covers a comparison of two instants, and "+
+				"the line it covers holds a fixed wait and no Sub, Before, After or Compare: a "+
+				"fixed wait that decides nothing is liveness, simulated <what it stands in for> "+
+				"or bench"
 		default:
 			rule, detail = BadMarker, fmt.Sprintf("a %s marker is a fixed wait's, and the line "+
 				"it covers reads elapsed time and holds no fixed wait: a measurement that "+
-				"decides nothing is //fixedwait:measure <why it decides nothing>, and a Sub "+
-				"between instants no wall clock separates is //fixedwait:stated <which "+
-				"instants or clock>", m.kind)
+				"decides nothing is //fixedwait:measure <why it decides nothing>, and a Sub, "+
+				"Before, After or Compare between instants no wall clock separates is "+
+				"//fixedwait:stated <which instants or clock>", m.kind)
 		}
 		tree.Findings = append(tree.Findings, Finding{
 			Rule: rule, File: s.rel, Line: m.line, Detail: detail,

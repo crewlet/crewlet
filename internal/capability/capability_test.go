@@ -3,6 +3,7 @@ package capability_test
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -96,15 +97,89 @@ func TestASnapshotReadsWhatTheSeatReaches(t *testing.T) {
 	text := capability.YourAccess(s)
 	for _, want := range []string{
 		"## Your access",
-		"- Cloudflare: Operate. Everything Read does, plus purging the cache.",
+		"Crewlet narrows every credential you hold to the grant an administrator sets for you in Crewlet",
+		"- Cloudflare: Operate. Everything Read does, plus purging the cache. Your Crewlet grant " +
+			"sets this; an administrator changes it under Settings, Integrations, Cloudflare, Agents.",
 		"- GitHub (acme/api, acme/web): Checks Read-only, Contents Read and write.",
-		"Requested and not in effect yet, until an organization owner accepts the app's new permissions: Commit statuses Read-only.",
-		"Not granted: Workflows.",
-		"- Not granted to you: Datadog.",
+		"Requested in your Crewlet grant and not in effect yet, until an organization owner " +
+			"accepts the app's new permissions at GitHub: Commit statuses Read-only.",
+		"Not in your Crewlet grant: Workflows. Your Crewlet grant sets this; an administrator " +
+			"changes it under Settings, Integrations, GitHub, Agents.",
+		"- Not in your Crewlet grant: Datadog. An administrator grants an integration under " +
+			"Settings, Integrations, then its Agents tab.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Your access lacks %q:\n%s", want, text)
 		}
+	}
+}
+
+// A PERMISSION THE APP HOLDS AND THE GRANT LEAVES OUT is said to be the grant's
+// alone, at the level the app holds it, so an agent asks for it in Crewlet and
+// knows what past that level still waits on an organization owner; and since
+// the app's registration is not the seat's access, its moving is never a
+// change and leaves the digest as it was.
+func TestAPermissionOnlyTheAppHoldsIsTheGrantsToAdd(t *testing.T) {
+	t.Parallel()
+	c := company()
+	delete(c.Roles[0].Integrations.GitHub.Permissions, "checks")
+	in := input(c)
+	gh := in.Observed[seataccess.LaneGitHub]
+	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "checks": config.GitHubRead,
+		"statuses": config.GitHubRead, "workflows": config.GitHubWrite}
+	in.Observed[seataccess.LaneGitHub] = gh
+	held := capability.Take(in)
+	if got := held.Integrations[1].AppHolds; !maps.Equal(got, map[string]string{"checks": "read", "workflows": "write"}) {
+		t.Fatalf("app holds = %v, want checks read-only and workflows", got)
+	}
+	if text := capability.YourAccess(held); !strings.Contains(text,
+		"Not in your Crewlet grant: Checks (the app already holds it at Read-only, so that waits on "+
+			"nothing at GitHub; Read and write waits on an organization owner accepting it there), "+
+			"Workflows (the app already holds it at Read and write, so nothing at GitHub waits).") {
+		t.Errorf("Your access does not say what the app holds, at its level:\n%s", text)
+	}
+	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "statuses": config.GitHubRead}
+	in.Observed[seataccess.LaneGitHub] = gh
+	notHeld := capability.Take(in)
+	if string(held.JSON()) == string(notHeld.JSON()) {
+		t.Fatal("the app's registration moved and the snapshot did not say so")
+	}
+	if held.Digest() != notHeld.Digest() {
+		t.Error("the app's registration alone moved the digest, which unsettles a pending review")
+	}
+	if changes := capability.Diff(held, notHeld); len(changes) != 0 {
+		t.Errorf("the app's registration alone moved, and a change was told: %+v", changes)
+	}
+	if changes := capability.Diff(notHeld, held); len(changes) != 0 {
+		t.Errorf("the app's registration alone moved back, and a change was told: %+v", changes)
+	}
+}
+
+// A BASELINE TOLD BEFORE THE APP'S REGISTRATION WAS PART OF A SNAPSHOT (version
+// 2) is no change from one that holds it, where nothing else moved.
+func TestAnOlderBaselineIsNoChangeFromWhatTheAppHolds(t *testing.T) {
+	t.Parallel()
+	in := input(company())
+	gh := in.Observed[seataccess.LaneGitHub]
+	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "checks": config.GitHubRead,
+		"workflows": config.GitHubWrite}
+	in.Observed[seataccess.LaneGitHub] = gh
+	now := capability.Take(in)
+	if now.V != capability.Version || now.V < 3 {
+		t.Fatalf("snapshot version = %d, want this build's (at least 3)", now.V)
+	}
+	old := now
+	old.V = 2
+	old.Integrations = slices.Clone(now.Integrations)
+	for i := range old.Integrations {
+		old.Integrations[i].AppHolds = nil
+	}
+	parsed, err := capability.Parse(old.JSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changes := capability.Diff(parsed, now); len(changes) != 0 {
+		t.Errorf("a version 2 baseline against the same access told %+v", changes)
 	}
 }
 
@@ -278,7 +353,8 @@ func TestARevertIsToldAsAChangeBack(t *testing.T) {
 	t.Parallel()
 	changes := capability.Diff(told("secure"), told("operate"))
 	if len(changes) != 1 || changes[0].Kind != capability.ChangeLevel ||
-		changes[0].Line != "Cloudflare: your level is now Operate (was Secure). Everything Read does, plus purging the cache." {
+		changes[0].Line != "Cloudflare: your Crewlet grant now sets your level to Operate (was "+
+			"Secure). Everything Read does, plus purging the cache." {
 		t.Fatalf("changes = %+v, want the level back to Operate", changes)
 	}
 	if changes := capability.Diff(told("operate"), told("operate")); len(changes) != 0 {
@@ -302,23 +378,8 @@ func TestARotationIsNoChange(t *testing.T) {
 
 func TestEveryKindOfChangeIsTold(t *testing.T) {
 	t.Parallel()
-	before := capability.Take(input(company()))
-	c := company()
-	c.Roles[0].Integrations.Cloudflare.Enabled = nil
-	c.Roles[0].Integrations.Datadog = &config.RoleDatadog{Enabled: on(), Role: "r1"}
-	c.Roles[0].Integrations.GitHub.Repos = []string{"acme/api", "acme/docs"}
-	c.Roles[0].Integrations.GitHub.Permissions["contents"] = config.GitHubRead
-	c.Policies = []string{"Only the SRE operates production.", "Deploys need a person's approval."}
-	c.Providers.Sandbox = &config.SandboxProvider{Setup: []config.SandboxSetupStep{{Name: "sre-tools"}}}
-	in := input(c)
-	gh := in.Observed[seataccess.LaneGitHub]
-	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "checks": config.GitHubRead,
-		"statuses": config.GitHubRead}
-	in.Observed[seataccess.LaneGitHub] = gh
-	in.Observed[seataccess.LaneDatadog] = seataccess.Observed{Exists: true, Enabled: true}
-	in.Tools = []capability.ToolServer{{Server: "sentry", Approve: []string{"list_issues", "resolve_issue"}},
-		{Server: "linear", Allow: []string{"search"}}}
-	changes := capability.Diff(before, capability.Take(in))
+	before, after := everyKind()
+	changes := capability.Diff(before, after)
 	var lines []string
 	for _, ch := range changes {
 		if !ch.Kind.Valid() {
@@ -327,11 +388,14 @@ func TestEveryKindOfChangeIsTold(t *testing.T) {
 		lines = append(lines, ch.Line)
 	}
 	want := []string{
-		"Cloudflare: no longer granted to you.",
+		"Cloudflare: no longer in your Crewlet grant.",
 		"Datadog: you now have your own account at r1.",
-		"GitHub: Contents is now Read-only (was Read and write).",
-		"GitHub: you can now work in acme/docs.",
-		"GitHub: you can no longer work in acme/web.",
+		"GitHub: your Crewlet grant no longer gives Checks (was Read-only).",
+		"GitHub: your Crewlet grant now gives Contents Read-only (was Read and write).",
+		"GitHub: your Crewlet grant now lets you work in acme/docs.",
+		"GitHub: your Crewlet grant no longer lets you work in acme/web.",
+		"GitHub: Workflows Read and write is in your Crewlet grant and not in effect yet: an " +
+			"organization owner has to accept the app's new permissions at GitHub.",
 		"GitHub: Commit statuses Read-only is now in effect.",
 		"New tool server: linear.",
 		"sentry: 1 tool now needs a person's approval before each call (list_issues).",
@@ -342,6 +406,30 @@ func TestEveryKindOfChangeIsTold(t *testing.T) {
 	if !slices.Equal(lines, want) {
 		t.Errorf("lines =\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
+}
+
+// everyKind is the SRE before and after a revision that moves one of each kind
+// of change.
+func everyKind() (before, after capability.Snapshot) {
+	before = capability.Take(input(company()))
+	c := company()
+	c.Roles[0].Integrations.Cloudflare.Enabled = nil
+	c.Roles[0].Integrations.Datadog = &config.RoleDatadog{Enabled: on(), Role: "r1"}
+	c.Roles[0].Integrations.GitHub.Repos = []string{"acme/api", "acme/docs"}
+	c.Roles[0].Integrations.GitHub.Permissions["contents"] = config.GitHubRead
+	delete(c.Roles[0].Integrations.GitHub.Permissions, "checks")
+	c.Roles[0].Integrations.GitHub.Permissions["workflows"] = config.GitHubWrite
+	c.Policies = []string{"Only the SRE operates production.", "Deploys need a person's approval."}
+	c.Providers.Sandbox = &config.SandboxProvider{Setup: []config.SandboxSetupStep{{Name: "sre-tools"}}}
+	in := input(c)
+	gh := in.Observed[seataccess.LaneGitHub]
+	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "checks": config.GitHubRead,
+		"statuses": config.GitHubRead}
+	in.Observed[seataccess.LaneGitHub] = gh
+	in.Observed[seataccess.LaneDatadog] = seataccess.Observed{Exists: true, Enabled: true}
+	in.Tools = []capability.ToolServer{{Server: "sentry", Approve: []string{"list_issues", "resolve_issue"}},
+		{Server: "linear", Allow: []string{"search"}}}
+	return before, capability.Take(in)
 }
 
 // THE BLOCK SAYS WHAT THE LINES REPLACE, and shows at most twenty of them.
@@ -425,13 +513,14 @@ func TestYourAccessListsEachHostsReadCommands(t *testing.T) {
 	}
 }
 
-// A CHANGED ALLOWLIST MOVES THE DIGEST AND IS TOLD BY THE NEXT SECTION: the
+// A CHANGED ALLOWLIST IS TOLD BY THE NEXT SECTION AND IS NO CHANGE: the
 // commands are part of the snapshot, so the seat is never left with a list
-// its host no longer admits, and no change line is invented for it.
+// its host no longer admits, and no change line is invented for it, nor a
+// digest moved that a pending review is measured to.
 //
-// Mutation: leave the commands out of the snapshot's encoding and the digest
-// stays put.
-func TestAChangedAllowlistMovesTheDigest(t *testing.T) {
+// Mutation: leave the commands out of the snapshot's encoding and the
+// snapshot stays put; digest them and the digest moves.
+func TestAChangedAllowlistIsSaidAndIsNoChange(t *testing.T) {
 	t.Parallel()
 	in := input(sshCompany())
 	in.Observed[seataccess.LaneSSH] = seataccess.Observed{Exists: true, Enabled: true}
@@ -440,8 +529,11 @@ func TestAChangedAllowlistMovesTheDigest(t *testing.T) {
 	changed.Integrations.SSH.Hosts[0].Containers = false
 	in.Company = changed
 	now := capability.Take(in)
-	if was.Digest() == now.Digest() {
-		t.Fatal("the host stopped admitting docker and the digest did not move")
+	if string(was.JSON()) == string(now.JSON()) {
+		t.Fatal("the host stopped admitting docker and the snapshot did not move")
+	}
+	if was.Digest() != now.Digest() {
+		t.Error("the allowlist alone moved the digest, which unsettles a pending review")
 	}
 	if strings.Contains(capability.YourAccess(now), "docker") {
 		t.Error("Your access still lists docker after the host stopped admitting it")
@@ -492,12 +584,15 @@ func TestAPersonReadsAChangeAboutTheSeat(t *testing.T) {
 	if len(seat) != 1 || len(person) != 1 || seat[0].Kind != person[0].Kind {
 		t.Fatalf("the two audiences were told %+v and %+v, want one change each", seat, person)
 	}
-	if !strings.Contains(seat[0].Line, "your level is now Operate (was Secure)") ||
-		!strings.Contains(person[0].Line, "its level is now Operate (was Secure)") {
+	if !strings.Contains(seat[0].Line, "your Crewlet grant now sets your level to Operate (was Secure)") ||
+		!strings.Contains(person[0].Line, "its Crewlet grant now sets its level to Operate (was Secure)") {
 		t.Errorf("the seat reads %q and a person %q", seat[0].Line, person[0].Line)
 	}
-	for _, c := range capability.DiffFor(capability.Take(input(company())), told("read"), capability.ForPerson) {
-		for _, word := range []string{" you ", " your ", "you are", "you now", "to you"} {
+	before, after := everyKind()
+	lines := append(capability.DiffFor(capability.Take(input(company())), told("read"), capability.ForPerson),
+		capability.DiffFor(before, after, capability.ForPerson)...)
+	for _, c := range lines {
+		for _, word := range []string{" you ", " your ", "you are", "you now", "to you", " you."} {
 			if strings.Contains(" "+c.Line+" ", word) {
 				t.Errorf("a person's line %q says %q", c.Line, strings.TrimSpace(word))
 			}

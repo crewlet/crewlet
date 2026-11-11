@@ -13,7 +13,7 @@ export function brandKitRow(over: Partial<ArtifactListItem> = {}): ArtifactListI
   return {
     id: DRAFT_KIT,
     kind: "brand",
-    title: "FairSplit brand",
+    title: "Acme brand",
     owner: "ana",
     owner_kind: "human",
     head_number: 2,

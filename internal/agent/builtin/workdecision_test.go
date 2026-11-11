@@ -437,7 +437,7 @@ func TestAnAgentsQuestionToAPersonIsADecision(t *testing.T) {
 	roster := func() []colleague.Seat {
 		return []colleague.Seat{
 			{Handle: "pm", Name: "Pat Manager", Kind: "agent"},
-			{Handle: "miles", Name: "Miles", Kind: "human"},
+			{Handle: "morgan", Name: "Morgan", Kind: "human"},
 		}
 	}
 	person := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
@@ -469,28 +469,28 @@ func TestAnAgentsQuestionToAPersonIsADecision(t *testing.T) {
 		want  string // "" when the question must be posted
 	}{
 		{"a comment asking a person in words", roster, nil,
-			builtin.CommentOnWorkTool, comment("miles", nil), "carries a `decision`"},
+			builtin.CommentOnWorkTool, comment("morgan", nil), "carries a `decision`"},
 		{"an item filed as a question to a person in words", roster, nil,
-			builtin.CreateWorkItemTool, create("miles", nil), "carries a `decision`"},
+			builtin.CreateWorkItemTool, create("morgan", nil), "carries a `decision`"},
 		{"a question no roster can place", nil, nil,
 			builtin.CommentOnWorkTool, comment("pm", nil), "carries a `decision`"},
 		{"a comment asking a person with no recommendation", roster, nil,
-			builtin.CommentOnWorkTool, comment("miles", unrecommended), "decision.recommended is empty"},
+			builtin.CommentOnWorkTool, comment("morgan", unrecommended), "decision.recommended is empty"},
 		{"an item asking a person with no rationale", roster, nil,
-			builtin.CreateWorkItemTool, create("miles", unrecommended), "decision.rationale is empty"},
+			builtin.CreateWorkItemTool, create("morgan", unrecommended), "decision.rationale is empty"},
 
 		{"a comment asking a person with a decision", roster, nil,
-			builtin.CommentOnWorkTool, comment("miles", decisionArg()), ""},
+			builtin.CommentOnWorkTool, comment("morgan", decisionArg()), ""},
 		{"an item filed to a person with a decision", roster, nil,
-			builtin.CreateWorkItemTool, create("miles", decisionArg()), ""},
+			builtin.CreateWorkItemTool, create("morgan", decisionArg()), ""},
 		{"a comment asking an agent seat in words", roster, nil,
 			builtin.CommentOnWorkTool, comment("pm", nil), ""},
 		{"an item filed to an agent seat in words", roster, nil,
 			builtin.CreateWorkItemTool, create("pm", nil), ""},
 		{"a person asking a person in words", roster, person,
-			builtin.CommentOnWorkTool, comment("miles", nil), ""},
+			builtin.CommentOnWorkTool, comment("morgan", nil), ""},
 		{"a person's decision with no recommendation", roster, person,
-			builtin.CommentOnWorkTool, comment("miles", unrecommended), ""},
+			builtin.CommentOnWorkTool, comment("morgan", unrecommended), ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

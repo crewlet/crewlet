@@ -992,12 +992,12 @@ const heads = (container: HTMLElement) =>
   );
 
 /** What the list draws with nothing chosen: the compact row, as columns. */
-const LIST_SET = ["", "Key", "Status", "Title", "Due", "", "", "Updated"];
+const LIST_SET = ["", "Key", "Status", "Title", "Due", "Type", "Assignee", "Updated"];
 
 /** And the table's: one field per column, the identity first. */
 const TABLE_SET = [
   "Key",
-  "",
+  "Type",
   "Title",
   "Status",
   "Priority",
@@ -2005,4 +2005,42 @@ test("rows past the first page are reachable", async () => {
   expect(next?.[1]?.limit).toBe(100);
   // AND THE LIST IS WHOLE: no way to more, and the foot says it is all of it.
   await waitFor(() => expect(screen.queryByRole("button", { name: "Load more" })).toBeNull());
+});
+
+// A CURSOR THE ENGINE REFUSES STARTS THE LIST AGAIN. A list sorted by the org
+// chart or the type catalogue refuses a cursor minted before either changed,
+// as `bad_params`, and pressing "Load more" again would be refused for ever.
+// The list goes back to its first page, asks it again for a cursor of the
+// order as it is now, and the foot says why.
+test("a refused cursor starts the list again from the top and says so", async () => {
+  const query = vi.fn(async (what: string, params?: Record<string, unknown>) => {
+    if (what !== "work_items") return {};
+    if (params?.cursor) throw new Error("bad_params");
+    return {
+      items: [row("1"), row("2")],
+      groups: [],
+      total_hint: 3,
+      next_cursor: "c-2",
+      complete: true,
+    };
+  });
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
+  vi.mocked(useOrg).mockReturnValue(withDerived({ name: "Acme", roles: [] }) as never);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("a task called 2")).toBeTruthy());
+  const firstPages = () =>
+    (query.mock.calls as unknown as [string, Record<string, unknown>?][]).filter(
+      ([what, params]) => what === "work_items" && !params?.cursor,
+    ).length;
+  const asked = firstPages();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  await waitFor(() =>
+    expect(
+      screen.getByText("This list changed since it was loaded, so it starts again from the top."),
+    ).toBeTruthy(),
+  );
+  expect(screen.queryByText("Couldn’t load more. Try again.")).toBeNull();
+  await waitFor(() => expect(firstPages()).toBeGreaterThan(asked));
+  expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
 });

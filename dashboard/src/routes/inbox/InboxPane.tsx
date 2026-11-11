@@ -67,6 +67,12 @@ import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
 import type { McpHeldCall } from "~/contract/mcp.ts";
+import {
+  EscalationNote,
+  ReleaseAnswerNote,
+  ReleaseRequestFacts,
+} from "~/components/Delegation.tsx";
+import { delegationEscalated, isReleaseAct, releaseRequestOf } from "~/lib/delegation.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -106,6 +112,7 @@ import {
   askHeadline,
   askIsMessage,
   askTexts,
+  closedReplyPlaceholder,
   followThrough,
   budgetLine,
   changeCard,
@@ -309,6 +316,7 @@ function OpenPane({
               run={row.subject.run}
               held={row.subject.run.held_call}
               frame={frame}
+              index={index}
               now={now}
               onSettled={onSettled}
             />
@@ -685,8 +693,7 @@ function AnsweredPane({
   const ask = "run" in answered ? null : answered;
   const decision = run ? run.decision : ask?.ask.decision;
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
-  const said =
-    words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
+  const said = words.kind === "choice" ? words.said : words.said ? `“${words.said}”` : null;
   // An answered message is read whole, since its heading does not quote it.
   const context = run
     ? run.question_context.trim()
@@ -726,7 +733,7 @@ function AnsweredPane({
           />
         )}
         <ReadingPaneOutcome>
-          {`${words.who} ${words.verb}`}
+          {`${words.who} ${words.verb}${words.kind === "withdrawn" && said ? ":" : ""}`}
           {said && (
             <>
               {" "}
@@ -741,7 +748,8 @@ function AnsweredPane({
             </>
           )}
         </ReadingPaneOutcome>
-        {words.who !== "You" && words.kind !== "resolved" && (
+        {words.replaced && <ReplacedBy replaced={words.replaced} />}
+        {words.who !== "You" && words.kind !== "withdrawn" && (
           <Text as="p" variant="caption">
             {`${words.who} answered for you at ${moment(answered.answer.at, now)}. Reply below if you see it differently.`}
           </Text>
@@ -752,6 +760,23 @@ function AnsweredPane({
         )}
       </>
     </TokenScope>
+  );
+}
+
+/** What now covers a withdrawn question: another work item, or a link. */
+function ReplacedBy({ replaced }: { replaced: NonNullable<AnswerWords["replaced"]> }) {
+  const item = replaced.item;
+  return (
+    <Text as="p" variant="caption">
+      {"Now covered by "}
+      {item ? (
+        <TaskLink item={item} label={item.key} title={item.title} glyph />
+      ) : replaced.url ? (
+        <Link href={replaced.url} variant="quiet" size="inherit" external>
+          {replaced.url}
+        </Link>
+      ) : null}
+    </Text>
   );
 }
 
@@ -796,7 +821,7 @@ function AskFollowThrough({
         label="Replies to this question"
         to={frame.name}
         replyTo={ask.comment}
-        placeholder={`Add to your answer for ${frame.name}. @mention to bring someone in.`}
+        placeholder={closedReplyPlaceholder(words, frame.name)}
         index={index}
         now={now}
       />
@@ -848,7 +873,7 @@ function followSteps(
     { id: "asked", label: `${asker} asked`, description: moment(answered.ask.asked_at, now) },
     {
       id: "answered",
-      label: words.kind === "resolved" ? `${words.who} closed it` : `${words.who} answered`,
+      label: words.kind === "withdrawn" ? `${words.who} withdrew it` : `${words.who} answered`,
       description: moment(answered.answer.at, now),
     },
     picked,
@@ -1407,12 +1432,14 @@ function HeldRunPane({
   run,
   held,
   frame,
+  index,
   now,
   onSettled,
 }: {
   run: ExecutorRow;
   held: McpHeldCall;
   frame: Frame;
+  index: OrgIndex;
   now: number;
   onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
@@ -1420,6 +1447,13 @@ function HeldRunPane({
   const landing = useFocusLanding(said !== null);
   const question = (run.question ?? "").trim();
   const context = run.question_context.trim();
+  // AN ESCALATION READS ITS DELEGATES BEFORE THE CALL (ADR-0125): who put it
+  // to people, what each answered, and why it reached them.
+  const escalated = delegationEscalated(held);
+  // A MERGE OR A DEPLOY is drawn from its arguments where this reader is sent
+  // them, each value as text, and else by the engine's words like any call.
+  const release = isReleaseAct(held.act) ? held.act : null;
+  const request = releaseRequestOf(held.act, run.held_arguments);
   return (
     <TokenScope texts={runAskTexts(run)}>
       <>
@@ -1430,6 +1464,9 @@ function HeldRunPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
+        {escalated && (
+          <EscalationNote delegation={escalated} name={(h) => index.byHandle.get(h)?.name ?? h} />
+        )}
         {question ? (
           <RunQuestion question={question} />
         ) : (
@@ -1437,10 +1474,22 @@ function HeldRunPane({
             Call <span className="mono">{held.tool}</span> on {held.server}?
           </ReadingPaneTitle>
         )}
-        {context && (
-          <ReadingPaneLead>
-            {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
-          </ReadingPaneLead>
+        {request ? (
+          <ReleaseRequestFacts request={request} />
+        ) : (
+          context && (
+            <ReadingPaneLead>
+              {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
+            </ReadingPaneLead>
+          )
+        )}
+        {release && (
+          <ReleaseAnswerNote
+            act={release}
+            agent={frame.name}
+            rule={held.delegation?.rule ?? null}
+            drawn={request !== null}
+          />
         )}
         {said && (
           <ReadingPaneOutcome {...landing} tone={said.settled ? "done" : "pending"}>
@@ -1454,6 +1503,7 @@ function HeldRunPane({
               seat={run.agent_handle}
               fixed={held.fixed}
               approvers={held.approvers}
+              act={held.act}
               onAnswered={(words, settled) => {
                 setSaid({ words, settled });
                 onSettled("Answered", undefined, !settled);
