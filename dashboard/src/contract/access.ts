@@ -302,6 +302,21 @@ interface AccessSync {
 type AccessToolState = "live" | "builtin" | "waiting" | "no_server" | "server_off" | "off";
 
 /**
+ * One seat's lane as one word, computed by the engine once so the Agents tab
+ * and Ask Crewlet cannot word a lane two ways. A draft's "Not saved" is the tab's own.
+ */
+export type AccessLaneStatus =
+  | "syncing"
+  | "refused"
+  | "changed_at_vendor"
+  | "needs_you"
+  | "next_sync"
+  | "in_sync"
+  | "off_account_kept"
+  | "off"
+  | "departed";
+
+/**
  * One variable Crewlet sets in a seat's executor box: one of the seat's own
  * credentials, by its sealed or issued name (`${EXPO_TOKEN_QA}`), or a
  * non-secret setting.
@@ -334,6 +349,9 @@ interface AccessBoxFile {
 export interface AccessSeatLane {
   desired: AccessDesired;
   observed: AccessObserved;
+  /** When a pass last read the vendor for this lane, a dry run included; `sync.at` is the last writing sync. */
+  observed_at?: string;
+  status: AccessLaneStatus;
   sync?: AccessSync;
   /** What the next sync does for this lane as the document stands. */
   plan: AccessStep[];

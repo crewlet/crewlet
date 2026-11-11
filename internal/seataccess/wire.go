@@ -27,6 +27,14 @@ type LaneAnswer struct {
 	Observed Observed    `json:"observed"`
 	Sync     *SyncResult `json:"sync,omitempty"`
 
+	// ObservedAt is when a pass last read the vendor for this lane, a dry
+	// run included ([LaneRecord.ObservedAt]); Sync.At is the last writing sync.
+	ObservedAt time.Time `json:"observed_at,omitzero"`
+
+	// Status is the lane as one word ([StatusOf]), set once the answer is
+	// whole ([Answer.SetStatuses]).
+	Status LaneStatus `json:"status"`
+
 	// Plan is what the next sync does for this lane as the document stands.
 	Plan []Step `json:"plan"`
 

@@ -4301,10 +4301,28 @@ answers the name and when it was minted, never the value.
     "observed": {"exists": true, "enabled": true, "level": "7d1a9e44-...",
       "account": "crewlet-sre@agents.crewlet.invalid",
       "credential": {"variable": "DATADOG_APP_KEY_SRE", "minted_at": "2026-10-29T17:02:10Z"}},
+    "observed_at": "2026-10-29T17:12:40Z",
     "sync": {"at": "2026-10-29T17:02:11Z", "outcome": "ok", "steps": []},
-    "plan": [], "tool": "live", "administers": true}}}]
+    "status": "in_sync", "plan": [], "tool": "live", "administers": true}}}]
 }
 ```
+
+Each seat lane's `status` is the lane as one word, computed by the engine so
+the tab and Ask Crewlet read a lane alike. It is the first of these that holds:
+`departed` (the seat left the document), `syncing` (steps to take while a sync
+of the integration runs), `refused` (the last sync failed), `changed_at_vendor`
+(somebody changed the account at the vendor, and the next sync restores it),
+`needs_you` (a step only a person takes, or a sync that ended waiting on one),
+`next_sync` (steps the next sync takes), `in_sync`, `off_account_kept` and
+`off`. A lane carries two clocks: `observed_at` is when a pass last read the
+vendor for it, every pass including the check's dry run
+(`POST /setup/integrations/{kind}/check`), and `sync.at` is when a writing sync
+last ended, which a dry run leaves alone. The tab draws them as one value,
+"Checked 1m ago, last applied 10m ago", and its header's "Last check" is the
+integration's own pass. On GitHub, `observed.ceiling` is the permissions the
+agent's app is registered with, which every token is narrowed from: a
+permission there that `desired` leaves out or holds lower is one the agent does
+not use, never drift, and the tab says so under the row.
 
 A level the company's connection cannot grant yet carries `unavailable`, the
 sentence saying what it waits on ("The Configure level is unavailable until the
