@@ -75,6 +75,29 @@ func (s *expungeScene) rows() Rows {
 	return rows
 }
 
+// expungeRow is a repository's expunges as its row records them — the one
+// open, the purge asked of it and not yet served, and its last commit's
+// instant (code.ExpungeState) — and the drop epoch every begin moves.
+type expungeRow struct {
+	code.ExpungeState
+	epoch int64
+}
+
+// state is the repository's expungeRow, its detail read linearizable through
+// the first Gitlet node.
+func (s *expungeScene) state() expungeRow {
+	s.c.T.Helper()
+	n := s.c.Fleet.Nodes()[0]
+	a, err := n.Read(s.c.Ctx, code.ReadQuery{Asker: Reader, Kind: code.ReadRepo, Repo: s.name, Fresh: Linearizable})
+	switch {
+	case err != nil:
+		s.c.T.Fatalf("the detail of %s through %s: %v", s.name, n.ID(), err)
+	case a.Repo == nil:
+		s.c.T.Fatalf("the detail of %s through %s answered no repository", s.name, n.ID())
+	}
+	return expungeRow{ExpungeState: a.Repo.Expunge, epoch: a.Repo.DropEpoch}
+}
+
 // mustPush pushes and fails the case unless every ref went through.
 func (s *expungeScene) mustPush(p *Person, dir string, refspecs ...string) {
 	s.c.T.Helper()
@@ -139,54 +162,64 @@ func (s *expungeScene) owed(ctx context.Context) (bool, error) {
 // or failed an expunge, a listing that failed, and a minute of passes that
 // never served the purge are its error. Under ctx alone, never the case's
 // test, so a case runs it on a goroutine while a fault holds the cycle.
-func (s *expungeScene) tryServed(ctx context.Context) (compact.ExpungeReport, error) {
-	var did compact.ExpungeReport
+//
+// HOW MANY PASSES IT TOOK IS NONE OF ITS ANSWER: a cycle whose rescue meets a
+// busy answer — the copy's objects/ still holding its begin's inputs, its
+// copy replaced by a swap, the maintenance lane busy — leaves its expunge
+// open, and the next pass finishes it from the rows (internal/code/compact's
+// package doc): on a loaded runner, a pass after the one that began it
+// (#994). What a case judges of the cycles is what the fleet records: the
+// repository's row ([expungeScene.state]) and the counts of
+// crewlet.code.expunge.runs ([expungesAnswered]).
+func (s *expungeScene) tryServed(ctx context.Context) expungeServed {
+	var o expungeServed
 	deadline := time.Now().Add(time.Minute)
 	for {
 		for _, n := range s.c.Fleet.Nodes() {
 			r, err := n.Compactor().ExpungePass(ctx)
 			if err != nil {
-				return did, fmt.Errorf("%s's expunge pass: %w", n.ID(), err)
+				o.err = fmt.Errorf("%s's expunge pass: %w", n.ID(), err)
+				return o
 			}
-			did.Listed += r.Listed
-			did.Maintained += r.Maintained
-			did.Expunged += r.Expunged
-			did.Refused += r.Refused
-			did.Failed += r.Failed
+			o.did.Listed += r.Listed
+			o.did.Maintained += r.Maintained
+			o.did.Expunged += r.Expunged
+			o.did.Refused += r.Refused
+			o.did.Failed += r.Failed
 			if r.Refused+r.Failed > 0 {
-				return did, fmt.Errorf("%s's expunge pass refused or failed an expunge: %+v", n.ID(), r)
+				o.err = fmt.Errorf("%s's expunge pass refused or failed an expunge: %+v", n.ID(), r)
+				return o
 			}
 		}
 		switch owed, err := s.owed(ctx); {
 		case err != nil:
-			return did, err
+			o.err = err
+			return o
 		case !owed:
-			return did, nil
-		case time.Now().After(deadline):
-			return did, fmt.Errorf("no Gitlet node's pass served the purge of %s in a minute: %+v", s.name, did)
+			return o
+		case time.Now().After(deadline): //fixedwait:measure a poll's own deadline, answered as the error every caller fails on
+			o.err = fmt.Errorf("no Gitlet node's pass served the purge of %s in a minute: %+v", s.name, o.did)
+			return o
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
 // served is tryServed failing the case on its error.
 func (s *expungeScene) served() compact.ExpungeReport {
 	s.c.T.Helper()
-	did, err := s.tryServed(s.c.Ctx)
-	if err != nil {
-		s.c.T.Fatal(err)
+	o := s.tryServed(s.c.Ctx)
+	if o.err != nil {
+		s.c.T.Fatal(o.err)
 	}
-	return did
+	return o.did
 }
 
 // servedAsync runs tryServed on a goroutine of its own, its answer on the
 // channel it returns.
 func (s *expungeScene) servedAsync() <-chan expungeServed {
 	done := make(chan expungeServed, 1)
-	go func() {
-		did, err := s.tryServed(s.c.Ctx)
-		done <- expungeServed{did: did, err: err}
-	}()
+	go func() { done <- s.tryServed(s.c.Ctx) }()
 	return done
 }
 
@@ -358,26 +391,43 @@ func (s *expungeScene) vsAPushCheckedBeforeIt() {
 	s.converged()
 }
 
-// F49: an expunge under a push to main every 100 ms commits in ONE CYCLE —
-// neither its begin nor its commit refused — inside the ExpungePoll its pass
-// was taken up in: a begin's decide reads its inputs and the epoch, a
-// commit's its open expunge alone, and no push moves either. The cycle is
-// held after its build and after its rescue's upload, each until two more
-// pushes have landed — the second begun, checked and decided while the
-// cycle was held — so its begin is decided over refs that moved since its
-// scan, and its commit over refs that moved since its rescue read them.
-// Every push lands, one checked before the begin and decided after it run
-// again once it is refused `expunging`, and every copy passes git fsck.
+// F49: an expunge under a push to main every 100 ms is served in ONE CYCLE —
+// one begin and its commit, neither refused: a begin's decide reads its
+// inputs and the epoch, a commit's its open expunge alone, and no push moves
+// either. The cycle is held after its build and after its rescue's upload,
+// each until two more pushes have landed — the second begun, checked and
+// decided while the cycle was held — so its begin is decided over refs that
+// moved since its scan, and its commit over refs that moved since its rescue
+// read them. Every push lands, one checked before the begin and decided after
+// it run again once it is refused `expunging`, and every copy passes git
+// fsck.
+//
+// THE BEGIN AND ITS COMMIT ARE THE ROW'S: while the commit is held, the
+// repository's row names the purge's own begin — an expunge open, serving
+// the purge's request, at the drop epoch it moved the repository to — and
+// once the passes are done, its commit — none open, the purge served, the
+// commit's instant recorded — at that epoch still, which every begin moves,
+// so no other expunge began.
 //
 // ONE CYCLE IS COUNTED ON EVERY NODE, never inferred from the cycle that
 // committed: a commit refused stale leaves its expunge open, and the next
 // pass finishes it from the rows — a second cycle the pass's own report
-// counts nowhere, since it counts what expunged, was refused or failed — so
-// the case holds every node's crewlet.code.expunge.runs{outcome=stale} to
-// what it was before the purge.
+// counts nowhere, since it counts what expunged, was refused or failed, and
+// after which the row reads as after one — so the case holds every node's
+// crewlet.code.expunge.runs{outcome=stale} to what it was before the purge.
 //
-// Mutation: have the commit's decide refuse stale once a push landed since
-// the rescue's sync, and the cycle is answered stale: red.
+// WHICHEVER PASS COMMITS IT: a cycle whose rescue meets a busy answer leaves
+// its expunge open for the next pass to finish from the rows, as compact's
+// own TestAnExpungeBusyPastItsBeginIsFinishedByTheNextAsk holds — on a
+// loaded runner, under this push rate, a pass after the one that began it
+// (#994). Passes run an ExpungePoll apart in production, so such a commit
+// lands a poll late there; how many passes the case's took is the runner's,
+// and decides nothing.
+//
+// Mutations: have the commit's decide refuse stale once a push landed since
+// the rescue's sync, and the cycle is answered stale: red; have the commit's
+// apply keep the repository's last commit instant, and the row records no
+// commit of the purge's expunge: red.
 func (s *expungeScene) underAPushEvery100ms() {
 	t := s.c.T
 	p := NewPerson(t, s.c.Fleet, "ceo")
@@ -400,19 +450,23 @@ func (s *expungeScene) underAPushEvery100ms() {
 	}
 
 	staleBefore := expungesAnswered(s.c.Fleet, compact.OutcomeStale)
-	s.purge()
+	purge := s.purge()
 	built, letBuild := s.hold(codefault.ExpungeAfterBuild)
 	rescued, letRescue := s.hold(codefault.ExpungeAfterRescueUpload)
-	start := time.Now()
 	done := s.servedAsync()
 	s.reach(built, done, codefault.ExpungeAfterBuild)
 	awaitPushes(codefault.ExpungeAfterBuild)
 	letBuild()
 	s.reach(rescued, done, codefault.ExpungeAfterRescueUpload)
+	// THE PURGE'S OWN BEGIN, as the row records it with the commit held.
+	begun := s.state()
+	if begun.Open == "" || begun.Request != purge.Request || begun.epoch != 1 {
+		t.Fatalf("with the commit held, the row holds open expunge %q, request %q and drop epoch %d; want the "+
+			"purge's own begun, serving %s, at epoch 1", begun.Open, begun.Request, begun.epoch, purge.Request)
+	}
 	awaitPushes(codefault.ExpungeAfterRescueUpload)
 	letRescue()
 	o := <-done
-	took := time.Since(start)
 	pushes.stop()
 
 	if o.err != nil {
@@ -426,9 +480,12 @@ func (s *expungeScene) underAPushEvery100ms() {
 		t.Errorf("the purge under a push every %s had its begin or its commit refused stale %d times, want each "+
 			"decided once over the refs that moved since it read them", expungePushEvery, stale)
 	}
-	if took >= compact.ExpungePoll {
-		t.Errorf("the purge under a push every %s committed %s after its first pass, past the %s its pass is "+
-			"taken up in", expungePushEvery, took, compact.ExpungePoll)
+	// AND ITS COMMIT, in whichever pass it landed.
+	if after := s.state(); after.Open != "" || after.Request != "" || after.ExpungedAt.IsZero() ||
+		after.epoch != begun.epoch {
+		t.Errorf("after the passes the row holds open expunge %q, request %q, last commit %v and drop epoch %d; "+
+			"want %s committed — none open, the purge served, the commit's instant recorded — at epoch %d",
+			after.Open, after.Request, after.ExpungedAt, after.epoch, begun.Open, begun.epoch)
 	}
 	last := pushes.now()
 	if last.failed != "" {
@@ -438,9 +495,6 @@ func (s *expungeScene) underAPushEvery100ms() {
 	if got := rows.Refs["refs/heads/main"]; got != last.head {
 		t.Errorf("main is at %s, want the last push's %s (%d landed, %d refused expunging and run again)", got,
 			last.head, last.landed, last.refused)
-	}
-	if rows.Repo.DropEpoch != 1 {
-		t.Errorf("after one expunge the repository's drop epoch is %d, want 1", rows.Repo.DropEpoch)
 	}
 	fsckCaches(s.c, p, s.id)
 	s.dropped(p, gone)
@@ -490,7 +544,7 @@ func (m *mainPusher) now() pushedSoFar {
 
 func (m *mainPusher) run() {
 	defer close(m.stopped)
-	tick := time.NewTicker(expungePushEvery)
+	tick := time.NewTicker(expungePushEvery) //fixedwait:simulated a busy repository, a push to main every expungePushEvery
 	defer tick.Stop()
 	for i := 0; ; i++ {
 		select {

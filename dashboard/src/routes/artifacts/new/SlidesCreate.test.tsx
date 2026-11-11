@@ -162,7 +162,7 @@ test("the company's brand tile comes first, chosen, and shows its tag", async ()
   const brand = {
     ...starters.themes[0]!,
     id: "brand",
-    name: "FairSplit",
+    name: "Acme",
     tag: "Your company brand",
   };
   vi.mocked(readSlidesStarters).mockResolvedValue({

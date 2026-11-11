@@ -17,7 +17,7 @@ func request() accessreview.Request {
 	return accessreview.Request{Handle: "sre", Baseline: "t-told",
 		BaselineAt: time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC), Digest: "d-new",
 		ChangedAt: time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC),
-		Lines:     []string{"Cloudflare: your level is now Read (was Operate)."}, Open: 3}
+		Lines:     []string{"Cloudflare: your Crewlet grant now sets your level to Read (was Operate)."}, Open: 3}
 }
 
 // A REQUEST IS ITS DELIVERY'S ONE SHAPE: what is published reads back whole,

@@ -226,7 +226,7 @@ func TestProvenScopesAreALevelOnlyWhole(t *testing.T) {
 // A TOKEN'S NAME SAYS WHICH AGENT OF WHICH COMPANY AT WHICH LEVEL.
 func TestATokenNameNamesTheAgentAndLevel(t *testing.T) {
 	t.Parallel()
-	if got, want := TokenName("Go Phrase!", "sre", "operate"), "crewlet-go-phrase-sre-operate"; got != want {
+	if got, want := TokenName("Acme Works!", "sre", "operate"), "crewlet-acme-works-sre-operate"; got != want {
 		t.Errorf("TokenName = %q, want %q", got, want)
 	}
 	if got, want := TokenName("", "sre", "read"), "crewlet-sre-read"; got != want {

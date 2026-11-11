@@ -42,8 +42,17 @@ type Dispatcher interface {
 	// connection it came on, and a tool half-way through a write would stop
 	// there. So a call runs under the context of the run the dispatcher
 	// serves, which it holds, and the request's is not even on offer to be
-	// used by mistake: all it is handed of the request is whether the request
-	// ended, cancelled or its connection lost ([Call.Abandoned]).
+	// used by mistake: all it is handed of the request is whether anybody can
+	// still read the answer ([Call.Abandoned]), when the request is over on its
+	// transport ([Call.Over]), and a way to say the call has started running
+	// ([Call.Running]).
+	//
+	// A DISPATCHER MAY ANSWER A CALL BEFORE ITS TOOL RETURNS, and run the
+	// tool on: the tool loop answers a call "still running" ahead of its
+	// harness's own tool timeout, and the bridge answers every call still
+	// running as the opening it was made on ends (internal/api/mcpbridge). The
+	// call is then the dispatcher's to finish and to record, and the server
+	// writes the answer it was handed as it writes any.
 	Call(call Call) Result
 }
 
@@ -75,20 +84,55 @@ type Call struct {
 	// is joined to the model request that asked for it.
 	Meta map[string]any
 
-	// Abandoned is closed once the harness has STOPPED WAITING FOR THE
-	// ANSWER and its request shows it: it cancelled the request
-	// (`notifications/cancelled` — Claude Code sends one at its tool timeout,
-	// and discards a late answer), or the connection the request came on
-	// failed (a relay's socket closed). A harness that stops waiting without
-	// either leaves it open: a streamable HTTP POST its harness hangs up on
-	// leaves its request running. Nil, never closed, for a call no request
-	// carries.
+	// Abandoned is closed once NOBODY CAN READ THE ANSWER ANY LONGER and the
+	// request shows it: the harness cancelled the request
+	// (`notifications/cancelled`, which Claude Code and OpenCode send at
+	// their tool timeout, discarding a late answer), the connection the
+	// request came on failed (a relay's socket closed), or, on a server that
+	// keeps a running call's answer going ([Server.KeepAnswersGoing]), a
+	// progress could not be written on the call's response: its harness hung
+	// up on it, and the streamable HTTP transport keeps no stream a harness
+	// could come back to, so the answer has no reader. A harness that stops
+	// waiting with none of those leaves it open: one that hangs up on a POST
+	// nothing is kept going on, or in the last cadence before its call
+	// returns. Nil, never closed, for a call no request carries.
 	//
 	// A SIGNAL, NEVER A CONTEXT, for the reason [Dispatcher.Call] takes none:
 	// the call runs under its run's context whatever becomes of the request,
 	// and this says only, once it has run, whether its answer still had a
 	// reader — which a dispatcher that records the call records beside it.
 	Abandoned <-chan struct{}
+
+	// Over is closed once the request is OVER ON ITS TRANSPORT, nothing more
+	// to be written for it: its answer's write has returned — written,
+	// refused, or failed — or the request was cancelled, or the connection it
+	// came on failed. NEVER BEFORE THE ANSWER'S WRITE HAS RETURNED, which is
+	// what a dispatcher that answers a call while its tool runs on waits for
+	// before it closes the session the call came on: the SDK refuses every
+	// answer not yet written once a session's close has begun. It is the
+	// request's context's Done, which the SDK ends only after the answer's
+	// write (go-sdk v1.8.0; held by this package's
+	// TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten, since it is the SDK's
+	// behaviour and not its promise); and unlike [Call.Abandoned] nothing here
+	// widens it: a progress that finds the call's response gone, and the
+	// handler's own return, close Abandoned and leave Over to the transport.
+	// Nil, never closed, for a call no request carries.
+	Over <-chan struct{}
+
+	// Running is for the dispatcher to call once, the moment it starts
+	// RUNNING the call, past every answer it gives without running it; nil
+	// on a server that keeps no running call's answer going
+	// ([Server.KeepAnswersGoing]). The answer starts there: the call's first
+	// progress is written before Running returns, and another every cadence
+	// after it until the dispatcher returns.
+	//
+	// THE DISPATCHER'S TO CALL, because only it knows where a call stops
+	// being one it answers at once — refused for a run that is over, for
+	// tools that have closed, for arguments that did not parse — and becomes
+	// one whose tool may take minutes. A call answered without running is
+	// answered before its harness could give up on it, and needs nothing
+	// kept going.
+	Running func()
 }
 
 // Result is what the harness is handed back for one call.
@@ -127,6 +171,10 @@ type Server struct {
 	lists     uint64
 	relisted  chan struct{}
 	holdLists bool
+
+	// answerEvery is how often a running call's answer is kept going
+	// ([Server.KeepAnswersGoing]); zero keeps nothing going.
+	answerEvery time.Duration
 }
 
 // relistWait bounds how long a call that changed the tool list holds its
@@ -188,6 +236,26 @@ func (s *Server) HoldAnswersForRelist() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.holdLists = true
+}
+
+// KeepAnswersGoing is for a transport whose harness gives up on a call whose
+// response stays silent: every call the dispatcher runs ([Call.Running]) has
+// a `notifications/progress` written on its own progress token the moment it
+// starts running, another every `every` while its tool runs, and none once
+// its tool has returned. So the response's first byte leaves at once, and the
+// response is never silent for longer than every — see keepalive.go.
+//
+// A CALL WHOSE REQUEST CARRIES NO PROGRESS TOKEN GETS ITS ANSWER ALONE: the
+// protocol ties a progress notification to a token the requester gave, and a
+// client that gave none has said it reads none.
+//
+// THE CALLER CHOOSES every, because the harnesses' silence checks it has to
+// answer are the transport's, not this package's (the bridge's, for the
+// harnesses that dial it over HTTP).
+func (s *Server) KeepAnswersGoing(every time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.answerEvery = every
 }
 
 // Sync brings the advertised list up to what the dispatcher offers.
@@ -273,9 +341,22 @@ func (s *Server) awaitRelist(ctx context.Context, after uint64) {
 // handler hands one call to the dispatcher.
 func (s *Server) handler(name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// WHETHER THE HARNESS STILL WAITS, the request's context's Done and
-		// nothing else of it ([Call.Abandoned]).
-		call := Call{Name: name, Meta: req.Params.Meta, Abandoned: ctx.Done()}
+		// WHETHER THE HARNESS STILL WAITS, and WHEN THE REQUEST IS OVER: the
+		// request's context's Done, and nothing else of it ([Call.Abandoned],
+		// [Call.Over]).
+		call := Call{Name: name, Meta: req.Params.Meta, Abandoned: ctx.Done(), Over: ctx.Done()}
+		s.mu.Lock()
+		every := s.answerEvery
+		s.mu.Unlock()
+		var going *beat
+		if every > 0 {
+			// THE ANSWER KEPT GOING once the dispatcher runs the call
+			// ([Server.KeepAnswersGoing]), and the request's end widened to
+			// a progress that found the call's response gone.
+			going = newBeat(ctx, req.Session, req.Params.GetProgressToken(), every)
+			defer going.lose()
+			call.Running, call.Abandoned = going.start, going.unread.Done()
+		}
 		args, err := toolargs.Decode(req.Params.Arguments)
 		if err != nil {
 			// HANDED ON, NOT ANSWERED HERE: a call whose arguments did not
@@ -286,6 +367,10 @@ func (s *Server) handler(name string) mcp.ToolHandler {
 		}
 		call.Arguments = args
 		res := s.d.Call(call)
+		// NOTHING KEPT GOING PAST THE ANSWER: the beat is stopped, and waited
+		// for, before the answer is handed back, so no progress races the
+		// answer on its response or follows it.
+		going.stop()
 		// THE CALL MAY HAVE BEEN AN ACTIVATION — see [Server.Sync] — and
 		// its answer then waits for the client's re-list where the client
 		// re-lists ([Server.HoldAnswersForRelist]).

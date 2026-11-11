@@ -172,6 +172,10 @@ func anEngineCommitLands(t *testing.T, newFleet NewFleet) {
 // landing (the Gitlet node's in-flight join), after it landed, and after another
 // push moved the branch on — every answer applied with the one commit, one
 // push row, and nothing built twice.
+//
+// Mutation: drop the in-flight join (host's joinWrite always leads) — the
+// second ask builds a scratch of its own for the push id, which is refused,
+// and is answered before it ever joins: red.
 func anEngineWriteRetriedIsOnePush(t *testing.T, newFleet NewFleet) {
 	c, p, work, head := seeded(t, newFleet, Shape{}, map[string]string{"README.md": "one\n"})
 	repo := c.Rows().Repo.ID
@@ -194,18 +198,24 @@ func anEngineWriteRetriedIsOnePush(t *testing.T, newFleet NewFleet) {
 	case a := <-first:
 		t.Fatalf("the first write ended before its upload did: %+v %v", a.res, a.err)
 	}
+	joined := make(chan struct{})
+	c.Fleet.Faults().Arm(codefault.WriteJoined, codefault.Action{Once: true, Reached: joined})
 	go func() {
 		res, err := c.Fleet.Write(c.Ctx, w)
 		second <- answer{res, err}
 	}()
-	// Given a moment to reach the Gitlet node building the first, the second ask
-	// joins it — the write's one scratch is the first's, and a scratch of its
-	// own for the same push id would be refused — and one that arrives only
-	// after the first landed is answered from its push's row. Either way it is
-	// answered the one push, which is what this case holds; that the join
-	// itself happens is host.TestARetriedEngineWriteIsOnePush's, which can see
-	// it.
-	time.Sleep(200 * time.Millisecond)
+	// THE SECOND ASK JOINS THE FIRST on the Gitlet node building it — the
+	// write's one scratch is the first's, and a scratch of its own for the
+	// same push id would be refused — and the first is let go only once it
+	// has: let go sooner, a second ask that reached the node after the first
+	// landed would be answered from the push's row, the join never asked.
+	select {
+	case <-joined:
+	case b := <-second:
+		t.Fatalf("the second ask was answered before it joined the first: %+v %v", b.res, b.err)
+	case <-time.After(time.Minute): //fixedwait:liveness
+		t.Fatal("the second ask never joined the first, held after its upload")
+	}
 	close(held)
 	a, b := <-first, <-second
 	for i, x := range []answer{a, b} {
@@ -424,7 +434,7 @@ func writeCrashAt(t *testing.T, newFleet NewFleet, point codefault.Point) {
 	for _, n := range c.Fleet.Nodes() {
 		for _, sub := range []string{"scratch", "tmp", "trash"} {
 			dir := filepath.Join(n.CacheDir(), sub)
-			if !within(10*time.Second, func() bool { return emptyDir(dir) }) {
+			if !within(cleanupWait, func() bool { return emptyDir(dir) }) {
 				t.Errorf("%s's %s/ still holds %v after the restart", n.ID(), sub, entries(dir))
 			}
 		}

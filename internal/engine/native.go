@@ -2082,6 +2082,23 @@ func (l liveUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 	return ChartUnits(l.engine.Company().Org).ResolveUnit(ref)
 }
 
+// liveSeatNames is every seat's name as the epoch current when a listing is
+// READ spells it, which is what `sort=assignee` orders by ([worklet.Roster]).
+// A node holding no company names nobody, and the listing orders by handle.
+type liveSeatNames struct{ engine *Engine }
+
+func (l liveSeatNames) SeatNames() map[string]string {
+	company := l.engine.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for role := range company.Org.AllRoles() {
+		out[role.Handle()] = role.Name
+	}
+	return out
+}
+
 // liveSeats resolves a people field's value to exactly one seat, against the
 // CURRENT epoch, and answers its handle.
 //

@@ -21,7 +21,7 @@ afterEach(() => {
 
 const DOC: BrandDocument = {
   v: 1,
-  name: "FairSplit",
+  name: "Acme",
   logos: { primary: "logos/primary.svg" },
   colors: { primary: "#0f7b5f" },
   type: { heading: { kit: "geist" }, body: { kit: "geist" } },
@@ -51,9 +51,7 @@ test("a logo is saved at the press from the bytes the page holds, and no link to
 
   fireEvent.click(screen.getByRole("button", { name: "Download the primary logo" }));
   expect(made).toHaveBeenCalledWith(SVG);
-  expect(saved).toEqual([
-    { href: "blob:dashboard/download", download: "fairsplit-primary-logo.svg" },
-  ]);
+  expect(saved).toEqual([{ href: "blob:dashboard/download", download: "acme-primary-logo.svg" }]);
   // The press's own link is gone with it.
   expect(container.ownerDocument.querySelector('a[href^="blob:"]')).toBeNull();
 });

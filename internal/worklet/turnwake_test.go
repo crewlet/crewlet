@@ -84,6 +84,10 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}
 	humanComment := agentComment
 	humanComment.CommentAuthorKind = worklet.AuthorHuman
+	// THE STATUS MOVES ACROSS THE FINISHED EDGE, recorded as a writer's
+	// record carries them: the edge is told where the status moved.
+	finished := map[string]worklet.Delta{"status": {From: "in_progress", To: "done"}}
+	reopened := map[string]worklet.Delta{"status": {From: "done", To: "in_progress"}}
 
 	cases := []struct {
 		name  string
@@ -121,7 +125,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}, {
 		name:  "a person's comment on the task, which speaks to everyone following it",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Snapshot: humanComment},
-		actor: "miles",
+		actor: "morgan",
 		want:  []string{"app-engineer", "backend-engineer", "designer", "pm", "qa"},
 	}, {
 		name: "an agent's reply in a thread two seats wrote in",
@@ -145,7 +149,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}, {
 		name:  "a person's comment naming one seat",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Mentions: []string{"pm"}, Snapshot: humanComment},
-		actor: "miles",
+		actor: "morgan",
 		want:  []string{"pm"},
 	}, {
 		name:  "a change to who watches the task",
@@ -159,7 +163,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		want:  []string{"app-engineer", "backend-engineer"},
 	}, {
 		name: "somebody else finishing the seat's task",
-		n: worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: func() worklet.Snapshot {
+		n: worklet.Notify{Kind: worklet.ChangeStatus, Fields: finished, Snapshot: func() worklet.Snapshot {
 			s := agentComment
 			s.PrevStatusGroup, s.StatusGroup = worklet.GroupActive, worklet.GroupDone
 			return s
@@ -176,13 +180,14 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		actor: "app-engineer",
 		want:  []string{"backend-engineer"},
 	}, {
-		name:  "a new assignment, which the reporter hears as the owner does",
-		n:     worklet.Notify{Kind: worklet.ChangeAssignee, Snapshot: agentComment},
-		actor: "miles",
+		name: "a new assignment, which the reporter hears as the owner does",
+		n: worklet.Notify{Kind: worklet.ChangeAssignee, Snapshot: agentComment,
+			Fields: map[string]worklet.Delta{"assignee": {To: "backend-engineer"}}},
+		actor: "morgan",
 		want:  []string{"app-engineer", "backend-engineer", "pm"},
 	}, {
 		name: "the assignee finishing the task, which its reporter verifies",
-		n: worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: func() worklet.Snapshot {
+		n: worklet.Notify{Kind: worklet.ChangeStatus, Fields: finished, Snapshot: func() worklet.Snapshot {
 			s := agentComment
 			s.PrevStatusGroup, s.StatusGroup = worklet.GroupActive, worklet.GroupDone
 			return s
@@ -191,7 +196,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		want:  []string{"app-engineer", "pm"},
 	}, {
 		name: "a reopened task",
-		n: worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: func() worklet.Snapshot {
+		n: worklet.Notify{Kind: worklet.ChangeStatus, Fields: reopened, Snapshot: func() worklet.Snapshot {
 			s := agentComment
 			s.PrevStatusGroup, s.StatusGroup = worklet.GroupDone, worklet.GroupActive
 			return s
@@ -215,7 +220,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	}, {
 		name:  "a person's comment on an unowned, unwatched task",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Snapshot: worklet.Snapshot{ProjectLead: "pm", CommentAuthorKind: worklet.AuthorHuman}},
-		actor: "miles",
+		actor: "morgan",
 		want:  []string{"pm"},
 	}, {
 		name:  "a new task nobody owns",

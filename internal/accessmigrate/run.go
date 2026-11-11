@@ -330,7 +330,7 @@ func seed(ctx context.Context, ledger seataccess.Ledger, seeds []Seed, landed []
 		if len(s.Lanes) > 0 {
 			rec.Lanes = map[seataccess.Lane]seataccess.LaneRecord{}
 			for lane, seen := range s.Lanes {
-				rec.Lanes[lane] = seataccess.LaneRecord{Observed: seen}
+				rec.Lanes[lane] = seataccess.LaneRecord{Observed: seen, ObservedAt: now}
 			}
 		}
 		for _, m := range landed {

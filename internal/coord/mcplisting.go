@@ -33,9 +33,10 @@ import (
 // # Two classes in the positions register
 //
 // A listing is one record per (server, node), [MCPListingKey]; each tool's
-// schemas are one record per definition digest, [MCPSchemaKey], written
-// create-only, so a schema every seat's child of a server lists is stored
-// once however many nodes and instances list it. Both live in the positions
+// definition, its schemas and its words whole, is one record per definition
+// digest, [MCPDefinitionKey], written create-only, so a definition every
+// seat's child of a server lists is stored once however many nodes and
+// instances list it. Both live in the positions
 // register, the bucket with no age, for the reason its other classes do: an
 // age would forget the listing of a server that has not changed in a week,
 // which is a server whose listing is exactly right. Removal is a decision:
@@ -62,11 +63,11 @@ import (
 // from the key it files the record under, so a node can describe only its
 // own listing of the server the key names.
 
-// MCPListingClass and MCPSchemaClass are the key classes the records are
+// MCPListingClass and MCPDefinitionClass are the key classes the records are
 // filed under in the positions register.
 const (
-	MCPListingClass = "mcp_listing"
-	MCPSchemaClass  = "mcp_schema"
+	MCPListingClass    = "mcp_listing"
+	MCPDefinitionClass = "mcp_definition"
 )
 
 // MCPListingKey is one node's listing of one server, by the server's
@@ -86,14 +87,14 @@ func MCPListingOf(key string) (server, node string, ok bool) {
 	return segments[1], segments[2], true
 }
 
-// MCPSchemaKey is one definition's schemas, by its digest.
-func MCPSchemaKey(digest string) string { return DocumentKey(MCPSchemaClass, digest) }
+// MCPDefinitionKey is one definition, by its digest.
+func MCPDefinitionKey(digest string) string { return DocumentKey(MCPDefinitionClass, digest) }
 
-// MCPSchemaDigest recovers the digest from a schema key, false for a key of
+// MCPDefinitionDigest recovers the digest from a definition key, false for a key of
 // another class or one naming no digest.
-func MCPSchemaDigest(key string) (string, bool) {
+func MCPDefinitionDigest(key string) (string, bool) {
 	segments, ok := DocumentSegments(key)
-	if !ok || len(segments) != 2 || segments[0] != MCPSchemaClass || !IsMCPDigest(segments[1]) {
+	if !ok || len(segments) != 2 || segments[0] != MCPDefinitionClass || !IsMCPDigest(segments[1]) {
 		return "", false
 	}
 	return segments[1], true
@@ -118,10 +119,11 @@ func IsMCPDigest(s string) bool {
 // each, plus the instructions and the server's identity), half the 1 MiB
 // payload an external NATS server allows by default, so a server listing
 // thousands of tools with essays for descriptions costs the fleet one bounded
-// record rather than a write the broker refuses; and the schemas one listing
-// stores to [MaxMCPListingSchemaBytes] in all, so a server that lists many
-// large schemas, or mints new definitions at every restart, costs the fleet a
-// bounded amount per listing rather than up to 256 times a definition's bound.
+// record rather than a write the broker refuses; and the definitions one
+// listing stores to [MaxMCPListingDefinitionBytes] in all, so a server that
+// lists many large definitions, or mints new ones at every restart, costs the
+// fleet a bounded amount per listing rather than up to 256 times a
+// definition's bound.
 const (
 	// MaxMCPListedTools is the most tools one listing names, the first by
 	// name; [MCPListing.ToolCount] travels whole beside them. 256 is past
@@ -129,10 +131,10 @@ const (
 	// is budgeted.
 	MaxMCPListedTools = 256
 
-	// MaxMCPToolTitleBytes bounds a tool's title, and MaxMCPToolDescriptionBytes
-	// its description: a description is what a model reads, and the whole
-	// of one is in the server's own listing; the record keeps what a person
-	// reading a list needs, and the digest still covers every byte.
+	// MaxMCPToolTitleBytes bounds a tool's title on a listing, and
+	// MaxMCPToolDescriptionBytes its description: what a person reading a
+	// list needs. The digest covers every byte, and the definition's record
+	// keeps its words whole ([MCPToolDefinition]).
 	MaxMCPToolTitleBytes       = 256
 	MaxMCPToolDescriptionBytes = 1024
 
@@ -145,18 +147,28 @@ const (
 
 	// MaxMCPToolSchemaBytes bounds one definition's schemas, input and
 	// output together, as encoded. A definition whose schemas are larger is
-	// listed without them ([MCPListedTool.SchemaKept] false) rather than
-	// stored: 64 KiB is past any schema a model is usefully offered.
+	// listed without its record ([MCPListedTool.DefinitionKept] false): 64
+	// KiB is past any schema a model is usefully offered.
 	MaxMCPToolSchemaBytes = 64 << 10
 
-	// MaxMCPListingSchemaBytes bounds the schemas one listing keeps, every
-	// kept definition's input and output together, as encoded: the tools'
-	// schemas are kept in name order while they fit, and a tool past the
-	// budget is listed without them. Held by the node that builds the
-	// listing, since a listing names its schemas by digest and a store
-	// writing it cannot weigh them. 1 MiB is sixteen of the largest
-	// definitions, and hundreds of the schemas real servers publish.
-	MaxMCPListingSchemaBytes = 1 << 20
+	// MaxMCPToolWordsBytes bounds one definition's words whole: its title,
+	// the title its hints carry and its description, together. The engine
+	// bounds nothing a server sends and hands a model every byte of a
+	// description on every request, so 64 KiB, some 16,000 tokens of one
+	// tool, is past any description a server usefully sends (real ones run
+	// to a few KiB). A definition whose words are longer is listed without
+	// its record, and a change to it is said rather than shown.
+	MaxMCPToolWordsBytes = 64 << 10
+
+	// MaxMCPListingDefinitionBytes bounds the records one listing keeps,
+	// every kept definition's schemas and words together: a tool whose
+	// definition waits for a review is kept first, so its change can be
+	// shown, then the rest in name order while they fit, and a tool past
+	// the budget is listed without its record. Held by the node that builds
+	// the listing, since a listing names its records by digest and a store
+	// writing it cannot weigh them. 1 MiB is eight of the largest
+	// definitions, and hundreds of the definitions real servers publish.
+	MaxMCPListingDefinitionBytes = 1 << 20
 )
 
 // The three words a hint is written in on a listing, as internal/mcp's Hint
@@ -235,11 +247,12 @@ type MCPListedTool struct {
 	Declared MCPToolHints `json:"declared"`
 
 	// Digest names the server's definition (internal/mcp's digest.go),
-	// and SchemaKept whether its schemas are stored under it
-	// ([MCPToolSchema]): false for schemas past [MaxMCPToolSchemaBytes],
-	// and for a tool past its listing's [MaxMCPListingSchemaBytes].
-	Digest     string `json:"digest"`
-	SchemaKept bool   `json:"schema_kept"`
+	// and DefinitionKept whether its record is stored under it
+	// ([MCPToolDefinition]): false for a definition past its bounds
+	// ([MCPToolDefinition.Fits]), and for a tool past its listing's
+	// [MaxMCPListingDefinitionBytes].
+	Digest         string `json:"digest"`
+	DefinitionKept bool   `json:"definition_kept"`
 
 	// Parts names each part of the definition apart ([MCPToolParts]), so
 	// a reader comparing it with the definition its level was decided on
@@ -345,9 +358,17 @@ func (l MCPListing) Validate() error {
 	return nil
 }
 
-// MCPToolSchema is one definition's schemas, stored once under its digest.
-type MCPToolSchema struct {
+// MCPToolDefinition is one definition whole, stored once under its digest: its
+// schemas, which a listing names rather than carries, and its words, which a
+// listing cuts. What a change to the tool is shown by, part by part.
+type MCPToolDefinition struct {
 	Digest string `json:"digest"`
+	// Title is the tool's own title, HintsTitle the title its hints carry,
+	// and Description what the model is told it does, each as the server
+	// sent it: the words the digest's title and description parts cover.
+	Title       string `json:"title,omitempty"`
+	HintsTitle  string `json:"hints_title,omitempty"`
+	Description string `json:"description"`
 	// Input is the tool's input schema, and Output its output schema or
 	// empty where it publishes none, each as encoded JSON.
 	Input  json.RawMessage `json:"input"`
@@ -360,26 +381,36 @@ type MCPToolSchema struct {
 	Version uint64 `json:"-"`
 }
 
-// MCPToolSchemaFits reports whether schemas this large may be stored.
-func MCPToolSchemaFits(input, output []byte) bool {
-	return len(input)+len(output) <= MaxMCPToolSchemaBytes
+// Fits reports whether the definition is within the bounds a record keeps:
+// its schemas within [MaxMCPToolSchemaBytes] and its words within
+// [MaxMCPToolWordsBytes].
+func (d MCPToolDefinition) Fits() bool {
+	return len(d.Input)+len(d.Output) <= MaxMCPToolSchemaBytes &&
+		len(d.Title)+len(d.HintsTitle)+len(d.Description) <= MaxMCPToolWordsBytes
 }
 
-// Validate reports why a schema record cannot be written.
-func (s MCPToolSchema) Validate() error {
+// Size is what the record weighs against its listing's
+// [MaxMCPListingDefinitionBytes]: its schemas and its words.
+func (d MCPToolDefinition) Size() int {
+	return len(d.Input) + len(d.Output) + len(d.Title) + len(d.HintsTitle) + len(d.Description)
+}
+
+// Validate reports why a definition record cannot be written.
+func (d MCPToolDefinition) Validate() error {
 	switch {
-	case !IsMCPDigest(s.Digest):
-		return fmt.Errorf("coord: an MCP tool schema is stored under its definition "+
-			"digest, and %q is not one", s.Digest)
-	case len(s.Input) == 0 || !json.Valid(s.Input):
-		return fmt.Errorf("coord: the schema stored under %s needs its input schema as JSON", s.Digest)
-	case len(s.Output) > 0 && !json.Valid(s.Output):
-		return fmt.Errorf("coord: the output schema stored under %s is not JSON", s.Digest)
-	case !MCPToolSchemaFits(s.Input, s.Output):
-		return fmt.Errorf("coord: the schemas stored under %s are %d bytes, past the %d "+
-			"a definition keeps", s.Digest, len(s.Input)+len(s.Output), MaxMCPToolSchemaBytes)
-	case s.At.IsZero():
-		return fmt.Errorf("coord: the schema stored under %s needs when it was stored", s.Digest)
+	case !IsMCPDigest(d.Digest):
+		return fmt.Errorf("coord: an MCP tool definition is stored under its digest, and %q is "+
+			"not one", d.Digest)
+	case len(d.Input) == 0 || !json.Valid(d.Input):
+		return fmt.Errorf("coord: the definition stored under %s needs its input schema as JSON", d.Digest)
+	case len(d.Output) > 0 && !json.Valid(d.Output):
+		return fmt.Errorf("coord: the output schema stored under %s is not JSON", d.Digest)
+	case !d.Fits():
+		return fmt.Errorf("coord: the definition stored under %s holds %d bytes of schemas and %d of "+
+			"words, past the %d and %d a record keeps", d.Digest, len(d.Input)+len(d.Output),
+			len(d.Title)+len(d.HintsTitle)+len(d.Description), MaxMCPToolSchemaBytes, MaxMCPToolWordsBytes)
+	case d.At.IsZero():
+		return fmt.Errorf("coord: the definition stored under %s needs when it was stored", d.Digest)
 	}
 	return nil
 }
@@ -425,22 +456,21 @@ type MCPListings interface {
 	// [SeatPauses.WatchSeatPauses] says.
 	WatchMCPListings(ctx context.Context) (<-chan MCPListingUpdate, error)
 
-	// CreateMCPToolSchema stores a definition's schemas unless its digest
-	// already holds some, reporting whether this call stored them. A digest
-	// names one definition, so what it holds is what this call would have
-	// written.
-	CreateMCPToolSchema(ctx context.Context, s MCPToolSchema) (bool, error)
+	// CreateMCPToolDefinition stores a definition unless its digest already
+	// holds one, reporting whether this call stored it. A digest names one
+	// definition, so what it holds is what this call would have written.
+	CreateMCPToolDefinition(ctx context.Context, s MCPToolDefinition) (bool, error)
 
-	// MCPToolSchema reads one definition's schemas.
-	MCPToolSchema(ctx context.Context, digest string) (MCPToolSchema, bool, error)
+	// MCPToolDefinition reads one definition.
+	MCPToolDefinition(ctx context.Context, digest string) (MCPToolDefinition, bool, error)
 
-	// ListMCPToolSchemas returns every stored schema, ordered by digest:
+	// ListMCPToolDefinitions returns every stored definition, ordered by digest:
 	// what the sweep weighs against the listings.
-	ListMCPToolSchemas(ctx context.Context) ([]MCPToolSchema, error)
+	ListMCPToolDefinitions(ctx context.Context) ([]MCPToolDefinition, error)
 
-	// DeleteMCPToolSchema removes a definition's schemas at a version,
+	// DeleteMCPToolDefinition removes a definition at a version,
 	// reporting whether that version still held.
-	DeleteMCPToolSchema(ctx context.Context, digest string, version uint64) (bool, error)
+	DeleteMCPToolDefinition(ctx context.Context, digest string, version uint64) (bool, error)
 }
 
 // SortMCPListings orders listings by server and then node, the order every

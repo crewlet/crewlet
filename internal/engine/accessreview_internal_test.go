@@ -137,8 +137,8 @@ func TestALevelChangeAsksForExactlyOneReview(t *testing.T) {
 	t.Parallel()
 	m, owed := measured(sreSnapshot(sreAccess("read")), toldAs("t-told", sreSnapshot(sreAccess("operate"))))
 	if !owed || m.base.Turn != "t-told" || len(m.seatLines) != 1 ||
-		!strings.Contains(m.seatLines[0], "Cloudflare: your level is now") ||
-		!strings.Contains(m.personLines[0], "Cloudflare: its level is now") {
+		!strings.Contains(m.seatLines[0], "Cloudflare: your Crewlet grant now sets your level to") ||
+		!strings.Contains(m.personLines[0], "Cloudflare: its Crewlet grant now sets its level to") {
 		t.Fatalf("a lowered level measures %+v (%v), want one line in each voice", m, owed)
 	}
 
@@ -443,7 +443,7 @@ func TestTheSaveDryRunCountsOpenItems(t *testing.T) {
 		t.Fatalf("draftReviews: %v", err)
 	}
 	if len(reviews) != 1 || reviews[0].Handle != "sre" || reviews[0].Open != 2 ||
-		len(reviews[0].Changes) != 1 || !strings.Contains(reviews[0].Changes[0], "its level is now") {
+		len(reviews[0].Changes) != 1 || !strings.Contains(reviews[0].Changes[0], "its Crewlet grant now sets its level to") {
 		t.Fatalf("the dry run of a lowered level names %+v, want the SRE with 2 open items", reviews)
 	}
 	if reviews, err := e.draftReviews(t.Context(), cfg, roster, current, draftOf("read"), noWork); err != nil || len(reviews) != 0 {

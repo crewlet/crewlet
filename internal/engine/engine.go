@@ -316,6 +316,13 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 				"pending run's row, because the submission check reads it",
 			in.Reply.Kind, handle, turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
 	}
+	// AND A PICKUP'S TURN CARRIES THE READ OF ITS TYPED ANSWER, for the same
+	// reason: without it the submission check and every later one would hold
+	// the turn to nothing on its item (ADR-0122).
+	if in.Reply.Item != "" && in.TypedAnswer == nil {
+		return nil, fmt.Errorf("engine: RunnerInput.Reply names item %q for %q and no "+
+			"TypedAnswer reads it: build it with Engine.typedAnswerFor", in.Reply.Item, handle)
+	}
 	te := c.Config.TurnEngine
 	del := te.Delegation
 	return runner.New(runner.Config{
@@ -378,10 +385,11 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 			Workers:   config.CloneWorkers(c.Config.WorkersFor(handle)),
 			Remaining: in.Remaining,
 		},
-		Task:    in.Task,
-		Context: in.Context,
-		Reply:   in.Reply,
-		Endings: in.Endings,
+		Task:        in.Task,
+		Context:     in.Context,
+		Reply:       in.Reply,
+		TypedAnswer: in.TypedAnswer,
+		Endings:     in.Endings,
 		// THE SEAT'S ACCESS AND WHAT CHANGED IN IT, rendered at the dispatch
 		// beside the endings and frozen with them (capability.go).
 		Access:            in.Access,
@@ -469,6 +477,11 @@ type RunnerInput struct {
 	// Reply says who is waiting for this turn, derived from the trigger
 	// before the turn starts. See [turn.Reply].
 	Reply turn.Reply
+
+	// TypedAnswer reads whether the turn has put a typed answer on the
+	// item a work pickup handed it ([Engine.typedAnswerFor]); required
+	// where Reply names an item, nil otherwise.
+	TypedAnswer func(ctx context.Context) (bool, error)
 
 	// Budget is the shared token counter this turn charges. Nil is the
 	// embedded single-node case, where no counter is shared with anyone.

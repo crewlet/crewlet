@@ -24,7 +24,10 @@
 //
 // An agent asks for more access by naming one key of the closed catalogue in
 // access.go, and the change is built here for that agent alone; a person
-// previews and sends it before the question is answered (ADR-0118).
+// previews and sends it before the question is answered (ADR-0118). The
+// catalogue is derived from what a seat can hold (every level of every GitHub
+// permission the seat catalogue offers), never listed by hand, so it cannot
+// fall behind the Agents tab.
 package advisor
 
 import (

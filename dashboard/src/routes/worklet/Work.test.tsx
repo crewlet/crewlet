@@ -992,12 +992,12 @@ const heads = (container: HTMLElement) =>
   );
 
 /** What the list draws with nothing chosen: the compact row, as columns. */
-const LIST_SET = ["", "Key", "Status", "Title", "Due", "", "", "Updated"];
+const LIST_SET = ["", "Key", "Status", "Title", "Due", "Type", "Assignee", "Updated"];
 
 /** And the table's: one field per column, the identity first. */
 const TABLE_SET = [
   "Key",
-  "",
+  "Type",
   "Title",
   "Status",
   "Priority",

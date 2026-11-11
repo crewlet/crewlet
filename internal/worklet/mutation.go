@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -59,11 +60,20 @@ import (
 // neither, and would apply the patch as one that names no date — keeping a
 // date every newer node cleared.
 // Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
-const RecordVersion = 11
+// Version 12 is a question its asker withdrew saying why ([Comment.Withdrawal]):
+// a build reading 11 would resolve it and drop the reason.
+// Version 13 is whom an agent's record a later turn reads was written for
+// ([MutationRecord.WorkingFor], ADR-0109).
+const RecordVersion = 13
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
 const AppsKeptVersion = 4
+
+// WorkingForVersion is the version from which a record carries whom it was
+// written for ([MutationRecord.WorkingFor]), which the applier keeps on its
+// history row; every older record keeps the column NULL.
+const WorkingForVersion = 13
 
 // NoticeAsksVersion is the version from which the applier keeps a comment
 // author's statement on its notice rows; every older record leaves it NULL.
@@ -128,6 +138,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.ClearStart", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_start"}},
 	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
 	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
+	{Name: "Comment.Withdrawal", Since: 12, Op: string(OpPatch), Path: []string{"mutation", "comment", "withdrawal"}},
+	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -814,10 +826,13 @@ type MutationRecord struct {
 	OperatorID string     `json:"operator_id,omitempty"`
 
 	// ActorApps are the apps the credential behind an [AuthorOperator]
-	// record that wakes somebody used when the node that took the write
-	// resolved it (iam.ActorApps), and absent on every other record — one
-	// that wakes nobody included, a gate among them. The change feed reads
-	// it, and a turn the record wakes uses no app outside it (ADR-0109,
+	// record a later turn reads used when the node that took the write
+	// resolved it (iam.ActorApps): an item's creation and every move of its
+	// assignee, whatever they wake, and any other record whose wake may start
+	// an agent's turn ([Writer.carries]); absent on every other record, a
+	// gate always among them. The change feed reads it, and so does the work
+	// pickup off the history row, and a turn the record wakes or hands work
+	// to uses no app outside it (ADR-0109, ADR-0112,
 	// notify.FirstPartyWriter). Version 2: an older build retains a record
 	// carrying it rather than waking a seat for a credential it would read as
 	// a stranger.
@@ -827,6 +842,23 @@ type MutationRecord struct {
 	// history row keeps (`tracker_history.actor_apps`, ADR-0112). Version 4,
 	// so a record older than the rule keeps an empty column on every node.
 	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
+
+	// WorkingFor is whom an [AuthorAgent] record a later turn reads was
+	// written for (ADR-0109): whoever the turn that wrote it worked for,
+	// composed from that turn's own bound ceiling, on an item's creation and
+	// every move of its assignee, whatever they wake, and on any other record
+	// whose wake may start an agent's turn ([Writer.carries]), and absent on
+	// every other record: an
+	// agent's write made for nobody else, every other author's, and one no
+	// later turn reads (a gate always among them). The change feed reads
+	// it, and the turn the record wakes works for them
+	// (notify.FirstPartyWriter), never for the writing seat, which holds every
+	// app. KEPT ON THE RECORD'S HISTORY ROW (`tracker_history.working_for`,
+	// [WorkingForVersion]), applied on every node from the carrier's first
+	// build on, though no read takes it yet. Version 12: an older build
+	// retains a record carrying it rather than waking a seat for the writing
+	// agent.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// NoticeAsksKept marks a record whose comment author's statement its notice
 	// rows keep (`tracker_notifications.asks`). Version 6, so a record older than
@@ -970,7 +1002,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept",
-	"notice_asks_kept", "notice_woke_kept", "operator_id", "turn_id", "chain", "kind", "notify",
+	"notice_asks_kept", "notice_woke_kept", "working_for", "operator_id", "turn_id", "chain", "kind",
+	"notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.
@@ -1201,6 +1234,48 @@ var ChangeKinds = []ChangeKind{
 // Valid reports whether a change kind off the wire is one this build knows.
 func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds, k) }
 
+// MovedFields is the deltas a change of kind k records its move under
+// ([TaskDeltas]), for the kinds that name one field of a task or one family of
+// its sets, and nil for every other kind.
+//
+// A RECORD CARRIES ONE KIND, and a write that moves several of these fields at
+// once is filed under one of them: update_work_item's is the assignee's, then
+// the status's, and the tags', the watchers', the team's or a link's only
+// where nothing before them set it. So the change of one of these kinds is
+// found by its delta, whatever kind its record ended with, as the pickup finds
+// an assignment by its assignee delta (readyAssignedArm, #930), the router
+// tells a hand-off and the finished edge ([Notify.moved], #953) and a wake's
+// prompt names every kind of change its write made ([Notify.movedKinds]). A
+// kind that names no single field, `fields` among them, is found by its kind
+// alone, and a checklist's move is not always a delta (a renamed or reassigned
+// item moves no list's done count), so its holders are told by the items it
+// touched ([Snapshot.ChecklistAssignees]) and never by this.
+func (k ChangeKind) MovedFields() []string {
+	switch k {
+	case ChangeStatus:
+		return []string{"status"}
+	case ChangeAssignee:
+		return []string{"assignee"}
+	case ChangeCollaborators:
+		return []string{"collaborators"}
+	case ChangeWatchers:
+		return []string{"watchers"}
+	case ChangeTags:
+		return []string{"tags"}
+	case ChangeRouted:
+		return []string{"routing_unit"}
+	case ChangeRelations:
+		// EVERY LINK SET, and the mirror a blocker carries of the items
+		// waiting on it ([TaskDeltas]).
+		fields := make([]string, 0, len(RelationKinds)+1)
+		for _, relation := range RelationKinds {
+			fields = append(fields, string(relation))
+		}
+		return append(fields, "blocking")
+	}
+	return nil
+}
+
 // MaxDeltas caps what a notification DISPLAYS, and governs nothing else.
 //
 // THIRTY-TWO IS A DISPLAY LIMIT. It must never govern the mutation: a write
@@ -1357,12 +1432,15 @@ type Snapshot struct {
 	ThreadOwing    []string `json:"thread_owing,omitempty"`
 	ThreadAwaiting []string `json:"thread_awaiting,omitempty"`
 
-	// RemovedWatchers are the handles a watchers commit dropped. They go
-	// to the INBOX only: a human learns that a lead removed her watch, and
-	// an agent is not woken about a decision that was not its own.
+	// RemovedWatchers are the handles a write dropped from the watchers,
+	// whatever kind its record ends with ([Snapshot.moves]). They go to
+	// the INBOX only: a human learns that a lead removed her watch, and an
+	// agent is not woken about a decision that was not its own.
 	RemovedWatchers []string `json:"removed_watchers,omitempty"`
 
-	// ParentAssignee hears when a child enters or leaves a finished group.
+	// ParentAssignee hears when a child enters or leaves a finished group:
+	// the parent's assignee as the write's decide read it, filled only
+	// across that edge ([Notify.restated]).
 	ParentAssignee string `json:"parent_assignee,omitempty"`
 
 	// ChecklistAssignees are the people whose checklist items changed.
@@ -1475,9 +1553,10 @@ type Notify struct {
 	Fields map[string]Delta `json:"fields,omitempty"`
 
 	// FieldsOmitted is how many more fields this change moved than
-	// [Notify.Fields] shows — the ones past [MaxDeltas], by field name.
+	// [Notify.Fields] shows — the ones past [MaxDeltas] ([cardFields]).
 	// SAID, because a card that dropped them silently reads as a change
-	// that moved only what it lists.
+	// that moved only what it lists, and the router reads it so
+	// ([Notify.watchOnly]).
 	FieldsOmitted int `json:"fields_omitted,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`

@@ -159,7 +159,7 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(t.Name()), nil
+		return unattributed(t.Name(), err), nil
 	}
 	if t.deps.Files == nil {
 		return unconfigured(t.Name()), nil
@@ -247,7 +247,7 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(t.Name()), nil
+		return unattributed(t.Name(), err), nil
 	}
 	if t.deps.Files == nil || t.deps.Objects == nil {
 		return unconfigured(t.Name()), nil
@@ -468,7 +468,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(t.Name()), nil
+		return unattributed(t.Name(), err), nil
 	}
 	if t.deps.FileWriter == nil || t.deps.Objects == nil {
 		return unconfigured(t.Name()), nil
@@ -665,7 +665,7 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(t.Name()), nil
+		return unattributed(t.Name(), err), nil
 	}
 	if t.deps.FileWriter == nil {
 		return unconfigured(t.Name()), nil

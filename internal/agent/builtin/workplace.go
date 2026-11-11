@@ -124,7 +124,7 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(name), nil
+		return unattributed(name, err), nil
 	}
 	if t.deps.Placer == nil || t.deps.Reader == nil {
 		return unconfigured(name), nil
@@ -203,7 +203,6 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		patch := worklet.TaskPatch{Status: place.Status}
 		notify = worklet.Wake{
 			Kind: worklet.ChangeStatus, Before: task, After: patched(task, patch),
-			Parent: t.deps.parentParty(ctx, task, patch),
 		}.Notify(t.deps.Leads)
 	}
 	// ONE OPERATION PER DISTINCT CALL, derived from what was sent — see

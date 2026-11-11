@@ -712,7 +712,7 @@ func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 				if held > 2 {
 					t.Errorf("%d of 2 slots held", held)
 				}
-				time.Sleep(time.Duration(i%3) * time.Millisecond)
+				time.Sleep(time.Duration(i%3) * time.Millisecond) //fixedwait:simulated a holder's work, none to two milliseconds, so the turns interleave
 				turn.Settle(time.Millisecond)
 			})
 		}

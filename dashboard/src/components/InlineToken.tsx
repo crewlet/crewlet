@@ -7,7 +7,7 @@
  *
  *  - A COLOUR is its words after a swatch of it.
  *  - AN ADDRESS carries the mark of the app its PARSED host belongs to
- *    (`describeLink`), and says the reference it is (`gophrase/backend#14`)
+ *    (`describeLink`), and says the reference it is (`acme/backend#14`)
  *    in place of the whole address, which its title keeps.
  *  - A REFERENCE or a COMMIT carries its code host's mark and links there
  *    when the company configured that host (`referenceTarget`); a reference

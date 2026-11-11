@@ -503,7 +503,8 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	t.deep.attachments = attached
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
 		History: earlier, Page: ts.Page, Boundary: t.boundary, Question: input,
-		Proposable: proposable(tools), Deep: offersDeep(tools), Attachments: refsOf(attached)}
+		Proposable: proposable(tools), Deep: offersDeep(tools), DeepConfigured: s.ReadsImages(),
+		Attachments: refsOf(attached)}
 	if c != nil {
 		in.Company, in.Zone = c.Name, c.Location()
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -340,7 +341,7 @@ func withRooms(f *fleet) map[string]*chatDesk {
 }
 
 var (
-	jane     = chatlet.Actor{Handle: "jane", Kind: chatlet.AuthorAgent}
+	jane     = chatlet.Actor{Handle: "jane", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	maya     = chatlet.Actor{Handle: "maya", Kind: chatlet.AuthorHuman}
 	linear   = statelog.Freshness{Level: statelog.ReadLinearizable}
 	chatSeen = statelog.Position{Stream: "CREWLET_CHAT_LOG", Generation: 1, Seq: 41}

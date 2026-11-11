@@ -59,7 +59,7 @@ const ADOPTED: NonNullable<BrandAnswer["brand"]> = {
   kit_version: 7,
   document: {
     v: 1,
-    name: "FairSplit",
+    name: "Acme",
     tagline: "Split the trip, keep the friends",
     logos: { primary: "logos/primary.svg" },
     colors: { primary: "#0f7b5f", text: "#111418", light_ground: "#ffffff" },
@@ -86,7 +86,7 @@ const ADOPTED: NonNullable<BrandAnswer["brand"]> = {
 /** A draft with nothing chosen but its name: what the first Continue publishes. */
 const PARTIAL: BrandDocument = {
   v: 1,
-  name: "FairSplit",
+  name: "Acme",
   logos: {},
   colors: {},
   type: { heading: { kit: "geist" }, body: { kit: "geist" } },
@@ -136,7 +136,7 @@ const EDITED = { author: { name: "ana", kind: "human" }, created_at: "2026-10-25
 function mount(grants: string[], brand: BrandAnswer["brand"], kits: ArtifactListItem[] = []) {
   const store = new Store();
   store.applyHealth(healthFrame());
-  store.applyOrg(withDerived({ name: "FairSplit", roles: [] }));
+  store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     what === "viewer"
@@ -175,7 +175,7 @@ test("a reader reads the adopted brand card by card and is handed no control", a
     expect(screen.getByRole("heading", { name: card })).toBeTruthy();
   }
   const logosCard = screen.getByRole("region", { name: "Logos" });
-  expect(within(logosCard).getAllByText("FairSplit").length).toBeGreaterThan(0);
+  expect(within(logosCard).getAllByText("Acme").length).toBeGreaterThan(0);
   expect(screen.getByText("#0f7b5f")).toBeTruthy();
   expect(screen.getByText("Text on light ground")).toBeTruthy();
   expect(screen.getByRole("list", { name: "Write like this" })).toBeTruthy();
@@ -223,7 +223,7 @@ test("a draft a setup left is drawn as a draft, says what it lacks, and is finis
   mount(["admin"], null, [brandKitRow()]);
   const notice = await screen.findByText(/Not ready to publish: add a primary logo and colour\./);
   expect(notice.textContent).toMatch(
-    /This draft of the FairSplit brand is not published yet, so artifacts still use Crewlet's look\./,
+    /This draft of the Acme brand is not published yet, so artifacts still use Crewlet's look\./,
   );
   expect(notice.textContent).toMatch(/Last edited by ana on /);
   const go = screen.getByRole("link", { name: "Finish draft" });
@@ -265,7 +265,7 @@ test("the assistant reads a draft a setup left as saved and changed only in its 
   const go = screen.getByRole("link", { name: brandDraftLabel(false) });
   expect(context.draft!.help).toContain(go.textContent!);
   expect(context.draft!.fields.find((f) => f.path === "name")).toMatchObject({
-    value: "FairSplit",
+    value: "Acme",
   });
   expect(context.draft!.fields.some((f) => f.editable)).toBe(false);
   expect(context.accepts).not.toContain("draft.set");
@@ -287,7 +287,7 @@ test("a complete draft is published by an administrator, and an editor edits the
   expect(screen.queryByText(/not ready to publish/i)).toBeNull();
   fireEvent.click(publish);
   const dialog = await screen.findByRole("dialog", {
-    name: "Publish version 2 as the FairSplit brand?",
+    name: "Publish version 2 as the Acme brand?",
   });
   expect(within(dialog).getByRole("button", { name: "Publish version 2" })).toBeTruthy();
   expect(within(dialog).getByRole("heading", { name: "When you publish" })).toBeTruthy();
@@ -315,7 +315,7 @@ test("the owner of a draft discards it after a confirm, and an editor is offered
   mount([], null, [brandKitRow({ role: "owner" })]);
   fireEvent.click(await screen.findByRole("button", { name: "Discard draft" }));
   const dialog = await screen.findByRole("alertdialog", { name: "Discard this draft?" });
-  expect(dialog.textContent).toMatch(/moves the FairSplit brand draft to the trash in Artifacts/);
+  expect(dialog.textContent).toMatch(/moves the Acme brand draft to the trash in Artifacts/);
   expect(dialog.textContent).toMatch(/unless its owner restores it/);
   expect(writes).toEqual([]);
   fireEvent.click(within(dialog).getByRole("button", { name: "Discard draft" }));
@@ -362,11 +362,11 @@ test("an administrator edits one card at a time, and a colour that would be refu
 // with no discard: it is a version of the published kit, not a kit of its own.
 test("a newer version is offered to an administrator to publish, and named to a reader who sees it", async () => {
   const newer = { ...ADOPTED, newer_version: 9, newer_by: { name: "brand-agent", kind: "agent" } };
-  serveVersions({ "01KIT:9": { ...READY, name: "FairSplit" } });
+  serveVersions({ "01KIT:9": { ...READY, name: "Acme" } });
   mount(["admin"], newer);
   expect(
     await screen.findByText(
-      /Version 9 of the FairSplit brand is a draft\. Artifacts keep using the published version 7 until this one is published\./,
+      /Version 9 of the Acme brand is a draft\. Artifacts keep using the published version 7 until this one is published\./,
     ),
   ).toBeTruthy();
   expect(screen.getByRole("button", { name: "Publish brand" })).toBeTruthy();

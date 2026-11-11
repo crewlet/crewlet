@@ -500,7 +500,7 @@ const InboxItem = memo(function InboxItem({
       unread={unread}
       actionable={!isNoticeRow(row) && !done}
       done={done}
-      doneLabel={settled?.label ?? (answered?.kind === "resolved" ? "Resolved" : "Answered")}
+      doneLabel={settled?.label ?? (answered?.kind === "withdrawn" ? "Withdrawn" : "Answered")}
       selected={selected}
       arrived={arrived}
       leaving={leaving}
@@ -570,10 +570,20 @@ function shortSaid(text: string): string {
 
 /**
  * "You chose **Hold release**", "Maya Ops replied **“Hold it a week.”**",
- * "You chose **Hold release** and wrote **“Tell support first.”**".
+ * "You chose **Hold release** and wrote **“Tell support first.”**",
+ * "Release manager withdrew it: **“Covered by the pull request.”**".
  */
 function AnswerLine({ words }: { words: AnswerWords }) {
-  if (words.kind === "resolved") return <>{`${words.who} ${words.verb}`}</>;
+  if (words.kind === "withdrawn") {
+    return words.said ? (
+      <>
+        {`${words.who} ${words.verb}: `}
+        <strong>{`“${shortSaid(words.said)}”`}</strong>
+      </>
+    ) : (
+      <>{`${words.who} ${words.verb}`}</>
+    );
+  }
   return (
     <>
       {`${words.who} ${words.verb} `}

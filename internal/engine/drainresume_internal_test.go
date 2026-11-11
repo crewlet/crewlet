@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -62,6 +63,10 @@ type drainRig struct {
 	// place of companyWithoutSandboxDoc: its swe seat is the one the rig's
 	// runs are on.
 	doc string
+
+	// bridge, when set, is the tool bridge each engine on the rig serves its
+	// runs' sessions on, in place of the one its environment would build.
+	bridge *mcpbridge.Bridge
 }
 
 func newDrainRig(t *testing.T) *drainRig {
@@ -94,6 +99,7 @@ func (r *drainRig) start(t *testing.T) *Engine {
 		Bootstrap: &b, Company: parseCompany(t, cmp.Or(r.doc, companyWithoutSandboxDoc)),
 		SandboxPollInterval: 50 * time.Millisecond,
 		resumeGate:          r.gate,
+		Bridge:              r.bridge,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

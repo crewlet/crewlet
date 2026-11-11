@@ -213,7 +213,7 @@ test("a GitHub grant sets its one permission on the entity as read, and keeps th
   query.mockReturnValue({
     data: {
       seat: "ada",
-      access: "grant-github-pull-requests",
+      access: "grant-github-pull-requests-write",
       revision: "r1",
       fix: { ...FIX, options: [pulls] },
     },
@@ -236,10 +236,10 @@ test("a GitHub grant sets its one permission on the entity as read, and keeps th
           asker="Ada"
           askedBy="ada"
           options={[
-            { id: "grant-github-pull-requests", label: "Allow it" },
+            { id: "grant-github-pull-requests-write", label: "Allow it" },
             { id: "decline", label: "Not now" },
           ]}
-          recommended="grant-github-pull-requests"
+          recommended="grant-github-pull-requests-write"
           open={false}
           onOpenChange={() => {}}
           onAnswered={() => {}}

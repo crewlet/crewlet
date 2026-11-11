@@ -307,7 +307,10 @@ func TestSearchKnowledgeSaysTheVendorRefusedFromWhatTheEngineKnows(t *testing.T)
 		{"the company's connection refused", 403, false, false, true, tools.RefusalForbidden, "company's connection for this search", false},
 		{"the company's connection expired", 401, false, false, true, tools.RefusalUnavailable, "company's connection itself", false},
 		{"the agent's credential expired", 401, true, true, true, tools.RefusalUnavailable, "this agent's credential itself", false},
-		{"a 403 the grant does not hold", 403, true, false, true, tools.RefusalVendorForbidden, "not in place", true},
+		{"a 403 the grant does not hold", 403, true, false, true, tools.RefusalVendorForbidden,
+			"not in this agent's Crewlet grant: Crewlet narrows the credential to that grant, so " +
+				"the fix is in Crewlet, not at Confluence. An administrator adds it under Settings, " +
+				"Integrations, Atlassian, Agents", true},
 		{"a 403 the grant holds", 403, true, true, true, tools.RefusalForbidden, "grant includes reading it", false},
 		{"a 403 whose grant cannot be read", 403, true, false, false, tools.RefusalForbidden, "could not be read", false},
 	} {

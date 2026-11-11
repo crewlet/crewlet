@@ -176,8 +176,8 @@ var catalogue = []Entry{{
 	},
 	worse: byShare("woken", "agent_comments"),
 }, {
-	Class: Class(advisor.ClassPersonRequestsWithoutAsk), Title: "Agents named a person without asking them a question",
-	Summary: "Comments naming the most-named person, and how many people were named.",
+	Class: Class(advisor.ClassPersonRequestsWithoutAsk), Title: "Agents asked a person for something without asking them a question",
+	Summary: "Comments asking the most-asked person for something, and how many people were asked.",
 	Facts:   []Fact{countFact(FactCount, namedBucket, "named"), foldedFact(FactPeople)},
 	worse:   byCount("named"),
 }, {

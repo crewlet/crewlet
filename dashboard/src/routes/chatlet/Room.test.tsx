@@ -553,7 +553,7 @@ test("offline, nothing can be said, and Send says why", async () => {
 // as in the room.
 describe("a message's links", () => {
   /** The company's code host, as the frame's `link_hosts` names it. */
-  const HOSTS = { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] };
+  const HOSTS = { hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }] };
 
   /** The room inside the frame's reading of the company's hosts. */
   function mountLinked(hosts: unknown = HOSTS) {
@@ -582,19 +582,19 @@ describe("a message's links", () => {
   };
 
   test("an address on the company's code host opens as rebuilt, in a new tab", async () => {
-    saying(["https://github.com/gophrase/backend/pull/14?ref=x#discussion_r1"]);
+    saying(["https://github.com/acme/backend/pull/14?ref=x#discussion_r1"]);
     mountLinked();
     const link = await waitFor(() => {
       const found = document.querySelector<HTMLAnchorElement>('[data-message-id="m-3"] a');
       if (!found) throw new Error("no link in the row yet");
       return found;
     });
-    expect(link.getAttribute("href")).toBe("https://github.com/gophrase/backend/pull/14");
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/backend/pull/14");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
     // UNFURLED: the app's name, the reference it is, and that it opens apart.
     expect(link.textContent).toContain("GitHub");
-    expect(link.textContent).toContain("gophrase/backend#14");
+    expect(link.textContent).toContain("acme/backend#14");
     expect(link.textContent).toContain("opens in a new tab");
   });
 
@@ -630,9 +630,9 @@ describe("a message's links", () => {
   // other-org is a control.
   test("an address on the company's code host under an owner it does not name is its words, whole", async () => {
     const foreign = "https://github.com/other-org/tool/pull/3";
-    saying([foreign, "https://github.com/gophrase/backend/pull/14"]);
+    saying([foreign, "https://github.com/acme/backend/pull/14"]);
     mountLinked();
-    expect(await linked()).toEqual(["https://github.com/gophrase/backend/pull/14"]);
+    expect(await linked()).toEqual(["https://github.com/acme/backend/pull/14"]);
     const found = await row();
     expect(found.textContent).toContain(foreign);
     expect(found.querySelector(`[title="${foreign}"]`)).not.toBeNull();
@@ -645,15 +645,15 @@ describe("a message's links", () => {
   // Mutation: drop `ownsOwner` from describeGitHub, and the pull request is a
   // control.
   test("a code host whose row names no owners opens no address on it", async () => {
-    const pull = "https://github.com/gophrase/backend/pull/14";
-    saying([pull, "https://gophrase.atlassian.net/browse/GP-1?focus=1"]);
+    const pull = "https://github.com/acme/backend/pull/14";
+    saying([pull, "https://acme.atlassian.net/browse/GP-1?focus=1"]);
     mountLinked({
       hosts: [
         { kind: "github", url: "https://github.com" },
-        { kind: "jira", url: "https://gophrase.atlassian.net" },
+        { kind: "jira", url: "https://acme.atlassian.net" },
       ],
     });
-    expect(await linked()).toEqual(["https://gophrase.atlassian.net/browse/GP-1"]);
+    expect(await linked()).toEqual(["https://acme.atlassian.net/browse/GP-1"]);
     const found = await row();
     expect(found.textContent).toContain(pull);
     expect(found.querySelector(`[title="${pull}"]`)).not.toBeNull();

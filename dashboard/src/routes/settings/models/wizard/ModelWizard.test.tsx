@@ -316,7 +316,7 @@ test("a save left between its two writes still makes both, and moves nothing on 
 });
 
 /**
- * GOPHRASE'S SPLIT SURVIVES AN EDIT OF ONE SIDE. `default` codes for the
+ * ACME'S SPLIT SURVIVES AN EDIT OF ONE SIDE. `default` codes for the
  * engineers and QA; `default-host`, its coding on the engine's host, for the
  * PM and the designer. Editing `default` for its key moved the PM and the
  * designer onto it, because a choice on Use it for reset its seats to every
@@ -324,7 +324,7 @@ test("a save left between its two writes still makes both, and moves nothing on 
  * that changes model, first.
  */
 const SPLIT_DOC = {
-  name: "GoPhrase",
+  name: "Acme",
   providers: {
     llm: {
       default: { harness: "claude-code", model: "opus", auth: { mode: "api-key" } },
@@ -374,7 +374,7 @@ function splitData(): ModelsData {
 test.each([
   ["a key replaced and nothing else", false],
   ["a key replaced and Coding chosen on Use it for", true],
-])("GoPhrase's coding split survives an edit of default: %s", async (_, chooseCoding) => {
+])("Acme's coding split survives an edit of default: %s", async (_, chooseCoding) => {
   vi.mocked(getConfig).mockImplementation(async () => {
     calls.push("read");
     return { kind: "document", document: structuredClone(SPLIT_DOC), etag: '"rev-1"' };

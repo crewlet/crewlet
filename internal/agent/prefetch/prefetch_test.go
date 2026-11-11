@@ -1329,7 +1329,7 @@ func TestEverySenderWithAProfileIsRendered(t *testing.T) {
 	r := request(t)
 	r.Senders = []learning.Subject{
 		{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
-		{ExternalID: "U2", Platform: "chat", Name: "Miles Okafor"},
+		{ExternalID: "U2", Platform: "chat", Name: "Morgan Okafor"},
 		{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
 		{ExternalID: "U3", Platform: "chat", Name: "A Stranger"},
 	}
@@ -1346,7 +1346,7 @@ func TestEverySenderWithAProfileIsRendered(t *testing.T) {
 	}
 	u1 := traits("ana")
 	u1["tone"] = "terse"
-	u2 := traits("miles")
+	u2 := traits("morgan")
 	u2["timezone"] = "CET"
 	got := fetch(t, prefetch.Sources{Counterparties: counterparties{
 		byExternal: map[string]learning.Profile{
@@ -1354,7 +1354,7 @@ func TestEverySenderWithAProfileIsRendered(t *testing.T) {
 			"U2": {Subject: r.Senders[1], InteractionCount: 3, Traits: u2},
 		}}}, r).CounterpartyProfile
 
-	for _, want := range []string{"Ana Ruiz", "Miles Okafor", "tone: terse", "timezone: CET"} {
+	for _, want := range []string{"Ana Ruiz", "Morgan Okafor", "tone: terse", "timezone: CET"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("the profile block is missing %q:\n%s", want, got)
 		}

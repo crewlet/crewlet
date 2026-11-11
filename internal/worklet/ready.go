@@ -23,19 +23,27 @@ import (
 // Assigned to the seat, `in_progress` or `todo`, not archived, not mid-merge,
 // not in the trash, past its start date if it has one, waiting on no open
 // blocker, and not held on a question the seat itself asked on it and nobody
-// has answered yet. `in_review` is not ready: a colleague holds the next move.
+// has answered yet. `in_review` is ready on the same terms for the seat that
+// holds it: as its review when somebody else moved it into review, and, when
+// the seat moved it there itself, as a review nobody holds (a seat never
+// reviews what it submitted itself, so it acts on the review it was given or
+// names a reviewer).
 //
 // # The order
 //
-// Started work first, then the seat's priority list in its lead's order, then
+// Started work first, then the reviews the seat holds, then its own items in
+// review that nobody reviews, then its priority list in its lead's order, then
 // the queue: priority, then due date, the order `my_work` lists `assigned` in.
 //
 // # What a pickup keys on, and whom its turn works for
 //
 // [ReadyItem.Moved] is the last change to the item that would have woken the
 // seat, so neither its own comment nor a change that only tells it (another
-// agent's words that ask nothing, a watcher added) hands it the same item again. [ReadyItem.For] is
-// whom the item's work is for, so the turn is held to their apps (ADR-0109).
+// agent's words that ask nothing, a watcher added) hands it the same item
+// again. [ReadyItem.Quiet] is when the item went quiet without a typed answer
+// from the seat, which the pickup rechecks once a day (ADR-0122).
+// [ReadyItem.For] is whom the item's work is for, so the turn is held to
+// their apps (ADR-0109).
 
 // ReadyRows is one page of ready work: the pickup reads the next page only
 // when every item on this one was already offered.
@@ -75,10 +83,21 @@ type ReadyItem struct {
 	// item over again. Zero on an item not started.
 	Progressed uint64 `json:"progressed,omitempty"`
 
+	// Quiet is when the item went quiet for the seat: the latest of MovedAt,
+	// the start it waited until and the seat's own last write on it since.
+	// Zero where that last write is a typed answer (typedanswer.go), which
+	// holds the item until a change would wake the seat again (ADR-0122).
+	Quiet time.Time `json:"quiet,omitzero"`
+
 	// For is whom the item's work is for: the writer of its last
-	// assignment by somebody else, else its reporter; nil for the seat's
-	// own work.
+	// assignment by somebody else, a change that moved its assignee
+	// whatever kind its record ended with ([readyAssignedArm]), else the
+	// writer that filed it; nil for the seat's own work.
 	For *types.WorkingFor `json:"for,omitempty"`
+
+	// SubmittedBy is who moved an item in review into review (or filed it
+	// there): the review's asker, the seat itself on one nobody reviews.
+	SubmittedBy string `json:"submitted_by,omitempty"`
 }
 
 // ReadyWork is one page of a seat's ready items in pickup order.
@@ -171,7 +190,7 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 		blocks[i] = rows
 		out.Capped = out.Capped || more != ""
 	}
-	reviews, err := theirReviews(ctx, tx, q.Handle, blocks[1])
+	reviews, own, err := readyReviews(ctx, tx, q.Handle, blocks[1])
 	if err != nil {
 		return err
 	}
@@ -179,7 +198,7 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err != nil {
 		return err
 	}
-	all := orderReady(blocks[0], reviews, blocks[2], person.Priorities)
+	all := orderReady(blocks[0], reviews, own, blocks[2], person.Priorities)
 	out.Total = len(all)
 	out.Fingerprint = fingerprintOf(all)
 	from := min(q.Page*ReadyRows, len(all))
@@ -190,6 +209,9 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 		return err
 	}
 	if err := loadProgressed(ctx, tx, q.Handle, out.Items); err != nil {
+		return err
+	}
+	if err := loadQuiet(ctx, tx, q.Handle, out.Items); err != nil {
 		return err
 	}
 	return loadFor(ctx, tx, q.Handle, out.Items)
@@ -234,16 +256,89 @@ func loadProgressed(ctx context.Context, tx *sql.Tx, handle string, items []Read
 	return nil
 }
 
+// readyLastWordArm is the seat's own last write to one item after the change
+// that last woke it (its log position) and the start it waited until (its
+// instant), and whether that write is a typed answer. A creation, a change of
+// who watches and nothing else, and a write that changed nothing are no
+// answer at all; a watch written beside a change is that change
+// ([movedBeyondWatch]).
+const readyLastWordArm = `SELECT h.subject_id, h.log_seq, h.created_at, ` + typedWrite + `
+	FROM tracker_history h
+	WHERE h.subject_id = ? AND h.actor = ? AND h.log_seq > ? AND h.created_at >= ?
+	  AND h.kind <> '` + string(ChangeCreated) + `'
+	  AND (` + movedBeyondWatch + ` OR h.kind IN ` + conversationKinds + `)
+	ORDER BY h.log_seq DESC LIMIT 1`
+
+// loadQuiet stamps each item with when it went quiet for the seat: the latest
+// of the change that last woke it, the start it waited until and the seat's
+// own last word on it since, unless that word is a typed answer.
+func loadQuiet(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	args := make([]any, 0, 4*len(items))
+	for _, item := range items {
+		var start int64
+		if item.Start != nil {
+			start = store.EncodeTime(*item.Start)
+		}
+		args = append(args, item.ID, handle, int64(item.Moved), start)
+	}
+	rows, err := tx.QueryContext(ctx, arms(len(items), readyLastWordArm), args...)
+	if err != nil {
+		return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, err)
+	}
+	type word struct {
+		at    time.Time
+		typed bool
+	}
+	last := map[string]word{}
+	for rows.Next() {
+		var id string
+		var seq, at int64
+		var typed bool
+		if serr := rows.Scan(&id, &seq, &at, &typed); serr != nil {
+			_ = rows.Close()
+			return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, serr)
+		}
+		last[id] = word{at: store.DecodeTime(at), typed: typed}
+	}
+	if err := closeRows(rows); err != nil {
+		return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, err)
+	}
+	for i := range items {
+		w, said := last[items[i].ID]
+		if said && w.typed {
+			continue
+		}
+		quiet := items[i].MovedAt
+		if start := items[i].Start; start != nil && start.After(quiet) {
+			quiet = *start
+		}
+		if said && w.at.After(quiet) {
+			quiet = w.at
+		}
+		items[i].Quiet = quiet
+	}
+	return nil
+}
+
 // orderReady is the pickup order over the blocks and the priority list:
-// started work in queue order, then the reviews the seat holds, then the
-// waiting items the list names in its order, then the rest in queue order.
-func orderReady(started, reviews, waiting []TaskRow, priorities []string) []ReadyItem {
-	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(waiting))
+// started work in queue order, then the reviews the seat holds, then its own
+// items in review nobody reviews, then the waiting items the list names in its
+// order, then the rest in queue order.
+func orderReady(started []TaskRow, reviews, own []reviewRow, waiting []TaskRow,
+	priorities []string) []ReadyItem {
+
+	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(waiting))
 	for _, row := range started {
 		out = append(out, ReadyItem{TaskRow: row, Why: types.PickupInProgress})
 	}
-	for _, row := range reviews {
-		out = append(out, ReadyItem{TaskRow: row, Why: types.PickupReview})
+	for _, r := range reviews {
+		out = append(out, ReadyItem{TaskRow: r.TaskRow, Why: types.PickupReview, SubmittedBy: r.by})
+	}
+	for _, r := range own {
+		out = append(out, ReadyItem{TaskRow: r.TaskRow, Why: types.PickupUnreviewed, SubmittedBy: r.by})
 	}
 	listed := make(map[string]bool, len(priorities))
 	byID := make(map[string]TaskRow, len(waiting))
@@ -287,11 +382,22 @@ const readyReviewArm = `SELECT h.subject_id, h.actor FROM tracker_history h
 	  AND (json_extract(h.fields_json, '$.status.to') IS NOT NULL OR h.kind = 'created')
 	ORDER BY h.log_seq DESC LIMIT 1`
 
-// theirReviews is the items in review handle holds that somebody else moved
-// into review: a seat never reviews what it submitted itself.
-func theirReviews(ctx context.Context, tx *sql.Tx, handle string, inReview []TaskRow) ([]TaskRow, error) {
+// reviewRow is an item in review and who moved it there.
+type reviewRow struct {
+	TaskRow
+	by string
+}
+
+// readyReviews splits the items in review handle holds by who moved them into
+// review: somebody else's are its reviews, and its own are reviews nobody
+// holds, since a seat never reviews what it submitted itself. Either way none
+// is held on a question the seat asked ([readyBlock]), which is how a review
+// put to a person waits on them.
+func readyReviews(ctx context.Context, tx *sql.Tx, handle string,
+	inReview []TaskRow) (reviews, own []reviewRow, err error) {
+
 	if len(inReview) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	args := make([]any, 0, len(inReview))
 	for _, row := range inReview {
@@ -299,27 +405,31 @@ func theirReviews(ctx context.Context, tx *sql.Tx, handle string, inReview []Tas
 	}
 	rows, err := tx.QueryContext(ctx, arms(len(inReview), readyReviewArm), args...)
 	if err != nil {
-		return nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
+		return nil, nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
 	}
 	defer rows.Close()
 	askedBy := make(map[string]string, len(inReview))
 	for rows.Next() {
 		var id, actor string
 		if err := rows.Scan(&id, &actor); err != nil {
-			return nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
+			return nil, nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
 		}
 		askedBy[id] = actor
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
+		return nil, nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
 	}
-	out := make([]TaskRow, 0, len(inReview))
 	for _, row := range inReview {
-		if by, known := askedBy[row.ID]; known && by != handle {
-			out = append(out, row)
+		by, known := askedBy[row.ID]
+		switch {
+		case !known:
+		case by != handle:
+			reviews = append(reviews, reviewRow{row, by})
+		default:
+			own = append(own, reviewRow{row, by})
 		}
 	}
-	return out, nil
+	return reviews, own, nil
 }
 
 // readyFirstArm is one item's first change, the creation the seat made itself.
@@ -328,10 +438,27 @@ const readyFirstArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker
 
 // readyAssignedArm is one item's last assignment by a person, a colleague or
 // a credential other than the seat: anybody but the engine's own duties.
+//
+// AN ASSIGNMENT IS A ROW THAT MOVED THE ASSIGNEE, read off its assignee delta
+// whatever kind its record ended with, as readyReviewArm reads a review
+// request off the status delta. A record carries one kind, and a write that
+// moves the assignee and another field in one call, the usual hand-off
+// "assign it to you and set it to todo", is filed under the other change's
+// kind ([ChangeKind.MovedFields]). Read by its kind, that hand-off was
+// invisible, and the pickup worked for the assigner before it (#930). An
+// assignment to the seat that already holds the item moves nothing, records no
+// delta, and is no assignment here: another colleague's reassertion changes
+// nothing about whom the work is for.
+//
+// THE CREATION OUTRANKS NOTHING. An item filed already assigned records the
+// assignee's delta on its creation row, its oldest, so any later assignment by
+// somebody else wins; where the creation is the only one, the arm reads the
+// writer that filed it, whom readyCreatedArm names anyway. The seat's own rows
+// stay out, a take included: whom the seat works for is never itself.
 const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps
 	FROM tracker_history h
-	WHERE h.subject_id = ? AND h.kind = 'assignee' AND h.actor <> ?
-	  AND h.actor_kind <> 'system'
+	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
+	  AND h.actor <> ? AND h.actor_kind <> 'system'
 	ORDER BY h.log_seq DESC LIMIT 1`
 
 // readyCreatedArm is one item's creation by a person, a colleague or a

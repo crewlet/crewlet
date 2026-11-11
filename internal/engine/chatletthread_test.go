@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -27,8 +28,8 @@ func TestATurnWokenInAChatletThreadIsHandedTheThread(t *testing.T) {
 	if !ok {
 		t.Fatal("a Chatlet company's data node hands out no chat writer")
 	}
-	ada := chatlet.Actor{Handle: "ada", Kind: chatlet.AuthorAgent}
-	bob := chatlet.Actor{Handle: "bob", Kind: chatlet.AuthorAgent}
+	ada := chatlet.Actor{Handle: "ada", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
+	bob := chatlet.Actor{Handle: "bob", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	room, err := rooms.CreateChannel(t.Context(), ada, chatlet.NewChannel{
 		Name: "launch", Kind: chatlet.KindPublic,
 	})

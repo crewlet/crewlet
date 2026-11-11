@@ -438,6 +438,59 @@ func TestSyncWithNoSinkIsADryRun(t *testing.T) {
 	}
 }
 
+// TWO CLOCKS, EACH MOVED BY ITS OWN PASS: every pass that reads the vendor
+// moves ObservedAt, a dry run included, and only a writing sync moves Sync, so
+// a row can say it was just checked without claiming it was just applied.
+func TestEveryPassMovesTheCheckAndOnlyAWritingSyncMovesTheSync(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	c := company(&config.RoleDatadog{Enabled: yes(), Role: "a"})
+	pass := func(write bool, now time.Time, vendor seataccess.Vendor) {
+		t.Helper()
+		in := seataccess.SyncInput{
+			Vendor: vendor, Open: seataccess.OpenInput{Config: c}, Ledger: h.ledger,
+			Pass: "pass", By: "reconcile loop", Now: func() time.Time { return now },
+		}
+		if write {
+			in.Sink = h.sink
+		}
+		if _, err := seataccess.Sync(t.Context(), in); err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+	}
+	clocks := func() (observed, synced time.Time) {
+		t.Helper()
+		lr := h.record(t).Lanes[dd]
+		if lr.Sync == nil {
+			t.Fatalf("lane = %+v, want a sync recorded", lr)
+		}
+		return lr.ObservedAt, lr.Sync.At
+	}
+
+	pass(true, at, h.v)
+	if observed, synced := clocks(); !observed.Equal(at) || !synced.Equal(at) {
+		t.Fatalf("a writing sync: checked %v, synced %v; want both %v", observed, synced, at)
+	}
+	dry := at.Add(10 * time.Minute)
+	pass(false, dry, h.v)
+	if observed, synced := clocks(); !observed.Equal(dry) || !synced.Equal(at) {
+		t.Fatalf("a dry run: checked %v, synced %v; want checked %v and synced %v",
+			observed, synced, dry, at)
+	}
+	unreadDry := dry.Add(10 * time.Minute)
+	pass(false, unreadDry, faultingVendor{Vendor: h.v, fault: "sre"})
+	if observed, synced := clocks(); !observed.Equal(dry) || !synced.Equal(at) {
+		t.Fatalf("a dry run that could not read the seat: checked %v, synced %v; want "+
+			"neither moved (%v, %v)", observed, synced, dry, at)
+	}
+	unread := unreadDry.Add(10 * time.Minute)
+	pass(true, unread, faultingVendor{Vendor: h.v, fault: "sre"})
+	if observed, synced := clocks(); !observed.Equal(dry) || !synced.Equal(unread) {
+		t.Fatalf("a writing sync that could not read the seat: checked %v, synced %v; want "+
+			"the check kept at %v and the failure recorded at %v", observed, synced, dry, unread)
+	}
+}
+
 // A DISCONNECT TURNS EVERY SEAT OFF, and removes where asked.
 func TestSyncDisconnectTurnsEverySeatOff(t *testing.T) {
 	t.Parallel()

@@ -878,6 +878,42 @@ func TestAnOwedCallNoRecordWillTakeIsNamedCallByCall(t *testing.T) {
 	}
 }
 
+// A CALL NOBODY WAITED FOR THAT LANDS ON NO RECORD IS NAMED AT WARNING. An
+// opening's end answers a call still running that it is still running and
+// waits for none, and the paths that end a run go on to read the run's log and
+// delete its record: a call that returns once the record is gone ran, and its
+// effect happened, while neither the session that made it (which holds the
+// end's answer) nor any record of the run holds it. So the ledger names it, at
+// warning, by its tool, its place among the job's calls and the opening of its
+// identity, where a call its harness was handed whose round is over stays the
+// ordinary end of a round, said at debug.
+//
+// Mutation: say every call the log no longer takes at debug (`false &&` before
+// the test of its mark), and the call nobody waited for is named only at debug.
+func TestACallNobodyWaitedForThatLandsOnNoRecordIsNamedAtWarning(t *testing.T) {
+	t.Parallel()
+	store := &movingStore{}
+	l, logs := readingLedger(store)
+	// THE RUN'S ENDING DELETED ITS RECORD while the calls ran.
+	store.moved.Store(true)
+	for _, call := range []mcpbridge.Call{
+		{Call: tools.Call{Name: "delegate"}, Seq: 5, Digest: strings.Repeat("e5", 32), Abandoned: true},
+		{Call: tools.Call{Name: "read_page"}, Seq: 6, Digest: strings.Repeat("f6", 32)},
+	} {
+		if err := l.Append(t.Context(), "run-1", call); err != nil {
+			t.Fatalf("the append of %s, which no record takes: %v", call.Name, err)
+		}
+	}
+	line := logLine(t, logs, "bridge_abandoned_call_after_its_job")
+	if line == nil || line["level"] != "WARN" || line["call"] != "delegate at place 5, digest e5e5e5e5" {
+		t.Errorf("the call nobody waited for was said as %v, want it named at warning\n%s", line, logs)
+	}
+	ordinary := logLine(t, logs, "bridge_call_after_its_job")
+	if ordinary == nil || ordinary["level"] != "DEBUG" || ordinary["tool"] != "read_page" {
+		t.Errorf("the call its harness was handed was said as %v, want it at debug alone\n%s", ordinary, logs)
+	}
+}
+
 // A CALL WHOSE RECORD FAILS ONCE ITS SESSION HAS ENDED IS SAID TO BE ON NO
 // RECORD. The session's end makes its last carry of its own; a call still in
 // flight as the opening ended records itself after that, and where its record

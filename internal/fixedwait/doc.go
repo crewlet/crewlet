@@ -8,9 +8,9 @@
 //
 // A test decides a claim on a fixed wait when time.Sleep, time.After,
 // time.AfterFunc, time.NewTimer, time.NewTicker or time.Tick stands where a
-// signal should, or when time.Since, time.Until or a time.Time's Sub reads
-// the wall clock a claim is held to. It comes in four shapes, each failing in
-// its own direction:
+// signal should, or when time.Since, time.Until, or a time.Time's Sub,
+// Before, After or Compare reads the wall clock a claim is held to. It comes
+// in four shapes, each failing in its own direction:
 //
 //   - A NEGATIVE WINDOW waits, then asserts that nothing happened. An event
 //     that arrives after the window lets the test pass with the bug present,
@@ -21,10 +21,16 @@
 //   - A POSITIVE DEADLINE is a claim that something answers within a short
 //     time. A loaded runner misses it and fails a healthy build.
 //   - An ELAPSED BOUND is a positive deadline whose clock is READ rather than
-//     waited on: time.Since(start) < d, time.Until(deadline) >= d, or
-//     t1.Sub(t0) held to a bound. It fails a healthy build when a loaded
+//     waited on: time.Since(start) < d, time.Until(deadline) >= d,
+//     t1.Sub(t0) held to a bound, or time.Now().Before(deadline) deciding
+//     that a step came in time. It fails a healthy build when a loaded
 //     runner loses time between the two readings — #736's served replies,
-//     which wanted half a margin left on the wall clock, reddened main.
+//     which wanted half a margin left on the wall clock, reddened main. AN
+//     ORDERING of two instants the code under test stamped from the wall
+//     clock is one too, though no bound is written —
+//     a.CreatedAt.Before(b.CreatedAt) — since it holds only once the clock
+//     has moved between the two stamps, and a coarse clock stamps two events
+//     equal.
 //
 // The survey behind crewlet/crewlet#734 found more than three hundred of
 // them, and the series that issue tracks removes them a package at a time.
@@ -51,6 +57,9 @@
 //   - For an elapsed bound, #736's: THE INSTANT A WAIT WAS ARMED WITH, held
 //     exactly, where a fake sees the wait; THE BUBBLE'S ANSWER INSTANT where
 //     none does; otherwise the signal the bound stood in for.
+//   - For an ordering of two stamps, THE ORDER THE CODE ALREADY RECORDS — a
+//     log position, a sequence, a seq column — asserted in place of the
+//     stamps, which needs no clock at all.
 //
 // # What the gate counts
 //
@@ -66,23 +75,35 @@
 // time — the default, an alias, or with a dot import the bare name — and a
 // function value counts where it is named (`sleep := time.Sleep`).
 //
-// It counts every reference to Sub WHOSE RECEIVER IS A time.Time, called or
-// not, and tells it from every other Sub — a big.Int's, a set's — by the
-// receiver's TYPE, never by a name or a shape: a time.Time's Sub is called
-// on any expression, and nothing in a name says what a value is. The types
-// come from internal/sourcetree's [sourcetree.TypeCheck], the module's one
-// loader of its own types (the standard library's go/types over `go list
-// -export` data), which type-checks each package whose test code spells the
-// identifier Sub as its test binary compiles it — its in-package tests with
-// it, its external test package against its test variant — and only those,
-// since only such a file can hold one. So an alias of time.Time is one, a
-// struct embedding one promotes its Sub, and a method expression
-// (time.Time.Sub) is counted; a DEFINED type over time.Time (type instant
-// time.Time) has none of its methods, as Go gives a defined type only the
-// methods its own declaration lists, so its Sub is its own and is not
-// counted until it is converted back. A file the platform the gate runs on
-// does not build is in no package go list answers, and a Sub in it cannot be
-// typed: it is refused rather than passed.
+// It counts every reference to a Sub, Before, After or Compare WHOSE
+// RECEIVER IS A time.Time, called or not, and tells each from every other
+// method of its name — a big.Int's Sub, a set's, a version's Compare, a
+// page's After — by the receiver's TYPE, never by a name or a shape: they
+// are called on any expression, and nothing in a name says what a value is.
+// Before, After and Compare decide on the span Sub reads —
+// time.Now().Before(deadline) is time.Until(deadline) > 0, and
+// t.Compare(d) < 0 and !t.After(d) are the claim t.Before(d) is — so they
+// are readings of elapsed time as Sub is. Equal is not counted: equality
+// decides nothing about elapsed time (a re-stamp asserted with it is a gap,
+// below). The types come from
+// internal/sourcetree's [sourcetree.TypeCheck], the module's one loader of
+// its own types (the standard library's go/types over `go list -export`
+// data), which type-checks each package whose test code may hold one as its
+// test binary compiles it — its in-package tests with it, its external test
+// package against its test variant — and only those: a package with a
+// test-code file holding a selector of one of the four names, since only
+// such a file can hold one. time.After through the file's own name for
+// package time is not such a selector: it is package time's function, the
+// wait, and never a method, since Go lets no package declare a name its files
+// import a package by. So an alias of time.Time is one, a struct embedding
+// one promotes its methods, and a method expression (time.Time.Before) is
+// counted; a DEFINED type over time.Time (type instant time.Time) has none
+// of its methods, as Go gives a defined type only the methods its own
+// declaration lists, so a Sub, Before, After or Compare it declares is its
+// own and is not counted until it is converted back. A file the platform the
+// gate runs on does not build is in no package go list answers, and a
+// selector of those names in it cannot be typed: it is refused rather than
+// passed.
 //
 // Three things are not counted:
 //
@@ -133,14 +154,15 @@
 //     //fixedwait:stated <which instants or clock>
 //
 //     The first three are a fixed wait's, measure is any elapsed reading's,
-//     and stated is a time.Time's Sub's alone: each covers only its own
-//     shape, and one over only references it does not cover is refused,
-//     since a wait is no measurement, a measurement no wait, and a reading
-//     of now never stated. A marker covers ONE line, and its place decides
-//     which: trailing code, it covers that code's line; alone on its line,
-//     the line under it. Never both: a marker written after a liveness timer
-//     must not also take the wait on the next line out of the class, where
-//     whoever reads the diff would not see it.
+//     and stated is a comparison of two instants' alone, a time.Time's Sub,
+//     Before, After or Compare: each covers only its own shape, and one over
+//     only references it does not cover is refused, since a wait is no
+//     measurement, a measurement no wait, and a reading of now never stated.
+//     A marker covers ONE line, and its place decides which: trailing code,
+//     it covers that code's line; alone on its line, the line under it. Never
+//     both: a marker written after a liveness timer must not also take the
+//     wait on the next line out of the class, where whoever reads the diff
+//     would not see it.
 //
 //     A LINE HOLDING BOTH SHAPES — a wait sized by an elapsed reading,
 //     time.After(time.Until(deadline)) — takes one marker of each, one alone
@@ -171,16 +193,23 @@
 //     logged or reported, or it is a poll's own deadline, whose firing only
 //     ends a wait for a condition that decides — and the reason is required,
 //     as for simulated, because a bound held to a loaded runner's clock is
-//     written identically. STATED: a time.Time's Sub reads no wall clock
-//     between its two instants — the test stated both (constants, calendar
-//     arithmetic on them), or a clock the test controls stamped both (a
-//     stepped or frozen fake the code under test is handed) — so it may
-//     decide a claim, and decides it exactly, with no runner's load between
-//     its readings. The reason names those instants or that clock, and is
-//     required, because an instant the code stamps from the wall clock is
-//     written identically: a fake's "now" that adds the time.Since of its
-//     own start is the wall clock again. Never time.Since or time.Until,
-//     which read now at the call.
+//     written identically. STATED: a comparison of two instants — a
+//     time.Time's Sub, Before, After or Compare — reads no wall clock between
+//     them: the test stated both (constants, calendar arithmetic on them), a
+//     clock the test controls stamped both (a stepped or frozen fake the code
+//     under test is handed), or the code under test DERIVED one from the
+//     other by its own arithmetic, computed once (an expiry it computes as
+//     the instant it stored an entry plus the entry's TTL). So it may decide
+//     a claim, and decides it exactly, with no runner's load between its
+//     readings. The reason names those instants, that clock or that
+//     derivation, and is required, because instants the code stamps from the
+//     wall clock are written identically: a fake's "now" that adds the
+//     time.Since of its own start is the wall clock again, and TWO
+//     INDEPENDENT READINGS of the wall clock never take it, whoever made
+//     them. An ordering of two such stamps is an elapsed bound, and its usual
+//     fix needs no clock: assert the order the code records (a log position,
+//     a sequence, a seq column) rather than the stamps. Never time.Since or
+//     time.Until, which read now at the call.
 //
 // # A wait that steps the clock
 //
@@ -239,19 +268,32 @@
 //
 // # What the gate does not see
 //
-// Known gaps. One is the same risk through none of the functions it counts:
+// Known gaps. Two are the same risk through none of the functions it counts:
 //
 //   - A window built from context.WithTimeout or context.WithDeadline — a
 //     negative window whose wait is a context's — left for a gate of its own
 //     if it recurs.
+//   - A time.Time's Equal, which is not counted, since equality decides
+//     nothing about elapsed time. But a re-stamp asserted with `!Equal` is a
+//     clock-step claim the gate does not count:
+//     `if b.Equal(a) { t.Fatal(...) }`, holding a second stamp off the
+//     first, passes only once the wall clock has moved between them, as a
+//     clock step's verdict does. And so is an Equal used as a proxy for
+//     kept, unchanged or not re-stamped, read off the same entity's
+//     wall-clock stamp before and after:
+//     `if !after.Equal(before) { t.Fatal(...) }` passes a rebuild or a
+//     re-stamp that lands inside one tick of the clock that stamped both.
+//     Either is decided only by a stated instant, a clock the test
+//     controls, or the order or count the code records.
 //
-// A bound on measured elapsed time was the other, until it reddened main
+// A bound on measured elapsed time was another, until it reddened main
 // (#736): it is the fourth shape now, counted at time.Since, time.Until and a
-// time.Time's Sub. What of it the walk still does not see is a Sub reached
-// where no type says time.Time — through an interface or a type parameter
-// whose method set lists a Sub — and an instant compared with another by
-// Before, After or Compare, or turned into a number first (UnixNano), which
-// reads the same clock with no Sub at all.
+// time.Time's Sub, Before, After and Compare. What of it the walk still does
+// not see is one of those four reached where no type says time.Time —
+// through an interface or a type parameter whose method set lists it — and
+// an instant turned into a number first (UnixNano, Unix, UnixMilli) and
+// compared or subtracted as one, which reads the same clock through none of
+// them.
 //
 // The others are time functions the walk reads in a way it cannot prove:
 //

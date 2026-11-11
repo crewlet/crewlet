@@ -79,6 +79,34 @@ func TestPermissionsAcceptOnlyWhatGitHubOffersAnAgent(t *testing.T) {
 	}
 }
 
+// WHAT A LEVEL NEEDS IS SOMETHING A SEAT CAN HOLD, and the validator refuses a
+// grant that leaves it out: Workflows write needs Contents write.
+func TestEveryNeedIsAPermissionASeatCanHold(t *testing.T) {
+	t.Parallel()
+	for _, p := range github.SeatPermissions {
+		for _, level := range p.Levels {
+			for _, need := range github.Needs(p.Key, level) {
+				with, ok := github.LookupPermission(need.Key)
+				if !ok || !with.Offers(need.Level) || need.Level == github.LevelNone || need.Why == "" {
+					t.Errorf("%s %s needs %+v, which no seat can hold", p.Key, level, need)
+				}
+				raw := map[string]string{p.Key: string(level)}
+				if _, problems := github.ParsePermissions(raw); len(problems) != 1 {
+					t.Errorf("%v without %s was accepted: %v", raw, need.Key, problems)
+				}
+				raw[need.Key] = string(need.Level)
+				if _, problems := github.ParsePermissions(raw); len(problems) != 0 {
+					t.Errorf("%v was refused: %v", raw, problems)
+				}
+			}
+		}
+	}
+	if needs := github.Needs(github.PermissionWorkflows, github.LevelWrite); len(needs) != 1 ||
+		needs[0].Key != github.PermissionContents || needs[0].Level != github.LevelWrite {
+		t.Errorf("Workflows write needs %+v, want Contents write", needs)
+	}
+}
+
 // METADATA RIDES ON EVERY TOKEN AND EVERY MANIFEST, because without it a
 // token cannot resolve a repository; a seat set to No access everywhere still
 // asks for it.

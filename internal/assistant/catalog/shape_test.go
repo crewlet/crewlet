@@ -432,6 +432,10 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 			provenance.TrustExternal},
 		{"list_executors", `{"runs":[{"agent_handle":"dev","status":"running"}]}`,
 			provenance.TrustColleague},
+		// A VENDOR'S WORDS: its refusal, its level, account and scope names.
+		{"get_seat_access", `{"handle":"sre","name":"SRE","integration":"GitHub",` +
+			`"status_label":"Refused","refusal":"Resource not accessible by integration"}`,
+			provenance.TrustExternal},
 		{"list_decisions", `{"items":[{"kind":"run","run":{"agent_handle":"dev","question":"Merge it?"}}]}`,
 			provenance.TrustExternal},
 		{"list_decisions", `{"items":[{"kind":"ask","ask":{"key":"ENG-1","title":"Ship it","body":"Which day?"}}]}`,

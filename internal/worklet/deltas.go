@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -203,12 +202,17 @@ func (d deltaSet) done() map[string]Delta {
 }
 
 // cardFields is what a notification card shows of a change's moves: all of
-// them up to [MaxDeltas], past it the first [MaxDeltas] by field name, and how
-// many were left off.
+// them up to [MaxDeltas], past it the fields a route reads and then the rest by
+// field name up to [MaxDeltas], and how many were left off.
 //
 // BY FIELD NAME, deterministically: a card that showed a different thirty-two
 // on two nodes would be one screen disagreeing with another about what
 // changed.
+//
+// THE FIELDS A ROUTE READS FIRST ([routedFields]), so the limit bounds what a
+// card displays and nothing else: [Candidates] decides a hand-off and the
+// finished edge on these deltas ([Notify.moved]), and a card trimmed by name
+// alone would drop `status` behind thirty-two fields before it.
 func cardFields(all map[string]Delta) (map[string]Delta, int) {
 	if len(all) <= MaxDeltas {
 		return all, 0
@@ -217,13 +221,25 @@ func cardFields(all map[string]Delta) (map[string]Delta, int) {
 	for name := range all {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.SortFunc(names, func(a, b string) int {
+		if routedA, routedB := slices.Contains(routedFields, a), slices.Contains(routedFields, b); routedA != routedB {
+			if routedA {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a, b)
+	})
 	shown := make(map[string]Delta, MaxDeltas)
 	for _, name := range names[:MaxDeltas] {
 		shown[name] = all[name]
 	}
 	return shown, len(all) - MaxDeltas
 }
+
+// routedFields are the deltas [Candidates] reads a task's change by
+// ([Notify.moved]), which a card keeps whatever else it trims ([cardFields]).
+var routedFields = []string{"assignee", "status"}
 
 // documentDeltas is what one record moved on a whole-document object.
 //

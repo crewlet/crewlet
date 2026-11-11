@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -50,7 +51,7 @@ func TestTickingOneChecklistItemKeepsAConcurrentAdd(t *testing.T) {
 	tick := worklet.ChecklistIntent{Op: worklet.ChecklistSetDone, Item: "migrate", Done: true}
 
 	// A PEER ADDS A LINE between that read and the tick landing.
-	peer := r.writer.As("ops", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-peer"})
+	peer := r.writer.As("ops", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil), TurnID: "turn-peer"})
 	if _, err := peer.UpdateTask(t.Context(), "op-add", "t-list", "ENG", worklet.NoIfMatch,
 		worklet.TaskPatch{Checklist: &worklet.ChecklistIntent{
 			Op: worklet.ChecklistAddItem, List: "launch", Item: "announce",

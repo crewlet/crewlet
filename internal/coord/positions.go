@@ -249,8 +249,8 @@ type PositionRegister interface {
 // of accounts the engine created at a vendor, which an age would forget while
 // the account still exists there. The twelfth and thirteenth are an MCP server's: [MCPListingKey], one node's listing of
 // one server, which an age would forget while the server lists exactly that,
-// and [MCPSchemaKey], one tool definition's schemas, which go when no listing
-// names them; both are removed by a decision, the node's own or the
+// and [MCPDefinitionKey], one tool definition whole, which goes when no listing
+// or accepted definition names it; both are removed by a decision, the node's own or the
 // maintenance sweep's (mcplisting.go). The fourteenth is [MCPRestartKey], a
 // person's request to restart an MCP server, which ages out of meaning by its
 // own stamp as a model retry does (mcprestart.go). The fifteenth is

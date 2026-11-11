@@ -56,7 +56,7 @@ func TestThePersistPromptCarriesTheAskOnlyWhereNoInteractionDoes(t *testing.T) {
 
 	spoken := pdTurn()
 	spoken.Event.Interactions = []types.InboundInteraction{{
-		Sender: types.CanonicalIdentity{Handle: "miles"}, Body: "fail over to eu-west",
+		Sender: types.CanonicalIdentity{Handle: "morgan"}, Body: "fail over to eu-west",
 	}}
 	p = says(`{"kind":"NOOP"}`)
 	mustDecide(t, decider(t, p, &fakeDiary{}), spoken)

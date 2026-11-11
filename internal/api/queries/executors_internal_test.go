@@ -114,7 +114,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 	run := sandbox.PendingRun{TurnID: "t1", LaunchID: "launch-t1", Status: sandbox.StatusAnswered,
 		DeclinedAnswers: []string{"a0"}}
 	answer, err := seal.Seal(run, sandbox.AnswerWords{Text: "use main", Via: types.AnswerViaOperator,
-		By: "miles", ByKind: "human"}, sandbox.RecordedAnswer{RecordedAt: at, EventIDs: []string{"a1"}})
+		By: "morgan", ByKind: "human"}, sandbox.RecordedAnswer{RecordedAt: at, EventIDs: []string{"a1"}})
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -124,8 +124,8 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 	if got := row["answer_ids"]; !slices.Equal(got.([]string), []string{"a1"}) {
 		t.Errorf("answer_ids = %v, want the recorded answer's delivery", got)
 	}
-	if row["answered_by"] != "miles" || row["answered_at"] != isoOrEmpty(at) {
-		t.Errorf("answered_by %v at %v, want miles at %s", row["answered_by"], row["answered_at"], at)
+	if row["answered_by"] != "morgan" || row["answered_at"] != isoOrEmpty(at) {
+		t.Errorf("answered_by %v at %v, want morgan at %s", row["answered_by"], row["answered_at"], at)
 	}
 	if got := row["declined_answers"]; !slices.Equal(got.([]string), []string{"a0"}) {
 		t.Errorf("declined_answers = %v, want the answer the question let go of", got)
@@ -163,7 +163,7 @@ func TestARunRowSaysItsAnswerIsARefusal(t *testing.T) {
 	seal := answerSealOf(t, "the fleet's key material")
 	run := sandbox.PendingRun{TurnID: "t1", LaunchID: "launch-t1", Status: sandbox.StatusAnswered}
 	refusal := sandbox.AnswerRefusal{EventIDs: []string{"a1", "a2"}, Bytes: 600 << 10, MaxBytes: 512 << 10}
-	answer, err := seal.Seal(run, sandbox.AnswerWords{Via: types.AnswerViaChat, By: "miles", ByKind: "human",
+	answer, err := seal.Seal(run, sandbox.AnswerWords{Via: types.AnswerViaChat, By: "morgan", ByKind: "human",
 		Refusal: &refusal}, sandbox.RecordedAnswer{Via: types.AnswerViaChat, EventIDs: refusal.EventIDs,
 		RecordedAt: time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC)})
 	if err != nil {
@@ -176,7 +176,7 @@ func TestARunRowSaysItsAnswerIsARefusal(t *testing.T) {
 	if !ok || got["messages"] != 2 || got["bytes"] != 600<<10 || got["max_bytes"] != 512<<10 {
 		t.Errorf("answer_refused = %v, want two messages at 600 KiB past 512 KiB", row["answer_refused"])
 	}
-	if ids := row["answer_ids"]; !slices.Equal(ids.([]string), refusal.EventIDs) || row["answered_by"] != "miles" {
+	if ids := row["answer_ids"]; !slices.Equal(ids.([]string), refusal.EventIDs) || row["answered_by"] != "morgan" {
 		t.Errorf("the refused reply is named as %v by %v, want its deliveries and its sender", ids,
 			row["answered_by"])
 	}

@@ -38,7 +38,8 @@ func TestANoAskCommentOrWatcherChangeDoesNotReArmThePickup(t *testing.T) {
 			if wake != nil {
 				wake(&w)
 			}
-			if _, err := r.writer.As(author, kind, worklet.Provenance{}).UpdateTask(t.Context(), op, "w-1", "ENG",
+			writer := r.writer.As(author, kind, aTurnNobodyWoke())
+			if _, err := writer.UpdateTask(t.Context(), op, "w-1", "ENG",
 				worklet.NoIfMatch, patch, changeKind, w.Notify(nil)); err != nil {
 				t.Fatalf("%s: %v", op, err)
 			}

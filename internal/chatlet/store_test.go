@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -428,7 +429,7 @@ func person(handle string) chatlet.Actor {
 // seat is an agent in a turn. The run is provenance only: what makes its
 // message ids derivable is the key its call carries ([chatlet.Actor.OpKey]).
 func seat(handle, run string) chatlet.Actor {
-	return chatlet.Actor{Handle: handle, Kind: chatlet.AuthorAgent, TurnID: run}
+	return chatlet.Actor{Handle: handle, Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil), TurnID: run}
 }
 
 // keyed is actor carrying a caller's own operation key.

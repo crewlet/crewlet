@@ -312,7 +312,7 @@ var engineSentences = map[Class]string{
 	ClassAgentMentionsWithoutAsk:  "The engine wakes an agent only for words that ask it something.",
 	ClassPersonRequestsWithoutAsk: "A comment reaches a person's Inbox as a decision only when it asks them a question.",
 	ClassAskOvertaken:             "An answer helps most on the newest question an item carries.",
-	ClassReviewIdle:               "An item in review waits on the agent holding it until its next turn on the item.",
+	ClassReviewIdle:               "An item in review waits on whoever reviews it: the agent holding it, or the person its holder asked.",
 	ClassNoticeLoad:               "Notices that ask something of a person lead their Inbox; the rest are context.",
 	ClassNoopShare:                "Turns that commit nothing are counted by what woke them, so those wakes can be reduced.",
 	ClassPickupStillWaiting:       "Work that waits on something else is better marked as waiting on it, so it is not handed out.",
@@ -343,18 +343,22 @@ func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding 
 			{Key: "agent_comments", Value: int64(ev.Work.AgentComments)}}, records)}
 }
 
+// personRequestsWithoutAsk is one finding per person agents asked for something
+// in words alone, counted by the comment tool's own predicate
+// ([worklet.RequestedWithoutAsk]): what this counts, the tool refuses.
 func personRequestsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
 	var out []Finding
 	for _, n := range ev.Work.Named {
-		if kind(n.Handle) != SeatPerson || n.Told < minNamedPerson {
+		if kind(n.Handle) != SeatPerson || n.Requested < minNamedPerson {
 			continue
 		}
 		out = append(out, engineFinding(ClassPersonRequestsWithoutAsk,
 			Subject{Kind: SubjectSeat, Seat: n.Handle},
-			"Agents named a person without asking them a question.",
-			fmt.Sprintf("In the last 7 days, agents named %s in %d comments with no question "+
-				"attached, so nothing in them reached the Inbox as a decision.", n.Handle, n.Told),
-			[]Fact{{Key: "named", Value: int64(n.Told)}}, n.Comments))
+			"Agents asked a person for something without asking them a question.",
+			fmt.Sprintf("In the last 7 days, agents asked %s for an answer or an action in %d "+
+				"comments that put no question to them with an ask, so nothing in them reached "+
+				"the Inbox as a decision.", n.Handle, n.Requested),
+			[]Fact{{Key: "named", Value: int64(n.Requested)}}, n.RequestedComments))
 	}
 	return out
 }
@@ -445,26 +449,52 @@ func noVerifiedBackup(ev Evidence, _ func(string) SeatKind) []Finding {
 	}}
 }
 
-// reviewIdle is one finding per agent holding a review it has taken no turn on
-// for [ReviewQuiet]: a review is the holder's next move, and none came.
+// reviewIdle is one finding per party a review idle for [ReviewQuiet] waits on:
+// the agent holding it, a person its holder asked, or nobody, for a review its
+// holder submitted itself with no question open on it.
 func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
-	byHolder := map[string][]string{}
-	var holders []string
-	for _, r := range ev.Work.IdleReviews {
-		if _, ok := byHolder[r.Holder]; !ok {
-			holders = append(holders, r.Holder)
+	type waits struct{ on, how string }
+	byWait := map[waits][]string{}
+	var order []waits
+	add := func(w waits, key string) {
+		if _, ok := byWait[w]; !ok {
+			order = append(order, w)
 		}
-		byHolder[r.Holder] = append(byHolder[r.Holder], r.Key)
+		byWait[w] = append(byWait[w], key)
+	}
+	for _, r := range ev.Work.IdleReviews {
+		switch {
+		case len(r.WaitsOn) > 0:
+			for _, p := range r.WaitsOn {
+				add(waits{p, "asked"}, r.Key)
+			}
+		case r.WaitsOnNobody():
+			add(waits{r.Holder, "nobody"}, r.Key)
+		default:
+			add(waits{r.Holder, "holder"}, r.Key)
+		}
 	}
 	var out []Finding
-	for _, h := range holders {
-		keys := byHolder[h]
-		out = append(out, engineFinding(ClassReviewIdle, Subject{Kind: SubjectSeat, Seat: h},
-			"Work in review waited a day for the agent holding it.",
+	for _, w := range order {
+		keys := byWait[w]
+		items := words.Count(len(keys), "item in review", "items in review")
+		title, why := "Work in review waited a day for the agent holding it.",
 			fmt.Sprintf("%s held by %s had no turn by it on the item in the last 24 hours "+
 				"(a turn on a linked pull request counts on the change, not the item), so "+
-				"the work behind them waits.", words.Count(len(keys), "item in review", "items in review"), h),
-			[]Fact{{Key: "idle", Value: int64(len(keys))}}, appendExamples(nil, keys)))
+				"the work behind them waits.", items, w.on)
+		switch w.how {
+		case "asked":
+			title, why = "Work in review waited a day for a person's answer.",
+				fmt.Sprintf("%s waited the last 24 hours on %s, whom its holder asked to review "+
+					"it, so the work behind them waits on that answer.", items, w.on)
+		case "nobody":
+			title, why = "Work in review has no reviewer.",
+				fmt.Sprintf("%s that %s moved into review itself had no reviewer for 24 hours: no "+
+					"seat holds the review and no question waits on anybody. The work pickup hands "+
+					"it back to %s to act on the review or name a reviewer.", items, w.on, w.on)
+		}
+		out = append(out, engineFinding(ClassReviewIdle, Subject{Kind: SubjectSeat, Seat: w.on},
+			title, why, []Fact{{Key: "idle", Value: int64(len(keys))}}, appendExamples(nil, keys)))
 	}
 	return out
 }

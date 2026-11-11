@@ -22,6 +22,7 @@ import type {
   McpServerAnswer,
   McpServerStatus,
   McpServersStatusAnswer,
+  McpToolView,
 } from "~/contract/mcp.ts";
 import type { ToolAnnotations, ToolRow } from "~/contract/tools.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -484,9 +485,12 @@ export const LINEAR_CHANGES: McpChangeView[] = [
   {
     tool: "delete_issue",
     kinds: ["description", "annotations"],
+    unshown: [],
     before: {
       digest: "b".repeat(64),
+      whole: true,
       title: "",
+      hints_title: "",
       description: "Delete an issue",
       annotations: { ...unadvertised, destructive: "yes" },
       risk: "destructive",
@@ -504,7 +508,9 @@ export const LINEAR_CHANGES: McpChangeView[] = [
     },
     after: {
       digest: "c".repeat(64),
+      whole: true,
       title: "",
+      hints_title: "",
       description: "Archive an issue, which can be restored",
       annotations: { ...unadvertised, destructive: "no" },
       risk: "additive",
@@ -525,9 +531,12 @@ export const LINEAR_CHANGES: McpChangeView[] = [
   {
     tool: "export_board",
     kinds: ["removed"],
+    unshown: [],
     before: {
       digest: "d".repeat(64),
+      whole: true,
       title: "",
+      hints_title: "",
       description: "Export a board",
       annotations: { ...unadvertised, read_only: "yes" },
       risk: "read_only",
@@ -545,6 +554,66 @@ export const LINEAR_CHANGES: McpChangeView[] = [
     seen_at: null,
   },
 ];
+
+/** A read-only tool's definition, by the digest's seed letter and its words. */
+function readOnlyDefinition(seed: string, description: string) {
+  const annotations: ToolAnnotations = { ...unadvertised, read_only: "yes", open_world: "no" };
+  return {
+    digest: seed.repeat(64),
+    whole: true,
+    title: "",
+    hints_title: "",
+    description,
+    annotations,
+    risk: "read_only" as const,
+    risk_declared: true,
+    external: false,
+    input_schema: { type: "object", properties: { team: { type: "string" } } },
+    output_schema: null,
+  };
+}
+
+/** A wording change to one of Linear's read-only tools, its description reworded. */
+export function wordingChange(
+  tool: string,
+  was: string,
+  now: string,
+  seeds: [string, string],
+): McpChangeView {
+  return {
+    tool,
+    kinds: ["description"],
+    unshown: [],
+    before: {
+      ...readOnlyDefinition(seeds[0], was),
+      accepted_by: null,
+      accepted_at: at(-600),
+      first_listing: true,
+    },
+    after: { ...readOnlyDefinition(seeds[1], now), instances: 1 },
+    loosened: false,
+    held: true,
+    seen_at: at(-20),
+  };
+}
+
+/** A description that runs past the first KiB a listing keeps of it, and ends as given. */
+export function longDescription(ending: string): string {
+  return `${"List the issues in a team, newest first, with their state and assignee. ".repeat(16)}${ending}`;
+}
+
+/**
+ * Linear's read-only tools as it lists them for the wording changes: the
+ * administrator's detail rows, each running read-only.
+ */
+export const LINEAR_READ_TOOLS: McpToolView[] = ["list_issues", "list_teams", "get_issue"].map(
+  (raw, i) => ({
+    ...LINEAR_DETAIL.tools[0]!,
+    name: `linear_${raw}`,
+    raw,
+    digest: String.fromCharCode(0x6b + i).repeat(64),
+  }),
+);
 
 /** Linear whole, as a member reads it. */
 export const LINEAR_MEMBER_DETAIL: McpMemberServerAnswer = {

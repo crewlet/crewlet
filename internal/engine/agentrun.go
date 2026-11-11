@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -774,7 +775,12 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
 	inbox.Bind(ctx, job.LaunchID)
-	opening := bridgeOpening(endpoint, s, inbox != nil)
+	// AS LONG AS THIS NODE'S BRIDGE CAN TAKE TO ANSWER A CALL is how long the
+	// box's harness waits for one, on every server it is handed: the bridge
+	// keeps a running call's answer going, so nothing else bounds the wait
+	// ([mcpbridge.Bridge.CallTimeout]).
+	wait := e.bridge.CallTimeout(s.Surface)
+	opening := bridgeOpening(endpoint, s, inbox != nil, wait)
 	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session its box starts of
 	// its own in place of the one its launch continues: the token its harness
 	// dials is the box's word on which session it started
@@ -783,19 +789,20 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// job is named before its launch knows its box, and a token is worth
 	// nothing outside the box that is handed it.
 	if fresh := e.bridge.FreshEndpoint(s); fresh != "" {
-		other := bridgeOpening(fresh, s, inbox != nil)
+		other := bridgeOpening(fresh, s, inbox != nil, wait)
 		opening.Fresh = &other
 	}
 	return opening, nil
 }
 
 // bridgeOpening is what a job's box is given at endpoint, one of its bridge
-// tokens: the bridge's servers ([bridgeServers]), where its harness asks for
-// its turn's notes where steered, and where it reports loading one of its
-// skills where it is handed any — under THE SAME NAMES THE BRIDGE SERVES, so
-// the box and the bridge cannot disagree about where they are.
-func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool) sandbox.Opening {
-	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s.Surface)}
+// tokens: the bridge's servers ([bridgeServers]), each waited on for a call
+// as long as wait, where its harness asks for its turn's notes where steered,
+// and where it reports loading one of its skills where it is handed any —
+// under THE SAME NAMES THE BRIDGE SERVES, so the box and the bridge cannot
+// disagree about where they are.
+func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait time.Duration) sandbox.Opening {
+	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s.Surface, wait)}
 	if steered {
 		opening.Steer = sandbox.SteerWiring{Server: config.ToolServerName,
 			Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)}
@@ -970,14 +977,19 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor lau
 // keeping a large tool list out of each request. The names are the bridge's own
 // reading of the surface ([mcpbridge.Servers]), so a box is handed exactly the
 // servers its opening serves.
-func bridgeServers(endpoint string, surface mcpbridge.Surface) map[string]sandbox.MCPServer {
+//
+// EVERY ONE WAITED ON FOR A CALL AS LONG AS wait, the bridge's own bound for
+// one ([mcpbridge.Bridge.CallTimeout], [sandbox.MCPServer.CallTimeout]): a
+// call to a seat's MCP server is kept going and answered by the same bridge
+// as one to the engine's own tools, and may be served as one of them.
+func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duration) map[string]sandbox.MCPServer {
 	out := map[string]sandbox.MCPServer{config.ToolServerName: {
 		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
-		AlwaysLoaded: true,
+		AlwaysLoaded: true, CallTimeout: wait,
 	}}
 	for _, name := range mcpbridge.Servers(surface) {
 		out[name] = sandbox.MCPServer{Name: name, Transport: sandbox.TransportHTTP,
-			URL: mcpbridge.ServerURL(endpoint, name)}
+			URL: mcpbridge.ServerURL(endpoint, name), CallTimeout: wait}
 	}
 	return out
 }

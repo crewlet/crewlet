@@ -68,13 +68,18 @@ type Ceiling struct {
 // authority is a ceiling and never a source: whatever is admitted is the
 // agent's own act, recorded as the agent.
 //
-// THE CEILING IS THE TURN'S, and ends with it, because it is composed from
-// what woke that turn alone: a colleague the agent asks answers in a turn the
-// agent woke, and the answer wakes the agent in a turn of its own work, so
-// neither is decided for whoever woke the first. That hop is the ceiling's
-// edge, which crewlet#798's second piece closes by carrying the requester on
-// the ask. Nor does it reach what the agent already knows. It bounds what a
-// turn does for its requester, not what an agent may go on to tell them.
+// THE CEILING IS THE TURN'S, and every turn it hands on to: it is composed
+// from what woke that turn, and what the turn hands on carries it. A colleague
+// the agent asks answers in a turn worked for whoever the asking turn worked
+// for, and the answer wakes the agent in a turn worked for them too; and what
+// the agent writes on the engine's own surfaces (a work item, a page or a
+// comment on one, a Chatlet message) wakes its colleague in a turn worked for
+// them as well (ADR-0109, internal/agent/builtin's workingForOf). The edges
+// are what carries no requester: a vendor's surface, whose wake comes back by
+// webhook with no field of the engine's, and Gitlet's records, until
+// crewlet#798's piece 4c. Nor does it reach what the agent already knows. It
+// bounds what a turn does for its requester, not what an agent may go on to
+// tell them.
 //
 // # Except the edits an agent makes to its own work
 //

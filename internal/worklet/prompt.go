@@ -334,10 +334,16 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 			b.WriteString("A new task was filed with you as its assignee.")
 		case ChangeRemoved:
 			b.WriteString("A task you were assigned to was removed.")
-		case ChangeAssignee:
-			b.WriteString("A task was assigned to you.")
 		default:
-			b.WriteString("A task you are assigned to changed.")
+			// HANDED TO YOU BY WHATEVER WRITE MOVED THE ASSIGNEE, which the
+			// record's one kind does not say ([MetaMoved]): a hand-off
+			// written with a status is a `status` record, and a
+			// reassertion to the seat that holds the task hands it nothing.
+			if slices.Contains(metaMoved(n.Metadata), ChangeAssignee) {
+				b.WriteString("A task was assigned to you.")
+			} else {
+				b.WriteString("A task you are assigned to changed.")
+			}
 		}
 	case ReasonUnassigned:
 		b.WriteString("A task you were assigned to went to somebody else.")
@@ -567,12 +573,87 @@ func promptHeader(b *strings.Builder, n notify.Inbound, parties notify.Parties) 
 //
 // Worth stating plainly because the kind alone does not: a seat that had to
 // infer "assigned to you" from a delta map would guess.
+//
+// EVERY KIND OF CHANGE THE WRITE MADE, read off [MetaMoved] rather than the
+// record's one kind: "assign it to ana and set it to todo" is a `status`
+// record, and its line used to say only that the status changed. The record's
+// own kind leads, where its field moved or it names an event of its own (a
+// move, a checklist), and the write's other moves follow it.
 func changeLead(meta map[string]string, actor string) string {
 	by := ""
 	if actor != "" {
 		by = " by " + actor
 	}
-	switch ChangeKind(meta[MetaChangeKind]) {
+	kind, moved := ChangeKind(meta[MetaChangeKind]), metaMoved(meta)
+	if kind.MovedFields() != nil && !slices.Contains(moved, kind) {
+		// A FIELD KIND WHOSE FIELD DID NOT MOVE: a reassertion beside the
+		// move the write made, which is what happened — another kind's, or
+		// an edit no kind names (a priority, a date, a custom value). A
+		// record that moved nothing at all keeps its kind's own line.
+		switch {
+		case len(moved) > 0:
+			kind = moved[0]
+		case meta[MetaDeltas] != "":
+			kind = ChangeFields
+		}
+	}
+	lead := kindLead(kind, by)
+	var also []words.Said
+	for _, other := range moved {
+		if other != kind {
+			also = append(also, words.Said(movedNoun(other)))
+		}
+	}
+	if lead == "" || len(also) == 0 {
+		return lead
+	}
+	others := words.And(also)
+	return lead + " " + strings.ToUpper(others[:1]) + others[1:] + " changed too."
+}
+
+// metaMoved is [MetaMoved] read back: the kinds of change a wake's write made,
+// nil where it names none. A member this build has no move for is skipped, as a
+// newer peer may name a kind of change this one cannot say.
+func metaMoved(meta map[string]string) []ChangeKind {
+	raw := meta[MetaMoved]
+	if raw == "" {
+		return nil
+	}
+	var out []ChangeKind
+	for _, part := range strings.Split(raw, ",") {
+		if kind := ChangeKind(part); kind.Valid() && movedNoun(kind) != "" {
+			out = append(out, kind)
+		}
+	}
+	return out
+}
+
+// movedNoun names what a kind of change moves, for the sentence that lists a
+// write's other moves ([changeLead]); "" for a kind whose change is no one
+// field's move ([ChangeKind.MovedFields]).
+func movedNoun(kind ChangeKind) string {
+	switch kind {
+	case ChangeAssignee:
+		return "the assignee"
+	case ChangeStatus:
+		return "the status"
+	case ChangeCollaborators:
+		return "the collaborators"
+	case ChangeWatchers:
+		return "the watchers"
+	case ChangeTags:
+		return "the tags"
+	case ChangeRouted:
+		return "the team"
+	case ChangeRelations:
+		return "the task's relations"
+	}
+	return ""
+}
+
+// kindLead is the line one kind of change is told in, by its actor.
+func kindLead(kind ChangeKind, by string) string {
+	switch kind {
 	case ChangeCreated:
 		return "The task was filed" + by + "."
 	case ChangeAssignee:

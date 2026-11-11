@@ -131,6 +131,18 @@ func (w Work) ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.
 	return call(ctx, w.r, opReadyWork, nil, readyWorkArgs{Query: q, Now: now})
 }
 
+// TypedAnswer answers whether a turn put a typed answer on an item: what a work
+// pickup's turn owes (ADR-0122), from whichever data node serves the tracker.
+func (w Work) TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error) {
+	return call(ctx, w.r, opTypedAnswer, nil, q)
+}
+
+// OwnAsks answers a seat's open asks to one person: what a turn the seat
+// holds with that person is handed at its start.
+func (w Work) OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time) (worklet.OwnAsks, error) {
+	return call(ctx, w.r, opOwnAsks, nil, ownAsksArgs{Query: q, Now: now})
+}
+
 // Projects lists the company's projects.
 func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)
@@ -425,11 +437,12 @@ func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, comm
 }
 
 // ResolveComment resolves the writer's own remark on a work item: an open
-// question its asker withdraws.
+// question its asker withdraws, saying why where withdrawal is set.
 func (w WorkWriter) ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
-	notify *worklet.Notify) (worklet.WriteResult, error) {
+	withdrawal *worklet.Withdrawal, notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opResolveTaskComment, &w.actor, resolveCommentOnTaskArgs{
-		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Notify: notify,
+		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID,
+		Withdrawal: withdrawal, Notify: notify,
 	})
 	w.settled(out.Result)
 	return out, err
