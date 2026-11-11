@@ -740,13 +740,13 @@ type BridgeCall struct {
 	// harness had given up on it — cancelled its request, as Claude Code and
 	// OpenCode do at their tool timeout, discarding a late answer, or hung up
 	// on the response the bridge kept its answer going on — or the job's
-	// session on the bridge had ended (internal/api/mcpbridge's
-	// Call.Abandoned). The
-	// bridge's to give, as it records the call, and kept as handed through
-	// every write of the round: a call of its job like any other, listed,
-	// numbered and paid for as its job's own, but one whose outcome the
-	// session of the job that made it does not hold — it shows the call with
-	// no outcome, or a failed one where its harness was told it timed out,
+	// session on the bridge ended while it ran and answered it as still
+	// running (internal/api/mcpbridge's Call.Abandoned). The bridge's to give,
+	// as it records the call, and kept as handed through every write of the
+	// round: a call of its job like any other, listed, numbered and paid for
+	// as its job's own, but one whose outcome the session of the job that
+	// made it does not hold — it shows the call with no outcome, a failed one
+	// where its harness was told it timed out, or the end's "still running",
 	// while the call ran on and its effect happened.
 	//
 	// HELD BY NO SAVE POINT, as a late call is, for the reason a late call is
@@ -1525,9 +1525,9 @@ type PendingRun struct {
 	RequesterLogin string      `json:"requester_login,omitempty"`
 	RequesterApps  []iam.Grant `json:"requester_apps,omitempty"`
 
-	// WorkingFor is who the run's turn works for when a colleague's ask or
-	// an answer handed it on ([types.WorkingFor]), which its resumed turn
-	// works for too.
+	// WorkingFor is who the run's turn works for when a colleague's ask, an
+	// answer, or a colleague's write on Worklet, Doclet or Chatlet handed it
+	// on ([types.WorkingFor]), which its resumed turn works for too.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// ColleagueAsk is the colleague's A2A question the run's turn answers,

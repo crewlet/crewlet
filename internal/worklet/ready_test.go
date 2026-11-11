@@ -78,7 +78,7 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 	// THE LAST CHANGE THAT WOULD HAVE WOKEN THE SEAT: its own comment does
 	// not move it, and a person's does.
 	before := got.Items[3].Moved
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	comment := func(w *worklet.Writer, op, author string, kind worklet.AuthorKind) {
 		t.Helper()
 		c := worklet.Comment{ID: op, Task: "low", Author: author, AuthorKind: kind,
@@ -121,8 +121,8 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	submitted := newTask("review")
 	submitted.Assignee, submitted.Status = "ana", worklet.StatusInReview
 	submitted.StatusGroup = worklet.StatusInReview.Group()
-	if _, err := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{}).CreateTask(t.Context(),
-		"op-review", submitted, nil); err != nil {
+	if _, err := r.writer.As("ana", worklet.AuthorAgent, aTurnNobodyWoke()).
+		CreateTask(t.Context(), "op-review", submitted, nil); err != nil {
 		t.Fatalf("CreateTask review: %v", err)
 	}
 	r.drain()
@@ -142,7 +142,7 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 		t.Fatalf("Depend: %v", err)
 	}
 	r.drain()
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	for _, q := range []worklet.Comment{
 		{ID: "q-1", Task: "asked", Author: "ana", AuthorKind: worklet.AuthorAgent,
 			Body: "which environment?", Ask: "pm", CreatedAt: wednesday},
@@ -174,17 +174,21 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 
 // READY WORK SAYS WHOM EACH ITEM'S WORK IS FOR (ADR-0109): the writer of its
 // last assignment by somebody else, else the writer that filed it, a
-// credential with the apps it wrote under; nobody for the seat's own work.
+// credential with the apps it wrote under; nobody for the seat's own work. A
+// token's reassertion to the seat that already holds its item moves nothing,
+// so its row keeps no apps and the pickup reads the move before it, which did.
 //
 // Mutation: read the reporter column, and the item a token filed already
-// assigned is for a seat named `token:ci` that no directory holds.
+// assigned is for a seat named `token:ci` that no directory holds; read the
+// assignment by its kind, and the token's reassertion makes it a credential
+// holding no app.
 func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
 	token := r.writer.As("token:ci", worklet.AuthorOperator,
 		worklet.Provenance{Apps: []iam.Grant{iam.GrantWorklet}})
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	file := func(w *worklet.Writer, id, assignee string) {
 		t.Helper()
 		task := newTask(id)
@@ -211,6 +215,17 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 	}
 	file(pm, "by-token", "")
 	assign(token, "by-token")
+	// THE REASSERTION, with the wake the tool builds for one: the item as it
+	// is held on both sides, which names nobody to wake.
+	held := newTask("by-token")
+	held.Assignee = "ana"
+	again := held.Assignee
+	if _, err := token.UpdateTask(t.Context(), "op-reassert-by-token", "by-token", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Assignee: &again}, worklet.ChangeAssignee,
+		worklet.Wake{Kind: worklet.ChangeAssignee, Before: held, After: held}.Notify(nil)); err != nil {
+		t.Fatalf("token:ci reasserts by-token: %v", err)
+	}
+	r.drain()
 	file(token, "filed-by-token", "ana")
 	file(pm, "filed-by-pm", "")
 	assign(ana, "filed-by-pm")
@@ -249,7 +264,7 @@ func TestAPickupReadsTheAssignmentWhateverKindItsRecordEndsWith(t *testing.T) {
 	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
 	lead := r.writer.As("lead", worklet.AuthorHuman, worklet.Provenance{})
 	ops := r.writer.As("ops", worklet.AuthorHuman, worklet.Provenance{})
-	cy := r.writer.As("cy", worklet.AuthorAgent, worklet.Provenance{})
+	cy := r.writer.As("cy", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	ana, bo := "ana", "bo"
 	started := worklet.StatusInProgress
 	write := func(w *worklet.Writer, op, id string, patch worklet.TaskPatch, kind worklet.ChangeKind) {
@@ -321,7 +336,7 @@ func TestReadyWorkTimesAndProgressFollowTheKey(t *testing.T) {
 	if first.MovedAt.IsZero() {
 		t.Fatal("an item somebody else filed has no instant for the change its key names")
 	}
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	c := worklet.Comment{ID: "c-1", Task: "started", Author: "ana", AuthorKind: worklet.AuthorAgent,
 		Body: "on it", CreatedAt: wednesday}
 	if _, err := ana.UpdateTask(t.Context(), "op-c", "started", "ENG", worklet.NoIfMatch,
@@ -390,7 +405,7 @@ func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
 	fileFor(t, r, "queued", "ana", worklet.StatusTodo, worklet.PriorityUrgent)
 	fileFor(t, r, "started", "ana", worklet.StatusInProgress, worklet.PriorityLow)
 	fileFor(t, r, "asked", "ana", worklet.StatusInReview, worklet.PriorityLow)
-	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
+	ana := r.writer.As("ana", worklet.AuthorAgent, aTurnNobodyWoke())
 	mine := newTask("mine")
 	mine.Assignee, mine.Status, mine.StatusGroup = "ana", worklet.StatusTodo, worklet.StatusTodo.Group()
 	if _, err := ana.CreateTask(t.Context(), "op-mine", mine, nil); err != nil {

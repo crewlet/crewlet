@@ -47,7 +47,7 @@ func TestAnAskTheFactsOvertookNoLongerWaits(t *testing.T) {
 		}
 		c := worklet.Comment{ID: id, Task: "w", Author: author, AuthorKind: kind,
 			Body: "which way?", Ask: ask, Answers: answers, CreatedAt: at.Add(time.Duration(minute) * time.Minute)}
-		if _, err := r.writer.As(author, kind, worklet.Provenance{}).UpdateTask(t.Context(),
+		if _, err := r.writer.As(author, kind, aTurnNobodyWoke()).UpdateTask(t.Context(),
 			"op-"+id, "w", "ENG", worklet.NoIfMatch, worklet.TaskPatch{Comment: &c}, worklet.ChangeComment,
 			nil); err != nil {
 			t.Fatalf("comment %s: %v", id, err)

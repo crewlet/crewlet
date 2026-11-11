@@ -170,11 +170,12 @@ type Blocks struct {
 	ThreadContextStoppedShort bool
 
 	// ThreadContextAnswered are the messages — by the backend's own ids
-	// ([notify.Message.ID]) — that this block SHOWED the turn and that were
-	// waiting for it: posted by the writer of the message that woke the turn
-	// after this seat's own last reply in the thread and before that message.
-	// Another writer's message waits for a turn of its own: one turn works
-	// for one writer (ADR-0109).
+	// ([notify.Message.ID]), and an edited one by the version it was shown
+	// at ([notify.Message.Version]) — that this block SHOWED the turn and that
+	// were waiting for it: posted by the writer of the message that woke the
+	// turn after this seat's own last reply in the thread and before that
+	// message. Another writer's message waits for a turn of its own: one turn
+	// works for one writer (ADR-0109).
 	//
 	// The turn answers them whether it was woken for them or not, because
 	// a turn answers its thread as the block shows it — so when one of them
@@ -182,7 +183,9 @@ type Blocks struct {
 	// the conversation's newer mail, on the only broker the engine ships),
 	// running it as a turn would answer it a second time, out of order.
 	// The dispatch records these as worked through when the turn completes,
-	// and drops such a message as already worked.
+	// and drops such a message as already worked: a redelivery of its post's
+	// wake, and of the wake of the very edit the block showed — never a later
+	// edit's, whose words the turn did not see.
 	//
 	// ONLY WHAT WAS SHOWN AND ONLY WHAT WAS WAITING: a message a bound
 	// dropped, the seat's own replies, and everything up to its last one
@@ -190,7 +193,16 @@ type Blocks struct {
 	// were answered already. Empty when the read stopped short or the
 	// trigger is not in it, because then nothing says which messages came
 	// before it.
-	ThreadContextAnswered []string
+	ThreadContextAnswered []Answered
+}
+
+// Answered is one waiting message a thread block showed its turn: the
+// backend's own id for it, and the version it was shown at, empty for a
+// message never edited ([notify.Message.Version]). See
+// [Blocks.ThreadContextAnswered].
+type Answered struct {
+	ID      string
+	Version string
 }
 
 // Empty reports that nothing was surfaced at all.

@@ -762,7 +762,7 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 
 	actor, err := d.actor(ctx, turn)
 	if err != nil {
-		refusal := notInATurn(name)
+		refusal := unattributed(name, err)
 		return Actor{}, nil, &refusal
 	}
 	if d.PersonWriter == nil {

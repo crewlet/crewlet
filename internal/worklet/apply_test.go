@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1260,6 +1261,60 @@ func TestAHistoryRowKeepsAppsOnlyFromTheVersionThatSaysSo(t *testing.T) {
 		}
 		if got != c.want {
 			t.Errorf("a version-%d record's history row keeps apps %q, want %q", c.v, got, c.want)
+		}
+	}
+}
+
+// A HISTORY ROW KEEPS WHOM AN AGENT'S WRITE WAS MADE FOR (ADR-0109), the same
+// on every node: the carrier a version-13 record rode, as its JSON, and NULL
+// for a record that carries none and for one below the carrier's version,
+// which an older build's applier wrote with no such column to fill, whatever
+// it holds. Kept from the carrier's first build on, before anything reads it,
+// because a replicated migration runs on each node when it opens rather than
+// at a log position: a column a later build began to fill would differ between
+// a node that applied these records before it upgraded and one that applied
+// them after.
+//
+// Mutation: drop the fill, and the record made for ada keeps NULL on both
+// nodes; fill the column from a record that carries nobody, and it keeps
+// "null" rather than NULL; drop the fill's version arm, and the record below
+// the carrier's version keeps ada.
+func TestAHistoryRowKeepsWhomAnAgentsWriteWasMadeFor(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	at := time.Unix(1_700_000_100, 0).UTC()
+	nodes := map[string]*applyHarness{"node-a": newApplyHarness(t), "node-b": newApplyHarness(t)}
+	for _, c := range []struct {
+		id         string
+		v          int
+		workingFor *types.WorkingFor
+		want       sql.NullString
+	}{
+		{"made-for-ada", worklet.WorkingForVersion, ada,
+			sql.NullString{String: `{"kind":"seat","seat":"ada"}`, Valid: true}},
+		{"made-for-nobody", worklet.WorkingForVersion, nil, sql.NullString{}},
+		{"below-the-carriers-version", worklet.WorkingForVersion - 1, ada, sql.NullString{}},
+	} {
+		for node, h := range nodes {
+			task := newTask(c.id)
+			rec := taskRecord(c.id, worklet.OpCreate, task,
+				worklet.Wake{Kind: worklet.ChangeCreated, After: task}.Notify(nil))
+			rec.V, rec.Actor, rec.ActorKind = c.v, "dev", worklet.AuthorAgent
+			rec.WorkingFor = c.workingFor
+			if _, err := h.apply(rec, at); err != nil {
+				t.Fatalf("%s on %s: apply: %v", c.id, node, err)
+			}
+			var got sql.NullString
+			if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+				return tx.QueryRowContext(t.Context(), `SELECT working_for FROM tracker_history
+					WHERE subject_id = ?`, c.id).Scan(&got)
+			}); err != nil {
+				t.Fatalf("%s on %s: read the history row: %v", c.id, node, err)
+			}
+			if got != c.want {
+				t.Errorf("%s's history row on %s keeps whom it was made for as %+v, want %+v",
+					c.id, node, got, c.want)
+			}
 		}
 	}
 }

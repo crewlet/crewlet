@@ -122,9 +122,9 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 		// longer names reads as a colleague's.
 		Hosted: true,
 	}
-	out.Messages = append(out.Messages, r.message(thread.Root.Message, handle, parties))
+	out.Messages = append(out.Messages, r.message(thread.Root, handle, parties))
 	for _, reply := range thread.Replies {
-		out.Messages = append(out.Messages, r.message(reply.Message, handle, parties))
+		out.Messages = append(out.Messages, r.message(reply, handle, parties))
 	}
 	return out, true
 }
@@ -137,8 +137,18 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 // is an author the chart no longer holds, or the engine's own narration,
 // which [AuthorLabel] describes by kind — the rendering the woken message's
 // own sender is given, so one person reads the same in both.
-func (ThreadReader) message(m Message, viewer string, parties notify.Parties) notify.Message {
-	return notify.Message{
+//
+// AND AN EDITED MESSAGE NAMES THE EDIT IT WAS READ AT ([notify.Message.Version]):
+// the position of the record that last wrote it ([MessageView.Position]),
+// which is the trigger an edit's wake carries (changefeed's trigger, the same
+// [statelog.Position.String] token), so a turn's mark of the message drops
+// that edit's wake and no later one. Only a post, an edit and a delete move
+// that position, and a deleted message renders no line, so it is never
+// marked. An unedited message names none: its post's own wake is dropped by
+// its id, as it always was.
+func (ThreadReader) message(view MessageView, viewer string, parties notify.Parties) notify.Message {
+	m := view.Message
+	out := notify.Message{
 		// THE MESSAGE'S OWN ID, which is what a Chatlet wake stamps as the
 		// trigger's `ts` ([notify.MessageIDField]): it is how the block says
 		// which waiting messages a turn was shown, and without it nothing
@@ -149,6 +159,10 @@ func (ThreadReader) message(m Message, viewer string, parties notify.Parties) no
 		Text:       threadText(m),
 		Own:        m.Author == viewer,
 	}
+	if m.EditedAt != nil {
+		out.Version = view.Position.String()
+	}
+	return out
 }
 
 // threadText is what a message said, as a transcript line.

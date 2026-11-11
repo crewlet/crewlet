@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -22,6 +23,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
+
+// aTurnNobodyWoke is the provenance of an agent's writer in a turn nobody
+// woke: one that states its writes are for its own seat, carrying nobody
+// (types.ForTurn(nil)), as an agent's writer must state whom it writes for or
+// write nothing (ADR-0109). Every case here that writes as an agent and is
+// about something else writes so.
+func aTurnNobodyWoke() worklet.Provenance {
+	return worklet.Provenance{WrittenFor: types.ForTurn(nil)}
+}
 
 // THE ROUND TRIP: a write reaches the broker, the applier consumes it, and the
 // reader answers from the rows it wrote.

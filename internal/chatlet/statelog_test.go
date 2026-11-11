@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -74,6 +75,7 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		ChannelKind: chatlet.KindPublic, Author: post.Author,
 		AuthorKind: post.AuthorKind,
 	}
+	var carrier *types.WorkingFor
 	switch field.Name {
 	case "MessagePost.Asks":
 		post.Asks = true
@@ -86,6 +88,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		n.Asked = []string{"colleague"}
 	case "Notify.Answering":
 		n.Answering = []string{"message-asked"}
+	case "MutationRecord.WorkingFor":
+		// THE AGENT'S POST WAKES THE ROOM, made in a turn a person woke:
+		// whom it was written for rides beside the agent.
+		carrier = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
@@ -100,7 +106,7 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			Scope:     chatlet.ScopeSet{Subject: true},
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: "suite-node",
 		},
-		Mutation: body, Actor: post.Author, ActorKind: post.AuthorKind, Notify: n,
+		Mutation: body, Actor: post.Author, ActorKind: post.AuthorKind, WorkingFor: carrier, Notify: n,
 	})
 }
 
@@ -208,6 +214,16 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		// the log.
 	}
 	op, payload, scope := suitePayload(chatlet.ObjectKind(kind), id)
+	if post, ok := payload.(chatlet.MessagePost); ok && version >= chatlet.WorkingForVersion && id == "suite-b" {
+		// AN AGENT'S POST MADE FOR SOMEBODY, on half the messages of a
+		// record version that carries whom it was made for, so the apply
+		// cases hold the document's field it fills to one value on every
+		// node and through a redelivery (ADR-0109).
+		post.Author, post.AuthorKind = "dev", chatlet.AuthorAgent
+		payload = post
+		rec.Actor, rec.ActorKind = "dev", chatlet.AuthorAgent
+		rec.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	}
 	rec.Op = op
 	rec.Scope = scope
 	if payload != nil {

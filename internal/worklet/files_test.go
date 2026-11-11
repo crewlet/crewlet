@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -286,7 +287,7 @@ func TestAPutOverAFileReplacesItsContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	editor := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	editor := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	second := r.objectOf([]byte("second"))
 	if _, err := editor.PutFile(t.Context(), "op-2", worklet.FilePut{
 		Project: "ENG", Path: "notes.txt", Object: second,

@@ -114,7 +114,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.TaskActivityTool), nil
+		return unattributed(worklet.TaskActivityTool, err), nil
 	}
 	reader, ok := t.deps.Reader.(FeedReader)
 	if !ok || t.deps.Reader == nil {
@@ -227,7 +227,7 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.MyWorkTool), nil
+		return unattributed(worklet.MyWorkTool, err), nil
 	}
 	reader, ok := t.deps.Reader.(FeedReader)
 	if !ok || t.deps.Reader == nil {

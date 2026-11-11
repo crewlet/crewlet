@@ -3997,7 +3997,10 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// AND THE TOOL SESSIONS OF ITS EXECUTOR RUNS, which the seat's next
 	// holder serves from now on: left open here they would pin the seat's
 	// surface in a process that no longer speaks for it, and every box
-	// would go on talking to it — see [mcpbridge.Bridge.ReleaseSeat].
+	// would go on talking to it — see [mcpbridge.Bridge.ReleaseSeat]. It
+	// waits for no call still running on them, which is answered that it is
+	// still running and runs on here, so the seat's lease is given back
+	// without waiting out a call.
 	e.bridge.ReleaseSeat(seat.ID)
 
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above

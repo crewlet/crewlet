@@ -355,8 +355,8 @@ func TestAddressedSurvivesAMergeWithUnaddressedTraffic(t *testing.T) {
 // senders are read per constituent: carried on the flat fields alone, every
 // earlier writer of the burst would read as the latest one.
 func TestEachConstituentKeepsItsOwnWriter(t *testing.T) {
-	ana := notify.FirstPartyWriter(iam.ActorHuman, "ana", nil)
-	bo := notify.FirstPartyWriter(iam.ActorAgent, "bo", nil)
+	ana := notify.FirstPartyWriter(iam.ActorHuman, "ana", nil, nil)
+	bo := notify.FirstPartyWriter(iam.ActorAgent, "bo", nil, nil)
 	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
 		note("ana", "first", "comment", func(n *types.ExternalNotification) { n.Writer = ana }),
 		note("bo", "latest", "comment", func(n *types.ExternalNotification) { n.Writer = bo }),

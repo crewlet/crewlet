@@ -1543,7 +1543,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 				continue
 			}
 			keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
-			if chat, ok := chatKeyOf(ev); ok {
+			if chat, _, ok := chatKeyOf(ev); ok {
 				keys = append(keys, chat)
 			}
 		}
@@ -1568,10 +1568,12 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 			out = append(out, ev)
 			continue
 		}
-		chat, isChat := chatKeyOf(ev)
+		chat, edit, isChat := chatKeyOf(ev)
 		switch {
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
 			skip(ev.ID, skipWorked)
+		case isChat && edit && worked[chat]:
+			skip(ev.ID, skipEditInThread)
 		case isChat && worked[chat]:
 			skip(ev.ID, skipInThread)
 		case d.absorbed(ctx, handle, ev, marks):
@@ -1925,6 +1927,8 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		switch skipped[ev.ID] {
 		case skipInThread:
 			reason = "a later turn was shown this message waiting in its thread and answered it there"
+		case skipEditInThread:
+			reason = "a later turn was shown this edit waiting in its thread and answered it there"
 		case skipAbsorbed:
 			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
 		}

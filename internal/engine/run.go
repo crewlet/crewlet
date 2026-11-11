@@ -2995,6 +2995,16 @@ func lifecycleContext(ctx context.Context) (context.Context, context.CancelFunc)
 // past it by at most [lifecyclePublishBudget], for the stop's announcement:
 // the drain joins that publish before it returns, and it is free of ctx's
 // cancellation for the reason [lifecycleContext] gives.
+//
+// AND ONCE ITS SEATS ARE GIVEN BACK, IT WAITS FOR THE TOOL CALLS THEIR
+// EXECUTOR RUNS STILL HAD RUNNING ([mcpbridge.Bridge.AwaitCalls]). Releasing a
+// seat ends its runs' sessions on the bridge without waiting for a call still
+// running on them — each is answered that it is still running and runs on
+// here, so the seat's lease is given back at once — and such a call writes
+// through the store and the broker the teardown closes: so the drain waits for
+// each to be recorded before it returns, as the release used to wait for it
+// while holding the seat's lease. Bounded by ctx, as the wait for the turns
+// is, which on a signal is the supervisor's grace.
 func (e *Engine) Drain(ctx context.Context) {
 	// ONE ALLOWANCE FOR EVERY LEASE THE STOP GIVES BACK, from its first —
 	// see [Engine.stopping].
@@ -3063,6 +3073,10 @@ func (e *Engine) Drain(ctx context.Context) {
 			announced.Go(func() { e.publishLifecycle(ctx, ev) })
 		}
 		e.node.Drain(ctx)
+		// THE CALLS ITS SEATS' RUNS STILL HAD RUNNING, once every seat is
+		// given back: each to its record, before the teardown closes what it
+		// records through.
+		e.bridge.AwaitCalls(ctx)
 		announced.Wait()
 	})
 }
@@ -4008,8 +4022,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 		// worked through beside its own triggers. Off the block this frame
 		// assembled, because the loop never knew what a prompt showed — see
 		// workedthrough.go. Only for a turn that RAN: a refused onboarding
-		// showed nothing to a model, so nothing was worked through.
-		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
+		// showed nothing to a model, so nothing was worked through. An edited
+		// message is recorded at the version shown and for whom this turn
+		// works: tel.workingFor, the carrier its ceiling is composed from, so
+		// the mark drops only that edit's wake made for the same whom.
+		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered,
+			tel.workingFor)
 	}
 	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later step of this
 	// segment will read a note, and one offered from here on is answered

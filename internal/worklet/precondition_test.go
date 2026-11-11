@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -71,7 +72,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	r := newRoundTrip(t)
 	task := r.createTask("the circulating one")
 
-	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-1"})
+	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil), TurnID: "turn-1"})
 	for i := range worklet.ReassignmentBudget {
 		to := fmt.Sprintf("peer-%d", i)
 		if _, err := agent.UpdateTask(t.Context(), fmt.Sprintf("op-hand-%d", i),

@@ -95,7 +95,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.MoveWorkItemTool), nil
+		return unattributed(worklet.MoveWorkItemTool, err), nil
 	}
 	if t.deps.Moves == nil || t.deps.Reader == nil {
 		return unconfigured(worklet.MoveWorkItemTool), nil

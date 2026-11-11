@@ -50,6 +50,20 @@
 // five seconds — the timeout every harness profile states
 // (internal/agent/toolloop, internal/providers/llm/harness/harnessprofile).
 //
+// # An answer before the tool returns
+//
+// A dispatcher may answer a call while its tool runs on, and then finish and
+// record the call itself: the tool loop near its harness's tool timeout, as
+// above, and the bridge as the opening a call was made on ends. That answer,
+// like the tool loop's, is not a failure: a harness hands its model a failed
+// result as a call that failed, and a model makes a failed call again. The
+// server writes such an answer as it writes any, after the beat is stopped and
+// waited for. What the dispatcher may need besides is when that answer is out
+// ([Call.Over]: the request's end, which the SDK reaches only once the
+// answer's write has returned), since a session whose close has begun writes
+// no answer: the bridge waits on it before it closes the sessions of the
+// opening that ended.
+//
 // # No listener anywhere
 //
 // Nothing here binds a network port. A node may bind none at all (`api.port:

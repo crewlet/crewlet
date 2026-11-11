@@ -31,7 +31,7 @@ import (
 func operator(t *testing.T, n *node) *worklet.Writer {
 	t.Helper()
 	// AS EVERY SURFACE WRITES THE TOKEN'S WORK ([builtin.ActorOf]): under its
-	// login, with the apps it holds riding every record that wakes somebody,
+	// login, with the apps it holds riding every record a later turn reads (worklet's Writer.carries),
 	// which a turn the work wakes is held to (ADR-0109). A name of the
 	// harness's own carrying no apps is a write no surface makes, and the turn
 	// it woke was worked for a stranger.

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -22,10 +23,10 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 	t.Parallel()
 	question := "c-question"
 	task := worklet.Task{Assignee: "backend-engineer"}
-	agent := Actor{Handle: "qa", Kind: worklet.AuthorAgent}
+	agent := Actor{Handle: "qa", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	person := Actor{Handle: "miles", Kind: worklet.AuthorHuman}
 	// asking is the agent whose comment says it asks; its handle marks it.
-	asking := Actor{Handle: "pm", Kind: worklet.AuthorAgent}
+	asking := Actor{Handle: "pm", Kind: worklet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	const (
 		quiet = iota
 		notWoken
@@ -52,8 +53,9 @@ func TestOnlyACommentThatLeavesTheAssigneeUnaskedIsWarned(t *testing.T) {
 		"an agent's mention that asks":    {task, asking, worklet.Comment{Mentions: []string{"backend-engineer"}}, nil, quiet, nil},
 		"an agent's mention asking nothing": {task, agent, worklet.Comment{Mentions: []string{"backend-engineer"}},
 			nil, notWoken, nil},
-		"the assignee's own remark": {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent}, worklet.Comment{}, nil, quiet, nil},
-		"a task nobody holds":       {worklet.Task{}, agent, worklet.Comment{}, nil, quiet, nil},
+		"the assignee's own remark": {task, Actor{Handle: "backend-engineer", Kind: worklet.AuthorAgent,
+			WrittenFor: types.ForTurn(nil)}, worklet.Comment{}, nil, quiet, nil},
+		"a task nobody holds": {worklet.Task{}, agent, worklet.Comment{}, nil, quiet, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

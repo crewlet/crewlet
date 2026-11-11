@@ -387,6 +387,12 @@ type Writer struct {
 	// nil for every other actor.
 	ActorApps []iam.Grant
 
+	// writtenFor is whom this writer's records are written for
+	// ([Provenance.WrittenFor]), set by [Writer.As] alone and asked of the
+	// actor's kind before every record is built ([Writer.decide]): a writer
+	// acting as an agent that states nobody writes nothing.
+	writtenFor types.WrittenFor
+
 	// Origin is where the turn behind this writer was woken — see
 	// [Provenance.Origin] — and what every task it creates states.
 	Origin *Origin
@@ -511,6 +517,10 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	if kind == AuthorOperator {
 		clone.ActorApps = slices.Clone(provenance.Apps)
 	}
+	// AND WHOM THE PARTY WRITES FOR, as stated: refused at the write
+	// ([Writer.decide]) where an agent states nobody, never mended here into
+	// a carrier nobody composed.
+	clone.writtenFor = provenance.WrittenFor
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
@@ -520,16 +530,67 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 }
 
 // recordedApps are the apps a record carries beside its actor
-// ([MutationRecord.ActorApps]): the writer's own, on a record that wakes
-// somebody, and nothing on one that wakes nobody. Only a wake is read for them
-// — the turn it starts is bounded by them — and a record that wakes nobody
-// stays at the base version every build reads: a gate (an eviction) is read
-// by every build there will ever be.
-func (w *Writer) recordedApps(notify *Notify) []iam.Grant {
-	if notify == nil {
+// ([MutationRecord.ActorApps]): the writer's own on a record a later turn reads
+// to learn whom it works for ([Writer.carries]), and nothing on any other.
+// Asked by the same rule as [Writer.recordedFor], because the turn a record
+// wakes or picks up is bounded by both, and a record a turn never reads stays
+// at the version every build reads.
+func (w *Writer) recordedApps(carries bool) []iam.Grant {
+	if !carries {
 		return nil
 	}
 	return slices.Clone(w.ActorApps)
+}
+
+// recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
+// or why this writer may write none: an agent's carrier on a record a later
+// turn reads to learn whom it works for ([Writer.carries]), nobody on any
+// other, which stays at the version every build reads, and a refusal for a
+// writer acting as an agent that states nobody, or as anybody else carrying
+// somebody ([types.WrittenFor.For]).
+//
+// ASKED OF EVERY RECORD, whether it carries or not, because the rule is the
+// actor's: an agent's writer whose builder forgot whom its turn works for is
+// a bug however its next record happens to route, and refusing it only where
+// a record carried would let it pass every test that never wakes anybody.
+func (w *Writer) recordedFor(carries bool) (*types.WorkingFor, error) {
+	carrier, err := w.writtenFor.For(iam.ActorKind(w.ActorKind))
+	if err != nil {
+		return nil, fmt.Errorf("worklet: a writer acting as %q: %w", w.Actor, err)
+	}
+	if !carries {
+		return nil, nil
+	}
+	return carrier, nil
+}
+
+// carries reports whether a record is one a later turn reads to learn whom it
+// works for (ADR-0109), so it carries the writer's carrier and apps:
+//
+//   - AN ITEM'S CREATION AND EVERY MOVE OF ITS ASSIGNEE, whatever they wake
+//     now: the work pickup reads an item's creation row and the rows that
+//     moved its assignee to learn whom the work it hands a seat is for
+//     (ADR-0112), long after the record woke anybody or nobody. A creation is
+//     the task's own ([ChangeCreated]), never the alias a move claims for its
+//     old key, which nothing reads for whom it was made. A move is a patch
+//     whose assignee differs from the current row, whatever kind it ends
+//     with (assigns, which only the decide that holds that row can tell); a
+//     reassertion that moves nothing is none, and no read takes its carrier;
+//   - ANY OTHER RECORD only where its own Notify proves an agent other than
+//     the actor may be woken by it ([mayWakeAnAgent]).
+//
+// NEVER A RECORD EVERY BUILD MUST READ — a gate, a barrier, a trimmed marker,
+// a generation — which no versioned field may ride ([RecordEnvelope.readByEveryBuild]).
+func (w *Writer) carries(subject Subject, op OpKind, kind ChangeKind, assigns bool,
+	notify *Notify) bool {
+
+	switch {
+	case RecordEnvelope{Subject: subject, Op: op}.readByEveryBuild():
+		return false
+	case op == OpCreate && kind == ChangeCreated, assigns:
+		return true
+	}
+	return mayWakeAnAgent(notify, w.Actor)
 }
 
 // origin is the origin a create states: the writer's own, and none where the
@@ -634,16 +695,35 @@ type Provenance struct {
 
 	// Apps are the apps the credential behind a writer acting as no seat
 	// ([AuthorOperator]) used when this node resolved it (iam.ActorApps),
-	// carried on every record the writer appends that wakes somebody
-	// ([MutationRecord.ActorApps]) so a turn the record wakes uses no app the
-	// credential did not use here (ADR-0109). Kept for an operator alone ([Writer.As]): a seat's or a
+	// carried on every record the writer appends that a later turn reads
+	// ([MutationRecord.ActorApps], [Writer.carries]) so a turn the record
+	// wakes or hands work to uses no app the credential did not use here
+	// (ADR-0109). Kept for an operator alone ([Writer.As]): a seat's or a
 	// person's record names the seat, whose holder the turn's node reads.
 	//
 	// SENT ONLY WHERE SET: a provenance crosses to a data node inside the
 	// estate's signed envelope (internal/estate's Actor), and a write that
-	// carries no apps — every seat's and every person's — goes out byte for
-	// byte as a build without the field sends it.
+	// carries no apps — every seat's and every person's — sends no apps
+	// member, as a build without the field sends none.
 	Apps []iam.Grant `json:",omitempty"`
+
+	// WrittenFor is whom the writer's records are written for (ADR-0109):
+	// for an [AuthorAgent] writer, whoever the turn behind it works for,
+	// carried on every record it appends that a later turn reads
+	// ([MutationRecord.WorkingFor], [Writer.carries]) so the turn the record
+	// wakes or hands work to works for them, and never for the writing seat. AN AGENT'S WRITER THAT STATES
+	// NOTHING WRITES NOTHING ([Writer.recordedFor]), and every other author
+	// carries nobody: see [types.WrittenFor].
+	//
+	// ASKED OF NO NODE UNSTATED: internal/estate refuses a tracker write whose
+	// actor may write nothing before the write is asked anywhere, in process
+	// as routed, so no node ever sends a data node an agent's write that
+	// states nothing. Sent only where it carries somebody (`omitzero`), as
+	// Apps is, and stated on arrival by the actor the provenance crosses
+	// inside (internal/estate's Actor), WHATEVER ARRIVED: an older build sends
+	// an agent's provenance that carries nothing as no member at all, so a
+	// decoder of the provenance alone would never run for it.
+	WrittenFor types.WrittenFor `json:",omitzero"`
 
 	// Written is where the tasks this writer's records COMMIT to are
 	// reported — the turn's own set, so the engine can charge a turn that
@@ -1259,15 +1339,29 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			// the applier's own question ([keysMoved]), of the stored task
 			// and the task this record leaves, so the write whose apply
 			// will touch the directory is exactly the one checked here.
-			if next := applyPatch(current, charged); keysMoved(current, next) {
+			next := applyPatch(current, charged)
+			if keysMoved(current, next) {
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				if err := scope.coversKeys(append(keysOf(current),
 					keysOf(next)...)); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
-			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID,
-				charged, notify, at)
+			// THE WAKE SAYS WHAT THIS WRITE MOVED, from the two states this
+			// snapshot holds rather than the task its caller read outside
+			// it ([Notify.restated]): the router decides who hears it by
+			// these deltas, so the card is the history row this record
+			// writes.
+			notify, err = w.restatedFor(ctx, tx, notify, current, next)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			// AN ASSIGNMENT WHATEVER ITS KIND: a status move that takes the
+			// item is recorded under `status`, which outranks `assignee`, and
+			// it is still the row the pickup reads for whom the work is for.
+			assigns := charged.Assignee != nil && *charged.Assignee != current.Assignee
+			decision, err := w.decideAssigning(ctx, tx, stamp, subject, OpPatch, kind, scope, opID,
+				charged, notify, at, assigns)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -2170,6 +2264,16 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 	subject Subject, op OpKind, kind ChangeKind, scope ScopeSet, opID string,
 	payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
 
+	return w.decideAssigning(ctx, tx, stamp, subject, op, kind, scope, opID, payload, notify, at, false)
+}
+
+// decideAssigning is [Writer.decide] for a record that may move an item's
+// assignee whatever its kind, saying whether it does (assigns): a task patch,
+// whose decide alone holds the row the patch is compared against.
+func (w *Writer) decideAssigning(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
+	subject Subject, op OpKind, kind ChangeKind, scope ScopeSet, opID string,
+	payload any, notify *Notify, at time.Time, assigns bool) (statelog.Decision, error) {
+
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
 		return statelog.Decision{}, err
 	}
@@ -2197,6 +2301,12 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 			"empty one resolves to the workspace and files its deferral where "+
 			"no project-scoped probe looks", op, subject, subject.Kind)
 	}
+	carries := w.carries(subject, op, kind, assigns, notify)
+	writtenFor, err := w.recordedFor(carries)
+	if err != nil {
+		return statelog.Decision{}, err
+	}
+	apps := w.recordedApps(carries)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return statelog.Decision{}, fmt.Errorf("worklet: encode the %s payload "+
@@ -2213,14 +2323,15 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		Mutation:  body,
 		Actor:     w.Actor,
 		ActorKind: w.ActorKind,
-		ActorApps: w.recordedApps(notify),
+		ActorApps: apps,
 		// THE HISTORY ROW KEEPS THEM from this version on (ADR-0112).
-		ActorAppsKept: len(w.recordedApps(notify)) > 0,
+		ActorAppsKept: len(apps) > 0,
 		// THE NOTICE ROWS KEEP THE STATEMENT from this version on.
 		NoticeAsksKept: notify != nil && notify.Snapshot.CommentAsks != nil,
 		// AND WHETHER IT WOKE EACH RECIPIENT, from this version on, where it
 		// tells somebody it does not wake.
 		NoticeWokeKept: tellsWithoutWaking(notify, w.Actor),
+		WorkingFor:     writtenFor,
 		OperatorID:     w.OperatorID,
 		TurnID:         w.TurnID,
 		Chain:          w.Chain,
@@ -2240,6 +2351,45 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 			op, subject, len(encoded), MaxCommitBytes)
 	}
 	return statelog.Decision{Payload: encoded}, nil
+}
+
+// restatedFor is [Notify.restated] in an update's decide, with the two facts
+// it reads in the decide's own snapshot: the project's catalogue where either
+// side holds a custom value, which names it as the applier's row does, and the
+// parent's assignee where the write moves the task across the finished edge.
+//
+// THE PARENT HERE, NEVER AT THE CALLER. Three of the callers that close a task
+// (a merged change, the merge queue, a merge of duplicates) never named its
+// parent, so its assignee heard of none of those closes; the decide holds the
+// one consistent read of the parent there is, and every update passes
+// through it. The read is the one transition's, so an ordinary edit costs
+// none.
+func (w *Writer) restatedFor(ctx context.Context, tx *sql.Tx, notify *Notify,
+	current, next Task) (*Notify, error) {
+
+	if notify == nil {
+		return nil, nil
+	}
+	var declared map[string]FieldDef
+	if len(current.Fields) > 0 || len(next.Fields) > 0 {
+		var err error
+		if declared, err = declaredFields(ctx, tx, next.Project); err != nil {
+			return nil, fmt.Errorf("worklet: read project %s's fields for the wake "+
+				"on task %s: %w", next.Project, next.ID, err)
+		}
+	}
+	parent := ""
+	if crossesFinished(current, next) && next.Parent != nil && *next.Parent != "" {
+		held, found, err := readTask(ctx, tx, *next.Parent)
+		if err != nil {
+			return nil, fmt.Errorf("worklet: read task %s's parent %s for the "+
+				"wake: %w", next.ID, *next.Parent, err)
+		}
+		if found {
+			parent = held.Assignee
+		}
+	}
+	return notify.restated(current, next, declared, w.Leads, parent), nil
 }
 
 // collided is a wake with [Snapshot.KeyCollision] derived from the key
@@ -2396,17 +2546,20 @@ func (w *Writer) report(wrote *committing, result statelog.Result) {
 
 // committedChange is the kind of change one record is, for its turn's outcome:
 // a comment, an answer to an ask, or a move of the item; "" for a change that
-// moves no work (who watches it).
+// moves no work: who watches it, and nothing else ([Notify.watchOnly]).
+//
+// BY WHAT THE WRITE MOVED, NEVER BY ITS KIND ALONE, by the rule the history read
+// of the same turns applies ([Reader.TurnsMoved]): `update_work_item` files a
+// watch written with a due date, a priority or a custom value under
+// `watchers`, and read by its kind the turn that wrote it moved nothing. A
+// quiet commit announces nothing and so carries no deltas to read, and is read
+// by its kind.
 func committedChange(payload []byte) types.CommittedChange {
 	record, err := Decode(payload)
 	if err != nil {
 		return types.CommittedItem
 	}
 	switch {
-	case record.Kind.Moves():
-		return types.CommittedItem
-	case record.Kind == ChangeWatchers:
-		return ""
 	case record.Kind.Conversation():
 		var patch TaskPatch
 		if json.Unmarshal(record.Mutation, &patch) == nil && patch.Comment != nil &&
@@ -2414,6 +2567,9 @@ func committedChange(payload []byte) types.CommittedChange {
 			return types.CommittedAnswer
 		}
 		return types.CommittedComment
+	case record.Notify != nil && record.Notify.watchOnly(),
+		record.Notify == nil && record.Kind == ChangeWatchers:
+		return ""
 	}
 	return types.CommittedItem
 }
