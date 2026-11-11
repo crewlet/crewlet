@@ -634,9 +634,10 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 				s.settleMu.Unlock()
 				log.ErrorContext(base, "steer_take_unsettled", "turn_id", turnID, "takes", left,
 					"detail", "this node stopped before the store answered the settle of a take of the run's "+
-						"notes, its last attempt on the stop's allowance included: where the store recorded "+
-						"it, the record says the run read notes its reader was never handed, and no other "+
-						"node knows to settle it")
+						"notes, its last attempt included, made in the window that opened as the stop's "+
+						"teardown began (none for a take handed off once the window was over): where the "+
+						"store recorded it, the record says the run read notes its reader was never handed, "+
+						"and no other node knows to settle it")
 				return
 			}
 		}
