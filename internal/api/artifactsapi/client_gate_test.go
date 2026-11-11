@@ -132,6 +132,8 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"DOC_TAB_TITLE_MAX_BYTES":        docindex.MaxTitleBytes,
 		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,
 		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
+		"DECK_TITLE_MAX_BYTES":           slideformat.MaxTitleBytes,
+		"DECK_NOTES_MAX_RUNES":           slideformat.MaxNotesRunes,
 		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
 		"ARTIFACT_FOLDER_NAME_MAX_BYTES": artifacts.MaxFolderNameBytes,
 		"ARTIFACT_FOLDER_MAX_DEPTH":      artifacts.MaxFolderDepth,

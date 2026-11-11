@@ -2208,8 +2208,12 @@ const (
 	// for a schema before a page context is sent, the page context's own
 	// bounds held to the engine's, and the Budgets ceiling's seat held to a
 	// handle's grammar past an enum's 64 took it to 5726.6 KiB (5,864,019
-	// bytes, +1,367, all script): 5727 KiB.
-	treeBudget = 5<<20 + 607<<10
+	// bytes, +1,367, all script): 5727 KiB. The org builder's identities and
+	// a mention held to the engine's (+131), a new project's key checked by
+	// its grammar (+92) and a deck's title held to its bytes, with Save held
+	// past it or past a slide's notes (+589), took it to 5727.4 KiB (5,864,831
+	// bytes, all script): 5728 KiB.
+	treeBudget = 5<<20 + 608<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

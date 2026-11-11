@@ -125,6 +125,16 @@ export const DECK_PLAN_MAX_SLIDES = 60;
 
 /** The longest slide title in a starter deck's plan, in UTF-8 bytes (`slideformat.MaxSlideTitleBytes`). */
 export const DECK_SLIDE_TITLE_MAX_BYTES = 200;
+
+/**
+ * The longest a deck's own title may be, in UTF-8 BYTES (`slideformat.MaxTitleBytes`),
+ * and a slide's speaker notes, in CHARACTERS (`slideformat.MaxNotesRunes`): the
+ * deck's editor holds Save past either, since a publish past one is refused
+ * whole. Two units, as the engine counts them.
+ */
+export const DECK_TITLE_MAX_BYTES = 120;
+/** See [DECK_TITLE_MAX_BYTES]. */
+export const DECK_NOTES_MAX_RUNES = 4000;
 /**
  * How many days a trashed artifact is kept before it is deleted for good
  * (`artifacts.TrashRetention`): the date every trash sentence names.
