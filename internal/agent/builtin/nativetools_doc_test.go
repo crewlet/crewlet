@@ -147,13 +147,18 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
 			Writer: full.Code.Writer, Holder: full.Code.Holder, Actor: builtin.PrincipalActor},
 		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
-		// AND THE ATLAS, over the settings acme runs.
-		Atlas: builtin.AtlasDeps{Settings: runsAcme},
+		// AND THE ATLAS, over the settings acme runs, and its writes over
+		// its log.
+		Atlas: builtin.AtlasDeps{Settings: runsAcme, Records: atlasLogOnly(newAtlasLedger())},
+		AtlasWrite: builtin.AtlasWriteDeps{Log: newAtlasLedger(), Actor: actor,
+			Org: func() *org.Organization { return company }},
 	})
 	// THE CODE TOOLS JOIN THE LIST through codeCandidates, which this
 	// fixture wires: every read and write a seat's registry takes, beside
-	// the list's own audit and mark.
-	declared := operatorCandidates(t) + len(builtin.CodeToolNames()) + len(builtin.CodeWrites())
+	// the list's own audit and mark; AND THE ATLAS'S WRITES through
+	// atlasWriteCandidates.
+	declared := operatorCandidates(t) + len(builtin.CodeToolNames()) + len(builtin.CodeWrites()) +
+		len(builtin.AtlasWriteTools)
 	if len(served) != declared {
 		names := make([]string, 0, len(served))
 		for _, tool := range served {
@@ -172,7 +177,8 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	}
 	for _, name := range append([]string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool,
-		builtin.CodeRepoReadersTool, builtin.CodeMarkInboxTool}, chatlet.OperatorOnlyTools()...) {
+		builtin.CodeRepoReadersTool, builtin.CodeMarkInboxTool}, append(chatlet.OperatorOnlyTools(),
+		builtin.AtlasWriteTools...)...) {
 		if !slices.Contains(only, name) {
 			t.Fatalf("the operator surface with every seam wired does not serve %s "+
 				"(it adds %v), so this count is not the one the page lists", name, only)
@@ -316,7 +322,17 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 				"catalogue's set of what no seat is given", name)
 		}
 	}
-	decisions := len(every) - len(operatorOnly) - len(chatOnly)
+	// AND THE ATLAS'S WRITES, a fourth set counted apart: every one is in
+	// `every`, and the pages name them as a set of their own.
+	for _, name := range builtin.AtlasWriteTools {
+		if !slices.Contains(every, name) {
+			t.Errorf("the atlas's %s is missing from the catalogue's set of what no "+
+				"seat is given", name)
+		}
+	}
+	atlasWrites := len(builtin.AtlasWriteTools)
+	besideAtlas := len(every) - atlasWrites
+	decisions := besideAtlas - len(operatorOnly) - len(chatOnly)
 	title := func(word string) string { return strings.ToUpper(word[:1]) + word[1:] }
 
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
@@ -343,7 +359,10 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 			"tools a seat holds (" + spelled(t, len(tracker)) + " over the tracker, " +
 				spelled(t, len(pages)) + " over the pages and " +
 				spelled(t, len(chatSeat)) + " in the chat) and " +
-				spelled(t, len(every)) + " more that no seat is given"},
+				spelled(t, besideAtlas) + " more that no seat is given"},
+		{"docs/getting-started/quickstart.md",
+			readPage(t, "docs/getting-started/quickstart.md"),
+			"and the atlas's " + spelled(t, atlasWrites) + " writes"},
 		// THE GUIDE COUNTS THE TWO HALVES APART: the tracker's beside the
 		// tables, and the person's decisions about the company after them.
 		{"docs/guides/tools-and-mcp.md", guide, "and " + spelled(t, len(operatorOnly)) +
@@ -363,7 +382,12 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 		// THE REFERENCE LISTS EVERY ONE, the tracker's and the rest.
 		{"docs/reference/api-endpoints.md",
 			readPage(t, "docs/reference/api-endpoints.md"),
-			"Plus **" + spelled(t, len(every)) + " no seat is given**"},
+			"Plus **" + spelled(t, besideAtlas) + " no seat is given**"},
+		{"docs/reference/api-endpoints.md",
+			readPage(t, "docs/reference/api-endpoints.md"),
+			"And the atlas's **" + spelled(t, atlasWrites) + " writes**"},
+		{"docs/guides/tools-and-mcp.md", guide,
+			title(spelled(t, atlasWrites)) + " more change the company's atlas"},
 	} {
 		if !strings.Contains(c.text, c.want) {
 			t.Errorf("%s does not say %q — the registry adds %d tracker and %d "+

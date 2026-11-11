@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -111,6 +112,15 @@ var nativeDomains = map[string]nativeDomain{
 		// direct conversation IS its participants, so the `to` that
 		// names them is the object a failed send_dm or open_dm points at.
 		objects: []string{"channel", "message_id", "to"},
+	},
+	atlasdomain.Domain{}.Name(): {
+		class:    atlasClass,
+		sentence: atlasdomain.Sentence,
+		// An entry is named by `atlas_entry` on every write, by its id or
+		// its kind and key, never a bare `entry`, which on the artifacts'
+		// tools is a file. A purged value is not an object a failure names:
+		// naming it would repeat what the purge erases.
+		objects: []string{"atlas_entry"},
 	},
 	code.Domain{}.Name(): {
 		class:    codeClass,

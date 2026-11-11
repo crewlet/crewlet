@@ -7,12 +7,15 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
 // AtlasToolDeps is what the atlas tools read on this node: the settings it
-// runs, read per call, their revision and the deployment's addresses. Gitlet
-// comes through the code tools' own half, as the caller (ADR-0127).
+// runs, read per call, their revision and the deployment's addresses, and
+// every record source it reaches, what people recorded in the atlas's log
+// included. Gitlet comes through the code tools' own half, as the caller
+// (ADR-0127).
 func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	if e == nil {
 		return builtin.AtlasDeps{}
@@ -52,7 +55,34 @@ func (e *Engine) atlasRecords(ctx context.Context) gather.Sources {
 		src.Usage = e.UsageReads()
 	}
 	src.Alarms = e
+	// AND WHAT PEOPLE RECORDED, through the router, so every read folds it.
+	if reads, ok := e.AtlasReads(); ok {
+		src.Log = reads
+	}
 	return src
+}
+
+// AtlasWriteToolDeps is what the atlas's write tools change it through on this
+// node: the log, read and written through the router, so a person's write from
+// a node without data is a data node's. Who writes and the chart an owner is
+// named from are the surface's, set per call. The zero value where this node
+// reaches no copy of the log.
+func AtlasWriteToolDeps(e *Engine) builtin.AtlasWriteDeps {
+	if e == nil {
+		return builtin.AtlasWriteDeps{}
+	}
+	reads, readable := e.AtlasReads()
+	writes, writable := e.AtlasWrites()
+	if !readable || !writable {
+		return builtin.AtlasWriteDeps{}
+	}
+	return builtin.AtlasWriteDeps{Log: atlasLog{AtlasReader: reads, AtlasWriter: writes}}
+}
+
+// atlasLog is the log's two sides as one, as the write tools take it.
+type atlasLog struct {
+	estate.AtlasReader
+	estate.AtlasWriter
 }
 
 // atlasSettings is the settings this node runs as the atlas reads them, and

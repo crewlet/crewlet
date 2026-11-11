@@ -155,7 +155,13 @@ read a `visibility: unit` repository, an administrator's audit, and
 the code writes (a seat is woken, never shown an inbox); and `atlas_search`,
 the company's [atlas](../concepts/atlas.md) for a holder of `atlas`, with its
 repositories only for a holder of `gitlet` too
-([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)). That set
+([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)).
+Eleven more change the company's atlas, each a claim in the person's own name
+and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
+`atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
+`atlas_restore`, `atlas_merge`, `atlas_split` and `atlas_purge`, the last an
+administrator's after a fresh sign-in
+([Changing the atlas](../concepts/atlas.md#changing-the-atlas)). That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
 dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)

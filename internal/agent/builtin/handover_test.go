@@ -503,6 +503,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	args[builtin.ReadSessionTool] = map[string]any{"turn_id": sweepSessionTurn}
 	maps.Copy(args, everyWriteCall)
 	maps.Copy(args, codeSweepArgs())
+	maps.Copy(args, atlasSweepCalls())
 	// NO RENAME, which is the container's lead's: the sweep's chart leads
 	// projects and nothing else, and a save is what is being swept.
 	args[builtin.SavePageTool] = map[string]any{"page": "p1", "base_version": 4, "body": "plain"}

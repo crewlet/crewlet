@@ -122,9 +122,36 @@ A key one source carries on two entries (two servers behind one load balancer, t
 
 For each fact, a source's newest claim stands for it, and across sources the most trusted wins, then the newest. A person's value is shown over every inference. When a newer report from an integration, an agent or the engine contradicts a person, the fact is **contested**; when two sources the engine trusts alike disagree with no person to settle it, it is **disputed**. Either way both values are shown, and the entry waits for a person; nothing is settled in silence.
 
+## Changing the atlas
+
+A person who holds Atlas changes it with eleven tools of the operator catalogue, the same catalogue the dashboard writes through ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)) and your own assistant reaches over `/operator/mcp`. Each records a claim in the person's own name, which outranks every integration and agent until they report a change, when both values are shown for review:
+
+| Tool | What it records |
+|---|---|
+| `atlas_add_entry` | an entry no source reports, by its `kind` and `key`, with a `name` where the key is not one |
+| `atlas_correct` | one fact's `value` as the person knows it (for a fact that holds many, one more value), or with `wrong`, that a value shown is wrong |
+| `atlas_confirm` | what the atlas shows, as the person's own: the entry, one fact (or another value a source reports for it) or one relation |
+| `atlas_relate`, `atlas_unrelate` | a relation between two entries, drawn or recorded as not there |
+| `atlas_set_owner` | the owning `seat` (by handle) or `unit` (by key) of the chart, in place of the owner a person named before; `clear` removes it. Never free text |
+| `atlas_retire`, `atlas_restore` | an entry taken off the map, kept in its history, and brought back |
+| `atlas_merge`, `atlas_split` | two entries of one kind said to be the same thing, or not the same |
+| `atlas_purge` | an entry or a value erased everywhere ([below](#the-atlass-own-log)) |
+
+**A write is decided on what the person reads.** Each reads the atlas as its caller does, Gitlet only for a holder of `gitlet` and what people recorded at the person's own level, after reading the version of every entry it names; every claim is recorded on that version, so a change somebody made in between refuses the write rather than being written over. A caller who decided from an earlier read names the version it read as `if_match`, and every write answers the entry's new `version`. A write that asks for what already holds records nothing and answers `applied` with `unchanged`.
+
+**What is declared elsewhere is changed there.** A fact the company's settings, Gitlet or the engine's own records declare is never written over in the atlas: a server the SSH settings declare is not retired here, nor its address corrected, and a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the engine names, are not added by hand. A Gitlet repository is changed only by a holder of `gitlet` who can read it, since the atlas is never a way round another permission. What the settings leave unsaid (a server's importance, a service's owner) is a person's to say.
+
+**Values go through the vocabulary's typed grammar, keys included.** A key or a value shaped like a credential is refused, never stored masked, and the refusal never repeats it.
+
+**"The same" and "not the same".** A merge joins two entries no exact key joins, and withdraws a "not the same" a person recorded between them first. A split keeps two entries apart whatever key they share, and always wins over a merge nobody made.
+
+**A purge is an administrator's**, after a fresh sign-in, and never an agent's. It names an entry, or a value exactly as the atlas holds it; a value the settings or the engine's records declare is removed there first. The value is never repeated in an answer, and only its digest leaves the node the purge was asked of.
+
+**A node without data writes too**, through a data node that publishes, as it reads. Every write is audited as every operator call is, and **no agent changes the atlas through these tools**: the authority table refuses every one of them to an agent whatever it holds, and no seat's registry holds them.
+
 ## The atlas's own log
 
-What people record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG`, applied identically on every data node, so whichever node a person reaches answers the same atlas. A node that holds no data, such as one that only runs agents, reads it through a data node's copy. Each entry is one subject on it: an edit names the version of the entry it was decided from, and is refused if somebody else changed the entry since. A claim is never overwritten: a newer claim from the same person on the same fact replaces the older one in the view, and the older one stays as the entry's history.
+What people record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG`, applied identically on every data node, so whichever node a person reaches answers the same atlas, and every read of the atlas folds it beside what the engine computes. A node that holds no data, such as one that only runs agents, reads and writes it through a data node. Each entry is one subject on it: an edit names the version of the entry it was decided from, and is refused if somebody else changed the entry since. A claim is never overwritten: a newer claim from the same person on the same fact replaces the older one in the view, and the older one stays as the entry's history.
 
 **History** is kept for the company's `atlas.retention_days`, 400 days unless it says otherwise (90 to 3650): a replaced value, and an entry a person retired that nothing has reported since, go once they are older than it. What the atlas holds now never expires.
 
@@ -138,7 +165,7 @@ Secrets, tokens, passwords, private keys, signed addresses, connection strings, 
 
 Reading the atlas takes the **Atlas** permission (`atlas`), the one app a person is given only on purpose: an invitation and a person's create leave it unticked, and an administrator holds it as every app ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md), [Atlas is given on purpose](identity-and-access.md#atlas-is-given-on-purpose)). A holder reads every entry, private addresses included. The atlas is never a way round another permission: its repositories are read as the reader, so a holder who does not use Gitlet is shown none, and the answer says Gitlet was not read and why.
 
-A person reads it today with `atlas_search` on the operator surface (`/operator/mcp`): every entry, or those a `query` or a `kind` names, each with its facts, where each came from and its relations, beside which sources were read in full and how many values were left out for being shaped like a credential. Those values are counted and never shown. An agent seat holds the app as it holds every app, and in a turn a person woke it is held to whether that person does ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+A person reads it with `atlas_search` on the operator surface (`/operator/mcp`): every entry, or those a `query` or a `kind` names, each with its facts, where each came from and its relations, beside which sources were read in full and how many values were left out for being shaped like a credential. Those values are counted and never shown. An agent seat holds the app as it holds every app, and in a turn a person woke it is held to whether that person does ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 
 ## Every piece of state, and who has to agree on it
 

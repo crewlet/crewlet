@@ -24,6 +24,8 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -374,6 +376,19 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a re-anchoring answer placing another set than its anchors, which no Gitlet node of this build " +
 				"gives: the asking node's own fault, never a caller's request"},
 		"ErrFutureVersion": {err: &code.ErrFutureVersion{},
+			why: "a record a newer build wrote, which the framework defers rather than refuses"},
+	},
+	atlasdomain.Domain{}.Name(): {
+		"ErrInvalid":      {err: atlasdomain.ErrInvalid, means: malformed},
+		"ErrStaleVersion": {err: atlasdomain.ErrStaleVersion, means: staleRead},
+		// A PURGED ENTRY OR VALUE is gone for good, on every node.
+		"ErrPurged":   {err: atlasdomain.ErrPurged, means: absent},
+		"ErrConflict": {err: atlasdomain.ErrConflict, means: lostRace},
+		"ErrExists":   {err: atlasdomain.ErrExists, means: taken},
+		// AN HOUR WITH NOTHING LEFT PAST THE RETENTION refuses by what it is
+		// now: the reaper's own expiry, which the next pass decides again.
+		"ErrNotDue": {err: atlasdomain.ErrNotDue, means: objectState},
+		"ErrFutureVersion": {err: &atlasdomain.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 	},
 }
@@ -793,6 +808,9 @@ var toolFailures = map[string]map[string]func(error) tools.Result{
 	artifactdata.Domain{}.Name(): {"write_artifact_data": func(err error) tools.Result {
 		return dataFailure(context.Background(), "write_artifact_data", err)
 	}},
+	atlasdomain.Domain{}.Name(): {AtlasCorrectTool: func(err error) tools.Result {
+		return atlasWriteFailure(context.Background(), AtlasCorrectTool, Actor{}, atlas.Ref{}, err)
+	}},
 }
 
 // domainPackages is each native domain's package, relative to internal/, read
@@ -803,7 +821,7 @@ func domainPackages() map[string]string {
 	internal := path.Dir(reflect.TypeFor[statelog.Position]().PkgPath())
 	out := map[string]string{}
 	for _, d := range []statelog.Domain{worklet.Domain{}, doclet.Domain{}, chatlet.Domain{},
-		artifactsdomain.Domain{}, artifactdata.Domain{}, code.Domain{}} {
+		artifactsdomain.Domain{}, artifactdata.Domain{}, code.Domain{}, atlasdomain.Domain{}} {
 		out[d.Name()] = strings.TrimPrefix(reflect.TypeOf(d).PkgPath(), internal+"/")
 	}
 	return out
