@@ -434,7 +434,7 @@ func writeCrashAt(t *testing.T, newFleet NewFleet, point codefault.Point) {
 	for _, n := range c.Fleet.Nodes() {
 		for _, sub := range []string{"scratch", "tmp", "trash"} {
 			dir := filepath.Join(n.CacheDir(), sub)
-			if !within(10*time.Second, func() bool { return emptyDir(dir) }) {
+			if !within(cleanupWait, func() bool { return emptyDir(dir) }) {
 				t.Errorf("%s's %s/ still holds %v after the restart", n.ID(), sub, entries(dir))
 			}
 		}

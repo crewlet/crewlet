@@ -139,61 +139,76 @@ func (s *expungeScene) owed(ctx context.Context) (bool, error) {
 // or failed an expunge, a listing that failed, and a minute of passes that
 // never served the purge are its error. Under ctx alone, never the case's
 // test, so a case runs it on a goroutine while a fault holds the cycle.
-func (s *expungeScene) tryServed(ctx context.Context) (compact.ExpungeReport, error) {
-	var did compact.ExpungeReport
+//
+// IT COUNTS, PASS BY PASS, each cycle's begin and its commit's answer
+// (codefault.ExpungeAfterBegin, ExpungeAfterCommit): a pass whose two counts
+// differ began a cycle another pass commits, or committed one another pass
+// began — an expunge left open, finished from its rows a pass later, which
+// a pass's own report counts nowhere ([expungeServed.split]).
+func (s *expungeScene) tryServed(ctx context.Context) expungeServed {
+	var o expungeServed
+	faults := s.c.Fleet.Faults()
 	deadline := time.Now().Add(time.Minute)
 	for {
 		for _, n := range s.c.Fleet.Nodes() {
+			begun, committed := faults.Hits(codefault.ExpungeAfterBegin), faults.Hits(codefault.ExpungeAfterCommit)
 			r, err := n.Compactor().ExpungePass(ctx)
-			if err != nil {
-				return did, fmt.Errorf("%s's expunge pass: %w", n.ID(), err)
+			if faults.Hits(codefault.ExpungeAfterBegin)-begun != faults.Hits(codefault.ExpungeAfterCommit)-committed {
+				o.split++
 			}
-			did.Listed += r.Listed
-			did.Maintained += r.Maintained
-			did.Expunged += r.Expunged
-			did.Refused += r.Refused
-			did.Failed += r.Failed
+			if err != nil {
+				o.err = fmt.Errorf("%s's expunge pass: %w", n.ID(), err)
+				return o
+			}
+			o.did.Listed += r.Listed
+			o.did.Maintained += r.Maintained
+			o.did.Expunged += r.Expunged
+			o.did.Refused += r.Refused
+			o.did.Failed += r.Failed
 			if r.Refused+r.Failed > 0 {
-				return did, fmt.Errorf("%s's expunge pass refused or failed an expunge: %+v", n.ID(), r)
+				o.err = fmt.Errorf("%s's expunge pass refused or failed an expunge: %+v", n.ID(), r)
+				return o
 			}
 		}
 		switch owed, err := s.owed(ctx); {
 		case err != nil:
-			return did, err
+			o.err = err
+			return o
 		case !owed:
-			return did, nil
-		case time.Now().After(deadline):
-			return did, fmt.Errorf("no Gitlet node's pass served the purge of %s in a minute: %+v", s.name, did)
+			return o
+		case time.Now().After(deadline): //fixedwait:measure a poll's own deadline, answered as the error every caller fails on
+			o.err = fmt.Errorf("no Gitlet node's pass served the purge of %s in a minute: %+v", s.name, o.did)
+			return o
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
 // served is tryServed failing the case on its error.
 func (s *expungeScene) served() compact.ExpungeReport {
 	s.c.T.Helper()
-	did, err := s.tryServed(s.c.Ctx)
-	if err != nil {
-		s.c.T.Fatal(err)
+	o := s.tryServed(s.c.Ctx)
+	if o.err != nil {
+		s.c.T.Fatal(o.err)
 	}
-	return did
+	return o.did
 }
 
 // servedAsync runs tryServed on a goroutine of its own, its answer on the
 // channel it returns.
 func (s *expungeScene) servedAsync() <-chan expungeServed {
 	done := make(chan expungeServed, 1)
-	go func() {
-		did, err := s.tryServed(s.c.Ctx)
-		done <- expungeServed{did: did, err: err}
-	}()
+	go func() { done <- s.tryServed(s.c.Ctx) }()
 	return done
 }
 
 // expungeServed is what tryServed answered.
 type expungeServed struct {
 	did compact.ExpungeReport
-	err error
+	// split is how many of its passes began a cycle they did not answer the
+	// commit of, or answered the commit of a cycle they did not begin.
+	split int
+	err   error
 }
 
 // hold arms point to block once, and answers the channel closed when the
@@ -376,8 +391,16 @@ func (s *expungeScene) vsAPushCheckedBeforeIt() {
 // the case holds every node's crewlet.code.expunge.runs{outcome=stale} to
 // what it was before the purge.
 //
-// Mutation: have the commit's decide refuse stale once a push landed since
-// the rescue's sync, and the cycle is answered stale: red.
+// INSIDE ITS POLL is the PASS that begins the cycle answering its commit:
+// passes run an ExpungePoll apart, so a commit left to the next pass lands a
+// poll late — here, where the case drives the passes back to back,
+// milliseconds late, which only the passes' own counts can see
+// ([expungeServed.split]).
+//
+// Mutations: have the commit's decide refuse stale once a push landed since
+// the rescue's sync, and the cycle is answered stale: red; have a cycle answer
+// waiting once its begin has applied, so the next pass finishes it from its
+// rows — one cycle, nothing refused stale — and its passes split it: red.
 func (s *expungeScene) underAPushEvery100ms() {
 	t := s.c.T
 	p := NewPerson(t, s.c.Fleet, "ceo")
@@ -403,7 +426,6 @@ func (s *expungeScene) underAPushEvery100ms() {
 	s.purge()
 	built, letBuild := s.hold(codefault.ExpungeAfterBuild)
 	rescued, letRescue := s.hold(codefault.ExpungeAfterRescueUpload)
-	start := time.Now()
 	done := s.servedAsync()
 	s.reach(built, done, codefault.ExpungeAfterBuild)
 	awaitPushes(codefault.ExpungeAfterBuild)
@@ -412,7 +434,6 @@ func (s *expungeScene) underAPushEvery100ms() {
 	awaitPushes(codefault.ExpungeAfterRescueUpload)
 	letRescue()
 	o := <-done
-	took := time.Since(start)
 	pushes.stop()
 
 	if o.err != nil {
@@ -426,9 +447,9 @@ func (s *expungeScene) underAPushEvery100ms() {
 		t.Errorf("the purge under a push every %s had its begin or its commit refused stale %d times, want each "+
 			"decided once over the refs that moved since it read them", expungePushEvery, stale)
 	}
-	if took >= compact.ExpungePoll {
-		t.Errorf("the purge under a push every %s committed %s after its first pass, past the %s its pass is "+
-			"taken up in", expungePushEvery, took, compact.ExpungePoll)
+	if o.split > 0 {
+		t.Errorf("the purge under a push every %s was begun and committed by different passes (%d split): its "+
+			"commit landed a pass, an ExpungePoll, after the pass that took it up", expungePushEvery, o.split)
 	}
 	last := pushes.now()
 	if last.failed != "" {

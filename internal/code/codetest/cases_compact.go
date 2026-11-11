@@ -461,7 +461,7 @@ func aCompactionDuringAFetch(t *testing.T, newFleet NewFleet) {
 	if _, stderr, err := p.Git().Try(t, fetched, nil, "fsck", "--connectivity-only", "--no-dangling"); err != nil {
 		t.Errorf("the fetched history is not whole: %v\n%s", err, stderr)
 	}
-	if !within(10*time.Second, func() bool {
+	if !within(cleanupWait, func() bool {
 		_, err := os.Stat(old)
 		return errors.Is(err, os.ErrNotExist)
 	}) {

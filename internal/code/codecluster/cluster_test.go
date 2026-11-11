@@ -173,6 +173,9 @@ type member struct {
 	// answered — its router's in process and its git lane's alike
 	// (memberGit): which member a read was served by.
 	gitAnswered atomic.Int64
+	// waitedOut is how many proposals the members' routers waited out on
+	// this member (waitedOutAsker).
+	waitedOut atomic.Int64
 
 	mu       sync.Mutex
 	q        *js.Queue
@@ -299,10 +302,10 @@ func (c *cluster) record(_ context.Context, e types.OperatorActed) {
 // registration serves the git lane over that half.
 func (m *member) route(t testing.TB) {
 	t.Helper()
-	r, err := estate.NewRouter(estate.RouterOptions{Self: m.id, Queue: m.q, Placement: m.c.placement,
-		Git: codetest.GitPlacement{Placement: m.c.placement, Node: m.c.gitletNodeOf}, LocalGit: memberGit{m},
-		Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming, Envelopes: clusterEnvelopes,
-		Now: m.c.now})
+	r, err := estate.NewRouter(estate.RouterOptions{Self: m.id, Queue: waitedOutAsker{Asker: m.q, c: m.c},
+		Placement: m.c.placement, Git: codetest.GitPlacement{Placement: m.c.placement, Node: m.c.gitletNodeOf},
+		LocalGit: memberGit{m}, Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming,
+		Envelopes: clusterEnvelopes, Now: m.c.now})
 	if err != nil {
 		t.Fatalf("codecluster: %s's router: %v", m.id, err)
 	}
@@ -777,8 +780,6 @@ func (c *cluster) RecordWriter(ctx context.Context, at statelog.Position) (strin
 	return m.data.Writer(ctx, at)
 }
 
-func (c *cluster) WriteAttempt() time.Duration { return clusterTiming.WriteAttempt }
-
 // GitRead is a read of a repository by object id through the first running
 // member's router (codetest.Fleet).
 func (c *cluster) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -867,6 +868,43 @@ func (c *cluster) gitAnswered(t testing.TB, node string) int64 {
 }
 
 func (c *cluster) Unanswered(node string) int { return c.placement.reported(node) }
+
+// WaitedOut is how many proposals the members' routers waited out on node, and
+// zero for a node that is no member (codetest.Cluster).
+func (c *cluster) WaitedOut(node string) int {
+	for _, m := range c.members {
+		if m.id == node {
+			return int(m.waitedOut.Load())
+		}
+	}
+	return 0
+}
+
+// waitedOutAsker is a member's router's queue, counting every proposal the
+// router waits out on a member (codetest.Cluster.WaitedOut): an ask of the
+// member's proposal lane whose attempt ends at its DEADLINE rather than by the
+// router's cancel once it moved on. Counted as the attempt ends, so a wait is
+// counted whoever made it — the broker's for an answer that never came, or the
+// router's own after one; a caller that hung up cancels the attempt, and is
+// no member's silence.
+type waitedOutAsker struct {
+	estate.Asker
+	c *cluster
+}
+
+func (a waitedOutAsker) Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error) {
+	for _, m := range a.c.members {
+		if subject == estate.ProposalSubject(m.id) {
+			context.AfterFunc(ctx, func() {
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					m.waitedOut.Add(1)
+				}
+			})
+			break
+		}
+	}
+	return a.Asker.Ask(ctx, subject, request, want)
+}
 
 func (c *cluster) Settle(ctx context.Context) error {
 	var errs []error
