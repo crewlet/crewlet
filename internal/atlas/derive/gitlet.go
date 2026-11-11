@@ -26,6 +26,8 @@ type GitletRepo struct {
 	MirrorFrom   string
 	MirrorTo     string
 	ImportedFrom string
+	// LastPush is the instant of its last push, zero for none.
+	LastPush time.Time
 }
 
 // GitletCheck is one check a repository's default branch runs, at its latest

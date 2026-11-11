@@ -502,3 +502,53 @@ func TestAToldRecordsReadPositionThatNamesNothingIsJudgedOnNoStream(t *testing.T
 		t.Errorf("a told record read at a position on another log was answered %v, want it refused", err)
 	}
 }
+
+// A SERVER'S USE IS COUNTED IN THE STORE, per server and seat: the commands
+// that ran in the week and in the month, and the last. A denied command used
+// nothing, and a window that starts after every command counts none.
+func TestAServersUseIsCountedPerServerAndSeat(t *testing.T) {
+	t.Parallel()
+	log := openAccessLog(t)
+	node := newWriteNode(t, log, "data-1")
+	ran := func(seat, host string) accessdomain.NewCommand {
+		c := command(seat, uuid.NewString(), "uptime")
+		c.Host = host
+		return c
+	}
+	denied := ran("sre", "api-1")
+	denied.Ran, denied.ExitCode, denied.Decision = false, 0, accessdomain.DecisionDenied
+	for _, c := range []accessdomain.NewCommand{ran("sre", "api-1"), ran("sre", "api-1"), ran("ops", "api-1"),
+		ran("sre", "db-1"), denied} {
+		if _, err := node.writer.Ran(t.Context(), engineCall(), c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	use, err := node.reader().HostUse(t.Context(), now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][2]int64{}
+	for _, u := range use {
+		if u.Last.IsZero() || u.Last.After(now.Add(time.Minute)) {
+			t.Errorf("%s on %s was last used at %s", u.Handle, u.Host, u.Last)
+		}
+		got[u.Host+"/"+u.Handle] = [2]int64{u.Week, u.Month}
+	}
+	want := map[string][2]int64{"api-1/ops": {1, 1}, "api-1/sre": {2, 2}, "db-1/sre": {1, 1}}
+	if !maps.Equal(got, want) {
+		t.Errorf("each server's use is %v, want %v", got, want)
+	}
+	later, err := node.reader().HostUse(t.Context(), now.Add(time.Hour), now.Add(-30*24*time.Hour), fresh)
+	if err != nil || len(later) != 3 || later[0].Week != 0 || later[0].Month != 1 {
+		t.Errorf("a week that starts after every command: %+v, %v", later, err)
+	}
+	if none, err := node.reader().HostUse(t.Context(), now.Add(2*time.Hour), now.Add(time.Hour), fresh); err != nil ||
+		len(none) != 0 {
+		t.Errorf("a month that starts after every command: %+v, %v", none, err)
+	}
+	if _, err := node.reader().HostUse(t.Context(), now.Add(-31*24*time.Hour), now.Add(-30*24*time.Hour), fresh); err == nil {
+		t.Error("a week that starts before its month was accepted")
+	}
+}

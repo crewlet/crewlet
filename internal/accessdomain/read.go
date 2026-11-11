@@ -600,6 +600,53 @@ func (r *Reader) Handles(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// HostUse is one seat's use of one server over a month: how many commands the
+// engine ran there for it in the last week and in the month, and the last.
+type HostUse struct {
+	Host, Handle string
+	Week, Month  int64
+	Last         time.Time
+}
+
+// HostUse is every seat's use of every server since month, the commands since
+// week counted apart: what the atlas shows as a server's use. Counted in the
+// store over the retention index, one row per server and seat, so a busy month
+// costs one range scan and never a page of commands per row. Only commands
+// that ran count: a denied one used nothing.
+func (r *Reader) HostUse(ctx context.Context, week, month time.Time, fresh statelog.Freshness) ([]HostUse, error) {
+	if week.Before(month) {
+		return nil, invalid("the week a server's use counts starts inside the month")
+	}
+	var out []HostUse
+	_, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out = nil
+		rows, err := tx.QueryContext(ctx, `
+			SELECT host, agent_handle, SUM(CASE WHEN at >= ? THEN 1 ELSE 0 END), COUNT(*), MAX(at)
+			  FROM access_commands INDEXED BY access_commands_expiry_idx
+			 WHERE at >= ? AND ran = 1
+			 GROUP BY host, agent_handle
+			 ORDER BY host, agent_handle`, store.EncodeTime(week), store.EncodeTime(month))
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var u HostUse
+			var last int64
+			if scanErr := rows.Scan(&u.Host, &u.Handle, &u.Week, &u.Month, &last); scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			u.Last = store.DecodeTime(last)
+			out = append(out, u)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, fmt.Errorf("accessdomain: count each server's use: %w", err)
+	}
+	return out, nil
+}
+
 // SealedCount is how many recorded commands are sealed under each keyring key.
 type SealedCount struct {
 	Values secrets.KeyCounts `json:"values,omitempty"`
