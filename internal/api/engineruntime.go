@@ -146,7 +146,7 @@ func (r engineRuntime) Tools() []queries.ToolRow {
 	// answered adds nothing, and the engine re-sends the catalogue when it
 	// is.
 	if live, ok := r.engine.LiveMCPListings(); ok {
-		out = append(out, queries.ListedRows(out, live, r.engine.HeldMCPToolSchemas())...)
+		out = append(out, queries.ListedRows(out, live, r.engine.HeldMCPToolDefinitions())...)
 	}
 	return out
 }

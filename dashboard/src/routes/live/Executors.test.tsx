@@ -639,12 +639,12 @@ test("a parked run's question heads the banner and its dialog reads the context 
           question: "Which retry ceiling?",
           question_context:
             "The API allows **five**. See https://evil.example.net/c?q=secret and " +
-            "https://github.com/gophrase/backend/pull/11.",
+            "https://github.com/acme/backend/pull/11.",
           audience_handles: ["jane"],
         }),
       ],
     },
-    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }] },
     turn: { turn_id: "turn-1", events: [] },
   });
   await settle();
@@ -659,7 +659,7 @@ test("a parked run's question heads the banner and its dialog reads the context 
   const prose = dialog.querySelector(".prose") as HTMLElement;
   expect(prose.querySelector("strong")?.textContent).toBe("five");
   expect([...prose.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-    "https://github.com/gophrase/backend/pull/11",
+    "https://github.com/acme/backend/pull/11",
   ]);
   expect(prose.textContent).toContain("https://evil.example.net/c?q=secret");
   fireEvent.change(within(dialog).getByLabelText("Your answer"), {
@@ -768,7 +768,7 @@ test("a parked run's question opens only what the dashboard built", async () => 
           question: "Which retry ceiling?",
           question_context:
             "The client used three. See https://evil.example.net/c?q=secret and " +
-            "https://github.com/gophrase/backend/pull/11?x=1.",
+            "https://github.com/acme/backend/pull/11?x=1.",
           decision: {
             question: "Which retry ceiling?",
             options: [
@@ -784,7 +784,7 @@ test("a parked run's question opens only what the dashboard built", async () => 
       ],
     },
     turn: { turn_id: "turn-1", events: [] },
-    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }] },
   });
   await settle();
   const banner = document.querySelector(".run-awaiting") as HTMLElement;
@@ -798,7 +798,7 @@ test("a parked run's question opens only what the dashboard built", async () => 
     return found;
   });
   expect(hrefs.filter((href) => href?.includes("evil.example.net"))).toEqual([]);
-  expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
+  expect(hrefs).toContain("https://github.com/acme/backend/pull/11");
   expect(dialog.textContent).toContain("https://evil.example.net/c?q=secret");
   expect(dialog.textContent).toContain("https://evil.example.net/r?q=secret");
 });

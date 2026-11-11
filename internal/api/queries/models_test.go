@@ -83,7 +83,7 @@ func modelSources(t *testing.T, backend coord.Backend) queries.Sources {
 				{Kind: statelog.KindApplyLag, Detail: "not a model's"},
 			}
 		},
-		Secrets: fakeSecretRows{{Name: "CLAUDE_CODE_OAUTH_TOKEN", UpdatedBy: "miles",
+		Secrets: fakeSecretRows{{Name: "CLAUDE_CODE_OAUTH_TOKEN", UpdatedBy: "morgan",
 			UpdatedAt: pinned.Add(-360 * 24 * time.Hour)}},
 		DeviceSignIns: fakeDevices{},
 	}
@@ -199,7 +199,7 @@ func TestAStoredTokensExpiryIsComputedFromItsRow(t *testing.T) {
 	def := entryOf(t, got, "default")
 	in := def.SignIn
 	if in.Variable == nil || *in.Variable != "CLAUDE_CODE_OAUTH_TOKEN" || in.Source != "store" ||
-		in.StoredBy == nil || *in.StoredBy != "miles" || in.Hint == nil {
+		in.StoredBy == nil || *in.StoredBy != "morgan" || in.Hint == nil {
 		t.Fatalf("sign_in = %+v", in)
 	}
 	if in.ExpiresAt == nil || !in.ExpiresAt.Equal(pinned.Add(5*24*time.Hour)) ||
@@ -274,7 +274,7 @@ func TestAMemberReadsNoCredentialAccountOrSentence(t *testing.T) {
 	}
 	raw, _ := json.Marshal(data)
 	body := string(raw)
-	for _, leak := range []string{"3f9a1c0e22b1", "CLAUDE_CODE_OAUTH_TOKEN", "Qm4x", "miles",
+	for _, leak := range []string{"3f9a1c0e22b1", "CLAUDE_CODE_OAUTH_TOKEN", "Qm4x", "morgan",
 		"session limit", `"said"`, `"usage"`, `"plan"`, `"last_failure"`, `"hint"`, `"variable"`,
 		`"stored_at"`, "cost_usd", `"nodes":["`} {
 		if strings.Contains(body, leak) {

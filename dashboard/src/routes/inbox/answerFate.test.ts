@@ -84,7 +84,7 @@ test("an executor whose ending is decided is over, whatever its status says", ()
  * was answered.
  *
  * Mutation: ignore `answer_refused` in the fate, and the press reads
- * `superseded`; ignore it in the caption, and it reads "Answered by @miles".
+ * `superseded`; ignore it in the caption, and it reads "Answered by @morgan".
  */
 test("a reply too long for the executor closed its question with no answer", () => {
   const given: GivenAnswer = {
@@ -104,16 +104,16 @@ test("a reply too long for the executor closed its question with no answer", () 
   expect(answerFate(given, { ...closed, answer_refused: null }, true)).toBe("superseded");
 
   const now = Date.parse("2026-11-09T12:00:00Z");
-  const record = { answered_by: "miles", answered_at: "2026-11-09T11:30:00Z" };
+  const record = { answered_by: "morgan", answered_at: "2026-11-09T11:30:00Z" };
   const refusedLine = closedAt({ ...record, answer_refused: closed.answer_refused }, now, true);
   expect(refusedLine).toMatch(
-    /^A reply by @miles too long for the executor to take closed the question at .+\.$/,
+    /^A reply by @morgan too long for the executor to take closed the question at .+\.$/,
   );
   expect(refusedLine).not.toContain("Answered");
   expect(closedAt({ ...record, answer_refused: null }, now, true)).toMatch(
-    /^Answered by @miles at /,
+    /^Answered by @morgan at /,
   );
   expect(closedAt({ ...record, answer_refused: closed.answer_refused }, now, false)).not.toContain(
-    "@miles",
+    "@morgan",
   );
 });

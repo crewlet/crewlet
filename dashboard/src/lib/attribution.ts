@@ -129,7 +129,7 @@ export function assisted(operatorId: string | null | undefined): boolean {
 }
 
 /**
- * An author's name as a history line says it: "Miles, with the assistant"
+ * An author's name as a history line says it: "Morgan, with the assistant"
  * where the write came through the assistant, else the name alone.
  */
 export function authorWords(name: string, operatorId: string | null | undefined): string {

@@ -340,6 +340,75 @@ func TestTheActivityFiltersNarrow(t *testing.T) {
 	}
 }
 
+// A KIND THAT NAMES A FIELD KEEPS EVERY CHANGE THAT MOVED THE FIELD, whatever
+// kind its record ended with (#930). A record carries one kind, so a write that
+// moves two fields in one call is filed under one of them, and the feed asked
+// for the other answered as though it had not happened. Each case moves its
+// field under another kind, and the feed asked for the field's kind keeps that
+// change; a change that moved none of the field is not kept.
+//
+// Mutation: filter on `h.kind IN (…)` alone, and no case keeps its change.
+func TestAKindThatNamesAFieldKeepsEveryChangeThatMovedIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	ana, bo, unit := "ana", "bo", "platform"
+	started := worklet.StatusInProgress
+	urgent := []string{"urgent"}
+	cases := []struct {
+		id    string
+		asked worklet.ChangeKind
+		patch worklet.TaskPatch
+		filed worklet.ChangeKind
+	}{
+		{"t-assignee", worklet.ChangeAssignee,
+			worklet.TaskPatch{Assignee: &ana, Status: &started}, worklet.ChangeStatus},
+		{"t-status", worklet.ChangeStatus,
+			worklet.TaskPatch{Status: &started, Tags: &urgent}, worklet.ChangeTags},
+		{"t-tags", worklet.ChangeTags,
+			worklet.TaskPatch{Assignee: &bo, Tags: &urgent}, worklet.ChangeAssignee},
+		{"t-watchers", worklet.ChangeWatchers,
+			worklet.TaskPatch{Status: &started, Watchers: &[]string{"ana"}}, worklet.ChangeStatus},
+		{"t-collaborators", worklet.ChangeCollaborators,
+			worklet.TaskPatch{Assignee: &ana, Collaborators: &[]string{"bo"}}, worklet.ChangeAssignee},
+		{"t-routed", worklet.ChangeRouted,
+			worklet.TaskPatch{Status: &started, RoutingUnit: &unit}, worklet.ChangeStatus},
+		{"t-relations", worklet.ChangeRelations, worklet.TaskPatch{Assignee: &ana,
+			Relate: &worklet.RelationIntent{Add: []worklet.Relation{{
+				Kind: worklet.RelationLinked, Other: "t-other",
+			}}}}, worklet.ChangeAssignee},
+	}
+	if _, err := r.writer.WriteTags(t.Context(), "op-tags-urgent", "ENG",
+		worklet.TagEdit{Add: []worklet.Tag{{Slug: "urgent", Label: "Urgent"}}}, worklet.TagAuthority{}); err != nil {
+		t.Fatalf("declare ENG's tag: %v", err)
+	}
+	r.drain()
+	filedTask(t, r, "t-other")
+	for _, c := range cases {
+		filedTask(t, r, c.id)
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+c.id+"-moved", c.id, "ENG",
+			worklet.NoIfMatch, c.patch, c.filed, nil); err != nil {
+			t.Fatalf("move %s's %s under %s: %v", c.id, c.asked, c.filed, err)
+		}
+		r.drain()
+	}
+	for _, c := range cases {
+		got := r.activity(worklet.ActivityQuery{Task: c.id, Kinds: []worklet.ChangeKind{c.asked}})
+		if !slices.ContainsFunc(got.Records, func(record worklet.ActivityRecord) bool {
+			return record.Kind == c.filed
+		}) {
+			t.Errorf("kinds=%s on %s keeps no %s change, and that change moved its %s",
+				c.asked, c.id, c.filed, c.asked)
+		}
+	}
+	// A CHANGE THAT MOVED NONE OF THE FIELD IS NOT KEPT: t-status's moved its
+	// status and its tags, and nobody ever assigned it.
+	if got := r.activity(worklet.ActivityQuery{Task: "t-status",
+		Kinds: []worklet.ChangeKind{worklet.ChangeAssignee}}); len(got.Records) != 0 {
+		t.Errorf("kinds=assignee on t-status keeps %d changes, and none of them moved its assignee",
+			len(got.Records))
+	}
+}
+
 // THE FEED NARROWS TO WHO WAS WRITING, which is a different question from
 // which handle.
 //

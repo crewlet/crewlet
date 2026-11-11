@@ -185,7 +185,7 @@ func TestAnInferredTableHidesBookkeepingAndTypesInstants(t *testing.T) {
 		{"key":"HOME","name":"Company","chart_epoch":1793001746322,
 		 "css_sha":"9fceb02d0ae598e95dc970b74767f19372d61af8",
 		 "updated_at":"2026-10-25T08:00:00Z"},
-		{"key":"FAIR","name":"FairSplit","chart_epoch":1793001746322,
+		{"key":"FAIR","name":"Acme","chart_epoch":1793001746322,
 		 "css_sha":"0ae598e95dc970b74767f19372d61af89fceb02d",
 		 "updated_at":"2026-10-24T08:00:00Z"}]`))
 	if err != nil {

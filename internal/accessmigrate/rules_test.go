@@ -17,8 +17,8 @@ import (
 // bot on with no roles, and admission refuses it.
 func TestTheMigratedDocumentIsRunAndAdmitted(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
-	if _, err := accessmigrate.Apply(root, plan(t, root, gophraseVendors())); err != nil {
+	root := acme(t)
+	if _, err := accessmigrate.Apply(root, plan(t, root, acmeVendors())); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := json.Marshal(root)

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/crewlet/crewlet/internal/envfile"
@@ -455,13 +456,24 @@ type Runner struct {
 	// reads: [maxLineBytes] in every runner New builds, a field for the
 	// failure bound's reason.
 	lineBound int
+
+	// now is the clock a pack's release is bounded by ([releaseContext]):
+	// time.Now in every runner New builds.
+	//
+	// A FIELD so the suite holds a release's deadline to the one its rule
+	// gives, exactly. Read off the wall clock inside the case, the rule turned
+	// on how long the case's take had run: past a minute less the floor, the
+	// floor moved a healthy release's deadline past its take's, and the case
+	// refused it. An instant compared against a deadline is an elapsed bound
+	// (internal/fixedwait).
+	now func() time.Time
 }
 
 var _ sandbox.Runner = (*Runner)(nil)
 
 // New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
-	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes}
+	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now}
 }
 
 // Name is the harness's config name.

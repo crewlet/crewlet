@@ -110,7 +110,7 @@ func appCompanyWith(t *testing.T, server string, enabled bool, builderGitHub str
 		state = "false"
 	}
 	return specCompany(t, `
-name: GoPhrase
+name: Acme
 providers:
   llm:
     zulu:
@@ -122,7 +122,7 @@ integrations:
     url: "`+server+`"
     webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
     provisioning:
-      org: gophrase
+      org: acme
 mcp_servers:
   - name: github
     transport: http
@@ -141,9 +141,9 @@ roles:
     integrations:
       github:
         enabled: `+state+`
-        repos: [gophrase/backend]
+        repos: [acme/backend]
         app_id: 101
-        app_slug: gophrase-builder
+        app_slug: acme-builder
         installation_id: 9001
         private_key: "${GITHUB_APP_KEY_BUILDER}"
         permissions:
@@ -160,7 +160,7 @@ roles:
       github:
         enabled: `+state+`
         app_id: 102
-        app_slug: gophrase-planner
+        app_slug: acme-planner
         private_key: "${GITHUB_APP_KEY_PLANNER}"
 `)
 }
@@ -500,7 +500,7 @@ func TestAShadowedBoxValueIsWarnedOnceAcrossLaunches(t *testing.T) {
 
 	gh := newAppGitHub(t)
 	c := specCompany(t, `
-name: GoPhrase
+name: Acme
 providers:
   llm:
     zulu:
@@ -518,7 +518,7 @@ integrations:
     url: "`+gh.url+`"
     webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
     provisioning:
-      org: gophrase
+      org: acme
 roles:
   - name: Owner
     handle: owner
@@ -532,9 +532,9 @@ roles:
     integrations:
       github:
         enabled: true
-        repos: [gophrase/backend]
+        repos: [acme/backend]
         app_id: 101
-        app_slug: gophrase-builder
+        app_slug: acme-builder
         installation_id: 9001
         private_key: "${GITHUB_APP_KEY_BUILDER}"
 `)

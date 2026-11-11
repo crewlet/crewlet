@@ -83,7 +83,7 @@ each record exactly as its tools gave it, outside code.
   "Design is late" and "Notes from the call" are capitalised because they
   start a sentence, not because they name the team or the page. A name no
   ordinary word is spelled like (all capitals, a capital inside it, a digit:
-  "QA", "GoPhrase"), a name of two words or more, and a key are still matched
+  "QA", "AcmeWorks"), a name of two words or more, and a key are still matched
   there, since a sentence's capital cannot make an ordinary word look like
   them. The renderer says which run opens a block (a paragraph, a heading, a
   list item, a table cell), and the matcher reads the run before, so a

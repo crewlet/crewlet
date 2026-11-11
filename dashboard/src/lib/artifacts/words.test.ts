@@ -160,7 +160,7 @@ describe("a datastore write in words", () => {
     op_id: "op",
     op: "write",
     verdict: "applied",
-    actor: { name: "miles", kind: "human" },
+    actor: { name: "morgan", kind: "human" },
     at: "2026-10-18T10:00:00Z",
     changes: [],
     digest: "",

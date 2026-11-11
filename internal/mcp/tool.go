@@ -301,6 +301,10 @@ func (d *Definition) Title() string {
 	return d.annotations.Title
 }
 
+// OwnTitle is the tool's own title alone, "" where the server gives none: with
+// [Definition.Declared]'s title, the words the digest's title part covers.
+func (d *Definition) OwnTitle() string { return d.title }
+
 // OutputSchema is the JSON Schema of the tool's structured result, as the
 // server published it, or nil where it published none.
 func (d *Definition) OutputSchema() map[string]any { return d.output }

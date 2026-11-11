@@ -17,7 +17,7 @@ import (
 // when the refusal names what to change (every refusal of a closed format
 // does, and the format is one read away), so a fourth refusal in a row says
 // the model is not converging: it is guessing, or probing the policy for a
-// way round it. The GoPhrase brand turn (GP-38) made fourteen such attempts
+// way round it. The Acme brand turn (GP-38) made fourteen such attempts
 // and spent eight minutes on them before anybody saw it (ADR-0059).
 const PolicyRefusalLimit = 4
 

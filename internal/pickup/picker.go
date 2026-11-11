@@ -103,8 +103,17 @@ type Picker struct {
 
 	// offered is the fingerprint of each seat's ready set the last pass
 	// found every item of already handed over, so an unchanged set costs
-	// no ledger read ([worklet.ReadyWork.Fingerprint]).
-	offered map[uuid.UUID]string
+	// no ledger read ([worklet.ReadyWork.Fingerprint]), until the first
+	// recheck of one of its items comes due.
+	offered map[uuid.UUID]offeredSet
+}
+
+// offeredSet is a ready set every item of which was handed over: its
+// fingerprint, and the instant the first of its keys changes on time alone
+// (zero where none will).
+type offeredSet struct {
+	fingerprint string
+	until       time.Time
 }
 
 // Pass decides every seat once, and forgets the settle of any seat it was
@@ -140,8 +149,9 @@ func (p *Picker) forget(held map[uuid.UUID]bool) {
 }
 
 // remember records, or with "" forgets, that a seat's ready set named by
-// fingerprint was all handed over.
-func (p *Picker) remember(seat uuid.UUID, fingerprint string) {
+// fingerprint was all handed over, until the instant one of its items comes
+// due for a recheck (zero for never).
+func (p *Picker) remember(seat uuid.UUID, fingerprint string, until time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if fingerprint == "" {
@@ -149,15 +159,19 @@ func (p *Picker) remember(seat uuid.UUID, fingerprint string) {
 		return
 	}
 	if p.offered == nil {
-		p.offered = map[uuid.UUID]string{}
+		p.offered = map[uuid.UUID]offeredSet{}
 	}
-	p.offered[seat] = fingerprint
+	p.offered[seat] = offeredSet{fingerprint: fingerprint, until: until}
 }
 
-func (p *Picker) allOffered(seat uuid.UUID, fingerprint string) bool {
+// allOffered reports a ready set remembered as all handed over at now: the
+// same fingerprint, and no item of it come due for a recheck since.
+func (p *Picker) allOffered(seat uuid.UUID, fingerprint string, now time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return fingerprint != "" && p.offered[seat] == fingerprint
+	set, ok := p.offered[seat]
+	return ok && fingerprint != "" && set.fingerprint == fingerprint &&
+		(set.until.IsZero() || now.Before(set.until))
 }
 
 // settle records whether this pass found the seat idle, and answers whether
@@ -250,6 +264,9 @@ func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time,
 
 	var out picked
 	passed, cooling := false, false
+	// THE FIRST RECHECK DUE among the items walked, which ends a remembered
+	// all-offered set: its key changes then with nothing else moving.
+	var until time.Time
 	for page := 0; ; page++ {
 		// THE NODE'S OWN COPY: the settle gave the last turn's writes a
 		// pass to land, and a stale answer costs a pickup the ledger refuses.
@@ -261,16 +278,19 @@ func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time,
 		}
 		out.ready, out.capped = ready.Total, ready.Capped
 		if ready.Total == 0 {
-			p.remember(seat.ID, "")
+			p.remember(seat.ID, "", time.Time{})
 			out.skip = SkipNothing
 			return out, nil
 		}
-		if p.allOffered(seat.ID, ready.Fingerprint) {
+		if p.allOffered(seat.ID, ready.Fingerprint, now) {
 			out.skip = SkipOffered
 			return out, nil
 		}
 		for _, item := range ready.Items {
-			key := KeyOf(seat.ID, item)
+			if next, ok := nextRecheck(item, now); ok && (until.IsZero() || next.Before(until)) {
+				until = next
+			}
+			key := KeyOf(seat.ID, item, now)
 			if p.Ledger.Worked(ctx, seat.Handle, []string{key.WorkKey()})[key.WorkKey()] {
 				passed = true
 				continue
@@ -282,7 +302,7 @@ func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time,
 				return out, err
 			case taken:
 				out.item, out.key = item, key
-				p.remember(seat.ID, "")
+				p.remember(seat.ID, "", time.Time{})
 				return out, nil
 			}
 			cooling = true
@@ -291,11 +311,11 @@ func (p *Picker) choose(ctx context.Context, seat Seat, now time.Time,
 			// A COOLING ITEM IS NOT OFFERED YET, so the set is not
 			// remembered as all offered.
 			if cooling {
-				p.remember(seat.ID, "")
+				p.remember(seat.ID, "", time.Time{})
 				out.skip = SkipCooldown
 				return out, nil
 			}
-			p.remember(seat.ID, ready.Fingerprint)
+			p.remember(seat.ID, ready.Fingerprint, until)
 			out.skip = SkipOffered
 			return out, nil
 		}

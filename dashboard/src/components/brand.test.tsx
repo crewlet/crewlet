@@ -52,7 +52,7 @@ const ADOPTED: NonNullable<BrandAnswer["brand"]> = {
   kit_version: 7,
   document: {
     v: 1,
-    name: "FairSplit",
+    name: "Acme",
     logos: { primary: "logos/primary.svg" },
     colors: { primary: "#0f7b5f" },
     type: { heading: { kit: "geist" }, body: { kit: "geist" } },
@@ -104,7 +104,7 @@ function mount(
 
 test("the Make row's chip names the adopted brand and leads to where it is set", async () => {
   mount(<BrandMakeChip />, [], ADOPTED);
-  const chip = await screen.findByRole("link", { name: /FairSplit brand/ });
+  const chip = await screen.findByRole("link", { name: /Acme brand/ });
   expect(chip.getAttribute("href")).toBe("#/company/brand");
 });
 
@@ -132,7 +132,7 @@ test("with no brand, an administrator is offered the setup and anyone else nothi
 test("the note under Ask an agent names the brand the agent follows", async () => {
   mount(<BrandAgentNote />, [], ADOPTED);
   expect(
-    await screen.findByRole("link", { name: /The agent follows the FairSplit brand/ }),
+    await screen.findByRole("link", { name: /The agent follows the Acme brand/ }),
   ).toBeTruthy();
 });
 
@@ -170,15 +170,15 @@ function fact(
 
 test("a doc or a dashboard is in the current brand, live", async () => {
   fact("doc", ADOPTED);
-  expect(await screen.findByText("FairSplit brand, current")).toBeTruthy();
+  expect(await screen.findByText("Acme brand, current")).toBeTruthy();
 });
 
 test("a page keeps the brand it was published with until it is next published", async () => {
   fact("html", ADOPTED, CSS);
-  expect(await screen.findByText("FairSplit brand, current")).toBeTruthy();
+  expect(await screen.findByText("Acme brand, current")).toBeTruthy();
   cleanup();
   fact("html", ADOPTED, "d".repeat(64));
-  expect(await screen.findByText("An older FairSplit brand")).toBeTruthy();
+  expect(await screen.findByText("An older Acme brand")).toBeTruthy();
   expect(screen.getByText("changes at the next publish")).toBeTruthy();
   cleanup();
   fact("design", ADOPTED);
@@ -189,7 +189,7 @@ test("a page keeps the brand it was published with until it is next published", 
 // "current" nor "older": it says which brand it was made with, and when.
 test("a deck says the brand it was made with, and the day", async () => {
   fact("slides", ADOPTED, undefined, "brand");
-  expect(await screen.findByText(`Made with the FairSplit brand of ${fmtDate(MADE)}`)).toBeTruthy();
+  expect(await screen.findByText(`Made with the Acme brand of ${fmtDate(MADE)}`)).toBeTruthy();
   cleanup();
   fact("slides", ADOPTED, undefined, "midnight");
   expect(await screen.findByText("Crewlet's look")).toBeTruthy();

@@ -63,6 +63,7 @@ type TrackerReader interface {
 		loc *time.Location) (worklet.MyWork, error)
 	ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
 		worklet.ReadyWork, error)
+	TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
 	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
@@ -527,6 +528,10 @@ type ServerSeams struct {
 	Units worklet.Units
 	Leads worklet.Leads
 
+	// Roster is attached to every task listing, for the seats' names
+	// `sort=assignee` orders by.
+	Roster worklet.Roster
+
 	// Seat resolves a searching seat's handle to its role and the org its
 	// read scope comes from, against this node's current epoch.
 	Seat func(handle string) (*org.Role, *org.Organization)
@@ -629,7 +634,7 @@ var opTasks = define("tracker.tasks", opRead, trackerDomain, false,
 		if b.Tracker == nil {
 			return worklet.Answer{}, errNoHalf
 		}
-		a.Query.Units = b.Units
+		a.Query.Units, a.Query.Roster = b.Units, b.Roster
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
 	})
 
@@ -862,6 +867,14 @@ var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
 			return worklet.ReadyWork{}, errNoHalf
 		}
 		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
+	})
+
+var opTypedAnswer = define("tracker.typed_answer", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.TypedAnswerQuery) (bool, error) {
+		if b.Tracker == nil {
+			return false, errNoHalf
+		}
+		return b.Tracker.TypedAnswer(ctx, q)
 	})
 
 var opProjects = define("tracker.projects", opRead, trackerDomain, false,

@@ -789,43 +789,54 @@ alone are exempt, since they cannot import the package that imports them.
 A test whose verdict depends on wall-clock time having passed — a
 `time.Sleep`, `time.After`, `time.AfterFunc`, `time.NewTimer`,
 `time.NewTicker` or `time.Tick` standing where a signal should, or a
-`time.Since`, `time.Until` or `time.Time`'s `Sub` reading the clock a claim
-is held to — passes with the bug present when the event comes after its
-window, and fails a healthy build when a loaded runner loses its race, misses
-its deadline or loses time between two readings of the clock.
+`time.Since`, `time.Until`, or a `time.Time`'s `Sub`, `Before`, `After` or
+`Compare` reading the clock a claim is held to — passes with the bug present
+when the event comes after its window, and fails a healthy build when a
+loaded runner loses its race, misses its deadline or loses time between two
+readings of the clock. An ordering of two instants the code under test
+stamped from the wall clock (`a.CreatedAt.Before(b.CreatedAt)`) is such a
+claim too, though no bound is written: it holds only once the clock has
+moved between the two stamps, and a coarse clock stamps two events equal.
 `internal/fixedwait` refuses a new one: it counts every reference to those
 six waits and to `Since` and `Until` in test code (every `_test.go` file and
-every file of a package whose directory name ends in `test`), and every `Sub`
-whose receiver's type is `time.Time` (told by the type, from the module's
-own type-checked source, never by the name), and fails on one that no
-synctest bubble, no verified `//fixedwait:bubble` helper and no marker takes
-out of the class, and that its inventory, `internal/fixedwait/allowed.go`,
-does not hold. The inventory is the references that predate the gate, and it
-only shrinks: an entry recording more than its function holds fails too, each
-shape held to its own count (a reading of elapsed time never stands in for a
-wait the inventory records, nor a wait for a reading), and adding one is the
-decision.
+every file of a package whose directory name ends in `test`), and every
+`Sub`, `Before`, `After` and `Compare` whose receiver's type is `time.Time`
+(told by the type, from the module's own type-checked source, never by the
+name; never `Equal`, since equality decides nothing about elapsed time), and
+fails on one that no synctest bubble, no verified `//fixedwait:bubble` helper
+and no marker takes out of the class, and that its inventory,
+`internal/fixedwait/allowed.go`, does not hold. The inventory is the
+references that predate the gate, and it only shrinks: an entry recording
+more than its function holds fails too, each shape held to its own count (a
+reading of elapsed time never stands in for a wait the inventory records,
+nor a wait for a reading), and adding one is the decision.
 
 Decide the claim by a signal instead, by the house patterns: a synctest
 bubble where the claim is about the clock (#634, #644, #652); a witness
 signal, a fence through the same channel or the producer's own count or
 state for "nothing happened" (#642); a wait on the parked state for a head
-start (#646); and for a bound on elapsed time, #736's: the instant a wait was
+start (#646); for a bound on elapsed time, #736's: the instant a wait was
 armed with, held exactly, where a fake sees the wait, the bubble's answer
-instant where none does, and otherwise the signal the bound stood in for. A
-reference that decides nothing says so with a marker trailing it on its
-line, or alone on the line above (a marker covers that one line and no
-other) — on a wait `//fixedwait:liveness` (it only bounds a wait for
-something that must happen), `//fixedwait:simulated <what it stands in for>`
-(a fake's latency) or `//fixedwait:bench` (in a function that takes a
-`*testing.B`), on a reading of elapsed time `//fixedwait:measure <why it
-decides nothing>` (it is logged or reported, or it is a poll's own
-deadline), and on a `time.Time`'s `Sub` between two instants no wall clock
-separates `//fixedwait:stated <which instants or clock>` (the test's own
-constants, or a clock the test controls stamped both; never `Since` or
-`Until`, which read now, and never a fake whose "now" adds the wall time
-since it started) — because no duration, shape or name tells a liveness
-bound, a logged duration or a fake's instant from a claim on the wall clock.
+instant where none does, and otherwise the signal the bound stood in for;
+and for an ordering of two stamps, the order the code already records (a log
+position, a sequence, a seq column), asserted in place of the stamps, which
+needs no clock at all. A reference that decides nothing says so with a
+marker trailing it on its line, or alone on the line above (a marker covers
+that one line and no other) — on a wait `//fixedwait:liveness` (it only
+bounds a wait for something that must happen), `//fixedwait:simulated <what
+it stands in for>` (a fake's latency) or `//fixedwait:bench` (in a function
+that takes a `*testing.B`), on a reading of elapsed time `//fixedwait:measure
+<why it decides nothing>` (it is logged or reported, or it is a poll's own
+deadline), and on a `time.Time`'s `Sub`, `Before`, `After` or `Compare`
+between two instants no wall clock separates `//fixedwait:stated <which
+instants or clock>` (the test's own constants, a clock the test controls
+stamped both, or the code under test derived one from the other by its own
+arithmetic, computed once, as an expiry of the instant it stored an entry
+plus the entry's TTL; never `Since` or `Until`, which read now, never a fake
+whose "now" adds the wall time since it started, and never two independent
+readings of the wall clock) — because no duration, shape or name tells a
+liveness bound, a logged duration or a fake's instant from a claim on the
+wall clock.
 A line holding a wait and a reading takes one marker alone above it and one
 trailing it.
 

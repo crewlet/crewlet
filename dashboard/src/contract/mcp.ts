@@ -814,7 +814,15 @@ export interface McpServerAnswer {
 /** One definition of a tool, in the server's words, read off the hints it declared. */
 interface McpDefinitionView {
   digest: string;
+  /**
+   * Read from the definition's record, so its words and schemas are whole.
+   * False where the fleet keeps none: the title and description are a
+   * listing's cut words.
+   */
+  whole: boolean;
+  /** The tool's own title, and the one its hints carry ("" where `whole` is false). */
   title: string;
+  hints_title: string;
   description: string;
   annotations: ToolAnnotations;
   risk: McpRisk;
@@ -846,6 +854,11 @@ interface McpListedView extends McpDefinitionView {
 export interface McpChangeView {
   tool: string;
   kinds: string[];
+  /**
+   * The parts in `kinds` this answer cannot show the change of: say each
+   * changed and is not shown, never that nothing changed.
+   */
+  unshown: string[];
   before: McpAcceptedView | null;
   after: McpListedView | null;
   /** Its declared hints claim less risk than the accepted ones. */

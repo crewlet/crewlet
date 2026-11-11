@@ -16,25 +16,38 @@ var (
 
 // THE TWO HALVES OF A SORT KEY AGREE, and neither fails loudly alone.
 //
-// A key [sortColumns] holds and [sortKeys] refuses is UNREACHABLE — dead code
-// carrying a comment about behaviour implemented somewhere else, which is what
-// `removed` was. A key [sortKeys] admits and [sortColumns] lacks is worse: the
-// parser accepts it, [sortTerms] silently drops the term, and the answer comes
-// back in the DEFAULT order with nothing saying the caller's own ordering was
-// ignored — the same failure shape [checkKeys] exists to prevent for filters.
+// A key [sortColumns] or [derivedOrders] holds and [sortKeys] refuses is
+// UNREACHABLE: dead code carrying a comment about behaviour implemented
+// somewhere else, which is what `removed` was. A key [sortKeys] admits and
+// neither compiles is worse: the parser accepts it, [sortTerms] silently drops
+// the term, and the answer comes back in the DEFAULT order with nothing saying
+// the caller's own ordering was ignored, the same failure shape [checkKeys]
+// exists to prevent for filters. And a key in both would be compiled one way
+// and documented the other.
 func TestEverySortKeyCompilesAndEveryColumnIsReachable(t *testing.T) {
 	t.Parallel()
 	for _, key := range sortKeys {
-		if _, known := sortColumns[key]; !known {
+		_, column := sortColumns[key]
+		_, derived := derivedOrders[key]
+		switch {
+		case !column && !derived:
 			t.Errorf("sort=%s is admitted by the parser and compiles to no "+
 				"column — the term is dropped and the answer comes back in "+
 				"the default order with nothing saying so", key)
+		case column && derived:
+			t.Errorf("sort=%s is both a column and a derived order", key)
 		}
 	}
 	for column := range sortColumns {
 		if !slices.Contains(sortKeys, column) {
 			t.Errorf("sortColumns has %q and the parser refuses it — the "+
 				"entry is unreachable", column)
+		}
+	}
+	for key := range derivedOrders {
+		if !slices.Contains(sortKeys, key) {
+			t.Errorf("derivedOrders has %q and the parser refuses it, so the "+
+				"entry is unreachable", key)
 		}
 	}
 }

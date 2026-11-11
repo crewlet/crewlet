@@ -592,10 +592,10 @@ func TestRefreshMemoryTellsTheFilterWhoIsAsking(t *testing.T) {
 		builtin.RefreshMemoryTool)
 	turn := turnFor(t, "agent-ceo")
 	turn.Senders = []types.CanonicalIdentity{
-		{ExternalID: "U1", Platform: "slack", DisplayName: "Miles"},
+		{ExternalID: "U1", Platform: "slack", DisplayName: "Morgan"},
 	}
 	callFor(t, tool, turn, map[string]any{"context_hint": "the deploy freeze"})
-	want := []learning.Subject{{ExternalID: "U1", Platform: "slack", Name: "Miles"}}
+	want := []learning.Subject{{ExternalID: "U1", Platform: "slack", Name: "Morgan"}}
 	if !slices.Equal(recall.senders, want) {
 		t.Fatalf("the re-filter was told the senders were %+v, want %+v", recall.senders, want)
 	}

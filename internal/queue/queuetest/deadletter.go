@@ -80,7 +80,7 @@ func (s *suite) runDeadLetters(t *testing.T) {
 				t.Errorf("entry %d has no sequence, so no drop can name it", i)
 			case k.StoredAt.IsZero():
 				t.Errorf("entry %d carries no instant it was kept at", i)
-			case !k.Expires.After(k.StoredAt):
+			case !k.Expires.After(k.StoredAt): //fixedwait:stated Expires is StoredAt plus the retention, computed once from that stamp (memory's DeadLettersOn, jetstream's letterStream.kept)
 				t.Errorf("entry %d expires at %v, not after it was kept at %v: a reader "+
 					"could not say how long it has left", i, k.Expires, k.StoredAt)
 			}

@@ -937,6 +937,7 @@ export function ItemsView({
               arrange={phone ? arrangement(false) : undefined}
               shape={shape}
               workspace={!project}
+              assigneeFixed={lockedAssignee !== ""}
               trash={inTrash}
               viewShape={savedShape}
               groupBy={axis}
@@ -1061,6 +1062,7 @@ export function ItemsView({
                 // one.
                 foot={foot}
                 seats={seats}
+                assigneeFixed={lockedAssignee !== ""}
                 more={pageMore}
                 sort={sort === EXPLICIT_NONE ? containerOrder : sort}
                 defaultSort={gridDefaultOrder}
