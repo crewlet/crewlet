@@ -855,7 +855,7 @@ type MutationRecord struct {
 	// (notify.FirstPartyWriter), never for the writing seat, which holds every
 	// app. KEPT ON THE RECORD'S HISTORY ROW (`tracker_history.working_for`,
 	// [WorkingForVersion]), applied on every node from the carrier's first
-	// build on, though no read takes it yet. Version 12: an older build
+	// build on, which the work pickup reads. Version 13: an older build
 	// retains a record carrying it rather than waking a seat for the writing
 	// agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
