@@ -322,6 +322,7 @@ type Frozen struct {
 	CounterpartyProfile string `json:"counterparty_profile,omitempty"`
 	SynthesizedSkills   string `json:"synthesized_skills,omitempty"`
 	OpenAsks            string `json:"open_asks,omitempty"`
+	Systems             string `json:"systems,omitempty"`
 
 	// Endings is how the conversation's earlier turns ended, rendered once at
 	// the turn's dispatch under its token (internal/agent/prompts'

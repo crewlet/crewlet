@@ -718,7 +718,7 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker, knowledge-base and chat tools a seat holds (nineteen
-over the tracker, five over the pages and nine in the chat) and twenty-seven
+over the tracker, five over the pages and nine in the chat) and twenty-six
 more that no seat is given: the saved views, the catalogue write, a person's own
 queue, inbox and pins, the trash, the board drag, the chat's furniture — making
 a room, opening a conversation, a room's settings and membership, editing and
@@ -726,8 +726,9 @@ taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
 steering a running turn, answering an executor's question, answering a
 question from the company's knowledge and, where the company hosts its code,
-reading who read a unit's repository and marking your own code notices, and,
-with the Atlas permission, searching the company's atlas.
+reading who read a unit's repository and marking your own code notices. With
+the Atlas permission it also reads the company's atlas, with the same three
+tools a seat holds.
 Each is decided by the same authority table a seat's calls are, and knowledge
 search sits beside them. On the deployment's token its writes carry the token's
 own login, `token:founder`, with author kind `operator` — never an agent's — so

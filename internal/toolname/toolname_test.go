@@ -75,6 +75,12 @@ var spelledElsewhere = map[string]map[string]string{
 	"internal/api/queries/answers.go": {
 		"work_inbox": "the inbox question's name in the query registry",
 	},
+	// THE ATLAS'S TRACE QUESTION shares its word with the agent's tool that
+	// answers the same read: the dashboard's contract asks it by this name,
+	// so a tool's rename must not move the question.
+	"internal/api/queries/atlas.go": {
+		"atlas_trace": "the atlas trace question's name in the query registry",
+	},
 	"internal/api/rest.go": {
 		"work_inbox":        "the inbox question's name in the query registry",
 		"code_repo_readers": "a code question's name in the query registry",
@@ -83,6 +89,7 @@ var spelledElsewhere = map[string]map[string]string{
 		"code_diff":         "a code question's name in the query registry",
 		"code_compare":      "a code question's name in the query registry",
 		"code_search":       "a code question's name in the query registry",
+		"atlas_trace":       "the atlas trace question's name in the query registry",
 	},
 	// GITLET'S QUESTIONS share their words with the code tools that
 	// answer a seat the same reads: the dashboard's Gitlet screens ask them by

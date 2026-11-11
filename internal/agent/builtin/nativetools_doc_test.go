@@ -118,8 +118,11 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	work.TrashWriter = func(builtin.Actor) builtin.TrashWriter { return nil }
 	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
 	work.Inbox = newFakeTracker()
+	// A SEAT READS THE ATLAS too, so its three tools are a seat's and no
+	// person's alone.
 	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
-		Pages: full.Pages, Knowledge: full.Knowledge, Chat: full.Chat, Code: full.Code})
+		Pages: full.Pages, Knowledge: full.Knowledge, Chat: full.Chat, Code: full.Code,
+		Atlas: builtin.AtlasDeps{Settings: runsAcme}})
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}

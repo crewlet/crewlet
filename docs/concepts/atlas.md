@@ -128,9 +128,18 @@ Secrets, tokens, passwords, private keys, signed addresses, connection strings, 
 
 ## Who reads it
 
-Reading the atlas takes the **Atlas** permission (`atlas`), the one app a person is given only on purpose: an invitation and a person's create leave it unticked, and an administrator holds it as every app ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md), [Atlas is given on purpose](identity-and-access.md#atlas-is-given-on-purpose)). A holder reads every entry, private addresses included. The atlas is never a way round another permission: its repositories are read as the reader, so a holder who does not use Gitlet is shown none, and the answer says Gitlet was not read and why.
+Reading the atlas takes the **Atlas** permission (`atlas`), the one app a person is given only on purpose: an invitation and a person's create leave it unticked, and an administrator holds it as every app ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md), [Atlas is given on purpose](identity-and-access.md#atlas-is-given-on-purpose)). A person holding it reads every entry, private addresses included. The atlas is never a way round another permission: its repositories are read as the reader, so a holder who does not use Gitlet is shown none, and the answer says Gitlet was not read and why.
 
-A person reads it today with `atlas_search` on the operator surface (`/operator/mcp`): every entry, or those a `query` or a `kind` names, each with its facts, where each came from and its relations, beside which sources were read in full and how many values were left out for being shaped like a credential. Those values are counted and never shown. An agent seat holds the app as it holds every app, and in a turn a person woke it is held to whether that person does ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+A person reads it with three tools on the operator surface (`/operator/mcp`), the ones an agent holds: `atlas_search` for every entry, or those a `query` or a `kind` names; `atlas_get` for one entry in full, by its id or its exact name or key, with what relies on it; and `atlas_trace` for what depends on one entry, or what it depends on. Each answers beside which sources were read in full and how many values were left out for being shaped like a credential, which are counted and never shown ([The company's atlas](../guides/tools-and-mcp.md#the-companys-atlas)).
+
+## Agents read the atlas
+
+An agent seat holds the Atlas permission as it holds every app, and the same three tools, and in a turn somebody woke it reads the atlas only if they hold it too ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)). Two things differ from a person's read:
+
+- **An internal address only within its own reach.** An agent is shown a private address, or a host name on a private network, only on an entry its own access reaches: a server its SSH access names, a tool server it is granted, a model it calls, a repository it may read, or an account it holds. Any other entry keeps its name and loses its private values, an entry whose key is itself a private address is left out with every relation to it, and the answer counts what it left out as `private_withheld`. The atlas tells an agent nothing about the inside of the network that its own access does not already reach.
+- **Text somebody else wrote.** Every answer carries who wrote what it holds, and is read at the least trust any of them earns: the settings, the engine's records, a person and an agent as a colleague's, and a vendor's listing, which names no writer, as an outside party's.
+
+A turn whose ask names an entry exactly is also handed a few lines about it before it starts, so a seat asked about `orders-db` reads what the company knows before it probes a server ([Systems in this work](agent-runtime.md#systems-in-this-work)).
 
 ## Every piece of state, and who has to agree on it
 

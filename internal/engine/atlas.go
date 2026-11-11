@@ -2,11 +2,19 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/authz/orgchart"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -99,4 +107,57 @@ func revisionRunning(target coord.Activation, found bool, c *Company) string {
 		return ""
 	}
 	return target.RevisionID
+}
+
+// turnReadsAtlas reports whether a turn of the seat handle may read the atlas
+// within whom it works for (ADR-0109): the atlas tools' decision, made with
+// the ceiling the turn's every tool call is held to, composed by the one
+// composer, before its prompt is built. Undecidable is false, logged: a
+// prompt that cannot tell shows no entry.
+func (e *Engine) turnReadsAtlas(ctx context.Context, company *Company, handle string, tel turnTelemetry) bool {
+	seat := company.Org.AgentSeatByHandle(handle)
+	if seat == nil {
+		return false
+	}
+	turn := &turnctx.Turn{Seat: seat, Org: company.Org, Requester: tel.requester, WorkingFor: tel.workingFor,
+		RequesterLogin: tel.requesterLogin, RequesterApps: tel.requesterApps, Senders: tel.senders}
+	ceiling, err := builtin.CeilingOfTurn(ctx, turn, turnRequesters{engine: e})
+	if err != nil {
+		log.WarnContext(ctx, "atlas_turn_ceiling_unread", "seat", handle, "error", err)
+		return false
+	}
+	d := authz.DecideWithinApps(ctx, turnctx.SeatPrincipal(company.Org, seat), ceiling, authz.ActionAtlasGet,
+		authz.Object{Kind: authz.KindAtlasEntry}, orgchart.Of(company.Org), time.Now())
+	if d.Unknown() {
+		log.WarnContext(ctx, "atlas_turn_undecided", "seat", handle)
+		return false
+	}
+	return d.Allowed
+}
+
+// atlasSystems is the atlas a turn's prompt names entries from: settings and
+// records as the seat reads them, a private address only within its own
+// reach. Gitlet's repositories are read by the atlas tools, as the seat and
+// with its ceiling, which a prompt built before the turn's first call has no
+// caller for.
+type atlasSystems struct{ engine *Engine }
+
+func (s atlasSystems) Systems(ctx context.Context, r prefetch.Request) (atlas.View, bool, error) {
+	deps := AtlasToolDeps(s.engine)
+	settings, running := AtlasSettingsFor(ctx, deps)
+	if !running {
+		return atlas.View{}, false, nil
+	}
+	answer, _ := deps.AtlasRead(ctx, nil, code.Principal{},
+		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}, time.Now().UTC())
+	view, _ := builtin.AtlasForSeat(answer.View, settings.Company, r.Seat)
+	return view, true, nil
+}
+
+// AtlasSettingsFor is the settings deps reads, and false where it reads none.
+func AtlasSettingsFor(ctx context.Context, deps builtin.AtlasDeps) (builtin.AtlasSettings, bool) {
+	if deps.Settings == nil {
+		return builtin.AtlasSettings{}, false
+	}
+	return deps.Settings(ctx)
 }

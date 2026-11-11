@@ -188,7 +188,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			deps.Knowledge != nil && deps.Org != nil},
 		// THE ATLAS, read as the caller: every entry to a holder of the app,
 		// and the repositories in it only where they use Gitlet (ADR-0127).
-		{&atlasSearch{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize},
+		{&atlasSearch{atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}},
+			deps.Atlas.Settings != nil},
+		{&atlasGet{atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}},
+			deps.Atlas.Settings != nil},
+		{&atlasTrace{atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}},
 			deps.Atlas.Settings != nil},
 		// A SEAT IS NEVER GIVEN IT: a question an executor asked is a
 		// person's to answer, and a seat that could answer its own
