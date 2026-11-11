@@ -2,11 +2,16 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/setup"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 )
@@ -101,4 +106,28 @@ func (s sshServers) Denied(ctx context.Context, call builtin.SSHCall) error {
 func (sshServers) operateCall(call builtin.SSHCall, h config.SSHHost, use sshint.Use) sshint.OperateCall {
 	return sshint.OperateCall{Use: use, Seat: call.Handle, Turn: call.Turn, HeldCall: call.HeldCall,
 		Approver: call.Approver, Host: h, Command: call.Command, Stdin: call.Stdin}
+}
+
+// RecordVerdict records v in the access log before it acts, answering whether
+// it is (Request, By)'s first: a verdict recorded twice acts once.
+func (s sshServers) RecordVerdict(ctx context.Context, v builtin.DelegatedVerdict) (bool, error) {
+	nv := accessdomain.NewVerdict{
+		Request: v.Request, Kind: delegated.Kind(v.Kind), Rule: v.Rule, Handle: v.Handle,
+		Turn: v.Turn, By: v.By, ByKind: accessdomain.VerdictBy(v.ByKind),
+		Through: accessdomain.VerdictThrough(v.Through), Asked: delegated.Verdict(v.Asked),
+		Confidence: delegated.Confidence(v.Confidence), Verdict: delegated.Verdict(v.Verdict), Final: v.Final,
+		Overruled: v.Overruled, Sampled: v.Sampled, Digest: v.Digest, Host: v.Host, User: v.User,
+		Subject: v.Subject, Decision: v.Decision, Item: v.Item, Reason: v.Reason, Findings: v.Findings,
+	}
+	if len(v.Stdin) > 0 {
+		sum := sha256.Sum256(v.Stdin)
+		nv.StdinBytes, nv.StdinSHA256 = int64(len(v.Stdin)), hex.EncodeToString(sum[:])
+	}
+	// MINTED AT THE REQUEST, never now: a retry after an unknown landing is
+	// then the same operation, which lands once and reads as this giver's.
+	minted := v.At
+	if minted.IsZero() {
+		return false, errors.New("engine: a verdict names when its request was made")
+	}
+	return sshAudit(s).RecordVerdict(ctx, minted.UTC(), nv)
 }

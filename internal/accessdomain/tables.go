@@ -10,12 +10,14 @@ import "slices"
 // reanchor's audit.
 var ReproducibleTables = []string{
 	"access_told", "access_seat_removals", "access_certificates", "access_commands",
-	"access_evictions", "access_log_generations",
+	"access_verdicts", "access_evictions", "access_log_generations",
 }
 
 // RetainedTables are the tables the retention expires, each with an `at`
 // column the broker stamped.
-var RetainedTables = []string{"access_told", "access_seat_removals", "access_certificates", "access_commands"}
+var RetainedTables = []string{
+	"access_told", "access_seat_removals", "access_certificates", "access_commands", "access_verdicts",
+}
 
 // MachineryTables are the log's own: the ledger, which travels in a donated
 // snapshot, and the deferred records with their scope index, this node's own.

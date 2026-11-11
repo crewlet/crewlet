@@ -52,7 +52,7 @@ func TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed(t *testing.T) {
 	t.Parallel()
 	desk := &askDesk{outcome: sandbox.AskRecorded}
 	seal := callSeal(t)
-	hold := builtin.NewCallHold(desk, seal, nil)
+	hold := builtin.NewCallHold(desk, seal, nil, nil)
 	turn := &turnctx.Turn{RunID: "run-1", WorkItem: &types.WorkItem{Backend: types.WorkWorklet,
 		ID: "id-9", Key: "ENG-9"}}
 	ctx := turnctx.WithJob(t.Context(), "launch-1")
@@ -103,18 +103,18 @@ func TestACallIsHeldOnlyForAJobThatCanParkOnIt(t *testing.T) {
 	t.Parallel()
 	call := tools.HeldCall{Name: "tr_close_issue", Entry: tools.Entry{Tool: trackerTool{}}}
 	desk := &askDesk{outcome: sandbox.AskRecorded}
-	hold := builtin.NewCallHold(desk, callSeal(t), nil)
+	hold := builtin.NewCallHold(desk, callSeal(t), nil, nil)
 	if got, held := hold.Hold(t.Context(), &turnctx.Turn{RunID: "run-1"}, call); held ||
 		!got.Failed || len(desk.recorded) != 0 {
 		t.Fatalf("a call with no job = %+v, %v, recorded %d", got, held, len(desk.recorded))
 	}
 	asked := &askDesk{outcome: sandbox.AskAlreadyAsked}
-	got, held := builtin.NewCallHold(asked, callSeal(t), nil).Hold(turnctx.WithJob(t.Context(), "launch-1"),
+	got, held := builtin.NewCallHold(asked, callSeal(t), nil, nil).Hold(turnctx.WithJob(t.Context(), "launch-1"),
 		&turnctx.Turn{RunID: "run-1"}, call)
 	if held || tools.RefusalOf(got) != tools.RefusalNotRunning {
 		t.Fatalf("a call while the job waits = %+v, %v, want not running", got, held)
 	}
-	if builtin.NewCallHold(desk, nil, nil) != nil || builtin.NewCallHold(nil, callSeal(t), nil) != nil {
+	if builtin.NewCallHold(desk, nil, nil, nil) != nil || builtin.NewCallHold(nil, callSeal(t), nil, nil) != nil {
 		t.Fatal("a holder was built without its desk or its seal")
 	}
 }
@@ -132,7 +132,7 @@ func TestACallIsHeldOnlyForAJobThatCanParkOnIt(t *testing.T) {
 func TestACallTooLargeToHoldIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 	t.Parallel()
 	desk := &askDesk{outcome: sandbox.AskRecorded}
-	hold := builtin.NewCallHold(desk, callSeal(t), nil)
+	hold := builtin.NewCallHold(desk, callSeal(t), nil, nil)
 	turn := &turnctx.Turn{RunID: "run-1"}
 	ctx := turnctx.WithJob(t.Context(), "launch-1")
 	entry := tools.Entry{Tool: trackerTool{}, Origin: tools.Origin("tracker"), NeedsApproval: true}
@@ -193,7 +193,7 @@ func TestAHeldCallNamesTheDecisionItsTurnWasWokenFor(t *testing.T) {
 		desk := &askDesk{outcome: sandbox.AskRecorded}
 		turn := turnFor(t, "agent-ceo")
 		turn.WorkItem, turn.Answered = item, answered
-		if _, held := builtin.NewCallHold(desk, callSeal(t), acting).Hold(
+		if _, held := builtin.NewCallHold(desk, callSeal(t), acting, nil).Hold(
 			turnctx.WithJob(t.Context(), "launch-1"), turn, call); !held || len(desk.recorded) != 1 {
 			t.Fatalf("the call was not held (%v, %d asks)", held, len(desk.recorded))
 		}

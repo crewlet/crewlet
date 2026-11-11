@@ -335,6 +335,7 @@ export type FramedScreen =
   | { screen: "tokens" }
   | { screen: "sign-in" }
   | { screen: "audit" }
+  | { screen: "delegated-decisions" }
   | { screen: "nodes"; node?: string }
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
@@ -799,6 +800,7 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     tokens: { screen: "tokens" },
     "sign-in": { screen: "sign-in" },
     audit: { screen: "audit" },
+    "delegated-decisions": { screen: "delegated-decisions" },
     storage: { screen: "storage" },
     gitlet: { screen: "code-settings" },
     diagnostics: { screen: "diagnostics" },

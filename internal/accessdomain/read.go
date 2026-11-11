@@ -7,18 +7,22 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Reader answers questions about what seats were told and about the SSH audit
-// from this node's own applied rows, through the domain's read authority, at
-// the level each caller asks: a turn's dispatch reads its seat's baseline at
-// `linearizable`, since the seat's previous turn may have been told on another
-// node; an audit page reads at the caller's level.
+// Reader answers questions about what seats were told, about the SSH audit and
+// about the verdicts on delegated requests from this node's own applied rows,
+// through the domain's read authority, at the level each caller asks: a turn's
+// dispatch reads its seat's baseline at `linearizable`, since the seat's
+// previous turn may have been told on another node; an audit page reads at the
+// caller's level.
 type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
@@ -267,13 +271,17 @@ func (q AuditQuery) validate() error {
 }
 
 // window is the query's instants as stored, the widest where unset.
-func (q AuditQuery) window() (since, until int64) {
+func (q AuditQuery) window() (since, until int64) { return window(q.Since, q.Until) }
+
+// window is a page's bounds on the broker instant as stored, the widest where
+// unset.
+func window(from, to time.Time) (since, until int64) {
 	since, until = 0, int64(1<<63-1)
-	if !q.Since.IsZero() {
-		since = store.EncodeTime(q.Since)
+	if !from.IsZero() {
+		since = store.EncodeTime(from)
 	}
-	if !q.Until.IsZero() {
-		until = store.EncodeTime(q.Until)
+	if !to.IsZero() {
+		until = store.EncodeTime(to)
 	}
 	return since, until
 }
@@ -518,6 +526,247 @@ func (r *Reader) Commands(ctx context.Context, q AuditQuery,
 	return out, nil
 }
 
+// ---- verdicts ----------------------------------------------------------- //
+
+// VerdictQuery narrows a page of verdicts. Every field is optional.
+type VerdictQuery struct {
+	// Handle is the seat whose requests they are, By the seat that gave
+	// them, Request one request's, Host one registered host's.
+	Handle  string
+	By      string
+	Request string
+	Host    string
+
+	// Kind, Verdict and ByKind narrow to one act, one verdict that took
+	// effect and one kind of giver.
+	Kind    delegated.Kind
+	Verdict delegated.Verdict
+	ByKind  VerdictBy
+
+	// Final and Sampled narrow to the records that did or did not decide
+	// their request, or were or were not chosen for a spot-check.
+	Final   *bool
+	Sampled *bool
+
+	// Since and Until bound the record's broker instant, Until exclusive.
+	Since time.Time
+	Until time.Time
+
+	Cursor string
+	Limit  int
+}
+
+// validate refuses a query naming what no record could hold.
+func (q VerdictQuery) validate() error {
+	for _, seat := range []string{q.Handle, q.By} {
+		if seat != "" {
+			if err := checkSeat(seat); err != nil {
+				return err
+			}
+		}
+	}
+	if err := checkRef("the request", q.Request, false); err != nil {
+		return err
+	}
+	switch {
+	case q.Host != "" && !hostPattern().MatchString(q.Host):
+		return invalid("%q is not a host id", q.Host)
+	case q.Kind != "" && !q.Kind.Delegable():
+		return invalid("kind %q is not one of %s", q.Kind, words.Or(delegated.DelegableKinds()))
+	case q.Verdict != "" && !q.Verdict.Valid():
+		return invalid("verdict %q is not one of %s", q.Verdict, words.Or(delegated.Verdicts()))
+	case q.ByKind != "" && !q.ByKind.Valid():
+		return invalid("by_kind %q is not one of %s", q.ByKind, words.Or(VerdictGivers))
+	case q.ByKind == VerdictByEngine && q.By != "":
+		return invalid("the engine's verdicts name no seat")
+	case !q.Since.IsZero() && !q.Until.IsZero() && !q.Until.After(q.Since):
+		return invalid("until is after since")
+	}
+	return nil
+}
+
+// VerdictRow is one verdict's record. What it decided and its giver's words
+// stay sealed until [VerdictRow.Open].
+type VerdictRow struct {
+	Handle  string
+	ID      string
+	Request string
+	Kind    delegated.Kind
+	Rule    int
+	Turn    string
+
+	By      string
+	ByKind  VerdictBy
+	Through VerdictThrough
+
+	Asked      delegated.Verdict
+	Confidence delegated.Confidence
+	Verdict    delegated.Verdict
+	Final      bool
+	Overruled  []string
+	Sampled    bool
+
+	Digest      string
+	Host        string
+	User        string
+	StdinBytes  int64
+	StdinSHA256 string
+
+	Decision string
+	Item     string
+
+	// SubjectSealed and WordsSealed are what was decided and the giver's
+	// reason and findings, sealed under ContentKey: opened by
+	// [VerdictRow.Open] for an administrator's audit read, never shown as
+	// they are.
+	SubjectSealed string
+	WordsSealed   string
+	ContentKey    string
+
+	At       time.Time
+	Position statelog.Position
+}
+
+// Open is what the verdict decided and its giver's reason and findings,
+// opened under the keyring the row was sealed for: for an administrator's
+// audit read and the engine's own digest alone.
+func (v VerdictRow) Open(sealer *Sealer) (subject, reason string, findings []string, err error) {
+	if sealer == nil {
+		return "", "", nil, errors.New("accessdomain: opening a verdict needs the fleet keyring")
+	}
+	return sealer.openVerdict(v.Handle, v.ID, v.SubjectSealed, v.WordsSealed)
+}
+
+// VerdictPage is one page of verdicts, newest first.
+type VerdictPage struct {
+	Rows     []VerdictRow
+	Next     string
+	Position statelog.Position
+	Complete bool
+}
+
+// verdictColumns is every column a [VerdictRow] is read from.
+const verdictColumns = `agent_handle, verdict_id, request_id, request_kind, rule_number, turn_id,
+	by_handle, by_kind, through, asked, confidence, verdict, final, overruled, sampled, digest,
+	host, login_user, stdin_bytes, stdin_sha256, decision_id, item, subject_sealed, words_sealed,
+	content_key, at, position`
+
+// scanVerdict reads one verdict row.
+func scanVerdict(row rowScanner) (VerdictRow, error) {
+	var (
+		v                                                            VerdictRow
+		kind, byKind, through, asked, confidence, verdict, overruled string
+		final, sampled                                               int
+		at, posn                                                     int64
+	)
+	if err := row.Scan(&v.Handle, &v.ID, &v.Request, &kind, &v.Rule, &v.Turn, &v.By, &byKind,
+		&through, &asked, &confidence, &verdict, &final, &overruled, &sampled, &v.Digest, &v.Host,
+		&v.User, &v.StdinBytes, &v.StdinSHA256, &v.Decision, &v.Item, &v.SubjectSealed,
+		&v.WordsSealed, &v.ContentKey, &at, &posn); err != nil {
+		return VerdictRow{}, err
+	}
+	if err := json.Unmarshal([]byte(overruled), &v.Overruled); err != nil {
+		return VerdictRow{}, fmt.Errorf("accessdomain: verdict %s names its overrulings as %w", v.ID, err)
+	}
+	v.Kind, v.ByKind, v.Through = delegated.Kind(kind), VerdictBy(byKind), VerdictThrough(through)
+	v.Asked, v.Confidence = delegated.Verdict(asked), delegated.Confidence(confidence)
+	v.Verdict = delegated.Verdict(verdict)
+	v.Final, v.Sampled = final == 1, sampled == 1
+	v.At, v.Position = store.DecodeTime(at), statelog.Unpack(Domain{}.Stream().Name, posn)
+	return v, nil
+}
+
+// verdictStatement is the page query for q below a position: the narrowest
+// index q names, each filter set spelt as an equality so the index seeks it.
+// A spot-check page reads the partial index its literal predicate admits.
+func verdictStatement(q VerdictQuery, before, since, until int64, limit int) (string, []any) {
+	index := "access_verdicts_position_idx"
+	switch {
+	case q.Request != "":
+		index = "access_verdicts_request_idx"
+	case q.Handle != "":
+		index = "access_verdicts_seat_idx"
+	case q.By != "":
+		index = "access_verdicts_by_idx"
+	case q.Sampled != nil && *q.Sampled:
+		index = "access_verdicts_sampled_idx"
+	}
+	var (
+		where []string
+		args  []any
+	)
+	for _, eq := range []struct{ column, value string }{
+		{"request_id", q.Request}, {"agent_handle", q.Handle}, {"by_handle", q.By}, {"host", q.Host},
+		{"request_kind", string(q.Kind)}, {"verdict", string(q.Verdict)}, {"by_kind", string(q.ByKind)},
+	} {
+		if eq.value != "" {
+			where, args = append(where, eq.column+" = ?"), append(args, eq.value)
+		}
+	}
+	for _, flag := range []struct {
+		column string
+		value  *bool
+	}{{"final", q.Final}, {"sampled", q.Sampled}} {
+		switch {
+		case flag.value == nil:
+		case *flag.value:
+			where = append(where, flag.column+" = 1")
+		default:
+			where = append(where, flag.column+" = 0")
+		}
+	}
+	where = append(where, "position < ?", "at >= ?", "at < ?")
+	args = append(args, before, since, until, limit+1)
+	return `SELECT ` + verdictColumns + ` FROM access_verdicts INDEXED BY ` + index + `
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY position DESC LIMIT ?`, args
+}
+
+// Verdicts pages the verdicts on delegated requests, newest first.
+func (r *Reader) Verdicts(ctx context.Context, q VerdictQuery,
+	fresh statelog.Freshness) (VerdictPage, error) {
+
+	if err := q.validate(); err != nil {
+		return VerdictPage{}, err
+	}
+	before, limit, err := page(q.Cursor, q.Limit)
+	if err != nil {
+		return VerdictPage{}, err
+	}
+	since, until := window(q.Since, q.Until)
+	scope := DomainScope()
+	if q.Handle != "" {
+		scope = SeatScope(q.Handle)
+	}
+	statement, args := verdictStatement(q, before, since, until, limit)
+	var out VerdictPage
+	answer, err := r.log.Read(ctx, fresh.Query(scope, true), func(tx *sql.Tx) error {
+		out = VerdictPage{}
+		rows, queryErr := tx.QueryContext(ctx, statement, args...)
+		if queryErr != nil {
+			return queryErr
+		}
+		for rows.Next() {
+			v, scanErr := scanVerdict(rows)
+			if scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			out.Rows = append(out.Rows, v)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return VerdictPage{}, fmt.Errorf("accessdomain: page the verdicts: %w", err)
+	}
+	if len(out.Rows) > limit {
+		out.Rows = out.Rows[:limit]
+		out.Next = cursorOf(out.Rows[limit-1].Position)
+	}
+	out.Position, out.Complete = answer.Position, answer.Complete
+	return out, nil
+}
+
 // ---- the engine's duties ------------------------------------------------ //
 
 // minAtStatements find the oldest instant at or after a bound and before
@@ -530,6 +779,8 @@ var minAtStatements = []string{
 	`SELECT MIN(at) FROM access_certificates INDEXED BY access_certificates_expiry_idx
 		WHERE at >= ? AND at < ?`,
 	`SELECT MIN(at) FROM access_commands INDEXED BY access_commands_expiry_idx
+		WHERE at >= ? AND at < ?`,
+	`SELECT MIN(at) FROM access_verdicts INDEXED BY access_verdicts_expiry_idx
 		WHERE at >= ? AND at < ?`,
 }
 
@@ -647,41 +898,55 @@ func (r *Reader) HostUse(ctx context.Context, week, month time.Time, fresh state
 	return out, nil
 }
 
-// SealedCount is how many recorded commands are sealed under each keyring key.
+// SealedCount is how many recorded commands and verdicts are sealed under each
+// keyring key.
 type SealedCount struct {
 	Values secrets.KeyCounts `json:"values,omitempty"`
 }
 
-// Outside is how many of the commands are sealed under a key other than active.
+// Outside is how many of them are sealed under a key other than active.
 func (c SealedCount) Outside(active string) int { return c.Values.Outside(active) }
 
-// SealedKeys counts the commands by the keyring key that sealed their text:
-// what a keyring rotation waits out before an old key may leave the ring.
+// sealedCountStatements count one sealed table's rows by key, one indexed walk
+// each.
+var sealedCountStatements = []string{
+	`SELECT content_key, COUNT(*) FROM access_commands INDEXED BY access_commands_key_idx
+		GROUP BY content_key`,
+	`SELECT content_key, COUNT(*) FROM access_verdicts INDEXED BY access_verdicts_key_idx
+		GROUP BY content_key`,
+}
+
+// SealedKeys counts the commands and the verdicts by the keyring key that
+// sealed their texts: what a keyring rotation waits out before an old key may
+// leave the ring.
 func (r *Reader) SealedKeys(ctx context.Context) (SealedCount, error) {
 	out := secrets.KeyCounts{}
 	_, err := r.log.Read(ctx, stale.Query(DomainScope(), true), func(tx *sql.Tx) error {
 		clear(out)
-		rows, err := tx.QueryContext(ctx, `
-			SELECT content_key, COUNT(*) FROM access_commands INDEXED BY access_commands_key_idx
-			GROUP BY content_key`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var (
-				key string
-				n   int
-			)
-			if scanErr := rows.Scan(&key, &n); scanErr != nil {
-				_ = rows.Close()
-				return scanErr
+		for _, statement := range sealedCountStatements {
+			rows, err := tx.QueryContext(ctx, statement)
+			if err != nil {
+				return err
 			}
-			out[key] += n
+			for rows.Next() {
+				var (
+					key string
+					n   int
+				)
+				if scanErr := rows.Scan(&key, &n); scanErr != nil {
+					_ = rows.Close()
+					return scanErr
+				}
+				out[key] += n
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return err
+			}
 		}
-		return errors.Join(rows.Err(), rows.Close())
+		return nil
 	})
 	if err != nil {
-		return SealedCount{}, fmt.Errorf("accessdomain: count the commands by key: %w", err)
+		return SealedCount{}, fmt.Errorf("accessdomain: count the sealed values by key: %w", err)
 	}
 	return SealedCount{Values: out}, nil
 }

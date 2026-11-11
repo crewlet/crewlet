@@ -412,18 +412,25 @@ func (s *session) memberRoles(ctx context.Context) ([]MemberRole, bool, error) {
 	return roles, available, nil
 }
 
+// FixedLevels is GitLab's default roles, least access first
+// ([seataccess.FixedLevels]); a group's custom roles are read live.
+func (Vendor) FixedLevels(seataccess.Lane) []seataccess.Level {
+	levels := make([]seataccess.Level, 0, len(Roles))
+	for _, role := range Roles {
+		levels = append(levels, seataccess.Level{
+			ID: strconv.Itoa(role.Level), Name: role.Name,
+			Administers: Administration(role.Level),
+		})
+	}
+	return levels
+}
+
 // Options implements [seataccess.Session].
 func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	if lane != seataccess.LaneGitLab {
 		return seataccess.Options{}, fmt.Errorf("gitlab: no lane %q", lane)
 	}
-	out := seataccess.Options{Lane: lane}
-	for _, role := range Roles {
-		out.Levels = append(out.Levels, seataccess.Level{
-			ID: strconv.Itoa(role.Level), Name: role.Name,
-			Administers: Administration(role.Level),
-		})
-	}
+	out := seataccess.Options{Lane: lane, Levels: Vendor{}.FixedLevels(lane)}
 	custom, available, err := s.memberRoles(ctx)
 	if err != nil {
 		return seataccess.Options{}, err

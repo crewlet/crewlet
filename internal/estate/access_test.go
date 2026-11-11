@@ -6,11 +6,13 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -134,5 +136,38 @@ func TestACommandCrossesTheRouterSealed(t *testing.T) {
 	if _, err := r.AccessWrites(nil).Ran(t.Context(), accessdomain.Call{},
 		accessdomain.NewCommand{ID: id, Handle: "sre", Command: text}); err == nil {
 		t.Error("a router with no keyring sent a command")
+	}
+}
+
+// A VERDICT CROSSES THE ROUTER SEALED (ADR-0125): the request a delegate's node
+// sends a data node carries neither what was decided nor the delegate's words,
+// only their seals, which open under the fleet keyring as that verdict's.
+//
+// Mutation: send the subject or the reason in the clear in
+// AccessWrites.Verdict and its text is in the request.
+func TestAVerdictCrossesTheRouterSealed(t *testing.T) {
+	t.Parallel()
+	r, asker := accessRouter(t)
+	sealer := accessSealer(t)
+	const subject, reason = "sudo systemctl restart billing-worker-7731", "routine for ticket-4471"
+	_, _ = r.AccessWrites(sealer).Verdict(t.Context(), accessdomain.Call{}, accessdomain.NewVerdict{
+		Request: uuid.NewString(), Kind: delegated.KindSSHOperate, Rule: 1, Handle: "sre", By: "security",
+		ByKind: accessdomain.VerdictByAgent, Through: accessdomain.VerdictThroughDelegation,
+		Asked: delegated.Allow, Confidence: delegated.High, Verdict: delegated.Allow, Final: true,
+		Digest: strings.Repeat("ab", 32), Host: "api-1", Subject: subject, Reason: reason,
+		Findings: []string{"restarts ticket-4471's worker"},
+	})
+	sent := asker.requests()
+	if len(sent) != 1 {
+		t.Fatalf("Verdict asked %d operations, want one", len(sent))
+	}
+	req := opened(sent[0].payload)
+	if req.Op != "access.verdict" || bytes.Contains(req.Args, []byte("billing-worker-7731")) ||
+		bytes.Contains(req.Args, []byte("ticket-4471")) {
+		t.Fatalf("the request asks %s and carries %s, want access.verdict with no text in the clear", req.Op, req.Args)
+	}
+	if _, err := r.AccessWrites(nil).Verdict(t.Context(), accessdomain.Call{},
+		accessdomain.NewVerdict{Request: uuid.NewString(), Handle: "sre", Subject: subject}); err == nil {
+		t.Error("a verdict was recorded with no keyring to seal it under")
 	}
 }

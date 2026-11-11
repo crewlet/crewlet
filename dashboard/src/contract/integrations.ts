@@ -29,6 +29,13 @@ export interface ReconcileFinding {
    */
   title?: string;
   /**
+   * The finding in a few words, for a list that gives each one line: its
+   * `title`, or where it has none its kind's own words about its `subject`.
+   * On every integrations row's finding; absent on a setup pass's own
+   * (`SetupRun.findings`), which are marshalled as the pass reported them.
+   */
+  label?: string;
+  /**
    * What is wrong, in one sentence — and only that.
    *
    * What to do about it is `remedy` and which things it is about is

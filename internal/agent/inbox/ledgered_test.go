@@ -95,6 +95,7 @@ func TestTheLedgeredSetIsExactlyWhatItClaims(t *testing.T) {
 		types.ExternalNotification{}.EventType(),
 		types.TaskAssigned{}.EventType(),
 		types.WorkPickupType,
+		types.DelegatedReviewType,
 	}
 	slices.Sort(want)
 	if got := inbox.LedgeredTypes(); !slices.Equal(got, want) {

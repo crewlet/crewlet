@@ -99,25 +99,25 @@ func TestAnAgentsCountLeavesOutBlockedAndRefusedToolsAndOnlyItsGrantsCount(t *te
 	}, func(live map[string]int64) []coord.MCPListing {
 		return []coord.MCPListing{
 			{Server: "docs", Node: "node-a", Epoch: live["node-a"], At: at, Shared: true, Instances: 1,
-				Tools: docs, ToolCount: 3},
+				Tools: docs},
 			{Server: "docs", Node: "node-b", Epoch: live["node-b"], At: at, Shared: true, Instances: 1,
-				Tools: docs, ToolCount: 3},
+				Tools: docs},
 			// A NODE THAT IS GONE: its record is still there, and counts
 			// for nobody.
 			{Server: "docs", Node: "node-gone", Epoch: 7, At: at, Shared: true, Instances: 1,
-				Tools: []coord.MCPListedTool{tool("drop_all", "drop_all", false)}, ToolCount: 1},
+				Tools: []coord.MCPListedTool{tool("drop_all", "drop_all", false)}},
 			{Server: "tracker", Node: "node-a", Epoch: live["node-a"], At: at, Shared: true, Instances: 1,
-				ToolCount: 2, Tools: []coord.MCPListedTool{tool("file_issue", "file_issue", false),
+				Tools: []coord.MCPListedTool{tool("file_issue", "file_issue", false),
 					tool("search", "search", false)}},
 			// A NODE STILL ON THE REVISION BEFORE wiki WAS TURNED OFF.
 			{Server: "wiki", Node: "node-b", Epoch: live["node-b"], At: at, Shared: true, Instances: 1,
-				Tools: []coord.MCPListedTool{tool("edit", "edit", false)}, ToolCount: 1},
+				Tools: []coord.MCPListedTool{tool("edit", "edit", false)}},
 			{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at, Instances: 1,
 				Tools: []coord.MCPListedTool{tool("gh_create_issue", "create_issue", false),
-					tool("gh_get_issue", "get_issue", false)}, ToolCount: 2},
+					tool("gh_get_issue", "get_issue", false)}},
 			{Server: "github", Node: "node-b", Epoch: live["node-b"], At: at, Instances: 1,
 				Tools: []coord.MCPListedTool{tool("gh_get_issue", "get_issue", false),
-					tool("gh_merge", "merge", false)}, ToolCount: 2},
+					tool("gh_merge", "merge", false)}},
 		}
 	})
 	got := askMCPStatus(t, s)
@@ -157,16 +157,15 @@ func TestAnAgentsCountLeavesOutBlockedAndRefusedToolsAndOnlyItsGrantsCount(t *te
 	}
 }
 
-// listingOf is one node's listing of server naming n tools t000, t001, ...,
-// counting counted in all.
-func listingOf(server string, epoch int64, n, counted int) coord.MCPListing {
+// listingOf is one node's listing of server naming n tools t000, t001, ....
+func listingOf(server string, epoch int64, n int) coord.MCPListing {
 	tools := make([]coord.MCPListedTool, 0, n)
 	for i := range n {
 		name := fmt.Sprintf("t%03d", i)
 		tools = append(tools, tool(name, name, false))
 	}
 	return coord.MCPListing{Server: server, Node: "node-a", Epoch: epoch, Shared: true, Instances: 1,
-		At: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC), Tools: tools, ToolCount: counted}
+		At: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC), Tools: tools}
 }
 
 // AN AGENT PAST THE BUDGET IS FLAGGED, AND ONE AT IT IS NOT: a hundred tools is
@@ -196,7 +195,7 @@ func TestAnAgentPastTheBudgetIsFlaggedAndOneAtItIsNot(t *testing.T) {
 			doc := "name: Acme\nmcp_servers:\n  - {name: big, command: big-mcp" + tc.levels + "}\n" +
 				"roles:\n  - {name: Ops, handle: ops}\n"
 			s := agentsSources(t, doc, nil, func(live map[string]int64) []coord.MCPListing {
-				return []coord.MCPListing{listingOf("big", live["node-a"], listed, listed)}
+				return []coord.MCPListing{listingOf("big", live["node-a"], listed)}
 			})
 			ops := agentNamed(t, askMCPStatus(t, s), "ops")
 			if ops.MCPTools != tc.tools || ops.OverBudget != tc.over {
@@ -207,15 +206,12 @@ func TestAnAgentPastTheBudgetIsFlaggedAndOneAtItIsNot(t *testing.T) {
 	}
 }
 
-// A SERVER LISTING MORE TOOLS THAN ITS RECORD NAMES COUNTS THEM ALL: a node
-// names at most 256 and counts the rest, which are offered at the server's
-// baseline, so an agent it reaches is counted every tool rather than the 256
-// named, and a server that blocks every tool but the ones it names counts
-// those alone.
+// A SERVER LISTING HUNDREDS OF TOOLS COUNTS EVERY ONE BY NAME: a listing names
+// every tool its node's instances list, so an agent it reaches is counted all
+// 300, and a server that blocks every tool but two counts those alone.
 //
-// Mutation: count only the named tools, or count the unnamed ones whatever the
-// baseline, and this is red.
-func TestAServerListingPastItsRecordCountsEveryTool(t *testing.T) {
+// Mutation: count only the first 256 a listing once named, and this is red.
+func TestAServerListingHundredsOfToolsCountsEveryOne(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
@@ -230,7 +226,7 @@ func TestAServerListingPastItsRecordCountsEveryTool(t *testing.T) {
 			doc := "name: Acme\nmcp_servers:\n  - {name: big, command: big-mcp" + tc.levels + "}\n" +
 				"roles:\n  - {name: Ops, handle: ops}\n"
 			s := agentsSources(t, doc, nil, func(live map[string]int64) []coord.MCPListing {
-				l := listingOf("big", live["node-a"], coord.MaxMCPListedTools, 300)
+				l := listingOf("big", live["node-a"], 300)
 				for i := 2; i < len(l.Tools); i++ {
 					l.Tools[i].Blocked = tc.levels != ""
 				}
@@ -304,9 +300,9 @@ units:
 		return []coord.MCPListing{
 			{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at, Shared: true, Instances: 1,
 				Tools: []coord.MCPListedTool{tool("gh_create_issue", "create_issue", false),
-					tool("gh_get_issue", "get_issue", false), tool("gh_merge", "merge", false)}, ToolCount: 3},
+					tool("gh_get_issue", "get_issue", false), tool("gh_merge", "merge", false)}},
 			{Server: "docs", Node: "node-a", Epoch: live["node-a"], At: at, Shared: true, Instances: 1,
-				Tools: []coord.MCPListedTool{tool("read_page", "read_page", false)}, ToolCount: 1},
+				Tools: []coord.MCPListedTool{tool("read_page", "read_page", false)}},
 		}
 	})
 	got := askMCPStatus(t, s)

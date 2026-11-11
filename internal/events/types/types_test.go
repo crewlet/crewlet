@@ -27,7 +27,7 @@ func catalogue() []events.Payload {
 		// config.go
 		ConfigRevisionActivated{}, ConfigRevisionApplied{},
 		// task.go
-		TaskAssigned{}, WorkPickup{},
+		TaskAssigned{}, WorkPickup{}, DelegatedReview{},
 		// schedule.go
 		ScheduledTaskFired{},
 		ScheduledFireSuperseded{},
@@ -209,6 +209,7 @@ var wireTypes = []string{
 	"turn_trigger_skipped",
 	"wake_held",
 	"work_pickup",
+	"delegated_review",
 }
 
 func TestRegistryMatchesWireTypes(t *testing.T) {
@@ -372,6 +373,7 @@ var wireTags = map[string][]string{
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
 	"work_pickup":                   {"agent_id", "item", "key", "moved", "progressed", "quiet", "ready", "ready_capped", "role", "status", "submitted_by", "waits_on", "why", "working_for"},
+	"delegated_review":              {"agent_handle", "agent_id", "at", "held_launch", "held_turn", "kind", "panel", "request", "requester", "rule"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
 	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
@@ -441,8 +443,8 @@ var wireTags = map[string][]string{
 	"agent_capability_told":         {"agent_handle", "baseline", "changes", "digest", "lines", "revision_from", "revision_to", "told_at"},
 	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
-	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "launch_id", "operator_id", "turn_id"},
-	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
+	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "launch_id", "operator_id", "turn_id"},
+	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "delegated_rule", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                   {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
 	"turn.guard_breach":             {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},

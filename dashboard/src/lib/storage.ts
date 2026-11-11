@@ -118,6 +118,12 @@ export const STORAGE_KEYS = {
    * every box (`routes/chatlet/Composer.tsx`).
    */
   chatletFormatting: "crewlet.chatlet.formatting",
+  /**
+   * The Home notices about delegated decisions this browser put away: the
+   * digest by its company day, the flagged denials by the newest one
+   * (`lib/delegation.ts`).
+   */
+  delegatedNotices: "crewlet.delegated.notices",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

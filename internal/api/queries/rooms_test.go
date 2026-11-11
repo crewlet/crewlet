@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -142,7 +143,9 @@ func everySeam(t *testing.T) queries.Sources {
 
 		IssueReports: issuereport.New(issuereport.Config{Store: coordmemory.NewFleet()}),
 		AgentAccess:  func(context.Context) ([]queries.AgentAccessRow, error) { return nil, nil },
-		Insights:     coordmemory.NewFleet(),
+		// WHAT DELEGATES DECIDED, read off an access log holding nothing.
+		Delegated: emptyVerdicts{},
+		Insights:  coordmemory.NewFleet(),
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a
@@ -767,4 +770,15 @@ func TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto(t *testing.T) {
 				"whatever band the engine counts it in", p)
 		}
 	}
+}
+
+// emptyVerdicts is an access log holding no verdict.
+type emptyVerdicts struct{}
+
+func (emptyVerdicts) Verdicts(context.Context, accessdomain.VerdictQuery, statelog.Freshness) (accessdomain.VerdictPage, error) {
+	return accessdomain.VerdictPage{Complete: true}, nil
+}
+
+func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []string, error) {
+	return "", "", nil, nil
 }

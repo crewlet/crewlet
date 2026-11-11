@@ -150,10 +150,8 @@ func permissionWords(in Integration) []string {
 		}
 		if want, ok := pending[key]; ok {
 			requested = append(requested, name+" "+want.Label())
-		} else if access == "" && slices.Contains(in.AppHolds, key) {
-			none = append(none, name+" (the app already holds it, so nothing at GitHub waits)")
 		} else if access == "" {
-			none = append(none, name)
+			none = append(none, name+appHoldsWords(in, key))
 		}
 	}
 	var out []string
@@ -171,6 +169,20 @@ func permissionWords(in Integration) []string {
 		out = append(out, "Not in your Crewlet grant: "+strings.Join(none, ", ")+".")
 	}
 	return out
+}
+
+// appHoldsWords is what a permission the grant leaves out waits on at GitHub,
+// where the seat's app already holds it: nothing up to the level the app
+// holds, and an organization owner past it. Empty where the app holds none.
+func appHoldsWords(in Integration, key string) string {
+	switch held := config.GitHubAccess(in.AppHolds[key]); held {
+	case config.GitHubWrite:
+		return " (the app already holds it at " + held.Label() + ", so nothing at GitHub waits)"
+	case config.GitHubRead:
+		return " (the app already holds it at " + held.Label() + ", so that waits on nothing at " +
+			"GitHub; " + config.GitHubWrite.Label() + " waits on an organization owner accepting it there)"
+	}
+	return ""
 }
 
 // ChangesBlock renders the "## What changed since your last turn" section: at

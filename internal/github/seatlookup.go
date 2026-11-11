@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 )
 
@@ -126,4 +128,38 @@ func (l *SeatLookup) read(ctx context.Context, fn func(*Client) error) error {
 		return fmt.Errorf("%w: %w", ErrNoSeatCanRead, last)
 	}
 	return ErrNoSeatCanRead
+}
+
+// ErrUnknownSeat reports a handle the company's roster has no GitHub App
+// seat for.
+var ErrUnknownSeat = errors.New("github: no agent with its own GitHub App has this handle")
+
+// ClientFor is a client acting as the ONE seat named handle, through that
+// seat's own app: what an agent does on GitHub is done as that agent, never
+// as whichever seat could. Unlike [SeatLookup.read] it asks no other seat when this one
+// cannot act, because another app acting would be another agent acting.
+//
+// The token is [ToolTokenLife] good, from the lookup's issuer: build a client
+// for each act rather than keep one.
+func (l *SeatLookup) ClientFor(ctx context.Context, handle string) (*Client, error) {
+	handle = strings.TrimSpace(handle)
+	i := slices.IndexFunc(l.Opts.Seats, func(s SeatApp) bool { return s.Handle == handle })
+	if i < 0 {
+		return nil, fmt.Errorf("%w: %q: give the agent its own app on the GitHub "+
+			"integration's Agents tab", ErrUnknownSeat, handle)
+	}
+	seat := l.Opts.Seats[i]
+	switch {
+	case seat.Off:
+		return nil, fmt.Errorf("%w: %s: turn it back on from the GitHub integration's "+
+			"Agents tab", ErrSeatOff, handle)
+	case !Issuable(seat):
+		return nil, fmt.Errorf("%w: %s: create and install its app from the GitHub "+
+			"integration's Agents tab", ErrNotInstalled, handle)
+	}
+	token, err := l.token(ctx, seat)
+	if err != nil {
+		return nil, fmt.Errorf("github: issue %s's token: %w", handle, err)
+	}
+	return NewClient(ClientOptions{APIBase: l.Opts.APIBase, WebBase: l.Opts.WebBase, Token: token})
 }

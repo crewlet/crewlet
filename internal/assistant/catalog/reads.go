@@ -869,8 +869,9 @@ func readTools() []Tool {
 		{
 			Name: "list_integrations", Phrase: "read integration health",
 			Description: "Administrators: every integration's state, its traffic, when its " +
-				"reconcile last checked it (Check now included) and the titles of what that " +
-				"check found. One agent's access at one integration is " + seatAccessReadTool + ".",
+				"reconcile last checked it (Check now included) and what that check found, " +
+				"each finding in a few words. One agent's access at one integration is " +
+				seatAccessReadTool + ".",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /integrations"}, Apps: adminOnly,
 			Build: func(map[string]any) (exec.Request, error) {
