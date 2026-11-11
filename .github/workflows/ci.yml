@@ -605,16 +605,22 @@ jobs:
       # three gits, about four minutes, on every run until main saves them. Only
       # these shards, `end-to-end gates` and `git recipe (macOS)` run git, so
       # only they carry the steps.
+      #
+      # AND ON THE IMAGE'S OS RELEASE (ImageOS, such as `ubuntu24`): a build
+      # links that release's libc, libcurl and zlib, so one made on a newer
+      # release is not restored on an older one.
       - &git-cache-dir
-        name: name the pinned gits' cache directory
-        run: echo "CREWLET_GIT_CACHE=$HOME/.cache/crewlet/git" >> "$GITHUB_ENV"
+        name: name the pinned gits' cache directory and OS release
+        run: |
+          echo "CREWLET_GIT_CACHE=$HOME/.cache/crewlet/git" >> "$GITHUB_ENV"
+          echo "CREWLET_GIT_CACHE_OS=${ImageOS:?the runner image sets no ImageOS}" >> "$GITHUB_ENV"
       - &git-restore
         name: restore the pinned gits main built
         id: git
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
-          key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
+          key: git-${{ runner.os }}-${{ runner.arch }}-${{ env.CREWLET_GIT_CACHE_OS }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
       # libcurl's development files are what building git's HTTPS transport
       # needs and the runner image may not carry; the C toolchain and zlib's
       # headers it does. Only a miss builds, so only a miss installs.
@@ -672,7 +678,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
-          key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
+          key: git-${{ runner.os }}-${{ runner.arch }}-${{ env.CREWLET_GIT_CACHE_OS }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
       # What this shard ran and how long each package took: the aggregate job
       # holds it against the plan, and `test weights` merges it. Only a shard
       # that passed hands one on, as only a run that passed is kept.
@@ -871,13 +877,14 @@ jobs:
   # skipped. Whether the job is a REQUIRED check is a repository setting.
   #
   # The pinned gits' cache steps are the race shards', whose key already
-  # carries the runner's OS and architecture, and there is no install step:
-  # Xcode's command line tools, on the image, supply the compiler, libcurl and
-  # zlib. The BUILD cache is every Go job's, under this job's own key: what it
-  # keeps is the race-instrumented standard library, gitproc's test binaries
-  # and skipgate for the runner's darwin, which no other job compiles —
-  # measured from an empty cache on four Linux vCPUs, 29–31 s for the test
-  # binaries and 10 s for skipgate, against 1.8 s warm, in an entry of 151 MB.
+  # carries the runner's OS, its release and its architecture, and there is no
+  # install step: Xcode's command line tools, on the image, supply the
+  # compiler, libcurl and zlib. The BUILD cache is every Go job's, under this
+  # job's own key: what it keeps is the race-instrumented standard library,
+  # gitproc's test binaries and skipgate for the runner's darwin, which no
+  # other job compiles. Measured from an empty cache on four Linux vCPUs:
+  # 29–31 s for the test binaries and 10 s for skipgate, against 1.8 s warm,
+  # in an entry of 151 MB.
   # The MODULE cache is not: `build + vet` saves it on Linux, a cache is
   # restored only on the OS that saved it, and an entry of this job's own would
   # hold three modules — uuid, x/sys and x/term, all gitproc's tests and
