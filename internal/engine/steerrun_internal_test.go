@@ -842,13 +842,21 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 	})
 }
 
-// gatedSettles is a run store whose settles the store does not answer until the
-// clock reaches answerAt, and which wait at gate while one is set: counting the
-// attempts, and the most it held at once.
+// gatedSettles is a run store whose settles the store does not answer while
+// unavailable says so, and which wait at gate while one is set: counting the
+// attempts, and the most it held at once. Nil unavailable answers every settle.
+//
+// UNAVAILABLE IS THE CASE'S OWN LITERAL, written inside its bubble, because
+// whether the store answers yet is a decision on the clock, and only a bubble's
+// is the case's to advance: SettleTake is the double's half of the store's
+// contract, run inside the bubble by every case here but held by none
+// lexically, so a reading written in it would sit outside every bubble — and as
+// the method sandbox.PendingStore names, it can be neither unexported nor
+// declared bubble-only (go doc ./internal/fixedwait).
 type gatedSettles struct {
 	sandbox.PendingStore
-	answerAt time.Time
-	gate     chan struct{}
+	unavailable func() bool
+	gate        chan struct{}
 
 	mu                    sync.Mutex
 	asked, inFlight, most int
@@ -874,7 +882,7 @@ func (s *gatedSettles) SettleTake(ctx context.Context, turnID string, settle san
 			return nil, ctx.Err()
 		}
 	}
-	if time.Now().Before(s.answerAt) {
+	if s.unavailable != nil && s.unavailable() {
 		return nil, coord.ErrUnavailable
 	}
 	return s.PendingStore.SettleTake(ctx, turnID, settle)
@@ -921,7 +929,9 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store, answerAt: time.Now().Add(time.Minute)}
+			answerAt := time.Now().Add(time.Minute)
+			settles := &gatedSettles{PendingStore: store,
+				unavailable: func() bool { return time.Now().Before(answerAt) }}
 			runs, _ := steersOver(t, steerRing, settles)
 			runs.stopped = t.Context().Done()
 			lostTakes(t, store, runs, "n-1")
@@ -939,7 +949,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
 			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store, answerAt: time.Now().Add(time.Hour)}
+			settles := &gatedSettles{PendingStore: store, unavailable: func() bool { return true }}
 			runs, _ := steersOver(t, steerRing, settles)
 			stopped := make(chan struct{})
 			runs.stopped = stopped
