@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -342,34 +343,44 @@ func TestTheStreamInfoAUsageAndASealReadIsAskedAgainWhenDropped(t *testing.T) {
 // lookup ceiling: the bound the one request had is the bound its callers were
 // sized against. The client here is given a default of 3.9 seconds — just
 // short of a third request, at four — so the read is asked twice inside it,
-// the second with nearly two seconds to spare, and a read held to the
-// thirty-second ceiling instead is told apart by far more than a late timer.
+// at none and two seconds, where a read held to the five seconds of a default
+// it did not take from its client is asked three times, and one held to the
+// thirty-second ceiling fifteen.
+//
+// THE READ RUNS IN A SYNCTEST BUBBLE, and the broker outside it: inside, every
+// timer of the read fires at exactly its instant, so it ends at exactly 3.9
+// seconds with exactly two requests sent. On the machine's clock the bound and
+// the third request were a tenth of a second apart, and a CI runner that
+// stalled across both sent the third — past the bound, which the hedge no
+// longer does ([jsprovision.ReadBoundedWith]) — so the verdict turned on how
+// late a loaded runner woke. The requests are counted at the broker behind a
+// fence on the read's own connection ([jsapitest.Held.Fence]): in the
+// bubble's few real milliseconds the broker may not yet have handed them over.
 func TestAStreamInfoNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 	t.Parallel()
 	const bound = 3900 * time.Millisecond
 	srv, b, _ := accountBucketAt(t, natsobj.Config{MaxBytes: testCeiling, Replicas: 1},
 		jetstream.WithDefaultTimeout(bound))
 	held := jsapitest.Hold(t, srv, jsapitest.StreamInfo(natsobj.Stream))
-	done := make(chan error, 1)
-	start := time.Now()
-	go func() {
-		_, err := b.Usage(context.Background())
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		if _, err := b.Usage(t.Context()); err == nil {
 			t.Fatal("a usage reading nobody answered succeeded")
 		}
-		if took := time.Since(start); took < bound {
-			t.Errorf("the read gave up after %v, inside its client's %v", took, bound)
+		if took := time.Since(start); took != bound {
+			t.Errorf("the read ended after %v, want its client's %v", took, bound)
 		}
-	case <-time.After(jsprovision.LookupBudget / 2):
-		t.Fatalf("a usage reading nobody answers was still being asked %v later, past its "+
-			"client's %v default (%d requests)", jsprovision.LookupBudget/2, bound, held.Count())
+	})
+	client, ok := clients.Load(objstore.Backend(b))
+	if !ok {
+		t.Fatal("the backend was not opened through openWith()")
 	}
-	if n := held.Count(); n != 2 {
+	asked, err := held.Fence(deadline(t), client.(jetstream.JetStream).Conn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked != 2 {
 		t.Errorf("the read was asked %d times inside its client's %v, want 2: at none and "+
-			"two seconds", n, bound)
+			"two seconds", asked, bound)
 	}
 }

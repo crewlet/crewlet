@@ -111,10 +111,6 @@ func AgentSource(seat, turn string, evidence Evidence) Source {
 // IntegrationSource is the source of a claim an integration's read made.
 func IntegrationSource(kind string) Source { return Source{Kind: SourceIntegration, Name: kind} }
 
-// identity is the source as one voice: a later claim of the same voice on the
-// same facet replaces its earlier one.
-func (s Source) identity() string { return string(s.Kind) + "\x00" + s.Name }
-
 // Confidence is how far a claim can be trusted, DERIVED from its source and
 // the evidence the engine checked, never chosen by whoever made the claim: a
 // value a writer chooses is a channel content can steer.

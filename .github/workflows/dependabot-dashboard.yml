@@ -76,7 +76,8 @@ jobs:
   # The untrusted half: it holds nothing worth stealing.
   build:
     name: rebuild the bundle
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
 
     # Both halves are load-bearing, as in dependabot-merge.yml. The author check
     # limits this to a bump; the ACTOR check limits it to a run Dependabot itself
@@ -192,7 +193,8 @@ jobs:
       needs.build.outputs.changed == 'true' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.actor == 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
 
     # The built-in token is not used at all; every call below uses the personal
     # access token.
