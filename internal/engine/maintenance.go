@@ -313,25 +313,34 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 // recorded: it reads the fleet's run records itself, and refuses while the seat
 // has any. The duty's next holder, or this node once it runs a coordinator,
 // retires the seat instead.
-func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64) error {
+//
+// A run the coordinator left WAITING on a tool call still running
+// ([sandbox.SeatRunsWaiting]) is handed on as the retirement's own word for
+// it, beside the error and never inside it: the retirement keeps the mailbox
+// for it without failing its tick.
+func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64,
+) (maintenance.SeatRunsWaiting, error) {
 	if rt := e.sandbox.Load(); rt != nil {
-		return rt.coordinator.RetireSeat(ctx, seat, handle, owner, epoch)
+		waiting, err := rt.coordinator.RetireSeat(ctx, seat, handle, owner, epoch)
+		return maintenance.SeatRunsWaiting{Calls: waiting.Calls, Until: waiting.Until}, err
 	}
 	if e.backends == nil || e.backends.Fleet == nil {
-		return fmt.Errorf("engine: this node has no fleet store, so it cannot tell whether "+
-			"retired seat %s left its executor in a box", seat)
+		return maintenance.SeatRunsWaiting{}, fmt.Errorf("engine: this node has no fleet store, so it "+
+			"cannot tell whether retired seat %s left its executor in a box", seat)
 	}
 	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActiveForSeatID(ctx, seat)
 	if err != nil {
-		return fmt.Errorf("engine: reading the executor records of retired seat %s: %w", seat, err)
+		return maintenance.SeatRunsWaiting{}, fmt.Errorf("engine: reading the executor records of "+
+			"retired seat %s: %w", seat, err)
 	}
 	if len(runs) > 0 {
-		return fmt.Errorf("engine: retired seat %s still has %d executor records and this node runs no "+
-			"sandbox coordinator to end them (no company it has served configures providers.sandbox); "+
-			"its mailbox is kept until a node that runs one holds the maintenance duty, or this "+
-			"node applies a company that configures providers.sandbox", seat, len(runs))
+		return maintenance.SeatRunsWaiting{}, fmt.Errorf("engine: retired seat %s still has %d executor "+
+			"records and this node runs no sandbox coordinator to end them (no company it has served "+
+			"configures providers.sandbox); its mailbox is kept until a node that runs one holds the "+
+			"maintenance duty, or this node applies a company that configures providers.sandbox",
+			seat, len(runs))
 	}
-	return nil
+	return maintenance.SeatRunsWaiting{}, nil
 }
 
 // mailboxRegistry is the node's view of [Engine.mailboxes].

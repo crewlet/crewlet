@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -78,8 +77,8 @@ import (
 // the ending ([Coordinator.drainEnding], [errAskAway]), which waits. A seat's
 // retirement ends every run of the seat in one loop and gives the seat up after
 // it, this node's retry of an ending with it ([Coordinator.ReleaseSeat]), so it
-// leaves such a run to its own next tick ([Coordinator.RetireSeat],
-// [errCallsStillRunning]).
+// leaves such a run to its own next tick, and answers it as waiting rather than
+// as a failure ([Coordinator.RetireSeat], [SeatRunsWaiting]).
 //
 // WHAT IT COSTS: a collection holds the run's seat for as long as it waits, as
 // the resumed turn does after it, up to the first of those bounds; one watch of
@@ -110,11 +109,78 @@ const (
 // nameDigestPrefix).
 const callDigestPrefix = 8
 
-// errCallsStillRunning is a run a seat's retirement did not end because its log
-// holds a call a collection would still wait for ([Coordinator.RetireSeat]): the
-// retirement's next tick ends it.
-var errCallsStillRunning = errors.New("sandbox: its tool log holds a call still running, " +
-	"which the retirement's next tick waits out")
+// SeatRunsWaiting is what a seat's retirement left for its next tick
+// ([Coordinator.RetireSeat]): the runs whose tool log holds a call a collection
+// would still wait for, named by those calls. Its zero value is a retirement
+// that left no run waiting.
+//
+// NOT AN ERROR, so it is answered beside the retirement's error and never inside
+// it. The call is running, which is no fault of the retirement's or of the
+// store's, and the retirement's next tick ends the run once the call is
+// recorded, or once the last of its bounds passes or its process stops; an
+// error is a run the retirement could not end, which somebody may have to act
+// on. Folded into the error, a wait failed the mailbox duty's tick at warning on
+// every tick it lasted, and a real failure beside it was one more member of the
+// same joined error, which no caller could tell from the wait without walking
+// it. Two answers, so a retirement can give both at once and its caller reads
+// each for what it is.
+type SeatRunsWaiting struct {
+	// Calls names each call still waited for, as the lines naming a call in
+	// flight do — its tool, its place and the opening of its digest — with the
+	// turn of the run it is a call of. Empty where no run waits.
+	Calls []string
+	// Until is the latest instant any of them is still waited for: for each,
+	// the earlier of its turn's cap and its own bound, whichever is set
+	// ([waitEnds]). Zero where no run waits, and where one of the calls has
+	// neither, which only its update or its process's end stops a collection
+	// waiting for — an entry the bridge writes always has its bound.
+	Until time.Time
+}
+
+// seatWait gathers, run by run, what a retirement leaves waiting.
+type seatWait struct {
+	waiting SeatRunsWaiting
+	// unbounded is whether a call it names has no bound at all, which makes
+	// the whole wait's bound none.
+	unbounded bool
+}
+
+// add names each of calls, run's calls a collection would still wait for, and
+// takes its bound into the wait's.
+func (w *seatWait) add(run PendingRun, calls []BridgeCall) {
+	for _, call := range calls {
+		w.waiting.Calls = append(w.waiting.Calls, fmt.Sprintf("%s, in turn %s", inFlightName(call), run.TurnID))
+		switch ends := waitEnds(run, call); {
+		case ends.IsZero():
+			w.unbounded = true
+		case ends.After(w.waiting.Until):
+			w.waiting.Until = ends
+		}
+	}
+}
+
+// answer is the wait as the retirement answers it.
+func (w *seatWait) answer() SeatRunsWaiting {
+	if w.unbounded {
+		return SeatRunsWaiting{Calls: w.waiting.Calls}
+	}
+	return w.waiting
+}
+
+// waitEnds is the instant past which no collection waits for call of run,
+// whatever becomes of it ([Coordinator.stillWaited]): the earlier of the turn's
+// cap and the call's own bound, whichever is set; zero where neither is, and
+// only the call's update or its process's end stops the wait.
+func waitEnds(run PendingRun, call BridgeCall) time.Time {
+	switch {
+	case run.Deadline.IsZero():
+		return call.Until
+	case call.Until.IsZero() || run.Deadline.Before(call.Until):
+		return run.Deadline
+	default:
+		return call.Until
+	}
+}
 
 // unfinishedCall is an entry a wait stopped waiting for, and why.
 type unfinishedCall struct {
@@ -377,22 +443,23 @@ func (c *Coordinator) callsInFlight(ctx context.Context, run PendingRun) ([]Brid
 // callsStillRunning ends job run's session on the bridge to new calls
 // ([CoordinatorOptions.Ended]) and splits, off one read of its log and one read
 // of the lease of each process running one of them, the calls of its round in
-// flight into whether any is one a collection would still wait for
-// ([Coordinator.stillWaited]) and those it would not: what an ending reached
-// where it may not wait asks before it decides the turn's end on the log, and a
-// seat's retirement before it ends a run. An error is the log's read.
-func (c *Coordinator) callsStillRunning(ctx context.Context, run PendingRun) (bool, []unfinishedCall, error) {
+// flight into those a collection would still wait for ([Coordinator.stillWaited])
+// and those it would not: what an ending reached where it may not wait asks
+// before it decides the turn's end on the log, and a seat's retirement before it
+// ends a run. An error is the log's read.
+func (c *Coordinator) callsStillRunning(ctx context.Context, run PendingRun,
+) ([]BridgeCall, []unfinishedCall, error) {
 	if c.ended != nil {
 		c.ended(run.TurnID)
 	}
 	held, err := c.callsInFlight(ctx, run)
 	if err != nil {
-		return false, nil, err
+		return nil, nil, err
 	}
 	gone := map[string]bool{}
 	c.readRunners(ctx, runnersOf(held), map[string]bool{}, gone)
 	waiting, left := c.stillWaited(held, run, gone)
-	return len(waiting) > 0, left, nil
+	return waiting, left, nil
 }
 
 // drainEnding waits, for an ending about to decide its turn's end on run's log,
@@ -413,8 +480,8 @@ func (c *Coordinator) drainEnding(ctx context.Context, run PendingRun, mayAsk bo
 		}
 		return nil
 	}
-	running, left, err := c.callsStillRunning(ctx, run)
-	if err == nil && running {
+	waiting, left, err := c.callsStillRunning(ctx, run)
+	if err == nil && len(waiting) > 0 {
 		return errAskAway
 	}
 	if err == nil {

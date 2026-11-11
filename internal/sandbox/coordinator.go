@@ -6102,7 +6102,9 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // for as long as the caller's budget. A run this call could not end is
 // returned as an error, and the caller retries the retirement on its next
 // tick; ending the same run twice reclaims a box that is already gone and
-// finds a record that is already deleted.
+// finds a record that is already deleted. A run left waiting on a call still
+// running is answered beside the error, never as one (below), and retried the
+// same way.
 //
 // # Finished here, every step of it
 //
@@ -6121,13 +6123,15 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 //
 // A run whose tool log holds a call a collection would still wait for
 // (drain.go) is not ended here: its session on the bridge is ended to new
-// calls, and it is answered as not ended ([errCallsStillRunning]), which keeps
-// the mailbox, and the retirement's next tick ends it once the call is
-// recorded, or past the call's own bound or its process's end. Waited for in
-// this loop, one run's call held every later run's ending behind it; handed to
-// this node's retry of the ending, as an ending reached on a frame hands it, it
-// was ended by nothing — the retry is the seat's, which the release below
-// drops.
+// calls, and it is answered as waiting ([SeatRunsWaiting]), the call named with
+// the latest instant it is waited for, which keeps the mailbox without failing
+// the retirement; the retirement's next tick ends it once the call is recorded,
+// or past the call's own bound or its process's end. Waited for in this loop,
+// one run's call held every later run's ending behind it; handed to this node's
+// retry of the ending, as an ending reached on a frame hands it, it was ended
+// by nothing — the retry is the seat's, which the release below drops. A run
+// that cannot be ended beside it is still this call's error: one answer does
+// not hide the other.
 //
 // # By the seat's id, with the handle a label
 //
@@ -6139,10 +6143,12 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // calls the seat, possibly nothing; the runs themselves carry the handle they
 // were launched under, which is the one this node's per-seat bookkeeping
 // counted them by and so the one released at the end.
-func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64) error {
+func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64,
+) (SeatRunsWaiting, error) {
 	runs, err := c.pending.ListActiveForSeatID(ctx, seat)
 	if err != nil {
-		return fmt.Errorf("sandbox: listing the runs of retired seat %s: %w", seatLabel(seat, handle), err)
+		return SeatRunsWaiting{}, fmt.Errorf("sandbox: listing the runs of retired seat %s: %w",
+			seatLabel(seat, handle), err)
 	}
 	if handle == "" && len(runs) > 0 {
 		// ONE HANDLE PER ID: the id is derived from the handle, so every
@@ -6151,7 +6157,10 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 	}
 	label := seatLabel(seat, handle)
 	fence := Fence{Owner: owner, Epoch: epoch}
-	var errs []error
+	var (
+		errs []error
+		wait seatWait
+	)
 	for _, run := range runs {
 		if err := ctx.Err(); err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
@@ -6167,14 +6176,16 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 			continue
 		}
 		// ITS CALLS STILL RUNNING FIRST, its session ended to new ones: a run
-		// whose log holds one, or whose log could not be read, is the
-		// retirement's next tick's to end.
-		if running, _, err := c.callsStillRunning(ctx, run); err != nil || running {
-			if err == nil {
-				err = errCallsStillRunning
-			}
+		// whose log holds one waits for the retirement's next tick, and one
+		// whose log could not be read was not ended.
+		waiting, _, logErr := c.callsStillRunning(ctx, run)
+		if logErr != nil {
 			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
-				run.TurnID, label, err))
+				run.TurnID, label, logErr))
+			continue
+		}
+		if len(waiting) > 0 {
+			wait.add(run, waiting)
 			continue
 		}
 		// A box that could not be reclaimed keeps its record, so the
@@ -6226,7 +6237,7 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 		// any run names: this node counted no run of it under any handle.
 		c.ReleaseSeat(handle)
 	}
-	return errors.Join(errs...)
+	return wait.answer(), errors.Join(errs...)
 }
 
 // seatLabel is what a retirement's errors call a seat: its handle, beside the

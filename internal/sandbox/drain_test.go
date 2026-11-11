@@ -218,10 +218,10 @@ func TestAWaitStopsAtTheCapAtACallsBoundAndAtItsProcessGone(t *testing.T) {
 		call := BridgeCall{Name: "delegate", Seq: 1, StartedAt: rig.now, Until: rig.now.Add(time.Hour),
 			Runner: "node-a:alive"}
 		run := beginInFlight(t, rig, "t1", call)
-		running, left, err := rig.coordinator.callsStillRunning(t.Context(), run)
-		if err != nil || !running || len(left) != 0 {
-			t.Errorf("a live runner's call within its bound = running %v, given up %+v, %v; want it waited for",
-				running, left, err)
+		waiting, left, err := rig.coordinator.callsStillRunning(t.Context(), run)
+		if err != nil || len(waiting) != 1 || len(left) != 0 {
+			t.Errorf("a live runner's call within its bound = waited for %+v, given up %+v, %v; want it waited for",
+				waiting, left, err)
 		}
 	})
 }
@@ -393,9 +393,11 @@ func TestAnEndingThatMayNotWaitHandsACallStillWaitedForToItsRetry(t *testing.T) 
 // ending with it — so a run whose log holds a call a collection would still
 // wait for is neither waited for in the loop, which would hold every later run
 // of the seat behind it, nor handed to that retry, which would end it never:
-// its session is ended to new calls and it is answered as not ended, its
-// ending undecided, which keeps the retirement for its next tick; and that tick
-// ends it once the call is recorded.
+// its session is ended to new calls and it is answered as WAITING, its ending
+// undecided — not as a failure, which the mailbox duty logged at warning and
+// failed its tick on for as long as the call ran — naming the call and the
+// latest instant it is waited for, which keeps the retirement for its next
+// tick; and that tick ends it once the call is recorded.
 //
 // Mutation: end the run whatever its log holds (calls-still-running-says-none),
 // and the retirement decides its ending with the call still running.
@@ -404,16 +406,23 @@ func TestASeatsRetirementLeavesARunWhoseCallStillRunsToItsNextTick(t *testing.T)
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
-	call := BridgeCall{Name: "delegate", Seq: 1, StartedAt: rig.now, Until: rig.now.Add(time.Hour)}
+	call := BridgeCall{Name: "delegate", Seq: 1, StartedAt: rig.now, Until: rig.now.Add(time.Hour),
+		Digest: "0123456789abcdef"}
 	run := beginInFlight(t, rig, "t1", call)
 	ended := &endedTurns{}
 	rig.coordinator.ended = ended.end
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12); !errors.Is(err,
-		errCallsStillRunning) {
-		t.Fatalf("a retirement beside a call still running = %v, want the run left for its next tick", err)
+	waiting, err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12)
+	if err != nil {
+		t.Fatalf("a retirement beside a call still running failed: %v; want the run left waiting, "+
+			"which is no failure", err)
+	}
+	want := []string{"delegate at place 1, digest 01234567, in turn t1"}
+	if !slices.Equal(waiting.Calls, want) || !waiting.Until.Equal(call.Until) {
+		t.Fatalf("the retirement left %+v waiting, want %q until the call's own bound %s",
+			waiting, want, call.Until)
 	}
 	if row, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || !found || row.Ending != nil {
 		t.Fatalf("the run is %+v (%v, %v) after the retirement, want it on the record, its ending undecided",
@@ -427,10 +436,85 @@ func TestASeatsRetirementLeavesARunWhoseCallStillRunsToItsNextTick(t *testing.T)
 		Round: run.Round, Call: finished(call, "delegated")}); err != nil || !ok {
 		t.Fatalf("the call's update = %v, %v", ok, err)
 	}
-	if err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12); err != nil {
-		t.Fatalf("the retirement's next tick = %v, want the run ended", err)
+	if waiting, err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12); err != nil ||
+		len(waiting.Calls) != 0 {
+		t.Fatalf("the retirement's next tick = %+v, %v; want the run ended, nothing left waiting", waiting, err)
 	}
 	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
 		t.Errorf("the run is on the record after the next tick (%v, %v), want it ended", found, err)
+	}
+}
+
+// A RUN THAT CANNOT BE ENDED BESIDE ONE THAT WAITS IS STILL A FAILURE. The two
+// are separate answers of one retirement, so neither hides the other: the run
+// whose box could not be reclaimed is the retirement's error, and the run whose
+// call still runs is named in its wait.
+func TestARetirementAnswersAWaitAndAFailureSideBySide(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.launch("t2")
+	call := BridgeCall{Name: "delegate", Seq: 1, StartedAt: rig.now, Until: rig.now.Add(time.Hour)}
+	beginInFlight(t, rig, "t1", call)
+	stuck := errors.New("the provider is unreachable")
+	rig.provider.KillErr = stuck
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	waiting, err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12)
+	if !errors.Is(err, stuck) || !strings.Contains(err.Error(), "run t2 ") || strings.Contains(err.Error(), "t1") {
+		t.Errorf("the retirement failed with %v, want the run whose box could not be reclaimed named, "+
+			"and only it", err)
+	}
+	if want := []string{"delegate at place 1, no digest kept, in turn t1"}; !slices.Equal(waiting.Calls, want) ||
+		!waiting.Until.Equal(call.Until) {
+		t.Errorf("the retirement left %+v waiting, want %q until %s", waiting, want, call.Until)
+	}
+	for _, turn := range []string{"t1", "t2"} {
+		if _, found, err := rig.pending.Get(t.Context(), turn); err != nil || !found {
+			t.Errorf("run %s is gone from the record (%v, %v), want it kept for the next tick", turn, found, err)
+		}
+	}
+}
+
+// A WAIT IS BOUNDED BY WHAT ENDS IT FIRST, and says so for the latest of its
+// calls: each call is waited for until the earlier of its turn's cap and its
+// own bound, whichever is set, and a call with neither — an entry the bridge
+// never writes — is waited for until its update or its process's end, so the
+// wait that holds it has no bound rather than the latest of the others'.
+func TestARetirementsWaitIsBoundedByWhatEndsEachCallFirst(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	capAt, bound := at.Add(time.Minute), at.Add(time.Hour)
+	for _, tc := range []struct {
+		name     string
+		deadline time.Time
+		until    time.Time
+		want     time.Time
+	}{
+		{"the turn's cap first", capAt, bound, capAt},
+		{"the call's own bound first", bound, capAt, capAt},
+		{"no cap", time.Time{}, bound, bound},
+		{"no bound of its own", capAt, time.Time{}, capAt},
+		{"neither", time.Time{}, time.Time{}, time.Time{}},
+	} {
+		run := PendingRun{TurnID: "t1", Deadline: tc.deadline}
+		if got := waitEnds(run, BridgeCall{Name: "a", Until: tc.until}); !got.Equal(tc.want) {
+			t.Errorf("%s: the wait for the call ends at %s, want %s", tc.name, got, tc.want)
+		}
+	}
+
+	var latest seatWait
+	latest.add(PendingRun{TurnID: "t1", Deadline: capAt}, []BridgeCall{{Name: "a", Seq: 1, Until: bound}})
+	latest.add(PendingRun{TurnID: "t2"}, []BridgeCall{{Name: "b", Seq: 1, Until: bound}})
+	if got := latest.answer(); len(got.Calls) != 2 || !got.Until.Equal(bound) {
+		t.Errorf("a wait on two calls = %+v, want both named until the later end, %s", got, bound)
+	}
+	var unbounded seatWait
+	unbounded.add(PendingRun{TurnID: "t1", Deadline: capAt}, []BridgeCall{{Name: "a", Seq: 1}})
+	unbounded.add(PendingRun{TurnID: "t2"}, []BridgeCall{{Name: "b", Seq: 2}})
+	unbounded.add(PendingRun{TurnID: "t3"}, []BridgeCall{{Name: "c", Seq: 3, Until: bound}})
+	if got := unbounded.answer(); len(got.Calls) != 3 || !got.Until.IsZero() {
+		t.Errorf("a wait on a call with no bound = %+v, want every call named and no bound", got)
 	}
 }
