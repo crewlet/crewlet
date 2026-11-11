@@ -1007,6 +1007,13 @@ func (s *refusingStore) AddHanded(ctx context.Context, run PendingRun,
 	return s.inner.AddHanded(ctx, run, add)
 }
 
+func (s *refusingStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	if s.called("WatchLog") {
+		return nil, errRefusedCall
+	}
+	return s.inner.WatchLog(ctx, turnID)
+}
+
 func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if s.called("AppendBridgeCall") {
 		return false, errRefusedCall

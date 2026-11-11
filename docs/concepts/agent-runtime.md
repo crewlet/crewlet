@@ -778,7 +778,10 @@ flowchart TD
    bound of its own, as the wait for turns has none: the supervisor's grace is
    the bound, and a call it cuts never makes its update — its entry, written
    on its run's record before it ran, stays there, the call counted by its
-   identity and its outcome unknown.
+   identity and its outcome unknown. The node holds its taker lease until that
+   wait is over, so a collection of such a run on the seat's next holder waits
+   for the call to be recorded, up to the call's own bound, rather than read
+   it as one whose process stopped.
 7. **Finish the git requests, then close the HTTP listener**, and not
    before: until now the probes are what the orchestrator reads, and they
    read the stream and the coordination store the next steps close. First the

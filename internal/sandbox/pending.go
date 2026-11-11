@@ -929,6 +929,15 @@ func (s AppendStep) Valid() bool {
 	return s == AppendRecord || s == AppendBegin || s == AppendWithdraw
 }
 
+// LogView is one state of a run's bridged tool log as a watch delivers it
+// ([PendingStore.WatchLog]): the log, its version in the store, and whether
+// there is one.
+type LogView struct {
+	Log     BridgeLog
+	Version uint64
+	Found   bool
+}
+
 // ErrCallsInFlight is what [PendingStore.AppendBridgeCall] answers for a begin
 // the run's log has no room for: [MaxCallsInFlight] calls of its round are in
 // flight already. Nothing is written, so the call is not run, and is answered
@@ -2961,6 +2970,19 @@ type PendingStore interface {
 	// lists none of them twice and writes the spend once more, where its job
 	// still holds the row (internal/engine's bridgeLedger.appendRetrying).
 	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
+
+	// WatchLog follows the bridged tool log beside run turnID's record,
+	// whatever job it is on ([BridgeLog]): its state as the watch begins —
+	// READ FROM THE STORE'S NEWEST WRITE, so a watch begun again after one that
+	// broke misses nothing written between the two — then each state it
+	// reaches after that, a state a later write replaced before the reader
+	// took it passed over and the newest always delivered, and none
+	// ([LogView.Found] false) once the run's record, and the log with it, is
+	// gone. A state this build cannot read is passed over. The channel is
+	// closed when ctx ends or the watch fails, which says nothing of the log:
+	// its reader watches again. What a collection waits on its run's calls in
+	// flight by ([Coordinator.drainCalls]).
+	WatchLog(ctx context.Context, turnID string) (<-chan LogView, error)
 
 	// BridgeLog reads the bridged tool log of run's job: the calls of the
 	// round the job belongs to, as the log beside its record now holds them

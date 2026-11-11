@@ -228,15 +228,14 @@ as one nobody waited for
 ([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
 amendment on such a call). Its identity is on the run's log from before it ran
 (ADR-0073's amendment on a call's identity); what lands later is its outcome,
-and it lands only where the run's log still takes it: the paths that end a run
-go on, waiting for no call, to read the run's log and delete its record, so a
-call still running as a stop, the turn's cap, a reclaim or the run's settle
-ends its job is read there as a call still in flight, its outcome in no
-collection of the run, where it returns after that read, and its update finds
-no record where it returns after the delete. A relaunch's job takes it as a
-late call of the round, and a run whose box goes on takes it as its own while
-its record stands. A call whose entry is still being written as its opening
-ends is answered that it was not run, failed, and never runs. A call that reaches an opening
+and every collection of the run waits for it on the run's log before it reads,
+on whichever node collects, up to the first of its own bound, the turn's cap
+and its process gone (ADR-0073's amendment on a collection's calls in flight),
+and its update finds no record where it returns after the ending's delete. A
+relaunch's job takes it as a late call of the round, and a run whose box goes
+on takes it as its own while its record stands. A call whose entry is still
+being written as its opening ends is answered that it was not run, failed, and
+never runs. A call that reaches an opening
 after its end is refused and runs nothing, as before, now in the words of how
 the opening ended: told to end its turn where the run ended, and, where the box
 goes on, that the session it reached was closing and to call again, which

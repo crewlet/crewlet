@@ -2246,6 +2246,80 @@ func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (log
 	return taken, true, nil
 }
 
+// WatchLog follows the bridged tool log beside run turnID's record. See the
+// contract on [PendingStore].
+//
+// THE WATCH'S FIRST STATE IS A READ FROM THE STREAM'S LEADER
+// ([coord.SandboxRuns.SandboxRunPart]), made once the part's watch is open, in
+// place of the watch's own certified first state, which may lag the newest
+// write by a replica's lag: everything the store took before the read is in
+// it, and everything after it reaches the watch, which then delivers only a
+// state newer than one already delivered, or the log gone.
+//
+// THE PART'S WATCH IS THIS CALL'S OWN, under a context it cancels: on a read
+// that fails, and once its goroutine ends — the caller's context done, or the
+// part's watch closed — so nothing it started outlives it.
+func (s *CoordStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	ctx, stop := context.WithCancel(ctx)
+	updates, err := s.runs.WatchSandboxRunPart(ctx, turnID, coord.RunLog)
+	if err != nil {
+		stop()
+		return nil, fmt.Errorf("sandbox: watch the log of run %s: %w", turnID, err)
+	}
+	read, found, err := s.runs.SandboxRunPart(ctx, turnID, coord.RunLog)
+	if err != nil {
+		stop()
+		return nil, fmt.Errorf("sandbox: read the log of run %s: %w", turnID, err)
+	}
+	out := make(chan LogView, 1)
+	go func() {
+		defer stop()
+		defer close(out)
+		var last uint64
+		deliver := func(u coord.SandboxRunUpdate) bool {
+			if u.Found && u.Record.Version <= last {
+				return true
+			}
+			view := LogView{Found: u.Found, Version: u.Record.Version}
+			if u.Found {
+				if err := json.Unmarshal(u.Record.Value, &view.Log); err != nil {
+					// A STATE THIS BUILD CANNOT READ is passed over, never
+					// delivered as an empty log.
+					log.WarnContext(ctx, "sandbox_log_view_unread", "turn_id", turnID, "error", err.Error())
+					return true
+				}
+				last = u.Record.Version
+			}
+			// THE NEWEST STATE WINS, as the notes' watch has it ([CoordStore.WatchNotes]).
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- view:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		if !deliver(coord.SandboxRunUpdate{Found: found, Record: read}) {
+			return
+		}
+		first := true
+		for u := range updates {
+			if first {
+				// THE WATCH'S OWN FIRST STATE, which the read above stands in for.
+				first = false
+				continue
+			}
+			if !deliver(u) {
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
 // BridgeLog reads the bridged tool log of run's job. See the contract on
 // [PendingStore].
 func (s *CoordStore) BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
