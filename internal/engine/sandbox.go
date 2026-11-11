@@ -2909,6 +2909,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
 		Stopped: e.releaseWorkingStatus,
+		// A HELD CALL PUT TO DELEGATES wakes them once it is parked, so
+		// each finds it waiting (ADR-0125). See delegated.go.
+		Parked: e.wakeDelegates,
 		// A turn parked on a run a person stopped is closed on the record
 		// as stopped, and its end recorded on the executor log, by
 		// whichever node finishes the run's ending — see runstop.go.

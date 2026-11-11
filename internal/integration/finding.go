@@ -3,6 +3,7 @@ package integration
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -575,6 +576,18 @@ func (f Finding) Same(other Finding) bool {
 		f.Remedy == other.Remedy &&
 		f.ExpiresAt.Equal(other.ExpiresAt) &&
 		slices.Equal(f.Subjects, other.Subjects)
+}
+
+// Label is the finding in a few words, for a list that gives each finding one
+// line: its [Finding.Title], or where it has none what its kind says about its
+// subject ("An agent identity could not be created for sre"). One rule, so the
+// advisor and Ask Crewlet word an untitled finding alike.
+func (f Finding) Label() string {
+	if title := strings.TrimSpace(f.Title); title != "" {
+		return title
+	}
+	sentence := f.Kind.sentence(f.Subject)
+	return strings.ToUpper(sentence[:1]) + sentence[1:]
 }
 
 // SameAll reports two finding lists that say the same things in the same

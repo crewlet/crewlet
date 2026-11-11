@@ -463,8 +463,9 @@ type Object struct {
 	Asked string
 
 	// Named are the seat handles the company document names for a
-	// [ClassNamed] gesture (integrations.ssh.approvers), read from the
-	// document by the caller, never from an argument.
+	// [ClassNamed] gesture (integrations.ssh.approvers), or beside the leads
+	// of a [ClassOwnOrLead] one (a delegated-decisions rule's escalate_to),
+	// read from the document by the caller, never from an argument.
 	Named []string
 
 	// Container is the project a task is filed under, the container a page

@@ -79,8 +79,7 @@ func listedDetail(raw ...string) func(context.Context, string) (queries.MCPServe
 		if name != "tracker" {
 			return queries.MCPServerAnswer{}, fmt.Errorf("%w: %s", queries.ErrNotFound, name)
 		}
-		answer := queries.MCPServerAnswer{Listed: []queries.MCPServerListing{{Node: "node-a", Tools: len(raw)}},
-			ToolCount: len(raw)}
+		answer := queries.MCPServerAnswer{Listed: []queries.MCPServerListing{{Node: "node-a", Tools: len(raw)}}}
 		for _, r := range raw {
 			answer.Tools = append(answer.Tools, queries.MCPToolView{Name: "tr_" + r, Raw: r})
 		}

@@ -15,6 +15,10 @@ test("a wake reason is said with who can act on it", () => {
   expect(wakeWords("colleague_ask", "swe").path).toEqual(["company", "org", "seats", "swe"]);
   expect(wakeWords("code_change:review_requested", "swe").path).toEqual(["gitlet"]);
   expect(wakeWords("alarm:fired", "sre").label).toBe("Engine alarms");
+  expect(wakeWords("delegated_request:ssh_operate", "security-engineer").path).toEqual([
+    "settings",
+    "delegated-decisions",
+  ]);
   expect(wakeWords("task_assigned", "swe")).toEqual({
     label: "task assigned",
     who: "Not described in this version",

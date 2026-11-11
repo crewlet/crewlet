@@ -71,6 +71,7 @@ var sentinels = []sentinel{
 	{"queue.ErrNotLive", queue.ErrNotLive},
 
 	{"worklet.ErrAlreadyAnswered", worklet.ErrAlreadyAnswered},
+	{"worklet.ErrBadCursor", worklet.ErrBadCursor},
 	{"worklet.ErrBadQuery", worklet.ErrBadQuery},
 	{"worklet.ErrForbidden", worklet.ErrForbidden},
 	{"worklet.ErrInvalid", worklet.ErrInvalid},

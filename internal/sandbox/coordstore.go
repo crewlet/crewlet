@@ -1290,6 +1290,68 @@ func (s *CoordStore) MarkHeldCall(ctx context.Context, turnID, launch string, fe
 	return held, won, nil
 }
 
+// waitsOnDelegates reports whether run's held call heldID waits on its
+// delegates on launch: [PendingStore.GiveDelegateVerdict]'s terms.
+func waitsOnDelegates(run PendingRun, launch, heldID string) bool {
+	return slices.Contains(Awaiting, run.Status) && run.Ending == nil && run.LaunchID == launch &&
+		run.HeldCall != nil && run.HeldCall.ID == heldID && run.HeldCall.Delegated()
+}
+
+// GiveDelegateVerdict records one delegate's answer. See the contract on
+// [PendingStore].
+func (s *CoordStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, heldID string,
+	v HeldVerdict) (HeldCall, bool, error) {
+
+	if err := v.validate(); err != nil {
+		return HeldCall{}, false, fmt.Errorf("sandbox: a verdict on held call %s of run %s: %w", heldID, turnID, err)
+	}
+	var held HeldCall
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if !waitsOnDelegates(*run, launch, heldID) {
+			return false
+		}
+		d := *run.HeldCall.Delegation
+		if !slices.Contains(d.Delegates, v.By) ||
+			slices.ContainsFunc(d.Given, func(g HeldVerdict) bool { return g.By == v.By }) {
+			return false
+		}
+		given := v
+		given.Findings = slices.Clone(v.Findings)
+		d.Given = append(slices.Clone(d.Given), given)
+		held = *run.HeldCall
+		held.Delegation = &d
+		run.HeldCall = &held
+		return true
+	})
+	if err != nil || !won {
+		return HeldCall{}, false, err
+	}
+	return held, true, nil
+}
+
+// EscalateHeld puts a call waiting on its delegates to people. See the
+// contract on [PendingStore].
+func (s *CoordStore) EscalateHeld(ctx context.Context, turnID, launch, heldID string,
+	e HeldEscalation) (bool, error) {
+
+	if err := e.validate(); err != nil {
+		return false, fmt.Errorf("sandbox: escalating held call %s of run %s: %w", heldID, turnID, err)
+	}
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if !waitsOnDelegates(*run, launch, heldID) {
+			return false
+		}
+		d := *run.HeldCall.Delegation
+		escalated := HeldEscalation{Overruled: slices.Clone(e.Overruled), Engine: slices.Clone(e.Engine), At: e.At}
+		d.Escalated = &escalated
+		held := *run.HeldCall
+		held.Delegation = &d
+		run.HeldCall = &held
+		return true
+	})
+	return won, err
+}
+
 // RecordHeldResult records what a marked held call came to: its result and the
 // call as its round's log keeps it, on the row, then the call in that log. See
 // the contract on [PendingStore].

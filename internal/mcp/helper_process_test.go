@@ -40,7 +40,8 @@ const (
 	helperToolsEnv = "CREWLET_MCP_TEST_TOOLS"
 
 	// helperPagesEnv selects the pagination shape: "", "two", "empty-cursor",
-	// "repeat", "endless", "hang".
+	// "repeat", "endless", "hang", or "many-N", N tools named tool_0001 on,
+	// in pages of helperManyPage.
 	helperPagesEnv = "CREWLET_MCP_TEST_PAGES"
 
 	// helperCallEnv selects tools/call behaviour: "", "error", "hang",
@@ -423,6 +424,9 @@ func listToolsResult(params json.RawMessage, page *int) string {
 	_ = json.Unmarshal(params, &p)
 	*page++
 
+	if count, ok := strings.CutPrefix(os.Getenv(helperPagesEnv), "many-"); ok {
+		return manyTools(count, p.Cursor)
+	}
 	switch os.Getenv(helperPagesEnv) {
 	case "two":
 		if p.Cursor == "" {
@@ -449,6 +453,26 @@ func listToolsResult(params json.RawMessage, page *int) string {
 		}
 		return fmt.Sprintf(`{"tools":%s}`, tools)
 	}
+}
+
+// helperManyPage is how many tools a page of "many-N" lists.
+const helperManyPage = 500
+
+// manyTools is the page of "many-N" after cursor: the next helperManyPage of
+// N tools, each read-only.
+func manyTools(count, cursor string) string {
+	total, _ := strconv.Atoi(count)
+	from, _ := strconv.Atoi(cursor)
+	to := min(from+helperManyPage, total)
+	page := make([][3]string, 0, to-from)
+	for i := from; i < to; i++ {
+		page = append(page, [3]string{fmt.Sprintf("tool_%04d", i+1), "Read item " + strconv.Itoa(i+1),
+			`{"readOnlyHint":true}`})
+	}
+	if to < total {
+		return fmt.Sprintf(`{"tools":%s,"nextCursor":"%d"}`, toolsJSON(page...), to)
+	}
+	return fmt.Sprintf(`{"tools":%s}`, toolsJSON(page...))
 }
 
 func callResult(out *os.File, id json.RawMessage, params json.RawMessage) {

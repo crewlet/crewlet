@@ -853,6 +853,11 @@ type Role struct {
 	// grants admit to ssh_read and ssh_operate. Empty is no grant.
 	SSHLevel string `yaml:"ssh_level,omitempty" json:"ssh_level,omitempty"`
 
+	// Delegate is whether an enabled delegation rule names this agent seat a
+	// delegate, which internal/authz's delegate grant admits to
+	// review_delegated (ADR-0125). False is no grant.
+	Delegate bool `yaml:"delegate,omitempty" json:"delegate,omitempty"`
+
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`

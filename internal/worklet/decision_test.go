@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -501,5 +502,50 @@ func TestADecisionsShapeAndEvidenceAreCheckedInOnePass(t *testing.T) {
 		if prefix == "" && strings.Contains(worklet.Sentence(err), "decision.") {
 			t.Errorf("a top-level decision is named under decision.: %s", worklet.Sentence(err))
 		}
+	}
+}
+
+// ONLY AN APPROVER CHOOSES AN ACT'S APPROVING OPTION (ADR-0125): an answer
+// choosing the option an engine-set act approves by is refused unless whoever
+// posts it decided that person may approve the act's kind, while choosing its
+// other option, or answering an ask with no act, needs nothing more; and an
+// act naming an option its decision does not offer is refused at the ask.
+//
+// Mutation: drop the check in the answer's settle, and anybody the question
+// reaches approves a production command with one press.
+func TestOnlyAnApproverChoosesAnActsApprovingOption(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "decide", "ana")
+	act := &delegated.Act{Kind: delegated.KindSSHOperate, Approve: "ship", Host: "api-1",
+		Digest: strings.Repeat("ab", 32)}
+	askOn(t, r, "op-act", "decide", worklet.Comment{
+		ID: "c-act", Task: "decide", Author: "dev", AuthorKind: worklet.AuthorAgent,
+		Body: "run it?", Ask: "ana", Decision: decisionFixture(), Act: act, CreatedAt: wednesday,
+	})
+	answer := func(ctx context.Context, opID, id, choice string) error {
+		answers := "c-act"
+		_, err := r.writer.UpdateTask(ctx, opID, "decide", "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
+				ID: id, Task: "decide", Author: "ana", AuthorKind: worklet.AuthorHuman,
+				Body: "ok", Answers: &answers, Choice: choice, CreatedAt: wednesday,
+			}}, worklet.ChangeComment, nil)
+		return err
+	}
+	if err := answer(t.Context(), "op-unadmitted", "c-1", "ship"); !errors.Is(err, worklet.ErrInvalid) ||
+		!strings.Contains(err.Error(), "signed in again recently") {
+		t.Fatalf("an approving choice nobody admitted: %v, want it refused", err)
+	}
+	if err := answer(delegated.WithApproval(t.Context(), delegated.KindSSHOperate), "op-admitted", "c-2",
+		"ship"); err != nil {
+		t.Fatalf("an approver's approving choice was refused: %v", err)
+	}
+	bad := *act
+	bad.Approve = "launch"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-bad-act", "decide", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Comment: &worklet.Comment{ID: "c-bad", Task: "decide", Author: "dev",
+			AuthorKind: worklet.AuthorAgent, Body: "run it?", Ask: "ana", Decision: decisionFixture(),
+			Act: &bad, CreatedAt: wednesday}}, worklet.ChangeComment, nil); !errors.Is(err, worklet.ErrInvalid) {
+		t.Fatalf("an act approving by an option its decision does not offer: %v", err)
 	}
 }

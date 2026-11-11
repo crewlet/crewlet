@@ -11,9 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -22,7 +24,8 @@ import (
 )
 
 // THE ACCESS WRITE PATH: one record per told turn, signed certificate, command,
-// removed seat or expired hour, decided inside one snapshot of this node's rows.
+// giver's verdict, removed seat or expired hour, decided inside one snapshot of
+// this node's rows.
 // Every write is the engine's own record of what it did, so a [Call] names the
 // engine and an operation id derived per execution, and a retry lands once.
 
@@ -64,6 +67,12 @@ func IssuedOpID(minted time.Time, handle string, serial uint64) string {
 // RanOpID is the operation a command's record is published under.
 func RanOpID(minted time.Time, handle, commandID string) string {
 	return statelog.DeriveOpID(minted, "access-ran", "crewlet.access", handle, commandID)
+}
+
+// VerdictOpID is the operation one giver's verdict on a request of seat handle
+// is published under, by empty for the engine.
+func VerdictOpID(minted time.Time, handle, request, by string) string {
+	return statelog.DeriveOpID(minted, "access-verdict", "crewlet.access", handle, request, by)
 }
 
 // WriterDeps is what a writer is built from.
@@ -566,10 +575,261 @@ func (w *Writer) RanSealed(ctx context.Context, c Call, n NewCommand,
 		}))
 }
 
+// ---- verdicts ----------------------------------------------------------- //
+
+// NewVerdict is one decision on a delegated request, by one giver. Subject,
+// Reason and Findings are the plain text, which the writer seals; the rest is
+// recorded as it is.
+type NewVerdict struct {
+	// Request is the request's id: a held call's, or a work item ask's.
+	// The record's own id is [VerdictID] of Request and By.
+	Request string
+	Kind    delegated.Kind
+
+	// Rule is the 1-based delegation rule that routed the request, zero for
+	// a person's approval through a decision.
+	Rule int
+
+	// Handle is the seat whose request it is, Turn that seat's run.
+	Handle string
+	Turn   string
+
+	// By is the delegate's or the approving person's seat, empty for the
+	// engine; Through the path the verdict was given on.
+	By      string
+	ByKind  VerdictBy
+	Through VerdictThrough
+
+	// Asked and Confidence are what a delegate answered, set for an agent's
+	// verdict alone; Verdict is what took effect for this record.
+	Asked      delegated.Verdict
+	Confidence delegated.Confidence
+	Verdict    delegated.Verdict
+
+	// Final is the record that decided the request, false for a panel
+	// member's verdict that waited on the other.
+	Final bool
+
+	// Overruled is the engine's closed words for why it changed or made the
+	// verdict, each `^[a-z_]{1,40}$`: never text.
+	Overruled []string
+
+	// Sampled is a verdict chosen for a person's spot-check after the fact.
+	Sampled bool
+
+	// Digest is the SHA-256 in lowercase hex of the exact request the
+	// verdict is bound to.
+	Digest string
+
+	// Host, User and the stdin's size and digest are an ssh_operate's alone;
+	// User may be empty.
+	Host        string
+	User        string
+	StdinBytes  int64
+	StdinSHA256 string
+
+	// Subject is what was decided, in clear for a person: an ssh_operate's
+	// command, a later kind's summary. Sealed to the record.
+	Subject string
+
+	// Decision is the ask a verdict through a decision answered, and Item
+	// the work item the request is on, empty where none.
+	Decision string
+	Item     string
+
+	// Reason and Findings are the giver's words, sealed with each other.
+	Reason   string
+	Findings []string
+}
+
+// overruledPattern is one of the engine's closed words for an overruling.
+var overruledPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z_]{1,40}$`)
+})
+
+// validate refuses a verdict record the log could not hold.
+func (n NewVerdict) validate() error {
+	if err := checkSeat(n.Handle); err != nil {
+		return err
+	}
+	if err := checkRef("the request", n.Request, true); err != nil {
+		return err
+	}
+	switch {
+	case !n.Kind.Delegable():
+		return invalid("kind %q is not one of %s", n.Kind, words.Or(delegated.DelegableKinds()))
+	case !n.ByKind.Valid():
+		return invalid("by_kind %q is not one of %s", n.ByKind, words.Or(VerdictGivers))
+	case !n.Through.Valid():
+		return invalid("through %q is not one of %s", n.Through, words.Or(VerdictPaths))
+	case !n.Verdict.Valid():
+		return invalid("verdict %q is not one of %s", n.Verdict, words.Or(delegated.Verdicts()))
+	case n.Rule < 0 || n.Rule > MaxVerdictRule:
+		return invalid("rule %d is not a delegation rule's number, 1 to %d, or zero", n.Rule, MaxVerdictRule)
+	case n.ByKind == VerdictByEngine && n.By != "":
+		return invalid("the engine's verdict names no seat, and this one names %q", n.By)
+	case n.ByKind != VerdictByEngine && !iam.ValidSeatHandle(n.By):
+		return invalid("the %s verdict's giver %q is not a seat handle", n.ByKind, n.By)
+	case n.ByKind == VerdictByAgent && n.Rule == 0:
+		return invalid("an agent's verdict names the rule that routed the request to it")
+	case n.ByKind == VerdictByPerson && (n.Through != VerdictThroughDecision || n.Rule != 0):
+		return invalid("a person's verdict is an approval through a decision, which no rule routed")
+	case n.ByKind == VerdictByAgent && (!n.Asked.Valid() || !n.Confidence.Valid()):
+		return invalid("an agent's verdict records what it answered (%s) and how sure it was (%s)",
+			words.Or(delegated.Verdicts()), words.Or(delegated.Confidences()))
+	case n.ByKind != VerdictByAgent && (n.Asked != "" || n.Confidence != ""):
+		return invalid("only an agent's verdict records an answer and a confidence")
+	case n.ByKind == VerdictByEngine && len(n.Overruled) == 0:
+		return invalid("the engine's verdict says why it made it, in its closed words")
+	case len(n.Overruled) > MaxOverruled:
+		return invalid("a verdict names %d overrulings and the maximum is %d", len(n.Overruled), MaxOverruled)
+	case !shaPattern().MatchString(n.Digest):
+		return invalid("the request's digest is SHA-256 in lowercase hex")
+	case n.Through == VerdictThroughDecision && n.Decision == "":
+		return invalid("a verdict through a decision names the ask it answered")
+	case n.Through != VerdictThroughDecision && n.Decision != "":
+		return invalid("only a verdict through a decision names an ask")
+	case strings.TrimSpace(n.Subject) == "":
+		return invalid("a verdict names what it decided")
+	case len(n.Findings) > MaxVerdictFindings:
+		return invalid("a verdict carries %d findings and the maximum is %d", len(n.Findings), MaxVerdictFindings)
+	}
+	for _, word := range n.Overruled {
+		if !overruledPattern().MatchString(word) {
+			return invalid("overruled %q is not a closed word of lowercase letters and underscores, "+
+				"at most %d: never text", word, OverruledMaxBytes)
+		}
+	}
+	if err := n.checkSSH(); err != nil {
+		return err
+	}
+	if err := checkText("the subject", n.Subject, VerdictSubjectMaxBytes); err != nil {
+		return err
+	}
+	if err := checkRunes("the reason", n.Reason, VerdictReasonMaxRunes); err != nil {
+		return err
+	}
+	for _, finding := range n.Findings {
+		if strings.TrimSpace(finding) == "" {
+			return invalid("a finding says something")
+		}
+		if err := checkRunes("a finding", finding, VerdictFindingMaxRunes); err != nil {
+			return err
+		}
+	}
+	for _, ref := range []struct {
+		field, value string
+	}{{"the turn", n.Turn}, {"the decision", n.Decision}, {"the item", n.Item}} {
+		if err := checkRef(ref.field, ref.value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSSH holds the fields only an ssh_operate verdict carries to that kind.
+func (n NewVerdict) checkSSH() error {
+	if n.Kind != delegated.KindSSHOperate {
+		if n.Host != "" || n.User != "" || n.StdinBytes != 0 || n.StdinSHA256 != "" {
+			return invalid("only an %s verdict names a host, a user or stdin", delegated.KindSSHOperate)
+		}
+		return nil
+	}
+	switch {
+	case !hostPattern().MatchString(n.Host):
+		return invalid("%q is not a host id", n.Host)
+	case n.User != "" && !userPattern().MatchString(n.User):
+		return invalid("%q is not a login user", n.User)
+	case n.StdinBytes < 0:
+		return invalid("a size is never negative")
+	case (n.StdinBytes > 0 || n.StdinSHA256 != "") && !shaPattern().MatchString(n.StdinSHA256):
+		return invalid("stdin's digest is SHA-256 in lowercase hex")
+	}
+	return nil
+}
+
+// checkRunes refuses a text field that is not UTF-8 or is longer than maxRunes.
+func checkRunes(field, value string, maxRunes int) error {
+	switch {
+	case !utf8.ValidString(value):
+		return invalid("%s is not valid UTF-8", field)
+	case utf8.RuneCountInString(value) > maxRunes:
+		return invalid("%s is %d characters and the maximum is %d", field,
+			utf8.RuneCountInString(value), maxRunes)
+	}
+	return nil
+}
+
+// Verdict records one giver's verdict on a delegated request, once, what it
+// decided and the giver's words sealed to the record.
+//
+// ONE RECORD PER REQUEST AND GIVER, the first written: a second verdict by
+// the same giver on the same request, under another operation, answers
+// [ErrRecorded] and changes nothing, while a panel's other delegate records
+// its own. A retry of the same operation is answered as the first copy's.
+func (w *Writer) Verdict(ctx context.Context, c Call, n NewVerdict) (statelog.Result, error) {
+	if err := n.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	sealed, err := w.sealer.SealVerdict(n.Handle, VerdictID(n.Request, n.By), n.Subject, n.Reason, n.Findings)
+	if err != nil {
+		return statelog.Result{}, err
+	}
+	n.Subject, n.Reason, n.Findings = "", "", nil
+	return w.VerdictSealed(ctx, c, n, sealed)
+}
+
+// VerdictSealed records one verdict whose texts another node sealed to this
+// record: n carries none of them, and sealed must open under this node's
+// keyring to texts within the verdict's bounds, so a value sealed for another
+// record is refused. [Writer.Verdict] says what a second verdict answers.
+func (w *Writer) VerdictSealed(ctx context.Context, c Call, n NewVerdict,
+	sealed SealedVerdict) (statelog.Result, error) {
+
+	if err := c.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	if n.Subject != "" || n.Reason != "" || len(n.Findings) > 0 {
+		return statelog.Result{}, invalid("a sealed verdict carries no text beside its seal")
+	}
+	if err := checkSeat(n.Handle); err != nil {
+		return statelog.Result{}, err
+	}
+	id := VerdictID(n.Request, n.By)
+	text, reason, findings, err := w.sealer.openVerdict(n.Handle, id, sealed.Subject, sealed.Words)
+	if err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: the sealed verdict does not open as this "+
+			"record's: %w", ErrInvalid, err)
+	}
+	for _, value := range []string{sealed.Subject, sealed.Words} {
+		if key, ok := secrets.EnvelopeKeyID(value); !ok || key != sealed.Key {
+			return statelog.Result{}, invalid("the sealed verdict names key %q and is sealed under another",
+				sealed.Key)
+		}
+	}
+	n.Subject, n.Reason, n.Findings = text, reason, findings
+	if err := n.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	p := Verdict{
+		V: baseRecordVersion, ID: id, Handle: n.Handle, Request: n.Request, Turn: n.Turn,
+		Kind: n.Kind, Rule: n.Rule, By: n.By, ByKind: n.ByKind, Through: n.Through,
+		Asked: n.Asked, Confidence: n.Confidence, Verdict: n.Verdict, Overruled: n.Overruled,
+		Final: n.Final, Sampled: n.Sampled, Digest: n.Digest, Host: n.Host, User: n.User,
+		StdinBytes: n.StdinBytes, StdinSHA256: n.StdinSHA256, Decision: n.Decision, Item: n.Item,
+		SubjectSealed: sealed.Subject, WordsSealed: sealed.Words, ContentKey: sealed.Key,
+	}
+	subject, scope := VerdictSubject(n.Handle, n.Request, n.By), ScopeSet{Subject: true}
+	return publish(ctx, w.publisher, request(subject, scope, c.OpID, statelog.PatternCreate,
+		func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return decision(stamp, c.By, subject, OpVerdict, scope, c.OpID, p, w.now())
+		}))
+}
+
 // ---- a removed seat ----------------------------------------------------- //
 
-// Forget removes what a seat the company removed was told. Its certificates and
-// commands stay: they are the audit trail, kept to their retention.
+// Forget removes what a seat the company removed was told. Its certificates,
+// commands and verdicts stay: they are the audit trail, kept to their retention.
 func (w *Writer) Forget(ctx context.Context, c Call, handle string) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err
@@ -629,6 +889,7 @@ var expirableStatements = []string{
 	`SELECT 1 FROM access_seat_removals WHERE at < ? LIMIT 1`,
 	`SELECT 1 FROM access_certificates WHERE at < ? LIMIT 1`,
 	`SELECT 1 FROM access_commands WHERE at < ? LIMIT 1`,
+	`SELECT 1 FROM access_verdicts WHERE at < ? LIMIT 1`,
 }
 
 // expirableBefore reports whether an expiry through `before` would take a row.

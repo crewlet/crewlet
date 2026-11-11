@@ -38,6 +38,10 @@ type SSH struct {
 	// operate command.
 	Approvers []string `yaml:"approvers,omitempty" json:"approvers,omitempty" desc:"Handles of human seats that may approve an agent's operate command, beside administrators. Optional."`
 
+	// AlwaysEscalate adds to the engine's own always-escalate list, which no
+	// setting shortens (internal/ssh's AlwaysEscalateClasses, ADR-0125).
+	AlwaysEscalate []string `yaml:"always_escalate,omitempty" json:"always_escalate,omitempty" desc:"Regular expressions (RE2) matched against an operate command and its stdin, added to the engine's own always-escalate list: a command any of them matches is never allowed by a delegate (delegation.rules). At most 64, each up to 512 bytes. Optional."`
+
 	// Commands bounds every command the engine runs on a server.
 	Commands *SSHCommands `yaml:"commands,omitempty" json:"commands,omitempty" desc:"How long a command may run and how much of its output reaches the agent. Optional."`
 
@@ -58,6 +62,12 @@ type SSHProvisioning struct {
 	// SourceAddresses are written into every certificate's source-address.
 	SourceAddresses []string `yaml:"source_addresses,omitempty" json:"source_addresses,omitempty" desc:"Address ranges, such as 203.0.113.7/32, every certificate may be used from: the engine's egress addresses. At most 16. Empty leaves certificates usable from anywhere until they expire."`
 }
+
+// The bounds of the added always-escalate patterns.
+const (
+	sshMaxAlwaysPatterns = 64
+	sshMaxPatternBytes   = 512
+)
 
 // SSHCommands bounds a command the engine runs.
 type SSHCommands struct {
@@ -395,6 +405,19 @@ func (s *SSH) validate(path Path) error {
 			p.add(at(path, "commands.max_output_bytes"), ErrOutOfRange,
 				"%d is outside %d to %d bytes; leave it empty for %d", b, sshMinOutputBytes, sshMaxOutputBytes,
 				SSHDefaultMaxOutputBytes)
+		}
+	}
+	if n := len(s.AlwaysEscalate); n > sshMaxAlwaysPatterns {
+		p.add(at(path, "always_escalate"), ErrOutOfRange, "%d patterns is more than %d", n, sshMaxAlwaysPatterns)
+	}
+	for i, pattern := range s.AlwaysEscalate {
+		here := idx(at(path, "always_escalate"), i)
+		if strings.TrimSpace(pattern) == "" || len(pattern) > sshMaxPatternBytes {
+			p.add(here, ErrOutOfRange, "a pattern is 1 to %d bytes", sshMaxPatternBytes)
+			continue
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			p.add(here, ErrUnknownValue, "%q is not a regular expression (RE2): %s", pattern, err.Error())
 		}
 	}
 	if len(s.Hosts) > sshMaxHosts {

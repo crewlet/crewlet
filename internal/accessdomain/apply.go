@@ -114,6 +114,11 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 			return applyResealed(ctx, tx, c, payload)
 		}
 		return applyCommand(ctx, tx, c, payload)
+	case KindVerdict:
+		if record.Op == OpResealed {
+			return applyVerdictResealed(ctx, tx, c, payload)
+		}
+		return applyVerdict(ctx, tx, c, payload)
 	case KindSeat:
 		return applyForget(ctx, tx, c, payload)
 	case KindExpiry:
@@ -295,9 +300,68 @@ func applyResealed(ctx context.Context, tx *sql.Tx, c applyContext, payload any)
 	return affected(res), nil
 }
 
+// applyVerdict writes one giver's verdict's row, create-only, its texts as
+// sealed. The record's id is its request's and giver's, held here as the
+// subject is, so one giver never holds two rows for one request.
+func applyVerdict(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
+	v, ok := payload.(Verdict)
+	if !ok {
+		return 0, fmt.Errorf("accessdomain: the verdict record at %s carries a %T", c.position, payload)
+	}
+	if err := ownedKey(c, v.Handle, v.ID); err != nil {
+		return 0, err
+	}
+	if v.ID != VerdictID(v.Request, v.By) {
+		return 0, fmt.Errorf("accessdomain: the verdict record at %s is %s and names request %s by %q",
+			c.position, v.ID, v.Request, v.By)
+	}
+	overruled, err := json.Marshal(nonNil(v.Overruled))
+	if err != nil {
+		return 0, fmt.Errorf("accessdomain: encode the overrulings at %s: %w", c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO access_verdicts (agent_handle, verdict_id, request_id, request_kind, rule_number,
+			turn_id, by_handle, by_kind, through, asked, confidence, verdict, final, overruled,
+			sampled, digest, host, login_user, stdin_bytes, stdin_sha256, decision_id, item,
+			subject_sealed, words_sealed, content_key, at, position)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (agent_handle, verdict_id) DO NOTHING`,
+		v.Handle, v.ID, v.Request, string(v.Kind), v.Rule, v.Turn, v.By, string(v.ByKind),
+		string(v.Through), string(v.Asked), string(v.Confidence), string(v.Verdict), boolInt(v.Final),
+		string(overruled), boolInt(v.Sampled), v.Digest, v.Host, v.User, v.StdinBytes, v.StdinSHA256,
+		v.Decision, v.Item, v.SubjectSealed, v.WordsSealed, v.ContentKey, c.at(), c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("accessdomain: record the verdict on %s by %q at %s: %w",
+			v.Request, v.By, c.position, err)
+	}
+	return affected(res), nil
+}
+
+// applyVerdictResealed writes a verdict's two texts sealed afresh over its
+// row, as [applyResealed] does a command's.
+func applyVerdictResealed(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
+	r, ok := payload.(VerdictResealed)
+	if !ok {
+		return 0, fmt.Errorf("accessdomain: the verdict reseal record at %s carries a %T", c.position, payload)
+	}
+	if err := ownedKey(c, r.Handle, r.ID); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE access_verdicts SET subject_sealed = ?, words_sealed = ?, content_key = ?
+		WHERE agent_handle = ? AND verdict_id = ?
+		  AND (subject_sealed != ? OR words_sealed != ? OR content_key != ?)`,
+		r.SubjectSealed, r.WordsSealed, r.ContentKey, r.Handle, r.ID,
+		r.SubjectSealed, r.WordsSealed, r.ContentKey)
+	if err != nil {
+		return 0, fmt.Errorf("accessdomain: reseal verdict %s at %s: %w", r.ID, c.position, err)
+	}
+	return affected(res), nil
+}
+
 // applyForget removes what a removed seat was told and records the removal,
-// which a told record decided before it is held to. Its certificates and
-// commands are the audit trail and stay to their retention.
+// which a told record decided before it is held to. Its certificates,
+// commands and verdicts are the audit trail and stay to their retention.
 func applyForget(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
 	f, ok := payload.(Forget)
 	if !ok || f.Handle == "" || f.Handle != c.record.Subject.ID {
@@ -318,13 +382,14 @@ func applyForget(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (
 }
 
 // expiryStatements are what an expiry deletes, oldest first, each by its broker
-// instant: every told record but a seat's baseline, every removal, certificate
-// and command.
+// instant: every told record but a seat's baseline, every removal, certificate,
+// command and verdict.
 var expiryStatements = []string{
 	`DELETE FROM access_told WHERE latest = 0 AND at < ?`,
 	`DELETE FROM access_seat_removals WHERE at < ?`,
 	`DELETE FROM access_certificates WHERE at < ?`,
 	`DELETE FROM access_commands WHERE at < ?`,
+	`DELETE FROM access_verdicts WHERE at < ?`,
 }
 
 // applyExpire removes every record past the retention through the hour the
