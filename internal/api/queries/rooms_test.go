@@ -145,7 +145,9 @@ func everySeam(t *testing.T) queries.Sources {
 		AgentAccess:  func(context.Context) ([]queries.AgentAccessRow, error) { return nil, nil },
 		// WHAT DELEGATES DECIDED, read off an access log holding nothing.
 		Delegated: emptyVerdicts{},
-		Insights:  coordmemory.NewFleet(),
+		// THE ATLAS, read off a node that runs no company yet.
+		Atlas:    builtin.AtlasDeps{},
+		Insights: coordmemory.NewFleet(),
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a
@@ -504,6 +506,14 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // repositories' lines, `code_search`, which a script read alone on the
 // path api-endpoints.md prints ("GET /gitlet/search").
 var readOutsideTheDashboard = map[string]string{
+	// THE ATLAS (ADR-0126), read over REST by a script or a token holding
+	// the atlas permission, as the reference prints each route, until the
+	// dashboard's Atlas screens read them and delete these lines.
+	"atlas_entries":     "a script: GET /atlas, as docs/reference/api-endpoints.md prints it",
+	"atlas_map":         "a script: GET /atlas/map, as docs/reference/api-endpoints.md prints it",
+	"atlas_entry":       "a script: GET /atlas/{id}, as docs/reference/api-endpoints.md prints it",
+	"atlas_trace":       "a script: GET /atlas/{id}/trace, as docs/reference/api-endpoints.md prints it",
+	"atlas_facets":      "a script: GET /atlas/facets, as docs/reference/api-endpoints.md prints it",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it

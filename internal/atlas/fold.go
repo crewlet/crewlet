@@ -232,7 +232,7 @@ func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, boo
 		facets[k] = append(facets[k], c)
 	}
 	e := Entry{ID: ref.ID(), Ref: ref, Lane: ref.Kind.Lane(), Name: ref.Key, Members: members,
-		Facts: []FactView{}, Relations: []Edge{}}
+		Facts: []FactView{}, Relations: []Edge{}, Sources: []Source{}}
 	var exists *resolution
 	asserted, sources := false, map[voice]Source{}
 	var support, winners []*Claim

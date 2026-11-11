@@ -45,6 +45,7 @@ type Sources struct {
 	ServerTests  ServerTests
 	AccessLog    AccessLog
 	Usage        Usage
+	Alarms       Alarms
 }
 
 // Request is one read of the atlas.
@@ -77,7 +78,15 @@ const (
 	SourceServerTests  SourceName = "server_tests"
 	SourceAccessLog    SourceName = "access_log"
 	SourceUsage        SourceName = "usage"
+	SourceAlarms       SourceName = "alarms"
 )
+
+// SourceNames is every place the atlas reads, in the order an answer's
+// coverage lists them.
+var SourceNames = []SourceName{
+	SourceAccessLog, SourceAlarms, SourceGitlet, SourceIntegrations, SourceNodes, SourceSeatAccess,
+	SourceServerTests, SourceSettings, SourceToolServers, SourceUsage,
+}
 
 // Coverage is one source's part in a read: whether it was read in full, and
 // why not where it was not.
@@ -93,6 +102,18 @@ type Answer struct {
 	Revision string            `json:"revision"`
 	Coverage []Coverage        `json:"coverage"`
 	Withheld []derive.Withheld `json:"withheld,omitempty"`
+}
+
+// Unread is a with the source name marked as not read in full, for why: a
+// reason the caller has for not reading it, rather than the read's.
+func (a Answer) Unread(name SourceName, why string) Answer {
+	a.Coverage = slices.Clone(a.Coverage)
+	for i := range a.Coverage {
+		if a.Coverage[i].Source == name {
+			a.Coverage[i].Complete, a.Coverage[i].Reason = false, why
+		}
+	}
+	return a
 }
 
 // maxRepoPage is the page a repository listing is read in: Gitlet's own
