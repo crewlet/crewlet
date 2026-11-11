@@ -74,9 +74,9 @@ func (o *optionalLevel) UnmarshalJSON(raw []byte) error {
 const toolsShape = `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": "allow"|"approve"|"blocked"|null}}`
 
 // maxToolsBody bounds the body: a level for each of the most tools one server
-// lists (internal/mcp's MaxServerTools), each name at a tool name's longest
-// (about 150 bytes a level), with room for the summary.
-const maxToolsBody = 1 << 20
+// lists (internal/mcp's MaxServerTools, 1,024), each name at a tool name's
+// longest (about 150 bytes a level), with room for the summary.
+const maxToolsBody = 256 << 10
 
 // ToolsAnswer is what the route answers beside the configuration's own answer
 // (a dry run's check, or the revision written): the server's tool levels as

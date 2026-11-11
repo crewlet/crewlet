@@ -387,6 +387,37 @@ func TestADefinitionTheStoreDoesNotHoldIsReadOnceUntilAListingKeepsIt(t *testing
 	}
 }
 
+// THE MOST TOOLS A SERVER MAY LIST FIT ONE LISTING, AT THEIR LONGEST: every
+// server the client takes is listed whole, never refused by the listing's
+// bytes, whatever its words. Names are of the characters a tool is filed
+// under, at the longest a listing keeps.
+//
+// Mutation: raise mcp.MaxServerTools past what MaxMCPListingBytes holds, and
+// this is red.
+func TestTheMostToolsAServerListsFitOneListing(t *testing.T) {
+	t.Parallel()
+	unknown := coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
+		Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown}
+	l := coord.MCPListing{Server: "cloud", Node: "node-a", Epoch: 1, At: time.Now(), Instances: 9999}
+	for i := range mcp.MaxServerTools {
+		name := fmt.Sprintf("%0*d", coord.MaxMCPToolNameBytes, i)
+		part := testDigest(name)[:coord.MCPToolPartLength]
+		l.Tools = append(l.Tools, coord.MCPListedTool{Name: name, Raw: name,
+			Title: strings.Repeat("t", coord.MaxMCPToolTitleBytes), Description: strings.Repeat("d",
+				coord.MaxMCPToolDescriptionBytes), Hints: unknown, Declared: unknown, Digest: testDigest(name),
+			DefinitionKept: true, Instances: 9999, Blocked: true,
+			Parts: coord.MCPToolParts{Title: part, Description: part, Schema: part, Hints: part}})
+	}
+	bounded := l.Bounded()
+	if err := bounded.Validate(); err != nil {
+		t.Fatalf("a listing of the most tools a server may list is refused: %v", err)
+	}
+	if len(bounded.Tools) != mcp.MaxServerTools || bounded.EncodedSize() > coord.MaxMCPListingBytes {
+		t.Errorf("the listing names %d tools in %d bytes, want %d within %d", len(bounded.Tools),
+			bounded.EncodedSize(), mcp.MaxServerTools, coord.MaxMCPListingBytes)
+	}
+}
+
 // liveNode puts a node's presence on backend, at the epoch the backend mints.
 func liveNode(t *testing.T, backend coord.Backend, node string) int64 {
 	t.Helper()

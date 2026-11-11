@@ -11946,7 +11946,7 @@ included. Read the changes again. `400 invalid_body` for a body that decides
 nothing or decides one tool twice, `404 not_found` for a server the company
 does not declare, `503 unavailable` where this node cannot read the fleet's
 listing of the server. A body may name a decision for each of the most tools
-one server lists (4,096), up to 1 MiB.
+one server lists (1,024), up to 256 KiB.
 
 ```json
 {"server": "github", "accepted": ["close_issue", "search_issues"], "blocked": ["delete_repository"], "moved": [], "revision": {"revision_id": "…", "epoch": 7, "warnings": []}}

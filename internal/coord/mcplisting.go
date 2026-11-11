@@ -124,14 +124,15 @@ func IsMCPDigest(s string) bool {
 // bytes and an invalid byte three, so a bound on the raw text would let a
 // record grow several times past it.
 const (
-	// MaxMCPListingBytes bounds one listing's record, encoded. 4 MiB is half
-	// of the 8 MiB message every broker the engine runs on carries
-	// (internal/queue's MaxPayloadBytes): it holds the identity of the most
-	// tools the engine takes from one server (internal/mcp's MaxServerTools,
-	// 4,096) at under 600 bytes each, with room for their words, and the
-	// largest server seen in use, at 461 tools, writes about 300 KiB. A
-	// listing whose identities alone are past it is refused, never cut.
-	MaxMCPListingBytes = 4 << 20
+	// MaxMCPListingBytes bounds one listing's record, encoded. 896 KiB keeps
+	// it, with its key and headers, under the 1 MiB a NATS server carries by
+	// default, as every coordination record stays. It holds the identity of
+	// the most tools the engine takes from one server (internal/mcp's
+	// MaxServerTools, 1,024) at about 775 bytes each at their longest, with
+	// room for their words; the largest server seen in use, at 461 tools,
+	// writes about 300 KiB with its words whole. A listing whose identities
+	// alone are past it is refused, never cut.
+	MaxMCPListingBytes = 896 << 10
 
 	// MaxMCPToolTitleBytes bounds a tool's title on a listing, and
 	// MaxMCPToolDescriptionBytes its description: what a person reading a

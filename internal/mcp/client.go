@@ -40,12 +40,11 @@ var ErrPagination = errors.New("mcp: server pagination is broken")
 var ErrTooManyTools = errors.New("mcp: server lists more tools than the engine takes from one server")
 
 // MaxServerTools is the most tools the engine takes from one server's
-// listing. The largest server seen in use lists 461 (a cloud vendor's), and
-// one generated from a large public API a few thousand; 4,096 is past both,
-// and is what one fleet listing holds the identities of
-// (internal/coord's MaxMCPListingBytes). An agent is offered 100 tools at
-// most, so a server this large is only ever used through per-agent limits.
-const MaxServerTools = 4096
+// listing: more than twice the 461 of the largest server seen in use (a
+// cloud vendor's), and what one fleet listing holds the identities of at
+// their longest (internal/coord's MaxMCPListingBytes). An agent is offered
+// 100 tools at most, so a server this large is used through per-agent limits.
+const MaxServerTools = 1024
 
 // toolDef is one tool as the server described it, before any prefixing,
 // exclusion or override is applied.

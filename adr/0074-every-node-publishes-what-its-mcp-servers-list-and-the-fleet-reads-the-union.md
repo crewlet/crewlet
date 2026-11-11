@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
-- **Enforced-by:** `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`, `internal/coord.TestADefinitionIsBoundedAsItIsStored`, `internal/mcp.TestAServerListingMoreToolsThanTheLimitIsRefusedWhole`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestANodesListingIsTheUnionOfItsInstances`, `internal/engine.TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst`, `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`, `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`, `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`, `internal/engine.TestANodeThatStopsRemovesItsOwnListings`, `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`, `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
+- **Enforced-by:** `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`, `internal/coord.TestADefinitionIsBoundedAsItIsStored`, `internal/mcp.TestAServerListingMoreToolsThanTheLimitIsRefusedWhole`, `internal/engine.TestTheMostToolsAServerListsFitOneListing`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestANodesListingIsTheUnionOfItsInstances`, `internal/engine.TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst`, `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`, `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`, `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`, `internal/engine.TestANodeThatStopsRemovesItsOwnListings`, `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`, `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
 - **Cost-when-tried:** the tool catalogue was each node's own registry, which holds a shared server's tools and none of a per-agent server's, whose children run only on the node holding each seat. A company running GitHub's and Datadog's servers per agent showed none of their tools on any screen, though every agent was offered them, and a node's answer about a server depended on which seats it happened to hold.
 - **Tag-status:** unreleased
 
@@ -35,11 +35,11 @@ has named for two sweeps in a row.
 **Every listing names every tool, and is bounded where it is built and again
 by the store by the bytes it is stored as**, never by a count of tools: a tool
 a listing left out is never reviewed (ADR-0078), so every call to it would ask
-a person for ever. A listing is held to 4 MiB encoded
-(`coord.MaxMCPListingBytes`): each text cut, and where that is not enough the
-words cut shorter, every description and then every title, while each tool's
-identity (its names, digest, parts and hints) stays; one whose identities alone
-pass it is refused rather than cut. A server listing more than 4,096 tools
+a person for ever. A listing is held to 896 KiB encoded, under the 1 MiB a
+NATS server carries by default (`coord.MaxMCPListingBytes`): each text cut,
+and where that is not enough the words cut shorter, every description and
+then every title, while each tool's identity (its names, digest, parts and
+hints) stays; one whose identities alone pass it is refused rather than cut. A server listing more than 1,024 tools
 (`mcp.MaxServerTools`) is refused by the client that lists it, so one
 instance's listing always fits. A definition whose schemas pass 64 KiB or
 whose words pass 64 KiB, as stored, is listed without being stored. **The

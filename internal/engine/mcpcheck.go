@@ -263,10 +263,10 @@ const (
 	// maxMCPCheckToolBytes bounds the tools one node's reply carries, as
 	// encoded: every tool the server listed (at most [mcp.MaxServerTools]),
 	// their descriptions and then their titles shortened until they fit.
-	// A quarter of the 8 MiB message a broker carries, so the reply's
+	// Half the 1 MiB a NATS server carries by default, so the reply's
 	// envelope and the rest of the report fit beside it; 461 tools take
 	// about 150 KiB with their words whole.
-	maxMCPCheckToolBytes = 2 << 20
+	maxMCPCheckToolBytes = 512 << 10
 )
 
 // mcpCheckBudget is how long a test of server may take on a node: its

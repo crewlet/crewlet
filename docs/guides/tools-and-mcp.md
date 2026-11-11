@@ -896,16 +896,17 @@ reads (`GET /mcp-servers/{name}`, everybody's in
   instances list, however many: a tool it left out could never be reviewed
   ([When a server changes a tool](#when-a-server-changes-a-tool)), so a call
   to it would ask a person for ever. Everything in a listing came from a
-  remote server, so it is bounded by the bytes it is stored as, 4 MiB: a
+  remote server, so it is bounded by the bytes it is stored as, 896 KiB, which
+  keeps it under the 1 MiB a NATS server carries by default: a
   description is cut to 1,024 bytes and a title to 256, and where hundreds of
-  tools would pass 4 MiB with those, every description and then every title is
+  tools would pass 896 KiB with those, every description and then every title is
   cut shorter, marked, until the listing fits. The instructions are cut to
   4,096 bytes. A definition whose schemas or words pass 64 KiB as stored is
   listed without being stored, and a listing stores at most 1 MiB of
   definitions in all, a change waiting for a review first, then in tool-name
   order while they fit; a tool past that is listed without its arguments.
   Every bound counts the bytes as stored, where `<`, `>` or `&` takes six.
-- **At most 4,096 tools a server.** A server that lists more is refused, never
+- **At most 1,024 tools a server.** A server that lists more is refused, never
   cut: its instance does not start, and its failure says how many it lists and
   to narrow what it lists with its own options (a toolset, a product or a
   read-only switch) or split it into several entries. The largest servers in
