@@ -4315,7 +4315,9 @@ of the integration runs), `refused` (the last sync failed), `changed_at_vendor`
 (somebody changed the account at the vendor, and the next sync restores it),
 `needs_you` (a step only a person takes, or a sync that ended waiting on one),
 `next_sync` (steps the next sync takes), `in_sync`, `off_account_kept` and
-`off`. A lane carries two clocks: `observed_at` is when a pass last read the
+`off`, and `status_label` is it in the tab's words ("Changed at Datadog"),
+which a reader that does not know the status draws instead. A lane carries two
+clocks: `observed_at` is when a pass last read the
 vendor for it, every pass including the check's dry run
 (`POST /setup/integrations/{kind}/check`), and `sync.at` is when a writing sync
 last ended, which a dry run leaves alone: a refusal a dry run finds (a sealing

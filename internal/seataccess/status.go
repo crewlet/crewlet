@@ -95,11 +95,13 @@ func StatusOf(la LaneAnswer, syncing, departed bool) LaneStatus {
 	return StatusOff
 }
 
-// SetStatuses sets every seat's lane's Status from the answer as it stands.
+// SetStatuses sets every seat's lane's Status and StatusLabel from the answer
+// as it stands.
 func (a *Answer) SetStatuses() {
 	for i, seat := range a.Seats {
 		for lane, la := range seat.Lanes {
 			la.Status = StatusOf(la, a.Syncing, seat.Departed)
+			la.StatusLabel = la.Status.Label(LaneName(lane))
 			a.Seats[i].Lanes[lane] = la
 		}
 	}

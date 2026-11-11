@@ -32,8 +32,10 @@ type LaneAnswer struct {
 	ObservedAt time.Time `json:"observed_at,omitzero"`
 
 	// Status is the lane as one word ([StatusOf]), set once the answer is
-	// whole ([Answer.SetStatuses]).
-	Status LaneStatus `json:"status"`
+	// whole ([Answer.SetStatuses]), and StatusLabel it in the Agents tab's
+	// words, which a reader that does not know the word draws instead.
+	Status      LaneStatus `json:"status"`
+	StatusLabel string     `json:"status_label"`
 
 	// Plan is what the next sync does for this lane as the document stands.
 	Plan []Step `json:"plan"`
