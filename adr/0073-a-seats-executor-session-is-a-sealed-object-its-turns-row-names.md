@@ -1970,8 +1970,9 @@ point — a kept session's, and the job's own copy in its box whatever its
 harness's end, which where that harness ended its own run is told such calls and
 the late ones alone — in the late calls' section, whose words now say the run
 that made them stopped waiting for them: it gave up on them, or was cut off or
-replaced, so the session may show one with no outcome, as interrupted or as
-failed (internal/agent/prompts' `lateCallsHeader`). No rebuilt skill guard
+replaced, so the session may show one with no outcome, as still running (the
+answer an opening's end hands a call it does not wait for), as interrupted or
+as failed (internal/agent/prompts' `lateCallsHeader`). No rebuilt skill guard
 counts a load such a call made, whose body never reached the session; and the
 log's dropped middle keeps such a call while an ordinary one is left there and
 counts one it gives up beside the late ones it drops (`BridgeLog.LateElided`,

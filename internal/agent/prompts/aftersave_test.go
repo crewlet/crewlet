@@ -133,7 +133,7 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 		t.Errorf("a session whose only untold call is late is told:\n%s\nwant its section alone", got)
 	}
 	for _, said := range []string{"ONE call, made once", "outcome told here stands", "gave up on them",
-		"no outcome, as interrupted or as failed"} {
+		"no outcome, as still running, as interrupted or as failed"} {
 		if !strings.Contains(lateCallsHeader, said) {
 			t.Errorf("a late call's heading does not say %q:\n%s", said, lateCallsHeader)
 		}
