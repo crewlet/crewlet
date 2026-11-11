@@ -45,8 +45,9 @@ type Words struct {
 
 // WordsOf is lane's words as this build knows them with no session: the levels
 // its vendor fixes ([seataccess.KnownLevels]) and the permissions its catalog
-// declares. A vendor that lists its levels live answers none, and its level
-// is named by its id unless the caller hands in a live read.
+// declares. A level the vendor lists live is named by its id unless the
+// caller hands in what a sync recorded ([RecordedWords]) or an offer read now
+// ([OfferedWords]).
 func WordsOf(kind integration.Kind, lane seataccess.Lane) Words {
 	var w Words
 	w.Levels, _ = seataccess.KnownLevels(kind, lane)
@@ -54,6 +55,30 @@ func WordsOf(kind integration.Kind, lane seataccess.Lane) Words {
 		if spec, ok := v.Catalog().Lane(lane); ok {
 			w.Permissions = spec.Permissions
 		}
+	}
+	return w
+}
+
+// RecordedWords is lane's words with the vendor's own names its last writing
+// sync recorded for the seat's grant ([seataccess.LaneRecord.Words]) ahead of
+// the ones this build fixes: what a turn is told, with no vendor asked.
+func RecordedWords(kind integration.Kind, lane seataccess.Lane, rec *seataccess.GrantWords) Words {
+	w := WordsOf(kind, lane)
+	if rec != nil {
+		w.Levels = append(slices.Clone(rec.Levels), w.Levels...)
+		w.ScopeNames = maps.Clone(rec.ScopeNames)
+	}
+	return w
+}
+
+// OfferedWords is lane's words as an offer read from its vendor names them,
+// ahead of the ones this build fixes.
+func OfferedWords(kind integration.Kind, offer seataccess.Options) Words {
+	w := WordsOf(kind, offer.Lane)
+	w.Levels = append(slices.Clone(offer.Levels), w.Levels...)
+	w.ScopeNames = maps.Clone(offer.ScopeNames)
+	if len(offer.Permissions) > 0 {
+		w.Permissions = offer.Permissions
 	}
 	return w
 }
