@@ -88,9 +88,15 @@ type NamedWithoutAsk struct {
 	Told  int `json:"told"`
 	Asked int `json:"asked"`
 	Woken int `json:"woken"`
-	// Comments and WokenComments are at most five of each, by id.
-	Comments      []string `json:"comments"`
-	WokenComments []string `json:"woken_comments"`
+	// Requested counts, of a person's notices, the comments that asked them
+	// for something without an ask ([RequestedWithoutAsk]), whatever else
+	// they put their question to.
+	Requested int `json:"requested"`
+	// Comments, WokenComments and RequestedComments are at most five of
+	// each, by id.
+	Comments          []string `json:"comments"`
+	WokenComments     []string `json:"woken_comments"`
+	RequestedComments []string `json:"requested_comments"`
 }
 
 // WorkPatterns reads q's window of comments and answers.
@@ -107,7 +113,7 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 		Set:   true,
 	}, func(tx *sql.Tx) error {
 		since, until := store.EncodeTime(q.Since), store.EncodeTime(q.Until)
-		if err := readNamedWithoutAsk(ctx, tx, since, until, &out); err != nil {
+		if err := readNamedWithoutAsk(ctx, tx, since, until, q.People, &out); err != nil {
 			return err
 		}
 		if err := readAnswers(ctx, tx, since, until, &out); err != nil {
@@ -132,12 +138,24 @@ LEFT JOIN tracker_notifications n ON n.record_id = c.record_id AND n.reason = 'm
 WHERE c.author_kind = 'agent' AND c.created_at >= ? AND c.created_at < ? AND c.removed = 0
 ORDER BY c.created_at, c.id`
 
-func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, out *WorkPatterns) error {
+func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, people []string,
+	out *WorkPatterns) error {
+
 	rows, err := tx.QueryContext(ctx, patternNamedStatement, since, until)
 	if err != nil {
 		return fmt.Errorf("worklet: read the window's agent comments: %w", err)
 	}
+	person := func(handle string) bool { return slices.Contains(people, handle) }
 	byHandle := map[string]*NamedWithoutAsk{}
+	entry := func(handle string) *NamedWithoutAsk {
+		named := byHandle[handle]
+		if named == nil {
+			named = &NamedWithoutAsk{Handle: handle, Comments: []string{},
+				WokenComments: []string{}, RequestedComments: []string{}}
+			byHandle[handle] = named
+		}
+		return named
+	}
 	last := ""
 	for rows.Next() {
 		var id, ask string
@@ -151,15 +169,26 @@ func readNamedWithoutAsk(ctx context.Context, tx *sql.Tx, since, until int64, ou
 			out.AgentComments++
 			last = id
 		}
-		if ask != "" || !recipient.Valid {
+		if !recipient.Valid {
 			continue
 		}
-		named := byHandle[recipient.String]
-		if named == nil {
-			named = &NamedWithoutAsk{Handle: recipient.String, Comments: []string{},
-				WokenComments: []string{}}
-			byHandle[recipient.String] = named
+		// THE TOOL'S OWN PREDICATE, so what it refuses and what this
+		// counts are one set; an unknown statement is no request.
+		var stated *bool
+		if asks.Valid {
+			stated = &asks.Bool
 		}
+		if len(RequestedWithoutAsk(true, stated, ask, []string{recipient.String}, person)) > 0 {
+			named := entry(recipient.String)
+			named.Requested++
+			if len(named.RequestedComments) < MaxPatternExamples {
+				named.RequestedComments = append(named.RequestedComments, id)
+			}
+		}
+		if ask != "" {
+			continue
+		}
+		named := entry(recipient.String)
 		named.Told++
 		switch {
 		case !asks.Valid:

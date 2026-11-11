@@ -58,15 +58,15 @@ func TestAListingKeyReadsBackItsServerAndNode(t *testing.T) {
 	if !ok || server != "github" || node != "node.a" {
 		t.Fatalf("MCPListingOf(%q) = %q, %q, %v", key, server, node, ok)
 	}
-	for _, other := range []string{coord.PositionKey("node-a"), coord.MCPSchemaKey(digestOf("x")), "mcp_listing.github"} {
+	for _, other := range []string{coord.PositionKey("node-a"), coord.MCPDefinitionKey(digestOf("x")), "mcp_listing.github"} {
 		if _, _, ok := coord.MCPListingOf(other); ok {
 			t.Errorf("%q read as a listing key", other)
 		}
 	}
-	if d, ok := coord.MCPSchemaDigest(coord.MCPSchemaKey(digestOf("x"))); !ok || d != digestOf("x") {
+	if d, ok := coord.MCPDefinitionDigest(coord.MCPDefinitionKey(digestOf("x"))); !ok || d != digestOf("x") {
 		t.Errorf("a schema key read back %q, %v", d, ok)
 	}
-	if _, ok := coord.MCPSchemaDigest(coord.DocumentKey(coord.MCPSchemaClass, "nope")); ok {
+	if _, ok := coord.MCPDefinitionDigest(coord.DocumentKey(coord.MCPDefinitionClass, "nope")); ok {
 		t.Error("a schema key naming no digest read as one")
 	}
 }
