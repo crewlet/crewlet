@@ -592,7 +592,11 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 			s.settleMu.Unlock()
 			return
 		}
-		overdue := !run.said && s.now().Sub(run.since) >= steerSettlePatience
+		// SAID ONLY OF A ROUND THAT MET AN ERROR: one whose every attempt was
+		// answered asked no take that is left — what is left joined the run's
+		// loop while the round was asked, and has not been asked yet — so there
+		// is nothing unanswered to say, and its error to say it with is none.
+		overdue := unanswered != nil && !run.said && s.now().Sub(run.since) >= steerSettlePatience
 		run.said = run.said || overdue
 		s.settleMu.Unlock()
 		if overdue {

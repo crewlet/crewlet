@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -844,7 +845,8 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 
 // gatedSettles is a run store whose settles the store does not answer while
 // unavailable says so, and which wait at gate while one is set: counting the
-// attempts, and the most it held at once. Nil unavailable answers every settle.
+// attempts, and the most it held at once. Nil unavailable answers every settle;
+// answering, where set, is called as a settle is about to be answered.
 //
 // UNAVAILABLE IS THE CASE'S OWN LITERAL, written inside its bubble, because
 // whether the store answers yet is a decision on the clock, and only a bubble's
@@ -856,6 +858,7 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 type gatedSettles struct {
 	sandbox.PendingStore
 	unavailable func() bool
+	answering   func()
 	gate        chan struct{}
 
 	mu                    sync.Mutex
@@ -884,6 +887,9 @@ func (s *gatedSettles) SettleTake(ctx context.Context, turnID string, settle san
 	}
 	if s.unavailable != nil && s.unavailable() {
 		return nil, coord.ErrUnavailable
+	}
+	if s.answering != nil {
+		s.answering()
 	}
 	return s.PendingStore.SettleTake(ctx, turnID, settle)
 }
@@ -918,11 +924,14 @@ func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ..
 // that lost it ended: its hook's request is answered, or its segment over,
 // within seconds. It stops when its node stops, and asks nothing more. And a
 // run's lost takes settle in one loop, whatever their number: never two of its
-// settles at once.
+// settles at once — a take lost while the loop's round is asked joining it, even
+// the round the store first answers past the patience, which met no error to
+// say the take unsettled with and says nothing.
 //
 // Mutation: give the settle up at its patience, end it with the context of the
-// take that lost it, ask on past the node's stop, or start a loop for every
-// take, and a case goes red.
+// take that lost it, ask on past the node's stop, start a loop for every take,
+// or say unsettled a round that met no error, and a case goes red — the last a
+// panic that ends the test binary, as it would end the node.
 func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 	t.Parallel()
 	t.Run("its store answering a minute after", func(t *testing.T) {
@@ -966,6 +975,36 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			}
 			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || read.Unanswered {
 				t.Errorf("the note is read %+v, want it read and unmarked: nothing settled it", read)
+			}
+		})
+	})
+	t.Run("a take joining the round the store first answers, past the patience", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			answerAt := time.Now().Add(steerSettlePatience)
+			var runs *runSteers
+			var joined atomic.Bool
+			settles := &gatedSettles{PendingStore: store,
+				unavailable: func() bool { return time.Now().Before(answerAt) },
+				// A HOOK'S TAKE LOST ON THE SAME OUTAGE, failing as the
+				// store comes back: it joins the run's loop while the loop's
+				// first answered round is asked.
+				answering: func() {
+					if joined.CompareAndSwap(false, true) {
+						runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
+					}
+				}}
+			runs, _ = steersOver(t, steerRing, settles)
+			runs.stopped = t.Context().Done()
+			lostTakes(t, store, runs, "n-1", "n-2")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			time.Sleep(2 * time.Minute)
+			synctest.Wait()
+			for _, id := range []string{"n-1", "n-2"} {
+				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
+					t.Errorf("note %s is read %+v, want it marked once the store answered", id, read)
+				}
 			}
 		})
 	})
