@@ -293,13 +293,15 @@ Two policies decide which copies count:
   acknowledged is never trimmed: the ordered logs, `CREWLET_TRACKER_LOG`,
   `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG`,
   `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
-  `CREWLET_EXECUTOR_LOG`, `CREWLET_CODE_LOG` and `CREWLET_ACCESS_LOG`, each
+  `CREWLET_EXECUTOR_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ACCESS_LOG` and
+  `CREWLET_ATLAS_LOG`, each
   grow until their own ceiling refuses writes — a full identity log refuses
   every sign-in, a full Ask Crewlet log every question Ask Crewlet is asked, a
   full chat log every message, a full executor log every session a turn would
   keep for its conversation's next, a full code log every push and every
-  record of a change, and a full access log every SSH command and every change
-  of access a seat would be told — while the two compacted logs,
+  record of a change, a full access log every SSH command and every change
+  of access a seat would be told, and a full atlas log every edit somebody
+  makes to the atlas — while the two compacted logs,
   `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
   records out on the broker whatever the trim decides; their trim and its
   alarms wait on an acknowledgement just the same.
@@ -1337,6 +1339,7 @@ So the reserve is the larger of two terms:
 | chat | 512 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | executor | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 | access | 256 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| atlas | 256 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.
@@ -1353,7 +1356,8 @@ A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`, `stream.code_log_max_bytes`,
 `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
 `stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes`,
-`stream.executor_log_max_bytes`, `stream.access_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
+`stream.executor_log_max_bytes`, `stream.access_log_max_bytes`,
+`stream.atlas_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
 running log's ceiling, raising it or lowering it, is a **fleet-wide
@@ -2746,11 +2750,11 @@ only on a small volume:
    headroom at about 51 % at the 16 GiB a 64 GiB volume asks for, and at
    about 88 % at the 64 GiB a volume of about 653 GiB or more gets. The alarm
    threshold is 10 %, clear of each. But the one budget scales every log to
-   fit the broker: the twelve logs' asks are scaled down to the share they
+   fit the broker: the thirteen logs' asks are scaled down to the share they
    divide, five eighths of what the broker can grant once the object store's
    `nats` bucket has its quarter. So a first boot with every field unset
    leaves about 59 % of the 19.1 GiB a 200 GiB volume creates it with, about
-   33 % of the 11.7 GiB a 128 GiB volume does and about 13 % of the 9.1 GiB a
+   33 % of the 11.7 GiB a 128 GiB volume does and about 13 % of the 9.0 GiB a
    100 GiB volume does; and a 64 GiB volume creates the log at 5.6 GiB, too
    small to hold that re-embedding at all: below about 97 GiB free, set
    `stream.tracker_vectors_max_bytes` to at least 9 GiB. The alarm fires
@@ -2763,7 +2767,7 @@ only on a small volume:
    is created with whole; or, for a company that hosts no code, set
    `stream.code_log_max_bytes` to its 1 GiB floor, which moves the line to
    about 84 GiB and leaves a 100 GiB volume's year-five re-embedding about
-   27 % free. Either takes effect at the first boot; once the streams exist,
+   26 % free. Either takes effect at the first boot; once the streams exist,
    the same trade is [`crewlet retention set-capacity`](#changing-a-logs-ceiling).
    The corpus is the company's whole history, so a larger or older company
    sets `stream.tracker_vectors_max_bytes` at about twice it, 34 MB per agent
