@@ -115,6 +115,10 @@ func IntegrationSource(kind string) Source { return Source{Kind: SourceIntegrati
 // same facet replaces its earlier one.
 func (s Source) identity() string { return string(s.Kind) + "\x00" + s.Name }
 
+// Voice is [Source.identity] for a store that keeps claims: the claims of one
+// voice on one [Claim.Slot] replace each other, newest first.
+func (s Source) Voice() string { return s.identity() }
+
 // Confidence is how far a claim can be trusted, DERIVED from its source and
 // the evidence the engine checked, never chosen by whoever made the claim: a
 // value a writer chooses is a channel content can steer.
@@ -244,7 +248,16 @@ const (
 	// FacetDistinct is a person's "not the same": two entries a shared key
 	// would merge stay apart, whatever the key says.
 	FacetDistinct FacetKind = "distinct"
+	// FacetSame is a person's "the same": two entries of one kind no exact key
+	// joins are one entry. A "not the same" between them always wins.
+	FacetSame FacetKind = "same"
 )
+
+// FacetKinds is every facet kind.
+var FacetKinds = []FacetKind{FacetExists, FacetFact, FacetRelation, FacetDistinct, FacetSame}
+
+// Valid reports whether k is a member of the closed set.
+func (k FacetKind) Valid() bool { return slices.Contains(FacetKinds, k) }
 
 // Target is what a relation, or a person's "not the same", points at: an
 // entry, or an identity outside the atlas (a seat, a unit, a page).
@@ -312,6 +325,17 @@ func Distinct(a, b Ref, src Source, at time.Time) (Claim, error) {
 	return checked(Claim{Subject: a, Facet: Facet{Kind: FacetDistinct, Target: Target{Entry: b}}, Source: src, ObservedAt: at})
 }
 
+// Same is a person's claim that a and b are one thing, though no exact key
+// joins them. A "not the same" between the two always wins.
+func Same(a, b Ref, src Source, at time.Time) (Claim, error) {
+	return checked(Claim{Subject: a, Facet: Facet{Kind: FacetSame, Target: Target{Entry: b}}, Source: src, ObservedAt: at})
+}
+
+// Slot is the one thing a claim fills on its entry: its fact, one value of a
+// fact that holds many, one relation to one target, or the entry itself. The
+// fold keeps each voice's newest claim per slot, and so does a store.
+func (c Claim) Slot() string { return facetKey(c) }
+
 // Denial is a person's claim that c does not hold: the entry is retired, the
 // value is wrong, the relation is not there.
 func Denial(c Claim, person Source, at time.Time) (Claim, error) {
@@ -367,12 +391,12 @@ func (c Claim) validate() error {
 		return c.validateFact()
 	case FacetRelation:
 		return c.validateRelation()
-	case FacetDistinct:
+	case FacetDistinct, FacetSame:
 		if c.Source.Kind != SourcePerson {
-			return errors.New(`only a person says two entries are not the same`)
+			return errors.New(`only a person says whether two entries are the same`)
 		}
 		if t := c.Facet.Target; t.External != "" || t.Name != "" || t.Entry.Kind != c.Subject.Kind || t.Entry == c.Subject {
-			return errors.New(`"not the same" names another entry of the same kind`)
+			return errors.New(`"the same" and "not the same" name another entry of the same kind`)
 		}
 		if _, err := NewRef(c.Facet.Target.Entry.Kind, c.Facet.Target.Entry.Key); err != nil {
 			return err

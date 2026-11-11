@@ -86,7 +86,7 @@ An entry's identity is its kind and its natural key, and its id is derived from 
 - two accounts named by the same account id;
 - two servers at the same public address, seen by different sources.
 
-A key one source carries on two entries (two servers behind one load balancer, two copies of one mirror) is a shared address, not an identity, and merges nothing. A private address never merges two servers, which may sit on two networks. An agent's report never merges anything. A person's "not the same" always wins, and similar names never merge: they only suggest.
+A key one source carries on two entries (two servers behind one load balancer, two copies of one mirror) is a shared address, not an identity, and merges nothing. A private address never merges two servers, which may sit on two networks. An agent's report never merges anything. A person may join two entries no key joins (a declared server and the cloud instance it is) by saying they are the same, and may keep two entries apart by saying they are not; a person's "not the same" always wins, and similar names never merge: they only suggest.
 
 ## When sources disagree
 
