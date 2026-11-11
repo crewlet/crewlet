@@ -678,6 +678,30 @@ type RankOrder struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
+// Roster is the org chart's seats in the order of their names: what
+// `sort=assignee` orders by, reconciled from the chart ([Writer.ApplyChart]).
+//
+// THE ORDER IS THE WRITER'S, carried whole: the collation that decides it
+// ([seatsByName]) runs once, where the record is decided, so every data node
+// applies the same places whatever collation tables its own build carries.
+type Roster struct {
+	V             int    `json:"v"`
+	Version       uint64 `json:"version"`
+	ScopedThrough uint64 `json:"scoped_through,omitempty"`
+
+	// Seats are the chart's handles, a seat's place its index here.
+	Seats []string `json:"seats"`
+
+	// ChartEpoch is the activation the order was taken from
+	// ([configplane.ActivationStamp]), which keeps an older activation
+	// applied late from walking a newer order back.
+	ChartEpoch int64 `json:"chart_epoch"`
+
+	UpdatedAt time.Time `json:"updated_at"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
 // Placement is one task's new position.
 type Placement struct {
 	Task string `json:"task"`

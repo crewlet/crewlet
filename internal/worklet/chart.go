@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/configplane"
@@ -202,6 +203,70 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 	if result.Outcome == statelog.OutcomeUnknown {
 		return false, fmt.Errorf("worklet: whether project %s's chart landed "+
 			"is unknown (operation %s); the next apply decides it again", p.Key, op)
+	}
+	return changed, nil
+}
+
+// ApplyRoster reconciles the org chart's seat order ([Roster]) from every
+// seat's name by handle, stamped with the activation the chart came from, and
+// reports whether it wrote.
+//
+// [Writer.ApplyChart]'s rules for a project, for the same reasons: the epoch
+// is the activation's instant, a roster stamped above it is left alone, and
+// one stamped at it in the same order writes nothing, so a reconcile on every
+// apply and every boot costs one local read after the first node's write.
+//
+// ONE RECORD FOR THE WHOLE CHART, because a place is relative: a seat added or
+// renamed moves every place after it, which per-seat records would write one
+// at a time with the order half moved in between.
+func (w *Writer) ApplyRoster(ctx context.Context, activatedAt time.Time,
+	names map[string]string) (bool, error) {
+
+	if activatedAt.IsZero() {
+		return false, ErrNoChartActivation
+	}
+	epoch := configplane.ActivationStamp(activatedAt)
+	seats := seatsByName(names)
+	subject := RosterSubject()
+	scope := ScopeSet{Subject: true}
+	now := w.Now()
+	// THE WALL CLOCK for the mint, for [Writer.applyChartProject]'s reason.
+	op := chartOpID(time.Now(), "roster")
+	var changed bool
+
+	result, err := w.published(ctx, statelog.Request{
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    op,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			changed = false
+			current, held, err := readRoster(ctx, tx)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if held && (current.ChartEpoch > epoch ||
+				current.ChartEpoch == epoch && slices.Equal(current.Seats, seats)) {
+				return statelog.Decision{}, nil
+			}
+			changed = true
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, "", scope, op,
+				Roster{V: DocumentVersion, Seats: seats, ChartEpoch: epoch, UpdatedAt: now},
+				nil, now)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			decision.Version = int64(current.Version)
+			return decision, nil
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("worklet: reconcile the seats' order from the "+
+			"org chart: %w", err)
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return false, fmt.Errorf("worklet: whether the seats' order landed is "+
+			"unknown (operation %s); the next apply decides it again", op)
 	}
 	return changed, nil
 }

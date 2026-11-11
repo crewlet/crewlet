@@ -1033,7 +1033,8 @@ func (t *listWorkItems) Parameters() map[string]any {
 			"sort": map[string]any{
 				"type": "string",
 				"description": "How to order: `rank` (the board's own order), " +
-					"`updated`, `created`, `due`, `priority`, or `f.<slug>` " +
+					"`updated`, `created`, `due`, `priority`, `key`, `status`, " +
+					"`type`, `assignee` (by the seat's name), or `f.<slug>` " +
 					"for a custom field. Prefix with `-` to reverse.",
 			},
 			"cursor": map[string]any{
@@ -1225,6 +1226,12 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// same keys refuse again for ever. What the model needs is the
 		// refusal's own sentence, which names what would narrow it.
 		return failed(fmt.Sprintf("%s: %s.", ListWorkItemsTool, worklet.Sentence(err))), nil
+	case errors.Is(err, worklet.ErrBadCursor):
+		// NOT [readFailure]'s "change the arguments" alone: the one
+		// argument to change is the cursor, and the remedy is to drop it.
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the "+
+			"cursor: %s. Call it again without `cursor` to start from the first "+
+			"page.", ListWorkItemsTool, ReadRefusalSentence(err))), nil
 	case err != nil:
 		return readFailure(ctx, ListWorkItemsTool, err), nil
 	}
@@ -1492,6 +1499,10 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
 			"come from the `comments` in a read of the item itself — drop "+
 			"`comment` to see the thread.", clip(id), clip(want.Comment))), nil
+	case errors.Is(err, worklet.ErrBadCursor):
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the "+
+			"comments cursor: %s. Call it again without `comments_cursor` to read "+
+			"the newest comments.", GetWorkItemTool, ReadRefusalSentence(err))), nil
 	case err != nil:
 		return readFailure(ctx, GetWorkItemTool, err), nil
 	}

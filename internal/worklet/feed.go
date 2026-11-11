@@ -130,6 +130,7 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 func wakesAnybody(kind ObjectKind) bool {
 	switch kind {
 	case KindBarrier, KindTrimmed, KindGeneration, KindEviction, KindTurn, KindRankOrder,
+		KindRoster,
 		// A FILE IS READ FROM ITS PROJECT, never woken into anybody's
 		// inbox — see [ObjectKind.Routable]'s own list of the kinds
 		// announced elsewhere.
