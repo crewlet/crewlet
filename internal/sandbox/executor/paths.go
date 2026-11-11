@@ -405,7 +405,9 @@ func (p Paths) JobEnded() string { return p.WorkDir() + "/job-ended" }
 // boxes there would overwrite each other's tools.
 func (p Paths) BinDir() string { return p.WorkDir() + "/bin" }
 
-// MCPConfig is where the scoped MCP surface is rendered.
+// MCPConfig is where the scoped MCP surface is rendered. Removed by the clear
+// before every run ([Runner.ClearArtifacts]), so each run's start writes its own
+// as a new file and a run with no servers keeps none naming a closed bridge session.
 func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 
 // MCPConfigFresh is where a Claude Code run that continues a session has the
