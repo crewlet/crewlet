@@ -71,13 +71,24 @@ type ProposalRef struct {
 	State ProposalState `json:"state"`
 }
 
+// ActionReportLineMaxBytes is the longest revision, reason or receipt an
+// [ActionReport] carries, in bytes: each is one short line, and a report
+// carrying a longer one is refused `400 invalid_body`.
+//
+// THE DASHBOARD HOLDS WHAT IT REPORTS TO IT (`contract/assistant.ts`, held equal
+// by the client gate), because a report the engine refuses is one nobody hears:
+// the page has already drawn its outcome, and the turn waits on the action
+// until the proposal's own expiry, never told why the screen refused it.
+const ActionReportLineMaxBytes = 256
+
 // ActionReport is the page's claim on, then its outcome of, a page action it
 // was sent: `PUT /assistant/actions/{id}`. A claim ([ActionApplying]) another
 // tab already made is `409 action_already_claimed`.
 type ActionReport struct {
 	ProtocolVersion int         `json:"protocol_version"`
 	State           ActionState `json:"state"`
-	// Revision is the page's revision when it reported.
+	// Revision is the page's revision when it reported. It, Reason and
+	// Receipt are each at most [ActionReportLineMaxBytes].
 	Revision string `json:"revision"`
 	Reason   string `json:"reason,omitempty"`
 	Receipt  string `json:"receipt,omitempty"`

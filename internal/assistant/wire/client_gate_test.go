@@ -108,6 +108,8 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_KEEPALIVE_SECONDS":          strconv.Itoa(wire.KeepaliveSeconds),
 		"ASSISTANT_ACTION_CONTEXT_INVALIDATE":  wire.ActionContextInvalidate,
 		"ASSISTANT_DIGEST_PREFIX":              wire.DigestPrefix,
+		// --- a page action's report ---
+		"ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES": strconv.Itoa(wire.ActionReportLineMaxBytes),
 		// --- a page context's grammars and its strings' bounds ---
 		"ASSISTANT_PAGE_SCREEN_PATTERN":            wire.PageScreenPattern,
 		"ASSISTANT_PAGE_KEY_PATTERN":               wire.PageKeyPattern,

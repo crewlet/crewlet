@@ -46,6 +46,17 @@
  * so a proposal is the draft the control would have made. Saving stays the
  * person's, through Review.
  *
+ * # A refusal is one short line
+ *
+ * What a control would not take is refused in a sentence the card shows and
+ * the page's report carries back to the model, which the engine takes as one
+ * short line. So each refusal is written within it (`said`): the agent's
+ * name, the product's and the value the proposal typed give way, and what the
+ * control does offer is listed as far as the line holds, then counted. Said
+ * whole, a refusal naming a dozen repositories, or a level nobody's role is
+ * called among eight, was past the line, and the report that carried it was
+ * refused: the model never heard why.
+ *
  * # Several tabs on one page are one draft
  *
  * An agent's own Access tab draws one Agents tab per integration, and the page
@@ -64,7 +75,10 @@ import {
 import type { AccessSeat, GitHubAccess } from "~/contract/access.ts";
 import {
   DraftRefusal,
+  listedWithin,
+  listing,
   refuse,
+  said,
   useAssistantDraft,
   type AssistantDraftSpec,
   type DraftFieldSpec,
@@ -174,25 +188,10 @@ function named(seat: AccessSeat, words: (name: string) => string): string {
   return `${words(name)}${handle}`;
 }
 
-/** Names in a sentence of at most `room` characters: as many as fit, then how many more. */
-function listed(names: readonly string[], room: number): string {
-  const all = names.join(", ");
-  if (runes(all) <= room) return all;
-  const kept: string[] = [];
-  for (const name of names) {
-    const more = ` and ${names.length - kept.length - 1} more`;
-    if (runes([...kept, name].join(", ")) + runes(more) > room) break;
-    kept.push(name);
-  }
-  return kept.length === 0
-    ? `${names.length} of them`
-    : `${kept.join(", ")} and ${names.length - kept.length} more`;
-}
-
 /** A hint of `head`, then the names that fit beside it and `tail`, within a hint's bound. */
 function hinted(head: string, names: readonly string[], tail = ""): string {
   const room = ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES - runes(head) - runes(tail);
-  return `${head}${listed(names, room)}${tail}`;
+  return `${head}${listedWithin(names, room, runes)}${tail}`;
 }
 
 /** The one choice `typed` names, by any name it goes by: as written, else in any case. */
@@ -214,7 +213,7 @@ function pick<T>(
 
 /** Why an agent that is off takes no `what` yet: its control is drawn once it is on. */
 function offWords(seat: AccessSeat, lane: Lane, what: string): string {
-  return `${seat.name} is off on ${lane.name}, and its ${what} is chosen once it is on. Turn it on in the same change.`;
+  return said`${seat.name} is off on ${lane.name}, and its ${what} is chosen once it is on. Turn it on in the same change.`;
 }
 
 /** A level's value as its picker shows it: its menu's name, or the stored id of one the vendor no longer lists. */
@@ -253,7 +252,7 @@ function switchField(seat: AccessSeat, lane: Lane, path: string): Field {
       );
       return typeof on === "object"
         ? withEnabled(d, seat, lane, on.value)
-        : refuse(`${seat.name} on ${lane.name} is ${ON} or ${OFF}.`);
+        : refuse(said`${seat.name} on ${lane.name} is ${ON} or ${OFF}.`);
     },
   };
 }
@@ -280,16 +279,16 @@ function levelField(seat: AccessSeat, lane: Lane, path: string): Field {
       );
       if (found === "none") {
         return refuse(
-          `${lane.name} offers ${seat.name} no level called “${typed}”. It offers ${orList(offered)}.`,
+          said`${lane.name} offers ${seat.name} no level called “${typed}”. It offers ${listing(offered, orList)}.`,
         );
       }
       if (found === "several") {
         return refuse(
-          `More than one ${lane.name} level is called “${typed}”: choose it on ${seat.name}'s row.`,
+          said`More than one ${lane.name} level is called “${typed}”: choose it on ${seat.name}'s row.`,
         );
       }
       // A LEVEL OFFERED DISABLED is refused in the sentence the menu shows under it.
-      if (found.value.unavailable) return refuse(found.value.unavailable);
+      if (found.value.unavailable) return refuse(said`${found.value.unavailable}`);
       return withLevel(d, seat, lane, found.value.id);
     },
   };
@@ -330,16 +329,16 @@ function levelsField(seat: AccessSeat, lane: Lane, path: string): Field {
         );
         if (found === "none") {
           return refuse(
-            `${lane.name} offers ${seat.name} no permission called “${typed}”. It offers ${orList(offered)}.`,
+            said`${lane.name} offers ${seat.name} no permission called “${typed}”. It offers ${listing(offered, orList)}.`,
           );
         }
         if (found === "several") {
           return refuse(
-            `More than one ${lane.name} permission is called “${typed}”: choose it on ${seat.name}'s row.`,
+            said`More than one ${lane.name} permission is called “${typed}”: choose it on ${seat.name}'s row.`,
           );
         }
         if (found.value.unavailable && !holds.some(([id]) => id === found.value.id)) {
-          return refuse(found.value.unavailable);
+          return refuse(said`${found.value.unavailable}`);
         }
         ids.push(found.value.id);
       }
@@ -375,7 +374,7 @@ function permissionField(
       );
       return typeof found === "object"
         ? withPermission(d, seat, lane, perm.key, found.value)
-        : refuse(`${seat.name}'s ${perm.name} permission is ${words}.`);
+        : refuse(said`${seat.name}'s ${perm.name} permission is ${words}.`);
     },
   };
 }
@@ -408,11 +407,11 @@ function scopeField(seat: AccessSeat, lane: Lane, path: string): Field | null {
       if (!want.enabled) return refuse(offWords(seat, lane, noun));
       if (!scopeApplies(lane, want)) {
         return refuse(
-          `${productOnly(lane, want.level)} on ${lane.name} takes no ${noun}. Choose ${seat.name}'s access first, in the same change.`,
+          said`${productOnly(lane, want.level) ?? ""} on ${lane.name} takes no ${noun}. Choose ${seat.name}'s access first, in the same change.`,
         );
       }
       const unavailable = scopeUnavailable(lane, want.scope);
-      if (unavailable) return refuse(`${unavailable.words}.`);
+      if (unavailable) return refuse(said`${unavailable.words}.`);
       // WHAT THE DIALOG OFFERS: what the connection reaches, and what the
       // agent holds that it no longer does, so that can be kept or cleared.
       const choices = scopeChoices(lane, want.scope);
@@ -424,17 +423,13 @@ function scopeField(seat: AccessSeat, lane: Lane, path: string): Field | null {
         );
         if (found === "several") {
           return refuse(
-            `More than one ${words.singular} is called “${typed}”: choose it in ${seat.name}'s ${noun} on the tab.`,
+            said`More than one ${words.singular} is called “${typed}”: choose it in ${seat.name}'s ${noun} on the tab.`,
           );
         }
         const id = typeof found === "object" ? found.value : lane.scope_open ? typed : null;
         if (id === null) {
-          const reaches = listed(
-            choices.map((c) => c.label),
-            ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES,
-          );
           return refuse(
-            `${lane.name}'s connection reaches no ${words.singular} called “${typed}”. It reaches: ${reaches}.`,
+            said`${lane.name}'s connection reaches no ${words.singular} called “${typed}”. It reaches: ${listing(choices.map((c) => c.label))}.`,
           );
         }
         if (!scope.includes(id)) scope.push(id);

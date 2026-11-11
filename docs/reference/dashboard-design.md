@@ -5049,7 +5049,15 @@ the engine refuses with every question asked on the page: `draft.set` past them
 is offered with no arguments, where the engine reads the draft's editable
 fields instead, and any other action is left out with one console warning
 naming it. Every size is counted in the bytes the engine's own encoding writes,
-which escapes `<`, `>` and `&`. A gate
+which escapes `<`, `>` and `&`. What a screen says of a change it applied or
+refused travels back on the action's report, which the engine takes as one
+short line of 256 bytes (`ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES`): the
+report cuts a longer reason or receipt at a whole character, marked, while
+the card draws the screen's whole sentence, and a screen writes its refusals
+within the line (`said`, in `draft.ts`), the values somebody typed or named
+giving way, longest first, and a list of what the control does take said as
+far as the line holds, then counted. A report the engine refused was one the
+turn never heard, waiting on the action until its expiry. A gate
 (`app/assistant/draftGate.test.ts`) fails for a module with draft or form state
 (a leave guard, an editing status, a setup wizard, a rich, inline or list
 editor, a form field) that neither declares a draft nor is listed as part of a

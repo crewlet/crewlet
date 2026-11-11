@@ -1,6 +1,7 @@
 package assistantapi
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
-	"github.com/crewlet/crewlet/internal/assistantdomain"
 )
 
 // report is `PUT /assistant/actions/{id}`: a page claiming a page action it was
@@ -29,12 +29,12 @@ func (s *Decisions) report(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &body) || !speaks(w, body.ProtocolVersion) {
 		return
 	}
-	if len(body.Reason) > assistantdomain.TitleMaxBytes ||
-		len(body.Receipt) > assistantdomain.TitleMaxBytes ||
-		len(body.Revision) > assistantdomain.TitleMaxBytes {
+	if len(body.Reason) > wire.ActionReportLineMaxBytes ||
+		len(body.Receipt) > wire.ActionReportLineMaxBytes ||
+		len(body.Revision) > wire.ActionReportLineMaxBytes {
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": "a report's revision, reason and receipt are each " +
-				"one short line"})
+			httpjson.Detail{"detail": fmt.Sprintf("a report's revision, reason and receipt "+
+				"are each one short line, at most %d bytes", wire.ActionReportLineMaxBytes)})
 		return
 	}
 	if !pageValid(w, body.PageContext) {

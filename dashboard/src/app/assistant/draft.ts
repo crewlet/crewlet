@@ -35,6 +35,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import {
   ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
   ASSISTANT_ACTION_ARGS_MAX_BYTES,
+  ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES,
   ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES,
@@ -51,6 +52,7 @@ import {
   type AssistantDraftKind,
   type AssistantPageDraft,
 } from "~/contract/assistant.ts";
+import { bytesOf, clipUtf8 } from "~/lib/clip.ts";
 import { wireBytes } from "~/protocol/assistantWire.ts";
 import {
   hashOf,
@@ -77,6 +79,98 @@ export class DraftRefusal {
 /** A field's `write` refusing a value: the sentence is the person's to read. */
 export function refuse(reason: string): DraftRefusal {
   return new DraftRefusal(reason);
+}
+
+/** A list a refusal names ([said]): as many of its names as fit, then how many more. */
+export interface Listing {
+  readonly names: readonly string[];
+  /** All of the names, said where they fit: "a, b, c", or "a, b or c". */
+  readonly whole: (names: readonly string[]) => string;
+}
+
+/** Names joined by commas, as a list in a sentence reads where it ends in nothing. */
+function commas(names: readonly string[]): string {
+  return names.join(", ");
+}
+
+/** `names` as a refusal lists them ([said]), `whole` saying all of them where they fit. */
+export function listing(
+  names: readonly string[],
+  whole: (names: readonly string[]) => string = commas,
+): Listing {
+  return { names, whole };
+}
+
+/**
+ * `names` within `room`, as `measure` counts it: all of them, said by
+ * `whole`, where they fit, else as many as fit and how many more, and how many
+ * there are where not even the first does.
+ */
+export function listedWithin(
+  names: readonly string[],
+  room: number,
+  measure: (text: string) => number,
+  whole: (names: readonly string[]) => string = commas,
+): string {
+  const all = whole(names);
+  if (measure(all) <= room) return all;
+  const kept: string[] = [];
+  for (const name of names) {
+    const more = ` and ${names.length - kept.length - 1} more`;
+    if (measure([...kept, name].join(", ")) + measure(more) > room) break;
+    kept.push(name);
+  }
+  return kept.length === 0
+    ? `${names.length} of them`
+    : `${kept.join(", ")} and ${names.length - kept.length} more`;
+}
+
+/**
+ * `room` shared out among values of `sizes`: each takes its own size where the
+ * room holds it, and THE LONGEST GIVE WAY FIRST, each in turn to an even share
+ * of what the shorter ones left.
+ */
+function shares(room: number, sizes: readonly number[]): number[] {
+  const caps = sizes.map(() => 0);
+  const order = sizes.map((_, i) => i).sort((a, b) => sizes[a]! - sizes[b]!);
+  let left = Math.max(room, 0);
+  order.forEach((i, at) => {
+    const cap = Math.min(sizes[i]!, Math.floor(left / (order.length - at)));
+    caps[i] = cap;
+    left -= cap;
+  });
+  return caps;
+}
+
+/**
+ * A REFUSAL IN ONE SHORT LINE, written as a tagged template, as in
+ * said`${field.label} is a line of text.`. A refusal is the reason a page
+ * action's report carries back to the model (`chunk/pageActions.ts`), which
+ * the engine takes as one line of [ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES]
+ * bytes, and the report cuts a longer one at its end: where a refusal says
+ * what its field DOES take. So the template's own words stay whole and the
+ * values placed in it give way to them, the longest first ([shares]): a text
+ * is cut at a whole character and marked ([clipUtf8]), and a [Listing] says as
+ * many of its names as fit and how many more. A name or a value somebody typed
+ * can run to any length; the sentence around it cannot.
+ */
+export function said(
+  words: TemplateStringsArray,
+  ...values: readonly (string | Listing)[]
+): string {
+  const whole = values.map((v) => (typeof v === "string" ? v : v.whole(v.names)));
+  const fixed = words.reduce((n, w) => n + bytesOf(w), 0);
+  const caps = shares(ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES - fixed, whole.map(bytesOf));
+  let out = words[0] ?? "";
+  values.forEach((v, i) => {
+    const cap = caps[i]!;
+    out +=
+      typeof v === "string"
+        ? clipUtf8(v, cap)
+        : clipUtf8(listedWithin(v.names, cap, bytesOf, v.whole), cap);
+    out += words[i + 1] ?? "";
+  });
+  return out;
 }
 
 /** One field of an open draft, as the screen declares it. */
@@ -339,7 +433,7 @@ function written<D>(
   if (field.file) {
     const ref = fileRef(value, field.file.accepts);
     if (ref === null) {
-      return `${field.label} takes one of your files: ${field.file.accepts.join(", ")}.`;
+      return said`${field.label} takes one of your files: ${listing(field.file.accepts)}.`;
     }
     const next = field.file.write(draft, ref);
     if (next instanceof DraftRefusal) return next.reason;
@@ -357,7 +451,9 @@ function written<D>(
   const list = typeof field.read(now) !== "string";
   const typed = proposed(value, list);
   if (typed === null) {
-    return list ? `${field.label} is a list of short lines.` : `${field.label} is a line of text.`;
+    return list
+      ? said`${field.label} is a list of short lines.`
+      : said`${field.label} is a line of text.`;
   }
   const next = field.write!(draft, typed);
   if (next instanceof DraftRefusal) return next.reason;
@@ -409,9 +505,9 @@ export function parseDraftChange<D>(
   const given = new Map<string, unknown>();
   for (const [path, value] of entries) {
     const field = spec.fields.find((f) => f.path === path);
-    if (!field) return refused(`The draft has no field “${path}”.`);
+    if (!field) return refused(said`The draft has no field “${path}”.`);
     if (!settable(field))
-      return refused(`${field.label} is not something Ask Crewlet can set here.`);
+      return refused(said`${field.label} is not something Ask Crewlet can set here.`);
     given.set(path, value);
   }
   let next = spec.value;

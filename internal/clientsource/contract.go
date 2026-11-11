@@ -585,6 +585,7 @@ var contract = []Entry{
 	{"ASSISTANT_AUDIT_REASON_MAX_RUNES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_KEEPALIVE_SECONDS", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_ACTION_CONTEXT_INVALIDATE", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
+	{"ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_DIGEST_PREFIX", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"AssistantFrame", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantConversationEvent", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
