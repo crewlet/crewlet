@@ -112,7 +112,7 @@ api:
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants: [admin]   # what this credential may do — required and
                           #   non-empty: admin, worklet, doclet,
-                          #   artifacts, chatlet, gitlet. Admin runs the
+                          #   artifacts, chatlet, gitlet, atlas. Admin runs the
                           #   company and includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
@@ -597,8 +597,8 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet` or `none`, and
-left out on an invitation it sends every app and not admin.
+`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`, `atlas` or `none`,
+and left out on an invitation it sends every app but `atlas`, and not admin.
 
 ```
 invitation 0192f4c8-…
@@ -718,7 +718,7 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker, knowledge-base and chat tools a seat holds (nineteen
-over the tracker, five over the pages and nine in the chat) and twenty-six
+over the tracker, five over the pages and nine in the chat) and twenty-seven
 more that no seat is given: the saved views, the catalogue write, a person's own
 queue, inbox and pins, the trash, the board drag, the chat's furniture — making
 a room, opening a conversation, a room's settings and membership, editing and
@@ -726,7 +726,8 @@ taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
 steering a running turn, answering an executor's question, answering a
 question from the company's knowledge and, where the company hosts its code,
-reading who read a unit's repository and marking your own code notices.
+reading who read a unit's repository and marking your own code notices, and,
+with the Atlas permission, searching the company's atlas.
 Each is decided by the same authority table a seat's calls are, and knowledge
 search sits beside them. On the deployment's token its writes carry the token's
 own login, `token:founder`, with author kind `operator` — never an agent's — so

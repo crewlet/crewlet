@@ -941,13 +941,13 @@ type APIToken struct {
 	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 
 	// Grants is what this credential may do: `admin`, `worklet`, `doclet`,
-	// `artifacts`, `chatlet`, `gitlet`. REQUIRED and non-empty: a credential's
-	// blast radius is stated at the pin, never inferred. The founder's
-	// break-glass token is `[admin]`; a CI pipeline that files work is
-	// `[worklet]`, and one that fetches the company's code is `[gitlet]`
-	// (ADR-0110) — a token bound to no seat fetches and never pushes
-	// (ADR-0085), and one bound to a person's seat is held to this list as
-	// well as to the person.
+	// `artifacts`, `chatlet`, `gitlet`, `atlas`. REQUIRED and non-empty: a
+	// credential's blast radius is stated at the pin, never inferred. The
+	// founder's break-glass token is `[admin]`; a CI pipeline that files work
+	// is `[worklet]`, one that fetches the company's code is `[gitlet]`
+	// (ADR-0110; a token bound to no seat fetches and never pushes, ADR-0085),
+	// and one that reads the company's map is `[atlas]` (ADR-0127). A token
+	// bound to a person's seat is held to this list as well as to the person.
 	//
 	// THIS IS THE CHANGE THAT MAKES A TOKEN SAFE TO HAVE. Before it, one
 	// token was the whole operator surface — the config document, the
@@ -958,7 +958,7 @@ type APIToken struct {
 	// STRICT, unlike a replicated row: a name this build does not know is
 	// refused here, naming the set, because a file an operator wrote is a
 	// typo rather than a newer peer's record.
-	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts, chatlet, gitlet. Required and non-empty."`
+	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts, chatlet, gitlet, atlas. Required and non-empty."`
 }
 
 // validate checks the auth block; serving is [Bootstrap.ServesAPI].

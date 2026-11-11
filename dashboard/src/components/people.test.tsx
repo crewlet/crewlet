@@ -425,15 +425,16 @@ describe("an invitation onto a seat", () => {
     expect(within(dialog).queryByRole("combobox")).toBeNull();
     expect(within(dialog).queryByLabelText("Seat")).toBeNull();
     expect(dialog.textContent).toMatch(/The seat is held until they join\./);
-    // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in
-    // every app unless somebody says otherwise.
+    // THE DEFAULT APPS ARE PRE-TICKED, AND ATLAS AND ADMIN ARE NOT: a person
+    // invited works in every app unless somebody says otherwise, and the
+    // atlas's map is given on purpose (ADR-0127). Mutation: seed the dialog
+    // from APPS and Atlas is ticked.
     for (const app of ["Worklet", "Doclet", "Artifacts", "Chatlet", "Gitlet"]) {
       expect(within(dialog).getByRole("checkbox", { name: app })).toHaveProperty("checked", true);
     }
-    expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
-      "checked",
-      false,
-    );
+    for (const opt of ["Atlas", "Admin"]) {
+      expect(within(dialog).getByRole("checkbox", { name: opt })).toHaveProperty("checked", false);
+    }
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee@example.com" },
     });
@@ -609,7 +610,7 @@ describe("a person created on a seat", () => {
     const [sent] = eng.writes();
     expect(sent?.path).toBe("/iam/people");
     expect(sent?.key).toMatch(UUID7);
-    // EVERY APP, AS AN INVITATION PRE-TICKS IT.
+    // THE DEFAULT APPS, AS AN INVITATION PRE-TICKS THEM: never atlas.
     expect(sent?.body).toEqual({
       kind: "person",
       seat: "sam",
@@ -841,12 +842,14 @@ describe("the access picker", () => {
     expect(box("Chatlet").disabled).toBe(true);
     expect(box("Gitlet").checked).toBe(true);
     expect(box("Gitlet").disabled).toBe(true);
-    expect(screen.getAllByText("Included with Admin.")).toHaveLength(5);
-    expect(value()).toBe("admin,worklet,doclet,artifacts,chatlet,gitlet");
+    expect(box("Atlas").checked).toBe(true);
+    expect(box("Atlas").disabled).toBe(true);
+    expect(screen.getAllByText("Included with Admin.")).toHaveLength(6);
+    expect(value()).toBe("admin,worklet,doclet,artifacts,chatlet,gitlet,atlas");
     fireEvent.click(box("Admin"));
     expect(box("Worklet").disabled).toBe(false);
     expect(box("Worklet").checked).toBe(true);
-    expect(value()).toBe("worklet,doclet,artifacts,chatlet,gitlet");
+    expect(value()).toBe("worklet,doclet,artifacts,chatlet,gitlet,atlas");
   });
 
   // A ROW STORED AS ADMIN ALONE keeps its apps when Admin is taken away.
@@ -854,7 +857,7 @@ describe("the access picker", () => {
     render(<Picker initial={["admin"]} held={ADMIN} />);
     expect(box("Worklet").checked).toBe(true);
     fireEvent.click(box("Admin"));
-    expect(value()).toBe("worklet,doclet,artifacts,chatlet,gitlet");
+    expect(value()).toBe("worklet,doclet,artifacts,chatlet,gitlet,atlas");
   });
 
   test("a permission the writer does not hold is offered disabled, with why", () => {
