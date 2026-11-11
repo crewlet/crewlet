@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -961,8 +962,14 @@ func (p *atOnce) Put(ctx context.Context, r io.Reader, limit int64, m objstore.P
 // finished. One failing part cancels the others, and its error is the
 // answer, with no part named.
 //
+// The layer is stored IN A BUBBLE, whose clock moves only while every
+// goroutine of it is durably blocked — a part's upload reading its files
+// never is, and the putter holds every part until all three have begun — so
+// each part's deadline is the instant the call began plus its bound, exactly.
+//
 // Mutation: upload the parts one after another — red, by the putter's own
-// deadline.
+// deadline; bound a part a second short of its own UploadDeadline — red at
+// its deadline.
 func TestStoreLayerUploadsEveryPartAtOnce(t *testing.T) {
 	t.Parallel()
 	const p = code.LayerPartBytes
@@ -1007,51 +1014,53 @@ func TestStoreLayerUploadsEveryPartAtOnce(t *testing.T) {
 		return nil
 	}
 
-	put := &atOnce{want: 3, all: make(chan struct{})}
-	began := time.Now()
-	parts, err := code.StoreLayer(t.Context(), put, paths, sections, hit)
-	ended := time.Now()
-	if err != nil {
-		t.Fatalf("store a layer of three parts: %v", err)
-	}
-	slices.Sort(hits)
-	if !slices.Equal(hits, []int64{0, p, 2 * p}) {
-		t.Errorf("the hit was asked at %v, want each part's start in the layer, %v", hits, []int64{0, p, 2 * p})
-	}
-	sizes := []int64{p, p, 1050}
-	if len(parts) != 3 {
-		t.Fatalf("StoreLayer answered %d parts, want 3", len(parts))
-	}
-	for i, m := range marks {
-		j := slices.IndexFunc(put.began, func(b begun) bool { return b.first == m.mark })
-		if j < 0 {
-			t.Fatalf("no part began with the byte %q", m.mark)
+	synctest.Test(t, func(t *testing.T) {
+		put := &atOnce{want: 3, all: make(chan struct{})}
+		began := time.Now()
+		parts, err := code.StoreLayer(t.Context(), put, paths, sections, hit)
+		if err != nil {
+			t.Fatalf("store a layer of three parts: %v", err)
 		}
-		b := put.began[j]
-		bound := code.UploadDeadline(sizes[i])
-		switch {
-		case parts[i] != (code.LayerPart{Object: b.key, Hash: objstore.HashOf([]byte{m.mark}), Size: sizes[i]}):
-			t.Errorf("part %d is %+v, want the object its upload stored, %d bytes", i, parts[i], sizes[i])
-		case b.limit != sizes[i] || b.meta.ContentType != code.LayerContentType:
-			t.Errorf("part %d was put limited at %d as %q, want %d as %q", i, b.limit, b.meta.ContentType, sizes[i],
-				code.LayerContentType)
-		case b.deadline.Before(began.Add(bound)) || b.deadline.After(ended.Add(bound)):
-			t.Errorf("part %d was put under a deadline of %v, want %v from its start", i, b.deadline, bound)
+		slices.Sort(hits)
+		if !slices.Equal(hits, []int64{0, p, 2 * p}) {
+			t.Errorf("the hit was asked at %v, want each part's start in the layer, %v", hits, []int64{0, p, 2 * p})
 		}
-	}
+		sizes := []int64{p, p, 1050}
+		if len(parts) != 3 {
+			t.Fatalf("StoreLayer answered %d parts, want 3", len(parts))
+		}
+		for i, m := range marks {
+			j := slices.IndexFunc(put.began, func(b begun) bool { return b.first == m.mark })
+			if j < 0 {
+				t.Fatalf("no part began with the byte %q", m.mark)
+			}
+			b := put.began[j]
+			bound := code.UploadDeadline(sizes[i])
+			switch {
+			case parts[i] != (code.LayerPart{Object: b.key, Hash: objstore.HashOf([]byte{m.mark}), Size: sizes[i]}):
+				t.Errorf("part %d is %+v, want the object its upload stored, %d bytes", i, parts[i], sizes[i])
+			case b.limit != sizes[i] || b.meta.ContentType != code.LayerContentType:
+				t.Errorf("part %d was put limited at %d as %q, want %d as %q", i, b.limit, b.meta.ContentType,
+					sizes[i], code.LayerContentType)
+			case !b.deadline.Equal(began.Add(bound)):
+				t.Errorf("part %d was put under a deadline of %v, want %v: its bound, %v, from its start", i,
+					b.deadline, began.Add(bound), bound)
+			}
+		}
 
-	injected := errors.New("the bucket refused part 1")
-	put = &atOnce{want: 3, all: make(chan struct{}), fail: 'B', err: injected}
-	parts, err = code.StoreLayer(t.Context(), put, paths, sections, nil)
-	if !errors.Is(err, injected) || parts != nil {
-		t.Fatalf("a layer whose second part fails: %v, %v parts; want the part's own error and no part", err,
-			len(parts))
-	}
-	for _, b := range put.began {
-		if b.first != 'B' && !b.canceled {
-			t.Errorf("the part beginning %q was not cancelled by the failure of another", b.first)
+		injected := errors.New("the bucket refused part 1")
+		put = &atOnce{want: 3, all: make(chan struct{}), fail: 'B', err: injected}
+		parts, err = code.StoreLayer(t.Context(), put, paths, sections, nil)
+		if !errors.Is(err, injected) || parts != nil {
+			t.Fatalf("a layer whose second part fails: %v, %v parts; want the part's own error and no part", err,
+				len(parts))
 		}
-	}
+		for _, b := range put.began {
+			if b.first != 'B' && !b.canceled {
+				t.Errorf("the part beginning %q was not cancelled by the failure of another", b.first)
+			}
+		}
+	})
 }
 
 // A LAYER IS STORED AS ITS THREE FILES BACK TO BACK AND LAID BACK WHERE IT CAME

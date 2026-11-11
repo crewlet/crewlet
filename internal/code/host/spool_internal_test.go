@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -401,41 +402,48 @@ func TestARequestThatMustWaitIsRefusedOnlyWithoutAPlace(t *testing.T) {
 
 // A WAIT ENDS AT ITS BOUND, unserved: errSpoolFull saying what held it back,
 // counted expired, and its place given back — and a request it held back from
-// the node is granted as it leaves.
+// the node is granted as it leaves. In a bubble, whose clock moves only while
+// every goroutine of it waits: the wait ends at its bound to the nanosecond,
+// neither before it nor after.
+//
+// Mutation: arm the wait's timer at half its bound — it ends early, red.
 func TestAWaitEndsAtItsBound(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	a := newSpools(spoolSizes{limit: 100, share: 10, request: 10, grain: 1, places: 8, placesPerCredential: 8})
-	granted(t, "x's first", begin(ctx, t, a, "x", 10, 1, time.Minute))
-	start := time.Now()
-	r := <-begin(ctx, t, a, "x", 10, 1, 50*time.Millisecond).out
-	var unserved *spoolUnserved
-	switch {
-	case !errors.Is(r.err, errSpoolFull) || !errors.As(r.err, &unserved) || unserved.reason != spoolExpired:
-		t.Fatalf("a wait past its bound answered %v, want an expired errSpoolFull", r.err)
-	case r.w.outcome != spoolExpired:
-		t.Errorf("an expired wait is counted %q", r.w.outcome)
-	case time.Since(start) < 50*time.Millisecond:
-		t.Errorf("the wait ended after %v, before its bound", time.Since(start))
-	}
-	const says = "behind this credential's own requests still arriving (1 of its fetches, which may yet need 9 " +
-		"of the 10 bytes one credential's may)"
-	if unserved == nil || !strings.Contains(unserved.detail, says) {
-		t.Errorf("an expired wait says %q, want it to say %q", unserved.detail, says)
-	}
-	if n, p := a.waiters(), a.placesHeld(); n != 0 || p != 0 {
-		t.Errorf("%d requests still wait and %d places are held after the only waiter expired", n, p)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		a := newSpools(spoolSizes{limit: 100, share: 10, request: 10, grain: 1, places: 8, placesPerCredential: 8})
+		granted(t, "x's first", begin(ctx, t, a, "x", 10, 1, time.Minute))
+		const bound = 50 * time.Millisecond
+		start := time.Now()
+		r := <-begin(ctx, t, a, "x", 10, 1, bound).out
+		var unserved *spoolUnserved
+		switch {
+		case !errors.Is(r.err, errSpoolFull) || !errors.As(r.err, &unserved) || unserved.reason != spoolExpired:
+			t.Fatalf("a wait past its bound answered %v, want an expired errSpoolFull", r.err)
+		case r.w.outcome != spoolExpired:
+			t.Errorf("an expired wait is counted %q", r.w.outcome)
+		case time.Since(start) != bound:
+			t.Errorf("the wait ended after %v, want at its bound, %v", time.Since(start), bound)
+		}
+		const says = "behind this credential's own requests still arriving (1 of its fetches, which may yet need 9 " +
+			"of the 10 bytes one credential's may)"
+		if unserved == nil || !strings.Contains(unserved.detail, says) {
+			t.Errorf("an expired wait says %q, want it to say %q", unserved.detail, says)
+		}
+		if n, p := a.waiters(), a.placesHeld(); n != 0 || p != 0 {
+			t.Errorf("%d requests still wait and %d places are held after the only waiter expired", n, p)
+		}
 
-	// A HEAD THAT EXPIRES lets the node's room go to what waited behind it.
-	b := newSpools(spoolSizes{limit: 100, share: 100, request: 60, grain: 1, places: 8, placesPerCredential: 8})
-	spooled(ctx, t, b, "x", 60)
-	expiring := begin(ctx, t, b, "y", 60, 60, 50*time.Millisecond)
-	behind := begin(ctx, t, b, "z", 30, 30, time.Minute)
-	if r := <-expiring.out; !errors.Is(r.err, errSpoolFull) {
-		t.Fatalf("y's wait answered %v", r.err)
-	}
-	granted(t, "z's 30, once y's 60 left the queue", behind)
+		// A HEAD THAT EXPIRES lets the node's room go to what waited behind it.
+		b := newSpools(spoolSizes{limit: 100, share: 100, request: 60, grain: 1, places: 8, placesPerCredential: 8})
+		spooled(ctx, t, b, "x", 60)
+		expiring := begin(ctx, t, b, "y", 60, 60, bound)
+		behind := begin(ctx, t, b, "z", 30, 30, time.Minute)
+		if r := <-expiring.out; !errors.Is(r.err, errSpoolFull) {
+			t.Fatalf("y's wait answered %v", r.err)
+		}
+		granted(t, "z's 30, once y's 60 left the queue", behind)
+	})
 }
 
 // A WAITER WHOSE REQUEST ENDS LEAVES AT ONCE, answered its context's error and

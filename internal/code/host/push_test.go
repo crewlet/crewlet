@@ -104,15 +104,17 @@ func TestAnOkIsAnsweredOnlyFromAnAppliedRow(t *testing.T) {
 	}
 }
 
-// A pending push is waited on for at most the grace — read again at a spacing
-// that doubles to its ceiling — and then said to be pending.
+// A pending push is waited on for at most the grace — read again until it is
+// spent — and then said to be pending, on the whole path: the person's git
+// prints the push pending, its outcome having been read. How the reads are
+// spaced, doubling to their ceiling, and that the last comes at the grace's
+// very end, is held exactly in a bubble
+// (TestAPendingPushIsReadAgainUntilItsGraceIsSpent).
 func TestAPendingPushWaitsAtMostTheStallGrace(t *testing.T) {
 	timing := fast
 	timing.PendingGrace = 300 * time.Millisecond
-	var proposed time.Time
 	e := &recording{
 		propose: func(context.Context, host.Estate, code.Proposal) (code.ProposeResult, error) {
-			proposed = time.Now()
 			return pendingAt(1 << 20), nil
 		},
 		outcome: func(context.Context, host.Estate, code.OutcomeQuery) (code.PushOutcome, error) {
@@ -128,27 +130,8 @@ func TestAPendingPushWaitsAtMostTheStallGrace(t *testing.T) {
 	if reason, _ := res.Rejected("refs/heads/main"); !strings.Contains(reason, "(pending: durable at ") {
 		t.Errorf("a push whose outcome never resolved printed %q: %s", reason, res)
 	}
-	reads := e.seen("outcome")
-	if len(reads) < 2 {
-		t.Fatalf("the outcome was read %d times in a grace of %v", len(reads), timing.PendingGrace)
-	}
-	const margin = 300 * time.Millisecond
-	if last := reads[len(reads)-1].at.Sub(proposed); last > timing.PendingGrace+timing.PendingMax+margin {
-		t.Errorf("the last outcome read came %v after the proposal, past the grace %v, a step %v and %v",
-			last, timing.PendingGrace, timing.PendingMax, margin)
-	}
-	// THE LAST STEP IS CUT TO THE GRACE: a read is never put off past it, so
-	// only the steps before it are held to the doubling.
-	wait := timing.PendingFirst
-	for i := 1; i < len(reads)-1; i++ {
-		if gap := reads[i].at.Sub(reads[i-1].at); gap < wait-time.Millisecond {
-			t.Errorf("outcome read %d came %v after the one before, under the step %v", i, gap, wait)
-		}
-		wait = min(2*wait, timing.PendingMax)
-	}
-	if last := reads[len(reads)-1].at.Sub(proposed); last < timing.PendingGrace-10*time.Millisecond {
-		t.Errorf("the last outcome read came %v after the proposal, before the grace %v ran out", last,
-			timing.PendingGrace)
+	if len(e.seen("outcome")) == 0 {
+		t.Errorf("the outcome of a push answered pending was never read in its grace of %v", timing.PendingGrace)
 	}
 }
 

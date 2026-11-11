@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,24 +306,27 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// truncateNewestIndex truncates the newest .idx of RepoName's cache on node 0.
+// truncateNewestIndex truncates the .idx of the newest pack of RepoName's
+// cache on node 0: the live pack its rows added last, by its record's place
+// in the log — never by a file's modification time, which a coarse clock
+// stamps alike for two packs written in one tick.
 func truncateNewestIndex(t *testing.T, c *codetest.Case) {
 	t.Helper()
-	s, err := c.Fleet.Nodes()[0].Cache().Sync(c.Ctx, c.Rows().Repo.ID, codetest.Linearizable)
+	rows := c.Rows()
+	if len(rows.Packs) == 0 {
+		t.Fatalf("%s holds no live pack", codetest.RepoName)
+	}
+	last := slices.MaxFunc(rows.Packs, func(a, b code.PackRow) int {
+		return cmp.Compare(a.Added.Packed(), b.Added.Packed())
+	})
+	s, err := c.Fleet.Nodes()[0].Cache().Sync(c.Ctx, rows.Repo.ID, codetest.Linearizable)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(s.Dir, "objects", "pack")
+	newest := filepath.Join(s.Dir, "objects", "pack", "pack-"+last.GitChecksum+".idx")
 	s.Release()
-	list, _ := filepath.Glob(filepath.Join(dir, "*.idx"))
-	newest, at := "", time.Time{}
-	for _, path := range list {
-		if info, err := os.Stat(path); err == nil && info.ModTime().After(at) {
-			newest, at = path, info.ModTime()
-		}
-	}
-	if newest == "" {
-		t.Fatalf("no pack index in %s", dir)
+	if _, err := os.Stat(newest); err != nil {
+		t.Fatalf("the newest pack's index: %v", err)
 	}
 	// The cache installs its indexes read-only; only root writes past that.
 	if err := os.Chmod(newest, 0o600); err != nil {

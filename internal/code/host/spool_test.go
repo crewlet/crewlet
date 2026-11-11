@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -228,18 +229,19 @@ func TestASpooledFetchWaitsItsTurn(t *testing.T) {
 		eventually(t, "the other credential's body arriving", func() bool {
 			return host.SpoolsArriving(node.Host()) == 1
 		})
-		// Built before the clock starts, so what is timed is the node's
-		// answer and never the case's own request.
+		// NEVER MADE TO WAIT, read off the allowance's own count: a turn that
+		// waited is counted by how it ended, and one answered at once is not.
+		waited := spoolTurnsCounted(node.Metrics())
 		past := repeatedWants(head, 80<<10)
-		start := time.Now()
 		resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, past)
 		if resp.StatusCode != http.StatusRequestEntityTooLarge ||
 			!strings.Contains(answer, "larger than this node spools for one request") ||
 			!strings.Contains(answer, "a sparse checkout asks only for the files it checks out") {
 			t.Errorf("a request past what one request spools answered %d %q", resp.StatusCode, answer)
 		}
-		if took := time.Since(start); took > 5*time.Second {
-			t.Errorf("a request this node can never take was answered after %v, not at once", took)
+		if n := spoolTurnsCounted(node.Metrics()) - waited; n != 0 {
+			t.Errorf("a request this node can never take waited its turn (%d counted by %s), not answered at once",
+				n, metrics.CodeHostSpoolWaits)
 		}
 		held.abandon()
 		assertNoSpool(t, c)
@@ -263,11 +265,10 @@ func TestAWaitPastItsBoundIs503(t *testing.T) {
 	c.MustPush(p, work, "main")
 	body := repeatedWants(head, 8<<10)
 	host.SetSpools(node.Host(), sizes(func(z *host.SpoolSizes) { z.Share, z.Request, z.Grain = 64<<10, 64<<10, 1<<10 }))
+	waits := host.RecordSpoolWaits(node.Host())
 	first := openFetch(t, c, "ceo", body)
 	eventually(t, "the first request's body arriving", func() bool { return host.SpoolsArriving(node.Host()) == 1 })
-	start := time.Now()
 	resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, body)
-	took := time.Since(start)
 	if resp.StatusCode != http.StatusServiceUnavailable ||
 		resp.Header.Get("Retry-After") != strconv.Itoa(int(host.BusyRetryAfter/time.Second)) ||
 		!strings.Contains(answer, "this node's room for large fetch requests is in use: this fetch waited") ||
@@ -276,8 +277,11 @@ func TestAWaitPastItsBoundIs503(t *testing.T) {
 		t.Errorf("a wait past its bound answered %d %q (Retry-After %q)", resp.StatusCode, answer,
 			resp.Header.Get("Retry-After"))
 	}
-	if took < timing.SpoolWait {
-		t.Errorf("the wait was answered after %v, before its bound of %v", took, timing.SpoolWait)
+	// ITS BOUND IS THE WAIT IT WAS GIVEN, and the allowance ends a wait at
+	// its bound and not before (TestAWaitEndsAtItsBound).
+	if got := waits(); !slices.Equal(got, []time.Duration{timing.SpoolWait}) {
+		t.Errorf("the requests waited with bounds %v, want the one that waited past it given %v", got,
+			timing.SpoolWait)
 	}
 	if n := lines.count("code_fetch_spool_unserved", `"reason":"expired"`, ceoOperatorID); n != 1 {
 		t.Errorf("logged code_fetch_spool_unserved for the expired wait %d times, want once", n)
@@ -584,15 +588,14 @@ func TestACredentialsEndedSpoolsOutlastingTheWait(t *testing.T) {
 	body := repeatedWants(head, 8<<10)
 	share := int64(len(body)) + 4<<10
 	host.SetSpools(node.Host(), sizes(func(z *host.SpoolSizes) { z.Share, z.Request = share, share }))
+	waits := host.RecordSpoolWaits(node.Host())
 	armHold(t, hold)
 	first := fetchAsync(t, c, "ceo", body)
 	eventually(t, "the first request spooled whole and held in its upload-pack", func() bool {
 		_, err := os.Stat(started)
 		return err == nil && host.SpoolsArriving(node.Host()) == 0
 	})
-	start := time.Now()
 	resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, body)
-	took := time.Since(start)
 	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" ||
 		!strings.Contains(answer, "behind this credential's own spooled requests (they hold") ||
 		!strings.Contains(answer, fmt.Sprintf("of the %d bytes one credential's may", share)) ||
@@ -600,8 +603,11 @@ func TestACredentialsEndedSpoolsOutlastingTheWait(t *testing.T) {
 		t.Errorf("a request behind its credential's held spool answered %d %q (Retry-After %q)", resp.StatusCode,
 			answer, resp.Header.Get("Retry-After"))
 	}
-	if took < timing.SpoolWait {
-		t.Errorf("it was answered after %v, before the wait's bound of %v", took, timing.SpoolWait)
+	// ITS BOUND IS THE WAIT IT WAS GIVEN, and the allowance ends a wait at
+	// its bound and not before (TestAWaitEndsAtItsBound).
+	if got := waits(); !slices.Equal(got, []time.Duration{timing.SpoolWait}) {
+		t.Errorf("the requests waited with bounds %v, want the one behind the held spool given %v", got,
+			timing.SpoolWait)
 	}
 	if n := lines.count("code_fetch_spool_unserved", `"reason":"expired"`, ceoOperatorID); n != 1 {
 		t.Errorf("logged code_fetch_spool_unserved for the expired wait %d times, want once", n)
@@ -1072,6 +1078,17 @@ func (o *open) finish() reply {
 func (o *open) abandon() {
 	_ = o.w.CloseWithError(errors.New("the client left"))
 	<-o.out
+}
+
+// spoolTurnsCounted is every turn at the spool allowance rec has counted,
+// whatever it ended in: the turns that waited, since one answered at once is
+// counted by none.
+func spoolTurnsCounted(rec *metrics.Recorder) uint64 {
+	var n uint64
+	for _, outcome := range host.SpoolOutcomes() {
+		n += counted(rec, metrics.CodeHostSpoolWaits, outcome)
+	}
+	return n
 }
 
 // counted is rec's counter name for outcome.

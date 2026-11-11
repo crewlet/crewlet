@@ -3,6 +3,7 @@ package compact_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -1008,17 +1009,19 @@ func (x *fixture) publicationListed(name string) bool {
 // repository; it is still held ten minutes on, its build's tenfold not yet
 // passed; and once that has passed it is published.
 //
+// ONE CLOCK THE CASE MOVES is the compactor's and the broker's instant on
+// every record the data node applies (stampedBy): a push is settled, and a
+// build's pace spent, by that clock alone, read once from the wall where the
+// case begins and moved only as the case says.
+//
 // Mutations: skip no repository for a build that did not land, and the next
 // pass builds the failed one again; pace it by PublishMinInterval alone, and
 // it is built again before its build's tenfold has passed.
 func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
 	t.Parallel()
-	x := newFixture(t)
-	x.pushN(2, 4<<10)
-	x.fleet.Declare(t, code.Declared{Name: "other", Settings: codetest.Settings()})
 	var (
 		mu  sync.Mutex
-		now = time.Now().Add(compact.PublishDebounce)
+		now = time.Now()
 	)
 	clock := func() time.Time {
 		mu.Lock()
@@ -1030,6 +1033,11 @@ func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
 		defer mu.Unlock()
 		now = now.Add(d)
 	}
+	x := newFixtureWith(t, func(o *codetest.SoloOptions) { o.WrapApplier = stampedBy(clock) })
+	x.pushN(2, 4<<10)
+	x.fleet.Declare(t, code.Declared{Name: "other", Settings: codetest.Settings()})
+	// THE PUSHES SETTLED, a publication debounce on.
+	advance(compact.PublishDebounce)
 	// THE BUILD FAILS once it has run past the pass's minute: the clock moves
 	// two of them while it builds.
 	const took = 2 * compact.PublishPoll
@@ -1039,24 +1047,20 @@ func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
 		t.Fatalf("the pass over %s, whose build fails, reported %+v; want it failed", codetest.RepoName, report)
 	}
 
-	// ANOTHER REPOSITORY DUE, listed beside the one whose build failed.
+	// ANOTHER REPOSITORY DUE, listed beside the one whose build failed: its
+	// push applied at the clock's instant, and settled a debounce on.
 	other := x.p.Init()
 	x.p.Commit(other, map[string]string{"README.md": "other\n"}, "other")
 	if res := x.p.Push(t.Context(), other, x.node().URL()+"/git/other", "main"); res.Err != nil {
 		t.Fatalf("the push to other: %s", res)
 	}
-	mu.Lock()
-	// Settled by the compactor's clock, however long the case has taken.
-	if settled := time.Now().Add(compact.PublishDebounce); now.Before(settled) {
-		now = settled
-	}
-	mu.Unlock()
+	advance(compact.PublishDebounce)
 	if report := publicationPassWhileBusy(t, c, rec); report.Published != 1 || report.Failed != 0 ||
 		x.publicationListed("other") || !x.publicationListed(codetest.RepoName) {
 		t.Errorf("the pass after the failed build reported %+v; want other published and %s, its build "+
 			"failed, not attempted", report, codetest.RepoName)
 	}
-	advance(compact.PublishMinInterval)
+	advance(compact.PublishMinInterval - compact.PublishDebounce)
 	if report := publicationPassWhileBusy(t, c, rec); report.Published != 0 || report.Failed != 0 {
 		t.Errorf("a pass %v after the failed build began reported %+v; want nothing built, the build's pace "+
 			"being %d times its %v", took+compact.PublishMinInterval, report, compact.PublishDutyCycle, took)
@@ -1067,6 +1071,35 @@ func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
 		t.Errorf("the pass once the failed build's pace passed reported %+v; want %s published", report,
 			codetest.RepoName)
 	}
+}
+
+// stampedBy has a data node's applier read every record's broker instant off
+// clock — the instant its rows are stamped with, and the one its gates count
+// a rejection at — in place of the broker's own: a case's records stamped by
+// the clock it moves, so what the compactor judges by its clock against a
+// record's instant reads no wall clock between them.
+func stampedBy(clock func() time.Time) func(statelog.Applier) statelog.Applier {
+	return func(a statelog.Applier) statelog.Applier { return stampedApplier{Applier: a, clock: clock} }
+}
+
+// stampedApplier is an applier reading every record's broker instant off a
+// case's clock.
+type stampedApplier struct {
+	statelog.Applier
+	clock func() time.Time
+}
+
+func (a stampedApplier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool,
+	error) {
+	rec.StoredAt = a.clock()
+	return a.Applier.Gated(ctx, tx, rec)
+}
+
+func (a stampedApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+	at := a.clock()
+	rec.StoredAt, opts.StoredAt = at, at
+	return a.Applier.Apply(ctx, tx, rec, opts)
 }
 
 // A PASS PUBLISHES ONLY WHAT ITS NODE MAINTAINS, asked by its maintenance's

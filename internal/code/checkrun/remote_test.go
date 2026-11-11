@@ -488,15 +488,22 @@ func heldBack(t *testing.T, rec *metrics.Recorder, hold checkrun.RemoteHold) {
 	})
 }
 
-// eventually waits, a few seconds at most, for ok.
+// eventually waits for ok, failing t past ten seconds: a HANG DETECTOR, whose
+// bound decides nothing, since every caller waits for what a broken build
+// never brings about at all — a slot given back on leases whose clock the
+// case holds (fleet.leases), a minute charged or refused on the runner's clock
+// the case moved, a run's slot freed under a clock that keeps its timeout out
+// of reach, a walk a nudge begins with no backstop within the case, or the
+// runner's own count of the checks its walks held back — and a build that
+// brings it about late is held by its caller's own check.
 func eventually(t *testing.T, what string, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !ok() {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("never %s", what)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

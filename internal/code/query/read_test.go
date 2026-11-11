@@ -400,6 +400,8 @@ type holdingCache struct {
 	once     sync.Once
 	entered  chan struct{}
 	released chan struct{}
+	// ended, where set, is told what ended a held sync's context.
+	ended *endings
 }
 
 func (h *holdingCache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error) {
@@ -408,6 +410,7 @@ func (h *holdingCache) Sync(ctx context.Context, repoID string, fresh statelog.F
 		select {
 		case <-h.released:
 		case <-ctx.Done():
+			h.ended.note(ctx)
 			return cache.Synced{}, ctx.Err()
 		}
 	}

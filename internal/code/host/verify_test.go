@@ -41,6 +41,22 @@ func awaitVerify(t *testing.T, h *host.Server, name string, id uuid.UUID) host.V
 	}
 }
 
+// steppedClock is a clock a case hands a host: it reads at, and moves it on
+// by step at every reading — frozen where step is zero.
+type steppedClock struct {
+	mu   sync.Mutex
+	at   time.Time
+	step time.Duration
+}
+
+func (c *steppedClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	at := c.at
+	c.at = c.at.Add(c.step)
+	return at
+}
+
 // holdMaintainerOff admits a check of the case's repository of its own and
 // holds the maintainer off the repository with it until release, or the case's
 // end: the copy a case checks was just pushed and holds no commit-graph, so
@@ -85,9 +101,17 @@ func holdMaintainerOff(t *testing.T, c *codetest.Case) (slots int, release func(
 // and one the grammar refuses are both not found, a verification of another
 // repository or an id the node never made is none, and a stopped host
 // verifies nothing.
+//
+// THE HOST'S CLOCK IS THE CASE'S, a microsecond on at every reading
+// (steppedClock): a verification's end is stamped by a reading made after its
+// start's, so it is the later, with no wall clock between the two.
+//
+// Mutation: stamp a verification's end with its start's instant — its end
+// not after its start, red.
 func TestAVerifyAnswersTheRepositoryItNames(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
 	h := c.Fleet.Nodes()[0].Host()
+	host.SetClock(h, (&steppedClock{at: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC), step: time.Microsecond}).now)
 	if _, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{}); !errors.Is(err, cache.ErrNotHeld) {
 		t.Fatalf("a verify of a repository this node never served answered %v, want cache.ErrNotHeld", err)
 	}
@@ -104,8 +128,9 @@ func TestAVerifyAnswersTheRepositoryItNames(t *testing.T) {
 		t.Fatalf("a verify started as %+v, want it running, named, no repair", started)
 	}
 	ended := awaitVerify(t, h, codetest.RepoName, started.ID)
-	if ended.State != host.VerifyDone || ended.Err != nil || ended.Ended.Before(ended.Started) {
-		t.Fatalf("the verify ended %+v, want done", ended)
+	//fixedwait:stated both are the case's clock's readings, the end's made after the start's
+	if ended.State != host.VerifyDone || ended.Err != nil || !ended.Ended.After(ended.Started) {
+		t.Fatalf("the verify ended %+v, want done, its end stamped after its start", ended)
 	}
 	if r := ended.Report; r.Name != codetest.RepoName || r.Packs != 1 || len(r.Problems) != 0 {
 		t.Fatalf("a verify of a repository one push old answered %+v, want it named, one pack, no problem", r)
@@ -215,8 +240,13 @@ func TestAVerifyOutlivesItsRequest(t *testing.T) {
 // (cache.CheckBudget over what the copy holds), which a caller waits by; an
 // ended verification carries none.
 //
+// THE HOST'S CLOCK IS THE CASE'S, frozen at one instant (steppedClock, no
+// step): the deadline the host states is that instant plus the pass's bound,
+// held within the bound of a small copy with no wall clock between them.
+//
 // Mutation: drop the deadline the check pass is told, and the running
-// check states none.
+// check states none; state it off the wall clock rather than the host's, and
+// it is no bound from the check's start.
 func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
 	var (
 		holding atomic.Bool
@@ -239,13 +269,14 @@ func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
 	}}
 	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}}, codetest.Settings())
 	h := c.Fleet.Nodes()[0].Host()
+	began := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	host.SetClock(h, (&steppedClock{at: began}).now)
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 	c.MustPush(p, work, "main")
 
 	holding.Store(true)
-	began := time.Now()
 	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
 	if err != nil {
 		t.Fatalf("a verify failed to start: %v", err)
@@ -255,11 +286,12 @@ func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
 	}
 	select {
 	case <-reached:
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("the check never read its rows")
 	}
 	checking, ok := h.Verification(codetest.RepoName, started.ID)
 	if most := began.Add(cache.CheckBudget(1 << 30)); !ok || checking.State != host.VerifyRunning ||
+		//fixedwait:stated the host's frozen clock is the case's instant began, and the deadline is it plus a bound
 		checking.Deadline.Before(began.Add(cache.CheckBudget(0))) || checking.Deadline.After(most) {
 		t.Errorf("a verify checking its copy states %+v, %v; want it running, ending its check within the "+
 			"bound of a small copy from its start", checking, ok)

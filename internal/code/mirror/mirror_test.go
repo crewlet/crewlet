@@ -2,6 +2,7 @@ package mirror_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -215,15 +216,46 @@ type harness struct {
 
 func newHarness(t *testing.T, limits code.Limits) *harness {
 	t.Helper()
-	src := newSource(t)
-	faults := &codefault.Script{}
-	f := codetest.SoloNode(t, codetest.SoloOptions{Shape: codetest.Shape{Limits: limits}, Faults: faults})
-	full := code.DefaultLimits()
-	if limits.MaxBlobBytes != 0 {
-		full.MaxBlobBytes = limits.MaxBlobBytes
+	return newHarnessWith(t, limits, nil)
+}
+
+// newHarnessWith is newHarness over a fleet whose options edit changes,
+// handed the harness — its clock among it — before the fleet is built.
+func newHarnessWith(t *testing.T, limits code.Limits, edit func(*harness, *codetest.SoloOptions)) *harness {
+	t.Helper()
+	h := &harness{t: t, src: newSource(t), faults: &codefault.Script{}, events: announced{t: t}, now: time.Now()}
+	opts := codetest.SoloOptions{Shape: codetest.Shape{Limits: limits}, Faults: h.faults}
+	if edit != nil {
+		edit(h, &opts)
 	}
-	return &harness{t: t, f: f, src: src, est: &recording{Estate: f.Code(t)}, faults: faults, limits: full,
-		events: announced{t: t}, now: time.Now()}
+	h.f = codetest.SoloNode(t, opts)
+	h.est = &recording{Estate: h.f.Code(t)}
+	h.limits = code.DefaultLimits()
+	if limits.MaxBlobBytes != 0 {
+		h.limits.MaxBlobBytes = limits.MaxBlobBytes
+	}
+	return h
+}
+
+// stampedApplier is a data node's applier reading every record's broker
+// instant off a case's clock — the instant its rows are stamped with, and the
+// one its gates count a rejection at — in place of the broker's own.
+type stampedApplier struct {
+	statelog.Applier
+	clock func() time.Time
+}
+
+func (a stampedApplier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool,
+	error) {
+	rec.StoredAt = a.clock()
+	return a.Applier.Gated(ctx, tx, rec)
+}
+
+func (a stampedApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+	at := a.clock()
+	rec.StoredAt, opts.StoredAt = at, at
+	return a.Applier.Apply(ctx, tx, rec, opts)
 }
 
 // clock is the workers' clock; advance moves it.
@@ -545,13 +577,24 @@ func TestARepositoryMadeAPullMirrorIsImportedFirst(t *testing.T) {
 // that landed whole is its last sync, so a worker that knows nothing of it (a
 // restart, or a node newly home to it) does not list it within the interval;
 // and once the interval has passed, a sync that finds the source moved nothing
-// lands a sync of nothing, which moves the mirror's last sync on.
+// lands a sync of nothing, which moves the mirror's last sync on to its own
+// record's instant.
+//
+// THE WORKERS' CLOCK STAMPS EVERY RECORD the data node applies, as the
+// broker's instant (stampedApplier): the import's end at the instant the case
+// began, and the sync of nothing at the instant it moved the clock to — read
+// with no wall clock between them.
 //
 // Mutation: leave a mirror's import end off its last sync, and the fresh
 // worker lists it at once; land nothing where the source moved nothing, and
 // its last sync stays the import's.
 func TestAQuietPullMirrorIsNotFetchedAgainByAFreshHome(t *testing.T) {
-	h := newHarness(t, code.Limits{})
+	h := newHarnessWith(t, code.Limits{}, func(h *harness, o *codetest.SoloOptions) {
+		// At the rows' own resolution, the microsecond, so an instant they
+		// keep is the clock's to the last digit.
+		h.now = h.now.Truncate(time.Microsecond)
+		o.WrapApplier = func(a statelog.Applier) statelog.Applier { return stampedApplier{Applier: a, clock: h.clock} }
+	})
 	h.src.commit(map[string]string{"a": "a\n"}, "first")
 	h.src.push("HEAD:refs/heads/main")
 	s := codetest.Settings()
@@ -568,9 +611,9 @@ func TestAQuietPullMirrorIsNotFetchedAgainByAFreshHome(t *testing.T) {
 		return a.Mirrors[0]
 	}
 	imported := synced()
-	if rows := h.rows("quiet"); rows.Repo.Status != code.RepoStatusActive || imported.SyncedAt.IsZero() {
-		t.Fatalf("after its import the mirror is %s, last synced %v; want it active, synced at its import's end",
-			rows.Repo.Status, imported.SyncedAt)
+	if rows := h.rows("quiet"); rows.Repo.Status != code.RepoStatusActive || !imported.SyncedAt.Equal(h.clock()) {
+		t.Fatalf("after its import the mirror is %s, last synced %v; want it active, synced at its import's end, "+
+			"%v", rows.Repo.Status, imported.SyncedAt, h.clock())
 	}
 	if listed := h.pass(h.mirrors()); len(listed) != 0 {
 		t.Fatalf("a fresh worker listed %v within the interval of the mirror's import", listed)
@@ -586,9 +629,9 @@ func TestAQuietPullMirrorIsNotFetchedAgainByAFreshHome(t *testing.T) {
 	if len(syncs) != 1 || !syncs[0].Sync.Current() {
 		t.Fatalf("the quiet mirror proposed %+v; want one sync of nothing", syncs)
 	}
-	if got := synced(); !got.SyncedAt.After(imported.SyncedAt) {
-		t.Fatalf("after a sync of nothing the mirror's last sync is %v, want it past its import's %v",
-			got.SyncedAt, imported.SyncedAt)
+	if got := synced(); !got.SyncedAt.Equal(h.clock()) {
+		t.Fatalf("after a sync of nothing the mirror's last sync is %v, want its record's instant %v, past its "+
+			"import's %v", got.SyncedAt, h.clock(), imported.SyncedAt)
 	}
 }
 

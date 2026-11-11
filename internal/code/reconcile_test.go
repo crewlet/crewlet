@@ -315,11 +315,13 @@ func TestAReconcileWhoseContextEndsLeavesNothingInFlight(t *testing.T) {
 // SHARES IS ENDED, not waited out: a publish on a node whose applier has
 // stalled waits its whole budget for an answer the failure already gives, and
 // a reconcile that waited for each one in flight would hold the apply for it.
-// Here every decision but the first stalls until its context ends — the call
-// returns once the first has failed, not when the stalls would.
+// Here every decision but the first stalls until its context ends, and says
+// which ended it: the reconcile's failure, or the stall's own end — a hang
+// detector no build that ends its decisions at the failure ever meets, so a
+// decision that waited it out is a decision the failure did not end.
 //
 // Mutation: record the failure without ending the decisions in flight and
-// the call waits out every stall.
+// the call waits out every stall, each one counted.
 func TestADecisionInFlightIsEndedByAFailureEveryRepositoryShares(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -329,25 +331,27 @@ func TestADecisionInFlightIsEndedByAFailureEveryRepositoryShares(t *testing.T) {
 	full := &statelog.Unavailable{Reason: statelog.ReasonLogFull, Detail: "the log is at its ceiling"}
 	first := code.NamePath(code.NameToken(declared[0].Name))
 	const stall = 20 * time.Second
+	var ended, waitedOut atomic.Int32
 	g.refuse = func(ctx context.Context, req statelog.Request) error {
 		if slices.Contains(req.Scope.Paths, first) {
 			return full
 		}
 		select {
 		case <-ctx.Done():
+			ended.Add(1)
 			return ctx.Err()
-		case <-time.After(stall):
+		case <-time.After(stall): //fixedwait:liveness
+			waitedOut.Add(1)
 			return nil
 		}
 	}
-	began := time.Now()
 	_, err := s.EnsureRepos(t.Context(), a, declared)
 	if !errors.Is(err, full) {
 		t.Fatalf("EnsureRepos = %v, want the shared refusal", err)
 	}
-	if took := time.Since(began); took > stall/2 {
-		t.Fatalf("the reconcile took %v, waiting out the decisions in flight rather than "+
-			"ending them at the refusal every repository shares", took)
+	if out, in := waitedOut.Load(), ended.Load(); out != 0 || in == 0 {
+		t.Fatalf("%d decisions in flight waited out their stall and %d were ended: want every one ended at "+
+			"the refusal every repository shares, and at least one in flight to end", out, in)
 	}
 	if inFlight, _, _ := g.counts(); inFlight != 0 {
 		t.Fatalf("%d decisions in flight at the call's return", inFlight)

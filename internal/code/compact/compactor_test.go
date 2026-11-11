@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -159,18 +160,19 @@ func (g *listedGate) asks() int {
 	return g.asked
 }
 
-// kindsRead is a compactor's reads of Gitlet, counting each kind read.
+// kindsRead is a Gitlet whose every listing is empty, counting each kind read
+// of it: a compactor's reads, and nothing for its passes to do.
 type kindsRead struct {
 	compact.Estate
 	mu    sync.Mutex
 	kinds map[code.ReadKind]int
 }
 
-func (k *kindsRead) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (k *kindsRead) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	k.mu.Lock()
+	defer k.mu.Unlock()
 	k.kinds[q.Kind]++
-	k.mu.Unlock()
-	return k.Estate.Read(ctx, q)
+	return code.ReadAnswer{}, nil
 }
 
 // read is how many reads of kind it counted.
@@ -188,44 +190,66 @@ func (k *kindsRead) read(kind code.ReadKind) int {
 // repository placed elsewhere or nowhere, and log a placement it could read.
 // Listed, every loop passes at once.
 //
+// In a bubble, over a Gitlet whose listings are empty and a cache and a store
+// nothing of the passes reaches: the loops run on the bubble's clock, which
+// moves only while every one of them waits, so each loop's first question and
+// its first recheck are read a recheck apart, and once listed each loop's
+// pass is read at the very recheck that found it listed — not at its first
+// tick, a minute on.
+//
 // Mutation: pass at Start without asking, and the loops list while this node
-// is unlisted.
+// is unlisted; wait a tick before the first pass, and no loop has listed at
+// the recheck.
 func TestTheLoopsPassOnceThisNodeIsListed(t *testing.T) {
 	t.Parallel()
-	x := newFixture(t)
-	gate := &listedGate{}
-	seam := &kindsRead{Estate: served{x.fleet}, kinds: map[code.ReadKind]int{}}
-	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Estate, o.Maintainers = seam, gate })
-	c.Start()
-
-	// SIX ASKS UNLISTED: each of the three loops' first, and a recheck
-	// waited out by each loop, or by one of them twice — whichever, none may
-	// have read a listing.
-	await(t, "the loops to ask whether this node is listed six times", func() bool { return gate.asks() >= 6 })
-	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue, code.ReadExpungeDue} {
-		if n := seam.read(kind); n != 0 {
-			t.Errorf("the loops read %d %s listings with this node unlisted, want none", n, kind)
+	synctest.Test(t, func(t *testing.T) {
+		gate := &listedGate{}
+		seam := &kindsRead{kinds: map[code.ReadKind]int{}}
+		var l logs
+		c, err := compact.New(compact.Options{Cache: idleCache{}, Objects: idleObjects{}, Estate: seam,
+			Maintainers: gate, NodeID: "git-a", Limits: code.DefaultLimits, Logger: l.logger()})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	gate.list()
-	await(t, "every loop to list once this node is listed", func() bool {
-		return seam.read(code.ReadCompactionDue) > 0 && seam.read(code.ReadPublicationDue) > 0 &&
-			seam.read(code.ReadExpungeDue) > 0
+		c.Start()
+		defer c.Stop(context.Background())
+		kinds := []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue, code.ReadExpungeDue}
+
+		// EACH LOOP'S FIRST QUESTION, and its first recheck, unlisted: six,
+		// and no listing read.
+		time.Sleep(compact.ListedRecheck)
+		synctest.Wait()
+		if n := gate.asks(); n != 6 {
+			t.Errorf("the loops asked whether this node is listed %d times by their first recheck, want each "+
+				"loop's first question and its recheck, 6", n)
+		}
+		for _, kind := range kinds {
+			if n := seam.read(kind); n != 0 {
+				t.Errorf("the loops read %d %s listings with this node unlisted, want none", n, kind)
+			}
+		}
+
+		gate.list()
+		time.Sleep(compact.ListedRecheck)
+		synctest.Wait()
+		for _, kind := range kinds {
+			if n := seam.read(kind); n != 1 {
+				t.Errorf("the loops read %d %s listings at the recheck that found this node listed, want its "+
+					"loop's pass at once", n, kind)
+			}
+		}
 	})
 }
 
-// await waits until done holds, failing t after a minute: what a case waits
-// on here is a loop's next step, a second or two away.
-func await(t *testing.T, what string, done func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(time.Minute)
-	for !done() {
-		if time.Now().After(deadline) {
-			t.Fatalf("waited a minute for %s", what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
+// idleCache is a node's cache nothing of a pass over empty listings reaches,
+// but the repositories it holds a refused layer of: none.
+type idleCache struct{ compact.Cache }
+
+func (idleCache) Damaged() []code.RepoRef { return nil }
+
+// idleObjects is an object store nothing of a pass over empty listings
+// reaches.
+type idleObjects struct{ compact.Uploader }
 
 // A PASS JUDGES ITS MAINTAINERS AGAINST ONE LISTING: a pass asks who maintains
 // what ONCE, for every listed repository it must judge — on a node that
