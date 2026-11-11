@@ -2864,6 +2864,7 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   executor: applied at CREWLET_EXECUTOR_LOG 30870
   code: applied at CREWLET_CODE_LOG 2207
   access: applied at CREWLET_ACCESS_LOG 4120
+  atlas: applied at CREWLET_ATLAS_LOG 310
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
@@ -3026,7 +3027,8 @@ Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 `stream.usage_log_max_bytes`, `stream.artifacts_log_max_bytes`,
 `stream.artifact_data_log_max_bytes`, `stream.assistant_log_max_bytes`,
 `stream.chat_log_max_bytes`, `stream.executor_log_max_bytes`,
-`stream.code_log_max_bytes`, `stream.access_log_max_bytes`) is not a live
+`stream.code_log_max_bytes`, `stream.access_log_max_bytes`,
+`stream.atlas_log_max_bytes`) is not a live
 setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a

@@ -1272,6 +1272,23 @@
           ],
           "description": "Byte ceiling on Ask Crewlet's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."
         },
+        "atlas_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 68719476736,
+              "minimum": 67108864,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the atlas log, where what people record about what the company runs on is kept with its history; unset takes 128 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."
+        },
         "chat_log_max_bytes": {
           "anyOf": [
             {

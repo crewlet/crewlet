@@ -431,7 +431,7 @@ HTTP — which on a `roles: [data, seats]` satellite is the one place to look,
 because such a node serves no API on its port:
 
 ```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat executor code access]"
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat executor code access atlas]"
 ```
 
 ---

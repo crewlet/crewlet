@@ -1296,6 +1296,17 @@ stream:
                                     #   day. How long the records are kept is
                                     #   the company document's
                                     #   access_history.retention_days
+  # atlas_log_max_bytes: 134217728  #   the atlas log, where what people
+                                    #   record about what the company runs on
+                                    #   is kept with its history (64 MiB..64
+                                    #   GiB). UNSET TAKES 128 MiB, sized by
+                                    #   what people record rather than by the
+                                    #   disk, and scaled down as far as 64 MiB
+                                    #   where the broker is short: about four
+                                    #   months of a completely blocked trim at
+                                    #   the reference company's rate. How long
+                                    #   the history is kept is the company
+                                    #   document's atlas.retention_days
   # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
                                     #   the ordered stream a repository's refs,
                                     #   packs and settings move on. It runs on
