@@ -726,16 +726,27 @@ func (s *runSteers) stopping() bool {
 
 // stopWith ends this node's settles with e's teardown, as [New] wires them: the
 // moment it begins ([Engine.teardownSignal]), and the window every attempt is
-// held to from then on, which ends [steerSettleStopBudget] after that moment —
-// one window for every settle the node holds, opened as the teardown begins
-// whether or not one is being asked then, so a take handed off later in the
-// stop is asked inside it too. Nothing waits for the moment: the window is
-// armed by the teardown signal itself, and its timer starts then.
+// held to from then on, which ends [steerSettleStopBudget] after that moment
+// ([windowFrom]) — one window for every settle the node holds, opened as the
+// teardown begins whether or not one is being asked then, so a take handed off
+// later in the stop is asked inside it too.
 func (s *runSteers) stopWith(e *Engine) {
 	begun := e.teardownSignal()
-	window, end := context.WithCancel(context.Background())
-	context.AfterFunc(begun, func() { time.AfterFunc(steerSettleStopBudget, end) })
-	s.stopped, s.stopWindow = begun.Done(), window
+	s.stopped, s.stopWindow = begun.Done(), windowFrom(begun, steerSettleStopBudget)
+}
+
+// windowFrom is a context that ends d after begun does, and not before: the
+// window of d that opens as begun ends. Nothing waits for that moment: the
+// window is armed by begun itself, so its timer starts then.
+//
+// MADE FROM BEGUN AND NOTHING ELSE. It carries begun's values and none of its
+// ending, which would close the window the moment it opens; and none of a
+// caller's context either: [New], which opens the settles' window, holds one
+// that may end as the stop begins, and the window would end with it.
+func windowFrom(begun context.Context, d time.Duration) context.Context {
+	window, end := context.WithCancel(context.WithoutCancel(begun))
+	context.AfterFunc(begun, func() { time.AfterFunc(d, end) })
+	return window
 }
 
 // waitSettles waits out every settle loop this node runs, for its teardown,

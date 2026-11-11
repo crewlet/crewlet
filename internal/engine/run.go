@@ -1916,7 +1916,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// node's teardown, which is when its store goes — asking every take once
 	// more as it begins, in a window of its own beside the give-backs, never
 	// on the stop's allowance (runsteer.go, steerSettleStopBudget).
-	e.runSteers.stopWith(e) //nolint:contextcheck // the settles' stop window is the teardown's, never ctx's: it runs its own bound from the teardown's start, which nothing ctx holds may end
+	e.runSteers.stopWith(e)
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
