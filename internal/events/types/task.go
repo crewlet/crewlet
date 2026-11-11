@@ -390,12 +390,14 @@ const (
 	// PickupTyped is a change to one of the item's fields, or a question put
 	// on it with `ask`, by the seat since the turn began.
 	PickupTyped PickupAnswer = "typed"
-	// PickupRemoved, PickupFinished and PickupReassigned are an item that left
-	// the seat while the turn ran, by somebody else's change: in the trash,
-	// in a finished status, or held by another seat or by nobody. Nothing
-	// typed is owed on it, and on a removed item nothing could be written.
-	PickupRemoved    PickupAnswer = "removed"
-	PickupFinished   PickupAnswer = "finished"
+	// PickupRemoved is an item put in the trash, or purged, while the turn
+	// ran: nothing typed is owed on it, and nothing could be written.
+	PickupRemoved PickupAnswer = "removed"
+	// PickupFinished is an item somebody else moved to a finished status
+	// while the turn ran: nothing typed is owed on it.
+	PickupFinished PickupAnswer = "finished"
+	// PickupReassigned is an item somebody else handed to another seat, or
+	// to nobody, while the turn ran: nothing typed is owed on it.
 	PickupReassigned PickupAnswer = "reassigned"
 	// PickupUnread is a read that failed: the turn falls back to the
 	// delivery every turn owes rather than loop on a store it cannot reach.
