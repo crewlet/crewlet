@@ -11208,8 +11208,6 @@ it under, so a node that drained, died or restarted stops counting at once.
   somebody accepts the change (`changes`). `removed` is a tool the server no
   longer lists, kept, named by the definition accepted for it, with no
   instances or nodes, until somebody accepts that it went.
-- `tool_count` is how many tools the server lists, never fewer than `tools`
-  holds: a node's listing names at most 256 of them.
 - `baseline` is the level of every tool `tools.levels` does not name: the
   entry's `tools.default`, or `null` where it sets none, which leaves each such
   tool at the level its hints start it at (`allow` for one whose `risk` is
@@ -11217,7 +11215,7 @@ it under, so a node that drained, died or restarted stops counting at once.
   tools `tools.levels` names that no live node's listing names, sorted: a level
   that decides nothing, most often a name written with the `tool_prefix` or
   spelled otherwise than the server spells it. Empty where the listings cannot
-  say: no live node lists the server, or one lists more than its 256.
+  say: no live node lists the server.
 - `changes` is every change the server made to its tools since their levels
   were decided ([Tools and MCP › When a server changes a tool](../guides/tools-and-mcp.md#when-a-server-changes-a-tool)),
   by `tool` (the server's own name), then by definition: one for each tool it
@@ -11387,7 +11385,6 @@ server that lists nothing.
                       "required": ["owner", "repo", "issue_number"]},
      "output_schema": null}
   ],
-  "tool_count": 42,
   "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
   "instructions": "",
   "dependants": {"mcp_env": [], "sandbox": [], "mcp_limits": [], "secrets": []},
@@ -11449,7 +11446,7 @@ configuration's grants, as a seat's `tool_sources` on the org chart is, which
 no other reader is given either.
 
 A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
-(every field, `held` and `removed` included), `tool_count`, `server_info`,
+(every field, `held` and `removed` included), `server_info`,
 `last_success` and:
 
 - `instances`, each without its `wait` (the variables a waiting instance waits
@@ -11483,7 +11480,6 @@ a change is reviewed by who may decide it.
   "nodes": [{"id": "node-a", "reported": true}],
   "listed": [{"node": "node-a", "at": "2026-11-01T09:00:00Z", "instances": 2, "tools": 42}],
   "tools": [{"name": "get_issue", "raw": "get_issue", "title": "Get issue", "…": "…"}],
-  "tool_count": 42,
   "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
   "instances": [
     {"seat": "backend-dev", "node": "node-a", "state": "running", "since": "2026-11-01T08:40:00Z",
@@ -11949,7 +11945,8 @@ named for a tool still listed): nothing is decided, the rest of the body
 included. Read the changes again. `400 invalid_body` for a body that decides
 nothing or decides one tool twice, `404 not_found` for a server the company
 does not declare, `503 unavailable` where this node cannot read the fleet's
-listing of the server.
+listing of the server. A body may name a decision for each of the most tools
+one server lists (4,096), up to 1 MiB.
 
 ```json
 {"server": "github", "accepted": ["close_issue", "search_issues"], "blocked": ["delete_repository"], "moved": [], "revision": {"revision_id": "…", "epoch": 7, "warnings": []}}
@@ -11960,6 +11957,18 @@ somebody else decided between this node's read and its write, for which
 nothing was written; `revision` the configuration's answer to the block, `null`
 where nothing was blocked. Every call is one `mcp_server_acted` with the action
 `review_changes`, naming the tools accepted and kept blocked.
+
+The decisions are written one by one, so where the store fails one the
+answer is `503 unavailable` naming what was and was not decided, beside the
+detail: `accepted` and `blocked` the tools decided before it, `moved` the ones
+somebody else decided first, and `undecided` the one that failed and every one
+not tried after it. Asking again with the same body is refused `409
+stale_version`, since the decided ones are decided; read the changes again and
+decide the `undecided` ones.
+
+```json
+{"error": "unavailable", "detail": "the decision about \"export\" could not be written, and nothing was tried for \"purge\". Decided already: \"close_issue\". Read the server's changes again and decide the ones left.", "accepted": ["close_issue"], "blocked": [], "moved": [], "undecided": ["export", "purge"]}
+```
 
 ### `GET /mcp-approvals/{id}`
 
@@ -11994,7 +12003,10 @@ answered beside the arguments it showed, so it is given only from a surface
 that read all of it; without it, or naming another, it is `409 conflict` and
 nothing is answered. `always` takes an optional
 `_summary` for the revision it writes; without one the revision is summarised
-as the tool allowed in answer to the held call.
+as the tool allowed in answer to the held call. `always` also accepts the
+definition the call was made under, where a live listing names the tool under
+it, so a tool held because it changed stops asking
+([Tools and MCP › When a server changes a tool](../guides/tools-and-mcp.md#when-a-server-changes-a-tool)).
 
 Decided as `tools.approve`: an administrator, or a lead of the seat whose run
 made the call, a person and never an agent seat or Ask Crewlet. The route

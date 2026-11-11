@@ -892,12 +892,28 @@ reads (`GET /mcp-servers/{name}`, everybody's in
   dies stops counting the moment its presence lapses, and the
   [maintenance sweep](../concepts/coordination.md#what-the-fleet-shares) removes
   what it left behind, along with a schema no listing has named for two sweeps.
-- **Bounded.** Everything in a listing came from a remote server, so a listing
-  names at most 256 tools (the count travels whole), a description is cut to
-  1,024 bytes, the instructions to 4,096, and a tool's schemas past 64 KiB are
-  listed without being stored. A listing stores at most 1 MiB of schemas in
-  all, kept in tool-name order while they fit; a tool past that is listed
-  without its arguments.
+- **Every tool, bounded by bytes.** A listing names every tool its node's
+  instances list, however many: a tool it left out could never be reviewed
+  ([When a server changes a tool](#when-a-server-changes-a-tool)), so a call
+  to it would ask a person for ever. Everything in a listing came from a
+  remote server, so it is bounded by the bytes it is stored as, 4 MiB: a
+  description is cut to 1,024 bytes and a title to 256, and where hundreds of
+  tools would pass 4 MiB with those, every description and then every title is
+  cut shorter, marked, until the listing fits. The instructions are cut to
+  4,096 bytes. A definition whose schemas or words pass 64 KiB as stored is
+  listed without being stored, and a listing stores at most 1 MiB of
+  definitions in all, a change waiting for a review first, then in tool-name
+  order while they fit; a tool past that is listed without its arguments.
+  Every bound counts the bytes as stored, where `<`, `>` or `&` takes six.
+- **At most 4,096 tools a server.** A server that lists more is refused, never
+  cut: its instance does not start, and its failure says how many it lists and
+  to narrow what it lists with its own options (a toolset, a product or a
+  read-only switch) or split it into several entries. The largest servers in
+  use list a few hundred, and an agent is offered at most 100 tools, so a
+  server that large is used through
+  [a team's limits](#narrowing-a-server-for-a-team). A test of a server shows
+  every tool it lists, its words cut shorter where hundreds of them would not
+  fit one answer.
 
 In the catalogue, a listed tool is added under a name nothing on the node
 already holds: one tool per name, as a model is offered, so a name a built-in
@@ -1275,10 +1291,12 @@ revision of the company document.
 
 #### Setting levels from the dashboard
 
-A server's **Tools** tab shows each tool's level beside its risk. An
-administrator changes one tool's level with its select, sends a tool with a
-level of its own (marked **Custom**) back to the server's default, sets every
-tool the search and filter show at once (**Set N shown**), and sets the
+A server's **Tools** tab shows each tool's level beside its risk, fifty tools
+at a time with **Load more** for a server that lists more, in the order the
+list is sorted by. An administrator changes one tool's level with its select,
+sends a tool with a level of its own (marked **Custom**) back to the server's
+default, sets every tool the search and filter match at once (**Set N
+tools**, loaded or not), and sets the
 server's default in the **Default for this server** card, where **By each
 tool's hints** leaves `default` unset. Each change is one write of
 `PUT /mcp-servers/{name}/tools`, by the server's own name for each tool, at a
@@ -1468,8 +1486,8 @@ at the change.
 
 - **A server's first listing is accepted as it is.** You chose the server with
   it in front of you (the add flow tests it and shows each tool's starting
-  level), so the node that lists the server first records each tool's
-  definition as accepted.
+  level), so the node that lists the server first records the definition of
+  every tool it lists as accepted, however many there are.
 - **A changed or added tool asks first.** A tool the server lists under any
   other definition (its title, description, schema or annotations changed),
   or one it adds after its first listing, is held at Needs approval while its
@@ -1514,8 +1532,20 @@ at the change.
   recent step-up. A definition the server swapped in since your review is
   refused and nothing is decided, so a server cannot have a change accepted
   that nobody read. Keeping a tool blocked sets its level to `blocked` and
-  records the definition you decided on. Always allow on a held call accepts
-  the definition the call was made under.
+  records the definition you decided on. Decisions are written one by one,
+  and where the store fails one the route answers `503` naming the tools
+  decided (`accepted`, `blocked`), the ones somebody decided first (`moved`)
+  and the ones it did not decide (`undecided`); read the changes again and
+  decide those.
+- **Always allow on a held call accepts the definition the call was made
+  under**, by the held call's own digest, where a live listing names the tool
+  under it, so the tool runs unasked from then on, across a restart of the
+  server or of the engine. Where it accepts nothing the node logs why: the
+  definition is accepted already, or the server's first listing is not yet
+  (`mcp_held_definition_left`, `INFO`), or no live listing names the tool
+  under that definition, because the server lists another since, which waits
+  for a review, or no node lists it now (`mcp_held_definition_not_accepted`,
+  `WARN`, naming the definitions listed).
 - **The engine lists a running server again** when the `ttlMs` its listing
   states runs out, held between one minute (a server cannot make the engine
   list it constantly) and fifteen minutes (nor opt out of being watched),
@@ -1534,9 +1564,9 @@ and one it no longer lists *Removed*, counts the changes over the list with
 **Review**, and filters them with **Changed**; the tab itself is marked while
 any wait. The alarm's fix opens the same review. **Review** shows each change,
 one that now claims less risk first and flagged: a description or title as a
-text diff, the arguments a line each (or the schemas whole, where what moved
-is inside an argument or in the output), and each hint that moved with its old
-word and its new. A part the engine cannot show is said to have changed and
+text diff, the schemas whole (with the arguments a line each above them where
+an argument was added, removed or retyped), and each hint that moved with its
+old word and its new. A part the engine cannot show is said to have changed and
 not to be shown. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
 blocked** decide it by the digest of the definition shown, and a removal is
 accepted with **Accept that it went**. A definition the server swapped since it
@@ -1552,9 +1582,13 @@ the tool is read-only both as the server declares it and as it runs here, your
 overrides applied. A rewording can still change what a tool says it does, so
 the action first lists each tool with the words it changed, one line each
 (hover a cut line for the whole of it), and nothing is decided until you press
-**Accept N changes** there; **Cancel** returns to the review. That press sends
-every tool's reviewed digest in one decision, so a definition the server
-swapped since is refused by name and nothing is decided. Every other change (new or changed arguments, changed hints, a claim
+**Accept N changes** there; **Cancel** returns to the review. The list is
+fixed when it opens: a reading of the server that brings another definition
+meanwhile changes neither what is listed nor what is sent. That press sends
+the digest of every definition listed in one decision, so a definition the
+server swapped since is refused by name and nothing is decided. Where the
+engine decides some and could not write the rest, the review says which were
+decided and which were not, and reads the changes again. Every other change (new or changed arguments, changed hints, a claim
 of less risk, a tool that writes, a tool added or removed) is decided one by
 one.
 
