@@ -1240,9 +1240,13 @@ func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds, k) }
 // the status's, and the tags', the watchers', the team's or a link's only
 // where nothing before them set it. So the change of one of these kinds is
 // found by its delta, whatever kind its record ended with, as the pickup finds
-// an assignment by its assignee delta (readyAssignedArm, #930). A kind that
-// names no single field, `fields` among them, is found by its kind alone, and
-// a checklist's move records no delta to find it by.
+// an assignment by its assignee delta (readyAssignedArm, #930), the router
+// tells a hand-off and the finished edge ([Notify.moved], #953) and a wake's
+// prompt names every kind of change its write made ([Notify.movedKinds]). A
+// kind that names no single field, `fields` among them, is found by its kind
+// alone, and a checklist's move is not always a delta (a renamed or reassigned
+// item moves no list's done count), so its holders are told by the items it
+// touched ([Snapshot.ChecklistAssignees]) and never by this.
 func (k ChangeKind) MovedFields() []string {
 	switch k {
 	case ChangeStatus:
@@ -1425,12 +1429,15 @@ type Snapshot struct {
 	ThreadOwing    []string `json:"thread_owing,omitempty"`
 	ThreadAwaiting []string `json:"thread_awaiting,omitempty"`
 
-	// RemovedWatchers are the handles a watchers commit dropped. They go
-	// to the INBOX only: a human learns that a lead removed her watch, and
-	// an agent is not woken about a decision that was not its own.
+	// RemovedWatchers are the handles a write dropped from the watchers,
+	// whatever kind its record ends with ([Snapshot.moves]). They go to
+	// the INBOX only: a human learns that a lead removed her watch, and an
+	// agent is not woken about a decision that was not its own.
 	RemovedWatchers []string `json:"removed_watchers,omitempty"`
 
-	// ParentAssignee hears when a child enters or leaves a finished group.
+	// ParentAssignee hears when a child enters or leaves a finished group:
+	// the parent's assignee as the write's decide read it, filled only
+	// across that edge ([Notify.restated]).
 	ParentAssignee string `json:"parent_assignee,omitempty"`
 
 	// ChecklistAssignees are the people whose checklist items changed.
@@ -1543,9 +1550,10 @@ type Notify struct {
 	Fields map[string]Delta `json:"fields,omitempty"`
 
 	// FieldsOmitted is how many more fields this change moved than
-	// [Notify.Fields] shows — the ones past [MaxDeltas], by field name.
+	// [Notify.Fields] shows — the ones past [MaxDeltas] ([cardFields]).
 	// SAID, because a card that dropped them silently reads as a change
-	// that moved only what it lists.
+	// that moved only what it lists, and the router reads it so
+	// ([Notify.watchOnly]).
 	FieldsOmitted int `json:"fields_omitted,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`

@@ -1324,12 +1324,22 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			// the applier's own question ([keysMoved]), of the stored task
 			// and the task this record leaves, so the write whose apply
 			// will touch the directory is exactly the one checked here.
-			if next := applyPatch(current, charged); keysMoved(current, next) {
+			next := applyPatch(current, charged)
+			if keysMoved(current, next) {
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				if err := scope.coversKeys(append(keysOf(current),
 					keysOf(next)...)); err != nil {
 					return statelog.Decision{}, err
 				}
+			}
+			// THE WAKE SAYS WHAT THIS WRITE MOVED, from the two states this
+			// snapshot holds rather than the task its caller read outside
+			// it ([Notify.restated]): the router decides who hears it by
+			// these deltas, so the card is the history row this record
+			// writes.
+			notify, err = w.restatedFor(ctx, tx, notify, current, next)
+			if err != nil {
+				return statelog.Decision{}, err
 			}
 			// AN ASSIGNMENT WHATEVER ITS KIND: a status move that takes the
 			// item is recorded under `status`, which outranks `assignee`, and
@@ -2318,6 +2328,45 @@ func (w *Writer) decideAssigning(ctx context.Context, tx *sql.Tx, stamp statelog
 	return statelog.Decision{Payload: encoded}, nil
 }
 
+// restatedFor is [Notify.restated] in an update's decide, with the two facts
+// it reads in the decide's own snapshot: the project's catalogue where either
+// side holds a custom value, which names it as the applier's row does, and the
+// parent's assignee where the write moves the task across the finished edge.
+//
+// THE PARENT HERE, NEVER AT THE CALLER. Three of the callers that close a task
+// (a merged change, the merge queue, a merge of duplicates) never named its
+// parent, so its assignee heard of none of those closes; the decide holds the
+// one consistent read of the parent there is, and every update passes
+// through it. The read is the one transition's, so an ordinary edit costs
+// none.
+func (w *Writer) restatedFor(ctx context.Context, tx *sql.Tx, notify *Notify,
+	current, next Task) (*Notify, error) {
+
+	if notify == nil {
+		return nil, nil
+	}
+	var declared map[string]FieldDef
+	if len(current.Fields) > 0 || len(next.Fields) > 0 {
+		var err error
+		if declared, err = declaredFields(ctx, tx, next.Project); err != nil {
+			return nil, fmt.Errorf("worklet: read project %s's fields for the wake "+
+				"on task %s: %w", next.Project, next.ID, err)
+		}
+	}
+	parent := ""
+	if crossesFinished(current, next) && next.Parent != nil && *next.Parent != "" {
+		held, found, err := readTask(ctx, tx, *next.Parent)
+		if err != nil {
+			return nil, fmt.Errorf("worklet: read task %s's parent %s for the "+
+				"wake: %w", next.ID, *next.Parent, err)
+		}
+		if found {
+			parent = held.Assignee
+		}
+	}
+	return notify.restated(current, next, declared, w.Leads, parent), nil
+}
+
 // collided is a wake with [Snapshot.KeyCollision] derived from the key
 // directory in the decide's own snapshot ([keyHeldByAnother]), or nil for a
 // record that wakes nobody.
@@ -2472,17 +2521,20 @@ func (w *Writer) report(wrote *committing, result statelog.Result) {
 
 // committedChange is the kind of change one record is, for its turn's outcome:
 // a comment, an answer to an ask, or a move of the item; "" for a change that
-// moves no work (who watches it).
+// moves no work: who watches it, and nothing else ([Notify.watchOnly]).
+//
+// BY WHAT THE WRITE MOVED, NEVER BY ITS KIND ALONE, by the rule the history read
+// of the same turns applies ([Reader.TurnsMoved]): `update_work_item` files a
+// watch written with a due date, a priority or a custom value under
+// `watchers`, and read by its kind the turn that wrote it moved nothing. A
+// quiet commit announces nothing and so carries no deltas to read, and is read
+// by its kind.
 func committedChange(payload []byte) types.CommittedChange {
 	record, err := Decode(payload)
 	if err != nil {
 		return types.CommittedItem
 	}
 	switch {
-	case record.Kind.Moves():
-		return types.CommittedItem
-	case record.Kind == ChangeWatchers:
-		return ""
 	case record.Kind.Conversation():
 		var patch TaskPatch
 		if json.Unmarshal(record.Mutation, &patch) == nil && patch.Comment != nil &&
@@ -2490,6 +2542,9 @@ func committedChange(payload []byte) types.CommittedChange {
 			return types.CommittedAnswer
 		}
 		return types.CommittedComment
+	case record.Notify != nil && record.Notify.watchOnly(),
+		record.Notify == nil && record.Kind == ChangeWatchers:
+		return ""
 	}
 	return types.CommittedItem
 }
