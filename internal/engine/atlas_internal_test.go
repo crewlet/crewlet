@@ -7,11 +7,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// THE ATLAS NAMES THE REVISION ITS SETTINGS CAME FROM, AND ONLY THAT ONE: the
-// fleet's pointer names it while it names the activation this node's epoch was
-// applied from, and between a later activation and this node's apply of it the
-// read names none, rather than one this node has not read. Mutation: answer
-// the pointer's revision whatever it names, and the second case goes red.
+// THE ATLAS NAMES ONLY THE REVISION ITS SETTINGS CAME FROM, never one the fleet
+// activated that this node has not applied yet. Mutation: answer the pointer's
+// revision whatever it names, and the second case goes red.
 func TestTheAtlasNamesOnlyTheRevisionThisNodeRuns(t *testing.T) {
 	t.Parallel()
 	applied := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)

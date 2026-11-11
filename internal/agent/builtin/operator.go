@@ -54,9 +54,8 @@ type OperatorDeps struct {
 	Code CodeDeps
 
 	// Atlas is the atlas tools' half: the settings this node runs, read per
-	// call. The tools read Gitlet through Code, as the caller, so the
-	// repositories in the atlas are exactly the ones the caller may read. The
-	// zero value omits them.
+	// call. Gitlet is read through Code, as the caller. The zero value omits
+	// the tools.
 	Atlas AtlasDeps
 
 	// Readers is `code_repo_readers`' half beside Code — who read a

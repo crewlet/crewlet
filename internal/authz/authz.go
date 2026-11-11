@@ -51,10 +51,8 @@
 // answer shows neither to a reader without the app.
 //
 // READING THE ATLAS TAKES THE ATLAS PERMISSION: ADR-0127, whose authority this
-// package is too. Every atlas verb names [iam.GrantAtlas], so a principal
-// without it is refused here before an entry is read, and an atlas entry is
-// the app's kind ([AppFor]). A seat holds it as it holds every app, and a turn
-// a person woke is held to whether they use it (ADR-0109).
+// package is too. Every atlas verb names [iam.GrantAtlas], refused here before
+// an entry is read, and an atlas entry is the app's kind ([AppFor]).
 //
 // # What it replaces, and what each of those got wrong
 //
@@ -371,10 +369,9 @@ const (
 	// its repository is: a turn a change woke names it as its origin, and a
 	// reader without the app is shown no such origin.
 	KindChange ObjectKind = "change"
-	// KindAtlasEntry is one entry of the company's atlas: a vendor account, a
-	// domain, a server, a data store or anything else the company runs on,
-	// and its facts and relations. Atlas's, so an answer that mixes apps
-	// shows none to a reader without the app ([AppFor]).
+	// KindAtlasEntry is one entry of the company's atlas, with its facts and
+	// relations: Atlas's, so an answer that mixes apps shows none to a reader
+	// without the app ([AppFor]).
 	KindAtlasEntry ObjectKind = "atlas_entry"
 )
 

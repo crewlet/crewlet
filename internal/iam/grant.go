@@ -143,18 +143,9 @@ const (
 	// chat nothing.
 	GrantGitlet Grant = "gitlet"
 
-	// GrantAtlas uses Atlas, the map and catalogue of everything the company
-	// runs on: its vendor accounts, domains, servers, data stores,
-	// repositories, monitoring, tool servers and models, and how they depend
-	// on each other (ADR-0127).
-	//
-	// A HOLDER READS ALL OF IT, private addresses included, because a map
-	// with holes cut per reader answers "what depends on this?" wrongly. That
-	// is why it is OPT-IN ([OptInApps]): a full map of servers and addresses
-	// is what an intruder looks for first, so nobody holds it until somebody
-	// ticks it, except an administrator, who holds every app through
-	// [Expand]. A panel Atlas joins from another app's records stays that
-	// app's, so Atlas is never a way round another permission.
+	// GrantAtlas uses Atlas, the map of everything the company runs on. A
+	// holder reads all of it, private addresses included, so it is OPT-IN
+	// ([OptInApps]) and an administrator holds it through [Expand] (ADR-0127).
 	GrantAtlas Grant = "atlas"
 )
 
@@ -185,18 +176,14 @@ var AllGrants = []Grant{
 // goes last and no stored row moves.
 var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet, GrantAtlas}
 
-// OptInApps are the apps a person holds only once somebody gives them: never
-// by default on an invitation, a create or a picker, and always through admin.
-//
-// An app joins this list when holding it is a decision about the person
-// rather than about the company's tools: [GrantAtlas], because its map is
-// what an intruder looks for first.
+// OptInApps are the apps a person holds only once somebody gives them: never by
+// default on an invitation, a create or a picker, and always through admin.
+// Holding one is a decision about the person rather than the company's tools.
 var OptInApps = []Grant{GrantAtlas}
 
 // DefaultApps are what a person's invitation or create carries when nothing
-// names their access: every app but the opt-in ones, in [Apps] order. The
-// CLI's default and the dashboard's picker read it, the dashboard through a
-// copy held to it by a gate.
+// names their access: every app but the opt-in ones, in [Apps] order, read by
+// the CLI and, through a copy a gate holds to it, the dashboard's picker.
 var DefaultApps = slices.DeleteFunc(slices.Clone(Apps), func(g Grant) bool {
 	return slices.Contains(OptInApps, g)
 })

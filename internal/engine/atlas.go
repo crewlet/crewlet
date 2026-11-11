@@ -9,14 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// AtlasToolDeps is what the atlas tools read the atlas through on this node:
-// the settings it runs, read per call so an apply is read from the next call,
-// with the revision they were activated as and the addresses the deployment
-// answers at. Gitlet is read through the code tools' own half, as the caller,
-// so it is not repeated here (ADR-0127).
-//
-// EXPORTED for the operator surface, which builds its catalogue for every
-// call.
+// AtlasToolDeps is what the atlas tools read on this node: the settings it
+// runs, read per call, their revision and the deployment's addresses. Gitlet
+// comes through the code tools' own half, as the caller (ADR-0127).
 func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	if e == nil {
 		return builtin.AtlasDeps{}
@@ -43,11 +38,8 @@ func (e *Engine) atlasSettings(ctx context.Context) (builtin.AtlasSettings, bool
 }
 
 // runningRevision is the revision the epoch c was applied from, or "" where
-// this node cannot tell. The epoch keeps its activation's instant and not its
-// revision, so the fleet's pointer names it only while it names that same
-// activation; in the moments between an activation and this node's apply of
-// it the pointer names the next one, and a fact read from these settings
-// labelled with it would be attributed to a document this node has not read.
+// this node cannot tell: the fleet's pointer names it only while it names the
+// activation c was applied from, never one this node has not applied yet.
 func (e *Engine) runningRevision(ctx context.Context, c *Company) string {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return ""
@@ -62,10 +54,9 @@ func (e *Engine) runningRevision(ctx context.Context, c *Company) string {
 	return revisionRunning(target, found, c)
 }
 
-// revisionRunning is target's revision where target is the activation the
-// epoch c was applied from, compared as the engine compares activation
-// instants ([store.EncodeTime]), and "" otherwise or for an epoch no
-// activation named.
+// revisionRunning is target's revision where target is the activation c was
+// applied from, compared as the engine compares activation instants
+// ([store.EncodeTime]), and "" otherwise.
 func revisionRunning(target coord.Activation, found bool, c *Company) string {
 	if !found || c == nil || c.ActivatedAt.IsZero() ||
 		store.EncodeTime(target.At) != store.EncodeTime(c.ActivatedAt) {

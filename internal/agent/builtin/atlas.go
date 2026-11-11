@@ -31,10 +31,9 @@ const (
 	maxAtlasList     = 500
 )
 
-// AtlasSettings is the company settings an atlas read reads: the document this
-// node runs, the revision it was activated as (empty where this node cannot
-// tell which), and the addresses the deployment answers at. The atlas reads the
-// document only through its redacting copy ([derive.FromSettings]).
+// AtlasSettings is the settings an atlas read reads: the document this node runs
+// (read only through its redacting copy), its revision, empty where this node
+// cannot tell, and the addresses the deployment answers at.
 type AtlasSettings struct {
 	Company    *config.Company
 	Revision   string
@@ -49,14 +48,9 @@ type AtlasDeps struct {
 	Settings func(ctx context.Context) (AtlasSettings, bool)
 }
 
-// atlasSearch is atlas_search: the atlas as its caller may read it.
-//
-// GITLET IS READ AS THE CALLER, AND ONLY FOR A CALLER WHO USES IT. The atlas
-// app never opens another app's records (ADR-0127), so the repositories are
-// read only where the caller may read the company's code (ADR-0110), through
-// the code tools' own resolution of who reads and for whom, and a repository
-// only one unit may read reaches only that unit. Without it the atlas answers
-// from the settings and says Gitlet was not read.
+// atlasSearch is atlas_search: the atlas as its caller may read it. Gitlet is
+// read as the caller and only where they may read code (ADR-0110), since the
+// atlas never opens another app's records (ADR-0127).
 type atlasSearch struct {
 	deps      AtlasDeps
 	code      CodeDeps
@@ -100,10 +94,9 @@ func (t *atlasSearch) Call(ctx context.Context, args map[string]any) (tools.Resu
 	return t.CallForTurn(ctx, nil, args)
 }
 
-// atlasList is atlas_search's answer: the entries, how many matched in all,
-// which sources were read in full, and how many values the read left out
-// because they were shaped like a credential. Those values are counted and
-// never shown.
+// atlasList is atlas_search's answer: the entries, how many matched, which
+// sources were read in full, and how many values were left out for being
+// shaped like a credential, counted and never shown.
 type atlasList struct {
 	Entries  []atlas.Entry     `json:"entries"`
 	Total    int               `json:"total"`
@@ -146,11 +139,9 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return compactAnswer(rendered, "Ask for fewer with `limit`, or narrow by `kind` or `query`.")
 }
 
-// gitlet is the Gitlet source this call reads, and who it reads as: none
-// where this surface serves no code, where the caller may not read the
-// company's code, or where whoever a seat's turn works for may not. why says
-// which, for the answer's coverage, and is empty where Gitlet is read or this
-// surface serves none.
+// gitlet is the Gitlet source this call reads and who it reads as: none where
+// this surface serves no code or the caller (or whoever a seat's turn works
+// for) may not read it, and then why says which, for the answer's coverage.
 func (t *atlasSearch) gitlet(ctx context.Context, turn *turnctx.Turn) (
 	src gather.Sources, asker code.Principal, why string) {
 

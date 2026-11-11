@@ -93,10 +93,9 @@ func gitletCoverage(t *testing.T, a atlasAnswer) gather.Coverage {
 	return a.Coverage[i]
 }
 
-// THE ATLAS IS READ ONLY BY A HOLDER OF ITS APP (ADR-0127): a person holding
-// every other app is refused before anything is read, naming Atlas, and the
-// same person given it is answered. Mutation: name another app on the
-// atlas_search row and the first half goes red.
+// THE ATLAS IS READ ONLY BY A HOLDER OF ITS APP (ADR-0127): every other app is
+// refused, naming atlas, before Gitlet is read. Mutation: name another app on
+// the atlas_search row and the first half goes red.
 func TestTheAtlasIsReadOnlyByAHolderOfItsApp(t *testing.T) {
 	t.Parallel()
 	host := newGitletHost()
@@ -116,11 +115,9 @@ func TestTheAtlasIsReadOnlyByAHolderOfItsApp(t *testing.T) {
 	}
 }
 
-// THE ATLAS LISTS REPOSITORIES ONLY FOR A CALLER WHO USES GITLET (ADR-0110):
-// a holder of both is answered with the company's repository, read as them; a
-// holder of atlas alone is answered from the settings, Gitlet is asked
-// nothing, and the coverage says why it was not read. Mutation: drop the
-// gitlet decision from atlas_search and the second half reads the repository.
+// THE ATLAS LISTS REPOSITORIES ONLY FOR A CALLER WHO USES GITLET (ADR-0110), read
+// as them; without gitlet Gitlet is asked nothing and the coverage says why.
+// Mutation: drop the code.read decision and the second half reads the repository.
 func TestTheAtlasListsRepositoriesOnlyForAGitletHolder(t *testing.T) {
 	t.Parallel()
 	both := newGitletHost()
@@ -151,9 +148,8 @@ func TestTheAtlasListsRepositoriesOnlyForAGitletHolder(t *testing.T) {
 	}
 }
 
-// A QUERY AND A KIND NARROW THE LISTING, and what the tool cannot read is
-// refused naming what it takes: an unknown kind, a limit out of bounds, and a
-// node that runs no company yet.
+// A QUERY AND A KIND NARROW THE LISTING; an unknown kind, a limit out of bounds
+// and a node that runs no company yet are refused, saying so.
 func TestTheAtlasIsNarrowedByKindAndQuery(t *testing.T) {
 	t.Parallel()
 	tool := atlasTool(t, newGitletHost(), runsAcme)
