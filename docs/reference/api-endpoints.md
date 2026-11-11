@@ -12720,9 +12720,10 @@ which no brief of the round told: a continued session is told it whatever its
 save, it is never the round's submission, and what it cost is charged to no
 job. The call a person approved is never marked. `abandoned: true` marks a
 call nobody waited for by the time it returned — its harness had given up on
-it and cancelled the request, or the job's session on the bridge had ended: it
-ran and its effect happened, while the session that made it holds it with no
-outcome or as timed out, so a continued session is told it whatever its save.
+it and cancelled the request, or the job's session on the bridge ended while it
+ran and answered it as still running: it ran and its effect happened, while the
+session that made it holds it with no outcome, as timed out or as still
+running, so a continued session is told it whatever its save.
 Both are absent on every other call.
 `bridge_calls_elided` counts the calls of the round the log does not list —
 dropped from the middle of a long run's log; a call whose own append reached

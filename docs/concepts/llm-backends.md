@@ -1522,7 +1522,10 @@ timeout, which the box is handed as the bridge's own bound, and the model reads
 the call as timed out — or hung up on, which the next progress the bridge keeps
 its answer going with finds, is listed as its run's own and marked as one
 nobody waited for, which every continuation of its round is told whatever its
-save point; one it stopped waiting for while it still read the call's response,
+save point — as is one still running as its job's session on the bridge ended,
+which that end answered at once that it was still running ([The tool
+bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box));
+one it stopped waiting for while it still read the call's response,
 as Claude Code's own watchdogs on a call can, is listed as any call ([A call
 its harness gave up
 on](code-sandbox.md#a-relaunch-continues-the-turns-session)). A call that
