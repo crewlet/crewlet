@@ -5,8 +5,8 @@
 // # A typed act, never prose
 //
 // A held call and an ask carry their act ([Kind]), set by the engine from the
-// structured data that made the request: the held ssh_operate call, or a
-// decision a tool composed for one exact call. Nothing reads an act out of a
+// structured data that made the request: the held ssh_operate, ask_to_merge or
+// ask_to_deploy call, or a decision a tool composed for one exact call. Nothing reads an act out of a
 // model's words, and an act the engine did not set is [KindOther], which is
 // never delegated.
 //
@@ -21,7 +21,8 @@
 // cap per kind and delegate per hour ([DecisionsPerHour]); a request that
 // touches access, budgets or spend, data deletion, secrets or the company
 // document, or one on an item labelled security, privacy or legal; and each
-// kind's own conditions. A request no delegate answered in [Deadline], and
+// kind's own conditions, read from the server or the code host when the
+// verdict is given ([Unmet]). A request no delegate answered in [Deadline], and
 // every request once delegated decisions are turned off, goes to people.
 //
 // # What a person still sees
@@ -46,13 +47,19 @@ type Kind string
 const (
 	// KindSSHOperate is an agent's command on a server as its operate user.
 	KindSSHOperate Kind = "ssh_operate"
+	// KindPRMerge is merging one change, a Gitlet change or a GitHub pull
+	// request, at exactly the head it was asked about.
+	KindPRMerge Kind = "pr_merge"
+	// KindDeploy is deploying one commit that holds a set of merged changes
+	// to an environment.
+	KindDeploy Kind = "deploy"
 	// KindOther is every request whose act the engine did not set: never
 	// delegated.
 	KindOther Kind = "other"
 )
 
 // Kinds is every act, the delegable first.
-func Kinds() []Kind { return []Kind{KindSSHOperate, KindOther} }
+func Kinds() []Kind { return []Kind{KindSSHOperate, KindPRMerge, KindDeploy, KindOther} }
 
 // Valid reports whether k is an act this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds(), k) }

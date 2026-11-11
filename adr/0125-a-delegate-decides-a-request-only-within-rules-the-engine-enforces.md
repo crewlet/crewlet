@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/delegated`
-- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`
+- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`
 - **Measured:** in one company over a month, the person answering one agent's requests took its recommendation on 90 of 95, and another agent's on 31 of 32 (the advisor's `approval.rubber_stamp`). Each was a merge, a deploy or a server command waiting in the Inbox.
 - **Tag-status:** unreleased
 
@@ -13,12 +13,17 @@ company names, and only within rules the engine enforces.** Every held call
 and every work item ask carries its act, set by the engine from the structured
 data that made it, never read out of prose: `ssh_operate` for an agent's
 held SSH operate command and for the decision `ask_to_operate` composes for
-one exact command, and `other` for everything else, which is never delegated.
+one exact command, `pr_merge` for a held `ask_to_merge` (one change at exactly
+the head the agent read), `deploy` for a held `ask_to_deploy` (one commit
+holding merged changes, to an environment, with a rollback), and `other` for
+everything else, which is never delegated.
 The company document's `delegated_decisions` block, off unless enabled, names
 per rule the kinds it delegates, one delegate seat or a panel of two on
 different first LLM entries, the people an escalation is put to, and a
-spot-check rate. A delegate is an agent seat that cannot request the kind it
-decides (for `ssh_operate`, it holds no SSH access), and a rule names at least
+spot-check rate, and for a merge or a deploy the rule's own always-escalate
+paths. A delegate is an agent seat (for `ssh_operate`, one that holds no SSH
+access); a request a delegate made itself goes to people the moment it is
+held, since any agent may ask for a merge or a deploy. A rule names at least
 one person to escalate to.
 
 A request of a delegated kind goes to its delegates first, as a
@@ -38,7 +43,17 @@ request shown). The engine then decides, not the model:
   accounts and passwords, keys, Crewlet's gate, the certificate authority,
   firewalls, secrets, data deletion, Crewlet's own company document and
   budgets, downloads or decoded text piped into a shell, hidden text, and
-  logging and auditing, extended only by adding patterns); and past
+  logging and auditing, extended only by adding patterns; for `pr_merge` and
+  `deploy`, `internal/delegated`'s paths: CI pipelines, owners files, secret
+  files, access policies, infrastructure, migrations and Crewlet company
+  documents, extended by the rule's `always_escalate_paths`); where the
+  kind's own conditions, read from the code host when the verdict is given,
+  do not hold (for a merge: the head asked about, open, every check its
+  target requires passed on that head, mergeable, its target's own gate
+  otherwise met, and an approving review of that head by somebody other than
+  its authors and the requester; for a deploy: every change merged into one
+  branch, the commit holding each and on that branch, and every check the
+  branch requires passed on the commit), or cannot be read; and past
   `delegated.DecisionsPerHour` allows per kind and delegate, or
   `ServerAllowsPerHour` per server, in one clock hour, counted fleet-wide and
   failing closed.
@@ -46,7 +61,11 @@ request shown). The engine then decides, not the model:
   verdict the log does not hold never acts.
 - **An allow carries out what a person's approval would**, through the same
   path: for `ssh_operate`, the answer a person's Allow once gives, the
-  five-minute certificate bound to the exact command and the host as shown.
+  five-minute certificate bound to the exact command and the host as shown;
+  for `pr_merge`, the engine's merge of exactly that head as the requesting
+  seat (Gitlet's gate still decides it, and GitHub's merge is given the
+  head's SHA); for `deploy`, the approval handed back to the run, since the
+  engine has no deploy path of its own.
   The answer is marked as decided under delegation and its rule.
 - **A request no delegate answered in `delegated.Deadline` goes to people**,
   and so does every request once the rule is off or its delegates changed;
@@ -82,8 +101,14 @@ routine ones. The trade is bounded by what an allow can never reach, by the
 caps, by the spot-check and the digest, and by one setting that returns every
 request to people.
 
+A merge or a deploy that reaches a person is answered by an administrator, a
+lead of the requesting seat, or a person its rule names in `escalate_to`,
+within the step-up window (`release.approve`).
+
 ## What this does not decide
 
-Which further kinds become delegable (a merge, a deploy) and their own
-conditions, which are added as kinds of their own; who may approve a request
-that reaches a person, which stays each kind's own rule.
+Which further kinds become delegable and their own conditions, which are added
+as kinds of their own. Merges on GitLab, whose approvals name no commit, so
+nothing could bind an allow to the head shown: they stay `other`. Who may
+approve a request of another kind that reaches a person, which stays each
+kind's own rule.

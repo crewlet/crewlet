@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
@@ -89,14 +90,16 @@ type DelegatedDesk interface {
 	Rule(kind delegated.Kind) (delegates []string, rule, sampleOneIn int, ok bool)
 	// SSHPatterns are the company's additions to the SSH always-escalate list.
 	SSHPatterns() []string
+	// RulePaths are the always-escalate path globs the rule naming kind adds.
+	RulePaths(kind delegated.Kind) []string
 	// Held is the active run whose row holds held call id.
 	Held(ctx context.Context, id string) (sandbox.PendingRun, bool, error)
 	// Arguments are run's held call's arguments, opened from their seal.
 	Arguments(run sandbox.PendingRun) (map[string]any, error)
 	// Leads reports whether lead is answerable for seat in the chart.
 	Leads(ctx context.Context, lead, seat string) (bool, error)
-	// Labels are the labels of the work item run is on, none for no item.
-	Labels(ctx context.Context, run sandbox.PendingRun) ([]string, error)
+	// Labels are the labels of item, none for no item.
+	Labels(ctx context.Context, item *types.WorkItem) ([]string, error)
 	// Allow counts one allow in bucket for now's clock hour: false where
 	// the hour already holds limit.
 	Allow(ctx context.Context, bucket string, limit int, now time.Time) (bool, error)
@@ -182,6 +185,8 @@ type reviewDelegated struct{ deps DelegatedDeps }
 // DelegatedDeps are what the verdict tool acts through; a nil Desk omits it.
 type DelegatedDeps struct {
 	Desk DelegatedDesk
+	// Release reads a merge's or a deploy's conditions from its code host.
+	Release ReleaseDeps
 	// Now is the clock a verdict is given at; nil is the wall clock.
 	Now func() time.Time
 }
@@ -289,11 +294,10 @@ func (t *reviewDelegated) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"this node, so it cannot be decided here. Escalate it."), nil
 	}
 	now := t.deps.now()
-	command, stdin, host := argString(callArgs, "command"), []byte(argString(callArgs, "stdin")),
-		argString(callArgs, "host")
+	host, subject, stdin := t.deps.Release.subjectOf(kind, callArgs)
 	given, overruled, said := a.verdict, []string(nil), []string(nil)
 	if a.verdict == delegated.Allow && a.confidence == delegated.High {
-		overruled, said = t.overrule(ctx, run, handle, kind, host, command, stdin, now)
+		overruled, said = t.overrule(ctx, turn, run, handle, kind, callArgs, now)
 		if len(overruled) > 0 {
 			given = delegated.Escalate
 		}
@@ -316,7 +320,7 @@ func (t *reviewDelegated) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Asked: string(a.verdict), Confidence: string(a.confidence), Verdict: string(outcomeOr(outcome, given)),
 		Final: outcome.Decided, Overruled: overruled,
 		Sampled: outcome.Decided && delegated.Sampled(held.ID, sampleOneIn),
-		Digest:  held.Delegation.Digest, Host: host, Subject: command,
+		Digest:  held.Delegation.Digest, Host: host, Subject: subject,
 		Stdin: stdin, Item: workItemOf(run), Reason: a.reason, Findings: a.findings,
 	})
 	switch {
@@ -354,8 +358,8 @@ func givenOf(verdicts []sandbox.HeldVerdict) []delegated.Given {
 // closed words and as the sentences people and the delegate read; none for an
 // allow that stands. The hour's counts are taken only for an allow nothing
 // else refused, the kind's first.
-func (t *reviewDelegated) overrule(ctx context.Context, run sandbox.PendingRun, delegate string,
-	kind delegated.Kind, host, command string, stdin []byte, now time.Time) (overruled, said []string) {
+func (t *reviewDelegated) overrule(ctx context.Context, turn *turnctx.Turn, run sandbox.PendingRun,
+	delegate string, kind delegated.Kind, callArgs map[string]any, now time.Time) (overruled, said []string) {
 
 	desk := t.deps.Desk
 	add := func(word, sentence string) { overruled, said = append(overruled, word), append(said, sentence) }
@@ -370,7 +374,7 @@ func (t *reviewDelegated) overrule(ctx context.Context, run sandbox.PendingRun, 
 	case leads:
 		add(delegated.OverruledLeads, "The delegate leads "+run.AgentHandle+", whose request it is.")
 	}
-	switch labels, err := desk.Labels(ctx, run); {
+	switch labels, err := desk.Labels(ctx, run.WorkItem); {
 	case err != nil:
 		add(delegated.OverruledLabel, "The engine could not read the work item's labels, so a person decides.")
 	default:
@@ -378,9 +382,19 @@ func (t *reviewDelegated) overrule(ctx context.Context, run sandbox.PendingRun, 
 			add(delegated.OverruledLabel, "The work item is labelled "+label+".")
 		}
 	}
-	if kind == delegated.KindSSHOperate {
+	host := argString(callArgs, "host")
+	switch kind {
+	case delegated.KindSSHOperate:
+		command, stdin := argString(callArgs, "command"), []byte(argString(callArgs, "stdin"))
 		for _, m := range sshint.AlwaysEscalate(command, stdin, desk.SSHPatterns()) {
 			add(m.Class, "The command "+m.Says+": no delegate allows that.")
+		}
+	case delegated.KindPRMerge, delegated.KindDeploy:
+		// THE KIND'S OWN CONDITIONS, read from its code host now: what the
+		// request was when it was asked is not what an allow carries out.
+		for _, u := range t.deps.Release.unmet(ctx, turn, run.AgentHandle, kind, callArgs, desk.RulePaths(kind),
+			releaseFacts{labels: desk.Labels}) {
+			add(u.Word, u.Says)
 		}
 	}
 	if len(overruled) > 0 {

@@ -148,6 +148,12 @@ func ChoicesOf(h HeldCall) []string {
 // step-up (authz's ssh.operate.approve).
 const HeldApproversSSH = "ssh"
 
+// HeldApproversRelease is [HeldCall.Approvers] for a merge or a deploy asked
+// with ask_to_merge or ask_to_deploy: an administrator, a lead of the seat, or
+// a person the kind's delegated-decisions rule names in escalate_to, at a
+// fresh step-up (authz's release.approve).
+const HeldApproversRelease = "release"
+
 // maxHeldBindingBytes bounds [HeldCall.Binding]: a SHA-256 in hex.
 const maxHeldBindingBytes = 64
 
@@ -297,7 +303,8 @@ type HeldCall struct {
 	Fixed bool `json:"fixed,omitempty"`
 
 	// Approvers names who may answer where it is not the run's seat's lead
-	// or an administrator: [HeldApproversSSH] for an SSH operate command.
+	// or an administrator: [HeldApproversSSH] for an SSH operate command,
+	// [HeldApproversRelease] for a merge or a deploy.
 	// Empty is the seat's lead or an administrator (tools.approve).
 	Approvers string `json:"approvers,omitempty"`
 
@@ -516,7 +523,7 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 				"escalation on a call being held, and both come after it is held"))
 		}
 	}
-	if h.Approvers != "" && (h.Approvers != HeldApproversSSH || !h.Fixed) {
+	if h.Approvers != "" && ((h.Approvers != HeldApproversSSH && h.Approvers != HeldApproversRelease) || !h.Fixed) {
 		found = append(found, fieldRefusal("held_call.approvers", "names approvers this build does "+
 			"not know, or names them on a call that may be allowed always"))
 	}

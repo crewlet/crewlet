@@ -42,10 +42,13 @@ type fakeDesk struct {
 	leadsErr  error
 	labels    []string
 	labelsErr error
-	full      map[string]bool // buckets whose hour is spent
-	allowErr  error
-	buckets   []string
-	recordErr error
+	// itemLabels are the labels of items other than the run's, by id.
+	itemLabels map[string][]string
+	rulePaths  []string
+	full       map[string]bool // buckets whose hour is spent
+	allowErr   error
+	buckets    []string
+	recordErr  error
 
 	verdicts  []builtin.DelegatedVerdict
 	answers   []answered
@@ -54,6 +57,7 @@ type fakeDesk struct {
 
 func (d *fakeDesk) Rule(delegated.Kind) ([]string, int, int, bool) { return d.delegates, 1, 10, d.live }
 func (d *fakeDesk) SSHPatterns() []string                          { return d.patterns }
+func (d *fakeDesk) RulePaths(delegated.Kind) []string              { return d.rulePaths }
 
 func (d *fakeDesk) Held(_ context.Context, id string) (sandbox.PendingRun, bool, error) {
 	d.mu.Lock()
@@ -70,7 +74,13 @@ func (d *fakeDesk) Leads(_ context.Context, lead, seat string) (bool, error) {
 	return d.leads[[2]string{lead, seat}], d.leadsErr
 }
 
-func (d *fakeDesk) Labels(context.Context, sandbox.PendingRun) ([]string, error) {
+func (d *fakeDesk) Labels(_ context.Context, item *types.WorkItem) ([]string, error) {
+	if item == nil {
+		return nil, nil
+	}
+	if labels, ok := d.itemLabels[item.ID]; ok {
+		return labels, nil
+	}
 	return d.labels, d.labelsErr
 }
 

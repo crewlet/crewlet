@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -24,11 +26,13 @@ type DelegatedDecisions struct {
 type DelegatedRule struct {
 	Kinds []delegated.Kind `yaml:"kinds" json:"kinds" js:"required"`
 
-	Delegates []string `yaml:"delegates" json:"delegates" js:"required" desc:"The agent seat that decides, or two for a panel that must both allow (any disagreement escalates); a panel's two run on different first llm entries. A delegate can never request a kind it decides."`
+	Delegates []string `yaml:"delegates" json:"delegates" js:"required" desc:"The agent seat that decides, or two for a panel that must both allow (any disagreement escalates); a panel's two run on different first llm entries. A delegate of server commands holds no SSH access, and a request a delegate made goes to people."`
 
 	EscalateTo []string `yaml:"escalate_to" json:"escalate_to" js:"required" desc:"The people an escalation is put to, beside administrators: at least one. They read what was decided for them, and may approve what the rule's kinds ask as approvers do."`
 
 	SampleOneIn int `yaml:"sample_one_in,omitempty" json:"sample_one_in,omitempty" desc:"One decision in this many is shown to the escalate_to people for a spot-check after the fact: 1 to 1000. Empty is 10."`
+
+	AlwaysEscalatePaths []string `yaml:"always_escalate_paths,omitempty" json:"always_escalate_paths,omitempty" desc:"Repository path globs (docs/**, services/*/billing/**) a merge or deploy touching which goes to people, beside the built-in list: only for a rule of pr_merge or deploy. At most 64, each at most 128 bytes."`
 }
 
 // fieldDescriptions is the schema's description of the rule's kinds, which
@@ -36,8 +40,11 @@ type DelegatedRule struct {
 func (DelegatedRule) fieldDescriptions() map[string]string {
 	return map[string]string{
 		"kinds": "The kinds of request this rule delegates: " + string(delegated.KindSSHOperate) +
-			" (an agent's command on a server as its operate user). " + string(delegated.KindOther) +
-			" is never delegated.",
+			" (an agent's command on a server as its operate user), " + string(delegated.KindPRMerge) +
+			" (merging a change at the head it was asked about, " + toolname.AskToMerge + ") and " +
+			string(delegated.KindDeploy) + " (deploying a commit that holds merged changes, " +
+			toolname.AskToDeploy + "). " +
+			string(delegated.KindOther) + " is never delegated.",
 	}
 }
 
@@ -48,6 +55,9 @@ const (
 	delegatedMaxSampleOneIn = 1000
 	// delegatedMaxDelegates is a panel: two seats on two models.
 	delegatedMaxDelegates = 2
+	// delegatedMaxPaths bounds a rule's own globs, the SSH list's bound: a
+	// company's sensitive places are a handful of directories, not a tree.
+	delegatedMaxPaths = 64
 )
 
 // SampleRate is one in how many of the rule's decisions are spot-checked.
@@ -113,17 +123,23 @@ func (c *Company) SSHMayApprove() []string {
 	if s := c.Integrations.SSH; s != nil {
 		out = slices.Clone(s.Approvers)
 	}
-	for _, r := range c.DelegatedDecisions.Rules {
-		if !slices.Contains(r.Kinds, delegated.KindSSHOperate) {
-			continue
-		}
-		for _, h := range r.EscalateTo {
-			if !slices.Contains(out, h) {
-				out = append(out, h)
-			}
+	for _, h := range c.DelegatedDecisions.EscalateFor(delegated.KindSSHOperate) {
+		if !slices.Contains(out, h) {
+			out = append(out, h)
 		}
 	}
 	return out
+}
+
+// EscalateFor is the people the rule naming kind puts an escalation to,
+// whether or not delegation is on: they may approve the kind's requests.
+func (d DelegatedDecisions) EscalateFor(kind delegated.Kind) []string {
+	for _, r := range d.Rules {
+		if slices.Contains(r.Kinds, kind) {
+			return slices.Clone(r.EscalateTo)
+		}
+	}
+	return nil
 }
 
 // validateDelegatedDecisions holds every rule to delegable kinds each in one rule,
@@ -182,6 +198,7 @@ func (c *Company) validateDelegatedDecisions(o *org.Organization) error {
 			p.add(at(here, "sample_one_in"), ErrOutOfRange, "%d is outside 1 to %d; leave it empty for %d",
 				s, delegatedMaxSampleOneIn, delegated.DefaultSampleOneIn)
 		}
+		checkRulePaths(&p, at(here, "always_escalate_paths"), r)
 	}
 	return p.err()
 }
@@ -250,4 +267,27 @@ func firstLLM(r *org.Role) string {
 		return ""
 	}
 	return strings.TrimSpace(r.LLM[0])
+}
+
+// checkRulePaths holds a rule's own always-escalate globs to a rule that
+// delegates a merge or a deploy, and each to a path glob a repository's paths
+// are matched by (gitref.ParsePathGlob).
+func checkRulePaths(p *problems, path Path, r DelegatedRule) {
+	if len(r.AlwaysEscalatePaths) == 0 {
+		return
+	}
+	if !slices.Contains(r.Kinds, delegated.KindPRMerge) && !slices.Contains(r.Kinds, delegated.KindDeploy) {
+		p.add(path, ErrConflict, "paths escalate a merge or a deploy; this rule delegates neither %s nor %s",
+			delegated.KindPRMerge, delegated.KindDeploy)
+		return
+	}
+	if n := len(r.AlwaysEscalatePaths); n > delegatedMaxPaths {
+		p.add(path, ErrOutOfRange, "%d paths is more than %d", n, delegatedMaxPaths)
+		return
+	}
+	for i, glob := range r.AlwaysEscalatePaths {
+		if _, err := gitref.ParsePathGlob(glob); err != nil {
+			p.add(idx(path, i), ErrUnknownValue, "%q is not a path glob: %s", glob, err.Error())
+		}
+	}
 }

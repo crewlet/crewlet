@@ -413,6 +413,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// and a delegate's verdict carries out what a person's would.
 		builtin.SSHAskOperateTool:   true,
 		builtin.ReviewDelegatedTool: true,
+		// A merge or a deploy asked for carries out, once approved, what
+		// reaches production, so a worker is never handed one.
+		builtin.AskToMergeTool:  true,
+		builtin.AskToDeployTool: true,
 		// CHATLET. Its reads are reads; saying something and
 		// reacting are words on somebody else's screen; joining and
 		// leaving move only where this seat listens, which is its own.

@@ -503,6 +503,21 @@ const (
 	// operate command before it is called, so the call it names runs without
 	// a second prompt (ADR-0125). An agent's alone, by its operate grant.
 	ActionSSHAskOperate Action = "ask_to_operate"
+	// ActionAskToMerge asks to merge one change at exactly the head it names,
+	// held on the agent's run for a delegate or a person (ADR-0125); an
+	// approval merges that head as the agent, whose own credential and the
+	// target's own rules still decide the merge. Any agent's, in its own run.
+	ActionAskToMerge Action = "ask_to_merge"
+	// ActionAskToDeploy asks to deploy one commit holding merged changes to
+	// an environment, held likewise; an approval is handed back to the run,
+	// which deploys with its own tools. Any agent's, in its own run.
+	ActionAskToDeploy Action = "ask_to_deploy"
+	// ActionReleaseApprove answers a merge or a deploy an agent asked for
+	// (`POST /mcp-approvals/{id}`): allow it once or deny it. An
+	// administrator's, a lead's of the seat, or a person's the kind's
+	// delegated-decisions rule names in escalate_to, at the step-up window;
+	// never an agent's or the assistant's.
+	ActionReleaseApprove Action = "release.approve"
 	// ActionSSHRequester is a server reached FOR whoever woke the turn of an
 	// agent holding an SSH grant: anybody of the company who may act, a
 	// colleague seat among them, and nobody outside it.
@@ -1768,6 +1783,16 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 	ActionSSHAskOperate: {class: ClassAdmin, seatGrant: SeatGrantSSHOperate, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	// A MERGE OR A DEPLOY IS ASKED FOR BY ANY AGENT, in its own run: asking
+	// changes nothing, and what an approval carries out is still the agent's
+	// own credential's and its target's rules'.
+	ActionAskToMerge:  {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAskToDeploy: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND APPROVED BY A PERSON ANSWERABLE FOR IT, as recently confirmed as an
+	// SSH command: the seat's lead, an administrator, or a person the kind's
+	// rule names in escalate_to ([Object.Named]).
+	ActionReleaseApprove: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
 	// A DELEGATED REQUEST IS DECIDED BY A SEAT A RULE NAMED, which can never
 	// request the kind it decides; the engine, not this row, bounds what its
 	// allow carries out (ADR-0125).
@@ -2265,6 +2290,9 @@ var assistantNever = map[Action]neverEntry{
 		"and the assistant deciding it would be a model approving a model's call", tellApproval},
 	ActionSSHOperateApprove: {"an agent's command on a production server runs only as a person " +
 		"approved it, and the assistant approving it would be a model approving a model's command", tellApproval},
+	ActionReleaseApprove: {"a merge or a deploy an agent asked for goes ahead only as a person or a " +
+		"delegate approved it, and the assistant approving it would be a model approving a model's request",
+		tellApproval},
 	ActionSSHAuditRead: {"the SSH audit answers each command's text in clear, which can carry a " +
 		"credential typed into it", tellSSHAudit},
 }

@@ -335,6 +335,10 @@ var filed = []struct {
 	{CodeDequeueChangeTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeRevertChangeTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeRerunChecksTool, GroupCode, GateGitlet, reachesNoVendor},
+	// A MERGE OR A DEPLOY ASKED FOR, held for a delegate or a person: any
+	// agent's to ask, the carrying out its own credential's (release.go).
+	{AskToMergeTool, GroupCode, GateEverybody, reachesNoVendor},
+	{AskToDeployTool, GroupCode, GateEverybody, reachesNoVendor},
 
 	{FleetHealthTool, GroupHealth, GateHealthTools, reachesNoVendor},
 	{CodeStatusTool, GroupHealth, GateHealthTools, reachesNoVendor},

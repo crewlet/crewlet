@@ -136,6 +136,11 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
 	deps.SSH = SSHToolDeps(e)
 	deps.Delegated = DelegatedToolDeps(e)
+	// AND THE RELEASE REQUESTS' PULL REQUESTS, where the company runs GitHub:
+	// read and merged as the requesting seat's own app (releasepulls.go).
+	if gh := c.Config.Integrations.GitHub; gh != nil && gh.Enabled {
+		deps.Pulls = releasePulls{engine: e}
+	}
 	// AND THE ROOMS. Without this the nine chat tools were built,
 	// documented and registered against a zero [builtin.ChatDeps] — which
 	// gates every one of them off — so a company on `chat.backend: chatlet`
