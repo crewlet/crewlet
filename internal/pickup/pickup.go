@@ -4,9 +4,9 @@
 //
 // # Once per item version
 //
-// A pickup is identified by [Key]: the seat, the item, the last change
-// somebody else made to it, its status and, for started work, the seat's own
-// last progress on it. Its event id is derived from the key, so the fleet's
+// A pickup is identified by [Key]: the seat, the item, the last change to it
+// that would have woken the seat, its status and, for started work, the seat's
+// own last progress on it. Its event id is derived from the key, so the fleet's
 // completion ledger refuses it again on any node and across restarts, and a
 // fleet claim on the key keeps two nodes from both sending it during a move.
 // A seat's own comment moves no part of the key, so a comment alone does not
@@ -64,9 +64,9 @@ const Tick = time.Minute
 // unchecked for longer, and a shorter one would spend a turn an hour on words.
 const RecheckAfter = 24 * time.Hour
 
-// Key identifies one pickup: the seat, the item, the last change somebody
-// other than the seat made to it, its status, the seat's own progress on it
-// when started, the start it waited until, and the recheck it came back for.
+// Key identifies one pickup: the seat, the item, the last change to it that
+// would have woken the seat, its status, the seat's own progress on it when
+// started, the start it waited until, and the recheck it came back for.
 type Key struct {
 	Seat       uuid.UUID
 	Item       string

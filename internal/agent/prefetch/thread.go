@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -262,8 +263,9 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // the block whose items are somebody else's prose.
 //
 // AND IT SAYS WHICH WAITING MESSAGES IT SHOWED ([Blocks.ThreadContextAnswered])
-// — the waking message's writer's, after this seat's own last reply and before
-// the message that woke the turn ([waitingMessages]) — kept in step with the
+// — the waking message's writer's, written for whom the turn works for, after
+// this seat's own last reply and before the message that woke the turn
+// ([waitingMessages]) — kept in step with the
 // lines through every bound. Only a
 // message rendered VERBATIM counts: one left out was never seen, and one
 // condensed into the middle's account was seen as a model's paraphrase, and a
@@ -277,7 +279,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	// authors runs beside them too: who said each line, so the fence names
 	// the speakers of what it holds and nobody whose message was left out.
 	authors := make([]provenance.Author, 0, len(read.Messages))
-	waitingFor := waitingMessages(read, r.Message)
+	waitingFor := waitingMessages(read, r.Message, r.WorkingFor)
 	// rootSlot says the read carried a root at all; rootShown says it
 	// rendered as a message rather than as its stand-in. The two are apart
 	// because the message count reports what was HANDED OVER, and a notice
@@ -428,10 +430,11 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 }
 
 // waitingMessages marks, by position in the read, the messages that were
-// waiting for the turn trigger woke: the trigger's own writer's, after this
-// seat's own last reply, before the trigger itself. Each is named by its id
-// and the version it was read at ([notify.Message.Version]), so its mark
-// drops the wake of the edit the turn was shown and never a later one.
+// waiting for the turn trigger woke: the trigger's own writer's, written for
+// whom the turn works for (workingFor), after this seat's own last reply,
+// before the trigger itself. Each is named by its id and the version it was
+// read at ([notify.Message.Version]), so its mark drops the wake of the edit
+// the turn was shown and never a later one.
 //
 // NOTHING, unless the read reached the trigger: a read that stopped short is
 // missing the newest messages — the trigger among them — and a trigger the
@@ -448,8 +451,17 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 // price, accepted: when another writer's turn failed and its message comes
 // back behind this one, that turn answers it even where this turn already
 // spoke to it.
-func waitingMessages(read notify.Transcript, trigger string) map[int]Answered {
-	if trigger == "" || read.StoppedShort {
+//
+// AND ONLY THOSE WRITTEN FOR WHOM THIS TURN WORKS FOR, as the partition keys a
+// carrier ([notify.WorkingForKey]): one agent's message written for another
+// requester is that requester's work, owed a turn of its own held to their
+// apps, as another writer's message is. Compared with the turn's own carrier,
+// never the trigger message's document, which keeps its post's carrier across
+// an edit made for somebody else. NOTHING where the read could not say whom
+// its messages were written for ([notify.Transcript.WorkingForUnread]): it then
+// cannot tell one requester's message from another's.
+func waitingMessages(read notify.Transcript, trigger string, workingFor *types.WorkingFor) map[int]Answered {
+	if trigger == "" || read.StoppedShort || read.WorkingForUnread {
 		return nil
 	}
 	at := -1
@@ -465,13 +477,15 @@ func waitingMessages(read notify.Transcript, trigger string) map[int]Answered {
 	if writer == "" {
 		return nil
 	}
+	whom := notify.WorkingForKey(workingFor)
 	out := map[int]Answered{}
 	for i := at - 1; i >= 0; i-- {
 		m := read.Messages[i]
 		if m.Own {
 			break
 		}
-		if m.ID != "" && m.ID != trigger && m.SenderID == writer {
+		if m.ID != "" && m.ID != trigger && m.SenderID == writer &&
+			notify.WorkingForKey(m.WorkingFor) == whom {
 			out[i] = Answered{ID: m.ID, Version: m.Version}
 		}
 	}

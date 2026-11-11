@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // ONLY WHO A QUESTION WAS PUT TO ANSWERS IT IN THE CONVERSATION (ADR-0077).
@@ -53,9 +54,16 @@ func TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation(t *testing.T) {
 // question its park put to audience.
 func parkedOnAQuestionPutTo(t *testing.T, audience ...string) *coordRig {
 	t.Helper()
+	return parkedOnAQuestionFor(t, nil, audience...)
+}
+
+// parkedOnAQuestionFor is [parkedOnAQuestionPutTo] for a run that works for
+// whom (nil: the run's own work), as a turn a colleague's write woke records it.
+func parkedOnAQuestionFor(t *testing.T, whom *types.WorkingFor, audience ...string) *coordRig {
+	t.Helper()
 	rig := newCoordRig(t)
 	rig.audience.resolves(Audience{Handles: audience})
-	rig.launch("t1")
+	rig.launchWith("t1", func(run *PendingRun) { run.WorkingFor = whom })
 	rig.ask("t1", Ask{Question: "which branch?", To: AskToManager, Decision: choosing("which branch?")})
 	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")

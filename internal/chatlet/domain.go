@@ -104,7 +104,9 @@ const ChatLogDuplicates = 2 * time.Minute
 // 3 000 over its 100 seats, the turns [ChatMessagesPerDay] is derived from —
 // times the four chat reads a turn is declared to make, each at the seat's own
 // level ([statelog.SurfaceSeat]), so each a barrier: the turn-start thread read
-// ([ThreadReader]), the room read a reply is written from, the lookup a room's
+// ([ThreadReader]) — ONE read that runs, even where it falls back to the plain
+// thread during a rolling upgrade, since the second walk is asked only after
+// no node ran the first — the room read a reply is written from, the lookup a room's
 // name resolves through, and the visible set a search intersects. Past twice
 // it — eight a turn — seats are re-reading rooms in a loop, which is exactly
 // the drift worth telling an operator about. A surface that starts reading

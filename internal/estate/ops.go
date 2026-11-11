@@ -282,6 +282,11 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.Transcript, error)
 	Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 		fresh statelog.Freshness) (chatlet.Thread, error)
+	// TurnThread is Thread's one read with whom each of its messages was
+	// written for ([chatlet.TurnThread]): the engine's turn-start read alone
+	// ([TurnThreads]), which no reader's surface asks.
+	TurnThread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+		fresh statelog.Freshness) (chatlet.TurnThread, error)
 	RoomNames(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
 	Directory(ctx context.Context, viewer string,
@@ -2430,6 +2435,22 @@ var opChatThread = define("chat.thread", opRead, chatDomain, false,
 			return chatlet.Thread{}, errNoHalf
 		}
 		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+// THE ENGINE'S TURN-START THREAD READ: chat.thread's one read with whom each
+// of its messages was written for ([chatlet.TurnThread]), which no reader is
+// ever handed. An operation of its own rather than a member on chat.thread's
+// answer, whose type every reader's surface holds and which an older data
+// node would refuse to answer with a member it does not declare. Asked only
+// through [TurnThreads], which the engine alone builds; an older data node
+// does not declare it, answers it unserved, and the facade reads the plain
+// thread instead.
+var opChatTurnThread = define("chat.turn_thread", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatThreadArgs) (chatlet.TurnThread, error) {
+		if b.Chat == nil {
+			return chatlet.TurnThread{}, errNoHalf
+		}
+		return b.Chat.TurnThread(ctx, a.Viewer, a.Query, a.Fresh)
 	})
 
 type chatRoomNamesArgs struct {

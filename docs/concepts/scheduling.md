@@ -683,12 +683,13 @@ the last word anybody said about that item.
   one update is an assignment by whoever made it. Naming the assignee the
   item already has moves nothing and is none. A seat the organisation no
   longer holds is worked for as a stranger, and a write an older build
-  recorded carries no apps. Work the seat filed for itself is worked as its
-  own. An agent's assignment made in a turn somebody woke is the
-  exception for now: the turn the assignment wakes works for that somebody,
-  but the pickup reads only the history row's writer, the agent, until
-  crewlet#798's piece 4b-ii reads its `working_for`, which the row already
-  keeps.
+  recorded carries no apps. An agent's assignment or filing made in a turn
+  somebody woke is worked for that somebody, as the turn it woke was: the
+  history row keeps whom it was written for (`working_for`). Work the seat
+  filed for itself is its own, unless it filed it in a turn for somebody;
+  and its own take of an item counts only when it was made for somebody, so
+  a take-back made on its own initiative still works for whoever assigned
+  the item before.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under

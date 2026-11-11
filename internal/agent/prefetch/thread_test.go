@@ -27,6 +27,9 @@ type threads struct {
 	// hosted is what the engine's own chat says of its transcripts: every
 	// sender authenticated as a company principal.
 	hosted bool
+	// unread is a read that could not say whom its messages were written
+	// for, as the engine's own chat says of a fallback to the plain thread.
+	unread bool
 	asked  []notify.Thread
 }
 
@@ -37,6 +40,7 @@ func (s *threads) ReadThread(_ context.Context, _ string, t notify.Thread) (noti
 	}
 	return notify.Transcript{
 		Messages: s.messages, Older: s.older, StoppedShort: s.stoppedShort, Hosted: s.hosted,
+		WorkingForUnread: s.unread,
 	}, true
 }
 
