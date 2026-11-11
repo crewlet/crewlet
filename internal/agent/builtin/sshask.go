@@ -215,7 +215,8 @@ func (t *sshOperate) RunDecided(ctx context.Context, turn *turnctx.Turn, args ma
 	}
 	ctx = tools.WithApproval(ctx, tools.Approval{By: act.AnsweredBy, HeldID: held,
 		Binding: sshint.OperateBinding(h)})
-	res, err := t.CallForTurn(ctx, turn, args)
+	res, _, err := tools.Invoke(ctx, tools.Invocation{Name: t.Name(), Tool: t,
+		Args: tools.ArgsOf(t, false, args), AsSeat: true, Turn: turn, Where: t.Name()})
 	if err != nil {
 		return faulted(ctx, t.Name(), err, t.Name()+" was approved through the decision and did not finish"), true
 	}

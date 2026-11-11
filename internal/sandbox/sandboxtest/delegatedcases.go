@@ -68,20 +68,23 @@ func testAPanelVerdictIsRecordedOncePerDelegate(t *testing.T, s sandbox.PendingS
 	if err != nil || !ok || len(got.Delegation.Given) != 1 || got.Delegation.Given[0].By != "security-a" {
 		t.Fatalf("the first delegate's answer = %+v, %v, %v; want it recorded", got.Delegation, ok, err)
 	}
-	if _, again, err := s.GiveDelegateVerdict(ctx, "t-panel", held.LaunchID, held.ID,
-		verdictBy("security-a", "deny")); err != nil || again {
-		t.Fatalf("a delegate's second answer = %v, %v; want nothing written", again, err)
+	_, again, againErr := s.GiveDelegateVerdict(ctx, "t-panel", held.LaunchID, held.ID,
+		verdictBy("security-a", "deny"))
+	if againErr != nil || again {
+		t.Fatalf("a delegate's second answer = %v, %v; want nothing written", again, againErr)
 	}
-	if _, stranger, err := s.GiveDelegateVerdict(ctx, "t-panel", held.LaunchID, held.ID,
-		verdictBy("intruder", "allow")); err != nil || stranger {
-		t.Fatalf("an answer by a seat the call was not put to = %v, %v; want nothing written", stranger, err)
+	_, stranger, strangerErr := s.GiveDelegateVerdict(ctx, "t-panel", held.LaunchID, held.ID,
+		verdictBy("intruder", "allow"))
+	if strangerErr != nil || stranger {
+		t.Fatalf("an answer by a seat the call was not put to = %v, %v; want nothing written", stranger,
+			strangerErr)
 	}
 	got, ok, err = s.GiveDelegateVerdict(ctx, "t-panel", held.LaunchID, held.ID, verdictBy("security-b", "allow"))
 	if err != nil || !ok || len(got.Delegation.Given) != 2 {
 		t.Fatalf("the second delegate's answer = %+v, %v, %v; want both on the call", got.Delegation, ok, err)
 	}
-	if _, _, err := s.GiveDelegateVerdict(ctx, "t-panel", held.LaunchID, held.ID,
-		sandbox.HeldVerdict{By: "security-b", Verdict: "maybe", Confidence: "high", At: base}); err == nil {
+	if _, _, badErr := s.GiveDelegateVerdict(ctx, "t-panel", held.LaunchID, held.ID,
+		sandbox.HeldVerdict{By: "security-b", Verdict: "maybe", Confidence: "high", At: base}); badErr == nil {
 		t.Fatalf("an answer naming no verdict was taken")
 	}
 }
