@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -410,5 +411,27 @@ func TestARotationPromotesOnlyOnceEveryServerPassedWithTheStagedAuthority(t *tes
 	}
 	if res := rotate("rotate"); res.Code != http.StatusBadRequest {
 		t.Errorf("an unknown action = %d: %s", res.Code, res.Body)
+	}
+}
+
+// THE AUDIT'S PAGE IS THE READER'S OWN: the route admits every limit up to the
+// access log's page and refuses the first past it, naming the field, rather
+// than admitting a page the reader then refuses as an error of its own.
+//
+// Mutation: bound the route at 200 again, and a limit one past the reader's
+// page is admitted.
+func TestTheSSHAuditsPageIsTheReadersOwn(t *testing.T) {
+	t.Parallel()
+	s := newSurfaceWithSSH(t, &fakeSSHAccess{}, coordmemory.NewFleet())
+	s.seed(t)
+	at := func(limit int) *httptest.ResponseRecorder {
+		return s.do(t, http.MethodGet, "/setup/integrations/ssh/audit?kind=command&limit="+strconv.Itoa(limit), "", nil)
+	}
+	if res := at(accessdomain.MaxPageSize); res.Code != http.StatusOK {
+		t.Errorf("a page of the reader's own size = %d: %s", res.Code, res.Body)
+	}
+	if res := at(accessdomain.MaxPageSize + 1); res.Code != http.StatusBadRequest ||
+		!strings.Contains(res.Body.String(), `"field":"limit"`) {
+		t.Errorf("a page past the reader's = %d: %s", res.Code, res.Body)
 	}
 }

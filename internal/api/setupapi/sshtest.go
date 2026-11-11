@@ -112,9 +112,6 @@ func (s *Service) sshTest(w http.ResponseWriter, r *http.Request) {
 		"host": host.ID, "authority": ca.Fingerprint(), "ok": ok, "steps": steps, "at": at})
 }
 
-// maxAuditPage bounds an audit page, which the reader holds to its own limit.
-const maxAuditPage = 200
-
 // sshAudit serves GET /setup/integrations/ssh/audit: certificates or commands,
 // newest first, narrowed by seat, host and time; a command's text opened.
 func (s *Service) sshAudit(w http.ResponseWriter, r *http.Request) {
@@ -133,9 +130,11 @@ func (s *Service) sshAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > maxAuditPage {
+		// THE READER'S OWN BOUND, never a second number: a page past it is one
+		// the reader refuses, answered as the request's fault.
+		if err != nil || n < 1 || n > accessdomain.MaxPageSize {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid, map[string]string{
-				"field": "limit", "detail": "limit is 1 to " + strconv.Itoa(maxAuditPage)})
+				"field": "limit", "detail": "limit is 1 to " + strconv.Itoa(accessdomain.MaxPageSize)})
 			return
 		}
 		query.Limit = n
