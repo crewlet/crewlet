@@ -8,10 +8,13 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -136,5 +139,111 @@ func TestAFailedTurnRecordsNothingAsWorkedThrough(t *testing.T) {
 	key := workedThroughKey("1.1")
 	if completions.Worked(ctx, "swe", []string{key})[key] {
 		t.Fatal("a turn that failed recorded a message it was shown as answered")
+	}
+}
+
+// chatWake is bea's Chatlet message in thread msg-0 of room-1, written for
+// whom, as Chatlet's parser states it: its record's op as the event type, and
+// the position the record was committed at as its trigger.
+func chatWake(id string, op chatlet.OpKind, trigger string, whom *types.WorkingFor) *events.Event {
+	e := events.New(types.ExternalNotification{
+		NotificationSource: chatlet.Source, SourceEventType: string(op),
+		Sender: "bea", Body: "the plan",
+		Writer: notify.FirstPartyWriter(iam.ActorAgent, "bea", nil, whom),
+		Metadata: map[string]string{
+			notify.TransportField: chatlet.Source, notify.ChannelField: "room-1",
+			notify.ThreadField: "msg-0", notify.MessageIDField: id,
+		},
+	}, events.TraceContext{})
+	e.Source = "notify." + chatlet.Source
+	e.Timestamp = clock
+	notifyStamp(e, "chat:room-1:msg-0", "chat:room-1:msg-0")
+	if trigger != "" {
+		e.Payload[notify.TriggerField] = trigger
+	}
+	return e
+}
+
+// AN EDIT'S WAKE IS DROPPED ONLY WHERE A TURN FOR ITS REQUESTER WAS SHOWN THAT
+// EDIT, end to end through the dispatcher.
+//
+// A turn woken by bea's message msg-3, written for ada, was shown bea's earlier
+// msg-1 waiting at its edit e1, and reports it: its post's key, and the key of
+// version e1 for ada. A mark of the message alone used to drop every later
+// wake of it, an edit made after the read included, whose words no turn saw.
+// Now the redelivery of msg-1's post is dropped, and so is e1's wake made for
+// ada, with a reason that names the edit. But e1's wake made for omar runs,
+// owed a turn worked for omar; so does a later edit e2; and so does an edit's
+// wake that carries no trigger position, since nothing says which version it
+// is.
+//
+// Mutation: key an edit's wake by the message's key, as main did, or give the
+// edit's skip the post's reason, and a row goes red.
+func TestAnEditsWakeIsDroppedOnlyWhereATurnForItsRequesterWasShownThatEdit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	omar := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "omar"}
+	at := func(seq uint64) string {
+		return statelog.Position{Stream: "chat", Generation: 1, Seq: seq}.String()
+	}
+	e1, e2 := at(41), at(57)
+	// What the marking turn reports, by the derivation the dispatch drops on
+	// (TestAMarkDropsOnlyTheEditItsTurnWasShownForTheSameWhom holds the two
+	// sides of it to each other).
+	post := workkey.Derive([]string{"chat-message", chatlet.Source, "room-1", "msg-1"})
+	edit := workkey.Derive([]string{"chat-edit", chatlet.Source, "room-1", "msg-1", e1,
+		notify.WorkingForKey(ada)})
+
+	r := &recorder{result: turn.Result{Decision: phase.Done, WorkedThrough: []string{post, edit}}}
+	d := dispatcher(t, r)
+	d.Completions = ledgerstore.NewMemoryCompletions()
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+	marking := chatWake("msg-3", chatlet.OpPost, at(60), ada)
+	if got := d.Dispatch(ctx, "swe", []*events.Event{marking}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("the marking turn = %v, want an ack", got.Outcome)
+	}
+	r.result = turn.Result{Decision: phase.Done}
+
+	const (
+		postReason = "a later turn was shown this message waiting in its thread and answered it there"
+		editReason = "a later turn was shown this edit waiting in its thread and answered it there"
+	)
+	cases := []struct {
+		name   string
+		ev     *events.Event
+		reason string // empty: the wake runs a turn
+	}{
+		{"msg-1's post, delivered again", chatWake("msg-1", chatlet.OpPost, at(30), ada), postReason},
+		{"the wake of edit e1, made for ada", chatWake("msg-1", chatlet.OpEdit, e1, ada), editReason},
+		{"the wake of edit e1, made for omar", chatWake("msg-1", chatlet.OpEdit, e1, omar), ""},
+		{"the wake of a later edit e2", chatWake("msg-1", chatlet.OpEdit, e2, ada), ""},
+		{"an edit's wake with no trigger position", chatWake("msg-1", chatlet.OpEdit, "", ada), ""},
+	}
+	for _, tc := range cases {
+		before := len(r.reqs)
+		if got := d.Dispatch(ctx, "swe", []*events.Event{tc.ev}); got.Outcome != queue.OutcomeAck {
+			t.Errorf("%s = %v, want an ack", tc.name, got.Outcome)
+			continue
+		}
+		ran := len(r.reqs) > before
+		switch {
+		case tc.reason == "" && !ran:
+			t.Errorf("%s was dropped, want a turn of its own: no turn was shown it working for "+
+				"whom it was made for", tc.name)
+		case tc.reason != "" && ran:
+			t.Errorf("%s ran a turn, want it dropped: the marking turn answered it", tc.name)
+		case tc.reason != "":
+			var skipped *types.TurnTriggerSkipped
+			for _, e := range seen {
+				if s, ok := events.DataAs[*types.TurnTriggerSkipped](e); ok && s.TriggerID == tc.ev.ID.String() {
+					skipped = s
+				}
+			}
+			if skipped == nil || skipped.Reason != tc.reason {
+				t.Errorf("%s was dropped with %+v, want the reason %q", tc.name, skipped, tc.reason)
+			}
+		}
 	}
 }
