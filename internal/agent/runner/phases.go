@@ -365,6 +365,8 @@ type Resume struct {
 	// nothing was recorded — every call of the round and every note the turn
 	// has read, and arms none of the job's own loads ([Runner.inPlaceAfter],
 	// [Runner.sessionDecided]): the safe direction for a word that never came.
+	// An own run's copy is told the calls the round's log took late alone,
+	// which it is not known to hold, and its guard counts none of their loads.
 	HarnessEnd sandbox.HarnessEnd
 
 	// Answer is the run's closing text: what its harness said last, which the
@@ -397,11 +399,26 @@ type Resume struct {
 	// record ([turn.Work.Absorbed]), and read by nothing else.
 	Absorbed []ledger.Elided
 
+	// LateElided is how many of Elided's calls the log took late
+	// (sandbox.BridgeLog.LateElided): dropped, they keep no mark, so every
+	// relaunch that continues the round's session is told how many there
+	// were, under the late calls' own words, whatever its save point
+	// ([Runner.calledAfter], prompts.AfterSave.LateDropped), since no save
+	// point holds a late call.
+	LateElided int
+
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round
 	// made before a person's answer carried it on, and zero where no answer
 	// has: off the run's log (sandbox.BridgeLog.AnsweredThrough). Only a
 	// submission made after it is the round's ([sinceAnswer]).
 	Answered int
+
+	// BridgedRead is how many calls the round's log had taken at the read
+	// Bridged is (sandbox.ResumeRequest.BridgedRead): every call a brief
+	// built from Bridged can tell. A relaunch that carries the round on hands
+	// it to its launch ([Continuation.BriefRead]), whose opening marks every
+	// call the log took after it late ([BridgedCall.Late]).
+	BridgedRead int
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
@@ -482,6 +499,28 @@ type BridgedCall struct {
 	// call an older build appended, which every save point reads as after it.
 	Appended int
 
+	// Late is a call the round's log took after its job was replaced by a
+	// relaunch that carried the round on (sandbox.BridgeCall.Late): a call of
+	// an earlier job of the round, which no brief of the round had told when
+	// the log took it and the session of the job that made it may not hold.
+	// HELD BY NO SAVE POINT ([heldAt]), so every continuation of the round
+	// built after it landed is told it, under words of its own, and no rebuilt
+	// guard counts a load it made; and never the round's submission
+	// ([sinceAnswer]).
+	Late bool
+
+	// Abandoned is a call nobody waited for by the time it returned
+	// (sandbox.BridgeCall.Abandoned): its harness had cancelled it — Claude
+	// Code cancels a call at its tool timeout and discards a late answer — or
+	// its job's session on the bridge had ended. It ran and its effect
+	// happened, while the session of the job that made it shows it with no
+	// outcome or a failed one. HELD BY NO SAVE POINT, as a late call is
+	// ([heldAt]): every continuation of the round built after it landed is
+	// told it, under the late calls' words, and no rebuilt guard counts a load
+	// it made. Unlike a late call it may be the round's submission
+	// ([sinceAnswer]): its job, which was never replaced, made it.
+	Abandoned bool
+
 	// StartedAt is when the call was handed to the seat's surface, and
 	// Duration how long the surface took to answer — measured at the bridge,
 	// since the call ran inside the harness's own loop. Both zero on a call
@@ -516,6 +555,15 @@ type BridgedCall struct {
 	// whose arguments every record withholds ([ledger.Call.Withheld]), which
 	// the execute phase's record says in place of them.
 	Held, Approved bool
+
+	// HeldID names the held call an Approved call was made for
+	// (sandbox.BridgeCall.HeldID), "" on every other call: what tells the
+	// call a person approved for the answer a relaunch carries the round on
+	// with, whose outcome that relaunch's lead tells ([Asked.Held]), from one
+	// an earlier answer of the round approved, which no lead of the relaunch
+	// tells. So the brief tells the first once, in its lead, and the second
+	// among the round's calls as any call is ([Runner.calledAfter]).
+	HeldID string
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:

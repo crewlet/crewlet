@@ -704,6 +704,15 @@ A **view** is a saved query with a shape. Five shapes:
   on either, and the choice is remembered per shape, so arranging the table
   does not rearrange the list.
 
+  The Key, Status, Type and Assignee heads sort by what the value means
+  rather than how it is spelled: a key by its project and then its number
+  (`ENG-9` before `ENG-10`), a status in the board's order from To do to
+  Closed, a type in your catalogue's order (the builtins, then your own types
+  as you declared them), and an assignee by the seat's name in the org chart,
+  with unassigned work last in both directions. On **My work → Queue** every
+  item is held by the person whose day it is, so the Assignee column starts
+  off there; **Display → Columns** turns it on.
+
 **Every container has six views without anybody saving one**: one per shape,
 plus `trash` — a table carrying `removed=true` and `show_closed=true`. The
 trash is a builtin *view* rather than a sixth shape because what makes it the
@@ -775,7 +784,10 @@ page one does, and paging through a tie — every task at zero spend, or updated
 in the same instant — returns each task once, in the order one read draws. An
 order no index serves reads its scope for every page, as its first page does.
 A cursor belongs to the order that minted it, and re-sorting starts again from
-the first page.
+the first page. So does an edit to what an order is built from: `sort=type`
+follows the type catalogue and `sort=assignee` the seats' names in the org
+chart, and a cursor minted before either changed is refused rather than
+resumed in the middle of a different order.
 
 ### What a board groups on
 
@@ -1267,7 +1279,13 @@ has ever made, and it has no cheaper mode to fall back to. Its `kinds` are the
 change kinds below and nothing else: one the tracker does not have is
 **refused** naming every kind it does, never answered with an empty feed — a
 filter that matches nothing reads exactly like a project where nothing
-happened.
+happened. A change carries one kind, so one write that moves several fields is
+filed under one of them: handing an item over and setting its status in one
+update is a `status` change whose `fields` carry the assignee too. A kind that
+names a field — `status`, `assignee`, `collaborators`, `watchers`, `tags`,
+`routed` (the team) or `relations` (any link) — therefore keeps every change
+that moved that field, whatever kind it was filed under; a creation stays
+`created`, though its `fields` carry every value it was filed with.
 
 **Every change carries its own before and after.** A row says what KIND of
 change it was (`status`, `view_saved`, `project_updated`, …) and, in `fields`,

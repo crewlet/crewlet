@@ -678,9 +678,13 @@ the last word anybody said about that item.
   writer of the item's last assignment by somebody else, else of whoever
   filed it, and a credential to the apps it wrote under, exactly as the turn
   its assignment woke ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
-  A seat the organisation no longer holds is worked for as a stranger, and a
-  write an older build recorded carries no apps. Work the seat filed for
-  itself is worked as its own.
+  An assignment is any change that moved the item's assignee, whatever else
+  the same write changed: handing an item over and setting it to `todo` in
+  one update is an assignment by whoever made it. Naming the assignee the
+  item already has moves nothing and is none. A seat the organisation no
+  longer holds is worked for as a stranger, and a write an older build
+  recorded carries no apps. Work the seat filed for itself is worked as its
+  own.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under

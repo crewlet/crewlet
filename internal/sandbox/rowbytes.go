@@ -69,10 +69,13 @@ import (
 // ([MaxAbsorbedIdentityBytes]). 199 × 16,384 + 73,728 + 2 × 65,536 + 300 for
 // the keys, the commas and the count is 3,465,516, inside the share. The rest
 // of the log is the turn's earlier rounds' tool names ([MaxPriorCalls]) and the
-// log's own identifiers — its job, its round, the answer it was cut for — which
-// weigh tens of KiB: the room left above them is a later build's, for keys it
-// adds to the log or to an identity ([BridgeLog.Extra], [ElidedCall.Extra]); a
-// key added to a call comes out of the call's own share.
+// log's own fields — its identifiers (its job, its round, the answer it was cut
+// for), every kind of change its round's calls committed, each once
+// ([BridgeLog.Committed]), and how many of the calls it dropped no save point
+// holds ([BridgeLog.LateElided]) — which weigh tens of KiB together at their
+// worst (TestTheWholeLogFitsItsBudget): the room left above them is a later
+// build's, for keys it adds to the log or to an identity ([BridgeLog.Extra],
+// [ElidedCall.Extra]); a key added to a call comes out of the call's own share.
 //
 // THE PARKED STATE is held by the park, which is the one writer of it: past
 // [ExecuteStateBytes] the closed rounds' payloads are condensed, and a state
@@ -94,7 +97,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,701,281  (with 2,988,597 to spare)
+//	every other field, measured ..... 1,701,403  (with 2,988,475 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
@@ -132,8 +135,10 @@ const (
 
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
-	// value — the turn's earlier rounds' tool names, the log's identifiers
-	// and the room for a later build's keys — is what [RowBytes] leaves.
+	// value — the turn's earlier rounds' tool names, the log's own fields (its
+	// identifiers, the kinds of change its calls committed and its count of
+	// the dropped calls no save point holds) and the room for a later build's
+	// keys — is what [RowBytes] leaves.
 	BridgeLogBytes = 3<<20 + 1<<18 + 1<<16
 
 	// ExecuteStateBytes is the parked turn's share of the row: the
@@ -269,10 +274,17 @@ const (
 	// MaxBridgeCallBytes bounds one call as the log holds it, every field at
 	// its bound: the name at its worst (256 bytes escaped six-fold, 1,538),
 	// the arguments (8,192) and the output (4,096), the digest and every
-	// other field (at most 600, measured by TestABridgedCallIsHeldToItsShare
+	// other field (at most 700, measured by TestABridgedCallIsHeldToItsShare
 	// with both its places at their widest — the place it was admitted at and
 	// the one its round's log took it at, [BridgeCall.Appended], whose 31
-	// bytes at their widest the 600 held room for), and what is left — 1,958
+	// bytes at their widest the 600 this figure was held room for — its late
+	// mark set, [BridgeCall.Late], whose 12 bytes it held room for too, the
+	// mark that nobody waited for it, [BridgeCall.Abandoned], whose 17 it held
+	// room for as well, and every kind of change a call can commit to its
+	// turn, [BridgeCall.Committed], each once, whose 61 it held no room for:
+	// 654 measured with every one of them, 593 before those kinds; 700 is
+	// that worst rounded up to the next hundred, as 600 was for the marks
+	// since, which leaves the next small mark room), and what is left — 1,858
 	// bytes — the room for keys a LATER BUILD ADDS TO A CALL
 	// ([BridgeCall.Extra]), which this build carries unread.
 	MaxBridgeCallBytes = 16 << 10
@@ -280,9 +292,12 @@ const (
 	// MaxSubmissionArgsBytes is what the log keeps of the arguments of the
 	// run's NEWEST SUCCESSFUL SUBMISSION — the `submit_work` the collection
 	// replays as the round's outcome (internal/agent/runner's
-	// replaySubmission), which therefore has to be in the log whole. Every
-	// other call's arguments, an earlier submission's included, are held to
-	// [MaxBridgeArgsBytes].
+	// replaySubmission), which therefore has to be in the log whole — and
+	// NEVER A LATE ONE ([BridgeCall.Late]), which the collection never
+	// replays: a job a relaunch replaced made it, and the round's submission is
+	// the one the job carrying the round on makes. Every other call's
+	// arguments, an earlier submission's and a late one's included, are held
+	// to [MaxBridgeArgsBytes].
 	//
 	// TWICE [MaxSubmissionBytes], what the live tool accepts: the tool weighs
 	// the submission as it reads it, its arguments in their canonical form,
@@ -432,9 +447,24 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	return call
 }
 
+// unheld reports whether no save point holds call, whatever its number: a call
+// the log took late ([BridgeCall.Late]), or one its harness stopped waiting for
+// before it returned ([BridgeCall.Abandoned]). Each is told to every
+// continuation of its round by its mark, so the log's dropped middle keeps it
+// while an ordinary call is left there ([appendBounded]) and counts one it gives
+// up ([BridgeLog.LateElided]), since a dropped call keeps no mark.
+func (c BridgeCall) unheld() bool { return c.Late || c.Abandoned }
+
 // submitted reports whether call is a submission the collection could replay:
-// a `submit_work` the surface did not refuse.
-func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !call.Failed }
+// a `submit_work` the surface did not refuse, and the log did not take late
+// ([BridgeCall.Late]) — which the collection never takes for the round's
+// (internal/agent/runner's sinceAnswer), so a late one given the round's
+// whole share would cut the round's own submission to the ordinary one, and
+// the collection, refusing a cut submission, would read the round as one that
+// submitted nothing.
+func submitted(call BridgeCall) bool {
+	return call.Name == SubmitWorkTool && !call.Failed && !call.Late
+}
 
 // appendCall adds one finished call to the log, with absorbed — the calls the
 // run's call log took in from the call's own work — and holds the log to its
@@ -455,6 +485,15 @@ func submitted(call BridgeCall) bool { return call.Name == SubmitWorkTool && !ca
 // than carried at whatever size it came. Keeping a call already kept changes
 // nothing ([keptCall]).
 //
+// THE NEWEST AS THE COLLECTION READS IT, which replays it: of the submissions
+// it could replay ([submitted], never a late one), the one placed last in the
+// order the bridge admitted them ([BridgeCall.Seq]), and of two at one place —
+// a session opened again on the job while a call of the closed one was still
+// in flight reuses its place — the one the log took last, as the collection's
+// stable sort by place leaves it. A share kept on any other leaves the one the
+// collection replays cut, which it refuses, and the round reads as one that
+// submitted nothing.
+//
 // AND THE CALL IS NUMBERED AS THE ROUND'S NEXT APPEND ([BridgeCall.Appended]),
 // here and nowhere else, before the bound drops anything: this is the one
 // writer of what the log lists and of what it counts without listing, so the
@@ -473,6 +512,11 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	l.Calls, l.Elided, elided = appendBounded(l.Calls, l.Elided, next)
 	for _, call := range elided {
 		dropped = fold(dropped, identity(call), elidedTally)
+		// AND ONE NO SAVE POINT HOLDS COUNTED AS SUCH, its mark gone with
+		// the call ([BridgeLog.LateElided]).
+		if call.unheld() {
+			l.LateElided++
+		}
 	}
 	for _, e := range absorbed {
 		if e.Calls <= 0 {
@@ -483,7 +527,7 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	l.ElidedCalls, l.AbsorbedCalls = dropped, taken
 	newest := -1
 	for i, call := range l.Calls {
-		if submitted(call) && (newest < 0 || call.Seq > l.Calls[newest].Seq) {
+		if submitted(call) && (newest < 0 || call.Seq >= l.Calls[newest].Seq) {
 			newest = i
 		}
 	}

@@ -71,7 +71,9 @@ func (t *taskActivity) Parameters() map[string]any {
 				"type": "string",
 				"description": "Comma-separated change kinds to keep, such as " +
 					"`status,assignee`, from: " + changeKindNames() +
-					". Omit for everything.",
+					". A kind that names a field (status, assignee, collaborators, " +
+					"watchers, tags, routed, relations) also keeps a change filed " +
+					"under another kind that moved that field. Omit for everything.",
 			},
 			"actor": map[string]any{
 				"type": "string",

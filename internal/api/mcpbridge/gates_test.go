@@ -304,3 +304,62 @@ func TestClosingOneRunLeavesAnotherServing(t *testing.T) {
 		t.Error("the other run's box lost its connection")
 	}
 }
+
+// A CALL NOBODY WAITED FOR IS RECORDED SO. The bridge runs a call under its
+// run's context, so a call goes on once its harness cancels it — Claude
+// Code cancels the request at its tool timeout and discards a late answer — and
+// once the opening it was made on ends, its box's sessions closed behind it.
+// Either way its effect happens and no harness is handed its answer: the session
+// of the job that made it holds it with no outcome or a failed one, so its
+// record says nobody waited (mcpbridge.Call.Abandoned), as read the moment its
+// tool returned. A call returned to a harness still waiting for it, and one no
+// request carries, are recorded as ever.
+//
+// Mutation: read nothing of whether the harness still waits, or nothing of the
+// opening's end, and a call nobody was handed the answer of is recorded as one
+// its harness had.
+func TestACallNobodyWaitedForIsRecordedSo(t *testing.T) {
+	t.Parallel()
+	held := newHeldTool("delegate")
+	g := newGated(t, held)
+	t.Cleanup(held.free)
+	opened := mcpbridge.Dispatcher(g.session)
+	gaveUp := make(chan struct{})
+	close(gaveUp)
+	opened.Call(toolsession.Call{Name: "delegate", Arguments: map[string]any{}, Abandoned: make(chan struct{})})
+	opened.Call(toolsession.Call{Name: "delegate", Arguments: map[string]any{}, Abandoned: gaveUp})
+	opened.Call(toolsession.Call{Name: "read_page", Arguments: map[string]any{}})
+	<-held.entered
+	<-held.entered
+
+	// THE OPENING ENDS while a call runs on it: the run settles, or its next
+	// job's opening replaces it.
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		opened.Call(toolsession.Call{Name: "delegate", Arguments: map[string]any{"value": "hold"},
+			Abandoned: make(chan struct{})})
+	}()
+	<-held.entered
+	g.bridge.Close("run-1")
+	held.free()
+	<-returned
+
+	rows := g.ledger.rows()
+	if len(rows) != 4 {
+		t.Fatalf("%d rows, want the four calls: %+v", len(rows), rows)
+	}
+	for i, want := range []struct {
+		why       string
+		abandoned bool
+	}{
+		{"returned to the harness waiting for it", false},
+		{"its harness gave up on", true},
+		{"no request carries", false},
+		{"still running as its opening ended", true},
+	} {
+		if rows[i].Abandoned != want.abandoned {
+			t.Errorf("a call %s is recorded abandoned %v, want %v", want.why, rows[i].Abandoned, want.abandoned)
+		}
+	}
+}

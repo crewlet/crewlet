@@ -14,8 +14,10 @@ import (
 // copy is: a company that keeps no session takes none, and a capture the
 // relaunch does not continue — its keep still under way past the relaunch's
 // wait, or refused — is one the relaunch does not read. That copy holds every
-// call the job made only where its harness ENDED ITS OWN RUN — the job over, its
-// harness gone cleanly by itself, its script packing it — by the line a
+// call the job made — of one its harness gave up on, only that it timed out
+// ([BridgeCall.Abandoned]) — only where its harness ENDED ITS OWN RUN — the
+// job over, its harness gone cleanly by itself, its script packing it — by the
+// line a
 // capture's save point is drawn by ([readCapture], savepoint.go): a harness can
 // make a call, and have it answered, before it writes the call to its record
 // (measured on Claude Code 2.1.310), so one killed, crashed, told to stop or
@@ -57,7 +59,8 @@ type HarnessEnd string
 const (
 	// HarnessEndOwnRun is a harness that ended its own run: the job over, its
 	// harness gone cleanly by itself, its script packing its session. The copy
-	// its box holds has every call it made.
+	// its box holds has every call it made, and the outcome of each but one it
+	// gave up on ([BridgeCall.Abandoned]), which it holds as timed out.
 	HarnessEndOwnRun HarnessEnd = "own_run"
 	// HarnessEndCutOff is every other end ([readCapture]): a harness killed —
 	// past its end's grace, by its memory limit, by a crash — told to stop, or

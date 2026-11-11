@@ -1074,6 +1074,15 @@ export interface BridgeCall {
    * the work on, so neither is drawn as empty.
    */
   approved?: boolean;
+  /**
+   * A call the round's record took only after the job that made it was
+   * replaced by a relaunch that carried the round on: still running as the
+   * relaunch was readied, and finished after. A call of the round all the
+   * same, whose effect happened — but what it cost is charged to no job, it is
+   * never the round's submission, and every later continuation of the round is
+   * told it. Absent on every other call.
+   */
+  late?: boolean;
 }
 
 // ---------------------------------------------------------------------------

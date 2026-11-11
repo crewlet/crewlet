@@ -1463,6 +1463,19 @@ function BridgeCallGrid({ calls }: { calls: readonly BridgeCall[] }) {
                   approved
                 </Tag>
               ),
+              // A CALL THAT OUTLIVED ITS JOB, which the round's record took
+              // after a relaunch carried the round on: said, so a call charged
+              // to no job and told to every later continuation is not read as
+              // one of the job's own.
+              r.call.late && (
+                <Tag
+                  key="late"
+                  variant="neutral"
+                  title="Its run was replaced before it finished: a call of the round, charged to no launch"
+                >
+                  finished after a relaunch
+                </Tag>
+              ),
               callFailed(r.call) && (
                 <Tag key="failed" variant="danger">
                   failed

@@ -1495,6 +1495,18 @@ at the change.
   beside the one listed now, whether it is loosened, whether it holds the
   tool, and when the fleet first saw it. A held tool's row answers its level
   as `approve` with `held: true`.
+- **A change is shown whole.** A server's listing keeps the first KiB of each
+  description, enough for a list, while the definition's digest covers every
+  byte, so a server may change a sentence past that cut. Each definition is
+  therefore also kept whole, once under its digest: its title, the title its
+  hints carry, its description (up to 64 KiB of words) and its schemas (up to
+  64 KiB). A change is served from those, so its before and after differ
+  where the server changed them. A definition waiting for a review is kept
+  before any other within the 1 MiB a listing keeps of its definitions, and
+  the accepted one is kept for as long as its acceptance stands. A part the
+  engine can still not show (a definition past those bounds, or past that
+  budget) is named in the change's `unshown`, and the review says it changed
+  and is not shown, never that nothing changed.
 - **Accept it or keep it blocked** with
   [`POST /mcp-servers/{name}/changes`](../reference/api-endpoints.md#post-mcp-serversnamechanges),
   naming each change by the digest of the definition you reviewed, at a
@@ -1521,13 +1533,29 @@ and one it no longer lists *Removed*, counts the changes over the list with
 **Review**, and filters them with **Changed**; the tab itself is marked while
 any wait. The alarm's fix opens the same review. **Review** shows each change,
 one that now claims less risk first and flagged: a description or title as a
-text diff, the arguments a line each, and each hint that moved with its old
-word and its new. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
+text diff, the arguments a line each (or the schemas whole, where what moved
+is inside an argument or in the output), and each hint that moved with its old
+word and its new. A part the engine cannot show is said to have changed and
+not to be shown. **Accept change** (for a new tool, **Accept the new tool**) and **Keep
 blocked** decide it by the digest of the definition shown, and a removal is
 accepted with **Accept that it went**. A definition the server swapped since it
 was shown is refused and read again. The **Servers** tab's **Waiting on you**
 counts the servers with changes to review beside the calls waiting for an
 answer.
+
+A server that rewords its tools often leaves several such changes at once, so
+when two or more of them only reword a read-only tool, **Accept N wording
+changes** accepts them together. A change qualifies when only its title or
+description moved, every part it moved is shown, it claims no less risk, and
+the tool is read-only both as the server declares it and as it runs here, your
+overrides applied. A rewording can still change what a tool says it does, so
+the action first lists each tool with the words it changed, one line each
+(hover a cut line for the whole of it), and nothing is decided until you press
+**Accept N changes** there; **Cancel** returns to the review. That press sends
+every tool's reviewed digest in one decision, so a definition the server
+swapped since is refused by name and nothing is decided. Every other change (new or changed arguments, changed hints, a claim
+of less risk, a tool that writes, a tool added or removed) is decided one by
+one.
 
 ### Each agent's tools, and the budget
 

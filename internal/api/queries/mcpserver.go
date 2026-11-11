@@ -27,8 +27,8 @@ import (
 )
 
 // MCPListingReader is the fleet's listings of its MCP servers' tools
-// (internal/coord's mcplisting.go) as this node holds them, and the schemas
-// they name.
+// (internal/coord's mcplisting.go) as this node holds them, and the
+// definitions they name.
 type MCPListingReader interface {
 	// MCPListings is every node's listing of every server, whatever the
 	// node's presence: the answer filters them by the presence it reads
@@ -36,9 +36,9 @@ type MCPListingReader interface {
 	// yet, never a fleet that lists nothing.
 	MCPListings(ctx context.Context) ([]coord.MCPListing, error)
 
-	// MCPToolSchemas reads the schemas stored under digests, leaving out a
+	// MCPToolDefinitions reads the definitions stored under digests, leaving out a
 	// digest the store holds nothing under.
-	MCPToolSchemas(ctx context.Context, digests []string) (map[string]coord.MCPToolSchema, error)
+	MCPToolDefinitions(ctx context.Context, digests []string) (map[string]coord.MCPToolDefinition, error)
 
 	// MCPAccepted is the definition every server's tools' levels were
 	// decided on (internal/coord's mcpaccepted.go), as this node holds
@@ -343,8 +343,9 @@ type MCPToolView struct {
 	// applied; Raw is the server's own name for it.
 	Name string `json:"name"`
 	Raw  string `json:"raw"`
-	// Title and Description are the server's words, Description cut to
-	// [coord.MaxMCPToolDescriptionBytes].
+	// Title and Description are the server's words as a listing names
+	// them, Description cut to [coord.MaxMCPToolDescriptionBytes]: a list's
+	// summary. A change shows them whole ([MCPChangeView]).
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	// Annotations are its hints with the company's overrides applied, as
@@ -370,7 +371,7 @@ type MCPToolView struct {
 	Nodes     []string `json:"nodes"`
 	// InputSchema and OutputSchema are the definition's schemas, null
 	// where none is stored: an output schema the server publishes none
-	// of, schemas past [coord.MaxMCPToolSchemaBytes], or ones a sweep
+	// of, a definition past its bounds or its listing's, or one a sweep
 	// removed a moment ago.
 	InputSchema  map[string]any `json:"input_schema"`
 	OutputSchema map[string]any `json:"output_schema"`
@@ -529,13 +530,13 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	review := reviewOf(name, listings, accepted, entry)
 	tools, counted, kept := serverTools(listings, entry)
 	digests := slices.Compact(slices.Sorted(slices.Values(slices.Concat(kept, changeDigests(review.Changes)))))
-	schemas, err := s.MCPListings.MCPToolSchemas(ctx, digests)
+	definitions, err := s.MCPListings.MCPToolDefinitions(ctx, digests)
 	if err != nil {
 		return MCPServerAnswer{}, err
 	}
 	for i := range tools {
-		if schema, ok := schemas[tools[i].Digest]; ok {
-			tools[i].InputSchema, tools[i].OutputSchema = schemaObject(schema.Input), schemaObject(schema.Output)
+		if d, ok := definitions[tools[i].Digest]; ok {
+			tools[i].InputSchema, tools[i].OutputSchema = schemaObject(d.Input), schemaObject(d.Output)
 		}
 	}
 	out.Tools, out.ToolCount = tools, counted
@@ -546,8 +547,8 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		}
 		out.UnlistedLevels = UnlistedLevels(entry.Tools, out)
 	}
-	out.Tools = reviewTools(out.Tools, review, schemas)
-	out.Changes = changeViews(review, schemas)
+	out.Tools = reviewTools(out.Tools, review, definitions)
+	out.Changes = changeViews(review, definitions)
 	if out.Usage, out.Calls, err = s.mcpActivity(ctx, name); err != nil {
 		return MCPServerAnswer{}, err
 	}
@@ -665,7 +666,7 @@ func latestIdentified(listings []coord.MCPListing) *coord.MCPListing {
 // serverTools is every tool one server's live listings name, each once at the
 // level it runs at, and how many tools they count in all, never fewer than are
 // named (a node names at most [coord.MaxMCPListedTools]); kept are the digests
-// whose schemas are stored ([mergeListedTools]).
+// whose definitions are stored ([mergeListedTools]).
 //
 // THE ONE READING OF A SERVER'S TOOLS, which its page lists and each agent's
 // count is taken from ([Sources.mcpAgents]), so the two never disagree on which
@@ -692,9 +693,9 @@ func serverTools(listings []coord.MCPListing, entry *config.MCPServer) (tools []
 
 // mergeListedTools is every tool the listings name, each once by name, sorted:
 // the definition most instances list shown, the instances and nodes summed.
-// Its schemas are left for the caller to read, under kept: the digests shown
-// whose schemas a listing says are stored, sorted, so a definition listed
-// without them costs no read of the store.
+// Its definitions are left for the caller to read, under kept: the digests
+// shown whose definitions a listing says are stored, sorted, so a definition
+// listed without one costs no read of the store.
 func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []string) {
 	type definition struct {
 		tool      coord.MCPListedTool
@@ -734,7 +735,7 @@ func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []
 			instances += d.instances
 		}
 		shown := definitions[0].tool
-		if shown.SchemaKept {
+		if shown.DefinitionKept {
 			kept = append(kept, shown.Digest)
 		}
 		// WHAT THE NODES DID, for a server no entry decides: a tool any
