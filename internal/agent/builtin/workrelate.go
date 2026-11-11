@@ -309,35 +309,6 @@ func othersOfKind(task worklet.Task, kind worklet.RelationKind) []string {
 	return out
 }
 
-// parentParty is the item's parent as the wake needs it, or nil.
-//
-// READ ONLY ON THE ONE TRANSITION THAT USES IT — a status move across the
-// finished edge — so an ordinary edit costs no read at all. The gate is
-// computed from the same two values the router's own gate reads, which is what
-// stops this tool paying for a lookup whose answer would be dropped.
-func (d WorkDeps) parentParty(ctx context.Context, task worklet.Task,
-	patch worklet.TaskPatch) *worklet.TaskParty {
-
-	if patch.Status == nil || task.Parent == nil || *task.Parent == "" || d.Reader == nil {
-		return nil
-	}
-	if task.StatusGroup.Finished() == patch.Status.Group().Finished() {
-		return nil
-	}
-	got, err := d.Reader.Task(ctx, *task.Parent, worklet.DetailWants{}, seatRead)
-	if err != nil {
-		// BEST EFFORT, like every other routing lookup: a parent this
-		// node cannot read is a parent's assignee who is not told, and
-		// failing somebody's close because of it would be worse than
-		// the omission. The reporter, the watchers and the assignee are
-		// all still routed from the snapshot.
-		return nil
-	}
-	return &worklet.TaskParty{
-		Task: got.Task.ID, Key: got.Task.Key, Assignee: got.Task.Assignee,
-	}
-}
-
 // resolveThread reads the conversation a comment is joining, or returns the
 // refusal — as a result carrying a read's error where one failed, for the
 // reason [WorkDeps.resolveRef] gives.

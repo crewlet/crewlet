@@ -259,12 +259,14 @@ func loadProgressed(ctx context.Context, tx *sql.Tx, handle string, items []Read
 // readyLastWordArm is the seat's own last write to one item after the change
 // that last woke it (its log position) and the start it waited until (its
 // instant), and whether that write is a typed answer. A creation, a change of
-// who watches and a write that changed nothing are no answer at all.
+// who watches and nothing else, and a write that changed nothing are no
+// answer at all; a watch written beside a change is that change
+// ([movedBeyondWatch]).
 const readyLastWordArm = `SELECT h.subject_id, h.log_seq, h.created_at, ` + typedWrite + `
 	FROM tracker_history h
 	WHERE h.subject_id = ? AND h.actor = ? AND h.log_seq > ? AND h.created_at >= ?
-	  AND h.kind NOT IN ('` + string(ChangeCreated) + `', '` + string(ChangeWatchers) + `')
-	  AND (h.fields_json <> '{}' OR h.kind IN ` + conversationKinds + `)
+	  AND h.kind <> '` + string(ChangeCreated) + `'
+	  AND (` + movedBeyondWatch + ` OR h.kind IN ` + conversationKinds + `)
 	ORDER BY h.log_seq DESC LIMIT 1`
 
 // loadQuiet stamps each item with when it went quiet for the seat: the latest

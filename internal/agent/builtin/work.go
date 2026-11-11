@@ -2942,7 +2942,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Kind:   kind,
 				Before: before.Task,
 				After:  patched(before.Task, patch),
-				Parent: t.deps.parentParty(ctx, before.Task, patch),
 				// THE REASON IS THE CHANGE'S EXCERPT, which is the one line
 				// both the history row and the wake already carry — so the
 				// new assignee is woken with it and the item's history
