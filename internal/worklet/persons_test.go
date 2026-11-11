@@ -144,8 +144,9 @@ func TestAnAgentsWaitOnAPersonItHasNotAskedIsReady(t *testing.T) {
 				t.Errorf("%s came back as %q naming %v, want %q naming %v", row.name, item.Why,
 					item.WaitsOn, types.PickupWaitsOnPerson, row.want)
 			}
-			if !item.Quiet.Equal(item.MovedAt) && item.Quiet.After(wednesday) {
-				t.Errorf("%s is quiet since %s, after its read: its future date bounded it", row.name, item.Quiet)
+			// QUIET SINCE ITS LAST WRITE, never since the date ahead of it.
+			if !item.Quiet.Equal(wednesday) {
+				t.Errorf("%s is quiet since %s, want %s, its last write", row.name, item.Quiet, wednesday)
 			}
 		})
 	}
