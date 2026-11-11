@@ -283,7 +283,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 // unit and its verdict covers all of it. Acking some and NAKing others would
 // deliver a partial one to the successor.
 func (a *attachment) applyPartition(ctx context.Context, batchKey string, items []delivery, evs []*events.Event, res queue.Result) {
-	queue.LogBatchResult(a.log, a.key.topic, a.key.group, batchKey, evs, res)
+	queue.LogBatchResult(ctx, a.log, a.key.topic, a.key.group, batchKey, evs, res)
 
 	switch res.Outcome {
 	case queue.OutcomeAck:

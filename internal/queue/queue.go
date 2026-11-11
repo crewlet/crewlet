@@ -1381,18 +1381,24 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 // LogResult emits the standard structured line for a single delivery's
 // outcome. An Ack logs nothing: the normal case is the overwhelming majority
 // of deliveries, and a line per success buries the two that matter.
-func LogResult(l *slog.Logger, topic, group string, ev *events.Event, r Result) {
+//
+// UNDER ctx, because the line is correlated by the trace a context carries
+// (internal/logging), and a backend that logs under its handler's context
+// would otherwise spell the line itself to keep that: the in-memory twin did,
+// and logged a partition's deferral under a single delivery's name.
+func LogResult(ctx context.Context, l *slog.Logger, topic, group string, ev *events.Event, r Result) {
 	switch r.Outcome {
 	case OutcomeNak:
-		l.Warn("handler_failed", "topic", topic, "group", group,
+		l.WarnContext(ctx, "handler_failed", "topic", topic, "group", group,
 			"event_type", eventType(ev), "error", errText(r.Err))
 	case OutcomeDefer:
-		l.Info("delivery_deferred", "topic", topic, "group", group,
+		l.InfoContext(ctx, "delivery_deferred", "topic", topic, "group", group,
 			"event_type", eventType(ev), "reason", r.Reason)
 	}
 }
 
-// LogBatchResult emits the standard line for one partition's outcome.
+// LogBatchResult emits the standard line for one partition's outcome, under
+// ctx for [LogResult]'s reason.
 //
 // A distinct event name from LogResult, carrying the partition key and the
 // partition size, because the two failures are operationally different
@@ -1400,18 +1406,18 @@ func LogResult(l *slog.Logger, topic, group string, ev *events.Event, r Result) 
 // a bad turn. A log consumer must be able to tell them apart without
 // parsing, and every backend must emit the same name for the same situation
 // — which is why this lives in the contract rather than in each backend.
-func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events.Event, r Result) {
+func LogBatchResult(ctx context.Context, l *slog.Logger, topic, group, batchKey string, evs []*events.Event, r Result) {
 	var head *events.Event
 	if len(evs) > 0 {
 		head = evs[0]
 	}
 	switch r.Outcome {
 	case OutcomeNak:
-		l.Warn("batch_handler_failed", "topic", topic, "group", group,
+		l.WarnContext(ctx, "batch_handler_failed", "topic", topic, "group", group,
 			"batch_key", batchKey, "event_count", len(evs),
 			"event_type", eventType(head), "error", errText(r.Err))
 	case OutcomeDefer:
-		l.Info("batch_delivery_deferred", "topic", topic, "group", group,
+		l.InfoContext(ctx, "batch_delivery_deferred", "topic", topic, "group", group,
 			"batch_key", batchKey, "event_count", len(evs),
 			"event_type", eventType(head), "reason", r.Reason)
 	}

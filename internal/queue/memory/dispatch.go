@@ -253,8 +253,9 @@ func takeOneLocked(sub *subscription) *events.Event {
 func (b *Broker) deliverOne(ctx context.Context, sub *subscription, m *consumer, ev *events.Event) {
 	b.invoke(ctx, sub, m, []*events.Event{ev},
 		func(hctx context.Context) queue.Result { return m.handler(hctx, ev) },
-		"handler_failed",
-		[]any{"topic", sub.topic, "group", sub.group, "event_type", ev.Type},
+		func(lctx context.Context, res queue.Result) {
+			queue.LogResult(lctx, log, sub.topic, sub.group, ev, res)
+		},
 	)
 }
 
@@ -334,21 +335,12 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 		evs := part.Items
 		outcome := b.invoke(ctx, sub, m, evs,
 			func(hctx context.Context) queue.Result { return m.batchHandler(hctx, evs) },
-			// The same machine-parsable failure event a real backend
-			// emits for batch partitions: log consumers must not see
-			// different names per backend.
-			"batch_handler_failed",
-			[]any{
-				"topic", sub.topic, "group", sub.group,
-				// firstType, not evs[0].Type: this is a LOG FIELD, and
-				// indexing here happens outside the recover that contains
-				// a handler panic, so an empty partition would take the
-				// process down to decorate a log line. PartitionByKey
-				// cannot produce one today — which is exactly why the
-				// index looked safe, and why it would only ever fire on a
-				// day something upstream was already wrong.
-				"batch_key", part.Key, "event_type", firstType(evs),
-				"event_count", len(evs),
+			// THE CONTRACT'S PARTITION LINE, the one the backend that
+			// ships emits: a log consumer must not see a partition's
+			// outcome under a single delivery's name on one backend and
+			// under its own on the other.
+			func(lctx context.Context, res queue.Result) {
+				queue.LogBatchResult(lctx, log, sub.topic, sub.group, part.Key, evs, res)
 			},
 		)
 		if outcome == queue.OutcomeNak {
@@ -468,8 +460,7 @@ func (b *Broker) invoke(
 	m *consumer,
 	evs []*events.Event,
 	call func(context.Context) queue.Result,
-	failureEvent string,
-	attrs []any,
+	logResult func(context.Context, queue.Result),
 ) queue.Outcome {
 	client := m.client
 
@@ -532,13 +523,13 @@ func (b *Broker) invoke(
 	// every attachment change — for as long as one write takes. It is the
 	// oldest way to turn a slow logger into an outage, and the reason
 	// nothing here logs while holding the lock.
-	switch res.Outcome {
-	case queue.OutcomeDefer:
-		log.InfoContext(ctx, "delivery_deferred", append(attrs, "reason", deferralReason(res))...)
-	case queue.OutcomeNak:
-		log.WarnContext(ctx, failureEvent, append(attrs, "error", errText(res.Err))...)
-	case queue.OutcomeAck:
-	}
+	//
+	// AND THROUGH THE CONTRACT'S OWN LINE ([queue.LogResult],
+	// [queue.LogBatchResult]), never one spelled here: the twin wrote its
+	// own, and logged a partition's deferral as a single delivery's,
+	// `delivery_deferred`, where the backend that ships says
+	// `batch_delivery_deferred`.
+	logResult(ctx, res)
 	b.logDeadLetters(ctx, sub, dead)
 	return res.Outcome
 }
@@ -816,26 +807,3 @@ func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer
 // --- small helpers --------------------------------------------------------
 
 func sameEvent(ev *events.Event) *events.Event { return ev }
-
-// firstType names a batch for a log line, tolerating a batch with nothing in
-// it. Diagnostics must not be able to fail louder than what they describe.
-func firstType(evs []*events.Event) string {
-	if len(evs) == 0 || evs[0] == nil {
-		return ""
-	}
-	return evs[0].Type
-}
-
-func deferralReason(res queue.Result) string {
-	if res.Reason == "" {
-		return "unspecified"
-	}
-	return res.Reason
-}
-
-func errText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}

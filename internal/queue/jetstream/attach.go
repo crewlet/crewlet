@@ -1004,7 +1004,7 @@ func runBatchHandler(ctx context.Context, log *slog.Logger, evs []*events.Event,
 
 // apply turns a handler outcome into broker operations.
 func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Event, res queue.Result) {
-	queue.LogResult(a.log, a.key.topic, a.key.group, ev, res)
+	queue.LogResult(ctx, a.log, a.key.topic, a.key.group, ev, res)
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		// FORGOTTEN FIRST. A message that succeeded after failing twice
