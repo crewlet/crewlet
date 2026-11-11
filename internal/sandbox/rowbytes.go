@@ -47,14 +47,15 @@ import (
 //	                                                      ---------
 //	                                  RowBytes            8,384,512
 //
-// and the log's two ways, beside it:
+// and the log's three ways, beside it, a split that closes as its figures are
+// stated (TestACallInFlightIsHeldToItsShare):
 //
 //	its calls and their tallies ..... BridgeLogBytes      3,473,408  (3.3125 MiB)
 //	its calls in flight ............. InFlightBytes       1,048,576  (1 MiB)
 //	the turn's earlier rounds' tool
 //	  names, the log's own fields,
 //	  and the room a later build
-//	  adds keys to the log in ....... the rest            3,862,528  (3.68 MiB)
+//	  adds keys to the log in ....... LogRestBytes        3,862,528  (3.68 MiB)
 //	                                                      ---------
 //	                                  RowBytes            8,384,512
 //
@@ -374,6 +375,16 @@ const (
 	// [MaxCallsInFlight] of [MaxCallInFlightBytes] each, taken out of the room
 	// the log leaves beside its calls.
 	InFlightBytes = MaxCallsInFlight * MaxCallInFlightBytes
+
+	// LogRestBytes is the rest of the log's value beside its calls and its
+	// calls in flight: the turn's earlier rounds' tool names, the log's own
+	// fields, and the room a later build adds keys to the log in. STATED, NOT
+	// DERIVED, as the table above states it, so the log's split closes only
+	// while every line of it is the table's: a change of [BridgeLogBytes] or of
+	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
+	// TestACallInFlightIsHeldToItsShare until this figure, and the table and
+	// docs/concepts/code-sandbox.md that state it, move with it.
+	LogRestBytes = 3_862_528
 
 	// MaxPriorCalls bounds [BridgeLog.PriorCalls]: the tool names a turn's
 	// earlier rounds called with success. Five hundred and twelve is past
