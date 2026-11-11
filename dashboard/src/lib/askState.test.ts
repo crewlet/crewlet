@@ -17,6 +17,23 @@ test("a question's state is said, an overtaken one with why", () => {
     "The question it is about was answered at [t1].",
   );
   expect(askStateWords({ ...ask, open: false, resolved: true }, when)).toBe(
-    "The question it is about was resolved.",
+    "The question it is about was withdrawn by its asker.",
+  );
+});
+
+// A WITHDRAWN QUESTION SAYS WHY, in its asker's words, rather than only closing.
+test("a withdrawn question carries its asker's reason", () => {
+  const ask = { comment: "c-1", asked_of: "jane", open: false, resolved: true };
+  expect(
+    askStateWords(
+      {
+        ...ask,
+        answered_at: "t2",
+        withdrawn: { reason: "Covered by the pull request.", reason_comment: "c-2" },
+      },
+      when,
+    ),
+  ).toBe(
+    "The question it is about was withdrawn by its asker at [t2]: “Covered by the pull request.”",
   );
 });

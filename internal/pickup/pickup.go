@@ -171,6 +171,7 @@ func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready i
 		Item: item.ID, Key: worklet.ItemAddress(item.ID, item.Key, item.KeyCollision),
 		Status: string(item.Status), Moved: item.Moved, Progressed: item.Progressed,
 		Why: item.Why, Ready: ready, ReadyCapped: capped, WorkingFor: item.For,
+		SubmittedBy: item.SubmittedBy,
 	}
 	if key.Recheck != 0 {
 		// A RECHECK SAYS SO, and since when the item has been quiet.

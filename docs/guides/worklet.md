@@ -1190,6 +1190,21 @@ instead, which holds the item until they answer
 ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
 A person's own wait is written as given.
 
+**A review names its reviewer.** An agent that moves an item it keeps into
+`in_review` names `reviewer` with `update_work_item`, since a seat never
+reviews what it submitted itself and a review nobody holds waits on nobody
+([ADR-0124](../../adr/0124-a-question-and-a-review-say-whom-they-wait-on.md)).
+A colleague seat named `reviewer` is handed the item, as an assignment, and the
+review is ready for it. A person named `reviewer` must already have the
+agent's open ask on the item (`comment_on_work_item` with `ask` and a
+`decision`), which is how the review reaches their Inbox; the item stays with
+the agent until they answer. Handing the item to a colleague seat in the same
+call names its reviewer by itself. A move with no reviewer, the agent itself,
+a person not asked, or a reviewer beside a different `assignee` is refused with
+nothing written; a person's own move is written as given. An item already in
+review that its holder submitted with nobody reviewing it comes back to that
+holder through the work pickup, to act on the review it was given or name one.
+
 `estimate_minutes` and `points` are the two halves of a size, both carried
 rather than one chosen: which one a team uses is a team's own habit, and the
 totals (`totals=points:sum`, `totals=estimate_min:sum`) and the workload
@@ -1236,12 +1251,22 @@ A `holding_up` row is the task plus `blocks` (how many open items wait on it,
 directly or through another waiting item, each counted once; `blocks_capped`
 says the count is a floor, past 512 waiting items or past the 2,048 items one
 read walks, shared by the whole list), `holders` (who holds that waiting work, the reader
-left out, at most eight) and `held_since` (when it last changed hands, whichever change moved its assignee: its filing, an assignment, or a status change that handed it over). It is
+left out, at most eight), `held_since` (when it last changed hands, whichever change moved its assignee: its filing, an assignment, or a status change that handed it over) and `agent_waiting` (how many of the items waiting through it agent seats hold). It is
 the one list about who waits on the reader rather than what waits for them, and
-it is the same for a person, whose dashboard shows it under My work. The list
-ranks the first 100 such items in the queue's own order: a person
+it is the same for a person, whose dashboard shows it under My work. The reader
+holds two kinds of item: one **assigned** to them that open work waits on, and
+one whose holder put an **open question** to them (`asked`, the question's
+comment id), where the item itself waits on their answer and so does everything
+waiting on it ([ADR-0124](../../adr/0124-a-question-and-a-review-say-whom-they-wait-on.md)). The list
+ranks the first 100 of each, the assigned ones in the queue's own order and the
+asked ones newest question first, by how much waits on them: a person
 holding a review or a decision as a work item can stall a team that nothing
-else tells them about. What to do with a row is the tracker's own actions, taken
+else tells them about. Beside the list, `holding_agents` sums it over agent
+work, across every item walked rather than the page: `items` (held items that
+agent items wait on), `agent_items` (the distinct agent items waiting, each
+once however many chains reach it) and `capped` (a bound was reached, so both
+are floors). The dashboard's Inbox leads with "You hold N items that M agent
+items wait on" when M is above zero. What to do with a row is the tracker's own actions, taken
 by the reader.
 
 `task_activity` is the only way to ask what CHANGED. A board is about what is
@@ -2022,6 +2047,22 @@ still waiting. Its card carries `overtaken` with the reason, and an answer that
 names it is still recorded. A question somebody answered is never overtaken.
 The Inbox says so on a notice about it: the question no longer needs an answer,
 because it was asked again since or its item is finished.
+
+Only its asker closes a question without an answer, and that is a
+**withdrawal**: `withdraw_ask` posts the reason as a reply in the question's
+thread and resolves the question with a record naming that reply and, in
+`replaced_by`, what now covers the question, another work item or a link such
+as a pull request
+([ADR-0124](../../adr/0124-a-question-and-a-review-say-whom-they-wait-on.md)).
+The record is checked in the resolve's own snapshot: the reason must be the
+asker's reply to the question, and a replacement must be one of an item that
+exists, other than the question's own, or an http or https link. The question's
+card (`ask` on a notice, `answer` on an answered decision) carries `withdrawn`:
+the reason's words as they stand, its comment id, and the item or link that
+covers it, so the person reads why the question closed. A question resolved
+again later keeps the withdrawal. A seat's own open asks to the person it is
+talking with are handed to its turn at the start
+([Agent Runtime](../concepts/agent-runtime.md#your-open-questions-to-the-people-in-the-turn)).
 
 ### Asking for a decision
 
