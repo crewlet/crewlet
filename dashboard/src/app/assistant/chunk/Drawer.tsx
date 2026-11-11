@@ -283,6 +283,9 @@ export function Drawer({
     return undefined;
   }, [view.fault, model, view.stream, waitSeconds]);
 
+  // WHY NO IMAGE IS TAKEN NOW, as the Attach button and the drop overlay say it.
+  const dropClosed = disabledReason ?? attach?.short;
+
   // THE PERSON'S OWN QUESTION IS ALWAYS SHOWN: the thread follows only while
   // it is read at its end, so a question sent while scrolled up would land out
   // of view behind "Jump to latest". Each ask brings the thread to its end once
@@ -523,12 +526,18 @@ export function Drawer({
                 </RefusalStrip>
               ) : null}
               {/* IMAGES DROPPED ANYWHERE ON THE COMPOSER are attached; the
-                  button in its foot is the keyboard's way to the same. */}
+                  button in its foot is the keyboard's way to the same. THE DROP
+                  IS ALWAYS TAKEN, so a file never replaces the dashboard in the
+                  tab: where none may be attached, the overlay and the refusal say
+                  why, as the Attach button does. */}
               <FileDrop
-                title="Drop images to attach them"
-                hint={ATTACH_HINT}
-                disabled={disabledReason !== undefined || attach !== null}
-                onFiles={(dropped) => attachments.add(dropped.map((d) => d.file))}
+                title={dropClosed ?? "Drop images to attach them"}
+                hint={dropClosed === undefined ? ATTACH_HINT : undefined}
+                onFiles={(dropped) =>
+                  disabledReason === undefined
+                    ? attachments.add(dropped.map((d) => d.file))
+                    : attachments.refuse(`${disabledReason}, so nothing was attached.`)
+                }
               >
                 <AskComposer
                   ref={composer}
@@ -593,7 +602,7 @@ export function Drawer({
                       variant="ghost"
                       leadingIcon={<PaperclipGlyph size="sm" />}
                       accept={ATTACH_ACCEPT}
-                      disabledReason={disabledReason ?? attach?.short}
+                      disabledReason={dropClosed}
                       onFiles={(picked) => attachments.add(picked.map((p) => p.file))}
                     >
                       Attach image

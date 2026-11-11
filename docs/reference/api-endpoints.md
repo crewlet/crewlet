@@ -4316,10 +4316,14 @@ of the integration runs), `refused` (the last sync failed), `changed_at_vendor`
 (somebody changed the account at the vendor, and the next sync restores it),
 `needs_you` (a step only a person takes, or a sync that ended waiting on one),
 `next_sync` (steps the next sync takes), `in_sync`, `off_account_kept` and
-`off`. A lane carries two clocks: `observed_at` is when a pass last read the
+`off`, and `status_label` is it in the tab's words ("Changed at Datadog"),
+which a reader that does not know the status draws instead. A lane carries two
+clocks: `observed_at` is when a pass last read the
 vendor for it, every pass including the check's dry run
 (`POST /setup/integrations/{kind}/check`), and `sync.at` is when a writing sync
-last ended, which a dry run leaves alone. The tab draws them as one value,
+last ended, which a dry run leaves alone: a refusal a dry run finds (a sealing
+step the sync would refuse) is reported on the integration and leaves the
+lane's last sync as it was. The tab draws them as one value,
 "Checked 1m ago, last applied 10m ago", and its header's "Last check" is the
 integration's own pass. On GitHub, `observed.ceiling` is the permissions the
 agent's app is registered with, which every token is narrowed from: a
@@ -4334,7 +4338,8 @@ and the tab offers it disabled with that reason.
 Each seat lane's `tool` says whether the agent can use its credential through
 a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
-read), `no_server` (no server the company declares reads it), `server_off`
+read, and SSH, whose tools are the engine's own `ssh_read` and `ssh_operate`),
+`no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
 seat or its account is off). A `waiting` tool also carries `tool_reason`, a
 sentence in the engine's words, where it waits on the vendor applying a grant
@@ -13283,6 +13288,9 @@ says which). `label` is the state in a reader's words, `reason` one sentence
 on why, and `surface` the surface it was taken from. The rules are
 [One state per tool](../concepts/integration-reconcile.md#one-state-per-tool).
 
+Every reconcile finding carries `label`, the finding in a few words for a list
+that gives each one line: its `title` where it has one, else its kind's own
+words about its `subject` ("An agent identity could not be created for sre").
 A reconcile finding of kind `credential_expiring` carries `expires_at`, the
 instant the credential stops working.
 

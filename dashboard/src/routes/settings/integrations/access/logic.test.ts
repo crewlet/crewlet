@@ -89,6 +89,23 @@ describe("a row's status", () => {
     expect(statusOf(DATADOG_LANE, { ...sre(), status: "syncing" }, false).busy).toBe(true);
     expect(statusOf(DATADOG_LANE, offLane(), false).label).toBe("Off");
   });
+
+  // A NEWER OR OLDER ENGINE may send a status this bundle has no words for, or
+  // none: the row reads the engine's own label, neutral, and the tab still draws.
+  test("a status the tab does not know reads the engine's label, neutral", () => {
+    const unknown = { ...sre(), status: "quarantined", status_label: "Quarantined" };
+    expect(statusOf(DATADOG_LANE, unknown as unknown as AccessSeatLane, false)).toEqual({
+      label: "Quarantined",
+      tone: "neutral",
+    });
+    const missing: Partial<AccessSeatLane> = { ...sre() };
+    delete missing.status;
+    delete missing.status_label;
+    expect(statusOf(DATADOG_LANE, missing as unknown as AccessSeatLane, false)).toEqual({
+      label: "Status unknown",
+      tone: "neutral",
+    });
+  });
 });
 
 describe("a row's clocks", () => {

@@ -174,3 +174,37 @@ func TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt(t *testing.T) {
 		})
 	}
 }
+
+// A GRANT THIS BUILD NO LONGER OFFERS IS NEVER ANSWERED AS A YES: a request
+// asked before the catalogue changed still offers its old key, and choosing it
+// would tell the agent yes with nothing granted. Every reserved choice is a
+// grant, so one whose key is not valid is refused, whatever the seat holds.
+//
+// Mutation: admit a reserved choice by its key's validity alone and this posts.
+func TestARetiredGrantIsNeverAnsweredAsAYes(t *testing.T) {
+	t.Parallel()
+	const retired = "grant-github-contents"
+	trk := newFakeTracker()
+	trk.thread.AnswersDecision = &decision.Decision{Options: []decision.Option{
+		{ID: retired, Label: "Allow it"}, {ID: "decline", Label: "Not now"}}}
+	trk.thread.AnsweredAuthor = "agent-cto"
+	reg := tools.NewRegistry()
+	holdsEverything := func(context.Context, string) (*org.Role, error) {
+		return &org.Role{HealthTools: true}, nil
+	}
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Work: builtin.WorkDeps{
+		Reader: trk, Writer: trk.as, FleetSeat: holdsEverything}})); err != nil {
+		t.Fatal(err)
+	}
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
+		"item": "ENG-1", "answers": "c-ask", "choice": retired})
+	if !got.Failed || len(trk.patched) != 0 || !strings.Contains(got.Output, "no longer offers") {
+		t.Errorf("answer = %+v with %d writes, want it refused as a grant no longer offered",
+			got, len(trk.patched))
+	}
+	declined := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
+		"item": "ENG-1", "answers": "c-ask", "choice": "decline"})
+	if declined.Failed || len(trk.patched) != 1 {
+		t.Errorf("declining = %+v with %d writes, want it posted", declined, len(trk.patched))
+	}
+}

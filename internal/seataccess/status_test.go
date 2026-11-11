@@ -71,7 +71,8 @@ func TestEachLaneReadsAsOneStatus(t *testing.T) {
 }
 
 // AN ANSWER'S STATUSES ARE SET FROM THE ANSWER WHOLE: its sync in flight and
-// each seat's departure.
+// each seat's departure, each beside its words, which a reader that does not
+// know the status draws instead.
 func TestAnAnswerSetsEveryLanesStatus(t *testing.T) {
 	t.Parallel()
 	gh := seataccess.LaneGitHub
@@ -87,5 +88,11 @@ func TestAnAnswerSetsEveryLanesStatus(t *testing.T) {
 	}
 	if got := answer.Seats[1].Lanes[gh].Status; got != seataccess.StatusDeparted {
 		t.Errorf("a departed seat's lane reads %q", got)
+	}
+	for _, seat := range answer.Seats {
+		la := seat.Lanes[gh]
+		if want := la.Status.Label("GitHub"); la.StatusLabel != want {
+			t.Errorf("%s's lane is labelled %q, want %q", seat.Handle, la.StatusLabel, want)
+		}
 	}
 }
