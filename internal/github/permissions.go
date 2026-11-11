@@ -162,18 +162,40 @@ func ParsePermissions(raw map[string]string) (Permissions, []string) {
 			out[name] = level
 		}
 	}
-	// A WORKFLOW CHANGE IS A PUSH, and GitHub refuses a push from a token
-	// that cannot write contents whatever else it holds. Accepting the
-	// pair half-set would store a grant that does nothing except widen
-	// what a leaked key could ask an owner to accept.
-	if out[PermissionWorkflows] == LevelWrite && out[PermissionContents] != LevelWrite {
-		problems = append(problems,
-			"Workflows (Read and write) needs Contents (Read and write): a "+
-				"workflow change is a push, and GitHub refuses a push from a "+
-				"token that cannot write contents")
+	for _, key := range slices.Sorted(maps.Keys(out)) {
+		perm, _ := LookupPermission(key)
+		for _, need := range Needs(key, out[key]) {
+			if out[need.Key].Rank() < need.Level.Rank() {
+				with, _ := LookupPermission(need.Key)
+				problems = append(problems, fmt.Sprintf("%s (%s) needs %s (%s): %s", perm.Name,
+					out[key].Label(), with.Name, need.Level.Label(), need.Why))
+			}
+		}
 	}
 	return out, problems
 }
+
+// Need is a permission, at least at Level, that another one's level does
+// nothing without; Why is GitHub's reason, as a refusal says it.
+type Need struct {
+	Key   string
+	Level Level
+	Why   string
+}
+
+// needs is every [Need] by permission and level. The one place the rule lives,
+// so a stored grant, a form and an agent's request for access cannot differ.
+var needs = map[string]map[Level][]Need{
+	// A WORKFLOW CHANGE IS A PUSH, and GitHub refuses a push from a token that
+	// cannot write contents: the pair half-set only widens what a leaked key
+	// could ask an owner to accept.
+	PermissionWorkflows: {LevelWrite: {{Key: PermissionContents, Level: LevelWrite,
+		Why: "a workflow change is a push, and GitHub refuses a push from a token that " +
+			"cannot write contents"}}},
+}
+
+// Needs is what holding key at level needs besides itself, nil for nothing.
+func Needs(key string, level Level) []Need { return slices.Clone(needs[key][level]) }
 
 // PermissionsOf reads permissions stored as strings, the way the org model
 // carries a seat's (org.GitHubApp.Permissions). An empty level is No access.
