@@ -2334,6 +2334,18 @@ that also keeps a turn racing the removal from being told into it; its
 certificates and commands stay to their retention, since they are the audit
 trail.
 
+The **atlas's history** (what people recorded about what the company runs on,
+on `CREWLET_ATLAS_LOG`) is kept for the company's `atlas.retention_days`,
+**400 days** by default and settable from 90 to 3650, the access history's
+horizon for its reason: a yearly review finds the whole year it reviews. Only
+history goes: a value a newer value from the same person replaced, once it has
+been replaced for that long, and an entry a person retired that nothing has
+reported since. What the atlas holds now never expires. The trash reaper
+expires it an hour at a time, by one record each hour that every node applies
+by the broker instants its rows hold. An administrator's
+[purge](../concepts/atlas.md#the-atlass-own-log) is the other way something
+leaves it, at once and history included.
+
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet
 singleton would tidy one node and let the table grow for ever on every other,

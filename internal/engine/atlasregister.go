@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/config"
@@ -10,10 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/trashreap"
 )
 
-// THE ATLAS LOG, wired: its entry in the register and its two sides over the
-// running log (ADR-0126). Every data node runs it, whatever its company keeps.
+// THE ATLAS LOG, wired: its entry in the register, its two sides over the
+// running log, and its history's retention through the trash reaper (ADR-0126).
+// Every data node runs it, whatever its company keeps.
 
 // atlasRegistrations is the atlas domain's entry in the register: the
 // THIRTEENTH domain and the ELEVENTH strict, identity-claiming one, registered
@@ -139,4 +142,87 @@ func (e *Engine) AtlasWriter() *atlasdomain.Writer {
 		return c.atlasWriter
 	}
 	return nil
+}
+
+// atlasRetention is how long the atlas keeps its history, asked at every reaper
+// pass: the `atlas.retention_days` of the revision the fleet's activation
+// pointer names, read on a node that runs that very activation. The fleet's
+// revision, never this node's own: an expiry is a record every data node
+// applies.
+func (e *Engine) atlasRetention(ctx context.Context) (time.Duration, error) {
+	company, err := e.servedFleetRevision(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return atlasRetentionOf(company), nil
+}
+
+// atlasRetentionOf is the retention a company's document states, the block's
+// own default where a company built in code states none.
+func atlasRetentionOf(c *Company) time.Duration {
+	if c == nil || c.Config == nil {
+		return config.Atlas{}.Retention()
+	}
+	return c.Config.Atlas.Retention()
+}
+
+// atlasTrash is the atlas log's retention as the trash reaper reaches it: the
+// hours of history past `atlas.retention_days`, oldest first, one expiry each.
+// The reaper derives each operation from its slot and the hour, so two reapers
+// in one slot publish the same record.
+type atlasTrash struct {
+	reader atlasHours
+	writer atlasExpiries
+	term   func(context.Context) (time.Duration, error)
+}
+
+// atlasHours is the slice of the atlas reader the reaper reads.
+type atlasHours interface {
+	ExpirableHours(ctx context.Context, cutoff time.Time, limit int) ([]time.Time, error)
+}
+
+// atlasExpiries is the slice of the atlas writer the reaper writes through.
+type atlasExpiries interface {
+	Expire(ctx context.Context, c atlasdomain.Call, hour, cutoff time.Time) (statelog.Result, error)
+}
+
+var _ trashreap.Termed = atlasTrash{}
+
+func (atlasTrash) Name() string { return atlasdomain.Domain{}.Name() }
+
+// Term is the history's retention, asked at every pass.
+func (a atlasTrash) Term(ctx context.Context) (time.Duration, error) { return a.term(ctx) }
+
+// TrashedBefore nominates the hours that hold history past cutoff.
+func (a atlasTrash) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
+	hours, err := a.reader.ExpirableHours(ctx, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(hours))
+	for _, hour := range hours {
+		out = append(out, atlasdomain.Bucket(hour))
+	}
+	return out, nil
+}
+
+// PurgeTrashed expires one hour of history past cutoff, decided again in the
+// write's own snapshot.
+func (a atlasTrash) PurgeTrashed(ctx context.Context, id string, cutoff time.Time, opID string) error {
+	hour, err := atlasdomain.ParseBucket(id)
+	if err != nil {
+		return fmt.Errorf("%w: the reaper listed %q: %w", trashreap.ErrNotEligible, id, err)
+	}
+	res, err := a.writer.Expire(ctx, atlasdomain.Call{By: reaperActor, OpID: opID}, hour, cutoff)
+	return reapAnswer(res, err, atlasdomain.ErrNotDue)
+}
+
+// atlasSource is the atlas log's source for the trash reaper on this node,
+// false where this node writes nothing.
+func (e *Engine) atlasSource() (atlasTrash, bool) {
+	c := e.core.Load()
+	if c == nil || !e.mode.Publishes() || c.atlasReader == nil || c.atlasWriter == nil {
+		return atlasTrash{}, false
+	}
+	return atlasTrash{reader: c.atlasReader, writer: c.atlasWriter, term: e.atlasRetention}, true
 }

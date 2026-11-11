@@ -179,6 +179,10 @@ func (e *Engine) trashSources() []trashreap.Source {
 	if src, ok := e.accessSource(); ok {
 		out = append(out, src)
 	}
+	// AND THE ATLAS'S HISTORY, on the company's atlas retention.
+	if src, ok := e.atlasSource(); ok {
+		out = append(out, src)
+	}
 	return out
 }
 

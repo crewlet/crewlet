@@ -38,8 +38,9 @@
 //   - `expire` removes one hour of history, and everything older, past the
 //     retention its writer names: every claim its voice replaced, and every
 //     entry a person retired that nothing was recorded about since, with every
-//     claim on it. A live claim never expires: it is the atlas.
-//     [Reader.ExpirableHours] lists the hours a record is due for.
+//     claim on it. A live claim never expires: it is the atlas. The trash
+//     reaper nominates the hours past the company's `atlas.retention_days`
+//     ([Reader.ExpirableHours]) and publishes one record each.
 //
 // The eviction, the generation, the barrier and the trimmed record are the
 // framework's.
