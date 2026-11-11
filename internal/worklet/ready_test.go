@@ -110,8 +110,8 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 
 // READY WORK LEAVES OUT WHAT CANNOT START NOW: work waiting on an open
 // blocker, work whose start date is ahead, work held on a question the seat
-// asked and nobody answered, work in review the seat submitted itself, and work
-// in the trash or done.
+// asked and nobody answered (a review it submitted and asked a person to make
+// among them), and work in the trash or done.
 func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -143,12 +143,16 @@ func TestReadyWorkLeavesOutWhatCannotStartNow(t *testing.T) {
 	}
 	r.drain()
 	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{})
-	ask := worklet.Comment{ID: "q-1", Task: "asked", Author: "ana",
-		AuthorKind: worklet.AuthorAgent, Body: "which environment?", Ask: "pm",
-		CreatedAt: wednesday}
-	if _, err := ana.UpdateTask(t.Context(), "op-ask", "asked", "ENG", worklet.NoIfMatch,
-		worklet.TaskPatch{Comment: &ask}, worklet.ChangeComment, nil); err != nil {
-		t.Fatalf("ask: %v", err)
+	for _, q := range []worklet.Comment{
+		{ID: "q-1", Task: "asked", Author: "ana", AuthorKind: worklet.AuthorAgent,
+			Body: "which environment?", Ask: "pm", CreatedAt: wednesday},
+		{ID: "q-2", Task: "review", Author: "ana", AuthorKind: worklet.AuthorAgent,
+			Body: "approve the release notes?", Ask: "jo", CreatedAt: wednesday},
+	} {
+		if _, err := ana.UpdateTask(t.Context(), "op-"+q.ID, q.Task, "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Comment: &q}, worklet.ChangeComment, nil); err != nil {
+			t.Fatalf("ask on %s: %v", q.Task, err)
+		}
 	}
 	r.drain()
 
@@ -374,8 +378,12 @@ func TestReadyWorkIsPaged(t *testing.T) {
 }
 
 // A REVIEW IS READY FOR THE SEAT THAT HOLDS IT WHEN SOMEBODY ELSE ASKED FOR IT:
-// it comes after started work and before work not started, and a seat never
-// reviews what it moved into review itself, whoever holds it after.
+// it comes after started work and before work not started, naming who asked.
+// A seat's own submission is ready for it only while nobody reviews it (no
+// question of its own holds it), after its reviews (ADR-0124).
+//
+// Mutation: list a self-submitted review as a review and ana reviews her own
+// work; drop the open-question hold and she is handed it while jo reviews.
 func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -396,19 +404,36 @@ func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
 	}
 	r.drain()
 
+	// HER OWN SUBMISSION, WITH NOBODY REVIEWING IT, comes back to her after
+	// the reviews she holds: not to review, but because nobody does.
 	got := r.readyWork("ana")
-	if ids := readyIDs(got); !slices.Equal(ids, []string{"started", "asked", "queued"}) {
-		t.Fatalf("ana's ready work = %v, want started, then the review she was asked for, then the queue", ids)
+	if ids := readyIDs(got); !slices.Equal(ids, []string{"started", "asked", "mine", "queued"}) {
+		t.Fatalf("ana's ready work = %v, want started, the review she was asked for, her own "+
+			"review nobody holds, then the queue", ids)
 	}
-	if got.Items[1].Why != types.PickupReview {
-		t.Errorf("the review sits there because %q, want %q", got.Items[1].Why, types.PickupReview)
+	if it := got.Items[1]; it.Why != types.PickupReview || it.SubmittedBy != "pm" {
+		t.Errorf("the review sits there because %q, submitted by %q; want %q by pm", it.Why,
+			it.SubmittedBy, types.PickupReview)
+	}
+	if it := got.Items[2]; it.Why != types.PickupUnreviewed || it.SubmittedBy != "ana" {
+		t.Errorf("her own review sits there because %q, submitted by %q; want %q by ana", it.Why,
+			it.SubmittedBy, types.PickupUnreviewed)
+	}
+	// A QUESTION SHE PUT TO A PERSON REVIEWING IT holds it until they answer.
+	askOn(t, r, "op-ask-jo", "mine", worklet.Comment{ID: "c-review", Task: "mine", Author: "ana",
+		AuthorKind: worklet.AuthorAgent, Body: "Approve?", Ask: "jo", CreatedAt: wednesday})
+	if ids := readyIDs(r.readyWork("ana")); slices.Contains(ids, "mine") {
+		t.Errorf("ana's ready work = %v, want her review held on her question to jo", ids)
 	}
 	if _, err := ana.UpdateTask(t.Context(), "op-hand", "mine", "ENG", worklet.NoIfMatch,
 		worklet.TaskPatch{Assignee: &bob}, worklet.ChangeAssignee, nil); err != nil {
 		t.Fatalf("hand to bob: %v", err)
 	}
 	r.drain()
-	if ids := readyIDs(r.readyWork("bob")); !slices.Equal(ids, []string{"mine"}) {
-		t.Errorf("bob's ready work = %v, want the review ana handed him", ids)
+	forBob := r.readyWork("bob")
+	if ids := readyIDs(forBob); !slices.Equal(ids, []string{"mine"}) ||
+		forBob.Items[0].Why != types.PickupReview || forBob.Items[0].SubmittedBy != "ana" {
+		t.Errorf("bob's ready work = %v (%+v), want the review ana handed him, submitted by ana",
+			ids, forBob.Items)
 	}
 }

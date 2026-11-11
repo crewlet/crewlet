@@ -214,6 +214,17 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 		record.Mutation = patch
+	case "Comment.Withdrawal":
+		// A RESOLVE THAT WITHDRAWS A QUESTION, SAYING WHY AND WHAT COVERS IT.
+		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{
+			ID: "c-ask", Task: "carrying", Author: "ada", Ask: "bo", Resolved: true, ResolvedBy: "ada",
+			Withdrawal: &worklet.Withdrawal{Reason: "c-why", ReplacedBy: &worklet.Replacement{
+				URL: "https://github.com/acme/web/pull/12"}}}})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Kind, record.Mutation = worklet.ChangeCommentResolved, patch
 	case "TaskPatch.WaitReason":
 		// A PATCH THAT SAYS WHY THE TASK WAITS UNTIL ITS START.
 		start, reason := time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "the vendor's window opens then"

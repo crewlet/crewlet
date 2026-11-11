@@ -52,7 +52,9 @@ blocked, each item counted once, past the items a review lists too.
   author, held to whoever woke the turn as a comment is (ADR-0109): somebody
   who uses Worklet, or the person the question asks) or what its own executor
   waits on (answered by the seat itself, a held call as Deny, so the call is
-  never made and the run is told it withdrew it).
+  never made and the run is told it withdrew it). The resolve records the
+  reason and what now covers the question, which the person's Inbox shows
+  ([ADR-0124](0124-a-question-and-a-review-say-whom-they-wait-on.md)).
 - **A run is withdrawn only for somebody who may answer it**: in a turn
   somebody woke, the run half is held to `answer_executor`'s rule, the one the
   approval route keeps too: the person the run asks, or whoever leads the

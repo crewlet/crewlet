@@ -84,7 +84,9 @@ import type {
   InboxNotice,
   InboxPosition,
   WorkAskRow,
+  WorkHoldingAgents,
   WorkInboxNotice,
+  WorkWithdrawn,
 } from "~/protocol/index.ts";
 
 export type InboxRow =
@@ -1135,6 +1137,20 @@ export function pairAnswered(
 }
 
 /**
+ * The line the Inbox leads with when agent work waits on the reader: how many
+ * items they hold that agent items wait on, and how many agent items wait,
+ * from My work's `holding_up` summary. Null when no agent item waits.
+ */
+export function holdingLead(h: WorkHoldingAgents | undefined): string | null {
+  if (!h || h.agent_items === 0) return null;
+  const floor = h.capped ? "at least " : "";
+  return (
+    `You hold ${floor}${plural(h.items, "item")} that ${floor}` +
+    `${plural(h.agent_items, "agent item")} ${h.agent_items === 1 ? "waits" : "wait"} on.`
+  );
+}
+
+/**
  * An answer as the row and the pane say it: who closed the ask, the verb, and
  * what they said. "You" for the reader, by name for anybody else, since a
  * colleague may answer a question put to you.
@@ -1147,15 +1163,18 @@ export function pairAnswered(
  */
 export interface AnswerWords {
   who: string;
-  /** "chose", "replied", or "closed it without an answer". */
+  /** "chose", "replied", or "withdrew it" (the asker, who alone closes a
+   *  question without an answer). */
   verb: string;
   /** The option's label or the words, empty for a resolution. */
   said: string;
   /** The words written beside a choice, or "" where none were. */
   note: string;
-  kind: "choice" | "reply" | "resolved";
+  kind: "choice" | "reply" | "withdrawn";
   /** The chosen option was the asker's recommendation. */
   recommended: boolean;
+  /** What now covers a withdrawn question, where its asker named it. */
+  replaced?: WorkWithdrawn["replaced_by"];
 }
 
 export function answerWords(
@@ -1166,14 +1185,16 @@ export function answerWords(
   const a = answered.answer;
   const who = a.by === reader ? "You" : (whoOf(index, a.by, a.by_kind)?.name ?? a.by);
   if (a.resolved) {
-    return {
+    const words: AnswerWords = {
       who,
-      verb: "closed it without an answer",
-      said: "",
+      verb: "withdrew it",
+      said: a.withdrawn?.reason.trim() ?? "",
       note: "",
-      kind: "resolved",
+      kind: "withdrawn",
       recommended: false,
     };
+    if (a.withdrawn?.replaced_by) words.replaced = a.withdrawn.replaced_by;
+    return words;
   }
   const decision = "run" in answered ? answered.run.decision : answered.ask.decision;
   const option = a.choice ? decision?.options.find((o) => o.id === a.choice) : undefined;
@@ -1189,6 +1210,17 @@ export function answerWords(
     };
   }
   return { who, verb: "replied", said: a.body, note: "", kind: "reply", recommended: false };
+}
+
+/**
+ * What the composer under a closed question invites: adding to the reader's
+ * own answer only where the reader gave it, and a plain reply where the asker
+ * withdrew the question or somebody else answered it.
+ */
+export function closedReplyPlaceholder(words: AnswerWords, name: string): string {
+  return words.kind !== "withdrawn" && words.who === "You"
+    ? `Add to your answer for ${name}. @mention to bring someone in.`
+    : `Reply to ${name}. @mention to bring someone in.`;
 }
 
 /**

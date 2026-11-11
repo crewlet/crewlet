@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -33,13 +34,25 @@ type NoticeLoad struct {
 	Addressed int    `json:"addressed"`
 }
 
-// IdleReview is an item in review its agent holder has taken no turn on.
+// IdleReview is an item in review its agent holder has taken no turn on, and
+// whom the review waits on.
 type IdleReview struct {
 	Task   string    `json:"task"`
 	Key    string    `json:"key"`
 	Holder string    `json:"holder"`
 	Since  time.Time `json:"since"`
+
+	// SubmittedBy is who moved it into review: the holder itself on one it
+	// submitted, which nobody reviews unless it asked somebody.
+	SubmittedBy string `json:"submitted_by,omitempty"`
+	// WaitsOn is whom the holder's open questions on it are put to, sorted:
+	// a review put to a person waits on their answer, not on the holder.
+	WaitsOn []string `json:"waits_on,omitempty"`
 }
+
+// WaitsOnNobody reports a review its holder submitted itself with no question
+// open on it: nobody holds the review.
+func (r IdleReview) WaitsOnNobody() bool { return r.SubmittedBy == r.Holder && len(r.WaitsOn) == 0 }
 
 // MaxPatternExamples bounds the records a pattern names as its evidence.
 const MaxPatternExamples = 5
@@ -351,9 +364,46 @@ func readIdleReviewsOf(ctx context.Context, tx *sql.Tx, reviewer string, quiet t
 		case ok && handed.After(r.Since):
 			r.Since = handed
 		}
+		if r.SubmittedBy, r.WaitsOn, err = readReviewWaits(ctx, tx, r.Task, r.Holder); err != nil {
+			return err
+		}
 		out.IdleReviews = append(out.IdleReviews, r)
 	}
 	return nil
+}
+
+// reviewAsksStatement is whom one holder's open questions on one item are put
+// to, a seek of the open asks' (task_id, ask) index.
+const reviewAsksStatement = `SELECT DISTINCT c.ask FROM tracker_comments c
+	WHERE c.task_id = ? AND c.author = ? AND c.ask <> '' AND c.resolved = 0
+	  AND c.answered_by IS NULL AND c.removed = 0 AND c.overtaken = ''
+	ORDER BY c.ask`
+
+// readReviewWaits is who moved one item into review, and whom its holder's
+// open questions on it are put to.
+func readReviewWaits(ctx context.Context, tx *sql.Tx, task, holder string) (string, []string, error) {
+	var submitter string
+	err := tx.QueryRowContext(ctx, readyReviewArm, task).Scan(new(string), &submitter)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", nil, fmt.Errorf("worklet: read who moved %s into review: %w", task, err)
+	}
+	rows, err := tx.QueryContext(ctx, reviewAsksStatement, task, holder)
+	if err != nil {
+		return "", nil, fmt.Errorf("worklet: read whom %s's review waits on: %w", task, err)
+	}
+	var asked []string
+	for rows.Next() {
+		var handle string
+		if err := rows.Scan(&handle); err != nil {
+			_ = rows.Close()
+			return "", nil, fmt.Errorf("worklet: read whom %s's review waits on: %w", task, err)
+		}
+		asked = append(asked, handle)
+	}
+	if err := closeRows(rows); err != nil {
+		return "", nil, fmt.Errorf("worklet: read whom %s's review waits on: %w", task, err)
+	}
+	return submitter, asked, nil
 }
 
 // patternNoticesStatement is one person's notices in the window, a range of

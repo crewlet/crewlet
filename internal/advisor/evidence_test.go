@@ -531,3 +531,38 @@ func TestOnlyThePollSettlingSaysTheWebhookIsSilent(t *testing.T) {
 		}
 	}
 }
+
+// AN IDLE REVIEW NAMES WHOM IT WAITS ON (ADR-0124): the agent holding it, the
+// person its holder asked to review it, or nobody, for a review its holder
+// submitted itself with no question open on it, one finding per party.
+//
+// Mutation: group by holder alone and the person whose answer it waits on is
+// never named.
+func TestAnIdleReviewNamesWhoItWaitsOn(t *testing.T) {
+	t.Parallel()
+	work := worklet.WorkPatterns{IdleReviews: []worklet.IdleReview{
+		{Key: "W-1", Holder: "qa", SubmittedBy: "app"},
+		{Key: "W-2", Holder: "pm", SubmittedBy: "pm", WaitsOn: []string{"owner"}},
+		{Key: "W-3", Holder: "designer", SubmittedBy: "designer"},
+		{Key: "W-4", Holder: "app", SubmittedBy: "app", WaitsOn: []string{"owner"}},
+	}}
+	got := map[string]advisor.Finding{}
+	for _, f := range advisor.Detect(advisor.Evidence{Work: work}, kindOf) {
+		if f.Class == advisor.ClassReviewIdle {
+			got[f.Subject.Seat] = f
+		}
+	}
+	for seat, want := range map[string]struct{ title, why string }{
+		"qa":       {"waited a day for the agent holding it", "held by qa"},
+		"owner":    {"waited a day for a person's answer", "2 items in review waited the last 24 hours on owner"},
+		"designer": {"has no reviewer", "designer moved into review itself"},
+	} {
+		f, ok := got[seat]
+		if !ok || !strings.Contains(f.Title, want.title) || !strings.Contains(f.Why, want.why) {
+			t.Errorf("the finding about %s is %+v, want %q saying %q", seat, f, want.title, want.why)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("raised findings about %d parties, want 3", len(got))
+	}
+}
