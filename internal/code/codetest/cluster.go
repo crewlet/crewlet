@@ -53,16 +53,26 @@ type Cluster interface {
 	// placement that node did not answer them (estate.Placement.Unanswered)
 	// — what a router does on meeting a member that is gone.
 	Unanswered(node string) int
+	// WaitedOut is how many of the proposals the members' routers asked of
+	// node they waited out: asked on its proposal lane, each one's attempt
+	// reached its deadline before the router moved on — a push's whole write
+	// attempt spent on a member that said nothing. A member that refuses
+	// answers, and one whose subjects nothing serves costs no wait at all:
+	// the broker answers an ask of a subject nobody serves at once.
+	WaitedOut(node string) int
 	// Appends is how many records node's committer has appended
 	// (DataNode.Appends).
 	Appends(node string) int
+	// Closes is how many graceful stops have closed node's writers — its
+	// committer, change writer and checks writer each refusing every new
+	// write and every one queued, while what they hold in flight runs on
+	// (DataNode.Closes): what a case holding a batch at node's committer
+	// waits on before it lets the batch go, so the batch ends into a
+	// committer that refuses what is queued behind it.
+	Closes(node string) int
 	// RecordWriter is the member that published the code log's record at at,
 	// read off the log by a running member (DataNode.Writer).
 	RecordWriter(ctx context.Context, at statelog.Position) (string, error)
-	// WriteAttempt is how long every member's router waits on one data node
-	// for a write: what a push asked of a node that never answers costs
-	// before the runner-up is asked.
-	WriteAttempt() time.Duration
 	// GitReadThrough is a read of a repository by object id asked through
 	// member node's own router, as a seat's tool on that member asks it —
 	// the repository's home Gitlet node first, the member's own git half at its
@@ -666,17 +676,6 @@ func aGateDroppedPushIsNotApplied(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// stopSettle is how long F20 lets a graceful stop run before it lets the held
-// record go: long enough that the stop's steps up to the committer's refusal
-// have happened — the presence given back, the member's Gitlet node stopped with
-// nothing running on it, the refusal itself a lock taken and a flag set — and
-// a tenth of the stop's own bound on the batch it waits for
-// (statelog.DefaultResolveBudget), which a later release would run into. Only
-// the case's power to catch a stop in the wrong order rests on it: let go
-// sooner, the held record and the pushes queued behind it commit before the
-// committer refuses, which passes the right order and the wrong one alike.
-const stopSettle = 500 * time.Millisecond
-
 // F20: a committer stopping hands its repositories on. (a) Gracefully: its
 // committer refuses before its subject stops answering, so the pushes queued
 // at it are answered "not serving" and committed by the runner-up, and the
@@ -686,7 +685,18 @@ const stopSettle = 500 * time.Millisecond
 // a process that dies gives no presence back — so the router of the member a
 // push is received by asks it first, hears that nothing answers on its
 // subject, reports it to the placement and asks the repository's runner-up:
-// the push is ok, at the cost of at most one write attempt.
+// the push is ok, no attempt waited out on the dead member, whose subjects
+// nothing serves, so the broker answers an ask of them at once.
+//
+// NO PUSH WAITS OUT A WRITE ATTEMPT, read off the routers' own asks rather
+// than the pushes' wall time (Cluster.WaitedOut): an ask of the committer's
+// proposal lane whose attempt reached its deadline is the write attempt a
+// push spent on a member that said nothing, however fast or slow the runner
+// was around it.
+//
+// Mutations: a router that waits out its attempt on a stopping committer's
+// refusal — (a) red; one that waits out its attempt on a proposal lane nothing
+// serves — (b) red.
 func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f20")
 	committer := rc.committer()
@@ -710,49 +720,51 @@ func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 	defer release()
 	url := rc.url(r)
 	results := make([]Pushed, pushes)
-	took := make([]time.Duration, pushes)
-	push := func(i int) {
-		start := time.Now()
-		results[i] = p.Push(rc.ctx, work, url, fmt.Sprintf("s%d", i))
-		took[i] = time.Since(start)
-	}
-	uploads := c.Faults().Hits(codefault.HostAfterUpload)
+	push := func(i int) { results[i] = p.Push(rc.ctx, work, url, fmt.Sprintf("s%d", i)) }
+	waited := c.WaitedOut(committer)
 	var wg sync.WaitGroup
 	wg.Go(func() { push(0) })
 	<-reached
 	for i := 1; i < pushes; i++ {
 		wg.Go(func() { push(i) })
 	}
-	if !within(time.Minute, func() bool { return c.Faults().Hits(codefault.HostAfterUpload)-uploads == pushes }) {
-		t.Errorf("only %d of %d pushes uploaded", c.Faults().Hits(codefault.HostAfterUpload)-uploads, pushes)
+	// THE OTHERS QUEUED AT THE COMMITTER behind the held record — each one's
+	// last trip, from its receiver to the committer's queue, made — before
+	// the committer is stopped under them (code.Committer.Queued).
+	if !within(time.Minute, func() bool { return c.Queued(rc.id) == pushes-1 }) {
+		t.Errorf("%d of %d pushes queued behind the held record", c.Queued(rc.id), pushes-1)
 	}
-	// THE LAST TRIP, from the receiver to the committer's queue, after the
-	// upload the count above saw.
-	time.Sleep(stopSettle)
 	down := true
 	defer func() {
 		if down {
 			c.Restart(t, committer)
 		}
 	}()
+	closes := c.Closes(committer)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		c.Stop(t, committer)
 	}()
-	time.Sleep(stopSettle)
+	// THE STOP REACHES THE COMMITTER'S REFUSAL — its presence given back, its
+	// Gitlet node stopped, its writers closed — before the held record goes:
+	// let go sooner, the record and the pushes queued behind it commit before
+	// the committer refuses, which passes the right order and the wrong one
+	// alike.
+	if !within(time.Minute, func() bool { return c.Closes(committer) > closes }) {
+		t.Errorf("the stop of %s never closed its committer", committer)
+	}
 	release()
 	wg.Wait()
 	<-stopped
 	for i, res := range results {
-		ref := fmt.Sprintf("refs/heads/s%d", i)
-		if !res.OK(ref) {
+		if ref := fmt.Sprintf("refs/heads/s%d", i); !res.OK(ref) {
 			t.Errorf("push %d while its committer stopped: %s", i, res)
 		}
-		if limit := c.WriteAttempt() / 2; took[i] > limit {
-			t.Errorf("push %d while its committer stopped took %s, past half a write attempt (%s): a "+
-				"member went silent rather than refusing", i, took[i], limit)
-		}
+	}
+	if n := c.WaitedOut(committer) - waited; n > 0 {
+		t.Errorf("%d proposals waited out a write attempt on %s while it stopped: a member went silent "+
+			"rather than refusing", n, committer)
 	}
 	c.Restart(t, committer)
 	down = false
@@ -765,19 +777,19 @@ func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 		t.Fatalf("settle the fleet once %s is back: %v", committer, err)
 	}
 
-	// (b) The committer killed: a push received after it is ok, in at most
-	// one write attempt, through a router that met the dead committer.
+	// (b) The committer killed: a push received after it is ok, through a
+	// router that met the dead committer and waited out no attempt on it.
 	head := p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
-	reported := c.Unanswered(committer)
+	reported, waited := c.Unanswered(committer), c.WaitedOut(committer)
 	c.Kill(t, committer)
 	down = true
-	start := time.Now()
 	res := p.Push(rc.ctx, work, rc.url(r), "main")
 	if !res.OK("refs/heads/main") {
 		t.Errorf("a push whose committer died before it: %s, want ok", res)
 	}
-	if elapsed, limit := time.Since(start), c.WriteAttempt(); elapsed > limit {
-		t.Errorf("a push whose committer died before it took %s, past one write attempt (%s)", elapsed, limit)
+	if n := c.WaitedOut(committer) - waited; n > 0 {
+		t.Errorf("a push whose committer died before it waited out %d write attempts on it, where an ask "+
+			"of a subject nothing serves is answered at once", n)
 	}
 	if c.Unanswered(committer) == reported {
 		t.Errorf("no router reported the dead committer %s unanswered: the push never asked it", committer)
@@ -962,7 +974,7 @@ func crashOnAFleet(t *testing.T, c Cluster, name string, point codefault.Point) 
 	for _, n := range c.Nodes() {
 		for _, sub := range []string{"scratch", "tmp", "trash"} {
 			dir := filepath.Join(n.CacheDir(), sub)
-			if !within(10*time.Second, func() bool { return emptyDir(dir) }) {
+			if !within(cleanupWait, func() bool { return emptyDir(dir) }) {
 				t.Errorf("%s's %s/ still holds %v after %s's restart", n.ID(), sub, entries(dir), killed)
 			}
 		}

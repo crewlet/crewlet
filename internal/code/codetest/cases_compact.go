@@ -88,10 +88,10 @@ func tryCompactOn(ctx context.Context, c *Case, n Node) (compact.Outcome, error)
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := n.Compactor().Compact(ctx, cand)
-		if out != compact.OutcomeBusy || time.Now().After(deadline) {
+		if out != compact.OutcomeBusy || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: it answers the last outcome, which every caller holds
 			return out, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -114,10 +114,10 @@ func compactAtMaintainer(c *Case) Node {
 				c.T.Fatalf("%s's pass refused or failed the compaction: %+v", n.ID(), report)
 			}
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			c.T.Fatalf("no Gitlet node's pass compacted %s in a minute", RepoName)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -461,7 +461,7 @@ func aCompactionDuringAFetch(t *testing.T, newFleet NewFleet) {
 	if _, stderr, err := p.Git().Try(t, fetched, nil, "fsck", "--connectivity-only", "--no-dangling"); err != nil {
 		t.Errorf("the fetched history is not whole: %v\n%s", err, stderr)
 	}
-	if !within(10*time.Second, func() bool {
+	if !within(cleanupWait, func() bool {
 		_, err := os.Stat(old)
 		return errors.Is(err, os.ErrNotExist)
 	}) {

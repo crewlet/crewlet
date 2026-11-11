@@ -42,6 +42,30 @@ func SetTimings(p *Pool, slotWait, killGrace time.Duration) {
 // than a stall (call before any Run).
 func SetRemoteStall(p *Pool, stall time.Duration) { p.remoteStall = stall }
 
+// SetClock has p read the instants a run's process began and was reaped at
+// from now rather than the machine's clock (Result.Began, Result.Took), so a
+// case states them rather than ordering two readings of the wall clock, which
+// a coarse clock stamps equal. Call before any Run.
+func SetClock(p *Pool, now func() time.Time) { p.now = now }
+
+// SeeGrace has p arm the wait between a run's SIGTERM and its SIGKILL
+// through armed rather than a timer: armed is handed the grace the pool
+// waits, exactly, and answers the channel whose value ends the wait. Call
+// before any Run.
+func SeeGrace(p *Pool, armed func(grace time.Duration) <-chan time.Time) {
+	p.grace = func(d time.Duration) (<-chan time.Time, func() bool) {
+		return armed(d), func() bool { return true }
+	}
+}
+
+// OnDrain has p tell fn each stream a run's drain begins to wait for, in the
+// drain's order — stdout, stderr, the trace and, last, stdin — from the run's
+// own goroutine, so fn must not block. It is the parked state a case waits a
+// run into before it lets the run's caller go on: a run that has reached its
+// drain has been reaped and swept, and one waiting for its stdin has nothing
+// left to wait for but its caller's Read. Call before any Run.
+func OnDrain(p *Pool, fn func(stream string)) { p.draining = fn }
+
 // ResolveMemory is what New sizes the lanes by under o, the node's own
 // memory read by read.
 func ResolveMemory(o Options, read func() (Memory, error)) (Memory, error) {
@@ -54,6 +78,18 @@ func SetCaptureMax(p *Pool, n int) { p.captureMax = n }
 // ReadLane is the READ lane's held slots and outstanding loans, for the lane
 // accounting cases.
 func ReadLane(p *Pool) (held, lent int64) { return p.read.counts() }
+
+// Waiting is how many runs wait in p's lane of class c: queued for a slot
+// and granted none yet. It is the parked state a case waits a run into
+// before it lets a slot go or ends the run's caller, so the release or the
+// cancel meets the waiter the case names rather than a run still on its way
+// to the lane.
+func Waiting(p *Pool, c Class) int64 {
+	l := p.lane(c)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.waiting
+}
 
 // ShareForget is the decayed charge below which an idle account is forgotten.
 const ShareForget = shareForget

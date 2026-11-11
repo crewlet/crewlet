@@ -84,11 +84,11 @@ func aReadIsAnsweredByTheHome(t *testing.T, newFleet NewFleet) {
 		if err == nil && readsServed(home) > before {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("no read through the fleet was answered by the repository's home %s within %s "+
 				"(the last: %v)", home.ID(), homeWait, err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 	for _, n := range nodes {
 		if n.ID() != home.ID() && n.ID() != pusher.ID() && n.Cache().Holds(repo) {
@@ -172,7 +172,7 @@ func aHomesDeathFillsOneCopy(t *testing.T, c Cluster) {
 				t.Fatalf("a read through %s was served while every download was held", via)
 			}
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the home's runner-up %s began no copy within %s of the home %s's death", runnerUp,
 				homeWait, home)
 		}
@@ -197,12 +197,12 @@ func aHomesDeathFillsOneCopy(t *testing.T, c Cluster) {
 				break
 			}
 		}
-		if !served && time.Now().After(deadline) {
+		if !served && time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("no read through %s or %s was served within %s of the home %s's death", runnerUp, third,
 				homeWait, home)
 		}
 		if !served {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 	if !node(runnerUp).Cache().Holds(rc.id) {
