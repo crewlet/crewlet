@@ -1632,6 +1632,17 @@ func (e *Engine) applyChart(ctx context.Context, c *Company) {
 	if writer == nil || c == nil || c.Org == nil || c.ActivatedAt.IsZero() {
 		return
 	}
+	// THE SEATS' ORDER FIRST AND WHATEVER THE PROJECTS DO: `sort=assignee`
+	// reads it from the tracker's own rows ([worklet.Writer.ApplyRoster]).
+	ordered, err := writer.ApplyRoster(ctx, c.ActivatedAt, seatNames(c.Org))
+	switch {
+	case err != nil:
+		log.ErrorContext(ctx, "tracker_roster_not_applied", "error", err.Error(),
+			"detail", "work sorted by assignee keeps the order of the last chart "+
+				"applied; the next config apply or restart retries it")
+	case ordered:
+		log.InfoContext(ctx, "tracker_roster_applied")
+	}
 	chart := chartProjects(c.Org)
 	if len(chart) == 0 {
 		return
@@ -1648,6 +1659,16 @@ func (e *Engine) applyChart(ctx context.Context, c *Company) {
 	if len(wrote) > 0 {
 		log.InfoContext(ctx, "tracker_chart_applied", "projects", wrote)
 	}
+}
+
+// seatNames is every seat the chart holds, by handle, with the name a person
+// reads it by: what the seats' order is collated from.
+func seatNames(o *org.Organization) map[string]string {
+	out := map[string]string{}
+	for role := range o.AllRoles() {
+		out[role.Handle()] = role.Name
+	}
+	return out
 }
 
 // chartProjects is every project the org chart names, with the three fields
@@ -2080,23 +2101,6 @@ type liveUnits struct{ engine *Engine }
 
 func (l liveUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 	return ChartUnits(l.engine.Company().Org).ResolveUnit(ref)
-}
-
-// liveSeatNames is every seat's name as the epoch current when a listing is
-// READ spells it, which is what `sort=assignee` orders by ([worklet.Roster]).
-// A node holding no company names nobody, and the listing orders by handle.
-type liveSeatNames struct{ engine *Engine }
-
-func (l liveSeatNames) SeatNames() map[string]string {
-	company := l.engine.Company()
-	if company == nil || company.Org == nil {
-		return nil
-	}
-	out := map[string]string{}
-	for role := range company.Org.AllRoles() {
-		out[role.Handle()] = role.Name
-	}
-	return out
 }
 
 // liveSeats resolves a people field's value to exactly one seat, against the

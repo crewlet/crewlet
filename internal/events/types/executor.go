@@ -745,6 +745,11 @@ type ExecutorAnswerGiven struct {
 	AnsweredByKind string `json:"answered_by_kind"`
 	OperatorID     string `json:"operator_id,omitempty"`
 
+	// DelegatedRule is the delegated-decisions rule a delegate answered
+	// under (ADR-0125), 0 for an answer a person gave: every reader shows
+	// such an answer as decided under delegation.
+	DelegatedRule int `json:"delegated_rule,omitempty"`
+
 	// LaunchID is the QUESTION this answers: the job the run held when it
 	// asked, off the row the answer was accepted against. Every new question
 	// comes with a new job — nothing but a launch opens one — so the job
@@ -908,6 +913,9 @@ type ExecutorAnswered struct {
 	AnsweredBy     string `json:"answered_by,omitempty"`
 	AnsweredByKind string `json:"answered_by_kind,omitempty"`
 	OperatorID     string `json:"operator_id,omitempty"`
+	// DelegatedRule is the delegated-decisions rule a delegate answered
+	// under, 0 for a person's answer ([ExecutorAnswerGiven.DelegatedRule]).
+	DelegatedRule int `json:"delegated_rule,omitempty"`
 
 	// LaunchID is the question the answer was given to, by the job that
 	// asked it, and AskedAt when it was put.

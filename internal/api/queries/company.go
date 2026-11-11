@@ -1176,6 +1176,9 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 		if f.Title != "" {
 			row["title"] = f.Title
 		}
+		// THE FINDING IN A FEW WORDS, on every one, for a list that gives a
+		// finding one line (Ask Crewlet's): the title, or its kind's words.
+		row["label"] = f.Label()
 		// AN AGENT'S OWN, which its row on the Agents tab draws from its own
 		// record, so the integration's list leaves it there.
 		if f.Seat {

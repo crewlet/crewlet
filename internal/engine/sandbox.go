@@ -1694,13 +1694,14 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// citation naming any surface at all, before the loop's later
 		// checks ever ran.
 		Reply: resumedReply,
-		// AND THE READ OF A PICKUP'S TYPED ANSWER, by the turn's own id:
-		// the run's writes over the bridge carry it (ADR-0122).
-		TypedAnswer: e.typedAnswerFor(in.Run.TurnID, resumedReply),
-		Publisher:   e.backends.Queue,
-		Turn:        turnIdentity,
-		Sessions:    e.sessions,
-		Metrics:     e.metrics,
+		// AND THE READ OF A PICKUP'S ANSWER, from the turn's first launch,
+		// which no write of the turn precedes: its row keeps that instant
+		// across every relaunch (ADR-0122).
+		PickupAnswer: e.pickupAnswerFor(in.Run.AgentHandle, in.Run.CreatedAt, resumedReply),
+		Publisher:    e.backends.Queue,
+		Turn:         turnIdentity,
+		Sessions:     e.sessions,
+		Metrics:      e.metrics,
 		// THE LAUNCHER, for the turn's LATER iterations rather than this
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
@@ -2908,6 +2909,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
 		Stopped: e.releaseWorkingStatus,
+		// A HELD CALL PUT TO DELEGATES wakes them once it is parked, so
+		// each finds it waiting (ADR-0125). See delegated.go.
+		Parked: e.wakeDelegates,
 		// A turn parked on a run a person stopped is closed on the record
 		// as stopped, and its end recorded on the executor log, by
 		// whichever node finishes the run's ending — see runstop.go.

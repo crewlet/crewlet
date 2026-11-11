@@ -81,6 +81,12 @@ type e2eServers struct {
 
 func (s *e2eServers) Reach(handle string) config.SSHReach { return s.cfg.SSHReachOf(handle) }
 
+func (s *e2eServers) RecordVerdict(context.Context, builtin.DelegatedVerdict) (bool, error) {
+	return true, nil
+}
+
+func (s *e2eServers) MayApprove(context.Context, string) (bool, error) { return false, nil }
+
 func (s *e2eServers) Read(ctx context.Context, call builtin.SSHCall) (sshint.Result, error) {
 	reach := s.Reach(call.Handle)
 	h, ok := reach.Host(call.Host)
@@ -193,7 +199,7 @@ func TestAHeldOperateCallApprovedOnceRunsOnce(t *testing.T) {
 	turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: o.AgentSeatByHandle("sre"), Org: o,
 		Lookups: turnctx.NewLookups()}
 	exec := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.SSHOperateTool}).
-		WithHolder(builtin.NewCallHold(desk, seal, nil)).ForTurn(turn)
+		WithHolder(builtin.NewCallHold(desk, seal, nil, nil)).ForTurn(turn)
 	ctx := turnctx.WithJob(iam.WithPrincipal(t.Context(), turnctx.SeatPrincipal(o, turn.Seat)), "launch-1")
 	const marker = "/tmp/crewlet-e2e-ran"
 	args := map[string]any{"host": "api-1", "command": "echo ran >> " + marker, "reason": "prove the run"}

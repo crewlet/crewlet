@@ -88,19 +88,23 @@ func TestABlockingIntegrationLeadsTheAnswer(t *testing.T) {
 }
 
 // TWO FINDINGS OF ONE KIND ON ONE SURFACE SAY WHICH. A reconcile finding with
-// no title of its own is titled with its subject, so two agents' refusals at
-// one vendor are two findings a person can tell apart.
+// no title of its own is titled with its label, which names its subject, so
+// two agents' refusals at one vendor are two findings a person can tell apart,
+// worded as Ask Crewlet's list of the integration's findings words them.
 func TestTwoFindingsOfOneKindOnASurfaceSayWhich(t *testing.T) {
 	t.Parallel()
-	got := advisor.FromIntegrations([]integration.State{reconciled(integration.KindDatadog,
-		integration.Finding{Kind: integration.FindingIdentityFailed, Subject: "pm", Detail: "Refused."},
-		integration.Finding{Kind: integration.FindingIdentityFailed, Subject: "sre", Detail: "Refused."})})
+	findings := []integration.Finding{
+		{Kind: integration.FindingIdentityFailed, Subject: "pm", Detail: "Refused."},
+		{Kind: integration.FindingIdentityFailed, Subject: "sre", Detail: "Refused."},
+	}
+	got := advisor.FromIntegrations([]integration.State{reconciled(integration.KindDatadog, findings...)})
 	if len(got) != 2 || got[0].Title == got[1].Title {
 		t.Fatalf("findings = %+v, want two with titles that differ", got)
 	}
 	for i, who := range []string{"pm", "sre"} {
-		if !strings.Contains(got[i].Title, "("+who+")") {
-			t.Errorf("title %q does not name %s", got[i].Title, who)
+		if want := "Datadog: " + findings[i].Label() + "."; got[i].Title != want ||
+			!strings.HasSuffix(findings[i].Label(), "for "+who) {
+			t.Errorf("title %q, want %q naming %s", got[i].Title, want, who)
 		}
 	}
 }

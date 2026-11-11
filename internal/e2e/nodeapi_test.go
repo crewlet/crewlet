@@ -414,11 +414,12 @@ func wireAPI(
 	// node `crewlet run` never produces — one whose envelope carries no
 	// `seeded_from` and whose feed starts at boot — and every case reading
 	// either proved the harness rather than the node. FAILED here rather than
-	// warned about, as cmd/crewlet does: a seed that cannot read the fleet it
-	// was just built beside is a broken case, not a degraded node.
+	// read again until it lands, as cmd/crewlet reads it: a seed that cannot
+	// read the fleet it was just built beside is a broken case, not a
+	// degraded node.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, seedBudget)
 	_, composed := company()
-	err = observe.Seed(seedCtx, e.History(), composed, app.Stream().State())
+	_, err = observe.Seed(seedCtx, e.History(), composed, app.Stream().State())
 	cancelSeed()
 	if err != nil {
 		return fail("seed the live projection", err)
@@ -458,8 +459,9 @@ func wireAPI(
 }
 
 // seedBudget bounds the harness's boot seed, at cmd/crewlet's
-// projectionSeedBudget: the same read, over the same fan-out, against a fleet
-// that is booting just as a real one is.
+// projectionSeedBudget, which is how long a node waits for it before serving:
+// the same read, over the same fan-out, against a fleet that is booting just as
+// a real one is.
 const seedBudget = 5 * time.Second
 
 // stopInReverse runs a teardown in the reverse of the order it was built.

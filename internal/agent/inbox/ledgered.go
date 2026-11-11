@@ -23,6 +23,7 @@ import (
 var ledgeredTypes = map[string]bool{
 	types.TaskAssigned{}.EventType():         true,
 	types.WorkPickupType:                     true,
+	types.DelegatedReviewType:                true,
 	types.ExternalNotification{}.EventType(): true,
 	types.A2ARequestType:                     true,
 	types.A2AMessageType:                     true,

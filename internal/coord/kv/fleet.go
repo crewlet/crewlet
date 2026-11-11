@@ -1193,6 +1193,30 @@ func (f *FleetStore) Worked(ctx context.Context, scope string, keys []string) (m
 	return out, nil
 }
 
+// WorkedAt returns the keys already recorded under scope, each with the
+// instant its first record stated.
+func (f *FleetStore) WorkedAt(ctx context.Context, scope string, keys []string) (map[string]time.Time, error) {
+	out := make(map[string]time.Time, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		entry, err := f.get(ctx, f.ledger, ledgerKey(scope, key))
+		switch {
+		case err == nil:
+			// A RECORD THAT DOES NOT DECODE IS STILL WORKED, at no
+			// instant anybody can state.
+			var record ledgerRecord
+			_ = json.Unmarshal(entry.Value(), &record)
+			out[key] = record.At
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+		default:
+			return nil, unavailable("read the completion ledger", err)
+		}
+	}
+	return out, nil
+}
+
 // Record marks one key worked.
 func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at time.Time) error {
 	if scope == "" || key == "" {

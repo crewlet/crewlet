@@ -181,6 +181,19 @@ func Seeks(plan []string, index string) bool {
 	return false
 }
 
+// SeeksJoined reports a plan that reads the relation joined under alias by
+// seeking an index (`SEARCH <alias> USING INDEX …`), rather than scanning it
+// once for every row it is joined to, as `json_each` joined bare is.
+// [TestAJoinedRelationIsSoughtOnlyThroughAnIndex] holds it to the driver.
+func SeeksJoined(plan []string, alias string) bool {
+	for _, line := range plan {
+		if strings.HasPrefix(line, "SEARCH "+alias+" ") && len(IndexesIn([]string{line})) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // Walks reports a plan that reads through index in the index's own order —
 // `SCAN … USING INDEX` — with no term on its leading columns to seek.
 func Walks(plan []string, index string) bool {

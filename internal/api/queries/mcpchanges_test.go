@@ -52,7 +52,7 @@ func TestADetailListsEachChangeAndHoldsTheToolItChanged(t *testing.T) {
 	accepted := mcpreview.Baseline(coord.MCPListing{Server: "github",
 		Tools: []coord.MCPListedTool{was, deleteRepo, gone}}, at.Add(-time.Hour))
 	listings := []coord.MCPListing{{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at,
-		Instances: 1, Tools: []coord.MCPListedTool{deleteRepo, now, added}, ToolCount: 3}}
+		Instances: 1, Tools: []coord.MCPListedTool{deleteRepo, now, added}}}
 	seen := at.Add(-10 * time.Minute)
 	surface, _ := configSurface(t, mcpCompany)
 	s := mcpSources(t, backend)
@@ -125,8 +125,7 @@ func TestAServerNotYetBaselinedShowsNoChange(t *testing.T) {
 	s := mcpSources(t, backend)
 	s.Config = surface
 	s.MCPListings = fakeListings{listings: []coord.MCPListing{{Server: "github", Node: "node-a",
-		Epoch: live["node-a"], At: time.Now(), Instances: 1, ToolCount: 1,
-		Tools: []coord.MCPListedTool{defined("gh_get_issue", "Read one issue", readOnly)}}}}
+		Epoch: live["node-a"], At: time.Now(), Instances: 1, Tools: []coord.MCPListedTool{defined("gh_get_issue", "Read one issue", readOnly)}}}}
 	s, _ = withHistory(t, s)
 	got, err := s.MCPServer(t.Context(), "github")
 	if err != nil {
@@ -173,7 +172,7 @@ func TestADescriptionChangedPastTheListingsCutIsServedWhole(t *testing.T) {
 	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
 	was, now, accepted := lateChange(t, at)
 	listing := coord.MCPListing{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at,
-		Instances: 1, Tools: []coord.MCPListedTool{now}, ToolCount: 1}.Bounded()
+		Instances: 1, Tools: []coord.MCPListedTool{now}}.Bounded()
 	// THE PREMISE: what a listing and an accepted record keep reads alike.
 	listing.Tools[0].DefinitionKept = false
 	if accepted[0].Description != listing.Tools[0].Description {
@@ -231,7 +230,7 @@ func TestAPartNoRecordCanShowIsSaidUnshown(t *testing.T) {
 	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
 	was, now, accepted := lateChange(t, at)
 	listing := coord.MCPListing{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at,
-		Instances: 1, Tools: []coord.MCPListedTool{now}, ToolCount: 1}.Bounded()
+		Instances: 1, Tools: []coord.MCPListedTool{now}}.Bounded()
 	for name, tc := range map[string]struct {
 		definitions map[string]coord.MCPToolDefinition
 		whole       bool

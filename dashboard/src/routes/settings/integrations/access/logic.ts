@@ -588,7 +588,11 @@ export interface Status {
 export function statusOf(lane: Lane, saved: AccessSeatLane, drafted: boolean): Status {
   if (drafted && saved.status !== "departed")
     return { label: "Not saved", tone: "info", outline: true };
-  return STATUS_WORDS[saved.status](lane);
+  // A STATUS THIS BUNDLE DOES NOT KNOW, from a newer or older engine, is drawn
+  // in the engine's own words, neutral, rather than breaking the tab.
+  const words = Object.hasOwn(STATUS_WORDS, saved.status) ? STATUS_WORDS[saved.status] : null;
+  if (words) return words(lane);
+  return { label: saved.status_label || "Status unknown", tone: "neutral" };
 }
 
 /** Each engine status in the tab's words, keyed by the contract's set so a new one is worded here. */

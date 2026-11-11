@@ -164,6 +164,45 @@ func TestARestartDoesNotReRaiseAStandingAlarm(t *testing.T) {
 		}
 	})
 
+	// A FLAPPING RUN OUTLIVES A RESTART: an alarm that cleared before a
+	// restart and comes back inside the relapse window after it keeps its
+	// first raise, and keeps it through the next restart while it stands.
+	t.Run("a flapping run through restarts", func(t *testing.T) {
+		t.Parallel()
+		db := nodeFile(t)
+		observe(t, start(t, db, t0, false), []statelog.Alarm{backup})
+		observe(t, start(t, db, t0.Add(5*time.Minute), false), nil)
+		back := start(t, db, t0.Add(10*time.Minute), false)
+		observe(t, back, []statelog.Alarm{backup})
+		if got := names(back.said); !slices.Equal(got, []string{"fired backup_age"}) {
+			t.Fatalf("the raise inside the window handed on %v, want one fire", got)
+		}
+		for _, b := range []*boot{back, start(t, db, t0.Add(20*time.Minute), false)} {
+			if b != back {
+				observe(t, b, []statelog.Alarm{backup})
+			}
+			marks, _ := b.tracker.Marks()
+			if len(marks) != 1 || !marks[0].Since.Equal(t0) {
+				t.Fatalf("the marks are %+v, want the run's first raise %v", marks, t0)
+			}
+		}
+	})
+
+	t.Run("a raise past the relapse window after a restart", func(t *testing.T) {
+		t.Parallel()
+		db := nodeFile(t)
+		observe(t, start(t, db, t0, false), []statelog.Alarm{backup})
+		cleared := t0.Add(5 * time.Minute)
+		observe(t, start(t, db, cleared, false), nil)
+		late := cleared.Add(statelog.RelapseWindow)
+		again := start(t, db, late, false)
+		observe(t, again, []statelog.Alarm{backup})
+		marks, _ := again.tracker.Marks()
+		if len(marks) != 1 || !marks[0].Since.Equal(late) {
+			t.Fatalf("the marks are %+v, want a new run from %v", marks, late)
+		}
+	})
+
 	t.Run("a raise the broker never took", func(t *testing.T) {
 		t.Parallel()
 		db := nodeFile(t)

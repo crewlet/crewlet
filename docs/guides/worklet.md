@@ -709,7 +709,9 @@ A **view** is a saved query with a shape. Five shapes:
   (`ENG-9` before `ENG-10`), a status in the board's order from To do to
   Closed, a type in your catalogue's order (the builtins, then your own types
   as you declared them), and an assignee by the seat's name in the org chart,
-  with unassigned work last in both directions. On **My work → Queue** every
+  with unassigned work last in both directions. Names follow the Unicode
+  root collation, so "Émile" sorts beside "Emma" rather than after "Zoe",
+  and a letter's case or accent orders only names that are otherwise equal. On **My work → Queue** every
   item is held by the person whose day it is, so the Assignee column starts
   off there; **Display → Columns** turns it on.
 
@@ -786,8 +788,14 @@ order no index serves reads its scope for every page, as its first page does.
 A cursor belongs to the order that minted it, and re-sorting starts again from
 the first page. So does an edit to what an order is built from: `sort=type`
 follows the type catalogue and `sort=assignee` the seats' names in the org
-chart, and a cursor minted before either changed is refused rather than
-resumed in the middle of a different order.
+chart, and a cursor minted before either changed is refused as `bad_params`
+rather than resumed in the middle of a different order. On that refusal the
+list's **Load more** starts again from the top and says why, and
+`list_work_items` tells an agent to ask again without `cursor`. The seats'
+order is kept on the data nodes by every configuration apply, as the projects
+the chart names are, so `sort=assignee` reads each task's place with one
+indexed lookup and its pages cost what `sort=title`'s do however many seats the
+chart holds; the type order is bounded by the catalogue's 64 declared types.
 
 ### What a board groups on
 
@@ -1172,8 +1180,9 @@ input to something the tracker already reports:
 `update_work_item` also takes a **wait until a date**: `wait_until`, in the
 same spellings, sets the item's `start` with a required `wait_reason`, one line
 of at most 200 bytes saying what it waits for, which the item reads as
-`wait_reason`. The seat holding it is not handed it before the date and is
-handed it once when the date comes. A wait without a reason, a reason without
+`wait_reason`. The seat holding it is not handed it before the date, unless the
+reason waits on a person nobody asked (below), and is handed it once when the
+date comes. A wait without a reason, a reason without
 a wait, a wait beside `start`, or a date that has passed is refused with
 nothing written, and `wait_until: null` ends the wait. A `start` moved or
 cleared without a reason takes the old reason off, since it said why the item
@@ -1183,12 +1192,25 @@ date, as **Waits for** until the date comes and **Waited for** after.
 A date is for a real date: a release window, an agreed start. **A wait on a
 person is an ask**, never a date, because the date passes whether or not they
 answered and nothing reaches their Inbox. So an agent's `wait_until` whose
-`wait_reason` names a person, by handle (with or without its `@`) or by name,
-is refused with nothing written unless the agent already holds an open ask to
-that person on the item: ask them with `comment_on_work_item` and `ask`
-instead, which holds the item until they answer
+`wait_reason` names a person is refused with nothing written unless the agent
+already holds an open ask to that person on the item: ask them with
+`comment_on_work_item` and `ask` instead, which holds the item until they
+answer
 ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
-A person's own wait is written as given.
+A reason names a person by `@handle`, in any case, or by the name the org
+chart gives them, as a whole phrase in the case the chart writes it: a bare
+handle or a name in another case is not a person, since handles and one-word
+names are often ordinary words ("the release will be cut Friday" waits on
+nobody, whoever holds the handle `will`). A person whose access the directory
+withholds is not matched. A person's own wait is written as given.
+
+**A wait on a person nobody asked comes back.** An agent's wait until a later
+date whose reason names a person that the agent who set it has not asked on
+the item is ready for the item's holder before its date, however and whenever
+the wait was written: the [work pickup](../concepts/scheduling.md#the-work-pickup)
+hands it over naming the person, and the holder asks them, or restates the
+reason without naming them where the date is real and waits on nobody. The
+item is still handed once more when its date comes.
 
 **A review names its reviewer.** An agent that moves an item it keeps into
 `in_review` names `reviewer` with `update_work_item`, since a seat never
@@ -1308,6 +1330,7 @@ commit may move several of these, and the row names each one it moved:
 |---|---|
 | `title` `status` `assignee` `priority` `project` `type` `tags` | the columns a board is read by |
 | `due` `due_all_day` `start` `estimate` `points` | the schedule and the sizing. The flag is recorded beside the instant because an all-day date is stored as the company's own midnight, so making a midnight due date all-day moves the flag and leaves the instant where it was |
+| `wait_reason` | why the item waits until its start, whole: recorded on its own when a wait is restated on the same date with another reason |
 | `reporter` `watchers` `muted` `collaborators` | who filed it, who follows it, who opted out of hearing, who is doing it with you — the last three as the handles that joined and left |
 | `parent` `routing_unit` `archived` `removed_with` | where it sits, whose lead hears about it, whether it is filed away, and — when a removal cascaded — the item it went with |
 | `waiting_on` `linked` `duplicates` `page` `blocking` | the four kinds of link it authors, and the mirror a blocker carries — each as the items that joined and left it |

@@ -43,7 +43,7 @@ export function ServerPage({
   const tab: Tab = (tabs as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
   const w = whereWords(server);
   const reach = data.reaches(server.name);
-  const toolCount = detail.data?.tool_count ?? server.tools;
+  const toolCount = detail.data?.tools.length ?? server.tools;
   // The trail names the server as its head does ("GitHub"), not by its key.
   usePageLabels({ [server.name]: server.title });
   const gestures = data.admin && server.configured;

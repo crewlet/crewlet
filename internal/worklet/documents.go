@@ -103,6 +103,29 @@ func readProject(ctx context.Context, tx *sql.Tx, key string) (Project, bool, er
 		func(p *Project, v uint64) { p.Version = v })
 }
 
+// readRoster reads the chart's seat order, absent until the first chart apply.
+//
+// ITS OWN STATEMENT, for [readCounter]'s reason: the roster is machinery
+// rather than a whole-document object, so no generic write path reaches it.
+func readRoster(ctx context.Context, tx *sql.Tx) (Roster, bool, error) {
+	var body []byte
+	var version int64
+	err := tx.QueryRowContext(ctx, `SELECT document, version FROM tracker_rosters
+		WHERE name = ?`, RosterSubject().ID).Scan(&body, &version)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Roster{}, false, nil
+	case err != nil:
+		return Roster{}, false, fmt.Errorf("worklet: read the seats' order: %w", err)
+	}
+	var roster Roster
+	if err := json.Unmarshal(body, &roster); err != nil {
+		return Roster{}, false, fmt.Errorf("worklet: decode the stored seats' order: %w", err)
+	}
+	roster.Version = uint64(version)
+	return roster, true, nil
+}
+
 func readTagSet(ctx context.Context, tx *sql.Tx, project string) (TagSet, bool, error) {
 	return readDocument(ctx, tx, TagsSubject(project),
 		func(t *TagSet, v uint64) { t.Version = v })

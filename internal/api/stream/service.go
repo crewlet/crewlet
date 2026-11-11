@@ -410,6 +410,32 @@ func (s *Service) ReconcileExecutors(records []livestate.ExecutorRecord, asOf ti
 	s.pushAgents(change, now)
 }
 
+// Seed folds stored history into the projection ([livestate.LiveState.Seed])
+// and corrects every open socket when it moved anything.
+//
+// A SEED CAN LAND AFTER THE NODE SERVES: one read again after an attempt that
+// did not complete (internal/observe's Seeding). Every socket open by then
+// holds a snapshot without it, and the feed has no push that inserts rows
+// behind the live ones, so each is sent its snapshot again, which a tab applies
+// as it applies its first. Before the node serves there is no socket to send.
+func (s *Service) Seed(h livestate.History) livestate.Change {
+	change := s.state.Seed(h)
+	if change.Events || change.Tokens || len(change.Agents) > 0 {
+		now := s.now()
+		for _, c := range s.hub.registered() {
+			c.Reply(Push(KindSnapshot, s.Snapshot(c.Audience()), now))
+		}
+	}
+	return change
+}
+
+// SeedPauses lands the pause record on the projection
+// ([livestate.LiveState.SeedPauses]) and pushes the seats it moved, for a
+// pause seed that lands after the node serves.
+func (s *Service) SeedPauses(pauses []livestate.SeedPause) {
+	s.pushAgents(s.state.SeedPauses(pauses), s.now())
+}
+
 // pushAgents sends the rows of the seats a change moved, named by agent id.
 //
 // A LIVE CALL'S HEAVY FIELDS GO ONLY WHEN THEY MOVED. A running phase moves

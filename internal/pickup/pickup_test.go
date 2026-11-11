@@ -71,11 +71,11 @@ func TestAPickupIsKeyedOnTheItemsVersionBySomebodyElse(t *testing.T) {
 	}
 }
 
-// A QUIET ITEM IS RECHECKED ONCE A DAY (ADR-0122): an item the seat left
-// without a typed answer keeps the key it was handed under until a whole day
-// has passed since it went quiet, takes a new key then and keeps it through
-// that day, and takes another the next; an item a typed answer holds keeps its
-// key however long it waits; and an item with no recheck due keeps the identity
+// A QUIET ITEM IS RECHECKED ONCE A DAY (ADR-0122): an item still ready for the
+// seat keeps the key it was handed under until a whole day has passed since it
+// went quiet, takes a new key then and keeps it through that day, and takes
+// another the next; an item the read stamped no quiet instant on keeps its key
+// however long it waits; and an item with no recheck due keeps the identity
 // older builds derive.
 //
 // Mutation: leave the recheck out of the key's text, and every recheck is the
@@ -104,7 +104,7 @@ func TestAQuietItemIsRecheckedOnceADay(t *testing.T) {
 
 	held := item("a", worklet.StatusInProgress, 40)
 	if pickup.KeyOf(seat, held, quietSince.Add(30*pickup.RecheckAfter)).WakeID() != handed.WakeID() {
-		t.Error("an item a typed answer holds came back for a recheck")
+		t.Error("an item with no quiet instant came back for a recheck")
 	}
 	older := uuid.NewSHA1(uuid.MustParse("7d0c6f2e-4b1a-5e39-8c27-91f3a6b2d4e8"),
 		[]byte(seat.String()+"\x00a\x0040\x00in_progress\x000"))
@@ -193,5 +193,35 @@ func TestABriefPastTheReadCountSaysAtLeast(t *testing.T) {
 	assigned, _ := events.DataAs[*types.WorkPickup](ev)
 	if brief := assigned.Brief(); !strings.Contains(brief, "at least 400 ready items") {
 		t.Errorf("a capped count reads as exact:\n%s", brief)
+	}
+}
+
+// A WAIT ON A PERSON IS HANDED UNDER A KEY OF ITS OWN (ADR-0122): handed before
+// its date it names the persons its reason waits on and says to ask them, and
+// its key differs from the one the same item takes when its date comes, so the
+// pickup at the date is a new one.
+//
+// Mutation: leave the mark out of the key, and the item waited on a person is
+// never handed when its date comes.
+func TestAWaitOnAPersonIsHandedUnderAKeyOfItsOwn(t *testing.T) {
+	t.Parallel()
+	start := at.Add(72 * time.Hour)
+	onPerson := item("a", worklet.StatusTodo, 40)
+	onPerson.Start, onPerson.Why, onPerson.WaitsOn = &start, types.PickupWaitsOnPerson, []string{"jane"}
+	dated := item("a", worklet.StatusTodo, 40)
+	dated.Start = &start
+	before, after := pickup.KeyOf(seat, onPerson, at), pickup.KeyOf(seat, dated, start.Add(time.Minute))
+	if before.WakeID() == after.WakeID() || !before.OnPerson || after.OnPerson {
+		t.Errorf("the wait on a person handed before its date is keyed %+v, and at its date %+v: "+
+			"the pickup at the date would be refused as already worked", before, after)
+	}
+	ev := pickup.Event(seat, "engineer", onPerson, before, 1, false, events.TraceContext{})
+	handed, _ := events.DataAs[*types.WorkPickup](ev)
+	brief := handed.Brief()
+	for _, want := range []string{"names jane", "a person you have not asked", "`ask`", "`decision`",
+		"restate `wait_reason`"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("the brief of a wait on a person lacks %q:\n%s", want, brief)
+		}
 	}
 }

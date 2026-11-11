@@ -34,6 +34,10 @@
 // leader with its own reply subject, which is a reply arriving late to the
 // request that asked.
 //
+// A consumer's CREATION is held the same way ([ConsumerCreate]): the broker
+// answers it only once it has found where the consumer begins, which for a
+// listing of every subject's newest message means reading the stream's blocks.
+//
 // It intercepts the ACCOUNT's own API (`$JS.API.>`) of a server with no
 // JetStream domain. A domain's API reaches JetStream through mappings of its
 // own, which the broker consults before any added after them, so a case reads
@@ -43,6 +47,7 @@ package jsapitest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -77,6 +82,17 @@ func ConsumerList(stream string) string { return fmt.Sprintf(server.JSApiConsume
 // read on — which only the metadata leader answers.
 func AccountInfo() string { return server.JSApiAccountInfo }
 
+// ConsumerCreate is the account API subjects a consumer of stream is made on
+// under a name, whatever its filter, as the client names every consumer it
+// makes: answered once the consumer's leader has found where it begins.
+func ConsumerCreate(stream string) string {
+	return fmt.Sprintf(server.JSApiConsumerCreateT, stream) + "." + fullWildcard
+}
+
+// fullWildcard is the last token of a subject that stands for every subject
+// with the tokens before it ([ConsumerCreate]).
+const fullWildcard = ">"
+
 // heldSeq makes every interception's subject its own, so two in one process
 // never hear each other's reads.
 var heldSeq atomic.Uint64
@@ -88,6 +104,9 @@ type Read struct {
 	N   int
 	msg *nats.Msg
 	h   *Held
+	// asked is the subject the read was asked on, which [Read.Answer] sends
+	// it on to: the interception's own, or one it stands for ([ConsumerCreate]).
+	asked string
 }
 
 // Reply is the subject the reader listens on for this read's answer — what
@@ -106,7 +125,7 @@ func (r *Read) Answer() error {
 		return fmt.Errorf("jsapitest: read %d answered while reads on %s are still held — "+
 			"release them first, or the broker maps it straight back", r.N, r.h.subject)
 	}
-	return r.h.nc.PublishMsg(&nats.Msg{Subject: r.h.subject, Reply: r.msg.Reply,
+	return r.h.nc.PublishMsg(&nats.Msg{Subject: r.asked, Reply: r.msg.Reply,
 		Header: r.msg.Header, Data: r.msg.Data})
 }
 
@@ -152,10 +171,22 @@ func Hold(t testing.TB, srv *server.Server, subject string, signIn ...nats.Optio
 		done:    done,
 	}
 	held := fmt.Sprintf("jsapitest.held.%d", heldSeq.Add(1))
-	if _, err := nc.Subscribe(held, func(msg *nats.Msg) {
+	// A FULL WILDCARD is mapped onto one of the interception's own, since a
+	// mapping keeps the tokens it stands for, and those tokens name the
+	// subject each request was asked on.
+	prefix, wild := strings.CutSuffix(subject, "."+fullWildcard)
+	dest := held
+	if wild {
+		dest = held + "." + fullWildcard
+	}
+	if _, err := nc.Subscribe(dest, func(msg *nats.Msg) {
+		asked := subject
+		if wild {
+			asked = prefix + strings.TrimPrefix(msg.Subject, held)
+		}
 		h.mu.Lock()
 		h.n++
-		r := &Read{N: h.n, msg: msg, h: h}
+		r := &Read{N: h.n, msg: msg, h: h, asked: asked}
 		h.mu.Unlock()
 		select {
 		case h.reads <- r:
@@ -173,7 +204,7 @@ func Hold(t testing.TB, srv *server.Server, subject string, signIn ...nats.Optio
 		nc.Close()
 		t.Fatalf("jsapitest: flush the interception's subscription: %v", err)
 	}
-	if err := h.acc.AddMapping(subject, held); err != nil {
+	if err := h.acc.AddMapping(subject, dest); err != nil {
 		end()
 		nc.Close()
 		t.Fatalf("jsapitest: map the leader reads on %s: %v", subject, err)

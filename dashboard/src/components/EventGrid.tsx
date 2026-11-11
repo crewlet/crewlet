@@ -25,6 +25,8 @@ import { fmtDate, fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.t
 import { useNow } from "~/lib/clock.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { withoutActor } from "~/lib/words.ts";
+import { delegatedRuleOf } from "~/lib/delegation.ts";
+import { DelegatedMark } from "./Delegation.tsx";
 
 /**
  * Which day a row belongs to, AS ITS BAND DRAWS IT: the key is the label, in
@@ -133,6 +135,8 @@ export function EventGrid({
                 />
               )}
               <span className="truncate">{eventWhat(e)}</span>
+              {/* AN ANSWER A DELEGATE GAVE says so, with its rule (ADR-0125). */}
+              {delegatedRuleOf(e) !== null && <DelegatedMark rule={delegatedRuleOf(e)!} />}
             </span>
           ),
         },

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -302,6 +303,36 @@ func TestPaginationEdgeCases(t *testing.T) {
 				t.Fatalf("err %q does not say %q", err, tc.match)
 			}
 		})
+	}
+}
+
+// A SERVER LISTING MORE TOOLS THAN THE ENGINE TAKES FROM ONE SERVER IS REFUSED
+// WHOLE, NAMING THE LIMIT, never cut to it: a tool taken without the fleet's
+// listing naming it could never be reviewed. One at the limit lists every
+// tool, across pages.
+//
+// Mutation: drop the check, or cut the tools to the limit, and this is red.
+func TestAServerListingMoreToolsThanTheLimitIsRefusedWhole(t *testing.T) {
+	t.Parallel()
+	at := mustConnect(t, helperSpec(t, "at-limit", "serve",
+		map[string]string{helperPagesEnv: fmt.Sprintf("many-%d", MaxServerTools)}))
+	defs, err := at.listTools(t.Context())
+	if err != nil {
+		t.Fatalf("a server listing %d tools: %v", MaxServerTools, err)
+	}
+	if got := names(defs); len(got) != MaxServerTools || got[MaxServerTools-1] != fmt.Sprintf("tool_%04d", MaxServerTools) {
+		t.Fatalf("listed %d tools, want all %d", len(got), MaxServerTools)
+	}
+
+	past := mustConnect(t, helperSpec(t, "past-limit", "serve",
+		map[string]string{helperPagesEnv: fmt.Sprintf("many-%d", MaxServerTools+1)}))
+	defs, err = past.listTools(t.Context())
+	if !errors.Is(err, ErrTooManyTools) || defs != nil {
+		t.Fatalf("a server listing %d tools answered %d tools, err %v; want ErrTooManyTools and none",
+			MaxServerTools+1, len(defs), err)
+	}
+	if !strings.Contains(err.Error(), "past-limit") || !strings.Contains(err.Error(), strconv.Itoa(MaxServerTools)) {
+		t.Errorf("err %q names neither the server nor the limit", err)
 	}
 }
 

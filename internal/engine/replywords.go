@@ -15,14 +15,45 @@ import (
 
 // replyOf is a delivery offered to a parked run of the seat self as the
 // answer to its question: where it came from, what it says ([replyWords]),
-// and who wrote that and how far the run may rely on it ([replyLabel]),
-// which the run reads it fenced under.
+// who wrote that and how far the run may rely on it ([replyLabel]), which the
+// run reads it fenced under, and whom its writer wrote it for
+// ([replyWorkingFor]).
 func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
 	conv sandbox.ConversationRef, evs []*events.Event) sandbox.Reply {
 
 	return sandbox.Reply{Conv: conv, Text: replyWords(evs),
 		Label: replyLabel(prompts, parties, self, evs), Events: evs,
-		Writer: replyWriter(parties, evs), Says: replySays(prompts, parties, self, evs)}
+		Writer: replyWriter(parties, evs), Says: replySays(prompts, parties, self, evs),
+		WorkingFor: replyWorkingFor(evs)}
+}
+
+// newestEvent is the newest of a delivery's events, the one its writer and
+// whom it was written for are read off ([replyWriter], [replyWorkingFor]):
+// after the partition function every event of a delivery has the same writer
+// and the same carrier.
+func newestEvent(evs []*events.Event) *events.Event {
+	var newest *events.Event
+	for _, ev := range evs {
+		if ev != nil && (newest == nil || !ev.Timestamp.Before(newest.Timestamp)) {
+			newest = ev
+		}
+	}
+	return newest
+}
+
+// replyWorkingFor is whom a delivery offered to a parked run was written for
+// ([sandbox.Reply.WorkingFor]): the newest event's carrier, read by the rule a
+// wake is read by ([writtenForIn]), so the two cannot drift — an agent's
+// carrier, off the first constituent where the notification coalesced, and nil
+// for a writer that is no agent and for a vendor's notification. Read whether
+// or not there is a party registry: whom a write was made for is stated on the
+// write, never looked up.
+func replyWorkingFor(evs []*events.Event) *types.WorkingFor {
+	n, ok := events.DataAs[*types.ExternalNotification](newestEvent(evs))
+	if !ok || n == nil {
+		return nil
+	}
+	return writtenForIn(n)
 }
 
 // replySays is whether a delivery carries words its writer addressed to the
@@ -61,13 +92,7 @@ func replySays(prompts notify.Prompts, parties notify.Parties, self string, evs 
 // whoever holds a seat this does name is asked again when a run would take the
 // reply ([audienceResolver.MayAnswer]).
 func replyWriter(parties notify.Parties, evs []*events.Event) string {
-	var newest *events.Event
-	for _, ev := range evs {
-		if ev != nil && (newest == nil || !ev.Timestamp.Before(newest.Timestamp)) {
-			newest = ev
-		}
-	}
-	n, ok := events.DataAs[*types.ExternalNotification](newest)
+	n, ok := events.DataAs[*types.ExternalNotification](newestEvent(evs))
 	if !ok || n == nil || parties == nil {
 		return ""
 	}

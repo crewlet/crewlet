@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/ssh`
-- **Enforced-by:** `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudo`, `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudoOnARealServer`, `internal/ssh.TestAHostsReadCommandsAreListedAsAnAgentTypesThem`, `internal/capability.TestYourAccessListsEachHostsReadCommands`, `internal/capability.TestAHostsReadCommandsAreBounded`, `internal/capability.TestAChangedAllowlistMovesTheDigest`, `internal/agent/builtin.TestARefusedReadNamesTheHostsReadCommands`
+- **Enforced-by:** `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudo`, `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudoOnARealServer`, `internal/ssh.TestAHostsReadCommandsAreListedAsAnAgentTypesThem`, `internal/capability.TestYourAccessListsEachHostsReadCommands`, `internal/capability.TestAHostsReadCommandsAreBounded`, `internal/capability.TestAChangedAllowlistIsSaidAndIsNoChange`, `internal/agent/builtin.TestARefusedReadNamesTheHostsReadCommands`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -28,9 +28,10 @@ setup is version 2 with it.
 function renders a host's allowlist in that form: programs by their bare
 names, and a placeholder (`<unit>`, `<n>`, `<container>`, `<value>`,
 `<arg>`) for each word a rule leaves open. "Your access" lists at most 16 per
-host with the rest counted; the list is part of the snapshot, so a changed
-allowlist moves its digest and the next turn's section says the new list,
-with no change line of its own, and the shorter compaction levels drop it.
+host with the rest counted; the list is part of the snapshot, so the next
+turn's section says a changed allowlist, with no change line of its own and
+outside the digest a pending access review is measured to, and the shorter
+compaction levels drop it.
 A read the gate refused (exit 126) is answered with the same list, so the
 seat retries correctly in the same turn.
 

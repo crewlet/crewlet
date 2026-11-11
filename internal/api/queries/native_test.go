@@ -1075,6 +1075,32 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	}
 }
 
+// A CURSOR THE TRACKER CANNOT RESUME IS A BAD REQUEST, on the work list and on
+// a thread alike: answered as a fault, a reader pressing "Load more" after
+// somebody added a seat met a 500 on every press, and the dashboard could not
+// tell it to start again from the first page.
+//
+// Mutation: drop ErrBadCursor from either answer's refusal arm and its case
+// goes red.
+func TestACursorTheTrackerRefusesIsBadParams(t *testing.T) {
+	t.Parallel()
+	refused := fmt.Errorf("%w: it was minted for another order", worklet.ErrBadCursor)
+	for what, params := range map[string]map[string]any{
+		"work_items":    {"container": "project:ENG", "cursor": "stale"},
+		"work_comments": {"item": "ENG-1", "cursor": "stale"},
+	} {
+		r := queries.NewRegistry()
+		queries.Register(r, queries.Sources{Work: &stubWork{err: refused}})
+		_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), what, params)
+		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, worklet.ErrBadCursor) {
+			t.Errorf("%s answered a refused cursor with %v, want ErrBadParams", what, err)
+		}
+		if detail := queries.RefusalDetail(err); strings.Contains(detail, "worklet:") {
+			t.Errorf("%s told the reader %q, the domain's Go error", what, detail)
+		}
+	}
+}
+
 // A READ NO COPY COULD ANSWER IS "COME BACK", NEVER "ASK SOMETHING ELSE".
 //
 // The tracker is read through the estate router, as a seat's tools read it, so

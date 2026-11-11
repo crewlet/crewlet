@@ -3,8 +3,6 @@ package worklet
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strconv"
 )
@@ -261,26 +259,23 @@ const listCursorOrder = "priority-list"
 func pageListed(rows []TaskRow, cursor string, limit int) ([]TaskRow, string, error) {
 	from := 0
 	if cursor != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(cursor)
+		resume, err := decodePage(cursor)
 		if err != nil {
-			return nil, "", fmt.Errorf("worklet: the cursor is not one this "+
-				"surface minted: %w", err)
-		}
-		var resume page
-		if json.Unmarshal(raw, &resume) != nil || len(resume.Keys) != 1 {
-			return nil, "", fmt.Errorf("worklet: the cursor names no row to " +
-				"resume after")
+			return nil, "", err
 		}
 		if resume.Order != listCursorOrder {
-			return nil, "", fmt.Errorf("worklet: this cursor was minted for "+
-				"the order %q and this query is ordered by a priority list — "+
-				"a cursor belongs to the order that minted it, and re-sorting "+
-				"starts a new page", resume.Order)
+			return nil, "", fmt.Errorf("%w: it was minted for another order "+
+				"and this query is ordered by a priority list. A cursor belongs "+
+				"to the order that minted it, and re-sorting starts again from "+
+				"the first page", ErrBadCursor)
 		}
-		offset, err := strconv.Atoi(fmt.Sprint(resume.Keys[0]))
+		offset := -1
+		if len(resume.Keys) == 1 {
+			offset, err = strconv.Atoi(fmt.Sprint(resume.Keys[0]))
+		}
 		if err != nil || offset < 0 {
-			return nil, "", fmt.Errorf("worklet: the cursor names no row to " +
-				"resume after")
+			return nil, "", fmt.Errorf("%w: it names no row to resume after",
+				ErrBadCursor)
 		}
 		from = min(offset, len(rows))
 	}

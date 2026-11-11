@@ -265,3 +265,108 @@ test("a held call names the decision it carries out", async () => {
   await afterMicrotasks();
   expect(screen.queryByText(/It carries out a decision/)).toBeNull();
 });
+
+/** An agent's SSH command its delegate escalated (ADR-0125), with what it found. */
+function escalatedRun(): ExecutorRow {
+  return heldRun({
+    agent_handle: "sre",
+    question: "Run `ufw allow 22` on web-1?",
+    held_call: {
+      id: "0190f3a8-0000-7000-8000-000000000002",
+      server: "crewlet",
+      tool: "ssh_operate",
+      raw: "ssh_operate",
+      digest: "sha256:d2",
+      held_at: "2026-11-01T11:50:00Z",
+      fixed: true,
+      approvers: "ssh",
+      act: "ssh_operate",
+      delegation: {
+        rule: 1,
+        delegates: ["security-engineer"],
+        given: [
+          {
+            by: "security-engineer",
+            verdict: "escalate",
+            confidence: "high",
+            reason: "Opens the firewall, which the item does not ask for.",
+            findings: ["Changes firewall rules", "Not one of the item's servers"],
+            at: "2026-11-01T11:52:00Z",
+          },
+        ],
+        escalated: {
+          overruled: ["firewall"],
+          engine: ["The command changes firewall rules, which no delegate allows."],
+          at: "2026-11-01T11:52:00Z",
+        },
+      },
+    },
+    held_arguments: { host: "web-1", command: "ufw allow 22" },
+  });
+}
+
+// AN ESCALATION READS ITS DELEGATES BEFORE THE CALL: who put it to people and
+// under which rule, each finding as given, and the engine's own reason, all
+// ahead of what the call would send. Mutation: draw the note after the
+// arguments, or drop the findings, and this is red.
+test("an escalated call shows its delegate's answer and findings before the call", async () => {
+  await mount(escalatedRun());
+  const row = document.querySelector<HTMLElement>(".decision-list > li")!;
+  expect(within(row).getByText("Escalated by security-engineer (rule 1)")).toBeTruthy();
+  const finding = within(row).getByText("Changes firewall rules");
+  expect(within(row).getByText("Not one of the item's servers")).toBeTruthy();
+  expect(within(row).getByText("High confidence")).toBeTruthy();
+  expect(
+    within(row).getByText("The command changes firewall rules, which no delegate allows."),
+  ).toBeTruthy();
+  const args = within(row).getByText("Arguments");
+  expect(finding.compareDocumentPosition(args) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // ITS ANSWERS ARE UNCHANGED: a fixed call is reviewed whole before Allow once.
+  expect(within(row).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+});
+
+test("a call put to people at once carries no escalation", async () => {
+  await mount(heldRun());
+  expect(screen.queryByText(/Escalated by/)).toBeNull();
+});
+
+// A HELD MERGE'S ARGUMENTS READ AS THE MERGE, for whoever is sent them: the
+// change, the head, the method and the reason, each as text and never Markdown.
+// Mutation: draw them through the JSON block, and this is red.
+test("a held merge's arguments are drawn as the merge, its reason as text", async () => {
+  const reason = "**Ship it** [now](https://evil.example)";
+  await mount(
+    heldRun({
+      agent_handle: "sre",
+      question: "May sre merge web!42 at 4f1c2a9b7e3d?",
+      held_call: {
+        id: "0190f3a8-0000-7000-8000-000000000003",
+        server: "crewlet",
+        tool: "ask_to_merge",
+        raw: "ask_to_merge",
+        digest: "sha256:d3",
+        held_at: "2026-11-01T11:50:00Z",
+        fixed: true,
+        approvers: "release",
+        act: "pr_merge",
+        delegation: null,
+      },
+      held_arguments: {
+        change: "web!42",
+        head: "4f1c2a9b7e3d5f60718293a4b5c6d7e8f9012345",
+        method: "merge",
+        reason,
+      },
+    }),
+  );
+  const row = document.querySelector<HTMLElement>(".decision-list > li")!;
+  fireEvent.click(within(row).getByText("Arguments"));
+  expect(within(row).getByText("web!42")).toBeTruthy();
+  expect(within(row).getByText("4f1c2a9").getAttribute("title")).toBe(
+    "4f1c2a9b7e3d5f60718293a4b5c6d7e8f9012345",
+  );
+  expect(within(row).getByText("A merge commit")).toBeTruthy();
+  expect(within(row).getByText(reason)).toBeTruthy();
+  expect(row.querySelector("dl a, dl strong, pre")).toBeNull();
+  expect(within(row).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+});

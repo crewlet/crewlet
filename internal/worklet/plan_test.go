@@ -542,6 +542,19 @@ func registeredQueries() map[string]map[string]any {
 		"the trash": {"container": "project:P01", "removed": "true",
 			"show_closed": "true"},
 		"the trash everywhere": {"removed": "true", "show_closed": "true"},
+
+		// THE ORDERS NO COLUMN HOLDS ([derivedOrders]), each over a real
+		// chart and catalogue ([planBasis]) at both scopes, and held to
+		// seeking a row's place by [TestEveryDerivedOrderSeeksItsPlaces].
+		"by key":                   {"container": "project:P01", "sort": "key"},
+		"by key everywhere":        {"sort": "-key"},
+		"by status":                {"container": "project:P01", "sort": "status"},
+		"by status everywhere":     {"sort": "-status"},
+		"by type order":            {"container": "project:P01", "sort": "type"},
+		"by type order everywhere": {"sort": "-type"},
+		"by assignee":              {"container": "project:P01", "sort": "-assignee"},
+		"by assignee everywhere":   {"sort": "assignee"},
+		"by type, then assignee":   {"sort": "type,-assignee"},
 	})
 }
 
@@ -644,6 +657,7 @@ func taskReads() map[string]indexedRead {
 		"the move stragglers walk":      seek(stranded, strandedAfterStatement, "", WalkBatch),
 		"the apply's duplicate probe": seek(ranks, rankDuplicateStatement,
 			"P01", "P01", "a000001", "t-00002"),
+		"where a pickup's item stands": seek(key, pickupItemStatement, "t-0008"),
 		"the advisor's answers in a window": seek(key, patternAnswersStatement,
 			store.EncodeTime(planNow.AddDate(0, 0, -7)), store.EncodeTime(planNow)),
 		"the advisor's idle reviews": seek("tracker_tasks_queue_idx", patternIdleReviewsStatement,
@@ -800,6 +814,9 @@ func taskReads() map[string]indexedRead {
 		// WHOM AN IDLE REVIEW'S HOLDER ASKED, by the open asks' item index.
 		"whom a review waits on": seek("tracker_comments_open_asks_idx", reviewAsksStatement,
 			task, "agent"),
+		// WHOM A WAIT'S WRITER ASKED, by the open asks' item index.
+		"whom a wait's writer asked": seek("tracker_comments_open_asks_idx", arms(2, readyWaitAsksArm),
+			task, "ana", "t-0008", "ana"),
 		// WHAT A PERSON HOLDS BY BEING ASKED, its page and its count.
 		"what waits on a person's answers": func() indexedRead {
 			statement, open := heldByAsksStatement()
@@ -837,6 +854,9 @@ func taskReads() map[string]indexedRead {
 		// by the seat and the status group.
 		"ready (started)": {readyBlock(person, StatusInProgress, planNow), queue},
 		"ready (waiting)": {readyBlock(person, StatusTodo, planNow), queue},
+		// AND ITS WAITS ON A PERSON, the same seek bounded the other way.
+		"set aside (started)": {waitBlock(person, StatusInProgress, planNow), queue},
+		"set aside (waiting)": {waitBlock(person, StatusTodo, planNow), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
 		page, args := taskRowsStatement(set, block.query.terms)
@@ -1183,8 +1203,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			task, "ana", "t-0008", "ana"),
 		"a seat's last word on its ready work": seek(subject, arms(2, readyLastWordArm),
 			task, "ana", int64(0), int64(0), "t-0008", "ana", int64(0), int64(0)),
-		"whether a turn answered an item typed": seek(subject, typedAnswerStatement,
-			"t-1", task),
+		"whether a seat answered an item typed": seek(subject, pickupTypedStatement,
+			task, "ana", int64(0)),
+		"who set a seat's work aside": seek(subject, arms(2, readyWaitArm), task, "t-0008"),
 		"who filed a seat's ready work": seek(subject, arms(2, readyCreatedArm),
 			task, "ana", "t-0008", "ana"),
 		"who assigned a seat's ready work": seek(subject, arms(2, readyAssignedArm),
@@ -1662,6 +1683,20 @@ func planFields(q Query) map[string]resolvedField {
 	return out
 }
 
+// planBasis is what the derived orders are built from over the plan fixture:
+// the builtin type catalogue, and a roster that has been applied.
+//
+// A REAL BASIS, never the zero one: compiled over no catalogue the type order
+// was `CASE t.type ELSE 0 END`, which is not SQL, so no derived order was
+// ever planned.
+func planBasis() orderBasis {
+	basis := orderBasis{roster: 1}
+	for _, kind := range EffectiveTypes(nil) {
+		basis.types = append(basis.types, kind.Slug)
+	}
+	return basis
+}
+
 // THE CONTAINER SURVIVES THE SUBTASK ROLLUP, and it is the only predicate the
 // outer row has to enter on.
 //
@@ -1957,7 +1992,7 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 		}
 		index := indexes[0]
 		walked[index] = true
-		terms := sortTerms(q, planFields(q), orderBasis{})
+		terms := sortTerms(q, planFields(q), planBasis())
 		leading := strings.TrimPrefix(terms[0].Column, rowAlias.col(""))
 		bound := regexp.MustCompile(`\(.*\b` + regexp.QuoteMeta(leading) + `[=<>]`)
 		t.Run(name, func(t *testing.T) {
@@ -1997,6 +2032,68 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 			t.Errorf("no registered query's first page walks %s unsorted, so "+
 				"this test never checks a later page of a listing in its "+
 				"order", index)
+		}
+	}
+}
+
+// AN ORDER BY THE SEATS' NAMES SEEKS EACH ROW'S PLACE.
+//
+// `sort=assignee` joins the roster's places on the seat's key
+// ([assigneeOrder]), and every statement that reads that join (a page, each
+// arm of the next one, the around read's) must seek it, so a row's place is
+// one seek however many seats the chart holds. Measured over 20 000 tasks and
+// a 5 000-seat chart: the order spelled as a CASE naming every seat cost 3 to
+// 5 s for a first page and 10 to 18 s for a later one or a task's neighbours;
+// the seats bound as a list and joined were scanned once per row under the
+// default listing's `status_group IN (…)`, whatever shape the list took
+// (BenchmarkADerivedOrder has the joined table's figures).
+//
+// NOT VACUOUS: a page, a later page and the around read must each have been
+// checked.
+//
+// Mutation: join the places on an expression of their key
+// (`ON lower(place.handle) = t.assignee`) and every case goes red.
+func TestAnOrderByTheSeatsNamesSeeksItsPlaces(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	checked := map[string]bool{}
+	for name, params := range registeredQueries() {
+		q := planQuery(t, params)
+		var joined []sortTerm
+		for _, term := range sortTerms(q, planFields(q), planBasis()) {
+			if strings.Contains(term.Join, "tracker_seat_places") {
+				joined = append(joined, term)
+			}
+		}
+		if len(joined) == 0 {
+			continue
+		}
+		statements := queryStatements(t, q)
+		t.Run(name, func(t *testing.T) {
+			for what, statement := range statements {
+				for _, term := range joined {
+					if !strings.Contains(statement.sql, term.Join) {
+						continue
+					}
+					checked[what] = true
+					if side, _, arm := strings.Cut(what, ", arm "); arm {
+						checked[side] = true
+					}
+					alias, _, _ := strings.Cut(term.Column, ".")
+					plan := storetest.Plan(t, db, statement.sql, statement.args)
+					if !storetest.SeeksJoined(plan, alias) {
+						t.Errorf("%s reads %s's places other than by a seek, so "+
+							"each row walks the chart:\n%s", what, alias,
+							strings.Join(plan, "\n"))
+					}
+				}
+			}
+		})
+	}
+	for _, want := range []string{"the page", nextPage + "0", rowsAhead,
+		previousRow, nextRow} {
+		if !checked[want] {
+			t.Errorf("no registered order by assignee checked %q", want)
 		}
 	}
 }
@@ -2460,7 +2557,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	terms := sortTerms(q, fields, orderBasis{})
+	terms := sortTerms(q, fields, planBasis())
 	page, pageArgs := taskRowsStatement(set, terms)
 	values, valueArgs := sortValuesStatement(terms, "t-00001")
 	out := map[string]plannedRead{
@@ -2483,7 +2580,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	if q.GroupBy == "" && !listOrdered(q) {
 		next := q
 		next.Cursor = mintCursor(keys, cursorOrder(terms))
-		resume, err := pageClause(next, fields, orderBasis{})
+		resume, err := pageClause(next, fields, planBasis())
 		if err != nil {
 			t.Fatalf("pageClause: %v", err)
 		}

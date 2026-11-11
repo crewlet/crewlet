@@ -28,7 +28,7 @@ var goPackages = map[string]bool{
 	"compact": true, "config": true, "configapi": true, "configplane": true, "crewlet": true,
 	"confluence": true, "coord": true,
 	"coordtest": true, "costlimit": true, "credential": true, "cron": true,
-	"dashspec": true, "datadog": true, "datasetsapi": true, "decision": true, "decltype": true,
+	"dashspec": true, "datadog": true, "datasetsapi": true, "decision": true, "decltype": true, "delegated": true,
 	"digitalocean": true, "docindex": true, "doclet": true, "docsgate": true, "e2e": true, "embeddings": true,
 	"engine": true, "envfile": true, "envref": true, "estate": true, "executordomain": true, "executordomaintest": true, "executorkeep": true, "executorread": true,
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true, "expo": true,

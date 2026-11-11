@@ -595,7 +595,10 @@ func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
 }
 
 // pickupStillWaiting is one finding for the company when pickups often ended
-// in words only: the work handed out was waiting on something else.
+// in words only: the work handed out was waiting on something else. A pickup
+// its turn answered typed, with an ask as with a change, is in the ledger as
+// moved ([types.OutcomeOfPickup]), so words here are pickups nothing typed
+// answered (ADR-0122).
 func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
 	var pickups, words int64
 	for _, s := range seatsOf(ev.Ledger) {
@@ -607,8 +610,8 @@ func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
 	}
 	return []Finding{engineFinding(ClassPickupStillWaiting, Subject{Kind: SubjectCompany},
 		"Agents picked up work and moved none of it.",
-		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only (a comment, "+
-			"a question or a chat post) and no work moved, as when an agent says the item "+
+		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only (a comment "+
+			"or a chat post) and nothing typed on the item, as when an agent says the item "+
 			"still waits on something.", words, pickups),
 		[]Fact{{Key: "pickups", Value: pickups}, {Key: "words", Value: words}}, nil)}
 }

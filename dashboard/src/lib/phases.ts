@@ -1692,6 +1692,7 @@ const TRIGGER_KINDS: Record<string, string> = {
   scheduled_task_fired: "A schedule",
   executor_finished: "Its executor finished",
   inbound_delivery: "A delivery",
+  delegated_review: "A delegated request",
 };
 
 export function triggerKind(
