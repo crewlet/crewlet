@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -102,19 +103,27 @@ func TestRetryAfterReadsSecondsOrADate(t *testing.T) {
 }
 
 // SLEEP ENDS WITH ITS CONTEXT, so a cancelled caller is not held for the rest
-// of a vendor's window.
+// of a vendor's window, and otherwise lasts exactly what it was asked. Inside a
+// synctest bubble the clock moves only when the case is blocked, so each end is
+// an exact instant. Mutation: ignore ctx in Sleep and the first wait ends an
+// hour late.
 func TestSleepEndsWithItsContext(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	if err := httpx.Sleep(ctx, time.Hour); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Sleep past its context = %v, want the deadline", err)
-	}
-	if took := time.Since(start); took > 10*time.Second {
-		t.Errorf("Sleep held its caller for %s past a 10ms deadline", took)
-	}
-	if err := httpx.Sleep(t.Context(), time.Millisecond); err != nil {
-		t.Errorf("a short Sleep = %v, want it to end", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+		defer cancel()
+		if err := httpx.Sleep(ctx, time.Hour); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Sleep past its context = %v, want the deadline", err)
+		}
+		if deadline := start.Add(10 * time.Millisecond); !time.Now().Equal(deadline) {
+			t.Errorf("Sleep held its caller until %s, want its deadline %s", time.Now(), deadline)
+		}
+		if err := httpx.Sleep(t.Context(), time.Millisecond); err != nil {
+			t.Errorf("a short Sleep = %v, want it to end", err)
+		}
+		if ended := start.Add(11 * time.Millisecond); !time.Now().Equal(ended) {
+			t.Errorf("a 1ms Sleep ended at %s, want %s", time.Now(), ended)
+		}
+	})
 }
