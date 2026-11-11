@@ -1269,7 +1269,7 @@ func TestAHistoryRowKeepsAppsOnlyFromTheVersionThatSaysSo(t *testing.T) {
 // on every node: the carrier a version-13 record rode, as its JSON, and NULL
 // for a record that carries none and for one below the carrier's version,
 // which an older build's applier wrote with no such column to fill, whatever
-// it holds. Kept from the carrier's first build on, before anything reads it,
+// it holds. Kept from the carrier's first build on, before the pickup read it,
 // because a replicated migration runs on each node when it opens rather than
 // at a log position: a column a later build began to fill would differ between
 // a node that applied these records before it upgraded and one that applied

@@ -37,13 +37,16 @@ import (
 // # What counts as worked through
 //
 // Exactly the messages the turn's thread block SHOWED it that were waiting for
-// an answer — its own writer's, after the seat's own last reply in the thread,
-// before the message that woke the turn ([prefetch.Blocks.ThreadContextAnswered]).
-// Not a message a bound dropped (the turn never saw it), not anything up to the
-// seat's last reply (answered already), not ANOTHER WRITER'S (one turn works
-// for one writer, ADR-0109, so their message is owed a turn of its own, held
-// to their apps), and nothing at all when the read stopped short or did not
-// reach the trigger (nothing then says which messages came before it).
+// an answer — its own writer's, written for whom the turn works for, after the
+// seat's own last reply in the thread, before the message that woke the turn
+// ([prefetch.Blocks.ThreadContextAnswered]). Not a message a bound dropped (the
+// turn never saw it), not anything up to the seat's last reply (answered
+// already), not ANOTHER WRITER'S nor one WRITTEN FOR ANOTHER REQUESTER (one
+// turn works for one writer and one whom, ADR-0109, so such a message is owed
+// a turn of its own, held to its requester's apps), and nothing at all when the
+// read stopped short, did not reach the trigger, or could not say whom its
+// messages were written for (nothing then says which messages are this
+// turn's).
 // Recorded only when the turn COMPLETES, with the turn's own triggers: a turn
 // that failed answered nothing.
 //

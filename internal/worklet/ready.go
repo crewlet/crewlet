@@ -43,7 +43,8 @@ import (
 // again. [ReadyItem.Quiet] is when the item went quiet without a typed answer
 // from the seat, which the pickup rechecks once a day (ADR-0122).
 // [ReadyItem.For] is whom the item's work is for, so the turn is held to
-// their apps (ADR-0109).
+// their apps (ADR-0109): whom its assignment, else its creation, was written
+// for, as the history row keeps it (`working_for`), else that row's writer.
 
 // ReadyRows is one page of ready work: the pickup reads the next page only
 // when every item on this one was already offered.
@@ -89,10 +90,12 @@ type ReadyItem struct {
 	// holds the item until a change would wake the seat again (ADR-0122).
 	Quiet time.Time `json:"quiet,omitzero"`
 
-	// For is whom the item's work is for: the writer of its last
-	// assignment by somebody else, a change that moved its assignee
-	// whatever kind its record ended with ([readyAssignedArm]), else the
-	// writer that filed it; nil for the seat's own work.
+	// For is whom the item's work is for: whom its last assignment was
+	// written for, a change that moved its assignee whatever kind its
+	// record ended with ([readyAssignedArm]), else whom its creation was
+	// written for ([readyCreatedArm]) — whom the writing turn worked for
+	// where an agent wrote it for somebody, and otherwise the writer itself;
+	// nil for the seat's own work.
 	For *types.WorkingFor `json:"for,omitempty"`
 
 	// SubmittedBy is who moved an item in review into review (or filed it
@@ -437,7 +440,8 @@ const readyFirstArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker
 	WHERE h.subject_id = ? ORDER BY h.log_seq LIMIT 1`
 
 // readyAssignedArm is one item's last assignment by a person, a colleague or
-// a credential other than the seat: anybody but the engine's own duties.
+// a credential other than the seat — anybody but the engine's own duties — or
+// the seat's own take made in a turn for somebody.
 //
 // AN ASSIGNMENT IS A ROW THAT MOVED THE ASSIGNEE, read off its assignee delta
 // whatever kind its record ended with, as readyReviewArm reads a review
@@ -452,20 +456,36 @@ const readyFirstArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker
 //
 // THE CREATION OUTRANKS NOTHING. An item filed already assigned records the
 // assignee's delta on its creation row, its oldest, so any later assignment by
-// somebody else wins; where the creation is the only one, the arm reads the
-// writer that filed it, whom readyCreatedArm names anyway. The seat's own rows
-// stay out, a take included: whom the seat works for is never itself.
-const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps
+// somebody else wins; where the creation is the only one, the arm reads whom
+// its filing was for, whom readyCreatedArm names anyway.
+//
+// THE SEAT'S OWN ROWS STAY OUT, BUT FOR ITS OWN TAKE MADE FOR SOMEBODY: an
+// agent's row that assigned the item to its own writer and carries whom that
+// turn worked for (ADR-0109's carrier). The arm reads the newest admitted row,
+// so the seat's own uncarried moves, and its moves away from itself — a
+// hand-away, an unassignment — are never admitted: a take-back made on the
+// seat's own initiative reads through to the newest move by somebody else, or
+// to the seat's own take made for somebody. Whom the seat works for is never
+// itself.
+const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps, h.working_for
 	FROM tracker_history h
 	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
-	  AND h.actor <> ? AND h.actor_kind <> 'system'
+	  AND (h.actor <> ? OR (h.actor_kind = 'agent' AND h.working_for IS NOT NULL
+	    AND json_extract(h.fields_json, '$.assignee.to') = h.actor))
+	  AND h.actor_kind <> 'system'
 	ORDER BY h.log_seq DESC LIMIT 1`
 
 // readyCreatedArm is one item's creation by a person, a colleague or a
-// credential other than the seat: whom work filed already assigned is for.
-const readyCreatedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps
+// credential other than the seat, or by the seat itself in a turn for
+// somebody: whom work filed already assigned is for.
+//
+// THE SEAT'S OWN CREATION COUNTS ONLY AS AN AGENT'S ROW THAT CARRIES WHOM ITS
+// TURN WORKED FOR, the rule [whomFor] believes a carrier by: work a seat filed
+// for itself is its own, and work it filed for somebody is theirs.
+const readyCreatedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps, h.working_for
 	FROM tracker_history h
-	WHERE h.subject_id = ? AND h.kind = 'created' AND h.actor <> ?
+	WHERE h.subject_id = ? AND h.kind = 'created'
+	  AND (h.actor <> ? OR (h.actor_kind = 'agent' AND h.working_for IS NOT NULL))
 	  AND h.actor_kind <> 'system'
 	ORDER BY h.log_seq LIMIT 1`
 
@@ -530,9 +550,9 @@ func seqAt(ctx context.Context, tx *sql.Tx, query string, args []any) (map[strin
 	return out, rows.Err()
 }
 
-// loadFor stamps each item with whom its work is for: the writer of its last
-// assignment by somebody else, else the writer that filed it, each a seat or a
-// credential with the apps it wrote under; nil for the seat's own work.
+// loadFor stamps each item with whom its work is for: whom its last admitted
+// assignment was written for, else whom its admitted creation was ([whomFor]);
+// nil for the seat's own work.
 func loadFor(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
 	if len(items) == 0 {
 		return nil
@@ -541,11 +561,11 @@ func loadFor(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) 
 	for _, item := range items {
 		args = append(args, item.ID, handle)
 	}
-	assigned, err := writersOf(ctx, tx, arms(len(items), readyAssignedArm), args)
+	assigned, err := writersOf(ctx, tx, arms(len(items), readyAssignedArm), args, handle)
 	if err != nil {
 		return fmt.Errorf("worklet: read who assigned %s's ready work: %w", handle, err)
 	}
-	filed, err := writersOf(ctx, tx, arms(len(items), readyCreatedArm), args)
+	filed, err := writersOf(ctx, tx, arms(len(items), readyCreatedArm), args, handle)
 	if err != nil {
 		return fmt.Errorf("worklet: read who filed %s's ready work: %w", handle, err)
 	}
@@ -559,8 +579,9 @@ func loadFor(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) 
 	return nil
 }
 
-// writersOf runs one statement of writer arms and reads each item's writer.
-func writersOf(ctx context.Context, tx *sql.Tx, query string, args []any) (
+// writersOf runs one statement of writer arms and reads whom each item's row
+// says its work is for, as reader reads it ([whomFor]).
+func writersOf(ctx context.Context, tx *sql.Tx, query string, args []any, reader string) (
 	map[string]*types.WorkingFor, error) {
 
 	rows, err := tx.QueryContext(ctx, query, args...)
@@ -570,13 +591,43 @@ func writersOf(ctx context.Context, tx *sql.Tx, query string, args []any) (
 	out := map[string]*types.WorkingFor{}
 	for rows.Next() {
 		var id, actor, kind, apps string
-		if serr := rows.Scan(&id, &actor, &kind, &apps); serr != nil {
+		var workingFor sql.NullString
+		if serr := rows.Scan(&id, &actor, &kind, &apps, &workingFor); serr != nil {
 			_ = rows.Close()
 			return nil, serr
 		}
-		out[id] = workingForWriter(AuthorKind(kind), actor, apps)
+		out[id] = whomFor(AuthorKind(kind), actor, apps, workingFor, reader)
 	}
 	return out, closeRows(rows)
+}
+
+// whomFor is whom one admitted history row says the item's work is for, read
+// by the seat reader: whom an agent's row was written for, as its record
+// carried them (`working_for`, ADR-0109), and otherwise the row's writer
+// ([workingForWriter]).
+//
+// A CARRIER IS BELIEVED ONLY FROM AN AGENT'S ROW, the rule a wake is read by:
+// a person, a credential and the engine write for nobody but themselves, so a
+// carrier on one of their rows would make the pickup work for somebody that
+// writer never spoke for. A carrier this build cannot read — one that does not
+// decode, or decodes to nothing — is a stranger's, which holds no app, the
+// closed end. A seat carrier naming the reader is the seat's own work, nil,
+// as the ceiling reads one; a credential's apps are the ones its writing turn
+// already narrowed, which the pickup's turn narrows again on its own node.
+func whomFor(kind AuthorKind, actor, apps string, workingFor sql.NullString,
+	reader string) *types.WorkingFor {
+
+	if !workingFor.Valid || kind != AuthorAgent {
+		return workingForWriter(kind, actor, apps)
+	}
+	var carried *types.WorkingFor
+	if err := json.Unmarshal([]byte(workingFor.String), &carried); err != nil || carried == nil {
+		return &types.WorkingFor{Kind: types.WorkingForStranger}
+	}
+	if carried.Kind == types.WorkingForSeat && strings.TrimSpace(carried.Seat) == reader {
+		return nil
+	}
+	return carried
 }
 
 // closeRows closes rows and answers the error its walk ended on.

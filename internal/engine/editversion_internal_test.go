@@ -18,8 +18,8 @@ import (
 )
 
 // editedThread is a running node's private room where ceo asked ada something
-// (the root), ada answered (the reply), then edited that answer to name ceo,
-// and then said something more (the trigger). Every record is a raw peer
+// (the root), ada answered (the reply) in a turn for omar, then edited that
+// answer to name ceo, and then said something more (the trigger). Every record is a raw peer
 // record this node's own applier committed, as another node's writer
 // publishes it, and the node's own chat feed relays their wakes, which the
 // rig keeps.
@@ -60,18 +60,18 @@ func newEditedThread(t *testing.T) *editedThread {
 		chatlet.ChannelCreate{V: chatlet.DocumentVersion, ChannelID: th.room, Kind: chatlet.KindPrivate,
 			Members: []chatlet.Member{{Handle: "ceo"}, {Handle: "ada"}}, CreatedBy: "ceo",
 			CreatedByKind: chatlet.AuthorAgent}))
-	post := func(author, id, root, body string, mentions ...string) {
+	post := func(author, id, root, body string, whom *types.WorkingFor, mentions ...string) {
 		rec := raw.peer(chatlet.MessageSubject(th.room), chatlet.OpPost, "op-"+id, chatlet.MessagePost{
 			V: chatlet.DocumentVersion, MessageID: id, Body: body, ThreadRoot: root,
 			Mentions: mentions, Author: author, AuthorKind: chatlet.AuthorAgent, MembersOnly: true})
-		rec.Actor = author
+		rec.Actor, rec.WorkingFor = author, whom
 		rec.Notify = &chatlet.Notify{MessageID: id, ChannelID: th.room, ChannelKind: chatlet.KindPrivate,
 			ThreadRoot: root, Author: author, AuthorKind: chatlet.AuthorAgent, Excerpt: body,
 			Mentions: mentions}
 		raw.applied(rec)
 	}
-	post("ceo", th.root, "", "@ada what ships on friday?", "ada")
-	post("ada", th.reply, th.root, "the importer")
+	post("ceo", th.root, "", "@ada what ships on friday?", nil, "ada")
+	post("ada", th.reply, th.root, "the importer", forOmar)
 	edit := raw.peer(chatlet.MessageSubject(th.room), chatlet.OpEdit, "op-edit-"+th.reply,
 		chatlet.MessageEdit{V: chatlet.DocumentVersion, MessageID: th.reply,
 			Body: "@ceo the importer, and the export", Mentions: []string{"ceo"},
@@ -82,8 +82,42 @@ func newEditedThread(t *testing.T) *editedThread {
 		AuthorKind: chatlet.AuthorAgent, Excerpt: "@ceo the importer, and the export",
 		Mentions: []string{"ceo"}}
 	raw.applied(edit)
-	post("ada", th.trigger, th.root, "and the date?")
+	post("ada", th.trigger, th.root, "and the date?", forOmar)
 	return th
+}
+
+// forOmar is whom ada's reply, and the turns that work it, were written for.
+var forOmar = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "omar"}
+
+// trigger is ada's newest message in the thread, as its wake hands it to ceo:
+// written for whom.
+func (th *editedThread) triggerFor(whom *types.WorkingFor) *events.Event {
+	ev := events.New(types.ExternalNotification{
+		NotificationSource: chatlet.Source, SourceEventType: string(chatlet.OpPost),
+		Sender: "ada", Body: "and the date?",
+		Writer: notify.FirstPartyWriter(iam.ActorAgent, "ada", nil, whom),
+		Metadata: map[string]string{
+			notify.TransportField: chatlet.Source, notify.ChannelField: th.room,
+			notify.ThreadField: th.root, notify.MessageIDField: th.trigger,
+		},
+	}, events.TraceContext{})
+	ev.Source = "notify." + chatlet.Source
+	return ev
+}
+
+// workedThrough is what a turn of ceo's woken by trigger reports as worked
+// through, run to its depth guard: after the prefetch that read the thread,
+// before anything is launched.
+func (th *editedThread) workedThrough(t *testing.T, trigger *events.Event) []string {
+	t.Helper()
+	res, err := th.e.runTurn(t.Context(), Request{
+		Handle: "ceo", WorkKey: "wk-" + trigger.ID.String(), Depth: 3, WorkSince: time.Now().UTC(),
+		Events: []*events.Event{trigger},
+	})
+	if err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+	return res.WorkedThrough
 }
 
 // relayedEdit is the wake the node's chat feed relayed for the reply's edit.
@@ -115,11 +149,8 @@ func (th *editedThread) relayedEdit(t *testing.T) types.RawWebhook {
 // Chatlet reader, through the router.
 func (th *editedThread) read(t *testing.T) notify.Transcript {
 	t.Helper()
-	rooms, ok := OperatorChat(th.e)
-	if !ok {
-		t.Fatal("the node hands out no chat")
-	}
-	got, ok := chatlet.NewThreadReader(rooms, nil).ReadThread(t.Context(), "ceo", th.room, th.root)
+	got, ok := th.e.ChatThreads().ReadThread(t.Context(), "ceo",
+		notify.Thread{Backend: chatlet.Source, Channel: th.room, Root: th.root})
 	if !ok {
 		t.Fatal("ceo could not read the thread")
 	}
@@ -169,7 +200,6 @@ func TestAnEditsWakeNamesTheVersionTheThreadReadShows(t *testing.T) {
 func TestATurnRecordsTheEditItWasShownOfAWaitingReply(t *testing.T) {
 	t.Parallel()
 	th := newEditedThread(t)
-	omar := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "omar"}
 	var version string
 	for _, m := range th.read(t).Messages {
 		if m.ID == th.reply {
@@ -179,30 +209,33 @@ func TestATurnRecordsTheEditItWasShownOfAWaitingReply(t *testing.T) {
 	if version == "" {
 		t.Fatal("the edited reply reads at no version, so this case proves nothing")
 	}
-	trigger := events.New(types.ExternalNotification{
-		NotificationSource: chatlet.Source, SourceEventType: string(chatlet.OpPost),
-		Sender: "ada", Body: "and the date?",
-		Writer: notify.FirstPartyWriter(iam.ActorAgent, "ada", nil, omar),
-		Metadata: map[string]string{
-			notify.TransportField: chatlet.Source, notify.ChannelField: th.room,
-			notify.ThreadField: th.root, notify.MessageIDField: th.trigger,
-		},
-	}, events.TraceContext{})
-	trigger.Source = "notify." + chatlet.Source
-
-	// AT THE DEPTH GUARD, so the turn ends before anything is launched —
-	// after the prefetch that read the thread, which is the half under test.
-	res, err := th.e.runTurn(t.Context(), Request{
-		Handle: "ceo", WorkKey: "wk-edit", Depth: 3, WorkSince: time.Now().UTC(),
-		Events: []*events.Event{trigger},
-	})
-	if err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	got := th.workedThrough(t, th.triggerFor(forOmar))
 	want := []string{chatMessageKey(chatlet.Source, th.room, th.reply),
-		chatEditKey(chatlet.Source, th.room, th.reply, version, omar)}
-	if !slices.Equal(res.WorkedThrough, want) {
+		chatEditKey(chatlet.Source, th.room, th.reply, version, forOmar)}
+	if !slices.Equal(got, want) {
 		t.Fatalf("the turn reported %v as worked through, want the reply's own key and its "+
-			"version's for omar (%v)", res.WorkedThrough, want)
+			"version's for omar (%v)", got, want)
+	}
+}
+
+// A TURN'S THREAD BLOCK IS TOLD WHOM THE TURN WORKS FOR, through the real
+// [Engine.runTurn]: its own carrier, from which its ceiling is composed, never
+// derived again. Ada's reply was written for omar. A turn ada's trigger woke
+// for omar works it through; a turn her trigger woke for nobody else works for
+// ada herself, and leaves omar's reply to a turn of its own, held to omar's
+// apps, rather than answering it inside ada's.
+//
+// Mutation: hand the prefetch no carrier, or compare the sender alone, and a
+// row goes red.
+func TestATurnsThreadBlockIsToldWhomTheTurnWorksFor(t *testing.T) {
+	t.Parallel()
+	th := newEditedThread(t)
+	if got := th.workedThrough(t, th.triggerFor(forOmar)); !slices.Contains(got,
+		chatMessageKey(chatlet.Source, th.room, th.reply)) {
+		t.Errorf("a turn for omar reported %v, want omar's waiting reply worked through", got)
+	}
+	if got := th.workedThrough(t, th.triggerFor(nil)); len(got) != 0 {
+		t.Errorf("a turn ada's own trigger woke reported %v as worked through, want nothing: the "+
+			"waiting reply was written for omar", got)
 	}
 }
