@@ -1462,7 +1462,11 @@ session and no other:
   session tells it as a note the session may already show, never as one it had
   not read; a fresh run is told it as it is told every note. Where nothing reads
   it before the turn ends, the ending reports it `unconfirmed` at the job it was
-  served to, never `expired`: its session may hold it.
+  served to, never `expired`: its session may hold it. A confirmation whose
+  write landed while its answer was lost is reported `delivered` all the same:
+  the route settles its take on its own path and reports what the take
+  recorded, and a confirmation the plugin makes again that finds the note
+  already read at its job's step reports it as the same record.
 - **It asks, and never insists**: a poll is held up to the route's ten seconds
   and given twenty, a confirmation ten; a failed request — a stopping node's
   `503` among them — is made again after a pause of a second, doubling to

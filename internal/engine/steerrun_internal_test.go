@@ -1346,6 +1346,98 @@ func TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered(t *testing.T) {
 	}
 }
 
+// A CONFIRMATION WHOSE ANSWER WAS LOST REPORTS ITS NOTE, ONCE. OpenCode's plugin
+// confirms a note once OpenCode delivered it, and the confirmation's take is
+// what reports the note read: a take whose write landed and whose answer was
+// lost reported nothing, the confirmation the plugin made again found the note
+// read and skipped it, and the run's ending, a step having read the note,
+// reported nothing either. So the take is settled on the confirmation's own
+// path, and what its write recorded is reported there, the confirmation
+// answered done, whether or not the plugin ever confirms again; where the
+// store answers that settle no more than the take, the confirmation answers
+// its error, and the one the plugin makes again finds the note read at its
+// job's step and reports it; and a confirmation made again after one that
+// reported its note, its answer lost on the way back, reports it under the
+// same id at the same instant: one record.
+//
+// Mutation: answer a lost take's confirmation without settling it, skip a note
+// an earlier confirmation of the job read, or report it again under another id
+// or at another instant, and a case goes red.
+func TestAConfirmationWhoseAnswerWasLostReportsItsNoteOnce(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		store func(sandbox.PendingStore) sandbox.PendingStore
+		// answered is whether the first confirmation is answered done, again
+		// whether the plugin confirms once more, and reports how many times the
+		// note is published delivered.
+		answered, again bool
+		reports         int
+	}{
+		"its take lost, its settle answered": {
+			store:    func(s sandbox.PendingStore) sandbox.PendingStore { return &lostAnswerStore{PendingStore: s} },
+			answered: true, reports: 1},
+		"its take and its settle lost, confirmed again": {
+			store: func(s sandbox.PendingStore) sandbox.PendingStore {
+				return &lostAnswerStore{PendingStore: s, failSettles: 1}
+			},
+			again: true, reports: 1},
+		"its answer lost after its report, confirmed again": {
+			store:    func(s sandbox.PendingStore) sandbox.PendingStore { return s },
+			answered: true, again: true, reports: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			runs, p := steersOver(t, steerRing, tc.store(store))
+			launch := workingRun(t, store, runs, "run-1")
+			fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+			inbox := boundInbox(t, runs, store, "run-1", launch)
+			viewHolds(t, inbox, 1)
+			if notes, _ := inbox.Wait(ctx, 0); len(notes) != 1 {
+				t.Fatalf("the poll was answered %+v, want n-1", notes)
+			}
+			if err := inbox.Read(ctx, []string{"n-1"}); (err == nil) != tc.answered {
+				t.Fatalf("the confirmation answered %v, want it answered done: %v", err, tc.answered)
+			}
+			if read := readOn(ctx, store, "run-1", "n-1"); read == nil || read.Launch != launch ||
+				read.Boundary != string(types.SteerBoundaryStep) {
+				t.Fatalf("the note is read %+v, want it read at job %s's step", read, launch)
+			}
+			if tc.again {
+				viewHolds(t, inbox, 0)
+				if err := inbox.Read(ctx, []string{"n-1"}); err != nil {
+					t.Fatalf("the confirmation made again answered %v", err)
+				}
+			}
+			eventually(t, "the confirmed note's reports", func() bool { return len(steered(p)) >= tc.reports })
+			// THE RUN'S ENDING, which reports nothing of a note a step read.
+			row := mustRow(t, store, "run-1")
+			row.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)}
+			if err := runs.ended(ctx, row); err != nil {
+				t.Fatalf("ended: %v", err)
+			}
+			p.mu.Lock()
+			published := slices.Clone(p.events)
+			p.mu.Unlock()
+			if len(published) != tc.reports {
+				t.Fatalf("the note was published %d times, want %d", len(published), tc.reports)
+			}
+			for _, ev := range published {
+				rec, _ := events.DataAs[*types.AgentTurnSteered](ev)
+				if rec == nil || rec.NoteID != "n-1" || rec.Outcome != types.SteerDelivered ||
+					rec.Boundary != types.SteerBoundaryStep || rec.LaunchID != launch {
+					t.Errorf("the note is reported %+v, want it delivered at job %s's step", rec, launch)
+				}
+				if ev.ID != published[0].ID || !ev.Timestamp.Equal(published[0].Timestamp) {
+					t.Errorf("the note is reported as %s at %v and as %s at %v, want one record", ev.ID,
+						ev.Timestamp, published[0].ID, published[0].Timestamp)
+				}
+			}
+		})
+	}
+}
+
 // THE FINISH READS THE STORE EVEN WHEN THE VIEW IS STALE: the run's last
 // boundary is its last chance to read a note in its own loop, so it asks the
 // record itself, where a batch answers from a view one write behind.

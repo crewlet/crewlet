@@ -94,8 +94,13 @@ import (
 // write recorded, its round still waiting on it; where the store answers that
 // settle no more than the take, the take is kept and settled again by the
 // segment's next round or brief, standing meanwhile for a note waiting, and is
-// handed off the path, marked, only when the segment ends ([rowSource]). A
-// settle off the path asks until its store answers, or until the node stops
+// handed off the path, marked, only when the segment ends ([rowSource]). An
+// OpenCode confirmation's take settles on its own path too, in answer mode,
+// never marking: its read is true, the harness having confirmed delivering the
+// note, and only its report rode on the answer, so what it recorded is
+// reported there; and a confirmation made again that finds a note read at its
+// job's step reports it under the same record ([runInbox.Read]). A settle off
+// the path asks until its store answers, or until the node stops
 // ([runSteers.settleUnanswered]).
 //
 // # A note a harness may have delivered is never one the record says nothing of
@@ -682,7 +687,7 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 		var answered []string
 		var unanswered error
 		for _, take := range takes {
-			marked, err := s.settleOnce(base, turnID, take)
+			marked, err := s.settleOnce(base, turnID, sandbox.NoteSettle{Take: take, Unanswered: true})
 			if err != nil {
 				unanswered = err
 				continue
@@ -732,14 +737,16 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 	}
 }
 
-// settleOnce is one attempt at settling take, held to [steerSettleAttempt] and
-// to the window this node's teardown opens ([runSteers.stopWindow]): the
-// teardown waits for it ([runSteers.waitSettles]), and a store that does not
-// answer must hold the stop no longer than that window — never on the stop's
-// allowance, which is the give-backs' ([steerSettleStopBudget]). An attempt
-// begun once the window is over is made on a context that has already ended,
-// so it fails at once.
-func (s *runSteers) settleOnce(base context.Context, turnID, take string) ([]sandbox.RunNote, error) {
+// settleOnce is one attempt at settle, held to [steerSettleAttempt] and to the
+// window this node's teardown opens ([runSteers.stopWindow]): the teardown
+// waits for it ([runSteers.waitSettles]), and a store that does not answer must
+// hold the stop no longer than that window — never on the stop's allowance,
+// which is the give-backs' ([steerSettleStopBudget]). An attempt begun once the
+// window is over is made on a context that has already ended, so it fails at
+// once. The settle loop's attempts mark ([runSteers.settleRun]); a
+// confirmation's answers ([runInbox.confirm]).
+func (s *runSteers) settleOnce(base context.Context, turnID string, settle sandbox.NoteSettle) (
+	[]sandbox.RunNote, error) {
 	ctx, cancel := context.WithTimeout(base, steerSettleAttempt)
 	defer cancel()
 	if window := s.stopWindow; window != nil {
@@ -749,7 +756,7 @@ func (s *runSteers) settleOnce(base context.Context, turnID, take string) ([]san
 			cancel()
 		}
 	}
-	return s.store.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: take, Unanswered: true})
+	return s.store.SettleTake(ctx, turnID, settle)
 }
 
 // stopping reports whether this node's teardown has begun ([runSteers.stopped]).
@@ -1644,8 +1651,25 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	return out, changed
 }
 
-// Read records the notes named read at the run's next step — see
-// [mcpbridge.SteerInbox].
+// Read records the notes named read at the run's next step, and publishes them
+// delivered there — see [mcpbridge.SteerInbox].
+//
+// A CONFIRMATION'S READ IS TRUE WHETHER OR NOT ITS ANSWER ARRIVES — OpenCode
+// delivered the note — but its REPORT rides on that answer: a take whose write
+// landed and whose answer was lost published nothing, the plugin's confirmation
+// made again found the note no longer waiting and skipped it, and the run's
+// ending, a step having read the note, reported nothing either. So no node
+// said what became of it. Two things close that:
+//
+//   - THE TAKE NAMES ITSELF, and one that answered an error is SETTLED ON THIS
+//     PATH ([runInbox.confirm]): what its write recorded is published
+//     delivered, and the confirmation answered done, whether or not the
+//     plugin would ever confirm again; and
+//   - A NOTE NAMED THAT THE RECORD HOLDS READ AT A STEP OF THIS JOB — an
+//     earlier confirmation's, whose answer never reached the plugin — is
+//     published delivered all the same ([runInbox.confirmedBefore]), under the
+//     id that confirmation's report took and at its read's instant, so a note
+//     both reported is one record.
 func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	launch, watch := i.bound()
 	if launch == "" || len(ids) == 0 {
@@ -1658,6 +1682,7 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 			candidates = append(candidates, o)
 		}
 	}
+	var record *sandbox.PendingRun
 	if len(candidates) < len(ids) {
 		// A NOTE THE VIEW HAS NOT CAUGHT UP WITH, or one already read: the
 		// record decides, read now.
@@ -1668,6 +1693,7 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 		if !found {
 			return nil
 		}
+		record = &run
 		candidates = nil
 		for _, o := range i.steers.waiting(run.TurnID, run.Steer.Notes) {
 			if slices.Contains(ids, o.held.ID) {
@@ -1675,23 +1701,93 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 			}
 		}
 	}
-	if len(candidates) == 0 {
-		return nil
-	}
-	idsOf := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		idsOf = append(idsOf, c.held.ID)
-	}
-	taken, err := i.steers.store.TakeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteTake{
-		IDs: idsOf, Launch: launch, Statuses: steerTakeStatuses,
-		Read: sandbox.NoteRead{Phase: string(types.PhaseExecute), Iteration: i.round, Round: 1,
-			Boundary: string(types.SteerBoundaryStep), Launch: launch},
-	})
-	if err != nil {
+	taken, err := i.confirm(ctx, launch, candidates)
+	if err != nil || len(taken) == len(ids) {
 		return err
 	}
-	i.delivered(ctx, taken, notesTaken(candidates, taken))
+	// A NOTE NAMED THAT THIS CONFIRMATION DID NOT TAKE: off the record read
+	// above, or, where the view said every one waited, read now.
+	if record == nil {
+		run, found, err := i.steers.store.Get(ctx, i.ident.turn.TurnID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		record = &run
+	}
+	i.confirmedBefore(ctx, *record, launch, ids, taken)
 	return nil
+}
+
+// confirm records candidates read by job launch at the run's next step, and
+// publishes delivered what it recorded ([runInbox.Read]).
+//
+// A TAKE THAT ANSWERED AN ERROR IS SETTLED HERE, in answer mode: its write may
+// have landed with its answer lost, and the read it recorded is true — the
+// harness confirmed the note delivered — so it is never marked, and what the
+// settle finds recorded is published delivered now. Under a bound of its own
+// ([runSteers.settleOnce]), never the request's: the plugin gives up on a
+// confirmation at ten seconds, and a settle made under the request it gave up
+// on would fail at once, the note reported by no node unless the plugin
+// confirms again, which it does not once its run is over. A settle that finds
+// nothing recorded leaves the notes waiting, the take unable to land after it,
+// and answers the take's error, so the plugin confirms them again; one the
+// store does not answer either answers it too, and the confirmation the plugin
+// makes again finds what the take recorded ([runInbox.confirmedBefore]).
+func (i *runInbox) confirm(ctx context.Context, launch string, candidates []openedNote) ([]sandbox.RunNote,
+	error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		ids = append(ids, c.held.ID)
+	}
+	read := sandbox.NoteRead{Phase: string(types.PhaseExecute), Iteration: i.round, Round: 1,
+		Boundary: string(types.SteerBoundaryStep), Launch: launch, Take: takeName()}
+	taken, err := i.steers.store.TakeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteTake{
+		IDs: ids, Launch: launch, Statuses: steerTakeStatuses, Read: read,
+	})
+	if err != nil {
+		settled, settleErr := i.steers.settleOnce(context.WithoutCancel(ctx), i.ident.turn.TurnID,
+			sandbox.NoteSettle{Take: read.Take})
+		if settleErr != nil || len(settled) == 0 {
+			return nil, err
+		}
+		// RECORDED, ITS ANSWER LOST: reported now.
+		taken = settled
+	}
+	i.delivered(ctx, taken, notesTaken(candidates, taken))
+	return taken, nil
+}
+
+// confirmedBefore publishes delivered every note of ids that run's record holds
+// read at a step of job launch and that this confirmation did not take: an
+// earlier confirmation's, whose answer never reached the plugin, which
+// confirms the note again ([runInbox.Read]). Under the id that confirmation's
+// report took, from the turn and the note, and at the instant of its read, so
+// a note both reported is one record. Only a step's read of this job is one: a
+// read by its brief, a review or another job is reported by whatever read it,
+// and a note no longer on the record by nobody here.
+func (i *runInbox) confirmedBefore(ctx context.Context, run sandbox.PendingRun, launch string, ids []string,
+	taken []sandbox.RunNote) {
+	var held []sandbox.RunNote
+	var notes []steer.Note
+	for _, n := range run.Steer.Notes {
+		read := n.Read
+		if read == nil || read.Launch != launch || read.Boundary != string(types.SteerBoundaryStep) ||
+			read.Unanswered || !slices.Contains(ids, n.ID) ||
+			slices.ContainsFunc(taken, func(t sandbox.RunNote) bool { return t.ID == n.ID }) {
+			continue
+		}
+		if note, ok := i.steers.open(run.TurnID, n); ok {
+			held = append(held, n)
+			notes = append(notes, note)
+		}
+	}
+	i.delivered(ctx, held, notes)
 }
 
 // Close ends the inbox — see [mcpbridge.SteerInbox].
