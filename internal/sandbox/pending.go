@@ -737,9 +737,11 @@ type BridgeCall struct {
 	Late bool `json:"late,omitempty"`
 
 	// Abandoned marks a call NOBODY WAITED FOR BY THE TIME IT RETURNED: its
-	// harness had given up on it and cancelled its request — Claude Code does
-	// at its tool timeout, and discards a late answer — or the job's session on
-	// the bridge had ended (internal/api/mcpbridge's Call.Abandoned). The
+	// harness had given up on it — cancelled its request, as Claude Code and
+	// OpenCode do at their tool timeout, discarding a late answer, or hung up
+	// on the response the bridge kept its answer going on — or the job's
+	// session on the bridge had ended (internal/api/mcpbridge's
+	// Call.Abandoned). The
 	// bridge's to give, as it records the call, and kept as handed through
 	// every write of the round: a call of its job like any other, listed,
 	// numbered and paid for as its job's own, but one whose outcome the

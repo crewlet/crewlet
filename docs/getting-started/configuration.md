@@ -106,7 +106,9 @@ turn_engine:                            # optional — executor/reviewer turn co
     budget_fraction: 0.2                # ONE slice for the whole call, shared by every task in it
     min_tokens_per_task: 500            # call refused up front if the per-task share falls below this; 0 = no floor
     task_timeout_seconds: 300           # wall-clock cap on one worker
-    call_timeout_seconds: 900           # wall-clock cap on the whole call, dependency waves included
+    call_timeout_seconds: 900           # wall-clock cap on the whole call, dependency waves included;
+                                        #   also counts toward how long an executor's box waits
+                                        #   for a call (Code Sandbox § The tool bridge)
   executor_min_budget_tokens: 25000     # refuse an executor launch, and park the seat, below
                                         #   this remaining budget (0 = no floor). A seat's or
                                         #   the company's token_budget ceiling below it is
@@ -2643,7 +2645,11 @@ Both deadlines therefore always apply.
   and over HTTP. Raise it for a server whose tools genuinely run long (a
   large code search, a slow report); lower it for one that should always
   answer quickly, so a wedged call reaches the agent as a failed tool result
-  it can react to instead of a turn that never ends.
+  it can react to instead of a turn that never ends. It also counts toward
+  how long an executor's box waits for a call: the harness in the box is
+  told to wait as long as the bridge can take to answer one, which counts
+  the longest `request_timeout_seconds` among the seat's servers ([The tool
+  bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 
 A server that exceeds either deadline is logged and skipped; the rest of
 the company still starts.
