@@ -14,15 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // cutPool is a query.Pool whose processes of one git command wait until the
 // context they run under ends — a read lane busy past it, or a run that
 // outlasts it — and end as gitproc ends a run its caller ended, that
-// context's cause wrapped. Every other process runs on the pool beneath.
+// context's cause wrapped, telling ended, where set, what ended it. Every
+// other process runs on the pool beneath.
 type cutPool struct {
 	query.Pool
 	command string
+	ended   *endings
 }
 
 func (p cutPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
@@ -30,8 +33,42 @@ func (p cutPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error)
 		return p.Pool.Run(ctx, c)
 	}
 	<-ctx.Done()
+	p.ended.note(ctx)
 	return gitproc.Result{Exit: -1}, fmt.Errorf("gitproc: git %s was ended by its caller: %w", c.Args[0],
 		context.Cause(ctx))
+}
+
+// endings is what ended each wait a case held until its context ended: the
+// held wait's own record of its end, which no clock is read for.
+type endings struct {
+	mu     sync.Mutex
+	causes []error
+}
+
+// note keeps what ended ctx; a nil endings keeps nothing.
+func (e *endings) note(ctx context.Context) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.causes = append(e.causes, context.Cause(ctx))
+}
+
+// fellDue is nil where a held wait was ended, and every one by its read's
+// answer falling due (code.ErrAnswerDue), and says what ended one otherwise.
+func (e *endings) fellDue() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.causes) == 0 {
+		return errors.New("no held wait was ended")
+	}
+	for _, cause := range e.causes {
+		if !errors.Is(cause, code.ErrAnswerDue) {
+			return fmt.Errorf("a held wait was ended by %w", cause)
+		}
+	}
+	return nil
 }
 
 // A READ WHOSE ANSWER FALLS DUE SAYS SO WHILE ITS ASKER LISTENS. A Gitlet node's
@@ -45,9 +82,19 @@ func (p cutPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error)
 // would have given it. A caller that goes away is answered its own ending,
 // which nobody listens for.
 //
+// EACH HELD WAIT SAYS WHAT ENDED IT, with no clock read: the sync's and the
+// processes' contexts their cause (endings), and the share by its own count,
+// which counts a take whose wait ran out and never one its caller's context
+// ended. So every wait is seen ended by the answer's due instant — a margin
+// before the asker's deadline, which TestAReadIsServedUntilItsAnswerIsDue
+// holds exactly — and never by a bound of its own: the sync's minute, the
+// share's code.GitShareWait.
+//
 // Mutations: answer a sync, a share or a run the answer's due instant ended
 // with the context's error — each its row red; answer a run of the read's own
-// git the instant ended as too large — its row red.
+// git the instant ended as too large — its row red; wait out a sync or a take
+// on a context the due instant does not end — its row red, its wait ended by
+// its own bound.
 func TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
@@ -58,24 +105,42 @@ func TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens(t *testing.T) {
 	node := x.f.Nodes()[0]
 
 	// A SHARE OF ONE UNIT, HELD: a take waits code.GitShareWait, ten times
-	// what the asker's attempt leaves the read below.
-	held := code.NewGitShare(node.ID(), 2, nil)
+	// what the asker's attempt leaves the read below — and is counted
+	// unready where that wait runs out.
+	takes, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := code.NewGitShare(node.ID(), 2, takes)
 	unit, err := held.Take(t.Context(), code.SeatWorkRead)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unit()
+	shareWaitedOut := func() error {
+		for _, s := range takes.Read() {
+			if s.Name == metrics.CodeSeatworkWaits && s.Attrs["outcome"] == "unready" && s.Count > 0 {
+				return fmt.Errorf("a take was ended by the share's own wait (%d of them)", s.Count)
+			}
+		}
+		return nil
+	}
 
+	syncs, checks, runs := &endings{}, &endings{}, &endings{}
 	for name, tc := range map[string]struct {
-		o    query.Options
-		repo string
-		want code.UnreadyReason
+		o     query.Options
+		repo  string
+		want  code.UnreadyReason
+		ended func() error
 	}{
 		"its copy's sync": {query.Options{Cache: &holdingCache{Cache: node.Cache(), repo: cold,
-			entered: make(chan struct{}), released: make(chan struct{})}}, cold, code.UnreadySyncing},
-		"its unit of the share":       {query.Options{Share: held}, warm, code.UnreadyShare},
-		"a check of what it names":    {query.Options{Git: cutPool{Pool: node.Pool(), command: "cat-file"}}, warm, code.UnreadyShare},
-		"its own git, run or waiting": {query.Options{Git: cutPool{Pool: node.Pool(), command: "ls-tree"}}, warm, code.UnreadyShare},
+			entered: make(chan struct{}), released: make(chan struct{}), ended: syncs}}, cold, code.UnreadySyncing,
+			syncs.fellDue},
+		"its unit of the share": {query.Options{Share: held}, warm, code.UnreadyShare, shareWaitedOut},
+		"a check of what it names": {query.Options{Git: cutPool{Pool: node.Pool(), command: "cat-file",
+			ended: checks}}, warm, code.UnreadyShare, checks.fellDue},
+		"its own git, run or waiting": {query.Options{Git: cutPool{Pool: node.Pool(), command: "ls-tree",
+			ended: runs}}, warm, code.UnreadyShare, runs.fellDue},
 	} {
 		s := x.server(0, tc.o)
 		query.SetSyncWait(s, time.Minute)
@@ -85,27 +150,32 @@ func TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens(t *testing.T) {
 		deadline := time.Now().Add(code.ReplyMargin + 200*time.Millisecond)
 		ctx, cancel := code.AnswerBy(t.Context(), deadline)
 		_, err := s.Read(ctx, treeQ(tc.repo, code.TreeQuery{Rev: head}))
-		answered := time.Now()
 		cancel()
-		switch {
+		switch ended := tc.ended(); {
 		case errors.Is(err, code.ErrSliceTooLarge):
 			t.Errorf("%s: a read the answer's due instant ended there = %v, want it unready: it had less than "+
 				"its budget, and a node with the time would answer it", name, err)
 		case !unready(err, tc.want):
 			t.Errorf("%s: a read the answer's due instant ended there = %v, want ErrGitUnready{%s}", name, err,
 				tc.want)
-		case !answered.Before(deadline):
-			t.Errorf("%s: the read answered at %v, past its asker's deadline %v: nobody heard it", name,
-				answered, deadline)
+		case ended != nil:
+			t.Errorf("%s: %v, where the answer's due instant was to end it, a margin before its asker's "+
+				"deadline: nobody heard the answer", name, ended)
 		}
 	}
 
-	// A CALLER THAT GOES AWAY is answered its own ending, not unready.
-	s := x.server(0, query.Options{Cache: &holdingCache{Cache: node.Cache(), repo: cold,
-		entered: make(chan struct{}), released: make(chan struct{})}})
+	// A CALLER THAT GOES AWAY is answered its own ending, not unready: it
+	// leaves once the read is held on its sync.
+	hold := &holdingCache{Cache: node.Cache(), repo: cold, entered: make(chan struct{}),
+		released: make(chan struct{})}
+	s := x.server(0, query.Options{Cache: hold})
 	query.SetSyncWait(s, time.Minute)
 	ctx, leave := context.WithCancel(t.Context())
-	time.AfterFunc(50*time.Millisecond, leave)
+	defer leave()
+	go func() {
+		<-hold.entered
+		leave()
+	}()
 	if _, err := s.Read(ctx, treeQ(cold, code.TreeQuery{Rev: head})); !errors.Is(err, context.Canceled) {
 		t.Errorf("a read whose caller went away = %v, want the caller's own ending", err)
 	}

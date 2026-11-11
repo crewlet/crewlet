@@ -647,7 +647,7 @@ func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Millisecond):
+		case <-time.After(time.Millisecond): //fixedwait:liveness
 		}
 	}
 }

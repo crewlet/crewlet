@@ -38,7 +38,7 @@ func TestASeatsResyncsAreTheCensussSeatTerm(t *testing.T) {
 	said := code.NotRejudged(r, "this run's", "this seat's", now)
 	back := code.ResyncsBackAt(r, now)
 	if !strings.Contains(said, "this run's re-syncs are spent until "+back.Format(time.RFC3339)) ||
-		back.Before(now.Add(r.RetryAfter)) {
+		back.Before(now.Add(r.RetryAfter)) { //fixedwait:stated now is the case's own time.Date, and back the code's arithmetic on it
 		t.Errorf("the sentence %q names %s, want the second at or after %s", said, back, now.Add(r.RetryAfter))
 	}
 

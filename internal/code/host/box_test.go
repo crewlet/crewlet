@@ -94,6 +94,18 @@ func boxRequest(t *testing.T, c *codetest.Case, i int, repo, tail, user, pass, p
 	return req
 }
 
+// uploadPacks is how many of the git processes cmds holds were upload-pack:
+// what writes every byte of a fetch's or an advertisement's answer.
+func uploadPacks(cmds []gitproc.Cmd) int {
+	n := 0
+	for _, c := range cmds {
+		if len(c.Args) > 0 && c.Args[0] == "upload-pack" {
+			n++
+		}
+	}
+	return n
+}
+
 // boxSend sends req through client and reads its whole answer: safe on a
 // goroutine of its own, since it fails no test itself.
 func boxSend(req *http.Request, client *http.Client) reply {
@@ -728,12 +740,18 @@ func TestABoxReadsAtItsRunsFloor(t *testing.T) {
 // and a raise that fails refuses the answer 503, floor_unraised, the box to
 // retry.
 //
-// Mutation: raise after writing the answer — the answer arrives while the
-// raise is held — red.
+// Every byte of an ls-refs's answer is upload-pack's, so none has been
+// written while upload-pack has not been handed to the pool: read off the
+// node's own record of the git it ran (host.RecordGit) while the raise is
+// held, inside the request.
+//
+// Mutation: raise after writing the answer — upload-pack ran before the
+// raise, red.
 func TestABoxIsShownNothingItsFloorDoesNotHold(t *testing.T) {
 	t.Parallel()
 	var lines logs
 	c, _ := boxCase(t, codetest.SoloOptions{Logger: lines.logger()})
+	ran := host.RecordGit(c.Fleet.Nodes()[0].Host())
 	runs := c.Fleet.Runs()
 	ref, _ := c.LaunchBox(codetest.FixtureAlice, code.AccessRead)
 	floor := runs.Floor(ref)
@@ -760,23 +778,22 @@ func TestABoxIsShownNothingItsFloorDoesNotHold(t *testing.T) {
 	answered := make(chan reply, 1)
 	req := boxRequest(t, c, 0, codetest.RepoName, boxUploadPack, host.BoxUser, runs.Token(ref), v2, lsRefs())
 	client := c.Fleet.Nodes()[0].Client()
+	served := uploadPacks(ran())
 	go func() { answered <- boxSend(req, client) }()
 	var r codetest.Raise
 	select {
 	case r = <-raising:
 	case a := <-answered:
 		t.Fatalf("the ls-refs answered %d %v and raised no floor", a.status, a.err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the ls-refs raised no floor in ten seconds")
 	}
 	if past, err := floor.Before(r.Pos); r.Ref != ref || err != nil || !past {
 		t.Errorf("the ls-refs raised %+v to %s, want %+v past its floor %s (%v)", r.Ref, r.Pos, ref, floor, err)
 	}
-	select {
-	case a := <-answered:
-		t.Fatalf("the ls-refs answered %d while its floor's raise was held: shown before its floor held it",
-			a.status)
-	case <-time.After(300 * time.Millisecond):
+	if got := uploadPacks(ran()) - served; got != 0 {
+		t.Fatalf("the ls-refs handed upload-pack to the pool %d times before its floor's raise returned: its "+
+			"answer was written before its floor held it", got)
 	}
 	let()
 	if a := <-answered; a.status != http.StatusOK {

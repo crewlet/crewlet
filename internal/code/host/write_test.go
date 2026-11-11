@@ -69,8 +69,15 @@ type writeCase struct {
 // newWriteCase is a write case over o, main holding seed.
 func newWriteCase(t *testing.T, o codetest.SoloOptions, seed map[string]string) *writeCase {
 	t.Helper()
-	c := newCase(t, o, codetest.Settings())
-	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	return seedWriteCase(newCase(t, o, codetest.Settings()), seed)
+}
+
+// seedWriteCase is the write case of c, main holding seed: ceo's push of it
+// is c's first request, so what a case hands its host before this is in
+// place for every request the host serves.
+func seedWriteCase(c *codetest.Case, seed map[string]string) *writeCase {
+	c.T.Helper()
+	p := codetest.NewPerson(c.T, c.Fleet, "ceo")
 	work := p.Init()
 	head := p.Commit(work, seed, "seed")
 	c.MustPush(p, work, "main")
@@ -230,12 +237,13 @@ func TestARetriedEngineWriteIsOnePush(t *testing.T) {
 		second <- answer{res, err}
 	}()
 	joined := false
+	//fixedwait:measure a poll's own deadline: a second ask that never joined fails the case after it
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 		if host.WriteJoiners(s, pushID) == 1 {
 			joined = true
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	close(held)
 	a, b := <-first, <-second

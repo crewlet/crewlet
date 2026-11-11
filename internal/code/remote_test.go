@@ -174,13 +174,21 @@ func TestAChunkLandsOnlyInItsTurn(t *testing.T) {
 // seat it pushes as and its refs included, and none once it is removed. A
 // repository with neither details none.
 //
+// EVERY RECORD IS STAMPED BY A CLOCK THE CASE HOLDS: a minute past harnessAt
+// for each place in the log, the broker's instant the drain hands the
+// applier — so the sync's instant is past the import's end because its
+// record comes after the end's in the log, read with no wall clock between
+// them.
+//
 // Mutations: serve no import progress (Chunks left 0) — the detail after a
 // chunk says none landed, red; drop the sync's instant from the read — the
 // mirror reads as never synced, red; serve no push mirror — the detail of one
-// says none, red.
+// says none, red; leave a sync's instant where its import's end put it — the
+// mirror reads as never synced since, red.
 func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
+	n.storedAt = func(seq uint64, _ time.Time) time.Time { return harnessAt.Add(time.Duration(seq) * time.Minute) }
 	ctx := t.Context()
 	detail := func(name string) code.RemoteState {
 		t.Helper()
@@ -236,6 +244,7 @@ func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 	sync := syncOf(n, web, 0, update("refs/heads/synced", code.ZeroOID, oidOf("A")))
 	res, err = c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: sync})
 	requireSynced(t, "the sync", res, err)
+	//fixedwait:stated both are their records' instants, which the case's clock stamped by their places in the log
 	if got := detail("web"); !got.MirrorSyncedAt.After(imported.MirrorSyncedAt) {
 		t.Fatalf("a pull mirror synced details %+v, want its last sync's instant past its import's end", got)
 	}

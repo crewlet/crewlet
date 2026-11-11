@@ -76,7 +76,7 @@ func BenchmarkBuildChain(b *testing.B) {
 				checkedBefore, _ := checked()
 				began := time.Now()
 				res, err := s.BuildChain(b.Context(), r.chain())
-				took := time.Since(began)
+				took := time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 				b.StopTimer()
 				if err != nil || res.Settle == nil {
 					b.Fatalf("the chain was not built: %+v %v", res, err)
