@@ -776,7 +776,9 @@ flowchart TD
    call to finish and be recorded, logging `mcp_bridge_calls_draining` with
    how many and whose runs, then `mcp_bridge_calls_drained`. That wait has no
    bound of its own, as the wait for turns has none: the supervisor's grace is
-   the bound, and a call it cuts is on no record.
+   the bound, and a call it cuts never makes its update — its entry, written
+   on its run's record before it ran, stays there, the call counted by its
+   identity and its outcome unknown.
 7. **Finish the git requests, then close the HTTP listener**, and not
    before: until now the probes are what the orchestrator reads, and they
    read the stream and the coordination store the next steps close. First the

@@ -461,34 +461,14 @@ type CoordinatorOptions struct {
 	// still waiting are on the run's record, which the ending publishes as
 	// expired before it deletes it ([CoordinatorOptions.SteersExpired]).
 	//
-	// AND THE SESSION CARRIES WHAT IT OWES BEFORE THIS RETURNS: a call whose
-	// own append did not land, which its session carries into the run's log
-	// as it ends (internal/api/mcpbridge's Ledger.End, the session's last
-	// carry of its own, made once any carry [CoordinatorOptions.Settle] asked
-	// for is done), so the reads and the deletes that follow an ending see
-	// it. IT WAITS FOR NO CALL STILL RUNNING: the session answers each that
-	// it is still running and closes behind those answers, and the call runs
-	// on and records itself as its tool returns, which may be after this has
-	// returned — and after the reads and the delete that follow it, which then
-	// hold nothing of it (internal/api/mcpbridge, "An opening ends without
+	// IT WAITS FOR NO CALL STILL RUNNING: the session answers each that it is
+	// still running and closes behind those answers, and the call runs on and
+	// makes its one update as its tool returns, which may be after this has
+	// returned — its identity on the run's log from before it ran
+	// ([BridgeLog.InFlight]), so what reads the log after this reads the call
+	// as one still in flight (internal/api/mcpbridge, "An opening ends without
 	// waiting for its calls").
 	Ended func(runID string)
-
-	// Settle asks the bridge session serving a run's job to carry into the
-	// run's log whatever calls it still owes it — ones whose own append did
-	// not land, which a later call of the session would have carried — with
-	// their spend onto the job's record, before it returns, and reports
-	// whether it carried any. Asked once the job's box has been read back and
-	// before the log is read for what the job did: a job's LAST call has no
-	// later call of its own, and a submission whose append met a store's blip
-	// would otherwise be missing from the log its resume judges the round by,
-	// though the store answered a second later. Where it carried something,
-	// the job's spend is read again ([Coordinator.collectClaimed]), and the
-	// resume reads the calls from the log after it.
-	//
-	// Nil carries nothing, which a coordinator whose runs make no bridged
-	// calls — a test's — has.
-	Settle func(ctx context.Context, runID, launchID string) bool
 
 	// Recovered is told of each run this node takes over still RUNNING in
 	// its box, as it recovers the run's seat ([Coordinator.RecoverSeat]):
@@ -980,8 +960,6 @@ type Coordinator struct {
 	// pushes is [CoordinatorOptions.Pushes].
 	pushes RunPushes
 	ended  func(runID string)
-	// settle is [CoordinatorOptions.Settle].
-	settle func(ctx context.Context, runID, launchID string) bool
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
@@ -1202,7 +1180,6 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		answers:       opts.Answers,
 		condense:      opts.Condense,
 		ended:         opts.Ended,
-		settle:        opts.Settle,
 		recovered:     opts.Recovered,
 		unresumable:   opts.Unresumable,
 		stopped:       opts.Stopped,
@@ -1795,13 +1772,10 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// where the claim's read cannot be the whole of it: a run ENDED AT ITS
 	// TURN'S CAP was working until the collection ended its job, and a call it
 	// made over the bridge meanwhile wrote its spend on the record and not on
-	// the claim; and a job whose session still OWED the log calls has them
-	// carried now ([CoordinatorOptions.Settle]) — its last call, a
-	// submission, whose own append met a store's blip, above all — with their
-	// spend. The calls themselves are read from the log by the resume, after
-	// this ([Coordinator.resumeAndSettle]), so the resumed turn judges the run
-	// on what it did, all of it, and is charged for all of it.
-	if settled := c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID); ended || settled {
+	// the claim. The calls themselves are read from the log by the resume,
+	// after this ([Coordinator.resumeAndSettle]), so the resumed turn judges
+	// the run on what it did, all of it, and is charged for all of it.
+	if ended {
 		run = c.rereadSpend(ctx, run)
 	}
 	if ended {

@@ -84,21 +84,17 @@ import (
 // over-counting is safe for the reason above.
 //
 // WHAT A RESUME SEEDS, then, is everything the run's log held that its record
-// keeps an identity of: the calls a bridged run's tool log lists (a call whose
-// own append did not land among them, once its session carried it), the ones it
-// counts without listing (a long run's dropped middle), the calls the log
-// absorbed from a bridged call's own work (a delegated worker's, [Called],
-// [CallLog.Own]), and the same three for every closed round. An under-count —
-// a call the run made that the seed leaves out — is the hazard this log
-// exists to close. One remains, and it is not a record's bound: a call whose
-// record never landed and that nothing of its session carried — not a later
-// call of its job, not the carry its run's collection asks for, not the last
-// one its session makes as it ends, the store out of reach from the call
-// through every one of them, or the run's log moved on to its next job
-// before one landed — is a call no record of the run holds, and no seed can
-// count it. The engine's bridge ledger names each such call in its log, at
-// warning: its tool, its place among its job's calls and the opening of its
-// identity.
+// keeps an identity of: the calls a bridged run's tool log lists, the ones it
+// holds in flight — begun and not finished, whose entry the bridge wrote
+// before it ran them — the ones it counts without listing (a long run's
+// dropped middle), the calls the log absorbed from a bridged call's own work
+// (a delegated worker's, [Called], [CallLog.Own]), and the same for every
+// closed round. An under-count — a call the run made that the seed leaves out
+// — is the hazard this log exists to close, and NONE REMAINS: the bridge runs a
+// call only once the log has taken its entry, and a call whose entry the log
+// did not take is not run (internal/api/mcpbridge, "A call is on its run's
+// record before it runs"), so every call the run made is on its record by its
+// identity, a call whose outcome its record lost among them.
 //
 // A DELEGATED WORKER forks the log ([Fork]) and its calls are absorbed back
 // ([Absorb]) once its wave is done. Workers write under the parent's unit of

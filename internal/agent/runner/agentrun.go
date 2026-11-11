@@ -459,8 +459,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	case basis.Continues() && r.cfg.Resume != nil:
 		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
 		// middle among them: the session continued is that round's job's.
-		collected := roundCalls{bridged: r.cfg.Resume.Bridged, elided: r.cfg.Resume.Elided,
-			lateElided: r.cfg.Resume.LateElided, absorbed: r.cfg.Resume.Absorbed}
+		collected := roundCalls{bridged: r.cfg.Resume.Bridged, unfinished: r.cfg.Resume.Unfinished,
+			elided: r.cfg.Resume.Elided, lateElided: r.cfg.Resume.LateElided,
+			absorbed: r.cfg.Resume.Absorbed}
 		// A SEND-BACK'S LEAD TELLS NO HELD CALL, so every call a person
 		// approved after the save is told among the rest.
 		briefs.kept = r.keptSession(ctx, basis, collected, "", built, fresh, "").led(r.sendBackLead(notes))
@@ -610,8 +611,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	round := roundCalls{bridged: bridgedCalls, elided: elided, lateElided: r.cfg.Resume.LateElided,
-		absorbed: absorbed}
+	round := roundCalls{bridged: bridgedCalls, unfinished: inAdmissionOrder(r.cfg.Resume.Unfinished),
+		elided: elided, lateElided: r.cfg.Resume.LateElided, absorbed: absorbed}
 	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, round)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -631,7 +632,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			StartedAt: began.UTC(), Caps: caps,
 			Failed: true, Err: refusedErr,
 		})
-		return turn.Work{Calls: logged, Elided: elided, Absorbed: absorbed}, describe(surface), refusedErr
+		// AND ITS CALLS WHOSE OUTCOME IS UNKNOWN, after its calls, as the
+		// record of every round lists them ([Resume.Unfinished]).
+		return turn.Work{Calls: append(slices.Clone(logged), bridgedLedger(round.unfinished)...),
+			Elided: elided, Absorbed: absorbed}, describe(surface), refusedErr
 	}
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
@@ -906,8 +910,13 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // NEVER READ, exactly as the launch's is not when the run is collected in
 // another process: the collection replays submit_work from the run's durable
 // log ([Runner.resumeAgentRun]).
+//
+// AND THE CALLS ITS LOG HOLDS IN FLIGHT (unfinished, [Resume.Unfinished]), which
+// its call log counts by their identity: a call of the run still running on
+// the node it left, whose update has not landed, is a call made, and a call
+// made here that asks for something else must not derive its operation id.
 func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
-	bridged []BridgedCall, elided, absorbed []ledger.Elided, spent Bridged, continued bool,
+	bridged, unfinished []BridgedCall, elided, absorbed []ledger.Elided, spent Bridged, continued bool,
 ) (ReopenedRun, error) {
 	history := state.Iterations
 	called := append(bridgedLedger(inAdmissionOrder(bridged)), ledger.Called(elided)...)
@@ -924,7 +933,8 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 
 	meter := NewBridgedSpendFrom(spent)
 	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
-		roundCalls{bridged: inAdmissionOrder(bridged), elided: elided, absorbed: absorbed})
+		roundCalls{bridged: inAdmissionOrder(bridged), unfinished: inAdmissionOrder(unfinished),
+			elided: elided, absorbed: absorbed})
 	if err != nil {
 		return ReopenedRun{}, err
 	}
@@ -1093,6 +1103,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	logged := bridgedLedger(bridged)
 	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
+	unfinished := inAdmissionOrder(r.cfg.Resume.Unfinished)
 
 	// THE REPLAY'S DECODER IS NOT HELD TO WHAT THE LOG KEEPS WHOLE
 	// ([keptWhole]): the submission is already made, and one a build before
@@ -1110,7 +1121,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// what it could still have discovered ([Runner.finishWork]); and the
 	// turn's call log, which starts from what the turn already called.
 	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history,
-		roundCalls{bridged: bridged, elided: elided, absorbed: absorbed})
+		roundCalls{bridged: bridged, unfinished: unfinished, elided: elided, absorbed: absorbed})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -1118,8 +1129,14 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 
 	replaySubmission(ctx, submit, sinceAnswer(bridged, r.cfg.Resume.Answered))
 
+	// THE ROUND'S RECORD LISTS ITS CALLS WHOSE OUTCOME IS UNKNOWN after its
+	// calls ([Resume.Unfinished]): the reviewer reads them, and the turn's
+	// tool log keeps them, each failed with the words that say what it may
+	// have done ([UnfinishedNote]) — and a later segment's call log counts them
+	// off the closed round's record by their identity.
+	recorded := append(slices.Clone(bridged), unfinished...)
 	run := r.cfg.Resume.Run
-	res := agentRunResult(answer, bridged, elided, run, state.LaunchedAt, began)
+	res := agentRunResult(answer, recorded, elided, run, state.LaunchedAt, began)
 	// THE NOTES THE ROUND'S RUN READ, off the record every read is written
 	// on: in its briefs, and at the boundaries of its harness's own loop — the
 	// reads of this round's jobs, at the run's one round, each with where it
@@ -1142,8 +1159,8 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// met its reviewer's usage limit before writing anything was settled
 	// for good as a turn that had written, and the run's result never
 	// reached the seat.
-	work.Calls = logged
-	work.Inherited = len(logged)
+	work.Calls = bridgedLedger(recorded)
+	work.Inherited = len(work.Calls)
 	// AND THE CALLS THE LOG DID NOT KEEP, by identity: the round's all the
 	// same, for the delivery checks, the closed round's record and the
 	// reviewer, who is told how many there were — and the ones the round's

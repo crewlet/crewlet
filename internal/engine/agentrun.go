@@ -757,6 +757,9 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 ) (_ sandbox.Opening, err error) {
 	defer origin.Stamp(&err)
 	ledger.bind(job)
+	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
+	// names it: what a collection on any node reads this process's liveness by.
+	ledger.runner = e.callRunner()
 	s.Launch, s.LastSeq = job.LaunchID, job.LastSeq
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
@@ -785,6 +788,19 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 		opening.Fresh = &other
 	}
 	return opening, nil
+}
+
+// callRunner is the incarnation every bridged call this process runs names as
+// its runner ([sandbox.BridgeCall.Runner]): the one its sandbox coordinator
+// holds its taker lease under ([sandbox.CoordinatorOptions.Incarnation]), where
+// it holds one — a lease store wired and a runtime built — and "" where it
+// holds none, whose calls a collection waits for by their bound alone rather
+// than read as stopped the moment it finds no lease.
+func (e *Engine) callRunner() string {
+	if e.backends == nil || e.backends.Coord == nil || e.sandbox.Load() == nil {
+		return ""
+	}
+	return e.incarnation
 }
 
 // bridgeOpening is what a job's box is given at endpoint, one of its bridge

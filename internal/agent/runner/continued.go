@@ -457,6 +457,16 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		}
 		after = append(after, call.Call)
 	}
+	// AND EVERY CALL WHOSE OUTCOME IS UNKNOWN ([Resume.Unfinished]), under the
+	// late calls' words, whatever the point: the log held it in flight when the
+	// round was read, so no save point holds what it did, and the session that
+	// made it shows it with no outcome or as still running — which those words
+	// say — while its effects may stand. Never a submission: it is failed.
+	for _, call := range inAdmissionOrder(round.unfinished) {
+		if !slices.Contains(r.cfg.SkipNames, call.Name) {
+			late = append(late, call.Call)
+		}
+	}
 	if len(after)+len(late) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
 		pieces := ledger.CallPieces(after, opts)

@@ -190,8 +190,8 @@ func closedNow(ch <-chan struct{}) bool {
 // relaunch's opening of its next job, the seat leaving this node, a recovery's
 // opening of the same job — answers the box's call while its tool is still
 // held, in the words of how it ended and not as a failure, and returns; and the
-// call's tool runs on, and is recorded once it returns, after the session's
-// ledger ended, as one nobody waited for.
+// call's tool runs on, and is recorded once it returns — one update of the entry
+// written ahead of it — as one nobody waited for.
 //
 // Mutation: let an ending answer no call still running (`false &&` before its
 // cut), and the box is never answered while its call's tool is held; answer it
@@ -265,8 +265,8 @@ func TestEveryEndingOfAnOpeningReturnsWhileACallIsHeld(t *testing.T) {
 				t.Fatalf("the call is recorded %+v, want it once, with what its tool did, as one "+
 					"nobody waited for", rows)
 			}
-			if trail := g.ledger.order(); !slices.Equal(trail, []string{"end", "append write"}) {
-				t.Errorf("the ledger took %v, want the session's end and then the call", trail)
+			if trail := g.ledger.order(); !slices.Equal(trail, []string{"begin write", "record write"}) {
+				t.Errorf("the ledger took %v, want the call's entry and then its one update", trail)
 			}
 		})
 	}

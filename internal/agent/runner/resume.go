@@ -141,12 +141,28 @@ func submitted(calls []ledger.Call) bool {
 // own that it dropped from the middle (elided), how many of those it had taken
 // late (lateElided, [Resume.LateElided]), and the ones its calls' own work made
 // in the run's call log (absorbed).
+//
+// AND THE CALLS IT HELD IN FLIGHT (unfinished, [Resume.Unfinished]): begun,
+// their identity on the record, and not finished as the log was read — each
+// a call whose outcome is unknown ([ledger.Call.Unfinished]).
 type roundCalls struct {
 	bridged    []BridgedCall
+	unfinished []BridgedCall
 	elided     []ledger.Elided
 	lateElided int
 	absorbed   []ledger.Elided
 }
+
+// UnfinishedNote is what a call whose outcome is unknown answered, as every
+// record of its round keeps it ([ledger.Call.Unfinished]): its run's log held
+// it in flight when the round's calls were read, so what it did is not known.
+// NEVER A PLAIN FAILURE, which a run takes for a call that did nothing and
+// makes again — the duplicate delegation, post or write the late calls'
+// telling exists to prevent — but a call whose effects may stand, to be
+// checked before it is made again.
+const UnfinishedNote = "This call's outcome is unknown: it was still running when its turn " +
+	"stopped waiting for it, so what it did may have taken effect. Check whether it did " +
+	"before making it again."
 
 // seedCalls records into a resumed run's log every call the turn made before
 // this segment: the rounds that closed and whatever its executor run called
@@ -163,6 +179,12 @@ type roundCalls struct {
 // or a call made again after a different one would take its first copy's
 // operation id. See [turnctx.CallLog]. Order does not matter to a count, and
 // a call recorded twice only raises one, which is safe.
+//
+// AND EVERY CALL THE ROUND'S LOG HELD IN FLIGHT (round.unfinished), by the
+// identity its entry carries: a call begun is a call made, wherever it runs and
+// however it ends, so a later call that asks for something else never derives
+// its operation id — on a node that takes the run over while the call still
+// runs on the one it left, above all ([ledger.Call.Unfinished]).
 //
 // BY IDENTITY: the digest each call was admitted under ([ledger.Call.Digest]),
 // which its record carries whatever it kept of its arguments — a run's log
@@ -191,7 +213,7 @@ type roundCalls struct {
 // logged at debug so the fallback is visible: no call made now can reach it
 // to be counted anyway.
 func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.Iteration, round roundCalls) {
-	groups := [][]ledger.Call{bridgedLedger(round.bridged)}
+	groups := [][]ledger.Call{bridgedLedger(round.bridged), bridgedLedger(round.unfinished)}
 	tallies := [][]ledger.Elided{round.elided, round.absorbed}
 	for _, iteration := range history {
 		groups = append(groups, iteration.Calls)
@@ -201,7 +223,10 @@ func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.
 	for _, group := range groups {
 		for _, call := range group {
 			switch {
-			case call.Withheld:
+			case call.Withheld, call.Unfinished && call.Digest == "":
+				// A CALL WHOSE ARGUMENTS NO RECORD HOLDS: one held for a
+				// person's approval, and one whose entry kept no digest of
+				// them, its tool one that may ask first.
 				calls.Seed(turnctx.SeededCall{Tool: call.Name, Unknown: true})
 				continue
 			case call.Digest != "":

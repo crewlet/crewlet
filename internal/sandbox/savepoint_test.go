@@ -37,17 +37,17 @@ func ordinalOf(calls []BridgeCall, name string) (int, bool) {
 // before it, through whatever the log does with its calls: a long round's middle
 // dropped by the bound, where each listed call keeps the number it was taken at
 // and the numbers the log no longer lists are exactly the calls it counts
-// without listing; the calls a session owed, carried by a later append, each
-// numbered where the log took it, and one the log already lists neither taken
-// nor numbered again; and the call a person approved, which every reader's copy
-// numbers as the next job's opening then numbers it, before any call of that
-// job.
+// without listing; calls whose entries were written ahead of them, each
+// numbered as its update lands, in the order they finish, never as it begins,
+// and one the log already lists neither taken nor numbered again; and the call
+// a person approved, which every reader's copy numbers as the next job's opening
+// then numbers it, before any call of that job.
 //
 // Mutation: number a call by what the log lists alone (len(Calls)+1), or by
 // its place (Seq), and the dropped middle's case goes red; number a call the
-// log already lists again, or an owed call where its session first asked, and
-// the carried case does; number the approved call anywhere but the one append,
-// and its copy and its opening disagree.
+// log already lists again, or a call as its entry is written, and the case of
+// the updates does; number the approved call anywhere but the one append, and
+// its copy and its opening disagree.
 func TestEveryAppendedCallIsNumberedInItsRound(t *testing.T) {
 	t.Parallel()
 	t.Run("past the bound, its middle dropped", func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestEveryAppendedCallIsNumberedInItsRound(t *testing.T) {
 				"list: the two are the same calls", unlisted, log.Elided)
 		}
 	})
-	t.Run("owed calls carried by a later append", func(t *testing.T) {
+	t.Run("calls numbered as their updates land", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
 		store := NewCoordStore(memory.NewFleet())
@@ -103,23 +103,27 @@ func TestEveryAppendedCallIsNumberedInItsRound(t *testing.T) {
 				t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
 			}
 		}
+		// TWO CALLS BEGUN, their entries written ahead of them: numbered by
+		// none, since no session holds the outcome of a call in flight.
+		appended(BridgeAppend{Step: AppendBegin, Call: call(1)})
+		appended(BridgeAppend{Step: AppendBegin, Call: call(2)})
+		// THE SECOND FINISHES FIRST, and the first's update is asked again,
+		// having landed and lost its answer.
+		appended(BridgeAppend{Call: call(2)})
 		appended(BridgeAppend{Call: call(1)})
-		// THE SESSION'S TWO EARLIER APPENDS THAT DID NOT LAND, and one that
-		// did and lost its answer, carried by its fourth call.
-		appended(BridgeAppend{Call: call(4),
-			Owed: []OwedAppend{{Call: call(2)}, {Call: call(3)}, {Call: call(1)}}})
-		// AND THE FOURTH ASKED AGAIN, which landed and lost its answer.
-		appended(BridgeAppend{Call: call(4)})
+		appended(BridgeAppend{Call: call(1)})
 		log, err := store.BridgeLog(ctx, opened)
 		if err != nil {
 			t.Fatalf("BridgeLog: %v", err)
 		}
-		if log.Appends() != 4 {
-			t.Fatalf("the log took %d calls, want 4: each once", log.Appends())
+		if log.Appends() != 2 || len(log.InFlight) != 0 {
+			t.Fatalf("the log took %d calls and holds %d in flight, want 2, each once, and none",
+				log.Appends(), len(log.InFlight))
 		}
-		for i := 1; i <= 4; i++ {
-			if got, ok := ordinalOf(log.Calls, fmt.Sprintf("c%d", i)); !ok || got != i {
-				t.Errorf("c%d is numbered %d (listed %v), want %d", i, got, ok, i)
+		for name, want := range map[string]int{"c2": 1, "c1": 2} {
+			if got, ok := ordinalOf(log.Calls, name); !ok || got != want {
+				t.Errorf("%s is numbered %d (listed %v), want %d: the order the updates landed in", name, got, ok,
+					want)
 			}
 		}
 	})

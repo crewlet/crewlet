@@ -28,7 +28,7 @@ func TestASubmissionAByteTooLargeIsRefusedNamingASizePastItsBound(t *testing.T) 
 	t.Parallel()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{})
 	reopened, err := r.ReopenAgentRun(t.Context(), execstate.State{Version: execstate.Version, Round: 1},
-		nil, nil, nil, runner.Bridged{}, false)
+		nil, nil, nil, nil, runner.Bridged{}, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}

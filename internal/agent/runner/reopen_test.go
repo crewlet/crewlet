@@ -48,7 +48,7 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 			Result: "created"}, Seq: 2},
 		{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
 			Result: "posted"}, Seq: 1},
-	}, nil, nil, spent, false)
+	}, nil, nil, nil, spent, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestARunTakenOverKeepsTheSkillsItLoaded(t *testing.T) {
 	}, []runner.BridgedCall{
 		{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
 			Result: "Always thread your reply."}, Seq: 1},
-	}, nil, nil, runner.Bridged{}, false)
+	}, nil, nil, nil, runner.Bridged{}, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}

@@ -52,9 +52,9 @@ func TestALateCallReachesItsRoundsLogThroughItsSessionsLedger(t *testing.T) {
 		t.Fatalf("the relaunch works in round %q, want the one it carried on, %q", next.Round, first.Round)
 	}
 	started := time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
-	if err := l.Append(ctx, "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate"}, Seq: 1,
+	if err := l.Record(ctx, "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate"}, Seq: 1,
 		StartedAt: started}); err != nil {
-		t.Fatalf("Append: %v", err)
+		t.Fatalf("Record: %v", err)
 	}
 
 	logged, err := store.BridgeLog(ctx, next)
@@ -125,47 +125,6 @@ func TestAResumeHandsTheRunnerHowManyLateCallsItsLogDropped(t *testing.T) {
 	if resumed := runnerResume(resumeInput{Run: next, Bridged: logged}, nil, nil); resumed.LateElided != dropped {
 		t.Errorf("the next job's resume hands the runner %d late calls its log dropped, want %d",
 			resumed.LateElided, dropped)
-	}
-}
-
-// A LATE CARRY OF WHAT A SESSION OWED REACHES ITS ROUND'S LOG. A call whose own
-// append did not land is owed, and the session carries it on its next append,
-// on its collection's settle or as it ends — the last of them most often only
-// once a relaunch replaced its job, since the relaunch's opening is what ends
-// the session it replaces. The carry names the job and its round, as every
-// append does, so where the relaunch carried the round on its calls are listed
-// in the round's log, marked late, rather than dropped as calls of a job that
-// is over.
-//
-// Mutation: carry what the session owed under its job alone, and the calls are
-// dropped.
-func TestALateCarryOfWhatASessionOwedReachesItsRoundsLog(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	store := sandbox.NewCoordStore(memory.NewFleet())
-	first, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe"}, sandbox.Fence{})
-	if err != nil {
-		t.Fatalf("BeginLaunch: %v", err)
-	}
-	l := newBridgeLedger(store, nil)
-	l.bind(first.NamedJob(first.OpenedAfter))
-	l.owed = []sandbox.OwedAppend{{Call: sandbox.BridgeCall{Name: "slack_post", Seq: 1,
-		StartedAt: time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)}}}
-
-	next, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Continues: true},
-		sandbox.Fence{})
-	if err != nil || next.Round != first.Round {
-		t.Fatalf("the relaunch that carries the round on = round %q, %v; want %q", next.Round, err, first.Round)
-	}
-	if !l.Settle(ctx, "run-1") {
-		t.Error("the carry of what the session owed was answered not carried")
-	}
-	logged, err := store.BridgeLog(ctx, next)
-	if err != nil {
-		t.Fatalf("BridgeLog: %v", err)
-	}
-	if len(logged.Calls) != 1 || logged.Calls[0].Name != "slack_post" || !logged.Calls[0].Late {
-		t.Fatalf("the round's log lists %+v, want the call the old session owed, marked late", logged.Calls)
 	}
 }
 
@@ -278,12 +237,12 @@ func (s *replacedStore) AppendBridgeCall(context.Context, string, sandbox.Bridge
 	return true, sandbox.ErrJobReplaced
 }
 
-// A LATE CALL'S APPEND IS ASKED ONCE AND ANSWERS NO ERROR. The store answers an
-// append of a job replaced in its round recorded beside its word that the job
-// was replaced: the calls are in the round's log, and what they cost can reach
-// no record, by design. Asking again would write nothing more, so it is asked
+// A LATE CALL'S UPDATE IS ASKED ONCE AND ANSWERS NO ERROR. The store answers an
+// update of a job replaced in its round recorded beside its word that the job
+// was replaced: the call is in the round's log, and what it cost can reach no
+// record, by design. Asking again would write nothing more, so it is asked
 // once; and nothing failed, so the box's call answers no error and no line says
-// it is owed or on no record.
+// it lost its outcome.
 //
 // Mutation: read the store's word that the job was replaced as a write that
 // failed, and the call is asked again and answers an error.
@@ -292,18 +251,14 @@ func TestALateCallsAppendIsAskedOnceAndAnswersNoError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := &replacedStore{}
 		l, logs := readingLedger(store)
-		if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate"}, Seq: 1}); err != nil {
-			t.Errorf("a late call's append answered %v, want no error", err)
+		if err := l.Record(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate"}, Seq: 1}); err != nil {
+			t.Errorf("a late call's update answered %v, want no error", err)
 		}
-		if store.asked != 1 || l.owing() != 0 {
-			t.Errorf("a late call's append was asked %d times and left %d owed, want once and none", store.asked,
-				l.owing())
+		if store.asked != 1 {
+			t.Errorf("a late call's update was asked %d times, want once", store.asked)
 		}
-		for _, msg := range []string{"bridge_call_owed", "bridge_owed_calls_unrecorded",
-			"bridge_owed_calls_after_their_job"} {
-			if line := logLine(t, logs, msg); line != nil {
-				t.Errorf("a late call the round's log lists was said as %s: %v", msg, line)
-			}
+		if line := logLine(t, logs, "bridge_call_outcome_unrecorded"); line != nil {
+			t.Errorf("a late call the round's log lists was said to have lost its outcome: %v", line)
 		}
 	})
 }
