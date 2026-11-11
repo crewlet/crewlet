@@ -149,6 +149,11 @@ type Deps struct {
 	// Delegated is what a delegate's verdict tool acts through (ADR-0125);
 	// a nil desk omits review_delegated.
 	Delegated DelegatedDeps
+	// Pulls are the company's GitHub pull requests, which ask_to_merge and
+	// ask_to_deploy read and merge as the seat's own app; nil serves Gitlet's
+	// changes alone, and with no Gitlet writes either omits both. See
+	// release.go.
+	Pulls PullRequests
 
 	// Sessions are the seat's own executor sessions, which its executor
 	// lists and reads back: its rows, the objects they name and the switch
@@ -349,9 +354,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	// Gitlet's writes are wired the writes, each a delivery to it
 	// (the switch below) — and the health tools after them, the same way
 	// ([HealthTools]).
+	// THE RELEASE REQUESTS read Gitlet through the code tools' own deps, and
+	// the verdict tool reads their conditions through the same.
+	release := ReleaseDeps{Code: deps.Code, Pulls: deps.Pulls}
+	delegatedDeps := deps.Delegated
+	delegatedDeps.Release = release
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
 		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
-		delegatedCandidates(deps.Delegated))
+		releaseCandidates(release), delegatedCandidates(delegatedDeps))
 
 	var names []string
 	for _, c := range candidates {
@@ -470,6 +480,9 @@ func annotationsFor(name string) tools.Annotations {
 		return a
 	}
 	if a, ok := sshAnnotations(name); ok {
+		return a
+	}
+	if a, ok := releaseAnnotations(name); ok {
 		return a
 	}
 	if name == ReviewDelegatedTool {

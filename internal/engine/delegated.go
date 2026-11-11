@@ -23,6 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -87,6 +89,19 @@ func (d delegatedDesk) SSHPatterns() []string {
 	return nil
 }
 
+// RulePaths are the always-escalate path globs the rule naming kind adds.
+func (d delegatedDesk) RulePaths(kind delegated.Kind) []string {
+	c := d.engine.Company()
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	rule, _, ok := c.Config.DelegatedDecisions.RuleFor(kind)
+	if !ok {
+		return nil
+	}
+	return slices.Clone(rule.AlwaysEscalatePaths)
+}
+
 func (d delegatedDesk) Held(ctx context.Context, id string) (sandbox.PendingRun, bool, error) {
 	return d.answers().Held(ctx, id)
 }
@@ -120,17 +135,17 @@ func (d delegatedDesk) Leads(_ context.Context, lead, seat string) (bool, error)
 	return false, nil
 }
 
-// Labels are the tags of the Worklet task run is on, none for a run on no
-// task or on another tracker's item.
-func (d delegatedDesk) Labels(ctx context.Context, run sandbox.PendingRun) ([]string, error) {
-	if run.WorkItem == nil || run.WorkItem.ID == "" || run.WorkItem.Backend != types.WorkWorklet {
+// Labels are the tags of a Worklet task, none for no task or another
+// tracker's item.
+func (d delegatedDesk) Labels(ctx context.Context, item *types.WorkItem) ([]string, error) {
+	if item == nil || item.ID == "" || item.Backend != types.WorkWorklet {
 		return nil, nil
 	}
 	tracker := d.engine.Tracker()
 	if tracker == nil {
 		return nil, errors.New("engine: this node reads no tracker")
 	}
-	detail, err := tracker.Task(ctx, run.WorkItem.ID, worklet.DetailWants{},
+	detail, err := tracker.Task(ctx, item.ID, worklet.DetailWants{},
 		statelog.Freshness{Level: statelog.ReadConsistentPrefix})
 	if err != nil {
 		return nil, err
@@ -206,6 +221,16 @@ func (e *Engine) wakeDelegates(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 	d := held.Delegation
+	if word, said := ownRequest(run); word != "" {
+		// A DELEGATE'S OWN REQUEST is put to people now, not at its deadline:
+		// its delegate never decides it, and a panel's other half never
+		// allows alone.
+		if e.backends != nil && e.backends.Fleet != nil {
+			escalateHeld(ctx, sandbox.NewCoordStore(e.backends.Fleet), sshServers{engine: e},
+				delegatedDesk{engine: e}.Arguments, run, word, said, time.Now())
+		}
+		return
+	}
 	var panel []string
 	if len(d.Delegates) > 1 {
 		panel = slices.Clone(d.Delegates)
@@ -280,7 +305,80 @@ func (e *Engine) delegatedRequest(ctx context.Context, handle string,
 	if err != nil {
 		return &types.DelegatedRequest{Unread: "its arguments do not open on this node"}, true
 	}
+	switch delegated.Kind(run.HeldCall.Act) {
+	case delegated.KindPRMerge:
+		return mergeRequest(run, args), true
+	case delegated.KindDeploy:
+		return deployRequest(run, args), true
+	}
 	return sshRequest(e.Company(), run, args, desk.SSHPatterns()), true
+}
+
+// releaseChecks is what the engine holds a merge's or a deploy's allow to, as
+// its delegate is told before it decides.
+const releaseChecks = "Read the change before you answer: " + toolname.CodeGetChange + " for a Gitlet change, " +
+	"your own GitHub access for a pull request. Whatever you answer, Crewlet puts an allow to people where, read " +
+	"when you answer, "
+
+// mergeRequest is a held ask_to_merge call as its delegate reads it: the
+// change, the head and the method in the engine's words, the reason fenced,
+// and the conditions an allow is held to.
+func mergeRequest(run sandbox.PendingRun, args map[string]any) *types.DelegatedRequest {
+	change, _ := args["change"].(string)
+	head, _ := args["head"].(string)
+	method, _ := args["method"].(string)
+	reason, _ := args["reason"].(string)
+	if method == "" {
+		method = "merge"
+	}
+	about := fmt.Sprintf("%s asks to merge the change below at exactly the head %s, as a %s; an allow merges "+
+		"that head as %s, and a change pushed to since is not merged.", run.AgentHandle, head, method,
+		run.AgentHandle)
+	if item := run.WorkItem; item != nil && item.Key != "" {
+		about += " The run is on work item " + item.Key + "."
+	}
+	about += " " + releaseChecks + "the head is not the one asked about, a check its target requires has not " +
+		"passed on it, it does not merge cleanly, its target's own gate holds it back, nobody but its authors " +
+		"and " + run.AgentHandle + " approved that head, it or its item is labelled security, privacy or legal, " +
+		"or it touches a path no delegate allows (CI pipelines, owners files, secret files, access policies, " +
+		"infrastructure, migrations, company documents, and the rule's own)."
+	return &types.DelegatedRequest{About: about, Digest: run.HeldCall.Delegation.Digest,
+		Parts: []types.RequestPart{{Title: "Change", Text: change, Fenced: true}, {Title: "Head", Text: head},
+			{Title: "Reason given", Text: reason, Fenced: true}}}
+}
+
+// deployRequest is a held ask_to_deploy call as its delegate reads it: the
+// repository, the commit, the changes and the environment in the engine's
+// words, the rollback and the reason fenced, and the conditions an allow is
+// held to.
+func deployRequest(run sandbox.PendingRun, args map[string]any) *types.DelegatedRequest {
+	repo, _ := args["repo"].(string)
+	commit, _ := args["commit"].(string)
+	environment, _ := args["environment"].(string)
+	rollback, _ := args["rollback"].(string)
+	reason, _ := args["reason"].(string)
+	var changes []string
+	if list, ok := args["changes"].([]any); ok {
+		for _, c := range list {
+			if text, ok := c.(string); ok {
+				changes = append(changes, text)
+			}
+		}
+	}
+	about := fmt.Sprintf("%s asks to deploy commit %s of the repository below to %s; an allow tells it it may "+
+		"deploy exactly that commit there, once, with its own tools.", run.AgentHandle, commit, environment)
+	if item := run.WorkItem; item != nil && item.Key != "" {
+		about += " The run is on work item " + item.Key + "."
+	}
+	about += " " + releaseChecks + "a change it names has not merged, the changes merged into different " +
+		"branches, the commit does not hold each change or is not on their branch, a check the branch requires " +
+		"has not passed on the commit, a change or its item is labelled security, privacy or legal, or a " +
+		"change touches a path no delegate allows. Judge the rollback yourself: escalate one that would not " +
+		"undo the deploy."
+	return &types.DelegatedRequest{About: about, Digest: run.HeldCall.Delegation.Digest,
+		Parts: []types.RequestPart{{Title: "Repository", Text: repo, Fenced: true}, {Title: "Commit", Text: commit},
+			{Title: "Changes", Text: words.And(changes), Fenced: true}, {Title: "Environment", Text: environment},
+			{Title: "Rollback given", Text: rollback, Fenced: true}, {Title: "Reason given", Text: reason, Fenced: true}}}
 }
 
 // sshRequest is a held ssh_operate call as its delegate reads it: the server,
@@ -436,43 +534,69 @@ func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules built
 			run.Ending != nil || run.LaunchID != held.LaunchID {
 			continue
 		}
-		delegates, _, _, live := rules.Rule(delegated.Kind(held.Act))
-		word, said := dueEscalation(*held, delegates, live, now)
+		word, said := ownRequest(run)
+		if word == "" {
+			delegates, _, _, live := rules.Rule(delegated.Kind(held.Act))
+			word, said = dueEscalation(*held, delegates, live, now)
+		}
 		if word == "" {
 			continue
 		}
-		escalated, err := store.EscalateHeld(ctx, run.TurnID, run.LaunchID, held.ID, sandbox.HeldEscalation{
-			Overruled: []string{word}, Engine: []string{said}, At: now.UTC()})
-		switch {
-		case err != nil:
-			log.WarnContext(ctx, "delegated_sweep_escalation_failed", "request", held.ID, "error", err.Error())
-			continue
-		case !escalated:
-			continue
-		}
-		// WHAT IT DECIDED, as every verdict on the request names it: the
-		// access log refuses a record that names nothing.
-		args, err := open(run)
-		if err != nil {
-			log.WarnContext(ctx, "delegated_sweep_unrecorded", "request", held.ID, "error", err.Error(),
-				"detail", "the request was put to people; its arguments do not open here, so its record "+
-					"in the access log names nothing it could hold")
-			continue
-		}
-		host, subject, stdin := builtin.RequestSubject(delegated.Kind(held.Act), args)
-		item := ""
-		if run.WorkItem != nil {
-			item = cmp.Or(run.WorkItem.Key, run.WorkItem.ID)
-		}
-		if _, err := audit.RecordVerdict(ctx, builtin.DelegatedVerdict{
-			At: held.HeldAt, Request: held.ID, Kind: held.Act, Rule: held.Delegation.Rule, Handle: run.AgentHandle,
-			Turn: run.TurnID, ByKind: builtin.VerdictByEngine, Through: builtin.VerdictThroughDelegation,
-			Verdict: string(delegated.Escalate), Final: true, Overruled: []string{word},
-			Digest: held.Delegation.Digest, Host: host, Subject: subject, Stdin: stdin, Item: item,
-		}); err != nil {
-			log.WarnContext(ctx, "delegated_sweep_unrecorded", "request", held.ID, "error", err.Error(),
-				"detail", "the request was put to people; its record in the access log did not land")
-		}
+		escalateHeld(ctx, store, audit, open, run, word, said, now)
+	}
+}
+
+// ownRequest is why a call one of its own delegates made goes to people at
+// once, "" for one a delegate did not make: a delegate never decides its own
+// request, and a panel's other delegate never allows alone.
+func ownRequest(run sandbox.PendingRun) (string, string) {
+	if !slices.Contains(run.HeldCall.Delegation.Delegates, run.AgentHandle) {
+		return "", ""
+	}
+	return delegated.OverruledSelf, run.AgentHandle + " is a delegate of this rule, and no delegate decides " +
+		"its own request, so it came to people."
+}
+
+// escalateHeld puts run's held call to people for word, said, and records the
+// engine's escalation in the access log, naming what it decided from the
+// call's arguments as open opens them. A call no longer waiting on its
+// delegates is left alone.
+func escalateHeld(ctx context.Context, store sandbox.PendingStore, audit delegatedRecorder,
+	open func(sandbox.PendingRun) (map[string]any, error), run sandbox.PendingRun, word, said string,
+	now time.Time) {
+
+	held := run.HeldCall
+	escalated, err := store.EscalateHeld(ctx, run.TurnID, run.LaunchID, held.ID, sandbox.HeldEscalation{
+		Overruled: []string{word}, Engine: []string{said}, At: now.UTC()})
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "delegated_escalation_failed", "request", held.ID, "error", err.Error())
+		return
+	case !escalated:
+		return
+	}
+	// WHAT IT DECIDED, as every verdict on the request names it: the access
+	// log refuses a record that names nothing.
+	args, err := open(run)
+	if err != nil {
+		log.WarnContext(ctx, "delegated_escalation_unrecorded", "request", held.ID, "error", err.Error(),
+			"detail", "the request was put to people; its arguments do not open here, so its record "+
+				"in the access log names nothing it could hold")
+		return
+	}
+	host, subject, stdin := builtin.RequestSubject(delegated.Kind(held.Act), args)
+	item := ""
+	if run.WorkItem != nil {
+		item = cmp.Or(run.WorkItem.Key, run.WorkItem.ID)
+	}
+	if _, err := audit.RecordVerdict(ctx, builtin.DelegatedVerdict{
+		At: held.HeldAt, Request: held.ID, Kind: held.Act, Rule: held.Delegation.Rule, Handle: run.AgentHandle,
+		Turn: run.TurnID, ByKind: builtin.VerdictByEngine, Through: builtin.VerdictThroughDelegation,
+		Verdict: string(delegated.Escalate), Final: true, Overruled: []string{word},
+		Digest: held.Delegation.Digest, Host: host, Subject: subject, Stdin: stdin, Item: item,
+	}); err != nil {
+		log.WarnContext(ctx, "delegated_escalation_unrecorded", "request", held.ID, "error", err.Error(),
+			"detail", "the request was put to people; its record in the access log did not land")
 	}
 }
 

@@ -67,8 +67,12 @@ import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
 import type { McpHeldCall } from "~/contract/mcp.ts";
-import { EscalationNote } from "~/components/Delegation.tsx";
-import { delegationEscalated } from "~/lib/delegation.ts";
+import {
+  EscalationNote,
+  ReleaseAnswerNote,
+  ReleaseRequestFacts,
+} from "~/components/Delegation.tsx";
+import { delegationEscalated, isReleaseAct, releaseRequestOf } from "~/lib/delegation.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -1446,6 +1450,10 @@ function HeldRunPane({
   // AN ESCALATION READS ITS DELEGATES BEFORE THE CALL (ADR-0125): who put it
   // to people, what each answered, and why it reached them.
   const escalated = delegationEscalated(held);
+  // A MERGE OR A DEPLOY is drawn from its arguments where this reader is sent
+  // them, each value as text, and else by the engine's words like any call.
+  const release = isReleaseAct(held.act) ? held.act : null;
+  const request = releaseRequestOf(held.act, run.held_arguments);
   return (
     <TokenScope texts={runAskTexts(run)}>
       <>
@@ -1466,10 +1474,22 @@ function HeldRunPane({
             Call <span className="mono">{held.tool}</span> on {held.server}?
           </ReadingPaneTitle>
         )}
-        {context && (
-          <ReadingPaneLead>
-            {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
-          </ReadingPaneLead>
+        {request ? (
+          <ReleaseRequestFacts request={request} />
+        ) : (
+          context && (
+            <ReadingPaneLead>
+              {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
+            </ReadingPaneLead>
+          )
+        )}
+        {release && (
+          <ReleaseAnswerNote
+            act={release}
+            agent={frame.name}
+            rule={held.delegation?.rule ?? null}
+            drawn={request !== null}
+          />
         )}
         {said && (
           <ReadingPaneOutcome {...landing} tone={said.settled ? "done" : "pending"}>
@@ -1483,6 +1503,7 @@ function HeldRunPane({
               seat={run.agent_handle}
               fixed={held.fixed}
               approvers={held.approvers}
+              act={held.act}
               onAnswered={(words, settled) => {
                 setSaid({ words, settled });
                 onSettled("Answered", undefined, !settled);

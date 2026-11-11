@@ -1334,11 +1334,20 @@ export interface McpHeldCall {
   digest: string;
   /** When the call was held; "" where the row does not say. */
   held_at: string;
-  /** A call its tool asks about every time (an SSH operate command): answered Allow once or Deny alone. */
+  /**
+   * A call its tool asks about every time (an SSH operate command, a merge, a
+   * deploy): answered Allow once or Deny alone.
+   */
   fixed?: boolean;
-  /** Who answers it where not the seat's lead: `ssh` for an SSH operate command's approvers. */
+  /**
+   * Who answers it where not the seat's lead: `ssh` for an SSH operate
+   * command's approvers, `release` for a merge's or a deploy's.
+   */
   approvers?: string;
-  /** What approving it does (ADR-0125): `ssh_operate`, or `other`, which is never delegated. */
+  /**
+   * What approving it does (ADR-0125): `ssh_operate`, `pr_merge`, `deploy`, or
+   * `other`, which is never delegated.
+   */
   act: DelegatedAct;
   /**
    * The delegates it went to first, their answers and why it reached people;

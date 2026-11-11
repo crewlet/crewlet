@@ -11,11 +11,13 @@
 
 /**
  * What a request is for: its act, set by the engine from the structured data
- * that made it (`delegated.Kind`). `other` is never delegated. CLOSED: the
- * engine sends only the acts it declares and a gate holds this list to
- * `delegated.Kinds()`; a reader still says an act it does not know as written.
+ * that made it (`delegated.Kind`): a command on a server, a merge of one
+ * change, a deploy of one commit, or `other`, which is never delegated.
+ * CLOSED: the engine sends only the acts it declares and a gate holds this
+ * list to `delegated.Kinds()`; a reader still says an act it does not know as
+ * written.
  */
-export type DelegatedAct = "ssh_operate" | "other";
+export type DelegatedAct = "ssh_operate" | "pr_merge" | "deploy" | "other";
 
 /** A delegate's answer, or what a request's answers came to (`delegated.Verdict`). */
 export type DelegatedVerdict = "allow" | "escalate" | "deny";
@@ -67,6 +69,11 @@ export interface DelegatedRule {
   escalate_to: string[];
   /** One decision in this many is shown for a spot-check after the fact. */
   sample_one_in: number;
+  /**
+   * Repository path globs a merge or a deploy touching one goes to people
+   * for, beside the engine's built-in list; empty for none.
+   */
+  always_escalate_paths: string[];
 }
 
 /** The limits the engine holds every delegate to, whatever the document says. */
@@ -107,12 +114,15 @@ export interface DelegatedVerdictRow {
   overruled: string[];
   /** Chosen for a person's spot-check after the fact. */
   sampled: boolean;
-  /** The server, for an `ssh_operate`. */
+  /** The server, for an `ssh_operate`; "" for a merge or a deploy. */
   host: string;
   /** The work item the request is on, "" where none. */
   item: string;
   at: string;
-  /** What was decided, in clear: a command. Absent where it did not open on this node. */
+  /**
+   * What was decided, in clear: a command, a merge or a deploy. Absent where
+   * it did not open on this node.
+   */
   subject?: string;
   /** The giver's words. Absent where they did not open. */
   reason?: string;

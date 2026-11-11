@@ -5,9 +5,15 @@ import {
   delegationEscalated,
   delegationWaiting,
   escalatedByWords,
+  isReleaseAct,
+  kindWords,
+  mergeMethodWords,
   newestFlag,
   overruledWords,
   readDismissed,
+  releaseAllowWords,
+  releaseApproverWords,
+  releaseRequestOf,
   verdictWords,
   withDelegateWords,
   writeDismissed,
@@ -96,6 +102,111 @@ describe("words for the engine's closed words", () => {
     expect(overruledWords("low_confidence")).toBe("low confidence");
     expect(overruledWords("deadline")).toBe("no delegate answered in time");
     expect(overruledWords("authorized_key")).toBe("authorized key");
+  });
+
+  // A MERGE'S AND A DEPLOY'S UNMET CONDITIONS and the path classes no delegate
+  // allows (`delegated.Unmet*`, `delegated.Path*`) each read as a phrase, never
+  // as the engine's word with its underscores taken out.
+  test("a merge's or a deploy's unmet condition and every path class is a phrase", () => {
+    const words = [
+      "facts_unread",
+      "head_moved",
+      "not_open",
+      "no_required_checks",
+      "checks_not_passed",
+      "not_mergeable",
+      "not_ready",
+      "no_approval",
+      "paths_unclassified",
+      "not_merged",
+      "not_contained",
+      "ci_pipelines",
+      "code_owners",
+      "secret_files",
+      "access_policies",
+      "infrastructure",
+      "migrations",
+      "crewlet_company",
+      "rule_path",
+    ];
+    for (const word of words) {
+      expect(overruledWords(word), word).not.toBe(word.replaceAll("_", " "));
+    }
+    expect(overruledWords("head_moved")).toBe("the change's head is not the one asked about");
+    expect(overruledWords("rule_path")).toBe("it touches a path the rule always puts to people");
+  });
+
+  test("each act a rule may delegate has its words; an unknown one is said as written", () => {
+    expect(kindWords("ssh_operate")).toBe("Commands on servers");
+    expect(kindWords("pr_merge")).toBe("Merges");
+    expect(kindWords("deploy")).toBe("Deploys");
+    expect(kindWords("launch" as never)).toBe("launch");
+  });
+});
+
+describe("a held merge or deploy", () => {
+  const HEAD = "4f1c2a9b7e3d5f60718293a4b5c6d7e8f9012345";
+  const MERGE = { change: "web!42", head: HEAD, method: "squash", reason: "Fixes the login loop." };
+  const DEPLOY = {
+    repo: "web",
+    commit: HEAD,
+    changes: ["web!41", 42],
+    environment: "production",
+    rollback: "Deploy 1a2b3c4 again.",
+    reason: "Ships the login fix.",
+  };
+
+  test("only a merge and a deploy are release acts", () => {
+    expect(isReleaseAct("pr_merge")).toBe(true);
+    expect(isReleaseAct("deploy")).toBe(true);
+    expect(isReleaseAct("ssh_operate")).toBe(false);
+    expect(isReleaseAct(undefined)).toBe(false);
+  });
+
+  test("its arguments read as the request, each value as the agent sent it", () => {
+    expect(releaseRequestOf("pr_merge", MERGE)).toEqual({ act: "pr_merge", ...MERGE });
+    // A METHOD LEFT OUT is the engine's default, said by the method's words.
+    const bare = { change: MERGE.change, head: HEAD, reason: MERGE.reason };
+    expect(releaseRequestOf("pr_merge", bare)).toEqual({ act: "pr_merge", ...bare, method: "" });
+    expect(releaseRequestOf("deploy", DEPLOY)).toEqual({
+      act: "deploy",
+      ...DEPLOY,
+      changes: ["web!41", "42"],
+    });
+  });
+
+  // READ WHOLE OR NOT AT ALL: a key the tool does not take, or a value of
+  // another type, leaves the arguments to be drawn as sent. Mutation: drop
+  // the key check, and the extra key is never shown.
+  test("arguments it cannot read whole are not read as a request", () => {
+    expect(releaseRequestOf("pr_merge", { ...MERGE, force: true })).toBeNull();
+    expect(releaseRequestOf("pr_merge", { ...MERGE, head: 42 })).toBeNull();
+    expect(releaseRequestOf("pr_merge", { ...MERGE, reason: undefined })).toBeNull();
+    expect(releaseRequestOf("deploy", { ...DEPLOY, changes: "web!41" })).toBeNull();
+    expect(releaseRequestOf("deploy", { ...DEPLOY, changes: [{ n: 41 }] })).toBeNull();
+    expect(releaseRequestOf("deploy", MERGE)).toBeNull();
+    expect(releaseRequestOf("ssh_operate", { host: "web-1", command: "uptime" })).toBeNull();
+    expect(releaseRequestOf("pr_merge", null)).toBeNull();
+    expect(releaseRequestOf("pr_merge", undefined)).toBeNull();
+  });
+
+  test("a merge's method is said in words, an unknown one as written", () => {
+    expect(mergeMethodWords("")).toBe("A merge commit");
+    expect(mergeMethodWords("merge")).toBe("A merge commit");
+    expect(mergeMethodWords("squash")).toBe("One squashed commit");
+    expect(mergeMethodWords("rebase")).toBe("rebase");
+  });
+
+  test("who may answer it names the rule's people where a rule routed it", () => {
+    expect(releaseApproverWords("pr_merge", "SRE", 2)).toBe(
+      "Administrators, SRE's leads and the people rule 2 escalates to may answer it. " +
+        "Answering asks you to confirm it\u2019s you unless you did recently.",
+    );
+    expect(releaseApproverWords("deploy", "Release Bot", null)).toMatch(
+      /^Administrators, Release Bot's leads and the people a delegated decisions rule for deploys escalates to may answer it\./,
+    );
+    expect(releaseAllowWords("pr_merge", "SRE")).toMatch(/^Allow once merges exactly this head/);
+    expect(releaseAllowWords("deploy", "SRE")).toMatch(/Crewlet does not deploy it\.$/);
   });
 });
 

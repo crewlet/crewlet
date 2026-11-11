@@ -343,6 +343,27 @@ func (o SeatAppOptions) client(seat SeatApp) (*AppClient, error) {
 	return o.builder()(seat.AppID, seat.Key, o.APIBase)
 }
 
+// SeatOfLogin is the seat whose own app acts as login, which is the account
+// GitHub names when that app reviews, comments or pushes: the app's slug with
+// `[bot]` ([BotLogin]), compared folded.
+//
+// ONLY THE BOT ACCOUNT. A person's login can equal an app's slug, and that
+// person is not the seat: `acme-sre-lead` and `acme-sre-lead[bot]` are two
+// accounts. A seat whose app is switched off still maps, since what its app
+// did is still that seat's.
+func (o SeatAppOptions) SeatOfLogin(login string) (handle string, ok bool) {
+	login = NormalizeLogin(login)
+	if login == "" {
+		return "", false
+	}
+	for _, seat := range o.Seats {
+		if bot := BotLogin(seat.Slug); bot != "" && bot == login {
+			return seat.Handle, true
+		}
+	}
+	return "", false
+}
+
 // orgLabel names the account an app is installed on, for a sentence.
 func orgLabel(org string) string {
 	if name := strings.TrimSpace(org); name != "" {

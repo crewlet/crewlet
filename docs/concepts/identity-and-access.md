@@ -2679,6 +2679,13 @@ what delegates decided is `delegated_decisions.read`, **human-only**, named:
 an administrator, or a person a rule's `escalate_to` names. See
 [Delegated Decisions](../guides/delegated-decisions.md).
 
+**And a merge or a deploy asked for.** `ask_to_merge` and `ask_to_deploy` are
+everybody's: asking changes nothing, and what an approval carries out is the
+agent's own credential's and its target's rules'. Answering one is
+`release.approve`, **human-only**, at a fresh step-up: an administrator, a
+lead of the agent, or a person the kind's rule names in `escalate_to`
+(`own_or_lead`, whose object names those people beside the leads).
+
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat
 works is its lead's to decide, or an administrator's, exactly as what it works

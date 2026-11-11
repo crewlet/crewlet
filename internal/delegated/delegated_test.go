@@ -102,3 +102,45 @@ func TestOneDecisionInNIsSpotChecked(t *testing.T) {
 			delegated.KindOther.Delegable())
 	}
 }
+
+// Every built-in path class catches its conventional places, at the root and
+// below it, and leaves an ordinary source file alone; a rule's own glob adds
+// to them, and a glob nobody can read matches every path.
+//
+// Mutation: drop a class's glob, read `**` as one component or more, or let a
+// glob that does not parse match nothing, and a change touching that place is
+// merged by a delegate alone.
+func TestEveryPathClassCatchesItsConventionalPlaces(t *testing.T) {
+	t.Parallel()
+	for class, paths := range map[string][]string{
+		delegated.PathCIPipelines:    {".github/workflows/ci.yml", ".gitlab-ci.yml", "build/Jenkinsfile", "Jenkinsfile"},
+		delegated.PathCodeOwners:     {"CODEOWNERS", ".github/CODEOWNERS"},
+		delegated.PathSecretFiles:    {".env", "services/api/.env.production", "deploy/tls.key", "config/secrets/db.yaml"},
+		delegated.PathAccessPolicies: {"platform/iam/roles.yaml", "policy/allow.rego"},
+		delegated.PathInfrastructure: {"main.tf", "infra/terraform/vpc/main.tf", "stacks/Pulumi.prod.yaml"},
+		delegated.PathMigrations:     {"db/migrations/0042_drop_users.sql", "schema.sql"},
+		delegated.PathCompany:        {"company.yaml", "ops/crewlet.yaml"},
+	} {
+		for _, p := range paths {
+			matches := delegated.EscalatingPaths([]string{"README.md", p}, nil)
+			if !slices.ContainsFunc(matches, func(m delegated.PathMatch) bool { return m.Class == class && m.Path == p }) {
+				t.Errorf("%s does not escalate as %s: %+v", p, class, matches)
+			}
+		}
+	}
+	if got := delegated.EscalatingPaths([]string{"web/src/app.ts", "docs/guide.md"}, nil); len(got) != 0 {
+		t.Errorf("ordinary source escalates: %+v", got)
+	}
+	rule := delegated.EscalatingPaths([]string{"web/src/app.ts", "billing/rates.go"}, []string{"billing/**"})
+	if len(rule) != 1 || rule[0].Class != delegated.PathRule || rule[0].Path != "billing/rates.go" {
+		t.Errorf("a rule's own glob matched %+v, want billing/rates.go", rule)
+	}
+	if bad := delegated.EscalatingPaths([]string{"web/src/app.ts"}, []string{"/bad//glob"}); len(bad) != 1 {
+		t.Errorf("a glob that does not parse matched %+v, want every path", bad)
+	}
+	for _, k := range []delegated.Kind{delegated.KindPRMerge, delegated.KindDeploy} {
+		if !k.Delegable() {
+			t.Errorf("%s is not delegable", k)
+		}
+	}
+}

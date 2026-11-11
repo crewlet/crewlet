@@ -764,7 +764,7 @@ group, and names the **gate** its authority row decides:
 | Knowledge | `knowledge` | The company's pages in Doclet, and the search over its knowledge |
 | Chat | `chat` | Chatlet rooms and direct messages |
 | Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
-| Code | `code` | The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks ([The company's code](#the-companys-code)) |
+| Code | `code` | The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks ([The company's code](#the-companys-code)); and `ask_to_merge` and `ask_to_deploy`, which hold a merge or a deploy for approval ([Delegated Decisions](delegated-decisions.md#asking-to-merge-and-to-deploy)) |
 | Health | `health` | The deployment's health: `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
 | Servers | `servers` | The company's servers over SSH: `ssh_read`, `ssh_operate` and `ask_to_operate` ([SSH](../integrations/ssh.md#the-agents-tools)) |
 | Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
@@ -773,7 +773,7 @@ group, and names the **gate** its authority row decides:
 
 | `gate` | Who may call it |
 |---|---|
-| `everybody` | Any agent. Also the discovery pair's, which no authority row decides |
+| `everybody` | Any agent: `ask_to_merge` and `ask_to_deploy` among them, each of whose calls waits for the company's delegate or a person who may approve it. Also the discovery pair's, which no authority row decides |
 | `self` | The calling agent, about its own diary, past turns, sessions, skills and onboarding, and nobody else's |
 | `worklet` | An agent that uses Worklet. `my_work` is here too: it reads the caller's own day and takes no name for anybody else's |
 | `worklet_asked` | An agent that uses Worklet, or one an open ask on the item names |

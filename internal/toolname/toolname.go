@@ -155,6 +155,14 @@ const ReviewDelegated = "review_delegated"
 // prefix and names it.
 const AskToOperate = "ask_to_operate"
 
+// AskToMerge asks for approval to merge one change at exactly the head it
+// names; the company document's delegated-decisions kinds name it.
+const AskToMerge = "ask_to_merge"
+
+// AskToDeploy asks for approval to deploy one commit holding merged changes;
+// the company document's delegated-decisions kinds name it.
+const AskToDeploy = "ask_to_deploy"
+
 // WriteProject is the tracker's one project write a seat holds. The tracker
 // owns it, and it is here because internal/caveat, which the tracker imports,
 // words what a task filed to triage tells the model when its project's

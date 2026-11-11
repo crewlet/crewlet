@@ -52,9 +52,9 @@ func TestADelegateIsAnAgentThatCannotRequestWhatItDecides(t *testing.T) {
 		{"a sample rate past its bound", "    - {kinds: [ssh_operate], delegates: [security-a], " +
 			"escalate_to: [ops-lead], sample_one_in: 5000}\n", "delegated_decisions.rules[0].sample_one_in", "out_of_range"},
 	} {
-		_, err := config.ParseCompany([]byte(delegatedDoc(t, c.rules)))
-		if p, ok := problemAt(err, c.path); !ok || p.Kind != c.kind {
-			t.Errorf("%s: %v, want %s at %s", c.name, err, c.kind, c.path)
+		_, parseErr := config.ParseCompany([]byte(delegatedDoc(t, c.rules)))
+		if p, ok := problemAt(parseErr, c.path); !ok || p.Kind != c.kind {
+			t.Errorf("%s: %v, want %s at %s", c.name, parseErr, c.kind, c.path)
 		}
 	}
 }
@@ -112,5 +112,43 @@ func TestAnEscalationNamesAPerson(t *testing.T) {
 	cfg.DelegatedDecisions.Enabled = false
 	if _, _, ok := cfg.DelegatedDecisions.RuleFor(delegated.KindSSHOperate); ok {
 		t.Errorf("a disabled block still delegates ssh_operate")
+	}
+}
+
+// A merge and a deploy are delegated like any kind, to any agent seat (any
+// agent may ask for one, so a delegate's own request is the engine's to send
+// to people), and a rule's own always-escalate paths are path globs held to a
+// rule that delegates one of them.
+//
+// Mutation: accept paths on an ssh_operate rule, or a glob that does not
+// parse, and a rule says it escalates what it never reads, or what matches
+// nothing.
+func TestAMergeRuleAddsOnlyPathGlobsItCanMatch(t *testing.T) {
+	t.Parallel()
+	good := "    - {kinds: [pr_merge, deploy], delegates: [sre], escalate_to: [ops-lead], " +
+		"always_escalate_paths: [billing/**, 'services/*/payments/**']}\n"
+	doc, err := config.ParseCompany([]byte(delegatedDoc(t, good)))
+	if err != nil {
+		t.Fatalf("a merge and deploy rule with path globs was refused: %v", err)
+	}
+	if rule, n, ok := doc.DelegatedDecisions.RuleFor(delegated.KindDeploy); !ok || n != 1 ||
+		len(rule.AlwaysEscalatePaths) != 2 {
+		t.Fatalf("deploy's rule reads %+v (%d, %v)", rule, n, ok)
+	}
+	if got := doc.DelegatedDecisions.EscalateFor(delegated.KindPRMerge); len(got) != 1 || got[0] != "ops-lead" {
+		t.Fatalf("a merge escalates to %v, want ops-lead", got)
+	}
+	for _, c := range []struct{ name, rules, path, kind string }{
+		{"paths on a server command rule", "    - {kinds: [ssh_operate], delegates: [security-a], " +
+			"escalate_to: [ops-lead], always_escalate_paths: [billing/**]}\n",
+			"delegated_decisions.rules[0].always_escalate_paths", "conflict"},
+		{"a glob that does not parse", "    - {kinds: [pr_merge], delegates: [security-a], " +
+			"escalate_to: [ops-lead], always_escalate_paths: ['/billing//x']}\n",
+			"delegated_decisions.rules[0].always_escalate_paths[0]", "unknown_value"},
+	} {
+		_, parseErr := config.ParseCompany([]byte(delegatedDoc(t, c.rules)))
+		if p, ok := problemAt(parseErr, c.path); !ok || p.Kind != c.kind {
+			t.Errorf("%s: %v, want %s at %s", c.name, parseErr, c.kind, c.path)
+		}
 	}
 }

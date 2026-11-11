@@ -309,7 +309,7 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		authz.ActionWithdrawAsk,
 		authz.ActionRequestAccess,
 		// a person's approval of an agent's call, and of its production command
-		authz.ActionToolsApprove, authz.ActionSSHOperateApprove,
+		authz.ActionToolsApprove, authz.ActionSSHOperateApprove, authz.ActionReleaseApprove,
 	}
 	var got []authz.Action
 	for _, a := range authz.Actions() {

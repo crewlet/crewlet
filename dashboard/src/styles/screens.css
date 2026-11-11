@@ -7049,6 +7049,16 @@ a.work-cal-chip {
   list-style: disc;
 }
 
+/* A HELD MERGE OR DEPLOY (components/Delegation.tsx): the agent's values kept
+   to the lines it wrote, a long address broken anywhere, at a reading measure. */
+.release-request {
+  max-width: 72ch;
+}
+.release-request__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* A PARKED RUN'S BANNER (routes/live/Executors.tsx): the question, who it is put
    to and how long its box is held, then the Answer. The sentences are held to
    a reading measure — on a wide page the banner spans the column, and one

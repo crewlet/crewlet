@@ -1473,8 +1473,23 @@
     "DelegatedRule": {
       "additionalProperties": false,
       "properties": {
+        "always_escalate_paths": {
+          "description": "Repository path globs (docs/**, services/*/billing/**) a merge or deploy touching which goes to people, beside the built-in list: only for a rule of pr_merge or deploy. At most 64, each at most 128 bytes.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "delegates": {
-          "description": "The agent seat that decides, or two for a panel that must both allow (any disagreement escalates); a panel's two run on different first llm entries. A delegate can never request a kind it decides.",
+          "description": "The agent seat that decides, or two for a panel that must both allow (any disagreement escalates); a panel's two run on different first llm entries. A delegate of server commands holds no SSH access, and a request a delegate made goes to people.",
           "items": {
             "type": [
               "string",
@@ -1504,7 +1519,7 @@
           ]
         },
         "kinds": {
-          "description": "The kinds of request this rule delegates: ssh_operate (an agent's command on a server as its operate user). other is never delegated.",
+          "description": "The kinds of request this rule delegates: ssh_operate (an agent's command on a server as its operate user), pr_merge (merging a change at the head it was asked about, ask_to_merge) and deploy (deploying a commit that holds merged changes, ask_to_deploy). other is never delegated.",
           "items": {
             "type": [
               "string",

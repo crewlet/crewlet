@@ -134,3 +134,27 @@ func TestTurningDelegationOffReturnsEveryRequestToPeople(t *testing.T) {
 		t.Errorf("a request its live rule still delegates went to people early: %+v", e)
 	}
 }
+
+// A request one of its own delegates made goes to people at once, whatever
+// its deadline: no delegate decides its own request, and a panel's other half
+// never allows alone. The wake escalates it as it is held; the sweep catches
+// one the wake could not.
+//
+// Mutation: leave a delegate's own request to its deadline, and its delegate
+// sits on its own merge for fifteen minutes, or its panel partner allows it.
+func TestADelegatesOwnRequestReachesPeopleAtOnce(t *testing.T) {
+	t.Parallel()
+	heldAt := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	// sandboxtest's runs are swe's.
+	sandboxtest.DelegatedParked(t, store, "t-own", []string{"swe", "security-b"}, heldAt)
+	audit := &sweepAudit{}
+	sweepDelegated(t.Context(), store, sweepRules{delegates: []string{"swe", "security-b"}, live: true}, audit,
+		openHeld(t), heldAt.Add(time.Second))
+	e := escalation(t, store, "t-own")
+	if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledSelf}) || len(audit.verdicts) != 1 ||
+		audit.verdicts[0].Subject == "" {
+		t.Fatalf("a delegate's own request reads %+v with records %+v, want it put to people for self at once",
+			e, audit.verdicts)
+	}
+}

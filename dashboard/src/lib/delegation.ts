@@ -18,6 +18,7 @@ import type {
 } from "~/contract/delegated.ts";
 import type { McpHeldCall } from "~/contract/mcp.ts";
 import type { EventRecord, ExecutorAnswerPayload } from "~/protocol/index.ts";
+import { possessive } from "./format.ts";
 import { STORAGE_KEYS } from "./storage.ts";
 import { andList } from "./words.ts";
 
@@ -82,6 +83,8 @@ export function verdictWords(verdict: string): {
 /** What each act a rule may delegate is called (`delegated.Kind`). */
 const KIND_WORDS: Readonly<Record<string, string>> = {
   ssh_operate: "Commands on servers",
+  pr_merge: "Merges",
+  deploy: "Deploys",
 };
 
 /** An act in words; one this build does not name is said as written. */
@@ -96,8 +99,10 @@ export function confidenceWords(confidence: DelegatedConfidence | ""): string {
 
 /**
  * The engine's closed words for why it changed or made a verdict
- * (`delegated.Overruled*`), as a phrase. A word this list does not carry (an
- * SSH always-escalate class, a newer engine's) is said as written.
+ * (`delegated.Overruled*`, a merge's and a deploy's unmet conditions
+ * `delegated.Unmet*` and the path classes no delegate allows), as a phrase. A
+ * word this list does not carry (an SSH always-escalate class, a newer
+ * engine's) is said as written.
  */
 const OVERRULED_WORDS: Readonly<Record<string, string>> = {
   self: "the delegate made, asked for or handed on the request",
@@ -109,6 +114,25 @@ const OVERRULED_WORDS: Readonly<Record<string, string>> = {
   deadline: "no delegate answered in time",
   delegation_off: "delegation was turned off or its delegates changed",
   sensitive_label: "its work item is labelled security, privacy or legal",
+  facts_unread: "a condition could not be read from the code host",
+  head_moved: "the change's head is not the one asked about",
+  not_open: "the change is not open",
+  no_required_checks: "its branch requires no check",
+  checks_not_passed: "a required check has not passed",
+  not_mergeable: "the change does not merge cleanly",
+  not_ready: "the target's own merge gate is not met",
+  no_approval: "nobody but its authors approved the head",
+  paths_unclassified: "it touches more paths than Crewlet reads",
+  not_merged: "a change it names has not merged",
+  not_contained: "the commit does not hold every change, or is not on their branch",
+  ci_pipelines: "it changes a CI pipeline",
+  code_owners: "it changes who owns and approves the code",
+  secret_files: "it touches a file that holds keys or secrets",
+  access_policies: "it changes access policies or roles",
+  infrastructure: "it changes infrastructure the company runs",
+  migrations: "it changes a database migration",
+  crewlet_company: "it changes a Crewlet company document",
+  rule_path: "it touches a path the rule always puts to people",
 };
 
 export function overruledWords(word: string): string {
@@ -118,6 +142,112 @@ export function overruledWords(word: string): string {
 /** Who gave a verdict, in words: the delegate or person by name, or Crewlet. */
 export function giverWords(row: Pick<DelegatedVerdictRow, "by" | "by_kind">, name: Name): string {
   return row.by_kind === "engine" || !row.by ? "Crewlet" : name(row.by);
+}
+
+/** The acts an agent asks for with a release tool: a merge and a deploy (`release` approvers). */
+export function isReleaseAct(act: string | undefined): act is "pr_merge" | "deploy" {
+  return act === "pr_merge" || act === "deploy";
+}
+
+/** A merge `ask_to_merge` holds: the change, the head it read, how to merge and why. */
+export interface MergeRequest {
+  act: "pr_merge";
+  change: string;
+  head: string;
+  /** `merge` or `squash`; "" where the call named none, which the engine merges as `merge`. */
+  method: string;
+  reason: string;
+}
+
+/** A deploy `ask_to_deploy` holds: the commit, the changes it ships, where, the way back and why. */
+export interface DeployRequest {
+  act: "deploy";
+  repo: string;
+  commit: string;
+  /** As the agent named them: `web!41`, `41` or `#41`. */
+  changes: string[];
+  environment: string;
+  rollback: string;
+  reason: string;
+}
+
+export type ReleaseRequest = MergeRequest | DeployRequest;
+
+const MERGE_KEYS = new Set(["change", "head", "method", "reason"]);
+const DEPLOY_KEYS = new Set(["repo", "commit", "changes", "environment", "rollback", "reason"]);
+
+/**
+ * A held merge's or deploy's arguments, read whole, or null: for another act,
+ * arguments not shown, or any key or value the tool does not take, so a
+ * screen draws every argument as sent rather than the ones it knew.
+ */
+export function releaseRequestOf(
+  act: string | undefined,
+  args: Record<string, unknown> | null | undefined,
+): ReleaseRequest | null {
+  if (!args || !isReleaseAct(act)) return null;
+  const known = act === "pr_merge" ? MERGE_KEYS : DEPLOY_KEYS;
+  if (!Object.keys(args).every((k) => known.has(k))) return null;
+  // EVERY VALUE TEXT, `method` the one a call may leave out.
+  const text: Record<string, string> = {};
+  for (const key of known) {
+    if (key === "changes") continue;
+    const value = args[key] ?? (key === "method" ? "" : undefined);
+    if (typeof value !== "string") return null;
+    text[key] = value;
+  }
+  if (act === "pr_merge") {
+    return {
+      act,
+      change: text.change!,
+      head: text.head!,
+      method: text.method!,
+      reason: text.reason!,
+    };
+  }
+  const changes = args.changes;
+  if (!Array.isArray(changes)) return null;
+  if (!changes.every((c) => typeof c === "string" || typeof c === "number")) return null;
+  return {
+    act,
+    repo: text.repo!,
+    commit: text.commit!,
+    changes: changes.map(String),
+    environment: text.environment!,
+    rollback: text.rollback!,
+    reason: text.reason!,
+  };
+}
+
+/** How a merge is made, in words; a method this build does not know is said as written. */
+export function mergeMethodWords(method: string): string {
+  if (method === "" || method === "merge") return "A merge commit";
+  if (method === "squash") return "One squashed commit";
+  return method;
+}
+
+/** What Allow once of a held merge or deploy does, for the agent named. */
+export function releaseAllowWords(act: "pr_merge" | "deploy", agent: string): string {
+  return act === "pr_merge"
+    ? `Allow once merges exactly this head, once, as ${agent}. A change pushed to since is not merged, and the target's own rules still apply.`
+    : `Allow once tells ${agent} it may deploy exactly this commit there, once. Crewlet does not deploy it.`;
+}
+
+/**
+ * Who may answer a held merge or deploy (`release.approve`): administrators,
+ * the agent's leads and the people the kind's rule escalates to, at a recent
+ * step-up. The rule is the delegation's, or unnamed for a call put to people
+ * at once.
+ */
+export function releaseApproverWords(
+  act: "pr_merge" | "deploy",
+  agent: string,
+  rule: number | null,
+): string {
+  const named = rule
+    ? `the people rule ${rule} escalates to`
+    : `the people a delegated decisions rule for ${act === "pr_merge" ? "merges" : "deploys"} escalates to`;
+  return `Administrators, ${possessive(agent)} leads and ${named} may answer it. Answering asks you to confirm it\u2019s you unless you did recently.`;
 }
 
 /**
