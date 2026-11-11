@@ -206,7 +206,21 @@ logs survive, on the same members:
   than leave out the files the member had not caught up on: the collector
   would otherwise have taken a finished upload's pieces for an unfinished
   upload and, a day later, abandoned them. A healthy read asks the leader
-  nothing extra; a listing asks once.
+  nothing extra; a listing asks twice, for that entry and for the bucket's
+  size.
+- **A listing is given the time its start takes.** A listing reads each
+  file's newest entry, and before the broker hands over the first it finds
+  every one of them: it reads each block of the bucket that holds one, which
+  is about the whole bucket, from disk, since the broker lets go of what it
+  read two minutes later. So a listing is given five seconds and a tenth of a
+  second for every MiB the bucket holds to start, about a minute for 580 MB,
+  rather than the five seconds the NATS client gives a request on its own,
+  which a bucket of 580 MB outgrew at 13.6 seconds on a nearly full disk: the
+  hourly collection failed for it. A listing the broker never starts fails
+  once that time has passed, saying how long it waited, and the collection is
+  tried again ten minutes later. On a single data node the broker holds the
+  bucket's uploads and downloads while it reads, so they wait for the start
+  too.
 - **A delete marker another client left is no object.** The engine deletes by
   purging, but `nats object rm` — or any other client of the format — leaves a
   marker under the name. The engine reads the name as holding nothing, and
@@ -1244,6 +1258,12 @@ dashboard draws the same under **Settings › File storage**.
   key order, and asks the store about them outside every read, so it never
   holds a read of the estate open across the store's round trips; a retired
   or derived row costs it nothing, and costs a backup on `s3` no request.
+- **On `nats` every listing starts by reading the bucket from disk**: the
+  collection and its sweep each list it once an hour, and an audit once per
+  hundred thousand objects. A listing is given the time that takes, a tenth
+  of a second a MiB ([the fleet's own bucket](#the-fleets-own-bucket--nats-the-default)),
+  and on a single data node the bucket's uploads and downloads wait while it
+  reads.
 - **On `nats` an audit lists the whole store once per hundred thousand
   objects**, the window it holds in memory at 127 bytes a key. Each listing
   names every object, so the audit names N × ⌈N / 100,000⌉ of them: at the
