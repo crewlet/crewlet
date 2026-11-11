@@ -188,7 +188,10 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 }
 
 // shapeOf is the shape of the answer types a page holds — every field's name
-// and type, recursively — as a fingerprint: what memoFormat names.
+// and type, recursively — as a fingerprint: what memoFormat names. Each type
+// is spelled as the encoding reads it, by its name and never its package's
+// (spell), so a package's move is no reshape: the encoding reads fields, not
+// import paths.
 func shapeOf() string {
 	var b strings.Builder
 	seen := map[reflect.Type]bool{}
@@ -204,13 +207,13 @@ func shapeOf() string {
 			return
 		}
 		seen[ty] = true
-		fmt.Fprintf(&b, "%s{", ty)
+		fmt.Fprintf(&b, "%s{", spell(ty))
 		for i := range ty.NumField() {
 			f := ty.Field(i)
 			if ty == reflect.TypeFor[gitlet.GitAnswer]() && (slices.Contains(stamped, f.Name) || slices.Contains(unkept, f.Name)) {
 				continue
 			}
-			fmt.Fprintf(&b, "%s %s;", f.Name, f.Type)
+			fmt.Fprintf(&b, "%s %s;", f.Name, spell(f.Type))
 		}
 		b.WriteString("}")
 		for i := range ty.NumField() {
@@ -226,10 +229,43 @@ func shapeOf() string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// spell is ty as reflect spells it with no package's name in it: a defined
+// type by its own name (TreeAnswer, Time), and a pointer, a slice, an array,
+// a map or an unnamed struct by what it holds (*TreeAnswer, []Entry,
+// map[string]Count, struct{Path string;}).
+func spell(ty reflect.Type) string {
+	if ty.Name() != "" {
+		return ty.Name()
+	}
+	switch ty.Kind() {
+	case reflect.Pointer:
+		return "*" + spell(ty.Elem())
+	case reflect.Slice:
+		return "[]" + spell(ty.Elem())
+	case reflect.Array:
+		return fmt.Sprintf("[%d]%s", ty.Len(), spell(ty.Elem()))
+	case reflect.Map:
+		return "map[" + spell(ty.Key()) + "]" + spell(ty.Elem())
+	case reflect.Struct:
+		var b strings.Builder
+		b.WriteString("struct{")
+		for i := range ty.NumField() {
+			fmt.Fprintf(&b, "%s %s;", ty.Field(i).Name, spell(ty.Field(i).Type))
+		}
+		b.WriteString("}")
+		return b.String()
+	default:
+		return ty.String()
+	}
+}
+
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever.
+// written over: a format names one shape, for ever. page/4's was recorded as
+// 4a3450124092111d while the fingerprint spelled each type with its package's
+// name (code.GitAnswer); the same fields, spelled as spell spells them, are
+// 7bc6fe45e8de6b7f.
 var memoShapes = map[string]string{
-	"page/4": "4a3450124092111d",
+	"page/4": "7bc6fe45e8de6b7f",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
