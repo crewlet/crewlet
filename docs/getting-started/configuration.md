@@ -88,6 +88,11 @@ access_history:                         # optional: what each agent was told abo
   retention_days: 400                   #   and every SSH certificate and command, kept this long
                                         #   (default 400, 90..3650); each agent's newest told
                                         #   record stays while the agent exists.
+atlas:                                  # optional: the atlas, the map of what the company runs on
+  retention_days: 400                   #   how long its history is kept: a value somebody replaced,
+                                        #   and an entry a person retired that nothing has reported
+                                        #   since (default 400, 90..3650). What the atlas holds now
+                                        #   never expires.
 assistant: {...}                        # optional, Ask Crewlet; off unless enabled
                                         #   (see "Ask Crewlet" below)
 

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -124,16 +125,18 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	for _, src := range sources {
 		names = append(names, src.Name())
 	}
-	// THE ASSISTANT'S TOO, the executor sessions' and the access log's: a
-	// conversation untouched for its retention is purged through the same
-	// reaper, a session untouched for the company's conversation retention is
-	// deleted through it, and an hour of access records past its retention is
-	// expired through it, each a Termed source of its own.
+	// THE ASSISTANT'S TOO, the executor sessions', the access log's and the
+	// atlas's: a conversation untouched for its retention is purged through
+	// the same reaper, a session untouched for the company's conversation
+	// retention is deleted through it, and an hour of access records or of the
+	// atlas's history past its retention is expired through it, each a Termed
+	// source of its own.
 	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name(),
 		assistantdomain.Domain{}.Name(), executordomain.Domain{}.Name(),
-		accessdomain.Domain{}.Name()}) {
+		accessdomain.Domain{}.Name(), atlasdomain.Domain{}.Name()}) {
 		t.Fatalf("the node arms the sources %v, want the knowledge base's, the "+
-			"artifacts', the assistant's, the executor sessions' and the access log's", names)
+			"artifacts', the assistant's, the executor sessions', the access log's "+
+			"and the atlas's", names)
 	}
 	for _, got := range report.Sources {
 		if got.Source == source {
