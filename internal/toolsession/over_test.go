@@ -3,9 +3,11 @@ package toolsession_test
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -37,20 +39,58 @@ func closedNow(ch <-chan struct{}) bool {
 	}
 }
 
+// answerGate holds the first response a server's end of a pipe writes once it
+// is armed — the answer to a call, written by the SDK as it handles the
+// call's result — until it is let go, saying so on holding as it starts.
+type answerGate struct {
+	armed            atomic.Bool
+	holding, release chan struct{}
+}
+
+// answerGatedTransport is a server's end of a pipe whose writes pass gate.
+type answerGatedTransport struct {
+	mcp.Transport
+	gate *answerGate
+}
+
+func (g answerGatedTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	conn, err := g.Transport.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return answerGatedConn{Connection: conn, gate: g.gate}, nil
+}
+
+// answerGatedConn holds the response its gate is armed for, inside its write
+// ([answerGate]); every other message, a progress among them, passes.
+type answerGatedConn struct {
+	mcp.Connection
+	gate *answerGate
+}
+
+func (c answerGatedConn) Write(ctx context.Context, msg jsonrpc.Message) error {
+	if _, ok := msg.(*jsonrpc.Response); ok && c.gate.armed.CompareAndSwap(true, false) {
+		close(c.gate.holding)
+		<-c.gate.release
+	}
+	return c.Connection.Write(ctx, msg)
+}
+
 // A CALL'S REQUEST IS OVER ONLY ONCE ITS ANSWER IS WRITTEN. A dispatcher that
 // answers a call while its tool runs on — the bridge, as the opening a call was
 // made on ends — waits for that answer to be out before it closes the session,
 // whose close writes no answer once it has begun; what it waits on is the
 // request's end ([toolsession.Call.Over]). That end comes after the answer's
-// write by the SDK's own order (go-sdk v1.8.0 cancels a request's context once
-// its response's write has returned), which is its behaviour rather than its
-// promise, so it is held here: with the answer held between the handler's
-// return and the SDK's write, by a middleware between the two, the request is
-// not over; once the client has the answer, it is.
+// write by the SDK's own order (go-sdk v1.8.0 writes a call's response, then
+// cancels its request), which is its behaviour rather than its promise, so it
+// is held here at the write itself: with the answer's write held on the
+// transport, the SDK already writing it, the request is not over; once the
+// write has returned and the client has the answer, it is.
 //
 // Mutation: hand the dispatcher the beat's own end as Over (`going.unread`,
-// which the handler's return ends), and the request reads as over while its
-// answer is still held short of its write.
+// which the handler's return ends), or have the SDK cancel the request ahead
+// of its response's write, and the request reads as over while its answer is
+// still held in its write.
 func TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -59,20 +99,11 @@ func TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten(t *testing.T) {
 		// KEPT GOING, as the bridge's are, so the beat a call's answer is kept
 		// going with ends as the handler returns: the end Over must not be.
 		s.KeepAnswersGoing(cadence)
-		holding, held := make(chan struct{}), make(chan struct{})
-		release := sync.OnceFunc(func() { close(held) })
-		s.MCP().AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
-			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-				res, err := next(ctx, method, req)
-				if method == "tools/call" {
-					close(holding)
-					<-held
-				}
-				return res, err
-			}
-		})
+		gate := &answerGate{holding: make(chan struct{}), release: make(chan struct{})}
+		release := sync.OnceFunc(func() { close(gate.release) })
 		serverEnd, clientEnd := mcp.NewInMemoryTransports()
-		ss, err := s.MCP().Connect(context.WithoutCancel(t.Context()), serverEnd, nil)
+		ss, err := s.MCP().Connect(context.WithoutCancel(t.Context()),
+			answerGatedTransport{Transport: serverEnd, gate: gate}, nil)
 		if err != nil {
 			t.Fatalf("serve: %v", err)
 		}
@@ -89,14 +120,20 @@ func TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten(t *testing.T) {
 		// session nothing to wait for.
 		t.Cleanup(release)
 
+		// ARMED ONCE THE SESSION IS UP, so the gate holds the call's answer
+		// and never the answer the session's start was given.
+		gate.armed.Store(true)
 		answered := callInBackground(context.WithoutCancel(t.Context()), cs, "now", "now-1")
-		<-holding
+		<-gate.holding
 		over := <-d.overs
+		// EVERYTHING ELSE THE SERVER DOES FOR THE CALL HAS HAPPENED, its write
+		// held.
+		synctest.Wait()
 		if over == nil {
 			t.Fatal("a call a request carries was handed no Over")
 		}
 		if closedNow(over) {
-			t.Fatal("the request is over while its answer is held short of its write")
+			t.Fatal("the request is over while its answer's write is held")
 		}
 		release()
 		if res := <-answered; res.IsError || text(res) != "now done" {
