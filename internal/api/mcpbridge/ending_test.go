@@ -2,7 +2,11 @@ package mcpbridge_test
 
 import (
 	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -13,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -755,4 +760,71 @@ func TestABridgeAwaitsEveryCallItRunsUntilItIsRecorded(t *testing.T) {
 			t.Errorf("the call is recorded %+v, want it once, as one nobody waited for", rows)
 		}
 	})
+}
+
+// A CALL RETURNING AFTER ITS OPENING ENDED STOPS NOTHING. The fence after a
+// call closes an opening's tools where its seat moved while the call ran, and
+// says so: every later call is refused, and the run's harness told to end its
+// turn. A seat leaving this node leaves the node's grants before its release
+// ends the opening, and that release answers a call still running and lets it
+// run on, so such a call returns to a closed fence on an opening that has
+// ended — whose end already refuses every later call in its own words, and
+// tells a box that goes on to call again. So the call is recorded, as one
+// nobody waited for, and nothing is stopped or said of the run: no warning
+// that its harness is told to end its turn, which is false of a run that goes
+// on with the seat's next holder.
+//
+// NOT PARALLEL: it installs the process's log sink, which only a case running
+// alone may do.
+//
+// Mutation: stop an opening whatever its end (`false &&` before the stop's
+// test of it), and the run is said to be stopped as its call returns.
+func TestACallReturningAfterItsOpeningEndedStopsNothing(t *testing.T) {
+	logs := &syncBuffer{}
+	logging.Configure(slog.LevelInfo, logging.FormatText, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	held := newHeldTool("delegate")
+	g := newGated(t, held)
+	t.Cleanup(held.free)
+	opened := mcpbridge.Dispatcher(g.session)
+
+	answered := make(chan toolsession.Result, 1)
+	go func() {
+		answered <- opened.Call(toolsession.Call{Name: "delegate",
+			Arguments: map[string]any{"value": "hold"}, Abandoned: make(chan struct{})})
+	}()
+	select {
+	case <-held.entered:
+	case <-ctx.Done():
+		t.Fatal("the call never reached its tool")
+	}
+	// THE SEAT LEAVES THIS NODE: out of the node's grants first, and then
+	// its release ends the opening.
+	g.closeFence(errors.New("this node no longer holds the seat"))
+	g.bridge.ReleaseSeat(seat())
+	select {
+	case res := <-answered:
+		if res.Failed || res.Output != mcpbridge.StillRunningNote {
+			t.Fatalf("the call still running as its seat left was answered %v %q, want %q",
+				res.Failed, res.Output, mcpbridge.StillRunningNote)
+		}
+	case <-ctx.Done():
+		t.Fatal("the call still running as its seat left was not answered")
+	}
+	held.free()
+	g.bridge.AwaitCalls(ctx)
+
+	if rows := g.ledger.rows(); len(rows) != 1 || rows[0].Output != "delegate done" || !rows[0].Abandoned {
+		t.Errorf("the call is recorded %+v, want it once, with what its tool did, as one nobody "+
+			"waited for", rows)
+	}
+	said := logs.String()
+	if !strings.Contains(said, "mcp_bridge_answered_at_end") {
+		t.Fatalf("the log heard nothing of the opening's end, so it cannot say what was not said:\n%s", said)
+	}
+	if strings.Contains(said, "mcp_bridge_run_stopped") {
+		t.Errorf("a call returning after its opening ended stopped the run:\n%s", said)
+	}
 }

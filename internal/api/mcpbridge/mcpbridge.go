@@ -2185,6 +2185,14 @@ func fence(s *Session) error {
 }
 
 // stop closes the opening's tools for good, saying why once.
+//
+// AN OPENING THAT HAS ENDED IS NOT STOPPED: its end refuses every later call
+// already, in its own words ([ending.notRun]), so a stop would change nothing
+// and say what is false of it — that the run's harness is told to end its
+// turn, of a run whose box may go on. Which is what a call still running as
+// its seat leaves this node meets as its tool returns ([binding.conclude]):
+// the seat leaves the node's grants before its release ends the opening, so
+// the fence after the call is closed, on an opening that has ended.
 func (o *binding) stop(why error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -2192,7 +2200,7 @@ func (o *binding) stop(why error) {
 }
 
 func (o *binding) stopLocked(why error) {
-	if o.stopped != nil {
+	if o.stopped != nil || o.ended {
 		return
 	}
 	o.stopped = why
