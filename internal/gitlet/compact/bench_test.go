@@ -110,7 +110,7 @@ import (
 //     pass and the three measure alike. gitlet.CompactMinMerge is the floor
 //     of the three with the fewest GETs and PUTs a thousand pushes here,
 //     where it saves more than a tenth of them against the floor before it —
-//     16, which halved 8's, the largest floor measured (code's limits.go has
+//     16, which halved 8's, the largest floor measured (gitlet's limits.go has
 //     each floor's figures, and what bounds a higher one). Its
 //     retired/push, record-B/push and sweep-B/push are a merge at the
 //     floor's: the rows and the records a repository pushed more slowly than

@@ -143,7 +143,7 @@ const MaxSnapshotRestarts = 3
 // read of every domain (estate's laneShared) — a seat's tracker read, a page
 // write, the code.resolve every git request is admitted by — and scanned on
 // one of its reader connections, max(8, GOMAXPROCS) of them, about 59 ms for
-// a full page of refs (gitlet.MaxSnapshotItems; code's
+// a full page of refs (gitlet.MaxSnapshotItems; gitlet's
 // BenchmarkServeASnapshotPage), nearly all of it the driver's scan. Every
 // other read the node serves takes one of the same connections, which
 // database/sql hands to a waiting read drawn at random, never the one that

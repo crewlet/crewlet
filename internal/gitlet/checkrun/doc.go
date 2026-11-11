@@ -7,7 +7,7 @@
 // # Every Gitlet node runs checks, ranked per repository
 //
 // A check's attempt is queued on its repository's checks subject (internal/
-// code's checks.go) and taken by whichever Gitlet node claims it first. Every Gitlet
+// gitlet's checks.go) and taken by whichever Gitlet node claims it first. Every Gitlet
 // node walks the queue — a `checks_queued` read, the attempts oldest queued
 // first ([gitlet.ReadChecksQueued]) — and ranks each attempt by its repository's
 // GIT ORDER (estate.Router.GitOrder: every live Gitlet node in the repository's

@@ -61,7 +61,7 @@ import (
 //
 // MOVES OF ONE REF AT ONE POSITION ARE IN THE ORDER THEIR PUSHES LANDED them.
 // Group commit lands up to gitlet.MaxPushesPerRecord pushes in one record, each
-// decided against the ones before it (code's decide), so two moves of one ref
+// decided against the ones before it (gitlet's decide), so two moves of one ref
 // in one record chain — the second's old is the first's new — and the chain
 // is their order. The push id is no such order: the rows keep none within a
 // record.
@@ -115,7 +115,7 @@ const (
 
 // The codes a push record names its way and its principal's kind by: one
 // table each, so a kind or a way a later build adds is a code here — and
-// TestEveryPushPrincipalAndWayHasARunCode holds every value of code's closed
+// TestEveryPushPrincipalAndWayHasARunCode holds every value of gitlet's closed
 // sets to one.
 var (
 	runViaCodes = map[gitlet.PushVia]uint8{gitlet.ViaGit: 1, gitlet.ViaEngine: 2, gitlet.ViaMerge: 3,

@@ -568,7 +568,7 @@ var zeroByMethod = map[string]string{
 		"decodes as Go's zero, which names nothing too",
 	"statelog.Position.Stream": "a zero position names nothing, so no reader judges its stream: " +
 		"every reader of a position an operation takes asks IsZero, Seq or statelog's On before " +
-		"its stream (accessdomain's told check by On, code's decides by IsZero, the executor log's " +
+		"its stream (accessdomain's told check by On, gitlet's decides by IsZero, the executor log's " +
 		"by Seq), and On takes a zero position on any log",
 	"gitlet.RunProvenance": "Go's own zero: its method compares the value with RunProvenance{}",
 	"gitlet.RevisionClasses": "no path classed and the revision not complete: the decide reads the " +
@@ -700,7 +700,7 @@ var zeroThroughPointer = map[string]string{
 		"CheckGesture and Apply, in the tracker's MarkInbox decide — each asking IsZero first " +
 		"(Gesture.readThrough), so nil, which is what crosses, reads the same",
 	"gitlet.MarkGesture.ReadThrough": "read only as inbox's gesture (MarkGesture.Gesture), by " +
-		"Gesture.Empty, CheckGesture and Apply in code's mark decide and its marks record's apply, " +
+		"Gesture.Empty, CheckGesture and Apply in gitlet's mark decide and its marks record's apply, " +
 		"each asking IsZero first (inbox's Gesture.readThrough): a position that names nothing is no " +
 		"position, so nil, which is what crosses, reads the same",
 }

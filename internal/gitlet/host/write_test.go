@@ -660,7 +660,7 @@ func TestAWritePastTheDepthBoundRunsNoGit(t *testing.T) {
 
 // A WRITE'S BUILD IS ONE READ'S DEADLINE: its git — every process of it,
 // together — is given gitproc.ReadDeadline of run time, gitlet.WriteBuildDeadline,
-// which this package's constant names apart since code imports no git; and a
+// which this package's constant names apart since gitlet imports no git; and a
 // build whose git runs the whole of it is too_large, a change no node builds
 // faster.
 func TestAWriteBuildIsOneReadsDeadline(t *testing.T) {

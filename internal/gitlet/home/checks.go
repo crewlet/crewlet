@@ -40,7 +40,7 @@ const ChecksFileRefresh = 10 * time.Minute
 // checks is the home's CHECK WORK, a worker every loop is built with beside
 // the change work: for each live change of a repository whose head owes its
 // checks something — as the `checks_due` listing reads the rows (internal/
-// code's CheckWork) — the head's checks DISPATCHED from the checks file its
+// gitlet's CheckWork) — the head's checks DISPATCHED from the checks file its
 // TARGET'S TIP holds, the attempts its change moved on from cancelled, and an
 // attempt its infrastructure ended queued again; and each target whose
 // branch moved past the tip its checks file was read at READ AGAIN, at the

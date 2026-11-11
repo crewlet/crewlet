@@ -1135,7 +1135,7 @@ func BenchmarkColdJoin(b *testing.B) {
 }
 
 // The data node BenchmarkColdJoin models. coldPageServe is how long a page
-// holds its answer and its reader: 59 ms, what code's
+// holds its answer and its reader: 59 ms, what gitlet's
 // BenchmarkServeASnapshotPage measured a full page of refs to take to serve
 // (gitlet.MaxSnapshotItems of a repository of gitlet.MaxRefsPerRepo, nearly all
 // of it the driver's scan), and a millisecond for the estate's crossing —

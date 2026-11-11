@@ -14,7 +14,7 @@
 -- EVERY DEFAULT IS '' because SQLite requires one for a NOT NULL column added
 -- to a table, and the push apply writes every column of every row. via's is
 -- deliberately no way at all: a row whose via is not one this build knows is
--- refused by every reader of it (code's scanPush), so an apply that forgot the
+-- refused by every reader of it (gitlet's scanPush), so an apply that forgot the
 -- column fails a read rather than answering every push the engine built as one
 -- a client's git sent, which a default of 'git' would have done.
 --

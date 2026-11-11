@@ -53,7 +53,7 @@ const (
 )
 
 // THE CODE LOG'S DAY, which config sizes the code log's ceiling against this
-// log's by (DerivedCodeLogNumerator's reason, and code's CodeLogMaxBytes): at
+// log's by (DerivedCodeLogNumerator's reason, and gitlet's CodeLogMaxBytes): at
 // the ratio of the two days a blocked trim fills both logs in the same time,
 // so that ratio is a figure derived from this log's published day. A push is
 // a SEAT'S, as every one of the reference company's is — a hundred seats
@@ -887,7 +887,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"run_id": "the executor a change is opened for by the engine (internal/engine's run " +
 					"changes) rather than by a tool: one UUID more",
 				"mentions": "the asker's mentions, which the committer holds into the routing and takes off " +
-					"the record (code's withRouting)",
+					"the record (gitlet's withRouting)",
 				"routing": "whom an open concerns — the handles its description mentions (at most " +
 					"gitlet.MaxMentions, 32), with the change's context, about three hundred bytes — and the " +
 					"reference text mentions nobody, so it carries none",
@@ -979,7 +979,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"carries": "the earlier findings a review carries forward, an id each, and the reference " +
 					"reviews raise their own",
 				"mentions": "the asker's mentions, which the writer holds into the routing and takes off " +
-					"the record (code's withRouting)",
+					"the record (gitlet's withRouting)",
 			}),
 	},
 	gitlet.OpFindingResolve: {
@@ -1007,7 +1007,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"anchor": "a comment on a line of a revision — its revision, path, side, line and blob, " +
 					"about a hundred bytes — and the reference comments are on the change",
 				"mentions": "the asker's mentions, which the writer holds into the routing and takes off " +
-					"the record (code's withRouting)",
+					"the record (gitlet's withRouting)",
 				"routing": "whom a comment concerns — the handles it mentions, its thread's other " +
 					"participants — with the change's context, about three hundred bytes, and the " +
 					"reference comments mention nobody and open their threads, so they carry none",
@@ -1202,7 +1202,7 @@ func (referenceChart) UnitLead(string) string    { return referenceLead }
 // THE FIGURES THE DOCS PRINT: what each gesture of the reference company's
 // day costs the mutation log, in bytes, as Worklet's package doc ("What a
 // day costs the log, measured") and docs/guides/retention.md's storage
-// forecast print them, and as config's and code's arithmetic for the code
+// forecast print them, and as config's and gitlet's arithmetic for the code
 // log's share of the broker reads the day they make.
 //
 // The text the records carry is a STATED ASSUMPTION, not a measurement: how
@@ -1592,7 +1592,7 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 // package's doc ("What a day costs the log, measured") and TrackerLogMaxBytes's
 // reason, and the reasons that size the code log's share of the broker against
 // this day (config's DerivedCodeLogNumerator and its prose in
-// docs/guides/replication.md, code's CodeLogMaxBytes and GitReadsShare), the
+// docs/guides/replication.md, gitlet's CodeLogMaxBytes and GitReadsShare), the
 // count of barriers a day that is the reference company's line for a code log
 // at half this log's ceiling among them — and what the code log keeps of the
 // reference company's day beside its barriers (internal/gitlet's "What a push

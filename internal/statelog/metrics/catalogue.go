@@ -1381,7 +1381,7 @@ func Catalogue() []Instrument {
 			Name: CodeExpungeDroppedBytes, Kind: KindCounter, Unit: UnitBytes,
 			Shows: "Bytes the expunges this node ran took out of their " +
 				"repositories' packs: each commit's dropping packs less the " +
-				"rescue it kept of them. The store keeps them for code's " +
+				"rescue it kept of them. The store keeps them for gitlet's " +
 				"RetireGrace (a day) after the commit, so a reader already on one " +
 				"finishes, and the collector deletes them at its next pass after " +
 				"that.",

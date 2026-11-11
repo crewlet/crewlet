@@ -23,7 +23,7 @@
 -- its pushes above the run's launch position over code_pushes_repo_idx, which
 -- replicated 0084 orders by position, keeping the run's own — in pages each
 -- held to what it reads, weighed by the row_bytes that index carries before
--- any row is looked up (code's runPushes). An index on run_id would hold an
+-- any row is looked up (gitlet's runPushes). An index on run_id would hold an
 -- entry of two UUIDs and a position, about a hundred bytes, for every box push
 -- on every data node for the 181 days the history keeps it — about 4.5 GB at
 -- 250 000 box pushes a day — to serve that one read a run.

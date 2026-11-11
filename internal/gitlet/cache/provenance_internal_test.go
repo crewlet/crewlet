@@ -629,7 +629,7 @@ func TestTheBoundUnmapsTheRunLetGoLongestAgo(t *testing.T) {
 
 // EVERY PUSH PRINCIPAL AND WAY HAS A RUN CODE. A run names a push's way and
 // its principal's kind by a code of one table each, so a kind or a way a later
-// build adds to code's closed sets is a code here — or a run could not be
+// build adds to gitlet's closed sets is a code here — or a run could not be
 // written for a push of it, and its round's fold would leave the index a gap.
 // Each code is distinct and none is zero, and a push of each round-trips — a
 // seat's with the run behind it, a coding box's run and harness among

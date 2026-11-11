@@ -13,7 +13,7 @@ import (
 // THE DOMAIN'S BOUNDS, each with the reason it is the value it is. The
 // constants a configuration document is also validated against are config's
 // (internal/config/code.go) and named again here as aliases — one value, never
-// a copy — because code imports config and the reverse cannot hold.
+// a copy — because gitlet imports config and the reverse cannot hold.
 
 // Limits are the epoch's code.limits as one value, with the defaults applied:
 // what a push is held to. They cross the estate wire in [RepoDetail], which is

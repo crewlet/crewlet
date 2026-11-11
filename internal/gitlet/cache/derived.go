@@ -1002,7 +1002,7 @@ func DerivedFiles() []Derived {
 		// refs. A report keeps it (the scrub decides), and a log gone back
 		// reaches it as the chain moving. An expunge's commit cuts it where a
 		// layer names a pack it takes out, which none does — nothing is
-		// published while an expunge is open (code's publication rule) — so it
+		// published while an expunge is open (gitlet's publication rule) — so it
 		// keeps every layer.
 		OnPackAdded: Keep, OnPackRemoved: Prefix, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Keep,
 		OnPackRetired: Prefix, OnPackExpunged: Prefix, OnLayersMoved: Prefix,

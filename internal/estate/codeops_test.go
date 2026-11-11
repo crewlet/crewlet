@@ -2041,7 +2041,7 @@ func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 //
 // The sum is spelled here from the committer's bounds and the floor wait, never
 // from the router's own constant, so a bound that lost a term fails; the two
-// packages' constants meet here because estate imports code, never the
+// packages' constants meet here because estate imports gitlet, never the
 // reverse.
 func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 	t.Parallel()

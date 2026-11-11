@@ -29,7 +29,7 @@ const LayerSplitFactor = 2
 //
 // 8, KEPT (M3-decisions M3-O39): git's repack.midxNewLayerThreshold default.
 // It is the term that keeps a published repository's pack count bounded,
-// since a published pack is never a compaction's input (code's decide rule
+// since a published pack is never a compaction's input (gitlet's decide rule
 // 2): under 32 × 8 non-full packs and some 24 full ones at the default
 // repo_max_bytes, against gitlet.MaxPacksPerRepo.
 const LayerRepackPacks = 8

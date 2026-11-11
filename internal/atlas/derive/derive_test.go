@@ -256,7 +256,7 @@ func TestDeriveImportsNoWritePath(t *testing.T) {
 	}
 	for _, imp := range pkg.Imports {
 		for _, banned := range []string{"internal/api", "internal/store", "internal/statelog", "internal/coord",
-			"internal/queue", "internal/gitlet", "net/http"} {
+			"internal/queue", "internal/gitlet", "internal/codesearch", "net/http"} {
 			if strings.Contains(imp, banned) {
 				t.Errorf("internal/atlas/derive imports %s", imp)
 			}

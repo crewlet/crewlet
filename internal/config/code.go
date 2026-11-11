@@ -20,7 +20,7 @@ import (
 )
 
 // Gitlet's limits that both tiers and the domain read: config VALIDATES
-// a document against them and internal/gitlet DECIDES a push with them, and code
+// a document against them and internal/gitlet DECIDES a push with them, and gitlet
 // imports config, so they are defined here once. internal/gitlet names each of
 // them again as a constant of its own, which is the same value rather than a
 // copy — a Go constant alias cannot drift.

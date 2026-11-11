@@ -30,7 +30,7 @@ type treeEntry struct {
 	id   [20]byte
 }
 
-// The modes a tree spells, beside code's file modes.
+// The modes a tree spells, beside gitlet's file modes.
 const (
 	modeTree      = "40000"
 	modeSubmodule = "160000"

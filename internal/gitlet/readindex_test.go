@@ -636,10 +636,10 @@ func TestTheReadGateFindsEveryStatement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("internal/gitlet/code.go", fixtureCode)
-	write("internal/gitlet/elsewhere_windows.go", "//go:build windows\n\npackage code\n\n"+
+	write("internal/gitlet/gitlet.go", fixtureCode)
+	write("internal/gitlet/elsewhere_windows.go", "//go:build windows\n\npackage gitlet\n\n"+
 		"const elsewhereSQL = `SELECT id FROM code_refs WHERE repo_id = ?`\n")
-	write("internal/gitlet/code_test.go", "package gitlet\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n)\n\n"+
+	write("internal/gitlet/gitlet_test.go", "package gitlet\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n)\n\n"+
 		"func tested(ctx context.Context, tx *sql.Tx, q string) {\n"+
 		"\t_, _ = tx.QueryContext(ctx, q+`SELECT 1 FROM code_tested`)\n}\n")
 	write("internal/objstore/objstore.go", "package objstore\n\ntype ReferenceTable struct{ Table string }\n")

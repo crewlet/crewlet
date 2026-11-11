@@ -722,7 +722,7 @@ type tailDigest [16]byte
 // at most once while the tail holds it.
 func (d *tailDigest) flip(checksum string) {
 	var p tailDigest
-	// A row's checksum is forty hex digits (code's bundle check, the one way a
+	// A row's checksum is forty hex digits (gitlet's bundle check, the one way a
 	// pack enters a live set), so its first thirty-two decode whole.
 	_, _ = hex.Decode(p[:], []byte(checksum[:min(len(checksum), 2*len(p))]))
 	for i := range d {

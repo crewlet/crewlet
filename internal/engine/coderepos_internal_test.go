@@ -530,7 +530,7 @@ func TestEveryDeclaredSearchModeIsOneTheDomainRecords(t *testing.T) {
 // Mutations: resolve an unset search to grep (config.CodeSearchMode.Resolved)
 // — web reads grep, red; compare settings without their mode
 // (gitlet.RepoSettings.equal) — the changed mode never reaches the log, red;
-// leave the mode out of the reconcile's batch read (code's reposRowsSQL) — the
+// leave the mode out of the reconcile's batch read (gitlet's reposRowsSQL) — the
 // unchanged activation writes a settings record, red.
 func TestADeclaredRepositoryIsIndexedByDefault(t *testing.T) {
 	t.Parallel()

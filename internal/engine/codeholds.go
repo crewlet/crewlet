@@ -89,7 +89,7 @@ const holdsAskBudget = eventfan.FleetReadBudget
 const codeHoldsProtocol = 1
 
 // codeHoldsQuestion is what the reader scatters on topics.CodeHolds: a page's
-// keys, at most the page the pass reads (code's retention page, 256 scratch
+// keys, at most the page the pass reads (gitlet's retention page, 256 scratch
 // repository ids).
 type codeHoldsQuestion struct {
 	Version int      `json:"version"`

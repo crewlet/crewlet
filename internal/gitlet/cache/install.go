@@ -961,7 +961,7 @@ func (c *Cache) stageBundle(id string, p gitlet.PackRow) (*stagedPack, error) {
 }
 
 // download streams s's bundle from the object store into its three files,
-// split as its row says and teed through code's seal, checks the seal against
+// split as its row says and teed through gitlet's seal, checks the seal against
 // the row, and closes the files: making them durable is placePack's, on no GET
 // slot. getSlot waits for the GET's turn, share and node slot — the files
 // already made — and answers the slot's copy buffer and what gives the share

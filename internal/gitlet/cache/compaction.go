@@ -45,14 +45,14 @@ var ErrSuperseded = errors.New("cache: a swap replaced the copy the sync pinned"
 // this cache did not hand out.
 //
 // NEVER A ROW AN EXPUNGE'S BEGIN LEFT DROPPING: no compaction takes one as an
-// input — its decide refuses it stale (code's liveInput), so a plan naming
+// input — its decide refuses it stale (gitlet's liveInput), so a plan naming
 // one would be refused at every poll until the expunge commits — and the
 // compaction's build reads its inputs through its merge's store, links of
 // exactly them from the incarnation's objects/pack (Cache.NewMergeScratch),
 // where no dropping pack lies: a merge naming one is refused [ErrInvalid].
 // Nor is one a publication's: a dropping pack is no pack a layer may name, and
 // the committer refuses a publication while the repository's expunge is open
-// (code's rule 6g).
+// (gitlet's rule 6g).
 //
 // AS THE INCARNATION HOLDS THEM, which may be past s.Position: a round that
 // adds packs applies in place on the incarnation s pins. A plan from them is

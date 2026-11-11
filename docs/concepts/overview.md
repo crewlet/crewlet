@@ -216,7 +216,7 @@ internal/
 ├── executordomain/       # Each seat's executor sessions, statelog's tenth
 │                         #   domain: a row per turn naming the sealed object
 │                         #   its harness's session is kept in
-├── code/                 # Gitlet — statelog's eleventh domain:
+├── gitlet/               # Gitlet — statelog's eleventh domain:
 │                         #   a repository's settings, refs and packs as rows,
 │                         #   one subject a repository, the committer that
 │                         #   group-commits its pushes, the activation fence

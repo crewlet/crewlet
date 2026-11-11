@@ -1,7 +1,7 @@
 -- A merge is recorded on its change.
 --
 -- A change MERGES by a merge record on its repository's own subject (internal/
--- code's merge.go, ADR-0096): one record its committer decides from one
+-- gitlet's merge.go, ADR-0096): one record its committer decides from one
 -- snapshot — the change's merge gate met with the record's principal as the
 -- merger, or a person's override of it — that marks the change merged, moves
 -- its target onto the commit its merge built and lands that move as a push. The
