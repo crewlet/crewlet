@@ -93,13 +93,18 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 // accessSession reads the document it was opened on, and nothing else.
 type accessSession struct{ company *config.Company }
 
-// Options is the two fixed levels and the registered hosts. Operate administers,
-// so granting it needs a step-up.
-func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	levels := []seataccess.Level{
+// FixedLevels is the two levels, least access first ([seataccess.FixedLevels]).
+// Operate administers, so granting it needs a step-up.
+func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
+	return []seataccess.Level{
 		{ID: config.SSHLevelRead, Name: LevelName(config.SSHLevelRead), Note: readNote},
 		{ID: config.SSHLevelOperate, Name: LevelName(config.SSHLevelOperate), Note: operateNote, Administers: true},
 	}
+}
+
+// Options is the two fixed levels and the registered hosts.
+func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	levels := accessVendor{}.FixedLevels(lane)
 	block := s.company.Integrations.SSH
 	names := map[string]string{}
 	for _, h := range block.Hosts {

@@ -4333,7 +4333,8 @@ and the tab offers it disabled with that reason.
 Each seat lane's `tool` says whether the agent can use its credential through
 a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
-read), `no_server` (no server the company declares reads it), `server_off`
+read, and SSH, whose tools are the engine's own `ssh_read` and `ssh_operate`),
+`no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
 seat or its account is off). A `waiting` tool also carries `tool_reason`, a
 sentence in the engine's words, where it waits on the vendor applying a grant
