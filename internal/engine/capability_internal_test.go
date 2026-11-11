@@ -294,7 +294,7 @@ func TestAToldRecordWhoseChangesDoNotDecodeIsSaidOnce(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	good, _ := json.Marshal([]capability.Change{{Kind: capability.ChangeLevel, Vendor: "Cloudflare",
-		Lane: "cloudflare", Line: "Cloudflare: your level is now Secure (was Operate)."}})
+		Lane: "cloudflare", Line: "Cloudflare: your Crewlet grant now sets your level to Secure (was Operate)."}})
 	rows := []accessdomain.ToldRow{
 		{Handle: "ceo", Turn: "t-bad", Changes: json.RawMessage(`{"not":"a list"}`)},
 		{Handle: "ceo", Turn: "t-good", Changes: good},
