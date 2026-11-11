@@ -3,6 +3,7 @@ package gather_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -30,6 +31,8 @@ type fakeGitlet struct {
 	page    int
 	fail    map[code.ReadKind]error
 	remotes map[string]code.RemoteState
+	// checksPerRepo is how many checks each default branch runs; 0 is one.
+	checksPerRepo int
 }
 
 func (f *fakeGitlet) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -54,9 +57,14 @@ func (f *fakeGitlet) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer,
 	case code.ReadRepo:
 		return code.ReadAnswer{Repo: &code.RepoDetail{Remotes: f.remotes[q.Repo]}}, nil
 	case code.ReadChecks:
-		return code.ReadAnswer{Checks: []code.CheckRow{
+		a := code.ReadAnswer{Checks: []code.CheckRow{
 			{CheckKey: code.CheckKey{Name: "test"}, Repo: q.Repo, State: code.CheckStatePassed, Required: true},
-		}}, nil
+		}}
+		for i := 1; i < f.checksPerRepo; i++ {
+			a.Checks = append(a.Checks, code.CheckRow{CheckKey: code.CheckKey{Name: fmt.Sprintf("check-%d", i)},
+				Repo: q.Repo, State: code.CheckStateFailed})
+		}
+		return a, nil
 	}
 	return code.ReadAnswer{}, errors.New("not asked of the atlas")
 }

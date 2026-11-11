@@ -47,6 +47,17 @@
 // TestEveryNATSServerATestBuildsDeclaresItsSize, which reads every Go file of
 // the module and judges an Options value by its type, fails one that does not.
 //
+// A server a NODE dials as its external broker is held one step further,
+// because the node never reads the server's cap: it reads the account's limit,
+// and where the account states none it stands three quarters of its own
+// volume's free space in for one. A server built from options with its cap
+// declared and its account unlimited therefore refused what that stand-in
+// sized on a roomy enough runner: the engine's object-window case built one,
+// and it refused the node's bucket on any runner with more than about 92 GB
+// free. So externaltest's server states the account's limit too, and a test
+// binary's node refuses to open on an external broker whose account states
+// none (engine.ErrUndeclaredBrokerLimit).
+//
 // # Why one figure
 //
 // The floor of a fresh node is a sum over the state-log register and the

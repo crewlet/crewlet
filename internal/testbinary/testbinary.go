@@ -1,7 +1,9 @@
 // Package testbinary says whether this process is a test binary, for the few
 // rules shipping code holds only a TEST to: the broker and Gitlet a test runs
 // declare their sizes rather than take them from the machine running the suite
-// (jetstream.ErrUndeclaredSize, engine.ErrUndeclaredCodeCache).
+// (jetstream.ErrUndeclaredSize, engine.ErrUndeclaredCodeCache), and a node on
+// an external broker reads its account's limit rather than stand the machine's
+// free disk in for it (engine.ErrUndeclaredBrokerLimit).
 //
 // # Why not testing.Testing
 //

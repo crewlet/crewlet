@@ -59,10 +59,11 @@ func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
 			append([]Grant{GrantAdmin}, Apps...)},
 		{"admin beside an app it already includes",
 			[]Grant{GrantDoclet, GrantAdmin},
-			[]Grant{GrantDoclet, GrantAdmin, GrantWorklet, GrantArtifacts, GrantChatlet, GrantGitlet}},
+			[]Grant{GrantDoclet, GrantAdmin, GrantWorklet, GrantArtifacts, GrantChatlet, GrantGitlet,
+				GrantAtlas}},
 		{"an unknown name is carried through", []Grant{future, GrantAdmin},
 			[]Grant{future, GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet,
-				GrantGitlet}},
+				GrantGitlet, GrantAtlas}},
 		{"duplicates in the row stay as given", []Grant{GrantWorklet, GrantWorklet},
 			[]Grant{GrantWorklet, GrantWorklet}},
 		// THE CONTROL: no admin, nothing added.
@@ -92,27 +93,53 @@ func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
 	}
 }
 
-// GITLET IS THE LAST APP, AND EVERY APP BEFORE IT KEEPS ITS PLACE.
+// ATLAS IS THE LAST APP, AND EVERY APP BEFORE IT KEEPS ITS PLACE.
 //
 // The order of [Apps] is what [Expand] stores in a row and what every list of
 // an administrator's permissions reads in, so an app is appended and never
-// inserted (ADR-0110 appended gitlet after chatlet, as ADR-0033's amendment
-// appended chatlet after artifacts). The prefix is pinned by value rather than
-// read off the list, because a list compared with itself cannot move.
-// Mutation: insert gitlet before chatlet and the order goes red; drop it from
-// AllGrants and the vocabulary does.
-func TestGitletIsTheLastApp(t *testing.T) {
+// inserted (ADR-0127 appended atlas after gitlet, as ADR-0110 appended gitlet
+// after chatlet). The prefix is pinned by value rather than read off the list,
+// because a list compared with itself cannot move. Mutation: insert atlas
+// before gitlet and the order goes red; drop it from AllGrants and the
+// vocabulary does.
+func TestAtlasIsTheLastApp(t *testing.T) {
 	t.Parallel()
-	want := []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
+	want := []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet, GrantAtlas}
 	if !slices.Equal(Apps, want) {
 		t.Fatalf("Apps = %v, want %v: an app moved, so every row Expand stored reads in "+
 			"another order", Apps, want)
 	}
-	if GrantGitlet != "gitlet" || !GrantGitlet.Valid() || !GrantGitlet.IsApp() {
-		t.Errorf("gitlet is not a valid app: %q", GrantGitlet)
+	if GrantAtlas != "atlas" || !GrantAtlas.Valid() || !GrantAtlas.IsApp() {
+		t.Errorf("atlas is not a valid app: %q", GrantAtlas)
 	}
-	if got := AllGrants[len(AllGrants)-1]; got != GrantGitlet {
-		t.Errorf("the vocabulary ends with %q, want gitlet appended last", got)
+	if got := AllGrants[len(AllGrants)-1]; got != GrantAtlas {
+		t.Errorf("the vocabulary ends with %q, want atlas appended last", got)
+	}
+}
+
+// ATLAS IS GIVEN ONLY WHEN SOMEBODY CHOOSES TO, AND EVERY OTHER APP BY DEFAULT.
+//
+// A person invited or created with nothing said holds [DefaultApps]: every app
+// but atlas, whose map of servers and addresses is a decision about the
+// person (ADR-0127). An administrator still holds it, through [Expand].
+// Mutation: drop atlas from OptInApps and a newcomer is given the map; add
+// another app and a newcomer loses a tool the company expects them to use.
+func TestAtlasIsOptIn(t *testing.T) {
+	t.Parallel()
+	want := []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
+	if !slices.Equal(DefaultApps, want) {
+		t.Errorf("DefaultApps = %v, want every app but atlas: %v", DefaultApps, want)
+	}
+	if !slices.Equal(OptInApps, []Grant{GrantAtlas}) {
+		t.Errorf("OptInApps = %v, want atlas alone", OptInApps)
+	}
+	for _, app := range OptInApps {
+		if !app.IsApp() {
+			t.Errorf("%q is opt-in and is not an app", app)
+		}
+	}
+	if !slices.Contains(Expand([]Grant{GrantAdmin}), GrantAtlas) {
+		t.Error("an administrator does not hold atlas")
 	}
 }
 
@@ -152,7 +179,7 @@ func TestAppsOfIsEveryAppAdminIncludesAndNeverAdmin(t *testing.T) {
 		{[]Grant{GrantAdmin}, Apps},
 		{[]Grant{GrantDoclet, "teleport", GrantWorklet}, []Grant{GrantDoclet, GrantWorklet}},
 		{[]Grant{GrantChatlet, GrantAdmin},
-			[]Grant{GrantChatlet, GrantWorklet, GrantDoclet, GrantArtifacts, GrantGitlet}},
+			[]Grant{GrantChatlet, GrantWorklet, GrantDoclet, GrantArtifacts, GrantGitlet, GrantAtlas}},
 	} {
 		held := slices.Clone(c.held)
 		got := AppsOf(held)

@@ -336,7 +336,7 @@
       "additionalProperties": false,
       "properties": {
         "grants": {
-          "description": "What this credential may do: admin, worklet, doclet, artifacts, chatlet, gitlet. Required and non-empty.",
+          "description": "What this credential may do: admin, worklet, doclet, artifacts, chatlet, gitlet, atlas. Required and non-empty.",
           "items": {
             "type": [
               "string",

@@ -179,9 +179,9 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 		t.Fatalf("the create left %+v, want an active person on founder", held)
 	}
 	if got := slices.Sorted(slices.Values(held.Grants)); !slices.Equal(got,
-		slices.Sorted(slices.Values(iam.Apps))) {
-		t.Errorf("a create naming no -grants left %v, want every app and not "+
-			"admin: %v", held.Grants, iam.Apps)
+		slices.Sorted(slices.Values(iam.DefaultApps))) {
+		t.Errorf("a create naming no -grants left %v, want the default apps and "+
+			"neither atlas nor admin: %v", held.Grants, iam.DefaultApps)
 	}
 
 	// THE SCREEN THE LINK OPENS says it sets their FIRST password.
