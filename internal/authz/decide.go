@@ -592,6 +592,13 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		if r.class == ClassOwnRecord {
 			return consulting(Decision{Reason: ReasonNotSelf}, adminGrant)
 		}
+		// A PERSON THE DOCUMENT NAMES FOR IT beside the leads: the people a
+		// delegated-decisions rule puts the seat's request to.
+		for _, name := range o.Named {
+			if name != "" && p.Seat == name {
+				return consulting(Decision{Allowed: true, Reason: ReasonAsked}, adminGrant)
+			}
+		}
 		if o.Unresolved {
 			// NOBODY KNOWS WHOSE RECORD THIS IS YET — see
 			// [Object.Unresolved] — and the only admission left is

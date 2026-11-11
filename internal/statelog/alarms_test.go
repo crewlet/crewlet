@@ -1837,3 +1837,86 @@ func TestAFeedIsNamedOnceItHasBeenDownForTheStallGrace(t *testing.T) {
 		t.Errorf("the gauge reads %v after the feeds reopened, want 0", got)
 	}
 }
+
+// A RAISED VOLUME ALARM CLEARS ONLY PAST ITS WIDER MARGIN. Between the raise
+// and the clear a reading raises nothing new and keeps a standing alarm up,
+// and the detail names the free space that clears it.
+//
+// Mutation: drop the rule's stays, or judge it at the raise factor, and the
+// standing case clears.
+func TestAVolumeAlarmClearsOnlyPastItsMargin(t *testing.T) {
+	t.Parallel()
+	const store = 4 << 30
+	at := func(factor float64, up ...statelog.Kind) statelog.Reading {
+		return statelog.Reading{Up: up, FreeBytes: int64(factor * store), StoreBytes: store,
+			CopyHeldBytes: 0, StoreVolume: "/var/lib/crewlet"}
+	}
+	between := (statelog.VolumeHeadroomFactor + statelog.VolumeClearFactor) / 2
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		want    bool
+	}{
+		"short of the raise, nothing up":       {at(statelog.VolumeHeadroomFactor - 0.01), true},
+		"between, nothing up":                  {at(between), false},
+		"between, standing":                    {at(between, statelog.KindVolumeLow), true},
+		"between, another alarm standing":      {at(between, statelog.KindWALLarge), false},
+		"at the clear, standing":               {at(statelog.VolumeClearFactor, statelog.KindVolumeLow), false},
+		"past the clear, standing":             {at(statelog.VolumeClearFactor+0.01, statelog.KindVolumeLow), false},
+		"a held log moves the clear, standing": {statelog.Reading{Up: []statelog.Kind{statelog.KindVolumeLow}, FreeBytes: int64(statelog.VolumeClearFactor*store) + 1, StoreBytes: store, CopyHeldBytes: 1 << 30, StoreVolume: "/v"}, true},
+	} {
+		a, firing := find(statelog.Evaluate(c.reading), statelog.KindVolumeLow)
+		if firing != c.want {
+			t.Errorf("%s: volume_low firing = %v, want %v", name, firing, c.want)
+		}
+		if firing && !strings.Contains(a.Detail, "the alarm clears once ") {
+			t.Errorf("%s: the detail %q does not say what clears it", name, a.Detail)
+		}
+	}
+	a, _ := find(statelog.Evaluate(at(1, statelog.KindVolumeLow)), statelog.KindVolumeLow)
+	if !strings.Contains(a.Detail, "the alarm clears once 5.0 GiB is free") {
+		t.Errorf("the detail %q does not name 1.25 times the 4 GiB store", a.Detail)
+	}
+}
+
+// A FLAP IS ONE RUN. An alarm raised again inside the relapse window of its
+// clear is a new raise in the log and to whoever is told, and its mark keeps
+// the run's first raise; one raised past the window starts a run of its own.
+//
+// Mutation: date a raise from now whatever lapsed, or never prune a lapse, and
+// a mark is wrong.
+func TestARaiseInsideTheRelapseWindowKeepsItsRunsStart(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	clock := t0
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+	var said []statelog.AlarmTransition
+	tracker.OnTransition("node-a", func(tr statelog.AlarmTransition) { said = append(said, tr) })
+	low := []statelog.Alarm{{Kind: statelog.KindVolumeLow, Detail: "1.0 GiB free"}}
+	markedSince := func(when string, want time.Time, age time.Duration) {
+		t.Helper()
+		marks, _ := tracker.Marks()
+		if len(marks) != 1 || !marks[0].Since.Equal(want) {
+			t.Errorf("%s: marks = %v, want one since %v", when, marks, want)
+		}
+		if got := tracker.Firing()[statelog.KindVolumeLow]; got != age {
+			t.Errorf("%s: the alarm's age is %v, want %v", when, got, age)
+		}
+	}
+
+	tracker.Observe(t.Context(), low)
+	clock = t0.Add(5 * time.Minute)
+	tracker.Observe(t.Context(), nil)
+	clock = t0.Add(5*time.Minute + statelog.RelapseWindow - time.Second)
+	tracker.Observe(t.Context(), low)
+	markedSince("raised again inside the window", t0, 5*time.Minute+statelog.RelapseWindow-time.Second)
+	if len(said) != 3 || said[2].Change != statelog.TransitionFired || !said[2].Since.Equal(clock) {
+		t.Fatalf("handed on %+v, want a fire, a clear and a second fire dated now", said)
+	}
+
+	cleared := clock.Add(time.Minute)
+	clock = cleared
+	tracker.Observe(t.Context(), nil)
+	clock = cleared.Add(statelog.RelapseWindow)
+	tracker.Observe(t.Context(), low)
+	markedSince("raised again at the window", clock, 0)
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -394,6 +397,10 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 	if err := scope.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
+	writtenFor, err := actor.recordedFor(notify)
+	if err != nil {
+		return statelog.Decision{}, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return statelog.Decision{}, fmt.Errorf("doclet: encode the %s payload "+
@@ -410,6 +417,7 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 		Actor:      actor.Name(),
 		ActorKind:  actor.Kind,
 		ActorApps:  actor.operatorApps(notify),
+		WorkingFor: writtenFor,
 		OperatorID: actor.OperatorID,
 		TurnID:     actor.TurnID,
 		Chain:      actor.Chain,
@@ -503,6 +511,20 @@ type Actor struct {
 	// byte for byte as a build without the field sends it.
 	Apps []iam.Grant `json:",omitempty"`
 
+	// WrittenFor is whom this actor's writes are made for (ADR-0109): for an
+	// [AuthorAgent], whoever the turn behind it works for, carried on every
+	// record it writes that may wake an agent ([MutationRecord.WorkingFor]) so
+	// the turn the record wakes works for them, and never for the writing
+	// seat. AN AGENT THAT STATES NOTHING WRITES NOTHING ([Actor.recordedFor]),
+	// and every other kind carries nobody: see [types.WrittenFor].
+	//
+	// ASKED OF NO NODE UNSTATED: internal/estate refuses a page write whose
+	// actor this field refuses before the write is asked anywhere, in process
+	// as routed, so no node ever sends a data node an agent's write that
+	// states nothing. Sent only where it carries somebody (`omitzero`), as
+	// Apps is, and decoded as stated ([Actor.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:",omitzero"`
+
 	// OpKey is the caller's own operation key: the value a RETRY of this
 	// same gesture reproduces, which every write here derives its operation
 	// id from when it is set.
@@ -535,6 +557,62 @@ func (a Actor) operatorApps(notify *Notify) []iam.Grant {
 		return nil
 	}
 	return slices.Clone(a.Apps)
+}
+
+// recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
+// or why this actor may write none: an agent's carrier on a record its Notify
+// proves may wake an agent other than the actor ([mayWakeAnAgent]), the only
+// records a later turn reads to learn whom it works for, nobody on any other,
+// which stays at the version every build reads, and a refusal for an agent
+// that states nobody, or for any other kind carrying somebody
+// ([types.WrittenFor.For]).
+//
+// ASKED OF EVERY RECORD, whether it carries or not, and in the one builder
+// every write shares ([Store.decide]): the rule is the actor's, and an agent's
+// actor whose builder forgot whom its turn works for is a bug however its next
+// record happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
+// ([Actor.UnmarshalJSONFrom]), so a data node never refuses a write for a key an
+// older node never sends.
+func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
+	carrier, err := a.WrittenFor.For(iam.ActorKind(a.Kind))
+	if err != nil {
+		return nil, fmt.Errorf("doclet: %s's write: %w", a.Name(), err)
+	}
+	if !mayWakeAnAgent(notify, a) {
+		return nil, nil
+	}
+	return carrier, nil
+}
+
+// UnmarshalJSONFrom decodes an actor that crossed to a data node in a page
+// write's arguments (internal/estate): whom its writes are for is what the
+// node that built it stated ([types.WrittenFor.Received]), WHATEVER ARRIVED,
+// since no node asks a page write whose actor states nothing (the
+// [Actor.WrittenFor] field); an absent carrier is nobody, which is also what
+// an older node sends.
+//
+// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
+// estate's wire a member this build does not declare, in the actor or in its
+// carrier, refuses the request, named at its path, as one anywhere else in
+// the arguments does. An UnmarshalJSON would be handed bytes and decode them
+// again under encoding/json's own defaults, which drop such a member without
+// a word. NO ENCODER OF ITS OWN: what crosses is the plain encoding of its
+// fields under the caller's options.
+func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	type wire Actor
+	if err := jsonv2.UnmarshalDecode(dec, (*wire)(a)); err != nil {
+		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
+		// hands its caller a *jsonv2.SemanticError a method returns as it
+		// is, and wraps any other in a second one, typed as this actor and
+		// placed wherever the decoder stopped. The estate's wire names the
+		// member it refuses from the first SemanticError it finds, so
+		// returned bare that is the decoder's own, at the member's path as
+		// the decoder recorded it, never a position json/v2 inferred, which
+		// is the member's only because that is where the decoder stops.
+		return err
+	}
+	a.WrittenFor = a.WrittenFor.Received()
+	return nil
 }
 
 // operation is the id one write is published under: derived from the actor's

@@ -23,7 +23,7 @@ func TestAWithdrawnQuestionSaysWhyAndWhatCoversIt(t *testing.T) {
 	assign(t, r, "decide", "dev")
 	assign(t, r, "covering", "dev")
 	task := r.task(t, "decide").Task
-	dev := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{})
+	dev := r.writer.As("dev", worklet.AuthorAgent, aTurnNobodyWoke())
 	ask := worklet.Comment{ID: "c-ask", Task: "decide", Author: "dev", AuthorKind: worklet.AuthorAgent,
 		Body: "Run the migration?", Ask: "ana", Decision: decisionFixture(), CreatedAt: wednesday}
 	if _, err := dev.UpdateTask(t.Context(), "op-ask", "decide", "ENG", worklet.NoIfMatch,

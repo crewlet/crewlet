@@ -23,6 +23,10 @@ import (
 //
 // The table is that missing link. A field a routing arm reads and no producer
 // fills makes this go red, which is the only way the omission is visible.
+// `ParentAssignee` is the one field no [worklet.Wake] fills: the write's
+// decide resolves it, so its producer is held by
+// TestAnUpdatesWakeIsWhatItsWriteMoved and its gate by the internal
+// TestTheParentIsNamedOnlyAcrossTheFinishedEdge.
 func TestEveryRoutingFieldHasAProducer(t *testing.T) {
 	t.Parallel()
 	past := time.Date(2025, 3, 4, 9, 0, 0, 0, time.UTC)
@@ -61,14 +65,6 @@ func TestEveryRoutingFieldHasAProducer(t *testing.T) {
 			want: func(s worklet.Snapshot) bool {
 				return len(s.Dependents) == 1 && s.Dependents[0].Assignee == "cy"
 			},
-		},
-		{
-			field: "ParentAssignee", reason: worklet.ReasonParentAssignee,
-			wake: worklet.Wake{
-				Kind: worklet.ChangeStatus, Before: before, After: done,
-				Parent: &worklet.TaskParty{Task: "p", Key: "ENG-9", Assignee: "pa"},
-			},
-			want: func(s worklet.Snapshot) bool { return s.ParentAssignee == "pa" },
 		},
 		{
 			field: "ChecklistAssignees", reason: worklet.ReasonChecklist,
@@ -212,45 +208,6 @@ func TestAChecklistReorderWakesNobody(t *testing.T) {
 	}
 	if slices.Contains(got.Snapshot.ChecklistAssignees, "bo") {
 		t.Error("an untouched item's assignee is woken")
-	}
-}
-
-// THE PARENT HEARS ONLY ACROSS THE FINISHED EDGE, and the gate is the same
-// predicate the router applies — computed from the same two values, so a field
-// filled here can never be one the router will not read.
-func TestTheParentHearsOnlyAcrossTheFinishedEdge(t *testing.T) {
-	t.Parallel()
-	parent := &worklet.TaskParty{Task: "p", Key: "ENG-9", Assignee: "pa"}
-	todo := worklet.Task{ID: "t", Key: "ENG-1", Project: "ENG", Parent: ref("p"),
-		Status: worklet.StatusTodo, StatusGroup: worklet.GroupNotStarted}
-	doing := todo
-	doing.Status, doing.StatusGroup = worklet.StatusInProgress, worklet.GroupActive
-	finished := todo
-	finished.Status, finished.StatusGroup = worklet.StatusDone, worklet.GroupDone
-
-	for _, c := range []struct {
-		name          string
-		before, after worklet.Task
-		kind          worklet.ChangeKind
-		want          bool
-	}{
-		{"into_done", doing, finished, worklet.ChangeStatus, true},
-		{"out_of_done", finished, doing, worklet.ChangeStatus, true},
-		{"within_open", todo, doing, worklet.ChangeStatus, false},
-		{"not_a_status_change", doing, doing, worklet.ChangeFields, false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			got := worklet.Wake{
-				Kind: c.kind, Before: c.before, After: c.after, Parent: parent,
-			}.Notify(fixedLeads{})
-			named := got.Snapshot.ParentAssignee != ""
-			if named != c.want {
-				t.Errorf("ParentAssignee named=%v, want %v — the gate has to be "+
-					"the router's own, or a field is filled for a record whose "+
-					"arm will not fire", named, c.want)
-			}
-		})
 	}
 }
 
@@ -432,12 +389,18 @@ func TestEveryKindOffersItsReasonsInTheDeclaredPrecedence(t *testing.T) {
 }
 
 // everyRoutingField is a notification of kind naming a different handle in
-// every field [worklet.Candidates] routes from, across the finished edge, so
-// that each arm the kind opens offers a handle no other arm offers.
+// every field [worklet.Candidates] routes from, across the finished edge and
+// handed from the previous assignee to the assignee — the two moves its deltas
+// record, as a writer's record does — so that each arm the kind opens offers a
+// handle no other arm offers.
 func everyRoutingField(kind worklet.ChangeKind) *worklet.Notify {
 	return &worklet.Notify{
 		Kind:     kind,
 		Mentions: []string{"mentioned"},
+		Fields: map[string]worklet.Delta{
+			"assignee": {From: "previous-assignee", To: "assignee"},
+			"status":   {From: "in_progress", To: "done"},
+		},
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG",
 			PrevStatusGroup:    worklet.GroupActive,
@@ -501,7 +464,10 @@ func reasonAlone(reason worklet.Reason) *worklet.Notify {
 		n.Snapshot.Assignee = "a"
 		return n
 	case worklet.ReasonUnassigned:
+		// HANDED TO NOBODY: the assignee delta is what tells its holder,
+		// whatever kind the record ends with.
 		n := base(worklet.ChangeAssignee)
+		n.Fields = map[string]worklet.Delta{"assignee": {From: "u"}}
 		n.Snapshot.PrevAssignee = "u"
 		return n
 	case worklet.ReasonReporter:

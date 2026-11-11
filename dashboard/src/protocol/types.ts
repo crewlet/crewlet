@@ -59,6 +59,7 @@ import type {
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
+import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
 import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
@@ -207,6 +208,16 @@ export interface EventRecord {
    * published.
    */
   node?: string;
+}
+
+/**
+ * What a screen reads off an `executor_answered` or `executor_answer_given`
+ * payload beyond its summary (`types.ExecutorAnswered`): the
+ * delegated-decisions rule a delegate answered under (ADR-0125). Absent,
+ * never 0, on a person's answer.
+ */
+export interface ExecutorAnswerPayload {
+  delegated_rule?: number;
 }
 
 export interface EventsPage {
@@ -5980,8 +5991,9 @@ export interface TurnRow {
  *  `work_item` (`id` the item's key, `reason` the tracker's), `schedule` (`id`
  *  its name), `colleague_ask` (`id` the colleague channel's), `code_change`
  *  (`id` the change as the Gitlet screens name it, `web!42`, `reason` the code
- *  notice's) or `alarm` (`id` the alarm instance as the alarms page names it,
- *  `reason` its transition: `fired` or `cleared`). OPEN, for
+ *  notice's), `alarm` (`id` the alarm instance as the alarms page names it,
+ *  `reason` its transition: `fired` or `cleared`) or `delegated_request`
+ *  (`id` the request a delegate decides, `reason` its act). OPEN, for
  *  a kind a newer engine adds. */
 export interface TurnOrigin {
   kind:
@@ -5991,6 +6003,7 @@ export interface TurnOrigin {
     | "colleague_ask"
     | "code_change"
     | "alarm"
+    | "delegated_request"
     | (string & {});
   id: string;
   reason?: string;
@@ -7923,6 +7936,9 @@ export interface QueryMap {
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
+  /** The rules delegates decide by, and what they decided: an administrator's
+   *  and the people a rule escalates to (ADR-0125). */
+  delegated_decisions: DelegatedDecisionsAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;

@@ -181,6 +181,11 @@ func TestToolStateOf(t *testing.T) {
 	}{
 		{"off", perSeat, dd, seataccess.Desired{}, live, seataccess.ToolOff},
 		{"builtin", perSeat, seataccess.LaneJira, on("a"), live, seataccess.ToolBuiltin},
+		// SSH'S TOOLS ARE THE ENGINE'S OWN, its certificate issued at use and
+		// never sealed: never a server to declare, nor a credential to wait on.
+		{"ssh, with no server", none, seataccess.LaneSSH, on("read"), waiting, seataccess.ToolBuiltin},
+		{"ssh, beside a server", perSeat, seataccess.LaneSSH, on("operate"), waiting, seataccess.ToolBuiltin},
+		{"ssh, off", none, seataccess.LaneSSH, seataccess.Desired{}, live, seataccess.ToolOff},
 		{"no server declared", none, dd, on("a"), live, seataccess.ToolNoServer},
 		{"waiting for its key", perSeat, dd, on("a"), waiting, seataccess.ToolWaiting},
 		{"live", perSeat, dd, on("a"), live, seataccess.ToolLive},

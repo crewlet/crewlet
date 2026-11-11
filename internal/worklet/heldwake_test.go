@@ -19,7 +19,8 @@ func TestAnAgentToldAndNotWokenIsAHeldWake(t *testing.T) {
 	no := false
 	wake := worklet.Wake{Kind: worklet.ChangeComment, Before: created, After: created,
 		Comment: &comment, Mentions: comment.Mentions, Asks: &no, MentionedAgents: []string{"qa"}}.Notify(nil)
-	if _, err := r.writer.As("pm", worklet.AuthorAgent, worklet.Provenance{}).UpdateTask(t.Context(),
+	pm := r.writer.As("pm", worklet.AuthorAgent, aTurnNobodyWoke())
+	if _, err := pm.UpdateTask(t.Context(),
 		"op-c-1", created.ID, "ENG", worklet.NoIfMatch, worklet.TaskPatch{Comment: &comment},
 		worklet.ChangeComment, wake); err != nil {
 		t.Fatalf("comment: %v", err)

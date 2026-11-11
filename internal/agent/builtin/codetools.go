@@ -396,11 +396,18 @@ func CodeAskerOf(a Actor) code.Principal {
 func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (Actor, code.Principal,
 	*tools.Result) {
 
-	resolve := actorFor
+	resolve := func(turn *turnctx.Turn) (Actor, error) { return actorFor(ctx, turn, d.Requesters) }
 	if d.Actor != nil {
 		resolve = func(turn *turnctx.Turn) (Actor, error) { return d.Actor(ctx, turn) }
 	}
 	actor, err := resolve(turn)
+	if errors.Is(err, ErrUndecidable) {
+		// A SEAT'S TURN WHOSE REQUESTER COULD NOT BE COMPOSED, which a write
+		// this call makes would carry ([writtenForTurn]): asked again
+		// shortly, never answered as a caller with no seat.
+		r := unattributed(tool, err)
+		return Actor{}, code.Principal{}, &r
+	}
 	if err != nil {
 		r := refusedBy(tools.RefusalForbidden, err, tool+" can only be called during a turn, on "+
 			"behalf of a seat, or by a signed-in caller.")

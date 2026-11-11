@@ -583,6 +583,9 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 		work = builtin.WorkDeps{
 			Reader:    reader,
 			ChangeRef: e.ChangeRef,
+			// A PERSON'S ANSWER THAT APPROVES AN ACT is decided as that
+			// act's approval, at its proof (ADR-0125).
+			ApprovesAct: e.ApprovesAct,
 			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
 			// from the request's context rather than from the call: a
 			// tracker whose author field is chosen by the writer is not

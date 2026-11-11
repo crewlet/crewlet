@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -252,7 +253,7 @@ var evictedWriters = map[string]evictedWriter{
 			t.Helper()
 			// THE COMPANY'S OWN SEAT, as a seat's tool would make it.
 			written, err := e.native.Load().chat.CreateChannel(ctx,
-				chatlet.Actor{Handle: "ceo", Kind: chatlet.AuthorAgent},
+				chatlet.Actor{Handle: "ceo", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)},
 				chatlet.NewChannel{Name: "room-" + tag, Kind: chatlet.KindPublic})
 			return written.Outcome.Position, written.Outcome.Outcome, err
 		},

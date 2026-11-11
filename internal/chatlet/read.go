@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1633,7 +1634,8 @@ type ReactionCount struct {
 
 // MessageView is one message as a reader renders it.
 //
-// THE DOCUMENT PLUS THE TWO VALUES THE APPLIER MINTED, which the document
+// THE DOCUMENT AS A READER IS HANDED IT ([Message.forReaders], without whom
+// it was written for) PLUS THE TWO VALUES THE APPLIER MINTED, which the document
 // deliberately does not carry: the per-channel sequence, and the position of
 // the record that last changed the row. Both are read rather than derived,
 // because they are the applier's arithmetic and a second copy in the blob
@@ -1909,6 +1911,32 @@ type Thread struct {
 	Earlier int `json:"earlier,omitempty"`
 }
 
+// TurnThread is one thread as the engine's turn-start read takes it: the
+// thread, as any reader is handed it, and whom each of its messages was
+// written for, which no reader is ever handed ([Message.forReaders]).
+//
+// THE ENGINE'S ALONE. A turn works through only the waiting messages written
+// for whom it works for (ADR-0109), and nothing else needs whom an agent's post
+// was written for: a room's reader needs no requester's seat, login or apps.
+// So it is answered by its own read ([Reader.TurnThread]), which only the
+// engine's own facade asks, and every view keeps stripping it.
+type TurnThread struct {
+	Thread Thread `json:"thread"`
+
+	// WorkingFor maps a message's id to whom its post was written for, for
+	// every message of the thread whose document holds a carrier
+	// ([Message.WorkingFor]). A message missing from it was written for
+	// nobody else: a person's, a room event, an agent's own work, or a post
+	// below the carrier's version.
+	WorkingFor map[string]*types.WorkingFor `json:"working_for,omitempty"`
+
+	// Carried says the serving reader read WorkingFor. Only it sets it, so
+	// an answer that lacks it, a plain thread a fallback read instead or a
+	// build that never set it, says nothing was read, and a turn then marks
+	// no waiting message as worked through: the safe direction.
+	Carried bool `json:"carried"`
+}
+
 // Thread answers one thread from its root.
 //
 // THE ROOT IS READ EVEN WHEN IT IS A TOMBSTONE, which is what the tombstone is
@@ -1919,29 +1947,59 @@ type Thread struct {
 func (r *Reader) Thread(ctx context.Context, viewer string, q ThreadQuery,
 	fresh statelog.Freshness) (Thread, error) {
 
+	out, _, err := r.readThread(ctx, viewer, q, fresh)
+	return out, err
+}
+
+// TurnThread answers one thread as [Reader.Thread] does, in the same one read,
+// with whom each of its messages was written for ([TurnThread]).
+//
+// FOR THE ENGINE'S TURN-START READ ALONE, through the engine's own facade
+// (estate.TurnThreads): a seat's turn works through only the waiting messages
+// written for whom it works for, so it must know whom each was written for,
+// and no reader of a room may. ONE READ, never [Reader.Thread] and then a
+// second for the carriers: a turn's thread is one linearizable read
+// ([LinearizableReadsPerSeatDay]), and two would be two answers that need not
+// agree.
+func (r *Reader) TurnThread(ctx context.Context, viewer string, q ThreadQuery,
+	fresh statelog.Freshness) (TurnThread, error) {
+
+	out, carriers, err := r.readThread(ctx, viewer, q, fresh)
+	if err != nil {
+		return TurnThread{}, err
+	}
+	return TurnThread{Thread: out, WorkingFor: carriers, Carried: true}, nil
+}
+
+// readThread is [Reader.Thread]'s one read, with the carriers of the messages it
+// answered, which [Reader.TurnThread] alone hands on.
+func (r *Reader) readThread(ctx context.Context, viewer string, q ThreadQuery,
+	fresh statelog.Freshness) (Thread, map[string]*types.WorkingFor, error) {
+
 	who, err := viewerOf(viewer)
 	if err != nil {
-		return Thread{}, err
+		return Thread{}, nil, err
 	}
 	if fresh.Level == "" {
-		return Thread{}, errNoLevel("a thread read")
+		return Thread{}, nil, errNoLevel("a thread read")
 	}
 	if strings.TrimSpace(q.RootID) == "" {
-		return Thread{}, invalid("root_id", "a thread read names no root — a "+
+		return Thread{}, nil, invalid("root_id", "a thread read names no root — a "+
 			"thread is addressed by the message it hangs off, and the room's "+
 			"own transcript is `Messages`")
 	}
 	if q.Newest < 0 || (q.Newest > 0 && q.Cursor != "") {
-		return Thread{}, invalid("newest", "a thread read asks for the newest "+
+		return Thread{}, nil, invalid("newest", "a thread read asks for the newest "+
 			"%d replies beside a cursor — the cursor pages forward from the "+
 			"root and the newest end is read in one, so a read names one or "+
 			"the other", q.Newest)
 	}
 	after, err := parseSeqCursor(q.Cursor)
 	if err != nil {
-		return Thread{}, err
+		return Thread{}, nil, err
 	}
 	out := Thread{ChannelID: q.ChannelID}
+	var carriers map[string]*types.WorkingFor
 	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(q.ChannelID), false),
 		func(tx *sql.Tx) error {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -1972,6 +2030,7 @@ func (r *Reader) Thread(ctx context.Context, viewer string, q ThreadQuery,
 					ErrNotFound)
 			}
 			out.Root = root.views[0]
+			carriers = withCarriers(carriers, root.workingFor)
 
 			where := []string{"channel_id = ?", "thread_root = ?"}
 			args := []any{q.ChannelID, q.RootID}
@@ -1983,6 +2042,7 @@ func (r *Reader) Thread(ctx context.Context, viewer string, q ThreadQuery,
 					return err
 				}
 				out.Replies, out.Earlier = tail.views, earlier
+				carriers = withCarriers(carriers, tail.workingFor)
 				out.Unreadable = root.undecodable + tail.undecodable
 				out.Participants, err = threadParticipants(ctx, tx,
 					q.ChannelID, q.RootID)
@@ -1998,16 +2058,31 @@ func (r *Reader) Thread(ctx context.Context, viewer string, q ThreadQuery,
 				return err
 			}
 			out.Replies, out.NextCursor = page.views, page.next
+			carriers = withCarriers(carriers, page.workingFor)
 			out.Unreadable = root.undecodable + page.undecodable
 			out.Participants, err = threadParticipants(ctx, tx, q.ChannelID,
 				q.RootID)
 			return err
 		})
 	if err != nil {
-		return Thread{}, err
+		return Thread{}, nil, err
 	}
 	out.Served = servedFrom(answer)
-	return out, nil
+	return out, carriers, nil
+}
+
+// withCarriers adds a page's carriers to those a read has gathered.
+func withCarriers(into, page map[string]*types.WorkingFor) map[string]*types.WorkingFor {
+	if len(page) == 0 {
+		return into
+	}
+	if into == nil {
+		into = make(map[string]*types.WorkingFor, len(page))
+	}
+	for id, carrier := range page {
+		into[id] = carrier
+	}
+	return into
 }
 
 // readThreadTail reads a thread's newest n replies still standing, oldest
@@ -2108,6 +2183,11 @@ type messagePage struct {
 	views       []MessageView
 	next        string
 	undecodable int
+
+	// workingFor is whom each message of the page that carries one was
+	// written for, by its id: taken before [Message.forReaders] strips it
+	// from the view, and handed on by [Reader.TurnThread] alone.
+	workingFor map[string]*types.WorkingFor
 }
 
 // readMessagePage reads one window of `chat_messages` and everything hanging
@@ -2186,8 +2266,14 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 			out.undecodable++
 			continue
 		}
+		if message.WorkingFor != nil {
+			if out.workingFor == nil {
+				out.workingFor = map[string]*types.WorkingFor{}
+			}
+			out.workingFor[message.ID] = message.WorkingFor
+		}
 		out.views = append(out.views, MessageView{
-			Message: message, ChannelSeq: seq,
+			Message: message.forReaders(), ChannelSeq: seq,
 			Position: statelog.Position{
 				Stream: stream, Generation: uint32(generation),
 				Seq: uint64(position),

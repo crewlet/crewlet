@@ -310,7 +310,7 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 func TestAFirstPartyWakeSaysWhoWroteItsChange(t *testing.T) {
 	h := newService(t, nil)
 	written := to(notify.Recipient{Handle: "engineering-lead"}, "please look")
-	written.Writer = notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil)
+	written.Writer = notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil, nil)
 	vendors := to(notify.Recipient{Handle: "backend-engineer"}, "please look")
 	h.parser.out = []notify.Routed{written, vendors}
 
@@ -358,7 +358,7 @@ func TestAFirstPartyWriterIsASeatByItsKindAlone(t *testing.T) {
 		// A RECORD THAT STATES NO KIND names no seat either.
 		{"", "engineering-lead", "", ""},
 	} {
-		w := notify.FirstPartyWriter(c.kind, c.actor, every)
+		w := notify.FirstPartyWriter(c.kind, c.actor, every, nil)
 		if w == nil || w.Kind != c.kind || w.Seat != c.seat || w.Login != c.login {
 			t.Errorf("FirstPartyWriter(%q, %q) = %+v, want kind %q, seat %q and login %q",
 				c.kind, c.actor, w, c.kind, c.seat, c.login)
@@ -379,12 +379,45 @@ func TestAFirstPartyWriterIsASeatByItsKindAlone(t *testing.T) {
 func TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames(t *testing.T) {
 	w := notify.FirstPartyWriter(iam.ActorOperator, "token:ci", []iam.Grant{
 		iam.GrantDoclet, iam.GrantAdmin, "teleport", iam.GrantWorklet, iam.GrantDoclet,
-	})
+	}, nil)
 	if want := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}; !slices.Equal(w.Apps, want) {
 		t.Errorf("the credential's writer carries %v, want %v", w.Apps, want)
 	}
-	if none := notify.FirstPartyWriter(iam.ActorOperator, "token:ci", nil); len(none.Apps) != 0 {
+	if none := notify.FirstPartyWriter(iam.ActorOperator, "token:ci", nil, nil); len(none.Apps) != 0 {
 		t.Errorf("a record naming no apps gave the writer %v", none.Apps)
+	}
+}
+
+// AN AGENT'S WRITER CARRIES WHOM ITS RECORD WAS WRITTEN FOR, AND NOBODY ELSE'S
+// DOES (ADR-0109): the turn the write wakes works for them, never for the
+// writing seat. A person, a credential and the engine write for nobody but
+// themselves, so a carrier handed for one of them rides nothing. The carrier
+// is the writer's own copy, with a credential's apps held to the apps this
+// build knows, once each, in iam.Apps order, as a credential writer's own are.
+//
+// Mutation: keep the carrier for every kind, and the person's writer works
+// its turn for ada; drop it for the agent, and the agent's write wakes its
+// seat for the agent.
+func TestAnAgentsWriterCarriesWhomItWroteFor(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	for _, kind := range []iam.ActorKind{iam.ActorAgent, iam.ActorHuman, iam.ActorOperator, iam.ActorSystem} {
+		w := notify.FirstPartyWriter(kind, "cto", nil, ada)
+		if want := kind == iam.ActorAgent; (w.WorkingFor != nil) != want {
+			t.Errorf("a %s's writer carries %+v; want a carrier only on an agent's", kind, w.WorkingFor)
+		}
+	}
+	token := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci", Apps: []iam.Grant{
+		iam.GrantDoclet, iam.GrantAdmin, "teleport", iam.GrantWorklet, iam.GrantDoclet,
+	}}
+	w := notify.FirstPartyWriter(iam.ActorAgent, "cto", nil, token)
+	want := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}}
+	if !reflect.DeepEqual(w.WorkingFor, want) {
+		t.Errorf("the agent's writer carries %+v, want %+v", w.WorkingFor, want)
+	}
+	if token.Apps[0] != iam.GrantDoclet || len(token.Apps) != 5 {
+		t.Errorf("building the writer moved the record's own carrier: %+v", token)
 	}
 }
 

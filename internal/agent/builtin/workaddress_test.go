@@ -340,8 +340,6 @@ func TestNoToolNamesATaskByAKeyOutsideTheAddressRule(t *testing.T) {
 	allowed := map[string]string{
 		"ReceiptOf": "the receipt helper: it puts the key BESIDE the address " +
 			"it computes, never in its place",
-		"WorkDeps.parentParty": "a wake's TaskParty carries the key as data " +
-			"beside the id it routes on, and shows it to nobody as a reference",
 		"moveWorkItem.CallForTurn": "`moved_from` reports the key the item is " +
 			"LEAVING — what it was called, not a reference to it",
 		"evidenceLookup.Task": "the keys a cited task has carried, matched " +

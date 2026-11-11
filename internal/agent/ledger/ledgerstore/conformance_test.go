@@ -108,6 +108,14 @@ func TestRecordingTwiceIsNotAnError(t *testing.T) {
 			if !s.Worked(ctx, "ceo", []string{"wk-1"})["wk-1"] {
 				t.Error("the key stopped being worked after a second record")
 			}
+			// AND WHEN IT WAS WORKED is the first record's instant, which
+			// the work pickup spaces a recheck from.
+			if at, ok := s.WorkedAt(ctx, "ceo", []string{"wk-1", "wk-2"})["wk-1"]; !ok || !at.Equal(base) {
+				t.Errorf("the key reads worked at %s (%v), want the first record's %s", at, ok, base)
+			}
+			if _, ok := s.WorkedAt(ctx, "ceo", []string{"wk-2"})["wk-2"]; ok {
+				t.Error("an unrecorded key reads as worked")
+			}
 		})
 	}
 }
@@ -192,6 +200,9 @@ func TestAFailedCompletionReadAnswersNOTHINGRatherThanAPartialSet(t *testing.T) 
 			"marks some triggers worked and leaves the rest unknown, with no way "+
 			"for the caller to tell", got)
 	}
+	if got := s.WorkedAt(ctx, "ceo", []string{"wk-1", "wk-2", "wk-3"}); len(got) != 0 {
+		t.Errorf("a failed read of when keys were worked answered %v, want nothing known", got)
+	}
 	ledger.fail = nil
 	if got := s.Worked(ctx, "ceo", []string{"wk-1"}); len(got) != 1 {
 		t.Errorf("the ledger did not recover: %v", got)
@@ -209,4 +220,11 @@ func (f *faultyLedger) Worked(ctx context.Context, scope string, keys []string) 
 		return nil, f.fail
 	}
 	return f.Fleet.Worked(ctx, scope, keys)
+}
+
+func (f *faultyLedger) WorkedAt(ctx context.Context, scope string, keys []string) (map[string]time.Time, error) {
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	return f.Fleet.WorkedAt(ctx, scope, keys)
 }

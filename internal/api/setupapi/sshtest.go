@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/iam"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -21,19 +23,24 @@ import (
 
 // Test connection and the audit: each press proves a server's setup with
 // certificates the engine records before it uses them, and the audit answers
-// every certificate and command the access log holds, a command's text opened
-// for the administrator reading it alone.
+// every certificate, command and verdict on a delegated request the access log
+// holds, a command's text and what a verdict decided opened for the
+// administrator reading it alone.
 
 // SSHAccess is the engine's half of these routes.
 type SSHAccess interface {
 	// TestConnection runs the steps against in.Host, recording every test
 	// certificate before it is used.
 	TestConnection(ctx context.Context, in sshint.TestInput) []sshint.TestStep
-	// Certificates and Commands page the access log's SSH records.
+	// Certificates and Commands page the access log's SSH records, and
+	// Verdicts its verdicts on delegated requests.
 	Certificates(ctx context.Context, q accessdomain.AuditQuery, fresh statelog.Freshness) (accessdomain.CertificatePage, error)
 	Commands(ctx context.Context, q accessdomain.AuditQuery, fresh statelog.Freshness) (accessdomain.CommandPage, error)
-	// OpenCommand is a command's text, for an administrator's read.
+	Verdicts(ctx context.Context, q accessdomain.VerdictQuery, fresh statelog.Freshness) (accessdomain.VerdictPage, error)
+	// OpenCommand is a command's text, and OpenVerdict what a verdict decided
+	// and its giver's reason and findings, for an administrator's read.
 	OpenCommand(row accessdomain.CommandRow) (string, error)
+	OpenVerdict(row accessdomain.VerdictRow) (subject, reason string, findings []string, err error)
 }
 
 // testRequest names which authority a press tests with.
@@ -112,11 +119,14 @@ func (s *Service) sshTest(w http.ResponseWriter, r *http.Request) {
 		"host": host.ID, "authority": ca.Fingerprint(), "ok": ok, "steps": steps, "at": at})
 }
 
-// maxAuditPage bounds an audit page, which the reader holds to its own limit.
-const maxAuditPage = 200
+// verdictFilters are the audit's filters only a verdict carries, refused on
+// another kind rather than ignored, so a page never answers wider than asked.
+var verdictFilters = []string{"verdict", "by_kind", "delegation_kind", "by", "request", "final", "sampled"}
 
-// sshAudit serves GET /setup/integrations/ssh/audit: certificates or commands,
-// newest first, narrowed by seat, host and time; a command's text opened.
+// sshAudit serves GET /setup/integrations/ssh/audit: certificates, commands or
+// verdicts on delegated requests, newest first, narrowed by seat, host and
+// time; a command's text, and what a verdict decided with its giver's words,
+// opened.
 func (s *Service) sshAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := accessdomain.AuditQuery{Handle: q.Get("seat"), Host: q.Get("host"), Cursor: q.Get("cursor")}
@@ -132,16 +142,28 @@ func (s *Service) sshAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if v := q.Get("limit"); v != "" {
+		// THE READER'S OWN BOUND, never a number of the route's: a limit the
+		// route admitted and the reader refused was answered 400 anyway.
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > maxAuditPage {
+		if err != nil || n < 1 || n > accessdomain.MaxPageSize {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid, map[string]string{
-				"field": "limit", "detail": "limit is 1 to " + strconv.Itoa(maxAuditPage)})
+				"field": "limit", "detail": "limit is 1 to " + strconv.Itoa(accessdomain.MaxPageSize)})
 			return
 		}
 		query.Limit = n
 	}
 	fresh := statelog.Freshness{Level: statelog.ReadConsistentPrefix}
-	switch kind := strings.TrimSpace(q.Get("kind")); kind {
+	kind := strings.TrimSpace(q.Get("kind"))
+	if kind != "verdict" {
+		for _, name := range verdictFilters {
+			if q.Has(name) {
+				httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid, map[string]string{
+					"field": name, "detail": name + " narrows kind=verdict alone"})
+				return
+			}
+		}
+	}
+	switch kind {
 	case "", "certificate":
 		page, err := s.ssh.Certificates(r.Context(), query, fresh)
 		if s.auditFailed(w, r, err) {
@@ -180,10 +202,72 @@ func (s *Service) sshAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		httpjson.Write(w, http.StatusOK, map[string]any{"kind": "command", "rows": rows,
 			"next": page.Next, "complete": page.Complete})
+	case "verdict":
+		vq, ok := verdictQuery(w, q, query)
+		if !ok {
+			return
+		}
+		page, err := s.ssh.Verdicts(r.Context(), vq, fresh)
+		if s.auditFailed(w, r, err) {
+			return
+		}
+		rows := make([]map[string]any, 0, len(page.Rows))
+		for _, v := range page.Rows {
+			row := map[string]any{"seat": v.Handle, "request": v.Request, "kind": v.Kind, "rule": v.Rule,
+				"turn": v.Turn, "by": v.By, "by_kind": v.ByKind, "through": v.Through, "asked": v.Asked,
+				"confidence": v.Confidence, "verdict": v.Verdict, "final": v.Final,
+				"overruled": nonNilWords(v.Overruled), "sampled": v.Sampled, "digest": v.Digest,
+				"host": v.Host, "user": v.User, "stdin_bytes": v.StdinBytes, "stdin_sha256": v.StdinSHA256,
+				"decision": v.Decision, "item": v.Item, "at": v.At}
+			if subject, reason, findings, openErr := s.ssh.OpenVerdict(v); openErr == nil {
+				row["subject"], row["reason"], row["findings"] = subject, reason, nonNilWords(findings)
+			} else {
+				row["subject_unopened"] = "the verdict's texts did not open under this node's keyring"
+			}
+			rows = append(rows, row)
+		}
+		httpjson.Write(w, http.StatusOK, map[string]any{"kind": "verdict", "rows": rows,
+			"next": page.Next, "complete": page.Complete})
 	default:
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid, map[string]string{
-			"field": "kind", "detail": "kind is certificate or command"})
+			"field": "kind", "detail": "kind is certificate, command or verdict"})
 	}
+}
+
+// verdictQuery is the audit's query with the verdict filters q names, or false
+// once a malformed one is answered. Each word is held to its closed set by the
+// reader, which names it.
+func verdictQuery(w http.ResponseWriter, q url.Values, audit accessdomain.AuditQuery) (
+	accessdomain.VerdictQuery, bool) {
+
+	out := accessdomain.VerdictQuery{
+		Handle: audit.Handle, Host: audit.Host, By: q.Get("by"), Request: q.Get("request"),
+		Kind: delegated.Kind(q.Get("delegation_kind")), Verdict: delegated.Verdict(q.Get("verdict")),
+		ByKind: accessdomain.VerdictBy(q.Get("by_kind")),
+		Since:  audit.Since, Until: audit.Until, Cursor: audit.Cursor, Limit: audit.Limit,
+	}
+	for name, into := range map[string]**bool{"final": &out.Final, "sampled": &out.Sampled} {
+		switch q.Get(name) {
+		case "":
+		case "true":
+			*into = new(true)
+		case "false":
+			*into = new(false)
+		default:
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid, map[string]string{
+				"field": name, "detail": name + " is true or false"})
+			return accessdomain.VerdictQuery{}, false
+		}
+	}
+	return out, true
+}
+
+// nonNilWords is a list that encodes as an array, never as null.
+func nonNilWords(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 // auditFailed answers an audit read that failed, reporting whether it did.

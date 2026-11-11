@@ -166,7 +166,7 @@ func (d *timelineDriver) run(i int, st scenario.Step) []string {
 	if d.tl.Kind(st.Actor) == scenario.SeatPerson {
 		kind = worklet.AuthorHuman
 	}
-	writer := d.r.writer.As(st.Actor, kind, worklet.Provenance{})
+	writer := d.r.writer.As(st.Actor, kind, aTurnNobodyWoke())
 	before := len(d.r.wakes(d.t))
 	opID := fmt.Sprintf("op-step-%d", i)
 	if st.Verb == scenario.VerbFile {

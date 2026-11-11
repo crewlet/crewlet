@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -159,6 +162,14 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	if version == 0 {
 		return record.Encode()
 	}
+	if version >= worklet.WorkingForVersion && id == "suite-b" {
+		// AN AGENT'S WRITE MADE FOR SOMEBODY, on half the objects of a
+		// record version that carries whom it was made for, so the apply
+		// cases hold the history row's column it fills to one value on
+		// every node and through a redelivery (ADR-0109).
+		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
+		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	}
 	return json.Marshal(record)
 }
 
@@ -214,6 +225,17 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 		record.Mutation = patch
+	case "Comment.Act":
+		// AN ASK THE ENGINE COMPOSED FOR ONE EXACT COMMAND, carrying its act.
+		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{
+			ID: "c-act", Task: "carrying", Author: "ops", AuthorKind: worklet.AuthorAgent, Ask: "ada",
+			Act: &delegated.Act{Kind: delegated.KindSSHOperate, Approve: "run-once", Host: "api-1",
+				Digest: strings.Repeat("ab", 32)}}})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Kind, record.Mutation = worklet.ChangeComment, patch
 	case "Comment.Withdrawal":
 		// A RESOLVE THAT WITHDRAWS A QUESTION, SAYING WHY AND WHAT COVERS IT.
 		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{
@@ -261,6 +283,12 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// from, which only a reply reads and every build must carry.
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
 			Snapshot: worklet.Snapshot{ThreadOwing: []string{"ada"}}}
+	case "MutationRecord.WorkingFor":
+		// AN AGENT'S WRITE THAT WAKES SOMEBODY, made in a turn a person
+		// woke: whom it was written for rides beside the agent.
+		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
+		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated}
 	case "TaskPatch.ClearStart", "TaskPatch.ClearDue":
 		// A TASK PATCH TAKING A DATE OFF by its flag, which a build that
 		// decodes no flag would apply as a patch naming no date.

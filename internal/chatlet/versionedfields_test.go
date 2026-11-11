@@ -16,6 +16,7 @@ func TestAClosedChatRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
 	closed := map[int][]string{
 		2: {"MessagePost.Asks", "Notify.Answering", "Notify.Asked", "Notify.Asks", "Notify.Held"},
+		3: {"MutationRecord.WorkingFor"},
 	}
 	got := map[int][]string{}
 	for _, field := range chatlet.VersionedFields() {

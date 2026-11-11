@@ -18,8 +18,8 @@ import (
 // is delivered fine, wakes nobody and writes nothing.
 func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	t.Parallel()
-	if len(worklet.ObjectKinds) != 15 {
-		t.Fatalf("%d kinds are enumerated; the log carries fifteen",
+	if len(worklet.ObjectKinds) != 16 {
+		t.Fatalf("%d kinds are enumerated; the log carries sixteen",
 			len(worklet.ObjectKinds))
 	}
 	seen := map[worklet.ObjectKind]bool{}

@@ -405,6 +405,24 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 		if len(owed) > 0 {
 			l.afterTheirJob(ctx, runID, launch, owed)
 		}
+		if call.Abandoned {
+			// NOR FOR A CALL NOBODY WAITED FOR: its harness was handed its
+			// opening's end's answer, or gave up on it, so the session that
+			// made it does not hold it either, and now no record of the run
+			// does, though it ran and its effect happened. Which is what a
+			// call still running as its run's stop, cap, reclaim or settle
+			// ended its job comes to where it returns once the ending has
+			// deleted the run's record: no ending waits for it
+			// (internal/api/mcpbridge, "An opening ends without waiting for
+			// its calls").
+			l.logger().WarnContext(ctx, "bridge_abandoned_call_after_its_job", "run_id", runID,
+				"launch_id", launch,
+				"call", owedCalls([]sandbox.OwedAppend{{Call: a.Call}})[0],
+				"detail", "a call nobody waited for returned once the run's log no longer took the "+
+					"calls of its round: the run ended, or a new round began; it ran and its effect "+
+					"happened, and neither the session that made it nor any record of the run holds it")
+			return nil
+		}
 		l.logger().DebugContext(ctx, "bridge_call_after_its_job", "run_id", runID,
 			"launch_id", launch, "tool", call.Name)
 		return nil

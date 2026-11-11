@@ -294,9 +294,18 @@ type subscription struct {
 	// is draining asks the running pass to go round again rather than
 	// starting a nested one. Nesting would interleave two drains over one
 	// mailbox and reorder the conversation.
-	draining         bool
-	drainAgain       bool
-	drainAgainBypass bool
+	draining   bool
+	drainAgain bool
+
+	// lingered is the events a linger window's flush found waiting in the
+	// mailbox: they have waited out their window, so a drain takes them
+	// without opening another, and the set is forgotten once the mailbox
+	// holds none of them ([lingeredLocked]).
+	// Only they: mail published after the flush began has waited for
+	// nothing, and opens a window of its own once they are gone (#983) —
+	// what the window's flush skips is ITS events' linger, never the next
+	// event's.
+	lingered map[*events.Event]struct{}
 
 	// drained is the events a drain took out of the mailbox and has not yet
 	// dispatched: still waiting for a handler, as the broker's fetched and
@@ -688,7 +697,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// seed, and a flaky test on a shared subject is unfixable.
 	slices.SortFunc(targets, func(a, b *subscription) int { return cmp.Compare(a.group, b.group) })
 	for _, sub := range targets {
-		q.broker.drain(ctx, sub, false)
+		q.broker.drain(ctx, sub)
 	}
 	return nil
 }
@@ -746,7 +755,7 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 		return err
 	}
 	log.DebugContext(ctx, "subscription_added", "topic", topic, "group", group)
-	q.broker.drain(ctx, sub, false)
+	q.broker.drain(ctx, sub)
 	return nil
 }
 
@@ -776,7 +785,7 @@ func (q *Queue) SubscribeBatch(
 		return err
 	}
 	log.DebugContext(ctx, "batch_subscription_added", "topic", topic, "group", group)
-	q.broker.drain(ctx, sub, false)
+	q.broker.drain(ctx, sub)
 	return nil
 }
 
@@ -869,7 +878,7 @@ func (q *Queue) Unquiesce(ctx context.Context, topic, group string) (bool, error
 
 	log.InfoContext(ctx, "subscription_unquiesced", "topic", topic, "group", group)
 	if sub != nil {
-		q.broker.drain(ctx, sub, false)
+		q.broker.drain(ctx, sub)
 	}
 	return true, nil
 }
@@ -1248,7 +1257,7 @@ func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) er
 	log.InfoContext(ctx, "memory_topic_resumed", "topic", topic, "group", group,
 		"reason", reason, "backlog", backlog)
 	if sub != nil {
-		q.broker.drain(ctx, sub, false)
+		q.broker.drain(ctx, sub)
 	}
 	return nil
 }

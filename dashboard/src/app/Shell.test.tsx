@@ -991,10 +991,12 @@ describe("the page header", () => {
     mountShell(store, socket);
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
-    const access = within(column).getByRole("group", { name: "Access, Needs Admin access" });
-    expect(access.querySelectorAll("svg.crewlet-locked-label__key")).toHaveLength(1);
-    const people = within(access).getByRole("link", { name: /^People, Needs Admin access/ });
-    expect(people.querySelector("[title='Needs Admin access']")).not.toBeNull();
+    // ENGINE IS ADMIN'S THROUGHOUT. Access is not: Delegated decisions in it is
+    // read by whoever a rule escalates to, whom no grant names.
+    const engine = within(column).getByRole("group", { name: "Engine, Needs Admin access" });
+    expect(engine.querySelectorAll("svg.crewlet-locked-label__key")).toHaveLength(1);
+    const nodes = within(engine).getByRole("link", { name: /^Nodes, Needs Admin access/ });
+    expect(nodes.querySelector("[title='Needs Admin access']")).not.toBeNull();
     // SPEND HOLDS AN OPEN ROW, so its group is not locked and names no reason.
     const spend = within(column).getByRole("group", { name: "Spend" });
     expect(spend.closest(".crewlet-nav-group--locked")).toBeNull();

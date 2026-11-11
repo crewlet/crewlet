@@ -291,6 +291,25 @@ func TestTheReviewReadsWhatTheRouteSends(t *testing.T) {
 	holdDeclared(t, "McpChangesAnswer", rows, false)
 }
 
+// THE REVIEW READS WHAT A DECISION WRITTEN IN PART SENDS: the 503 of a review
+// whose store failed one decision, read as `McpChangesPartial` (what was
+// decided and what was not) beside the envelope's own keys.
+//
+// Mutation: drop `undecided` from the answer or from McpChangesPartial, and
+// this is red.
+func TestTheReviewReadsWhatAPartialWriteSends(t *testing.T) {
+	t.Parallel()
+	reviews := trackerReview()
+	reviews.failing = map[string]bool{"export": true}
+	svc := reviewSurface(t, reviews, &fakeToolDocuments{}, &recordedAudit{})
+	code, got := answer(t, svc, proved(time.Minute), "/mcp-servers/tracker/changes",
+		`{"accept": {"close_issue": "`+reviewDigest("v2")+`", "export": "`+reviewDigest("e1")+`"}}`)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("POST = %d %v, want 503", code, got)
+	}
+	holdDeclared(t, "McpChangesPartial", []map[string]any{got}, true)
+}
+
 // THE SIGN IN AND REVOKE DIALOGS READ WHAT THE SIGN-IN ROUTES SEND: the start
 // (`POST /mcp-servers/{name}/oauth`), the read the dialog polls
 // (`GET /mcp-sign-ins/{id}`) and the sign-out (`DELETE`), each as declared, and

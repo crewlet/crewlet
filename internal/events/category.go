@@ -219,7 +219,10 @@ var categories = map[string]placement{
 	"task_assigned": {"task", RateAuthenticated},
 	// The work pickup's wake: one per idle seat, item and version, on the
 	// engine's own loop.
-	"work_pickup":       {"task", RateEngine},
+	"work_pickup": {"task", RateEngine},
+	// A delegate's wake: one per delegate of each held request, published
+	// once its run is parked (ADR-0125).
+	"delegated_review":  {"task", RateEngine},
 	"executor_launched": {"task", RateEngine},
 	"executor_asked":    {"task", RateEngine},
 	"executor_finished": {"task", RateEngine},

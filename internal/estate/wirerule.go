@@ -65,6 +65,26 @@ import (
 // the top — and a refusal built from it would have been a reading of the
 // decoder's words.
 //
+// # A type that writes its own encoding is held to the rule only through it
+//
+// Both options live on the encoder and the decoder, and a type's own method
+// sees them only if it writes and reads through the ones it is handed:
+// encoding/json/v2's MarshalJSONTo and UnmarshalJSONFrom, calling
+// [jsonv2.MarshalEncode] and [jsonv2.UnmarshalDecode] with no options of their
+// own. A MarshalJSON or an UnmarshalJSON is handed bytes, and the json.Marshal
+// or json.Unmarshal inside it starts again from encoding/json's defaults, which
+// hold neither option: every zero field below it goes on the wire, and every
+// member it does not declare is dropped without a word. So a type an operation
+// takes that must decode itself does it the v2 way: the actors, each of which
+// states whom its writes are for when it arrives (ADR-0109), whatever members
+// did, and whom a write was made for (types.WrittenFor), whose fields are its
+// own. An actor carries no policy in its codec and has no encoder at all: a
+// write whose actor may write nothing is refused before it is asked anywhere
+// ([actorWrites]), never in the encoder of a request that might not be made.
+// The gates hold every type an operation takes that decodes itself to saying
+// why it drops nothing (wirerule_test.go's decodesItself), and read the actors'
+// fields as any struct's, since what crosses of them is their plain encoding.
+//
 // # Not a refusal of a field this build retired
 //
 // The rule refuses what the serving build does not declare, whichever build

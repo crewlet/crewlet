@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -484,7 +485,7 @@ func author(handle string) doclet.Actor {
 }
 
 func agent(handle string) doclet.Actor {
-	return doclet.Actor{Handle: handle, Kind: doclet.AuthorAgent, TurnID: "turn-" + handle}
+	return doclet.Actor{Handle: handle, Kind: doclet.AuthorAgent, WrittenFor: types.ForTurn(nil), TurnID: "turn-" + handle}
 }
 
 func ptr[T any](v T) *T { return &v }

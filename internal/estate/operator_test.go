@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -352,8 +353,12 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		t.Errorf("a revision the page has none of = (%v, %v), want not found", found, err)
 	}
 
+	// STATED, AS EVERY ACTOR THAT CROSSES THE WIRE ARRIVES: whom an
+	// operator's write is for is nobody but the operator, and the far side
+	// reads what arrived as stated (types.WrittenFor.Received).
 	operator := Actor{Handle: "founder", Kind: worklet.AuthorOperator,
-		Provenance: worklet.Provenance{OperatorID: "founder", Apps: []iam.Grant{iam.GrantWorklet}}}
+		Provenance: worklet.Provenance{OperatorID: "founder", Apps: []iam.Grant{iam.GrantWorklet},
+			WrittenFor: types.ForNobody()}}
 	w := f.client.WriterAs(operator)
 	authorized := worklet.PersonAuthority{Authorized: true}
 	prior, err := w.ViewPrior(ctx, "v-1")
@@ -411,7 +416,8 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	// AND THE KNOWLEDGE BASE'S, each made as the operator who made it and
 	// under the key they brought.
 	editor := doclet.Actor{Handle: "founder", Kind: doclet.AuthorOperator,
-		OperatorID: "founder", Apps: []iam.Grant{iam.GrantDoclet}, OpKey: statelog.NewOpID(now, "page")}
+		OperatorID: "founder", Apps: []iam.Grant{iam.GrantDoclet}, WrittenFor: types.ForNobody(),
+		OpKey: statelog.NewOpID(now, "page")}
 	kb2 := f.client.Pages()
 	for _, write := range []struct {
 		op    string

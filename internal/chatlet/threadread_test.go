@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -167,22 +170,25 @@ func TestAnUndecodableReplyInTheWindowIsCountedOnce(t *testing.T) {
 	}
 }
 
-// threadSource is a [chatlet.ThreadSource] that answers one thread and records
-// what it was asked.
+// threadSource is a [chatlet.ThreadSource] that answers one thread, with whom
+// its messages were written for, and records what it was asked. uncarried
+// answers as a fallback to the plain thread does: carrying nothing.
 type threadSource struct {
-	thread chatlet.Thread
-	err    error
+	thread     chatlet.Thread
+	workingFor map[string]*types.WorkingFor
+	uncarried  bool
+	err        error
 
 	viewer string
 	query  chatlet.ThreadQuery
 	fresh  statelog.Freshness
 }
 
-func (s *threadSource) Thread(_ context.Context, viewer string, q chatlet.ThreadQuery,
-	fresh statelog.Freshness) (chatlet.Thread, error) {
+func (s *threadSource) TurnThread(_ context.Context, viewer string, q chatlet.ThreadQuery,
+	fresh statelog.Freshness) (chatlet.TurnThread, error) {
 
 	s.viewer, s.query, s.fresh = viewer, q, fresh
-	return s.thread, s.err
+	return chatlet.TurnThread{Thread: s.thread, WorkingFor: s.workingFor, Carried: !s.uncarried}, s.err
 }
 
 // roster is the company's party registry as these cases need it.
@@ -198,6 +204,162 @@ func view(id, author string, kind chatlet.AuthorKind, body string, links ...stri
 	return chatlet.MessageView{Message: chatlet.Message{
 		ID: id, Author: author, AuthorKind: kind, Body: body, Links: links,
 	}}
+}
+
+// AN EDITED MESSAGE IS HANDED OVER AT THE EDIT IT WAS READ AT: the position of
+// the record that last wrote it, which is the token that edit's wake carries
+// as its trigger, so a turn's mark of the message drops that edit's wake and
+// no later one. An unedited message names no version, though its row has a
+// position too: its post's own wake is dropped by its id, as it always was.
+//
+// Mutation: leave Version empty, or name one for every message, and a row
+// goes red.
+func TestTheTurnStartThreadReadSaysWhichEditOfAMessageItShowed(t *testing.T) {
+	t.Parallel()
+	at := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: "chat", Generation: 1, Seq: seq}
+	}
+	editedAt := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
+	root := view("root", "ana", chatlet.AuthorHuman, "what is the plan")
+	root.Position = at(3)
+	edited := view("m-1", "bea", chatlet.AuthorAgent, "the plan, revised")
+	edited.Message.EditedAt = &editedAt
+	edited.Position = at(41)
+	plain := view("m-2", "bea", chatlet.AuthorAgent, "and the date")
+	plain.Position = at(17)
+	source := &threadSource{thread: chatlet.Thread{ChannelID: "room-1", Root: root,
+		Replies: []chatlet.MessageView{edited, plain}}}
+
+	got, ok := chatlet.NewThreadReader(source, nil).ReadThread(t.Context(), "swe", "room-1", "root")
+	if !ok || len(got.Messages) != 3 {
+		t.Fatalf("the thread read back as %+v (ok %v), want the root and two replies", got.Messages, ok)
+	}
+	if v := got.Messages[1].Version; v != at(41).String() {
+		t.Errorf("the edited reply reads at version %q, want %q: the position of the record that "+
+			"last wrote it, which its edit's wake carries", v, at(41).String())
+	}
+	for _, m := range []notify.Message{got.Messages[0], got.Messages[2]} {
+		if m.Version != "" {
+			t.Errorf("the unedited message %s reads at version %q, want none: a mark naming its "+
+				"post's position would drop nothing and key nothing", m.ID, m.Version)
+		}
+	}
+}
+
+// sessionSource is a real reader as a [chatlet.ThreadSource], read at the
+// harness's own session rather than a seat's level: the rows a case has just
+// applied, through the reader's own one read.
+type sessionSource struct {
+	reader *chatlet.Reader
+	fresh  statelog.Freshness
+}
+
+func (s sessionSource) TurnThread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+	_ statelog.Freshness) (chatlet.TurnThread, error) {
+	return s.reader.TurnThread(ctx, viewer, q, s.fresh)
+}
+
+// THE TURN-START THREAD READ HANDS THE ENGINE WHOM EACH MESSAGE WAS WRITTEN
+// FOR, AND NO OTHER READ DOES. Through a real reader: an agent's post made in
+// a turn for ada reads with ada, a person's with nobody, and the transcript
+// says it read them. The same thread read as a room's reader reads it, through
+// Thread or Messages, carries no carrier at all: whom an agent wrote for is the
+// engine's, never a reader's.
+//
+// Mutation: leave the carriers out of the turn's read, strip them there as the
+// views do, or leave the read saying it carried nothing, and a row goes red.
+func TestTheTurnStartThreadReadHandsTheEngineWhomEachMessageWasWrittenFor(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	h := newReadHarness(t)
+	h.apply(readCreateRoom("room-1", "launch", chatlet.KindPublic, "jo", "dev", "bea"))
+	h.apply(readPost("room-1", "root", "jo", "what is the plan"))
+	agents := readRecord(chatlet.MessageSubject("room-1"), chatlet.OpPost, "op-post-m-1",
+		chatlet.MessagePost{V: chatlet.DocumentVersion, MessageID: "m-1", Body: "on it, for ada",
+			ThreadRoot: "root", Author: "dev", AuthorKind: chatlet.AuthorAgent},
+		chatlet.ScopeSet{Subject: true}, "dev")
+	agents.V, agents.ActorKind, agents.WorkingFor = chatlet.WorkingForVersion, chatlet.AuthorAgent, ada
+	h.apply(agents)
+	h.apply(readReply("room-1", "root", "m-2", "jo", "thanks"))
+
+	got, ok := chatlet.NewThreadReader(sessionSource{reader: h.reader(), fresh: h.session()}, nil).
+		ReadThread(t.Context(), "bea", "room-1", "root")
+	if !ok {
+		t.Fatal("the turn-start read could not read the thread")
+	}
+	if got.WorkingForUnread {
+		t.Error("the turn-start read says it could not read whom its messages were written for")
+	}
+	carried := map[string]*types.WorkingFor{}
+	for _, m := range got.Messages {
+		carried[m.ID] = m.WorkingFor
+	}
+	want := map[string]*types.WorkingFor{"root": nil, "m-1": ada, "m-2": nil}
+	if !reflect.DeepEqual(carried, want) {
+		t.Errorf("the transcript carries %+v, want the agent's post written for ada and nothing "+
+			"else", carried)
+	}
+
+	thread, err := h.reader().Thread(t.Context(), "bea", chatlet.ThreadQuery{
+		ChannelID: "room-1", RootID: "root", Newest: 10}, h.session())
+	if err != nil {
+		t.Fatalf("read the thread as a reader: %v", err)
+	}
+	for _, view := range append([]chatlet.MessageView{thread.Root}, thread.Replies...) {
+		if view.Message.WorkingFor != nil {
+			t.Errorf("a reader's thread hands over whom %s was written for: %+v", view.Message.ID,
+				view.Message.WorkingFor)
+		}
+	}
+	transcript, err := h.reader().Messages(t.Context(), "bea",
+		chatlet.TranscriptQuery{ChannelID: "room-1"}, h.session())
+	if err != nil {
+		t.Fatalf("read the room as a reader: %v", err)
+	}
+	for _, view := range transcript.Messages {
+		if view.Message.WorkingFor != nil {
+			t.Errorf("a reader's transcript hands over whom %s was written for: %+v",
+				view.Message.ID, view.Message.WorkingFor)
+		}
+	}
+}
+
+// A THREAD READ WITHOUT WHOM ITS MESSAGES WERE WRITTEN FOR SAYS SO. A source
+// that answers the plain thread (a fallback while no data node serves the
+// turn's own read) carried nothing, and the transcript says it could not read
+// whom its messages were written for, so the turn marks none of them worked
+// through. A source that carried says it read them, and hands each over.
+//
+// Mutation: leave WorkingForUnread unset, or set it from anything but Carried,
+// and a row goes red.
+func TestAThreadReadWithoutWhomMessagesWereWrittenForSaysSo(t *testing.T) {
+	t.Parallel()
+	thread := chatlet.Thread{ChannelID: "room-1",
+		Root:    view("root", "jo", chatlet.AuthorHuman, "what is the plan"),
+		Replies: []chatlet.MessageView{view("m-1", "dev", chatlet.AuthorAgent, "on it")}}
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	for _, tc := range []struct {
+		name       string
+		source     *threadSource
+		unread     bool
+		workingFor *types.WorkingFor
+	}{
+		{"a fallback to the plain thread", &threadSource{thread: thread, uncarried: true}, true, nil},
+		{"the turn's own read", &threadSource{thread: thread,
+			workingFor: map[string]*types.WorkingFor{"m-1": ada}}, false, ada},
+	} {
+		got, ok := chatlet.NewThreadReader(tc.source, nil).ReadThread(t.Context(), "bea", "room-1", "root")
+		if !ok || len(got.Messages) != 2 {
+			t.Fatalf("%s: the thread read as %+v (ok %v)", tc.name, got, ok)
+		}
+		if got.WorkingForUnread != tc.unread {
+			t.Errorf("%s: WorkingForUnread = %v, want %v", tc.name, got.WorkingForUnread, tc.unread)
+		}
+		if !reflect.DeepEqual(got.Messages[1].WorkingFor, tc.workingFor) {
+			t.Errorf("%s: the agent's reply carries %+v, want %+v", tc.name, got.Messages[1].WorkingFor,
+				tc.workingFor)
+		}
+	}
 }
 
 // A CHATLET THREAD IS HANDED TO THE TURN IT WOKE, AS THE SEAT IT WOKE.

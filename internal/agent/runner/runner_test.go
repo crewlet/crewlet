@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // deliverySurface is a plain one-write-tool surface, which the citation check
@@ -514,19 +515,21 @@ func TestALargeIDInASubmissionSurvivesTheStructRoundTrip(t *testing.T) {
 
 // A PICKUP'S SUBMISSION IS REFUSED OVER WORDS ALONE (ADR-0122): a delivery, a
 // block, or an outcome left out, reported while the engine's record shows no
-// typed answer on the item, is refused naming the five answers before any
-// other check; a typed answer submits; a no_action is refused as on every
-// turn somebody waits on; and an assignment's turn is not asked.
+// typed answer on the item and the item is still the seat's, is refused naming
+// the five answers before any other check; a typed answer, or an item that left
+// the seat meanwhile, submits; a no_action is refused as on every turn somebody
+// waits on; and an assignment's turn is not asked.
 //
 // Mutation: read the typed answer only for `delivered`, and a block reported
-// over a comment is accepted at submission and refused after it.
+// over a comment is accepted at submission and refused after it; accept only a
+// typed answer, and a turn whose item was trashed under it cannot submit.
 func TestAPickupsSubmissionIsRefusedOverWordsAlone(t *testing.T) {
 	t.Parallel()
 	pickup := turn.ToolReply("")
 	pickup.Item = "w-1"
 	posted := []ledger.Call{{Name: "slack_post"}}
-	typed := false
-	decode := typedPickup(pickup, func(context.Context) bool { return typed },
+	answer := types.PickupUnanswered
+	decode := typedPickup(pickup, func(context.Context) types.PickupAnswer { return answer },
 		decodeWork(pickup, func() []ledger.Call { return posted }, deliverySurface))
 	for _, blob := range []string{
 		`{"outcome":"delivered","summary":"commented","deliveries":["slack_post"]}`,
@@ -541,14 +544,18 @@ func TestAPickupsSubmissionIsRefusedOverWordsAlone(t *testing.T) {
 		err.Error() == turn.PickupUntyped {
 		t.Errorf("no_action on a pickup: %v, want the refusal every awaited turn gets", err)
 	}
-	typed = true
-	if _, err := decode(t.Context(), args(t,
-		`{"outcome":"delivered","summary":"started it","deliveries":["slack_post"]}`)); err != nil {
-		t.Errorf("a typed answer was refused: %v", err)
+	for _, answer = range []types.PickupAnswer{types.PickupTyped, types.PickupRemoved,
+		types.PickupFinished, types.PickupReassigned} {
+		if _, err := decode(t.Context(), args(t,
+			`{"outcome":"delivered","summary":"started it","deliveries":["slack_post"]}`)); err != nil {
+			t.Errorf("a %s answer was refused: %v", answer, err)
+		}
 	}
 	asked := 0
-	assigned := typedPickup(turn.ToolReply(""), func(context.Context) bool { asked++; return false },
-		decodeWork(turn.ToolReply(""), func() []ledger.Call { return posted }, deliverySurface))
+	assigned := typedPickup(turn.ToolReply(""), func(context.Context) types.PickupAnswer {
+		asked++
+		return types.PickupUnanswered
+	}, decodeWork(turn.ToolReply(""), func() []ledger.Call { return posted }, deliverySurface))
 	if _, err := assigned(t.Context(), args(t,
 		`{"outcome":"delivered","summary":"posted","deliveries":["slack_post"]}`)); err != nil || asked != 0 {
 		t.Errorf("an assignment's submission: %v after %d typed reads, want it accepted unread", err, asked)

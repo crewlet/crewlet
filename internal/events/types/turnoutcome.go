@@ -65,6 +65,16 @@ func (c CommittedChange) Outcome() TurnOutcome {
 	return OutcomeNothing
 }
 
+// OutcomeOfPickup is a work pickup's turn's outcome: moved where the delivery
+// checks read a typed answer on its item, which an ask is though its kind is a
+// comment, and otherwise what its writes committed (ADR-0122, #964).
+func OutcomeOfPickup(committed TurnOutcome, answer PickupAnswer) TurnOutcome {
+	if answer == PickupTyped {
+		return OutcomeMoved
+	}
+	return committed
+}
+
 // WakeDisposition is what became of a wake: a turn started, or the seat was
 // told and not woken.
 type WakeDisposition string

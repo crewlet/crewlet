@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/org"
@@ -29,7 +26,7 @@ func (d WorkDeps) checkWaitOnPerson(ctx context.Context, actor Actor, item workl
 	if actor.Kind != worklet.AuthorAgent || patch.WaitReason == nil || d.Seats == nil {
 		return nil
 	}
-	persons := personsNamedIn(*patch.WaitReason, d.Seats())
+	persons := worklet.PersonsNamed(*patch.WaitReason, PersonSeats(d.Seats()))
 	if len(persons) == 0 {
 		return nil
 	}
@@ -90,46 +87,15 @@ func (d WorkDeps) openAsksBy(ctx context.Context, item worklet.TaskDetail,
 	return out, nil
 }
 
-// personsNamedIn is the handles of the person seats text names: by handle,
-// with or without its `@`, or by the seat's name, as a whole word in any case.
-// A name a model wrote is matched only where the roster declares it.
-func personsNamedIn(text string, roster []colleague.Seat) []string {
-	lower := strings.ToLower(text)
-	var out []string
+// PersonSeats is the persons of roster a wait's reason can name, as the
+// tracker's matcher reads them ([worklet.PersonsNamed]): every person seat the
+// directory does not withhold, since a person nobody can reach cannot be asked.
+func PersonSeats(roster []colleague.Seat) []worklet.PersonSeat {
+	var out []worklet.PersonSeat
 	for _, seat := range roster {
-		if seat.Kind != string(org.KindHuman) || slices.Contains(out, seat.Handle) {
-			continue
-		}
-		for _, name := range []string{seat.Handle, seat.Name} {
-			if wholeWordIn(lower, strings.ToLower(strings.TrimSpace(name))) {
-				out = append(out, seat.Handle)
-				break
-			}
+		if seat.Kind == string(org.KindHuman) && !seat.Withheld {
+			out = append(out, worklet.PersonSeat{Handle: seat.Handle, Name: seat.Name})
 		}
 	}
 	return out
 }
-
-// wholeWordIn reports whether word occurs in text with no letter, digit, `_`
-// or `-` on either side of it.
-func wholeWordIn(text, word string) bool {
-	if word == "" {
-		return false
-	}
-	for from := 0; from < len(text); {
-		at := strings.Index(text[from:], word)
-		if at < 0 {
-			return false
-		}
-		start, end := from+at, from+at+len(word)
-		before, _ := utf8.DecodeLastRuneInString(text[:start])
-		after, _ := utf8.DecodeRuneInString(text[end:])
-		if (start == 0 || !wordRune(before)) && (end == len(text) || !wordRune(after)) {
-			return true
-		}
-		from = start + 1
-	}
-	return false
-}
-
-func wordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' }

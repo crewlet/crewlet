@@ -101,9 +101,16 @@ func ReadScope(q Query) statelog.ScopeSet {
 	// wrong column, the wrong option id — and report the answer complete.
 	// The declarations live under the catalogue FAMILY, which no
 	// container's closure reaches.
-	if namesAField(q) {
+	if namesAField(q) || q.sortsBy("type") {
 		paths = append(paths,
 			ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path())
+	}
+	// AND AN ORDER BY THE SEATS' NAMES, which is read from the roster
+	// ([assigneeOrder]), on the same reasoning: the order of a page drawn
+	// from a roster this node holds back is not the fleet's.
+	if q.sortsBy("assignee") {
+		paths = append(paths,
+			ScopeTerm{Kind: TermFamily, ID: string(KindRoster)}.Path())
 	}
 	return statelog.ScopeSet{Paths: paths}.Normalised()
 }

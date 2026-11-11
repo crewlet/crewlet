@@ -720,6 +720,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		AllToolNames:    spend.AllTools,
 		Outcome:         spend.Outcome,
 		Acted:           actedOutside(spend.ToolExecutions, deliverySurface(e.ToolsFor(t.handle))),
+		PickupAnswer:    res.PickupAnswer,
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
@@ -737,8 +738,10 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		whole := t.measured(spend, ended)
 		completed.Turn = &types.TurnTally{DurationMS: whole.DurationMS, Failed: failed,
 			Reviews: whole.Reviews, SentBack: whole.SentBack, Unaccepted: whole.Unaccepted,
-			Tools: whole.Tools, Wake: whole.Wake, Outcome: t.written.Outcome(), Tokens: whole.Tokens,
-			Refusals: whole.Refusals}
+			Tools: whole.Tools, Wake: whole.Wake, Tokens: whole.Tokens, Refusals: whole.Refusals,
+			// A PICKUP ANSWERED TYPED MOVED ITS ITEM, an ask included, by the
+			// gate's own reading; its ledger outcome says so (ADR-0122).
+			Outcome: types.OutcomeOfPickup(t.written.Outcome(), res.PickupAnswer)}
 	}
 	e.publishEvent(ctx, t.stamp(events.New(completed, t.trace)), t.role)
 	e.publishReflectionDue(ctx, completed, t)
@@ -1292,8 +1295,9 @@ func writersIn(evs []*events.Event) []*types.NotificationWriter {
 // ([types.WorkingFor]), off the first event as [requesterOf] reads the asker:
 // a colleague's ask carries whoever the asking turn worked for, and the
 // answer to this seat's own ask carries whoever the answering turn worked
-// for, which is who this seat worked for when it asked. Nil for any other
-// wake, and for one that carried nobody.
+// for, which is who this seat worked for when it asked; and an agent's write
+// on Worklet, Doclet or Chatlet carries whoever the writing turn worked for.
+// Nil for any other wake, and for one that carried nobody.
 func workingForIn(evs []*events.Event) *types.WorkingFor {
 	for _, ev := range evs {
 		if ev == nil {
@@ -1309,9 +1313,32 @@ func workingForIn(evs []*events.Event) *types.WorkingFor {
 		if pickup, ok := events.DataAs[*types.WorkPickup](ev); ok && pickup != nil {
 			return pickup.WorkingFor
 		}
+		// A WRITE IS WORKED FOR WHOM IT WAS WRITTEN FOR (ADR-0109).
+		if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
+			return writtenForIn(n)
+		}
 		return nil
 	}
 	return nil
+}
+
+// writtenForIn is whom the agent's write a notification announces was made
+// for ([types.NotificationWriter.WorkingFor]): its FIRST constituent's, since
+// the partition splits on it (notify.KeyOf) and every constituent of one turn
+// carries the same, or the notification's own where nothing was coalesced.
+// Nil for a vendor's notification, which states no writer, and for any writer
+// that is no agent: a person, a credential and the engine write for nobody
+// but themselves, and a carrier read off one of them would have the turn work
+// for somebody that writer never spoke for.
+func writtenForIn(n *types.ExternalNotification) *types.WorkingFor {
+	w := n.Writer
+	if len(n.Messages) > 0 {
+		w = n.Messages[0].Writer
+	}
+	if w == nil || w.Kind != iam.ActorAgent {
+		return nil
+	}
+	return w.WorkingFor.Clone()
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

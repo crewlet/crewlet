@@ -34,7 +34,8 @@ type FleetHistory interface {
 }
 
 // Seeded is the projection history is folded into. Satisfied by
-// *livestate.LiveState.
+// *livestate.LiveState, and by the stream service, which also corrects every
+// open socket with a seed that lands after the node serves.
 type Seeded interface {
 	Seed(livestate.History) livestate.Change
 }
@@ -108,15 +109,17 @@ const seedTurnReads = 16
 // BEST EFFORT per read: one that cannot be answered does not cost the others,
 // and every failure is returned for the caller to report, because what it
 // costs is visible nowhere else. The screens still render; they start at this
-// process's boot.
+// process's boot until a later seed fills them ([HistorySeed]). The coverage
+// returned is the one recorded on the projection.
 //
 // CONCURRENT, which is what makes each read independent in time as well as in
-// failure. The caller bounds this whole call so a fleet that will not answer
-// cannot hold the listener shut; read one after another, a SLOW first read
-// spent that whole budget and handed the next an expired context, so one slow
-// read cost them all. Side by side, each has the caller's whole budget and the
-// seed costs the slowest of them rather than their sum.
-func Seed(ctx context.Context, history FleetHistory, organization *org.Organization, live Seeded) error {
+// failure: read one after another under a budget, a SLOW first read spent that
+// whole budget and handed the next an expired context, so one slow read cost
+// them all. Side by side, the seed costs the slowest of them rather than their
+// sum. The listener waits on it for a budget at most ([Seeding.Wait]).
+func Seed(ctx context.Context, history FleetHistory, organization *org.Organization, live Seeded) (
+	eventfan.Coverage, error) {
+
 	var (
 		h      livestate.History
 		wg     sync.WaitGroup
@@ -186,7 +189,7 @@ func Seed(ctx context.Context, history FleetHistory, organization *org.Organizat
 
 	h.Coverage = combine(covers, len(errs) == 0)
 	live.Seed(h)
-	return errors.Join(errs...)
+	return h.Coverage, errors.Join(errs...)
 }
 
 // agentSeats is every agent seat's id in the composed org, sorted: the seats

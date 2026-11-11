@@ -126,7 +126,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.RemoveWorkItemTool), nil
+		return unattributed(worklet.RemoveWorkItemTool, err), nil
 	}
 	if t.deps.TrashWriter == nil || t.deps.Reader == nil {
 		return unconfigured(worklet.RemoveWorkItemTool), nil
@@ -255,7 +255,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.RestoreWorkItemTool), nil
+		return unattributed(worklet.RestoreWorkItemTool, err), nil
 	}
 	if t.deps.TrashWriter == nil || t.deps.Reader == nil {
 		return unconfigured(worklet.RestoreWorkItemTool), nil

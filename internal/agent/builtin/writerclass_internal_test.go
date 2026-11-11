@@ -227,6 +227,7 @@ var domainErrors = map[string]map[string]classRow{
 	},
 	worklet.Domain{}.Name(): {
 		"ErrAlreadyAnswered":        {err: worklet.ErrAlreadyAnswered, means: answered},
+		"ErrBadCursor":              {err: worklet.ErrBadCursor, means: malformed},
 		"ErrBadQuery":               {err: worklet.ErrBadQuery, means: malformed},
 		"ErrForbidden":              {err: worklet.ErrForbidden, means: notPermitted},
 		"ErrIndexBuilding":          {err: worklet.ErrIndexBuilding, means: nodeCondition},

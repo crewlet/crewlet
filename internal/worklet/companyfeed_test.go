@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -132,7 +133,8 @@ func TestACreateFromAChatThreadSaysWhere(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	seat := r.writer.As("pm", worklet.AuthorAgent, worklet.Provenance{
-		Origin: &worklet.Origin{Surface: "slack", Conversation: "slack:C1:171.2"},
+		WrittenFor: types.ForTurn(nil),
+		Origin:     &worklet.Origin{Surface: "slack", Conversation: "slack:C1:171.2"},
 	})
 	task := newTask("from-slack")
 	if _, err := seat.CreateTask(t.Context(), "op-slack", task, nil); err != nil {

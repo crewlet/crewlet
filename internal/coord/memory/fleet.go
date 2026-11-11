@@ -302,6 +302,21 @@ func (f *Fleet) Worked(_ context.Context, scope string, keys []string) (map[stri
 	return out, nil
 }
 
+// WorkedAt returns the keys already recorded under scope, each with the
+// instant its first record stated.
+func (f *Fleet) WorkedAt(_ context.Context, scope string, keys []string) (map[string]time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[string]time.Time, len(keys))
+	for _, key := range keys {
+		if entry, done := f.worked[scope+"\x00"+key]; done {
+			out[key] = entry.at
+		}
+	}
+	return out, nil
+}
+
 // Record marks one key worked.
 func (f *Fleet) Record(_ context.Context, scope, key, detail string, at time.Time) error {
 	if scope == "" || key == "" {

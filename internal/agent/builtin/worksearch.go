@@ -102,7 +102,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(worklet.SearchWorkItemsTool), nil
+		return unattributed(worklet.SearchWorkItemsTool, err), nil
 	}
 	if t.deps.Search == nil {
 		return unconfigured(worklet.SearchWorkItemsTool), nil

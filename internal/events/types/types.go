@@ -196,8 +196,8 @@ type Trigger struct {
 // thing a person holds: a message's id, a work item's key, a schedule's name.
 type TriggerOrigin struct {
 	// Kind is what ID names: [OriginChatMessage], [OriginWorkItem],
-	// [OriginSchedule], [OriginColleagueAsk], [OriginCodeChange] or
-	// [OriginAlarm].
+	// [OriginSchedule], [OriginColleagueAsk], [OriginCodeChange],
+	// [OriginAlarm] or [OriginDelegatedRequest].
 	Kind string `json:"kind"`
 	// ID is the object's own id in that kind: a chat message's id, a work
 	// item's key, a schedule's name, a colleague channel's id, a change as
@@ -224,6 +224,9 @@ const (
 	OriginColleagueAsk = "colleague_ask"
 	OriginCodeChange   = "code_change"
 	OriginAlarm        = "alarm"
+	// OriginDelegatedRequest is a request put to a delegate (ADR-0125), by
+	// its id: a held call's.
+	OriginDelegatedRequest = "delegated_request"
 )
 
 // IsZero reports an origin that names nothing.

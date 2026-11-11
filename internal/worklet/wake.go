@@ -86,12 +86,15 @@ type Wake struct {
 	// fills it rather than this package resolving it.
 	AnswersDecision *decision.Decision
 
-	// Dependents, Parent and Thread are the three routing facts this
+	// Dependents and Thread are two of the three routing facts this
 	// package cannot derive from the two states of ONE task, and they are
-	// filled by the caller for the same reason [Wake.Mentions] is: every
-	// one of them is about a DIFFERENT row, and resolving another row at
-	// the wake would resolve it from a node that may never have applied
-	// it.
+	// filled by the caller for the same reason [Wake.Mentions] is: each
+	// is about a DIFFERENT row, and resolving another row at the wake
+	// would resolve it from a node that may never have applied it. The
+	// third, the parent's assignee, the WRITE resolves, in its decide's
+	// own snapshot ([Notify.restated]): a parent each caller had to fill
+	// was a parent three of the callers that close a task never filled,
+	// and its assignee was told of none of those closes.
 	//
 	// Each is also the only thing standing between a reason and silence.
 	// [Candidates] reads `Snapshot.Dependents` for `blocking`,
@@ -105,12 +108,6 @@ type Wake struct {
 	// dependency and on the duty's repair of one, and on nothing else: a
 	// new dependent is a fact for the blocker's assignee to weigh.
 	Dependents []TaskParty
-
-	// Parent is this task's parent as it stood, carried so a child
-	// entering or leaving a finished group can tell the parent's
-	// assignee. Nil on a root, and on every change that is not a status
-	// move across that edge.
-	Parent *TaskParty
 
 	// Thread is the comment conversation this change joins: who has
 	// already spoken, who asked, and who is being answered. Empty on
@@ -161,7 +158,11 @@ func (w Wake) Notify(leads Leads) *Notify {
 	if !w.Kind.Valid() {
 		return nil
 	}
-	fields, omitted := cardFields(w.deltas())
+	// IN THE CALLER'S FRAME, WHICH HOLDS NO CATALOGUE ([TaskDeltas]), so a
+	// custom value is not named here: an update's decide restates the card
+	// from its own comparison, the catalogue's names included
+	// ([Notify.restated]).
+	fields, omitted := cardFields(TaskDeltas(w.Before, w.After, nil))
 	notify := &Notify{
 		Kind:          w.Kind,
 		Mentions:      w.Mentions,
@@ -302,49 +303,19 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		snapshot.CommentAsks = w.Asks
 		snapshot.MentionedAgents = slices.Clone(w.MentionedAgents)
 	}
-	if w.Kind == ChangeWatchers {
-		// THE HANDLES THIS COMMIT DROPPED, which only the two states
-		// know. [Candidates] reads them on this kind alone and writes
-		// them to the INBOX rather than routing them — a human learns
-		// that a lead removed her watch — and with nothing filling the
-		// field that never happened at all.
-		snapshot.RemovedWatchers = without(w.Before.Watchers, after.Watchers)
-	}
 	if leads != nil {
 		snapshot.ProjectLead = leads.ProjectLead(after.Project)
 		if after.RoutingUnit != "" {
 			snapshot.RoutingUnitLead = leads.UnitLead(after.RoutingUnit)
 		}
 	}
-	if w.Kind == ChangeRouted && after.RoutingUnit != w.Before.RoutingUnit {
-		// THE NEW UNIT'S LEAD IS AN ORDINARY CANDIDATE, never the
-		// fallback — which is the whole reason this field exists beside
-		// RoutingUnitLead rather than being read from it. A fallback
-		// survives only when no ordinary candidate did, so on any task
-		// that still has an assignee, a collaborator or a watcher the
-		// new lead would be dropped in silence.
-		//
-		// GATED ON THE UNIT ACTUALLY MOVING. A `routed` commit that
-		// re-asserts the unit it already had tells its lead nothing
-		// they do not know, and a walk that re-stamps a thousand tasks
-		// with the unit they are already in would otherwise wake one
-		// person a thousand times.
-		snapshot.RoutedTo = snapshot.RoutingUnitLead
+	if w.Kind != ChangeCreated {
+		// AN UPDATE'S TRANSITIONS, whatever kind its record ends with,
+		// and never a creation's, whose before is nothing.
+		snapshot.moves(w.Before, after, leads)
 	}
 	if len(w.Dependents) > 0 {
 		snapshot.Dependents = capParties(w.Dependents, MaxDependents)
-	}
-	if w.Parent != nil && w.Kind == ChangeStatus &&
-		w.Before.StatusGroup.Finished() != after.StatusGroup.Finished() {
-		// ONLY ACROSS THE FINISHED EDGE, which is the one transition
-		// the parent's assignee is told about — and the gate is the
-		// same predicate [Candidates] applies, computed from the same
-		// two values, so a field filled here can never be one the
-		// router will not read.
-		snapshot.ParentAssignee = w.Parent.Assignee
-	}
-	if lists := checklistAssignees(w.Before, after); len(lists) > 0 {
-		snapshot.ChecklistAssignees = lists
 	}
 	if w.Comment != nil && w.Kind == ChangeCreated {
 		// A TASK FILED AS A QUESTION ([Writer.CreateTaskAsking]) asks
@@ -490,18 +461,100 @@ func capParties(in []TaskParty, cap int) []TaskParty {
 	return out
 }
 
-// deltas are the fields that moved, as TEXT.
+// moves fills in the transitions a write made from before to after: the
+// watchers it dropped, the lead of a team it moved the task to and the holders
+// of the checklist items it touched. Each is filled only where its transition
+// happened and emptied where it did not, so a filled field IS the transition,
+// and [Candidates] reads each wherever it is filled, whatever kind the record
+// ends with: a hand-off written with a status still drops a watcher, moves the
+// team and touches the item it touches (#953). Never asked of a creation,
+// whose before is nothing.
+func (s *Snapshot) moves(before, after Task, leads Leads) {
+	s.RemovedWatchers = nil
+	if removed := without(before.Watchers, after.Watchers); len(removed) > 0 {
+		// THE HANDLES THIS WRITE DROPPED, which only the two states know.
+		// [Candidates] writes them to the INBOX rather than routing them —
+		// a human learns that a lead removed her watch — and with nothing
+		// filling the field that never happened at all.
+		s.RemovedWatchers = removed
+	}
+	s.RoutedTo = ""
+	if after.RoutingUnit != before.RoutingUnit && after.RoutingUnit != "" && leads != nil {
+		// THE NEW UNIT'S LEAD IS AN ORDINARY CANDIDATE, never the
+		// fallback — which is the whole reason this field exists beside
+		// RoutingUnitLead rather than being read from it. A fallback
+		// survives only when no ordinary candidate did, so on any task
+		// that still has an assignee, a collaborator or a watcher the new
+		// lead would be dropped in silence.
+		//
+		// GATED ON THE UNIT ACTUALLY MOVING, by whatever write moved it. A
+		// commit that re-asserts the unit it already had tells its lead
+		// nothing they do not know, and a walk that re-stamps a thousand
+		// tasks with the unit they are already in would otherwise wake
+		// one person a thousand times.
+		s.RoutingUnitLead = leads.UnitLead(after.RoutingUnit)
+		s.RoutedTo = s.RoutingUnitLead
+	}
+	s.ChecklistAssignees = nil
+	if lists := checklistAssignees(before, after); len(lists) > 0 {
+		s.ChecklistAssignees = lists
+	}
+}
+
+// restated is an update's wake as its decide publishes it: the caller's, with
+// what the write moved stated from the two states the decide holds — before,
+// the row in this snapshot, and after, the row this record leaves — rather
+// than from the task the caller read outside it.
 //
-// Text rather than the typed value, because a change record is read by a card,
-// a person and a model, and all three want "todo → in_progress". The typed
-// value is on the row for anything that needs it.
+// THE CARD IS THE UPDATE'S HISTORY ROW, as a create's is ([Notify.settled]):
+// the applier writes that row from [TaskDeltas] over the same two states and
+// the project's catalogue (declared), and the caller's account missed what
+// only this snapshot settles. A link a gesture resolved here recorded no edge;
+// a custom value, keyed by the slug it was typed as and named only through the
+// catalogue, read as a move whenever one was written; a status the patch named
+// without its group kept the old group; and a change another writer made
+// after the caller's read stood as this write's own. The router decides who
+// hears a change by these deltas ([Notify.moved]), so each was a misroute
+// (#953).
 //
-// EVERY FIELD THAT MOVED: the card trims to the display limit where it is
-// built ([cardFields]) and says by how many, and the mutation is never what
-// the limit governs.
-// THE WRITER HOLDS NO CATALOGUE, which is why the argument is nil here and
-// why a custom-field move is HISTORY-ONLY. See [TaskDeltas].
-func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After, nil) }
+// THE TRANSITIONS WITH THEM, each only where it happened: the assignee and the
+// seat it left, the status and the group it left, the moves [Snapshot.moves]
+// fills, and, across the finished edge, the parent's assignee, which the
+// decide read in the same snapshot (parent). The rest of the snapshot is
+// routing state the caller copied and this write decided nothing about — a
+// repair's deliberately narrow one among it, which names its one recipient
+// and nobody else.
+func (n *Notify) restated(before, after Task, declared map[string]FieldDef,
+	leads Leads, parent string) *Notify {
+
+	if n == nil {
+		return nil
+	}
+	out := *n
+	out.Fields, out.FieldsOmitted = cardFields(TaskDeltas(before, after, declared))
+	s := &out.Snapshot
+	if before.Assignee != after.Assignee {
+		s.PrevAssignee, s.Assignee = before.Assignee, after.Assignee
+	}
+	if before.Status != after.Status {
+		s.Status, s.StatusGroup, s.PrevStatusGroup =
+			after.Status, after.StatusGroup, before.StatusGroup
+	}
+	s.moves(before, after, leads)
+	s.ParentAssignee = ""
+	if crossesFinished(before, after) {
+		s.ParentAssignee = parent
+	}
+	return &out
+}
+
+// crossesFinished reports a move of a task's status into or out of a finished
+// group: the one transition a reporter and a parent's assignee are told of.
+// [Notify.crossesFinished] reads the same transition off a record: its status
+// delta beside the two groups its snapshot copies.
+func crossesFinished(before, after Task) bool {
+	return before.StatusGroup.Finished() != after.StatusGroup.Finished()
+}
 
 // TaskDeltas is what changed between two versions of a task.
 //
@@ -584,6 +637,9 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	// states are present on every task.
 	add("due_all_day", boolText(before.DueAllDay), boolText(after.DueAllDay))
 	add("start", instantText(before.StartAt), instantText(after.StartAt))
+	// AND WHY IT WAITS, a write of its own when the date is restated with
+	// another reason: unrecorded, that write moved nothing a reader could see.
+	moved.prose("wait_reason", before.WaitReason, after.WaitReason)
 	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
 	add("points", pointsText(before.Points), pointsText(after.Points))
 	// AND THE EDGES, ONE FIELD PER RELATION KIND, because an edge change

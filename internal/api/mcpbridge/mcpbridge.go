@@ -51,15 +51,19 @@
 //     which the session does not even hand over: a box that disconnects
 //     mid-call abandons only the answer, never a tool half-way through a
 //     write. And the record says so ([Call.Abandoned]): a call whose
-//     harness had given up on it — cancelled it, or hung up on the response
-//     its answer was kept going on (below) — or whose opening had ended, by
-//     the time it returned is one its job's session holds with no outcome
-//     or a failed one, though it ran.
+//     harness had given up on it by the time it returned — cancelled it, or
+//     hung up on the response its answer was kept going on (below) — or
+//     that its opening's end answered as still running (below) is one its
+//     job's session holds with no outcome, a failed one or that one, though
+//     it ran.
 //   - A PANIC IS CONTAINED. A tool that panics is answered as failed, said in
 //     the log with its stack, and the run's tools are closed to it: the
 //     process stays up, and a defect does not run again on the next call.
 //   - A RUN THAT IS OVER REFUSES. A call that reaches a session after its run
-//     ended, or after a relaunch replaced it, is answered and not run.
+//     ended, or after a relaunch replaced it, is answered and not run; one
+//     that reaches it after the seat left this node, or after a recovery
+//     opened its job again, is told to make the call again, which reaches
+//     the opening that serves its box now.
 //   - A CREDENTIAL A BOX MAY HOLD. The endpoint is per-job, its token expires
 //     with the run, and nothing secret enters the box — see internal/runtoken.
 //   - THE MODEL A CALL WAS MADE ON. A tool loop tells each call its round's
@@ -118,6 +122,82 @@
 // flows, and the call is recorded as one nobody waited for. The bridge
 // itself cuts nothing: a call past every bound the engine sets is a defect or
 // a hang, and a tool half-way through a write is the run's.
+//
+// # An opening ends without waiting for its calls
+//
+// Every way an opening ends — the run's settle, a stop, a reclaim, its cap's
+// cut, or its launch failing ([Bridge.Close]); a relaunch's opening of another
+// job, or a recovery's of the same one ([Bridge.Open]); the seat leaving this
+// node ([Bridge.ReleaseSeat]) — closes the MCP sessions a box holds on it, and
+// the SDK's close of a session waits for every request in flight on it and
+// writes no answer once it has begun (go-sdk v1.8.0). So an ending that closed
+// first waited out every call still running, and that call's answer was never
+// written: measured with the SDK's own client as the box, a close and a
+// relaunch's opening each returned only once the held call's tool did, and the
+// box read "request terminated without response"; the seat leaving this node,
+// and a recovery's opening, had not returned when the measurement stopped
+// waiting — and a node gives a seat's lease back only once its release of the
+// seat has returned.
+//
+// AN ENDING ANSWERS EVERY CALL STILL RUNNING, THEN CLOSES. Under the opening's
+// lock it refuses every later call and answers each call it admitted whose tool
+// has not returned, in the words of how it ended ([ending]): where the run is
+// over for the box — a close, a relaunch's opening — that the run has ended,
+// the call is still running and must not be made again, and the turn should
+// end; where the box goes on — the seat leaving, a recovery — that the call is
+// still running and must not be made again. NOT A FAILURE, as the tool loop's
+// own "still running" is not (internal/agent/toolloop): a harness hands its
+// model a failed result as a call that failed, and a model makes a failed call
+// again, where this one is running and its effect is still to come. The call's
+// handler stops its beat and waits for it, as before any answer, so no progress
+// follows. The ending waits for each answer it gave to be out
+// ([toolsession.Call.Over]); for the answer of a call whose tool returned just
+// before it, which its own result answers, once its record is made; and for
+// every answer the opening gave without running a call, the refusal of one that
+// reached it after its end among them — for at most [endAnswerWait], and only
+// then closes the sessions, which by then hold no request a tool is behind: so
+// it returns once those answers are out, which a box that reads takes no time
+// over, and a seat leaving this node gives its lease back then rather than once
+// the call returns. A call that reaches the opening as that close begins is
+// refused all the same, and its box reads the close's failure in place of that
+// refusal: the SDK writes no answer once a close has begun.
+//
+// PAST THAT BOUND THE ENDING DOES NOT WAIT: an answer still on its way is one a
+// box is not reading, and a box that does not read must not hold an ending. It
+// ends the opening's ledger and returns, and the bridge closes the sessions
+// behind it once those answers are out: once the box reads them, or its
+// connection ends — at the latest when its box is reclaimed, or this node's
+// listener closes its connections as the node stops. An answer whose write
+// fails is one its box never reads: its harness sees the call's request fail,
+// and the call is recorded as nobody waited for it, as below.
+//
+// THE CALL'S TOOL RUNS ON TO ITS OWN END, and the call's record is appended
+// once it returns ([binding.conclude]) — after the opening ended, and after
+// its ledger's end, which the ledger takes as it takes any call in flight as
+// its session ends ([Ledger.End]) — as one nobody waited for, since its
+// harness was handed the ending's answer and not the tool's. IT LANDS ONLY
+// WHERE THE RUN'S LOG STILL TAKES IT: every path that ends a run goes on, not
+// waiting for the call, to read the run's log and delete its record — a
+// stop's collection, the cap's, a reclaim's, the run's settle — so a call that
+// returns after that read is in no collection of the run, what it committed
+// in no outcome, and one that returns after the delete is on no record of the
+// run at all, though its effect happened. A relaunch's job takes it as a late
+// call of the round, and a run whose box goes on takes it as its own while its
+// record stands. WHO WAITS FOR IT IS THE
+// BRIDGE, under the run's context, which nothing cancels, until the call's
+// own bound ends it — a seat MCP server's request timeout, `delegate`'s call
+// cap, a builtin's own (wait.go): [binding.Call] starts the goroutine that
+// runs the call's tool as it admits the call, the bridge holds it in its
+// registry ([bridgedCalls]) until the call is recorded, which
+// [Bridge.AwaitCalls] waits for, and the tool's return ends it.
+// [Bridge.Shutdown] leaves it running; a node's drain, once it has given its
+// seats back, waits for it (internal/engine's Engine.Drain); and a process
+// killed first ends it with the process, the call on no record.
+//
+// WHAT A LATER RUN OF THE WORK IS TOLD. A call so recorded is held by no save
+// point, so every continuation of its round built after it landed is told its
+// result from the run's log (ADR-0073), while the session that made it holds
+// the ending's answer, never the call's output.
 //
 // # A run outlives the process that opened its session
 //
@@ -466,10 +546,11 @@ type Ledger interface {
 	// the store answers a second later. AND IT IS THE SESSION'S LAST CARRY OF
 	// ITS OWN, made once a Settle still out as the opening ends is done —
 	// taking up what that one could not land — and returning only after it:
-	// a call still in flight as the opening ends records itself after it, and
-	// one whose record then fails is on no record unless a later call of the
-	// session carries it — which the ledger says of it, rather than promise a
-	// carry that is not coming.
+	// a call still running as the opening ends, which the end answers and
+	// waits for no longer ([binding.endKeeping]), records itself after it as
+	// its tool returns, and one whose record then fails is on no record
+	// unless a later call of the session carries it — which the ledger says
+	// of it, rather than promise a carry that is not coming.
 	End(ctx context.Context, runID string) bool
 }
 
@@ -534,11 +615,15 @@ type Call struct {
 	// Abandoned marks a call NOBODY WAITED FOR BY THE TIME IT RETURNED: its
 	// harness had given up on it and cancelled its request, or hung up on
 	// the response its answer was kept going on, which the next progress
-	// found gone ([toolsession.Call.Abandoned]), or the opening it was made
-	// on had ended. The call ran and its effect happened, but the session of
-	// the job that made it holds it with no outcome or a failed one, so no
-	// save point may hold it (sandbox.BridgeCall.Abandoned). False for every
-	// call answered without running, which returns at once.
+	// found gone ([toolsession.Call.Abandoned]); or the opening it was made
+	// on ended while its tool ran, and answered it as still running
+	// ([binding.endKeeping]). The call ran and its effect happened, but the
+	// session of the job that made it holds it with no outcome, a failed one
+	// or the end's "still running", so no save point may hold it
+	// (sandbox.BridgeCall.Abandoned). Decided once, with who answers the
+	// call ([binding.conclude]), so no call handed its own answer is marked
+	// for its opening's end. False for every call answered without running,
+	// which returns at once.
 	Abandoned bool
 }
 
@@ -588,6 +673,11 @@ type Bridge struct {
 	// hold is how long a poll for notes is held when none waits —
 	// [steerHold], which only a case of this package's shortens.
 	hold time.Duration
+
+	// calls is every call this bridge's openings admitted, until it is
+	// recorded, and every close of an opening's sessions its end left
+	// running ([bridgedCalls]).
+	calls *bridgedCalls
 }
 
 // Options configure [New].
@@ -665,6 +755,7 @@ func New(opts Options) (*Bridge, error) {
 		ready:    map[uuid.UUID]bool{},
 		shutdown: make(chan struct{}),
 		hold:     steerHold,
+		calls:    newBridgedCalls(),
 	}
 	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
 	// [Bridge.Close] ends every MCP session the moment the run ends — and
@@ -821,7 +912,7 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 		return ""
 	}
 
-	opened := newBinding(ctx, s, where)
+	opened := newBinding(ctx, s, where, b.calls)
 	s.mu.Lock()
 	s.live = opened
 	s.mu.Unlock()
@@ -850,11 +941,21 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 		// not only the run: closing the transport only ends a connection
 		// the box would reopen, and it holds a signed token that has not
 		// expired.
+		recovered := previous.id == opened.id
 		log.Info("mcp_bridge_session_replaced", "run_id", s.RunID, "launch_id", s.Launch,
-			"seat", s.Handle, "recovered", previous.id == opened.id)
+			"seat", s.Handle, "recovered", recovered)
 		// AND ITS NOTE INBOX, unless the new opening serves the same one —
 		// the same session opened again.
-		previous.endKeeping(opened.steer)
+		//
+		// A RECOVERY'S BOX GOES ON, served by the new opening under the token
+		// it holds; a relaunch's earlier box has had its run end, the new job
+		// carrying it on. Which is what the earlier opening's calls still
+		// running, and any that reach it after, are told ([ending]).
+		how := runEnded
+		if recovered {
+			how = boxGoesOn
+		}
+		previous.endKeeping(opened.steer, how)
 	}
 	return base + PathPrefix + b.signer.Mint(opened.subject(false), b.ttlOf(s))
 }
@@ -1048,6 +1149,13 @@ func (b *Bridge) routeOf(s *Session) (route, error) {
 // AND IT RETURNS ONCE THE SESSION'S LEDGER HAS CARRIED WHAT IT OWES
 // ([Ledger.End]), bounded by the ledger: the paths that end a run go on to
 // read its record, or to delete it.
+//
+// IT WAITS FOR NO CALL STILL RUNNING: each is answered that the run has ended
+// and the call is still running ([endedRunningNote]), and runs on, its record
+// appended as its tool returns ([binding.endKeeping]) — after the reads and
+// the delete that follow this where it returns later, which then hold
+// nothing of it (see the package doc, "An opening ends without waiting for
+// its calls").
 func (b *Bridge) Close(runID string) {
 	if b == nil {
 		return
@@ -1059,7 +1167,7 @@ func (b *Bridge) Close(runID string) {
 		delete(b.sessions, opened.id)
 	}
 	b.mu.Unlock()
-	opened.end()
+	opened.end(runEnded)
 }
 
 // Settle asks the session serving job `launch` of a run to carry into the run's
@@ -1319,11 +1427,15 @@ func (b *Bridge) ReleaseSeat(seat uuid.UUID) {
 	b.mu.Unlock()
 	// SIDE BY SIDE: each ending waits on its ledger's carry of what it owes
 	// ([Ledger.End]), which a store in an outage holds to the ledger's
-	// bound, and a seat leaving this node waits on the slowest of them rather
-	// than on their sum.
+	// bound, and on the answers it hands its box ([endAnswerWait]); a seat
+	// leaving this node waits on the slowest of them rather than on their
+	// sum. AND ON NO CALL STILL RUNNING: each is answered that it is still
+	// running, since the box goes on with the seat's next holder
+	// ([stillRunningNote]), and runs on here to be recorded, so the node
+	// gives the seat's lease back without waiting out a call.
 	var ended sync.WaitGroup
 	for _, opened := range released {
-		ended.Go(opened.end)
+		ended.Go(func() { opened.end(boxGoesOn) })
 	}
 	ended.Wait()
 }
@@ -1530,10 +1642,15 @@ type binding struct {
 	// context has no other way to reach it; see [Bridge.Open].
 	ctx context.Context
 
+	// calls is the bridge's registry of the calls it runs ([bridgedCalls]),
+	// which holds each call the opening admits until it is recorded.
+	calls *bridgedCalls
+
 	mu sync.Mutex
-	// ended is an opening whose run ended or was relaunched: every call is
-	// refused.
-	ended bool
+	// ended is an opening that has ended ([binding.endKeeping]): every later
+	// call is refused, as endedAs says it ended.
+	ended   bool
+	endedAs ending
 	// stopped is why the opening's calls are refused from here on: the
 	// seat's fence closed, or a tool panicked. Nil while it serves.
 	stopped error
@@ -1541,6 +1658,15 @@ type binding struct {
 	// the job's order — from [Session.LastSeq] — and so the one before the
 	// next [Call.Seq].
 	arrived int
+	// running is every call the opening admitted whose answer is not yet
+	// decided and out ([bridgedCall]): what its end answers and waits for.
+	// A call leaves it at an admission after its answer is out.
+	running map[*bridgedCall]struct{}
+	// refusals is the request's end of every answer the opening gave without
+	// running a call that may still be on its way
+	// ([binding.holdRefusalLocked]): what its end waits for too, before it
+	// closes the box's sessions.
+	refusals []<-chan struct{}
 
 	// steer is the run's note inbox, fixed when the opening opened
 	// ([Session.Steer]), and closed when it ends; nil once it has.
@@ -1615,9 +1741,10 @@ var _ toolsession.Dispatcher = (*binding)(nil)
 // Not a setting: nothing about a deployment moves the harnesses' clocks.
 const answerEvery = 20 * time.Second
 
-func newBinding(ctx context.Context, s *Session, where route) *binding {
+func newBinding(ctx context.Context, s *Session, where route, calls *bridgedCalls) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
-		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer}
+		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer, calls: calls,
+		running: map[*bridgedCall]struct{}{}}
 	// EVERY ENDPOINT IS FILED BEFORE ANY SERVER IS BUILT: a server lists its
 	// tools as it is built, and which endpoint lists a tool is read off the
 	// map — a server built before its siblings were filed would list theirs,
@@ -1683,51 +1810,6 @@ func (o *binding) subject(fresh bool) string {
 	return subject{launch: o.id, fresh: fresh, route: o.route, run: o.session.RunID}.String()
 }
 
-// end refuses every later call on the opening and closes every MCP session a
-// box holds on it. Nil-safe, and safe to call twice.
-//
-// Closing a server session runs the handler's own removal hook, so the session
-// leaves the SDK's table as well as ending on the wire — which is what makes
-// [Bridge.Close] release the surface rather than merely hide it.
-func (o *binding) end() { o.endKeeping(nil) }
-
-// endKeeping is [binding.end], closing the opening's note inbox unless it is
-// keep — the inbox an opening replacing this one serves too.
-//
-// AND IT ENDS THE SESSION'S LEDGER ([Ledger.End]), which carries what it owes,
-// before it returns, once, by the call that ended it: no call of the opening
-// comes after its end to carry what the ledger owes, and every path that ends
-// one — the run's settle, a stop, a relaunch's opening, the seat leaving this
-// node — goes on to read the run's record, delete it, or hand the run to a node
-// whose ledger owes it nothing. Last, once the opening refuses every new call
-// and its box's sessions are closed, so nothing it owes is still to come but
-// what a call already in flight records itself — which the ledger, told the
-// session ended, says is on no record where it does not land.
-func (o *binding) endKeeping(keep SteerInbox) {
-	if o == nil {
-		return
-	}
-	o.mu.Lock()
-	first := !o.ended
-	o.ended = true
-	inbox := o.steer
-	o.steer = nil
-	o.mu.Unlock()
-	if inbox != nil && inbox != keep {
-		inbox.Close()
-	}
-	for _, ep := range o.order {
-		for ss := range ep.server.MCP().Sessions() {
-			if err := ss.Close(); err != nil {
-				log.Debug("mcp_bridge_session_close", "error", err)
-			}
-		}
-	}
-	if first && o.session.Ledger != nil {
-		o.session.Ledger.End(o.ctx, o.session.RunID)
-	}
-}
-
 // inbox is the opening's note inbox, nil once it ended or where it has none.
 func (o *binding) inbox() SteerInbox {
 	o.mu.Lock()
@@ -1770,8 +1852,10 @@ func (o *binding) Revision() uint64 { return o.session.Surface.Revision() }
 // The answers a call gets when it is not run. None of them says more than the
 // run needs to stop: what stopped it is in the engine's log.
 const (
-	// endedNote answers a call on an opening whose run ended or was
-	// replaced by a relaunch.
+	// endedNote answers a call that reaches an opening after its end, where
+	// the run ended for its box: it settled, was stopped, or a relaunch
+	// replaced its job ([runEnded]). One whose box goes on is told
+	// [closingNote].
 	endedNote = "This run has ended; this call was not run. End your turn now."
 
 	// stoppedNote answers a call once the executor's tools are closed: the
@@ -1800,6 +1884,12 @@ const (
 //
 // The request's context is not handed over ([toolsession.Dispatcher.Call]) —
 // see the package doc, "a call is the run's, not the request's".
+//
+// ITS TOOL RUNS ON A GOROUTINE OF THE BRIDGE'S ([bridgedCalls]), and the call
+// is answered by whichever comes first: its own result, once its record is
+// made ([binding.conclude]), or the opening's end, which answers every call
+// still running before it closes the box's sessions ([binding.endKeeping]) —
+// see the package doc, "An opening ends without waiting for its calls".
 func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	s := o.session
 	// THE FENCE BEFORE ANY CALL, outside the lock: it reads the node's own
@@ -1809,10 +1899,18 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 
 	o.mu.Lock()
 	if o.ended {
-		// NOT RECORDED: the run is over, and its record with it — the job's
-		// row is gone, or holds the job that replaced it.
+		// NOT RECORDED: the call never ran, and the record is not this
+		// opening's to write — the run is over and its record with it, a
+		// relaunch's job holds it, or the run goes on through the opening
+		// that serves its box now. TOLD AS THE OPENING ENDED
+		// ([ending.notRun]): to end its turn where the run ended, and to call
+		// again where the box goes on, its next call reaching that opening.
+		// And HELD until that answer is out, which the end waits for before it
+		// closes the box's sessions.
+		why := o.endedAs.notRun()
+		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
-		return refused(endedNote)
+		return refused(why)
 	}
 	if o.stopped == nil && fenced != nil {
 		o.stopLocked(fenced)
@@ -1828,6 +1926,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// made this call after its tools closed — which a reviewer reading
 		// the run should see, and a surface that is not a model can act on
 		// only by its class.
+		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		o.record(Call{Call: tools.Call{Name: in.Name, Args: args, Output: stoppedNote,
 			Failed: true, Cause: tools.RefusalNotRunning}, Seq: seq})
@@ -1837,6 +1936,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// ANSWERED, NOT RUN, and recorded: the call was made, and an empty
 		// object in place of what the model wrote is a call it never made.
 		// Not admitted to the run's call log, since nothing ran.
+		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		out := toolloop.UnparsedArguments(in.Name, in.ArgumentsError)
 		o.record(Call{Call: tools.Call{Name: in.Name, Output: out, Failed: true,
@@ -1848,6 +1948,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// counted by there, which the record of the call carries.
 	admitted := s.Surface.Admit(in.Name, args)
 	digest := s.Surface.DigestOf(in.Name, args)
+	// HELD BY THE OPENING FROM ITS ADMISSION, under the lock its end takes:
+	// an end either came before — and the call is refused above — or finds
+	// the call here, and answers it if its tool is still running.
+	c := o.holdLocked(in.Over)
 	o.mu.Unlock()
 
 	// ITS ANSWER STARTS HERE, past every answer given without running it, and
@@ -1859,19 +1963,106 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		in.Running()
 	}
 
-	written := writtenOf(s.Surface)
-	before := written.Changes()
-	started := time.Now()
-	res, broke, err := o.execute(admitted, in.Name, args)
-	took := time.Since(started)
+	// THE TOOL RUNS, AND THE CALL IS RECORDED, ON A GOROUTINE OF ITS OWN,
+	// which the bridge holds until the record is made: the answer can then
+	// come before the tool returns, where the opening ends first, and the
+	// tool runs on to its end all the same.
+	concluded := make(chan answer, 1)
+	go func() {
+		defer o.calls.done(c)
+		written := writtenOf(s.Surface)
+		r := ran{name: in.Name, args: args, digest: digest, seq: seq, abandoned: in.Abandoned,
+			written: written, before: written.Changes(), started: time.Now()}
+		r.res, r.broke, r.err = o.execute(admitted, in.Name, args)
+		r.took = time.Since(r.started)
+		concluded <- o.conclude(c, r)
+	}()
+	select {
+	case a := <-concluded:
+		if a.own {
+			return a.result
+		}
+		// THE END ANSWERED IT FIRST, though its record came in before this
+		// saw the end: the answer is the end's, as the record says.
+		return c.endsAnswer()
+	case <-c.cut:
+		return c.endsAnswer()
+	}
+}
+
+// ran is one admitted call as its tool returned: what its record step reads.
+type ran struct {
+	name   string
+	args   map[string]any
+	digest string
+	seq    int
+	// abandoned is the call's request's [toolsession.Call.Abandoned].
+	abandoned <-chan struct{}
+	// written is the set the call commits to, and before what it held as the
+	// call's tool started.
+	written *turnctx.Written
+	before  []types.CommittedChange
+	// started is when the call was handed to the surface, and took how long
+	// the surface took to answer.
+	started time.Time
+	took    time.Duration
+	// res, broke and err are what the surface answered ([binding.execute]).
+	res   toolloop.ToolResult
+	broke *turn.PanicError
+	err   error
+}
+
+// answer is what a call's record step hands back: the call's own answer, and
+// whether that is the call's answer at all — own, where the opening had not
+// ended as the tool returned; where it had, the end's answer stands.
+type answer struct {
+	result toolsession.Result
+	own    bool
+}
+
+// conclude is a bridged call's ONE RECORD STEP: everything that follows its
+// tool's return, called once, on the call's own goroutine, after the tool
+// returned, and nowhere else. Its contract:
+//
+//   - WHO ANSWERS THE CALL is decided first, once, under the opening's lock
+//     ([binding.claim]): its own result where the opening has not ended —
+//     whose end, finding the call answered so, waits for that answer rather
+//     than answering it — and the end's answer where it has, which the end
+//     handed the box already ([binding.endKeeping]). So the answer and the
+//     record never disagree about whether anybody waited for it.
+//   - IT RECORDS THE CALL ONCE ([binding.record]) — or not at all where the
+//     surface could not run it, a call that did not happen as far as any
+//     record says — with what it committed to the run's turn, and as ONE
+//     NOBODY WAITED FOR ([Call.Abandoned]) where the end answered it, or its
+//     harness had given up on its request by then.
+//   - IT MAY RUN AFTER THE OPENING ENDED, and after the session's ledger
+//     ended, which the ledger takes as it takes any call still in flight as
+//     its session ends ([Ledger.End]): under the run's context, never the
+//     request's, which the call has no part of. And after the run's
+//     collection read its log, or its ending deleted the run's record, which
+//     the ending of an opening does not wait for: what it appends then is in
+//     no collection of the run, or on no record of it.
+//   - IT NEVER FAILS THE CALL BACK over its record ([binding.record]): the
+//     tool ran, and its effect happened.
+//
+// It also closes the opening's tools where the call broke inside the engine,
+// or the seat's fence closed while it ran. A late call's mark is not decided
+// here: the run's log gives it as it takes the record
+// ([sandbox.BridgeCall.Late]).
+func (o *binding) conclude(c *bridgedCall, r ran) answer {
+	s := o.session
+	// FIRST, as the tool returns, so an end from here on leaves the call to
+	// its own answer and waits for it.
+	own := o.claim(c)
+	res := r.res
 	switch {
-	case broke != nil:
+	case r.broke != nil:
 		log.ErrorContext(o.ctx, "mcp_bridge_tool_panicked", "run_id", s.RunID,
-			"seat", s.Handle, "tool", in.Name, "panic", broke.Value, "stack", broke.Stack)
-		o.stop(broke)
+			"seat", s.Handle, "tool", r.name, "panic", r.broke.Value, "stack", r.broke.Stack)
+		o.stop(r.broke)
 		res = toolloop.ToolResult{Output: failedInsideNote, Failed: true,
 			Cause: tools.RefusalInternalError, Absorbed: res.Absorbed}
-	case err != nil:
+	case r.err != nil:
 		// The surface returns an error only for a call that could not run
 		// at all — nothing was recorded on it, and nothing is here: the
 		// call did not happen as far as any record says.
@@ -1881,8 +2072,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// ("toolloop: context canceled") it can do nothing with. The error
 		// goes to this node's log.
 		log.ErrorContext(o.ctx, "mcp_bridge_dispatch_failed",
-			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name, "error", err)
-		return refused(unrunNote)
+			"run_id", s.RunID, "seat", s.Handle, "tool", r.name, "error", r.err)
+		return answer{result: refused(unrunNote), own: own}
 	case res.Suspend:
 		// A SUSPEND CANNOT CROSS THIS BOUNDARY. It parks a tool loop with
 		// the call unanswered so the conversation can be persisted and
@@ -1898,27 +2089,29 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// like the tool loop's, says so — forbidden, refused for where it
 		// was called.
 		log.ErrorContext(o.ctx, "mcp_bridge_suspend_refused",
-			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name)
+			"run_id", s.RunID, "seat", s.Handle, "tool", r.name)
 		res = toolloop.ToolResult{Output: suspendNote, Failed: true,
 			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server,
 			Source: res.Source, Absorbed: res.Absorbed}
 	}
 
-	// AND AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered — it
-	// ran, and what it did is done — but nothing after it runs as a seat
-	// this node no longer holds.
+	// AND THE FENCE AGAIN ONCE THE TOOL HAS RETURNED. It ran, and what it did
+	// is done, whichever answer its box was handed — its own, or its
+	// opening's end's — but nothing after it runs as a seat this node no
+	// longer holds.
 	if after := fence(s); after != nil {
 		o.stop(after)
 	}
-	// WHETHER ANYBODY STILL WAITS FOR THE ANSWER, read as the tool returns and
-	// before the record: the harness cancelled its request, a progress kept
-	// going on its response found the response gone, or the opening ended and
-	// its session is closed behind it ([Call.Abandoned]). A harness that hung
-	// up on its POST is seen at the next progress after it, and only then: a
-	// request this transport carries runs on when its harness hangs up, so a
-	// hang-up in the last cadence before the tool returns is not seen here.
-	abandoned := gone(in.Abandoned) || o.over()
-	recorded := args
+	// WHETHER ANYBODY WAITED FOR THE ANSWER ([Call.Abandoned]): nobody, where
+	// the opening's end answered the call before its tool returned; and
+	// nobody, where the harness had cancelled its request, or a progress kept
+	// going on its response found the response gone, by the time it returned.
+	// A harness that hung up on its POST is seen at the next progress after
+	// it, and only then: a request this transport carries runs on when its
+	// harness hangs up, so a hang-up in the last cadence before the tool
+	// returns is not seen here.
+	abandoned := !own || gone(r.abandoned)
+	recorded, digest := r.args, r.digest
 	if res.Held {
 		// A HELD CALL'S ARGUMENTS ARE NOT LOGGED: they ride the run's row
 		// sealed beside its question (ADR-0077), and the call log is
@@ -1933,14 +2126,26 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		output = tools.UnkeptOutput(output)
 	}
 	o.record(Call{
-		Call: tools.Call{Name: in.Name, Args: recorded, Output: output, Failed: res.Failed,
+		Call: tools.Call{Name: r.name, Args: recorded, Output: output, Failed: res.Failed,
 			Cause: res.Cause},
-		Seq: seq, StartedAt: started.UTC(), Duration: took,
+		Seq: r.seq, StartedAt: r.started.UTC(), Duration: r.took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
-		Digest: digest, Absorbed: res.Absorbed, Committed: written.Since(before),
+		Digest: digest, Absorbed: res.Absorbed, Committed: r.written.Since(r.before),
 		Abandoned: abandoned,
 	})
-	return toolsession.Result{Output: res.Output, Failed: res.Failed}
+	return answer{result: toolsession.Result{Output: res.Output, Failed: res.Failed}, own: own}
+}
+
+// claim decides who answers c now that its tool has returned, once, under the
+// opening's lock: its own result, unless the opening's end answered it first.
+func (o *binding) claim(c *bridgedCall) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if c.cutByEnd {
+		return false
+	}
+	c.own = true
+	return true
 }
 
 // execute runs one admitted call as the run's seat, under the run's context,
@@ -1980,6 +2185,14 @@ func fence(s *Session) error {
 }
 
 // stop closes the opening's tools for good, saying why once.
+//
+// AN OPENING THAT HAS ENDED IS NOT STOPPED: its end refuses every later call
+// already, in its own words ([ending.notRun]), so a stop would change nothing
+// and say what is false of it — that the run's harness is told to end its
+// turn, of a run whose box may go on. Which is what a call still running as
+// its seat leaves this node meets as its tool returns ([binding.conclude]):
+// the seat leaves the node's grants before its release ends the opening, so
+// the fence after the call is closed, on an opening that has ended.
 func (o *binding) stop(why error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -1987,7 +2200,7 @@ func (o *binding) stop(why error) {
 }
 
 func (o *binding) stopLocked(why error) {
-	if o.stopped != nil {
+	if o.stopped != nil || o.ended {
 		return
 	}
 	o.stopped = why

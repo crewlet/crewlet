@@ -36,6 +36,7 @@ var dutyNames = map[string][]string{
 	"embedDutyName":         {embedDutyName},
 	"objectCollectorDuty":   {objectCollectorDuty},
 	"chatPruneDutyName":     {chatPruneDutyName},
+	"delegatedSweepName":    {delegatedSweepName},
 	"codeRetentionDutyName": {codeRetentionDutyName},
 	"name":                  identityDutyNames(),
 }
@@ -55,6 +56,7 @@ var dutyPhrases = map[string][]string{
 	embedDutyName:         {"embedding"},
 	objectCollectorDuty:   {"collector"},
 	chatPruneDutyName:     {"message horizon", "chat prune"},
+	delegatedSweepName:    {"delegated decisions sweep", "delegated-decisions"},
 	codeRetentionDutyName: {"code retention", "code-retention"},
 	identitySweepDuty:     {"identity sweep"},
 }

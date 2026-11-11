@@ -3,6 +3,8 @@ package mcpbridge
 import (
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -25,8 +27,39 @@ func EndOpening(s *Session) {
 	s.mu.Lock()
 	opened := s.live
 	s.mu.Unlock()
-	opened.end()
+	opened.end(runEnded)
 }
+
+// OpeningServers is every MCP server a session's live opening serves, the
+// engine's own first, for a case that connects a box to one over a transport
+// of its own: an in-process pipe a bubble's goroutines wait on durably, as none
+// waits on a socket.
+func OpeningServers(s *Session) []*mcp.Server {
+	s.mu.Lock()
+	opened := s.live
+	s.mu.Unlock()
+	out := make([]*mcp.Server, 0, len(opened.order))
+	for _, ep := range opened.order {
+		out = append(out, ep.server.MCP())
+	}
+	return out
+}
+
+// AwaitClosing waits for every close of an opening's sessions its end left
+// running ([binding.endKeeping]).
+func AwaitClosing(b *Bridge) { b.calls.closing.Wait() }
+
+// The answers a call is handed as its opening ends, or after it ended.
+const (
+	EndedNote        = endedNote
+	EndedRunningNote = endedRunningNote
+	StillRunningNote = stillRunningNote
+	ClosingNote      = closingNote
+)
+
+// EndAnswerWait bounds how long an opening's end waits for its calls'
+// answers to be written before it closes the box's sessions.
+const EndAnswerWait = endAnswerWait
 
 // HoldPollsFor shortens how long the bridge holds a poll for notes, for a case
 // that waits one out.

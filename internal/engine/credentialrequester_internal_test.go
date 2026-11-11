@@ -123,7 +123,7 @@ func TestACredentialIsPlacedByItsLoginsNamespaceAlone(t *testing.T) {
 func TestACredentialsTurnUsesOnlyWhatEveryOneOfItsWritesCarried(t *testing.T) {
 	t.Parallel()
 	token := func(apps ...iam.Grant) *types.NotificationWriter {
-		return notify.FirstPartyWriter(iam.ActorOperator, "token:ci", apps)
+		return notify.FirstPartyWriter(iam.ActorOperator, "token:ci", apps, nil)
 	}
 	burst := []*events.Event{events.New(types.ExternalNotification{
 		NotificationSource: worklet.Source, Sender: "token:ci", Writer: token(iam.GrantWorklet),
@@ -175,7 +175,7 @@ func TestACredentialsTurnIsStillItsTurnWhenItResumes(t *testing.T) {
 	wake := events.New(types.ExternalNotification{
 		NotificationSource: worklet.Source, SourceEventType: "comment", Sender: "token:ci",
 		Body: body, SalientBody: &body,
-		Writer:   notify.FirstPartyWriter(iam.ActorOperator, "token:ci", []iam.Grant{iam.GrantWorklet}),
+		Writer:   notify.FirstPartyWriter(iam.ActorOperator, "token:ci", []iam.Grant{iam.GrantWorklet}, nil),
 		Metadata: map[string]string{notify.ActorField: "token:ci"},
 	}, events.TraceContext{})
 	tel, err := e.describeTurn(t.Context(), company, Request{

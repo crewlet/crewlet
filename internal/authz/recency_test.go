@@ -263,6 +263,10 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 			"holds, which no step-up reaches",
 		authz.ActionSSHOperate: "a tool a granted seat holds, which no step-up reaches: what it " +
 			"asks waits for a person who approves it at a fresh step-up (ssh.operate.approve)",
+		authz.ActionSSHAskOperate: "a tool a granted seat holds, which no step-up reaches: it posts a " +
+			"question, and only a person's answer at a fresh step-up approves the command it names",
+		authz.ActionReviewDelegated: "a tool a granted seat holds, which no step-up reaches: what its " +
+			"allow carries out is bounded by the engine's own limits, and every verdict is recorded first",
 		authz.ActionModelsCheck: "a model's checks change no config and no " +
 			"credential: they spend a few tokens on a call the company already makes",
 		authz.ActionModelsRetry: "a retry changes no config and no credential: " +

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -118,6 +119,21 @@ func (d *chatDesk) Thread(_ context.Context, viewer string, q chatlet.ThreadQuer
 	served := d.read("thread", viewer, fresh)
 	return chatlet.Thread{Served: served, ChannelID: q.ChannelID,
 		Root: chatlet.MessageView{Message: chatlet.Message{ID: q.RootID}}}, nil
+}
+
+// TurnThread answers the thread Thread does, carrying whom its root was
+// written for, as the serving reader does.
+func (d *chatDesk) TurnThread(_ context.Context, viewer string, q chatlet.ThreadQuery,
+	fresh statelog.Freshness) (chatlet.TurnThread, error) {
+	served := d.read("turn_thread", viewer, fresh)
+	return chatlet.TurnThread{
+		Thread: chatlet.Thread{Served: served, ChannelID: q.ChannelID,
+			Root: chatlet.MessageView{Message: chatlet.Message{ID: q.RootID}}},
+		WorkingFor: map[string]*types.WorkingFor{
+			q.RootID: {Kind: types.WorkingForSeat, Seat: "ada"},
+		},
+		Carried: true,
+	}, nil
 }
 
 func (d *chatDesk) Activity(_ context.Context, viewer string, q chatlet.ActivityQuery,
@@ -340,7 +356,7 @@ func withRooms(f *fleet) map[string]*chatDesk {
 }
 
 var (
-	jane     = chatlet.Actor{Handle: "jane", Kind: chatlet.AuthorAgent}
+	jane     = chatlet.Actor{Handle: "jane", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
 	maya     = chatlet.Actor{Handle: "maya", Kind: chatlet.AuthorHuman}
 	linear   = statelog.Freshness{Level: statelog.ReadLinearizable}
 	chatSeen = statelog.Position{Stream: "CREWLET_CHAT_LOG", Generation: 1, Seq: 41}
@@ -391,6 +407,13 @@ func TestEveryChatReadIsAnsweredForItsViewerAtItsLevel(t *testing.T) {
 		{"thread", func() (chatlet.Served, bool, error) {
 			out, err := c.Thread(ctx, "jane", chatlet.ThreadQuery{ChannelID: "room-1", RootID: "m-1"}, linear)
 			return out.Served, out.Root.Message.ID == "m-1", err
+		}},
+		{"turn_thread", func() (chatlet.Served, bool, error) {
+			out, err := f.client.TurnThreads().TurnThread(ctx, "jane",
+				chatlet.ThreadQuery{ChannelID: "room-1", RootID: "m-1"}, linear)
+			carried := out.Carried && out.WorkingFor["m-1"] != nil &&
+				out.WorkingFor["m-1"].Seat == "ada"
+			return out.Thread.Served, out.Thread.Root.Message.ID == "m-1" && carried, err
 		}},
 		{"room_names", func() (chatlet.Served, bool, error) {
 			out, err := c.RoomNames(ctx, "jane", linear)

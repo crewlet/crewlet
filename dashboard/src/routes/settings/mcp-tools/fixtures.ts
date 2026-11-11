@@ -352,7 +352,6 @@ export const LINEAR_DETAIL: McpServerAnswer = {
       removed: false,
     },
   ],
-  tool_count: 2,
   baseline: null,
   unlisted_levels: [],
   server_info: { name: "linear-mcp", version: "2.1.0", protocol: "2026-07-28" },
@@ -622,7 +621,6 @@ export const LINEAR_MEMBER_DETAIL: McpMemberServerAnswer = {
   nodes: LINEAR_DETAIL.nodes,
   listed: LINEAR_DETAIL.listed,
   tools: LINEAR_DETAIL.tools,
-  tool_count: LINEAR_DETAIL.tool_count,
   server_info: LINEAR_DETAIL.server_info,
   instances: LINEAR_DETAIL.instances.map(({ wait: _w, failure, last_failure, ...i }) => ({
     ...i,

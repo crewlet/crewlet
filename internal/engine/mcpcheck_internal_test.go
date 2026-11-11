@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,14 +219,21 @@ mcp_servers:
 }
 
 // A REPORT LEAVES ITS NODE BOUNDED: every sentence redacted and cut, the
-// server's instructions left out, the tools capped with their words cut, and a
-// tool a built-in holds the name of refused for it.
+// server's instructions left out, EVERY TOOL KEPT with its words cut until the
+// tools fit their bytes, and a tool a built-in holds the name of refused for it.
+// The person adding a server is shown each tool its first listing accepts.
+//
+// Mutation: cap the tools at a count, or stop shortening the words, and this
+// is red.
 func TestAReportLeavesItsNodeBounded(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("y", 4*coord.MaxMCPErrorBytes)
-	tools := make([]mcp.TestedTool, maxMCPCheckTools+5)
+	tools := make([]mcp.TestedTool, mcp.MaxServerTools)
 	for i := range tools {
-		tools[i] = mcp.TestedTool{Name: "t", Description: strings.Repeat("d", 2*coord.MaxMCPToolDescriptionBytes)}
+		// `<` is stored as six bytes: the bound is on what is encoded.
+		tools[i] = mcp.TestedTool{Name: fmt.Sprintf("tool_%04d", i), Raw: fmt.Sprintf("tool_%04d", i),
+			Title:       strings.Repeat("t", 2*coord.MaxMCPToolTitleBytes),
+			Description: strings.Repeat("<", 2*coord.MaxMCPToolDescriptionBytes)}
 	}
 	report := boundedReport(mcp.TestReport{
 		Steps:    []mcp.TestStep{{Stage: mcp.StageLaunch, State: mcp.StepFailed, Detail: long}},
@@ -236,8 +245,22 @@ func TestAReportLeavesItsNodeBounded(t *testing.T) {
 		len(report.Identity.Name) > coord.MaxMCPServerInfoBytes || report.Identity.Instructions != "" {
 		t.Fatalf("a report left unbounded: %+v", report)
 	}
-	if len(report.Tools) != maxMCPCheckTools || len(report.Tools[0].Description) > coord.MaxMCPToolDescriptionBytes {
-		t.Fatalf("tools = %d, the first described in %d bytes", len(report.Tools), len(report.Tools[0].Description))
+	if len(report.Tools) != mcp.MaxServerTools || report.Tools[mcp.MaxServerTools-1].Name != tools[mcp.MaxServerTools-1].Name {
+		t.Fatalf("tools = %d of %d", len(report.Tools), mcp.MaxServerTools)
+	}
+	raw, err := json.Marshal(report.Tools)
+	if err != nil || len(raw) > maxMCPCheckToolBytes {
+		t.Fatalf("the tools encode to %d bytes (%v), past %d", len(raw), err, maxMCPCheckToolBytes)
+	}
+	if first := report.Tools[0]; first.Description == "" || !strings.HasSuffix(first.Description, "…") ||
+		len(first.Title) > coord.MaxMCPToolTitleBytes {
+		t.Errorf("the first tool's words are %q and %q: cut, and marked as cut", first.Title, first.Description)
+	}
+
+	// A FEW TOOLS KEEP THEIR WORDS to their own bounds, unshortened.
+	few := boundedReport(mcp.TestReport{Tools: tools[:3]}, nil)
+	if n := len(few.Tools[0].Description); n != coord.MaxMCPToolDescriptionBytes {
+		t.Errorf("three tools' descriptions kept %d bytes, want %d", n, coord.MaxMCPToolDescriptionBytes)
 	}
 }
 
