@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -154,7 +155,7 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 }
 
 // leafAcrossSlowLink is a client of a leaf whose link to its member crosses a
-// [slowLink] carrying rate bytes a second towards the member.
+// slow link carrying rate bytes a second towards the member ([linktest.Slow]).
 func leafAcrossSlowLink(t *testing.T, rate int64) *Queue {
 	t.Helper()
 	cfg := testTimings(Config{FleetAuth: testFleetAuth()})
@@ -166,10 +167,10 @@ func leafAcrossSlowLink(t *testing.T, rate int64) *Queue {
 	memberCfg.StoreDir, memberCfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
 	member := startTestServer(t, memberCfg)
 
-	link := slowLinkTo(t, fmt.Sprintf("127.0.0.1:%d", member.LeafPort()), rate)
+	link := linktest.Slow(t, fmt.Sprintf("127.0.0.1:%d", member.LeafPort()), rate)
 	leafCfg := cfg
 	leafCfg.ServerName = "leaf"
-	leafCfg.LeafURLs = []string{"nats-leaf://" + link.addr()}
+	leafCfg.LeafURLs = []string{"nats-leaf://" + link.Addr()}
 	leaf := startTestServer(t, leafCfg)
 	q, err := leaf.Client(t.Context())
 	if err != nil {

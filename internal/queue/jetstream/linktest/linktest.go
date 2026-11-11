@@ -1,6 +1,17 @@
-package jetstream
+// Package linktest is a slow link a test puts between a node and the broker it
+// reaches across one — a leaf's link to its member, a client's dial to an
+// external server — so a case can show what a write waits for when its bytes
+// take a while to cross, on a loopback interface that otherwise carries them
+// at once.
+//
+// ONE RELAY FOR EVERY PACKAGE whose writes cross a link: the queue's
+// (internal/queue/jetstream) and the coordination store's (internal/coord/kv)
+// reach the members over the same leaf link in production, and a relay
+// written twice would pace them apart.
+package linktest
 
 import (
+	"context"
 	"io"
 	"net"
 	"sync"
@@ -8,7 +19,7 @@ import (
 	"time"
 )
 
-// slowLink is a TCP relay a case puts between a node and the broker it
+// Link is a TCP relay a case puts between a node and the broker it
 // reaches across a link — a leaf and its member's leaf listener, a client and
 // an external server — which carries what the NODE sends at rate bytes a
 // second and what the broker sends back at once: the direction a write's
@@ -28,7 +39,7 @@ import (
 //
 // It ends with the case that started it: its listener, every connection it
 // carries and every goroutine it runs.
-type slowLink struct {
+type Link struct {
 	ln     net.Listener
 	target string
 	// rate is how many bytes a second the link carries towards the broker.
@@ -43,28 +54,33 @@ type slowLink struct {
 	conns []net.Conn
 }
 
-// slowLinkTo listens on a loopback port and carries every connection made to
-// it on to target, at rate bytes a second towards target, until the case ends.
-func slowLinkTo(t *testing.T, target string, rate int64) *slowLink {
+// Slow listens on a loopback port and carries every connection made to it on
+// to target, at rate bytes a second towards target, until the case ends.
+func Slow(t testing.TB, target string, rate int64) *Link {
 	t.Helper()
 	if rate <= 0 {
 		t.Fatalf("a slow link carries %d bytes a second, which carries nothing", rate)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// THE CASE'S CONTEXT, which ends as the case does, just before its
+	// cleanups (this link's close among them): a connection it dialled
+	// outlives it, as a dialled connection does its dial's context.
+	ctx := t.Context()
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("bind the slow link: %v", err)
 	}
-	l := &slowLink{ln: ln, target: target, rate: rate, done: make(chan struct{})}
-	l.wg.Go(l.accept)
+	l := &Link{ln: ln, target: target, rate: rate, done: make(chan struct{})}
+	l.wg.Go(func() { l.accept(ctx) })
 	t.Cleanup(l.close)
 	return l
 }
 
-// addr is the host and port the node dials to cross the link.
-func (l *slowLink) addr() string { return l.ln.Addr().String() }
+// Addr is the host and port the node dials to cross the link.
+func (l *Link) Addr() string { return l.ln.Addr().String() }
 
-// accept carries every connection the listener takes, until it is closed.
-func (l *slowLink) accept() {
+// accept carries every connection the listener takes, until it is closed,
+// dialling the target for each in ctx.
+func (l *Link) accept(ctx context.Context) {
 	for {
 		in, err := l.ln.Accept()
 		if err != nil {
@@ -74,13 +90,13 @@ func (l *slowLink) accept() {
 			_ = in.Close()
 			continue
 		}
-		l.wg.Go(func() { l.carry(in) })
+		l.wg.Go(func() { l.carry(ctx, in) })
 	}
 }
 
 // track records c for the case's end to close, and refuses it once that end
 // has begun, so no connection outlives the link.
-func (l *slowLink) track(c net.Conn) bool {
+func (l *Link) track(c net.Conn) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.shut {
@@ -90,10 +106,10 @@ func (l *slowLink) track(c net.Conn) bool {
 	return true
 }
 
-// carry relays in to a connection of its own to the target, both ways, until
-// either side ends, and then closes both.
-func (l *slowLink) carry(in net.Conn) {
-	out, err := net.Dial("tcp", l.target)
+// carry relays in to a connection of its own to the target, dialled in ctx,
+// both ways, until either side ends, and then closes both.
+func (l *Link) carry(ctx context.Context, in net.Conn) {
+	out, err := (&net.Dialer{}).DialContext(ctx, "tcp", l.target)
 	if err != nil {
 		_ = in.Close()
 		return
@@ -128,7 +144,7 @@ func (l *slowLink) carry(in net.Conn) {
 
 // close ends the link: no connection is taken or carried after it, and it
 // returns once every goroutine the link ran has.
-func (l *slowLink) close() {
+func (l *Link) close() {
 	_ = l.ln.Close()
 	l.mu.Lock()
 	l.shut = true
