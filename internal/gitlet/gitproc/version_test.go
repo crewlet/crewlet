@@ -248,8 +248,8 @@ func TestTheNodeFloorWritesALayerOverANamedBase(t *testing.T) {
 // node floor's own build (in gitproc.NodeMinVersion's series), so those arms
 // cannot quietly shrink to the one git a make target puts on PATH, which is
 // how the floor's expectations were wrong in three arms and nothing ran them.
-// Where the floor's build is named (every make target names it), its arm must
-// have run.
+// Where the floor's build is named (every make target that runs this package
+// names it), its arm must have run.
 //
 // Mutation: run onNodeGits's body on the pin alone, and this is red.
 func TestEveryNodeGitClaimRunsOnBothEnds(t *testing.T) {

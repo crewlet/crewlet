@@ -933,10 +933,11 @@ jobs:
   # libcurl, none of which any Linux job reaches, and `make test-gitproc` runs
   # gitproc's own suite on what it built — the floor judgement, a real pool on
   # the node pin, and the two floors' builds through gittest.NodeFloor and
-  # gittest.ClientFloor, required as every make target requires them. A
-  # contributor on a Mac runs this recipe (CONTRIBUTING.md, Development setup),
-  # so a failure here is theirs before it is anybody's: it is fixed, never
-  # skipped. Whether the job is a REQUIRED check is a repository setting.
+  # gittest.ClientFloor, required as every make target that runs them
+  # requires them. A contributor on a Mac runs this recipe (CONTRIBUTING.md,
+  # Development setup), so a failure here is theirs before it is anybody's: it
+  # is fixed, never skipped. Whether the job is a REQUIRED check is a
+  # repository setting.
   #
   # The pinned gits' cache steps are the race shards', whose key already
   # carries the runner's OS, its release and its architecture, and there is no

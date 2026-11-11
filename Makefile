@@ -22,7 +22,7 @@
 # (CONTRIBUTING.md, "A skip is not a pass"). Every queue backend certifies
 # itself with no external service: the JetStream suite starts an embedded
 # broker per test. The suite's git is the same posture's: every target that
-# runs Go tests runs the git the engine image builds, which `make git` builds
+# runs the suite runs the git the engine image builds, which `make git` builds
 # once a machine, and a machine without a C compiler or libcurl's headers is
 # told so by name rather than handed its own git (`##@ The pinned gits`). So
 # are its Chromiums: every target that runs the whole suite names the two
@@ -418,7 +418,8 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # beside the old). Gitlet runs real git, and what a case asserts about it
 # is the git's behaviour as much as the engine's, so the suite runs the git a
 # Gitlet node runs rather than whichever one the machine has: every target that
-# runs Go tests depends on `git` and runs under GIT_ENV, and so do CI's two test
+# runs the suite — `test`, `test-solo`, `test-norace`, `test-gitproc` and
+# `bench` — depends on `git` and runs under GIT_ENV, and so do CI's two test
 # jobs and its `git recipe (macOS)` job, which call those targets.
 #
 # EVERY PIN IS BUILT, the floors' as well as the node's, so a pin whose version

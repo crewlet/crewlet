@@ -35,8 +35,9 @@ minutes on four vCPUs, and a pin bump or a change to the recipe builds beside
 what is there — and leaves the older builds where they are, about 70 MB a set,
 because another checkout still on them may be running one: `rm -rf
 ~/.cache/crewlet/git` clears them, and the next `make git` builds what the tree
-pins). Every target that runs Go tests depends on it and puts the node
-pin first on `PATH`, and a one-package loop does the same by hand, as two
+pins). The make targets that run the suite — `test`, `test-solo`,
+`test-norace`, `test-gitproc` and `bench` — depend on it and put the node pin
+first on `PATH`, and a one-package loop does the same by hand, as two
 statements:
 `bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/gitlet/cache/`
 — never `PATH="$(scripts/git.sh node):$PATH" go test …`, whose substitution
@@ -65,7 +66,7 @@ do, or those cases' floor arms skip:
 — and a row whose range does not hold names the format and the git that
 disagreed.
 
-**The floors' arm.** Every make target that runs Go tests also names the two
+**The floors' arm.** Every make target that runs the suite also names the two
 floors' own builds — `CREWLET_TEST_GIT_NODE_FLOOR` and
 `CREWLET_TEST_GIT_CLIENT_FLOOR`, each `$(scripts/git.sh <pin>)/git` for
 `node-floor` and `client-floor` (the Makefile's `GIT_ENV`) — and requires

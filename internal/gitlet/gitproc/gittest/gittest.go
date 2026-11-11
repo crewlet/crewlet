@@ -15,10 +15,10 @@
 // ADR-0087): [Require] is a CLIENT's git and fails a test without git 2.40 or
 // newer on PATH, [RequireNode] is the git every POOL a test builds runs and
 // fails one without 2.55 — never skipping either, because a skip there would
-// be a pass the suite never earned. Every make target puts the node pin first
-// on PATH, so both are that git; [NodeFloor] and [ClientFloor] are the floors'
-// own builds, which the floors' arm of Gitlet's suite runs against
-// each other.
+// be a pass the suite never earned. Every make target that runs such a test
+// puts the node pin first on PATH, so both are that git; [NodeFloor] and
+// [ClientFloor] are the floors' own builds, which the floors' arm of Gitlet's
+// suite runs against each other.
 //
 // A client trusts one repository a test did not make: the checkout this
 // module was compiled from, for a test whose subject is the repository itself
