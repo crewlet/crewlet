@@ -37,13 +37,13 @@ func (s sharedEstate) GitRead(ctx context.Context, q code.GitQuery) (code.GitAns
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
-	time.Sleep(benchFactsHold)
+	time.Sleep(benchFactsHold) //fixedwait:simulated a facts read's git holding its unit of the share
 	release()
 	return s.estate.GitRead(ctx, q)
 }
 
 func (s sharedEstate) Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
-	time.Sleep(benchRecordTrip)
+	time.Sleep(benchRecordTrip) //fixedwait:simulated a record's round trip to its writer
 	return s.estate.Converse(ctx, w)
 }
 
@@ -131,16 +131,16 @@ func burst(b *testing.B, units, turns int) (time.Duration, []time.Duration) {
 			select {
 			case <-done:
 				return
-			case <-time.After(benchSeatPause):
+			case <-time.After(benchSeatPause): //fixedwait:bench
 			}
 			began := time.Now()
 			release, err := share.Take(context.Background(), code.SeatWorkRead)
-			waited := time.Since(began)
+			waited := time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 			mu.Lock()
 			waits = append(waits, waited)
 			mu.Unlock()
 			if err == nil {
-				time.Sleep(benchSeatHold)
+				time.Sleep(benchSeatHold) //fixedwait:bench
 				release()
 			}
 		}
@@ -158,9 +158,9 @@ func burst(b *testing.B, units, turns int) (time.Duration, []time.Duration) {
 		if left == 0 {
 			break
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
-	drained := time.Since(began)
+	drained := time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 	close(done)
 	seat.Wait()
 	l.Stop(context.Background())

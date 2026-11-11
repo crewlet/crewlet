@@ -5,17 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
 // THE SPOOL ALLOWANCE'S TURNS, over the allowance alone: who starts and is
 // granted room, in what order, and what a wait that ends unserved gives back.
-// Every case waits at most a second for what it asserts and bounds its waits
-// by a minute, so a request that is never granted is a failure here rather
-// than a wait.
+// Every case waits at most a second for an answer it asserts, reads a request
+// that must still wait off the allowance's own queue (waiting), and bounds its
+// waits by a minute, so a request that is never granted is a failure here
+// rather than a wait.
 
 // turn is one request's start or room, run off the case's goroutine.
 type turn struct {
@@ -24,36 +27,65 @@ type turn struct {
 	err error
 }
 
+// request is one ask made off the case's goroutine: its answer, on out once
+// it has one, and — where it was queued — its waiter in a's queue.
+type request struct {
+	a   *spools
+	out <-chan turn
+	w   *spoolWaiter
+}
+
 // queued runs ask off the case's goroutine and waits until it is answered or
-// queued — so the order requests are made in is the order they arrive in.
-func queued(t *testing.T, a *spools, what string, ask func() turn) <-chan turn {
+// queued — so the order requests are made in is the order they arrive in —
+// and answers it with the waiter it queued, nil where it was answered at once.
+func queued(t *testing.T, a *spools, what string, ask func() turn) request {
 	t.Helper()
-	before := a.waiters()
+	before := a.waitersNow()
 	out := make(chan turn, 1)
 	go func() { out <- ask() }()
 	deadline := time.Now().Add(time.Second)
+	//fixedwait:measure a poll's own deadline: its firing fails the case, an ask neither answered nor queued
 	for time.Now().Before(deadline) {
 		select {
 		case r := <-out:
 			// Answered at once: hand the answer back as it came.
 			done := make(chan turn, 1)
 			done <- r
-			return done
+			return request{a: a, out: done}
 		default:
 		}
-		if a.waiters() > before {
-			return out
+		if w := a.joined(before); w != nil {
+			return request{a: a, out: out, w: w}
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
 	t.Fatalf("%s was neither answered nor queued in a second", what)
+	return request{}
+}
+
+// waitersNow is every request a holds queued, in its order.
+func (a *spools) waitersNow() []*spoolWaiter {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.queue)
+}
+
+// joined is the waiter a holds queued that before did not, nil for none.
+func (a *spools) joined(before []*spoolWaiter) *spoolWaiter {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, w := range a.queue {
+		if !slices.Contains(before, w) {
+			return w
+		}
+	}
 	return nil
 }
 
 // begin starts a body for credential on a that claims claim bytes, asking room
 // for need of them.
 func begin(ctx context.Context, t *testing.T, a *spools, credential string, claim, need int64,
-	wait time.Duration) <-chan turn {
+	wait time.Duration) request {
 
 	t.Helper()
 	return queued(t, a, credential+"'s start", func() turn {
@@ -63,7 +95,7 @@ func begin(ctx context.Context, t *testing.T, a *spools, credential string, clai
 }
 
 // grow asks room for need more bytes of body b, arriving.
-func grow(ctx context.Context, t *testing.T, a *spools, b *spoolBody, need int64, wait time.Duration) <-chan turn {
+func grow(ctx context.Context, t *testing.T, a *spools, b *spoolBody, need int64, wait time.Duration) request {
 	t.Helper()
 	return queued(t, a, b.credential+"'s room", func() turn {
 		got, w, err := a.more(ctx, b, need, need, wait)
@@ -72,27 +104,35 @@ func grow(ctx context.Context, t *testing.T, a *spools, b *spoolBody, need int64
 }
 
 // granted fails t unless r is answered granted within a second.
-func granted(t *testing.T, what string, r <-chan turn) turn {
+func granted(t *testing.T, what string, r request) turn {
 	t.Helper()
 	select {
-	case got := <-r:
+	case got := <-r.out:
 		if got.err != nil {
 			t.Fatalf("%s: %v", what, got.err)
 		}
 		return got
-	case <-time.After(time.Second):
+	case <-time.After(time.Second): //fixedwait:liveness
 		t.Fatalf("%s was not granted in a second", what)
 	}
 	return turn{}
 }
 
-// waiting fails t unless r is still unanswered.
-func waiting(t *testing.T, what string, r <-chan turn) {
+// waiting fails t unless r still waits: its waiter in its queue, neither
+// granted nor gone. Read off the allowance itself — a grant takes its waiter
+// out of the queue under the allowance's lock, in the call that gives it the
+// room — so a grant the case's last move made is seen however late its
+// answer would reach the case.
+func waiting(t *testing.T, what string, r request) {
 	t.Helper()
-	select {
-	case got := <-r:
-		t.Fatalf("%s was answered (%+v) while it should wait", what, got)
-	case <-time.After(20 * time.Millisecond):
+	if r.w == nil {
+		t.Fatalf("%s was answered at once (%+v) while it should wait", what, <-r.out)
+	}
+	r.a.mu.Lock()
+	queued, got := slices.Contains(r.a.queue, r.w), r.w.got
+	r.a.mu.Unlock()
+	if !queued || got != 0 {
+		t.Fatalf("%s left the queue, granted %d bytes, while it should wait", what, got)
 	}
 }
 
@@ -316,7 +356,7 @@ func TestARequestThatCanStartNowStartsNow(t *testing.T) {
 	}
 	// One that must wait finds no place: y's second, its credential's body
 	// arriving, and the room full.
-	r := <-begin(ctx, t, a, "y", 10, 10, time.Minute)
+	r := <-begin(ctx, t, a, "y", 10, 10, time.Minute).out
 	var unserved *spoolUnserved
 	if !errors.As(r.err, &unserved) || unserved.reason != spoolRefused || r.w.outcome != spoolRefused {
 		t.Errorf("a request that must wait beside a full room answered %v (%q), want refused a place", r.err,
@@ -340,7 +380,7 @@ func TestARequestThatMustWaitIsRefusedOnlyWithoutAPlace(t *testing.T) {
 	a := newSpools(spoolSizes{limit: 100, share: 10, request: 10, grain: 1, places: 3, placesPerCredential: 1})
 	first := granted(t, "x's body", begin(ctx, t, a, "x", 10, 10, time.Minute)).t.body
 	second := begin(ctx, t, a, "x", 10, 10, time.Minute)
-	refused(t, "x's third with its one place taken", <-begin(ctx, t, a, "x", 10, 10, time.Minute))
+	refused(t, "x's third with its one place taken", <-begin(ctx, t, a, "x", 10, 10, time.Minute).out)
 	a.ended(first, 10)
 	a.release(first)
 	got := granted(t, "x's second", second)
@@ -357,46 +397,53 @@ func TestARequestThatMustWaitIsRefusedOnlyWithoutAPlace(t *testing.T) {
 	granted(t, "x's body", begin(ctx, t, b, "x", 10, 10, time.Minute))
 	begin(ctx, t, b, "y", 5, 5, time.Minute)
 	begin(ctx, t, b, "z", 5, 5, time.Minute)
-	refused(t, "w's request with the room full", <-begin(ctx, t, b, "w", 5, 5, time.Minute))
+	refused(t, "w's request with the room full", <-begin(ctx, t, b, "w", 5, 5, time.Minute).out)
 }
 
 // A WAIT ENDS AT ITS BOUND, unserved: errSpoolFull saying what held it back,
 // counted expired, and its place given back — and a request it held back from
-// the node is granted as it leaves.
+// the node is granted as it leaves. In a bubble, whose clock moves only while
+// every goroutine of it waits: the wait ends at its bound to the nanosecond,
+// neither before it nor after.
+//
+// Mutation: arm the wait's timer at half its bound — it ends early, red.
 func TestAWaitEndsAtItsBound(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	a := newSpools(spoolSizes{limit: 100, share: 10, request: 10, grain: 1, places: 8, placesPerCredential: 8})
-	granted(t, "x's first", begin(ctx, t, a, "x", 10, 1, time.Minute))
-	start := time.Now()
-	r := <-begin(ctx, t, a, "x", 10, 1, 50*time.Millisecond)
-	var unserved *spoolUnserved
-	switch {
-	case !errors.Is(r.err, errSpoolFull) || !errors.As(r.err, &unserved) || unserved.reason != spoolExpired:
-		t.Fatalf("a wait past its bound answered %v, want an expired errSpoolFull", r.err)
-	case r.w.outcome != spoolExpired:
-		t.Errorf("an expired wait is counted %q", r.w.outcome)
-	case time.Since(start) < 50*time.Millisecond:
-		t.Errorf("the wait ended after %v, before its bound", time.Since(start))
-	}
-	const says = "behind this credential's own requests still arriving (1 of its fetches, which may yet need 9 " +
-		"of the 10 bytes one credential's may)"
-	if unserved == nil || !strings.Contains(unserved.detail, says) {
-		t.Errorf("an expired wait says %q, want it to say %q", unserved.detail, says)
-	}
-	if n, p := a.waiters(), a.placesHeld(); n != 0 || p != 0 {
-		t.Errorf("%d requests still wait and %d places are held after the only waiter expired", n, p)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		a := newSpools(spoolSizes{limit: 100, share: 10, request: 10, grain: 1, places: 8, placesPerCredential: 8})
+		granted(t, "x's first", begin(ctx, t, a, "x", 10, 1, time.Minute))
+		const bound = 50 * time.Millisecond
+		start := time.Now()
+		r := <-begin(ctx, t, a, "x", 10, 1, bound).out
+		var unserved *spoolUnserved
+		switch {
+		case !errors.Is(r.err, errSpoolFull) || !errors.As(r.err, &unserved) || unserved.reason != spoolExpired:
+			t.Fatalf("a wait past its bound answered %v, want an expired errSpoolFull", r.err)
+		case r.w.outcome != spoolExpired:
+			t.Errorf("an expired wait is counted %q", r.w.outcome)
+		case time.Since(start) != bound:
+			t.Errorf("the wait ended after %v, want at its bound, %v", time.Since(start), bound)
+		}
+		const says = "behind this credential's own requests still arriving (1 of its fetches, which may yet need 9 " +
+			"of the 10 bytes one credential's may)"
+		if unserved == nil || !strings.Contains(unserved.detail, says) {
+			t.Errorf("an expired wait says %q, want it to say %q", unserved.detail, says)
+		}
+		if n, p := a.waiters(), a.placesHeld(); n != 0 || p != 0 {
+			t.Errorf("%d requests still wait and %d places are held after the only waiter expired", n, p)
+		}
 
-	// A HEAD THAT EXPIRES lets the node's room go to what waited behind it.
-	b := newSpools(spoolSizes{limit: 100, share: 100, request: 60, grain: 1, places: 8, placesPerCredential: 8})
-	spooled(ctx, t, b, "x", 60)
-	expiring := begin(ctx, t, b, "y", 60, 60, 50*time.Millisecond)
-	behind := begin(ctx, t, b, "z", 30, 30, time.Minute)
-	if r := <-expiring; !errors.Is(r.err, errSpoolFull) {
-		t.Fatalf("y's wait answered %v", r.err)
-	}
-	granted(t, "z's 30, once y's 60 left the queue", behind)
+		// A HEAD THAT EXPIRES lets the node's room go to what waited behind it.
+		b := newSpools(spoolSizes{limit: 100, share: 100, request: 60, grain: 1, places: 8, placesPerCredential: 8})
+		spooled(ctx, t, b, "x", 60)
+		expiring := begin(ctx, t, b, "y", 60, 60, bound)
+		behind := begin(ctx, t, b, "z", 30, 30, time.Minute)
+		if r := <-expiring.out; !errors.Is(r.err, errSpoolFull) {
+			t.Fatalf("y's wait answered %v", r.err)
+		}
+		granted(t, "z's 30, once y's 60 left the queue", behind)
+	})
 }
 
 // A WAITER WHOSE REQUEST ENDS LEAVES AT ONCE, answered its context's error and
@@ -410,11 +457,11 @@ func TestAWaiterWhoseRequestEndsLeavesAtOnce(t *testing.T) {
 	behind := begin(t.Context(), t, a, "z", 30, 30, time.Minute)
 	cancel()
 	select {
-	case r := <-leaving:
+	case r := <-leaving.out:
 		if !errors.Is(r.err, context.Canceled) || r.w.outcome != spoolAbandoned {
 			t.Errorf("a waiter whose request ended answered %v, counted %q", r.err, r.w.outcome)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(time.Second): //fixedwait:liveness
 		t.Fatal("a waiter whose request ended was still waiting a second later")
 	}
 	granted(t, "z's 30, once y's 60 left", behind)
@@ -528,7 +575,7 @@ func TestEveryBodyArrivesWhole(t *testing.T) {
 			}
 			room, size := st.got, first
 			for size < p.size {
-				time.Sleep(p.pause)
+				time.Sleep(p.pause) //fixedwait:simulated a client's pause between two pieces of its body
 				k := min(64, p.size-size)
 				if short := size + k - room; short > 0 {
 					got, _, err := a.more(ctx, st.body, short, a.ask(room, short, p.claim), 10*time.Second)
@@ -545,7 +592,7 @@ func TestEveryBodyArrivesWhole(t *testing.T) {
 				}
 			}
 			a.ended(st.body, size)
-			time.Sleep(p.hold)
+			time.Sleep(p.hold) //fixedwait:simulated a request reading its spooled body before it gives the spool back
 			a.release(st.body)
 		})
 	}

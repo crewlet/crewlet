@@ -676,20 +676,22 @@ func TestTheListingIsReadAPageAtATimeInTheOrderItIsStepped(t *testing.T) {
 
 // laneClock is a pass's clock and timer and a write authority that takes a
 // fixed time a step on that clock — the pacing and the budget staged exactly,
-// with no wall clock in them.
+// with no wall clock in them — counting the records it took.
 type laneClock struct {
 	code.Publisher
 	step time.Duration
 
-	mu    sync.Mutex
-	at    time.Time
-	slept []time.Duration
+	mu      sync.Mutex
+	at      time.Time
+	slept   []time.Duration
+	records int
 }
 
 func (c *laneClock) Publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	res, err := c.Publisher.Publish(ctx, req)
 	c.mu.Lock()
 	c.at = c.at.Add(c.step)
+	c.records++
 	c.mu.Unlock()
 	return res, err
 }
@@ -759,28 +761,15 @@ func TestAPassPacesItsStepsAndStopsAtItsBudget(t *testing.T) {
 	}
 }
 
-// spans is a write authority that records when each of its records was
-// asked for and answered.
-type spans struct {
-	code.Publisher
-	mu   sync.Mutex
-	took [][2]time.Time
-}
-
-func (s *spans) Publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
-	began := time.Now()
-	res, err := s.Publisher.Publish(ctx, req)
-	s.mu.Lock()
-	s.took = append(s.took, [2]time.Time{began, time.Now()})
-	s.mu.Unlock()
-	return res, err
-}
-
 // A PASS HOLDS AT MOST A THIRD OF THE WRITE LANE, measured on the whole path
-// and the wall clock: between one step's record answering and the next being
-// asked for, the pass waits at least twice as long as the record took —
-// whatever this machine's apply costs, since the wait is measured from it.
-// What share of the pass's wall clock its records held is logged.
+// — the real store, its reads and its records — on a clock only the records
+// and the pass's own waits move: each record takes a step of it, and between
+// one step's record answering and the next being asked for, over four parts
+// and the purge, the pass waits RetentionIdlePerStep times as long as the
+// step took, so each step's turn holds the lane a third of it. What share of
+// the pass its records held is logged. The pace's own clock and timer, the
+// wall clock's and a timer's, are held to the same in a bubble
+// (TestAPassPacesOnTheWallClockByDefault).
 //
 // Mutation: no wait after a step, and the records follow one another at once.
 func TestAPassHoldsAtMostAThirdOfTheWriteLane(t *testing.T) {
@@ -790,31 +779,31 @@ func TestAPassHoldsAtMostAThirdOfTheWriteLane(t *testing.T) {
 	big := n.mustID("big")
 	n.deleteAt(big, harnessAt.Add(-2*keep))
 	n.seedRows(big, 4*code.PurgePartRows+1, 0, 0)
-	timed := &spans{Publisher: n.pub}
+	const step = 30 * time.Millisecond
+	lane := &laneClock{Publisher: n.pub, step: step, at: harnessAt}
 	s, err := code.NewStore(code.StoreOptions{
-		Publisher: timed, DB: n.db.Reader(), NodeID: n.id, Now: func() time.Time { return harnessAt },
+		Publisher: lane, DB: n.db.Reader(), NodeID: n.id, Now: func() time.Time { return harnessAt },
 	})
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	var p purged
-	if report, err := passOver(s, n.reader, &p).Pass(t.Context()); err != nil || report.Steps != 5 {
+	r := passOver(s, n.reader, &p)
+	// A BUDGET NO TURN REACHES: five steps and their waits are under half a
+	// second of the lane's clock.
+	code.SetRetentionPace(r, lane.now, lane.sleep, time.Hour, 0)
+	if report, err := r.Pass(t.Context()); err != nil || report.Steps != 5 {
 		t.Fatalf("Pass = %+v, %v; want four parts and the purge", report, err)
 	}
-	var busy time.Duration
-	for i, span := range timed.took {
-		took := span[1].Sub(span[0])
-		busy += took
-		if i+1 == len(timed.took) {
-			break
-		}
-		want := time.Duration(float64(took) * code.RetentionIdlePerStep)
-		if gap := timed.took[i+1][0].Sub(span[1]); gap < want {
-			t.Errorf("step %d's record took %v and the next was asked for %v later, want at "+
-				"least %v", i+1, took, gap, want)
-		}
+	wait := time.Duration(float64(step) * code.RetentionIdlePerStep)
+	if got, want := lane.slept, slices.Repeat([]time.Duration{wait}, 4); !slices.Equal(got, want) {
+		t.Fatalf("the pass waited %v between its steps of %v, want %v after each but the last", got, step, want)
 	}
-	wall := timed.took[len(timed.took)-1][1].Sub(timed.took[0][0])
-	t.Logf("the pass's records held the lane %v of its %v: %.0f%% over %d steps",
-		busy, wall, 100*float64(busy)/float64(wall), len(timed.took))
+	var idle time.Duration
+	for _, d := range lane.slept {
+		idle += d
+	}
+	busy := time.Duration(lane.records) * step
+	t.Logf("the pass's records held the lane %v of its %v: %.0f%% over %d records", busy, busy+idle,
+		100*float64(busy)/float64(busy+idle), lane.records)
 }

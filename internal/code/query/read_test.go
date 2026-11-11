@@ -400,6 +400,8 @@ type holdingCache struct {
 	once     sync.Once
 	entered  chan struct{}
 	released chan struct{}
+	// ended, where set, is told what ended a held sync's context.
+	ended *endings
 }
 
 func (h *holdingCache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error) {
@@ -408,6 +410,7 @@ func (h *holdingCache) Sync(ctx context.Context, repoID string, fresh statelog.F
 		select {
 		case <-h.released:
 		case <-ctx.Done():
+			h.ended.note(ctx)
 			return cache.Synced{}, ctx.Err()
 		}
 	}
@@ -702,10 +705,10 @@ func TestAColdRepositoryAnswersUnreadyAndKeepsSyncing(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		_, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head}))
-		if err == nil || time.Now().After(deadline) {
+		if err == nil || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the read is asserted after it
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 	if err != nil {
 		t.Fatalf("a read once the store answers = %v, want it served", err)
@@ -826,10 +829,10 @@ func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 		deadline := time.Now().Add(30 * time.Second)
 		for {
 			a, err := s.Read(t.Context(), q)
-			if !unready(err, code.UnreadySyncing) || time.Now().After(deadline) {
+			if !unready(err, code.UnreadySyncing) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its caller judges the answer it answers
 				return a, err
 			}
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 
@@ -1101,10 +1104,10 @@ func TestADamagedRunGivesNoAnswer(t *testing.T) {
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		if _, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head})); err == nil || time.Now().After(deadline) {
+		if _, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head})); err == nil || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the read is asserted after it
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 	if err != nil {
 		t.Errorf("a read once the cache repaired its copy = %v, want it served", err)

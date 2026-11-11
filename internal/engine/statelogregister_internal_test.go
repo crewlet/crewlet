@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
@@ -143,6 +144,9 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		// linearizable: a told record another node published must be applied
 		// before the next turn diffs against it.
 		accessdomain.Domain{}.Name(): true,
+		// A BARRIER, for every strict log's reason: a read may ask for
+		// linearizable, though none does today.
+		atlasdomain.Domain{}.Name(): true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -205,6 +209,9 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		code.Domain{}.Name(): new(125),
 		// One dispatch read a turn, at thirty turns a seat a day.
 		accessdomain.Domain{}.Name(): new(30),
+		// No read takes a barrier: a person's edit decides from the entry's
+		// version in its own snapshot.
+		atlasdomain.Domain{}.Name(): new(0),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()
@@ -535,6 +542,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		executordomain.Domain{}.Name(),
 		code.Domain{}.Name(),
 		accessdomain.Domain{}.Name(),
+		atlasdomain.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {

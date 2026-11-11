@@ -94,8 +94,8 @@ func retentionAlarmsScenarios() map[string]statelog.Report {
 		return report(domains)
 	}
 	// A COUNT OF ITS OWN PER LOG, so a suite can tell one log's line from
-	// another's: distinct and non-zero for each of the twelve.
-	keeps := func(i int) uint64 { return 2400 >> i }
+	// another's: distinct and non-zero for each of the thirteen.
+	keeps := func(i int) uint64 { return 4800 >> i }
 	unbacked := func(i int, domain statelog.Domain, since time.Time) statelog.DomainInputs {
 		d := alarmLog(domain, keeps(i), statelog.TrimInputs{
 			Counted: counted(keeps(i) + 400), CountedReadable: true})

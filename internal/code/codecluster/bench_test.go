@@ -322,7 +322,7 @@ func chain(b *testing.B, batch int, fresh func(*testing.B) target, appends func(
 			wg.Go(func() {
 				at := time.Now()
 				res, err := propose(b.Context(), p)
-				elapsed := time.Since(at)
+				elapsed := time.Since(at) //fixedwait:measure a benchmark reports this; no gate reads it
 				switch {
 				case err != nil:
 					errs[k] = err
@@ -545,7 +545,7 @@ func BenchmarkEngineWrite(b *testing.B) {
 			for b.Loop() {
 				start := time.Now()
 				w.land(b)
-				took = append(took, time.Since(start))
+				took = append(took, time.Since(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 			}
 			slices.Sort(took)
 			b.ReportMetric(quantile(took, 0.50), "p50-ms")

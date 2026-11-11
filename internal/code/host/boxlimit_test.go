@@ -279,7 +279,7 @@ func TestABoxPastItsInFlightIsBusy(t *testing.T) {
 		case <-raised:
 		case a := <-answered:
 			t.Fatalf("request %d of the run answered %d %v before its raise was released", i+1, a.status, a.err)
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			t.Fatalf("only %d of the run's %d requests reached their raise in ten seconds", i,
 				host.MaxRunRequests)
 		}
@@ -296,7 +296,7 @@ func TestABoxPastItsInFlightIsBusy(t *testing.T) {
 			t.Errorf("the run's seventeenth request answered %d %q (Retry-After %q), want 503 run_busy", a.status,
 				short(a.body), a.header.Get("Retry-After"))
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the run's seventeenth request was admitted with its sixteen in flight")
 	}
 	if got := runs.Reads() - reads; got != 0 {

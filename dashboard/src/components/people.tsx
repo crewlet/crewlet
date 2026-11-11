@@ -63,6 +63,7 @@ import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/g
 import { QueryState } from "~/components/common.tsx";
 import {
   APPS,
+  DEFAULT_APPS,
   GRANTS,
   TOKEN_DEFAULT_DAYS,
   TOKEN_MAX_DAYS,
@@ -945,10 +946,10 @@ export function InviteDialog({
   const write = useIamGesture();
   const waiting = useWaiting();
   const [email, setEmail] = useState("");
-  // EVERY APP, ADMIN UNTICKED: a person joins to use the company's apps, and
-  // the agents send work to people through the tracker; admin is a decision
-  // somebody makes on purpose.
-  const [grants, setGrants] = useState<string[]>(() => [...APPS]);
+  // THE DEFAULT APPS, ADMIN UNTICKED: a person joins to use the company's
+  // apps, and the agents send work to people through the tracker; admin and
+  // the atlas's map are decisions somebody makes on purpose.
+  const [grants, setGrants] = useState<string[]>(() => [...DEFAULT_APPS]);
 
   const done = write.answer?.kind === "done" ? write.answer.body : null;
   const url = typeof done?.url === "string" ? done.url : "";
@@ -1066,8 +1067,8 @@ export function CreatePersonDialog({
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [login, setLogin] = useState("");
-  // EVERY APP, ADMIN UNTICKED, as an invitation's ([InviteDialog]).
-  const [grants, setGrants] = useState<string[]>(() => [...APPS]);
+  // THE DEFAULT APPS, ADMIN UNTICKED, as an invitation's ([InviteDialog]).
+  const [grants, setGrants] = useState<string[]>(() => [...DEFAULT_APPS]);
   const [tried, setTried] = useState(false);
   const typed = login.trim();
   const loginWrong = loginProblem("person", typed);

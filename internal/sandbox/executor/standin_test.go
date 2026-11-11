@@ -74,11 +74,11 @@ func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) 
 // so no redirection the stand-in makes after it is held to it.
 //
 // NEVER `mkdir`, the obvious claim, whose exclusivity is its tool's. uutils
-// coreutils' mkdir — /usr/bin/mkdir on Ubuntu 26.04, and so on CI's runners —
-// has none through 0.10.0: it checks that the name is free, then creates it,
-// and answers a create that failed with success wherever the name is a
-// directory by then (fixed upstream in 0.11.0, "mkdir: do not ignore EEXIST
-// on non-recursive creation"). Measured on ubuntu:26.04: two mkdirs of one
+// coreutils' mkdir (/usr/bin/mkdir on Ubuntu 26.04) has none through 0.10.0:
+// it checks that the name is free, then creates it, and answers a create that
+// failed with success wherever the name is a directory by then (fixed
+// upstream in 0.11.0, "mkdir: do not ignore EEXIST on non-recursive
+// creation"). Measured on ubuntu:26.04: two mkdirs of one
 // name started together both succeeded in 2178 rounds of 3000, and two of
 // these claims in none. Two packs that had each taken the first's turn each
 // held for the other's word, out to the pack's two-minute bound (#946).
@@ -135,8 +135,9 @@ func TestAStandInRunsTheMomentItIsHandedOver(t *testing.T) {
 // one of them takes it.
 //
 // Mutation: claim with `mkdir`, and on a machine whose mkdir is uutils' through
-// 0.10.0 — CI's — both shells take the claim in most rounds. GNU's mkdir is
-// exclusive, so on a machine with GNU coreutils that mutant passes.
+// 0.10.0 (Ubuntu 26.04's) both shells take the claim in most rounds. GNU's
+// mkdir is exclusive, so on a machine with GNU coreutils, CI's Ubuntu 24.04
+// runners among them, that mutant passes.
 func TestAStandInsClaimIsTakenByOneProcess(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -172,7 +173,8 @@ func TestAStandInsClaimIsTakenByOneProcess(t *testing.T) {
 
 // claimRounds is how many rounds [TestAStandInsClaimIsTakenByOneProcess] makes.
 //
-// FIFTY: on CI's mkdir both shells took the claim in about three rounds of
-// four (2178 of 3000, measured on ubuntu:26.04), so a claim that is not one
-// process's has no round in fifty to hide in, at a hundred short shells.
+// FIFTY: on Ubuntu 26.04's mkdir both shells took the claim in about three
+// rounds of four (2178 of 3000, measured on ubuntu:26.04), so a claim that is
+// not one process's has no round in fifty to hide in, at a hundred short
+// shells.
 const claimRounds = 50

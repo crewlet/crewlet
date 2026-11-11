@@ -861,7 +861,7 @@ trusted, and every start of the node logs the same warning as
 Holding a credential is not the same as being allowed to use it here. Every
 route and every socket question declares who may ask it — **everybody**, one
 of the [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`), or a verb of the
+(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`, `atlas`), or a verb of the
 authority table that the answer decides record by record — and a principal that
 does not carry what it declares is refused, a Tier A token included, whose
 declared permissions are read through the node's `api.auth.admin` posture on
@@ -6819,7 +6819,7 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-six no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-seven no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
@@ -6833,7 +6833,13 @@ and, beside the code reads and on their terms,
 [`code_repo_readers`](#get-gitletreposnamereaders), who read a `visibility: unit`
 repository, and beside the code writes `code_mark_inbox`, a person's marks
 over their own code notices: a seat is woken, never shown an inbox, so it has
-none to mark. A view is furniture (a name, a shape
+none to mark. And `atlas_search`, the company's
+[atlas](../concepts/atlas.md) for a holder of `atlas`, every entry with its
+facts, sources and relations, and its repositories only for a caller who holds
+`gitlet` too: a `query` (part of a name or key, or an id), a `kind` and a
+`limit` (default 50, at most 500), answered with `entries`, the `total` that
+matched, each source's `coverage` and how many values were `withheld` for being
+shaped like a credential. A view is furniture (a name, a shape
 and a filter, arranged so a person finds the same question tomorrow), and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -8505,7 +8511,11 @@ other. A `200` answers **per log**:
     {"domain": "access", "stream": "CREWLET_ACCESS_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.access:node-4",
      "outcome": "applied",
-     "position": {"stream": "CREWLET_ACCESS_LOG", "generation": 0, "seq": 4120}}
+     "position": {"stream": "CREWLET_ACCESS_LOG", "generation": 0, "seq": 4120}},
+    {"domain": "atlas", "stream": "CREWLET_ATLAS_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.atlas:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_ATLAS_LOG", "generation": 0, "seq": 310}}
   ]
 }
 ```
@@ -12266,7 +12276,7 @@ own `alarm_raised` log line.
       "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
       "config_reported_at": "2026-09-23T08:14:02.118Z",
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
-      "posture": "serve", "appliers_ready": 12, "appliers_total": 12,
+      "posture": "serve", "appliers_ready": 13, "appliers_total": 13,
       "admin": "serve",
       "alarms": [{"kind": "backup_age", "since": "2026-09-23T08:10:02Z"}]
     }

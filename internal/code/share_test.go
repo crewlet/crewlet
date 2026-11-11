@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -24,117 +25,126 @@ import (
 // its outcome — the one that ran out its whole wait, which is a term of the
 // attempt its asker was given — and the gauge follows what is held.
 //
+// In a bubble, so the race is decided rather than sampled: the bubble's clock
+// moves only once every taker is parked, on the share or in its hold, so every
+// taker the share admits has counted itself running before any hold ends —
+// one admitted past the share is seen beside the others however the runner
+// schedules them — and the wait a third taker runs out is the bubble's 50 ms.
+//
 // Mutation: ShareOf answering the whole lane — four in flight, red. An
-// unready take recorded as no wait — red.
+// unready take recorded as no wait — red. A taker admitted without a unit
+// (Take past the semaphore) — every racing taker runs at once, red.
 func TestSeatGitWorkIsHalfTheReadLane(t *testing.T) {
 	t.Parallel()
-	for slots, want := range map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 64: 32} {
-		if got := code.ShareOf(slots); got != want {
-			t.Errorf("ShareOf(%d) = %d, want %d: half the read lane, at least one", slots, got, want)
+	synctest.Test(t, func(t *testing.T) {
+		for slots, want := range map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 64: 32} {
+			if got := code.ShareOf(slots); got != want {
+				t.Errorf("ShareOf(%d) = %d, want %d: half the read lane, at least one", slots, got, want)
+			}
 		}
-	}
 
-	rec, err := metrics.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := code.NewGitShare("git-a", 4, rec)
-	code.SetShareWait(s, 50*time.Millisecond)
-	if s.Units() != 2 {
-		t.Fatalf("a share of a four-slot read lane holds %d units, want 2", s.Units())
-	}
-	if got := gauge(rec, metrics.CodeSeatworkHeld); got != 0 {
-		t.Errorf("a share nobody holds reads %v held, want 0 — present, and zero", got)
-	}
-	ctx := t.Context()
-	one, err := s.Take(ctx, code.SeatWorkRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	two, err := s.Take(ctx, code.SeatWorkRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Held() != 2 || gauge(rec, metrics.CodeSeatworkHeld) != 2 {
-		t.Errorf("held %d (gauge %v), want 2", s.Held(), gauge(rec, metrics.CodeSeatworkHeld))
-	}
-
-	// THE THIRD WAITS ITS WHILE, THEN IS UNREADY — about the node.
-	_, err = s.Take(ctx, code.SeatWorkRead)
-	var unready *code.ErrGitUnready
-	if !errors.As(err, &unready) || unready.Reason != code.UnreadyShare {
-		t.Fatalf("a third take over a full share = %v, want ErrGitUnready{share}", err)
-	}
-
-	// A UNIT GIVEN BACK IS THE WAITER'S, and a release twice is one.
-	got := make(chan error, 1)
-	go func() {
-		release, err := s.Take(ctx, code.SeatWorkRead)
-		if err == nil {
-			release()
+		rec, err := metrics.New()
+		if err != nil {
+			t.Fatal(err)
 		}
-		got <- err
-	}()
-	one()
-	one()
-	if err := <-got; err != nil {
-		t.Errorf("a waiter after a release: %v, want the released unit", err)
-	}
-	two()
-	if s.Held() != 0 {
-		t.Errorf("held %d after every release, want 0", s.Held())
-	}
+		s := code.NewGitShare("git-a", 4, rec)
+		code.SetShareWait(s, 50*time.Millisecond)
+		if s.Units() != 2 {
+			t.Fatalf("a share of a four-slot read lane holds %d units, want 2", s.Units())
+		}
+		if got := gauge(rec, metrics.CodeSeatworkHeld); got != 0 {
+			t.Errorf("a share nobody holds reads %v held, want 0 — present, and zero", got)
+		}
+		ctx := t.Context()
+		one, err := s.Take(ctx, code.SeatWorkRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		two, err := s.Take(ctx, code.SeatWorkRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Held() != 2 || gauge(rec, metrics.CodeSeatworkHeld) != 2 {
+			t.Errorf("held %d (gauge %v), want 2", s.Held(), gauge(rec, metrics.CodeSeatworkHeld))
+		}
 
-	// A CALLER THAT LEAVES is its own answer, and no count.
-	full1, _ := s.Take(ctx, code.SeatWorkRead)
-	full2, _ := s.Take(ctx, code.SeatWorkRead)
-	gone, cancel := context.WithCancel(ctx)
-	cancel()
-	if _, err := s.Take(gone, code.SeatWorkRead); !errors.Is(err, context.Canceled) {
-		t.Errorf("a take whose caller left = %v, want context.Canceled", err)
-	}
-	full1()
-	full2()
-	if got, _ := waits(rec, "granted"); got != 5 {
-		t.Errorf("waits{outcome=granted} counts %d, want 5", got)
-	}
-	if got, waited := waits(rec, "unready"); got != 1 || waited < 50 {
-		t.Errorf("waits{outcome=unready} counts %d waiting %.1f ms, want 1 waiting its whole 50 ms — the one "+
-			"that waited its while", got, waited)
-	}
+		// THE THIRD WAITS ITS WHILE, THEN IS UNREADY — about the node.
+		_, err = s.Take(ctx, code.SeatWorkRead)
+		var unready *code.ErrGitUnready
+		if !errors.As(err, &unready) || unready.Reason != code.UnreadyShare {
+			t.Fatalf("a third take over a full share = %v, want ErrGitUnready{share}", err)
+		}
 
-	// NEVER MORE THAN THE SHARE AT ONCE, however many race.
-	code.SetShareWait(s, time.Minute)
-	var running, most atomic.Int32
-	var wg sync.WaitGroup
-	for range 32 {
-		wg.Go(func() {
+		// A UNIT GIVEN BACK IS THE WAITER'S, and a release twice is one.
+		got := make(chan error, 1)
+		go func() {
 			release, err := s.Take(ctx, code.SeatWorkRead)
-			if err != nil {
-				t.Error(err)
-				return
+			if err == nil {
+				release()
 			}
-			defer release()
-			n := running.Add(1)
-			for {
-				m := most.Load()
-				if n <= m || most.CompareAndSwap(m, n) {
-					break
-				}
-			}
-			time.Sleep(time.Millisecond)
-			running.Add(-1)
-		})
-	}
-	wg.Wait()
-	if most.Load() > 2 {
-		t.Errorf("%d takers ran at once, past the share's 2", most.Load())
-	}
+			got <- err
+		}()
+		one()
+		one()
+		if err := <-got; err != nil {
+			t.Errorf("a waiter after a release: %v, want the released unit", err)
+		}
+		two()
+		if s.Held() != 0 {
+			t.Errorf("held %d after every release, want 0", s.Held())
+		}
 
-	// A kind of work this build does not know is refused by name.
-	if _, err := s.Take(ctx, "compact"); !errors.Is(err, code.ErrInvalid) {
-		t.Errorf("an unknown kind of seat work = %v, want ErrInvalid", err)
-	}
+		// A CALLER THAT LEAVES is its own answer, and no count.
+		full1, _ := s.Take(ctx, code.SeatWorkRead)
+		full2, _ := s.Take(ctx, code.SeatWorkRead)
+		gone, cancel := context.WithCancel(ctx)
+		cancel()
+		if _, err := s.Take(gone, code.SeatWorkRead); !errors.Is(err, context.Canceled) {
+			t.Errorf("a take whose caller left = %v, want context.Canceled", err)
+		}
+		full1()
+		full2()
+		if got, _ := waits(rec, "granted"); got != 5 {
+			t.Errorf("waits{outcome=granted} counts %d, want 5", got)
+		}
+		if got, waited := waits(rec, "unready"); got != 1 || waited < 50 {
+			t.Errorf("waits{outcome=unready} counts %d waiting %.1f ms, want 1 waiting its whole 50 ms — the one "+
+				"that waited its while", got, waited)
+		}
+
+		// NEVER MORE THAN THE SHARE AT ONCE, however many race.
+		code.SetShareWait(s, time.Minute)
+		var running, most atomic.Int32
+		var wg sync.WaitGroup
+		for range 32 {
+			wg.Go(func() {
+				release, err := s.Take(ctx, code.SeatWorkRead)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer release()
+				n := running.Add(1)
+				for {
+					m := most.Load()
+					if n <= m || most.CompareAndSwap(m, n) {
+						break
+					}
+				}
+				time.Sleep(time.Millisecond)
+				running.Add(-1)
+			})
+		}
+		wg.Wait()
+		if most.Load() > 2 {
+			t.Errorf("%d takers ran at once, past the share's 2", most.Load())
+		}
+
+		// A kind of work this build does not know is refused by name.
+		if _, err := s.Take(ctx, "compact"); !errors.Is(err, code.ErrInvalid) {
+			t.Errorf("an unknown kind of seat work = %v, want ErrInvalid", err)
+		}
+	})
 }
 
 // AN ENGINE WRITE'S BUILD IS SEAT GIT WORK OF THE SAME SHARE: two builds hold

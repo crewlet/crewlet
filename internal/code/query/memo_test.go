@@ -62,10 +62,10 @@ func (x *fixture) settle(i int, repo string) {
 				return
 			}
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			x.t.Fatalf("node %d's index of %s holds no whole history 30s on (%v)", i, repo, err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -376,19 +376,19 @@ func TestTwoReadsOfOnePageNoMemoHoldsRunOneGit(t *testing.T) {
 	go read(0)
 	select {
 	case <-h.entered:
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("the first read ran no ls-tree within 30s")
 	}
 	go read(1)
 	deadline := time.Now().Add(30 * time.Second)
 	for query.Waiting(s) != 1 {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			close(h.release)
 			wg.Wait()
 			t.Fatalf("the second read of the page the first is cutting waited on nothing within 30s; it ran %v",
 				kinds(&h.recording, 0))
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	close(h.release)
 	wg.Wait()

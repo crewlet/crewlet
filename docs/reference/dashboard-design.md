@@ -1053,7 +1053,7 @@ is named from the reading the refusal was decided on (`useHeldReading`), never
 from the viewer beside it, which has not answered in the moment between the
 session's answer and the socket's — named off it, the refusal told a person
 signed in that nobody was. It names ACCESS by the word People gives
-it (Admin, Worklet, Doclet, Artifacts, Chatlet, Gitlet) rather than a credential,
+it (Admin, Worklet, Doclet, Artifacts, Chatlet, Gitlet, Atlas) rather than a credential,
 because a signed-in person lacks access, and "needs an operator credential"
 sent them looking for a credential they have no use for. A screen that mounted anyway was
 refused and drew the refusal as data: "0 nodes" in its header, four tiles of 0

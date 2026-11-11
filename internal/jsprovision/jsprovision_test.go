@@ -1174,6 +1174,125 @@ func TestAReadBoundOfZeroIsRefused(t *testing.T) {
 	}
 }
 
+// lagging is a context whose deadline has passed while its Done is still open:
+// what every context with a deadline is from that instant until the runtime
+// runs the timer that ends it, which a stalled process does late.
+type lagging struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c lagging) Deadline() (time.Time, bool) { return c.deadline, true }
+
+// lateBy is a context of parent's whose deadline falls deadline from now and
+// which ends lag after it ([lagging]).
+func lateBy(parent context.Context, deadline, lag time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(parent, deadline+lag)
+	return lagging{Context: ctx, deadline: time.Now().Add(deadline)}, cancel
+}
+
+// NOTHING IS ASKED AGAIN ONCE ITS DEADLINE HAS PASSED, though its context
+// cannot say so yet: not by a read's hedge, a write's re-ask, a placement's
+// retry, nor a read-back's next question.
+//
+// Each paused on a timer of its own and took ctx.Done for the only word on
+// the deadline, which the runtime closes only once it runs the deadline's own
+// timer, late on a stalled process ([overdue]). After a stall across both, the
+// loop took its pause and asked past its caller's deadline: natsobj's
+// unanswered stream info was asked a third time inside a 3.9-second bound
+// whose third request was due at four, on a loaded CI runner. Each case's
+// context is [lagging], its deadline midway through the pause before the
+// request that must not go out and its ending after that request comes due;
+// IN A SYNCTEST BUBBLE, so all three fall exactly there. A request due AT the
+// deadline is not sent either: it has no time left to be answered in. The
+// loop ends when its context does, returning what it returns then, with the
+// context's own error set beside it, as on a runtime that ran every timer on
+// time.
+func TestNothingIsAskedAgainOnceItsDeadlineHasPassed(t *testing.T) {
+	t.Parallel()
+	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
+	cadence := fast.ReadTerm + fast.ReAsk
+	reading := func(ctx context.Context, one func(context.Context) error) error {
+		return read(ctx, fast, one)
+	}
+	heardNothing := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+	for _, c := range []struct {
+		name string
+		// due is when the request that must not go out comes due,
+		// deadline when the caller's deadline falls — inside the pause
+		// before it, or at it — and ends when the context ends, after
+		// both.
+		due, deadline, ends time.Duration
+		// loop asks one on ctx at [fast], and answer is what each request
+		// it sends is told.
+		loop   func(ctx context.Context, one func(context.Context) error) error
+		answer func(ctx context.Context) error
+		// sent is how many requests go out, every one before the
+		// deadline, and want what the loop returns once ctx ends.
+		sent int64
+		want error
+	}{
+		{"a read's hedge, its deadline midway through the pause",
+			2 * cadence, 2*cadence - fast.ReAsk/2, 2*cadence + fast.ReAsk/2,
+			reading, heardNothing, 2, context.DeadlineExceeded},
+		{"a read's hedge, its deadline at the re-ask",
+			2 * cadence, 2 * cadence, 2*cadence + fast.ReAsk/2,
+			reading, heardNothing, 2, context.DeadlineExceeded},
+		{"a write's re-ask, after a silence at once",
+			fast.ReAsk, fast.ReAsk / 2, fast.ReAsk * 3 / 2,
+			func(ctx context.Context, one func(context.Context) error) error {
+				return fast.Ask(ctx, one, nil)
+			},
+			func(context.Context) error { return nats.ErrNoResponders },
+			1, nats.ErrNoResponders},
+		{"a placement's retry, after a refusal",
+			fast.PlacementRetry, fast.PlacementRetry / 2, fast.PlacementRetry * 3 / 2,
+			func(ctx context.Context, one func(context.Context) error) error {
+				return fast.Place(ctx, one, nil)
+			},
+			func(context.Context) error { return placement },
+			1, placement},
+		{"a read-back's next question, after a not-found",
+			fast.PlacementRetry, fast.PlacementRetry / 2, fast.PlacementRetry * 3 / 2,
+			func(ctx context.Context, one func(context.Context) error) error {
+				return settle(ctx, fast, one)
+			},
+			func(context.Context) error { return jetstream.ErrStreamNotFound },
+			1, jetstream.ErrStreamNotFound},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := lateBy(t.Context(), c.deadline, c.ends-c.deadline)
+				defer cancel()
+				var sent atomic.Int64
+				start := time.Now()
+				err := c.loop(ctx, func(ctx context.Context) error {
+					if err := ctx.Err(); err != nil {
+						return err // nats.go sends nothing on a context that has ended
+					}
+					sent.Add(1)
+					return c.answer(ctx)
+				})
+				if n := sent.Load(); n != c.sent {
+					t.Errorf("%d requests went out, want %d: the one due at %v, with the deadline "+
+						"at %v that its context could not yet report, was sent", n, c.sent, c.due,
+						c.deadline)
+				}
+				if !errors.Is(err, c.want) {
+					t.Errorf("the loop returned %v, want %v: what it returns when its context ends",
+						err, c.want)
+				}
+				if took := time.Since(start); took != c.ends || ctx.Err() == nil {
+					t.Errorf("the loop returned after %v with its context's error %v, want at "+
+						"%v, the context's ending, with that ending set beside what it "+
+						"returned", took, ctx.Err(), c.ends)
+				}
+			})
+		})
+	}
+}
+
 // AND A WRITE IS NOT CUT AT IT, because a write's reply is HELD: the server
 // answers a create once the object it made has a leader, an election after the
 // request arrived. Cut at the read term, every accepted create would be

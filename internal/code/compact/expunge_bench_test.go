@@ -115,7 +115,7 @@ func benchExpunge(b *testing.B, repo int64, share float64) {
 		b.StartTimer()
 		began := time.Now()
 		out, err := expungeWhileBusy(b, c, cand)
-		cycle += time.Since(began)
+		cycle += time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 		b.StopTimer()
 		// THE SHARE IS JUDGED ON DISK, never on the arm's nominal share: the
 		// history packs smaller than its raw bytes, so share=0.25 may read
