@@ -676,7 +676,7 @@ func (n NewVerdict) validate() error {
 		return invalid("a person's verdict is an approval through a decision, which no rule routed")
 	case n.ByKind == VerdictByAgent && (!n.Asked.Valid() || !n.Confidence.Valid()):
 		return invalid("an agent's verdict records what it answered (%s) and how sure it was (%s)",
-			words.Or(delegated.Verdicts()), words.Or([]delegated.Confidence{delegated.High, delegated.Low}))
+			words.Or(delegated.Verdicts()), words.Or(delegated.Confidences()))
 	case n.ByKind != VerdictByAgent && (n.Asked != "" || n.Confidence != ""):
 		return invalid("only an agent's verdict records an answer and a confidence")
 	case n.ByKind == VerdictByEngine && len(n.Overruled) == 0:
