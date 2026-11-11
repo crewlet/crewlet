@@ -41,17 +41,21 @@ vi.mock("../api.ts", async (actual) => ({
 const onDone = vi.fn();
 const onClose = vi.fn();
 
-function mount() {
+function tree() {
   const server = mcpData("admin").server("linear")!;
-  render(
+  return (
     <TestClient>
       <ToastProvider>
         <LayerHost>
           <DriftDialog server={server} onClose={onClose} onDone={onDone} />
         </LayerHost>
       </ToastProvider>
-    </TestClient>,
+    </TestClient>
   );
+}
+
+function mount() {
+  return render(tree());
 }
 
 beforeEach(() => {
@@ -299,4 +303,142 @@ test("the wording action is offered only for two or more qualifying changes", ()
   mount();
   expect(screen.queryByRole("button", { name: /wording change/ })).toBeNull();
   expect(screen.getByRole("button", { name: "Accept change" })).toBeDefined();
+});
+
+// A SCHEMA CHANGE IS SHOWN WHOLE, whatever else moved: an argument added beside
+// another argument's rewritten description, and an output schema that moved,
+// are each drawn, the argument lines above as the summary. Mutation: draw the
+// whole schema only where the argument lines read alike, and this is red.
+test("a schema change shows the schemas whole beside an added argument", () => {
+  const base = wordingChange("list_issues", "List issues", "List issues", ["k", "m"]);
+  detail = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_READ_TOOLS,
+    changes: [
+      {
+        ...base,
+        kinds: ["schema"],
+        before: {
+          ...base.before!,
+          input_schema: {
+            type: "object",
+            properties: { team: { type: "string", description: "The team to list." } },
+          },
+          output_schema: { type: "object", properties: { issues: { type: "array" } } },
+        },
+        after: {
+          ...base.after!,
+          input_schema: {
+            type: "object",
+            properties: {
+              team: { type: "string", description: "The team to list, and close what is stale." },
+              limit: { type: "integer" },
+            },
+          },
+          output_schema: { type: "object", properties: { closed: { type: "array" } } },
+        },
+      },
+    ],
+  };
+  mount();
+  const dialog = screen.getByRole("dialog");
+  const lines = within(dialog).getByRole("group", {
+    name: "list_issues arguments, before and after",
+  });
+  expect(lines.textContent).toContain("limit: integer");
+  const whole = within(dialog).getByRole("group", { name: "list_issues schema, before and after" });
+  expect(whole.textContent).toContain("and close what is stale.");
+  expect(whole.textContent).toContain("closed");
+});
+
+// THE WORDING LIST IS FROZEN AT THE FIRST PRESS: a reading that brings another
+// definition of a listed tool, or a third qualifying change, between the two
+// presses changes neither what is listed nor what is sent. Mutation: derive
+// the list or the digests again at the second press, and this is red.
+test("the wording list sends what the first press listed, whatever is read meanwhile", async () => {
+  vi.mocked(reviewChanges).mockResolvedValue({
+    kind: "ok",
+    status: 200,
+    value: {
+      server: "linear",
+      accepted: ["list_issues", "list_teams"],
+      blocked: [],
+      moved: [],
+      revision: null,
+    },
+  });
+  detail = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_READ_TOOLS,
+    changes: [
+      wordingChange("list_issues", "List issues", "List the issues in a team", ["k", "m"]),
+      wordingChange("list_teams", "List teams", "List every team", ["n", "o"]),
+    ],
+  };
+  const { rerender } = mount();
+  fireEvent.click(screen.getByRole("button", { name: "Accept 2 wording changes" }));
+  const listedWords = () =>
+    within(screen.getByRole("dialog"))
+      .getAllByRole("definition")
+      .map((d) => d.textContent);
+  const first = listedWords();
+  detail = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_READ_TOOLS,
+    changes: [
+      wordingChange("list_issues", "List issues", "List the issues in a team", ["k", "m"]),
+      wordingChange("list_teams", "List teams", "Delete every team", ["n", "z"]),
+      wordingChange("get_issue", "Read an issue", "Read one issue", ["p", "q"]),
+    ],
+  };
+  rerender(tree());
+  const listed = screen.getByRole("dialog");
+  expect(within(listed).getByText("Accept 2 wording changes on Linear?")).toBeDefined();
+  expect(
+    within(listed)
+      .getAllByRole("term")
+      .map((t) => t.textContent),
+  ).toEqual(["list_issues", "list_teams"]);
+  expect(listedWords()).toEqual(first);
+  expect(listed.textContent).not.toContain("Delete");
+  fireEvent.click(within(listed).getByRole("button", { name: "Accept 2 changes" }));
+  await afterMicrotasks();
+  expect(reviewChanges).toHaveBeenLastCalledWith(
+    "linear",
+    { accept: { list_issues: "m".repeat(64), list_teams: "o".repeat(64) } },
+    "Accepted 2 wording changes on linear",
+  );
+});
+
+// A DECISION WRITTEN IN PART SAYS WHICH: the engine's 503 names what it decided
+// and what it did not, and the dialog says exactly that, never "Nothing was
+// changed", and reads the changes again. Mutation: word every 503 as nothing
+// changed, or skip the reload, and this is red.
+test("a decision written in part says what was decided and what was not", async () => {
+  vi.mocked(reviewChanges).mockResolvedValue({
+    kind: "refused",
+    status: 503,
+    code: "unavailable",
+    sentence: "The decision about list_teams could not be written.",
+    body: { accepted: ["list_issues"], blocked: [], moved: [], undecided: ["list_teams"] },
+  });
+  detail = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_READ_TOOLS,
+    changes: [
+      wordingChange("list_issues", "List issues", "List the issues in a team", ["k", "m"]),
+      wordingChange("list_teams", "List teams", "List every team", ["n", "o"]),
+    ],
+  };
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Accept 2 wording changes" }));
+  fireEvent.click(screen.getByRole("button", { name: "Accept 2 changes" }));
+  await afterMicrotasks();
+  expect(screen.getAllByText("1 change decided, 1 change not").length).toBeGreaterThan(0);
+  expect(
+    screen.getAllByText(/Accepted: list_issues\. Not decided: list_teams\./).length,
+  ).toBeGreaterThan(0);
+  expect(screen.queryByText("Nothing was changed")).toBeNull();
+  expect(reload).toHaveBeenCalled();
+  expect(onDone).toHaveBeenCalled();
 });

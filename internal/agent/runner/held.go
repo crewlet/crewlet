@@ -368,6 +368,7 @@ func (a Asked) heldContinuation(b provenance.Boundary) string {
 	}
 	w.WriteString("## Your call was answered\n\n")
 	w.WriteString(a.Held.called("You", "your") + " " + a.Held.what(a.heldBy(b)) + "\n\n")
+	w.WriteString(a.heldSaid(b))
 	w.WriteString(a.Held.told(b) + "\n\n")
 	w.WriteString("Carry on with the task from where you stopped, and finish it as the task asks.")
 	return w.String()
@@ -386,9 +387,21 @@ func (a Asked) heldReseed(b provenance.Boundary) string {
 	}
 	w.WriteString("## A run before you on this task called a tool that asks a person first\n\n")
 	w.WriteString(a.Held.called("It", "its") + " " + a.Held.what(a.heldBy(b)) + "\n\n")
+	w.WriteString(a.heldSaid(b))
 	w.WriteString(a.Held.told(b) + "\n\n")
 	w.WriteString(a.freshMachine("with this incorporated"))
 	return w.String()
+}
+
+// heldSaid is what whoever answered a held call said with it, as its own
+// paragraph, "" for an answer that said nothing beyond its choice: a delegate's
+// reason for a denial, and the rule it decided under (ADR-0125).
+func (a Asked) heldSaid(b provenance.Boundary) string {
+	said := strings.TrimSpace(a.Answer)
+	if said == "" {
+		return ""
+	}
+	return "They said: " + provenance.Neutralise(b, said) + "\n\n"
 }
 
 // heldBy is who answered a held call, as the prompts name them.

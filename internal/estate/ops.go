@@ -535,10 +535,6 @@ type ServerSeams struct {
 	Units worklet.Units
 	Leads worklet.Leads
 
-	// Roster is attached to every task listing, for the seats' names
-	// `sort=assignee` orders by.
-	Roster worklet.Roster
-
 	// Seat resolves a searching seat's handle to its role and the org its
 	// read scope comes from, against this node's current epoch.
 	Seat func(handle string) (*org.Role, *org.Organization)
@@ -641,7 +637,7 @@ var opTasks = define("tracker.tasks", opRead, trackerDomain, false,
 		if b.Tracker == nil {
 			return worklet.Answer{}, errNoHalf
 		}
-		a.Query.Units, a.Query.Roster = b.Units, b.Roster
+		a.Query.Units = b.Units
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
 	})
 

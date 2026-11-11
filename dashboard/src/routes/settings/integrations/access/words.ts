@@ -392,7 +392,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       none: "No servers are added yet",
       noneLink: { label: "Add a server", doc: "ssh", anchor: "add-a-server" },
     },
-    tool: "ssh_read and ssh_operate, built in",
+    tool: "ssh_read, ssh_operate and ask_to_operate, built in",
     issued: "15 minutes",
   },
 };

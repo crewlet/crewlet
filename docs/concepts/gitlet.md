@@ -418,7 +418,9 @@ every change into a gated branch is judged under it, its readiness listing
 each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 `code_merge_change` merges one only as it allows, a change into a branch
 whose gate requires a check queued rather than merged ([The merge
-queue](#the-merge-queue)); a read of
+queue](#the-merge-queue)), and so does an approved `ask_to_merge`, which merges
+as the agent that asked ([Delegated
+Decisions](../guides/delegated-decisions.md#asking-to-merge-and-to-deploy)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
 where it asks for them (`GET /gitlet/repos/{name}?gates=true`'s `gates`, and
 `code_get_repo`), and a push is held

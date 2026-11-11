@@ -260,9 +260,13 @@ const (
 	// answering node's test ends, so its reply arrives in time: a broker
 	// round trip, many times over.
 	mcpCheckReplyMargin = 2 * time.Second
-	// maxMCPCheckTools bounds the tools one node's reply carries: a
-	// listing's own bound ([coord.MaxMCPListedTools]).
-	maxMCPCheckTools = coord.MaxMCPListedTools
+	// maxMCPCheckToolBytes bounds the tools one node's reply carries, as
+	// encoded: every tool the server listed (at most [mcp.MaxServerTools]),
+	// their descriptions and then their titles shortened until they fit.
+	// Half the 1 MiB a NATS server carries by default, so the reply's
+	// envelope and the rest of the report fit beside it; 461 tools take
+	// about 150 KiB with their words whole.
+	maxMCPCheckToolBytes = 512 << 10
 )
 
 // mcpCheckBudget is how long a test of server may take on a node: its
@@ -767,9 +771,11 @@ func withTried(server *config.MCPServer, block map[string]string, forSeat bool,
 // boundedReport is report as it leaves this node: every sentence passed
 // through the redaction pass and cut to [coord.MaxMCPErrorBytes], the
 // server's identity cut to [coord.MaxMCPServerInfoBytes] with its
-// instructions left out, at most [maxMCPCheckTools] tools with their titles and
-// descriptions cut, and each tool whose name a built-in of surface holds
-// refused for it, since built-ins are filed first.
+// instructions left out, every tool the server listed with its names and words
+// cut and all of them within [maxMCPCheckToolBytes] ([toolsWithin]), and each
+// tool whose name a built-in of surface holds refused for it, since built-ins
+// are filed first. EVERY TOOL: the first listing of a server is accepted as
+// the person adding it was shown it, so a test shows them all.
 //
 // NO INSTRUCTIONS: they are the server's words for a model, and a test's
 // answer is read by people and, on approval, by the assistant; the server's
@@ -788,10 +794,10 @@ func boundedReport(report mcp.TestReport, surface *tools.Registry) mcp.TestRepor
 	}
 	out.Identity = mcp.Identity{Name: infoField(report.Identity.Name), Title: infoField(report.Identity.Title),
 		Version: infoField(report.Identity.Version), Protocol: infoField(report.Identity.Protocol)}
-	out.Tools = make([]mcp.TestedTool, 0, min(len(report.Tools), maxMCPCheckTools))
-	for _, t := range report.Tools[:min(len(report.Tools), maxMCPCheckTools)] {
-		t.Title = textcut.Bytes(t.Title, coord.MaxMCPToolTitleBytes)
-		t.Description = textcut.Bytes(t.Description, coord.MaxMCPToolDescriptionBytes)
+	out.Tools = make([]mcp.TestedTool, 0, len(report.Tools))
+	for _, t := range report.Tools {
+		t.Name = textcut.Bytes(t.Name, coord.MaxMCPToolNameBytes)
+		t.Raw = textcut.Bytes(t.Raw, coord.MaxMCPToolNameBytes)
 		if t.Refused == "" && surface != nil {
 			if entry, filed := surface.Lookup(t.Name); filed {
 				if _, fromMCP := entry.FromMCP(); !fromMCP {
@@ -801,7 +807,38 @@ func boundedReport(report mcp.TestReport, surface *tools.Registry) mcp.TestRepor
 		}
 		out.Tools = append(out.Tools, t)
 	}
+	out.Tools = toolsWithin(out.Tools, maxMCPCheckToolBytes)
 	return out
+}
+
+// toolsWithin is tools with their words cut until they encode within budget
+// bytes: every title and description to its bound first, then every
+// description to half as many bytes again until they fit, then every title,
+// each cut marked. Every tool stays.
+func toolsWithin(tools []mcp.TestedTool, budget int) []mcp.TestedTool {
+	description, title := coord.MaxMCPToolDescriptionBytes, coord.MaxMCPToolTitleBytes
+	for {
+		out := slices.Clone(tools)
+		for i := range out {
+			out[i].Title = textcut.Bytes(out[i].Title, coord.MaxMCPToolTitleBytes)
+			out[i].Description = textcut.Bytes(out[i].Description, coord.MaxMCPToolDescriptionBytes)
+			if description < coord.MaxMCPToolDescriptionBytes {
+				out[i].Description = textcut.Within(out[i].Description, description)
+			}
+			if title < coord.MaxMCPToolTitleBytes {
+				out[i].Title = textcut.Within(out[i].Title, title)
+			}
+		}
+		raw, err := json.Marshal(out)
+		if err != nil || len(raw) <= budget || title == 0 {
+			return out
+		}
+		if description > 0 {
+			description /= 2
+		} else {
+			title /= 2
+		}
+	}
 }
 
 // infoField is one field of a server's identity as a reader on another node

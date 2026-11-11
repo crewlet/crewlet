@@ -680,7 +680,6 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 func (e *Engine) serverSeams() estate.ServerSeams {
 	seams := estate.ServerSeams{
 		Units: liveUnits{engine: e}, Leads: liveLeads{engine: e},
-		Roster: liveSeatNames{engine: e},
 		Seat: func(handle string) (*org.Role, *org.Organization) {
 			c := e.Company()
 			if c == nil || c.Org == nil {

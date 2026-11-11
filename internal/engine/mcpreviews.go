@@ -161,6 +161,15 @@ func (e *Engine) MCPAccepted(context.Context) ([]coord.MCPAcceptedTool, error) {
 	return out, nil
 }
 
+// acceptedRecords is every accepted definition in this node's copy, answered
+// or not.
+func (e *Engine) acceptedRecords() []coord.MCPAcceptedTool {
+	r := &e.reviews
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Collect(maps.Values(r.records))
+}
+
 // reviewIndex is this node's copy by server and tool, and whether it has been
 // answered.
 func (e *Engine) reviewIndex() (mcpreview.Index, bool) {

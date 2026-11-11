@@ -12,7 +12,7 @@ package httpjson
 // when a package is added, renamed or removed without this table following.
 var goPackages = map[string]bool{
 	"a2a": true, "a2atest": true, "accessdomain": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
-	"advisor": true, "api": true,
+	"advisor": true, "api": true, "atlas": true, "derive": true, "gather": true,
 	"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 	"artifactspike": true, "artifactupload": true,
@@ -28,7 +28,7 @@ var goPackages = map[string]bool{
 	"compact": true, "config": true, "configapi": true, "configplane": true, "crewlet": true,
 	"confluence": true, "coord": true,
 	"coordtest": true, "costlimit": true, "credential": true, "cron": true,
-	"dashspec": true, "datadog": true, "datasetsapi": true, "decision": true, "decltype": true,
+	"dashspec": true, "datadog": true, "datasetsapi": true, "decision": true, "decltype": true, "delegated": true,
 	"digitalocean": true, "docindex": true, "doclet": true, "docsgate": true, "e2e": true, "embeddings": true,
 	"engine": true, "envfile": true, "envref": true, "estate": true, "executordomain": true, "executordomaintest": true, "executorkeep": true, "executorread": true,
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true, "expo": true,

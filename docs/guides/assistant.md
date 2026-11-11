@@ -315,7 +315,8 @@ assistant:
 
 Deep work is also the only path that reads the images a person attaches to a
 question. Without it, the dashboard draws Attach image disabled with that
-reason and refuses a pasted or dropped image (`/viewer` answers
+reason, says it while an image is dragged over the composer, and refuses a
+pasted or dropped image in place (`/viewer` answers
 `reads_images` only where deep work is configured), and a quick answer told of
 an attachment says it cannot see it and offers what works: pasting the text,
 or asking an administrator to turn on deep work, or asking again shortly where

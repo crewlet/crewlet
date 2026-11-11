@@ -44,6 +44,8 @@ type AccessWriter interface {
 	Issued(ctx context.Context, c accessdomain.Call, n accessdomain.NewCertificate) (statelog.Result, error)
 	RanSealed(ctx context.Context, c accessdomain.Call, n accessdomain.NewCommand,
 		sealed accessdomain.SealedCommand) (statelog.Result, error)
+	VerdictSealed(ctx context.Context, c accessdomain.Call, n accessdomain.NewVerdict,
+		sealed accessdomain.SealedVerdict) (statelog.Result, error)
 }
 
 // The domain's own sides are what a data node serves the log with.
@@ -193,6 +195,24 @@ var opAccessRan = define("access.ran", opIdempotentWrite, accessDomain, false,
 		return w.RanSealed(ctx, a.Call, a.Command, a.Sealed)
 	}).byEngine()
 
+type accessVerdictArgs struct {
+	Call    accessdomain.Call
+	Verdict accessdomain.NewVerdict
+	Sealed  accessdomain.SealedVerdict
+}
+
+// A VERDICT'S RECORD crosses the router as a command's does (ADR-0125): what
+// it decided and its giver's words sealed by the asking node, opened by the
+// data node that takes it to check them.
+var opAccessVerdict = define("access.verdict", opIdempotentWrite, accessDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a accessVerdictArgs) (statelog.Result, error) {
+		w, err := b.accessWriter()
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		return w.VerdictSealed(ctx, a.Call, a.Verdict, a.Sealed)
+	}).byEngine()
+
 // ---- the asking half ---------------------------------------------------- //
 
 // AccessReads is the access log's reads, answered by a data node whose copy
@@ -278,6 +298,22 @@ func (x AccessWrites) Ran(ctx context.Context, c accessdomain.Call,
 	}
 	n.Command = ""
 	return x.written(call(ctx, x.r, opAccessRan, nil, accessRanArgs{Call: c, Command: n, Sealed: sealed}))
+}
+
+// Verdict records one verdict on a delegated request, what it decided and its
+// giver's words sealed here.
+func (x AccessWrites) Verdict(ctx context.Context, c accessdomain.Call,
+	n accessdomain.NewVerdict) (statelog.Result, error) {
+	if x.sealer == nil {
+		return statelog.Result{}, errors.New("estate: recording a verdict needs this node's keyring")
+	}
+	sealed, err := x.sealer.SealVerdict(n.Handle, accessdomain.VerdictID(n.Request, n.By), n.Subject,
+		n.Reason, n.Findings)
+	if err != nil {
+		return statelog.Result{}, err
+	}
+	n.Subject, n.Reason, n.Findings = "", "", nil
+	return x.written(call(ctx, x.r, opAccessVerdict, nil, accessVerdictArgs{Call: c, Verdict: n, Sealed: sealed}))
 }
 
 // written observes a write's position for the next read's floor and answers it.

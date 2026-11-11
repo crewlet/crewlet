@@ -831,6 +831,10 @@ func (e *Engine) draftReviews(ctx context.Context, cfg *config.Company, roster *
 		if err != nil {
 			return nil, err
 		}
+		// THE OFFER THE SAVE WAS DRAWN FROM names its levels, a new one included,
+		// which no sync has recorded yet.
+		wordsOffered(&was, current)
+		wordsOffered(&will, current)
 		changes := capability.DiffFor(capability.Take(was), capability.Take(will), capability.ForPerson)
 		if len(changes) == 0 {
 			continue
@@ -846,6 +850,13 @@ func (e *Engine) draftReviews(ctx context.Context, cfg *config.Company, roster *
 			Changes: linesOf(changes[:min(len(changes), capability.MaxLines)])})
 	}
 	return out, nil
+}
+
+// wordsOffered words in's lanes of answer's kind as answer's offers name them.
+func wordsOffered(in *capability.Input, answer seataccess.Answer) {
+	for _, offer := range answer.Options {
+		in.Words[offer.Lane] = capability.OfferedWords(answer.Kind, offer)
+	}
 }
 
 // draftCompany is a copy of cfg with the save's edits of draft against current,

@@ -222,9 +222,11 @@ type Access interface {
 	Reseal(ctx context.Context) (accessdomain.ResealReport, error)
 }
 
-// AccessResealed is what a rekey moved in the access log, counted.
+// AccessResealed is what a rekey moved in the access log, counted: the SSH
+// commands' texts and the verdicts' words (ADR-0125).
 type AccessResealed struct {
 	Commands int `json:"commands"`
+	Verdicts int `json:"verdicts"`
 }
 
 // IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
@@ -1167,10 +1169,10 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 	var access *AccessResealed
 	if s.access != nil {
 		report, err := s.access.Reseal(r.Context())
-		access = &AccessResealed{Commands: report.Commands}
+		access = &AccessResealed{Commands: report.Commands, Verdicts: report.Verdicts}
 		if err != nil || report.Unknown > 0 {
 			log.ErrorContext(r.Context(), "secret_rekey_access_incomplete",
-				"error", errText(err), "moved", rekeyed.Moved, "access_commands", access.Commands,
+				"error", errText(err), "moved", rekeyed.Moved, "access_commands", access.Commands, "access_verdicts", access.Verdicts,
 				"access_unknown", report.Unknown, "by", by.Name, "operator", by.OperatorID)
 			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
 				"moved":             nonNil(rekeyed.Moved),

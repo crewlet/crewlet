@@ -606,3 +606,34 @@ func TestATurnHasEndedOnlyWhereNothingOfItRuns(t *testing.T) {
 		t.Error("a seat this node does not hold reads as ended")
 	}
 }
+
+// WORDS BESIDE THE ACCESS LEAVE A PENDING REVIEW AS IT WAS MEASURED: the vendor
+// renaming a level while a real change waits on its review measures to the same
+// digest, so the pending record keeps its instant, no second review turn is
+// asked, and the settle check still reads the change as told once it is.
+//
+// Mutation: digest the snapshot's words again and the two measures differ.
+func TestWordsBesideTheAccessLeaveAPendingReviewAsMeasured(t *testing.T) {
+	t.Parallel()
+	before, after := sreAccess("secure"), sreAccess("operate")
+	told := toldAs("t-told", sreSnapshot(before))
+	first, owed := measured(sreSnapshot(after), told)
+	if !owed {
+		t.Fatal("a lowered level owes no review")
+	}
+	renamed := capability.Take(capability.Input{Company: after, Handle: "sre", Observed: sreObserved,
+		Words: map[seataccess.Lane]capability.Words{seataccess.LaneCloudflare: {Levels: []seataccess.Level{
+			{ID: "operate", Name: "Operator", Note: "Renamed at the vendor."}}}}})
+	second, owed := measured(renamed, told)
+	if !owed || second.digest != first.digest {
+		t.Fatalf("a renamed level measures to %s (owed %v), want the change's own %s",
+			second.digest, owed, first.digest)
+	}
+	pending := accessreview.Pending{Baseline: first.base.Turn, Digest: first.digest}
+	if !pending.Same(second.base.Turn, second.digest) {
+		t.Error("a renamed level reads as a new change, which restarts the pending review")
+	}
+	if _, owed := measured(renamed, toldAs("t-renamed", sreSnapshot(after))); owed {
+		t.Error("once the change is told, a renamed level alone owes a review")
+	}
+}

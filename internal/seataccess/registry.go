@@ -98,16 +98,17 @@ func Lookup(kind integration.Kind) (Vendor, bool) {
 	return v, ok
 }
 
-// FixedLevels is a vendor whose levels are this engine's own fixed set rather
-// than a list it reads from the vendor, so they can be named with no session:
-// the levels its [Session.Options] offers, before any of them is marked
-// unavailable.
+// FixedLevels is a vendor whose levels are, at least in part, this engine's own
+// fixed set rather than a list it reads from the vendor, so they can be named
+// with no session: those levels as its [Session.Options] offers them, before
+// any is marked unavailable. A vendor that also lists levels live (GitLab's
+// custom roles) answers its fixed ones alone.
 type FixedLevels interface {
 	FixedLevels(lane Lane) []Level
 }
 
 // KnownLevels is lane's levels as kind's vendor fixes them, least access
-// first, and false for a vendor that lists its levels live or is not
+// first, and false for a vendor that lists every level live or is not
 // registered.
 func KnownLevels(kind integration.Kind, lane Lane) ([]Level, bool) {
 	v, ok := Lookup(kind)
