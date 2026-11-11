@@ -443,6 +443,11 @@ type Ledger interface {
 	// already answered everything.
 	Worked(ctx context.Context, scope string, keys []string) (map[string]bool, error)
 
+	// WorkedAt is Worked with when each key was worked: the instant its
+	// first record stated, zero where a record states none. Fails open the
+	// same way.
+	WorkedAt(ctx context.Context, scope string, keys []string) (map[string]time.Time, error)
+
 	// Record marks one key worked. Best effort, for the same reason.
 	Record(ctx context.Context, scope, key, detail string, at time.Time) error
 }
