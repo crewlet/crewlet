@@ -35,6 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // A person's note to a turn whose executor is out, through the real turn: the
@@ -937,6 +938,11 @@ func (s *gatedSettles) SettleTake(ctx context.Context, turnID string, settle san
 			return nil, ctx.Err()
 		}
 	}
+	// A CONTEXT THAT HAS ENDED IS ANSWERED ITS ERROR, as a store over a
+	// connection answers it.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.unavailable != nil && s.unavailable() {
 		return nil, coord.ErrUnavailable
 	}
@@ -974,16 +980,25 @@ func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ..
 // is back: so it asks again until the store answers — a minute's outage past its
 // patience included — and the note is marked then, however long ago the take
 // that lost it ended: its hook's request is answered, or its segment over,
-// within seconds. It stops when its node stops, and asks nothing more. And a
-// run's lost takes settle in one loop, whatever their number: never two of its
-// settles at once — a take lost while the loop's round is asked joining it, even
-// the round the store first answers past the patience, which met no error to
-// say the take unsettled with and says nothing.
+// within seconds. And a run's lost takes settle in one loop, whatever their
+// number: never two of its settles at once — a take lost while the loop's
+// round is asked joining it, even the round the store first answers past the
+// patience, which met no error to say the take unsettled with and says nothing.
+//
+// It stops when its node stops — once it has asked every take once more, on the
+// stop's allowance and held to it: a store back while the loop slept between
+// rounds settles then, and so does a take a segment the teardown ended hands
+// off, one joining that last round included, whereas a store still silent is
+// asked nothing more. And once the teardown has waited the settles out, a take
+// lost is asked nothing at all: the store it would ask is closing.
 //
 // Mutation: give the settle up at its patience, end it with the context of the
 // take that lost it, ask on past the node's stop, start a loop for every take,
-// or say unsettled a round that met no error, and a case goes red — the last a
-// panic that ends the test binary, as it would end the node.
+// say unsettled a round that met no error, sleep through the node's stop, make
+// no last attempt, leave a take joining the last round unasked, hold the last
+// attempt to its own bound rather than the stop's allowance, or start a loop
+// once the teardown waited them out, and a case goes red — the panic one a
+// crash of the test binary, as it would end the node.
 func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 	t.Parallel()
 	t.Run("its store answering a minute after", func(t *testing.T) {
@@ -1012,21 +1027,127 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			store := sandbox.NewCoordStore(coordmem.NewFleet())
 			settles := &gatedSettles{PendingStore: store, unavailable: func() bool { return true }}
 			runs, _ := steersOver(t, steerRing, settles)
-			stopped := make(chan struct{})
-			runs.stopped = stopped
+			e := &Engine{}
+			runs.stopWith(e)
 			lostTakes(t, store, runs, "n-1")
 			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
 			time.Sleep(20 * time.Second)
-			close(stopped)
 			synctest.Wait()
-			atStop, _ := settles.counts()
+			before, _ := settles.counts()
+			e.tearingDown()
+			runs.waitSettles()
+			if asked, _ := settles.counts(); asked != before+1 {
+				t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
+			}
 			time.Sleep(time.Minute)
 			synctest.Wait()
-			if asked, _ := settles.counts(); asked != atStop {
-				t.Errorf("the settle was asked %d times after its node stopped", asked-atStop)
+			if asked, _ := settles.counts(); asked != before+1 {
+				t.Errorf("the settle was asked %d times after its last attempt", asked-before-1)
 			}
 			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || read.Unanswered {
 				t.Errorf("the note is read %+v, want it read and unmarked: nothing settled it", read)
+			}
+		})
+	})
+	t.Run("its store back as its node stops, a take joining its last round", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			var back, joined atomic.Bool
+			var runs *runSteers
+			settles := &gatedSettles{PendingStore: store,
+				unavailable: func() bool { return !back.Load() },
+				// A SEGMENT THE TEARDOWN ENDED, handing off a take of its own
+				// while the loop's last round is asked.
+				answering: func() {
+					if joined.CompareAndSwap(false, true) {
+						runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
+					}
+				}}
+			runs, _ = steersOver(t, steerRing, settles)
+			e := &Engine{}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1", "n-2")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			time.Sleep(10 * time.Second)
+			synctest.Wait()
+			// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS, and the
+			// node stops before the loop's next round.
+			back.Store(true)
+			e.tearingDown()
+			synctest.Wait()
+			for _, id := range []string{"n-1", "n-2"} {
+				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
+					t.Errorf("note %s is read %+v as its node stops, want it marked by the settle's last attempt",
+						id, read)
+				}
+			}
+			runs.waitSettles()
+		})
+	})
+	t.Run("a take handed off once its node stopped", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			settles := &gatedSettles{PendingStore: store}
+			runs, _ := steersOver(t, steerRing, settles)
+			e := &Engine{}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1")
+			e.tearingDown()
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			runs.waitSettles()
+			if asked, _ := settles.counts(); asked != 1 {
+				t.Errorf("a take handed off once its node stopped was asked %d times, want once", asked)
+			}
+			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || !read.Unanswered {
+				t.Errorf("the note is read %+v, want it marked by the take's one attempt", read)
+			}
+		})
+	})
+	t.Run("its last attempt held to the stop's allowance", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			settles := &gatedSettles{PendingStore: store, gate: make(chan struct{})}
+			runs, _ := steersOver(t, steerRing, settles)
+			// A TTL WHOSE STOP ALLOWANCE IS SHORTER THAN AN ATTEMPT'S OWN BOUND,
+			// so what ends a hung attempt is the allowance — of an Engine
+			// literal, as the stop's other cases build, since the allowance is
+			// a fraction of the TTL and nothing New builds.
+			e := &Engine{leaseTTL: 9 * time.Second}
+			allowance := seat.StopAllowance(e.stopTTL()) - e.admissionShare()
+			if allowance >= steerSettleAttempt {
+				t.Fatalf("the premise: the stop's allowance of %v is no shorter than an attempt's %v",
+					allowance, steerSettleAttempt)
+			}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			synctest.Wait()
+			begun := time.Now()
+			e.tearingDown()
+			runs.waitSettles()
+			if took := time.Since(begun); took > allowance {
+				t.Errorf("the settle held its node's stop %v, past the stop's allowance of %v", took, allowance)
+			}
+		})
+	})
+	t.Run("a take lost once its node waited its settles out", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			settles := &gatedSettles{PendingStore: store}
+			runs, _ := steersOver(t, steerRing, settles)
+			e := &Engine{}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1")
+			e.tearingDown()
+			runs.waitSettles()
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			synctest.Wait()
+			if asked, _ := settles.counts(); asked != 0 {
+				t.Errorf("a take lost once its node waited its settles out was asked %d times, want none", asked)
 			}
 		})
 	})

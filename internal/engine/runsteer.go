@@ -190,26 +190,38 @@ type runSteers struct {
 	// a view that follows a busy record does not say so on every write.
 	warned sync.Map
 
-	// stopped is closed when this node stops ([Engine.teardownSignal]): a
-	// settle this node makes off the path that took asks its store until the
-	// store answers, or until then, and no longer
-	// ([runSteers.settleUnanswered]). Nil is a node that never stops, as an
-	// engine assembled by hand is.
-	stopped <-chan struct{}
+	// stopped is closed when this node's teardown begins
+	// ([Engine.teardownSignal]), and stopStep makes a context a step of the
+	// stop's allowance from that moment ([Engine.stepOnceTornDown]): a settle
+	// this node makes off the path that took asks its store until the store
+	// answers, or until then — and then once more, on the allowance
+	// ([runSteers.settleRun]). Nil stopped is a node that never stops, as an
+	// engine assembled by hand is, and nil stopStep keeps a context as it is.
+	// Both set by [runSteers.stopWith].
+	stopped  <-chan struct{}
+	stopStep func(context.Context) (context.Context, func())
 
-	// settleMu guards settling: every run this node is settling takes of off
-	// the path that took, by turn id — one loop a run, whatever its takes.
-	settleMu sync.Mutex
-	settling map[string]*runSettle
+	// settleMu guards settling and settlesShut: every run this node is
+	// settling takes of off the path that took, by turn id — one loop a run,
+	// whatever its takes — and whether the teardown has waited the loops out
+	// ([runSteers.waitSettles]), after which no loop starts.
+	settleMu    sync.Mutex
+	settling    map[string]*runSettle
+	settlesShut bool
+
+	// settles is the settle loops running, which the teardown waits out.
+	settles sync.WaitGroup
 }
 
 // runSettle is one run's takes this node is settling off the path that took
-// ([runSteers.settleUnanswered]): their names, when the first was lost, and
-// whether the settle was said unsettled.
+// ([runSteers.settleUnanswered]): their names, when the first was lost,
+// whether the settle was said unsettled, and the takes a round begun once the
+// node stopped has asked — each its last attempt ([runSteers.settleRun]).
 type runSettle struct {
 	takes []string
 	since time.Time
 	said  bool
+	tried []string
 }
 
 var _ builtin.RunSteers = (*runSteers)(nil)
@@ -525,10 +537,13 @@ func takeName() string { return uuid.NewString() }
 // capture of its session then counts held — while the store that did not answer
 // in time answers once it is back. So it is asked again, rounds a second apart
 // doubling to eight, until an attempt is answered — the notes marked, or the
-// record gone with the run — or the node stops ([runSteers.stopped]); said at
-// ERROR once [steerSettlePatience] has passed unanswered, and again where the
-// node stops with it unsettled, since what a stopping node did not settle no
-// other node knows to.
+// record gone with the run — or the node stops, which it asks every take once
+// more before it ends ([runSteers.settleRun]); said at ERROR once
+// [steerSettlePatience] has passed unanswered, and again where the node stops
+// with it unsettled, since what a stopping node did not settle no other node
+// knows to. A take lost once the teardown has waited the settles out
+// ([runSteers.waitSettles]) is said so at once: the store it would be asked of
+// is closing.
 //
 // ONE LOOP A RUN: a take a run loses while its loop runs joins it, so a run
 // whose store does not answer holds one loop, however many takes it loses. The
@@ -543,41 +558,64 @@ func (s *runSteers) settleUnanswered(ctx context.Context, turnID, take string) {
 		}
 		return
 	}
+	if s.settlesShut {
+		log.ErrorContext(ctx, "steer_take_unsettled", "turn_id", turnID, "takes", 1,
+			"detail", "a take of the run's notes answered an error once this node had stopped settling: "+
+				"where the store recorded it, the record says the run read notes its reader was never "+
+				"handed, and no other node knows to settle it")
+		return
+	}
 	if s.settling == nil {
 		s.settling = map[string]*runSettle{}
 	}
 	run := &runSettle{takes: []string{take}, since: s.now()}
 	s.settling[turnID] = run
-	go s.settleRun(context.WithoutCancel(ctx), turnID, run)
+	s.settles.Add(1)
+	go func() {
+		defer s.settles.Done()
+		s.settleRun(context.WithoutCancel(ctx), turnID, run)
+	}()
 }
 
 // settleRun asks turnID's store to settle run's takes, round after round, until
 // it has answered for every one, or the node stops — see
 // [runSteers.settleUnanswered]. base is the loop's own context, which nothing
-// but the node's stop ends ([runSteers.stopped]): watched by a goroutine of the
-// loop's own, which goes with the loop.
+// ends: an attempt is held to [steerSettleAttempt], and from the moment the
+// node's teardown begins to the stop's allowance too ([runSteers.settleOnce]).
+//
+// ONE LAST ATTEMPT AT EVERY TAKE AS THE NODE STOPS, never none: a store that
+// came back while the loop slept between rounds, or a take a segment the
+// teardown ended handed off, would otherwise stay unsettled for good. So the
+// round in flight as the teardown begins goes on, a step of the stop's
+// allowance; a loop asleep between rounds wakes; and a round begun once the
+// teardown has asks every take no such round has asked yet — one that joins
+// it meanwhile is asked by the next — after which what is left is said
+// unsettled, and the loop ends.
 func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettle) {
-	life, end := context.WithCancel(base)
-	defer end()
-	if s.stopped != nil {
-		go func() {
-			select {
-			case <-s.stopped:
-				end()
-			case <-life.Done():
-			}
-		}()
-	}
 	for round := 1; ; round++ {
+		last := s.stopping()
 		s.settleMu.Lock()
 		takes := slices.Clone(run.takes)
+		if last {
+			takes = slices.DeleteFunc(takes, func(t string) bool { return slices.Contains(run.tried, t) })
+			run.tried = append(run.tried, takes...)
+			if len(takes) == 0 {
+				delete(s.settling, turnID)
+				left := len(run.takes)
+				s.settleMu.Unlock()
+				log.ErrorContext(base, "steer_take_unsettled", "turn_id", turnID, "takes", left,
+					"detail", "this node stopped before the store answered the settle of a take of the run's "+
+						"notes, its last attempt on the stop's allowance included: where the store recorded "+
+						"it, the record says the run read notes its reader was never handed, and no other "+
+						"node knows to settle it")
+				return
+			}
+		}
 		s.settleMu.Unlock()
 		var answered []string
 		var unanswered error
 		for _, take := range takes {
-			ctx, cancel := context.WithTimeout(life, steerSettleAttempt)
-			marked, err := s.store.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: take, Unanswered: true})
-			cancel()
+			marked, err := s.settleOnce(base, turnID, take)
 			if err != nil {
 				unanswered = err
 				continue
@@ -602,7 +640,8 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 		// answered asked no take that is left — what is left joined the run's
 		// loop while the round was asked, and has not been asked yet — so there
 		// is nothing unanswered to say, and its error to say it with is none.
-		overdue := unanswered != nil && !run.said && s.now().Sub(run.since) >= steerSettlePatience
+		// And never of a last round, whose end says what is left.
+		overdue := !last && unanswered != nil && !run.said && s.now().Sub(run.since) >= steerSettlePatience
 		run.said = run.said || overdue
 		s.settleMu.Unlock()
 		if overdue {
@@ -613,23 +652,66 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 					"never handed, and a continuation of its session is not told them. Asked again until "+
 					"the store answers")
 		}
+		if last {
+			continue
+		}
 		timer := time.NewTimer(backoff.Jitter(backoff.Doubling(round, steerSettleRetryBase,
 			steerSettleRetryCeiling), 0.2))
 		select {
 		case <-timer.C:
-		case <-life.Done():
+		case <-s.stopped:
 			timer.Stop()
-			s.settleMu.Lock()
-			delete(s.settling, turnID)
-			left = len(run.takes)
-			s.settleMu.Unlock()
-			log.ErrorContext(base, "steer_take_unsettled", "turn_id", turnID, "takes", left,
-				"detail", "this node stopped before the store answered the settle of a take of the run's "+
-					"notes: where the store recorded it, the record says the run read notes its reader was "+
-					"never handed, and no other node knows to settle it")
-			return
 		}
 	}
+}
+
+// settleOnce is one attempt at settling take, held to [steerSettleAttempt] and,
+// from the moment this node's teardown begins, to the stop's allowance
+// ([runSteers.stopStep]): the teardown waits for it ([runSteers.waitSettles]),
+// and a store that does not answer must not hold the stop past what every
+// give-back it makes shares.
+func (s *runSteers) settleOnce(base context.Context, turnID, take string) ([]sandbox.RunNote, error) {
+	ctx, cancel := context.WithTimeout(base, steerSettleAttempt)
+	defer cancel()
+	if s.stopStep != nil {
+		var done func()
+		ctx, done = s.stopStep(ctx)
+		defer done()
+	}
+	return s.store.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: take, Unanswered: true})
+}
+
+// stopping reports whether this node's teardown has begun ([runSteers.stopped]).
+func (s *runSteers) stopping() bool {
+	select {
+	case <-s.stopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// stopWith ends this node's settles with e's teardown, as [New] wires them: the
+// moment it begins ([Engine.teardownSignal]), and the stop's allowance every
+// attempt is held to from then on ([Engine.stepOnceTornDown]).
+func (s *runSteers) stopWith(e *Engine) {
+	s.stopped = e.teardownSignal().Done()
+	s.stopStep = e.stepOnceTornDown
+}
+
+// waitSettles waits out every settle loop this node runs, for its teardown,
+// which has begun: each makes its last attempt on the stop's allowance and
+// ends ([runSteers.settleRun]). From here a take lost is said unsettled, and no
+// loop starts — the store it would ask is closing. Nil-safe: an engine whose
+// boot failed before it built its steers has no settle to wait for.
+func (s *runSteers) waitSettles() {
+	if s == nil {
+		return
+	}
+	s.settleMu.Lock()
+	s.settlesShut = true
+	s.settleMu.Unlock()
+	s.settles.Wait()
 }
 
 // carried is every note run's record holds read, opened, in the order read —

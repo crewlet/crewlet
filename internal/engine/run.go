@@ -1909,8 +1909,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	steers.runs = e.runSteers
 	// AND THE SETTLES THOSE RECORDS TAKE OFF THE PATH THAT TOOK END WITH THE
 	// NODE: each asks its store until it answers, and no longer than this
-	// node's teardown, which is when its store goes (runsteer.go).
-	e.runSteers.stopped = e.teardownSignal().Done()
+	// node's teardown, which is when its store goes — asking every take once
+	// more as it begins, on the stop's allowance (runsteer.go).
+	e.runSteers.stopWith(e)
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
@@ -3426,6 +3427,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
 	e.stopBridgeFleet(ctx)
+	// AND THE SETTLES OF TAKES WHOSE ANSWERS WERE LOST, once nothing is left
+	// to lose one — the drain ended the turns, and the sandbox's resumes and
+	// the bridge's relay are stopped above — and while the coordination store
+	// they write is still there: each loop made its last attempt on this
+	// stop's allowance as the teardown began, and is waited out here.
+	e.runSteers.waitSettles()
 	e.stopIssueSender()
 	// AND THEN THE CORE, whose logs are the last thing standing — see the
 	// comment above stopNative.
