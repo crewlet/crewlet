@@ -461,7 +461,7 @@ func TestAWaiterWhoseRequestEndsLeavesAtOnce(t *testing.T) {
 		if !errors.Is(r.err, context.Canceled) || r.w.outcome != spoolAbandoned {
 			t.Errorf("a waiter whose request ended answered %v, counted %q", r.err, r.w.outcome)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(time.Second): //fixedwait:liveness
 		t.Fatal("a waiter whose request ended was still waiting a second later")
 	}
 	granted(t, "z's 30, once y's 60 left", behind)
@@ -575,7 +575,7 @@ func TestEveryBodyArrivesWhole(t *testing.T) {
 			}
 			room, size := st.got, first
 			for size < p.size {
-				time.Sleep(p.pause)
+				time.Sleep(p.pause) //fixedwait:simulated a client's pause between two pieces of its body
 				k := min(64, p.size-size)
 				if short := size + k - room; short > 0 {
 					got, _, err := a.more(ctx, st.body, short, a.ask(room, short, p.claim), 10*time.Second)
@@ -592,7 +592,7 @@ func TestEveryBodyArrivesWhole(t *testing.T) {
 				}
 			}
 			a.ended(st.body, size)
-			time.Sleep(p.hold)
+			time.Sleep(p.hold) //fixedwait:simulated a request reading its spooled body before it gives the spool back
 			a.release(st.body)
 		})
 	}

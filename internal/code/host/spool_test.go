@@ -539,10 +539,10 @@ func TestAFetchHeldPastTheWaitDoesNotHoldItsCredentialsTurn(t *testing.T) {
 	start := time.Now()
 	if a := <-fetchAsync(t, c, "ceo", body); a.status != http.StatusOK || !strings.Contains(a.body, "packfile") {
 		t.Errorf("the request behind a held one answered %d %q after %v", a.status, short(a.body),
-			time.Since(start))
+			time.Since(start)) //fixedwait:measure the failure message's own reading, which decides nothing
 	}
-	if held := time.Since(start); held < 2*timing.SpoolWait {
-		time.Sleep(2*timing.SpoolWait - held)
+	if held := time.Since(start); held < 2*timing.SpoolWait { //fixedwait:measure the elapsed time only sizes the simulated hold below
+		time.Sleep(2*timing.SpoolWait - held) //fixedwait:simulated a cold sync holding the first request past twice the wait's bound
 	}
 	select {
 	case a := <-first:
@@ -758,7 +758,7 @@ func TestAQueueBehindOneTokenLeavesTheRequestMemoryToEverybodyElse(t *testing.T)
 			if a.status != http.StatusOK {
 				t.Errorf("%s beside the queue answered %d %q", tc.name, a.status, short(a.body))
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(5 * time.Second): //fixedwait:liveness
 			t.Fatalf("%s beside the queue was not answered in five seconds", tc.name)
 		}
 		if n := host.SpoolWaiting(node.Host()); n != 4 {

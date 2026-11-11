@@ -990,6 +990,15 @@ func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 // receiver's bug is answered as the committer would answer it, with nobody
 // asked and no bundle stored for a push no row will name. Stood in by the
 // check itself, since no push the commands' own bound admits reaches it.
+//
+// THE CHECK REFUSES ONLY ONCE THE UPLOAD IS HELD — read off the upload's
+// fault point, which a build that starts the upload beside the check reaches
+// at once — so the refusal ends an upload in flight. A check still waiting
+// for it after ten seconds fails the case, rather than refusing a push with
+// nothing in flight to end.
+//
+// Mutation: ask the check before the upload starts (introduceAndStore) — the
+// upload never reaches its hold while the check waits, red.
 func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	l, e := &logs{}, &recording{}
 	c := newCase(t, codetest.SoloOptions{Logger: l.logger(), Shape: codetest.Shape{WrapEstate: e.wrap}},
@@ -1000,9 +1009,11 @@ func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	c.Fleet.Faults().Arm(codefault.HostUpload, codefault.Action{Once: true, Block: held, Reached: reached})
 	checked := make(chan struct{})
 	host.SetProposalCheck(c.Fleet.Nodes()[0].Host(), func(code.Proposal) error {
-		select { // the upload is held when the check refuses
+		select {
 		case <-reached:
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
+			t.Error("the proposal's check waited ten seconds and its push's upload never reached its hold: " +
+				"the refusal had no upload in flight to end")
 		}
 		close(checked)
 		return fmt.Errorf("%w: a receiver's bug", code.ErrInvalidProposal)
@@ -1010,7 +1021,7 @@ func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	go func() { // a check never asked must not hold the push for ever
 		select {
 		case <-checked:
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			release.Do(func() { close(held) })
 		}
 	}()
@@ -1279,8 +1290,9 @@ func TestALoanIsRepaidBeforeThePushsUpload(t *testing.T) {
 	reachedFirst(t, reached, done)
 	slots := node.Pool().Slots(gitproc.ClassRead)
 	free := node.Pool().Free(gitproc.ClassRead)
+	//fixedwait:measure a poll's own deadline: the lane is asserted whole after it
 	for deadline := time.Now().Add(5 * time.Second); free != slots && time.Now().Before(deadline); {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 		free = node.Pool().Free(gitproc.ClassRead)
 	}
 	lent := -1.0
@@ -1516,7 +1528,7 @@ esac`)
 	go func() { pushed <- p.Push(c.Ctx, work, c.URL(0), "main") }()
 	select {
 	case <-reached:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Error("the push's upload did not start while its listing was held: it waited for the listing")
 	}
 	if err := os.WriteFile(release, nil, 0o600); err != nil {

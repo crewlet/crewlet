@@ -34,10 +34,10 @@ func awaitVerify(t *testing.T, h *host.Server, name string, id uuid.UUID) host.V
 		if v.State != host.VerifyRunning {
 			return v
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the verification %s of %s never ended", id, name)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -84,11 +84,11 @@ func holdMaintainerOff(t *testing.T, c *codetest.Case) (slots int, release func(
 	t.Cleanup(held.Release) // a case that fails while it holds the check lets it go before the fleet stops
 	deadline := time.Now().Add(time.Minute)
 	for node.Pool().Free(gitproc.ClassMaintenance) != slots-1 {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the maintenance lane has %d of its %d slots free a minute after the held check's admission, "+
 				"want all but its own", node.Pool().Free(gitproc.ClassMaintenance), slots)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	return slots, held.Release
 }
@@ -206,7 +206,7 @@ func TestAVerifyOutlivesItsRequest(t *testing.T) {
 	}
 	select {
 	case <-reached:
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("the check never reached its sync")
 	}
 	cancel()
@@ -525,7 +525,7 @@ func TestAVerifyTheStopCutsShortIsAnsweredStopping(t *testing.T) {
 			}()
 			select {
 			case <-reached:
-			case <-time.After(10 * time.Second):
+			case <-time.After(10 * time.Second): //fixedwait:liveness
 				t.Fatal("the verify never reached its resolve")
 			}
 			if tc.byStop {
@@ -536,7 +536,7 @@ func TestAVerifyTheStopCutsShortIsAnsweredStopping(t *testing.T) {
 			var err error
 			select {
 			case err = <-answered:
-			case <-time.After(10 * time.Second):
+			case <-time.After(10 * time.Second): //fixedwait:liveness
 				t.Fatal("the verify never returned once it was cut short")
 			}
 			if got := errors.Is(err, host.ErrStopping); got != tc.stopping {
@@ -575,7 +575,7 @@ func TestAVerifyTheStopCutsShortIsAnsweredStopping(t *testing.T) {
 		}
 		select {
 		case <-reached:
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			t.Fatal("the check never reached its sync")
 		}
 		h.Stop(c.Ctx)

@@ -50,7 +50,7 @@ func BenchmarkEngineRebase(b *testing.B) {
 						Kind: code.WriteRebaseChange, RepoID: r.repo, Principal: pat(), OpID: opNow(),
 						Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}, Ref: featureRef,
 						ExpectedHead: r.head, Change: r.change})
-					took := time.Since(began)
+					took := time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 					b.StopTimer()
 					if err != nil || res.Outcome != statelog.OutcomeApplied {
 						b.Fatalf("the rebase did not land: %+v %v", res, err)

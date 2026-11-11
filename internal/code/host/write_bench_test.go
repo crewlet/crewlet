@@ -329,21 +329,21 @@ func (o timedObjects) Put(ctx context.Context, name string, r io.Reader, m objst
 func (o timedObjects) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
 	start := time.Now()
 	rc, err := o.Backend.Get(ctx, name, off, n)
-	o.called("GET", name, time.Since(start))
+	o.called("GET", name, time.Since(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 	return rc, err
 }
 
 func (o timedObjects) Stat(ctx context.Context, name string) (objstore.Info, error) {
 	start := time.Now()
 	info, err := o.Backend.Stat(ctx, name)
-	o.called("STAT", name, time.Since(start))
+	o.called("STAT", name, time.Since(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 	return info, err
 }
 
 func (o timedObjects) Delete(ctx context.Context, name string) error {
 	start := time.Now()
 	err := o.Backend.Delete(ctx, name)
-	o.called("DELETE", name, time.Since(start))
+	o.called("DELETE", name, time.Since(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 	return err
 }
 
@@ -362,13 +362,14 @@ func (e timedEstate) Propose(ctx context.Context, p code.Proposal) (code.Propose
 	e.fig.mu.Lock()
 	defer e.fig.mu.Unlock()
 	if p.Via != code.ViaEngine {
+		//fixedwait:measure a benchmark reports this; no gate reads it
 		e.fig.personProposals[e.fig.phase] = append(e.fig.personProposals[e.fig.phase], end.Sub(start))
 		if p.Pack != nil {
 			e.fig.person[p.Pack.Object.Name()] = true
 		}
 		return res, err
 	}
-	e.fig.proposals = append(e.fig.proposals, end.Sub(start))
+	e.fig.proposals = append(e.fig.proposals, end.Sub(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 	e.fig.answered[p.PushID] = end
 	if err == nil && res.Outcome == statelog.OutcomePending {
 		e.fig.pending++
@@ -804,7 +805,7 @@ func (r *writeRig) compact(b *testing.B) {
 	r.fig.enter(phaseCompact)
 	defer r.fig.enter(was)
 	start := time.Now()
-	defer func() { r.compacting += time.Since(start) }()
+	defer func() { r.compacting += time.Since(start) }() //fixedwait:measure a benchmark leaves it out of the rate it reports; no gate reads it
 	for range compactPasses {
 		report, err := r.node.Compactor().Poll(b.Context())
 		switch {
@@ -871,7 +872,7 @@ func (r *writeRig) landSeed(ctx context.Context, w code.EngineWrite) (code.Engin
 		res, err := r.f.Write(ctx, w)
 		switch {
 		case unready(err) && try < seedTries:
-			time.Sleep(code.GitShareWait)
+			time.Sleep(code.GitShareWait) //fixedwait:liveness
 			continue
 		case err != nil:
 			return res, err
@@ -1031,8 +1032,7 @@ func (r *writeRig) run(b *testing.B) {
 		}
 	}
 	r.fig.enter(phaseWrites)
-	watch, stopWatch := context.WithCancel(b.Context())
-	peak := watchInFlight(watch, r.node.Host())
+	peak := watchInFlight(b, r.node.Host())
 	pushing, stopPushing := context.WithCancel(b.Context())
 	besides := make(chan besideResult, 1)
 	if person != nil {
@@ -1047,9 +1047,8 @@ func (r *writeRig) run(b *testing.B) {
 		r.round(b, rounds)
 		rounds++
 	}
-	elapsed := time.Since(start) - r.compacting
+	elapsed := time.Since(start) - r.compacting //fixedwait:measure a benchmark reports this; no gate reads it
 	stopPushing()
-	stopWatch()
 	inFlight := peak()
 
 	r.mu.Lock()
@@ -1060,7 +1059,7 @@ func (r *writeRig) run(b *testing.B) {
 	r.fig.mu.Lock()
 	for id, end := range r.ended {
 		if at, ok := r.fig.answered[id]; ok {
-			adopt = append(adopt, end.Sub(at))
+			adopt = append(adopt, end.Sub(at)) //fixedwait:measure a benchmark reports this; no gate reads it
 		}
 	}
 	proposals, pending, packs := inOrder(r.fig.proposals), r.fig.pending, len(r.fig.packs)
@@ -1176,14 +1175,16 @@ func (r *writeRig) run(b *testing.B) {
 	}
 }
 
-// watchInFlight samples how many writes s holds every millisecond until ctx
-// ends, and answers the most it saw once it has stopped.
-func watchInFlight(ctx context.Context, s *host.Server) func() int {
+// watchInFlight samples how many writes s holds every millisecond, for b's
+// inflight-peak, until the function it answers is called: that stops it and
+// answers the most it saw.
+func watchInFlight(b *testing.B, s *host.Server) func() int {
+	ctx, stop := context.WithCancel(b.Context())
 	var peak int
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(time.Millisecond)
+		tick := time.NewTicker(time.Millisecond) //fixedwait:bench
 		defer tick.Stop()
 		for {
 			select {
@@ -1195,6 +1196,7 @@ func watchInFlight(ctx context.Context, s *host.Server) func() int {
 		}
 	}()
 	return func() int {
+		stop()
 		<-done
 		return peak
 	}
@@ -1272,7 +1274,8 @@ func (bp *besidePusher) paced(ctx context.Context, n int) ([]time.Duration, erro
 		select {
 		case <-ctx.Done():
 			return took, nil
-		case <-time.After(time.Until(start.Add(besidePace))):
+		//fixedwait:simulated a person pushing once every besidePace
+		case <-time.After(time.Until(start.Add(besidePace))): //fixedwait:measure the remaining time only paces the person's pushes
 		}
 	}
 	return took, nil
@@ -1554,11 +1557,11 @@ func holdMaintenance(b *testing.B, node codetest.Node) {
 		switch {
 		case err == nil:
 			held = append(held, r)
-		case !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline):
+		case !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline): //fixedwait:measure a poll's own deadline, whose firing only fails the benchmark
 			b.Fatalf("hold node %s's maintenance lane, %d of its %d slots held: %v", node.ID(), len(held), slots,
 				err)
 		default:
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 }
