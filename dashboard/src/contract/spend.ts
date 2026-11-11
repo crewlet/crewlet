@@ -87,4 +87,10 @@ export type BudgetState = "ok" | "near" | "refusing";
  * equal by `internal/api/queries.TestTheDashboardSaysEveryWakeKind`.
  */
 export type WakeKind =
-  "chat_message" | "work_item" | "schedule" | "colleague_ask" | "code_change" | "alarm";
+  | "chat_message"
+  | "work_item"
+  | "schedule"
+  | "colleague_ask"
+  | "code_change"
+  | "alarm"
+  | "delegated_request";

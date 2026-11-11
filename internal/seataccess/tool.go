@@ -57,7 +57,9 @@ func ToolServerOf(c *config.Company, lane Lane) string {
 // credentials the engine sets there ([LaneSpec.BoxEnv], [BoxDefaults]),
 // waiting until the credential is sealed; server_off where every such server
 // is turned off; and otherwise builtin for Jira and Confluence, whose
-// credential the engine's own tools read, and no_server for the rest.
+// credential the engine's own tools read, and no_server for the rest. SSH is
+// builtin whatever the servers: its tools are the engine's own `ssh_read` and
+// `ssh_operate`, which issue the seat's certificate at use.
 //
 // A SERVER TURNED OFF READS NO CREDENTIAL ([config.MCPServer.IsEnabled]): it
 // starts for nobody, so a lane whose only server is off is not live however
@@ -66,6 +68,9 @@ func ToolServerOf(c *config.Company, lane Lane) string {
 func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have Observed) ToolState {
 	if !want.Enabled || !have.Exists || !have.Enabled {
 		return ToolOff
+	}
+	if lane == LaneSSH {
+		return ToolBuiltin
 	}
 	var servers []*config.MCPServer
 	if c != nil {

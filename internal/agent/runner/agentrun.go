@@ -424,7 +424,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// log.
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.typedAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))))
 
@@ -603,7 +603,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// included, or a delivery made before the question, or before the loss,
 	// would be refused here and accepted there.
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.typedAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
 				carried := append(slices.Clone(logged), ledger.Called(elided)...)
 				return turn.Record(history, append(carried, calls(surface)...))
@@ -923,7 +923,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.typedAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
 				return turn.Record(history, append(slices.Clone(called), calls(surface)...))
 			},
@@ -1106,7 +1106,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// that bound recorded whole is replayed as it stands.
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.typedAnswer, decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
 				return turn.Record(history, append(slices.Clone(logged), ledger.Called(elided)...))
 			},

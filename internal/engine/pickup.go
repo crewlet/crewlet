@@ -6,8 +6,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pickup"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -129,24 +131,36 @@ func (e *Engine) picker() *pickup.Picker {
 				c := e.Company()
 				return c != nil && c.Org != nil && c.Org.SeatByHandle(handle) != nil
 			},
+			// THE ROSTER THE WAIT TOOL REFUSES BY, so a wait it would
+			// refuse now comes back however it was written (ADR-0122).
+			People: func() []worklet.PersonSeat {
+				if c := e.Company(); c == nil || c.Org == nil {
+					return nil
+				}
+				return builtin.PersonSeats(e.seatCorpus())
+			},
 		}
 	}
 	return e.pickup.picker
 }
 
-// typedAnswerFor is the read of whether the turn turnID put a typed answer on
-// the item a work pickup handed it (ADR-0122), and nil where reply names none:
-// at a level that has the turn's own writes, from whichever node serves them.
-func (e *Engine) typedAnswerFor(turnID string, reply turn.Reply) func(context.Context) (bool, error) {
+// pickupAnswerFor is the read of how the seat handle has left the item a work
+// pickup handed its turn since the turn began (ADR-0122), and nil where reply
+// names none: at a level that has the turn's own writes, from whichever node
+// serves them. Read by the seat's rows rather than the turn's id, so a merge
+// queue's close of the item, made as the seat outside any turn, answers it.
+func (e *Engine) pickupAnswerFor(handle string, since time.Time,
+	reply turn.Reply) func(context.Context) (types.PickupAnswer, error) {
+
 	if reply.Item == "" {
 		return nil
 	}
-	return func(ctx context.Context) (bool, error) {
+	return func(ctx context.Context) (types.PickupAnswer, error) {
 		if e.router == nil {
-			return false, errors.New("engine: no estate router to read the pickup's answer through")
+			return "", errors.New("engine: no estate router to read the pickup's answer through")
 		}
-		return e.router.Work().TypedAnswer(ctx, worklet.TypedAnswerQuery{
-			Turn: turnID, Item: reply.Item, Level: statelog.ReadLinearizable,
+		return e.router.Work().PickupAnswer(ctx, worklet.PickupAnswerQuery{
+			Seat: handle, Item: reply.Item, Since: since, Level: statelog.ReadLinearizable,
 		})
 	}
 }

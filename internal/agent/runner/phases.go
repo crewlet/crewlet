@@ -167,11 +167,11 @@ type Config struct {
 	// See [turn.Reply].
 	Reply turn.Reply
 
-	// TypedAnswer reads, off the tracker's record of this turn's writes,
-	// whether the turn has put a typed answer on the item a work pickup
-	// handed it ([turn.Reply.Item], ADR-0122). Required where Reply names
-	// an item, and read by the submission check and after every phase.
-	TypedAnswer func(ctx context.Context) (bool, error)
+	// PickupAnswer reads, off the tracker's rows, how this turn has left
+	// the item a work pickup handed it ([turn.Reply.Item], ADR-0122).
+	// Required where Reply names an item, and read by the submission check
+	// and after every phase.
+	PickupAnswer func(ctx context.Context) (types.PickupAnswer, error)
 
 	// Context is what this seat remembers, what its company has written
 	// down, what it has done before, and who it is talking to — rendered
@@ -808,27 +808,36 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 	work, surface, ran := r.executeAsAgentRun(ctx, round, notes, history)
 	if ran == nil && !work.Suspended && r.cfg.Reply.Item != "" {
-		work.Typed = r.typedAnswer(ctx)
+		work.Answer = r.pickupAnswer(ctx)
 	}
 	return work, surface, ran
 }
 
-// typedAnswer reads whether the turn has put a typed answer on the item its
-// reply names (ADR-0122). A read that fails answers true, LOGGED: the turn
-// falls back to the delivery every turn owes, rather than loop on a store it
-// cannot reach, and an item answered in words comes back on its recheck.
-func (r *Runner) typedAnswer(ctx context.Context) bool {
-	if r.cfg.TypedAnswer == nil {
-		return true
+// pickupAnswer reads how the turn has left the item its reply names
+// (ADR-0122). A read that fails answers [types.PickupUnread], LOGGED, which the
+// checks accept: the turn falls back to the delivery every turn owes rather
+// than loop on a store it cannot reach, and an item left in words comes back
+// on its recheck. An item that left the seat is said once it is read so.
+func (r *Runner) pickupAnswer(ctx context.Context) types.PickupAnswer {
+	if r.cfg.PickupAnswer == nil {
+		return types.PickupUnread
 	}
-	typed, err := r.cfg.TypedAnswer(ctx)
+	answer, err := r.cfg.PickupAnswer(ctx)
+	if err == nil && !answer.Valid() {
+		err = fmt.Errorf("the read answered %q, which this build does not know", answer)
+	}
 	if err != nil {
 		log.WarnContext(ctx, "pickup_answer_unread", "item", r.cfg.Reply.Item,
-			"error", err.Error(), "detail", "whether the pickup's turn answered its item "+
-				"with a typed answer could not be read, so any delivery counts for this check")
-		return true
+			"error", err.Error(), "detail", "how the pickup's turn left its item could not be "+
+				"read, so any delivery counts for this check")
+		return types.PickupUnread
 	}
-	return typed
+	if answer.Moot() {
+		log.InfoContext(ctx, "pickup_moot", "item", r.cfg.Reply.Item, "answer", string(answer),
+			"detail", "the item left the seat while its pickup's turn ran, so no typed "+
+				"answer is owed on it")
+	}
+	return answer
 }
 
 // executorPrompt is the executor's opening: its system prompt and the turn's

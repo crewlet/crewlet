@@ -1,8 +1,8 @@
 /**
  * Review the tools a server changed since their levels were decided: for
- * each, what moved (its title or description as a text diff, its arguments a
- * line each, the hints that moved keyed by the hint), and one choice, Accept
- * or Keep blocked.
+ * each, what moved (its title or description as a text diff, its schemas
+ * whole with its arguments a line each above them where those moved, the
+ * hints that moved keyed by the hint), and one choice, Accept or Keep blocked.
  *
  * THE ENGINE SAYS WHAT CHANGED AND WHAT IT HOLDS. Each row is the detail's
  * `changes` (the parts that moved, whether it now claims less risk, whether
@@ -22,9 +22,15 @@
  * WORDING ON READ-ONLY TOOLS IS ACCEPTED TOGETHER, ONCE READ: two or more
  * changes that only reword a read-only tool are offered as one action, which
  * first lists each tool with the words it changed (a rewording can still
- * change what a tool says it does) and only on a second press sends each
- * tool's reviewed digest in one decision, so a definition swapped since is
- * still refused by name. Every other change is decided one by one.
+ * change what a tool says it does), frozen as listed, and only on a second
+ * press sends each listed tool's digest in one decision, so a definition
+ * swapped since is still refused by name. Every other change is decided one
+ * by one.
+ *
+ * A DECISION WRITTEN IN PART IS SAID AS SUCH: the engine writes several one
+ * by one, and where the store fails one it names what was decided and what
+ * was not, which the dialog says tool by tool before reading the changes
+ * again.
  *
  * EVERY PART IS THE ONE DIFF THE DASHBOARD DRAWS (`components/DiffView.tsx`),
  * never the package's: its diffs paint a removed line in the danger state's
@@ -46,7 +52,12 @@ import {
   useToast,
 } from "@crewlethq/ui";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
-import type { McpChangeView, McpMemberServerStatus, McpToolView } from "~/contract/mcp.ts";
+import type {
+  McpChangesPartial,
+  McpChangeView,
+  McpMemberServerStatus,
+  McpToolView,
+} from "~/contract/mcp.ts";
 import type { ToolAnnotations } from "~/contract/tools.ts";
 import { plural } from "~/lib/format.ts";
 import { changedRuns, type Run } from "~/lib/wordDiff.ts";
@@ -197,28 +208,33 @@ function PartChange({
         </Part>
       );
     case "schema": {
-      // THE ARGUMENTS A LINE EACH where they moved; the schemas whole where
-      // what moved is inside an argument or in the output.
+      // THE SCHEMAS WHOLE, ALWAYS: an argument's description, enum or default
+      // and the output schema are text the model reads, and move beside an
+      // added argument as readily as alone. The arguments a line each above
+      // them, where those moved, as the summary.
       const was = argumentLines(before?.input_schema);
       const now = argumentLines(after?.input_schema);
-      return was !== now ? (
-        <Part label={label}>
-          <DiffView
-            before={was}
-            after={now}
-            empty={guard}
-            aria-label={`${tool} arguments, before and after`}
-          />
-        </Part>
-      ) : (
-        <Part label="Schema">
-          <DiffView
-            before={schemaText(before)}
-            after={schemaText(after)}
-            empty={guard}
-            aria-label={`${tool} schema, before and after`}
-          />
-        </Part>
+      return (
+        <>
+          {was !== now ? (
+            <Part label={label}>
+              <DiffView
+                before={was}
+                after={now}
+                empty={guard}
+                aria-label={`${tool} arguments, before and after`}
+              />
+            </Part>
+          ) : null}
+          <Part label="Schema">
+            <DiffView
+              before={schemaText(before)}
+              after={schemaText(after)}
+              empty={guard}
+              aria-label={`${tool} schema, before and after`}
+            />
+          </Part>
+        </>
       );
     }
     case "annotations":
@@ -334,6 +350,49 @@ function changedWords(change: McpChangeView): string {
     .join(" · ");
 }
 
+/** A wording change as the first press of its action froze it. */
+interface Reworded {
+  tool: string;
+  /** The digest of the definition read, which the decision names. */
+  digest: string | null;
+  /** The words it changed, as they were listed. */
+  words: string;
+}
+
+/** The decided and the undecided a decision written in part names, or null for any other refusal. */
+function partialOf(body: Record<string, unknown>): McpChangesPartial | null {
+  const list = (v: unknown) =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
+  const undecided = list(body.undecided);
+  if (!undecided || undecided.length === 0) return null;
+  return {
+    accepted: list(body.accepted) ?? [],
+    blocked: list(body.blocked) ?? [],
+    moved: list(body.moved) ?? [],
+    undecided,
+  };
+}
+
+/** A partial write's title: nothing changed only where nothing was decided. */
+function partialTitle(p: McpChangesPartial): string {
+  const decided = p.accepted.length + p.blocked.length;
+  return decided === 0
+    ? "Nothing was changed"
+    : `${plural(decided, "change")} decided, ${plural(p.undecided.length, "change")} not`;
+}
+
+/** What a partial write decided and what it did not, tool by tool. */
+function partialWords(p: McpChangesPartial): string {
+  return [
+    p.accepted.length > 0 ? `Accepted: ${p.accepted.join(", ")}.` : "",
+    p.blocked.length > 0 ? `Kept blocked: ${p.blocked.join(", ")}.` : "",
+    p.moved.length > 0 ? `Decided by somebody else first: ${p.moved.join(", ")}.` : "",
+    `Not decided: ${p.undecided.join(", ")}. The engine could not write them; review them again.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function DriftDialog({
   server,
   onClose,
@@ -351,8 +410,11 @@ export function DriftDialog({
   const ordered = [...changes].sort((a, b) => Number(b.loosened) - Number(a.loosened));
   const [chosen, setChosen] = useState("");
   const [busy, setBusy] = useState(false);
-  // THE SECOND PRESS: the wording action first lists what it would accept.
-  const [confirming, setConfirming] = useState(false);
+  // THE SECOND PRESS: the wording action first lists what it would accept,
+  // FROZEN at the first press (each tool, the digest and the words shown), so
+  // a reading that brings another definition meanwhile changes neither what
+  // is listed nor what is sent; the engine refuses whatever moved since.
+  const [confirming, setConfirming] = useState<readonly Reworded[] | null>(null);
   const current = ordered.find((c) => c.tool === chosen) ?? ordered[0] ?? null;
   const held = changes.filter((c) => c.held).length;
 
@@ -378,10 +440,24 @@ export function DriftDialog({
         } else {
           toast.show({ variant: "success", title: done });
         }
-        setConfirming(false);
+        setConfirming(null);
         onDone();
         void detail.reload({ quiet: true });
         if (changes.length <= decided) onClose();
+        return;
+      }
+      const partial = partialOf(answer.body);
+      if (partial) {
+        // WRITTEN IN PART: say exactly what was decided and what was not,
+        // and read the changes again, which no longer list the decided ones.
+        setConfirming(null);
+        onDone();
+        void detail.reload({ quiet: true });
+        toast.show({
+          variant: "danger",
+          title: partialTitle(partial),
+          message: partialWords(partial),
+        });
         return;
       }
       if (answer.code === "stale_version") {
@@ -408,14 +484,15 @@ export function DriftDialog({
       1,
     );
 
-  // EACH BY THE DIGEST REVIEWED, in one decision: the engine refuses it whole,
-  // naming the tools, if any of them moved since.
-  const acceptWording = () =>
+  // EACH BY THE DIGEST REVIEWED, as the first press froze it, in one
+  // decision: the engine refuses it whole, naming the tools, if any of them
+  // moved since.
+  const acceptWording = (frozen: readonly Reworded[]) =>
     send(
-      { accept: Object.fromEntries(wording.map((c) => [c.tool, c.after?.digest ?? null])) },
-      `Accepted ${plural(wording.length, "wording change")} on ${server.name}`,
-      `${plural(wording.length, "wording change")} accepted`,
-      wording.length,
+      { accept: Object.fromEntries(frozen.map((c) => [c.tool, c.digest])) },
+      `Accepted ${plural(frozen.length, "wording change")} on ${server.name}`,
+      `${plural(frozen.length, "wording change")} accepted`,
+      frozen.length,
     );
 
   if (detail.data === null) {
@@ -438,33 +515,33 @@ export function DriftDialog({
       </Modal>
     );
   }
-  if (confirming && wording.length >= 2) {
+  if (confirming) {
     return (
       <Modal
         open
         onClose={onClose}
-        title={`Accept ${plural(wording.length, "wording change")} on ${server.title}?`}
+        title={`Accept ${plural(confirming.length, "wording change")} on ${server.title}?`}
         subtitle="Each tool only rewords itself and stays read-only. Read what each now says before you accept."
         size="lg"
         footer={
           <>
-            <Button variant="secondary" disabled={busy} onClick={() => setConfirming(false)}>
+            <Button variant="secondary" disabled={busy} onClick={() => setConfirming(null)}>
               Cancel
             </Button>
-            <Button variant="primary" loading={busy} onClick={() => void acceptWording()}>
-              Accept {wording.length} changes
+            <Button variant="primary" loading={busy} onClick={() => void acceptWording(confirming)}>
+              Accept {confirming.length} changes
             </Button>
           </>
         }
       >
         <DescriptionList
           aria-label="The wording each tool changed"
-          items={wording.map((c) => [
+          items={confirming.map((c) => [
             <Text key="tool" as="span" variant="cell" mono>
               {c.tool}
             </Text>,
             <Text key="words" as="span" variant="body" truncate>
-              {changedWords(c)}
+              {c.words}
             </Text>,
           ])}
         />
@@ -485,7 +562,19 @@ export function DriftDialog({
       size="lg"
       footerStart={
         wording.length >= 2 ? (
-          <Button variant="secondary" disabled={busy} onClick={() => setConfirming(true)}>
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() =>
+              setConfirming(
+                wording.map((c) => ({
+                  tool: c.tool,
+                  digest: c.after?.digest ?? null,
+                  words: changedWords(c),
+                })),
+              )
+            }
+          >
             Accept {wording.length} wording changes
           </Button>
         ) : null

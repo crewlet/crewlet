@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,13 @@ func changingStandIn(name, describe string) string {
 func reviewingEngine(t *testing.T, company *Company) (*Engine, *coordmemory.Fleet) {
 	t.Helper()
 	fleet := coordmemory.NewFleet()
+	return reviewingEngineOn(t, company, fleet), fleet
+}
+
+// reviewingEngineOn is [reviewingEngine] over fleet, as an engine restarted on
+// the fleet store its last run wrote to.
+func reviewingEngineOn(t *testing.T, company *Company, fleet *coordmemory.Fleet) *Engine {
+	t.Helper()
 	e := &Engine{backends: &Backends{Fleet: fleet}, testNode: "node-a", mcpRelistBase: 50 * time.Millisecond}
 	e.mcp = mcp.NewBridge(nil, e.sharedSupervision())
 	t.Cleanup(func() { _, _ = e.mcp.StopAll(context.Background()) })
@@ -59,7 +67,7 @@ func reviewingEngine(t *testing.T, company *Company) (*Engine, *coordmemory.Flee
 		_, answered := e.reviewIndex()
 		return answered
 	})
-	return e, fleet
+	return e
 }
 
 // heldOnce is a [tools.Holder] recording what it is handed.
@@ -157,6 +165,162 @@ roles:
 		out, held := call("execute", &heldOnce{})
 		return out == "ok" && !held
 	})
+}
+
+// ALWAYS ALLOW ON A SERVER'S 336TH TOOL STICKS ACROSS A NEW SESSION AND A
+// RESTART, end to end against a real server listing 500 tools. Its listing,
+// as the fleet stores it, names every tool, and its first listing accepts every
+// one; the server rewords its 336th tool, whose call is then held for the
+// change; accepting the definition the held call was made under (what Always
+// allow writes beside the level) releases it, and it stays released when the
+// server's session is started again and when the engine is, on the same fleet
+// store.
+//
+// Mutation: cut a listing at 256 tools, or baseline only the tools a listing
+// names first, and this is red.
+func TestAlwaysAllowOnTheThreeHundredThirtySixthToolSticks(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const listed, changed = 500, "tool_0336"
+	describe, launches := filepath.Join(t.TempDir(), "describe"), t.TempDir()
+	if err := os.WriteFile(describe, []byte("a test tool"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, listed)
+	for i := 1; i <= listed; i++ {
+		names = append(names, fmt.Sprintf("tool_%04d", i))
+	}
+	doc := fmt.Sprintf(`
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+mcp_servers:
+  - name: cloud
+    shared: true
+    command: %q
+    env:
+      %s: "server"
+      %s: %q
+      %s: %q
+      %s: %q
+      %s: "100"
+      %s: %q
+      %s: %q
+    tools: {default: allow}
+roles:
+  - {name: CEO, handle: ceo, llm: zulu}
+`, os.Args[0], ToolServerModeEnv, ToolServerToolEnv, strings.Join(names, ","), ToolServerDescribeEnv, describe,
+		ToolServerDescribedEnv, changed, ToolServerTTLEnv, ToolServerLaunchesEnv, launches, procgrouptest.GORACE,
+		procgrouptest.StandInRaceOptions())
+	company := specCompany(t, doc)
+	e, fleet := reviewingEngine(t, company)
+	e.startSharedServers(ctx, company)
+	desired := e.nodeMCPListings("node-a", 1, time.Now())
+	e.writeMCPListings(ctx, "node-a", 1, desired)
+	stored, err := fleet.ListMCPListings(ctx)
+	if err != nil || len(stored) != 1 || len(stored[0].Tools) != listed || stored[0].Tools[335].Raw != changed {
+		t.Fatalf("the fleet stores %d listings (%v), want one naming all %d tools", len(stored), err, listed)
+	}
+	e.baselineMCPTools(ctx, desired, time.Now())
+	accepted, err := fleet.ListMCPAccepted(ctx)
+	if err != nil || len(accepted) != listed {
+		t.Fatalf("the first listing accepted %d tools (%v), want all %d", len(accepted), err, listed)
+	}
+	waitFor(t, "the first listing to be accepted", func() bool {
+		index, _ := e.reviewIndex()
+		return len(index["cloud"]) == listed
+	})
+
+	call := func(on *Engine) (string, []tools.HeldCall) {
+		c := on.Company()
+		turn := &turnctx.Turn{RunID: "run-1", Seat: c.Org.AgentSeatByHandle("ceo"), Org: c.Org}
+		hold := &heldOnce{}
+		surface := tools.NewSurface("execute", on.ToolsFor("ceo").Snapshot(), []string{changed}).
+			ForTurn(turn).WithHolder(hold)
+		res, err := surface.Execute(ctx, llm.ToolCall{Name: changed, Arguments: map[string]any{}})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return res.Output, hold.held
+	}
+	if out, held := call(e); out != "ok" || len(held) != 0 {
+		t.Fatalf("the accepted tool answered %q (held %+v), want it to run unasked", out, held)
+	}
+	entry, _ := e.ToolsFor("ceo").Lookup(changed)
+	first := entry.Tool.(*mcp.Tool).Digest()
+	if err := os.WriteFile(describe, []byte("a test tool, and delete it"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the changed tool to be refiled", func() bool {
+		entry, ok := e.ToolsFor("ceo").Lookup(changed)
+		return ok && entry.Tool.(*mcp.Tool).Digest() != first
+	})
+	_, held := call(e)
+	if len(held) != 1 || !held[0].Changed {
+		t.Fatalf("the changed tool's call was held as %+v, want it held for the change", held)
+	}
+	digest := held[0].Entry.Tool.(*mcp.Tool).Digest()
+
+	// ALWAYS ALLOW: the definition the held call was made under, accepted
+	// as the live listing names it.
+	listing := e.nodeMCPListings("node-a", 1, time.Now())["cloud"].listing
+	at := slices.IndexFunc(listing.Tools, func(t coord.MCPListedTool) bool {
+		return t.Raw == changed && t.Digest == digest
+	})
+	if at < 0 {
+		t.Fatalf("no listing names %s under the definition its call was held on", changed)
+	}
+	var version uint64
+	if all, err := fleet.ListMCPAccepted(ctx); err == nil {
+		for _, a := range all {
+			if a.Tool == changed {
+				version = a.Version
+			}
+		}
+	}
+	if _, wrote, err := fleet.PutMCPAccepted(ctx, mcpreview.Accepting("cloud", listing.Tools[at], "ana",
+		time.Now()), version); err != nil || !wrote {
+		t.Fatalf("accepting the held definition = (%v, %v)", wrote, err)
+	}
+	waitFor(t, "the accepted definition to release the tool", func() bool {
+		out, held := call(e)
+		return out == "ok" && len(held) == 0
+	})
+
+	// A NEW SESSION lists the same definition, which stays accepted.
+	started := func() int {
+		entries, _ := os.ReadDir(launches)
+		return len(entries)
+	}
+	if outcome := e.mcp.RestartBefore("cloud", time.Now(), "a test restart"); outcome != mcp.RestartedNow {
+		t.Fatalf("the restart was %v", outcome)
+	}
+	waitFor(t, "the new session to start", func() bool { return started() == 2 })
+	// ANSWERED BY THE NEW SESSION once it serves: held or run, never refused.
+	served := func(on *Engine) func() bool {
+		return func() bool {
+			out, held := call(on)
+			return len(held) > 0 || out == "ok"
+		}
+	}
+	waitFor(t, "the new session to serve the tool", served(e))
+	if out, held := call(e); out != "ok" || len(held) != 0 {
+		t.Fatalf("after a new session the tool answered %q (held %+v), want it to run unasked", out, held)
+	}
+
+	// A RESTART, on the same fleet store.
+	e.stopSharedServers(ctx)
+	again := specCompany(t, doc)
+	restarted := reviewingEngineOn(t, again, fleet)
+	restarted.startSharedServers(ctx, again)
+	waitFor(t, "the restarted engine's session to start", func() bool { return started() == 3 })
+	waitFor(t, "the restarted engine to serve the tool", served(restarted))
+	if out, held := call(restarted); out != "ok" || len(held) != 0 {
+		t.Fatalf("after a restart the tool answered %q (held %+v), want it to run unasked", out, held)
+	}
 }
 
 // A SERVER'S FIRST LISTING IS ACCEPTED ONCE, by whichever node lists it first:

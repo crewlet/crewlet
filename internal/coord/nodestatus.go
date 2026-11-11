@@ -289,7 +289,8 @@ type AlarmMark struct {
 	// Since is when the node raised it, on that node's own clock, to the
 	// second: the evaluation that first found it, and for a kind standing
 	// on several logs the oldest of them, so a log joining an alarm that is
-	// already up does not make it look newer.
+	// already up does not make it look newer. An alarm raised again soon
+	// after it cleared keeps its run's first raise (statelog.RelapseWindow).
 	Since time.Time
 }
 

@@ -637,6 +637,9 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	// states are present on every task.
 	add("due_all_day", boolText(before.DueAllDay), boolText(after.DueAllDay))
 	add("start", instantText(before.StartAt), instantText(after.StartAt))
+	// AND WHY IT WAITS, a write of its own when the date is restated with
+	// another reason: unrecorded, that write moved nothing a reader could see.
+	moved.prose("wait_reason", before.WaitReason, after.WaitReason)
 	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
 	add("points", pointsText(before.Points), pointsText(after.Points))
 	// AND THE EDGES, ONE FIELD PER RELATION KIND, because an edge change

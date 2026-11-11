@@ -172,6 +172,12 @@ const (
 	// naming no writer, as a check's log is.
 	SourceServerOutput Source = "server_output"
 
+	// SourceDelegatedRequest is a request a delegate decides (ADR-0125): an
+	// agent's command, its stdin and its reason, which that agent wrote and
+	// whatever it read may have written for it to steer its delegate, so it
+	// is read at [TrustExternal], naming the requesting seat.
+	SourceDelegatedRequest Source = "delegated_request"
+
 	// SourceTurnEnding is how an earlier turn of a conversation ended, as the
 	// engine recorded it on the executor log and tells the conversation's
 	// next turn: what that turn was asked, what its reviewer said landed,
@@ -191,7 +197,7 @@ var Sources = []Source{
 	SourcePageContext, SourceDeepWork,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
-	SourceTurnEnding, SourceServerOutput,
+	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest,
 }
 
 // Valid reports whether s is one of [Sources].
@@ -894,6 +900,17 @@ func Repository(src Source) Label {
 // servers: EXTERNAL, naming nobody, for the reason a check's log is.
 func ServerOutput() Label {
 	return Label{Source: SourceServerOutput, Trust: TrustExternal}
+}
+
+// DelegatedRequest is the label of a request a delegate decides (ADR-0125):
+// EXTERNAL, naming the requesting seat, since whatever that seat read may have
+// written the request's words for it to steer its delegate.
+func DelegatedRequest(requester string) Label {
+	var writers []Author
+	if requester != "" {
+		writers = []Author{{Kind: iam.ActorAgent, Seat: requester}}
+	}
+	return Label{Source: SourceDelegatedRequest, Trust: TrustExternal, Authors: writers}
 }
 
 // Executor is the label of what a seat's executor puts to a person (its

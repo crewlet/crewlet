@@ -58,7 +58,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (_ turn
 	defer origin.Stamp(&err)
 	work, surface, err := r.resume(ctx, history)
 	if err == nil && !work.Suspended && r.cfg.Reply.Item != "" {
-		work.Typed = r.typedAnswer(ctx)
+		work.Answer = r.pickupAnswer(ctx)
 	}
 	return work, surface, err
 }

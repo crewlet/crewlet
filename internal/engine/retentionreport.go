@@ -515,6 +515,11 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	healths map[string]domainHealth, windows []judgedWindow) statelog.Reading {
 
 	var out statelog.Reading
+	// WHAT IS UP NOW, so an alarm that clears past its raise is judged against
+	// the wider bound while it stands ([statelog.Reading.Up]).
+	if r.alarms != nil {
+		out.Up, _ = r.alarms.Standing()
+	}
 	// THE FLOORS ARE READ AT MOST ONCE, and only where a health was not
 	// handed in: one read of every domain's key answers every domain's floor.
 	var floors *publishedFloors

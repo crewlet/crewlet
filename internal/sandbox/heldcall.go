@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +11,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/words"
@@ -114,10 +118,14 @@ type HeldAct struct {
 	Key      string `json:"key,omitempty"`
 	Ask      string `json:"ask"`
 	Question string `json:"question" untrusted:"name"`
-	// Choice is the chosen option's label, empty for an answer in words.
-	Choice     string    `json:"choice,omitempty" untrusted:"name"`
-	AnsweredBy string    `json:"answered_by"`
-	AnsweredAt time.Time `json:"answered_at"`
+	// Choice is the chosen option's label, empty for an answer in words, and
+	// ChoiceID its id; Act is what the question was for where the engine
+	// composed it (ADR-0125), which a call that matches it exactly is made on.
+	Choice     string         `json:"choice,omitempty" untrusted:"name"`
+	ChoiceID   string         `json:"choice_id,omitempty"`
+	Act        *delegated.Act `json:"act,omitempty"`
+	AnsweredBy string         `json:"answered_by"`
+	AnsweredAt time.Time      `json:"answered_at"`
 }
 
 // HeldChoices is every answer, in the order a person is offered them.
@@ -139,6 +147,12 @@ func ChoicesOf(h HeldCall) []string {
 // administrator or a person integrations.ssh.approvers names, at a fresh
 // step-up (authz's ssh.operate.approve).
 const HeldApproversSSH = "ssh"
+
+// HeldApproversRelease is [HeldCall.Approvers] for a merge or a deploy asked
+// with ask_to_merge or ask_to_deploy: an administrator, a lead of the seat, or
+// a person the kind's delegated-decisions rule names in escalate_to, at a
+// fresh step-up (authz's release.approve).
+const HeldApproversRelease = "release"
 
 // maxHeldBindingBytes bounds [HeldCall.Binding]: a SHA-256 in hex.
 const maxHeldBindingBytes = 64
@@ -289,7 +303,8 @@ type HeldCall struct {
 	Fixed bool `json:"fixed,omitempty"`
 
 	// Approvers names who may answer where it is not the run's seat's lead
-	// or an administrator: [HeldApproversSSH] for an SSH operate command.
+	// or an administrator: [HeldApproversSSH] for an SSH operate command,
+	// [HeldApproversRelease] for a merge or a deploy.
 	// Empty is the seat's lead or an administrator (tools.approve).
 	Approvers string `json:"approvers,omitempty"`
 
@@ -301,6 +316,17 @@ type HeldCall struct {
 	// Acting is the decision the call carries out: the newest question its
 	// seat asked on the turn's work item that a person answered; nil for none.
 	Acting *HeldAct `json:"acting,omitempty"`
+
+	// Act is what the call is for, set by the engine from the tool that made
+	// it (internal/delegation's Kind): ssh_operate for an SSH operate command,
+	// other for every other call.
+	Act string `json:"act,omitempty"`
+
+	// Delegation is the rule that put the call to agent delegates before any
+	// person (ADR-0125), nil for a call put to people at once. While it is
+	// not escalated the call waits on its delegates alone: it is put to
+	// nobody's Inbox.
+	Delegation *HeldDelegation `json:"delegation,omitempty"`
 
 	// HeldAt is when the call was held.
 	HeldAt time.Time `json:"held_at"`
@@ -330,6 +356,93 @@ type HeldCall struct {
 
 // Calling reports whether a resume has begun making the call.
 func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
+
+// Delegated reports whether the call waits on its delegates alone: put to
+// agent delegates and not yet escalated to people.
+func (h HeldCall) Delegated() bool { return h.Delegation != nil && h.Delegation.Escalated == nil }
+
+// HeldDelegation is how a held call was put to agent delegates (ADR-0125):
+// the rule, the seats, what a verdict binds to, what each answered, and the
+// escalation that put it to people.
+type HeldDelegation struct {
+	// Rule is the 1-based number of the rule that routed the call, as it
+	// stood when the call was held, and Delegates its seats then: one, or
+	// a panel of two that must both allow.
+	Rule      int      `json:"rule"`
+	Delegates []string `json:"delegates"`
+	// Digest is the SHA-256 of the call's arguments, which a verdict names
+	// so it is of the call its delegate was shown.
+	Digest string `json:"digest"`
+	// Given is each delegate's answer, in the order given.
+	Given []HeldVerdict `json:"given,omitempty"`
+	// Escalated is set once the call is put to people.
+	Escalated *HeldEscalation `json:"escalated,omitempty"`
+}
+
+// HeldVerdict is one delegate's answer to a held call: its verdict and
+// confidence, and its own words, which people read before the call itself.
+type HeldVerdict struct {
+	By         string    `json:"by"`
+	Verdict    string    `json:"verdict"`
+	Confidence string    `json:"confidence"`
+	Reason     string    `json:"reason"`
+	Findings   []string  `json:"findings,omitempty"`
+	At         time.Time `json:"at"`
+}
+
+// HeldEscalation is why a delegated call went to people: the engine's closed
+// words, and the sentences people read beside the delegates' answers.
+type HeldEscalation struct {
+	Overruled []string  `json:"overruled,omitempty"`
+	Engine    []string  `json:"engine,omitempty"`
+	At        time.Time `json:"at"`
+}
+
+// The bounds of a delegate's answer on the row, the verdict tool's own.
+const (
+	MaxReviewReasonRunes  = 500
+	MaxReviewFindings     = 8
+	MaxReviewFindingRunes = 300
+	maxEscalationReasons  = 16
+	maxEscalationRunes    = 300
+)
+
+// validate holds a delegate's answer to its bounds.
+func (v HeldVerdict) validate() error {
+	switch {
+	case v.By == "" || v.At.IsZero():
+		return errors.New("a delegate's answer names who gave it and when")
+	case !delegated.Verdict(v.Verdict).Valid() || !delegated.Confidence(v.Confidence).Valid():
+		return fmt.Errorf("a delegate's answer is %s with confidence %s", words.Or(delegated.Verdicts()),
+			words.Or(delegated.Confidences()))
+	case utf8.RuneCountInString(v.Reason) > MaxReviewReasonRunes:
+		return fmt.Errorf("a delegate's reason is at most %d characters", MaxReviewReasonRunes)
+	case len(v.Findings) > MaxReviewFindings:
+		return fmt.Errorf("a delegate's answer carries at most %d findings", MaxReviewFindings)
+	}
+	for _, f := range v.Findings {
+		if utf8.RuneCountInString(f) > MaxReviewFindingRunes {
+			return fmt.Errorf("a finding is at most %d characters", MaxReviewFindingRunes)
+		}
+	}
+	return nil
+}
+
+// validate holds an escalation to its bounds.
+func (e HeldEscalation) validate() error {
+	switch {
+	case e.At.IsZero():
+		return errors.New("an escalation names when it was made")
+	case len(e.Engine) > maxEscalationReasons || len(e.Overruled) > maxEscalationReasons:
+		return fmt.Errorf("an escalation carries at most %d reasons", maxEscalationReasons)
+	}
+	for _, said := range e.Engine {
+		if utf8.RuneCountInString(said) > maxEscalationRunes {
+			return fmt.Errorf("an escalation's reason is at most %d characters", maxEscalationRunes)
+		}
+	}
+	return nil
+}
 
 // Made reports whether the call's result is recorded.
 func (h HeldCall) Made() bool { return !h.MadeAt.IsZero() }
@@ -394,7 +507,23 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 		found = append(found, fieldRefusal("held_call.binding", "is set on a call no tool binds, "+
 			"or is longer than a digest"))
 	}
-	if h.Approvers != "" && (h.Approvers != HeldApproversSSH || !h.Fixed) {
+	if h.Act != "" && !delegated.Kind(h.Act).Valid() {
+		found = append(found, fieldRefusal("held_call.act", "is not an act this build knows"))
+	}
+	if d := h.Delegation; d != nil {
+		switch {
+		case !delegated.Kind(h.Act).Delegable():
+			found = append(found, fieldRefusal("held_call.delegation", "is set on a call whose act is "+
+				"never delegated"))
+		case d.Rule < 1 || len(d.Delegates) < 1 || len(d.Delegates) > 2 || len(d.Digest) != maxHeldBindingBytes:
+			found = append(found, fieldRefusal("held_call.delegation", "names no rule, one or two "+
+				"delegates, or the digest a verdict binds to"))
+		case len(d.Given) > 0 || d.Escalated != nil:
+			found = append(found, fieldRefusal("held_call.delegation", "carries an answer or an "+
+				"escalation on a call being held, and both come after it is held"))
+		}
+	}
+	if h.Approvers != "" && ((h.Approvers != HeldApproversSSH && h.Approvers != HeldApproversRelease) || !h.Fixed) {
 		found = append(found, fieldRefusal("held_call.approvers", "names approvers this build does "+
 			"not know, or names them on a call that may be allowed always"))
 	}
@@ -459,6 +588,21 @@ func (s *CallSeal) OpenArguments(turnID string, h HeldCall) (map[string]any, err
 		return nil, fmt.Errorf("sandbox: the arguments of held call %s do not decode: %w", h.ID, err)
 	}
 	return args, nil
+}
+
+// HeldArgumentsDigest is the SHA-256, in hex, of a held call's arguments as
+// JSON with sorted keys: what an approver who was shown them names, a person
+// at `POST /mcp-approvals/{id}` and the SSH reviewer alike.
+func HeldArgumentsDigest(args map[string]any) (string, error) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("sandbox: digesting a held call's arguments: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // MaxHeldResultBytes bounds what a held call's result hands the run that

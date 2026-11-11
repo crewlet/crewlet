@@ -5,6 +5,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -15,8 +17,11 @@ import (
 // to an agent: no agent may approve a call, and a question an agent receives
 // is one nobody who may answer it sees. An SSH operate command's approvers are
 // the administrators and the people integrations.ssh.approvers names
-// (ssh.operate.approve); any other held call's are the people among the
-// seat's leads and the administrators (tools.approve).
+// (ssh.operate.approve), after the people its delegated-decisions rule puts
+// an escalation to where it was put to delegates; a merge's or a deploy's are
+// the people its rule names in escalate_to, the seat's leads and the
+// administrators (release.approve); any other held call's are the people among
+// the seat's leads and the administrators (tools.approve).
 
 // heldAudienceRead bounds the directory read that names the administrators.
 const heldAudienceRead = 10 * time.Second
@@ -34,13 +39,31 @@ func heldAudience(company *Company, run sandbox.PendingRun, admins []string) san
 		}
 		out = append(out, r.Handle())
 	}
-	if run.HeldCall.Approvers == sandbox.HeldApproversSSH {
-		if company.Config != nil && company.Config.Integrations.SSH != nil {
-			for _, handle := range company.Config.Integrations.SSH.Approvers {
+	// A CALL PUT TO DELEGATES reaches people only once escalated, and then
+	// the ones its rule names for that first (ADR-0125).
+	if d := run.HeldCall.Delegation; d != nil && company.Config != nil && d.Rule >= 1 &&
+		d.Rule <= len(company.Config.DelegatedDecisions.Rules) {
+		for _, handle := range company.Config.DelegatedDecisions.Rules[d.Rule-1].EscalateTo {
+			add(handle)
+		}
+	}
+	switch run.HeldCall.Approvers {
+	case sandbox.HeldApproversSSH:
+		if s := company.SSH(); s != nil {
+			for _, handle := range s.Approvers {
 				add(handle)
 			}
 		}
-	} else {
+	case sandbox.HeldApproversRelease:
+		if company.Config != nil {
+			for _, handle := range company.Config.DelegatedDecisions.EscalateFor(delegated.Kind(run.HeldCall.Act)) {
+				add(handle)
+			}
+		}
+		for _, handle := range leadChain(o, o.SeatByHandle(run.AgentHandle)) {
+			add(handle)
+		}
+	default:
 		for _, handle := range leadChain(o, o.SeatByHandle(run.AgentHandle)) {
 			add(handle)
 		}
@@ -49,6 +72,14 @@ func heldAudience(company *Company, run sandbox.PendingRun, admins []string) san
 		add(handle)
 	}
 	return sandbox.Audience{Handles: out}
+}
+
+// SSH is the company's SSH integration block, nil where it has none.
+func (c *Company) SSH() *config.SSH {
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	return c.Config.Integrations.SSH
 }
 
 // adminSeats is the seat of every administrator who may act, read off this

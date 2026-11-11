@@ -185,6 +185,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, noteCases...)
 	cases = append(cases, askCases...)
 	cases = append(cases, heldCases...)
+	cases = append(cases, delegatedCases...)
 	cases = append(cases, bytesCases...)
 	cases = append(cases, refusalCases...)
 	cases = append(cases, standbyCases...)

@@ -80,6 +80,47 @@ func TestTheDecorrelationCheckSeesTheDriverUnnest(t *testing.T) {
 	}
 }
 
+// A JOINED RELATION IS SOUGHT ONLY THROUGH AN INDEX.
+//
+// [storetest.SeeksJoined] is what holds an order joined from another relation to
+// one seek per row, so it is held to the driver here: a table joined on its key
+// is sought through the key's index, and a list joined as `json_each` is
+// scanned once per row. If a driver bump renames the plan's words, the first
+// case fails here rather than every gate asking it passing over a scan.
+//
+// Mutation: drop the index test from the predicate and the second case goes
+// red.
+func TestAJoinedRelationIsSoughtOnlyThroughAnIndex(t *testing.T) {
+	t.Parallel()
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	list := []any{`["a","b","c"]`}
+	for name, c := range map[string]struct {
+		statement string
+		sought    bool
+	}{
+		"a table joined on its key": {
+			statement: `SELECT t.id, o.name FROM tracker_tasks t
+			              LEFT JOIN tracker_projects o ON o.key = t.project_key
+			              WHERE t.id <> ?`,
+			sought: true,
+		},
+		"json_each joined bare": {
+			statement: `SELECT t.id, o.key FROM tracker_tasks t
+			              LEFT JOIN json_each(?) o ON o.value = t.assignee`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan := storetest.Plan(t, estate, c.statement, list)
+			if got := storetest.SeeksJoined(plan, "o"); got != c.sought {
+				t.Errorf("SeeksJoined says %v, want %v, for the plan %q", got, c.sought, plan)
+			}
+		})
+	}
+}
+
 // A PLAN THAT SAYS NOTHING FAILS, EXCEPT AN INSERT'S.
 //
 // A gate that passed on an empty plan would certify nothing, so [storetest.Plan]

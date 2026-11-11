@@ -515,8 +515,9 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // A reused box still carries the prior run's done marker, result and
 // findings. Without clearing them the completion poll fires immediately on the
 // stale marker and Collect reads the old result. Its brief, system text,
-// settings and configuration go too: a run's instructions are its own — a
-// previous job's hooks name a bridge session that job's end closed. (Whatever
+// settings and configuration go too, its MCP configuration ([Paths.MCPConfig])
+// among them, since a run's instructions are its own (a
+// previous job's hooks name a bridge session that job's end closed). (Whatever
 // mode a previous run left on one, the file this run writes has the box's
 // own: a box write replaces a file whole ([sandbox.Sandbox.WriteFile]).)
 // OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
@@ -528,6 +529,10 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // credits nothing must leave no hook, and one that names another run must not
 // credit the last one. THE CHECKOUT IS LEFT INTACT — that disk state is the
 // continued context, and it is the whole reason to reuse a box.
+//
+// SO EVERY FILE A RUN STARTS WITH IS NEW TO ITS BOX: a container mounted across a VM
+// keeps its entry for a file replaced from the host side for about a second, and a
+// harness opening it then finds nothing; a name the box removed is looked up anew.
 //
 // AND THE END PROTOCOL'S RECORDS: the pid the previous run's script published
 // ([Paths.JobScript]) — a request read through it would go to a process that
@@ -557,7 +562,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(), p.OpenCodeConfig(),
 		p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh(),
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and

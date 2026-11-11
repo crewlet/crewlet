@@ -1138,6 +1138,22 @@ func (s *refusingStore) RecordHeldResult(ctx context.Context, turnID, launch str
 	return s.inner.RecordHeldResult(ctx, turnID, launch, made, fence)
 }
 
+func (s *refusingStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, heldID string,
+	v HeldVerdict) (HeldCall, bool, error) {
+	if s.called("GiveDelegateVerdict") {
+		return HeldCall{}, false, errRefusedCall
+	}
+	return s.inner.GiveDelegateVerdict(ctx, turnID, launch, heldID, v)
+}
+
+func (s *refusingStore) EscalateHeld(ctx context.Context, turnID, launch, heldID string,
+	e HeldEscalation) (bool, error) {
+	if s.called("EscalateHeld") {
+		return false, errRefusedCall
+	}
+	return s.inner.EscalateHeld(ctx, turnID, launch, heldID, e)
+}
+
 func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {
 	if s.called("ClearHandBack") {
 		return false, errRefusedCall

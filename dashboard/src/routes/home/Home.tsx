@@ -63,6 +63,7 @@ import { useLeaveGuard, useUnloadGuard } from "~/app/router.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { HomeDataProvider, useHomeData } from "./useHomeData.ts";
 import { HomeHead } from "./sections.tsx";
+import { DelegatedNotices } from "./DelegatedNotices.tsx";
 import { shippedBoard } from "./board/catalog.tsx";
 import {
   COLUMNS,
@@ -501,6 +502,9 @@ export function Home() {
             )
           }
         />
+        {/* WHAT DELEGATES DECIDED for the reader, above the board and never
+            part of it: a notice of the day, put away per day. */}
+        {editing ? null : <DelegatedNotices viewer={data.viewer} />}
         <VisuallyHidden id={reorder.hintId}>{reorder.hint}</VisuallyHidden>
         {page.length === 0 ? (
           <EmptyState

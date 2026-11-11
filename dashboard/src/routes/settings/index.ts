@@ -2,6 +2,7 @@
 
 export { Audit } from "./Audit.tsx";
 export { Backups } from "./Backups.tsx";
+export { DelegatedDecisions } from "./DelegatedDecisions.tsx";
 export { ConfigScreen, RevisionPeek } from "./Config.tsx";
 export { Diagnostics } from "./Diagnostics.tsx";
 export { Advisor } from "./Advisor.tsx";

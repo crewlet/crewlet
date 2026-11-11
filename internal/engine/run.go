@@ -1126,6 +1126,10 @@ type Engine struct {
 	// current epoch's horizon per tick instead, so a retention change
 	// lands without a restart.
 	chatPrune *chatPrune
+	// delegatedSweep puts a delegated request to people once its delegates
+	// ran out of time or delegated decisions were turned off: a fleet
+	// singleton reading the company per pass, so no apply re-arms it.
+	delegatedSweep *delegatedSweep
 
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
@@ -2644,6 +2648,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// BESIDE THE SCHEDULER, the other producer of a seat's own work: it
 	// reads the company on every pass, so no apply re-arms it.
 	e.startPickups(ctx)
+	// AND THE SWEEP THAT HANDS DELEGATED REQUESTS BACK TO PEOPLE.
+	e.startDelegatedSweep(ctx)
 	// AFTER the epoch is current, because the dispatcher resolves a turn's
 	// seat against it — and before notifications, so a turn woken by the
 	// first inbound message already has somewhere to write what it learns.
@@ -2777,6 +2783,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.ReviewSettled == nil {
 		d.ReviewSettled = e.AccessReviewSettled
+	}
+	if d.DelegatedRequests == nil {
+		d.DelegatedRequests = e.readDelegatedRequests
 	}
 	if d.Observe == nil {
 		d.Observe = e.observe
@@ -3279,6 +3288,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopLearning()
 	e.stopScheduler()
 	e.stopPickups()
+	e.stopDelegatedSweep()
 	// GITLET'S GIT SURFACE WITH THEM, and not with the publishers it shares a
 	// reason with further down (the committer and the estate subject, which
 	// it still stops before): its git reads are answered for peers on this
@@ -3879,7 +3889,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// once here and frozen on the turn like the endings below; its notes
 	// written before a told change are marked (capability.go).
 	told := e.capabilityFor(ctx, company, req.Handle, req.RunID)
-	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told,
+		tel.workingFor)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
@@ -3910,8 +3921,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 		Context: blocks,
 		Skills:  e.skills,
 		Reply:   reply,
-		// THE TURN'S OWN WRITES are what answer a pickup (ADR-0122).
-		TypedAnswer: e.typedAnswerFor(req.RunID, reply),
+		// THE SEAT'S OWN WRITES SINCE THE TURN BEGAN are what answer a
+		// pickup (ADR-0122).
+		PickupAnswer: e.pickupAnswerFor(req.Handle, tel.startedAt, reply),
 		// BOUNDED AT RENDER: the newest endings whole while they fit, the
 		// rest counted ([prompts.EndingsMaxBytes]), and frozen on every park.
 		Endings: conversation.endingsBlock(),

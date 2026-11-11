@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -365,9 +366,9 @@ type buildOpts struct {
 	// what a run is told of it: none unless a case serves one.
 	conversation string
 
-	// typed is the engine's read of a pickup's typed answer
-	// (runner.Config.TypedAnswer), for the cases about a pickup's turn.
-	typed func(context.Context) (bool, error)
+	// answer is the engine's read of a pickup's answer
+	// (runner.Config.PickupAnswer), for the cases about a pickup's turn.
+	answer func(context.Context) (types.PickupAnswer, error)
 }
 
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
@@ -449,7 +450,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		CapabilityChanges: opts.changes,
 		Task:              task,
 		Reply:             waiting,
-		TypedAnswer:       opts.typed,
+		PickupAnswer:      opts.answer,
 		Launcher:          launcher,
 		Resume:            opts.resume,
 		Fence:             opts.fence,

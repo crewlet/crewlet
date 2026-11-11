@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -63,7 +64,7 @@ type TrackerReader interface {
 		loc *time.Location) (worklet.MyWork, error)
 	ReadyWork(ctx context.Context, q worklet.ReadyWorkQuery, now time.Time) (
 		worklet.ReadyWork, error)
-	TypedAnswer(ctx context.Context, q worklet.TypedAnswerQuery) (bool, error)
+	PickupAnswer(ctx context.Context, q worklet.PickupAnswerQuery) (types.PickupAnswer, error)
 	OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time) (worklet.OwnAsks, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
@@ -282,6 +283,11 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.Transcript, error)
 	Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 		fresh statelog.Freshness) (chatlet.Thread, error)
+	// TurnThread is Thread's one read with whom each of its messages was
+	// written for ([chatlet.TurnThread]): the engine's turn-start read alone
+	// ([TurnThreads]), which no reader's surface asks.
+	TurnThread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+		fresh statelog.Freshness) (chatlet.TurnThread, error)
 	RoomNames(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
 	Directory(ctx context.Context, viewer string,
@@ -529,10 +535,6 @@ type ServerSeams struct {
 	Units worklet.Units
 	Leads worklet.Leads
 
-	// Roster is attached to every task listing, for the seats' names
-	// `sort=assignee` orders by.
-	Roster worklet.Roster
-
 	// Seat resolves a searching seat's handle to its role and the org its
 	// read scope comes from, against this node's current epoch.
 	Seat func(handle string) (*org.Role, *org.Organization)
@@ -635,7 +637,7 @@ var opTasks = define("tracker.tasks", opRead, trackerDomain, false,
 		if b.Tracker == nil {
 			return worklet.Answer{}, errNoHalf
 		}
-		a.Query.Units, a.Query.Roster = b.Units, b.Roster
+		a.Query.Units = b.Units
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
 	})
 
@@ -870,12 +872,12 @@ var opReadyWork = define("tracker.ready_work", opRead, trackerDomain, false,
 		return b.Tracker.ReadyWork(ctx, a.Query, a.Now)
 	})
 
-var opTypedAnswer = define("tracker.typed_answer", opRead, trackerDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q worklet.TypedAnswerQuery) (bool, error) {
+var opPickupAnswer = define("tracker.pickup_answer", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.PickupAnswerQuery) (types.PickupAnswer, error) {
 		if b.Tracker == nil {
-			return false, errNoHalf
+			return "", errNoHalf
 		}
-		return b.Tracker.TypedAnswer(ctx, q)
+		return b.Tracker.PickupAnswer(ctx, q)
 	})
 
 // ownAsksArgs is [opOwnAsks]' input.
@@ -2430,6 +2432,22 @@ var opChatThread = define("chat.thread", opRead, chatDomain, false,
 			return chatlet.Thread{}, errNoHalf
 		}
 		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+// THE ENGINE'S TURN-START THREAD READ: chat.thread's one read with whom each
+// of its messages was written for ([chatlet.TurnThread]), which no reader is
+// ever handed. An operation of its own rather than a member on chat.thread's
+// answer, whose type every reader's surface holds and which an older data
+// node would refuse to answer with a member it does not declare. Asked only
+// through [TurnThreads], which the engine alone builds; an older data node
+// does not declare it, answers it unserved, and the facade reads the plain
+// thread instead.
+var opChatTurnThread = define("chat.turn_thread", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatThreadArgs) (chatlet.TurnThread, error) {
+		if b.Chat == nil {
+			return chatlet.TurnThread{}, errNoHalf
+		}
+		return b.Chat.TurnThread(ctx, a.Viewer, a.Query, a.Fresh)
 	})
 
 type chatRoomNamesArgs struct {

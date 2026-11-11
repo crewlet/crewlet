@@ -226,7 +226,8 @@ type MutationRecord struct {
 	// record wakes works for them (notify.FirstPartyWriter), never for the
 	// writing seat, which holds every app. KEPT ON THE MESSAGE A POST WRITES
 	// ([Message.WorkingFor], [WorkingForVersion]), applied on every node from
-	// the carrier's first build on, though no read takes it yet. Version 3:
+	// the carrier's first build on, which the engine's turn-start thread
+	// read alone takes ([Reader.TurnThread]). Version 3:
 	// an older build retains a record carrying it rather than waking a seat
 	// for the writing agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`

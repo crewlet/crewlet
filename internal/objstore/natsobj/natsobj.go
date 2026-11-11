@@ -328,6 +328,10 @@ type Backend struct {
 	// acknowledge any of its messages out — a field so a test can watch a
 	// stall end a put without waiting a minute for it.
 	stall time.Duration
+	// beginPace is [listBeginPace], what a listing's beginning is given for
+	// each mebibyte of the bucket ([Backend.listBegin]): a field so a test
+	// can give a bucket of a few bytes the beginning a large one is given.
+	beginPace time.Duration
 	// window is the places every put on the connection shares for the
 	// messages it holds out ([window]).
 	window *window
@@ -467,7 +471,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 		size, pieces = linkWindow(cfg.LeaseHeartbeat), leader.Carrying(MessageBytes, objstore.MiBPace)
 	}
 	return &Backend{js: js, stream: stream, leader: leader, pieces: pieces,
-		stall: objstore.Stall, window: newWindow(size)}, nil
+		stall: objstore.Stall, beginPace: listBeginPace, window: newWindow(size)}, nil
 }
 
 // checkCeiling judges the ceiling the bucket holds against the one this node
@@ -988,21 +992,24 @@ type reading struct {
 	// what the leader held there when a listing began — a message stored
 	// after it is no message the listing owes anybody — or [everything].
 	through uint64
+	// begin is how long the broker is given to make each of the read's
+	// consumers: a listing's, which reads the bucket to begin
+	// ([Backend.listBegin]), or zero for a read whose own deadline bounds it.
+	begin time.Duration
 
 	cons jetstream.Consumer
 	msgs jetstream.MessagesContext
 }
 
-// consume makes an ordered consumer over filter as cfg says and reads it,
-// batch messages in hand, answering it with its first message — or no reading
-// at all where the stream's leader holds nothing on filter that the read must
-// reach (see [reading.open]).
+// consume makes and reads an ordered consumer over filter as cfg says, begin
+// to make it where not zero, batch messages in hand, answering its first, or no
+// reading where the leader holds nothing on filter the read must reach.
 func (b *Backend) consume(ctx context.Context, filter string, cfg jetstream.OrderedConsumerConfig,
-	batch int, stall time.Duration, through uint64) (*reading, jetstream.Msg, error) {
+	batch int, stall time.Duration, through uint64, begin time.Duration) (*reading, jetstream.Msg, error) {
 
 	cfg.FilterSubjects = []string{filter}
 	r := &reading{b: b, filter: filter, leader: b.leaderFor(filter), cfg: cfg, batch: batch,
-		stall: stall, through: through}
+		stall: stall, through: through, begin: begin}
 	msg, err := r.open(ctx)
 	if err != nil || msg == nil {
 		return nil, nil, err
@@ -1028,7 +1035,7 @@ func (b *Backend) consume(ctx context.Context, filter string, cfg jetstream.Orde
 func (r *reading) open(ctx context.Context) (jetstream.Msg, error) {
 	var behind time.Time
 	for remade := 0; ; {
-		cons, err := r.b.stream.OrderedConsumer(ctx, r.cfg)
+		cons, err := r.create(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1067,6 +1074,23 @@ func (r *reading) open(ctx context.Context) (jetstream.Msg, error) {
 		}
 		return msg, nil
 	}
+}
+
+// create asks the broker for r's consumer for no longer than r.begin where r
+// has one: under a context with no deadline the client holds the request to
+// its own five seconds, which a large bucket's listing outgrows.
+func (r *reading) create(ctx context.Context) (jetstream.Consumer, error) {
+	if r.begin <= 0 {
+		return r.b.stream.OrderedConsumer(ctx, r.cfg)
+	}
+	begin, cancel := context.WithTimeout(ctx, r.begin)
+	defer cancel()
+	cons, err := r.b.stream.OrderedConsumer(begin, r.cfg)
+	if err != nil && ctx.Err() == nil && begin.Err() != nil {
+		return nil, fmt.Errorf("the broker made no consumer for it in the %v it was given: %w",
+			r.begin, err)
+	}
+	return cons, err
 }
 
 // lagging is the pause before a consumer is made again after one was made on
@@ -1258,7 +1282,7 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 		}
 		cfg.DeliverPolicy, cfg.OptStartSeq, skip = jetstream.DeliverByStartSequencePolicy, start, before
 	}
-	r, first, err := b.consume(ctx, subject, cfg, readAhead, objstore.Stall, everything)
+	r, first, err := b.consume(ctx, subject, cfg, readAhead, objstore.Stall, everything, 0)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
@@ -1300,7 +1324,7 @@ func (b *Backend) seek(ctx context.Context, subject string, off int64) (uint64, 
 	r, msg, err := b.consume(ctx, subject, jetstream.OrderedConsumerConfig{
 		HeadersOnly:      true,
 		MaxResetAttempts: listResets,
-	}, walkAhead, objstore.Stall, everything)
+	}, walkAhead, objstore.Stall, everything, 0)
 	if err != nil || r == nil {
 		return 0, 0, false, err
 	}
@@ -1526,6 +1550,19 @@ const metaSubjects = "$O." + Bucket + ".M.>"
 // and one back from a leader election is caught by the first or second.
 const listResets = 5
 
+// listBeginPace is what a listing's beginning is given a mebibyte of bucket:
+// ten MiB a second, a quarter of the slowest beginning measured (580 MB in
+// 13.6 s on a volume 98% full), since the broker first reads the blocks.
+const listBeginPace = 100 * time.Millisecond
+
+// listBegin is how long a listing of a bucket of bytes is given to begin: the
+// client's own bound on one request, and [Backend.beginPace] for each
+// mebibyte begun, which the broker reads before it makes the consumer.
+func (b *Backend) listBegin(bytes uint64) time.Duration {
+	return b.js.Options().DefaultTimeout +
+		time.Duration((bytes+objstore.MiB-1)/objstore.MiB)*b.beginPace
+}
+
 // List implements [objstore.Backend].
 //
 // A CONSUMER OF ITS OWN OVER THE METADATA SUBJECTS, the last message on each,
@@ -1548,6 +1585,10 @@ const listResets = 5
 // abandon. It cannot go on from a consumer made again, as a get does: a
 // listing's consumer delivers each name's newest metadata, and one made from
 // a sequence delivers every message after it, superseded ones among them.
+//
+// A LISTING IS GIVEN WHAT ITS BEGINNING TAKES ([Backend.listBegin]): to make
+// its consumer the broker reads the blocks holding every name's newest
+// metadata, and the client's own five seconds could not cover that read.
 //
 // Every name is visited as it is — what one means is not this backend's to
 // judge. A name holding only the delete marker the library's own delete left —
@@ -1580,12 +1621,16 @@ func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo
 	default:
 		through = newest.Sequence
 	}
+	info, err := b.info(ctx)
+	if err != nil {
+		return fmt.Errorf("natsobj: list the bucket: read its size from the stream's leader: %w", err)
+	}
 	// NO STALL: a listing is waited on for as long as its caller allows,
 	// since a visitor that is slow holds the next name back on purpose.
 	r, msg, err := b.consume(ctx, metaSubjects, jetstream.OrderedConsumerConfig{
 		DeliverPolicy:    jetstream.DeliverLastPerSubjectPolicy,
 		MaxResetAttempts: listResets,
-	}, walkAhead, 0, through)
+	}, walkAhead, 0, through, b.listBegin(info.State.Bytes))
 	if err != nil {
 		return fmt.Errorf("natsobj: list the bucket: %w", err)
 	}
