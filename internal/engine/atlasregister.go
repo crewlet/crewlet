@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -106,6 +107,20 @@ func (c *core) openAtlas(sl *stateLog) error {
 	}
 	c.atlasReader, c.atlasWriter = reader, writer
 	return nil
+}
+
+// AtlasReads is the atlas log's reads as this node reaches them: through the
+// router, which answers from this node's own copy while it serves and from a
+// data node's otherwise, so a node without `data` reads the atlas too. False
+// on an engine that reaches no copy at all.
+func (e *Engine) AtlasReads() (estate.AtlasReader, bool) {
+	if e.router != nil {
+		return e.router.AtlasReads(), true
+	}
+	if r := e.AtlasReader(); r != nil {
+		return r, true
+	}
+	return nil, false
 }
 
 // AtlasReader is this node's atlas read side, or nil on an engine with no core

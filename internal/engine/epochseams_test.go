@@ -188,6 +188,8 @@ var classified = map[string]struct {
 	"estate.Backend.Access": {seamNone, "the access log's reader and writer, built over " +
 		"accessdomain.WriterDeps, over the copy's rows and its log; every record carries its whole " +
 		"values from the asking node, which has already judged the fleet's revision"},
+	"estate.Backend.Atlas": {seamNone, "the atlas log's reader, over the copy's rows and its " +
+		"log, which reads no revision"},
 	"estate.Backend.Reached": {seamNone, "the applier's position"},
 	"estate.Backend.Answers": {seamNone, "the copy's distance from its log"},
 	"estate.Backend.Admits":  {seamNone, "the copy's establishment, for a seat's admission"},
