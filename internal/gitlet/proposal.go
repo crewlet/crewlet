@@ -40,9 +40,7 @@ type Proposal struct {
 	// relay's git, or the engine's own — and carried whole into the record's
 	// entry and the push row: a push's history says how it was made as the
 	// code that made it saw it, never as a commit says. It rides the estate's
-	// wire as it rides the record, under [PushEntry.Via]'s stated condition:
-	// a committer of a build without it would decide the push into an entry
-	// naming no way.
+	// wire as it rides the record, in the base format ([PushEntry.Via]).
 	Via PushVia `json:"via"`
 	// Node is the node that received the push.
 	Node   string `json:"node"`
@@ -92,9 +90,8 @@ type Proposal struct {
 	// receiver judges first. Its decide opens it in the push's own entry
 	// ([PushEntry.Change]), names the live change its source already heads,
 	// or answers why it opened none ([PushAnswer.Change]); it never refuses
-	// the push. It rides the estate's wire as it rides the record, under
-	// [PushEntry.Change]'s stated condition: a committer of a build without
-	// it would decide the push and open nothing.
+	// the push. It rides the estate's wire as it rides the record, in the
+	// base format ([PushEntry.Change]).
 	Change *ChangeOption `json:"change,omitempty"`
 }
 

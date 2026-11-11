@@ -245,16 +245,8 @@ const (
 	// ([Grant.RefRule]). Spelled as iam's own account of the engine
 	// (iam.ActorSystem), which is what its push row's actor_kind says.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this kind — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a push record reads it. Once a build without it has run, an
-	// entry carrying it takes {Name: "Principal.Kind system", Since: 2, Op:
-	// "push", Path: []string{"mutation", "pushes", "principal", "kind"},
-	// Equals: string(PrincipalSystem)} in versionedFields, with RecordVersion
-	// at 2, its line under "What each version added" and a Carrying record
-	// in the statelogtest candidate: a new VALUE of a field every push entry
-	// carries, which such a build would meet as a principal it cannot judge.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// kind, so every build that meets a push record reads it.
 	PrincipalSystem PrincipalKind = "system"
 )
 
@@ -311,13 +303,8 @@ const (
 	// and renamed, its settings change and it is deleted as an active one is;
 	// the compactor, the publisher and the expunge pass it by.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this status — none of the domain is on main —
-	// and while that is so, every build that meets a record making one reads
-	// it. Once a build without it has run, a create that imports takes the
-	// rows CreateRepo.Import names (mirror.go), since only such a create
-	// makes a repository importing — a build without the status would apply
-	// it as an active repository, and take its pushes.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// status, so every build that meets a record making one reads it.
 	RepoStatusImporting RepoStatus = "importing"
 	// RepoStatusActive takes pushes.
 	RepoStatusActive RepoStatus = "active"
@@ -354,8 +341,8 @@ func (s RepoStatus) Valid() bool { return slices.Contains(RepoStatuses(), s) }
 // and a decide judges one by its state, its part and its size, so a row of a
 // kind this build does not know — a newer build's — is installed and judged
 // as any other. It is the repository's history of what rewrote its packs, for
-// whoever reads the rows. Every value is in the base format, under the code
-// domain's stated condition ([OpCompact], [OpExpungeBegin]).
+// whoever reads the rows. Every value is in the base format, as [OpCompact]
+// and [OpExpungeBegin] are.
 type PackKind string
 
 const (
@@ -612,17 +599,8 @@ type RepoSettings struct {
 	// ([Declared.settingsAt]), and no record changes it — a rename keeps its
 	// kind's form.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a record carrying settings reads it. Once a build without it
-	// has run, each op whose payload carries settings takes {Name:
-	// "RepoSettings.Kind", Since: 2, Op: <the op: create, settings, restore>,
-	// Path: []string{"mutation", "settings", "kind"}} in versionedFields, with
-	// RecordVersion at 2, its line under "What each version added" and a
-	// Carrying record in the statelogtest candidate — such a build would apply
-	// a create without its kind, and the row it wrote would read as no kind
-	// on that node for ever.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a record carrying settings reads it.
 	Kind  RepoKind `json:"kind"`
 	Owner Owner    `json:"owner"`
 	// DefaultBranch is a branch name, not a ref ("main").
@@ -634,17 +612,8 @@ type RepoSettings struct {
 	// Search is how code search reads it ([SearchMode]): never indexed on a
 	// scratch repository.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a record carrying settings reads it. Once a build without it
-	// has run, each op whose payload carries settings takes {Name:
-	// "RepoSettings.Search", Since: 2, Op: <the op: create, settings,
-	// restore>, Path: []string{"mutation", "settings", "search"}} in
-	// versionedFields, with RecordVersion at 2, its line under "What each
-	// version added" and a Carrying record in the statelogtest candidate —
-	// such a build would apply settings without their mode, and the row it
-	// wrote would read as no mode on that node for ever.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a record carrying settings reads it.
 	Search SearchMode `json:"search"`
 	// Protections are sorted by Pattern and unique — the canonical order,
 	// so two nodes deciding one declaration form byte-identical records —
@@ -655,17 +624,8 @@ type RepoSettings struct {
 	// owner once and each one's globs sorted and once — none on a scratch
 	// repository, which is its seat's own.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a record carrying settings reads it. Once a build without it
-	// has run, each op whose payload carries settings takes {Name:
-	// "RepoSettings.PathOwners", Since: 2, Op: <the op: create, settings,
-	// restore>, Path: []string{"mutation", "settings", "path_owners"}} in
-	// versionedFields, with RecordVersion at 2, its line under "What each
-	// version added" and a Carrying record in the statelogtest candidate —
-	// such a build would apply settings without their path owners, and a
-	// node running it would hold none of the rows every other node holds.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a record carrying settings reads it.
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
 	// MirrorFrom makes it a PULL MIRROR of a repository at another host, and
 	// MirrorTo a PUSH MIRROR to one; nil for none, and neither on a scratch
@@ -887,16 +847,8 @@ type LifecycleRecord struct {
 // Rename claims To for a tool-managed repository, on To's name subject, and
 // leaves From redirecting to it for [RedirectWindow] ([Store.Lifecycle]).
 //
-// BASE FORMAT, AS A STATED CONDITION: no build that carries the code domain
-// has run without this op — none of the domain is on main, so no image and no
-// release holds it — and while that is so, every build that meets a record of
-// it reads it. Once a build without it has run, it takes {Name:
-// "RecordEnvelope.Op rename", Since: 2, Path: []string{"op"}, Equals:
-// string(OpRename)} in versionedFields, with RecordVersion at 2, its line under
-// "What each version added", a Carrying record in the statelogtest candidate,
-// and the op excepted from the stamp test's base-format loop — an older build
-// would otherwise FAIL on the record at DecodeMutation's default arm rather
-// than retain it. It is no gate.
+// BASE FORMAT ([RecordVersion]): the domain landed on main with this op, so
+// every build that meets a record of it reads it. It is no gate.
 type Rename struct {
 	RepoID string `json:"repo_id"`
 	From   string `json:"from"`
@@ -907,10 +859,7 @@ type Rename struct {
 // ended, on that name's subject — the code-retention pass's
 // ([Store.ReleaseName]).
 //
-// BASE FORMAT, AS A STATED CONDITION, as [Rename] states it; once a build
-// without it has run, it takes {Name: "RecordEnvelope.Op release_name", Since:
-// 2, Path: []string{"op"}, Equals: string(OpReleaseName)} with the same
-// companions. It is no gate.
+// BASE FORMAT, as [Rename] is. It is no gate.
 type ReleaseName struct {
 	Name   string `json:"name"`
 	RepoID string `json:"repo_id"`
@@ -936,10 +885,7 @@ const RedirectWindow = 30 * 24 * time.Hour
 // NOTHING else: never an idle clock, which only activity moves ([Retention]),
 // nor a ref's own `at`, `position`, seat or target ([RefHoldKey]'s file).
 //
-// BASE FORMAT, AS A STATED CONDITION, as [Rename] states it; once a build
-// without it has run, it takes {Name: "RecordEnvelope.Op hold", Since: 2, Path:
-// []string{"op"}, Equals: string(OpHold)} with the same companions. It is no
-// gate.
+// BASE FORMAT, as [Rename] is. It is no gate.
 type Hold struct {
 	RepoID string `json:"repo_id"`
 	// TurnID is the turn holding it (turnctx.Turn.RunID), at most
@@ -949,15 +895,8 @@ type Hold struct {
 	// Ref is the seat's branch the turn holds — a ref [Holdable] admits — or
 	// "" for a hold on the scratch repository itself.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as the op itself is: no build that
-	// carries the code domain has run without this field — none of the domain
-	// is on main, so no image and no release holds it. Once a build without it
-	// has run, it takes {Name: "Hold.Ref", Since: 2, Op: "hold", Path:
-	// []string{"mutation", "ref"}} in versionedFields, with RecordVersion at
-	// 2 and a Carrying record in the statelogtest candidate: an older build
-	// would otherwise apply a ref hold as a hold on the scratch repository,
-	// moving no ref's held_position, and a deletion listed before the turn's
-	// read would not be ordered against it.
+	// BASE FORMAT, as the op itself is ([RecordVersion]): the domain landed
+	// on main with this field.
 	Ref string `json:"ref,omitempty"`
 }
 
@@ -1008,20 +947,8 @@ type PushEntry struct {
 	// the engine itself — as its proposer stamped it ([Proposal.Via]), and
 	// what its push row's via column says.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a push record reads it. Once a build without it has run, a
-	// push the ENGINE built takes {Name: "PushEntry.Via engine", Since: 2,
-	// Op: "push", Path: []string{"mutation", "pushes", "via"}, Equals:
-	// string(ViaEngine)} in versionedFields, with RecordVersion at 2, its
-	// line under "What each version added" and a Carrying record in the
-	// statelogtest candidate — such a build reads every push as one git
-	// received, which is true of a push git received and false of the
-	// engine's, so only the engine's needs the newer reader, and the key
-	// alone would stamp every push — and the migration that adds the column
-	// writes `git` into the rows it finds there, every one a push such a
-	// build received, since the column's default names no way.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a push record reads it.
 	Via PushVia `json:"via"`
 	// Node is the node that received the push.
 	Node   string `json:"node"`
@@ -1041,16 +968,8 @@ type PushEntry struct {
 	// (code_seat_days) with no clock and no zone of its own, identically on
 	// every node. Empty on every other entry.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a push record reads it. Once a build without it has run, it
-	// takes {Name: "PushEntry.Day", Since: 2, Op: "push", Path:
-	// []string{"mutation", "pushes", "day"}} in versionedFields, with
-	// RecordVersion at 2, its line under "What each version added" and a
-	// Carrying record in the statelogtest candidate — such a build would
-	// apply a seat's push without counting it, and every committer of it
-	// would read the seat's day short by that push.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a push record reads it.
 	Day string `json:"day,omitempty"`
 	// Change is the change this push opens from its options
 	// ([ChangeOption], pushchange.go): STAMPED BY ITS DECIDE, and only where
@@ -1061,16 +980,8 @@ type PushEntry struct {
 	// whose change was refused, or whose source already heads a live change
 	// carries none: nothing of a change a push did not open is state.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a push record reads it. Once a build without it has run, it
-	// takes {Name: "PushEntry.Change", Since: 2, Op: "push", Path:
-	// []string{"mutation", "pushes", "change"}} in versionedFields, with
-	// RecordVersion at 2, its line under "What each version added" and a
-	// Carrying record in the statelogtest candidate — such a build would
-	// apply the push and open no change, and every data node of it would
-	// hold the repository short of the change its pusher was told it opened.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a push record reads it.
 	Change *ChangeOption `json:"change,omitempty"`
 	// Routing is whom the entry concerns ([ChangeRouting]): one routing for
 	// every change its commands MERGE, by setting a target to a change's
@@ -1080,10 +991,7 @@ type PushEntry struct {
 	// no change otherwise concerns nobody (concerns.go). Bounded with the
 	// record's bytes by its decide ([routedEntry]).
 	//
-	// BASE FORMAT, under the condition concerns.go states: once a build
-	// without it has run, it takes {Name: "PushEntry.Routing", Since: 2, Op:
-	// "push", Path: []string{"mutation", "pushes", "routing"}} in
-	// versionedFields, with the companions concerns.go names.
+	// BASE FORMAT, as concerns.go's head says.
 	Routing []ChangeRouting `json:"routing,omitempty"`
 	// Landings is every LANDING the entry makes on a protected branch: each
 	// ok command that moves a branch a protection rule matches onto a
@@ -1094,12 +1002,7 @@ type PushEntry struct {
 	// green row where the branch's gate requires no check, without matching
 	// a rule itself. None for an entry that lands on no protected branch.
 	//
-	// BASE FORMAT, under the condition queuerecords.go's head states: once
-	// a build without it has run, it takes {Name: "PushEntry.Landings",
-	// Since: 2, Op: "push", Path: []string{"mutation", "pushes",
-	// "landings"}} in versionedFields — such a build would apply the push
-	// and write no landing, and the branch's tip checks would never judge
-	// what it landed.
+	// BASE FORMAT, as queuerecords.go's head says.
 	Landings []PushLanding `json:"landings,omitempty"`
 }
 
@@ -1127,18 +1030,8 @@ type Principal struct {
 	// absence, omitted from the encoding whole, and a principal stays a value
 	// the cases and the index of pushes compare with ==.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a push record reads it. Once a build without it has run, it
-	// takes {Name: "Principal.Run", Since: 2, Op: "push", Path:
-	// []string{"mutation", "pushes", "principal", "run"}} in
-	// versionedFields, with RecordVersion at 2, its line under "What each
-	// version added" and a Carrying record in the statelogtest candidate — an
-	// older build would otherwise apply a seat's push as a row naming no turn
-	// and no actor at all, since it writes a push's credential as its actor
-	// and a seat holds none; every seat's push names its run, so the row
-	// holds the actor's rule too.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a push record reads it.
 	Run RunProvenance `json:"run,omitzero"`
 }
 
@@ -1254,15 +1147,8 @@ type RunProvenance struct {
 	// push read back from its row ([PushRow.Run]) carries none — the change
 	// the push opened keeps the identity on its own row.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as RunID's below: no build that
-	// carries the code domain has run without it — none of the domain is on
-	// main — and while that is so, every build that meets a push record reads
-	// it. Once a build without it has run, it takes {Name:
-	// "RunProvenance.WorkID", Since: <the next version>, Op: "push", Path:
-	// []string{"mutation", "pushes", "principal", "run", "work_id"}} in
-	// versionedFields: a reader without it would open the push's change
-	// carrying no item on its node alone, and two data nodes' change rows
-	// would disagree.
+	// BASE FORMAT, as RunID is ([RecordVersion]): the domain landed on main
+	// with it, so every build that meets a push record reads it.
 	WorkID string `json:"work_id,omitempty"`
 	// WorkProject is that work item's PROJECT in its tracker
 	// (types.WorkItem.Project), carried exactly as WorkID is: stamped on a
@@ -1273,15 +1159,8 @@ type RunProvenance struct {
 	// engine's own open at the run's collection, gives it, and every wake
 	// built from the change names the item's project (MetaWorkProject).
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as WorkID's above: no build that
-	// carries the code domain has run without it — none of the domain is on
-	// main — and while that is so, every build that meets a push record reads
-	// it. Once a build without it has run, it takes {Name:
-	// "RunProvenance.WorkProject", Since: <the next version>, Op: "push",
-	// Path: []string{"mutation", "pushes", "principal", "run",
-	// "work_project"}} in versionedFields: a reader without it would open the
-	// push's change with no project on its node alone, and two data nodes'
-	// change rows would disagree.
+	// BASE FORMAT, as WorkID is ([RecordVersion]): the domain landed on main
+	// with it, so every build that meets a push record reads it.
 	WorkProject string `json:"work_project,omitempty"`
 	// Model is the executor model of the round that called the tool, empty
 	// where the call named none.
@@ -1296,20 +1175,8 @@ type RunProvenance struct {
 	// an engine-built write's run is the turn that called the tool, and a
 	// person acts with no run at all.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without these fields — none of the domain is on main, so
-	// no image and no release holds them — and while that is so, every build
-	// that meets a push record reads them. Once a build without them has run,
-	// they take {Name: "RunProvenance.RunID", Since: 3, Op: "push", Path:
-	// []string{"mutation", "pushes", "principal", "run", "run_id"}} and
-	// {Name: "RunProvenance.Harness", Since: 3, Op: "push", Path:
-	// []string{"mutation", "pushes", "principal", "run", "harness"}} in
-	// versionedFields, with RecordVersion at 3, its line under "What each
-	// version added" and a Carrying record in the statelogtest candidate. A
-	// version of their own, after Principal.Run's 2: a record carrying them
-	// carries the turn's run too, so a reader at version 2 would apply a box's
-	// push as one no executor made — its row without run_id and harness
-	// on that node alone, which no run_pushes read of that node finds.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with these
+	// fields, so every build that meets a push record reads them.
 	RunID   string `json:"run_id,omitempty"`
 	Harness string `json:"harness,omitempty"`
 }
@@ -1471,7 +1338,7 @@ type Purge struct {
 // needs a fence — the drop epoch its begin moves, which every push is held to
 // ([ExpungeBegin]) — and it is not this record.
 //
-// Every field is in the base format, under the condition [OpCompact] states.
+// Every field is in the base format, as [OpCompact] is.
 type Compaction struct {
 	RepoID string `json:"repo_id"`
 	// CompactionID is minted ONCE by the node that builds the compaction — a
@@ -1504,19 +1371,8 @@ type Compaction struct {
 	// layer gathers, and every Add is one of the layer's packs — or both are
 	// empty, a record that publishes a layer over the packs as they stand.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a publication reads its layer. Once a build without it has
-	// run, a new field is a versionedFields row, and this one takes {Name:
-	// "Compaction.Layer", Since: <the version after the table's highest>,
-	// Op: string(OpCompact), Path: []string{"mutation", "layer"}}, with
-	// RecordVersion moved to it and its line under "What each version
-	// added", a Carrying record — a compaction carrying a Layer — in the
-	// statelogtest candidate, and a publication and a plain compaction in
-	// the stamp test. omitempty, so only a publication carries the key: an
-	// older build would apply every plain compaction and RETAIN every
-	// publication rather than move its packs without its layer.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// field, so every build that meets a publication reads its layer.
 	Layer *LayerRef `json:"layer,omitempty"`
 }
 
@@ -1639,8 +1495,7 @@ type RetireSweep struct {
 // everything the open one did and what landed since — so the repository's
 // purge is served only once nothing from before the latest request is left.
 //
-// Every field is in the base format, under the condition [OpExpungeRequest]
-// states.
+// Every field is in the base format, as [OpExpungeRequest] is.
 type ExpungeRequest struct {
 	RepoID string `json:"repo_id"`
 	// RequestID is the record's operation id, minted once by whoever asks —
@@ -1672,8 +1527,7 @@ type ExpungeRequest struct {
 // none at all of a push whose receiver read the repository at an earlier drop
 // epoch, which its committer refuses `expunging`.
 //
-// Every field is in the base format, under the condition [OpExpungeBegin]
-// states.
+// Every field is in the base format, as [OpExpungeBegin] is.
 type ExpungeBegin struct {
 	RepoID string `json:"repo_id"`
 	// ExpungeID is minted ONCE by the node that builds the expunge — a bare
@@ -1742,8 +1596,7 @@ type ExpungeBegin struct {
 // relies on no dropping object, and one checked before it is refused
 // `expunging`.
 //
-// Every field is in the base format, under the condition [OpExpungeCommit]
-// states.
+// Every field is in the base format, as [OpExpungeCommit] is.
 type ExpungeCommit struct {
 	RepoID string `json:"repo_id"`
 	// ExpungeID is the expunge this commit ends: the repository's open one.
@@ -1797,8 +1650,7 @@ type ExpungeCommit struct {
 // repository an ExpungeInterval — and none for a repository an expunge
 // committed in, whose commit moves the same instant.
 //
-// Every field is in the base format, under the condition [OpExpungeScan]
-// states.
+// Every field is in the base format, as [OpExpungeScan] is.
 type ExpungeScan struct {
 	RepoID string `json:"repo_id"`
 	// ScanID is minted ONCE by the node that scanned — a bare UUIDv7 — and
@@ -1826,8 +1678,7 @@ type ExpungeScan struct {
 // its import_seq one below Seq, so a chunk asked twice, or after its import
 // moved on, is refused stale rather than landed again.
 //
-// Every field is in the base format, under the condition [OpImportChunk]
-// states.
+// Every field is in the base format, as [OpImportChunk] is.
 type ImportChunk struct {
 	RepoID string `json:"repo_id"`
 	// ChunkID is minted afresh for every attempt — a bare UUIDv7
@@ -1861,8 +1712,7 @@ type ImportChunk struct {
 // ([Committer.ProposeImport]) only while the repository is importing at
 // import_seq Seq: its last chunk's.
 //
-// Every field is in the base format, under the condition [OpImportDone]
-// states.
+// Every field is in the base format, as [OpImportDone] is.
 type ImportDone struct {
 	RepoID string `json:"repo_id"`
 	// Node is the Gitlet node that ended it.
@@ -1898,9 +1748,9 @@ type ImportDone struct {
 // alone: the instant `mirrors_due` orders the pull mirrors by is when each
 // was last brought level with its source, whether that moved a ref or not.
 //
-// Every field is in the base format, under the condition [OpMirrorSync]
-// states: a sync of nothing is the same op with its two lists empty, and
-// takes no versionedFields row of its own.
+// Every field is in the base format, as [OpMirrorSync] is: a sync of nothing
+// is the same op with its two lists empty, and takes no versionedFields row of
+// its own.
 type MirrorSync struct {
 	RepoID string `json:"repo_id"`
 	// SyncID is minted afresh for every round — a bare UUIDv7 — and is the

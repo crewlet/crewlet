@@ -99,10 +99,9 @@ const (
 	// (M5-D25: the push's own change, PushEntry.Change). A revert that does
 	// not apply cleanly stops it, nothing stored, every conflicting path
 	// named. A write is no record (this file's doc), so the kind takes no
-	// versionedFields row; it crosses the estate's wire to the Gitlet node
-	// under the code domain's stated condition (M3-O84 §2 item 5: no build
-	// carrying the domain has run without it), and the push it lands opens
-	// its change through PushEntry.Change, under the condition its doc states.
+	// versionedFields row; it crosses the estate's wire to the Gitlet node,
+	// and the domain landed on main with it ([RecordVersion]). The push it
+	// lands opens its change through PushEntry.Change, in the base format.
 	WriteRevertChange EngineWriteKind = "revert_change"
 )
 
@@ -233,9 +232,8 @@ type EngineWrite struct {
 	//
 	// A write is no record (this file's doc), so the field takes no
 	// versionedFields row; it crosses the estate's wire to the repository's
-	// Gitlet node under the code domain's stated condition — no build carrying
-	// the domain has run without it, none of the domain being on main — so
-	// every Gitlet node asked it reads it.
+	// Gitlet node, and every Gitlet node asked it reads it: the domain landed
+	// on main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// Change is a merge_change's or a rebase_change's change, by its number
 	// on the repository — web!42's 42, the name every change tool and the
@@ -256,8 +254,8 @@ type EngineWrite struct {
 	// because false is a word a caller says (keep it), never the default.
 	//
 	// A write is no record, so the field takes no versionedFields row; it
-	// crosses the estate's wire to the repository's Gitlet node under the code
-	// domain's stated condition, as Ceiling does.
+	// crosses the estate's wire to the repository's Gitlet node, as Ceiling
+	// does.
 	DeleteSource *bool `json:"delete_source,omitempty"`
 	// Override is a PERSON'S reason for merging past the target's merge gate,
 	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target

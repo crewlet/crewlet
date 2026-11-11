@@ -34,10 +34,8 @@ const (
 	// LandedQueue is a queue's landing, each change tested merged on the
 	// branch before it landed (m5-q2's `land` record).
 	//
-	// BASE FORMAT, under the condition queuerecords.go's head states: only
-	// a land record's apply writes it, so it rides that op's versionedFields
-	// row ({Name: "MutationRecord.Op land", Since: 2, Path: []string{"op"},
-	// Equals: "land"}) once a build without the queue has run.
+	// BASE FORMAT, as queuerecords.go's head says: only a land record's apply
+	// writes it.
 	LandedQueue LandingKind = "queue"
 	// LandedDirect is a change merged by a merge record ([Merge]), its gate
 	// held — or overridden by a person — from one snapshot.

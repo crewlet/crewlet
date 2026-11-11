@@ -87,21 +87,13 @@ import (
 //
 // # The record's format does not move
 //
-// What a push record's commands do to a change — a revision, a merge, a close
-// — is derived from the commands it already carries, and the one thing it
-// carries for a change, the change a push opens from its options, is a field
-// with a stated condition of its own ([PushEntry.Change]). Under the code
-// domain's stated condition —
-// no build that carries the code domain has run without these rows, since none
-// of the domain is on main — every build that meets a push record derives
-// them. Once a build without them has run, a push record such a build would
-// apply short of a change's rows must say so: the committer would stamp each
-// entry whose commands move a live change with how many it moves, and the push
-// op would take {Name: "PushEntry.Changes", Since: 2, Op: "push", Path:
-// []string{"mutation", "pushes", "changes"}} in versionedFields, with
-// RecordVersion at 2, its line under "What each version added" and a Carrying
-// record in the statelogtest candidate, so such a build retains such a record
-// rather than apply its refs without its changes.
+// What a push record's commands do to a change — a revision, a merge, a
+// close — is derived from the commands it already carries, and the one thing
+// it carries for a change, the change a push opens from its options, is a
+// field of its own ([PushEntry.Change]). The domain landed on main with these
+// rows, so every build that meets a push record derives them. What a later
+// apply comes to derive from the commands needs a versionedFields row
+// ([RecordVersion]).
 
 // SourceDeleted is the close reason (code_changes.close_reason) of a change a
 // push closed by deleting its source branch — the one reason no person wrote.

@@ -77,21 +77,11 @@ import (
 // whole, back to the history. A repository whose checks keep ending is never
 // listed, and none of its rows is removed twice.
 //
-// # Base format, as a stated condition
+// # Base format
 //
-// Every op, kind and field here is in the base format: no build that carries
-// the code domain has run without them — none of the domain is on main, so no
-// image and no release holds it — and while that is so, every build that
-// meets a record on a checks subject reads it. Once a build without them has
-// run, the KIND takes {Name: "Subject.Kind checks", Since: 2, Path:
-// []string{"subject", "k"}, Equals: string(KindChecks)} in versionedFields
-// and each op its own row ({Name: "MutationRecord.Op <op>", Since: 2, Path:
-// []string{"op"}, Equals: "<op>"} — check_queued, check_started,
-// check_finished, checks_sweep, check_dispatched), with RecordVersion at 2,
-// their lines under "What each version added", a Carrying record in the
-// statelogtest candidate and the kind excepted from the stamp test's
-// base-format loop — an older build would otherwise FAIL on such a record at
-// Apply's unknown-kind arm rather than retain it. None is a gate.
+// Every op, kind and field here is in the base format ([RecordVersion]): the
+// domain landed on main with them, so every build that meets a record on a
+// checks subject reads it. None is a gate.
 
 // CheckHistory is how long a check's rows are kept once it has ended: thirty
 // days. Past it a check is one nobody reads — a change merged weeks ago, a tip
@@ -583,8 +573,8 @@ func checkField(field, format string, args ...any) error {
 
 // CheckQueued queues one attempt of one check of one commit — or records it
 // skipped, its change touching none of its paths — on the repository's checks
-// subject ([OpCheckQueued]). Every field is in the base format, under the
-// condition the subject states.
+// subject ([OpCheckQueued]). Every field is in the base format, as this file's
+// head says.
 type CheckQueued struct {
 	CheckKey
 	Purpose CheckPurpose `json:"purpose"`
@@ -622,11 +612,7 @@ type CheckQueued struct {
 	// CheckSummaryBytes, which the row keeps as its summary. Such an attempt
 	// carries no definition, there being none that runs.
 	//
-	// BASE FORMAT, under the condition the subject states: once a build
-	// without it has run it takes {Name: "CheckQueued.Invalid", Since: 2, Op:
-	// "check_queued", Path: []string{"mutation", "invalid"}}, which an older
-	// build defers the record by rather than queue an attempt with no
-	// definition.
+	// BASE FORMAT, as this file's head says.
 	Invalid string `json:"invalid,omitempty"`
 	// QueuedAt is the queuing node's instant.
 	QueuedAt time.Time `json:"queued_at"`
@@ -693,17 +679,14 @@ func (q CheckQueued) Validate() error {
 // CheckStarted claims an attempt for a runner — and, as the holder's later
 // record repeating its claim's StartedAt and Runner, names the box it made —
 // on the repository's checks subject ([OpCheckStarted]). Every field is in
-// the base format, under the condition the subject states.
+// the base format, as this file's head says.
 //
 // NO `borrowed` FLAG: it named a box given its node's cache to read from, a
 // borrow no engine path launches (crewlet/crewlet#496 would measure one
 // against the fetch before any box takes it), so nothing ever set it and
-// every row held it false. Its removal takes no versionedFields row, under
-// the same condition: no build carrying the code domain has run, so no
-// record of this build meets one that wrote it. Were that otherwise, the
-// removal would still read both ways: a record carrying the key decodes here
-// with the key ignored, and a build that declared it reads a record without
-// it as the false every record carried.
+// every row held it false. It went before the domain landed on main, so no
+// record a build of main wrote carries it, and its removal takes no
+// versionedFields row.
 type CheckStarted struct {
 	CheckKey
 	// Runner is the claiming node's id; empty for an attempt a person's CI
@@ -765,7 +748,7 @@ func (l CheckLog) Content() objstore.Object {
 // CheckFinished ends an attempt, on the repository's checks subject
 // ([OpCheckFinished]): what it measured — or why it measured nothing — what
 // it said, and its log where a failed run kept one. Every field is in the
-// base format, under the condition the subject states.
+// base format, as this file's head says.
 type CheckFinished struct {
 	CheckKey
 	State  CheckState  `json:"state"`
@@ -798,9 +781,6 @@ type CheckFinished struct {
 	// the live change whose current head the ending fails, and its actor —
 	// the head's pusher, or the person whose CI reported it — STAMPED BY THE
 	// CHECKS WRITER, nil for any other ending.
-	// Under the condition the checks subject states, it takes {Name:
-	// "CheckFinished.Routing", Since: 2, Op: "check_finished", Path:
-	// []string{"mutation", "routing"}} once a build without it has run.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -910,7 +890,7 @@ func (f CheckFinished) Validate() error {
 // oldest first — the code-retention duty's, for a repository whose rows
 // outlive [CheckHistory] by [CheckSweepGrace] with no check of its own ending
 // to remove them ([OpChecksSweep], [Store.ChecksSweep]). In the base format,
-// under the condition the subject states.
+// as this file's head says.
 type ChecksSweep struct {
 	RepoID string `json:"repo_id"`
 	// Through is the duty holder's cutoff: its clock less CheckHistory.

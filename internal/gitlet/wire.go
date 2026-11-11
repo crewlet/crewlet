@@ -59,12 +59,9 @@ type RepoRef struct {
 	// ([RepoDetail.Remotes]): every push and fetch reads this row.
 	//
 	// AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
-	// it is read from the row a record wrote. AS A STATED CONDITION, as the
-	// mirror's own fields are (mirror.go): no build that carries the code
-	// domain has run without it — none of the domain is on main — so every
-	// node Gitlet asks answers it; were one without it ever to run
-	// first, a host reading its answer would take a pull mirror's push to the
-	// committer, which refuses it there, recorded, from the rows.
+	// it is read from the row a record wrote. The domain landed on main with
+	// it, as with the mirror's own fields (mirror.go), so every node Gitlet
+	// asks answers it.
 	Mirrored      bool   `json:"mirrored,omitempty"`
 	DefaultBranch string `json:"default_branch"`
 	// Description is what the repository says about itself, a line whoever
@@ -365,9 +362,10 @@ type OutcomeQuery struct {
 	// At is the record's position: "not found" is final only at or past it.
 	At statelog.Position `json:"at"`
 	// Change asks, of a push that asked for a change ([Proposal.Change]),
-	// for the change it opened as well ([PushOutcome.Opened]). A field a
-	// build without it ignores, answering no change: the receiver then says
-	// it does not know what became of it, which is true.
+	// for the change it opened as well ([PushOutcome.Opened]). An estate
+	// request's field and no record's, so it takes no versionedFields row:
+	// the domain landed on main with it ([RecordVersion]), so every node
+	// that serves the read reads it.
 	Change bool `json:"change,omitempty"`
 }
 
@@ -517,8 +515,7 @@ const (
 	// push names it ([Proposal.Validate]): a merge is decided through its
 	// gate ([Committer.ProposeMerge]), never as a push.
 	//
-	// BASE FORMAT, under the condition merge.go's head states: no build that
-	// carries the code domain has run without it.
+	// BASE FORMAT, as merge.go's head says.
 	ViaMerge PushVia = "merge"
 	// ViaExpiry is the ref lifecycle's deletion of seats' idle branches
 	// (retention_expiry.go): a push by the engine's own account
@@ -529,16 +526,7 @@ const (
 	// (rule 4b, [ExpiryRule]); its apply moves no activity clock
 	// (apply_push.go).
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without it — none of the domain is on main, so no image
-	// and no release holds it. Once a build without it has run, an entry
-	// carrying it takes {Name: "PushEntry.Via expiry", Since: 2, Op: "push",
-	// Path: []string{"mutation", "pushes", "via"}, Equals: string(ViaExpiry)}
-	// in versionedFields, with RecordVersion at 2, its line under "What each
-	// version added" and a Carrying record in the statelogtest candidate:
-	// such a build would apply the deletion as a push that moved the
-	// repository's idle clock, and refuse its row's via as a way it does not
-	// know (scanPush).
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with it.
 	ViaExpiry PushVia = "expiry"
 	// ViaQueue is a push a LAND RECORD lands ([Land]), one for each change a
 	// merge queue landed: its target moved from what the change before it
@@ -547,20 +535,20 @@ const (
 	// queue never acts on its own account. No proposal of a push names it: a
 	// landing is decided through each change's gate.
 	//
-	// BASE FORMAT, under the condition queuerecords.go's head states.
+	// BASE FORMAT, as queuerecords.go's head says.
 	ViaQueue PushVia = "queue"
 	// ViaImport is the push an IMPORT CHUNK lands ([ImportChunk]): the refs
 	// it sets, onto objects its home fetched from the host the repository is
 	// imported from, by the engine's own account ([PrincipalSystem]) —
 	// written by the chunk's own apply. No proposal of a push names it.
 	//
-	// BASE FORMAT, under the condition [OpImportChunk] states.
+	// BASE FORMAT, as [OpImportChunk] is.
 	ViaImport PushVia = "import"
 	// ViaMirror is the push a PULL MIRROR'S SYNC lands ([MirrorSync]): the
 	// refs it moves onto its source's, by the engine's own account —
 	// written by the sync's own apply. No proposal of a push names it.
 	//
-	// BASE FORMAT, under the condition [OpMirrorSync] states.
+	// BASE FORMAT, as [OpMirrorSync] is.
 	ViaMirror PushVia = "mirror"
 )
 
@@ -734,8 +722,8 @@ type ChangesDueQuery struct {
 	// refresh, so a chart apply re-judges every live change once — the one
 	// input of a readiness no record of the log moves. Never negative.
 	//
-	// BASE FORMAT, under the condition [OpMergeability] states: a field of a
-	// read between this build's nodes, which no record carries.
+	// BASE FORMAT, as [OpMergeability] is: a field of a read between this
+	// build's nodes, which no record carries.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
@@ -769,10 +757,8 @@ type ChangeDue struct {
 	// in Checks.
 	//
 	// RefreshDue is AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
-	// build that carries the code domain has run without it — none of the
-	// domain is on main — and a home of a build that predates it would never
-	// refresh a stored readiness, whose change's next merge records it again.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	FactsDue   bool `json:"facts_due,omitempty"`
 	MergeDue   bool `json:"merge_due,omitempty"`
 	RefreshDue bool `json:"refresh_due,omitempty"`
@@ -832,14 +818,9 @@ type RefQuery struct {
 	// the row first to learn the default branch paid a second read — on a
 	// node without the estate, a second hop through the router — for the
 	// commonest question a repository is asked, and named a branch a rename
-	// or a settings change may have moved between the two. AS A STATED
-	// CONDITION (M3-O84 §2 item 5), as [ResolvedRef.At]'s: no build that
-	// carries the code domain has resolved `HEAD` otherwise — none of the
-	// domain is on main — and a query's meaning is no record's, so it takes
-	// no versionedFields row. A build that read `HEAD` as a short name would
-	// answer it as refs/tags/HEAD — missing, but for a tag of that name — so
-	// were such a build ever to answer beside this one, an asker would name
-	// the default branch itself.
+	// or a settings change may have moved between the two. The domain landed
+	// on main resolving `HEAD` this way ([RecordVersion]), and a query's
+	// meaning is no record's, so it takes no versionedFields row.
 	Refs []string `json:"refs"`
 	// Fresh is REQUIRED, as on every code point read: whoever names a ref
 	// names the level it must be read at.
@@ -902,13 +883,8 @@ type ResolvedRef struct {
 	// from the same read whose position the hold is decided at.
 	//
 	// AN ESTATE ANSWER'S FIELDS, NOT A RECORD'S, so they take no
-	// versionedFields row. AS A STATED CONDITION, as [LifecycleResult.Rule]'s:
-	// no build that carries the code domain has run without them — none of
-	// the domain is on main. A build that predated them would answer every
-	// ref seat-less, and a hold decided from that answer would record
-	// nothing; so were such a build ever to run beside this one, a hold would
-	// read the ref's row in its own decide rather than ride fields such a
-	// build leaves out.
+	// versionedFields row. The domain landed on main with them
+	// ([RecordVersion]).
 	At   time.Time `json:"at,omitzero"`
 	Seat string    `json:"seat,omitempty"`
 	// Missing is, for a name no live ref holds, the sentence that says so,
@@ -1231,16 +1207,9 @@ type ReadQuery struct {
 	// `expunge_due`, which no principal makes.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row — and one a build that predates it would decode
-	// and ignore (the estate reads arguments leniently), serving the read to
-	// the asker's grant alone: a ceiling dropped, never a read refused. AS A
-	// STATED CONDITION: no build that carries the code domain has run
-	// without this field — none of the domain is on main, so no image and
-	// no release serves a code read — and while that is so, every node that
-	// answers a read made for a seat judges that seat. Were a build without
-	// it ever to run first, a read made for a seat would move to operations
-	// of its own, which such a build refuses as operations it does not know,
-	// rather than ride a field it ignores.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]), so every node that answers a read made for a seat
+	// judges that seat.
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
 	// Repo is the repository's NAME: required for repo, pushes, refs and
 	// change, and for changes the one repository the listing is of — where
@@ -1259,14 +1228,8 @@ type ReadQuery struct {
 	// kind, before any kind's own rules.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
-	// build that carries the code domain has run without this field — none
-	// of the domain is on main, so no image and no release serves a code
-	// read. A build that predated it would decode and ignore it, and answer
-	// every repository to a read that asked for the protected ones alone; so
-	// were a build without it ever to run first, the protected listing would
-	// move to a kind of its own, which such a build refuses as a kind it does
-	// not know, rather than ride a field it ignores.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	Protected bool `json:"protected,omitempty"`
 	// Prefix narrows a refs listing to the refs under it: "refs/heads/"
 	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
@@ -1305,14 +1268,9 @@ type ReadQuery struct {
 	// refused on every other kind.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row: a build that predates it decodes and ignores it,
-	// and answers a push history's rows whole — a heavier answer, never a
-	// wrong one: a whole row's commands are every one it carried, and it
-	// omits none. On a change read, AS A STATED CONDITION, as
-	// [ReadQuery.Push]'s: no build that carries the code domain has run
-	// without a change read in brief — none of the domain is on main — and a
-	// build that refused it would refuse the read as invalid, never answer a
-	// change around it.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]), for a push history's read and a change read in brief
+	// alike.
 	Brief bool `json:"brief,omitempty"`
 	// Push narrows a push history to ONE push, by its id, read whole: every
 	// command it carried and every commit it introduced. A push the
@@ -1322,14 +1280,8 @@ type ReadQuery struct {
 	// which page or cut a listing it is not.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row — and one a build that predates it would decode and
-	// ignore, answering the history's first page in its place. AS A STATED
-	// CONDITION, as [ReadQuery.CeilingSeat]'s: no build that carries the code
-	// domain has run without this field — none of the domain is on main, so
-	// no image and no release serves a code read. Were a build without it
-	// ever to run first, a read of one push would move to a kind of its own,
-	// which such a build refuses as a kind it does not know, rather than ride
-	// a field it ignores.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	Push string `json:"push,omitempty"`
 	// Commit is the commit a `commit` read names the changes of, its whole
 	// id; refused on every other kind. A field only that kind reads, which a
@@ -1349,11 +1301,8 @@ type ReadQuery struct {
 	// shipped and decoded to be dropped. Refused on every other kind.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
-	// build that carries the code domain has run without this field — none
-	// of the domain is on main — and a build that predates it, which decodes
-	// and ignores it, answers every detail with the path owners: a heavier
-	// answer, never a wrong one.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	PathOwners bool `json:"path_owners,omitempty"`
 	// Gates asks a read that answers one repository's DETAIL — a `repo`
 	// read, or a refs listing's first page, which carries it — for the merge
@@ -1367,15 +1316,8 @@ type ReadQuery struct {
 	// later pages, which carry no detail.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
-	// build that carries the code domain has run without this field — none
-	// of the domain is on main, so no image and no release serves a code
-	// read. A build that predated it would decode and ignore it, and answer
-	// a detail with no gates to a read that asked for them, every gated rule
-	// read as ungated; so were a build without it ever to run first, a read
-	// of the gates would move to a kind of its own, which such a build
-	// refuses as a kind it does not know, rather than ride a field it
-	// ignores.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	Gates bool `json:"gates,omitempty"`
 	// Change is a `change` read's number, and a `change_routing` read's: the
 	// change's on the repository Repo names, web!42's 42 — REQUIRED there,
@@ -1413,9 +1355,8 @@ type ReadQuery struct {
 	// whose stored readiness waits on a person — and tests every other
 	// filter on the rows it read, as every listing does.
 	//
-	// THE CHANGES KINDS CAME WITH THIS BUILD'S LINE: no build that carries
-	// the code domain has run without these two — none of it is on main —
-	// so no build ignores them and answers the wider listing they narrow.
+	// THE DOMAIN LANDED ON MAIN WITH THESE TWO ([RecordVersion]), so no build
+	// ignores them and answers the wider listing they narrow.
 	//
 	// Reviewer is also a `reviews` listing's REQUIRED reviewer — whose
 	// reviews it lists, a seat by its handle or a person by the human seat
@@ -1439,8 +1380,8 @@ type ReadQuery struct {
 	// ([ChangeParts]) — refused on every other kind.
 	// The change's detail rides a first page of its revisions alone; every
 	// page of another part carries that part's rows, held to the grant again
-	// as every page of a change is. Under the same condition as Reviewer: no
-	// build ignores it.
+	// as every page of a change is. As with Reviewer, the domain landed on
+	// main with it, so no build ignores it.
 	Part ChangePart `json:"part,omitempty"`
 	// DetailOnly asks a `change` read for the change's DETAIL ALONE — its
 	// row, description, authors, conversation, mergeability and readiness —
@@ -1458,11 +1399,8 @@ type ReadQuery struct {
 	// cursor or a limit, which page a list it does not read.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.PathOwners]'s:
-	// no build that carries the code domain has run without this field —
-	// none of the domain is on main — and a build that predates it, which
-	// decodes and ignores it, answers the detail with a first page of
-	// revisions beside it: a heavier answer, never a wrong one.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	DetailOnly bool `json:"detail_only,omitempty"`
 	// Resolve asks a read that names its repository BY NAME and judges the
 	// asker's grant on it — a `change` read, a `changes` or a `checks`
@@ -1478,11 +1416,8 @@ type ReadQuery struct {
 	// every other read, and on a listing naming no repository.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
-	// build that carries the code domain has run without it — none of the
-	// domain is on main — and a build that predates it, which decodes and
-	// ignores it, answers no resolution, which its asker refuses as a fault
-	// rather than act on a repository nothing resolved.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	Resolve bool `json:"resolve,omitempty"`
 	// FindingIDs narrows a `change` read's findings part to the findings it
 	// names, 1 to [MaxFindingsPerReview] of them, each a finding's id once —
@@ -1499,14 +1434,8 @@ type ReadQuery struct {
 	// kind.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row — and one a build that predates it would decode
-	// and ignore, answering the part's first page in its place. AS A STATED
-	// CONDITION, as [ReadQuery.Push]'s: no build that carries the code domain
-	// has run without this field — none of the domain is on main, so no image
-	// and no release serves a code read. Were a build without it ever to run
-	// first, a read of named findings would move to a part of its own, which
-	// such a build refuses as a part it does not know, rather than ride a
-	// field it ignores.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	FindingIDs []string `json:"finding_ids,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
@@ -1550,10 +1479,8 @@ type ReadQuery struct {
 	// kind and refused on every other: the cell the attempts' definitions
 	// name, which a runner's walk reads one at a time for the cells it has
 	// room in. An estate request's field and no record's, so it takes no
-	// versionedFields row: a node of a build that predates it answers the
-	// kind for every cell, which the walk still judges attempt by attempt —
-	// its cell resolved and its room taken for each — so it claims nothing
-	// it could not run, at the cost of reading what it skips.
+	// versionedFields row: the domain landed on main with it
+	// ([RecordVersion]), so every node that serves the read reads it.
 	ChecksQueued *ChecksQueuedQuery `json:"checks_queued,omitempty"`
 	// DefaultTips narrows a `default_tips` read to ONE repository by its id,
 	// answered with no row where it is not an active project repository;
@@ -1581,11 +1508,8 @@ type ReadQuery struct {
 	// never, least recently judged first; the maintainer asks from its
 	// clock less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
 	// other kind. An estate request's field and no record's, so it takes
-	// no versionedFields row: under the code domain's stated condition (no
-	// build of main carries internal/gitlet while it is unmerged) every node
-	// that serves the read reads it; were the domain to reach main first, a
-	// node of a build that predates it would answer the open arm alone,
-	// which delays an expunge on the schedule and drops no object.
+	// no versionedFields row: the domain landed on main with it
+	// ([RecordVersion]), so every node that serves the read reads it.
 	ScannedBefore time.Time `json:"scanned_before,omitzero"`
 	// BranchChanges is a `branch_changes` read's repositories and branches:
 	// REQUIRED for that kind, refused on every other. An estate request's
@@ -1664,7 +1588,8 @@ type ReadAnswer struct {
 	// on a listing's row and a detail.
 	//
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row, under [ReadQuery.Brief]'s stated condition.
+	// versionedFields row. The domain landed on main with it, as with
+	// [ReadQuery.Brief].
 	ChangeBrief *ChangeSummary `json:"change_brief,omitempty"`
 	// Resolved is the repository the read's name resolved to, on a read that
 	// asks for it ([ReadQuery.Resolve]): its row as a `repo` read resolves
@@ -1672,7 +1597,8 @@ type ReadAnswer struct {
 	// the name is one it was renamed from ([RepoRef.Redirect]).
 	//
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row, under [ReadQuery.Resolve]'s stated condition.
+	// versionedFields row. The domain landed on main with it, as with
+	// [ReadQuery.Resolve].
 	Resolved   *RepoRef               `json:"resolved,omitempty"`
 	Revisions  []RevisionRow          `json:"revisions,omitempty"`
 	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
@@ -1718,9 +1644,8 @@ type ReadAnswer struct {
 	// change's target is held to ([MatchTargetHumanPaths]).
 	//
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.PathOwners]'s:
-	// no build that carries the code domain has run without this field — none
-	// of the domain is on main.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]).
 	Gates []RuleGate `json:"gates,omitempty"`
 	// AskSettles is, on the first page of one repository's `changes_due`
 	// read, its changes whose asks for review no longer match the change's
@@ -1729,9 +1654,7 @@ type ReadAnswer struct {
 	// asks move to, which its home settles ([AskSettle]).
 	//
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, as [ChangeDue.RefreshDue]
-	// is, under the condition it states: a home of a build without it would
-	// settle no change's asks, and the listing of the changes waiting on a
-	// reviewer still keeps a live change alone.
+	// is: the domain landed on main with it ([RecordVersion]).
 	AskSettles []AskDue `json:"ask_settles,omitempty"`
 	// Checks is a page of a `checks` read — and a `check_box` read's one
 	// attempt as its row stands, or none where the rows hold no such attempt
@@ -1874,8 +1797,7 @@ type ImportCandidate struct {
 // still be the one its import left, importing.
 //
 // AN ESTATE ANSWER'S FIELDS, NOT A RECORD'S, so Version takes no
-// versionedFields row; as a stated condition, as [CheckWork]'s: no build that
-// carries the code domain has run without it.
+// versionedFields row; the domain landed on main with it, as with [CheckWork].
 type MirrorCandidate struct {
 	ID       string            `json:"id"`
 	Name     string            `json:"name"`
@@ -2099,9 +2021,8 @@ type ChangeProposal struct {
 	//
 	// A proposal is no record — the record is what the committer stamps from
 	// it — so this field takes no versionedFields row; it crosses the
-	// estate's wire to whichever data node decides it under the code domain's
-	// stated condition — no build carrying the domain has run without it,
-	// none of the domain being on main — so every node asked it reads it.
+	// estate's wire to whichever data node decides it, and every node asked
+	// it reads it: the domain landed on main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 
 	Open     *ChangeOpen     `json:"open,omitempty"`
@@ -2195,9 +2116,8 @@ type ConversationWrite struct {
 	//
 	// A write is no record — the record is what the writer stamps from it —
 	// so this field takes no versionedFields row; it crosses the estate's
-	// wire to whichever data node decides it under the code domain's stated
-	// condition — no build carrying the domain has run without it, none of
-	// the domain being on main — so every node asked it reads it.
+	// wire to whichever data node decides it, and every node asked it reads
+	// it: the domain landed on main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 
 	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`
@@ -2215,7 +2135,7 @@ type ConversationWrite struct {
 	// with NO Asker too ([AskSettle]).
 	//
 	// AN ESTATE REQUEST'S FIELD: what it carries rides the code log as the
-	// [OpAsks] record, under the condition that op states.
+	// [OpAsks] record, in the base format, as that op is.
 	Asks *AskSettle `json:"asks,omitempty"`
 }
 
@@ -2289,8 +2209,8 @@ type ChecksRequest struct {
 	Finished *CheckFinished `json:"finished,omitempty"`
 	// Dispatched is the home's record of a target's checks file read at its
 	// tip and the heads it dispatched under it (checksdispatch.go). An
-	// estate request's field, no record's: the record it asks for takes its
-	// op's versionedFields row, under the subject's stated condition.
+	// estate request's field, no record's: the record it asks for is in the
+	// base format, as the checks subject is (checks.go).
 	Dispatched *CheckDispatched `json:"dispatched,omitempty"`
 	// Asker, Rerun and Report are a PRINCIPAL'S write — a rerun a seat or a
 	// person asks for, a person's CI's report — decided into one of the
@@ -2350,8 +2270,8 @@ type CheckRow struct {
 	// to its repository, change and commit, each addressed by name; a box
 	// admission's read ([ReadCheckBox]) addresses the row by id and leaves it
 	// out. AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
-	// row, under M3-O84 §2 item 5's stated condition: no build carrying the
-	// code domain has answered a listing without it.
+	// row: the domain landed on main answering a listing with it
+	// ([RecordVersion]).
 	Repo    string       `json:"repo,omitempty"`
 	State   CheckState   `json:"state"`
 	Purpose CheckPurpose `json:"purpose,omitempty"`
@@ -2447,13 +2367,8 @@ type CheckQuery struct {
 	// declares at most [MaxChecksPerFile], which is the page a Latest listing
 	// takes where it names no limit ([latestCheckLimit]).
 	//
-	// AN ESTATE REQUEST'S FIELD, as State is, under the same STATED
-	// CONDITION (M3-O84 §2 item 5): no build carrying the code domain has run
-	// without it. A build that predated it would decode and ignore it and
-	// answer every attempt — the history a caller then reduces wrongly only
-	// where a page cuts it — and would refuse a Target beside an OID; were
-	// such a build ever to run first, a latest listing would move to a kind of
-	// its own, which such a build refuses as one it does not know.
+	// AN ESTATE REQUEST'S FIELD, as State is: the domain landed on main with
+	// it ([RecordVersion]).
 	Latest bool `json:"latest,omitempty"`
 	// State narrows a `checks` read to the attempts in one state; refused on
 	// a `check` read, which names its one attempt whatever its state, and on
@@ -2477,15 +2392,8 @@ type CheckQuery struct {
 	// commit's attempts, which their shape bounds — test it inside the walk.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row — and neither does Name's use as a narrowing. AS A
-	// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code
-	// domain has run without them — none of the domain is on main, so no
-	// image and no release serves a code read. A build that predated them
-	// would refuse a listing naming a Name and decode and ignore a State,
-	// answering the wider listing; so were such a build ever to run first,
-	// a narrowed listing would move to a kind of its own, which such a build
-	// refuses as a kind it does not know, rather than ride a field it
-	// ignores.
+	// versionedFields row — and neither does Name's use as a narrowing. The
+	// domain landed on main with them ([RecordVersion]).
 	State CheckState `json:"state,omitempty"`
 	// Since bounds a `checks` read of EVERY repository — the window, which
 	// names no repository — to the attempts that ended at or after it; zero
@@ -2500,11 +2408,8 @@ type CheckQuery struct {
 	// it. Zero is no end: up to the newest ending. Refused beside a
 	// repository, as Since is, at or before Since, and on a `check` read.
 	//
-	// AN ESTATE REQUEST'S FIELD, as State is, under the same STATED
-	// CONDITION (M3-O84 §2 item 5): no build carrying the code domain has run
-	// without it. A build that predated it would decode and ignore it and
-	// answer the window up to its newest ending; were such a build ever to
-	// run first, a window with an end would move to a kind of its own.
+	// AN ESTATE REQUEST'S FIELD, as State is: the domain landed on main with
+	// it ([RecordVersion]).
 	Until time.Time `json:"until,omitzero"`
 }
 
@@ -2809,10 +2714,10 @@ type ChangeSummary struct {
 	// conversation, and carries its lifecycle's last move alone, and no
 	// count of its findings.
 	//
-	// UNDER THE CODE DOMAIN'S STATED CONDITION (M3-O84 §2 item 5) these two
-	// are an answer's fields, never a record's, and take no versionedFields
-	// row: a build that predates them answers a listing without them, which
-	// no build serving the dashboard is, since none of the domain is on main.
+	// These two are an answer's fields, never a record's, and take no
+	// versionedFields row: the domain landed on main with them
+	// ([RecordVersion]), so every build serving the dashboard answers a
+	// listing with them.
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -3400,9 +3305,9 @@ type GitQuery struct {
 	// box's token admits it to — which the Gitlet node holds it to as it
 	// validates it, whatever its asker set; a diff's base is the attempt's
 	// row's, which the admission sets. An estate request's field and no
-	// record's, so it takes no versionedFields row: a Gitlet node of a build that
-	// predates it reads such a read as one naming no asker, and refuses it
-	// (ErrInvalid) — the box's read refused, never served as another's.
+	// record's, so it takes no versionedFields row: the domain landed on
+	// main with it ([RecordVersion]), so every Gitlet node that serves the
+	// read reads it.
 	Check *CheckKey `json:"check,omitempty"`
 	// CeilingSeat is the seat the asking seat's turn is acting for, whose
 	// grant the Gitlet node judges beside the asker's, from the same chart and
@@ -3415,8 +3320,8 @@ type GitQuery struct {
 	// beside a seat's asker, and never trusted for anything but whose bucket
 	// pays: the asker is judged by who it is, never by what it is doing. An
 	// estate request's field and no record's, so it takes no versionedFields
-	// row: a Gitlet node of a build that predates it charges nothing, as that
-	// build did.
+	// row: the domain landed on main with it ([RecordVersion]), so every
+	// Gitlet node that serves the read reads it.
 	Turn string `json:"turn,omitempty"`
 	// Fresh is the asker's floor on the code log, where it holds one: the
 	// answering node's copy is brought to at least it before anything is
@@ -3439,9 +3344,8 @@ type GitQuery struct {
 	// is as linearizable for the asker as its own barrier; a seat's look is
 	// charged to its turn's bucket all the same. Zero, the read takes its
 	// own barrier. A position on another log is [ErrInvalid]. An estate
-	// request's field and no record's, so it takes no versionedFields row:
-	// AS A STATED CONDITION, no build that carries the code domain has run
-	// without it — none of the domain is on main.
+	// request's field and no record's, so it takes no versionedFields row;
+	// the domain landed on main with it ([RecordVersion]).
 	Head statelog.Position `json:"head,omitzero"`
 	// Cursor is a page's Next, handed back whole; empty for the first page.
 	// Opaque to the asker, and refused [ErrBadCursor] where it is not one the
@@ -3478,9 +3382,8 @@ type GitQuery struct {
 	// node memoizes the two apart, since they are two cuts of one read.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION: no build that carries the
-	// code domain has run without it — none of the domain is on main — so
-	// every Gitlet node that answers a read honours it.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]), so every Gitlet node that answers a read honours it.
 	Unstamped bool `json:"unstamped,omitempty"`
 
 	Tree          *TreeQuery          `json:"tree,omitempty"`
@@ -4535,9 +4438,8 @@ type RevisionFactsAnswer struct {
 	//
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
 	// row (the record carries [Revise.PatchIDOmitted], the final omission
-	// alone). AS A STATED CONDITION, as [ReadQuery.Push]'s: no build that
-	// carries the code domain has run with the bool this replaced — none of
-	// the domain is on main — so no home reads an answer it cannot.
+	// alone). The domain landed on main with it and without the bool it
+	// replaced ([RecordVersion]), so no home reads an answer it cannot.
 	PatchIDOmission FactsOmission `json:"patch_id_omission,omitempty"`
 	// Touched is every file the change touches — every path the diff from
 	// the base to Head changes, in git's order — unless TouchesAll: the
@@ -4557,7 +4459,7 @@ type RevisionFactsAnswer struct {
 	// past a bound — MaxClassedBytes, or a revision that touches all, whose
 	// paths no list names (OmittedPastBound, final) — or out of what the
 	// read's budget of git left (OmittedOutOfTime, not final). An estate
-	// answer's field under PatchIDOmission's stated condition.
+	// answer's field, as PatchIDOmission is.
 	ClassesOmission FactsOmission `json:"classes_omission,omitempty"`
 	// HeadInTarget is Head reachable from Target: the change is in its
 	// target already, merged by whatever moved the target there. Its change

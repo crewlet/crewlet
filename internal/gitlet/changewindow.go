@@ -48,11 +48,8 @@ import (
 // reaches: the changes that moved within it, by [ChangeSummary.UpdatedAt].
 //
 // AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no versionedFields
-// row. AS A STATED CONDITION (M3-O84 §2 item 5): no build that carries the
-// code domain has run without it — none of the domain is on main — so no
-// build ignores it and answers the wider listing it narrows. Were the domain
-// to reach main first, a listing by window would move to a kind of its own,
-// which an older build refuses whole rather than ignore a field.
+// row. The domain landed on main with it ([RecordVersion]), so no build that
+// carries the domain ignores it and answers the wider listing it narrows.
 type ChangeWindow string
 
 // The windows a listing of changes is narrowed to: what a person opening the

@@ -66,9 +66,8 @@ const (
 	// decide held the change to its target's merge gate — or recorded a
 	// person's override of it — from one snapshot (ADR-0096).
 	//
-	// BASE FORMAT, under the condition merge.go's head states: no build
-	// that carries the code domain has run without it, and a change row is
-	// read by the build that wrote it.
+	// BASE FORMAT, as merge.go's head says, and a change row is read by the
+	// build that wrote it.
 	MergedViaDirect MergedVia = "direct"
 )
 
@@ -226,9 +225,8 @@ func (r ChangeRefusal) Valid() bool { return slices.Contains(ChangeRefusals(), r
 // wrote it, from the proposal's asker, and an open's and a reopen's head, from
 // the snapshot it decided in — so a record says what it did with no lookup.
 //
-// Every field is in the base format, under the condition [OpChangeOpen] states —
-// Mentions and Routing among them, under the condition concerns.go states for
-// a routing.
+// Every field is in the base format, as [OpChangeOpen] is: Mentions and
+// Routing among them, as concerns.go's head says of a routing.
 
 // ChangeOpen opens a change: its row, numbered by the apply from the
 // repository's next_change, its owner as its first author, and its first
@@ -388,12 +386,7 @@ type ChangeLanded struct {
 	// target before every move the rows still keep, or before the walk's
 	// bound.
 	//
-	// BASE FORMAT, under the condition [OpChangeLanded] states: once a build
-	// without them has run, they take {Name: "ChangeLanded.Push", Since: 2,
-	// Op: "change_landed", Path: []string{"mutation", "push_id"}} in
-	// versionedFields — the one row both ride, since a home sends both or
-	// neither — which an older build defers the record by rather than route
-	// a merge's news to the push that made it.
+	// BASE FORMAT, as [OpChangeLanded] is.
 	PushID       string            `json:"push_id,omitempty"`
 	PushPosition statelog.Position `json:"push_position,omitzero"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE

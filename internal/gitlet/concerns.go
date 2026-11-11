@@ -151,18 +151,11 @@ import (
 //
 // # The record format
 //
-// Under the code domain's stated condition (no build that carries the domain
-// has run without these fields — none of it is on main): every routing field
-// below rides the one field each payload gains, and takes no row of its own.
-// Once a build without them has run, each op's payload takes {Name:
-// "<Payload>.Routing", Since: 2, Op: "<op>", Path: []string{"mutation",
-// "routing"}} in versionedFields — a push's {Name: "PushEntry.Routing", Since:
-// 2, Op: "push", Path: []string{"mutation", "pushes", "routing"}} — while an
-// open's, an edit's, a review's and a comment's mentions ride the routing
-// alone (withRouting takes the asker's off the record) and take no row of
-// their own; with RecordVersion at 2, its line under "What each version
-// added" and a Carrying record in the statelogtest candidate: such a build
-// would apply the record and tell nobody, where it must retain it.
+// Every routing field below rides the one field each payload carries, and all
+// are in the base format ([RecordVersion]): the domain landed on main with
+// them, so none takes a row. An open's, an edit's, a review's and a comment's
+// mentions ride the routing alone (withRouting takes the asker's off the
+// record).
 
 // Reason is why one handle hears about a change (code_notifications.reason) —
 // a closed set, in precedence order ([Reasons]).
@@ -202,12 +195,9 @@ const (
 // branch stops everybody merging into it; a removal from the queue after a
 // conflict, which says why the change left it.
 //
-// BASE FORMAT, AS A STATED CONDITION: a notice row's reason is read back by
-// [Reason.Valid], and checks_failed, target_broken and dequeued are values an
-// older reader of code_notifications does not know. None of the code domain is
-// on main, so no build that carries it has run without them; once one has,
-// each record that produces one takes its routing's versionedFields row
-// (this file's head), which keeps such a build from applying the record.
+// BASE FORMAT ([RecordVersion]): the domain landed on main with every reason
+// here, checks_failed, target_broken and dequeued among them, so every build's
+// [Reason.Valid] and every reader of code_notifications knows them.
 func Reasons() []Reason {
 	return []Reason{ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed,
 		ReasonTargetBroken, ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge,
@@ -305,8 +295,7 @@ type ChangeRouting struct {
 	// ended not_closed, why the merged change's work item was not closed
 	// (M5-D27): its authors and its Enqueuer hear it under `merged`, the
 	// sentence beside — the excerpt of their notice, each change its own.
-	// Under the condition this file's head states, it rides
-	// CloseSettled.Routing's row.
+	// It is in the base format, as this file's head says.
 	NotClosed string `json:"not_closed,omitempty"`
 	// ChecksFailed is a check of the change's head that failed, or errored
 	// past the home's own requeue: its authors and its actor hear.

@@ -280,9 +280,8 @@ const (
 //
 // A REASON IS AN ESTATE REQUEST'S, NEVER A RECORD'S: an older asker reads
 // one it does not know as unready all the same, and passes no fill for it
-// ([UnreadyReason.PassesFill]). As a STATED CONDITION (M3-O84 §2 item 5),
-// index_building is answered by no build that predates it, and none of the
-// code domain is on main.
+// ([UnreadyReason.PassesFill]). The domain landed on main with index_building,
+// so no build that carries the domain predates it ([RecordVersion]).
 func UnreadyReasons() []UnreadyReason {
 	return []UnreadyReason{UnreadySyncing, UnreadyShare, UnreadyNoChart, UnreadyBehindConfig, UnreadyNotHeld,
 		UnreadyNodeFailed, UnreadyIndexBuilding}

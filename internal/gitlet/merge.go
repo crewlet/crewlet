@@ -69,26 +69,18 @@ import (
 // which no correct log carries but a record the ledger would have collapsed —
 // applies as nothing, logged (code_merge_not_applied).
 //
-// # Base format, as a stated condition
+// # Base format
 //
-// The op, its payload and every field here are in the base format: no build
-// that carries the code domain has run without them — none of the domain is on
-// main, so no image and no release holds it — and while that is so, every
-// build that meets a merge reads it. Once a build without them has run, the op
-// takes {Name: "MutationRecord.Op merge", Since: 2, Path: []string{"op"},
-// Equals: "merge"} in versionedFields, with RecordVersion at 2, its line under
-// "What each version added", a Carrying record in the statelogtest candidate
-// and the op excepted from the stamp test's base-format loop — and so do the
-// values a merge adds to closed sets older builds read: `merged_via direct` on a
-// change's row and `via merge` on a push's, which an older reader of either
-// refuses as a way it does not know (scanPush). Neither is a gate.
+// The op, its payload and every field here are in the base format
+// ([RecordVersion]): the domain landed on main with them, and with the values
+// a merge adds to closed sets (`merged_via direct` on a change's row and
+// `via merge` on a push's), so every build that meets a merge reads it. It is
+// no gate.
 
 // Merge moves a change's target onto the commit its merge built: the record of
 // op merge on the repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op merge", Since: 2,
-// Path: []string{"op"}, Equals: "merge"}.
+// BASE FORMAT, as this file's head says.
 type Merge struct {
 	RepoID string `json:"repo_id"`
 	// MergeID is the push the merge lands as — [WritePushID] of the
@@ -129,9 +121,7 @@ type Merge struct {
 	ReceivedAt time.Time `json:"received_at"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER: the change's authors, told it merged — all but who merged
-	// it. Under the condition concerns.go states, it takes {Name:
-	// "Merge.Routing", Since: 2, Op: "merge", Path: []string{"mutation",
-	// "routing"}} once a build without it has run.
+	// it.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 	// Principal is who merged it — the proposal's asker, STAMPED by the
 	// committer: the merger its gate judged, and whom its push row and the

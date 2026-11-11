@@ -102,7 +102,7 @@ func MarkGestureOf(g inbox.Gesture[Reason]) MarkGesture {
 // from the notice's own row — what the apply resolves the gesture with, since
 // it reads no notice ([OpMarks], this file's head).
 //
-// BASE FORMAT, AS A STATED CONDITION, as [KindPerson] states it.
+// BASE FORMAT, as [KindPerson] is.
 type PersonMarks struct {
 	Handle    string            `json:"handle"`
 	Gesture   MarkGesture       `json:"gesture"`

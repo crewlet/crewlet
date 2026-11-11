@@ -49,19 +49,11 @@ import (
 // would otherwise test a head nobody enqueued. No record waits for another:
 // the change's row and its entry are the same subject's rows.
 //
-// # Base format, as a stated condition
+// # Base format
 //
-// The ops, the payloads and every field here are in the base format: no build
-// that carries the code domain has run without them — none of the domain is on
-// main, so no image and no release holds it — and while that is so, every
-// build that meets an enqueue or a dequeue reads it. Once a build without them
-// has run, each op takes {Name: "MutationRecord.Op <op>", Since: 2, Path:
-// []string{"op"}, Equals: "<op>"} in versionedFields — enqueue, dequeue — with
-// RecordVersion at 2, its line under "What each version added", a Carrying
-// record in the statelogtest candidate and the ops excepted from the stamp
-// test's base-format loop: an older build would otherwise FAIL on such a
-// record at DecodeMutation's default arm rather than retain it. Neither is a
-// gate.
+// The ops, the payloads and every field here are in the base format
+// ([RecordVersion]): the domain landed on main with them, so every build that
+// meets an enqueue or a dequeue reads it. Neither is a gate.
 
 // MergeMethod is how a change merges into its target: a merge commit, one
 // squashed commit, or a fast-forward of the target to the change's head.
@@ -177,9 +169,7 @@ func QueueEntryID(opID string) string {
 // its asker was shown ([QueueProposal]): the record of op enqueue on the
 // repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op enqueue", Since: 2,
-// Path: []string{"op"}, Equals: "enqueue"}.
+// BASE FORMAT, as this file's head says.
 type Enqueue struct {
 	RepoID string `json:"repo_id"`
 	// EntryID is [QueueEntryID] of the proposal's operation id.
@@ -203,9 +193,7 @@ type Enqueue struct {
 // Dequeue takes a live entry out of its queue at a principal's ask: the record
 // of op dequeue on the repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op dequeue", Since: 2,
-// Path: []string{"op"}, Equals: "dequeue"}.
+// BASE FORMAT, as this file's head says.
 type Dequeue struct {
 	RepoID  string `json:"repo_id"`
 	EntryID string `json:"entry_id"`
@@ -214,9 +202,7 @@ type Dequeue struct {
 	Principal Principal `json:"principal"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER: the change's authors and its enqueuer, told it left the
-	// queue — all but who asked. Under the condition concerns.go states, it
-	// takes {Name: "Dequeue.Routing", Since: 2, Op: "dequeue", Path:
-	// []string{"mutation", "routing"}} once a build without it has run.
+	// queue — all but who asked.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -264,9 +250,8 @@ type QueueProposal struct {
 	//
 	// A proposal is no record — the record is what the committer stamps from
 	// it — so this field takes no versionedFields row; it crosses the
-	// estate's wire to whichever data node decides it under the code domain's
-	// stated condition — no build carrying the domain has run without it,
-	// none of the domain being on main — so every node asked it reads it.
+	// estate's wire to whichever data node decides it, and every node asked
+	// it reads it: the domain landed on main with it ([RecordVersion]).
 	Ceiling      *WriteCeiling `json:"ceiling,omitempty"`
 	Enqueue      *Enqueue      `json:"enqueue,omitempty"`
 	Dequeue      *Dequeue      `json:"dequeue,omitempty"`

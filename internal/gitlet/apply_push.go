@@ -80,17 +80,9 @@ import (
 // drops past the grace LAST, with whatever its budget still holds once the
 // tombstones have had theirs ([Applier.expireRefDrops]).
 //
-// THE PUSH RECORD'S FORMAT DOES NOT MOVE, under the code domain's stated
-// condition: no build carrying the code domain has run without these rows —
-// none of the domain is on main, so no image and no release holds it — and
-// no record carries anything new. Once a build without them has run, a push
-// record whose apply writes one is a record such a build would apply short
-// of its rows, and the push op takes two versionedFields rows, {Name:
-// "Command.Forced", Since: 2, Op: "push", Path: []string{"mutation",
-// "pushes", "commands", "forced"}} and {Name: "Command.New deleting", Since:
-// 2, Op: "push", Path: []string{"mutation", "pushes", "commands", "new"},
-// Equals: ZeroOID}, with RecordVersion at 2 — so the older build retains
-// such a record rather than apply it without its drops.
+// THE PUSH RECORD'S FORMAT DOES NOT MOVE ([RecordVersion]): the domain landed
+// on main with these rows, so every build that meets a push record writes
+// them, and no record carries anything new for them.
 //
 // # An applied push never applies twice
 //

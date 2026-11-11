@@ -26,9 +26,8 @@ import (
 // the expression and its plan by the one grammar the asker validated it
 // with, so a node and its asker cannot read one search two ways, and a
 // refusal names what the person or the seat wrote. An estate request, never
-// a record, so it moves no RecordVersion and takes no versionedFields row; as
-// a STATED CONDITION (M3-O84 §2 item 5), no build that carries the code
-// domain has run without it, since none of the domain is on main.
+// a record, so it moves no RecordVersion and takes no versionedFields row; the
+// domain landed on main with it.
 
 const (
 	// MaxSearchHits is the most lines one search answers: about 128 bytes a
@@ -90,9 +89,8 @@ type SearchQuery struct {
 	Limit int `json:"limit,omitempty"`
 	// After, where set, is the place in the search's order the answer
 	// continues from: only lines AFTER it are answered, so Limit counts the
-	// lines past it alone ([SearchAfter]). A field a node of an older build
-	// would read past, so — as the rest of this request — under the STATED
-	// CONDITION above.
+	// lines past it alone ([SearchAfter]). The domain landed on main with it,
+	// as with the rest of this request.
 	After *SearchAfter `json:"after,omitempty"`
 }
 
