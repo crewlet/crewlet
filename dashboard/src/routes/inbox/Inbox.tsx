@@ -79,9 +79,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Callout, InlineCode, announce, useMediaMatch, useScreenBelow } from "@crewlethq/ui";
+import { Callout, InlineCode, Link, announce, useMediaMatch, useScreenBelow } from "@crewlethq/ui";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
-import { useNavigator, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
@@ -116,6 +116,7 @@ import { usePagedInbox } from "./pages.ts";
 import {
   answeredRows,
   earlierOf,
+  holdingLead,
   inboxQuiet,
   inboxResources,
   inboxSelection,
@@ -290,6 +291,13 @@ export function Inbox() {
   });
   const attention = useAttention();
   const unwatched = useUnwatched();
+  // WHAT AGENT WORK WAITS ON THE READER, My work's own count, so the Inbox
+  // leads with it when an item they hold or a question put to them holds any.
+  const mine = useQuery("work_my_work", bound && runs.tracker ? { handle: owner } : undefined, {
+    enabled: bound && runs.tracker,
+    pollMs: INBOX_POLL_MS,
+  });
+  const holding = holdingLead(mine.data?.holding_agents);
 
   const rows = useMemo(
     () =>
@@ -588,6 +596,14 @@ export function Inbox() {
           updates kept under that login. <UnboundRemedy />
         </Callout>
       ) : null}
+      {holding && (
+        <Callout variant="info" className="inbox-callout">
+          {holding}{" "}
+          <Link href={href(["me", "holding-up"])} size="inherit">
+            See what they wait on
+          </Link>
+        </Callout>
+      )}
 
       <div className="inbox-panes">
         {showList && (

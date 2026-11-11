@@ -19,7 +19,9 @@ import {
   changeGate,
   classesLine,
   earlierOf,
+  closedReplyPlaceholder,
   followThrough,
+  holdingLead,
   measuredLine,
   findingsLine,
   inboxQuiet,
@@ -814,7 +816,38 @@ describe("what was answered", () => {
     const resolved = answered({
       answer: { by: "cto", at: "2026-09-30T11:00:00Z", body: "", resolved: true },
     });
-    expect(answerWords(resolved, "jane", index).kind).toBe("resolved");
+    expect(answerWords(resolved, "jane", index)).toMatchObject({
+      verb: "withdrew it",
+      said: "",
+      kind: "withdrawn",
+    });
+  });
+
+  // A WITHDRAWN QUESTION SAYS WHY AND WHAT COVERS IT, rather than only closing:
+  // its asker's reason is what the row and the pane say it with.
+  //
+  // Mutation: drop the reason from answerWords and the card is silent again.
+  test("a withdrawn question carries its asker's reason and replacement", () => {
+    const pr = "https://github.com/acme/web/pull/62";
+    const withdrawn = answered({
+      answer: {
+        by: "cto",
+        at: "2026-09-30T11:00:00Z",
+        body: "",
+        resolved: true,
+        withdrawn: {
+          reason: "Covered by the pull request, which runs the migration.",
+          reason_comment: "c-2",
+          replaced_by: { url: pr },
+        },
+      },
+    });
+    expect(answerWords(withdrawn, "jane", index)).toMatchObject({
+      verb: "withdrew it",
+      said: "Covered by the pull request, which runs the migration.",
+      kind: "withdrawn",
+      replaced: { url: pr },
+    });
   });
 
   // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body is the
@@ -997,5 +1030,54 @@ describe("what was answered", () => {
       ["ask:c-12", { row: ask, moved: true as const, order: 1 }],
     ]);
     expect(pairAnswered([], [], settled).answered).toEqual([run, ask]);
+  });
+});
+
+// THE INBOX LEADS WITH THE AGENT WORK WAITING ON THE READER (ADR-0124), and
+// says nothing when none waits.
+//
+// Mutation: lead on `items` alone and a person holding only their own work is
+// told agents wait on them.
+describe("the holding lead", () => {
+  test("names the held items and the agent items waiting, a floor where capped", () => {
+    expect(holdingLead(undefined)).toBeNull();
+    expect(holdingLead({ items: 3, agent_items: 0 })).toBeNull();
+    expect(holdingLead({ items: 1, agent_items: 1 })).toBe(
+      "You hold 1 item that 1 agent item waits on.",
+    );
+    expect(holdingLead({ items: 3, agent_items: 10 })).toBe(
+      "You hold 3 items that 10 agent items wait on.",
+    );
+    expect(holdingLead({ items: 3, agent_items: 10, capped: true })).toBe(
+      "You hold at least 3 items that at least 10 agent items wait on.",
+    );
+  });
+});
+
+// A CLOSED QUESTION'S COMPOSER INVITES WHAT THE READER CAN DO: add to their own
+// answer, or reply where the asker withdrew it or somebody else answered it,
+// since there is no answer of theirs to add to.
+//
+// Mutation: offer "Add to your answer" on every closed question and a withdrawn
+// one reads as though the person had answered it.
+describe("the closed question's composer", () => {
+  const words = (kind: "choice" | "reply" | "withdrawn", who: string) => ({
+    who,
+    verb: "",
+    said: "",
+    note: "",
+    kind,
+    recommended: false,
+  });
+  test("adds to the reader's own answer, and replies otherwise", () => {
+    expect(closedReplyPlaceholder(words("choice", "You"), "CTO")).toBe(
+      "Add to your answer for CTO. @mention to bring someone in.",
+    );
+    expect(closedReplyPlaceholder(words("withdrawn", "CTO"), "CTO")).toBe(
+      "Reply to CTO. @mention to bring someone in.",
+    );
+    expect(closedReplyPlaceholder(words("reply", "Maya Ops"), "CTO")).toBe(
+      "Reply to CTO. @mention to bring someone in.",
+    );
   });
 });

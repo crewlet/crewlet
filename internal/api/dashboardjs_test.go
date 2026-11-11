@@ -2190,8 +2190,11 @@ const (
 	// merged on top of it, took it to 5712.5 KiB (5,849,583 bytes, +428, all
 	// script): still 5713 KiB. An agent's permissions and scope read as their
 	// values beside a pencil, the scope changed in a dialog of its own, took it
-	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB.
-	treeBudget = 5<<20 + 596<<10
+	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB. A withdrawn
+	// question read with its asker's reason and what covers it, and the Inbox
+	// leading with the agent work a person holds up, took it to 5717.2 KiB
+	// (5,854,460 bytes, +1,647, all script): 5718 KiB.
+	treeBudget = 5<<20 + 598<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
