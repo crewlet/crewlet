@@ -110,8 +110,8 @@ func verdictLanded(res statelog.Result, err error, request string) (first bool, 
 	if errors.Is(err, accessdomain.ErrRecorded) {
 		return false, nil
 	}
-	if err := accessLanded(res, err, "the verdict on "+request); err != nil {
-		return false, err
+	if landed := accessLanded(res, err, "the verdict on "+request); landed != nil {
+		return false, landed
 	}
 	return true, nil
 }

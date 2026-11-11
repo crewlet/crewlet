@@ -80,11 +80,11 @@ func TestOneDecisionInNIsSpotChecked(t *testing.T) {
 	picked := 0
 	for i := range 1000 {
 		request := fmt.Sprintf("0190f3a8-0000-7000-8000-%012d", i)
-		if delegated.Sampled(request, delegated.DefaultSampleOneIn) {
+		first := delegated.Sampled(request, delegated.DefaultSampleOneIn)
+		if first {
 			picked++
 		}
-		if delegated.Sampled(request, delegated.DefaultSampleOneIn) !=
-			delegated.Sampled(request, delegated.DefaultSampleOneIn) {
+		if again := delegated.Sampled(request, delegated.DefaultSampleOneIn); again != first {
 			t.Fatalf("request %s is sampled one way and then the other", request)
 		}
 		if !delegated.Sampled(request, 1) {

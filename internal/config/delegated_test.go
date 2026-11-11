@@ -53,7 +53,7 @@ func TestADelegateIsAnAgentThatCannotRequestWhatItDecides(t *testing.T) {
 			"escalate_to: [ops-lead], sample_one_in: 5000}\n", "delegated_decisions.rules[0].sample_one_in", "out_of_range"},
 	} {
 		_, err := config.ParseCompany([]byte(delegatedDoc(t, c.rules)))
-		if p, ok := problemAt(err, c.path); !ok || string(p.Kind) != c.kind {
+		if p, ok := problemAt(err, c.path); !ok || p.Kind != c.kind {
 			t.Errorf("%s: %v, want %s at %s", c.name, err, c.kind, c.path)
 		}
 	}
@@ -91,7 +91,7 @@ func TestAnEscalationNamesAPerson(t *testing.T) {
 			"delegated_decisions.rules[0].escalate_to[0]", "unknown_value"},
 	} {
 		_, err := config.ParseCompany([]byte(delegatedDoc(t, c.rules)))
-		if p, ok := problemAt(err, c.path); !ok || string(p.Kind) != c.kind {
+		if p, ok := problemAt(err, c.path); !ok || p.Kind != c.kind {
 			t.Errorf("%s: %v, want %s at %s", c.name, err, c.kind, c.path)
 		}
 	}

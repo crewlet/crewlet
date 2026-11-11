@@ -87,9 +87,6 @@ func (d delegatedDesk) SSHPatterns() []string {
 }
 
 func (d delegatedDesk) Held(ctx context.Context, id string) (sandbox.PendingRun, bool, error) {
-	if _, err := uuid.Parse(id); err != nil {
-		return sandbox.PendingRun{}, false, nil
-	}
 	return d.answers().Held(ctx, id)
 }
 

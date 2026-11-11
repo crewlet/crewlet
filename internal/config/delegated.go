@@ -232,12 +232,12 @@ func (c *Company) checkDelegates(p *problems, path Path, o *org.Organization, r 
 
 // requests is how handle can request kind, "" where it cannot.
 func (c *Company) requests(handle string, kind delegated.Kind) string {
-	switch kind {
-	case delegated.KindSSHOperate:
-		for role := range c.EachRole() {
-			if role.IdentityKey() == handle && role.Integrations.SSH != nil {
-				return "holds SSH access (roles[].integrations.ssh)"
-			}
+	if kind != delegated.KindSSHOperate {
+		return ""
+	}
+	for role := range c.EachRole() {
+		if role.IdentityKey() == handle && role.Integrations.SSH != nil {
+			return "holds SSH access (roles[].integrations.ssh)"
 		}
 	}
 	return ""
