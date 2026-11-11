@@ -306,6 +306,28 @@ expect "git.sh names both digests when the tarball is not the pin's" 1 "" "pins 
 # Mutation: drop the stall bound from the recipe's download -> red.
 bounded "every download the recipe makes ends when it stalls"
 
+# A name that is a directory rather than a link, holding no intact build — as plant leaves one, and as nothing but a
+# person's hand would — is built over: the build made in its place is published, and the name made a link to it. It
+# is never linked into, which `ln -sn` does to a directory, answering 0 and leaving the name on the build without
+# .complete. Mutation: drop the publish loop's case of a directory at the name -> the name is still that directory
+# (red).
+s="$(scripts indirectory)"
+sha="$(standin "$TMPROOT/indirectory/downloads" 2.56.0)"
+pin "$s" 2.56.0 "$sha" 2.55.0 "$zero" 2.40.4 "$zero"
+build="$(plant "$TMPROOT/indirectory/cache" 2.56.0)"
+run env CREWLET_GIT_CACHE="$TMPROOT/indirectory/cache" GIT_PIN_DOWNLOADS="file://$TMPROOT/indirectory/downloads" \
+	"$s/git.sh" node
+expect "git.sh builds over a directory at the name that holds no intact build" 0 "$build/bin"
+why=()
+[ -L "$build" ] || why+=("the name is still a directory, not a link to the build made in its place")
+[ -f "$build/.complete" ] || why+=("the name holds no .complete")
+if [ ${#why[@]} -eq 0 ]; then
+	ok "a directory at the name holding no intact build is replaced by a link to the build made in its place"
+else
+	bad "a directory at the name holding no intact build is replaced by a link to the build made in its place" \
+		"${why[@]}" "$(ls -la "$build/")"
+fi
+
 # --- a hash that gives no SHA-256 is a refusal, never a digest -------------------------------------------------
 
 # The tarball's: a hash that fails over it, having printed nothing, leaves a download the recipe cannot check (1),
