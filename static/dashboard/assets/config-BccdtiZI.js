@@ -1,1 +1,0 @@
-var e=[{kind:`roles`,label:`Seats`},{kind:`units`,label:`Units`},{kind:`llm-providers`,label:`LLM providers`},{kind:`mcp-servers`,label:`MCP servers`}],t=[{period:`day`,label:`Daily`,none:`No daily ceiling`},{period:`week`,label:`Weekly`,none:`No weekly ceiling`},{period:`month`,label:`Monthly`,none:`No monthly ceiling`}],n=1024,r=2048,i=1024;export{r as a,i,e as n,n as r,t};

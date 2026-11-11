@@ -68,6 +68,15 @@ export const MAX_LOGIN = 64;
 export const SEAT_HANDLE = "^[a-z0-9][a-z0-9-]*$";
 
 /**
+ * The runs of a name a handle's slug replaces with one hyphen, once the name
+ * is trimmed and lowercased (`org.NonSlugPattern`, which `org.Slugify`
+ * applies): the org builder offers a new seat the handle its name slugs to,
+ * which reads as the one the engine would derive only while the two agree.
+ * Held by `internal/org.TestTheOrgBuilderSlugsANameAsTheEngineDoes`.
+ */
+export const NON_SLUG_PATTERN = "[^a-z0-9]+";
+
+/**
  * The prefixes that name a CREDENTIAL in the operator column (`pat:` a
  * machine token, `session:` a browser session), which no machine's login may
  * begin with.

@@ -110,3 +110,20 @@ export const VISION_MAX_CHARS = 2048;
 export const POLICY_MAX_CHARS = 1024;
 /** The most policies a company keeps. */
 export const POLICIES_MAX = 25;
+
+/**
+ * What a unit's KEY may look like (`config.UnitIDPattern`): a lowercase
+ * letter, then lowercase letters, digits, `-` and `_`, at most [MAX_UNIT_ID]
+ * characters. A seat's `lead:`, a `manages:` entry and a root seat's `unit:`
+ * name a unit by it, so the org builder mints a new unit's key in it and
+ * refuses one typed outside it before the add is recorded.
+ *
+ * A STRING rather than a regular expression, because a contract module is
+ * data; `routes/org/builder/model/identity.ts` compiles it. Held equal to the
+ * engine's, as [MAX_UNIT_ID] is, by
+ * `internal/config.TestTheOrgBuilderKeysAUnitByTheEnginesGrammar`.
+ */
+export const UNIT_ID_PATTERN = "^[a-z][a-z0-9_-]{0,63}$";
+
+/** The longest a unit's key may be (`config.MaxUnitID`): where a long name's slug is cut. */
+export const MAX_UNIT_ID = 64;

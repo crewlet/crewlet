@@ -306,6 +306,8 @@ var contract = []Entry{
 	{"VISION_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
 	{"POLICY_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
 	{"POLICIES_MAX", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"UNIT_ID_PATTERN", ReadScalar, "internal/config.TestTheOrgBuilderKeysAUnitByTheEnginesGrammar"},
+	{"MAX_UNIT_ID", ReadScalar, "internal/config.TestTheOrgBuilderKeysAUnitByTheEnginesGrammar"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,
@@ -418,6 +420,7 @@ var contract = []Entry{
 	{"MACHINE_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"SEAT_HANDLE", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksASeatHandleByTheEnginesGrammar"},
+	{"NON_SLUG_PATTERN", ReadScalar, "internal/org.TestTheOrgBuilderSlugsANameAsTheEngineDoes"},
 	{"CREDENTIAL_CLASSES", ReadLiteral,
 		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"ASSIST_CREDENTIAL_PREFIX", ReadScalar,
