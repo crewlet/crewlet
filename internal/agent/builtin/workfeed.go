@@ -177,6 +177,9 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if len(rec.Fields) > 0 || rec.Ask != nil {
 			namesBy(read)
 		}
+		if rec.Ask != nil {
+			fenceWithdrawn(read, fieldPath{}.key("records").index(i).key("ask"), rec.Ask)
+		}
 	}
 	return read.answer(ctx, worklet.TaskActivityTool, answer,
 		"Ask for fewer with `limit`, or narrow with `kinds`, `actor` or `since`.")
@@ -270,4 +273,14 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return read.answer(ctx, worklet.MyWorkTool, out,
 		"Read the blocks one at a time: "+ListWorkItemsTool+" for the tasks, "+
 			worklet.WorkInboxTool+" for what is waiting on you.")
+}
+
+// fenceWithdrawn fences a withdrawn question's reason at ask's path, under its
+// asker, who alone withdraws it and whose reply the reason is (ADR-0124).
+func fenceWithdrawn(read *foreignRead, at fieldPath, ask *worklet.AskView) {
+	if ask == nil || ask.Withdrawn == nil {
+		return
+	}
+	read.fence(at.key("withdrawn").key("reason"), provenance.SourceWorkComment,
+		[]provenance.Author{read.writer(ask.AnsweredBy, "")}, false, ask.Withdrawn.Reason)
 }
