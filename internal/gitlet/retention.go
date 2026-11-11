@@ -334,26 +334,26 @@ type RetentionReport struct {
 func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error) {
 	switch {
 	case r.Store == nil:
-		return report, errors.New("code: a retention pass needs the lifecycle store that " +
+		return report, errors.New("gitlet: a retention pass needs the lifecycle store that " +
 			"takes its sweeps' and its purges' steps")
 	case r.Reader == nil:
-		return report, errors.New("code: a retention pass needs the reader that lists the " +
+		return report, errors.New("gitlet: a retention pass needs the reader that lists the " +
 			"repositories due")
 	case r.Retention == nil:
-		return report, errors.New("code: a retention pass needs the current epoch's " +
+		return report, errors.New("gitlet: a retention pass needs the current epoch's " +
 			"code.deleted_retention_days")
 	case r.Policy == nil:
-		return report, errors.New("code: a retention pass needs the current epoch's code.scratch, " +
+		return report, errors.New("gitlet: a retention pass needs the current epoch's code.scratch, " +
 			"which its scratch expiry is held to")
 	case r.Holds == nil:
-		return report, errors.New("code: a retention pass needs the live turns' holds — its scratch " +
+		return report, errors.New("gitlet: a retention pass needs the live turns' holds — its scratch " +
 			"expiry never deletes a repository a live turn has named, and one that could not ask " +
 			"would delete it under a parked run")
 	case r.Propose == nil:
-		return report, errors.New("code: a retention pass needs the committer seam its ref expiry " +
+		return report, errors.New("gitlet: a retention pass needs the committer seam its ref expiry " +
 			"proposes its deletions to")
 	case strings.TrimSpace(r.Node) == "":
-		return report, errors.New("code: a retention pass needs this node's id, which its ref expiry's " +
+		return report, errors.New("gitlet: a retention pass needs this node's id, which its ref expiry's " +
 			"pushes name")
 	}
 	retention := r.Retention()
@@ -367,7 +367,7 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	}
 	log := r.Logger
 	if log == nil {
-		log = logging.Get("code")
+		log = logging.Get("gitlet")
 	}
 	pace := r.pacer()
 	defer func() { report.Unhanded = r.heldNames() }()
@@ -409,7 +409,7 @@ func (r *Retention) purges(ctx context.Context, now time.Time, retention time.Du
 	for {
 		due, err := r.Reader.due(ctx, dueQuery{cutoff: now.Add(-retention), after: after, limit: page})
 		if err != nil {
-			return false, fmt.Errorf("code: list the repositories due a purge past %v: %w",
+			return false, fmt.Errorf("gitlet: list the repositories due a purge past %v: %w",
 				retention, err)
 		}
 		for _, repo := range due {
@@ -443,7 +443,7 @@ func (r *Retention) release(ctx context.Context, now time.Time, pace *pacer,
 	for {
 		due, err := r.Reader.redirectsDue(ctx, q)
 		if err != nil {
-			return false, fmt.Errorf("code: list the old names whose redirect has ended: %w", err)
+			return false, fmt.Errorf("gitlet: list the old names whose redirect has ended: %w", err)
 		}
 		for _, name := range due {
 			switch turn, err := pace.wait(ctx); {
@@ -498,7 +498,7 @@ func (r *Retention) expireScratch(ctx context.Context, now time.Time, pace *pace
 	for {
 		page, err := r.Reader.idleScratch(ctx, q)
 		if err != nil {
-			return false, fmt.Errorf("code: list the scratch repositories idle since %s: %w",
+			return false, fmt.Errorf("gitlet: list the scratch repositories idle since %s: %w",
 				q.cutoff.UTC().Format(time.RFC3339), err)
 		}
 		if len(page.repos) == 0 {

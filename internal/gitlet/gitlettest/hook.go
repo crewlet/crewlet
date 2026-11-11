@@ -17,7 +17,7 @@ func HookCommand(t testing.TB) []string {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
-		t.Fatalf("codetest: this test binary's path: %v", err)
+		t.Fatalf("gitlettest: this test binary's path: %v", err)
 	}
 	return append([]string{"/usr/bin/env", procgrouptest.GORACE + "=" + procgrouptest.StandInRaceOptions()},
 		host.HookCommand(exe)...)

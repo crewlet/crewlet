@@ -473,7 +473,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// naming each seat by the agent id its day is counted
 				// under, off the live epoch.
 				Events: e.codeEvents(), AgentIDs: e.codeAgentID,
-				Metrics: e.metrics, Logger: logging.Get("code"),
+				Metrics: e.metrics, Logger: logging.Get("gitlet"),
 			}); err != nil {
 				return fmt.Errorf("engine: code committer: %w", err)
 			}
@@ -489,7 +489,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
 				Events: e.codeEvents(), AgentIDs: e.codeAgentID, People: turnRequesters{engine: e},
-				Metrics: e.metrics, Logger: logging.Get("code"),
+				Metrics: e.metrics, Logger: logging.Get("gitlet"),
 			}); err != nil {
 				return fmt.Errorf("engine: code change writer: %w", err)
 			}
@@ -500,7 +500,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			if n.checksWriter, err = gitlet.NewChecksWriter(gitlet.ChecksWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
-				Events: e.codeEvents(), AgentIDs: e.codeAgentID, Metrics: e.metrics, Logger: logging.Get("code"),
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID, Metrics: e.metrics, Logger: logging.Get("gitlet"),
 			}); err != nil {
 				return fmt.Errorf("engine: code checks writer: %w", err)
 			}

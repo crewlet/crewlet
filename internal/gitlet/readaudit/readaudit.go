@@ -53,7 +53,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-var log = logging.Get("code.readaudit")
+var log = logging.Get("gitlet.readaudit")
 
 // Read is one read the ledger is handed: as its producer described it (one
 // read, types.CodeFetched with Reads 1), when it was answered and the company

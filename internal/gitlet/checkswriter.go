@@ -238,22 +238,22 @@ var checkFlights = flightBounds{
 func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 	switch {
 	case o.Publisher == nil:
-		return nil, errors.New("code: a checks writer needs the code log's write authority — every write of " +
+		return nil, errors.New("gitlet: a checks writer needs the code log's write authority — every write of " +
 			"a repository's checks is a record on that log")
 	case o.DB.IsZero():
-		return nil, errors.New("code: a checks writer needs the replicated estate a write's answer is read " +
+		return nil, errors.New("gitlet: a checks writer needs the replicated estate a write's answer is read " +
 			"from — an applied write is only ever reported from its rows")
 	case !config.ValidNodeID(o.NodeID):
-		return nil, fmt.Errorf("code: a checks writer needs the deciding node's id, which every record names "+
+		return nil, fmt.Errorf("gitlet: a checks writer needs the deciding node's id, which every record names "+
 			"as its actor; %q is not one config admits", o.NodeID)
 	case o.Retention == nil:
-		return nil, errors.New("code: a checks writer needs the epoch's code.deleted_retention_days — a write " +
+		return nil, errors.New("gitlet: a checks writer needs the epoch's code.deleted_retention_days — a write " +
 			"about a deleted repository is told when its purge may begin, which a default would misstate")
 	case o.SeatRules == nil:
-		return nil, errors.New("code: a checks writer needs the epoch's chart (SeatRules) — a seat's rerun is " +
+		return nil, errors.New("gitlet: a checks writer needs the epoch's chart (SeatRules) — a seat's rerun is " +
 			"judged by its grant on the repository, never by a default")
 	case o.Events != nil && o.AgentIDs == nil:
-		return nil, errors.New("code: a checks writer that announces on an event stream needs AgentIDs — an " +
+		return nil, errors.New("gitlet: a checks writer that announces on an event stream needs AgentIDs — an " +
 			"ending that fails a change's head is counted on its owner's seat day by the owner's agent id, which " +
 			"only the chart says")
 	}
@@ -266,7 +266,7 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 		w.now = func() time.Time { return time.Now().UTC() }
 	}
 	if w.log == nil {
-		w.log = logging.Get("code")
+		w.log = logging.Get("gitlet")
 	}
 	return w, nil
 }
@@ -640,7 +640,7 @@ func (d *checksDecision) changeRead(ctx context.Context, tx *sql.Tx, change stri
 	path := ChangePath(change)
 	deferral, hit, err := statelog.DeferredIn(ctx, tx, Domain{}, statelog.ScopeSet{Paths: []string{path}})
 	if err != nil {
-		return fmt.Errorf("code: ask whether this node holds a record about change %s it cannot decode: %w",
+		return fmt.Errorf("gitlet: ask whether this node holds a record about change %s it cannot decode: %w",
 			change, err)
 	}
 	if hit {
@@ -755,7 +755,7 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, ch
 			}
 			return out, checksLanded{}, nil
 		}
-		return ChecksResult{}, checksLanded{}, fmt.Errorf("code: the publish of operation %s answered applied "+
+		return ChecksResult{}, checksLanded{}, fmt.Errorf("gitlet: the publish of operation %s answered applied "+
 			"with no record, and its decide neither refused nor found it unchanged", r.OpID)
 	case statelog.OutcomePending:
 		return ChecksResult{Outcome: statelog.OutcomePending, Position: res.Position}, checksLanded{}, nil
@@ -901,7 +901,7 @@ func headChangeIn(ctx context.Context, tx *sql.Tx, d *checksDecision, key CheckK
 		case errors.Is(err, sql.ErrNoRows):
 			return changeRow{}, false, nil
 		case err != nil:
-			return changeRow{}, false, fmt.Errorf("code: read the live change into %s at %s: %w", key.Target,
+			return changeRow{}, false, fmt.Errorf("gitlet: read the live change into %s at %s: %w", key.Target,
 				key.OID, err)
 		}
 		if err = d.changeRead(ctx, tx, change.id); err != nil {
@@ -946,7 +946,7 @@ func decideQueued(ctx context.Context, tx *sql.Tx, q CheckQueued, d checksDecisi
 	if held {
 		// A ROW WITH NO QUEUE no writer of this build makes: every attempt
 		// it records begins queued.
-		return checksDecision{}, fmt.Errorf("code: %s holds no queue — no writer records an attempt it did "+
+		return checksDecision{}, fmt.Errorf("gitlet: %s holds no queue — no writer records an attempt it did "+
 			"not queue", named(q.CheckKey))
 	}
 	latest, found, err := latestCheckIn(ctx, tx, q.CheckKey)
@@ -1133,7 +1133,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		}
 		return nil
 	}); err != nil {
-		readError = fmt.Errorf("code: the record of operation %s applied at %s and its attempt's row could not "+
+		readError = fmt.Errorf("gitlet: the record of operation %s applied at %s and its attempt's row could not "+
 			"be read: %w", r.OpID, at, err)
 		w.log.WarnContext(ctx, "code_checks_failed", "repo", key.RepoID, "op_id", r.OpID, "error", readError)
 		return ChecksResult{}, checksLanded{}, readError
@@ -1279,7 +1279,7 @@ func (w *ChecksWriter) dispatchApplied(ctx context.Context, r ChecksRequest, res
 		}
 		return nil
 	}); err != nil {
-		err = fmt.Errorf("code: the dispatch of operation %s applied at %s and its target's reading could not "+
+		err = fmt.Errorf("gitlet: the dispatch of operation %s applied at %s and its target's reading could not "+
 			"be read: %w", r.OpID, res.Position, err)
 		w.log.WarnContext(ctx, "code_checks_failed", "repo", d.RepoID, "op_id", r.OpID, "error", err)
 		return ChecksResult{}, checksLanded{}, err
@@ -1342,7 +1342,7 @@ func (w *ChecksWriter) refused(ctx context.Context, r ChecksRequest, err error) 
 			Detail: "the code log refused the write: " + strings.TrimPrefix(refusal.Error(), "statelog: ")}, nil
 	}
 	w.log.WarnContext(ctx, "code_checks_failed", "repo", r.RepoID(), "op_id", r.OpID, "error", err)
-	return ChecksResult{}, fmt.Errorf("code: checks operation %s: %w", r.OpID, err)
+	return ChecksResult{}, fmt.Errorf("gitlet: checks operation %s: %w", r.OpID, err)
 }
 
 // count counts one write's answer: a claim's outcome under

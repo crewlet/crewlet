@@ -41,7 +41,7 @@ func NewBoxTokens(t testing.TB) *host.BoxTokens {
 	t.Helper()
 	tokens, err := host.NewBoxTokens(boxKeyring, nil)
 	if err != nil {
-		t.Fatalf("codetest: box tokens over the fleet's keyring: %v", err)
+		t.Fatalf("gitlettest: box tokens over the fleet's keyring: %v", err)
 	}
 	return tokens
 }
@@ -53,7 +53,7 @@ func NewCheckTokens(t testing.TB) *host.CheckTokens {
 	t.Helper()
 	tokens, err := host.NewCheckTokens(boxKeyring, nil)
 	if err != nil {
-		t.Fatalf("codetest: check tokens over the fleet's keyring: %v", err)
+		t.Fatalf("gitlettest: check tokens over the fleet's keyring: %v", err)
 	}
 	return tokens
 }
@@ -353,7 +353,7 @@ func (r *FixtureRuns) Stopped(_ context.Context, seat string) (string, error) {
 	case r.failing != nil:
 		return "", r.failing
 	case r.pausesUnread:
-		return "", fmt.Errorf("codetest: this node has not yet read which seats are paused")
+		return "", fmt.Errorf("gitlettest: this node has not yet read which seats are paused")
 	}
 	return r.stops[seat], nil
 }
@@ -402,7 +402,7 @@ func SplitURL(t testing.TB, adverts, rpcs Node, base string) string {
 	proxy := func(n Node) *httputil.ReverseProxy {
 		target, err := url.Parse(n.URL())
 		if err != nil {
-			t.Fatalf("codetest: %s's URL: %v", n.ID(), err)
+			t.Fatalf("gitlettest: %s's URL: %v", n.ID(), err)
 		}
 		p := httputil.NewSingleHostReverseProxy(target)
 		p.Transport = n.Client().Transport

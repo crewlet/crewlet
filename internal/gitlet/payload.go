@@ -2086,7 +2086,7 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		// nothing of this domain's.
 		return nil, nil
 	}
-	return nil, fmt.Errorf("code: no payload shape for (%s, %s) — a record's "+
+	return nil, fmt.Errorf("gitlet: no payload shape for (%s, %s) — a record's "+
 		"kind and op together name its payload, and a pair this build does not "+
 		"know is a newer peer's record rather than an empty one", kind, op)
 }
@@ -2095,11 +2095,11 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 func decodePayload[T any](rec MutationRecord) (T, error) {
 	var out T
 	if len(rec.Mutation) == 0 {
-		return out, fmt.Errorf("code: the record on %s carries no payload, and "+
+		return out, fmt.Errorf("gitlet: the record on %s carries no payload, and "+
 			"(%s, %s) needs one", rec.Subject, rec.Subject.Kind, rec.Op)
 	}
 	if err := json.Unmarshal(rec.Mutation, &out); err != nil {
-		return out, fmt.Errorf("code: decode the %s payload on %s: %w", rec.Op, rec.Subject, err)
+		return out, fmt.Errorf("gitlet: decode the %s payload on %s: %w", rec.Op, rec.Subject, err)
 	}
 	return out, nil
 }

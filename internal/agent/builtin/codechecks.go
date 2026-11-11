@@ -888,7 +888,7 @@ func checkRefused(tool, what string, refusal gitlet.CheckRefusal, detail string)
 	case gitlet.CheckRefusalBusy, gitlet.CheckRefusalUnavailable, gitlet.CheckRefusalNotApplied:
 		class = tools.RefusalUnavailable
 	}
-	return refusedBy(class, fmt.Errorf("code: %s: %s", refusal, detail),
+	return refusedBy(class, fmt.Errorf("gitlet: %s: %s", refusal, detail),
 		fmt.Sprintf("%s %s: %s (%s).", tool, what, detail, refusal))
 }
 

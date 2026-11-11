@@ -86,7 +86,7 @@ func HashPieces(ctx context.Context, w io.Writer, r io.Reader, n int64, p Pieces
 		return copyChecked(ctx, w, io.LimitReader(r, n), buf)
 	}
 	if p.Size < 1 {
-		return 0, fmt.Errorf("code: hash in pieces: a hold over pieces of %d bytes would read nothing", p.Size)
+		return 0, fmt.Errorf("gitlet: hash in pieces: a hold over pieces of %d bytes would read nothing", p.Size)
 	}
 	var added int64
 	for added < n {
@@ -165,7 +165,7 @@ func (t Trailer) Sound() bool { return len(t.Held) > 0 && bytes.Equal(t.Held, t.
 func HashTrailer(ctx context.Context, r io.ReaderAt, size int64, sum hash.Hash, p Pieces) (Trailer, error) {
 	trailer := int64(sum.Size())
 	if size < trailer {
-		return Trailer{}, fmt.Errorf("code: hash a hashfile of %d bytes: that is shorter than its %d-byte trailer",
+		return Trailer{}, fmt.Errorf("gitlet: hash a hashfile of %d bytes: that is shorter than its %d-byte trailer",
 			size, trailer)
 	}
 	body := size - trailer
@@ -175,7 +175,7 @@ func HashTrailer(ctx context.Context, r io.ReaderAt, size int64, sum hash.Hash, 
 	case err != nil:
 		return t, err
 	case read < body:
-		return t, fmt.Errorf("code: the hashfile ends at byte %d, inside the %d before its trailer: %w", read, body,
+		return t, fmt.Errorf("gitlet: the hashfile ends at byte %d, inside the %d before its trailer: %w", read, body,
 			io.ErrUnexpectedEOF)
 	}
 	held := make([]byte, trailer)
@@ -185,13 +185,13 @@ func HashTrailer(ctx context.Context, r io.ReaderAt, size int64, sum hash.Hash, 
 	case n == len(held):
 		// io.ReaderAt may answer io.EOF beside the last of a file's bytes.
 	case errors.Is(err, io.EOF):
-		return t, fmt.Errorf("code: the hashfile ends at byte %d, inside its %d-byte trailer at %d: %w",
+		return t, fmt.Errorf("gitlet: the hashfile ends at byte %d, inside its %d-byte trailer at %d: %w",
 			body+int64(n), trailer, body, io.ErrUnexpectedEOF)
 	case err == nil:
-		return t, fmt.Errorf("code: read the hashfile's trailer at byte %d: %d bytes of %d and no error, which no "+
+		return t, fmt.Errorf("gitlet: read the hashfile's trailer at byte %d: %d bytes of %d and no error, which no "+
 			"reader may answer", body, n, trailer)
 	default:
-		return t, fmt.Errorf("code: read the hashfile's trailer at byte %d: %w", body, err)
+		return t, fmt.Errorf("gitlet: read the hashfile's trailer at byte %d: %w", body, err)
 	}
 	t.Held, t.Sum = held, sum.Sum(nil)
 	return t, nil

@@ -36,14 +36,14 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 	}
 	wide, err := factsColumns(r)
 	if err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: encode revision %d of %s's facts at %s: %w", r.N,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: encode revision %d of %s's facts at %s: %w", r.N,
 			r.ChangeID, at.position, err)
 	}
 	if _, err = tx.ExecContext(ctx, writeFactsSQL, r.ChangeID, r.N, r.TargetRef, r.TargetOID,
 		r.TargetPosition.Packed(), r.BaseOID, r.BaseTree, r.HeadTree, r.PatchID, r.PatchIDOmitted, len(r.Touched),
 		r.TouchesAll, r.Node, r.OwnersDigest, r.HumanPathsDigest, wide.bytes(), at.packed, wide.owners,
 		wide.skipped, wide.humanPaths, wide.classes, wide.touched); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: write revision %d of %s's facts at %s: %w", r.N,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write revision %d of %s's facts at %s: %w", r.N,
 			r.ChangeID, at.position, err)
 	}
 	counts := conversationCounts{textBytes: wide.bytes()}
@@ -53,7 +53,7 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 	rows := 1
 	for _, rv := range r.Asked {
 		if !rv.Kind.Valid() {
-			return 0, conversationCounts{}, fmt.Errorf("code: the facts at %s ask reviewer %q of kind %q, which no "+
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: the facts at %s ask reviewer %q of kind %q, which no "+
 				"writer stamps", at.position, rv.Handle, rv.Kind)
 		}
 	}
@@ -65,7 +65,7 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 			return []any{r.ChangeID, rv.Handle, string(rv.Kind), string(ReviewerPathOwner), string(ReviewerRequested),
 				at.packed}
 		}); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: ask change %s's path owners at %s: %w", r.ChangeID,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: ask change %s's path owners at %s: %w", r.ChangeID,
 			at.position, err)
 	}
 	if err = addParticipants(ctx, tx, at, r.ChangeID, r.Asked); err != nil {

@@ -319,7 +319,7 @@ func decideDispatched(ctx context.Context, tx *sql.Tx, d CheckDispatched, out ch
 		out.payload = d
 		return out, nil
 	case err != nil:
-		return checksDecision{}, fmt.Errorf("code: read target %s's checks file: %w", d.Target, err)
+		return checksDecision{}, fmt.Errorf("gitlet: read target %s's checks file: %w", d.Target, err)
 	case heldTip < tip || defs != d.DefsOID:
 		out.payload = d
 		return out, nil
@@ -331,7 +331,7 @@ func decideDispatched(ctx context.Context, tx *sql.Tx, d CheckDispatched, out ch
 			out.payload = d
 			return out, nil
 		case err != nil:
-			return checksDecision{}, fmt.Errorf("code: read head %s's dispatch: %w", h.OID, err)
+			return checksDecision{}, fmt.Errorf("gitlet: read head %s's dispatch: %w", h.OID, err)
 		case heldTip < tip || defs != d.DefsOID:
 			out.payload = d
 			return out, nil
@@ -449,7 +449,7 @@ type checkHead struct {
 func dueCheckHeadsIn(ctx context.Context, tx *sql.Tx, repoID, cursor string, limit int) ([]checkHead, error) {
 	rows, err := tx.QueryContext(ctx, dueCheckChangesSQL, repoID, cursor, limit, AutoRequeueAttempts)
 	if err != nil {
-		return nil, fmt.Errorf("code: list repository %s's heads due their checks: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: list repository %s's heads due their checks: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []checkHead
@@ -460,7 +460,7 @@ func dueCheckHeadsIn(ctx context.Context, tx *sql.Tx, repoID, cursor string, lim
 		)
 		if err := rows.Scan(&h.due.ID, &h.due.Number, &h.due.Revision, &h.due.Head, &h.due.SourceRef,
 			&h.due.TargetRef, &h.due.Tip, &at, &h.dispatch, &h.requeue); err != nil {
-			return nil, fmt.Errorf("code: list repository %s's heads due their checks: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: list repository %s's heads due their checks: %w", repoID, err)
 		}
 		h.due.TipPosition = unpacked(at)
 		out = append(out, h)
@@ -507,7 +507,7 @@ func checkWorkOf(ctx context.Context, tx *sql.Tx, repoID string, h checkHead, re
 func headAttemptsIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]string, []CheckKey, error) {
 	rows, err := tx.QueryContext(ctx, headAttemptsSQL, repoID, oid, target)
 	if err != nil {
-		return nil, nil, fmt.Errorf("code: read the checks %s holds for %s: %w", oid, target, err)
+		return nil, nil, fmt.Errorf("gitlet: read the checks %s holds for %s: %w", oid, target, err)
 	}
 	defer func() { _ = rows.Close() }()
 	type latest struct {
@@ -524,7 +524,7 @@ func headAttemptsIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string)
 			l    latest
 		)
 		if err := rows.Scan(&name, &l.attempt, &l.state, &l.reason); err != nil {
-			return nil, nil, fmt.Errorf("code: read the checks %s holds for %s: %w", oid, target, err)
+			return nil, nil, fmt.Errorf("gitlet: read the checks %s holds for %s: %w", oid, target, err)
 		}
 		if _, seen := last[name]; !seen {
 			names = append(names, name)
@@ -532,7 +532,7 @@ func headAttemptsIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string)
 		last[name] = l
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("code: read the checks %s holds for %s: %w", oid, target, err)
+		return nil, nil, fmt.Errorf("gitlet: read the checks %s holds for %s: %w", oid, target, err)
 	}
 	var (
 		held    []string
@@ -563,7 +563,7 @@ func touchedPathsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64, t
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
 	case err != nil:
-		return nil, fmt.Errorf("code: read the facts of revision %d of %s: %w", n, changeID, err)
+		return nil, fmt.Errorf("gitlet: read the facts of revision %d of %s: %w", n, changeID, err)
 	}
 	if touched != "" {
 		f.Touched = strings.Split(touched, "\x00")
@@ -579,14 +579,14 @@ func touchedPathsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64, t
 func staleChecksIn(ctx context.Context, tx *sql.Tx, repoID, changeID, head, target string) ([]CheckKey, error) {
 	rows, err := tx.QueryContext(ctx, staleChecksSQL, changeID, head, target, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the checks change %s moved on from: %w", changeID, err)
+		return nil, fmt.Errorf("gitlet: read the checks change %s moved on from: %w", changeID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []CheckKey
 	for rows.Next() {
 		k := CheckKey{RepoID: repoID}
 		if err := rows.Scan(&k.OID, &k.Target, &k.Name, &k.Attempt); err != nil {
-			return nil, fmt.Errorf("code: read the checks change %s moved on from: %w", changeID, err)
+			return nil, fmt.Errorf("gitlet: read the checks change %s moved on from: %w", changeID, err)
 		}
 		out = append(out, k)
 	}
@@ -599,7 +599,7 @@ func staleChecksIn(ctx context.Context, tx *sql.Tx, repoID, changeID, head, targ
 func requeuesIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]CheckQueued, error) {
 	rows, err := tx.QueryContext(ctx, requeuesSQL, repoID, oid, target, AutoRequeueAttempts)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the checks of %s for %s due a requeue: %w", oid, target, err)
+		return nil, fmt.Errorf("gitlet: read the checks of %s for %s due a requeue: %w", oid, target, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []CheckQueued
@@ -613,14 +613,14 @@ func requeuesIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]
 		q.RepoID, q.OID, q.Target = repoID, oid, target
 		if err := rows.Scan(&q.Name, &q.Attempt, &purpose, &q.ChangeID, &revision, &q.CandidateID, &q.EntryID,
 			&q.Base, &q.DefsOID, &q.Required, &def); err != nil {
-			return nil, fmt.Errorf("code: read the checks of %s for %s due a requeue: %w", oid, target, err)
+			return nil, fmt.Errorf("gitlet: read the checks of %s for %s due a requeue: %w", oid, target, err)
 		}
 		q.Attempt++
 		q.Purpose, q.Revision, q.Reason = CheckPurpose(purpose), int(revision), QueueRequeue
 		if def != "" {
 			q.Def = &CheckDef{}
 			if err := json.Unmarshal([]byte(def), q.Def); err != nil {
-				return nil, fmt.Errorf("code: read check %s of %s's definition: %w", q.Name, oid, err)
+				return nil, fmt.Errorf("gitlet: read check %s of %s's definition: %w", q.Name, oid, err)
 			}
 		}
 		out = append(out, q)

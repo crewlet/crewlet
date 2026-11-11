@@ -180,25 +180,25 @@ var changeFlights = flightBounds{
 func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 	switch {
 	case o.Publisher == nil:
-		return nil, errors.New("code: a change writer needs the code log's write authority — every write " +
+		return nil, errors.New("gitlet: a change writer needs the code log's write authority — every write " +
 			"of a change's conversation is a record on that log")
 	case o.DB.IsZero():
-		return nil, errors.New("code: a change writer needs the replicated estate a write's answer is read " +
+		return nil, errors.New("gitlet: a change writer needs the replicated estate a write's answer is read " +
 			"from — an applied write is only ever reported from its rows")
 	case !config.ValidNodeID(o.NodeID):
-		return nil, fmt.Errorf("code: a change writer needs the deciding node's id, which every record names "+
+		return nil, fmt.Errorf("gitlet: a change writer needs the deciding node's id, which every record names "+
 			"as its actor; %q is not one config admits", o.NodeID)
 	case o.Retention == nil:
-		return nil, errors.New("code: a change writer needs the epoch's code.deleted_retention_days — a write " +
+		return nil, errors.New("gitlet: a change writer needs the epoch's code.deleted_retention_days — a write " +
 			"to a deleted repository is told when its purge may begin, which a default would misstate")
 	case o.SeatRules == nil:
-		return nil, errors.New("code: a change writer needs the epoch's chart (SeatRules) — a seat's write and " +
+		return nil, errors.New("gitlet: a change writer needs the epoch's chart (SeatRules) — a seat's write and " +
 			"every reviewer an ask names are judged by the chart, never by a default")
 	case o.People == nil:
-		return nil, errors.New("code: a change writer needs the identity directory's people (People) — a person " +
+		return nil, errors.New("gitlet: a change writer needs the identity directory's people (People) — a person " +
 			"an ask for review names is asked only where they use Gitlet, never on a default")
 	case o.Events != nil && o.AgentIDs == nil:
-		return nil, errors.New("code: a change writer that announces on an event stream needs AgentIDs — a " +
+		return nil, errors.New("gitlet: a change writer that announces on an event stream needs AgentIDs — a " +
 			"review is counted on its reviewer's and its change owner's seat days by their agent ids, which only " +
 			"the chart says")
 	}
@@ -211,7 +211,7 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 		w.now = func() time.Time { return time.Now().UTC() }
 	}
 	if w.log == nil {
-		w.log = logging.Get("code")
+		w.log = logging.Get("gitlet")
 	}
 	return w, nil
 }
@@ -488,7 +488,7 @@ func (w *ChangeWriter) answer(ctx context.Context, cw ConversationWrite, last co
 			return ConversationResult{Outcome: statelog.OutcomeApplied, Position: unpacked(last.position),
 				Unchanged: true}, nil
 		}
-		return ConversationResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no "+
+		return ConversationResult{}, fmt.Errorf("gitlet: the publish of operation %s answered applied with no "+
 			"record, and its decide neither refused nor found it unchanged", cw.OpID)
 	case statelog.OutcomePending:
 		return cw.made(ConversationResult{Outcome: statelog.OutcomePending, Position: res.Position}), nil
@@ -528,7 +528,7 @@ func (w *ChangeWriter) applied(ctx context.Context, cw ConversationWrite, at sta
 		_, position, _, err = conversationIn(ctx, tx, cw.ChangeID())
 		return err
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of operation %s applied at %s and its change's conversation "+
+		failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and its change's conversation "+
 			"could not be read: %w", cw.OpID, at, err)
 		w.log.WarnContext(ctx, "code_conversation_failed", "repo", cw.RepoID(), "change", cw.ChangeID(),
 			"op_id", cw.OpID, "error", failed)
@@ -578,7 +578,7 @@ func (w *ChangeWriter) refused(ctx context.Context, cw ConversationWrite, err er
 	}
 	w.log.WarnContext(ctx, "code_conversation_failed", "repo", cw.RepoID(), "change", cw.ChangeID(),
 		"op_id", cw.OpID, "error", err)
-	return ConversationResult{}, fmt.Errorf("code: conversation operation %s: %w", cw.OpID, err)
+	return ConversationResult{}, fmt.Errorf("gitlet: conversation operation %s: %w", cw.OpID, err)
 }
 
 // count counts one write's answer under its op and what became of it

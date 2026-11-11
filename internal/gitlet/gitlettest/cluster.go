@@ -174,14 +174,14 @@ func RunFleet(t *testing.T, newCluster func(t *testing.T) Cluster) {
 			// ends, which its cleanups would run after.
 			defer func() {
 				if err := settled(t.Context(), c); err != nil {
-					t.Errorf("codetest: the fleet after %s: %v", fc.name, err)
+					t.Errorf("gitlettest: the fleet after %s: %v", fc.name, err)
 					broken = true
 				}
 			}()
 			fc.run(t, c)
 		})
 		if broken {
-			t.Fatalf("codetest: %s left the fleet unsettled, so the cases after it were not run on it",
+			t.Fatalf("gitlettest: %s left the fleet unsettled, so the cases after it were not run on it",
 				fc.name)
 		}
 	}
@@ -190,7 +190,7 @@ func RunFleet(t *testing.T, newCluster func(t *testing.T) Cluster) {
 // quorum refuses a cluster RunFleet cannot run on.
 func quorum(c Cluster) error {
 	if n := len(c.Members()); n < 3 {
-		return fmt.Errorf("codetest: RunFleet needs a cluster of at least three data nodes and was handed "+
+		return fmt.Errorf("gitlettest: RunFleet needs a cluster of at least three data nodes and was handed "+
 			"%d: two members have no quorum without each other, so the first case that kills one "+
 			"would leave a code log nobody can write", n)
 	}
@@ -301,7 +301,7 @@ func (rc *repoCase) url(node string) string {
 			return n.URL() + "/git/" + rc.name
 		}
 	}
-	rc.t.Fatalf("codetest: member %s serves no git right now (running: %v)", node, rc.c.DataNodes())
+	rc.t.Fatalf("gitlettest: member %s serves no git right now (running: %v)", node, rc.c.DataNodes())
 	return ""
 }
 
@@ -326,7 +326,7 @@ func (rc *repoCase) other(not ...string) string {
 			return n
 		}
 	}
-	rc.t.Fatalf("codetest: no running member but %v (running: %v)", not, rc.c.DataNodes())
+	rc.t.Fatalf("gitlettest: no running member but %v (running: %v)", not, rc.c.DataNodes())
 	return ""
 }
 

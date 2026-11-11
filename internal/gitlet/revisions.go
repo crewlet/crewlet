@@ -291,12 +291,12 @@ func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []Pu
 	if err := inChunks(sources, func(part []string) error {
 		return b.read(ctx, tx, liveBySourceSQL, repoID, part)
 	}); err != nil {
-		return nil, fmt.Errorf("code: read the live changes a push's branches head: %w", err)
+		return nil, fmt.Errorf("gitlet: read the live changes a push's branches head: %w", err)
 	}
 	if err := inChunks(pairs, func(part [][2]string) error {
 		return b.read(ctx, tx, liveByTargetSQL, repoID, part)
 	}); err != nil {
-		return nil, fmt.Errorf("code: read the live changes a push's targets are set to the heads of: %w", err)
+		return nil, fmt.Errorf("gitlet: read the live changes a push's targets are set to the heads of: %w", err)
 	}
 	// EACH TARGET'S CHANGES IN NUMBER ORDER, the order a record merges them
 	// in: what bounds the merges ([MaxPushMerges]) picks the same ones on
@@ -323,7 +323,7 @@ func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []Pu
 		}
 	}
 	if err := inChunks(held, func(part [][2]string) error { return b.readAuthors(ctx, tx, part) }); err != nil {
-		return nil, fmt.Errorf("code: read the authors a push's pushers are of the changes it moves: %w", err)
+		return nil, fmt.Errorf("gitlet: read the authors a push's pushers are of the changes it moves: %w", err)
 	}
 	// THE CHANGES THAT HOLD A LIVE QUEUE ENTRY, of those read: a move of
 	// one ends its entry, a row the record writes, counted.
@@ -333,7 +333,7 @@ func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []Pu
 	}
 	slices.Sort(ids)
 	if err := inChunks(ids, func(part []string) error { return b.readQueued(ctx, tx, part) }); err != nil {
-		return nil, fmt.Errorf("code: read which changes a push moves are queued: %w", err)
+		return nil, fmt.Errorf("gitlet: read which changes a push moves are queued: %w", err)
 	}
 	return b, nil
 }

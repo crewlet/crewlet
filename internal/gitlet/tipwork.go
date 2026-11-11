@@ -170,7 +170,7 @@ func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID, after string, 
 		}
 		encoded, err := json.Marshal(t)
 		if err != nil {
-			return false, fmt.Errorf("code: encode %s's tip work: %w", target, err)
+			return false, fmt.Errorf("gitlet: encode %s's tip work: %w", target, err)
 		}
 		out.DueTips = append(out.DueTips, t)
 		if pg.add(len(encoded) + 1) {
@@ -192,14 +192,14 @@ func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID, after string, 
 func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID, after string, limit int) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, dueTipTargetsSQL, repoID, after, limit)
 	if err != nil {
-		return nil, fmt.Errorf("code: list repository %s's targets owing tip work: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: list repository %s's targets owing tip work: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var target string
 		if err := rows.Scan(&target); err != nil {
-			return nil, fmt.Errorf("code: list repository %s's targets owing tip work: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: list repository %s's targets owing tip work: %w", repoID, err)
 		}
 		out = append(out, target)
 	}
@@ -222,7 +222,7 @@ func tipDueOf(ctx context.Context, tx *sql.Tx, repoID, target string, required *
 		from, ordinal = green.Position.Packed(), math.MaxInt32
 	}
 	if t.Required, err = required.of(target); err != nil {
-		return TipDue{}, fmt.Errorf("code: read %s's required checks: %w", target, err)
+		return TipDue{}, fmt.Errorf("gitlet: read %s's required checks: %w", target, err)
 	}
 	// ONE ROW PAST THE WINDOW says whether more lie above it, and whether
 	// the window's last landing ends its record.
@@ -256,7 +256,7 @@ func tipDueOf(ctx context.Context, tx *sql.Tx, repoID, target string, required *
 			&t.InFlight); {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return TipDue{}, fmt.Errorf("code: read whether %s's tip round is in flight: %w", target, err)
+			return TipDue{}, fmt.Errorf("gitlet: read whether %s's tip round is in flight: %w", target, err)
 		}
 	}
 	return t, tipChecksIn(ctx, tx, repoID, target, t)
@@ -266,7 +266,7 @@ func tipDueOf(ctx context.Context, tx *sql.Tx, repoID, target string, required *
 func tipLandingsIn(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]TipLanding, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's landings above its green: %w", args[1], err)
+		return nil, fmt.Errorf("gitlet: read %s's landings above its green: %w", args[1], err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []TipLanding
@@ -276,7 +276,7 @@ func tipLandingsIn(ctx context.Context, tx *sql.Tx, query string, args ...any) (
 			packed int64
 		)
 		if err := rows.Scan(&packed, &l.Ordinal, &l.Base, &l.OID, &l.Broken); err != nil {
-			return nil, fmt.Errorf("code: read %s's landings above its green: %w", args[1], err)
+			return nil, fmt.Errorf("gitlet: read %s's landings above its green: %w", args[1], err)
 		}
 		l.Position = unpacked(packed)
 		out = append(out, l)
@@ -285,7 +285,7 @@ func tipLandingsIn(ctx context.Context, tx *sql.Tx, query string, args ...any) (
 	case err != nil:
 		return nil, err
 	case query == newestLandingSQL && len(out) == 0:
-		return nil, errors.New("code: a target holding landings above its green answered no newest")
+		return nil, errors.New("gitlet: a target holding landings above its green answered no newest")
 	}
 	return out, nil
 }

@@ -386,7 +386,7 @@ func encodedLen(v any) int {
 	if err != nil {
 		// Every field of what is counted this way encodes; reaching here is a
 		// broken encoder, against which no page could be measured.
-		panic(fmt.Sprintf("code: encoding %T: %v", v, err))
+		panic(fmt.Sprintf("gitlet: encoding %T: %v", v, err))
 	}
 	return len(b)
 }

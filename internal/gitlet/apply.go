@@ -108,7 +108,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return "", false, fmt.Errorf("code: read the eviction gate for node %s: %w", rec.Writer, err)
+			return "", false, fmt.Errorf("gitlet: read the eviction gate for node %s: %w", rec.Writer, err)
 		default:
 			if evictedAt(rec.Position.Packed(), from, readmitted) {
 				return statelog.ReasonEvicted, true, nil
@@ -125,7 +125,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("code: read the deletion gate for repository %s: %w", repoID, err)
+		return "", false, fmt.Errorf("gitlet: read the deletion gate for repository %s: %w", repoID, err)
 	}
 	// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its own id —
 	// not by its op: "any purge" would let a second purge of a repository id
@@ -135,7 +135,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	}
 	if _, err := tx.ExecContext(ctx, countRejectSQL,
 		store.EncodeTime(rec.StoredAt), repoID); err != nil {
-		return "", false, fmt.Errorf("code: count a gate hit on the purged repository %s: %w", repoID, err)
+		return "", false, fmt.Errorf("gitlet: count a gate hit on the purged repository %s: %w", repoID, err)
 	}
 	return statelog.ReasonDeleted, true, nil
 }
@@ -153,7 +153,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 
 	record, err := Decode(rec.Payload)
 	if err != nil {
-		return 0, fmt.Errorf("code: decode the record at %s: %w", rec.Position, err)
+		return 0, fmt.Errorf("gitlet: decode the record at %s: %w", rec.Position, err)
 	}
 	at := applyContext{
 		record:       record,
@@ -202,7 +202,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD AT
 	// A VERSION IT CAN READ, which is a writer publishing a kind it never
 	// declared; failing is what makes the writer's mistake visible.
-	return 0, fmt.Errorf("code: %s is not a kind this build applies, and the "+
+	return 0, fmt.Errorf("gitlet: %s is not a kind this build applies, and the "+
 		"record at %s claims version %d — a kind is declared before it is published",
 		rec.Subject.Kind, rec.Position, record.V)
 }
@@ -245,15 +245,15 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext
 	}
 	e, ok := payload.(Eviction)
 	if !ok {
-		return 0, fmt.Errorf("code: the eviction at %s carries a %T", at.position, payload)
+		return 0, fmt.Errorf("gitlet: the eviction at %s carries a %T", at.position, payload)
 	}
 	if e.NodeID == "" {
-		return 0, fmt.Errorf("code: the eviction at %s names no node", at.position)
+		return 0, fmt.Errorf("gitlet: the eviction at %s names no node", at.position)
 	}
 	if e.Readmitted {
 		res, execErr := tx.ExecContext(ctx, readmitSQL, at.packed, at.packed, e.NodeID, at.packed)
 		if execErr != nil {
-			return 0, fmt.Errorf("code: readmit node %s at %s: %w", e.NodeID, at.position, execErr)
+			return 0, fmt.Errorf("gitlet: readmit node %s at %s: %w", e.NodeID, at.position, execErr)
 		}
 		n, _ := res.RowsAffected()
 		return int(n), nil
@@ -263,7 +263,7 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext
 	res, err := tx.ExecContext(ctx, evictSQL,
 		e.NodeID, at.at(), e.EvictedBy, at.packed, at.packed)
 	if err != nil {
-		return 0, fmt.Errorf("code: evict node %s at %s: %w", e.NodeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: evict node %s at %s: %w", e.NodeID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -294,13 +294,13 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	g, ok := payload.(Generation)
 	if !ok {
-		return 0, fmt.Errorf("code: the generation record at %s carries a %T", at.position, payload)
+		return 0, fmt.Errorf("gitlet: the generation record at %s carries a %T", at.position, payload)
 	}
 	res, err := tx.ExecContext(ctx, generationSQL,
 		g.Generation, at.at(), g.By, store.EncodeTime(g.StreamCreatedAt),
 		int64(g.PrevHighest), at.record.OpID)
 	if err != nil {
-		return 0, fmt.Errorf("code: record generation %d at %s: %w", g.Generation, at.position, err)
+		return 0, fmt.Errorf("gitlet: record generation %d at %s: %w", g.Generation, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -329,7 +329,7 @@ const generationSQL = `INSERT INTO code_log_generations
 // record rather than one per declared repository.
 func (a *Applier) applyActivation(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Subject.ID != activationID {
-		return 0, fmt.Errorf("code: the activation record at %s arbitrated %s, and "+
+		return 0, fmt.Errorf("gitlet: the activation record at %s arbitrated %s, and "+
 			"the fence is %s — a record on another company subject is not one this "+
 			"build writes", at.position, at.record.Subject, CompanySubject())
 	}
@@ -339,11 +339,11 @@ func (a *Applier) applyActivation(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	act, ok := payload.(Activated)
 	if !ok {
-		return 0, fmt.Errorf("code: the activation record at %s carries a %T", at.position, payload)
+		return 0, fmt.Errorf("gitlet: the activation record at %s carries a %T", at.position, payload)
 	}
 	res, err := tx.ExecContext(ctx, raiseFenceSQL, activationID, act.ConfigEpoch, at.packed)
 	if err != nil {
-		return 0, fmt.Errorf("code: raise the activation fence to %d at %s: %w",
+		return 0, fmt.Errorf("gitlet: raise the activation fence to %d at %s: %w",
 			act.ConfigEpoch, at.position, err)
 	}
 	n, _ := res.RowsAffected()
@@ -378,7 +378,7 @@ func fenced(ctx context.Context, tx *sql.Tx, managedBy ManagedBy, epoch int64) (
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("code: read the activation fence: %w", err)
+		return false, fmt.Errorf("gitlet: read the activation fence: %w", err)
 	}
 	return epoch < fence, nil
 }
@@ -392,16 +392,16 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	}
 	p, ok := payload.(CreateRepo)
 	if !ok {
-		return 0, fmt.Errorf("code: the create at %s carries a %T", at.position, payload)
+		return 0, fmt.Errorf("gitlet: the create at %s carries a %T", at.position, payload)
 	}
 	// THE NAME IS THE ADDRESS: a record that arbitrated one name and claims
 	// another would take a name nobody contended for.
 	if token := NameToken(p.Name); token != at.record.Subject.ID {
-		return 0, fmt.Errorf("code: the create at %s arbitrated name %s and its "+
+		return 0, fmt.Errorf("gitlet: the create at %s arbitrated name %s and its "+
 			"payload names %q, whose token is %s", at.position, at.record.Subject.ID, p.Name, token)
 	}
 	if p.RepoID == "" || !ValidName(p.Name) {
-		return 0, fmt.Errorf("code: the create at %s names repository %q as %q, "+
+		return 0, fmt.Errorf("gitlet: the create at %s names repository %q as %q, "+
 			"which no writer forms", at.position, p.RepoID, p.Name)
 	}
 	// A PURGED ID IS NEVER REUSED, so a create of one is a redelivery of the
@@ -409,7 +409,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	// repository's marker, so the create checks the marker itself.
 	var purged int
 	if err = tx.QueryRowContext(ctx, purgedSQL, p.RepoID).Scan(&purged); err != nil {
-		return 0, fmt.Errorf("code: read the deletion marker of %s: %w", p.RepoID, err)
+		return 0, fmt.Errorf("gitlet: read the deletion marker of %s: %w", p.RepoID, err)
 	}
 	if purged > 0 {
 		return 0, nil
@@ -419,7 +419,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	// and refusing would stall every node.
 	var held int
 	if err = tx.QueryRowContext(ctx, guardNameSQL, at.record.Subject.ID).Scan(&held); err != nil {
-		return 0, fmt.Errorf("code: read the claim on %q: %w", p.Name, err)
+		return 0, fmt.Errorf("gitlet: read the claim on %q: %w", p.Name, err)
 	}
 	if held > 0 {
 		return 0, nil
@@ -429,7 +429,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO code_names (token, name, repo_id) VALUES (?, ?, ?)`,
 		at.record.Subject.ID, p.Name, p.RepoID); err != nil {
-		return 0, fmt.Errorf("code: claim %q at %s: %w", p.Name, at.position, err)
+		return 0, fmt.Errorf("gitlet: claim %q at %s: %w", p.Name, at.position, err)
 	}
 	s := p.Settings
 	// WHO MADE IT, as the record names its decider: a seat's handle or a
@@ -445,7 +445,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	// from its source — makes the repository importing ([CreateRepo.status]).
 	from, to, imports, err := remoteColumns(s, p.importSource())
 	if err != nil {
-		return 0, fmt.Errorf("code: the create at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the create at %s: %w", at.position, err)
 	}
 	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, `INSERT INTO code_repos
@@ -459,7 +459,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 		at.at(), createdBy, createdKind, at.at(), at.packed, from, to, imports, ownersDigest, humanPathsDigest,
 		rowProtected(s))
 	if err != nil {
-		return 0, fmt.Errorf("code: create repository %s at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: create repository %s at %s: %w", p.RepoID, at.position, err)
 	}
 	created, _ := res.RowsAffected()
 	// AND COUNTED IN WITH ITS KIND, only where this record made the row: the
@@ -467,7 +467,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	// purge that removes the row counts out again.
 	if created > 0 {
 		if _, err = tx.ExecContext(ctx, countKindSQL, string(s.Kind)); err != nil {
-			return 0, fmt.Errorf("code: count repository %s in at %s: %w", p.RepoID, at.position, err)
+			return 0, fmt.Errorf("gitlet: count repository %s in at %s: %w", p.RepoID, at.position, err)
 		}
 	}
 	// EVERY RULE A CREATE WRITES IS ITS OWN: there is no row before it to
@@ -475,11 +475,11 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	protections, err := insertProtections(ctx, tx, at.maxVariables, p.RepoID, s.Protections,
 		at.sourcesOf(len(s.Protections)))
 	if err != nil {
-		return 0, fmt.Errorf("code: write %s's protections at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write %s's protections at %s: %w", p.RepoID, at.position, err)
 	}
 	owners, err := insertPathOwners(ctx, tx, at.maxVariables, p.RepoID, s.PathOwners)
 	if err != nil {
-		return 0, fmt.Errorf("code: write %s's path owners at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write %s's path owners at %s: %w", p.RepoID, at.position, err)
 	}
 	return 1 + 2*int(created) + protections + owners, nil
 }
@@ -555,7 +555,7 @@ func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID
 	rules []Protection, sources []ruleSource) (int, error) {
 
 	if len(sources) != len(rules) {
-		return 0, fmt.Errorf("code: write %s's protections: %d rules and %d sources", repoID, len(rules),
+		return 0, fmt.Errorf("gitlet: write %s's protections: %d rules and %d sources", repoID, len(rules),
 			len(sources))
 	}
 
@@ -628,7 +628,7 @@ func rulesSourced(ctx context.Context, tx *sql.Tx, at applyContext, repoID strin
 
 	held, err := sourcedRulesIn(ctx, tx, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's protections at %s: %w", repoID, at.position, err)
+		return nil, fmt.Errorf("gitlet: read %s's protections at %s: %w", repoID, at.position, err)
 	}
 	out := make([]ruleSource, len(rules))
 	for i, r := range rules {
@@ -759,11 +759,11 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case QueueSweep:
 		payloadRepo = p.RepoID
 	default:
-		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository "+
+		return 0, fmt.Errorf("gitlet: %s is not an op this build applies to a repository "+
 			"(the record at %s)", at.record.Op, at.position)
 	}
 	if payloadRepo != id {
-		return 0, fmt.Errorf("code: the record at %s arbitrated repo.%s and its payload "+
+		return 0, fmt.Errorf("gitlet: the record at %s arbitrated repo.%s and its payload "+
 			"names %s — a record on one repository's subject may change only that "+
 			"repository", at.position, id, payloadRepo)
 	}
@@ -772,7 +772,7 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	}
 	row, err := repoVersion(ctx, tx, id)
 	if err != nil {
-		return 0, fmt.Errorf("code: the %s at %s: %w", at.record.Op, at.position, err)
+		return 0, fmt.Errorf("gitlet: the %s at %s: %w", at.record.Op, at.position, err)
 	}
 	if row.version >= at.packed {
 		return 0, nil
@@ -843,7 +843,7 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case QueueSweep:
 		return a.applyQueueSweep(ctx, tx, at, p)
 	}
-	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
+	return 0, fmt.Errorf("gitlet: the record at %s carries a %T", at.position, payload)
 }
 
 // noticed is a record about changes applied, n rows, with its notices written
@@ -918,7 +918,7 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	}
 	from, to, imports, err := remoteColumns(s, prior.startsImport(s))
 	if err != nil {
-		return 0, fmt.Errorf("code: the settings at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the settings at %s: %w", at.position, err)
 	}
 	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, settingsSQL,
@@ -926,13 +926,13 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, rowProtected(s),
 		string(s.status()), s.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: settle %s's settings at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	if imports != "" {
 		// The same row the statement above wrote, so no row of its own.
 		if _, err = tx.ExecContext(ctx, mirrorImportSQL, imports, p.RepoID); err != nil {
-			return 0, fmt.Errorf("code: start %s's import from its pull mirror's source at %s: %w", p.RepoID,
+			return 0, fmt.Errorf("gitlet: start %s's import from its pull mirror's source at %s: %w", p.RepoID,
 				at.position, err)
 		}
 	}
@@ -954,12 +954,12 @@ func replacePathOwners(ctx context.Context, tx *sql.Tx, at applyContext, repoID 
 
 	res, err := tx.ExecContext(ctx, clearPathOwnersSQL, repoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: clear %s's path owners at %s: %w", repoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: clear %s's path owners at %s: %w", repoID, at.position, err)
 	}
 	removed, _ := res.RowsAffected()
 	written, err := insertPathOwners(ctx, tx, at.maxVariables, repoID, owners)
 	if err != nil {
-		return 0, fmt.Errorf("code: write %s's path owners at %s: %w", repoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write %s's path owners at %s: %w", repoID, at.position, err)
 	}
 	return int(removed) + written, nil
 }
@@ -975,12 +975,12 @@ func replaceProtections(ctx context.Context, tx *sql.Tx, at applyContext, repoID
 	}
 	res, err := tx.ExecContext(ctx, clearProtectionsSQL, repoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: clear %s's protections at %s: %w", repoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: clear %s's protections at %s: %w", repoID, at.position, err)
 	}
 	removed, _ := res.RowsAffected()
 	written, err := insertProtections(ctx, tx, at.maxVariables, repoID, rules, sources)
 	if err != nil {
-		return 0, fmt.Errorf("code: write %s's protections at %s: %w", repoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write %s's protections at %s: %w", repoID, at.position, err)
 	}
 	return int(removed) + written, nil
 }
@@ -999,7 +999,7 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext, 
 	res, err := tx.ExecContext(ctx, deleteRepoSQL,
 		at.at(), p.ConfigEpoch, at.packed, p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: delete %s at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: delete %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -1013,7 +1013,7 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	row versionRow) (int, error) {
 
 	if p.Settings == nil {
-		return 0, fmt.Errorf("code: the restore at %s carries no settings — a restore "+
+		return 0, fmt.Errorf("gitlet: the restore at %s carries no settings — a restore "+
 			"states what the repository comes back with", at.position)
 	}
 	s := *p.Settings
@@ -1025,7 +1025,7 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	from, to, _, err := remoteColumns(s, nil)
 	if err != nil {
-		return 0, fmt.Errorf("code: the restore at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the restore at %s: %w", at.position, err)
 	}
 	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, restoreRepoSQL,
@@ -1033,7 +1033,7 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, rowProtected(s),
 		string(s.status()), p.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: restore %s at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: restore %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -1072,7 +1072,7 @@ func jsonList(keys []string) (string, error) {
 	}
 	b, err := json.Marshal(keys)
 	if err != nil {
-		return "", fmt.Errorf("code: encode a key list: %w", err)
+		return "", fmt.Errorf("gitlet: encode a key list: %w", err)
 	}
 	return string(b), nil
 }

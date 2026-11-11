@@ -474,7 +474,7 @@ func (c *cluster) proposer(b *testing.B, via, repo string) func(context.Context,
 			return m.router.Load().Code().Propose
 		}
 	}
-	b.Fatal("codecluster: no member but the committer")
+	b.Fatal("gitletcluster: no member but the committer")
 	return nil
 }
 

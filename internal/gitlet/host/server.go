@@ -451,7 +451,7 @@ func New(o Options) (*Server, error) {
 		buildBudget: gitlet.EngineWriteKind.BuildDeadline, chainMerges: gitlet.MergeBuildDeadline,
 		chainPack: gitlet.ChainPackDeadline, chainObjects: gitlet.MaxChainObjectBytes}
 	if s.log == nil {
-		s.log = logging.Get("code.host")
+		s.log = logging.Get("gitlet.host")
 	}
 	if s.now == nil {
 		s.now = time.Now

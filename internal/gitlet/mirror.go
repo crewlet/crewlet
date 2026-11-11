@@ -361,13 +361,13 @@ func remotesIn(ctx context.Context, tx *sql.Tx, id string) (repoRemotes, error) 
 	case errors.Is(err, sql.ErrNoRows):
 		return repoRemotes{}, nil
 	case err != nil:
-		return repoRemotes{}, fmt.Errorf("code: read repository %s's mirrors: %w", id, err)
+		return repoRemotes{}, fmt.Errorf("gitlet: read repository %s's mirrors: %w", id, err)
 	}
 	if out.from, err = remoteOf[MirrorSource](from); err != nil {
-		return repoRemotes{}, fmt.Errorf("code: read repository %s's mirror_from: %w", id, err)
+		return repoRemotes{}, fmt.Errorf("gitlet: read repository %s's mirror_from: %w", id, err)
 	}
 	if out.to, err = remoteOf[MirrorTarget](to); err != nil {
-		return repoRemotes{}, fmt.Errorf("code: read repository %s's mirror_to: %w", id, err)
+		return repoRemotes{}, fmt.Errorf("gitlet: read repository %s's mirror_to: %w", id, err)
 	}
 	out.importPending = pending
 	return out, nil
@@ -386,19 +386,19 @@ func remoteColumns(s RepoSettings, imports *ImportSource) (from, to, imported st
 	var b []byte
 	if s.MirrorFrom != nil {
 		if b, err = json.Marshal(s.MirrorFrom); err != nil {
-			return "", "", "", fmt.Errorf("code: encode mirror_from: %w", err)
+			return "", "", "", fmt.Errorf("gitlet: encode mirror_from: %w", err)
 		}
 		from = string(b)
 	}
 	if s.MirrorTo != nil {
 		if b, err = json.Marshal(s.MirrorTo); err != nil {
-			return "", "", "", fmt.Errorf("code: encode mirror_to: %w", err)
+			return "", "", "", fmt.Errorf("gitlet: encode mirror_to: %w", err)
 		}
 		to = string(b)
 	}
 	if imports != nil {
 		if b, err = json.Marshal(imports); err != nil {
-			return "", "", "", fmt.Errorf("code: encode import_source: %w", err)
+			return "", "", "", fmt.Errorf("gitlet: encode import_source: %w", err)
 		}
 		imported = string(b)
 	}

@@ -80,7 +80,7 @@ func expungeStateIn(ctx context.Context, tx *sql.Tx, repoID string) (expungeStat
 	var s expungeState
 	err := tx.QueryRowContext(ctx, expungeStateSQL, repoID).Scan(s.dests()...)
 	if err != nil {
-		return expungeState{}, fmt.Errorf("code: read %s's expunge: %w", repoID, err)
+		return expungeState{}, fmt.Errorf("gitlet: read %s's expunge: %w", repoID, err)
 	}
 	return s, nil
 }
@@ -116,7 +116,7 @@ func (s expungeState) view() ExpungeState {
 func requestServed(ctx context.Context, tx *sql.Tx, repoID string, requested int64) (bool, error) {
 	var pending bool
 	if err := tx.QueryRowContext(ctx, requestPendingSQL, repoID, requested).Scan(&pending); err != nil {
-		return false, fmt.Errorf("code: read whether %s's purge request is served: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: read whether %s's purge request is served: %w", repoID, err)
 	}
 	return !pending, nil
 }
@@ -152,7 +152,7 @@ func (a *Applier) applyExpungeRequest(ctx context.Context, tx *sql.Tx, at applyC
 		request, requested = "", 0
 	}
 	if _, err := tx.ExecContext(ctx, requestSQL, request, requested, at.packed, r.RepoID); err != nil {
-		return 0, fmt.Errorf("code: record %s's purge request at %s: %w", r.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: record %s's purge request at %s: %w", r.RepoID, at.position, err)
 	}
 	return 1, nil
 }
@@ -184,7 +184,7 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 	}
 	chain, err := layersOf(ctx, tx, b.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: the begin at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the begin at %s: %w", at.position, err)
 	}
 	keep := len(chain) - len(b.DropLayers)
 	if !topOf(chain, b.DropLayers) {
@@ -200,7 +200,7 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 			return b.Dropping[i-len(b.Add)], PackCruft, PackDropping
 		})
 	if err != nil {
-		return 0, fmt.Errorf("code: the begin at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the begin at %s: %w", at.position, err)
 	}
 	if b.Grace == 0 {
 		// A PURGE'S CYCLE JUDGED WHAT IT REWROTE AT ITS SCAN: its outputs
@@ -211,13 +211,13 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 	}
 	moved, err := plan.apply(ctx, tx, at, b.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: the begin at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the begin at %s: %w", at.position, err)
 	}
 	if len(b.DropLayers) == 0 {
 		if _, err = tx.ExecContext(ctx, beginCountersSQL, moved.goneLive.packs, moved.addedLive.packs,
 			moved.goneLive.bytes, moved.addedLive.bytes, moved.goneLive.objects, moved.addedLive.objects,
 			b.DropEpoch, b.ExpungeID, at.packed, b.RepoID); err != nil {
-			return 0, fmt.Errorf("code: count the begin at %s: %w", at.position, err)
+			return 0, fmt.Errorf("gitlet: count the begin at %s: %w", at.position, err)
 		}
 		return moved.rows + 1, nil
 	}
@@ -227,7 +227,7 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 	}
 	res, err := tx.ExecContext(ctx, deleteLayerPartsSQL, b.RepoID, ids)
 	if err != nil {
-		return 0, fmt.Errorf("code: remove the parts of the layers the begin at %s drops: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: remove the parts of the layers the begin at %s drops: %w", at.position, err)
 	}
 	parts, _ := res.RowsAffected()
 	baseSeq := 0
@@ -235,17 +235,17 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 		baseSeq = chain[keep-1].Seq
 	}
 	if res, err = tx.ExecContext(ctx, deleteLayersAboveSQL, b.RepoID, baseSeq); err != nil {
-		return 0, fmt.Errorf("code: remove the layers the begin at %s drops: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: remove the layers the begin at %s drops: %w", at.position, err)
 	}
 	layers, _ := res.RowsAffected()
 	packs, objects, err := publishedIn(ctx, tx, b.RepoID, chain[:keep])
 	if err != nil {
-		return 0, fmt.Errorf("code: recount the packs the begin at %s leaves published: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: recount the packs the begin at %s leaves published: %w", at.position, err)
 	}
 	if _, err := tx.ExecContext(ctx, beginDroppedLayersSQL, moved.goneLive.packs, moved.addedLive.packs,
 		moved.goneLive.bytes, moved.addedLive.bytes, moved.goneLive.objects, moved.addedLive.objects,
 		packs, objects, at.packed, b.DropEpoch, b.ExpungeID, at.packed, b.RepoID); err != nil {
-		return 0, fmt.Errorf("code: count the begin at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: count the begin at %s: %w", at.position, err)
 	}
 	return moved.rows + int(parts) + int(layers) + 1, nil
 }
@@ -273,11 +273,11 @@ func (a *Applier) applyExpungeCommit(ctx context.Context, tx *sql.Tx, at applyCo
 	plan, err := planRewrite(ctx, tx, c.RepoID, c.Retire, dropping, len(c.Add),
 		func(i int) (PackRef, PackKind, PackState) { return c.Add[i], PackRescue, PackLive })
 	if err != nil {
-		return 0, fmt.Errorf("code: the commit at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the commit at %s: %w", at.position, err)
 	}
 	moved, err := plan.apply(ctx, tx, at, c.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: the commit at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the commit at %s: %w", at.position, err)
 	}
 	// WHAT IT TOOK OUT: the dropping packs it retired less the rescue it
 	// kept. The objects are exact — a rescue holds a subset of the dropping
@@ -304,7 +304,7 @@ func (a *Applier) applyExpungeCommit(ctx context.Context, tx *sql.Tx, at applyCo
 	if _, err := tx.ExecContext(ctx, commitCountersSQL, moved.addedLive.packs, moved.addedLive.bytes,
 		moved.addedLive.objects, at.at(), at.at(), droppedObjects, droppedBytes, request, requested, at.packed,
 		c.RepoID); err != nil {
-		return 0, fmt.Errorf("code: count the commit at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: count the commit at %s: %w", at.position, err)
 	}
 	return moved.rows + 1, nil
 }
@@ -318,7 +318,7 @@ func (a *Applier) applyExpungeScan(ctx context.Context, tx *sql.Tx, at applyCont
 	error) {
 
 	if _, err := tx.ExecContext(ctx, scanSQL, at.at(), at.packed, sc.RepoID); err != nil {
-		return 0, fmt.Errorf("code: record %s's clean scan at %s: %w", sc.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: record %s's clean scan at %s: %w", sc.RepoID, at.position, err)
 	}
 	return 1, nil
 }

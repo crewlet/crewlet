@@ -544,7 +544,7 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 		{"a cursor", fmt.Errorf("%w: phase %q", gitlet.ErrBadCursor, "x"), is(queries.ErrBadParams)},
 		{"a parameter", fmt.Errorf("%w: limit: 9000 is past the 200 one page of pushes carries", gitlet.ErrInvalid),
 			is(queries.ErrBadParams)},
-		{"a floor on another log", fmt.Errorf("code: this read's floor: %w", statelog.ErrForeignPosition),
+		{"a floor on another log", fmt.Errorf("gitlet: this read's floor: %w", statelog.ErrForeignPosition),
 			is(queries.ErrBadParams)},
 		{"behind", &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
 			RetryAfter: 7 * time.Second}, is(queries.ErrUnavailable)},

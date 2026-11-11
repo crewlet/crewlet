@@ -216,13 +216,13 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 	case "s3":
 		c.shared = s3Bucket(t)
 	default:
-		t.Fatalf("codecluster: no object store called %q", backend)
+		t.Fatalf("gitletcluster: no object store called %q", backend)
 	}
 	root := t.TempDir()
 	for i := range members {
 		m := &member{c: c, i: i, id: fmt.Sprintf("m%d", i), dir: filepath.Join(root, fmt.Sprintf("m%d", i))}
 		if err := os.MkdirAll(filepath.Join(m.dir, "data"), 0o755); err != nil {
-			t.Fatalf("codecluster: %s's directory: %v", m.id, err)
+			t.Fatalf("gitletcluster: %s's directory: %v", m.id, err)
 		}
 		c.members = append(c.members, m)
 	}
@@ -251,7 +251,7 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 		m.mu.Unlock()
 	}
 	if err := c.drained(t.Context()); err != nil {
-		t.Fatalf("codecluster: %v", err)
+		t.Fatalf("gitletcluster: %v", err)
 	}
 	return c
 }
@@ -265,7 +265,7 @@ func s3Bucket(t testing.TB) objstore.Backend {
 		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
 	})
 	if err != nil {
-		t.Fatalf("codecluster: open the S3 fake: %v", err)
+		t.Fatalf("gitletcluster: open the S3 fake: %v", err)
 	}
 	return b
 }
@@ -280,7 +280,7 @@ func (c *cluster) objectsOver(t testing.TB, q *js.Queue) objstore.Backend {
 	}
 	b, err := natsobj.Open(t.Context(), q.JetStream(), natsobj.Config{MaxBytes: bucketBytes, Replicas: members, Clustered: true})
 	if err != nil {
-		t.Fatalf("codecluster: open the broker's bucket: %v", err)
+		t.Fatalf("gitletcluster: open the broker's bucket: %v", err)
 	}
 	return b
 }
@@ -307,7 +307,7 @@ func (m *member) route(t testing.TB) {
 		LocalGit: memberGit{m}, Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming,
 		Envelopes: clusterEnvelopes, Now: m.c.now})
 	if err != nil {
-		t.Fatalf("codecluster: %s's router: %v", m.id, err)
+		t.Fatalf("gitletcluster: %s's router: %v", m.id, err)
 	}
 	m.router.Store(r)
 	// ON THE CLUSTER'S CONTEXT: the registration outlives the case that
@@ -315,7 +315,7 @@ func (m *member) route(t testing.TB) {
 	withdraw, err := estate.Serve(m.c.life.Context(), m.q, estate.ServerOptions{
 		Self: m.id, Local: memberCopy{m}, Git: memberGit{m}, Envelopes: clusterEnvelopes})
 	if err != nil {
-		t.Fatalf("codecluster: %s serves the estate: %v", m.id, err)
+		t.Fatalf("gitletcluster: %s serves the estate: %v", m.id, err)
 	}
 	m.withdraw = withdraw
 }
@@ -632,7 +632,7 @@ func (c *cluster) member(t testing.TB, id string) *member {
 			return m
 		}
 	}
-	t.Fatalf("codecluster: no member called %q (%v)", id, c.Members())
+	t.Fatalf("gitletcluster: no member called %q (%v)", id, c.Members())
 	return nil
 }
 
@@ -668,7 +668,7 @@ func (c *cluster) first(not ...string) (*member, error) {
 			return m, nil
 		}
 	}
-	return nil, fmt.Errorf("codecluster: no running member but %v", not)
+	return nil, fmt.Errorf("gitletcluster: no running member but %v", not)
 }
 
 // via is first, failing t.
@@ -695,7 +695,7 @@ func (c *cluster) level(ctx context.Context) error {
 func (c *cluster) mustLevel(t testing.TB) {
 	t.Helper()
 	if err := c.level(t.Context()); err != nil {
-		t.Fatalf("codecluster: the members are not level with the code log: %v", err)
+		t.Fatalf("gitletcluster: the members are not level with the code log: %v", err)
 	}
 }
 
@@ -818,7 +818,7 @@ func (c *cluster) GitReadThrough(ctx context.Context, node string, q gitlet.GitQ
 			return m.router.Load().Code().GitRead(ctx, q)
 		}
 	}
-	return gitlet.GitAnswer{}, fmt.Errorf("codecluster: no running member called %q", node)
+	return gitlet.GitAnswer{}, fmt.Errorf("gitletcluster: no running member called %q", node)
 }
 
 // GitWriteThrough is an engine write through member node's own router
@@ -831,7 +831,7 @@ func (c *cluster) GitWriteThrough(ctx context.Context, node string, w gitlet.Eng
 			return m.router.Load().Code().GitWrite(ctx, w)
 		}
 	}
-	return gitlet.EngineWriteResult{}, fmt.Errorf("codecluster: no running member called %q", node)
+	return gitlet.EngineWriteResult{}, fmt.Errorf("gitletcluster: no running member called %q", node)
 }
 
 // ChangeThrough is a write of a change's lifecycle asked through member node's
@@ -844,7 +844,7 @@ func (c *cluster) ChangeThrough(ctx context.Context, node string, p gitlet.Chang
 			return m.router.Load().Code().Change(ctx, p)
 		}
 	}
-	return gitlet.ChangeResult{}, fmt.Errorf("codecluster: no running member called %q", node)
+	return gitlet.ChangeResult{}, fmt.Errorf("gitletcluster: no running member called %q", node)
 }
 
 // ConverseThrough is a write of a change's conversation asked through member
@@ -857,7 +857,7 @@ func (c *cluster) ConverseThrough(ctx context.Context, node string, w gitlet.Con
 			return m.router.Load().Code().Converse(ctx, w)
 		}
 	}
-	return gitlet.ConversationResult{}, fmt.Errorf("codecluster: no running member called %q", node)
+	return gitlet.ConversationResult{}, fmt.Errorf("gitletcluster: no running member called %q", node)
 }
 
 // gitAnswered is how many reads by object id member node's git half has
@@ -1041,11 +1041,11 @@ func (c *cluster) ConfineMaintenance(t testing.TB) {
 	t.Helper()
 	m, err := c.first()
 	if err != nil {
-		t.Fatalf("codecluster: confine the case's maintenance: %v", err)
+		t.Fatalf("gitletcluster: confine the case's maintenance: %v", err)
 	}
 	earlier, err := gitlettest.RepoIDsOf(t.Context(), m.read)
 	if err != nil {
-		t.Fatalf("codecluster: the repositories the case's maintenance leaves out: %v", err)
+		t.Fatalf("gitletcluster: the repositories the case's maintenance leaves out: %v", err)
 	}
 	c.mu.Lock()
 	c.confined = earlier
@@ -1167,7 +1167,7 @@ func (c *cluster) ProposeCompactionAgain(ctx context.Context, node, repoID strin
 	p, ok := c.proposed[repoID]
 	c.mu.Unlock()
 	if !ok {
-		return gitlet.CompactResult{}, fmt.Errorf("codecluster: no compactor has proposed a compaction of %s", repoID)
+		return gitlet.CompactResult{}, fmt.Errorf("gitletcluster: no compactor has proposed a compaction of %s", repoID)
 	}
 	return c.member(c.life, node).router.Load().Code().Compact(ctx, p)
 }
@@ -1203,7 +1203,7 @@ func (c *cluster) waitApplied(t testing.TB, at statelog.Position) {
 	t.Helper()
 	for _, m := range c.writers() {
 		if err := m.data.WaitApplied(t.Context(), at); err != nil {
-			t.Fatalf("codecluster: %s applying %s: %v", m.id, at, err)
+			t.Fatalf("gitletcluster: %s applying %s: %v", m.id, at, err)
 		}
 	}
 }
@@ -1215,7 +1215,7 @@ func (c *cluster) PauseApplier(t testing.TB, node string) (resume func()) {
 	// whole log as it stood: a case pausing a member it then writes past
 	// reads a member exactly that far behind.
 	if err := m.data.Level(t.Context()); err != nil {
-		t.Fatalf("codecluster: level %s before holding its applier: %v", m.id, err)
+		t.Fatalf("gitletcluster: level %s before holding its applier: %v", m.id, err)
 	}
 	held := m.data.PauseApplier(t)
 	m.mu.Lock()
@@ -1227,7 +1227,7 @@ func (c *cluster) PauseApplier(t testing.TB, node string) (resume func()) {
 		m.paused = false
 		m.mu.Unlock()
 		if err := m.data.Level(t.Context()); err != nil {
-			t.Errorf("codecluster: %s catching up once resumed: %v", m.id, err)
+			t.Errorf("gitletcluster: %s catching up once resumed: %v", m.id, err)
 		}
 	}
 }
@@ -1239,7 +1239,7 @@ func (c *cluster) Level(ctx context.Context, node string) error {
 			return m.data.Level(ctx)
 		}
 	}
-	return fmt.Errorf("codecluster: no member called %q (%v)", node, c.Members())
+	return fmt.Errorf("gitletcluster: no member called %q (%v)", node, c.Members())
 }
 
 // Kill is the member's process dying: its Gitlet node killed, its broker client
@@ -1252,7 +1252,7 @@ func (c *cluster) Kill(t testing.TB, node string) {
 	t.Helper()
 	m := c.member(t, node)
 	if !m.isRunning() {
-		t.Fatalf("codecluster: Kill of %s, which is not running", node)
+		t.Fatalf("gitletcluster: Kill of %s, which is not running", node)
 	}
 	c.down(m)
 }
@@ -1301,7 +1301,7 @@ func (c *cluster) Stop(t testing.TB, node string) {
 	t.Helper()
 	m := c.member(t, node)
 	if !m.isRunning() {
-		t.Errorf("codecluster: Stop of %s, which is not running", node)
+		t.Errorf("gitletcluster: Stop of %s, which is not running", node)
 		return
 	}
 	c.placement.drop(m.id)
@@ -1317,7 +1317,7 @@ func (c *cluster) Stop(t testing.TB, node string) {
 	ctx, cancel := context.WithTimeout(context.Background(), statelog.DefaultResolveBudget)
 	defer cancel()
 	if err := withdraw(ctx); err != nil {
-		t.Errorf("codecluster: %s stops answering on its estate subjects: %v", node, err)
+		t.Errorf("gitletcluster: %s stops answering on its estate subjects: %v", node, err)
 	}
 	c.down(m)
 }
@@ -1331,7 +1331,7 @@ func (c *cluster) Restart(t testing.TB, node string) {
 	t.Helper()
 	m := c.member(t, node)
 	if m.isRunning() {
-		t.Fatalf("codecluster: Restart of %s, which was not stopped", node)
+		t.Fatalf("gitletcluster: Restart of %s, which was not stopped", node)
 	}
 	q := c.brokers.RestartMember(t, m.i)
 	objects := c.objectsOver(t, q)

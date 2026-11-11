@@ -108,7 +108,7 @@ var CheckLogReferences = objstore.ReferenceTable{
 func checkLogRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
-		return nil, fmt.Errorf("code: a record no build reads: %w", err)
+		return nil, fmt.Errorf("gitlet: a record no build reads: %w", err)
 	}
 	if env.V > RecordVersion || !env.Subject.Kind.Valid() {
 		if !mayWriteCheckLogs(env) {
@@ -131,7 +131,7 @@ func checkLogRecordReferences(payload []byte) ([]objstore.RecordReference, error
 	}
 	f, ok := payloadAny.(CheckFinished)
 	if !ok {
-		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
+		return nil, fmt.Errorf("gitlet: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
 	}
 	if f.Log == nil {
 		return nil, nil
@@ -215,7 +215,7 @@ func mayWriteCheckLogs(env RecordEnvelope) bool {
 func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
-		return nil, fmt.Errorf("code: a record no build reads: %w", err)
+		return nil, fmt.Errorf("gitlet: a record no build reads: %w", err)
 	}
 	if env.V > RecordVersion || !env.Subject.Kind.Valid() {
 		if !mayWritePacks(env) {
@@ -288,7 +288,7 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 		// NOTHING OF ITS OWN: a landing's commits are its train's, whose
 		// candidate record wrote their pack.
 	default:
-		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
+		return nil, fmt.Errorf("gitlet: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
 	}
 	return out, nil
 }

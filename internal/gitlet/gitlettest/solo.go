@@ -426,7 +426,7 @@ func (f *SoloFleet) route(t testing.TB) {
 		// process's death takes its subjects with it.
 		if _, err := estate.Serve(f.life.Context(), q, estate.ServerOptions{Self: g.o.ID,
 			Local: soloCopy{data: f.data}, Git: g, Envelopes: soloEnvelopes}); err != nil {
-			t.Fatalf("codetest: %s serves the estate: %v", g.o.ID, err)
+			t.Fatalf("gitlettest: %s serves the estate: %v", g.o.ID, err)
 		}
 	}
 	nodes := soloPlacement(ids)
@@ -441,7 +441,7 @@ func (f *SoloFleet) route(t testing.TB) {
 	r, err := estate.NewRouter(estate.RouterOptions{Self: soloRouter, Queue: q, Placement: nodes, Git: git,
 		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
 	if err != nil {
-		t.Fatalf("codetest: the fleet's router: %v", err)
+		t.Fatalf("gitlettest: the fleet's router: %v", err)
 	}
 	f.router.Store(r)
 	// EVERY GITLET NODE'S OWN ROUTER, which its compactor asks whether it is a
@@ -453,7 +453,7 @@ func (f *SoloFleet) route(t testing.TB) {
 		own, err := estate.NewRouter(estate.RouterOptions{Self: g.o.ID, Queue: q, Placement: nodes, Git: git,
 			LocalGit: g, Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
 		if err != nil {
-			t.Fatalf("codetest: %s's router: %v", g.o.ID, err)
+			t.Fatalf("gitlettest: %s's router: %v", g.o.ID, err)
 		}
 		f.routers[i].Store(own)
 	}
@@ -471,7 +471,7 @@ type soloMaintainers struct {
 func (m soloMaintainers) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
 	r := m.f.routers[m.i].Load()
 	if r == nil {
-		return nil, errors.New("codetest: the solo fleet routes nothing while it is killed")
+		return nil, errors.New("gitlettest: the solo fleet routes nothing while it is killed")
 	}
 	return r.MaintainerOf(charges)
 }
@@ -481,7 +481,7 @@ func (m soloMaintainers) MaintainerOf(charges map[string]int64) (map[string]bool
 func (m soloMaintainers) Listed() (bool, error) {
 	r := m.f.routers[m.i].Load()
 	if r == nil {
-		return false, errors.New("codetest: the solo fleet routes nothing while it is killed")
+		return false, errors.New("gitlettest: the solo fleet routes nothing while it is killed")
 	}
 	return r.Listed()
 }
@@ -520,7 +520,7 @@ func DefaultPeople() []string { return []string{"ceo", "dev", FixturePat} }
 func (f *SoloFleet) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	r := f.router.Load()
 	if r == nil {
-		return gitlet.EngineWriteResult{}, errors.New("codetest: the solo fleet routes nothing while it is killed")
+		return gitlet.EngineWriteResult{}, errors.New("gitlettest: the solo fleet routes nothing while it is killed")
 	}
 	return r.Code().GitWrite(ctx, w)
 }
@@ -531,7 +531,7 @@ func (f *SoloFleet) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.Eng
 func (f *SoloFleet) Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	rt := f.router.Load()
 	if rt == nil {
-		return gitlet.LifecycleResult{}, errors.New("codetest: the solo fleet routes nothing while it is killed")
+		return gitlet.LifecycleResult{}, errors.New("gitlettest: the solo fleet routes nothing while it is killed")
 	}
 	return rt.Code().Lifecycle(ctx, r)
 }
@@ -541,7 +541,7 @@ func (f *SoloFleet) Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (g
 func (f *SoloFleet) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	r := f.router.Load()
 	if r == nil {
-		return gitlet.GitAnswer{}, errors.New("codetest: the solo fleet routes nothing while it is killed")
+		return gitlet.GitAnswer{}, errors.New("gitlettest: the solo fleet routes nothing while it is killed")
 	}
 	return r.Code().GitRead(ctx, q)
 }
@@ -556,7 +556,7 @@ func (f *SoloFleet) Code(t testing.TB) estate.CodeSeam {
 	t.Helper()
 	r := f.router.Load()
 	if r == nil {
-		t.Fatal("codetest: the solo fleet routes nothing while it is killed")
+		t.Fatal("gitlettest: the solo fleet routes nothing while it is killed")
 	}
 	return r.Code()
 }
@@ -645,7 +645,7 @@ func (f *SoloFleet) openBroker(t testing.TB) *js.Queue {
 	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(f.dir, "stream"),
 		StoreMaxBytes: brokertest.StoreMaxBytes, SyncAlways: f.o.SyncAlways})
 	if err != nil {
-		t.Fatalf("codetest: open the broker: %v", err)
+		t.Fatalf("gitlettest: open the broker: %v", err)
 	}
 	f.mu.Lock()
 	f.brokers = append(f.brokers, q)
@@ -826,7 +826,7 @@ func (f *SoloFleet) gitNamed(t testing.TB, node string) *GitletNode {
 			return g
 		}
 	}
-	t.Fatalf("codetest: the solo fleet has no Gitlet node %q", node)
+	t.Fatalf("gitlettest: the solo fleet has no Gitlet node %q", node)
 	return nil
 }
 
@@ -924,7 +924,7 @@ func (f *SoloFleet) Readmit(t testing.TB, node string) {
 func (f *SoloFleet) mustBeData(t testing.TB, node string) {
 	t.Helper()
 	if node != soloDataNode {
-		t.Fatalf("codetest: the solo fleet's data node is %q, not %q", soloDataNode, node)
+		t.Fatalf("gitlettest: the solo fleet's data node is %q, not %q", soloDataNode, node)
 	}
 }
 
@@ -936,7 +936,7 @@ func (f *SoloFleet) mustBeData(t testing.TB, node string) {
 func (f *SoloFleet) Kill(t testing.TB, _ string) {
 	t.Helper()
 	if f.data.proc() == nil {
-		t.Fatal("codetest: Kill of a fleet that is not running")
+		t.Fatal("gitlettest: Kill of a fleet that is not running")
 	}
 	for _, g := range f.git {
 		g.Kill()
@@ -947,7 +947,7 @@ func (f *SoloFleet) Kill(t testing.TB, _ string) {
 		f.routers[i].Store(nil)
 	}
 	if err := f.broker().Stop(context.Background()); err != nil {
-		t.Errorf("codetest: stop the killed node's broker: %v", err)
+		t.Errorf("gitlettest: stop the killed node's broker: %v", err)
 	}
 }
 
@@ -957,7 +957,7 @@ func (f *SoloFleet) Kill(t testing.TB, _ string) {
 func (f *SoloFleet) Restart(t testing.TB, _ string) {
 	t.Helper()
 	if f.data.proc() != nil {
-		t.Fatal("codetest: Restart of a fleet that was not killed")
+		t.Fatal("gitlettest: Restart of a fleet that was not killed")
 	}
 	f.data.Restart(t, f.openBroker(t))
 	for _, g := range f.git {

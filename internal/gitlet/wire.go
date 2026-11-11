@@ -4225,7 +4225,7 @@ func TouchedCost(touched []string) int {
 	if err != nil {
 		// A list of strings always encodes; reaching here is a broken
 		// encoder, against which no list could be measured.
-		panic(fmt.Sprintf("code: encoding a touched list: %v", err))
+		panic(fmt.Sprintf("gitlet: encoding a touched list: %v", err))
 	}
 	return len(out)
 }

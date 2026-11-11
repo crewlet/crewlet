@@ -224,12 +224,12 @@ type Marks struct {
 func NewMarks(o MarksOptions) (*Marks, error) {
 	switch {
 	case o.Publisher == nil:
-		return nil, errors.New("code: a marks writer needs the code log's write authority — every mark is a " +
+		return nil, errors.New("gitlet: a marks writer needs the code log's write authority — every mark is a " +
 			"record on that log")
 	case o.DB.IsZero():
-		return nil, errors.New("code: a marks writer needs the replicated estate a mark's answer is read from")
+		return nil, errors.New("gitlet: a marks writer needs the replicated estate a mark's answer is read from")
 	case !config.ValidNodeID(o.NodeID):
-		return nil, fmt.Errorf("code: a marks writer needs the deciding node's id; %q is not one config admits",
+		return nil, fmt.Errorf("gitlet: a marks writer needs the deciding node's id; %q is not one config admits",
 			o.NodeID)
 	}
 	m := &Marks{pub: o.Publisher, db: o.DB, nodeID: o.NodeID, now: o.Now}
@@ -358,7 +358,7 @@ func (m *Marks) answer(ctx context.Context, w MarkWrite, last markDecision, deci
 			return MarkResult{Refusal: MarkUnavailable, Detail: "the code log refused the mark: " +
 				strings.TrimPrefix(refusal.Error(), "statelog: ")}, nil
 		}
-		return MarkResult{}, fmt.Errorf("code: mark operation %s: %w", w.OpID, err)
+		return MarkResult{}, fmt.Errorf("gitlet: mark operation %s: %w", w.OpID, err)
 	}
 	switch res.Outcome {
 	case statelog.OutcomeApplied:
@@ -370,7 +370,7 @@ func (m *Marks) answer(ctx context.Context, w MarkWrite, last markDecision, deci
 				return MarkResult{Outcome: statelog.OutcomeApplied, Unchanged: true,
 					Position: unpacked(last.position)}, nil
 			}
-			return MarkResult{}, fmt.Errorf("code: the publish of mark %s answered applied with no record, and "+
+			return MarkResult{}, fmt.Errorf("gitlet: the publish of mark %s answered applied with no record, and "+
 				"its decide neither refused it nor found it unchanged", w.OpID)
 		}
 		var position int64
@@ -379,7 +379,7 @@ func (m *Marks) answer(ctx context.Context, w MarkWrite, last markDecision, deci
 			_, position, err = marksIn(ctx, tx, w.Handle)
 			return err
 		}); err != nil {
-			return MarkResult{}, fmt.Errorf("code: the mark %s applied at %s and %s's marks could not be read: %w",
+			return MarkResult{}, fmt.Errorf("gitlet: the mark %s applied at %s and %s's marks could not be read: %w",
 				w.OpID, res.Position, w.Handle, err)
 		}
 		if position < res.Position.Packed() {
@@ -408,7 +408,7 @@ func marksIn(ctx context.Context, tx *sql.Tx, handle string) (inbox.Marks[Reason
 	case errors.Is(err, sql.ErrNoRows):
 		return inbox.Marks[Reason]{}, 0, nil
 	case err != nil:
-		return inbox.Marks[Reason]{}, 0, fmt.Errorf("code: read %s's code inbox marks: %w", handle, err)
+		return inbox.Marks[Reason]{}, 0, fmt.Errorf("gitlet: read %s's code inbox marks: %w", handle, err)
 	}
 	if seen != 0 {
 		m.SeenThrough = inbox.Position{Stream: stream, Generation: uint32(seen / statelog.GenerationStride),
@@ -419,7 +419,7 @@ func marksIn(ctx context.Context, tx *sql.Tx, handle string) (inbox.Marks[Reason
 		to  any
 	}{{read, &m.Read}, {unread, &m.Unread}, {snoozed, &m.Snoozed}, {p, &m.PrimaryReasons}} {
 		if err := json.Unmarshal([]byte(part.raw), part.to); err != nil {
-			return inbox.Marks[Reason]{}, 0, fmt.Errorf("code: decode %s's code inbox marks: %w", handle, err)
+			return inbox.Marks[Reason]{}, 0, fmt.Errorf("gitlet: decode %s's code inbox marks: %w", handle, err)
 		}
 	}
 	return normalMarks(m), position, nil
@@ -450,23 +450,23 @@ func noticePositionsIn(ctx context.Context, tx *sql.Tx, handle string, ids []str
 	}
 	list, err := json.Marshal(pairs)
 	if err != nil {
-		return nil, "", fmt.Errorf("code: name the notices a mark of %s names: %w", handle, err)
+		return nil, "", fmt.Errorf("gitlet: name the notices a mark of %s names: %w", handle, err)
 	}
 	rows, err := tx.QueryContext(ctx, noticePositionsSQL, string(list), handle)
 	if err != nil {
-		return nil, "", fmt.Errorf("code: read where the notices a mark of %s names sit: %w", handle, err)
+		return nil, "", fmt.Errorf("gitlet: read where the notices a mark of %s names sit: %w", handle, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var record, change string
 		var packed int64
 		if err := rows.Scan(&record, &change, &packed); err != nil {
-			return nil, "", fmt.Errorf("code: read where the notices a mark of %s names sit: %w", handle, err)
+			return nil, "", fmt.Errorf("gitlet: read where the notices a mark of %s names sit: %w", handle, err)
 		}
 		out[NoticeID(record, change)] = uint64(packed)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("code: read where the notices a mark of %s names sit: %w", handle, err)
+		return nil, "", fmt.Errorf("gitlet: read where the notices a mark of %s names sit: %w", handle, err)
 	}
 	for _, id := range ids {
 		if _, found := out[id]; !found {

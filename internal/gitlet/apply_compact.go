@@ -14,7 +14,7 @@ import (
 // applyLog is the applier's own voice: what it says is about a record applied
 // here — today only a publication that applies as nothing — and an operator
 // grepping for that should not have to know it was filed under the committer.
-var applyLog = logging.Get("code.apply")
+var applyLog = logging.Get("gitlet.apply")
 
 // applyCompact applies one compaction ([Compaction]): the rows of the packs it
 // retires leave code_packs for code_packs_retired, stamped with the record's
@@ -63,7 +63,7 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 	if c.Layer != nil {
 		var err error
 		if chain, err = layersOf(ctx, tx, c.RepoID); err != nil {
-			return 0, fmt.Errorf("code: the publication at %s: %w", at.position, err)
+			return 0, fmt.Errorf("gitlet: the publication at %s: %w", at.position, err)
 		}
 		if fits, applied := layerFits(chain, *c.Layer); !fits {
 			if !applied {
@@ -79,7 +79,7 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 		return c.Add[i], PackCompact, PackLive
 	})
 	if err != nil {
-		return 0, fmt.Errorf("code: the compaction at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the compaction at %s: %w", at.position, err)
 	}
 	if c.Layer == nil && plan.idle() {
 		// APPLIED ALREADY: nothing of it is left to move.
@@ -87,14 +87,14 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	m, err := plan.apply(ctx, tx, at, c.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: the compaction at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the compaction at %s: %w", at.position, err)
 	}
 	moved := m.rows + 1
 	if c.Layer == nil {
 		if _, err = tx.ExecContext(ctx, compactCountersSQL, m.goneLive.packs, m.addedLive.packs,
 			m.goneLive.bytes, m.addedLive.bytes, m.goneLive.objects, m.addedLive.objects, at.packed,
 			c.RepoID); err != nil {
-			return 0, fmt.Errorf("code: count the compaction at %s: %w", at.position, err)
+			return 0, fmt.Errorf("gitlet: count the compaction at %s: %w", at.position, err)
 		}
 		return moved, nil
 	}
@@ -105,12 +105,12 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 	packs, objects, err := publishedIn(ctx, tx, c.RepoID, append(slices.Clone(chain[:len(chain)-len(c.Layer.Replaces)]),
 		LayerRow{Layer: *c.Layer}))
 	if err != nil {
-		return 0, fmt.Errorf("code: recount the packs the publication at %s leaves published: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: recount the packs the publication at %s leaves published: %w", at.position, err)
 	}
 	if _, err := tx.ExecContext(ctx, publishCountersSQL, m.goneLive.packs, m.addedLive.packs, m.goneLive.bytes,
 		m.addedLive.bytes, m.goneLive.objects, m.addedLive.objects, packs, objects, at.at(), c.Layer.TookMs,
 		at.packed, at.packed, c.RepoID); err != nil {
-		return 0, fmt.Errorf("code: count the publication at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: count the publication at %s: %w", at.position, err)
 	}
 	return moved + placed, nil
 }
@@ -344,24 +344,24 @@ func (a *Applier) applyLayer(ctx context.Context, tx *sql.Tx, at applyContext, c
 		}
 		res, err := tx.ExecContext(ctx, deleteLayerPartsSQL, c.RepoID, list)
 		if err != nil {
-			return 0, fmt.Errorf("code: remove the parts of the layers the publication at %s replaces: %w",
+			return 0, fmt.Errorf("gitlet: remove the parts of the layers the publication at %s replaces: %w",
 				at.position, err)
 		}
 		parts, _ := res.RowsAffected()
 		if res, err = tx.ExecContext(ctx, deleteLayersAboveSQL, c.RepoID, baseSeq); err != nil {
-			return 0, fmt.Errorf("code: remove the layers the publication at %s replaces: %w", at.position, err)
+			return 0, fmt.Errorf("gitlet: remove the layers the publication at %s replaces: %w", at.position, err)
 		}
 		layers, _ := res.RowsAffected()
 		rows = parts + layers
 	}
 	packs, err := json.Marshal(l.Packs)
 	if err != nil {
-		return 0, fmt.Errorf("code: encode the packs of the layer at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: encode the packs of the layer at %s: %w", at.position, err)
 	}
 	if _, err = tx.ExecContext(ctx, insertLayerSQL, c.RepoID, baseSeq+1, l.LayerID, l.BaseID, l.GraphID,
 		string(packs), l.MidxBytes, l.BitmapBytes, l.GraphBytes, l.Objects, l.Commits, l.Git, l.TookMs,
 		at.packed); err != nil {
-		return 0, fmt.Errorf("code: write the layer the publication at %s adds: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: write the layer the publication at %s adds: %w", at.position, err)
 	}
 	parts, err := store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_layer_parts (repo_id, layer_id, part, object, hash, size) VALUES `,
@@ -371,7 +371,7 @@ func (a *Applier) applyLayer(ctx context.Context, tx *sql.Tx, at applyContext, c
 			return []any{c.RepoID, l.LayerID, i, p.Object.String(), string(p.Hash), p.Size}
 		})
 	if err != nil {
-		return 0, fmt.Errorf("code: write the parts of the layer the publication at %s adds: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: write the parts of the layer the publication at %s adds: %w", at.position, err)
 	}
 	return int(rows) + 1 + parts, nil
 }

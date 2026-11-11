@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-var log = logging.Get("code.query")
+var log = logging.Get("gitlet.query")
 
 // Cache is what the reads need of the node's git cache. *cache.Cache
 // satisfies it.

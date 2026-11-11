@@ -992,7 +992,7 @@ func diskAsTheCrashLeftIt(t *testing.T, dir string) {
 		}
 		return dst.Close()
 	}); err != nil {
-		t.Fatalf("codetest: copy %s as the crash left it: %v", dir, err)
+		t.Fatalf("gitlettest: copy %s as the crash left it: %v", dir, err)
 	}
 	if err := os.Rename(dir, dir+".crashed"); err != nil {
 		t.Fatal(err)

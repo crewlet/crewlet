@@ -443,7 +443,7 @@ func New(o Options) (*Compactor, error) {
 		c.held[i].repos = map[string]int64{}
 	}
 	if c.log == nil {
-		c.log = logging.Get("code.compact")
+		c.log = logging.Get("gitlet.compact")
 	}
 	if c.now == nil {
 		c.now = time.Now

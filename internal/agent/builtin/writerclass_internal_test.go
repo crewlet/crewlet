@@ -501,7 +501,7 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 // drop the prefix strip from worklet.Sentence, and a row goes red.
 func TestNoDomainRefusalReadsAsAGoError(t *testing.T) {
 	t.Parallel()
-	prefixes := []string{"worklet: ", "doclet: ", "chatlet: ", "code: ", "statelog: ", "artifactsdomain: ",
+	prefixes := []string{"worklet: ", "doclet: ", "chatlet: ", "gitlet: ", "statelog: ", "artifactsdomain: ",
 		"artifactdata: ", "artifacts: ", "%!"}
 	leaks := func(text string) string {
 		for _, p := range prefixes {

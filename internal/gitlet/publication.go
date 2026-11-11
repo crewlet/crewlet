@@ -244,7 +244,7 @@ func (c Compaction) validLayerFields() error {
 func layersOf(ctx context.Context, tx *sql.Tx, repoID string) ([]LayerRow, error) {
 	rows, err := tx.QueryContext(ctx, layersOfSQL, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's published layers: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's published layers: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []LayerRow
@@ -257,16 +257,16 @@ func layersOf(ctx context.Context, tx *sql.Tx, repoID string) ([]LayerRow, error
 		l := &row.Layer
 		if err := rows.Scan(&row.Seq, &l.LayerID, &l.BaseID, &l.GraphID, &packs, &l.MidxBytes, &l.BitmapBytes,
 			&l.GraphBytes, &l.Objects, &l.Commits, &l.Git, &l.TookMs, &added); err != nil {
-			return nil, fmt.Errorf("code: read %s's published layers: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: read %s's published layers: %w", repoID, err)
 		}
 		if err := json.Unmarshal([]byte(packs), &l.Packs); err != nil {
-			return nil, fmt.Errorf("code: %s's published layer %s holds packs %q: %w", repoID, l.LayerID, packs, err)
+			return nil, fmt.Errorf("gitlet: %s's published layer %s holds packs %q: %w", repoID, l.LayerID, packs, err)
 		}
 		row.Added = unpacked(added)
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's published layers: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's published layers: %w", repoID, err)
 	}
 	return out, nil
 }
@@ -305,19 +305,19 @@ type livePack struct {
 func livePacksOf(ctx context.Context, tx *sql.Tx, repoID string) ([]livePack, error) {
 	rows, err := tx.QueryContext(ctx, livePacksSQL, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's live packs: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's live packs: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []livePack
 	for rows.Next() {
 		var p livePack
 		if err := rows.Scan(&p.id, &p.checksum, &p.objects, &p.added); err != nil {
-			return nil, fmt.Errorf("code: read %s's live packs: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: read %s's live packs: %w", repoID, err)
 		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's live packs: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's live packs: %w", repoID, err)
 	}
 	return out, nil
 }

@@ -105,7 +105,7 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 	if opened != "" {
 		if !r.nextRead {
 			if err := tx.QueryRowContext(ctx, nextChangeSQL, r.repoID).Scan(&r.next); err != nil {
-				return nil, fmt.Errorf("code: read the next number of repository %s: %w", r.repoID, err)
+				return nil, fmt.Errorf("gitlet: read the next number of repository %s: %w", r.repoID, err)
 			}
 			r.nextRead = true
 		}
@@ -146,7 +146,7 @@ func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting, rowsLeft 
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			bound, err := entryBound(r.batch[j])
 			if err != nil {
-				return false, false, fmt.Errorf("code: measure push %s's entry: %w", r.batch[j].PushID, err)
+				return false, false, fmt.Errorf("gitlet: measure push %s's entry: %w", r.batch[j].PushID, err)
 			}
 			r.bounds += bound
 		}
@@ -166,7 +166,7 @@ func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting, rowsLeft 
 	}
 	bound, err := entryBound(r.batch[i])
 	if err != nil {
-		return false, false, fmt.Errorf("code: measure push %s's entry: %w", r.batch[i].PushID, err)
+		return false, false, fmt.Errorf("gitlet: measure push %s's entry: %w", r.batch[i].PushID, err)
 	}
 	for len(routings) > 0 && (bound+size > whole || r.notices+notices > rowsLeft) {
 		routings = routings[:len(routings)-1]
@@ -213,7 +213,7 @@ func routingBytes(routings []ChangeRouting) (int, error) {
 	}
 	encoded, err := json.Marshal(routings)
 	if err != nil {
-		return 0, fmt.Errorf("code: encode a push's routings: %w", err)
+		return 0, fmt.Errorf("gitlet: encode a push's routings: %w", err)
 	}
 	return len(encoded) + len(`,"routing":`), nil
 }

@@ -667,7 +667,7 @@ func opened(ctx context.Context, tx *sql.Tx, p ChangeProposal) (changeRow, error
 	o := p.Open
 	var next int64
 	if err := tx.QueryRowContext(ctx, nextChangeSQL, p.RepoID()).Scan(&next); err != nil {
-		return changeRow{}, fmt.Errorf("code: read the next number of repository %s: %w", p.RepoID(), err)
+		return changeRow{}, fmt.Errorf("gitlet: read the next number of repository %s: %w", p.RepoID(), err)
 	}
 	owner, kind := p.Asker.party()
 	row := changeRow{id: o.ChangeID, repoID: p.RepoID(), number: next, title: o.Title, owner: owner,
@@ -723,7 +723,7 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	if p.JudgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the committer hands a seat's write on to the
 		// repository's next committer before deciding it with no chart.
-		return changeDecision{}, fmt.Errorf("code: a seat's change to %s reached the decide with no chart to "+
+		return changeDecision{}, fmt.Errorf("gitlet: a seat's change to %s reached the decide with no chart to "+
 			"judge it by — the committer hands such a write to the repository's next committer", repoID)
 	}
 	grant := GrantOf(p.Asker, repo.grantRef(repoID), seats.Roster)
@@ -829,7 +829,7 @@ func decideOpen(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo
 	}
 	heads, err := refsNamed(ctx, tx, p.RepoID(), []string{o.SourceRef, o.TargetRef})
 	if err != nil {
-		return changeDecision{}, fmt.Errorf("code: read the branches change %s names: %w", o.ChangeID, err)
+		return changeDecision{}, fmt.Errorf("gitlet: read the branches change %s names: %w", o.ChangeID, err)
 	}
 	source, target := heads[o.SourceRef], heads[o.TargetRef]
 	switch {
@@ -908,7 +908,7 @@ func decideRetarget(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo push
 	}
 	heads, err := refsNamed(ctx, tx, p.RepoID(), []string{target})
 	if err != nil {
-		return changeDecision{}, fmt.Errorf("code: read the target %s retargets onto: %w", named, err)
+		return changeDecision{}, fmt.Errorf("gitlet: read the target %s retargets onto: %w", named, err)
 	}
 	if heads[target] == "" {
 		return d.refuse(ChangeRefusalNoTarget, fmt.Sprintf("%s holds no live %s to merge into", repo.name,
@@ -954,7 +954,7 @@ func decideLanded(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRe
 		&seat); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
-		return changeDecision{}, fmt.Errorf("code: read the target %s lands in: %w", named, err)
+		return changeDecision{}, fmt.Errorf("gitlet: read the target %s lands in: %w", named, err)
 	}
 	if tip != l.TargetOID {
 		return d.refuse(ChangeRefusalStale, fmt.Sprintf("%s of %s is at %s, and the home found %s's head in it "+
@@ -990,7 +990,7 @@ func decideReopen(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRe
 	}
 	heads, err := refsNamed(ctx, tx, p.RepoID(), []string{row.source})
 	if err != nil {
-		return changeDecision{}, fmt.Errorf("code: read the source %s reopens on: %w", named, err)
+		return changeDecision{}, fmt.Errorf("gitlet: read the source %s reopens on: %w", named, err)
 	}
 	head := heads[row.source]
 	if head == "" {
@@ -1174,7 +1174,7 @@ func (c *Committer) changeAnswer(ctx context.Context, p ChangeProposal, last cha
 			return ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: row.id, Number: row.number,
 				Version: row.version, Position: unpacked(row.position), Unchanged: true}, nil
 		}
-		return ChangeResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no record, "+
+		return ChangeResult{}, fmt.Errorf("gitlet: the publish of operation %s answered applied with no record, "+
 			"and its decide neither refused nor found it unchanged", p.OpID)
 	case statelog.OutcomePending:
 		return ChangeResult{Outcome: statelog.OutcomePending, ChangeID: p.ChangeID(), Position: res.Position}, nil
@@ -1201,7 +1201,7 @@ func (c *Committer) appliedChange(ctx context.Context, p ChangeProposal, at stat
 		row, found, err = changeRowIn(ctx, tx, p.ChangeID())
 		return err
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of operation %s applied at %s and its change's row could not be "+
+		failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and its change's row could not be "+
 			"read: %w", p.OpID, at, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindChange, "repo", p.RepoID(), "op_id", p.OpID,
 			"error", failed)
@@ -1255,7 +1255,7 @@ func (c *Committer) refusedChange(ctx context.Context, p ChangeProposal, err err
 	}
 	c.log.WarnContext(ctx, "code_commit_failed", "kind", kindChange, "repo", p.RepoID(), "op_id", p.OpID,
 		"error", err)
-	return ChangeResult{}, fmt.Errorf("code: change operation %s: %w", p.OpID, err)
+	return ChangeResult{}, fmt.Errorf("gitlet: change operation %s: %w", p.OpID, err)
 }
 
 // changeRow is one change's row of code_changes, as a decide, an apply and an
@@ -1332,7 +1332,7 @@ func changeRowIn(ctx context.Context, tx *sql.Tx, id string) (changeRow, bool, e
 	case errors.Is(err, sql.ErrNoRows):
 		return changeRow{}, false, nil
 	case err != nil:
-		return changeRow{}, false, fmt.Errorf("code: read change %s: %w", id, err)
+		return changeRow{}, false, fmt.Errorf("gitlet: read change %s: %w", id, err)
 	}
 	return row, true, nil
 }
@@ -1352,18 +1352,18 @@ func changeRowsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]cha
 	}
 	rows, err := tx.QueryContext(ctx, changesNamedSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %d changes: %w", len(ids), err)
+		return nil, fmt.Errorf("gitlet: read %d changes: %w", len(ids), err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		row, err := scanChange(rows.Scan)
 		if err != nil {
-			return nil, fmt.Errorf("code: read %d changes: %w", len(ids), err)
+			return nil, fmt.Errorf("gitlet: read %d changes: %w", len(ids), err)
 		}
 		out[row.id] = row
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %d changes: %w", len(ids), err)
+		return nil, fmt.Errorf("gitlet: read %d changes: %w", len(ids), err)
 	}
 	return out, nil
 }
@@ -1377,7 +1377,7 @@ func liveChangeOn(ctx context.Context, tx *sql.Tx, repoID, source string) (int64
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, false, nil
 	case err != nil:
-		return 0, false, fmt.Errorf("code: read the live change %s heads: %w", source, err)
+		return 0, false, fmt.Errorf("gitlet: read the live change %s heads: %w", source, err)
 	}
 	return number, true, nil
 }
@@ -1390,7 +1390,7 @@ func bodyOf(ctx context.Context, tx *sql.Tx, changeID string) (string, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
 	case err != nil:
-		return "", fmt.Errorf("code: read the body of change %s: %w", changeID, err)
+		return "", fmt.Errorf("gitlet: read the body of change %s: %w", changeID, err)
 	}
 	return body, nil
 }

@@ -11,40 +11,40 @@ import (
 // identity across the estate wire once a caller on another node reads it.
 var (
 	// ErrRepoNotFound is a repository nobody holds under that name or id.
-	ErrRepoNotFound = errors.New("code: no such repository")
+	ErrRepoNotFound = errors.New("gitlet: no such repository")
 
 	// ErrRefNotFound is a ref a repository does not hold live — never set,
 	// or deleted — under any ref one name of a [RefQuery] was tried as,
 	// which it names ([RefAnswer.Err]).
-	ErrRefNotFound = errors.New("code: no such ref")
+	ErrRefNotFound = errors.New("gitlet: no such ref")
 
 	// ErrChangeNotFound is a change a repository does not hold under the
 	// number a read named, which it names (web!42) — of a repository the
 	// asker may read: one it may not is [ErrNotPermitted] whatever its
 	// changes are, so a number is never an answer about a repository the
 	// grant guards.
-	ErrChangeNotFound = errors.New("code: no such change")
+	ErrChangeNotFound = errors.New("gitlet: no such change")
 
 	// ErrCheckNotFound is an attempt of a check a repository does not hold
 	// — never queued, or past the history its rows keep — under the commit,
 	// name and attempt a `check` read named, which it names; of a repository
 	// the asker may read, as [ErrChangeNotFound] is.
-	ErrCheckNotFound = errors.New("code: no such check")
+	ErrCheckNotFound = errors.New("gitlet: no such check")
 
 	// ErrPurging is a repository being removed part by part: its name
 	// returns when the purge completes.
-	ErrPurging = errors.New("code: the repository is being purged; its name returns when the purge completes")
+	ErrPurging = errors.New("gitlet: the repository is being purged; its name returns when the purge completes")
 
 	// ErrNotYet is a deleted repository still inside its retention, so not
 	// yet purged.
-	ErrNotYet = errors.New("code: the repository is within its deleted retention")
+	ErrNotYet = errors.New("gitlet: the repository is within its deleted retention")
 
 	// ErrNotDeleted is a purge asked of a repository that is not deleted.
-	ErrNotDeleted = errors.New("code: the repository is not deleted")
+	ErrNotDeleted = errors.New("gitlet: the repository is not deleted")
 
 	// ErrNotConfigManaged is a configuration reconcile reaching a repository
 	// its configuration does not manage.
-	ErrNotConfigManaged = errors.New("code: the repository is not managed by configuration")
+	ErrNotConfigManaged = errors.New("gitlet: the repository is not managed by configuration")
 
 	// ErrConfigManaged is the OTHER fact: a tool's lifecycle request reaching
 	// a repository its configuration manages (code.repos declares it), which
@@ -53,21 +53,21 @@ var (
 	// [ErrNotConfigManaged] read backwards: the reconcile's sentinel names the
 	// opposite case, and a caller reading one for the other would tell an
 	// operator to rename a declaration that is the reason for the refusal.
-	ErrConfigManaged = errors.New("code: a tool reaching a repository its configuration manages")
+	ErrConfigManaged = errors.New("gitlet: a tool reaching a repository its configuration manages")
 
 	// ErrNoActivation is a configuration write that does not name the
 	// activation it came from.
-	ErrNoActivation = errors.New("code: a repository's settings must name the instant their configuration was activated")
+	ErrNoActivation = errors.New("gitlet: a repository's settings must name the instant their configuration was activated")
 
 	// ErrSuperseded is a configuration reconcile whose activation a LATER
 	// one has already fenced off: its decisions would be refused on every
 	// node, so it makes none, and what it reports is the later activation's
 	// to decide.
-	ErrSuperseded = errors.New("code: a later configuration activation owns the declared repositories")
+	ErrSuperseded = errors.New("gitlet: a later configuration activation owns the declared repositories")
 
 	// ErrInvalid is a request or a declaration this domain refuses by field,
 	// wrapped with the field and the reason.
-	ErrInvalid = errors.New("code: refused")
+	ErrInvalid = errors.New("gitlet: refused")
 
 	// ErrInvalidProposal is a proposal this domain cannot decide — a push's
 	// or a compaction's — wrapped with the field and the reason
@@ -81,14 +81,14 @@ var (
 	// by the engine alone. From ValidateCommands itself it is the CLIENT'S
 	// push, past what one push may carry, which the receiver refuses in the
 	// client's words.
-	ErrInvalidProposal = errors.New("code: not a proposal this domain can decide")
+	ErrInvalidProposal = errors.New("gitlet: not a proposal this domain can decide")
 
 	// ErrInvalidLayer is a published layer's row that is not one
 	// ([LayerRef.Check]), wrapped with the field and the reason: what every
 	// holder of a layer row refuses before any byte moves — the committer
 	// deciding a publication, where it is the proposal's fault too
 	// ([ErrInvalidProposal] beside it), and a Gitlet node about to install one.
-	ErrInvalidLayer = errors.New("code: a published layer is malformed")
+	ErrInvalidLayer = errors.New("gitlet: a published layer is malformed")
 
 	// ErrNotServing is a node's code half that RAN NOTHING: a committer that
 	// decided nothing for this proposal and appended nothing — it is
@@ -98,31 +98,31 @@ var (
 	// holding no reader to answer from. Another data node can commit the
 	// same push under the same push id, which collapses a repeat, and can
 	// answer the same read; the estate router asks it.
-	ErrNotServing = errors.New("code: this node is not serving Gitlet")
+	ErrNotServing = errors.New("gitlet: this node is not serving Gitlet")
 
 	// ErrRecordCap is a decision past a record's byte or row budget — which
 	// the committer's batching keeps from ever forming; the check makes the
 	// invariant local to the record.
-	ErrRecordCap = errors.New("code: the decision exceeds a record's budget")
+	ErrRecordCap = errors.New("gitlet: the decision exceeds a record's budget")
 
 	// ErrBadCursor is a cursor this reader did not issue.
-	ErrBadCursor = errors.New("code: not a cursor this read issued")
+	ErrBadCursor = errors.New("gitlet: not a cursor this read issued")
 
 	// ErrBadLevel is a freshness this read does not serve.
-	ErrBadLevel = errors.New("code: not a freshness this read serves")
+	ErrBadLevel = errors.New("gitlet: not a freshness this read serves")
 
 	// ErrSnapshotMoved is a later page of a snapshot that found the
 	// repository's history moved under it — a tombstone a delta needed was
 	// swept, or the log was reanchored or recreated. NOT A FAULT: the
 	// consumer reads the snapshot again from its first page, which decides
 	// full or delta afresh.
-	ErrSnapshotMoved = errors.New("code: the repository's history moved under this snapshot; read it again from the first page")
+	ErrSnapshotMoved = errors.New("gitlet: the repository's history moved under this snapshot; read it again from the first page")
 
 	// ErrNotPermitted is a question or a write the asking principal's grant
 	// on the repository does not cover ([Grant.ReadRefusal] names why) — a
 	// refusal OF THE CALLER, never of the repository or the node: another
 	// node judging the same grant from the same chart refuses it too.
-	ErrNotPermitted = errors.New("code: the caller's grant does not cover this")
+	ErrNotPermitted = errors.New("gitlet: the caller's grant does not cover this")
 
 	// ErrAboveCeiling is a read the asking seat's own grant covers and the
 	// grant of the seat it is made FOR does not ([ReadQuery.CeilingSeat]:
@@ -135,7 +135,7 @@ var (
 	// same seat reads the repository in a turn nobody woke, so telling it
 	// that it may not read would be telling it something false about itself
 	// — and its remedy, asking for more access, would change nothing.
-	ErrAboveCeiling = errors.New("code: the seat this read is made for may not read the repository")
+	ErrAboveCeiling = errors.New("gitlet: the seat this read is made for may not read the repository")
 
 	// ErrBadBundle is a pack bundle whose bytes are not the pack, index and
 	// reverse index its row describes — a section's header, a count, or the
@@ -144,7 +144,7 @@ var (
 	// an installing cache before it renames anything into place; never a
 	// value the applier sees, because a push whose bundle failed it is never
 	// published.
-	ErrBadBundle = errors.New("code: a pack bundle is not the one its row describes")
+	ErrBadBundle = errors.New("gitlet: a pack bundle is not the one its row describes")
 
 	// ErrBadLayer is a published layer whose files are not the layer its
 	// row describes, or not git's formats as this package reads them
@@ -159,7 +159,7 @@ var (
 	// failed is never this, nor a value the applier sees: a layer that
 	// fails it is installed nowhere and named by no record its publisher
 	// proposes.
-	ErrBadLayer = errors.New("code: a published layer's files are not what its row says")
+	ErrBadLayer = errors.New("gitlet: a published layer's files are not what its row says")
 
 	// ErrObjectNotFound is an object id a read by oid ([GitQuery]) named —
 	// whole, or an abbreviation no object begins with — that the repository
@@ -167,19 +167,19 @@ var (
 	// answers looks again after one linearizable sync, since the asker may
 	// have learned of a push this node had not synced yet, and only then
 	// answers this, naming the id.
-	ErrObjectNotFound = errors.New("code: no such object in the repository")
+	ErrObjectNotFound = errors.New("gitlet: no such object in the repository")
 
 	// ErrNotATree is a directory listing ([GitTree]) whose path names a file,
 	// or nothing at all, in the commit or tree it was asked of — wrapped
 	// naming the path and that object.
-	ErrNotATree = errors.New("code: the path names no directory")
+	ErrNotATree = errors.New("gitlet: the path names no directory")
 
 	// ErrNotABlob is a file read ([GitBlob]) whose path names nothing in the
 	// commit it was asked of — a submodule included, whose commit is another
 	// repository's object — wrapped naming the path and that object. A path
 	// naming a directory is not this: the read answers the directory's
 	// listing.
-	ErrNotABlob = errors.New("code: the path names no file")
+	ErrNotABlob = errors.New("gitlet: the path names no file")
 
 	// ErrSliceTooLarge is a read by oid too large to answer: one item of its
 	// answer — a line of a patch — longer than a page, or git work past the
@@ -188,7 +188,7 @@ var (
 	// over. Wrapped naming the narrowing that would answer it — a line
 	// range, the paths a diff names, a narrower range — and never cut: a
 	// page that ended inside an item would be read as the whole of it.
-	ErrSliceTooLarge = errors.New("code: the read is too large to answer whole; narrow it")
+	ErrSliceTooLarge = errors.New("gitlet: the read is too large to answer whole; narrow it")
 )
 
 // ErrGitUnready is a read by oid ([GitQuery]) or an engine write
@@ -213,7 +213,7 @@ type ErrGitUnready struct {
 }
 
 func (e *ErrGitUnready) Error() string {
-	return fmt.Sprintf("code: this Gitlet node cannot answer now (%s): %s", e.Reason, e.Detail)
+	return fmt.Sprintf("gitlet: this Gitlet node cannot answer now (%s): %s", e.Reason, e.Detail)
 }
 
 // UnreadyReason is why a Gitlet node answered a read [ErrGitUnready]: a closed

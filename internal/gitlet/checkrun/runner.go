@@ -301,7 +301,7 @@ func New(o Options) (*Runner, error) {
 			"Production", ErrOptions, o.Timing)
 	}
 	if r.log == nil {
-		r.log = logging.Get("code.checkrun")
+		r.log = logging.Get("gitlet.checkrun")
 	}
 	if r.now == nil {
 		r.now = func() time.Time { return time.Now().UTC() }

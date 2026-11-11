@@ -655,7 +655,7 @@ func decideImportDone(ctx context.Context, tx *sql.Tx, e ImportDone, repo pushRe
 		refs, err := refsNamed(ctx, tx, e.RepoID, []string{branchPrefix + e.DefaultBranch,
 			branchPrefix + repo.defaultBranch})
 		if err != nil {
-			return remoteDecision{}, fmt.Errorf("code: read the default branches of %s's import: %w", repo.name, err)
+			return remoteDecision{}, fmt.Errorf("gitlet: read the default branches of %s's import: %w", repo.name, err)
 		}
 		switch {
 		case refTip(refs, branchPrefix+e.DefaultBranch) == ZeroOID:
@@ -735,7 +735,7 @@ func decideMoves(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, 
 	entry := PushEntry{PushID: "", Principal: Principal{Kind: PrincipalSystem}, Commands: out}
 	book, err := readChangeBook(ctx, tx, repoID, []PushEntry{entry}, 0, 0)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("code: the record's changes on %s: %w", repo.name, err)
+		return nil, "", "", fmt.Errorf("gitlet: the record's changes on %s: %w", repo.name, err)
 	}
 	changeRows, _ := book.alone(entry)
 	if rows := recordRows(entryRows(entry) + len(packs) + 1 + changeRows); rows > MaxRecordRows {
@@ -809,7 +809,7 @@ func (c *Committer) remoteAnswer(ctx context.Context, w remoteWrite, opID string
 		// NOTHING WAS APPENDED: the decide refused it, and its last round
 		// says why.
 		if !decided || last.refusal == "" {
-			return SyncResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no "+
+			return SyncResult{}, fmt.Errorf("gitlet: the publish of operation %s answered applied with no "+
 				"record and decided no refusal", opID)
 		}
 		return SyncResult{Refusal: last.refusal, Detail: last.detail}, nil
@@ -840,7 +840,7 @@ func (c *Committer) appliedRemote(ctx context.Context, w remoteWrite, opID strin
 		landed, err = pushesApplied(ctx, tx, []string{opID})
 		return err
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of operation %s applied at %s and its push row could not be "+
+		failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and its push row could not be "+
 			"read: %w", opID, at, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", w.kind(), "repo", w.repoID(), "op_id", opID,
 			"error", failed)
@@ -891,5 +891,5 @@ func (c *Committer) refusedRemote(ctx context.Context, w remoteWrite, opID strin
 	}
 	c.log.WarnContext(ctx, "code_commit_failed", "kind", w.kind(), "repo", w.repoID(), "op_id", opID,
 		"error", err)
-	return SyncResult{}, fmt.Errorf("code: %s operation %s: %w", w.kind(), opID, err)
+	return SyncResult{}, fmt.Errorf("gitlet: %s operation %s: %w", w.kind(), opID, err)
 }

@@ -87,7 +87,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// or for good once merged — internal/mcp's one rule — and the request
 	// itself, naming the change it means, is not wrong.
 	if !cv.change.State.Live() {
-		return refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s is %s", cv.g.ref(), cv.change.State),
+		return refusedBy(tools.RefusalConflict, fmt.Errorf("gitlet: %s is %s", cv.g.ref(), cv.change.State),
 			fmt.Sprintf("%s: %s is %s, and only a live change is rebased.", tool, cv.g.ref(),
 				cv.change.State)), nil
 	}

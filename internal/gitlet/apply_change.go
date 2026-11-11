@@ -47,7 +47,7 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	var next int64
 	if err := tx.QueryRowContext(ctx, nextChangeSQL, o.RepoID).Scan(&next); err != nil {
-		return 0, fmt.Errorf("code: read %s's next change at %s: %w", o.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read %s's next change at %s: %w", o.RepoID, at.position, err)
 	}
 	state := ChangeStateOpen
 	if o.Draft {
@@ -68,7 +68,7 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 		string(state), o.SourceRef, o.TargetRef, o.Head, owner, string(kind), operator, string(work.Backend),
 		work.ID, work.Key, work.Project, o.TurnID, o.RunID, at.at(), at.packed, at.packed, at.at())
 	if err != nil {
-		return 0, fmt.Errorf("code: open change %s at %s: %w", o.ChangeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: open change %s at %s: %w", o.ChangeID, at.position, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return changeNotApplied(ctx, at, o.RepoID, o.ChangeID, "a change already holds its id")
@@ -76,19 +76,19 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	rows := 1
 	if o.Body != "" {
 		if _, err := tx.ExecContext(ctx, setBodySQL, o.ChangeID, o.Body); err != nil {
-			return 0, fmt.Errorf("code: write change %s's body at %s: %w", o.ChangeID, at.position, err)
+			return 0, fmt.Errorf("gitlet: write change %s's body at %s: %w", o.ChangeID, at.position, err)
 		}
 		rows++
 	}
 	if _, err := tx.ExecContext(ctx, addAuthorSQL, o.ChangeID, owner, string(kind), 1, at.packed); err != nil {
-		return 0, fmt.Errorf("code: write change %s's owner as its author at %s: %w", o.ChangeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write change %s's owner as its author at %s: %w", o.ChangeID, at.position, err)
 	}
 	if _, err := tx.ExecContext(ctx, addRevisionSQL, o.ChangeID, 1, o.Head, owner, string(kind), "", at.packed,
 		at.at()); err != nil {
-		return 0, fmt.Errorf("code: write change %s's first revision at %s: %w", o.ChangeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write change %s's first revision at %s: %w", o.ChangeID, at.position, err)
 	}
 	if _, err := tx.ExecContext(ctx, openedSQL, at.packed, o.RepoID); err != nil {
-		return 0, fmt.Errorf("code: advance %s's next change at %s: %w", o.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: advance %s's next change at %s: %w", o.RepoID, at.position, err)
 	}
 	return rows + 3, nil
 }
@@ -112,7 +112,7 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyContext, payload any) (int, error) {
 	repoID, changeID, write, err := lifecycleWrite(payload)
 	if err != nil {
-		return 0, fmt.Errorf("code: the change record at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the change record at %s: %w", at.position, err)
 	}
 	row, found, err := changeRowIn(ctx, tx, changeID)
 	if err != nil {
@@ -198,7 +198,7 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 	}
 	next.version, next.position, next.updatedAt = row.version+1, at.packed, at.at()
 	if err := writeChanges(ctx, tx, at.maxVariables, write, []*changeRow{&next}); err != nil {
-		return 0, fmt.Errorf("code: write change %s at %s: %w", changeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write change %s at %s: %w", changeID, at.position, err)
 	}
 	rows := 1
 	if body != nil {
@@ -207,7 +207,7 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 			stmt, args = deleteBodySQL, []any{changeID}
 		}
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return 0, fmt.Errorf("code: write change %s's body at %s: %w", changeID, at.position, err)
+			return 0, fmt.Errorf("gitlet: write change %s's body at %s: %w", changeID, at.position, err)
 		}
 		rows++
 	}
@@ -229,13 +229,13 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		by, kind := revision.By.party()
 		if _, err := tx.ExecContext(ctx, addRevisionSQL, changeID, next.revision, next.head, by, string(kind), "",
 			at.packed, at.at()); err != nil {
-			return 0, fmt.Errorf("code: write change %s's revision %d at %s: %w", changeID, next.revision,
+			return 0, fmt.Errorf("gitlet: write change %s's revision %d at %s: %w", changeID, next.revision,
 				at.position, err)
 		}
 		rows++
 	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, repoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", repoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", repoID, at.position, err)
 	}
 	return rows + 1, nil
 }
@@ -382,7 +382,7 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 		{changeStateMoved, "close the changes"},
 	} {
 		if err := writeChanges(ctx, tx, maxVariables, part.write, byWrite[part.write]); err != nil {
-			return 0, fmt.Errorf("code: %s: %w", part.what, err)
+			return 0, fmt.Errorf("gitlet: %s: %w", part.what, err)
 		}
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
@@ -392,7 +392,7 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 			r := w.revisions[i]
 			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at}
 		}); err != nil {
-		return 0, fmt.Errorf("code: write the revisions: %w", err)
+		return 0, fmt.Errorf("gitlet: write the revisions: %w", err)
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position) VALUES `,
@@ -401,13 +401,13 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 			a := w.authors[i]
 			return []any{a.change, a.author, string(a.kind), a.first, b.packed}
 		}); err != nil {
-		return 0, fmt.Errorf("code: write the authors: %w", err)
+		return 0, fmt.Errorf("gitlet: write the authors: %w", err)
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables, `INSERT INTO code_change_bodies (change_id, body) VALUES `,
 		`(?, ?)`, `ON CONFLICT (change_id) DO NOTHING`, len(w.bodies), func(i int) []any {
 			return []any{w.bodies[i].change, w.bodies[i].body}
 		}); err != nil {
-		return 0, fmt.Errorf("code: write the descriptions of the changes opened: %w", err)
+		return 0, fmt.Errorf("gitlet: write the descriptions of the changes opened: %w", err)
 	}
 	// THE MOVED CHANGES LEAVE THEIR QUEUES: a head moved ejects a live
 	// entry, a merge or a close dequeues it — each list one statement a
@@ -438,7 +438,7 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 	// its counters, so this costs the record no row of its budget.
 	if len(byWrite[changeOpened]) > 0 {
 		if _, err := tx.ExecContext(ctx, nextChangeAfterSQL, b.next, b.repo); err != nil {
-			return 0, fmt.Errorf("code: move the repository's next change on: %w", err)
+			return 0, fmt.Errorf("gitlet: move the repository's next change on: %w", err)
 		}
 	}
 	return b.rowCount(), nil

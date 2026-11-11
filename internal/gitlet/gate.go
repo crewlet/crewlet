@@ -829,7 +829,7 @@ func gateColumn(g *MergeGate) (string, error) {
 	}
 	b, err := json.Marshal(g)
 	if err != nil {
-		return "", fmt.Errorf("code: encode a merge gate: %w", err)
+		return "", fmt.Errorf("gitlet: encode a merge gate: %w", err)
 	}
 	return string(b), nil
 }
@@ -852,7 +852,7 @@ func gateFrom(column string) (*MergeGate, error) {
 func decodeGate(column string) (MergeGate, error) {
 	var g MergeGate
 	if err := json.Unmarshal([]byte(column), &g); err != nil {
-		return MergeGate{}, fmt.Errorf("code: decode a merge gate: %w", err)
+		return MergeGate{}, fmt.Errorf("gitlet: decode a merge gate: %w", err)
 	}
 	return g, nil
 }

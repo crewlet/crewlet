@@ -41,19 +41,19 @@ func codeGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted
 		var removed, present int
 		err = tx.QueryRowContext(ctx, guardRepoSQL, subj.ID, subj.ID).Scan(&removed, &present)
 		if err != nil {
-			return false, false, fmt.Errorf("code: read the guards on repository %s: %w", subj.ID, err)
+			return false, false, fmt.Errorf("gitlet: read the guards on repository %s: %w", subj.ID, err)
 		}
 		return removed > 0, present > 0, nil
 	case KindName:
 		var held int
 		if err = tx.QueryRowContext(ctx, guardNameSQL, subj.ID).Scan(&held); err != nil {
-			return false, false, fmt.Errorf("code: read the guard on name %s: %w", subj.ID, err)
+			return false, false, fmt.Errorf("gitlet: read the guard on name %s: %w", subj.ID, err)
 		}
 		return false, held > 0, nil
 	case KindCompany:
 		var held int
 		if err = tx.QueryRowContext(ctx, guardCompanySQL, subj.ID).Scan(&held); err != nil {
-			return false, false, fmt.Errorf("code: read the guard on the company's %s: %w", subj.ID, err)
+			return false, false, fmt.Errorf("gitlet: read the guard on the company's %s: %w", subj.ID, err)
 		}
 		return false, held > 0, nil
 	}
@@ -110,7 +110,7 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	case err != nil:
 		// UNREADABLE IS NOT "not evicted": a fence that failed open would
 		// collect acknowledgements for writes that happen nowhere.
-		return false, fmt.Errorf("code: read this node's own eviction: %w", err)
+		return false, fmt.Errorf("gitlet: read this node's own eviction: %w", err)
 	}
 	if !from.Valid {
 		return false, nil
@@ -185,7 +185,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 			case err != nil:
-				return fmt.Errorf("code: read the deletion gate for repository %s: %w", repoID, err)
+				return fmt.Errorf("gitlet: read the deletion gate for repository %s: %w", repoID, err)
 			case author.Valid && author.String == opID:
 				// THE RECORD THAT WROTE THE MARKER IS NOT GATED BY IT, by
 				// its own id — and the read falls through to the eviction
@@ -204,7 +204,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		case errors.Is(err, sql.ErrNoRows):
 			return nil
 		case err != nil:
-			return fmt.Errorf("code: read the eviction gate for node %s: %w", writer, err)
+			return fmt.Errorf("gitlet: read the eviction gate for node %s: %w", writer, err)
 		}
 		if evictedAt(p.Packed(), from, readmitted) {
 			reason, gated = statelog.ReasonEvicted, true

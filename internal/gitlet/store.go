@@ -96,13 +96,13 @@ type Store struct {
 func NewStore(o StoreOptions) (*Store, error) {
 	switch {
 	case o.Publisher == nil:
-		return nil, errors.New("code: a store needs the code log's write authority — " +
+		return nil, errors.New("gitlet: a store needs the code log's write authority — " +
 			"every write here is a record on that log")
 	case o.DB.IsZero():
-		return nil, errors.New("code: a store needs the replicated estate a write " +
+		return nil, errors.New("gitlet: a store needs the replicated estate a write " +
 			"decides from")
 	case strings.TrimSpace(o.NodeID) == "":
-		return nil, errors.New("code: a store needs the deciding node's id, which a " +
+		return nil, errors.New("gitlet: a store needs the deciding node's id, which a " +
 			"configuration or system record names as its actor")
 	}
 	s := &Store{publisher: o.Publisher, db: o.DB, nodeID: o.NodeID, now: o.Now, seatRules: o.SeatRules,
@@ -175,13 +175,13 @@ func (s *Store) Activate(ctx context.Context, activatedAt time.Time) (Activation
 		},
 	})
 	if err != nil {
-		return Activation{}, fmt.Errorf("code: raise the activation fence to %d: %w", epoch, err)
+		return Activation{}, fmt.Errorf("gitlet: raise the activation fence to %d: %w", epoch, err)
 	}
 	if superseded {
 		return Activation{}, fmt.Errorf("%w (activation %d)", ErrSuperseded, epoch)
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return Activation{}, unknownOutcome(ctx, "code: whether the activation fence reached %d "+
+		return Activation{}, unknownOutcome(ctx, "gitlet: whether the activation fence reached %d "+
 			"is unknown (operation %s); the next attempt decides it again", epoch, opID)
 	}
 	return Activation{epoch: epoch, at: result.Position}, nil
@@ -707,7 +707,7 @@ func (s *Store) unchanged(ctx context.Context, a Activation, declared []Declared
 	})
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("code: read the declared repositories at activation %d: %w",
+		return nil, fmt.Errorf("gitlet: read the declared repositories at activation %d: %w",
 			a.epoch, err)
 	case superseded:
 		return nil, fmt.Errorf("%w (reading the declared repositories at activation %d)",
@@ -729,7 +729,7 @@ func unchangedIn(ctx context.Context, tx *sql.Tx, a Activation, declared []Decla
 	}
 	claims, err := keyPairs(ctx, tx, claimsSQL, tokens)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the declared names' claims: %w", err)
+		return nil, fmt.Errorf("gitlet: read the declared names' claims: %w", err)
 	}
 	ids := make([]string, 0, len(claims))
 	for _, id := range claims {
@@ -801,7 +801,7 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	}
 	rows, err := tx.QueryContext(ctx, reposRowsSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the declared repositories: %w", err)
+		return nil, fmt.Errorf("gitlet: read the declared repositories: %w", err)
 	}
 	for rows.Next() {
 		var id string
@@ -812,7 +812,7 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 			&search, &row.DefaultBranch, &row.Description, &row.ConfigEpoch, &row.PurgeParts,
 			&row.DeletedAt, &from, &to, &pending); err != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("code: read the declared repositories: %w", err)
+			return nil, fmt.Errorf("gitlet: read the declared repositories: %w", err)
 		}
 		row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
 		row.Kind, row.Visibility, row.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
@@ -824,25 +824,25 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()
-		return nil, fmt.Errorf("code: read the declared repositories: %w", err)
+		return nil, fmt.Errorf("gitlet: read the declared repositories: %w", err)
 	}
 	_ = rows.Close()
 	// THE RULES, sorted by pattern within each repository — the order a
 	// declaration's settings carry them in, which the comparison relies on.
 	rules, err := tx.QueryContext(ctx, protectionsOfSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the declared repositories' protections: %w", err)
+		return nil, fmt.Errorf("gitlet: read the declared repositories' protections: %w", err)
 	}
 	defer func() { _ = rules.Close() }()
 	for rules.Next() {
 		var id, direct, gate string
 		var p Protection
 		if err = rules.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
-			return nil, fmt.Errorf("code: read the declared repositories' protections: %w", err)
+			return nil, fmt.Errorf("gitlet: read the declared repositories' protections: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)
 		if p.Gate, err = gateFrom(gate); err != nil {
-			return nil, fmt.Errorf("code: read repository %s's rule %s: %w", id, p.Pattern, err)
+			return nil, fmt.Errorf("gitlet: read repository %s's rule %s: %w", id, p.Pattern, err)
 		}
 		if row, ok := out[id]; ok {
 			row.Protections = append(row.Protections, p)
@@ -850,7 +850,7 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 		}
 	}
 	if err := rules.Err(); err != nil {
-		return nil, fmt.Errorf("code: read the declared repositories' protections: %w", err)
+		return nil, fmt.Errorf("gitlet: read the declared repositories' protections: %w", err)
 	}
 	// AND THE PATH OWNERS, in one statement too, put in the order a
 	// declaration's settings carry them in.
@@ -860,7 +860,7 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 			out[id] = row
 		}
 	}); err != nil {
-		return nil, fmt.Errorf("code: read the declared repositories' path owners: %w", err)
+		return nil, fmt.Errorf("gitlet: read the declared repositories' path owners: %w", err)
 	}
 	for id, row := range out {
 		slices.SortFunc(row.Protections, func(a, b Protection) int { return strings.Compare(a.Pattern, b.Pattern) })
@@ -918,7 +918,7 @@ func (s *Store) claim(ctx context.Context, a Activation, name string, settings R
 			switch {
 			case errors.Is(readErr, sql.ErrNoRows):
 			case readErr != nil:
-				return statelog.Decision{}, fmt.Errorf("code: read the claim on %q: %w", name, readErr)
+				return statelog.Decision{}, fmt.Errorf("gitlet: read the claim on %q: %w", name, readErr)
 			default:
 				return statelog.Decision{}, nil
 			}
@@ -930,13 +930,13 @@ func (s *Store) claim(ctx context.Context, a Activation, name string, settings R
 	})
 	switch {
 	case err != nil:
-		return "", "", fmt.Errorf("code: create %q: %w", name, err)
+		return "", "", fmt.Errorf("gitlet: create %q: %w", name, err)
 	case superseded:
 		return "", "", fmt.Errorf("%w (creating %q at activation %d)", ErrSuperseded, name, a.epoch)
 	case !wrote:
 		return "", found, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return "", "", unknownOutcome(ctx, "code: whether %q was created is unknown "+
+		return "", "", unknownOutcome(ctx, "gitlet: whether %q was created is unknown "+
 			"(operation %s); the next attempt decides it again", name, opID)
 	case result.Outcome == statelog.OutcomeApplied:
 		// APPLIED HERE, so the rows say whether it made the repository: a
@@ -950,7 +950,7 @@ func (s *Store) claim(ctx context.Context, a Activation, name string, settings R
 			}
 			return err
 		}); err != nil {
-			return "", "", fmt.Errorf("code: read back the claim on %q: %w", name, err)
+			return "", "", fmt.Errorf("gitlet: read back the claim on %q: %w", name, err)
 		}
 		if holder != newID {
 			return "", "", fmt.Errorf("%w (creating %q at activation %d)", ErrSuperseded,
@@ -990,7 +990,7 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !found:
-				return statelog.Decision{}, fmt.Errorf("code: the name of repository %s is "+
+				return statelog.Decision{}, fmt.Errorf("gitlet: the name of repository %s is "+
 					"claimed and it has no row — a create writes both, so this node's "+
 					"rows are not what the log built", id)
 			case row.ManagedBy != ManagedConfig:
@@ -1045,13 +1045,13 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 				purging = true
 				return statelog.Decision{}, nil
 			}
-			return statelog.Decision{}, fmt.Errorf("code: repository %s has status %q, "+
+			return statelog.Decision{}, fmt.Errorf("gitlet: repository %s has status %q, "+
 				"which this build does not decide", id, row.Status)
 		},
 	})
 	switch {
 	case err != nil:
-		return Ensured{}, fmt.Errorf("code: settle repository %s: %w", id, err)
+		return Ensured{}, fmt.Errorf("gitlet: settle repository %s: %w", id, err)
 	case superseded:
 		return Ensured{}, fmt.Errorf("%w (settling repository %s at activation %d)",
 			ErrSuperseded, id, a.epoch)
@@ -1060,7 +1060,7 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 	case !out.Changed:
 		return out, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return Ensured{}, unknownOutcome(ctx, "code: whether repository %s's settings landed "+
+		return Ensured{}, unknownOutcome(ctx, "gitlet: whether repository %s's settings landed "+
 			"is unknown (operation %s); the next attempt decides them again", id, opID)
 	case result.Outcome == statelog.OutcomeApplied:
 		if err := s.readBack(ctx, id, a); err != nil {
@@ -1107,14 +1107,14 @@ func (s *Store) DeleteRepo(ctx context.Context, a Activation, repoID string) (bo
 	})
 	switch {
 	case err != nil:
-		return false, fmt.Errorf("code: delete repository %s: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: delete repository %s: %w", repoID, err)
 	case superseded:
 		return false, fmt.Errorf("%w (deleting repository %s at activation %d)",
 			ErrSuperseded, repoID, a.epoch)
 	case !wrote:
 		return false, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return false, unknownOutcome(ctx, "code: whether repository %s was deleted is unknown "+
+		return false, unknownOutcome(ctx, "gitlet: whether repository %s was deleted is unknown "+
 			"(operation %s); the next attempt decides it again", repoID, opID)
 	case result.Outcome == statelog.OutcomeApplied:
 		if err := s.readBack(ctx, repoID, a); err != nil {
@@ -1136,7 +1136,7 @@ func (s *Store) readBack(ctx context.Context, id string, a Activation) error {
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w (repository %s is gone)", ErrSuperseded, id)
 	case err != nil:
-		return fmt.Errorf("code: read back repository %s: %w", id, err)
+		return fmt.Errorf("gitlet: read back repository %s: %w", id, err)
 	case epoch < a.epoch:
 		return fmt.Errorf("%w (repository %s stayed at activation %d)", ErrSuperseded, id, epoch)
 	}
@@ -1152,7 +1152,7 @@ func activationSuperseded(ctx context.Context, tx *sql.Tx, a Activation) (bool, 
 	case err != nil:
 		return false, err
 	case fence < a.epoch:
-		return false, fmt.Errorf("code: this snapshot's activation fence is at %d, below "+
+		return false, fmt.Errorf("gitlet: this snapshot's activation fence is at %d, below "+
 			"activation %d — a decide of an activation waits for its own fence, so this "+
 			"Activation was not made by Activate", fence, a.epoch)
 	}
@@ -1167,7 +1167,7 @@ func fenceIn(ctx context.Context, tx *sql.Tx) (int64, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, nil
 	case err != nil:
-		return 0, fmt.Errorf("code: read the activation fence: %w", err)
+		return 0, fmt.Errorf("gitlet: read the activation fence: %w", err)
 	}
 	return fence, nil
 }
@@ -1213,10 +1213,10 @@ func (r repoRow) settings() RepoSettings {
 func (r *repoRow) remotesOf(from, to string, pending bool) error {
 	var err error
 	if r.Remotes.from, err = remoteOf[MirrorSource](from); err != nil {
-		return fmt.Errorf("code: read %s's mirror_from: %w", r.Name, err)
+		return fmt.Errorf("gitlet: read %s's mirror_from: %w", r.Name, err)
 	}
 	if r.Remotes.to, err = remoteOf[MirrorTarget](to); err != nil {
-		return fmt.Errorf("code: read %s's mirror_to: %w", r.Name, err)
+		return fmt.Errorf("gitlet: read %s's mirror_to: %w", r.Name, err)
 	}
 	r.Remotes.importPending = pending
 	return nil
@@ -1237,7 +1237,7 @@ func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return repoRow{}, false, nil
 	case err != nil:
-		return repoRow{}, false, fmt.Errorf("code: read repository %s: %w", id, err)
+		return repoRow{}, false, fmt.Errorf("gitlet: read repository %s: %w", id, err)
 	}
 	row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
 	row.Kind, row.Visibility, row.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
@@ -1259,7 +1259,7 @@ func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 func pathOwnersIn(ctx context.Context, tx *sql.Tx, id string) ([]PathOwner, error) {
 	rows, err := tx.QueryContext(ctx, pathOwnersSQL, id)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's path owners: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's path owners: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []PathOwner
@@ -1267,13 +1267,13 @@ func pathOwnersIn(ctx context.Context, tx *sql.Tx, id string) ([]PathOwner, erro
 		var kind, packed string
 		var po PathOwner
 		if err := rows.Scan(&kind, &po.Owner.Ref, &packed); err != nil {
-			return nil, fmt.Errorf("code: read %s's path owners: %w", id, err)
+			return nil, fmt.Errorf("gitlet: read %s's path owners: %w", id, err)
 		}
 		po.Owner.Kind, po.Paths = OwnerKind(kind), unpackPaths(packed)
 		out = append(out, po)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's path owners: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's path owners: %w", id, err)
 	}
 	// THE STATEMENT ORDERS BY THE KEY, and this states it again as a property
 	// the comparison relies on rather than a property of a plan.
@@ -1289,7 +1289,7 @@ func pathOwnersIn(ctx context.Context, tx *sql.Tx, id string) ([]PathOwner, erro
 func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, error) {
 	rows, err := tx.QueryContext(ctx, protectionsSQL, id)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []Protection
@@ -1297,16 +1297,16 @@ func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, er
 		var p Protection
 		var direct, gate string
 		if err = rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
-			return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+			return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 		}
 		p.DirectPush = DirectPush(direct)
 		if p.Gate, err = gateFrom(gate); err != nil {
-			return nil, fmt.Errorf("code: read %s's rule %s: %w", id, p.Pattern, err)
+			return nil, fmt.Errorf("gitlet: read %s's rule %s: %w", id, p.Pattern, err)
 		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 	}
 	// THE STATEMENT ORDERS BY PATTERN, and this states it again as a
 	// property the comparison relies on rather than a property of a plan.
@@ -1329,11 +1329,11 @@ func ruleIn(ctx context.Context, tx *sql.Tx, id, pattern string) (*Protection, e
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
 	case err != nil:
-		return nil, fmt.Errorf("code: read %s's rule %s: %w", id, pattern, err)
+		return nil, fmt.Errorf("gitlet: read %s's rule %s: %w", id, pattern, err)
 	}
 	p.DirectPush = DirectPush(direct)
 	if p.Gate, err = gateFrom(gate); err != nil {
-		return nil, fmt.Errorf("code: read %s's rule %s: %w", id, pattern, err)
+		return nil, fmt.Errorf("gitlet: read %s's rule %s: %w", id, pattern, err)
 	}
 	return &p, nil
 }
@@ -1353,7 +1353,7 @@ func ruleIn(ctx context.Context, tx *sql.Tx, id, pattern string) (*Protection, e
 func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]PushRule, error) {
 	rows, err := tx.QueryContext(ctx, pushRulesSQL, id)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []PushRule
@@ -1361,13 +1361,13 @@ func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]PushRule, error)
 		var p PushRule
 		var direct string
 		if err := rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct); err != nil {
-			return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+			return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 		}
 		p.DirectPush = DirectPush(direct)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 	}
 	// THE STATEMENT ORDERS BY PATTERN, and this states it again as a
 	// property the comparison relies on rather than a property of a plan.
@@ -1383,7 +1383,7 @@ func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]PushRule, error)
 func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 	rows, err := tx.QueryContext(ctx, gatesSQL, id)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's merge gates: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's merge gates: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []RuleGate
@@ -1391,17 +1391,17 @@ func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 		var r RuleGate
 		var column string
 		if err = rows.Scan(&r.Pattern, &column); err != nil {
-			return nil, fmt.Errorf("code: read %s's merge gates: %w", id, err)
+			return nil, fmt.Errorf("gitlet: read %s's merge gates: %w", id, err)
 		}
 		// NEVER AN EMPTY COLUMN, which the statement leaves out: one here is
 		// refused as the gate it does not decode to, never read as none.
 		if r.Gate, err = decodeGate(column); err != nil {
-			return nil, fmt.Errorf("code: read %s's rule %s: %w", id, r.Pattern, err)
+			return nil, fmt.Errorf("gitlet: read %s's rule %s: %w", id, r.Pattern, err)
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's merge gates: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read %s's merge gates: %w", id, err)
 	}
 	// THE STATEMENT ORDERS BY PATTERN, stated again as a property its reader
 	// relies on — a gate is found beside its rule by walking both in order.
@@ -1422,7 +1422,7 @@ func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 func ruleDetailsIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, []RuleSource, error) {
 	rows, err := tx.QueryContext(ctx, ruleDetailsSQL, id)
 	if err != nil {
-		return nil, nil, fmt.Errorf("code: read %s's rules: %w", id, err)
+		return nil, nil, fmt.Errorf("gitlet: read %s's rules: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var (
@@ -1437,7 +1437,7 @@ func ruleDetailsIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, []Ru
 			at     int64
 		)
 		if err = rows.Scan(&r.Pattern, &column, &r.SetBy, &kind, &at); err != nil {
-			return nil, nil, fmt.Errorf("code: read %s's rules: %w", id, err)
+			return nil, nil, fmt.Errorf("gitlet: read %s's rules: %w", id, err)
 		}
 		r.SetByKind, r.SetAt = ActorKind(kind), store.DecodeTime(at)
 		sources = append(sources, r)
@@ -1449,12 +1449,12 @@ func ruleDetailsIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, []Ru
 		}
 		g := RuleGate{Pattern: r.Pattern}
 		if g.Gate, err = decodeGate(column); err != nil {
-			return nil, nil, fmt.Errorf("code: read %s's rule %s: %w", id, r.Pattern, err)
+			return nil, nil, fmt.Errorf("gitlet: read %s's rule %s: %w", id, r.Pattern, err)
 		}
 		gates = append(gates, g)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("code: read %s's rules: %w", id, err)
+		return nil, nil, fmt.Errorf("gitlet: read %s's rules: %w", id, err)
 	}
 	// THE STATEMENT ORDERS BY PATTERN, stated again as a property its readers
 	// rely on: a gate and a source are found beside their rule by walking

@@ -1279,7 +1279,7 @@ func domainWords(err error) string {
 }
 
 // RefusalSentence is the sentence err carries past its sentinel's own words —
-// `code: the caller's grant does not cover this: <sentence>` read as the
+// `gitlet: the caller's grant does not cover this: <sentence>` read as the
 // sentence — wherever in the chain the sentinel was wrapped, since a refusal
 // another node answered arrives wrapped by the estate router as well; false
 // where the sentinel carries none.

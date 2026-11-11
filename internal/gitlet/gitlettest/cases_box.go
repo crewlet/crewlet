@@ -235,7 +235,7 @@ func memberScene(t *testing.T, c Cluster, name string) (boxScene, *repoCase) {
 				return n
 			}
 		}
-		t.Fatalf("codetest: member %s serves no git right now", id)
+		t.Fatalf("gitlettest: member %s serves no git right now", id)
 		return nil
 	}
 	return boxScene{t: t, f: c, ctx: rc.ctx, repo: name, a: byID(a), b: byID(b)}, rc

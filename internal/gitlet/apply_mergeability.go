@@ -44,7 +44,7 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 	error) {
 
 	if !m.State.Valid() {
-		return 0, conversationCounts{}, fmt.Errorf("code: the mergeability at %s says %q, which no writer forms",
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: the mergeability at %s says %q, which no writer forms",
 			at.position, m.State)
 	}
 	change, found, err := changeRowIn(ctx, tx, m.ChangeID)
@@ -60,7 +60,7 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 			m.ChecksPosition.Packed(), m.ChartEpoch, m.Ready, m.WaitsPerson, m.ChangeID, m.Revision, m.TargetRef,
 			m.TargetPosition.Packed())
 		if err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: refresh %s's readiness at %s: %w", m.ChangeID,
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: refresh %s's readiness at %s: %w", m.ChangeID,
 				at.position, err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
@@ -80,7 +80,7 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 		m.TargetPosition.Packed(), string(m.State), len(m.Conflicts), m.ConflictsOmitted, m.Node, weight,
 		at.packed, at.at(), m.ChangeVersion, m.ReadinessVersion, m.ChecksPosition.Packed(), m.ChartEpoch, m.Ready,
 		m.WaitsPerson, conflicts); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: write %s's mergeability at %s: %w", m.ChangeID,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write %s's mergeability at %s: %w", m.ChangeID,
 			at.position, err)
 	}
 	counts := conversationCounts{textBytes: weight}
@@ -123,14 +123,14 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k MergeabilityKept) (int, error) {
 	retarget, rejudge := k.TargetOID != "", k.ChangeVersion != 0
 	if !retarget && !rejudge {
-		return 0, fmt.Errorf("code: the kept mergeability at %s moves neither a tip nor a judgement, which no "+
+		return 0, fmt.Errorf("gitlet: the kept mergeability at %s moves neither a tip nor a judgement, which no "+
 			"writer forms", at.position)
 	}
 	res, err := tx.ExecContext(ctx, keptMergeabilitySQL, retarget, k.TargetOID, k.TargetPosition.Packed(), at.at(),
 		rejudge, k.ChangeVersion, k.ReadinessVersion, k.ChecksPosition.Packed(), k.ChangeID, k.Revision,
 		k.ChartEpoch)
 	if err != nil {
-		return 0, fmt.Errorf("code: move %s's mergeability at %s: %w", k.ChangeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's mergeability at %s: %w", k.ChangeID, at.position, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return conversationNotApplied(ctx, at, k.RepoID, k.ChangeID, "the mergeability it keeps is not the "+
@@ -159,11 +159,11 @@ func clearReadiness(ctx context.Context, tx store.Execer, ids []string) (int, er
 	}
 	res, err := tx.ExecContext(ctx, clearReadinessSQL, list)
 	if err != nil {
-		return 0, fmt.Errorf("code: clear the stored readiness of %d ended changes: %w", len(ids), err)
+		return 0, fmt.Errorf("gitlet: clear the stored readiness of %d ended changes: %w", len(ids), err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("code: clear the stored readiness of %d ended changes: %w", len(ids), err)
+		return 0, fmt.Errorf("gitlet: clear the stored readiness of %d ended changes: %w", len(ids), err)
 	}
 	return int(n), nil
 }

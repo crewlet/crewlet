@@ -162,9 +162,9 @@ func StartDataNode(t testing.TB, o DataOptions) *DataNode {
 	t.Helper()
 	switch {
 	case o.ID == "" || o.Queue == nil || o.Dir == "":
-		t.Fatalf("codetest: a data node needs an id, a queue and a directory (%+v)", o)
+		t.Fatalf("gitlettest: a data node needs an id, a queue and a directory (%+v)", o)
 	case o.LogBytes <= 0:
-		t.Fatalf("codetest: data node %s needs the code log's ceiling", o.ID)
+		t.Fatalf("gitlettest: data node %s needs the code log's ceiling", o.ID)
 	}
 	if o.Faults == nil {
 		o.Faults = &gitletfault.Script{}
@@ -215,15 +215,15 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if err := q.EnsureDomainStream(ctx, js.DomainStream{Name: spec.Name, Subjects: spec.Subjects,
 		MaxBytes: spec.MaxBytes, MaxMessageBytes: spec.MaxAppendBytes(),
 		Duplicates: spec.Duplicates}); err != nil {
-		t.Fatalf("codetest: %s: provision the code log: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: provision the code log: %v", d.o.ID, err)
 	}
 	var err error
 	if p.log, err = q.DomainLog(ctx, spec.Name); err != nil {
-		t.Fatalf("codetest: %s: open the code log: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: open the code log: %v", d.o.ID, err)
 	}
 	stats, err := p.log.Stats(ctx)
 	if err != nil {
-		t.Fatalf("codetest: %s: read the code log: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: read the code log: %v", d.o.ID, err)
 	}
 	// THE ESTATE, seeded where none exists and opened as it is where one
 	// does — which is what a restarted process does.
@@ -231,18 +231,18 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		store.Options{WrapDriver: d.o.WrapDriver}, 1)
 	checkpoint, _, err := statelog.CheckpointOf(ctx, p.estate.Reader(), spec.Name)
 	if err != nil {
-		t.Fatalf("codetest: %s: read the checkpoint: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: read the checkpoint: %v", d.o.ID, err)
 	}
 	if p.consumer, err = q.DomainConsumer(ctx, spec.Name, d.o.ID, checkpoint.At.Seq); err != nil {
-		t.Fatalf("codetest: %s: open the consumer: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: open the consumer: %v", d.o.ID, err)
 	}
 	signer, err := recordseal.NewSigner(gitlet.Domain{}.Name(), fleetRing)
 	if err != nil {
-		t.Fatalf("codetest: %s: build the record signer: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the record signer: %v", d.o.ID, err)
 	}
 	verifier, err := recordseal.NewVerifier(gitlet.Domain{}.Name(), fleetRing)
 	if err != nil {
-		t.Fatalf("codetest: %s: build the record verifier: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the record verifier: %v", d.o.ID, err)
 	}
 	p.records = statelog.VerifiedLog{Log: p.log, Verifier: verifier}
 	var applier statelog.Applier = gitlet.NewApplier(nil)
@@ -263,7 +263,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 			return gitlet.NewFence(p.estate.Reader(), node).Evicted(ctx)
 		},
 	}); err != nil {
-		t.Fatalf("codetest: %s: build the applier: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the applier: %v", d.o.ID, err)
 	}
 	p.startApplier()
 
@@ -277,11 +277,11 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		return statelog.Usage{Bytes: s.Bytes, MaxBytes: s.MaxBytes}, serr
 	})
 	if err != nil {
-		t.Fatalf("codetest: %s: build the gate reserve: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the gate reserve: %v", d.o.ID, err)
 	}
 	rows, err := gitlet.NewRows(p.estate.Reader(), spec)
 	if err != nil {
-		t.Fatalf("codetest: %s: build the read seam: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the read seam: %v", d.o.ID, err)
 	}
 	gen := func() uint32 { return p.runner.Committed().Generation }
 	publisher := func(writer string) *statelog.Publisher {
@@ -301,7 +301,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 			Admission: reserve, NodeID: writer, Generation: gen,
 		})
 		if perr != nil {
-			t.Fatalf("codetest: %s: build %s's write authority: %v", d.o.ID, writer, perr)
+			t.Fatalf("gitlettest: %s: build %s's write authority: %v", d.o.ID, writer, perr)
 		}
 		return pub
 	}
@@ -309,7 +309,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	index, err := statelog.NewReadIndex(gitlet.Domain{}, spec, p.log, p.log.Members, signer, reserve,
 		gitlet.EncodeBarrier, gen, nil)
 	if err != nil {
-		t.Fatalf("codetest: %s: build the read index: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the read index: %v", d.o.ID, err)
 	}
 	authority, err := statelog.NewReader(statelog.ReaderDeps{
 		Domain: gitlet.Domain{}, Spec: spec, Mode: statelog.ModeNormal, DB: p.estate.Reader(),
@@ -317,7 +317,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Health: func() (statelog.Health, error) { return p.health(ctx) },
 	})
 	if err != nil {
-		t.Fatalf("codetest: %s: build the read authority: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the read authority: %v", d.o.ID, err)
 	}
 	limits := func() gitlet.Limits { return d.o.Limits }
 	seatRules := d.o.SeatRules
@@ -340,7 +340,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}
 	if p.reader, err = gitlet.NewReader(gitlet.ReaderOptions{Log: authority, Limits: limits,
 		Roster: roster}); err != nil {
-		t.Fatalf("codetest: %s: build the reader: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the reader: %v", d.o.ID, err)
 	}
 	if p.committer, err = gitlet.NewCommitter(gitlet.CommitterOptions{
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
@@ -352,7 +352,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		// seat's push while it is behind the company's configuration.
 		SeatRules: seatRules, Current: d.o.Current,
 	}); err != nil {
-		t.Fatalf("codetest: %s: build the committer: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the committer: %v", d.o.ID, err)
 	}
 	if p.changes, err = gitlet.NewChangeWriter(gitlet.ChangeWriterOptions{
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
@@ -366,7 +366,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		// of the fleet does.
 		SeatRules: seatRules, Current: d.o.Current, People: people,
 	}); err != nil {
-		t.Fatalf("codetest: %s: build the change writer: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the change writer: %v", d.o.ID, err)
 	}
 	// THE CHECKS WRITER, as the engine builds it beside the committer, with no
 	// event stream: the suite reads what a check's record did from its rows.
@@ -376,13 +376,13 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Retention: func() time.Duration { return deletedRetention },
 		SeatRules: seatRules, Current: d.o.Current,
 	}); err != nil {
-		t.Fatalf("codetest: %s: build the checks writer: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the checks writer: %v", d.o.ID, err)
 	}
 	if p.marks, err = gitlet.NewMarks(gitlet.MarksOptions{
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID,
 	}); err != nil {
-		t.Fatalf("codetest: %s: build the marks writer: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the marks writer: %v", d.o.ID, err)
 	}
 	// THE LIFECYCLE STORE DECIDES A TOOL'S REQUEST as the engine's does: by
 	// the committer's chart and posture, and by the scratch policy of a
@@ -396,12 +396,12 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if p.lifecycle, err = gitlet.NewStore(gitlet.StoreOptions{Publisher: pub, DB: p.estate.Reader(),
 		NodeID: d.o.ID, Now: now, SeatRules: seatRules, Current: d.o.Current, Policy: scratchPolicy,
 		People: people}); err != nil {
-		t.Fatalf("codetest: %s: build the lifecycle store: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: %s: build the lifecycle store: %v", d.o.ID, err)
 	}
 	if d.o.Operator != "" {
 		if p.operator, err = gitlet.NewStore(gitlet.StoreOptions{Publisher: publisher(d.o.Operator),
 			DB: p.estate.Reader(), NodeID: d.o.Operator, Now: now}); err != nil {
-			t.Fatalf("codetest: %s: build the operator's lifecycle store: %v", d.o.ID, err)
+			t.Fatalf("gitlettest: %s: build the operator's lifecycle store: %v", d.o.ID, err)
 		}
 	}
 	return p
@@ -453,15 +453,15 @@ func (d *DataNode) Declare(t testing.TB, at time.Time, repos ...gitlet.Declared)
 	t.Helper()
 	s := d.Store()
 	if s == nil {
-		t.Fatalf("codetest: declare through data node %s, which is not running", d.o.ID)
+		t.Fatalf("gitlettest: declare through data node %s, which is not running", d.o.ID)
 	}
 	a, err := s.Activate(t.Context(), at)
 	if err != nil {
-		t.Fatalf("codetest: activate through %s: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: activate through %s: %v", d.o.ID, err)
 	}
 	for _, r := range repos {
 		if _, err := s.EnsureRepo(t.Context(), a, r); err != nil {
-			t.Fatalf("codetest: declare %s through %s: %v", r.Name, d.o.ID, err)
+			t.Fatalf("gitlettest: declare %s through %s: %v", r.Name, d.o.ID, err)
 		}
 	}
 }
@@ -472,18 +472,18 @@ func (d *DataNode) Remove(t testing.TB, at time.Time, name string) {
 	t.Helper()
 	served, s := d.Served(), d.Store()
 	if s == nil {
-		t.Fatalf("codetest: remove through data node %s, which is not running", d.o.ID)
+		t.Fatalf("gitlettest: remove through data node %s, which is not running", d.o.ID)
 	}
 	ref, err := served.Resolve(t.Context(), gitlet.ResolveQuery{Name: name, Fresh: Linearizable})
 	if err != nil {
-		t.Fatalf("codetest: resolve %s through %s: %v", name, d.o.ID, err)
+		t.Fatalf("gitlettest: resolve %s through %s: %v", name, d.o.ID, err)
 	}
 	a, err := s.Activate(t.Context(), at)
 	if err != nil {
-		t.Fatalf("codetest: activate through %s: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: activate through %s: %v", d.o.ID, err)
 	}
 	if _, err := s.DeleteRepo(t.Context(), a, ref.ID); err != nil {
-		t.Fatalf("codetest: remove %s through %s: %v", name, d.o.ID, err)
+		t.Fatalf("gitlettest: remove %s through %s: %v", name, d.o.ID, err)
 	}
 }
 
@@ -494,7 +494,7 @@ func (d *DataNode) Purge(t testing.TB) {
 	t.Helper()
 	p := d.proc()
 	if p == nil {
-		t.Fatalf("codetest: purge through data node %s, which is not running", d.o.ID)
+		t.Fatalf("gitlettest: purge through data node %s, which is not running", d.o.ID)
 	}
 	r := &gitlet.Retention{Store: p.lifecycle, Reader: p.reader,
 		Retention: func() time.Duration { return time.Nanosecond },
@@ -502,13 +502,13 @@ func (d *DataNode) Purge(t testing.TB) {
 	for range 64 {
 		report, err := r.Pass(t.Context())
 		if err != nil {
-			t.Fatalf("codetest: a retention pass through %s: %v", d.o.ID, err)
+			t.Fatalf("gitlettest: a retention pass through %s: %v", d.o.ID, err)
 		}
 		if !report.Remain && len(report.Unhanded) == 0 && len(report.Failed) == 0 {
 			return
 		}
 	}
-	t.Fatalf("codetest: sixty-four retention passes through %s left a purge unfinished", d.o.ID)
+	t.Fatalf("gitlettest: sixty-four retention passes through %s left a purge unfinished", d.o.ID)
 }
 
 // scratchPolicy is every topology's code.scratch: the defaults a company that
@@ -528,14 +528,14 @@ func (d *DataNode) Retain(t testing.TB, now time.Time) gitlet.RetentionReport {
 	t.Helper()
 	p := d.proc()
 	if p == nil {
-		t.Fatalf("codetest: a retention pass through data node %s, which is not running", d.o.ID)
+		t.Fatalf("gitlettest: a retention pass through data node %s, which is not running", d.o.ID)
 	}
 	r := &gitlet.Retention{Store: p.lifecycle, Reader: p.reader,
 		Retention: func() time.Duration { return deletedRetention }, Now: func() time.Time { return now },
 		Policy: scratchPolicy, Holds: holdsNone, Propose: p.committer.Propose, Node: d.o.ID}
 	report, err := r.Pass(t.Context())
 	if err != nil {
-		t.Fatalf("codetest: a retention pass through %s: %v", d.o.ID, err)
+		t.Fatalf("gitlettest: a retention pass through %s: %v", d.o.ID, err)
 	}
 	return report
 }
@@ -571,7 +571,7 @@ func (d *DataNode) CollectAt(t testing.TB, objects objstore.Backend, at time.Tim
 	t.Helper()
 	report, err := d.collector(t, objects, at).Collect(t.Context())
 	if err != nil {
-		t.Fatalf("codetest: a collection: %v", err)
+		t.Fatalf("gitlettest: a collection: %v", err)
 	}
 	return report
 }
@@ -584,7 +584,7 @@ func (d *DataNode) Audit(t testing.TB, objects objstore.Backend) collect.AuditRe
 	t.Helper()
 	report, err := d.collector(t, objects, time.Now()).Audit(t.Context())
 	if err != nil {
-		t.Fatalf("codetest: an audit: %v", err)
+		t.Fatalf("gitlettest: an audit: %v", err)
 	}
 	return report
 }
@@ -595,16 +595,16 @@ func (d *DataNode) collector(t testing.TB, objects objstore.Backend, at time.Tim
 	t.Helper()
 	store, err := objstore.NewStore(objects)
 	if err != nil {
-		t.Fatalf("codetest: the object store: %v", err)
+		t.Fatalf("gitlettest: the object store: %v", err)
 	}
 	sources, err := collect.Sources(codeTables, gitlet.ObjectEstate{Reader: d.Served().Reader})
 	if err != nil {
-		t.Fatalf("codetest: the collector's sources: %v", err)
+		t.Fatalf("gitlettest: the collector's sources: %v", err)
 	}
 	c, err := collect.New(collect.Options{Store: store, References: sources,
 		Now: func() time.Time { return at }})
 	if err != nil {
-		t.Fatalf("codetest: a collector: %v", err)
+		t.Fatalf("gitlettest: a collector: %v", err)
 	}
 	return c
 }
@@ -640,7 +640,7 @@ func (d *DataNode) gesture(t testing.TB, node string,
 		s = d.Store()
 	}
 	if s == nil {
-		t.Fatalf("codetest: %s %s through data node %s, which is not running", name, node, d.o.ID)
+		t.Fatalf("gitlettest: %s %s through data node %s, which is not running", name, node, d.o.ID)
 	}
 	actor := gitlet.Actor{ID: "ops", Kind: gitlet.ActorOperator, OperatorID: "ops"}
 	res, err := op(s, t.Context(), actor, statelog.NewOpID(time.Now(), name), node)
@@ -651,11 +651,11 @@ func (d *DataNode) gesture(t testing.TB, node string,
 		// and never a failure ([proposeLanded]): the node holds the gesture
 		// once it has applied every record the log held, this one among them.
 		if lerr := d.Level(t.Context()); lerr != nil {
-			t.Fatalf("codetest: %s %s through %s was answered pending at %s, and the node never reached it: %v",
+			t.Fatalf("gitlettest: %s %s through %s was answered pending at %s, and the node never reached it: %v",
 				name, node, d.o.ID, res.Position, lerr)
 		}
 	case err != nil || res.Outcome != statelog.OutcomeApplied:
-		t.Fatalf("codetest: %s %s through %s = (%+v, %v), want applied", name, node, d.o.ID, res, err)
+		t.Fatalf("gitlettest: %s %s through %s = (%+v, %v), want applied", name, node, d.o.ID, res, err)
 	}
 	return res.Position
 }
@@ -665,7 +665,7 @@ func (d *DataNode) gesture(t testing.TB, node string,
 func (d *DataNode) WaitApplied(ctx context.Context, at statelog.Position) error {
 	p := d.proc()
 	if p == nil {
-		return fmt.Errorf("codetest: data node %s is not running", d.o.ID)
+		return fmt.Errorf("gitlettest: data node %s is not running", d.o.ID)
 	}
 	return p.runner.WaitReached(ctx, at)
 }
@@ -676,14 +676,14 @@ func (d *DataNode) WaitApplied(ctx context.Context, at statelog.Position) error 
 func (d *DataNode) Level(ctx context.Context) error {
 	p := d.proc()
 	if p == nil {
-		return fmt.Errorf("codetest: data node %s is not running", d.o.ID)
+		return fmt.Errorf("gitlettest: data node %s is not running", d.o.ID)
 	}
 	_, last, err := p.log.Bounds(ctx)
 	if err != nil {
-		return fmt.Errorf("codetest: %s: the code log's end: %w", d.o.ID, err)
+		return fmt.Errorf("gitlettest: %s: the code log's end: %w", d.o.ID, err)
 	}
 	if err := awaitAt(ctx, func() uint64 { return p.runner.Reached().Seq }, last); err != nil {
-		return fmt.Errorf("codetest: %s reached %d of the log's %d: %w", d.o.ID, p.runner.Reached().Seq, last, err)
+		return fmt.Errorf("gitlettest: %s reached %d of the log's %d: %w", d.o.ID, p.runner.Reached().Seq, last, err)
 	}
 	return nil
 }
@@ -721,7 +721,7 @@ func (d *DataNode) Drained() bool {
 func (d *DataNode) Health(ctx context.Context) (statelog.Health, error) {
 	p := d.proc()
 	if p == nil {
-		return statelog.Health{}, fmt.Errorf("codetest: data node %s is not running", d.o.ID)
+		return statelog.Health{}, fmt.Errorf("gitlettest: data node %s is not running", d.o.ID)
 	}
 	return p.health(ctx)
 }
@@ -741,18 +741,18 @@ func (d *DataNode) Closes() int { return int(d.closes.Load()) }
 func (d *DataNode) Writer(ctx context.Context, at statelog.Position) (string, error) {
 	p := d.proc()
 	if p == nil {
-		return "", fmt.Errorf("codetest: data node %s is not running", d.o.ID)
+		return "", fmt.Errorf("gitlettest: data node %s is not running", d.o.ID)
 	}
 	_, body, _, ok, err := p.records.At(ctx, at.Seq)
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("codetest: %s: read the record at %s: %w", d.o.ID, at, err)
+		return "", fmt.Errorf("gitlettest: %s: read the record at %s: %w", d.o.ID, at, err)
 	case !ok:
-		return "", fmt.Errorf("codetest: %s: the code log holds no record at %s", d.o.ID, at)
+		return "", fmt.Errorf("gitlettest: %s: the code log holds no record at %s", d.o.ID, at)
 	}
 	env, err := gitlet.Domain{}.Envelope(body)
 	if err != nil {
-		return "", fmt.Errorf("codetest: %s: decode the record at %s: %w", d.o.ID, at, err)
+		return "", fmt.Errorf("gitlettest: %s: decode the record at %s: %w", d.o.ID, at, err)
 	}
 	return env.Writer, nil
 }
@@ -764,7 +764,7 @@ func (d *DataNode) Writer(ctx context.Context, at statelog.Position) (string, er
 func (d *DataNode) LogStats(ctx context.Context) (js.LogStats, error) {
 	p := d.proc()
 	if p == nil {
-		return js.LogStats{}, fmt.Errorf("codetest: the code log's stats through data node %s, which is not "+
+		return js.LogStats{}, fmt.Errorf("gitlettest: the code log's stats through data node %s, which is not "+
 			"running", d.o.ID)
 	}
 	return p.log.Stats(ctx)
@@ -781,12 +781,12 @@ func (d *DataNode) PauseApplier(t testing.TB) (resume func()) {
 	t.Helper()
 	p := d.proc()
 	if p == nil {
-		t.Fatalf("codetest: PauseApplier of data node %s, which is not running", d.o.ID)
+		t.Fatalf("gitlettest: PauseApplier of data node %s, which is not running", d.o.ID)
 		return func() {}
 	}
 	reached := p.runner.Reached()
 	if err := awaitAt(t.Context(), func() int64 { return p.runner.Committed().Packed() }, reached.Packed()); err != nil {
-		t.Fatalf("codetest: %s: checkpoint at %s, below the %s it reached, before the halt: %v", d.o.ID,
+		t.Fatalf("gitlettest: %s: checkpoint at %s, below the %s it reached, before the halt: %v", d.o.ID,
 			p.runner.Committed(), reached, err)
 		return func() {}
 	}
@@ -798,7 +798,7 @@ func (d *DataNode) PauseApplier(t testing.TB) (resume func()) {
 			err = p.consumer.Reset(ctx, at.Seq)
 		}
 		if err != nil {
-			t.Errorf("codetest: %s: move the consumer back to the checkpoint: %v", d.o.ID, err)
+			t.Errorf("gitlettest: %s: move the consumer back to the checkpoint: %v", d.o.ID, err)
 		}
 		p.startApplier()
 	}
@@ -841,7 +841,7 @@ func (d *DataNode) Kill() {
 func (d *DataNode) Restart(t testing.TB, q *js.Queue) {
 	t.Helper()
 	if d.proc() != nil {
-		t.Fatalf("codetest: Restart of data node %s, which was not killed", d.o.ID)
+		t.Fatalf("gitlettest: Restart of data node %s, which was not killed", d.o.ID)
 	}
 	p := d.start(t, q)
 	d.mu.Lock()

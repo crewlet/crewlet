@@ -123,7 +123,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return *refusal, nil
 	}
 	if !cv.change.State.Live() {
-		return refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s is %s", cv.g.ref(), cv.change.State),
+		return refusedBy(tools.RefusalConflict, fmt.Errorf("gitlet: %s is %s", cv.g.ref(), cv.change.State),
 			fmt.Sprintf("%s: %s is %s: its branch is no longer what it proposes, and takes no suggestion.", tool,
 				cv.g.ref(), cv.change.State)), nil
 	}

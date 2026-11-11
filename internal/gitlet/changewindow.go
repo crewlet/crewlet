@@ -111,7 +111,7 @@ func withConversations(ctx context.Context, tx *sql.Tx, rows []changeRow) error 
 	}
 	read, err := tx.QueryContext(ctx, conversationsOfSQL, list)
 	if err != nil {
-		return fmt.Errorf("code: read the conversations of %d changes: %w", len(rows), err)
+		return fmt.Errorf("gitlet: read the conversations of %d changes: %w", len(rows), err)
 	}
 	defer func() { _ = read.Close() }()
 	type said struct{ openFindings, spokenAt int64 }
@@ -120,12 +120,12 @@ func withConversations(ctx context.Context, tx *sql.Tx, rows []changeRow) error 
 		var id string
 		var s said
 		if err := read.Scan(&id, &s.openFindings, &s.spokenAt); err != nil {
-			return fmt.Errorf("code: read the conversations of %d changes: %w", len(rows), err)
+			return fmt.Errorf("gitlet: read the conversations of %d changes: %w", len(rows), err)
 		}
 		of[id] = s
 	}
 	if err := read.Err(); err != nil {
-		return fmt.Errorf("code: read the conversations of %d changes: %w", len(rows), err)
+		return fmt.Errorf("gitlet: read the conversations of %d changes: %w", len(rows), err)
 	}
 	for i := range rows {
 		s := of[rows[i].id]
@@ -222,7 +222,7 @@ func movedCursor(row changeRow) string { return logCursor(row.moved, row.id) }
 func readChangesBy(ctx context.Context, tx *sql.Tx, stmt string, args []any, what string) ([]changeRow, error) {
 	rows, err := tx.QueryContext(ctx, stmt, args...)
 	if err != nil {
-		return nil, fmt.Errorf("code: list changes by %s: %w", what, err)
+		return nil, fmt.Errorf("gitlet: list changes by %s: %w", what, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []changeRow
@@ -238,7 +238,7 @@ func readChangesBy(ctx context.Context, tx *sql.Tx, stmt string, args []any, wha
 			row, scanErr = scanChange(rows.Scan)
 		}
 		if scanErr != nil {
-			return nil, fmt.Errorf("code: list changes by %s: %w", what, scanErr)
+			return nil, fmt.Errorf("gitlet: list changes by %s: %w", what, scanErr)
 		}
 		out = append(out, row)
 	}

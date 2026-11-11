@@ -87,7 +87,7 @@ func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, cha
 	out.Routed = routed
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("code: read whom %s reached: %w", named, err)
+		return fmt.Errorf("gitlet: read whom %s reached: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	limit := min(limitOr(q.Limit, defaultRoutedLimit), r.pageRows)
@@ -113,7 +113,7 @@ func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, cha
 		)
 		if scanErr := rows.Scan(&recordID, &n.Handle, &kind, &reason, &addressed, &fallback, &n.FallbackRank,
 			&excerpt, &at, &packed); scanErr != nil {
-			return fmt.Errorf("code: read whom %s reached: %w", named, scanErr)
+			return fmt.Errorf("gitlet: read whom %s reached: %w", named, scanErr)
 		}
 		if record != nil && packed != seq {
 			if finish() {
@@ -137,7 +137,7 @@ func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, cha
 		record.Recipients = append(record.Recipients, n)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("code: read whom %s reached: %w", named, err)
+		return fmt.Errorf("gitlet: read whom %s reached: %w", named, err)
 	}
 	if out.Next == "" && record != nil {
 		finish()

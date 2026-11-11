@@ -1298,7 +1298,7 @@ type HostRefusal struct {
 	Detail string
 }
 
-func (r *HostRefusal) Error() string { return fmt.Sprintf("code: %s: %s", r.Refusal, r.Detail) }
+func (r *HostRefusal) Error() string { return fmt.Sprintf("gitlet: %s: %s", r.Refusal, r.Detail) }
 
 // writeRefusalError is a refusal Gitlet answered, as the cause beneath
 // a tool's class ([HostRefusal]).

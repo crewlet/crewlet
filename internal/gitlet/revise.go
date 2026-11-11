@@ -354,7 +354,7 @@ func OwnersDigest(owners []PathOwner) string {
 	if err != nil {
 		// A list of strings and named strings always encodes; reaching here
 		// is a broken encoder, which no digest could be taken past.
-		panic(fmt.Sprintf("code: encoding path owners: %v", err))
+		panic(fmt.Sprintf("gitlet: encoding path owners: %v", err))
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
@@ -564,7 +564,7 @@ func factsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64) (factsRo
 	case errors.Is(err, sql.ErrNoRows):
 		return factsRow{}, false, nil
 	case err != nil:
-		return factsRow{}, false, fmt.Errorf("code: read revision %d of %s's facts: %w", n, changeID, err)
+		return factsRow{}, false, fmt.Errorf("gitlet: read revision %d of %s's facts: %w", n, changeID, err)
 	}
 	return f, true, nil
 }
@@ -872,7 +872,7 @@ func ownersLead(repo RepoRef, roster Roster) Reviewer {
 func changesRequestedBefore(ctx context.Context, tx *sql.Tx, changeID string, n int64) ([]Reviewer, error) {
 	rows, err := tx.QueryContext(ctx, changesRequestedBeforeSQL, changeID, n, MaxReReviewers)
 	if err != nil {
-		return nil, fmt.Errorf("code: read who asks for changes on %s: %w", changeID, err)
+		return nil, fmt.Errorf("gitlet: read who asks for changes on %s: %w", changeID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []Reviewer
@@ -880,7 +880,7 @@ func changesRequestedBefore(ctx context.Context, tx *sql.Tx, changeID string, n 
 		var rv Reviewer
 		var kind string
 		if err := rows.Scan(&rv.Handle, &kind); err != nil {
-			return nil, fmt.Errorf("code: read who asks for changes on %s: %w", changeID, err)
+			return nil, fmt.Errorf("gitlet: read who asks for changes on %s: %w", changeID, err)
 		}
 		rv.Kind = PartyKind(kind)
 		out = append(out, rv)
@@ -893,7 +893,7 @@ func changesRequestedBefore(ctx context.Context, tx *sql.Tx, changeID string, n 
 func standingAsks(ctx context.Context, tx *sql.Tx, changeID string) ([]Reviewer, error) {
 	rows, err := tx.QueryContext(ctx, standingAsksSQL, changeID, MaxReviewersPerChange)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's reviewers: %w", changeID, err)
+		return nil, fmt.Errorf("gitlet: read %s's reviewers: %w", changeID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []Reviewer
@@ -901,7 +901,7 @@ func standingAsks(ctx context.Context, tx *sql.Tx, changeID string) ([]Reviewer,
 		var rv Reviewer
 		var kind string
 		if err := rows.Scan(&rv.Handle, &kind); err != nil {
-			return nil, fmt.Errorf("code: read %s's reviewers: %w", changeID, err)
+			return nil, fmt.Errorf("gitlet: read %s's reviewers: %w", changeID, err)
 		}
 		rv.Kind = PartyKind(kind)
 		out = append(out, rv)
@@ -950,7 +950,7 @@ func humanPlacesIn(ctx context.Context, tx *sql.Tx, repo RepoRef, r Revise) erro
 func matchDigestsIn(ctx context.Context, tx *sql.Tx, repoID string) (matchDigests, error) {
 	var m matchDigests
 	if err := tx.QueryRowContext(ctx, matchDigestsSQL, repoID).Scan(&m.owners, &m.humanPaths); err != nil {
-		return matchDigests{}, fmt.Errorf("code: read what repository %s's facts are matched against: %w", repoID,
+		return matchDigests{}, fmt.Errorf("gitlet: read what repository %s's facts are matched against: %w", repoID,
 			err)
 	}
 	return m, nil
@@ -964,7 +964,7 @@ func factsOf(ctx context.Context, tx *sql.Tx, changeID string) (bool, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("code: read whether %s holds facts: %w", changeID, err)
+		return false, fmt.Errorf("gitlet: read whether %s holds facts: %w", changeID, err)
 	}
 	return true, nil
 }

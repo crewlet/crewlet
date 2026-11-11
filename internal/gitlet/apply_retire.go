@@ -23,17 +23,17 @@ import (
 func (a *Applier) applyRetireSweep(ctx context.Context, tx *sql.Tx, at applyContext, p RetireSweep) (int, error) {
 	through := p.Through.Packed()
 	if p.Through.Stream != at.position.Stream || through <= 0 || through >= at.packed {
-		return 0, fmt.Errorf("code: the retire sweep at %s sweeps through %s — a sweep names a "+
+		return 0, fmt.Errorf("gitlet: the retire sweep at %s sweeps through %s — a sweep names a "+
 			"position on its own log below itself, where a record retired the rows it removes, "+
 			"and no writer forms this one", at.position, p.Through)
 	}
 	res, err := tx.ExecContext(ctx, sweepRetiredSQL, p.RepoID, through, RetireSweepRows)
 	if err != nil {
-		return 0, fmt.Errorf("code: sweep %s's retired packs at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: sweep %s's retired packs at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	if _, err := tx.ExecContext(ctx, sweptRetiredSQL, through, at.packed, p.RepoID); err != nil {
-		return 0, fmt.Errorf("code: raise %s's retired mark at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: raise %s's retired mark at %s: %w", p.RepoID, at.position, err)
 	}
 	return int(n) + 1, nil
 }

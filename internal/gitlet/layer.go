@@ -201,10 +201,10 @@ func readAt(r io.ReaderAt, p []byte, off int64, what string) error {
 		return formatf("%s ends at byte %d, inside the %d bytes at %d it is read as holding", what, off+int64(n),
 			len(p), off)
 	case err == nil:
-		return fmt.Errorf("code: read %s at byte %d: %d bytes of %d and no error, which no reader may answer", what,
+		return fmt.Errorf("gitlet: read %s at byte %d: %d bytes of %d and no error, which no reader may answer", what,
 			off, n, len(p))
 	}
-	return fmt.Errorf("code: read %s at byte %d: %w", what, off, err)
+	return fmt.Errorf("gitlet: read %s at byte %d: %w", what, off, err)
 }
 
 // sized holds what r holds to exactly size bytes: its last byte there, and no
@@ -217,7 +217,7 @@ func sized(r io.ReaderAt, size int64, what string) error {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return formatf("%s is shorter than its %d-byte section", what, size)
 			}
-			return fmt.Errorf("code: read %s's last byte, at %d: %w", what, size-1, err)
+			return fmt.Errorf("gitlet: read %s's last byte, at %d: %w", what, size-1, err)
 		}
 	}
 	switch n, err := r.ReadAt(b[:], size); {
@@ -226,10 +226,10 @@ func sized(r io.ReaderAt, size int64, what string) error {
 	case errors.Is(err, io.EOF):
 		return nil
 	case err == nil:
-		return fmt.Errorf("code: read %s past its %d bytes: nothing and no error, which no reader may answer",
+		return fmt.Errorf("gitlet: read %s past its %d bytes: nothing and no error, which no reader may answer",
 			what, size)
 	default:
-		return fmt.Errorf("code: read %s past its %d bytes: %w", what, size, err)
+		return fmt.Errorf("gitlet: read %s past its %d bytes: %w", what, size, err)
 	}
 }
 
@@ -246,7 +246,7 @@ func trailerOf(ctx context.Context, r io.ReaderAt, size int64, what string, p Pi
 	case errors.Is(err, io.ErrUnexpectedEOF):
 		return "", formatf("%s ends at byte %d, inside the %d bytes it is read as holding", what, t.Read, size)
 	case err != nil:
-		return "", fmt.Errorf("code: hash %s: %w", what, err)
+		return "", fmt.Errorf("gitlet: hash %s: %w", what, err)
 	case !t.Sound():
 		return "", formatf("%s's trailer, %x, is not the SHA-1 of the %d bytes before it, %x", what, t.Held,
 			size-hashBytes, t.Sum)
@@ -920,10 +920,10 @@ func CheckLayer(ctx context.Context, row LayerRef, midx, bitmap, graph io.Reader
 	}
 	switch {
 	case midx == nil || bitmap == nil:
-		return fmt.Errorf("code: check layer %s: its multi-pack-index and its bitmap are both read, and one was "+
+		return fmt.Errorf("gitlet: check layer %s: its multi-pack-index and its bitmap are both read, and one was "+
 			"handed as none", row.LayerID)
 	case row.GraphBytes > 0 && graph == nil:
-		return fmt.Errorf("code: check layer %s: its row carries a %d-byte commit-graph layer, and none was handed",
+		return fmt.Errorf("gitlet: check layer %s: its row carries a %d-byte commit-graph layer, and none was handed",
 			row.LayerID, row.GraphBytes)
 	case row.GraphBytes == 0 && graph != nil:
 		if err := sized(graph, 0, "the commit-graph layer"); err != nil {
@@ -1003,22 +1003,22 @@ func LayLayer(ctx context.Context, midxPath, bitmapPath, graphPath string, baseG
 	for i, path := range [3]string{midxPath, bitmapPath, graphPath} {
 		if path == "" {
 			if i < 2 {
-				return LayerRef{}, fmt.Errorf("code: lay out a layer: no path names its %s, which every layer has",
+				return LayerRef{}, fmt.Errorf("gitlet: lay out a layer: no path names its %s, which every layer has",
 					layerSections[i])
 			}
 			continue
 		}
 		f, err := os.Open(path)
 		if err != nil {
-			return LayerRef{}, fmt.Errorf("code: lay out a layer: %w", err)
+			return LayerRef{}, fmt.Errorf("gitlet: lay out a layer: %w", err)
 		}
 		defer func() { _ = f.Close() }()
 		info, err := f.Stat()
 		switch {
 		case err != nil:
-			return LayerRef{}, fmt.Errorf("code: lay out a layer: %w", err)
+			return LayerRef{}, fmt.Errorf("gitlet: lay out a layer: %w", err)
 		case !info.Mode().IsRegular():
-			return LayerRef{}, fmt.Errorf("code: lay out a layer: its %s, %s, is not a regular file",
+			return LayerRef{}, fmt.Errorf("gitlet: lay out a layer: its %s, %s, is not a regular file",
 				layerSections[i], path)
 		}
 		readers[i], sizes[i] = f, info.Size()
@@ -1116,19 +1116,19 @@ func StoreLayer(ctx context.Context, p Putter, paths [3]string, sections [3]int6
 	for i, n := range sections {
 		switch {
 		case n < 0:
-			return nil, fmt.Errorf("code: store a layer: its %s is %d bytes", layerSections[i], n)
+			return nil, fmt.Errorf("gitlet: store a layer: its %s is %d bytes", layerSections[i], n)
 		case (n > 0) != (paths[i] != ""):
-			return nil, fmt.Errorf("code: store a layer: its %s is %d bytes and named by the path %q; a file of "+
+			return nil, fmt.Errorf("gitlet: store a layer: its %s is %d bytes and named by the path %q; a file of "+
 				"bytes has a path, and only one has", layerSections[i], n, paths[i])
 		}
 		total += n
 	}
 	switch {
 	case sections[0] < 1 || sections[1] < 1:
-		return nil, fmt.Errorf("code: store a layer: a layer is a multi-pack-index and its bitmap at the least, "+
+		return nil, fmt.Errorf("gitlet: store a layer: a layer is a multi-pack-index and its bitmap at the least, "+
 			"and its sections are %s", words.And(sections[:]))
 	case total > MaxLayerParts*LayerPartBytes:
-		return nil, fmt.Errorf("code: store a layer: it is %d bytes, past the %d one layer's %d parts of %d may "+
+		return nil, fmt.Errorf("gitlet: store a layer: it is %d bytes, past the %d one layer's %d parts of %d may "+
 			"hold (MaxLayerParts)", total, MaxLayerParts*LayerPartBytes, MaxLayerParts, LayerPartBytes)
 	}
 	var files [3]*os.File
@@ -1138,15 +1138,15 @@ func StoreLayer(ctx context.Context, p Putter, paths [3]string, sections [3]int6
 		}
 		f, err := os.Open(path)
 		if err != nil {
-			return nil, fmt.Errorf("code: store a layer: %w", err)
+			return nil, fmt.Errorf("gitlet: store a layer: %w", err)
 		}
 		defer func() { _ = f.Close() }()
 		info, err := f.Stat()
 		switch {
 		case err != nil:
-			return nil, fmt.Errorf("code: store a layer: %w", err)
+			return nil, fmt.Errorf("gitlet: store a layer: %w", err)
 		case info.Size() != sections[i]:
-			return nil, fmt.Errorf("code: store a layer: its %s, %s, is %d bytes and its section %d", layerSections[i],
+			return nil, fmt.Errorf("gitlet: store a layer: its %s, %s, is %d bytes and its section %d", layerSections[i],
 				path, info.Size(), sections[i])
 		}
 		files[i] = f
@@ -1158,7 +1158,7 @@ func StoreLayer(ctx context.Context, p Putter, paths [3]string, sections [3]int6
 		g.Go(func() error {
 			obj, err := storePart(gctx, p, files, cut, hit)
 			if err != nil {
-				return fmt.Errorf("code: store part %d of the layer, its bytes %d to %d: %w", i, cut.start,
+				return fmt.Errorf("gitlet: store part %d of the layer, its bytes %d to %d: %w", i, cut.start,
 					cut.start+cut.size, err)
 			}
 			parts[i] = LayerPart{Object: obj.Key, Hash: obj.Hash, Size: cut.size}
@@ -1242,9 +1242,9 @@ func FetchLayerPart(ctx context.Context, r LayerReader, row LayerRef, i int, fil
 	}
 	switch {
 	case i < 0 || i >= len(row.Parts):
-		return fmt.Errorf("code: fetch part %d of layer %s: the layer has %d parts", i, row.LayerID, len(row.Parts))
+		return fmt.Errorf("gitlet: fetch part %d of layer %s: the layer has %d parts", i, row.LayerID, len(row.Parts))
 	case len(buf) == 0:
-		return fmt.Errorf("code: fetch part %d of layer %s: no buffer to copy it through", i, row.LayerID)
+		return fmt.Errorf("gitlet: fetch part %d of layer %s: no buffer to copy it through", i, row.LayerID)
 	}
 	// The part's place by the one cut StoreLayer made it by; its size is the
 	// row's part's, which row.Check holds to that cut (every part but the
@@ -1253,13 +1253,13 @@ func FetchLayerPart(ctx context.Context, r LayerReader, row LayerRef, i int, fil
 	spans := cut.spans
 	for _, s := range spans {
 		if files[s.section] == nil {
-			return fmt.Errorf("code: fetch part %d of layer %s: it holds bytes of the %s, and no file was handed "+
+			return fmt.Errorf("gitlet: fetch part %d of layer %s: it holds bytes of the %s, and no file was handed "+
 				"for it", i, row.LayerID, layerSections[s.section])
 		}
 	}
 	rc, err := r.Open(ctx, part.Content())
 	if err != nil {
-		return fmt.Errorf("code: fetch part %d of layer %s (object %s): %w", i, row.LayerID, part.Object, err)
+		return fmt.Errorf("gitlet: fetch part %d of layer %s (object %s): %w", i, row.LayerID, part.Object, err)
 	}
 	defer func() { _ = rc.Close() }()
 	for _, s := range spans {
@@ -1268,7 +1268,7 @@ func FetchLayerPart(ctx context.Context, r LayerReader, row LayerRef, i int, fil
 			n, rerr := rc.Read(buf[:min(int64(len(buf)), left)])
 			if n > 0 {
 				if _, werr := files[s.section].WriteAt(buf[:n], at); werr != nil {
-					return fmt.Errorf("code: fetch part %d of layer %s: write its bytes into the %s on this node: %w",
+					return fmt.Errorf("gitlet: fetch part %d of layer %s: write its bytes into the %s on this node: %w",
 						i, row.LayerID, layerSections[s.section], werr)
 				}
 				at, left = at+int64(n), left-int64(n)
@@ -1279,11 +1279,11 @@ func FetchLayerPart(ctx context.Context, r LayerReader, row LayerRef, i int, fil
 				// No verified read ends this way — a short object is
 				// ErrCorrupt — but a reader that did has handed over less
 				// than the part, which is not the part.
-				return fmt.Errorf("code: fetch part %d of layer %s (object %s): it ended %d bytes short of its %d: %w",
+				return fmt.Errorf("gitlet: fetch part %d of layer %s (object %s): it ended %d bytes short of its %d: %w",
 					i, row.LayerID, part.Object, left, part.Size, objstore.ErrCorrupt)
 			case errors.Is(rerr, io.EOF):
 			default:
-				return fmt.Errorf("code: fetch part %d of layer %s (object %s): %w", i, row.LayerID, part.Object,
+				return fmt.Errorf("gitlet: fetch part %d of layer %s (object %s): %w", i, row.LayerID, part.Object,
 					rerr)
 			}
 		}
@@ -1293,14 +1293,14 @@ func FetchLayerPart(ctx context.Context, r LayerReader, row LayerRef, i int, fil
 	// and anything else is more than the part.
 	switch n, rerr := rc.Read(buf[:1]); {
 	case n > 0:
-		return fmt.Errorf("code: fetch part %d of layer %s (object %s): the store handed over more than its %d "+
+		return fmt.Errorf("gitlet: fetch part %d of layer %s (object %s): the store handed over more than its %d "+
 			"bytes: %w", i, row.LayerID, part.Object, part.Size, objstore.ErrCorrupt)
 	case errors.Is(rerr, io.EOF):
 		return nil
 	case rerr == nil:
-		return fmt.Errorf("code: fetch part %d of layer %s (object %s): the read did not end after its %d bytes",
+		return fmt.Errorf("gitlet: fetch part %d of layer %s (object %s): the read did not end after its %d bytes",
 			i, row.LayerID, part.Object, part.Size)
 	default:
-		return fmt.Errorf("code: fetch part %d of layer %s (object %s): %w", i, row.LayerID, part.Object, rerr)
+		return fmt.Errorf("gitlet: fetch part %d of layer %s (object %s): %w", i, row.LayerID, part.Object, rerr)
 	}
 }

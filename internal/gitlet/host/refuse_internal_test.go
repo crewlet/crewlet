@@ -655,7 +655,7 @@ func TestOnlyTheCodeLogsOwnFailureIsToldAsTheCodeLogs(t *testing.T) {
 		"this node's disk":     {fmt.Errorf("cache: sync r: state: %w", full), nodeAnswer, true},
 		"a failure unforeseen": {errors.New("cache: cat-file answered 3 lines for 2 ids"), nodeAnswer, true},
 		"a protection this build cannot read": {fmt.Errorf("%w: %w", cache.ErrBadSnapshot,
-			errors.New(`code: protection "release/[" is not a protection pattern this build reads`)),
+			errors.New(`gitlet: protection "release/[" is not a protection pattern this build reads`)),
 			syncFailedAnswer{status: http.StatusInternalServerError, says: "(code_bad_snapshot)",
 				line: "code_bad_snapshot", level: "ERROR"}, true},
 	} {

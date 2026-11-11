@@ -38,12 +38,12 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext) 
 	}
 	p, ok := payload.(Rename)
 	if !ok {
-		return 0, fmt.Errorf("code: the rename at %s carries a %T", at.position, payload)
+		return 0, fmt.Errorf("gitlet: the rename at %s carries a %T", at.position, payload)
 	}
 	// THE NAME IS THE ADDRESS, as a create's: a record that arbitrated one
 	// name and claims another would take a name nobody contended for.
 	if token := NameToken(p.To); token != at.record.Subject.ID {
-		return 0, fmt.Errorf("code: the rename at %s arbitrated name %s and its payload names %q, whose "+
+		return 0, fmt.Errorf("gitlet: the rename at %s arbitrated name %s and its payload names %q, whose "+
 			"token is %s", at.position, at.record.Subject.ID, p.To, token)
 	}
 	var name, status, managed string
@@ -52,7 +52,7 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, nil
 	case err != nil:
-		return 0, fmt.Errorf("code: read repository %s for the rename at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read repository %s for the rename at %s: %w", p.RepoID, at.position, err)
 	}
 	if name != p.From || ManagedBy(managed) != ManagedTools ||
 		!RepoStatus(status).live() {
@@ -67,12 +67,12 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case !taken:
 		if _, err = tx.ExecContext(ctx, `INSERT INTO code_names (token, name, repo_id, redirect_until)
 			VALUES (?, ?, ?, NULL)`, at.record.Subject.ID, p.To, p.RepoID); err != nil {
-			return 0, fmt.Errorf("code: claim %q at %s: %w", p.To, at.position, err)
+			return 0, fmt.Errorf("gitlet: claim %q at %s: %w", p.To, at.position, err)
 		}
 	case holder == p.RepoID && redirect.Valid:
 		// ITS OWN OLD NAME, taken back: it stops redirecting.
 		if _, err = tx.ExecContext(ctx, keepNameSQL, at.record.Subject.ID, p.RepoID); err != nil {
-			return 0, fmt.Errorf("code: take %q back at %s: %w", p.To, at.position, err)
+			return 0, fmt.Errorf("gitlet: take %q back at %s: %w", p.To, at.position, err)
 		}
 	default:
 		return 0, nil
@@ -81,12 +81,12 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext) 
 	res, err := tx.ExecContext(ctx, redirectNameSQL, store.EncodeTime(at.brokerAt.Add(RedirectWindow)),
 		NameToken(p.From), p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: redirect %q at %s: %w", p.From, at.position, err)
+		return 0, fmt.Errorf("gitlet: redirect %q at %s: %w", p.From, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	rows += int(n)
 	if res, err = tx.ExecContext(ctx, renameRepoSQL, p.To, at.at(), at.packed, p.RepoID); err != nil {
-		return 0, fmt.Errorf("code: rename %s at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: rename %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ = res.RowsAffected()
 	return rows + int(n), nil
@@ -104,15 +104,15 @@ func (a *Applier) applyReleaseName(ctx context.Context, tx *sql.Tx, at applyCont
 	}
 	p, ok := payload.(ReleaseName)
 	if !ok {
-		return 0, fmt.Errorf("code: the release at %s carries a %T", at.position, payload)
+		return 0, fmt.Errorf("gitlet: the release at %s carries a %T", at.position, payload)
 	}
 	if token := NameToken(p.Name); token != at.record.Subject.ID {
-		return 0, fmt.Errorf("code: the release at %s arbitrated name %s and its payload names %q, whose "+
+		return 0, fmt.Errorf("gitlet: the release at %s arbitrated name %s and its payload names %q, whose "+
 			"token is %s", at.position, at.record.Subject.ID, p.Name, token)
 	}
 	res, err := tx.ExecContext(ctx, releaseRedirectSQL, at.record.Subject.ID, p.RepoID, at.at())
 	if err != nil {
-		return 0, fmt.Errorf("code: release %q at %s: %w", p.Name, at.position, err)
+		return 0, fmt.Errorf("gitlet: release %q at %s: %w", p.Name, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -141,7 +141,7 @@ func (a *Applier) applyHold(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	if p.Ref == "" {
 		res, err := tx.ExecContext(ctx, holdSQL, at.packed, p.RepoID)
 		if err != nil {
-			return 0, fmt.Errorf("code: record turn %s's hold on %s at %s: %w", p.TurnID, p.RepoID, at.position,
+			return 0, fmt.Errorf("gitlet: record turn %s's hold on %s at %s: %w", p.TurnID, p.RepoID, at.position,
 				err)
 		}
 		n, _ := res.RowsAffected()
@@ -149,12 +149,12 @@ func (a *Applier) applyHold(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	}
 	held, err := tx.ExecContext(ctx, refHeldSQL, at.packed, p.RepoID, p.Ref)
 	if err != nil {
-		return 0, fmt.Errorf("code: record turn %s's hold on %s of %s at %s: %w", p.TurnID, p.Ref, p.RepoID,
+		return 0, fmt.Errorf("gitlet: record turn %s's hold on %s of %s at %s: %w", p.TurnID, p.Ref, p.RepoID,
 			at.position, err)
 	}
 	moved, err := tx.ExecContext(ctx, refHoldVersionSQL, at.packed, p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: move %s's version to turn %s's hold on %s at %s: %w", p.RepoID, p.TurnID, p.Ref,
+		return 0, fmt.Errorf("gitlet: move %s's version to turn %s's hold on %s at %s: %w", p.RepoID, p.TurnID, p.Ref,
 			at.position, err)
 	}
 	refs, _ := held.RowsAffected()

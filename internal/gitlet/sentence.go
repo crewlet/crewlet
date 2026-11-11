@@ -14,7 +14,7 @@ import (
 // (internal/agent/builtin's WriterSentence), so a caller that asks only this
 // one cannot print the framework's words after the mark.
 //
-// THE PREFIX IS FOR A LOG. Every error this package writes opens with "code:"
+// THE PREFIX IS FOR A LOG. Every error this package writes opens with "gitlet:"
 // and states its fact after it, often with a sentence of the caller's own
 // after that ([ErrNotPermitted]'s "…: <who reads it>"); that sentence is the
 // one a reader is told where there is one, and otherwise the fact without the
@@ -24,5 +24,5 @@ func Sentence(err error) string {
 	if said, ok := statelog.Sentence(err); ok {
 		return said
 	}
-	return strings.TrimPrefix(err.Error(), "code: ")
+	return strings.TrimPrefix(err.Error(), "gitlet: ")
 }

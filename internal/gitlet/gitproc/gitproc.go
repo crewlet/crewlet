@@ -516,7 +516,7 @@ import (
 )
 
 // log is the package's logger, which a Pool uses when Options.Logger is nil.
-var log = logging.Get("code.gitproc")
+var log = logging.Get("gitlet.gitproc")
 
 // Options is how a [Pool] is built: which git, how many processes of each
 // kind, and where its HOME is.

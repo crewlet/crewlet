@@ -21,7 +21,7 @@ import (
 
 // log is the package's logger, which a Cache uses when Options.Logger is nil
 // and which Prepare, running before any Cache exists, always uses.
-var log = logging.Get("code.cache")
+var log = logging.Get("gitlet.cache")
 
 // The names under a cache's root.
 const (

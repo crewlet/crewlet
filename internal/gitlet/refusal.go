@@ -529,7 +529,7 @@ func ParseProtections(rules []PushRule) (Protections, error) {
 	for i, rule := range rules {
 		p, ok := gitref.ParsePattern(rule.Pattern)
 		if !ok {
-			return Protections{}, fmt.Errorf("code: protection %q is not a protection pattern "+
+			return Protections{}, fmt.Errorf("gitlet: protection %q is not a protection pattern "+
 				"this build reads, so no push to its repository can be judged against it", rule.Pattern)
 		}
 		out.patterns[i] = p

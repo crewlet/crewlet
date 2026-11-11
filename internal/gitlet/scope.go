@@ -188,11 +188,11 @@ func wellFormed(p string) bool {
 // writer is not, because a writer that cannot say what it touches is a bug.
 func validScope(paths []string) error {
 	if len(paths) == 0 {
-		return errors.New("code: a record's scope names nothing, which would " +
+		return errors.New("gitlet: a record's scope names nothing, which would " +
 			"say it makes no read stale")
 	}
 	if len(paths) > MaxScopePaths {
-		return fmt.Errorf("code: a record's scope names %d paths, past the %d the "+
+		return fmt.Errorf("gitlet: a record's scope names %d paths, past the %d the "+
 			"widest record this domain forms names (gitlet.MaxScopePaths): a writer "+
 			"naming more is a bug, and naming the whole domain instead would make "+
 			"the record meet every deferred record of every repository", len(paths),
@@ -200,11 +200,11 @@ func validScope(paths []string) error {
 	}
 	for _, p := range paths {
 		if !wellFormed(p) {
-			return fmt.Errorf("code: scope path %q is malformed", p)
+			return fmt.Errorf("gitlet: scope path %q is malformed", p)
 		}
 		if p != DomainPath() && p != statelog.FrameworkScope &&
 			!strings.HasPrefix(p, pathDomain+statelog.ScopeSeparator) {
-			return fmt.Errorf("code: scope path %q is outside this domain's "+
+			return fmt.Errorf("gitlet: scope path %q is outside this domain's "+
 				"alphabet, which begins every path with %q", p, pathDomain)
 		}
 	}

@@ -593,7 +593,7 @@ func decideBegin(ctx context.Context, tx *sql.Tx, b ExpungeBegin, repo pushRepo,
 	}
 	inputs, err := namedPackRows(ctx, tx, b.RepoID, b.Retire)
 	if err != nil {
-		return expungeDecision{}, fmt.Errorf("code: read the packs expunge %s rewrites: %w", b.ExpungeID, err)
+		return expungeDecision{}, fmt.Errorf("gitlet: read the packs expunge %s rewrites: %w", b.ExpungeID, err)
 	}
 	rows := make(map[string][]namedPack, len(inputs))
 	for _, p := range inputs {
@@ -745,19 +745,19 @@ type droppingPack struct {
 func droppingPacksOf(ctx context.Context, tx *sql.Tx, repoID string) ([]droppingPack, error) {
 	rows, err := tx.QueryContext(ctx, droppingPacksSQL, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's dropping packs: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's dropping packs: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []droppingPack
 	for rows.Next() {
 		var p droppingPack
 		if err := rows.Scan(&p.id, &p.objects); err != nil {
-			return nil, fmt.Errorf("code: read %s's dropping packs: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: read %s's dropping packs: %w", repoID, err)
 		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's dropping packs: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's dropping packs: %w", repoID, err)
 	}
 	return out, nil
 }
@@ -840,7 +840,7 @@ func (c *Committer) expungeAnswer(ctx context.Context, p ExpungeProposal, opID s
 		// broke the publisher's contract, and says so rather than answering
 		// from nothing.
 		if !decided || last.refusal == "" {
-			return ExpungeResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no "+
+			return ExpungeResult{}, fmt.Errorf("gitlet: the publish of operation %s answered applied with no "+
 				"record and decided no refusal", opID)
 		}
 		return ExpungeResult{Refusal: last.refusal, Detail: last.detail}, nil
@@ -885,7 +885,7 @@ func (c *Committer) appliedExpunge(ctx context.Context, p ExpungeProposal, opID 
 		missing, err = packsLacking(ctx, tx, p.RepoID(), added, at)
 		return err
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of operation %s applied at %s and the rows of the packs it "+
+		failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and the rows of the packs it "+
 			"added could not be read: %w", opID, at, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindExpunge, "repo", p.RepoID(), "op_id", opID,
 			"error", failed)
@@ -941,7 +941,7 @@ func (c *Committer) refusedExpunge(ctx context.Context, p ExpungeProposal, opID 
 	}
 	c.log.WarnContext(ctx, "code_commit_failed", "kind", kindExpunge, "repo", p.RepoID(), "op_id", opID,
 		"error", err)
-	return ExpungeResult{}, fmt.Errorf("code: expunge operation %s: %w", opID, err)
+	return ExpungeResult{}, fmt.Errorf("gitlet: expunge operation %s: %w", opID, err)
 }
 
 // The expunge's own read, registered in plan_test.go: a repository's dropping

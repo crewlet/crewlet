@@ -118,7 +118,7 @@ func checkRowIn(ctx context.Context, tx *sql.Tx, key CheckKey) (CheckRow, bool, 
 	case errors.Is(err, sql.ErrNoRows):
 		return CheckRow{}, false, nil
 	case err != nil:
-		return CheckRow{}, false, fmt.Errorf("code: read check %s of %s: %w", key.Name, key.OID, err)
+		return CheckRow{}, false, fmt.Errorf("gitlet: read check %s of %s: %w", key.Name, key.OID, err)
 	}
 	return r, true, nil
 }
@@ -132,7 +132,7 @@ func latestCheckIn(ctx context.Context, tx *sql.Tx, key CheckKey) (CheckRow, boo
 	case errors.Is(err, sql.ErrNoRows):
 		return CheckRow{}, false, nil
 	case err != nil:
-		return CheckRow{}, false, fmt.Errorf("code: read the latest attempt of check %s of %s for %s: %w",
+		return CheckRow{}, false, fmt.Errorf("gitlet: read the latest attempt of check %s of %s for %s: %w",
 			key.Name, key.OID, key.Target, err)
 	}
 	return r, true, nil
@@ -511,7 +511,7 @@ func (r *Reader) queuedChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 	rows, err := tx.QueryContext(ctx, queuedChecksSQL, string(q.ChecksQueued.RunIn), at, repo, oid, target, check,
 		attempt, limit)
 	if err != nil {
-		return fmt.Errorf("code: list the queued checks: %w", err)
+		return fmt.Errorf("gitlet: list the queued checks: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
@@ -522,12 +522,12 @@ func (r *Reader) queuedChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 			def string
 		)
 		if c.CheckRow, err = scanCheck(rows.Scan, &def, &c.Repo); err != nil {
-			return fmt.Errorf("code: list the queued checks: %w", err)
+			return fmt.Errorf("gitlet: list the queued checks: %w", err)
 		}
 		if def != "" {
 			c.Def = &CheckDef{}
 			if err := json.Unmarshal([]byte(def), c.Def); err != nil {
-				return fmt.Errorf("code: read check %s of %s's definition: %w", c.Name, c.OID, err)
+				return fmt.Errorf("gitlet: read check %s of %s's definition: %w", c.Name, c.OID, err)
 			}
 		}
 		out.Runnable = append(out.Runnable, c)
@@ -537,7 +537,7 @@ func (r *Reader) queuedChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("code: list the queued checks: %w", err)
+		return fmt.Errorf("gitlet: list the queued checks: %w", err)
 	}
 	if pg.full() {
 		out.Next = queuedCursor(last)
@@ -566,11 +566,11 @@ func (r *Reader) runningChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 	if id := q.ChecksRunning.RepoID; id != "" {
 		rows, err := tx.QueryContext(ctx, runningChecksSQL, id, r.pageRows)
 		if err != nil {
-			return fmt.Errorf("code: list repository %s's running checks: %w", id, err)
+			return fmt.Errorf("gitlet: list repository %s's running checks: %w", id, err)
 		}
 		defer func() { _ = rows.Close() }()
 		if out.Checks, err = scanChecks(rows); err != nil {
-			return fmt.Errorf("code: list repository %s's running checks: %w", id, err)
+			return fmt.Errorf("gitlet: list repository %s's running checks: %w", id, err)
 		}
 		return nil
 	}
@@ -579,13 +579,13 @@ func (r *Reader) runningChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 	}
 	rows, err := tx.QueryContext(ctx, runningReposSQL, q.Cursor, r.pageRows)
 	if err != nil {
-		return fmt.Errorf("code: list the repositories running checks: %w", err)
+		return fmt.Errorf("gitlet: list the repositories running checks: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("code: list the repositories running checks: %w", err)
+			return fmt.Errorf("gitlet: list the repositories running checks: %w", err)
 		}
 		out.DueRepos = append(out.DueRepos, id)
 	}
@@ -683,12 +683,12 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		rows, err = tx.QueryContext(ctx, checksOfRepoAfterSQL, repo.ref.ID, at, oid, target, name, attempt, limit)
 	}
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
+		return fmt.Errorf("gitlet: list repository %s's checks: %w", repo.ref.Name, err)
 	}
 	defer func() { _ = rows.Close() }()
 	scanned, err := scanChecks(rows)
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
+		return fmt.Errorf("gitlet: list repository %s's checks: %w", repo.ref.Name, err)
 	}
 	for i := range scanned {
 		scanned[i].Repo = repo.ref.Name
@@ -737,11 +737,11 @@ func (r *Reader) narrowedRepoChecks(ctx context.Context, tx *sql.Tx, q ReadQuery
 	}
 	places, err := narrowedPlaces(ctx, tx, repo.ID, c, from, 0, limit)
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's checks: %w", repo.Name, err)
+		return fmt.Errorf("gitlet: list repository %s's checks: %w", repo.Name, err)
 	}
 	scanned, err := narrowedRows(ctx, tx, places, nil)
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's checks: %w", repo.Name, err)
+		return fmt.Errorf("gitlet: list repository %s's checks: %w", repo.Name, err)
 	}
 	for i := range scanned {
 		scanned[i].Repo = repo.Name
@@ -783,12 +783,12 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 		rows, err = tx.QueryContext(ctx, checksWindowAfterSQL, since, at, repo, oid, target, name, attempt, limit)
 	}
 	if err != nil {
-		return fmt.Errorf("code: list the checks of every repository: %w", err)
+		return fmt.Errorf("gitlet: list the checks of every repository: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	scanned, err := scanChecks(rows)
 	if err != nil {
-		return fmt.Errorf("code: list the checks of every repository: %w", err)
+		return fmt.Errorf("gitlet: list the checks of every repository: %w", err)
 	}
 	ids := make([]string, len(scanned))
 	for i, row := range scanned {
@@ -832,7 +832,7 @@ func (r *Reader) narrowedWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c 
 	}
 	places, err := narrowedPlaces(ctx, tx, "", c, from, since, limit)
 	if err != nil {
-		return fmt.Errorf("code: list the checks of every repository: %w", err)
+		return fmt.Errorf("gitlet: list the checks of every repository: %w", err)
 	}
 	ids := make([]string, len(places))
 	for i, p := range places {
@@ -845,7 +845,7 @@ func (r *Reader) narrowedWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c 
 	kept := func(repoID string) bool { _, ok := listed[repoID]; return ok }
 	scanned, err := narrowedRows(ctx, tx, places, func(p checkPlace) bool { return kept(p.key.RepoID) })
 	if err != nil {
-		return fmt.Errorf("code: list the checks of every repository: %w", err)
+		return fmt.Errorf("gitlet: list the checks of every repository: %w", err)
 	}
 	for i, row := range scanned {
 		if repo, ok := listed[row.RepoID]; ok {
@@ -986,7 +986,7 @@ func narrowedRows(ctx context.Context, tx *sql.Tx, places []checkPlace,
 		case err != nil:
 			return nil, err
 		case !found:
-			return nil, fmt.Errorf("code: check %s of %s for %s, attempt %d, was listed and holds no row",
+			return nil, fmt.Errorf("gitlet: check %s of %s for %s, attempt %d, was listed and holds no row",
 				p.key.Name, p.key.OID, p.key.Target, p.key.Attempt)
 		}
 		out = append(out, row)
@@ -1052,19 +1052,19 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		return fmt.Errorf("%w: %s holds no attempt %d of check %s of %s for %s", ErrCheckNotFound,
 			repo.ref.Name, key.Attempt, key.Name, key.OID, key.Target)
 	case err != nil:
-		return fmt.Errorf("code: read check %s of %s: %w", key.Name, key.OID, err)
+		return fmt.Errorf("gitlet: read check %s of %s: %w", key.Name, key.OID, err)
 	}
 	d.Repo = repo.ref.Name
 	d.Tail = tail
 	if def != "" {
 		d.Def = &CheckDef{}
 		if err := json.Unmarshal([]byte(def), d.Def); err != nil {
-			return fmt.Errorf("code: read check %s of %s's definition: %w", key.Name, key.OID, err)
+			return fmt.Errorf("gitlet: read check %s of %s's definition: %w", key.Name, key.OID, err)
 		}
 	}
 	if failures != "" {
 		if err := json.Unmarshal([]byte(failures), &d.Failures); err != nil {
-			return fmt.Errorf("code: read check %s of %s's failures: %w", key.Name, key.OID, err)
+			return fmt.Errorf("gitlet: read check %s of %s's failures: %w", key.Name, key.OID, err)
 		}
 	}
 	var (
@@ -1076,11 +1076,11 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		&hash, &size); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
-		return fmt.Errorf("code: read check %s of %s's log: %w", key.Name, key.OID, err)
+		return fmt.Errorf("gitlet: read check %s of %s's log: %w", key.Name, key.OID, err)
 	default:
 		k, err := objstore.ParseKey(object)
 		if err != nil {
-			return fmt.Errorf("code: read check %s of %s's log: %w", key.Name, key.OID, err)
+			return fmt.Errorf("gitlet: read check %s of %s's log: %w", key.Name, key.OID, err)
 		}
 		d.Log = &CheckLog{Object: k, Hash: objstore.Hash(hash), Size: size}
 	}
@@ -1139,11 +1139,11 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 		}
 		changes, err := repoIDsIn(ctx, tx, dueCheckReposSQL, q.Cursor, r.pageRows, refresh, AutoRequeueAttempts)
 		if err != nil {
-			return fmt.Errorf("code: list the repositories check work is due in: %w", err)
+			return fmt.Errorf("gitlet: list the repositories check work is due in: %w", err)
 		}
 		tips, err := repoIDsIn(ctx, tx, dueTipReposSQL, q.Cursor, r.pageRows)
 		if err != nil {
-			return fmt.Errorf("code: list the repositories tip work is due in: %w", err)
+			return fmt.Errorf("gitlet: list the repositories tip work is due in: %w", err)
 		}
 		ids, next := mergeRepoPages(changes, tips, r.pageRows)
 		pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
@@ -1166,7 +1166,7 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
-		return fmt.Errorf("code: read repository %s's state: %w", repoID, err)
+		return fmt.Errorf("gitlet: read repository %s's state: %w", repoID, err)
 	case RepoStatus(status) != RepoStatusActive:
 		return nil
 	}
@@ -1219,7 +1219,7 @@ func (r *Reader) dueCheckTargets(ctx context.Context, tx *sql.Tx, repoID string,
 
 	rows, err := tx.QueryContext(ctx, dueCheckTargetsSQL, repoID, refresh, r.pageRows)
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's targets due a reading: %w", repoID, err)
+		return fmt.Errorf("gitlet: list repository %s's targets due a reading: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -1228,7 +1228,7 @@ func (r *Reader) dueCheckTargets(ctx context.Context, tx *sql.Tx, repoID string,
 			at int64
 		)
 		if err := rows.Scan(&d.TargetRef, &d.Tip, &at); err != nil {
-			return fmt.Errorf("code: list repository %s's targets due a reading: %w", repoID, err)
+			return fmt.Errorf("gitlet: list repository %s's targets due a reading: %w", repoID, err)
 		}
 		d.TipPosition = unpacked(at)
 		out.DueTargets = append(out.DueTargets, d)
@@ -1316,7 +1316,7 @@ func (r *Reader) ChecksBacklog(ctx context.Context, now time.Time) (ChecksBacklo
 		return err
 	})
 	if err != nil {
-		return ChecksBacklog{}, fmt.Errorf("code: read the queued checks' backlog: %w", err)
+		return ChecksBacklog{}, fmt.Errorf("gitlet: read the queued checks' backlog: %w", err)
 	}
 	return out, nil
 }

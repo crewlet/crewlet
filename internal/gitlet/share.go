@@ -152,7 +152,7 @@ func NewGitShare(node string, readSlots int, m *metrics.Recorder) *GitShare {
 }
 
 // errShareWait is the cause of a take's own wait ending.
-var errShareWait = errors.New("code: the seat git-work share's wait ended")
+var errShareWait = errors.New("gitlet: the seat git-work share's wait ended")
 
 // Take holds one unit for work, waiting at most [GitShareWait] for one to come
 // free: past it, [ErrGitUnready]{[UnreadyShare]} naming the node. ctx ending

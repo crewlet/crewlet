@@ -33,7 +33,7 @@ func applyCheckDispatched(ctx context.Context, tx *sql.Tx, at applyContext, d Ch
 	rows := 0
 	for _, a := range d.Attempts {
 		if a.RepoID != d.RepoID {
-			return 0, fmt.Errorf("code: the dispatch at %s of repository %s carries an attempt of %s — no "+
+			return 0, fmt.Errorf("gitlet: the dispatch at %s of repository %s carries an attempt of %s — no "+
 				"writer forms it", at.position, d.RepoID, a.RepoID)
 		}
 		joined, err := joinCheck(ctx, tx, at, a.CheckKey, queuedPart(a, at))
@@ -44,26 +44,26 @@ func applyCheckDispatched(ctx context.Context, tx *sql.Tx, at applyContext, d Ch
 	}
 	heldTip, heldAt, err := readingIn(ctx, tx, readCheckTargetSQL, d.RepoID, d.Target)
 	if err != nil {
-		return 0, fmt.Errorf("code: read target %s's checks file at %s: %w", d.Target, at.position, err)
+		return 0, fmt.Errorf("gitlet: read target %s's checks file at %s: %w", d.Target, at.position, err)
 	}
 	if laterReading(tip, at.packed, heldTip, heldAt) {
 		if _, err := tx.ExecContext(ctx, writeCheckTargetSQL, d.RepoID, d.Target, d.Tip, tip, d.DefsOID, recorded,
 			at.packed); err != nil {
-			return 0, fmt.Errorf("code: write target %s's checks file at %s: %w", d.Target, at.position, err)
+			return 0, fmt.Errorf("gitlet: write target %s's checks file at %s: %w", d.Target, at.position, err)
 		}
 		rows++
 	}
 	for _, h := range d.Heads {
 		heldTip, heldAt, err := readingIn(ctx, tx, readCheckDispatchSQL, d.RepoID, h.OID, d.Target)
 		if err != nil {
-			return 0, fmt.Errorf("code: read head %s's dispatch at %s: %w", h.OID, at.position, err)
+			return 0, fmt.Errorf("gitlet: read head %s's dispatch at %s: %w", h.OID, at.position, err)
 		}
 		if !laterReading(tip, at.packed, heldTip, heldAt) {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, writeCheckDispatchSQL, d.RepoID, h.OID, d.Target, d.DefsOID, h.ChangeID,
 			h.Revision, tip, recorded, at.packed); err != nil {
-			return 0, fmt.Errorf("code: write head %s's dispatch at %s: %w", h.OID, at.position, err)
+			return 0, fmt.Errorf("gitlet: write head %s's dispatch at %s: %w", h.OID, at.position, err)
 		}
 		rows++
 	}
@@ -95,7 +95,7 @@ func purgeDispatches(ctx context.Context, tx *sql.Tx, repoID string, budget int)
 		}
 		res, err := tx.ExecContext(ctx, stmt, repoID, budget-deleted)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s's dispatches: %w", repoID, err)
+			return 0, fmt.Errorf("gitlet: purge %s's dispatches: %w", repoID, err)
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)

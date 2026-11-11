@@ -154,7 +154,7 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 			return nil
 		})
 	if err != nil {
-		return 0, fmt.Errorf("code: write the notices of the record at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: write the notices of the record at %s: %w", at.position, err)
 	}
 	return counted + written, nil
 }
@@ -170,7 +170,7 @@ func countNotices(ctx context.Context, tx *sql.Tx, at applyContext, routings []*
 	for _, c := range noticesByChange(routings...) {
 		res, err := tx.ExecContext(ctx, countNoticesSQL, c.notices, c.changeID)
 		if err != nil {
-			return 0, fmt.Errorf("code: count the notices of change %s at %s: %w", c.changeID, at.position, err)
+			return 0, fmt.Errorf("gitlet: count the notices of change %s at %s: %w", c.changeID, at.position, err)
 		}
 		n, _ := res.RowsAffected()
 		updated += int(n)
@@ -240,7 +240,7 @@ func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, at applyContext
 	}
 	n, err := a.removed(ctx, tx, at, removeNoticesSQL, list)
 	if err != nil {
-		return 0, fmt.Errorf("code: remove the notices of the changes a purge removes: %w", err)
+		return 0, fmt.Errorf("gitlet: remove the notices of the changes a purge removes: %w", err)
 	}
 	return n, nil
 }
@@ -254,7 +254,7 @@ func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, at applyCont
 	limit int) (int, error) {
 	n, err := a.removed(ctx, tx, at, removeCutNoticesSQL, changeID, limit)
 	if err != nil {
-		return 0, fmt.Errorf("code: remove the notices of change %s a purge cuts: %w", changeID, err)
+		return 0, fmt.Errorf("gitlet: remove the notices of change %s a purge cuts: %w", changeID, err)
 	}
 	return n, nil
 }

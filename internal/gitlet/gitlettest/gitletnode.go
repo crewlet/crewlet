@@ -316,7 +316,7 @@ func StartGitletNode(t testing.TB, o GitOptions) *GitletNode {
 	switch {
 	case o.ID == "" || o.Dir == "" || o.Estate == nil || o.Reads == nil || o.Compactions == nil ||
 		o.Expunges == nil || o.Maintainers == nil || o.Objects == nil || o.Credentials == nil:
-		t.Fatalf("codetest: a Gitlet node needs an id, a directory, an estate, its reads, its compactions, "+
+		t.Fatalf("gitlettest: a Gitlet node needs an id, a directory, an estate, its reads, its compactions, "+
 			"its expunges, its maintainers, its objects and its credentials (%+v)", o)
 	}
 	if o.Faults == nil {
@@ -361,20 +361,20 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 	n := &gitIncarnation{id: g.o.ID, dir: g.o.Dir, reads: g.o.Reads, maintainers: g.o.Maintainers}
 	var err error
 	if n.metrics, err = metrics.New(); err != nil {
-		t.Fatalf("codetest: a recorder: %v", err)
+		t.Fatalf("gitlettest: a recorder: %v", err)
 	}
 	layout, err := prepare(ctx, n.dir)
 	if err != nil {
-		t.Fatalf("codetest: prepare %s's cache: %v", n.id, err)
+		t.Fatalf("gitlettest: prepare %s's cache: %v", n.id, err)
 	}
 	defer layout.Release()
 	if n.pool, err = gitproc.New(ctx, gitproc.Options{Path: g.o.GitPath, Home: layout.Home,
 		MaxProcesses: g.o.MaxProcesses, MaxTransfers: g.o.MaxTransfers, Metrics: n.metrics}); err != nil {
-		t.Fatalf("codetest: %s's git pool: %v", n.id, err)
+		t.Fatalf("gitlettest: %s's git pool: %v", n.id, err)
 	}
 	objects, err := objstore.NewStore(g.o.Objects())
 	if err != nil {
-		t.Fatalf("codetest: %s's object store: %v", n.id, err)
+		t.Fatalf("gitlettest: %s's object store: %v", n.id, err)
 	}
 	limits := func() gitlet.Limits { return g.o.Limits }
 	fleet := g.o.Fleet
@@ -387,7 +387,7 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 		Limits: limits, HookCommand: HookCommand(t), Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 		Now: time.Now,
 	}); err != nil {
-		t.Fatalf("codetest: open %s's cache: %v", n.id, err)
+		t.Fatalf("gitlettest: open %s's cache: %v", n.id, err)
 	}
 	audit := g.o.Audit
 	if audit == nil {
@@ -420,10 +420,10 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 		NodeID: n.id, ExternalBase: ExternalBase, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics,
 		Logger: g.o.Logger,
 	}); err != nil {
-		t.Fatalf("codetest: build %s's host: %v", n.id, err)
+		t.Fatalf("gitlettest: build %s's host: %v", n.id, err)
 	}
 	if err = n.host.Start(ctx); err != nil {
-		t.Fatalf("codetest: start %s's host: %v", n.id, err)
+		t.Fatalf("gitlettest: start %s's host: %v", n.id, err)
 	}
 	// THE QUERY SERVER, as the engine builds it: over the node's cache and
 	// pool, under the node's one share.
@@ -434,7 +434,7 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 	if n.query, err = query.New(query.Options{NodeID: n.id, Cache: n.cache, Git: reads, Share: n.share,
 		Resyncs: n.resyncs,
 		Roster:  roster, Current: g.o.Current, Fetched: fetched}); err != nil {
-		t.Fatalf("codetest: build %s's query server: %v", n.id, err)
+		t.Fatalf("gitlettest: build %s's query server: %v", n.id, err)
 	}
 	// THE MERGE PREVIEWS, as the engine builds them beside the query server:
 	// over the node's cache and its own pool, under the same share, judged
@@ -442,7 +442,7 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 	if n.previews, err = home.NewPreviews(home.PreviewOptions{NodeID: n.id, Cache: n.cache, Git: n.pool,
 		Share: n.share, Roster: roster, Current: g.o.Current, Fetched: fetched, Metrics: n.metrics,
 		Logger: g.o.Logger}); err != nil {
-		t.Fatalf("codetest: build %s's merge previews: %v", n.id, err)
+		t.Fatalf("gitlettest: build %s's merge previews: %v", n.id, err)
 	}
 	// THE COMPACTOR, as the engine builds it after the host has started: over
 	// the node's cache and store, listing through the node's reads and
@@ -451,7 +451,7 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 	if n.compactor, err = compact.New(compact.Options{Cache: n.cache, Objects: objects, Estate: proposals,
 		Maintainers: g.o.Maintainers, NodeID: n.id, Limits: limits, Faults: g.o.Faults, Metrics: n.metrics,
 		Logger: g.o.Logger}); err != nil {
-		t.Fatalf("codetest: build %s's compactor: %v", n.id, err)
+		t.Fatalf("gitlettest: build %s's compactor: %v", n.id, err)
 	}
 	// A PERSON'S THREE ROUTES AND A CODING BOX'S THREE, on one mux behind the
 	// API's real guard, as a Gitlet node serves them: the host's own handlers
@@ -624,7 +624,7 @@ func (g *GitletNode) Stop(drain context.Context) {
 		return
 	}
 	if err := n.srv.Config.Shutdown(drain); err != nil {
-		g.life.Logf("codetest: %s's listener drained only in part: %v", g.o.ID, err)
+		g.life.Logf("gitlettest: %s's listener drained only in part: %v", g.o.ID, err)
 	}
 	stop, cancel := context.WithTimeout(context.WithoutCancel(drain), host.StopBudget)
 	defer cancel()
@@ -644,7 +644,7 @@ func (g *GitletNode) Restart(t testing.TB) {
 	running := g.cur != nil
 	g.mu.Unlock()
 	if running {
-		t.Fatalf("codetest: Restart of Gitlet node %s, which was neither killed nor stopped", g.o.ID)
+		t.Fatalf("gitlettest: Restart of Gitlet node %s, which was neither killed nor stopped", g.o.ID)
 	}
 	n := g.start(t)
 	g.mu.Lock()
@@ -704,9 +704,9 @@ type serverLog struct{ t testing.TB }
 
 func (l serverLog) Write(p []byte) (int, error) {
 	if bytes.Contains(p, []byte("http: panic serving")) {
-		l.t.Errorf("codetest: a Gitlet node's handler panicked: %s", p)
+		l.t.Errorf("gitlettest: a Gitlet node's handler panicked: %s", p)
 	} else {
-		l.t.Logf("codetest: a Gitlet node's server: %s", bytes.TrimSpace(p))
+		l.t.Logf("gitlettest: a Gitlet node's server: %s", bytes.TrimSpace(p))
 	}
 	return len(p), nil
 }

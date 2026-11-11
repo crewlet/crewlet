@@ -37,7 +37,7 @@ func remoteStateIn(ctx context.Context, tx *sql.Tx, at applyContext, repoID stri
 	case errors.Is(err, sql.ErrNoRows):
 		return s, nil
 	case err != nil:
-		return s, fmt.Errorf("code: read repository %s at %s: %w", repoID, at.position, err)
+		return s, fmt.Errorf("gitlet: read repository %s at %s: %w", repoID, at.position, err)
 	}
 	s.status, s.found = RepoStatus(status), true
 	return s, nil
@@ -62,7 +62,7 @@ func (a *Applier) applyImportChunk(ctx context.Context, tx *sql.Tx, at applyCont
 			"is chunk %d", s.importSeq, c.Seq))
 	}
 	if _, err = tx.ExecContext(ctx, importSeqSQL, c.Seq, c.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's import to chunk %d at %s: %w", c.RepoID, c.Seq, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's import to chunk %d at %s: %w", c.RepoID, c.Seq, at.position, err)
 	}
 	entry := PushEntry{PushID: c.ChunkID, Principal: Principal{Kind: PrincipalSystem}, Via: ViaImport,
 		Node: c.Node, Commands: c.Commands, ReceivedAt: at.brokerAt}
@@ -96,7 +96,7 @@ func (a *Applier) applyImportDone(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	if _, err := tx.ExecContext(ctx, importDoneSQL, at.at(), d.Error, d.DefaultBranch, d.DefaultBranch, d.Error,
 		at.at(), at.packed, d.RepoID); err != nil {
-		return 0, fmt.Errorf("code: end %s's import at %s: %w", d.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: end %s's import at %s: %w", d.RepoID, at.position, err)
 	}
 	return 1, nil
 }
@@ -116,7 +116,7 @@ func (a *Applier) applyMirrorSync(ctx context.Context, tx *sql.Tx, at applyConte
 		return remoteNotApplied(ctx, at, m.RepoID, "the repository is not an active pull mirror")
 	}
 	if _, err = tx.ExecContext(ctx, mirrorSyncedSQL, at.at(), at.packed, m.RepoID); err != nil {
-		return 0, fmt.Errorf("code: record %s's sync at %s: %w", m.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: record %s's sync at %s: %w", m.RepoID, at.position, err)
 	}
 	if m.Current() {
 		return 1, nil

@@ -457,18 +457,18 @@ const offsetPoints = "host.upload, compact.upload and publish.upload"
 
 // ErrNotAPoint is a hit, an arming or a count naming a point that is not one
 // of [Points].
-var ErrNotAPoint = errors.New("codefault: not a fault point")
+var ErrNotAPoint = errors.New("gitletfault: not a fault point")
 
 // ErrOffset is a hit handing an offset to a point that reads none — every
 // point but the uploads', [HostUpload], [CompactUpload] and [PublishUpload],
 // is hit at zero — or a negative offset to an upload's, which counts bytes
 // from zero. Each wrap says which of the two it was.
-var ErrOffset = errors.New("codefault: an offset the point does not read")
+var ErrOffset = errors.New("gitletfault: an offset the point does not read")
 
 // ErrCrashed is what a hit held at a crash ([Action.Crash]) answers once
 // [Script.ReleaseCrashes] ends it: the node it was serving is dead, so the
 // call site's step fails and nothing after the point runs.
-var ErrCrashed = errors.New("codefault: the node crashed at this point")
+var ErrCrashed = errors.New("gitletfault: the node crashed at this point")
 
 // Action is what an armed point does when it fires. The zero Action does
 // nothing a hit could reveal, so [Script.Arm] refuses it: at least one of
@@ -537,21 +537,21 @@ var _ Injector = (*Script)(nil)
 // means to.
 func (s *Script) Arm(p Point, a Action) {
 	if s == nil {
-		panic(fmt.Sprintf("codefault: arming %s on a nil *Script, which hits nothing", p))
+		panic(fmt.Sprintf("gitletfault: arming %s on a nil *Script, which hits nothing", p))
 	}
 	mustBePoint(p)
 	switch {
 	case a.At != 0 && !readsOffset(p):
-		panic(fmt.Sprintf("codefault: an offset (At %d) on %s: only %s read one", a.At, p, offsetPoints))
+		panic(fmt.Sprintf("gitletfault: an offset (At %d) on %s: only %s read one", a.At, p, offsetPoints))
 	case a.At < 0:
-		panic(fmt.Sprintf("codefault: a negative offset (At %d) on %s", a.At, p))
+		panic(fmt.Sprintf("gitletfault: a negative offset (At %d) on %s", a.At, p))
 	case a.Err == nil && a.Block == nil && !a.Crash && a.Reached == nil:
-		panic(fmt.Sprintf("codefault: an action on %s that does nothing: set Err, Block, Crash or Reached", p))
+		panic(fmt.Sprintf("gitletfault: an action on %s that does nothing: set Err, Block, Crash or Reached", p))
 	case a.Crash && (a.Err != nil || a.Block != nil):
-		panic(fmt.Sprintf("codefault: a crash on %s beside an Err or a Block: a crash answers %v "+
+		panic(fmt.Sprintf("gitletfault: a crash on %s beside an Err or a Block: a crash answers %v "+
 			"once released, and never reaches either", p, ErrCrashed))
 	case a.Reached != nil && closed(a.Reached):
-		panic(fmt.Sprintf("codefault: an action on %s whose Reached channel is already closed, "+
+		panic(fmt.Sprintf("gitletfault: an action on %s whose Reached channel is already closed, "+
 			"which would say the point fired before it was hit", p))
 	}
 	s.mu.Lock()

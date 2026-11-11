@@ -40,7 +40,7 @@ func memberNode(t *testing.T, c Cluster, id string) Node {
 			return n
 		}
 	}
-	t.Fatalf("codetest: member %s serves no git right now", id)
+	t.Fatalf("gitlettest: member %s serves no git right now", id)
 	return nil
 }
 

@@ -73,7 +73,7 @@ func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (S
 			case errors.Is(err, sql.ErrNoRows):
 				return statelog.Decision{}, nil
 			case err != nil:
-				return statelog.Decision{}, fmt.Errorf("code: read repository %s: %w", repoID, err)
+				return statelog.Decision{}, fmt.Errorf("gitlet: read repository %s: %w", repoID, err)
 			}
 			cut, more, err := queueHistoryIn(ctx, tx, repoID, cutoff, QueueSweepRows, QueueSweepBytes)
 			if err != nil || cut.rows() == 0 {
@@ -86,11 +86,11 @@ func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (S
 	})
 	switch {
 	case err != nil:
-		return SweepResult{}, fmt.Errorf("code: sweep the queues of repository %s: %w", repoID, err)
+		return SweepResult{}, fmt.Errorf("gitlet: sweep the queues of repository %s: %w", repoID, err)
 	case swept.Rows == 0:
 		return SweepResult{}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return SweepResult{}, unknownOutcome(ctx, "code: whether the sweep of repository %s's queues landed "+
+		return SweepResult{}, unknownOutcome(ctx, "gitlet: whether the sweep of repository %s's queues landed "+
 			"is unknown (operation %s); the next pass decides it again", repoID, opID)
 	}
 	swept.Outcome, swept.Position = result.Outcome, result.Position
@@ -154,7 +154,7 @@ func (r *Reader) queueSweepDue(ctx context.Context, q queueSweepQuery) ([]string
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("code: list the repositories holding queue history from before %s: %w",
+		return nil, false, fmt.Errorf("gitlet: list the repositories holding queue history from before %s: %w",
 			q.cutoff.UTC().Format(time.RFC3339), err)
 	}
 	return page, len(page) == q.limit, nil

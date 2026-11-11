@@ -46,9 +46,9 @@ func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 
 	switch {
 	case nodeID == "":
-		return statelog.Result{}, errors.New("code: an eviction names no node")
+		return statelog.Result{}, errors.New("gitlet: an eviction names no node")
 	case opID == "":
-		return statelog.Result{}, fmt.Errorf("code: the eviction of %s has no operation "+
+		return statelog.Result{}, fmt.Errorf("gitlet: the eviction of %s has no operation "+
 			"id — a retry under a fresh one would write the gate twice", nodeID)
 	}
 	if err := actor.validate(); err != nil {
@@ -89,7 +89,7 @@ func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.Evicti
 	case errors.Is(err, sql.ErrNoRows):
 		return statelog.EvictionRow{}, false, nil
 	case err != nil:
-		return statelog.EvictionRow{}, false, fmt.Errorf("code: read %s's eviction row: %w", nodeID, err)
+		return statelog.EvictionRow{}, false, fmt.Errorf("gitlet: read %s's eviction row: %w", nodeID, err)
 	}
 	return statelog.EvictionRow{
 		NodeID: nodeID, From: uint64(from.Int64), Readmitted: uint64(readmitted.Int64),

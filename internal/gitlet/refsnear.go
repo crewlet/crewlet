@@ -126,14 +126,14 @@ func (r *Reader) RefsNearLimit(ctx context.Context, now time.Time) (RefsNear, er
 			return rows.Err()
 		})
 		if err != nil {
-			return RefsNear{}, fmt.Errorf("code: list the repositories near the ref bound: %w", err)
+			return RefsNear{}, fmt.Errorf("gitlet: list the repositories near the ref bound: %w", err)
 		}
 		for _, c := range page {
 			var recent int
 			if _, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 				return tx.QueryRowContext(ctx, refsSetSinceSQL, c.id, since).Scan(&recent)
 			}); err != nil {
-				return RefsNear{}, fmt.Errorf("code: count the refs %s set within %s: %w", c.name, RefExpiry, err)
+				return RefsNear{}, fmt.Errorf("gitlet: count the refs %s set within %s: %w", c.name, RefExpiry, err)
 			}
 			if !NearLimit(c.live, recent) {
 				continue

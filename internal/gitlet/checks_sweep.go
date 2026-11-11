@@ -72,12 +72,12 @@ func (s *Store) ChecksSweep(ctx context.Context, repoID string, now time.Time) (
 			case errors.Is(err, sql.ErrNoRows):
 				return statelog.Decision{}, nil
 			case err != nil:
-				return statelog.Decision{}, fmt.Errorf("code: read repository %s: %w", repoID, err)
+				return statelog.Decision{}, fmt.Errorf("gitlet: read repository %s: %w", repoID, err)
 			}
 			rows, more, err := checksEndedBefore(ctx, tx, repoID, 1, cutoff, CheckHorizonRows,
 				CheckHorizonBytes)
 			if err != nil {
-				return statelog.Decision{}, fmt.Errorf("code: read %s's checks past their history: %w", repoID, err)
+				return statelog.Decision{}, fmt.Errorf("gitlet: read %s's checks past their history: %w", repoID, err)
 			}
 			if rows == 0 {
 				return statelog.Decision{}, nil
@@ -89,11 +89,11 @@ func (s *Store) ChecksSweep(ctx context.Context, repoID string, now time.Time) (
 	})
 	switch {
 	case err != nil:
-		return SweepResult{}, fmt.Errorf("code: sweep the checks of repository %s: %w", repoID, err)
+		return SweepResult{}, fmt.Errorf("gitlet: sweep the checks of repository %s: %w", repoID, err)
 	case swept.Rows == 0:
 		return SweepResult{}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return SweepResult{}, unknownOutcome(ctx, "code: whether the sweep of repository %s's checks landed "+
+		return SweepResult{}, unknownOutcome(ctx, "gitlet: whether the sweep of repository %s's checks landed "+
 			"is unknown (operation %s); the next pass decides it again", repoID, opID)
 	}
 	swept.Outcome, swept.Position = result.Outcome, result.Position
@@ -178,7 +178,7 @@ func (r *Reader) checksDue(ctx context.Context, q checksQuery) (checksPage, erro
 		return nil
 	})
 	if err != nil {
-		return checksPage{}, fmt.Errorf("code: list the repositories holding checks that ended before %s: %w",
+		return checksPage{}, fmt.Errorf("gitlet: list the repositories holding checks that ended before %s: %w",
 			q.cutoff.UTC().Format(time.RFC3339), err)
 	}
 	return page, nil

@@ -164,7 +164,7 @@ func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target
 		rows, err = tx.QueryContext(ctx, ejectedOfTargetSQL, repo.ID, target, since, MaxEjectionsShown)
 	}
 	if err != nil {
-		return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
+		return fmt.Errorf("gitlet: read what %s's queues put out: %w", repo.Name, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var (
@@ -176,12 +176,12 @@ func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		e, err := scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &detail)...) })
 		if err != nil {
-			return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
+			return fmt.Errorf("gitlet: read what %s's queues put out: %w", repo.Name, err)
 		}
 		entries, details = append(entries, e), append(details, detail)
 	}
 	if err = rows.Err(); err != nil {
-		return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
+		return fmt.Errorf("gitlet: read what %s's queues put out: %w", repo.Name, err)
 	}
 	numbers, err := numbersOf(ctx, tx, entries)
 	if err != nil {
@@ -197,7 +197,7 @@ func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target
 				Paths  []string `json:"paths"`
 			}
 			if err := json.Unmarshal([]byte(details[i]), &x); err != nil {
-				return fmt.Errorf("code: read entry %s's ejection: %w", e.EntryID, err)
+				return fmt.Errorf("gitlet: read entry %s's ejection: %w", e.EntryID, err)
 			}
 			row.Checks, row.Paths = x.Checks, x.Paths
 		}
@@ -494,7 +494,7 @@ func (r *Reader) queueDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 		room := r.pageRows - len(out.DueRepos)
 		ids, err := list(after, room)
 		if err != nil {
-			return false, fmt.Errorf("code: list the repositories %s: %w", what, err)
+			return false, fmt.Errorf("gitlet: list the repositories %s: %w", what, err)
 		}
 		out.DueRepos = append(out.DueRepos, ids...)
 		after = ""
@@ -586,7 +586,7 @@ func (r *Reader) landings(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ro
 	limit := min(limitOr(q.Limit, defaultLandingLimit), r.pageRows)
 	rows, err := tx.QueryContext(ctx, landingsSQL, named.ref.ID, q.Target, from, from, ordinal, limit)
 	if err != nil {
-		return fmt.Errorf("code: read %s's landings on %s: %w", named.ref.Name, q.Target, err)
+		return fmt.Errorf("gitlet: read %s's landings on %s: %w", named.ref.Name, q.Target, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -596,7 +596,7 @@ func (r *Reader) landings(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ro
 		)
 		if err := rows.Scan(&packed, &l.Ordinal, &l.Kind, &l.ChangeID, &l.EntryID, &l.BaseOID, &l.CommitOID,
 			&l.EnqueuedBy, &l.MergedBy, &l.Broken, &t); err != nil {
-			return fmt.Errorf("code: read %s's landings on %s: %w", named.ref.Name, q.Target, err)
+			return fmt.Errorf("gitlet: read %s's landings on %s: %w", named.ref.Name, q.Target, err)
 		}
 		l.RepoID, l.TargetRef, l.Position, l.At = named.ref.ID, q.Target, unpacked(packed), store.DecodeTime(t)
 		out.Landings = append(out.Landings, l)
@@ -630,7 +630,7 @@ func (r *Reader) greens(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	rows, err := tx.QueryContext(ctx, greensSQL, named.ref.ID)
 	if err != nil {
-		return fmt.Errorf("code: read %s's green rows: %w", named.ref.Name, err)
+		return fmt.Errorf("gitlet: read %s's green rows: %w", named.ref.Name, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -639,7 +639,7 @@ func (r *Reader) greens(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			packed, t int64
 		)
 		if err := rows.Scan(&g.TargetRef, &g.CommitOID, &packed, &t); err != nil {
-			return fmt.Errorf("code: read %s's green rows: %w", named.ref.Name, err)
+			return fmt.Errorf("gitlet: read %s's green rows: %w", named.ref.Name, err)
 		}
 		g.RepoID, g.Position, g.At = named.ref.ID, unpacked(packed), store.DecodeTime(t)
 		out.Green = append(out.Green, g)
@@ -658,7 +658,7 @@ func greenIn(ctx context.Context, tx *sql.Tx, repoID, target string) (GreenRow, 
 	case errors.Is(err, sql.ErrNoRows):
 		return GreenRow{}, false, nil
 	case err != nil:
-		return GreenRow{}, false, fmt.Errorf("code: read %s's green row: %w", target, err)
+		return GreenRow{}, false, fmt.Errorf("gitlet: read %s's green row: %w", target, err)
 	}
 	g.Position, g.At = unpacked(packed), store.DecodeTime(t)
 	return g, true, nil
@@ -668,14 +668,14 @@ func greenIn(ctx context.Context, tx *sql.Tx, repoID, target string) (GreenRow, 
 func entriesBy(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]queueEntry, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("code: read a queue's entries: %w", err)
+		return nil, fmt.Errorf("gitlet: read a queue's entries: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []queueEntry
 	for rows.Next() {
 		e, err := scanEntry(rows.Scan)
 		if err != nil {
-			return nil, fmt.Errorf("code: read a queue's entries: %w", err)
+			return nil, fmt.Errorf("gitlet: read a queue's entries: %w", err)
 		}
 		out = append(out, e)
 	}
@@ -710,7 +710,7 @@ func numbersOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) (map[strin
 func trainsOf(ctx context.Context, tx *sql.Tx, repoID, target string) ([]CandidateRow, error) {
 	rows, err := tx.QueryContext(ctx, trainsSQL, repoID, target)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's trains: %w", target, err)
+		return nil, fmt.Errorf("gitlet: read %s's trains: %w", target, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []CandidateRow
@@ -722,10 +722,10 @@ func trainsOf(ctx context.Context, tx *sql.Tx, repoID, target string) ([]Candida
 		)
 		if err := rows.Scan(&c.CandidateID, &c.Train, &c.Ordinal, &c.BaseOID, &c.TipOID, &c.PackID, &c.State,
 			&packed, &entries); err != nil {
-			return nil, fmt.Errorf("code: read %s's trains: %w", target, err)
+			return nil, fmt.Errorf("gitlet: read %s's trains: %w", target, err)
 		}
 		if err := json.Unmarshal([]byte(entries), &c.Entries); err != nil {
-			return nil, fmt.Errorf("code: read candidate %s's entries: %w", c.CandidateID, err)
+			return nil, fmt.Errorf("gitlet: read candidate %s's entries: %w", c.CandidateID, err)
 		}
 		c.Position = unpacked(packed)
 		out = append(out, c)

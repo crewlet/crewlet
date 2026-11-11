@@ -342,7 +342,7 @@ func (w changeWalk) readIndex(ctx context.Context, tx *sql.Tx, cursor string, li
 	case changesStateKey:
 		return w.readBy(ctx, tx, changesInStateSQL, changesInStateAfterSQL, cursor, limit)
 	}
-	return nil, fmt.Errorf("code: no listing of changes walks %s", w.index)
+	return nil, fmt.Errorf("gitlet: no listing of changes walks %s", w.index)
 }
 
 // readBy is [changeWalk.read] by first, a first page's statement, binding the
@@ -361,14 +361,14 @@ func (w changeWalk) readBy(ctx context.Context, tx *sql.Tx, first, after, cursor
 	}
 	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
 	if err != nil {
-		return nil, fmt.Errorf("code: list changes by %s: %w", w.index, err)
+		return nil, fmt.Errorf("gitlet: list changes by %s: %w", w.index, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []changeRow
 	for rows.Next() {
 		row, scanErr := scanChange(rows.Scan)
 		if scanErr != nil {
-			return nil, fmt.Errorf("code: list changes by %s: %w", w.index, scanErr)
+			return nil, fmt.Errorf("gitlet: list changes by %s: %w", w.index, scanErr)
 		}
 		out = append(out, row)
 	}
@@ -605,14 +605,14 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 	}
 	rows, err := tx.QueryContext(ctx, listedReposSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the repositories %s names: %w", what, err)
+		return nil, fmt.Errorf("gitlet: read the repositories %s names: %w", what, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var ref RepoRef
 		var status, owners, visibility string
 		if scanErr := rows.Scan(&ref.ID, &ref.Name, &status, &owners, &ref.Owner.Ref, &visibility); scanErr != nil {
-			return nil, fmt.Errorf("code: read the repositories %s names: %w", what, scanErr)
+			return nil, fmt.Errorf("gitlet: read the repositories %s names: %w", what, scanErr)
 		}
 		ref.Status, ref.Owner.Kind, ref.Visibility = RepoStatus(status), OwnerKind(owners), Visibility(visibility)
 		if !ref.Status.live() {
@@ -724,7 +724,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		rows, err = tx.QueryContext(ctx, revisionsAfterSQL, row.id, n, limit)
 	}
 	if err != nil {
-		return fmt.Errorf("code: read the revisions of %s: %w", ChangeRef(repo.ref.Name, row.number), err)
+		return fmt.Errorf("gitlet: read the revisions of %s: %w", ChangeRef(repo.ref.Name, row.number), err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
@@ -738,11 +738,11 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		)
 		if scanErr := rows.Scan(append([]any{&rev.N, &rev.Head, &rev.Pusher, &kind, &rev.PushID, &position, &at},
 			facts.targets()...)...); scanErr != nil {
-			return fmt.Errorf("code: read the revisions of %s: %w", ChangeRef(repo.ref.Name, row.number), scanErr)
+			return fmt.Errorf("gitlet: read the revisions of %s: %w", ChangeRef(repo.ref.Name, row.number), scanErr)
 		}
 		rev.PusherKind, rev.Position, rev.At = PartyKind(kind), unpacked(position), store.DecodeTime(at)
 		if rev.Facts, err = facts.row(); err != nil {
-			return fmt.Errorf("code: read revision %d of %s's facts: %w", rev.N, ChangeRef(repo.ref.Name,
+			return fmt.Errorf("gitlet: read revision %d of %s's facts: %w", rev.N, ChangeRef(repo.ref.Name,
 				row.number), err)
 		}
 		out.Revisions = append(out.Revisions, rev)
@@ -766,7 +766,7 @@ func changeByNumberIn(ctx context.Context, tx *sql.Tx, repoID string, number int
 	case errors.Is(err, sql.ErrNoRows):
 		return changeRow{}, false, nil
 	case err != nil:
-		return changeRow{}, false, fmt.Errorf("code: read change %d of %s: %w", number, repoID, err)
+		return changeRow{}, false, fmt.Errorf("gitlet: read change %d of %s: %w", number, repoID, err)
 	}
 	return row, true, nil
 }
@@ -776,7 +776,7 @@ func changeByNumberIn(ctx context.Context, tx *sql.Tx, repoID string, number int
 func authorsIn(ctx context.Context, tx *sql.Tx, id string) ([]ChangeAuthor, error) {
 	rows, err := tx.QueryContext(ctx, changeAuthorsSQL, id)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the authors of change %s: %w", id, err)
+		return nil, fmt.Errorf("gitlet: read the authors of change %s: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
 	out := []ChangeAuthor{}
@@ -787,7 +787,7 @@ func authorsIn(ctx context.Context, tx *sql.Tx, id string) ([]ChangeAuthor, erro
 			position int64
 		)
 		if scanErr := rows.Scan(&a.Author, &kind, &a.FirstRevision, &position); scanErr != nil {
-			return nil, fmt.Errorf("code: read the authors of change %s: %w", id, scanErr)
+			return nil, fmt.Errorf("gitlet: read the authors of change %s: %w", id, scanErr)
 		}
 		a.Kind, a.Position = PartyKind(kind), unpacked(position)
 		out = append(out, a)

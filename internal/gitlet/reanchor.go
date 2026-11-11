@@ -48,7 +48,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 		StreamCreatedAt: f.Inputs.StreamCreatedAt.UTC(),
 	})
 	if err != nil {
-		return statelog.GenerationRecord{}, false, fmt.Errorf("code: encode generation %d: %w",
+		return statelog.GenerationRecord{}, false, fmt.Errorf("gitlet: encode generation %d: %w",
 			f.Generation, err)
 	}
 	// THE GENERATION AND THE WRITER ARE STAMPED, both this record's own: it

@@ -887,7 +887,7 @@ func (f CheckFinished) Validate() error {
 	if len(f.Failures) > 0 {
 		encoded, err := json.Marshal(f.Failures)
 		if err != nil {
-			return fmt.Errorf("code: encode an ending's failures: %w", err)
+			return fmt.Errorf("gitlet: encode an ending's failures: %w", err)
 		}
 		if len(encoded) > MaxCheckFailureBytes {
 			return checkField("failures", "%d bytes encoded, past the %d an ending's failures weigh "+

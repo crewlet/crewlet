@@ -676,7 +676,7 @@ const routingNoticeRows = MaxRoutedParticipants + 2
 func routingRoomBeside(payload any) (int, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return 0, fmt.Errorf("code: measure a record's payload: %w", err)
+		return 0, fmt.Errorf("gitlet: measure a record's payload: %w", err)
 	}
 	return MaxRecordBytes - recordOverheadBytes - len(encoded), nil
 }
@@ -766,7 +766,7 @@ func withRouting(payload any, r *ChangeRouting) any {
 		p.Routing = r
 		return p
 	}
-	panic(fmt.Sprintf("code: a %T carries no routing — every record about a change does (RoutingsOf)", payload))
+	panic(fmt.Sprintf("gitlet: a %T carries no routing — every record about a change does (RoutingsOf)", payload))
 }
 
 // concerning is what a record's decide hands [routingFor]: the change as the
@@ -892,7 +892,7 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 	if c.authors {
 		authors, err := partiesOf(ctx, tx, routingAuthorsSQL, row.id)
 		if err != nil {
-			return nil, fmt.Errorf("code: read change %s's authors: %w", row.id, err)
+			return nil, fmt.Errorf("gitlet: read change %s's authors: %w", row.id, err)
 		}
 		for _, a := range c.addedAuthors {
 			if len(authors) < MaxRoutedParticipants && !slices.ContainsFunc(authors, func(p Reviewer) bool {
@@ -906,7 +906,7 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 	if c.watchers {
 		watchers, err := partiesOf(ctx, tx, routingWatchersSQL, row.id)
 		if err != nil {
-			return nil, fmt.Errorf("code: read change %s's participants: %w", row.id, err)
+			return nil, fmt.Errorf("gitlet: read change %s's participants: %w", row.id, err)
 		}
 		r.Watchers = parties(watchers)
 	}
@@ -929,10 +929,10 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 	slices.Sort(r.Persons)
 	encoded, err := json.Marshal(r)
 	if err != nil {
-		return nil, fmt.Errorf("code: encode change %s's routing: %w", row.id, err)
+		return nil, fmt.Errorf("gitlet: encode change %s's routing: %w", row.id, err)
 	}
 	if len(encoded) > MaxRoutingBytes {
-		return nil, fmt.Errorf("code: change %s's routing is %d bytes, past MaxRoutingBytes (%d) — the bounds of "+
+		return nil, fmt.Errorf("gitlet: change %s's routing is %d bytes, past MaxRoutingBytes (%d) — the bounds of "+
 			"its roles keep it from forming", row.id, len(encoded), MaxRoutingBytes)
 	}
 	return r, nil
@@ -984,14 +984,14 @@ func threadParticipants(ctx context.Context, tx *sql.Tx, changeID, thread string
 	}
 	rows, err := tx.QueryContext(ctx, threadParticipantsSQL, changeID, thread, threadParticipantRows)
 	if err != nil {
-		return nil, fmt.Errorf("code: read who talks in thread %s of %s: %w", thread, changeID, err)
+		return nil, fmt.Errorf("gitlet: read who talks in thread %s of %s: %w", thread, changeID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var p Reviewer
 		var kind string
 		if err := rows.Scan(&p.Handle, &kind); err != nil {
-			return nil, fmt.Errorf("code: read who talks in thread %s of %s: %w", thread, changeID, err)
+			return nil, fmt.Errorf("gitlet: read who talks in thread %s of %s: %w", thread, changeID, err)
 		}
 		p.Kind = PartyKind(kind)
 		add(p)
@@ -1042,7 +1042,7 @@ func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (
 	case errors.Is(err, sql.ErrNoRows):
 		return "", "", nil
 	case err != nil:
-		return "", "", fmt.Errorf("code: read who pushed revision %d of %s: %w", n, changeID, err)
+		return "", "", fmt.Errorf("gitlet: read who pushed revision %d of %s: %w", n, changeID, err)
 	}
 	return pusher, PartyKind(kind), nil
 }
@@ -1083,7 +1083,7 @@ func landingPusher(ctx context.Context, tx *sql.Tx, repoID, changeID string, l C
 	case errors.Is(err, sql.ErrNoRows):
 		return "", "", nil
 	case err != nil:
-		return "", "", fmt.Errorf("code: read where revision %d of %s was pushed: %w", l.Revision, changeID, err)
+		return "", "", fmt.Errorf("gitlet: read where revision %d of %s was pushed: %w", l.Revision, changeID, err)
 	}
 	if pushed < revised {
 		return "", "", nil
@@ -1094,12 +1094,12 @@ func landingPusher(ctx context.Context, tx *sql.Tx, repoID, changeID string, l C
 	case errors.Is(err, sql.ErrNoRows):
 		return "", "", nil
 	case err != nil:
-		return "", "", fmt.Errorf("code: read push %s of repository %s, which merged %s: %w", l.PushID, repoID,
+		return "", "", fmt.Errorf("gitlet: read push %s of repository %s, which merged %s: %w", l.PushID, repoID,
 			changeID, err)
 	}
 	var cmds []Command
 	if err := json.Unmarshal([]byte(encoded), &cmds); err != nil {
-		return "", "", fmt.Errorf("code: decode push %s's commands of repository %s: %w", l.PushID, repoID, err)
+		return "", "", fmt.Errorf("gitlet: decode push %s's commands of repository %s: %w", l.PushID, repoID, err)
 	}
 	if !slices.ContainsFunc(cmds, func(c Command) bool {
 		return c.Ref == l.TargetRef && c.Result == ResultOK && c.New != ZeroOID

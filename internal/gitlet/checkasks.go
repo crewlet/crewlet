@@ -265,7 +265,7 @@ func decideRerun(ctx context.Context, tx *sql.Tx, r CheckRerun, asker Principal,
 	}
 	var def CheckDef
 	if err := json.Unmarshal([]byte(held.queue.def), &def); err != nil {
-		return checksDecision{}, fmt.Errorf("code: decode the definition %s ran under: %w", named(prev), err)
+		return checksDecision{}, fmt.Errorf("gitlet: decode the definition %s ran under: %w", named(prev), err)
 	}
 	by := asker
 	d.payload = CheckQueued{CheckKey: key, Purpose: latest.Purpose, ChangeID: latest.ChangeID,

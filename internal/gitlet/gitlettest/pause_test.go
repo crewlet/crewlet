@@ -47,7 +47,7 @@ func TestAPausedApplierHoldsTheBarrierItReached(t *testing.T) {
 	}
 	// The applier commits the barrier again only once its idle fetch returns,
 	// so a halt that does not wait for it meets it uncommitted.
-	hold.ReleaseFailing(errors.New("codetest: the barrier's checkpoint commit failed"))
+	hold.ReleaseFailing(errors.New("gitlettest: the barrier's checkpoint commit failed"))
 	resume := data.PauseApplier(t)
 	defer resume()
 

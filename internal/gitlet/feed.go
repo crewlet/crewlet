@@ -108,7 +108,7 @@ func (t *Translator) Source() changefeed.Source {
 func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	envelope, err := DecodeEnvelope(rec.Payload)
 	if err != nil {
-		return changefeed.Delivery{}, false, fmt.Errorf("code: read the envelope on %s: %w", rec.Key, err)
+		return changefeed.Delivery{}, false, fmt.Errorf("gitlet: read the envelope on %s: %w", rec.Key, err)
 	}
 	if !wakesAnybody(envelope.Subject.Kind, envelope.Op) {
 		return changefeed.Delivery{}, false, nil
@@ -125,14 +125,14 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 		if errors.As(err, &future) {
 			return changefeed.Delivery{}, false, changefeed.Defer(changefeed.DeferNewerRecord, err)
 		}
-		return changefeed.Delivery{}, false, fmt.Errorf("code: read the record on %s: %w", rec.Key, err)
+		return changefeed.Delivery{}, false, fmt.Errorf("gitlet: read the record on %s: %w", rec.Key, err)
 	}
 	payload, err := DecodeMutation(record)
 	if err != nil {
 		// A PAIR THIS BUILD DOES NOT KNOW at a version it reads: the applier
 		// stops on it too, so the feed waits beside it rather than
 		// acknowledging a record nobody here has applied.
-		return changefeed.Delivery{}, false, fmt.Errorf("code: read the payload on %s: %w", rec.Key, err)
+		return changefeed.Delivery{}, false, fmt.Errorf("gitlet: read the payload on %s: %w", rec.Key, err)
 	}
 	if !wakesASeat(Concerns(RoutingsOf(payload))) {
 		return changefeed.Delivery{}, false, nil
@@ -202,11 +202,11 @@ func routedActor(payload any) string {
 func recordBody(record MutationRecord) (map[string]any, error) {
 	data, err := Encode(record)
 	if err != nil {
-		return nil, fmt.Errorf("code: render the record body: %w", err)
+		return nil, fmt.Errorf("gitlet: render the record body: %w", err)
 	}
 	var body map[string]any
 	if err := json.Unmarshal(data, &body); err != nil {
-		return nil, fmt.Errorf("code: render the record body: %w", err)
+		return nil, fmt.Errorf("gitlet: render the record body: %w", err)
 	}
 	return body, nil
 }
@@ -227,7 +227,7 @@ type DomainConsumer interface {
 // Open opens the consumer.
 func (s FeedSource) Open(ctx context.Context, group string) (changefeed.Records, error) {
 	if s.Log == nil {
-		return nil, fmt.Errorf("code: the change feed has no log to consume, so nothing derives a wake " +
+		return nil, fmt.Errorf("gitlet: the change feed has no log to consume, so nothing derives a wake " +
 			"from a committed record and no seat hears about a change")
 	}
 	return s.Log.Consume(ctx, group)

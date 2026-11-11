@@ -300,11 +300,11 @@ var introducedShare = sync.OnceValue(func() int {
 	}
 	with, err := json.Marshal(PushEntry{Introduced: ids, IntroducedCount: math.MaxInt})
 	if err != nil {
-		panic("code: encode the most introduced ids: " + err.Error())
+		panic("gitlet: encode the most introduced ids: " + err.Error())
 	}
 	without, err := json.Marshal(PushEntry{})
 	if err != nil {
-		panic("code: encode an empty entry: " + err.Error())
+		panic("gitlet: encode an empty entry: " + err.Error())
 	}
 	return len(with) - len(without)
 })
@@ -327,7 +327,7 @@ var longestRecorded = sync.OnceValue(func() Refusal {
 var largestEntry = sync.OnceValue(func() PushEntry {
 	key, err := objstore.ParseKey("01ffffff-ffff-7fff-bfff-ffffffffffff")
 	if err != nil {
-		panic("code: the largest object key: " + err.Error())
+		panic("gitlet: the largest object key: " + err.Error())
 	}
 	return PushEntry{
 		PushID:     "01ffffff-ffff-7fff-bfff-ffffffffffff",

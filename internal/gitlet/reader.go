@@ -91,7 +91,7 @@ type ReaderOptions struct {
 // NewReader builds Gitlet's read side.
 func NewReader(o ReaderOptions) (*Reader, error) {
 	if o.Log == nil {
-		return nil, errors.New("code: a reader needs the code log's read authority — " +
+		return nil, errors.New("gitlet: a reader needs the code log's read authority — " +
 			"without it every read level is a label rather than a guarantee")
 	}
 	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
@@ -198,7 +198,7 @@ func checkFreshness(f statelog.Freshness) error {
 		return fmt.Errorf("%w: %q is not a read level", ErrBadLevel, f.Level)
 	}
 	if err := f.OnlyOn(topics.CodeLogStream); err != nil {
-		return fmt.Errorf("code: this read's floor: %w", err)
+		return fmt.Errorf("gitlet: this read's floor: %w", err)
 	}
 	if f.Level == statelog.ReadSession && f.Floor(topics.CodeLogStream).IsZero() {
 		return fmt.Errorf("%w: a session read names the position it must include", ErrBadLevel)
@@ -218,7 +218,7 @@ func resolver(name string) statelog.Resolver {
 		case errors.Is(err, sql.ErrNoRows):
 			return statelog.ScopeSet{Paths: []string{NamePath(token)}}, nil
 		case err != nil:
-			return statelog.ScopeSet{}, fmt.Errorf("code: resolve %q: %w", name, err)
+			return statelog.ScopeSet{}, fmt.Errorf("gitlet: resolve %q: %w", name, err)
 		}
 		return statelog.ScopeSet{Paths: []string{NamePath(token), RepoPath(id)}}, nil
 	}
@@ -232,7 +232,7 @@ func claimIn(ctx context.Context, tx *sql.Tx, name string) (string, bool, error)
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("code: read the claim on %q: %w", name, err)
+		return "", false, fmt.Errorf("gitlet: read the claim on %q: %w", name, err)
 	}
 	return id, true, nil
 }
@@ -315,7 +315,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 	case errors.Is(err, sql.ErrNoRows):
 		return repoView{}, false, nil
 	case err != nil:
-		return repoView{}, false, fmt.Errorf("code: read repository %s: %w", id, err)
+		return repoView{}, false, fmt.Errorf("gitlet: read repository %s: %w", id, err)
 	}
 	v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
 	v.ref.Kind, v.ref.Visibility, v.ref.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
@@ -636,7 +636,7 @@ func retiredAbove(ctx context.Context, tx *sql.Tx, repoID string, floor statelog
 
 	var n int64
 	if err := tx.QueryRowContext(ctx, retiredAboveSQL, repoID, floor.Packed(), depth).Scan(&n); err != nil {
-		return 0, fmt.Errorf("code: count %s's retirements above %s: %w", repoID, floor, err)
+		return 0, fmt.Errorf("gitlet: count %s's retirements above %s: %w", repoID, floor, err)
 	}
 	return n, nil
 }
@@ -713,7 +713,7 @@ func deltaOutweighs(ctx context.Context, tx *sql.Tx, repoID string, since, retir
 	}
 	var moved int64
 	if err := tx.QueryRowContext(ctx, deltaRowsSQL, repoID, since, room+1).Scan(&moved); err != nil {
-		return false, fmt.Errorf("code: count %s's delta: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: count %s's delta: %w", repoID, err)
 	}
 	return moved > room, nil
 }
@@ -804,7 +804,7 @@ func (r *Reader) layersPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 		}
 		rows, err := tx.QueryContext(ctx, layerPartsOfSQL, repoID)
 		if err != nil {
-			return fmt.Errorf("code: read %s's published layers' parts: %w", repoID, err)
+			return fmt.Errorf("gitlet: read %s's published layers' parts: %w", repoID, err)
 		}
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
@@ -814,28 +814,28 @@ func (r *Reader) layersPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 				size             int64
 			)
 			if err := rows.Scan(&id, &n, &object, &hash, &size); err != nil {
-				return fmt.Errorf("code: read %s's published layers' parts: %w", repoID, err)
+				return fmt.Errorf("gitlet: read %s's published layers' parts: %w", repoID, err)
 			}
 			i, ok := at[id]
 			if !ok {
 				// A PART OF NO LAYER OF THE CHAIN: the apply removes a
 				// layer's parts with its row, so this is rows no record
 				// wrote, which no snapshot may answer as a chain.
-				return fmt.Errorf("code: %s holds part %d of layer %s, which its chain does not", repoID, n, id)
+				return fmt.Errorf("gitlet: %s holds part %d of layer %s, which its chain does not", repoID, n, id)
 			}
 			k, err := objstore.ParseKey(object)
 			if err != nil {
-				return fmt.Errorf("code: part %d of %s's layer %s names %q: %w", n, repoID, id, object, err)
+				return fmt.Errorf("gitlet: part %d of %s's layer %s names %q: %w", n, repoID, id, object, err)
 			}
 			if n != len(chain[i].Layer.Parts) {
-				return fmt.Errorf("code: %s's layer %s holds part %d where part %d was due", repoID, id, n,
+				return fmt.Errorf("gitlet: %s's layer %s holds part %d where part %d was due", repoID, id, n,
 					len(chain[i].Layer.Parts))
 			}
 			chain[i].Layer.Parts = append(chain[i].Layer.Parts, LayerPart{Object: k, Hash: objstore.Hash(hash),
 				Size: size})
 		}
 		if err := rows.Err(); err != nil {
-			return fmt.Errorf("code: read %s's published layers' parts: %w", repoID, err)
+			return fmt.Errorf("gitlet: read %s's published layers' parts: %w", repoID, err)
 		}
 	}
 	for _, row := range chain {
@@ -861,7 +861,7 @@ func (r *Reader) packsFull(ctx context.Context, tx *sql.Tx, repoID string, out *
 		rows, err = tx.QueryContext(ctx, packsFullAfterSQL, repoID, id, id, part, pg.left())
 	}
 	if err != nil {
-		return false, fmt.Errorf("code: read %s's packs: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: read %s's packs: %w", repoID, err)
 	}
 	return r.scanPacks(rows, out, cur, pg, func(p PackRow) string { return p.PackID + "/" + p.Part })
 }
@@ -884,7 +884,7 @@ func (r *Reader) packsAfter(ctx context.Context, tx *sql.Tx, repoID string, floo
 		rows, err = tx.QueryContext(ctx, packsAddedAfterSQL, repoID, at, at, id, id, part, pg.left())
 	}
 	if err != nil {
-		return false, fmt.Errorf("code: read %s's packs: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: read %s's packs: %w", repoID, err)
 	}
 	return r.scanPacks(rows, out, cur, pg, func(p PackRow) string {
 		return strconv.FormatInt(p.Added.Packed(), 10) + "/" + p.PackID + "/" + p.Part
@@ -925,11 +925,11 @@ func (r *Reader) scanPacks(rows *sql.Rows, out *RepoSnapshot, cur *StateCursor, 
 		if err := rows.Scan(&p.PackID, &p.Part, &object, &hash, &p.Size, &p.IndexBytes,
 			&p.ReverseBytes, &p.GitChecksum, &p.Objects, &p.Kind, &p.State, &added, &content,
 			&arrived); err != nil {
-			return false, fmt.Errorf("code: read a pack: %w", err)
+			return false, fmt.Errorf("gitlet: read a pack: %w", err)
 		}
 		k, err := objstore.ParseKey(object)
 		if err != nil {
-			return false, fmt.Errorf("code: pack %s names %q: %w", p.PackID, object, err)
+			return false, fmt.Errorf("gitlet: pack %s names %q: %w", p.PackID, object, err)
 		}
 		p.Object, p.Hash, p.Added, p.Content = k, objstore.Hash(hash), unpacked(added), unpacked(content)
 		// ZERO IS NEVER: the column's default, and no record's broker
@@ -945,7 +945,7 @@ func (r *Reader) scanPacks(rows *sql.Rows, out *RepoSnapshot, cur *StateCursor, 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("code: read packs: %w", err)
+		return false, fmt.Errorf("gitlet: read packs: %w", err)
 	}
 	return served < asked, nil
 }
@@ -974,7 +974,7 @@ func (r *Reader) refs(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 		rows, err = tx.QueryContext(ctx, refsDeltaAfterSQL, repoID, n, n, ref, pg.left())
 	}
 	if err != nil {
-		return false, fmt.Errorf("code: read %s's refs: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: read %s's refs: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	asked, served := pg.left(), 0
@@ -982,7 +982,7 @@ func (r *Reader) refs(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 		var ref RefRow
 		var position int64
 		if err := rows.Scan(&ref.Ref, &ref.OID, &position); err != nil {
-			return false, fmt.Errorf("code: read a ref: %w", err)
+			return false, fmt.Errorf("gitlet: read a ref: %w", err)
 		}
 		ref.Position = unpacked(position)
 		out.Refs = append(out.Refs, ref)
@@ -997,7 +997,7 @@ func (r *Reader) refs(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("code: read refs: %w", err)
+		return false, fmt.Errorf("gitlet: read refs: %w", err)
 	}
 	return served < asked, nil
 }
@@ -1032,14 +1032,14 @@ func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 			pushID, pg.left())
 	}
 	if err != nil {
-		return false, fmt.Errorf("code: read %s's pushes since %s: %w", repoID, cur.Since, err)
+		return false, fmt.Errorf("gitlet: read %s's pushes since %s: %w", repoID, cur.Since, err)
 	}
 	defer func() { _ = rows.Close() }()
 	asked, served := pg.left(), 0
 	for rows.Next() {
 		in, cost, err := scanIntroduced(rows)
 		if err != nil {
-			return false, fmt.Errorf("code: read %s's pushes since %s: %w", repoID, cur.Since, err)
+			return false, fmt.Errorf("gitlet: read %s's pushes since %s: %w", repoID, cur.Since, err)
 		}
 		out.Pushes = append(out.Pushes, in)
 		served++
@@ -1049,7 +1049,7 @@ func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("code: read %s's pushes since %s: %w", repoID, cur.Since, err)
+		return false, fmt.Errorf("gitlet: read %s's pushes since %s: %w", repoID, cur.Since, err)
 	}
 	return served < asked, nil
 }
@@ -1083,7 +1083,7 @@ func (r *Reader) retiredPhase(ctx context.Context, tx *sql.Tx, repoID string, ou
 			pg.left())
 	}
 	if err != nil {
-		return false, fmt.Errorf("code: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
+		return false, fmt.Errorf("gitlet: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
 	}
 	defer func() { _ = rows.Close() }()
 	asked, served := pg.left(), 0
@@ -1093,7 +1093,7 @@ func (r *Reader) retiredPhase(ctx context.Context, tx *sql.Tx, repoID string, ou
 			retiredAt, position int64
 		)
 		if err := rows.Scan(&row.PackID, &row.Part, &row.GitChecksum, &retiredAt, &position); err != nil {
-			return false, fmt.Errorf("code: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
+			return false, fmt.Errorf("gitlet: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
 		}
 		row.RetiredAt, row.Position = store.DecodeTime(retiredAt), unpacked(position)
 		out.Retired = append(out.Retired, row)
@@ -1104,7 +1104,7 @@ func (r *Reader) retiredPhase(ctx context.Context, tx *sql.Tx, repoID string, ou
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("code: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
+		return false, fmt.Errorf("gitlet: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
 	}
 	return served < asked, nil
 }
@@ -1216,7 +1216,7 @@ func pushIn(ctx context.Context, tx *sql.Tx, pushID string) (PushRow, bool, erro
 	case errors.Is(err, sql.ErrNoRows):
 		return PushRow{}, false, nil
 	case err != nil:
-		return PushRow{}, false, fmt.Errorf("code: read push %s: %w", pushID, err)
+		return PushRow{}, false, fmt.Errorf("gitlet: read push %s: %w", pushID, err)
 	}
 	return row, true, nil
 }
@@ -1254,7 +1254,7 @@ func scanPush(s scanner) (PushRow, int, error) {
 	}
 	row.Position, row.At, row.ReceivedAt = unpacked(position), store.DecodeTime(at), store.DecodeTime(received)
 	if err := json.Unmarshal([]byte(commands), &row.Commands); err != nil {
-		return PushRow{}, 0, fmt.Errorf("code: push %s's commands: %w", row.PushID, err)
+		return PushRow{}, 0, fmt.Errorf("gitlet: push %s's commands: %w", row.PushID, err)
 	}
 	if introduced != "" {
 		row.Introduced = strings.Split(introduced, " ")
@@ -2344,7 +2344,7 @@ func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	}
 	c := MirrorCandidate{ID: id, To: remotes.mirrorTo()}
 	if err = tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&c.Name); err != nil {
-		return fmt.Errorf("code: read repository %s's name: %w", id, err)
+		return fmt.Errorf("gitlet: read repository %s's name: %w", id, err)
 	}
 	green, err := greenRowsIn(ctx, tx, id)
 	if err != nil {
@@ -2461,7 +2461,7 @@ func (r *Reader) branchChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 			}
 			return rows.Err()
 		}); err != nil {
-			return fmt.Errorf("code: read the live changes of repository %s's branches: %w", repo.RepoID, err)
+			return fmt.Errorf("gitlet: read the live changes of repository %s's branches: %w", repo.RepoID, err)
 		}
 		order := make(map[string]int, len(repo.Refs))
 		for i, ref := range repo.Refs {
@@ -2600,7 +2600,7 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	}
 	rows, err := tx.QueryContext(ctx, listing, args...)
 	if err != nil {
-		return fmt.Errorf("code: list repositories: %w", err)
+		return fmt.Errorf("gitlet: list repositories: %w", err)
 	}
 	var (
 		ids         []string
@@ -2621,7 +2621,7 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 			&v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects, &v.ref.DropEpoch, &v.pushes, &v.lastPushAt,
 			&head); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("code: list repositories: %w", err)
+			return fmt.Errorf("gitlet: list repositories: %w", err)
 		}
 		scanned, lastScanned = scanned+1, v.ref.Name
 		v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
@@ -2642,7 +2642,7 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("code: list repositories: %w", err)
+		return fmt.Errorf("gitlet: list repositories: %w", err)
 	}
 	_ = rows.Close()
 	if err := protectionsOf(ctx, tx, ids, out.Repos); err != nil {
@@ -2683,7 +2683,7 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 	}
 	rows, err := tx.QueryContext(ctx, pushRulesOfSQL, list)
 	if err != nil {
-		return fmt.Errorf("code: read the listing's protections: %w", err)
+		return fmt.Errorf("gitlet: read the listing's protections: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	at := make(map[string]int, len(repos))
@@ -2694,7 +2694,7 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 		var id, direct string
 		var p PushRule
 		if err := rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct); err != nil {
-			return fmt.Errorf("code: read the listing's protections: %w", err)
+			return fmt.Errorf("gitlet: read the listing's protections: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)
 		i := at[id]
@@ -2729,7 +2729,7 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	}
 	head, _, err := liveRefIn(ctx, tx, id, branchPrefix+v.ref.DefaultBranch)
 	if err != nil {
-		return fmt.Errorf("code: read %s's head: %w", name, err)
+		return fmt.Errorf("gitlet: read %s's head: %w", name, err)
 	}
 	// THE COUNTS ARE THE ROW'S, kept by the applier as it moves the refs:
 	// counted here they were a walk of every ref the namespace holds,
@@ -2787,18 +2787,18 @@ func detailRowIn(ctx context.Context, tx *sql.Tx, id string) (ExpungeState, Remo
 	)
 	dests := append(state.dests(), &from, &to, &source, &chunks, &doneAt, &failed, &syncedAt)
 	if err := tx.QueryRowContext(ctx, detailRowSQL, id).Scan(dests...); err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's detail row: %w", id, err)
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's detail row: %w", id, err)
 	}
 	var err error
 	if remotes.MirrorFrom, err = remoteOf[MirrorSource](from); err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's mirror_from: %w", id, err)
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's mirror_from: %w", id, err)
 	}
 	if remotes.MirrorTo, err = remoteOf[MirrorTarget](to); err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's mirror_to: %w", id, err)
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's mirror_to: %w", id, err)
 	}
 	imported, err := remoteOf[ImportSource](source)
 	if err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's import_source: %w", id, err)
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's import_source: %w", id, err)
 	}
 	if imported != nil {
 		remotes.Import = &ImportState{Source: *imported, Chunks: chunks, Error: failed}
@@ -2848,7 +2848,7 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		row, found, err := pushIn(ctx, tx, q.Push)
 		if err != nil {
-			return fmt.Errorf("code: read %s's push %s: %w", q.Repo, q.Push, err)
+			return fmt.Errorf("gitlet: read %s's push %s: %w", q.Repo, q.Push, err)
 		}
 		if found && row.RepoID == id {
 			out.Pushes = []PushRow{row}
@@ -2867,14 +2867,14 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		rows, err = tx.QueryContext(ctx, pushesAfterSQL, id, position, position, pushID, limit)
 	}
 	if err != nil {
-		return fmt.Errorf("code: read %s's pushes: %w", q.Repo, err)
+		return fmt.Errorf("gitlet: read %s's pushes: %w", q.Repo, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
 		row, commands, err := scanPush(rows)
 		if err != nil {
-			return fmt.Errorf("code: read %s's pushes: %w", q.Repo, err)
+			return fmt.Errorf("gitlet: read %s's pushes: %w", q.Repo, err)
 		}
 		// A ROW IN BRIEF IS CHARGED THE ROW IT READ — every command and
 		// every introduced id, read and decoded whole to be cut and counted —
@@ -2945,7 +2945,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	limit := min(limitOr(q.Limit, defaultRefLimit), r.pageRows)
 	rows, err := tx.QueryContext(ctx, refsUnderSQL, id, after, prefixEnd(prefix), limit)
 	if err != nil {
-		return fmt.Errorf("code: read %s's refs under %s: %w", q.Repo, prefix, err)
+		return fmt.Errorf("gitlet: read %s's refs under %s: %w", q.Repo, prefix, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
@@ -2953,7 +2953,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		var ref RefRow
 		var position int64
 		if err := rows.Scan(&ref.Ref, &ref.OID, &position); err != nil {
-			return fmt.Errorf("code: read %s's refs under %s: %w", q.Repo, prefix, err)
+			return fmt.Errorf("gitlet: read %s's refs under %s: %w", q.Repo, prefix, err)
 		}
 		ref.Position = unpacked(position)
 		out.Refs = append(out.Refs, ref)
@@ -2996,7 +2996,7 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: %s", ErrRepoNotFound, in.RepoID)
 	case err != nil:
-		return fmt.Errorf("code: read repository %s: %w", in.RepoID, err)
+		return fmt.Errorf("gitlet: read repository %s: %w", in.RepoID, err)
 	}
 	through := in.Through.Packed()
 	if in.Through.IsZero() {
@@ -3020,14 +3020,14 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 			limit)
 	}
 	if err != nil {
-		return fmt.Errorf("code: read %s's pushes in log order: %w", name, err)
+		return fmt.Errorf("gitlet: read %s's pushes in log order: %w", name, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
 		row, cost, err := scanIntroduced(rows)
 		if err != nil {
-			return fmt.Errorf("code: read %s's pushes in log order: %w", name, err)
+			return fmt.Errorf("gitlet: read %s's pushes in log order: %w", name, err)
 		}
 		out.Introduced = append(out.Introduced, row)
 		if pg.add(cost) {
@@ -3133,7 +3133,7 @@ func (r *Reader) runPushesOf(ctx context.Context, tx *sql.Tx, i int, in *RunPush
 	repo := in.Repos[i]
 	span, err := runSpanOf(ctx, tx, repo, position, pushID, *reads)
 	if err != nil {
-		return false, fmt.Errorf("code: weigh the pushes to %s a page of run %s's may read: %w", repo, in.Run,
+		return false, fmt.Errorf("gitlet: weigh the pushes to %s a page of run %s's may read: %w", repo, in.Run,
 			err)
 	}
 	if span.pushes == 0 {
@@ -3142,13 +3142,13 @@ func (r *Reader) runPushesOf(ctx context.Context, tx *sql.Tx, i int, in *RunPush
 	rows, err := tx.QueryContext(ctx, runPushesInSQL, repo, in.Run, position, pushID, span.lastPosition,
 		span.lastID)
 	if err != nil {
-		return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
+		return false, fmt.Errorf("gitlet: read run %s's pushes to %s: %w", in.Run, repo, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		row, commands, err := scanPush(rows)
 		if err != nil {
-			return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
+			return false, fmt.Errorf("gitlet: read run %s's pushes to %s: %w", in.Run, repo, err)
 		}
 		out.Pushes = append(out.Pushes, row)
 		if *sent += row.encodedBytes(commands); *sent >= reads.maxB {
@@ -3157,7 +3157,7 @@ func (r *Reader) runPushesOf(ctx context.Context, tx *sql.Tx, i int, in *RunPush
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
+		return false, fmt.Errorf("gitlet: read run %s's pushes to %s: %w", in.Run, repo, err)
 	}
 	reads.rows += span.pushes
 	reads.bytes += span.weight
@@ -3284,7 +3284,7 @@ func (r *Reader) compactionDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 		rows, err = tx.QueryContext(ctx, compactionDueAfterSQL, q.MinPacks, packs, packs, id, r.pageRows)
 	}
 	if err != nil {
-		return fmt.Errorf("code: list the repositories a compaction may be due in: %w", err)
+		return fmt.Errorf("gitlet: list the repositories a compaction may be due in: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
@@ -3294,7 +3294,7 @@ func (r *Reader) compactionDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 			version int64
 		)
 		if err := rows.Scan(&c.ID, &c.Name, &c.LivePacks, &c.LiveObjects, &version); err != nil {
-			return fmt.Errorf("code: list the repositories a compaction may be due in: %w", err)
+			return fmt.Errorf("gitlet: list the repositories a compaction may be due in: %w", err)
 		}
 		c.Version = unpacked(version)
 		out.Due = append(out.Due, c)
@@ -3373,7 +3373,7 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 		rows, err = tx.QueryContext(ctx, publicationDueAfterSQL, at, at, id, r.pageRows)
 	}
 	if err != nil {
-		return fmt.Errorf("code: list the repositories a publication may be due in: %w", err)
+		return fmt.Errorf("gitlet: list the repositories a publication may be due in: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
@@ -3385,7 +3385,7 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 		)
 		if err := rows.Scan(&c.ID, &c.Name, &c.LivePacks, &c.PublishedPacks, &c.LiveObjects,
 			&c.PublishedObjects, &lastPush, &published, &tookMs, &v); err != nil {
-			return fmt.Errorf("code: list the repositories a publication may be due in: %w", err)
+			return fmt.Errorf("gitlet: list the repositories a publication may be due in: %w", err)
 		}
 		if lastPush.Valid {
 			c.LastPushAt = store.DecodeTime(lastPush.Int64)
@@ -3441,7 +3441,7 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	if !weekly {
 		rows, err := tx.QueryContext(ctx, expungeDueSQL, q.Cursor, r.pageRows)
 		if err != nil {
-			return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+			return fmt.Errorf("gitlet: list the repositories an expunge is owed in: %w", err)
 		}
 		full, err := scanExpungeDue(rows, &pg, out, func(c ExpungeCandidate, _ int64) string { return c.ID })
 		if err != nil || full || q.ScannedBefore.IsZero() {
@@ -3460,7 +3460,7 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 			r.pageRows-pg.rows)
 	}
 	if err != nil {
-		return fmt.Errorf("code: list the repositories an expunge may be due in: %w", err)
+		return fmt.Errorf("gitlet: list the repositories an expunge may be due in: %w", err)
 	}
 	_, err = scanExpungeDue(rows, &pg, out, func(c ExpungeCandidate, scanned int64) string {
 		return weeklyCursor(scanned, c.ID)
@@ -3482,7 +3482,7 @@ func scanExpungeDue(rows *sql.Rows, pg *page, out *ReadAnswer,
 		)
 		if err := rows.Scan(&c.ID, &c.Name, &c.Open, &c.Request, &requested, &expunged, &scanned, &c.LivePacks,
 			&c.LiveBytes, &c.LiveObjects, &version); err != nil {
-			return false, fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+			return false, fmt.Errorf("gitlet: list the repositories an expunge is owed in: %w", err)
 		}
 		if c.Request != "" {
 			c.Requested = unpacked(requested)
@@ -3549,14 +3549,14 @@ func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Read
 	}
 	rows, err := tx.QueryContext(ctx, indexedSQL, string(SearchIndexed), q.Cursor, r.pageRows)
 	if err != nil {
-		return fmt.Errorf("code: list the repositories searched by index: %w", err)
+		return fmt.Errorf("gitlet: list the repositories searched by index: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
 	for rows.Next() {
 		var c IndexedRepo
 		if err := rows.Scan(&c.ID, &c.Name); err != nil {
-			return fmt.Errorf("code: list the repositories searched by index: %w", err)
+			return fmt.Errorf("gitlet: list the repositories searched by index: %w", err)
 		}
 		out.Indexed = append(out.Indexed, c)
 		if pg.add(2 + field("id", stringBytes(c.ID), true) + field("name", stringBytes(c.Name), false)) {
@@ -3580,7 +3580,7 @@ func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	}
 	rows, err := tx.QueryContext(ctx, importsDueSQL, q.Cursor, r.pageRows)
 	if err != nil {
-		return fmt.Errorf("code: list the repositories being imported: %w", err)
+		return fmt.Errorf("gitlet: list the repositories being imported: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
@@ -3591,14 +3591,14 @@ func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 			version int64
 		)
 		if err := rows.Scan(&c.ID, &c.Name, &source, &c.Seq, &version); err != nil {
-			return fmt.Errorf("code: list the repositories being imported: %w", err)
+			return fmt.Errorf("gitlet: list the repositories being imported: %w", err)
 		}
 		// AN IMPORTING REPOSITORY NAMES ITS SOURCE: its create's import or
 		// its pull mirror's, fixed at the create. One that names none is a
 		// row no apply of this build writes, listed with none, which its
 		// home ends rather than fetching from nowhere.
 		if src, err := remoteOf[ImportSource](source); err != nil {
-			return fmt.Errorf("code: list the repositories being imported: %s: %w", c.ID, err)
+			return fmt.Errorf("gitlet: list the repositories being imported: %s: %w", c.ID, err)
 		} else if src != nil {
 			c.Source = *src
 		}
@@ -3635,7 +3635,7 @@ func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	}
 	rows, err := tx.QueryContext(ctx, pullMirrorsSQL, at, at, after, r.pageRows)
 	if err != nil {
-		return fmt.Errorf("code: list the pull mirrors: %w", err)
+		return fmt.Errorf("gitlet: list the pull mirrors: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -3646,10 +3646,10 @@ func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 			version int64
 		)
 		if err = rows.Scan(&c.ID, &c.Name, &from, &synced, &version); err != nil {
-			return fmt.Errorf("code: list the pull mirrors: %w", err)
+			return fmt.Errorf("gitlet: list the pull mirrors: %w", err)
 		}
 		if c.From, err = remoteOf[MirrorSource](from); err != nil {
-			return fmt.Errorf("code: list the pull mirrors: %s: %w", c.ID, err)
+			return fmt.Errorf("gitlet: list the pull mirrors: %s: %w", c.ID, err)
 		}
 		// ZERO IS NEVER: the column's default, and no record's instant.
 		if synced != 0 {
@@ -3672,7 +3672,7 @@ func (r *Reader) pushMirrors(ctx context.Context, tx *sql.Tx, after string, pg *
 
 	rows, err := tx.QueryContext(ctx, pushMirrorsSQL, after, r.pageRows)
 	if err != nil {
-		return false, fmt.Errorf("code: list the push mirrors: %w", err)
+		return false, fmt.Errorf("gitlet: list the push mirrors: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -3681,10 +3681,10 @@ func (r *Reader) pushMirrors(ctx context.Context, tx *sql.Tx, after string, pg *
 			to string
 		)
 		if err = rows.Scan(&c.ID, &c.Name, &to); err != nil {
-			return false, fmt.Errorf("code: list the push mirrors: %w", err)
+			return false, fmt.Errorf("gitlet: list the push mirrors: %w", err)
 		}
 		if c.To, err = remoteOf[MirrorTarget](to); err != nil {
-			return false, fmt.Errorf("code: list the push mirrors: %s: %w", c.ID, err)
+			return false, fmt.Errorf("gitlet: list the push mirrors: %s: %w", c.ID, err)
 		}
 		out.Mirrors = append(out.Mirrors, c)
 		if pg.add(c.encodedBytes()) {
@@ -3756,7 +3756,7 @@ func (r *Reader) expungeTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: %s", ErrRepoNotFound, in.RepoID)
 	case err != nil:
-		return fmt.Errorf("code: read repository %s: %w", in.RepoID, err)
+		return fmt.Errorf("gitlet: read repository %s: %w", in.RepoID, err)
 	}
 	since := store.EncodeTime(in.Since)
 	from := tipsCursor{phase: tipsDrops}
@@ -3778,7 +3778,7 @@ func (r *Reader) expungeTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *
 		}
 		full, err := r.tipsOf(ctx, tx, phase, in.RepoID, since, after, &pg, answered, out)
 		if err != nil {
-			return fmt.Errorf("code: read the objects %s's expunge keeps (%s): %w", name, phase, err)
+			return fmt.Errorf("gitlet: read the objects %s's expunge keeps (%s): %w", name, phase, err)
 		}
 		if full {
 			return nil
@@ -4159,7 +4159,7 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 			}
 			resolved, err := firstLiveIn(ctx, tx, id, names)
 			if err != nil {
-				return fmt.Errorf("code: read %s of %s: %w", q.Refs[i], q.Repo, err)
+				return fmt.Errorf("gitlet: read %s of %s: %w", q.Refs[i], q.Repo, err)
 			}
 			resolved.Name = q.Refs[i]
 			if resolved.Ref == "" {
@@ -4262,7 +4262,7 @@ func grantRefIn(ctx context.Context, tx *sql.Tx, id string) (RepoRef, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return RepoRef{}, fmt.Errorf("%w: %s", ErrRepoNotFound, id)
 	case err != nil:
-		return RepoRef{}, fmt.Errorf("code: read repository %s's grant: %w", id, err)
+		return RepoRef{}, fmt.Errorf("gitlet: read repository %s's grant: %w", id, err)
 	}
 	ref.Status, ref.Owner.Kind, ref.Visibility = RepoStatus(status), OwnerKind(owners), Visibility(visibility)
 	return ref, nil
@@ -4352,7 +4352,7 @@ func (r *Reader) WalkLives(ctx context.Context, visit func(RepoLife) error) erro
 			return rows.Err()
 		})
 		if err != nil {
-			return fmt.Errorf("code: list the repositories a reconcile acts on: %w", err)
+			return fmt.Errorf("gitlet: list the repositories a reconcile acts on: %w", err)
 		}
 		for _, l := range page {
 			if err := visit(l); err != nil {
@@ -4431,7 +4431,7 @@ func (r *Reader) due(ctx context.Context, q dueQuery) ([]dueRepo, error) {
 			var err error
 			if out, err = dueIn(ctx, tx, out, true, duePurgingSQL, after, after, afterID,
 				q.limit); err != nil {
-				return fmt.Errorf("code: read the repositories purging: %w", err)
+				return fmt.Errorf("gitlet: read the repositories purging: %w", err)
 			}
 			if len(out) == q.limit {
 				return nil
@@ -4441,7 +4441,7 @@ func (r *Reader) due(ctx context.Context, q dueQuery) ([]dueRepo, error) {
 		var err error
 		if out, err = dueIn(ctx, tx, out, false, dueDeletedSQL, store.EncodeTime(q.cutoff),
 			after, after, afterID, q.limit-len(out)); err != nil {
-			return fmt.Errorf("code: read the repositories deleted past the retention: %w", err)
+			return fmt.Errorf("gitlet: read the repositories deleted past the retention: %w", err)
 		}
 		return nil
 	})
@@ -4487,7 +4487,7 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		var rows, marked int
 		if err := tx.QueryRowContext(ctx, purgeStateSQL, id, id).Scan(&rows, &marked); err != nil {
-			return fmt.Errorf("code: read whether %s is purged: %w", id, err)
+			return fmt.Errorf("gitlet: read whether %s is purged: %w", id, err)
 		}
 		purged = rows == 0 && marked > 0
 		return nil

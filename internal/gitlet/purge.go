@@ -92,7 +92,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 			if !present {
 				var marked int
 				if markErr := tx.QueryRowContext(ctx, purgedSQL, repoID).Scan(&marked); markErr != nil {
-					return statelog.Decision{}, fmt.Errorf("code: read %s's deletion marker: %w", repoID, markErr)
+					return statelog.Decision{}, fmt.Errorf("gitlet: read %s's deletion marker: %w", repoID, markErr)
 				}
 				if marked == 0 {
 					return statelog.Decision{}, fmt.Errorf("%w: %s", ErrRepoNotFound, repoID)
@@ -102,7 +102,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 			}
 			switch {
 			case row.Name != name:
-				return statelog.Decision{}, fmt.Errorf("code: repository %s is named %q "+
+				return statelog.Decision{}, fmt.Errorf("gitlet: repository %s is named %q "+
 					"and this purge was scoped to %q", repoID, row.Name, name)
 			case row.Status.live():
 				return statelog.Decision{}, fmt.Errorf("%w: %s is %s", ErrNotDeleted, row.Name, row.Status)
@@ -115,7 +115,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 			var weighed int64
 			if countErr := tx.QueryRowContext(ctx, remainingSQL, repoID,
 				PurgePartRows+1).Scan(&remaining, &weighed); countErr != nil {
-				return statelog.Decision{}, fmt.Errorf("code: count %s's rows: %w", repoID, countErr)
+				return statelog.Decision{}, fmt.Errorf("gitlet: count %s's rows: %w", repoID, countErr)
 			}
 			wrote = true
 			actor := Actor{ID: s.nodeID, Kind: ActorSystem}
@@ -130,11 +130,11 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 	})
 	switch {
 	case err != nil:
-		return PurgeResult{}, fmt.Errorf("code: purge repository %s: %w", repoID, err)
+		return PurgeResult{}, fmt.Errorf("gitlet: purge repository %s: %w", repoID, err)
 	case !wrote:
 		return PurgeResult{Done: done}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return PurgeResult{}, unknownOutcome(ctx, "code: whether the purge step on %s landed is "+
+		return PurgeResult{}, unknownOutcome(ctx, "gitlet: whether the purge step on %s landed is "+
 			"unknown (operation %s); the next pass decides it again", repoID, opID)
 	}
 	return PurgeResult{Done: done, Outcome: result.Outcome, Position: result.Position}, nil
@@ -151,7 +151,7 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("code: read repository %s's name: %w", id, err)
+		return "", false, fmt.Errorf("gitlet: read repository %s's name: %w", id, err)
 	}
 	return name, true, nil
 }

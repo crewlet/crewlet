@@ -49,11 +49,11 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case CheckDispatched:
 		repoID = p.RepoID
 	default:
-		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository's checks (the record "+
+		return 0, fmt.Errorf("gitlet: %s is not an op this build applies to a repository's checks (the record "+
 			"at %s)", at.record.Op, at.position)
 	}
 	if repoID != at.record.Subject.ID {
-		return 0, fmt.Errorf("code: the record at %s is on checks.%s and its payload names repository %s — a "+
+		return 0, fmt.Errorf("gitlet: the record at %s is on checks.%s and its payload names repository %s — a "+
 			"record on one repository's checks subject may write only that repository's checks", at.position,
 			at.record.Subject.ID, repoID)
 	}
@@ -72,7 +72,7 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case CheckDispatched:
 		return applyCheckDispatched(ctx, tx, at, p)
 	}
-	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
+	return 0, fmt.Errorf("gitlet: the record at %s carries a %T", at.position, payload)
 }
 
 // applyCheckFinished joins an ending into its attempt's row, and then removes
@@ -101,7 +101,7 @@ func applyCheckFinished(ctx context.Context, tx *sql.Tx, at applyContext, f Chec
 // an hour of the fleet's by `clock_skew`, can name.
 func applyChecksSweep(ctx context.Context, tx *sql.Tx, at applyContext, s ChecksSweep) (int, error) {
 	if s.Through.IsZero() || !s.Through.Before(at.brokerAt) {
-		return 0, fmt.Errorf("code: the checks sweep at %s removes the checks that ended before %s, not before "+
+		return 0, fmt.Errorf("gitlet: the checks sweep at %s removes the checks that ended before %s, not before "+
 			"its own instant %s — no writer forms it", at.position, s.Through.Format(time.RFC3339Nano),
 			at.brokerAt.Format(time.RFC3339Nano))
 	}
@@ -213,7 +213,7 @@ func finishedPart(f CheckFinished, at applyContext) (checkPart, error) {
 	if len(f.Failures) > 0 {
 		failures, err := json.Marshal(f.Failures)
 		if err != nil {
-			return checkPart{}, fmt.Errorf("code: encode the failures the ending at %s names: %w", at.position, err)
+			return checkPart{}, fmt.Errorf("gitlet: encode the failures the ending at %s names: %w", at.position, err)
 		}
 		e.failures = string(failures)
 	}
@@ -329,7 +329,7 @@ func endsBefore(a, b checkEnding) bool {
 func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, part checkPart) (int, error) {
 	row, held, err := readCheckRow(ctx, tx, key)
 	if err != nil {
-		return 0, fmt.Errorf("code: read check %s of %s at %s: %w", key.Name, key.OID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read check %s of %s at %s: %w", key.Name, key.OID, at.position, err)
 	}
 	if !held {
 		row = checkRow{key: key}
@@ -355,7 +355,7 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 		q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
 		q.position, e.position, row.rowBytes(), q.overdueAt(), e.url, e.summary, q.def, e.failures,
 		e.tail); err != nil {
-		return 0, fmt.Errorf("code: write check %s of %s at %s: %w", key.Name, key.OID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write check %s of %s at %s: %w", key.Name, key.OID, at.position, err)
 	}
 	if !ended {
 		return 1, nil
@@ -371,7 +371,7 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 func writeEndingLog(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, l *CheckLog) (int, error) {
 	res, err := tx.ExecContext(ctx, dropCheckLogSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt)
 	if err != nil {
-		return 0, fmt.Errorf("code: drop check %s of %s's log at %s: %w", key.Name, key.OID, at.position, err)
+		return 0, fmt.Errorf("gitlet: drop check %s of %s's log at %s: %w", key.Name, key.OID, at.position, err)
 	}
 	dropped, _ := res.RowsAffected()
 	if l == nil {
@@ -379,7 +379,7 @@ func writeEndingLog(ctx context.Context, tx *sql.Tx, at applyContext, key CheckK
 	}
 	if _, err = tx.ExecContext(ctx, writeCheckLogSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt,
 		l.Object.String(), string(l.Hash), l.Size); err != nil {
-		return 0, fmt.Errorf("code: write check %s of %s's log at %s: %w", key.Name, key.OID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write check %s of %s's log at %s: %w", key.Name, key.OID, at.position, err)
 	}
 	return int(dropped) + 1, nil
 }
@@ -418,7 +418,7 @@ func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool
 func checksHorizon(ctx context.Context, tx *sql.Tx, at applyContext, repoID string, cutoff int64) (int, error) {
 	take, _, err := checksEndedBefore(ctx, tx, repoID, 1, cutoff, CheckHorizonRows, CheckHorizonBytes)
 	if err != nil {
-		return 0, fmt.Errorf("code: read %s's checks past their history at %s: %w", repoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read %s's checks past their history at %s: %w", repoID, at.position, err)
 	}
 	return deleteOldestChecks(ctx, tx, repoID, 1, cutoff, take)
 }
@@ -465,7 +465,7 @@ func deleteOldestChecks(ctx context.Context, tx *sql.Tx, repoID string, lo, hi i
 	for _, stmt := range []string{deleteOldestCheckLogsSQL, deleteOldestChecksSQL} {
 		res, err := tx.ExecContext(ctx, stmt, repoID, lo, hi, n)
 		if err != nil {
-			return 0, fmt.Errorf("code: delete %s's oldest checks: %w", repoID, err)
+			return 0, fmt.Errorf("gitlet: delete %s's oldest checks: %w", repoID, err)
 		}
 		affected, _ := res.RowsAffected()
 		deleted += int(affected)
@@ -486,7 +486,7 @@ func purgeChecks(ctx context.Context, tx *sql.Tx, repoID string, budget int, wei
 	take, _, err := checksEndedBefore(ctx, tx, repoID, math.MinInt64, math.MaxInt64, budget/2,
 		PurgePartBytes-weighed)
 	if err != nil {
-		return 0, fmt.Errorf("code: read %s's checks to purge: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: read %s's checks to purge: %w", repoID, err)
 	}
 	return deleteOldestChecks(ctx, tx, repoID, math.MinInt64, math.MaxInt64, take)
 }

@@ -292,7 +292,7 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 
 	inputs, err := namedPackRows(ctx, tx, c.RepoID, c.Retire)
 	if err != nil {
-		return compactDecision{}, fmt.Errorf("code: read the packs compaction %s retires: %w", c.CompactionID, err)
+		return compactDecision{}, fmt.Errorf("gitlet: read the packs compaction %s retires: %w", c.CompactionID, err)
 	}
 	rows := make(map[string][]namedPack, len(inputs))
 	for _, p := range inputs {
@@ -431,7 +431,7 @@ func (c *Committer) compactAnswer(ctx context.Context, comp Compaction, last com
 		// broke the publisher's contract, and says so rather than answering
 		// from nothing.
 		if !decided || last.refusal == "" {
-			return CompactResult{}, fmt.Errorf("code: the publish of compaction %s answered applied with "+
+			return CompactResult{}, fmt.Errorf("gitlet: the publish of compaction %s answered applied with "+
 				"no record and decided no refusal", comp.CompactionID)
 		}
 		return CompactResult{Refusal: last.refusal, Detail: last.detail}, nil
@@ -463,7 +463,7 @@ func (c *Committer) appliedCompaction(ctx context.Context, comp Compaction, at s
 		missing, err = outputsMissing(ctx, tx, comp, at)
 		return err
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of compaction %s applied at %s and its output rows could not "+
+		failed := fmt.Errorf("gitlet: the record of compaction %s applied at %s and its output rows could not "+
 			"be read: %w", comp.CompactionID, at, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindCompaction, "repo", comp.RepoID,
 			"op_id", comp.CompactionID, "error", failed)
@@ -524,7 +524,7 @@ func (c *Committer) refusedCompaction(ctx context.Context, comp Compaction, err 
 	}
 	c.log.WarnContext(ctx, "code_commit_failed", "kind", kindCompaction, "repo", comp.RepoID,
 		"op_id", comp.CompactionID, "error", err)
-	return CompactResult{}, fmt.Errorf("code: compaction %s: %w", comp.CompactionID, err)
+	return CompactResult{}, fmt.Errorf("gitlet: compaction %s: %w", comp.CompactionID, err)
 }
 
 // partPack is the one part every pack this build stores is: a pack is ONE
@@ -630,7 +630,7 @@ func outputsMissing(ctx context.Context, tx *sql.Tx, comp Compaction, at statelo
 	}
 	lacking, err := packsLacking(ctx, tx, comp.RepoID, idsOf(comp.Add), at)
 	if err != nil {
-		return nil, fmt.Errorf("code: read compaction %s's outputs: %w", comp.CompactionID, err)
+		return nil, fmt.Errorf("gitlet: read compaction %s's outputs: %w", comp.CompactionID, err)
 	}
 	for _, id := range lacking {
 		missing = append(missing, "output "+id)

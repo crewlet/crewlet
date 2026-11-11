@@ -98,7 +98,7 @@ func (s *Store) RetireSweep(ctx context.Context, repoID string, now time.Time) (
 			case errors.Is(err, sql.ErrNoRows):
 				return statelog.Decision{}, nil
 			case err != nil:
-				return statelog.Decision{}, fmt.Errorf("code: read repository %s: %w", repoID, err)
+				return statelog.Decision{}, fmt.Errorf("gitlet: read repository %s: %w", repoID, err)
 			}
 			through, rows, more, err := sweepThrough(ctx, tx, repoID, cutoff)
 			if err != nil || rows == 0 {
@@ -112,11 +112,11 @@ func (s *Store) RetireSweep(ctx context.Context, repoID string, now time.Time) (
 	})
 	switch {
 	case err != nil:
-		return SweepResult{}, fmt.Errorf("code: sweep the retired packs of repository %s: %w", repoID, err)
+		return SweepResult{}, fmt.Errorf("gitlet: sweep the retired packs of repository %s: %w", repoID, err)
 	case swept.Rows == 0:
 		return SweepResult{}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return SweepResult{}, unknownOutcome(ctx, "code: whether the sweep of repository %s's "+
+		return SweepResult{}, unknownOutcome(ctx, "gitlet: whether the sweep of repository %s's "+
 			"retired packs landed is unknown (operation %s); the next pass decides it again",
 			repoID, opID)
 	}
@@ -148,14 +148,14 @@ func sweepThrough(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64) 
 
 	walk, err := tx.QueryContext(ctx, retiredOldestSQL, repoID, RetireSweepRows+1)
 	if err != nil {
-		return 0, 0, false, fmt.Errorf("code: read %s's retired packs: %w", repoID, err)
+		return 0, 0, false, fmt.Errorf("gitlet: read %s's retired packs: %w", repoID, err)
 	}
 	defer func() { _ = walk.Close() }()
 	var due []int64
 	for walk.Next() {
 		var position, retiredAt int64
 		if err := walk.Scan(&position, &retiredAt); err != nil {
-			return 0, 0, false, fmt.Errorf("code: read %s's retired packs: %w", repoID, err)
+			return 0, 0, false, fmt.Errorf("gitlet: read %s's retired packs: %w", repoID, err)
 		}
 		if retiredAt > cutoff {
 			break
@@ -163,7 +163,7 @@ func sweepThrough(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64) 
 		due = append(due, position)
 	}
 	if err := walk.Err(); err != nil {
-		return 0, 0, false, fmt.Errorf("code: read %s's retired packs: %w", repoID, err)
+		return 0, 0, false, fmt.Errorf("gitlet: read %s's retired packs: %w", repoID, err)
 	}
 	if len(due) <= RetireSweepRows {
 		if len(due) == 0 {
@@ -179,7 +179,7 @@ func sweepThrough(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64) 
 		whole--
 	}
 	if whole == 0 {
-		return 0, 0, false, fmt.Errorf("code: repository %s holds more than %d retired pack rows "+
+		return 0, 0, false, fmt.Errorf("gitlet: repository %s holds more than %d retired pack rows "+
 			"at position %s, more than one sweep record removes — no record that retires packs "+
 			"writes that many, so these rows are not ones a record of this domain wrote",
 			repoID, RetireSweepRows, unpacked(cut))
@@ -270,7 +270,7 @@ func (r *Reader) retiredDue(ctx context.Context, q retiredQuery) (retiredPage, e
 		return nil
 	})
 	if err != nil {
-		return retiredPage{}, fmt.Errorf("code: list the repositories holding packs retired "+
+		return retiredPage{}, fmt.Errorf("gitlet: list the repositories holding packs retired "+
 			"past %v: %w", RetireGrace, err)
 	}
 	return page, nil

@@ -520,7 +520,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if seats.Roster == nil && slices.ContainsFunc(open, func(i int) bool {
 		return batch[i].Principal.Kind.readsChart() || batch[i].Change != nil
 	}) {
-		return nil, nil, batchMoves{}, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
+		return nil, nil, batchMoves{}, 0, fmt.Errorf("gitlet: a seat's push to %s reached the decide with no chart to judge "+
 			"it by — the committer hands such a push to the repository's next committer", repoID)
 	}
 	stored, err := pushRulesIn(ctx, tx, repoID)
@@ -530,7 +530,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	// PARSED ONCE A BATCH, never once a command and rule (refusal.go), and
 	// again only in a round whose rules are not the ones parsed.
 	if err = v.under(stored); err != nil {
-		return nil, nil, batchMoves{}, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
+		return nil, nil, batchMoves{}, 0, fmt.Errorf("gitlet: read %s's protections: %w", repoID, err)
 	}
 	w, err := newWorking(ctx, tx, repoID, repo, batch, open, now)
 	if err != nil {
@@ -713,7 +713,7 @@ func newSeatQuota(ctx context.Context, tx *sql.Tx, batch []Proposal, open []int,
 		// A CLOCK NO LABEL SPELLS — past the year 9999 — has no company
 		// day to count a seat's push against, and a day of "" would count
 		// every such push against nothing.
-		return seatQuota{}, fmt.Errorf("code: the deciding node's clock reads %s, which no company day "+
+		return seatQuota{}, fmt.Errorf("gitlet: the deciding node's clock reads %s, which no company day "+
 			"spells, so no seat's push can be counted against one", now.UTC().Format(time.RFC3339))
 	}
 	list, err := jsonList(seats)
@@ -722,19 +722,19 @@ func newSeatQuota(ctx context.Context, tx *sql.Tx, batch []Proposal, open []int,
 	}
 	rows, err := tx.QueryContext(ctx, seatDaysSQL, q.day.Label, list)
 	if err != nil {
-		return seatQuota{}, fmt.Errorf("code: read the seats' pushes on %s: %w", q.day.Label, err)
+		return seatQuota{}, fmt.Errorf("gitlet: read the seats' pushes on %s: %w", q.day.Label, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var seat string
 		var pushes int
 		if err := rows.Scan(&seat, &pushes); err != nil {
-			return seatQuota{}, fmt.Errorf("code: read the seats' pushes on %s: %w", q.day.Label, err)
+			return seatQuota{}, fmt.Errorf("gitlet: read the seats' pushes on %s: %w", q.day.Label, err)
 		}
 		q.held[seat] = pushes
 	}
 	if err := rows.Err(); err != nil {
-		return seatQuota{}, fmt.Errorf("code: read the seats' pushes on %s: %w", q.day.Label, err)
+		return seatQuota{}, fmt.Errorf("gitlet: read the seats' pushes on %s: %w", q.day.Label, err)
 	}
 	return q, nil
 }
@@ -870,7 +870,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
 	case err != nil:
-		return pushRepo{}, false, fmt.Errorf("code: read repository %s for its pushes: %w", id, err)
+		return pushRepo{}, false, fmt.Errorf("gitlet: read repository %s for its pushes: %w", id, err)
 	}
 	r.status, r.owner.Kind, r.visibility = RepoStatus(status), OwnerKind(ownerKind), Visibility(visibility)
 	r.managedBy = ManagedBy(managed)
@@ -894,7 +894,7 @@ func deletionIn(ctx context.Context, tx *sql.Tx, id string) (string, bool, error
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("code: read repository %s's deletion marker: %w", id, err)
+		return "", false, fmt.Errorf("gitlet: read repository %s's deletion marker: %w", id, err)
 	}
 	return name, true, nil
 }
@@ -912,18 +912,18 @@ func pushRowsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]PushR
 	}
 	rows, err := tx.QueryContext(ctx, pushesNamedSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the pushes a batch names: %w", err)
+		return nil, fmt.Errorf("gitlet: read the pushes a batch names: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		row, _, err := scanPush(rows)
 		if err != nil {
-			return nil, fmt.Errorf("code: read the pushes a batch names: %w", err)
+			return nil, fmt.Errorf("gitlet: read the pushes a batch names: %w", err)
 		}
 		out[row.PushID] = row
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read the pushes a batch names: %w", err)
+		return nil, fmt.Errorf("gitlet: read the pushes a batch names: %w", err)
 	}
 	return out, nil
 }
@@ -1003,7 +1003,7 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 	}
 	targets, err := refsNamed(ctx, tx, repoID, names)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the refs a batch names: %w", err)
+		return nil, fmt.Errorf("gitlet: read the refs a batch names: %w", err)
 	}
 	w := &working{name: repo.name, now: now, targets: targets, live: repo.refs, bytes: repo.liveBytes,
 		packs: repo.livePacks, occupied: map[string]string{}, touched: map[string]bool{}}
@@ -1011,7 +1011,7 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 		return nil, err
 	}
 	if w.expiry, err = expiryRowsIn(ctx, tx, repoID, repo, batch, open); err != nil {
-		return nil, fmt.Errorf("code: read the refs an expiry names: %w", err)
+		return nil, fmt.Errorf("gitlet: read the refs an expiry names: %w", err)
 	}
 	return w, nil
 }
@@ -1145,7 +1145,7 @@ func (w *working) readAround(ctx context.Context, tx *sql.Tx, repoID string, bat
 		maps.Copy(w.targets, rows)
 		return err
 	}); err != nil {
-		return fmt.Errorf("code: read the directories a batch's creates would make: %w", err)
+		return fmt.Errorf("gitlet: read the directories a batch's creates would make: %w", err)
 	}
 	// WHAT THE WORKING STATE CAN HOLD LIVE: a ref a command names, which the
 	// batch may make, and a name with a live row. A name with neither — a
@@ -1228,7 +1228,7 @@ func (w *working) readAround(ctx context.Context, tx *sql.Tx, repoID string, bat
 	}
 	found, err := liveIn(ctx, tx, repoID, gaps)
 	if err != nil {
-		return fmt.Errorf("code: read the refs under a batch's creates: %w", err)
+		return fmt.Errorf("gitlet: read the refs under a batch's creates: %w", err)
 	}
 	// next[g] is the first gap from g on that holds a live ref.
 	next := make([]int, len(gaps)+1)
@@ -1304,7 +1304,7 @@ func (w *working) readTargets(ctx context.Context, tx *sql.Tx, repoID string, re
 	return inChunks(unread, func(part []string) error {
 		rows, err := refsNamed(ctx, tx, repoID, part)
 		if err != nil {
-			return fmt.Errorf("code: read the branches a batch's changes propose into: %w", err)
+			return fmt.Errorf("gitlet: read the branches a batch's changes propose into: %w", err)
 		}
 		maps.Copy(w.targets, rows)
 		return nil
@@ -1465,7 +1465,7 @@ func gapsAnswer(ctx context.Context, tx *sql.Tx, statement, repoID string, gaps 
 	}
 	list, err := json.Marshal(asked)
 	if err != nil {
-		return nil, fmt.Errorf("code: encode the gaps under a batch's creates: %w", err)
+		return nil, fmt.Errorf("gitlet: encode the gaps under a batch's creates: %w", err)
 	}
 	rows, err := tx.QueryContext(ctx, statement, repoID, string(list))
 	if err != nil {
@@ -1479,7 +1479,7 @@ func gapsAnswer(ctx context.Context, tx *sql.Tx, statement, repoID string, gaps 
 			return nil, err
 		}
 		if i < 0 || i >= len(part) {
-			return nil, fmt.Errorf("code: the gaps under a batch's creates answered gap %d of %d", i, len(part))
+			return nil, fmt.Errorf("gitlet: the gaps under a batch's creates answered gap %d of %d", i, len(part))
 		}
 		out[i] = ref
 	}

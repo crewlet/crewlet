@@ -66,16 +66,16 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case AskSettle:
 		repoID, changeID = p.RepoID, p.ChangeID
 	default:
-		return 0, fmt.Errorf("code: %s is not an op this build applies to a change (the record at %s)",
+		return 0, fmt.Errorf("gitlet: %s is not an op this build applies to a change (the record at %s)",
 			at.record.Op, at.position)
 	}
 	if changeID != at.record.Subject.ID {
-		return 0, fmt.Errorf("code: the record at %s arbitrated change.%s and its payload names change %s — a "+
+		return 0, fmt.Errorf("gitlet: the record at %s arbitrated change.%s and its payload names change %s — a "+
 			"record on one change's subject may write only that change's conversation", at.position,
 			at.record.Subject.ID, changeID)
 	}
 	if scoped, _ := scopedRepo(at.record.Scope.Set()); scoped != repoID {
-		return 0, fmt.Errorf("code: the record at %s names repository %s in its payload and %q in its scope — "+
+		return 0, fmt.Errorf("gitlet: the record at %s names repository %s in its payload and %q in its scope — "+
 			"a record no writer forms, which the deletion gate judges by the repository its scope names",
 			at.position, repoID, scoped)
 	}
@@ -85,9 +85,9 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case errors.Is(err, sql.ErrNoRows):
 		return conversationNotApplied(ctx, at, repoID, changeID, "the change has no row")
 	case err != nil:
-		return 0, fmt.Errorf("code: read change %s at %s: %w", changeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read change %s at %s: %w", changeID, at.position, err)
 	case held != repoID:
-		return 0, fmt.Errorf("code: the record at %s names change %s of repository %s, and the change is "+
+		return 0, fmt.Errorf("gitlet: the record at %s names change %s of repository %s, and the change is "+
 			"repository %s's — a record no writer forms, which would escape that repository's deletion gate",
 			at.position, changeID, repoID, held)
 	}
@@ -138,7 +138,7 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		// reviewers' key a change's distinct reviewers bound, and a count
 		// read off them stays the rows' whatever this record's ups and downs.
 		if _, err := tx.ExecContext(ctx, countAsksSQL, changeID); err != nil {
-			return 0, fmt.Errorf("code: count change %s's asks at %s: %w", changeID, at.position, err)
+			return 0, fmt.Errorf("gitlet: count change %s's asks at %s: %w", changeID, at.position, err)
 		}
 	}
 	return a.noticed(ctx, tx, at, repoID, payload, rows+1, nil)
@@ -219,7 +219,7 @@ func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID,
 	if _, err := tx.ExecContext(ctx, stmt, changeID, repoID, counts.comments, counts.reviews,
 		counts.openFindings, counts.openBlockers, counts.changesRequested, counts.textBytes, counts.readiness,
 		at.packed, counts.spokenAt); err != nil {
-		return fmt.Errorf("code: move change %s's conversation at %s: %w", changeID, at.position, err)
+		return fmt.Errorf("gitlet: move change %s's conversation at %s: %w", changeID, at.position, err)
 	}
 	return nil
 }
@@ -242,7 +242,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 	switch err := tx.QueryRowContext(ctx, standingVerdictSQL, r.ChangeID, by).Scan(&before); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
-		return 0, conversationCounts{}, fmt.Errorf("code: read %s's standing verdict on change %s at %s: %w", by,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: read %s's standing verdict on change %s at %s: %w", by,
 			r.ChangeID, at.position, err)
 	}
 	// THE CREDENTIAL A PERSON REVIEWED WITH, as a comment keeps its own.
@@ -253,7 +253,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 	res, err := tx.ExecContext(ctx, addReviewSQL, r.ReviewID, r.ChangeID, r.Revision, by, string(kind), operator,
 		string(r.Verdict), len(r.Findings), r.TurnID, r.Model, len(r.Summary), at.packed, at.at(), r.Summary)
 	if err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: write review %s at %s: %w", r.ReviewID, at.position, err)
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write review %s at %s: %w", r.ReviewID, at.position, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
@@ -292,7 +292,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 		}
 		if _, err := tx.ExecContext(ctx, supersedeFindingsSQL, string(FindingSuperseded), by, string(kind),
 			at.packed, list); err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: supersede %s's findings on change %s at %s: %w", by,
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: supersede %s's findings on change %s at %s: %w", by,
 				r.ChangeID, at.position, err)
 		}
 		rows += len(ids)
@@ -308,7 +308,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 				f.BlobOID, string(f.Side), f.LineStart, f.LineEnd, string(f.Severity), string(f.Category),
 				string(FindingOpen), at.packed}
 		}); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: write review %s's findings at %s: %w", r.ReviewID,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write review %s's findings at %s: %w", r.ReviewID,
 			at.position, err)
 	}
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables, addFindingTextsSQL, `(?, ?, ?, ?, ?, ?)`,
@@ -316,7 +316,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 			f := r.Findings[i]
 			return []any{r.ChangeID, f.ID, findingTextBytes(f), f.Title, f.Body, f.Suggestion}
 		}); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: write review %s's findings' texts at %s: %w",
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write review %s's findings' texts at %s: %w",
 			r.ReviewID, at.position, err)
 	}
 	for _, f := range r.Findings {
@@ -332,7 +332,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 		participant, args = judgeParticipantSQL, append(args, string(r.Verdict), r.Revision, r.ReviewID)
 	}
 	if _, err = tx.ExecContext(ctx, participant, args...); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", by, r.ChangeID,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: add %s to change %s at %s: %w", by, r.ChangeID,
 			at.position, err)
 	}
 	mentioned, err := addMentioned(ctx, tx, at, r.ChangeID, r.Routing)
@@ -369,7 +369,7 @@ func addMentioned(ctx context.Context, tx store.Execer, at applyContext, changeI
 		}
 		res, err := tx.ExecContext(ctx, addParticipantSQL, changeID, h, string(kind), at.packed)
 		if err != nil {
-			return 0, fmt.Errorf("code: add %s, mentioned, to change %s at %s: %w", h, changeID, at.position, err)
+			return 0, fmt.Errorf("gitlet: add %s, mentioned, to change %s at %s: %w", h, changeID, at.position, err)
 		}
 		n, _ := res.RowsAffected()
 		rows += int(n)
@@ -410,7 +410,7 @@ func applyFindingResolve(ctx context.Context, tx *sql.Tx, at applyContext, fr Fi
 		}
 		if _, err := tx.ExecContext(ctx, answerFindingSQL, string(a.Resolution), a.Note, by, string(kind), a.Commit,
 			at.packed, a.FindingID); err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: answer finding %s at %s: %w", a.FindingID,
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: answer finding %s at %s: %w", a.FindingID,
 				at.position, err)
 		}
 		if f.state == FindingOpen {
@@ -438,7 +438,7 @@ func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p Reviewer
 	}
 	for _, r := range p.Request {
 		if !r.Kind.Valid() {
-			return 0, fmt.Errorf("code: the ask for review at %s names reviewer %q of kind %q, which no writer "+
+			return 0, fmt.Errorf("gitlet: the ask for review at %s names reviewer %q of kind %q, which no writer "+
 				"stamps", at.position, r.Handle, r.Kind)
 		}
 	}
@@ -451,7 +451,7 @@ func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p Reviewer
 			return []any{p.ChangeID, r.Handle, string(r.Kind), string(ReviewerAsked), string(ReviewerRequested), by,
 				string(byKind), p.Note, at.packed}
 		}); err != nil {
-		return 0, fmt.Errorf("code: ask change %s's reviewers at %s: %w", p.ChangeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: ask change %s's reviewers at %s: %w", p.ChangeID, at.position, err)
 	}
 	if err := addParticipants(ctx, tx, at, p.ChangeID, p.Request); err != nil {
 		return 0, err
@@ -481,7 +481,7 @@ func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (
 	if c.Anchor != nil {
 		encoded, err := json.Marshal(c.Anchor)
 		if err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: encode comment %s's anchor: %w", c.CommentID, err)
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: encode comment %s's anchor: %w", c.CommentID, err)
 		}
 		anchor = string(encoded)
 	}
@@ -494,7 +494,7 @@ func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (
 	res, err := tx.ExecContext(ctx, addCommentSQL, c.CommentID, c.ChangeID, c.ThreadID, c.ParentID, c.FindingID,
 		by, string(kind), operator, anchor, c.TurnID, len(c.Body), at.packed, at.at(), c.Body)
 	if err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: write comment %s at %s: %w", c.CommentID, at.position,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write comment %s at %s: %w", c.CommentID, at.position,
 			err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
@@ -503,7 +503,7 @@ func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (
 		return n, conversationCounts{}, err
 	}
 	if _, err = tx.ExecContext(ctx, addParticipantSQL, c.ChangeID, by, string(kind), at.packed); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", by, c.ChangeID,
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: add %s to change %s at %s: %w", by, c.ChangeID,
 			at.position, err)
 	}
 	mentioned, err := addMentioned(ctx, tx, at, c.ChangeID, c.Routing)
@@ -526,7 +526,7 @@ func applyThreadResolve(ctx context.Context, tx *sql.Tx, at applyContext, t Thre
 	res, err := tx.ExecContext(ctx, resolveThreadSQL, t.Resolved, resolvedBy, resolvedKind, t.ThreadID,
 		t.ChangeID)
 	if err != nil {
-		return 0, fmt.Errorf("code: resolve thread %s of change %s at %s: %w", t.ThreadID, t.ChangeID,
+		return 0, fmt.Errorf("gitlet: resolve thread %s of change %s at %s: %w", t.ThreadID, t.ChangeID,
 			at.position, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
@@ -581,7 +581,7 @@ func addParticipants(ctx context.Context, tx store.Execer, at applyContext, chan
 		`ON CONFLICT (change_id, handle) DO NOTHING`, len(reviewers), func(i int) []any {
 			return []any{changeID, reviewers[i].Handle, string(reviewers[i].Kind), at.packed}
 		}); err != nil {
-		return fmt.Errorf("code: add change %s's reviewers as its participants at %s: %w", changeID, at.position,
+		return fmt.Errorf("gitlet: add change %s's reviewers as its participants at %s: %w", changeID, at.position,
 			err)
 	}
 	return nil
@@ -602,7 +602,7 @@ func moveAsks(ctx context.Context, tx store.Execer, at applyContext, changeID st
 	}
 	res, err := tx.ExecContext(ctx, moveAsksSQL, string(to), at.packed, changeID, string(from), list)
 	if err != nil {
-		return 0, fmt.Errorf("code: move change %s's asks %s to %s at %s: %w", changeID, from, to, at.position,
+		return 0, fmt.Errorf("gitlet: move change %s's asks %s to %s at %s: %w", changeID, from, to, at.position,
 			err)
 	}
 	n, _ := res.RowsAffected()

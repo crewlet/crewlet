@@ -83,7 +83,7 @@ func NewSweeper(o SweeperOptions) (*Sweeper, error) {
 	}
 	s := &Sweeper{o: o, log: o.Logger, now: o.Now}
 	if s.log == nil {
-		s.log = logging.Get("code.checkrun")
+		s.log = logging.Get("gitlet.checkrun")
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

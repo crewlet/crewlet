@@ -616,27 +616,27 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 func newCommitter(o CommitterOptions, announcements int) (*Committer, error) {
 	switch {
 	case o.Publisher == nil:
-		return nil, errors.New("code: a committer needs the code log's write authority — " +
+		return nil, errors.New("gitlet: a committer needs the code log's write authority — " +
 			"every push is a record on that log")
 	case o.DB.IsZero():
-		return nil, errors.New("code: a committer needs the replicated estate a batch's " +
+		return nil, errors.New("gitlet: a committer needs the replicated estate a batch's " +
 			"answers are read from — an ok is only ever reported from a push's row")
 	case !config.ValidNodeID(o.NodeID):
-		return nil, fmt.Errorf("code: a committer needs the deciding node's id, which every "+
+		return nil, fmt.Errorf("gitlet: a committer needs the deciding node's id, which every "+
 			"record names as its actor; %q is not one config admits", o.NodeID)
 	case o.Limits == nil:
-		return nil, errors.New("code: a committer needs the epoch's code.limits — what a " +
+		return nil, errors.New("gitlet: a committer needs the epoch's code.limits — what a " +
 			"push's pack is judged against is a decision input, never a default")
 	case o.Retention == nil:
-		return nil, errors.New("code: a committer needs the epoch's code.deleted_retention_days — " +
+		return nil, errors.New("gitlet: a committer needs the epoch's code.deleted_retention_days — " +
 			"a push to a deleted repository is told when its purge may begin, which a default " +
 			"would misstate for every company that set its own")
 	case o.SeatRules == nil:
-		return nil, errors.New("code: a committer needs the epoch's chart and calendar (SeatRules) — " +
+		return nil, errors.New("gitlet: a committer needs the epoch's chart and calendar (SeatRules) — " +
 			"a seat's push is judged by its grant on the chart and counted on the company's day, " +
 			"never by a default")
 	case o.Events != nil && o.AgentIDs == nil:
-		return nil, errors.New("code: a committer that announces on an event stream needs AgentIDs — an " +
+		return nil, errors.New("gitlet: a committer that announces on an event stream needs AgentIDs — an " +
 			"opened change is counted on its owner seat's day by the seat's agent id, which only the chart says")
 	}
 	c := &Committer{
@@ -651,7 +651,7 @@ func newCommitter(o CommitterOptions, announcements int) (*Committer, error) {
 		c.now = func() time.Time { return time.Now().UTC() }
 	}
 	if c.log == nil {
-		c.log = logging.Get("code")
+		c.log = logging.Get("gitlet")
 	}
 	c.life, c.end = context.WithCancel(context.Background())
 	c.endAnnouncements = func() {}
@@ -1307,7 +1307,7 @@ func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal
 		// A PUBLISH THAT ANSWERED WITHOUT DECIDING breaks the publisher's
 		// contract; every proposal is told so rather than answered from
 		// nothing.
-		failed := fmt.Errorf("code: the publish of operation %s answered %s without deciding "+
+		failed := fmt.Errorf("gitlet: the publish of operation %s answered %s without deciding "+
 			"the batch", opID, res.Outcome)
 		for i := range out {
 			out[i].err = failed
@@ -1335,7 +1335,7 @@ func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal
 			return err
 		})
 		if readErr != nil {
-			failed := fmt.Errorf("code: the record of operation %s applied at %s and its push rows "+
+			failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and its push rows "+
 				"could not be read: %w", opID, res.Position, readErr)
 			c.log.WarnContext(ctx, "code_commit_failed", "kind", kindPush, "repo", repoID, "op_id", opID,
 				"error", failed)
@@ -1403,14 +1403,14 @@ func changeNumbersIn(ctx context.Context, tx *sql.Tx, repoID string, ids []strin
 	}
 	rows, err := tx.QueryContext(ctx, changeNumbersSQL, repoID, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the numbers of repository %s's changes: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read the numbers of repository %s's changes: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
 		var number int64
 		if err := rows.Scan(&id, &number); err != nil {
-			return nil, fmt.Errorf("code: read the numbers of repository %s's changes: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: read the numbers of repository %s's changes: %w", repoID, err)
 		}
 		out[id] = number
 	}
@@ -1531,7 +1531,7 @@ func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Re
 	}
 	switch res.Outcome {
 	case statelog.OutcomeApplied:
-		return answered{err: fmt.Errorf("code: push %s was in the record of operation %s "+
+		return answered{err: fmt.Errorf("gitlet: push %s was in the record of operation %s "+
 			"applied at %s and has no row — an ok is only ever reported from a row",
 			p.PushID, opID, res.Position)}
 	case statelog.OutcomePending:
@@ -1640,7 +1640,7 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 			out[i].res.Answer = refuseAll(p, RefusalUnavailable, detail)
 		}
 	default:
-		failed := fmt.Errorf("code: the batch of operation %s: %w", opID, err)
+		failed := fmt.Errorf("gitlet: the batch of operation %s: %w", opID, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindPush, "repo", repoID, "op_id", opID,
 			"error", err)
 		for i := range out {

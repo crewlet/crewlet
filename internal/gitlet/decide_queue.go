@@ -312,7 +312,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 	for i, e := range l.Entries {
 		row, found := changes[e.ChangeID]
 		if !found || row.repoID != l.RepoID {
-			return queueDecision{}, fmt.Errorf("code: entry %s of %s's queue names change %s, which the "+
+			return queueDecision{}, fmt.Errorf("gitlet: entry %s of %s's queue names change %s, which the "+
 				"repository does not hold", e.EntryID, repo.name, e.ChangeID)
 		}
 		rows[i] = row
@@ -371,7 +371,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 	}
 	refs, err := refsNamed(ctx, tx, l.RepoID, sources)
 	if err != nil {
-		return queueDecision{}, fmt.Errorf("code: read the sources the landing at %s deletes: %w", l.TargetRef, err)
+		return queueDecision{}, fmt.Errorf("gitlet: read the sources the landing at %s deletes: %w", l.TargetRef, err)
 	}
 	stamped := l
 	stamped.Entries = slices.Clone(l.Entries)
@@ -557,14 +557,14 @@ func owedClosesNamed(ctx context.Context, tx *sql.Tx, repoID string, ids []strin
 	}
 	rows, err := tx.QueryContext(ctx, owedNamedSQL, list, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %d entries of %s's queues: %w", len(ids), repoID, err)
+		return nil, fmt.Errorf("gitlet: read %d entries of %s's queues: %w", len(ids), repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var op string
 		e, scanErr := scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &op)...) })
 		if scanErr != nil {
-			return nil, fmt.Errorf("code: read %d entries of %s's queues: %w", len(ids), repoID, scanErr)
+			return nil, fmt.Errorf("gitlet: read %d entries of %s's queues: %w", len(ids), repoID, scanErr)
 		}
 		out[e.EntryID] = owedClose{entry: e, op: op}
 	}
@@ -793,7 +793,7 @@ func gateOf(ctx context.Context, tx *sql.Tx, repoID, target string) (GateRules, 
 func targetTip(ctx context.Context, tx *sql.Tx, repoID, target string) (string, error) {
 	refs, err := refsNamed(ctx, tx, repoID, []string{target})
 	if err != nil {
-		return "", fmt.Errorf("code: read %s's tip on %s: %w", target, repoID, err)
+		return "", fmt.Errorf("gitlet: read %s's tip on %s: %w", target, repoID, err)
 	}
 	return refTip(refs, target), nil
 }
@@ -811,13 +811,13 @@ func entriesNamed(ctx context.Context, tx *sql.Tx, repoID string, ids []string) 
 	}
 	rows, err := tx.QueryContext(ctx, entriesNamedSQL, list, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %d entries of %s's queues: %w", len(ids), repoID, err)
+		return nil, fmt.Errorf("gitlet: read %d entries of %s's queues: %w", len(ids), repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		e, err := scanEntry(rows.Scan)
 		if err != nil {
-			return nil, fmt.Errorf("code: read %d entries of %s's queues: %w", len(ids), repoID, err)
+			return nil, fmt.Errorf("gitlet: read %d entries of %s's queues: %w", len(ids), repoID, err)
 		}
 		out[e.EntryID] = e
 	}
@@ -832,7 +832,7 @@ func landingTipAt(ctx context.Context, tx *sql.Tx, repoID, target string, positi
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("code: read %s's landing at %d: %w", target, position, err)
+		return "", false, fmt.Errorf("gitlet: read %s's landing at %d: %w", target, position, err)
 	}
 	return commit, true, nil
 }
@@ -854,7 +854,7 @@ func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position 
 	case errors.Is(err, sql.ErrNoRows):
 		return landingRow{}, false, nil
 	case err != nil:
-		return landingRow{}, false, fmt.Errorf("code: read %s's landing at %d, place %d: %w", target, position,
+		return landingRow{}, false, fmt.Errorf("gitlet: read %s's landing at %d, place %d: %w", target, position,
 			ordinal, err)
 	}
 	return l, true, nil
@@ -905,7 +905,7 @@ func (c *Committer) appliedQueueRecord(ctx context.Context, p QueueProposal, at 
 		held, err = queueRecordHeld(ctx, tx, p, at)
 		return err
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of operation %s applied at %s and its rows could not be read: %w",
+		failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and its rows could not be read: %w",
 			p.OpID, at, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindQueue, "repo", p.RepoID(), "op_id", p.OpID,
 			"error", failed)
@@ -976,7 +976,7 @@ func queueRecordHeld(ctx context.Context, tx *sql.Tx, p QueueProposal, at statel
 		}
 		return true, nil
 	}
-	return false, fmt.Errorf("code: queue operation %s is none of the queue's own records", p.OpID)
+	return false, fmt.Errorf("gitlet: queue operation %s is none of the queue's own records", p.OpID)
 }
 
 // announceEjected hands the announcer a code_queue_ejected event for each
@@ -1004,14 +1004,14 @@ func (c *Committer) announcePushEjections(repoID string, ejected []string, at st
 		rows, err := tx.QueryContext(ctx, pushEjectedSQL, list, at.Packed(), string(QueueEjected),
 			string(EjectHeadMoved))
 		if err != nil {
-			return nil, fmt.Errorf("code: read the entries the push at %s ejected: %w", at, err)
+			return nil, fmt.Errorf("gitlet: read the entries the push at %s ejected: %w", at, err)
 		}
 		defer func() { _ = rows.Close() }()
 		var out []Ejection
 		for rows.Next() {
 			x := Ejection{Reason: EjectHeadMoved}
 			if err := rows.Scan(&x.EntryID); err != nil {
-				return nil, fmt.Errorf("code: scan an entry the push at %s ejected: %w", at, err)
+				return nil, fmt.Errorf("gitlet: scan an entry the push at %s ejected: %w", at, err)
 			}
 			out = append(out, x)
 		}

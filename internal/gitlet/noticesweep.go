@@ -37,7 +37,7 @@ func NoticeJobs(db store.ReplicatedHandle, persons maintenance.Horizon) []mainte
 			err := db.Tx(ctx, func(tx *sql.Tx) error {
 				res, err := tx.ExecContext(ctx, sweepNoticesSQL, string(kind), store.EncodeTime(cutoff))
 				if err != nil {
-					return fmt.Errorf("code: sweep the %s notices: %w", kind, err)
+					return fmt.Errorf("gitlet: sweep the %s notices: %w", kind, err)
 				}
 				swept, err = res.RowsAffected()
 				return err

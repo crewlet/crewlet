@@ -436,7 +436,7 @@ func (s inboxScan) run(ctx context.Context, tx *sql.Tx, limit int) ([]InboxNotic
 func scanInbox(ctx context.Context, tx *sql.Tx, handle, statement string, args ...any) ([]InboxNotice, error) {
 	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's code inbox: %w", handle, err)
+		return nil, fmt.Errorf("gitlet: read %s's code inbox: %w", handle, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []InboxNotice
@@ -450,7 +450,7 @@ func scanInbox(ctx context.Context, tx *sql.Tx, handle, statement string, args .
 		)
 		if err := rows.Scan(&record, &packed, &n.LogStream, &n.LogGeneration, &at, &reason, &addressed,
 			&fallback, &n.Repo, &n.ChangeID, &n.ChangeRef, &n.Excerpt); err != nil {
-			return nil, fmt.Errorf("code: read %s's code inbox: %w", handle, err)
+			return nil, fmt.Errorf("gitlet: read %s's code inbox: %w", handle, err)
 		}
 		n.RecordID = NoticeID(record, n.ChangeID)
 		n.LogSeq = uint64(packed) % statelog.GenerationStride
@@ -459,7 +459,7 @@ func scanInbox(ctx context.Context, tx *sql.Tx, handle, statement string, args .
 		out = append(out, n)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read %s's code inbox: %w", handle, err)
+		return nil, fmt.Errorf("gitlet: read %s's code inbox: %w", handle, err)
 	}
 	return out, nil
 }
@@ -512,7 +512,7 @@ func inboxScanOf(q ReadQuery, marks inbox.Classifier, now time.Time) (inboxScan,
 	}
 	marked, err := json.Marshal(pairs)
 	if err != nil {
-		return inboxScan{}, false, fmt.Errorf("code: name the notices %s marked unread: %w", in.Handle, err)
+		return inboxScan{}, false, fmt.Errorf("gitlet: name the notices %s marked unread: %w", in.Handle, err)
 	}
 	s.marked = string(marked)
 	for _, list := range []struct {
@@ -536,7 +536,7 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]
 	}
 	held, err := changesByIDIn(ctx, tx, ids)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the changes an inbox page names: %w", err)
+		return nil, fmt.Errorf("gitlet: read the changes an inbox page names: %w", err)
 	}
 	for id, row := range held {
 		out[id] = noticeChangeOf(row)
@@ -590,7 +590,7 @@ func (q ReadQuery) validateNoticeCards() error {
 func (r *Reader) noticeCards(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	held, err := changesByIDIn(ctx, tx, q.NoticeCards)
 	if err != nil {
-		return fmt.Errorf("code: read the changes an inbox page's cards name: %w", err)
+		return fmt.Errorf("gitlet: read the changes an inbox page's cards name: %w", err)
 	}
 	repoIDs := make([]string, 0, len(held))
 	for _, row := range held {
@@ -633,7 +633,7 @@ func noticeCardsIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[
 	}
 	judged, err := readinessIn(ctx, tx, rows, repos, chart, asker, floor)
 	if err != nil {
-		return nil, fmt.Errorf("code: judge the readiness of the changes an inbox page's cards name: %w", err)
+		return nil, fmt.Errorf("gitlet: judge the readiness of the changes an inbox page's cards name: %w", err)
 	}
 	for id, readiness := range judged {
 		out[id].Readiness = &NoticeReadiness{Met: readiness.Met, Total: readiness.Total, First: readiness.First}
@@ -644,13 +644,13 @@ func noticeCardsIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[
 	}
 	rowsOf, err := tx.QueryContext(ctx, noticeBodiesSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page's cards name: %w", err)
+		return nil, fmt.Errorf("gitlet: read the descriptions of the changes an inbox page's cards name: %w", err)
 	}
 	for rowsOf.Next() {
 		var id, body string
 		if err = rowsOf.Scan(&id, &body); err != nil {
 			_ = rowsOf.Close()
-			return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page's cards name: %w",
+			return nil, fmt.Errorf("gitlet: read the descriptions of the changes an inbox page's cards name: %w",
 				err)
 		}
 		if c, found := out[id]; found {
@@ -660,18 +660,18 @@ func noticeCardsIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[
 	}
 	if err = rowsOf.Err(); err != nil {
 		_ = rowsOf.Close()
-		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page's cards name: %w", err)
+		return nil, fmt.Errorf("gitlet: read the descriptions of the changes an inbox page's cards name: %w", err)
 	}
 	_ = rowsOf.Close()
 	rowsOf, err = tx.QueryContext(ctx, noticeFindingsSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: count the findings of the changes an inbox page's cards name: %w", err)
+		return nil, fmt.Errorf("gitlet: count the findings of the changes an inbox page's cards name: %w", err)
 	}
 	defer func() { _ = rowsOf.Close() }()
 	for rowsOf.Next() {
 		var id, severity string
 		if err := rowsOf.Scan(&id, &severity); err != nil {
-			return nil, fmt.Errorf("code: count the findings of the changes an inbox page's cards name: %w", err)
+			return nil, fmt.Errorf("gitlet: count the findings of the changes an inbox page's cards name: %w", err)
 		}
 		c, found := out[id]
 		if !found {

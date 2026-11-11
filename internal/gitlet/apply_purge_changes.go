@@ -137,7 +137,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows, err := tx.QueryContext(ctx, purgeChangeWalkSQL, repoID, budget)
 	if err != nil {
-		return changesPurged{}, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+		return changesPurged{}, fmt.Errorf("gitlet: read %s's changes to purge: %w", repoID, err)
 	}
 	var whole []string
 	left := budget
@@ -151,7 +151,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.facts, &c.body,
 			&c.mergeability, &c.conversation); err != nil {
 			_ = rows.Close()
-			return changesPurged{}, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+			return changesPurged{}, fmt.Errorf("gitlet: read %s's changes to purge: %w", repoID, err)
 		}
 		switch {
 		case c.rows() > left:
@@ -173,7 +173,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()
-		return changesPurged{}, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+		return changesPurged{}, fmt.Errorf("gitlet: read %s's changes to purge: %w", repoID, err)
 	}
 	_ = rows.Close()
 
@@ -191,7 +191,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			res, err := tx.ExecContext(ctx, stmt, list)
 			if err != nil {
-				return changesPurged{}, fmt.Errorf("code: purge %s's changes: %w", repoID, err)
+				return changesPurged{}, fmt.Errorf("gitlet: purge %s's changes: %w", repoID, err)
 			}
 			n, _ := res.RowsAffected()
 			done.spent += int(n)
@@ -222,7 +222,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			res, err := tx.ExecContext(ctx, stmt, cut.id, left)
 			if err != nil {
-				return changesPurged{}, fmt.Errorf("code: purge change %s of %s: %w", cut.id, repoID, err)
+				return changesPurged{}, fmt.Errorf("gitlet: purge change %s of %s: %w", cut.id, repoID, err)
 			}
 			n, _ := res.RowsAffected()
 			done.spent += int(n)
@@ -239,7 +239,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 				return changesPurged{}, err
 			}
 			if _, err := tx.ExecContext(ctx, uncountNoticesSQL, take, cut.id); err != nil {
-				return changesPurged{}, fmt.Errorf("code: count change %s's notices again: %w", cut.id, err)
+				return changesPurged{}, fmt.Errorf("gitlet: count change %s's notices again: %w", cut.id, err)
 			}
 			done.spent += take + 1
 			done.deleted += removed + 1
@@ -253,25 +253,25 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 	wide := wideCut{left: left, weighed: weighed}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutCommentWidthsSQL, purgeCutCommentsSQL, cut.id,
 		wide); err != nil {
-		return changesPurged{}, fmt.Errorf("code: purge change %s's comments of %s: %w", cut.id, repoID, err)
+		return changesPurged{}, fmt.Errorf("gitlet: purge change %s's comments of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutFindingTextWidthsSQL, purgeCutFindingTextsSQL, cut.id,
 		wide); err != nil {
-		return changesPurged{}, fmt.Errorf("code: purge change %s's findings' texts of %s: %w", cut.id, repoID, err)
+		return changesPurged{}, fmt.Errorf("gitlet: purge change %s's findings' texts of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutReviewWidthsSQL, purgeCutReviewsSQL, cut.id,
 		wide); err != nil {
-		return changesPurged{}, fmt.Errorf("code: purge change %s's reviews of %s: %w", cut.id, repoID, err)
+		return changesPurged{}, fmt.Errorf("gitlet: purge change %s's reviews of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutFactWidthsSQL, purgeCutFactsSQL, cut.id, wide); err != nil {
-		return changesPurged{}, fmt.Errorf("code: purge change %s's revisions' facts of %s: %w", cut.id,
+		return changesPurged{}, fmt.Errorf("gitlet: purge change %s's revisions' facts of %s: %w", cut.id,
 			repoID, err)
 	}
 	done.spent += wide.deleted
 	done.deleted += wide.deleted
 	if wide.freed > 0 {
 		if _, err := tx.ExecContext(ctx, unweighConversationSQL, wide.freed, cut.id); err != nil {
-			return changesPurged{}, fmt.Errorf("code: weigh change %s's conversation again: %w", cut.id, err)
+			return changesPurged{}, fmt.Errorf("gitlet: weigh change %s's conversation again: %w", cut.id, err)
 		}
 		done.spent++
 		done.deleted++

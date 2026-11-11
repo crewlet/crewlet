@@ -34,7 +34,7 @@ func (r *Reader) TurnsMovedCode(ctx context.Context, q TurnsMovedQuery) (map[str
 	}
 	turns, err := json.Marshal(q.Turns)
 	if err != nil {
-		return nil, fmt.Errorf("code: encode the turns: %w", err)
+		return nil, fmt.Errorf("gitlet: encode the turns: %w", err)
 	}
 	query := statelog.Freshness{Level: q.Level}.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 	_, err = r.log.Read(ctx, query, func(tx *sql.Tx) error {
@@ -53,7 +53,7 @@ func (r *Reader) TurnsMovedCode(ctx context.Context, q TurnsMovedQuery) (map[str
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("code: read what the turns moved: %w", err)
+		return nil, fmt.Errorf("gitlet: read what the turns moved: %w", err)
 	}
 	return out, nil
 }

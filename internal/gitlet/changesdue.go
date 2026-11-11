@@ -254,11 +254,11 @@ func (r *Reader) dueRepos(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 func reposOf(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("code: list the repositories change work is due in: %w", err)
+		return nil, fmt.Errorf("gitlet: list the repositories change work is due in: %w", err)
 	}
 	var ids []string
 	if err := eachID(rows, func(id string) { ids = append(ids, id) }); err != nil {
-		return nil, fmt.Errorf("code: list the repositories change work is due in: %w", err)
+		return nil, fmt.Errorf("gitlet: list the repositories change work is due in: %w", err)
 	}
 	return ids, nil
 }
@@ -296,7 +296,7 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
-		return fmt.Errorf("code: read repository %s's state: %w", repoID, err)
+		return fmt.Errorf("gitlet: read repository %s's state: %w", repoID, err)
 	case RepoStatus(status) != RepoStatusActive:
 		return nil
 	}
@@ -356,7 +356,7 @@ func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, page
 	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows, q.ChangesDue.ChartEpoch,
 		digests.owners, digests.humanPaths)
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
+		return fmt.Errorf("gitlet: list repository %s's due changes: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -366,7 +366,7 @@ func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, page
 		)
 		if err := rows.Scan(&c.ID, &c.Number, &c.Revision, &c.Head, &c.SourceRef, &c.TargetRef, &c.Tip,
 			&at, &c.FactsDue, &c.MergeDue, &c.RefreshDue); err != nil {
-			return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
+			return fmt.Errorf("gitlet: list repository %s's due changes: %w", repoID, err)
 		}
 		c.TipPosition = statelog.Unpack(topics.CodeLogStream, at)
 		out.DueChanges = append(out.DueChanges, c)
@@ -400,7 +400,7 @@ func dueAskSettles(ctx context.Context, tx *sql.Tx, repoID string, pg *page, out
 			})
 		}
 		if err != nil {
-			return fmt.Errorf("code: list repository %s's asks due a settling: %w", repoID, err)
+			return fmt.Errorf("gitlet: list repository %s's asks due a settling: %w", repoID, err)
 		}
 		return nil
 	}
@@ -424,7 +424,7 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 	rows, err := tx.QueryContext(ctx, dueRechecksSQL, repoID, store.EncodeTime(q.ChangesDue.RecheckBefore),
 		q.ChangesDue.Rechecks)
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's due rechecks: %w", repoID, err)
+		return fmt.Errorf("gitlet: list repository %s's due rechecks: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -434,7 +434,7 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 		)
 		if err := rows.Scan(&c.ID, &c.Number, &c.Revision, &c.Head, &c.SourceRef, &c.TargetRef, &c.Tip, &at,
 			&checked); err != nil {
-			return fmt.Errorf("code: list repository %s's due rechecks: %w", repoID, err)
+			return fmt.Errorf("gitlet: list repository %s's due rechecks: %w", repoID, err)
 		}
 		c.TipPosition, c.Checked = statelog.Unpack(topics.CodeLogStream, at), store.DecodeTime(checked)
 		out.Rechecks = append(out.Rechecks, c)

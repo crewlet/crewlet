@@ -185,7 +185,7 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 	for _, rule := range rules {
 		pattern, ok := gitref.ParsePattern(rule.Pattern)
 		if !ok {
-			return GateRules{}, fmt.Errorf("code: protection %q is not a protection pattern this build reads, so "+
+			return GateRules{}, fmt.Errorf("gitlet: protection %q is not a protection pattern this build reads, so "+
 				"no merge into %s can be judged against it", rule.Pattern, target)
 		}
 		if !pattern.Match(target) {
@@ -583,7 +583,7 @@ func rulesOfRepos(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) 
 	}
 	rows, err := tx.QueryContext(ctx, protectionsOfSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the rules a merge gate judges: %w", err)
+		return nil, fmt.Errorf("gitlet: read the rules a merge gate judges: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	out := make(map[string][]Protection, len(ids))
@@ -593,16 +593,16 @@ func rulesOfRepos(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) 
 			p                Protection
 		)
 		if err = rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
-			return nil, fmt.Errorf("code: read the rules a merge gate judges: %w", err)
+			return nil, fmt.Errorf("gitlet: read the rules a merge gate judges: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)
 		if p.Gate, err = gateFrom(gate); err != nil {
-			return nil, fmt.Errorf("code: read repository %s's rule %s: %w", id, p.Pattern, err)
+			return nil, fmt.Errorf("gitlet: read repository %s's rule %s: %w", id, p.Pattern, err)
 		}
 		out[id] = append(out[id], p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read the rules a merge gate judges: %w", err)
+		return nil, fmt.Errorf("gitlet: read the rules a merge gate judges: %w", err)
 	}
 	// THE STATEMENT ORDERS BY PATTERN, stated again as the property a
 	// combination's sentences rely on.
@@ -623,11 +623,11 @@ func headFactsIn(ctx context.Context, tx *sql.Tx, heads [][2]any, at map[string]
 	}
 	encoded, err := json.Marshal(heads)
 	if err != nil {
-		return fmt.Errorf("code: encode %d head revisions' keys: %w", len(heads), err)
+		return fmt.Errorf("gitlet: encode %d head revisions' keys: %w", len(heads), err)
 	}
 	rows, err := tx.QueryContext(ctx, gateHeadsSQL, string(encoded))
 	if err != nil {
-		return fmt.Errorf("code: read the head revisions' facts a merge gate judges: %w", err)
+		return fmt.Errorf("gitlet: read the head revisions' facts a merge gate judges: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -638,11 +638,11 @@ func headFactsIn(ctx context.Context, tx *sql.Tx, heads [][2]any, at map[string]
 		)
 		if err := rows.Scan(&id, &target, &touchesAll, &touchedCount, &classes, &owners, &skipped, &digest,
 			&humanDigest, &humanPaths); err != nil {
-			return fmt.Errorf("code: read the head revisions' facts a merge gate judges: %w", err)
+			return fmt.Errorf("gitlet: read the head revisions' facts a merge gate judges: %w", err)
 		}
 		i, ok := at[id]
 		if !ok {
-			return fmt.Errorf("code: read the head revisions' facts a merge gate judges: a row of change %s, "+
+			return fmt.Errorf("gitlet: read the head revisions' facts a merge gate judges: a row of change %s, "+
 				"which the read did not ask", id)
 		}
 		if target != subjects[i].row.target {
@@ -664,7 +664,7 @@ func headFactsIn(ctx context.Context, tx *sql.Tx, heads [][2]any, at map[string]
 				continue
 			}
 			if err := json.Unmarshal([]byte(wide.text), wide.into); err != nil {
-				return fmt.Errorf("code: read change %s's head revision's %s: %w", id, wide.what, err)
+				return fmt.Errorf("gitlet: read change %s's head revision's %s: %w", id, wide.what, err)
 			}
 		}
 		out[i].Head = h
@@ -694,7 +694,7 @@ func matchDigestsOf(ctx context.Context, tx *sql.Tx, owned []string, subjects []
 	}
 	rows, err := tx.QueryContext(ctx, matchDigestsOfSQL, list)
 	if err != nil {
-		return fmt.Errorf("code: read what a merge gate's matches are held to: %w", err)
+		return fmt.Errorf("gitlet: read what a merge gate's matches are held to: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	of := make(map[string]matchDigests, len(owned))
@@ -704,12 +704,12 @@ func matchDigestsOf(ctx context.Context, tx *sql.Tx, owned []string, subjects []
 			m  matchDigests
 		)
 		if err := rows.Scan(&id, &m.owners, &m.humanPaths); err != nil {
-			return fmt.Errorf("code: read what a merge gate's matches are held to: %w", err)
+			return fmt.Errorf("gitlet: read what a merge gate's matches are held to: %w", err)
 		}
 		of[id] = m
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("code: read what a merge gate's matches are held to: %w", err)
+		return fmt.Errorf("gitlet: read what a merge gate's matches are held to: %w", err)
 	}
 	for i, s := range subjects {
 		if m, ok := of[s.repo.ID]; ok {
@@ -732,11 +732,11 @@ func gateChecksIn(ctx context.Context, tx *sql.Tx, keys [][4]any, byHead map[[3]
 	}
 	encoded, err := json.Marshal(keys)
 	if err != nil {
-		return fmt.Errorf("code: encode %d checks' keys: %w", len(keys), err)
+		return fmt.Errorf("gitlet: encode %d checks' keys: %w", len(keys), err)
 	}
 	rows, err := tx.QueryContext(ctx, gateChecksSQL, string(encoded))
 	if err != nil {
-		return fmt.Errorf("code: read the checks a merge gate judges: %w", err)
+		return fmt.Errorf("gitlet: read the checks a merge gate judges: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -747,7 +747,7 @@ func gateChecksIn(ctx context.Context, tx *sql.Tx, keys [][4]any, byHead map[[3]
 		)
 		if err := rows.Scan(&repoID, &commit, &target, &c.Name, &c.Attempt, &state, &reason,
 			&placement); err != nil {
-			return fmt.Errorf("code: read the checks a merge gate judges: %w", err)
+			return fmt.Errorf("gitlet: read the checks a merge gate judges: %w", err)
 		}
 		c.State, c.Reason, c.Placement = CheckState(state), CheckReason(reason), CheckPlacement(placement)
 		for _, i := range byHead[[3]string{repoID, commit, target}] {

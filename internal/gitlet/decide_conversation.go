@@ -716,7 +716,7 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	if w.JudgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the writer hands such a write to the
 		// repository's next writer before deciding it with no chart.
-		return conversationDecision{}, fmt.Errorf("code: a write of %s's conversation that the chart judges "+
+		return conversationDecision{}, fmt.Errorf("gitlet: a write of %s's conversation that the chart judges "+
 			"reached the decide with no chart — the writer hands such a write to the repository's next "+
 			"committing node", changeID)
 	}
@@ -881,7 +881,7 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 			return d.refuse(ConversationRefusalFindingGone, fmt.Sprintf("finding %s is %s: it no longer stands, "+
 				"so no review carries it", id, f.state))
 		}
-		return conversationDecision{}, fmt.Errorf("code: finding %s stands, %s's own, on %s, and %s's standing "+
+		return conversationDecision{}, fmt.Errorf("gitlet: finding %s stands, %s's own, on %s, and %s's standing "+
 			"findings left it out: standingStates and FindingState.Stands disagree", id, asker, row.id, asker)
 	}
 	superseded := supersededAmong(all, r)
@@ -1019,7 +1019,7 @@ func standingFindings(ctx context.Context, tx queryer, changeID, raiser string, 
 
 	rows, err := tx.QueryContext(ctx, standingFindingsSQL, changeID, raiser, string(kind), standingStates)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's standing findings on %s: %w", raiser, changeID, err)
+		return nil, fmt.Errorf("gitlet: read %s's standing findings on %s: %w", raiser, changeID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []standingFinding
@@ -1027,7 +1027,7 @@ func standingFindings(ctx context.Context, tx queryer, changeID, raiser string, 
 		var f standingFinding
 		var severity, state string
 		if err := rows.Scan(&f.id, &f.revision, &severity, &state); err != nil {
-			return nil, fmt.Errorf("code: read %s's standing findings on %s: %w", raiser, changeID, err)
+			return nil, fmt.Errorf("gitlet: read %s's standing findings on %s: %w", raiser, changeID, err)
 		}
 		f.severity, f.state = Severity(severity), FindingState(state)
 		out = append(out, f)
@@ -1055,7 +1055,7 @@ func findingsAmong(ctx context.Context, tx queryer, ids []string) (map[string]fi
 	}
 	rows, err := tx.QueryContext(ctx, findingsAmongSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %d findings: %w", len(ids), err)
+		return nil, fmt.Errorf("gitlet: read %d findings: %w", len(ids), err)
 	}
 	defer func() { _ = rows.Close() }()
 	out := make(map[string]findingRow, len(ids))
@@ -1063,7 +1063,7 @@ func findingsAmong(ctx context.Context, tx queryer, ids []string) (map[string]fi
 		var f findingRow
 		var kind, severity, state string
 		if err := rows.Scan(&f.id, &f.changeID, &f.raiser, &kind, &f.revision, &severity, &state); err != nil {
-			return nil, fmt.Errorf("code: read %d findings: %w", len(ids), err)
+			return nil, fmt.Errorf("gitlet: read %d findings: %w", len(ids), err)
 		}
 		f.raiserKind, f.severity, f.state = PartyKind(kind), Severity(severity), FindingState(state)
 		out[f.id] = f
@@ -1081,7 +1081,7 @@ func findingIn(ctx context.Context, tx *sql.Tx, id string) (findingRow, bool, er
 	case errors.Is(err, sql.ErrNoRows):
 		return findingRow{}, false, nil
 	case err != nil:
-		return findingRow{}, false, fmt.Errorf("code: read finding %s: %w", id, err)
+		return findingRow{}, false, fmt.Errorf("gitlet: read finding %s: %w", id, err)
 	}
 	f.raiserKind, f.severity, f.state = PartyKind(kind), Severity(severity), FindingState(state)
 	return f, true, nil
@@ -1230,14 +1230,14 @@ func decideAsks(ctx context.Context, tx *sql.Tx, w ConversationWrite, row change
 func asksIn(ctx context.Context, tx *sql.Tx, changeID string, state ReviewerState, limit int) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, asksInStateSQL, changeID, string(state), limit)
 	if err != nil {
-		return nil, fmt.Errorf("code: read change %s's asks %s: %w", changeID, state, err)
+		return nil, fmt.Errorf("gitlet: read change %s's asks %s: %w", changeID, state, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var handle string
 		if err := rows.Scan(&handle); err != nil {
-			return nil, fmt.Errorf("code: read change %s's asks %s: %w", changeID, state, err)
+			return nil, fmt.Errorf("gitlet: read change %s's asks %s: %w", changeID, state, err)
 		}
 		out = append(out, handle)
 	}
@@ -1368,7 +1368,7 @@ func conversationIn(ctx context.Context, tx *sql.Tx, changeID string) (version, 
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, 0, 0, nil
 	case err != nil:
-		return 0, 0, 0, fmt.Errorf("code: read change %s's conversation: %w", changeID, err)
+		return 0, 0, 0, fmt.Errorf("gitlet: read change %s's conversation: %w", changeID, err)
 	}
 	return version, position, readiness, nil
 }
@@ -1396,7 +1396,7 @@ func commentIn(ctx context.Context, tx *sql.Tx, id string) (commentRow, bool, er
 	case errors.Is(err, sql.ErrNoRows):
 		return commentRow{}, false, nil
 	case err != nil:
-		return commentRow{}, false, fmt.Errorf("code: read comment %s: %w", id, err)
+		return commentRow{}, false, fmt.Errorf("gitlet: read comment %s: %w", id, err)
 	}
 	c.authorKind = PartyKind(kind)
 	return c, true, nil
@@ -1414,13 +1414,13 @@ func authorsAmong(ctx context.Context, tx *sql.Tx, changeID string, handles []st
 	}
 	rows, err := tx.QueryContext(ctx, authorsAmongSQL, changeID, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read change %s's authors: %w", changeID, err)
+		return nil, fmt.Errorf("gitlet: read change %s's authors: %w", changeID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var author, kind string
 		if err := rows.Scan(&author, &kind); err != nil {
-			return nil, fmt.Errorf("code: read change %s's authors: %w", changeID, err)
+			return nil, fmt.Errorf("gitlet: read change %s's authors: %w", changeID, err)
 		}
 		out[author] = PartyKind(kind)
 	}
@@ -1440,25 +1440,25 @@ func reviewerStates(ctx context.Context, tx *sql.Tx, changeID string, handles []
 	}
 	rows, err := tx.QueryContext(ctx, reviewersNamedSQL, changeID, list)
 	if err != nil {
-		return nil, 0, fmt.Errorf("code: read change %s's reviewers: %w", changeID, err)
+		return nil, 0, fmt.Errorf("gitlet: read change %s's reviewers: %w", changeID, err)
 	}
 	for rows.Next() {
 		var handle, state string
 		if err := rows.Scan(&handle, &state); err != nil {
 			_ = rows.Close()
-			return nil, 0, fmt.Errorf("code: read change %s's reviewers: %w", changeID, err)
+			return nil, 0, fmt.Errorf("gitlet: read change %s's reviewers: %w", changeID, err)
 		}
 		out[handle] = ReviewerState(state)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return nil, 0, fmt.Errorf("code: read change %s's reviewers: %w", changeID, err)
+		return nil, 0, fmt.Errorf("gitlet: read change %s's reviewers: %w", changeID, err)
 	}
 	_ = rows.Close()
 	var requested int
 	if err := tx.QueryRowContext(ctx, reviewersAskedSQL, changeID, MaxReviewersPerChange+1).Scan(
 		&requested); err != nil {
-		return nil, 0, fmt.Errorf("code: count change %s's reviewers: %w", changeID, err)
+		return nil, 0, fmt.Errorf("gitlet: count change %s's reviewers: %w", changeID, err)
 	}
 	return out, requested, nil
 }

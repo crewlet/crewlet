@@ -236,7 +236,7 @@ const MaxAbandonedChecks = MaxQueueDepth * MaxRequiredChecks
 func abandonedChecksIn(ctx context.Context, tx *sql.Tx, repoID string) ([]AbandonedCheck, error) {
 	rows, err := tx.QueryContext(ctx, abandonedChecksSQL, repoID, MaxAbandonedChecks)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the checks of %s's given-up trains: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read the checks of %s's given-up trains: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []AbandonedCheck
@@ -244,7 +244,7 @@ func abandonedChecksIn(ctx context.Context, tx *sql.Tx, repoID string) ([]Abando
 		x := AbandonedCheck{CheckKey: CheckKey{RepoID: repoID}, Reason: CheckReasonAbandoned}
 		var dequeued bool
 		if err := rows.Scan(&x.Target, &x.CandidateID, &x.OID, &x.Name, &x.Attempt, &dequeued); err != nil {
-			return nil, fmt.Errorf("code: read the checks of %s's given-up trains: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: read the checks of %s's given-up trains: %w", repoID, err)
 		}
 		if dequeued {
 			x.Reason = CheckReasonDequeued
@@ -383,7 +383,7 @@ func enqueuedSince(ctx context.Context, tx *sql.Tx, repoID, target string, since
 	var n int
 	if err := tx.QueryRowContext(ctx, enqueuedSQL, repoID, target, store.EncodeTime(since), MergeRateScan).Scan(
 		&n); err != nil {
-		return 0, fmt.Errorf("code: count %s's entries enqueued since %s: %w", target, since, err)
+		return 0, fmt.Errorf("gitlet: count %s's entries enqueued since %s: %w", target, since, err)
 	}
 	return n, nil
 }
@@ -412,7 +412,7 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 		if !found {
 			// A LIVE ENTRY NAMES A CHANGE ITS REPOSITORY HOLDS: every record
 			// that removes a change ends its entry in the same apply.
-			return nil, fmt.Errorf("code: entry %s of %s's queue names change %s, which the repository does "+
+			return nil, fmt.Errorf("gitlet: entry %s of %s's queue names change %s, which the repository does "+
 				"not hold", e.EntryID, e.TargetRef, e.ChangeID)
 		}
 		out[i] = QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
@@ -479,7 +479,7 @@ func owedClosesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]QueueWorkEn
 func owedEntriesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]queueEntry, []string, error) {
 	rows, err := tx.QueryContext(ctx, owedClosesSQL, repoID, MaxOwedCloses)
 	if err != nil {
-		return nil, nil, fmt.Errorf("code: read %s's owed closes: %w", repoID, err)
+		return nil, nil, fmt.Errorf("gitlet: read %s's owed closes: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var (
@@ -492,12 +492,12 @@ func owedEntriesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]queueEntry
 			e  queueEntry
 		)
 		if e, err = scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &op)...) }); err != nil {
-			return nil, nil, fmt.Errorf("code: read %s's owed closes: %w", repoID, err)
+			return nil, nil, fmt.Errorf("gitlet: read %s's owed closes: %w", repoID, err)
 		}
 		owed, ops = append(owed, e), append(ops, op)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("code: read %s's owed closes: %w", repoID, err)
+		return nil, nil, fmt.Errorf("gitlet: read %s's owed closes: %w", repoID, err)
 	}
 	return owed, ops, nil
 }
@@ -540,7 +540,7 @@ func descriptionsOf(ctx context.Context, tx *sql.Tx, entries []QueueWorkEntry) e
 		})
 	}
 	if err != nil {
-		return fmt.Errorf("code: read the bodies of %d queued changes: %w", len(ids), err)
+		return fmt.Errorf("gitlet: read the bodies of %d queued changes: %w", len(ids), err)
 	}
 	rows, err = tx.QueryContext(ctx, changeAuthorsNamedSQL, list)
 	if err == nil {
@@ -554,7 +554,7 @@ func descriptionsOf(ctx context.Context, tx *sql.Tx, entries []QueueWorkEntry) e
 		})
 	}
 	if err != nil {
-		return fmt.Errorf("code: read the authors of %d queued changes: %w", len(ids), err)
+		return fmt.Errorf("gitlet: read the authors of %d queued changes: %w", len(ids), err)
 	}
 	for i := range entries {
 		id := entries[i].Change.ID

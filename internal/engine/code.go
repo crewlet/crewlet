@@ -1008,7 +1008,7 @@ func (e *Engine) newCodeRetentionDuty(store *gitlet.Store, reader *gitlet.Reader
 			// keeping every branch the same holds name.
 			Propose: e.router.Code().Propose,
 			Node:    nodeID,
-			Logger:  logging.Get("code"),
+			Logger:  logging.Get("gitlet"),
 		},
 		claim:    e.workerDuty(codeRetentionDutyName, codeRetentionDutyTTL),
 		giveBack: e.workerGiveBack(codeRetentionDutyName),

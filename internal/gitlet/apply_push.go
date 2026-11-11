@@ -151,7 +151,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	applied, err := pushesApplied(ctx, tx, ids)
 	if err != nil {
-		return 0, fmt.Errorf("code: read the applied pushes at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: read the applied pushes at %s: %w", at.position, err)
 	}
 	var named []string
 	seen := map[string]bool{}
@@ -168,7 +168,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	prior, err := refsNamed(ctx, tx, p.RepoID, named)
 	if err != nil {
-		return 0, fmt.Errorf("code: read the refs the push at %s moves: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: read the refs the push at %s moves: %w", at.position, err)
 	}
 
 	var (
@@ -276,7 +276,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 
 	held, err := tombstonesHeld(ctx, tx, p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: read the tombstones the push at %s finds: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: read the tombstones the push at %s finds: %w", at.position, err)
 	}
 	// HOW FAR PAST ITS BOUND the record would leave the tombstones were its
 	// deletions tombstones: more than the sweep can take, and they are
@@ -303,7 +303,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 			ref := kept[i]
 			return []any{p.RepoID, ref, final[ref], at.packed, at.at(), seatOf(setBy[ref], ref, final[ref])}
 		}); err != nil {
-		return 0, fmt.Errorf("code: write the refs at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: write the refs at %s: %w", at.position, err)
 	}
 	if len(removed) > 0 {
 		list, listErr := jsonList(removed)
@@ -311,7 +311,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 			return 0, listErr
 		}
 		if _, err = tx.ExecContext(ctx, deleteRefsSQL, p.RepoID, list); err != nil {
-			return 0, fmt.Errorf("code: remove the refs deleted at %s: %w", at.position, err)
+			return 0, fmt.Errorf("gitlet: remove the refs deleted at %s: %w", at.position, err)
 		}
 	}
 	// A PUSH'S PACK DATES ITS CONTENT FROM ITS OWN POSITION ([PackRow.Content]):
@@ -332,7 +332,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 				k.IndexBytes, k.ReverseBytes, k.GitChecksum, k.Objects, string(packKinds[i]), at.packed,
 				at.packed, at.at()}
 		}); err != nil {
-		return 0, fmt.Errorf("code: write the packs at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: write the packs at %s: %w", at.position, err)
 	}
 	// THE ROW'S WIDTH IS WRITTEN BESIDE IT: the bytes of its wide columns —
 	// the commands, the introduced ids and a seat's run, up to six fields
@@ -369,7 +369,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 				introduced[i], e.IntroducedCount, store.EncodeTime(e.ReceivedAt),
 				pushRowBytes(encoded[i], introduced[i], run)}
 		}); err != nil {
-		return 0, fmt.Errorf("code: write the pushes at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: write the pushes at %s: %w", at.position, err)
 	}
 	// THE CONFLICT IS A SKIP, never an abort, though no record this build
 	// applies meets one — every drop it writes is new at its own position —
@@ -381,7 +381,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		len(drops), func(i int) []any {
 			return []any{p.RepoID, at.at(), at.packed, drops[i].ref, drops[i].old}
 		}); err != nil {
-		return 0, fmt.Errorf("code: record the objects the push at %s left: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: record the objects the push at %s left: %w", at.position, err)
 	}
 	// A REMOVAL RAISES THE MARK TO THE RECORD'S OWN POSITION, in the counters'
 	// own row: a delta from below it would miss the deletions it removed.
@@ -403,7 +403,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if _, err = tx.ExecContext(ctx, pushCountersSQL, moved.live, moved.branches, moved.tags,
 		moved.tombstones, len(packRows), packBytes, packObjects, len(pushRows), keep, at.at(), keep, at.at(),
 		at.packed, mark, p.RepoID); err != nil {
-		return 0, fmt.Errorf("code: count the pushes at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: count the pushes at %s: %w", at.position, err)
 	}
 
 	swept, err := a.sweepTombstones(ctx, tx, at, p.RepoID, sweep,
@@ -443,11 +443,11 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 
 	book, err := readChangeBook(ctx, tx, repoID, pushes, at.packed, at.at())
 	if err != nil {
-		return 0, fmt.Errorf("code: the push at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the push at %s: %w", at.position, err)
 	}
 	if slices.ContainsFunc(pushes, func(e PushEntry) bool { return e.Change != nil }) {
 		if err = tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
-			return 0, fmt.Errorf("code: read %s's next change at %s: %w", repoID, at.position, err)
+			return 0, fmt.Errorf("gitlet: read %s's next change at %s: %w", repoID, at.position, err)
 		}
 	}
 	for _, e := range pushes {
@@ -464,7 +464,7 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 	}
 	written, err := book.write(ctx, tx, at.maxVariables)
 	if err != nil {
-		return 0, fmt.Errorf("code: the changes the push at %s moves: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: the changes the push at %s moves: %w", at.position, err)
 	}
 	return written, nil
 }
@@ -552,7 +552,7 @@ func (a *Applier) expireRefDrops(ctx context.Context, tx *sql.Tx, at applyContex
 	horizon := store.EncodeTime(at.brokerAt.Add(-PruneGrace))
 	res, err := tx.ExecContext(ctx, expireDropsSQL, repoID, horizon, limit)
 	if err != nil {
-		return 0, fmt.Errorf("code: remove %s's ref drops past their grace: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: remove %s's ref drops past their grace: %w", repoID, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -618,7 +618,7 @@ func recordedCommands(cmds []Command) (string, error) {
 	}
 	b, err := json.Marshal(stored)
 	if err != nil {
-		return "", fmt.Errorf("code: encode a push's commands: %w", err)
+		return "", fmt.Errorf("gitlet: encode a push's commands: %w", err)
 	}
 	return string(b), nil
 }
@@ -717,7 +717,7 @@ func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []Pu
 			k := counted[i]
 			return []any{k.seat, k.day, counts[k]}
 		}); err != nil {
-		return 0, fmt.Errorf("code: count the seats' pushes at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: count the seats' pushes at %s: %w", at.position, err)
 	}
 	list, err := jsonList(seats)
 	if err != nil {
@@ -725,7 +725,7 @@ func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []Pu
 	}
 	res, err := tx.ExecContext(ctx, forgetSeatDaysSQL, list)
 	if err != nil {
-		return 0, fmt.Errorf("code: forget the seats' older days at %s: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: forget the seats' older days at %s: %w", at.position, err)
 	}
 	forgotten, _ := res.RowsAffected()
 	return len(counted) + int(forgotten), nil
@@ -761,7 +761,7 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 	expired, _, _, err := pushesWithin(ctx, tx, HorizonBytesPerRecord,
 		func(instant int64) bool { return instant >= horizon }, expiredPushesSQL, repoID, limit)
 	if err != nil {
-		return 0, fmt.Errorf("code: read %s's expired pushes: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: read %s's expired pushes: %w", repoID, err)
 	}
 	if len(expired) == 0 {
 		return 0, nil
@@ -772,7 +772,7 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	res, err := tx.ExecContext(ctx, deletePushesSQL, list)
 	if err != nil {
-		return 0, fmt.Errorf("code: delete %s's expired pushes: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: delete %s's expired pushes: %w", repoID, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -834,7 +834,7 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 	aged := store.EncodeTime(at.brokerAt.Add(-RefTombstoneHorizon))
 	rows, err := tx.QueryContext(ctx, tombstonesOldestSQL, repoID, limit)
 	if err != nil {
-		return 0, fmt.Errorf("code: read %s's oldest tombstones: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: read %s's oldest tombstones: %w", repoID, err)
 	}
 	var stones []string
 	var through int64
@@ -843,7 +843,7 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 		var position, deleted int64
 		if scanErr := rows.Scan(&ref, &position, &deleted); scanErr != nil {
 			_ = rows.Close()
-			return 0, fmt.Errorf("code: read %s's oldest tombstones: %w", repoID, scanErr)
+			return 0, fmt.Errorf("gitlet: read %s's oldest tombstones: %w", repoID, scanErr)
 		}
 		if len(stones) >= excess && deleted >= aged {
 			break
@@ -853,7 +853,7 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()
-		return 0, fmt.Errorf("code: read %s's oldest tombstones: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: read %s's oldest tombstones: %w", repoID, err)
 	}
 	_ = rows.Close()
 	if len(stones) == 0 {
@@ -865,11 +865,11 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	res, err := tx.ExecContext(ctx, deleteRefsSQL, repoID, list)
 	if err != nil {
-		return 0, fmt.Errorf("code: delete %s's swept tombstones: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: delete %s's swept tombstones: %w", repoID, err)
 	}
 	n, _ := res.RowsAffected()
 	if _, err := tx.ExecContext(ctx, sweptTombstonesSQL, through, n, repoID); err != nil {
-		return 0, fmt.Errorf("code: raise %s's tombstone mark: %w", repoID, err)
+		return 0, fmt.Errorf("gitlet: raise %s's tombstone mark: %w", repoID, err)
 	}
 	return int(n) + 1, nil
 }
@@ -905,7 +905,7 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContext, p PurgePart) (int, error) {
 	var parts int
 	if err := tx.QueryRowContext(ctx, purgePartsSQL, p.RepoID).Scan(&parts); err != nil {
-		return 0, fmt.Errorf("code: read %s's purge at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read %s's purge at %s: %w", p.RepoID, at.position, err)
 	}
 	if p.Part != parts+1 {
 		return 0, nil
@@ -915,7 +915,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 
 	pushIDs, weighed, cut, err := pushesWithin(ctx, tx, PurgePartBytes, nil, purgePushesSQL, p.RepoID, budget)
 	if err != nil {
-		return 0, fmt.Errorf("code: read %s's pushes to purge: %w", p.RepoID, err)
+		return 0, fmt.Errorf("gitlet: read %s's pushes to purge: %w", p.RepoID, err)
 	}
 	if len(pushIDs) > 0 {
 		list, err := jsonList(pushIDs)
@@ -924,7 +924,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		}
 		res, err := tx.ExecContext(ctx, deletePushesSQL, list)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s's pushes: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: purge %s's pushes: %w", p.RepoID, err)
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)
@@ -939,20 +939,20 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	if budget > 0 {
 		rows, err := tx.QueryContext(ctx, purgeRefsSQL, p.RepoID, budget)
 		if err != nil {
-			return 0, fmt.Errorf("code: read %s's refs to purge: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: read %s's refs to purge: %w", p.RepoID, err)
 		}
 		for rows.Next() {
 			var ref, target string
 			if err := rows.Scan(&ref, &target); err != nil {
 				_ = rows.Close()
-				return 0, fmt.Errorf("code: read %s's refs to purge: %w", p.RepoID, err)
+				return 0, fmt.Errorf("gitlet: read %s's refs to purge: %w", p.RepoID, err)
 			}
 			refs = append(refs, ref)
 			gone.count(ref, target, +1)
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			return 0, fmt.Errorf("code: read %s's refs to purge: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: read %s's refs to purge: %w", p.RepoID, err)
 		}
 		_ = rows.Close()
 	}
@@ -963,7 +963,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		}
 		res, err := tx.ExecContext(ctx, deleteRefsSQL, p.RepoID, list)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s's refs: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: purge %s's refs: %w", p.RepoID, err)
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)
@@ -975,14 +975,14 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	if budget > 0 {
 		rows, err := tx.QueryContext(ctx, purgePacksSQL, p.RepoID, budget)
 		if err != nil {
-			return 0, fmt.Errorf("code: read %s's packs to purge: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: read %s's packs to purge: %w", p.RepoID, err)
 		}
 		for rows.Next() {
 			var id, state string
 			var size, objects int64
 			if err := rows.Scan(&id, &size, &objects, &state); err != nil {
 				_ = rows.Close()
-				return 0, fmt.Errorf("code: read %s's packs to purge: %w", p.RepoID, err)
+				return 0, fmt.Errorf("gitlet: read %s's packs to purge: %w", p.RepoID, err)
 			}
 			packIDs = append(packIDs, id)
 			if PackState(state) == PackLive {
@@ -993,7 +993,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			return 0, fmt.Errorf("code: read %s's packs to purge: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: read %s's packs to purge: %w", p.RepoID, err)
 		}
 		_ = rows.Close()
 	}
@@ -1004,7 +1004,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		}
 		res, err := tx.ExecContext(ctx, deletePacksSQL, p.RepoID, list)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s's packs: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: purge %s's packs: %w", p.RepoID, err)
 		}
 		n, _ := res.RowsAffected()
 		// ONE PART A PACK is what makes deleting by pack id exact: every
@@ -1012,7 +1012,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		// across rows would be deleted whole here while the budget counted
 		// one of them — a writer's bug, refused rather than miscounted.
 		if int(n) != len(packIDs) {
-			return 0, fmt.Errorf("code: purging %s deleted %d pack rows for %d packs — "+
+			return 0, fmt.Errorf("gitlet: purging %s deleted %d pack rows for %d packs — "+
 				"a pack this build stores is one row", p.RepoID, n, len(packIDs))
 		}
 		deleted += int(n)
@@ -1021,7 +1021,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	if budget > 0 {
 		res, err := tx.ExecContext(ctx, purgeRetiredSQL, p.RepoID, budget)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s's retired packs: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: purge %s's retired packs: %w", p.RepoID, err)
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)
@@ -1030,7 +1030,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	if budget > 0 {
 		res, err := tx.ExecContext(ctx, purgeDropsSQL, p.RepoID, budget)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s's ref drops: %w", p.RepoID, err)
+			return 0, fmt.Errorf("gitlet: purge %s's ref drops: %w", p.RepoID, err)
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)
@@ -1073,7 +1073,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 	if _, err := tx.ExecContext(ctx, purgeCountersSQL, p.Part, gone.live, gone.branches, gone.tags,
 		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
-		return 0, fmt.Errorf("code: count %s's purge at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: count %s's purge at %s: %w", p.RepoID, at.position, err)
 	}
 	return deleted + 1, nil
 }
@@ -1121,7 +1121,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// part (purge.go).
 	remaining, err := changesOf(ctx, tx, p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: read %s's remaining changes at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read %s's remaining changes at %s: %w", p.RepoID, at.position, err)
 	}
 	deleted, err := a.removeNotices(ctx, tx, at, remaining)
 	if err != nil {
@@ -1139,7 +1139,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s at %s: %w", p.RepoID, at.position, err)
+			return 0, fmt.Errorf("gitlet: purge %s at %s: %w", p.RepoID, at.position, err)
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)
@@ -1149,7 +1149,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// token is not this purge's to remove.
 	res, err := tx.ExecContext(ctx, releaseNameSQL, NameToken(p.Name), p.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: release %q at %s: %w", p.Name, at.position, err)
+		return 0, fmt.Errorf("gitlet: release %q at %s: %w", p.Name, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	deleted += int(n)
@@ -1160,23 +1160,23 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	switch err = tx.QueryRowContext(ctx, repoKindSQL, p.RepoID).Scan(&kind); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
-		return 0, fmt.Errorf("code: read %s's kind at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: read %s's kind at %s: %w", p.RepoID, at.position, err)
 	}
 	if res, err = tx.ExecContext(ctx, removeRepoSQL, p.RepoID); err != nil {
-		return 0, fmt.Errorf("code: remove %s at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: remove %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ = res.RowsAffected()
 	deleted += int(n)
 	if n > 0 {
 		if res, err = tx.ExecContext(ctx, uncountKindSQL, kind); err != nil {
-			return 0, fmt.Errorf("code: count %s out at %s: %w", p.RepoID, at.position, err)
+			return 0, fmt.Errorf("gitlet: count %s out at %s: %w", p.RepoID, at.position, err)
 		}
 		n, _ = res.RowsAffected()
 		deleted += int(n)
 	}
 	if res, err = tx.ExecContext(ctx, markSQL, p.RepoID, p.Name, at.at(), at.record.Actor,
 		p.Reason, at.record.OpID, at.packed); err != nil {
-		return 0, fmt.Errorf("code: mark %s purged at %s: %w", p.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: mark %s purged at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ = res.RowsAffected()
 	return deleted + int(n), nil

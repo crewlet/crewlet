@@ -93,7 +93,7 @@ func writeLandings(ctx context.Context, tx store.Execer, at applyContext, repoID
 				l.commit, l.enqueuedBy, l.by, at.at()}
 		})
 	if err != nil {
-		return 0, fmt.Errorf("code: write %d landings at %s: %w", len(landings), at.position, err)
+		return 0, fmt.Errorf("gitlet: write %d landings at %s: %w", len(landings), at.position, err)
 	}
 	rows := len(landings)
 	owed := map[string]bool{}
@@ -103,7 +103,7 @@ func writeLandings(ctx context.Context, tx store.Execer, at applyContext, repoID
 		}
 		owed[l.target] = true
 		if _, err := tx.ExecContext(ctx, oweTipSQL, repoID, l.target); err != nil {
-			return 0, fmt.Errorf("code: owe %s's tip work at %s: %w", l.target, at.position, err)
+			return 0, fmt.Errorf("gitlet: owe %s's tip work at %s: %w", l.target, at.position, err)
 		}
 		rows++
 	}
@@ -122,12 +122,12 @@ func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID,
 	error) {
 
 	if _, err := tx.ExecContext(ctx, advanceGreenSQL, repoID, target, commit, at.packed, at.at()); err != nil {
-		return 0, fmt.Errorf("code: move %s's green row on %s to %s at %s: %w", target, repoID, short(commit),
+		return 0, fmt.Errorf("gitlet: move %s's green row on %s to %s at %s: %w", target, repoID, short(commit),
 			at.position, err)
 	}
 	res, err := tx.ExecContext(ctx, tipPaidSQL, repoID, target)
 	if err != nil {
-		return 0, fmt.Errorf("code: clear %s's tip work at %s: %w", target, at.position, err)
+		return 0, fmt.Errorf("gitlet: clear %s's tip work at %s: %w", target, at.position, err)
 	}
 	cleared, _ := res.RowsAffected()
 	return 1 + int(cleared), nil
@@ -141,7 +141,7 @@ func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID,
 func settleTipWork(ctx context.Context, tx store.Execer, repoID, target string, above int64) (int, error) {
 	res, err := tx.ExecContext(ctx, settleTipSQL, repoID, target, above)
 	if err != nil {
-		return 0, fmt.Errorf("code: settle %s's tip work: %w", target, err)
+		return 0, fmt.Errorf("gitlet: settle %s's tip work: %w", target, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -188,7 +188,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	}
 	refs, err := refsNamed(ctx, tx, m.RepoID, named)
 	if err != nil {
-		return 0, fmt.Errorf("code: read the refs the merge at %s moves: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: read the refs the merge at %s moves: %w", at.position, err)
 	}
 	switch {
 	case refTip(refs, m.TargetRef) != m.BaseOID:
@@ -204,7 +204,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	// never merged by a record whose push the history skips.
 	landed, err := pushesApplied(ctx, tx, []string{m.MergeID})
 	if err != nil {
-		return 0, fmt.Errorf("code: read whether the merge at %s landed its push: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: read whether the merge at %s landed its push: %w", at.position, err)
 	}
 	if landed[m.MergeID] {
 		return mergeNotApplied(ctx, at, m, "its push "+m.MergeID+" is in the repository's history already")
@@ -223,7 +223,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	}
 	next.version, next.position, next.updatedAt = row.version+1, at.packed, at.at()
 	if err = writeChanges(ctx, tx, at.maxVariables, changeMerged, []*changeRow{&next}); err != nil {
-		return 0, fmt.Errorf("code: merge change %s at %s: %w", m.ChangeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: merge change %s at %s: %w", m.ChangeID, at.position, err)
 	}
 	rows := 1
 

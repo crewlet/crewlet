@@ -63,13 +63,13 @@ func (a *Applier) applyEnqueue(ctx context.Context, tx *sql.Tx, at applyContext,
 		string(e.Method), e.DeleteSource, e.CloseTask, by, string(kind), operator,
 		string(QueueWaiting), at.at())
 	if err != nil {
-		return 0, fmt.Errorf("code: enqueue change %s at %s: %w", e.ChangeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: enqueue change %s at %s: %w", e.ChangeID, at.position, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return queueNotApplied(ctx, at, e.RepoID, e.EntryID, "an entry already holds its id")
 	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, e.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", e.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", e.RepoID, at.position, err)
 	}
 	return 2, nil
 }
@@ -89,7 +89,7 @@ func (a *Applier) applyDequeue(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	if _, err := tx.ExecContext(ctx, endEntrySQL, string(QueueDequeued), at.at(), at.packed, string(EndAsked),
 		d.RepoID, d.EntryID); err != nil {
-		return 0, fmt.Errorf("code: dequeue entry %s at %s: %w", d.EntryID, at.position, err)
+		return 0, fmt.Errorf("gitlet: dequeue entry %s at %s: %w", d.EntryID, at.position, err)
 	}
 	rows := 2
 	// AN ENTRY A TRAIN TESTS TAKES THE TRAIN WITH IT: every candidate from
@@ -98,12 +98,12 @@ func (a *Applier) applyDequeue(ctx context.Context, tx *sql.Tx, at applyContext,
 	if entry.State == QueueTesting {
 		abandoned, err := abandonTrainOn(ctx, tx, d.RepoID, entry.TargetRef)
 		if err != nil {
-			return 0, fmt.Errorf("code: abandon %s's train at %s: %w", entry.TargetRef, at.position, err)
+			return 0, fmt.Errorf("gitlet: abandon %s's train at %s: %w", entry.TargetRef, at.position, err)
 		}
 		rows += abandoned
 	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, d.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", d.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", d.RepoID, at.position, err)
 	}
 	return rows, nil
 }
@@ -117,7 +117,7 @@ func endLiveEntryOf(ctx context.Context, tx *sql.Tx, at applyContext, changeID s
 
 	res, err := tx.ExecContext(ctx, endChangeEntrySQL, string(state), at.at(), at.packed, string(reason), changeID)
 	if err != nil {
-		return 0, fmt.Errorf("code: end change %s's queue entry at %s: %w", changeID, at.position, err)
+		return 0, fmt.Errorf("gitlet: end change %s's queue entry at %s: %w", changeID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -137,7 +137,7 @@ func endEntries(ctx context.Context, tx store.Execer, packed, instant int64, cha
 		}
 		if _, err := tx.ExecContext(ctx, endChangesEntriesSQL, string(state), instant, packed, string(reason),
 			string(list)); err != nil {
-			return fmt.Errorf("code: end %d changes' queue entries (%s): %w", len(part), reason, err)
+			return fmt.Errorf("gitlet: end %d changes' queue entries (%s): %w", len(part), reason, err)
 		}
 		return nil
 	})
@@ -157,7 +157,7 @@ func purgeQueues(ctx context.Context, tx *sql.Tx, repoID string, budget int) (in
 		}
 		res, err := tx.ExecContext(ctx, stmt, repoID, budget)
 		if err != nil {
-			return 0, fmt.Errorf("code: purge %s's merge queues: %w", repoID, err)
+			return 0, fmt.Errorf("gitlet: purge %s's merge queues: %w", repoID, err)
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)

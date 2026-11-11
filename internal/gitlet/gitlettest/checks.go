@@ -113,4 +113,4 @@ func NothingButSyncWritesACache(t *testing.T, newFleet NewFleet) error {
 }
 
 // errInjected is what an armed fault answers a step with.
-var errInjected = errors.New("codetest: an injected failure")
+var errInjected = errors.New("gitlettest: an injected failure")

@@ -349,7 +349,7 @@ func AtOnce(reads ...func() error) error {
 // ErrMisplaced is a re-anchoring's answer that placed another set than the
 // anchors asked ([PlaceAnchors]): no Gitlet node of this build gives one, so the
 // caller treats it as its own fault rather than a finding with no place.
-var ErrMisplaced = errors.New("code: a re-anchoring's answer is not the anchors asked")
+var ErrMisplaced = errors.New("gitlet: a re-anchoring's answer is not the anchors asked")
 
 // PlaceAnchors writes into placed where a re-anchoring's answer put each
 // anchor asked placed, refusing an answer that placed any other set than the

@@ -25,11 +25,11 @@ func (a *Applier) applyMarks(ctx context.Context, tx *sql.Tx, at applyContext) (
 	}
 	p, ok := payload.(PersonMarks)
 	if !ok || at.record.Op != OpMarks {
-		return 0, fmt.Errorf("code: %s is not an op this build applies to a person's code inbox (the record at %s)",
+		return 0, fmt.Errorf("gitlet: %s is not an op this build applies to a person's code inbox (the record at %s)",
 			at.record.Op, at.position)
 	}
 	if p.Handle != at.record.Subject.ID {
-		return 0, fmt.Errorf("code: the record at %s is on person.%s and its payload names %s — a record on one "+
+		return 0, fmt.Errorf("gitlet: the record at %s is on person.%s and its payload names %s — a record on one "+
 			"person's subject may write only that person's marks", at.position, at.record.Subject.ID, p.Handle)
 	}
 	marks, _, err := marksIn(ctx, tx, p.Handle)
@@ -65,12 +65,12 @@ func writeMarks(ctx context.Context, tx *sql.Tx, handle string, m inbox.Marks[Re
 		{m.PrimaryReasons, len(m.PrimaryReasons) == 0}} {
 		var err error
 		if cols[i], err = list(part.v, part.empty); err != nil {
-			return fmt.Errorf("code: encode %s's code inbox marks: %w", handle, err)
+			return fmt.Errorf("gitlet: encode %s's code inbox marks: %w", handle, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, writeMarksSQL, handle, m.Generation, m.SeenThrough.Stream,
 		int64(m.SeenThrough.Packed()), cols[0], cols[1], cols[2], cols[3], position); err != nil {
-		return fmt.Errorf("code: write %s's code inbox marks: %w", handle, err)
+		return fmt.Errorf("gitlet: write %s's code inbox marks: %w", handle, err)
 	}
 	return nil
 }

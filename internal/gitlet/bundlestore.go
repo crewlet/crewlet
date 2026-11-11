@@ -62,22 +62,22 @@ type Putter interface {
 func OpenIdx(path string) (count int64, f *os.File, err error) {
 	f, err = os.Open(path)
 	if err != nil {
-		return 0, nil, fmt.Errorf("code: open the pack index %s: %w", path, err)
+		return 0, nil, fmt.Errorf("gitlet: open the pack index %s: %w", path, err)
 	}
 	var head [indexHeaderBytes + fanoutBytes]byte
 	if _, err = io.ReadFull(f, head[:]); err != nil {
 		_ = f.Close()
-		return 0, nil, fmt.Errorf("code: read the pack index %s's header: %w", path, err)
+		return 0, nil, fmt.Errorf("gitlet: read the pack index %s's header: %w", path, err)
 	}
 	if !bytes.Equal(head[:len(indexMagic)], indexMagic) ||
 		binary.BigEndian.Uint32(head[len(indexMagic):indexHeaderBytes]) != 2 {
 		_ = f.Close()
-		return 0, nil, fmt.Errorf("code: %s is not a version-2 pack index", path)
+		return 0, nil, fmt.Errorf("gitlet: %s is not a version-2 pack index", path)
 	}
 	n := binary.BigEndian.Uint32(head[len(head)-4:])
 	if n > 1<<31 {
 		_ = f.Close()
-		return 0, nil, fmt.Errorf("code: the pack index %s counts %d objects, past 1<<31", path, n)
+		return 0, nil, fmt.Errorf("gitlet: the pack index %s counts %d objects, past 1<<31", path, n)
 	}
 	return int64(n), f, nil
 }
@@ -95,7 +95,7 @@ func LayBundle(packID, packPath, checksum string) (*PackRef, error) {
 	for i, ext := range bundleSections {
 		info, err := os.Stat(base + ext)
 		if err != nil {
-			return nil, fmt.Errorf("code: the bundle's %s: %w", ext, err)
+			return nil, fmt.Errorf("gitlet: the bundle's %s: %w", ext, err)
 		}
 		sizes[i] = info.Size()
 	}

@@ -47,7 +47,7 @@ const (
 // attemptOf is an attempt of def in the repository repo on a runner keeping
 // its logs through logs, as far as an ending's reads need one.
 func attemptOf(def gitlet.CheckDef, repo string, logs Uploader) *attempt {
-	return &attempt{r: &Runner{o: Options{Logs: logs}, log: logging.Get("code.checkrun")},
+	return &attempt{r: &Runner{o: Options{Logs: logs}, log: logging.Get("gitlet.checkrun")},
 		c: gitlet.RunnableCheck{Repo: repo, Def: &def}}
 }
 

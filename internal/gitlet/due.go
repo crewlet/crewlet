@@ -38,7 +38,7 @@ import (
 // at the instant its answer is due: its asker's deadline less [ReplyMargin]
 // ([AnswerBy]). A context ended by anything else — its caller gone, an earlier
 // deadline of its own — carries that end's cause instead.
-var ErrAnswerDue = errors.New("code: the read's answer is due")
+var ErrAnswerDue = errors.New("gitlet: the read's answer is due")
 
 // AnswerBy is ctx for serving a git read whose asker waits until deadline: it
 // ends [ReplyMargin] before deadline, its cause [ErrAnswerDue], so the read

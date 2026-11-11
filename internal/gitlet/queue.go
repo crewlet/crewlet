@@ -892,7 +892,7 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 		// THE CALLER'S BUG: the committer hands a write the chart judges on
 		// to the repository's next committer before deciding it with no
 		// chart.
-		return queueDecision{}, fmt.Errorf("code: a queue write the chart judges on %s reached the decide with "+
+		return queueDecision{}, fmt.Errorf("gitlet: a queue write the chart judges on %s reached the decide with "+
 			"no chart to judge it by — the committer hands such a write to the repository's next committer",
 			repoID)
 	}
@@ -1199,7 +1199,7 @@ func (c *Committer) queueAnswer(ctx context.Context, p QueueProposal, last queue
 			return QueueResult{EntryID: p.EntryID(), Refusal: last.refusal, Detail: last.detail,
 				Unmet: last.unmet, Refused: last.refused}, nil
 		}
-		return QueueResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no record, "+
+		return QueueResult{}, fmt.Errorf("gitlet: the publish of operation %s answered applied with no record, "+
 			"and its decide refused nothing", p.OpID)
 	case statelog.OutcomePending:
 		return QueueResult{Outcome: statelog.OutcomePending, EntryID: p.EntryID(), Position: res.Position}, nil
@@ -1232,7 +1232,7 @@ func (c *Committer) appliedQueue(ctx context.Context, p QueueProposal, at statel
 		}
 		return err
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of operation %s applied at %s and its entry's row could not be "+
+		failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and its entry's row could not be "+
 			"read: %w", p.OpID, at, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindQueue, "repo", p.RepoID(), "op_id", p.OpID,
 			"error", failed)
@@ -1279,7 +1279,7 @@ func (c *Committer) refusedQueue(ctx context.Context, p QueueProposal, err error
 	}
 	c.log.WarnContext(ctx, "code_commit_failed", "kind", kindQueue, "repo", p.RepoID(), "op_id", p.OpID,
 		"error", err)
-	return QueueResult{}, fmt.Errorf("code: queue operation %s: %w", p.OpID, err)
+	return QueueResult{}, fmt.Errorf("gitlet: queue operation %s: %w", p.OpID, err)
 }
 
 // queueEntry is one code_queue row as a decide, an answer and a read take it.
@@ -1320,7 +1320,7 @@ func entryIn(ctx context.Context, tx *sql.Tx, repoID, entryID string) (queueEntr
 	case errors.Is(err, sql.ErrNoRows):
 		return queueEntry{}, false, nil
 	case err != nil:
-		return queueEntry{}, false, fmt.Errorf("code: read entry %s of %s's queue: %w", entryID, repoID, err)
+		return queueEntry{}, false, fmt.Errorf("gitlet: read entry %s of %s's queue: %w", entryID, repoID, err)
 	}
 	return e, true, nil
 }
@@ -1352,13 +1352,13 @@ func liveEntriesOf(ctx context.Context, tx *sql.Tx, ids []string) (map[string]qu
 	}
 	rows, err := tx.QueryContext(ctx, liveEntriesSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %d changes' queue entries: %w", len(ids), err)
+		return nil, fmt.Errorf("gitlet: read %d changes' queue entries: %w", len(ids), err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		e, err := scanEntry(rows.Scan)
 		if err != nil {
-			return nil, fmt.Errorf("code: read %d changes' queue entries: %w", len(ids), err)
+			return nil, fmt.Errorf("gitlet: read %d changes' queue entries: %w", len(ids), err)
 		}
 		out[e.ChangeID] = e
 	}
@@ -1371,7 +1371,7 @@ func liveEntriesOf(ctx context.Context, tx *sql.Tx, ids []string) (map[string]qu
 func waitingIn(ctx context.Context, tx *sql.Tx, repoID, target string, capacity int) (int, error) {
 	var n int
 	if err := tx.QueryRowContext(ctx, waitingSQL, repoID, target, capacity).Scan(&n); err != nil {
-		return 0, fmt.Errorf("code: count %s's waiting entries on %s: %w", target, repoID, err)
+		return 0, fmt.Errorf("gitlet: count %s's waiting entries on %s: %w", target, repoID, err)
 	}
 	return n, nil
 }
@@ -1382,7 +1382,7 @@ func waitingIn(ctx context.Context, tx *sql.Tx, repoID, target string, capacity 
 func placeIn(ctx context.Context, tx *sql.Tx, e queueEntry) (int, error) {
 	var before int
 	if err := tx.QueryRowContext(ctx, placeSQL, e.RepoID, e.TargetRef, e.Seq).Scan(&before); err != nil {
-		return 0, fmt.Errorf("code: read entry %s's place in %s's queue: %w", e.EntryID, e.TargetRef, err)
+		return 0, fmt.Errorf("gitlet: read entry %s's place in %s's queue: %w", e.EntryID, e.TargetRef, err)
 	}
 	return before + 1, nil
 }
@@ -1417,7 +1417,7 @@ func placesIn(ctx context.Context, tx *sql.Tx, entries []queueEntry) (map[string
 			}
 			at, found := slices.BinarySearch(seqs, e.Seq)
 			if !found {
-				return nil, fmt.Errorf("code: entry %s is live in %s's queue and not among the live entries "+
+				return nil, fmt.Errorf("gitlet: entry %s is live in %s's queue and not among the live entries "+
 					"the same snapshot holds there", e.EntryID, e.TargetRef)
 			}
 			places[e.EntryID] = at + 1
@@ -1432,14 +1432,14 @@ func placesIn(ctx context.Context, tx *sql.Tx, entries []queueEntry) (map[string
 func liveSeqsIn(ctx context.Context, tx *sql.Tx, repoID, target string, through int64) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, liveSeqsSQL, repoID, target, through)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's live queue entries on %s: %w", target, repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's live queue entries on %s: %w", target, repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var seqs []int64
 	for rows.Next() {
 		var seq int64
 		if err := rows.Scan(&seq); err != nil {
-			return nil, fmt.Errorf("code: read %s's live queue entries on %s: %w", target, repoID, err)
+			return nil, fmt.Errorf("gitlet: read %s's live queue entries on %s: %w", target, repoID, err)
 		}
 		seqs = append(seqs, seq)
 	}

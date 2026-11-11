@@ -834,7 +834,7 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 	}
 	encoded, err := json.Marshal(pairs)
 	if err != nil {
-		return nil, fmt.Errorf("code: encode %d revisions' keys: %w", len(pairs), err)
+		return nil, fmt.Errorf("gitlet: encode %d revisions' keys: %w", len(pairs), err)
 	}
 	if err = readinessEach(ctx, tx, "facts", readinessFactsSQL, []any{string(encoded)}, at,
 		func(scan func(...any) (int, error)) (err error) {
@@ -894,7 +894,7 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		bounds[k] = [2]any{id, cut}
 	}
 	if encoded, err = json.Marshal(bounds); err != nil {
-		return nil, fmt.Errorf("code: encode %d changes' blockers' bounds: %w", len(bounds), err)
+		return nil, fmt.Errorf("gitlet: encode %d changes' blockers' bounds: %w", len(bounds), err)
 	}
 	raised := map[string]int64{}
 	if err := readinessEach(ctx, tx, "standing blockers", standingBlockersSQL, []any{string(encoded)}, at,
@@ -953,7 +953,7 @@ func readinessEach(ctx context.Context, tx queryer, what, query string, args []a
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("code: read the %s a readiness judges: %w", what, err)
+		return fmt.Errorf("gitlet: read the %s a readiness judges: %w", what, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -968,7 +968,7 @@ func readinessEach(ctx context.Context, tx queryer, what, query string, args []a
 			}
 			return i, nil
 		}); err != nil {
-			return fmt.Errorf("code: read the %s a readiness judges: %w", what, err)
+			return fmt.Errorf("gitlet: read the %s a readiness judges: %w", what, err)
 		}
 	}
 	return rows.Err()

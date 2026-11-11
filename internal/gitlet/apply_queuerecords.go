@@ -81,7 +81,7 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 	rows, err := abandonTrainOn(ctx, tx, c.RepoID, c.TargetRef)
 	if err != nil {
-		return 0, fmt.Errorf("code: abandon %s's train at %s: %w", c.TargetRef, at.position, err)
+		return 0, fmt.Errorf("gitlet: abandon %s's train at %s: %w", c.TargetRef, at.position, err)
 	}
 	base := c.BaseOID
 	bases := make([]string, len(c.Candidates))
@@ -96,7 +96,7 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 		}
 	}
 	if err = writeEntries(ctx, tx, at.maxVariables, entryTested, tested); err != nil {
-		return 0, fmt.Errorf("code: test train %s's entries at %s: %w", c.Train, at.position, err)
+		return 0, fmt.Errorf("gitlet: test train %s's entries at %s: %w", c.Train, at.position, err)
 	}
 	rows += len(tested)
 	encoded := make([]string, len(c.Candidates))
@@ -120,7 +120,7 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 			return []any{c.RepoID, cand.CandidateID, c.TargetRef, c.Train, cand.Ordinal, bases[i], cand.TipOID,
 				packID, candidateTesting, at.packed, encoded[i]}
 		}); err != nil {
-		return 0, fmt.Errorf("code: write train %s at %s: %w", c.Train, at.position, err)
+		return 0, fmt.Errorf("gitlet: write train %s at %s: %w", c.Train, at.position, err)
 	}
 	rows += len(c.Candidates)
 	added, err := addQueuePack(ctx, tx, at, c.RepoID, c.Pack, PackCandidate)
@@ -173,19 +173,19 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 		ejected[i] = entryRow{queueEntry: next, ejected: detail}
 	}
 	if err = writeEntries(ctx, tx, at.maxVariables, entryEjected, ejected); err != nil {
-		return 0, fmt.Errorf("code: eject %d entries at %s: %w", len(ejected), at.position, err)
+		return 0, fmt.Errorf("gitlet: eject %d entries at %s: %w", len(ejected), at.position, err)
 	}
 	rows := len(ejected)
 	if testing {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		abandoned, err := abandonTrainOn(ctx, tx, e.RepoID, target)
 		if err != nil {
-			return 0, fmt.Errorf("code: abandon %s's train at %s: %w", target, at.position, err)
+			return 0, fmt.Errorf("gitlet: abandon %s's train at %s: %w", target, at.position, err)
 		}
 		rows += abandoned
 	}
 	if _, err = tx.ExecContext(ctx, touchedSQL, at.packed, e.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", e.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", e.RepoID, at.position, err)
 	}
 	swept, err := sweepQueueHistory(ctx, tx, e.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)),
 		queueHorizonRows, queueHorizonBytes)
@@ -260,7 +260,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	// ITS PUSHES LAND WHOLE WITH IT OR NOT AT ALL, as a merge's does.
 	landed, err := pushesApplied(ctx, tx, []string{pushes[0].PushID})
 	if err != nil {
-		return 0, fmt.Errorf("code: read whether the landing at %s landed its pushes: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: read whether the landing at %s landed its pushes: %w", at.position, err)
 	}
 	if landed[pushes[0].PushID] {
 		return queueNotApplied(ctx, at, l.RepoID, "", "its push "+pushes[0].PushID+" is in the repository's "+
@@ -283,7 +283,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		merged[i] = &next
 	}
 	if err = writeChanges(ctx, tx, at.maxVariables, changeMerged, merged); err != nil {
-		return 0, fmt.Errorf("code: merge the changes the landing at %s lands: %w", at.position, err)
+		return 0, fmt.Errorf("gitlet: merge the changes the landing at %s lands: %w", at.position, err)
 	}
 	rows := len(merged)
 	// AND THEIR STORED READINESS CLEARED, one statement for them all: a
@@ -307,12 +307,12 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		ended[i] = entryRow{queueEntry: next, closeOp: closeOpOf(at, next, changes[i])}
 	}
 	if err = writeEntries(ctx, tx, at.maxVariables, entryLanded, ended); err != nil {
-		return 0, fmt.Errorf("code: land %d entries at %s: %w", len(ended), at.position, err)
+		return 0, fmt.Errorf("gitlet: land %d entries at %s: %w", len(ended), at.position, err)
 	}
 	rows += len(ended)
 	dropped, err := dropLandedCandidates(ctx, tx, l)
 	if err != nil {
-		return 0, fmt.Errorf("code: remove train %s's landed candidates at %s: %w", l.Train, at.position, err)
+		return 0, fmt.Errorf("gitlet: remove train %s's landed candidates at %s: %w", l.Train, at.position, err)
 	}
 	rows += dropped
 
@@ -405,10 +405,10 @@ func (a *Applier) applyCloseSettled(ctx context.Context, tx *sql.Tx, at applyCon
 		return 0, err
 	}
 	if _, err = tx.ExecContext(ctx, settleClosesSQL, list, c.RepoID); err != nil {
-		return 0, fmt.Errorf("code: settle %d entries' closes at %s: %w", len(settling), at.position, err)
+		return 0, fmt.Errorf("gitlet: settle %d entries' closes at %s: %w", len(settling), at.position, err)
 	}
 	if _, err = tx.ExecContext(ctx, touchedSQL, at.packed, c.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", c.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", c.RepoID, at.position, err)
 	}
 	return closeSettledRows(len(settling)), nil
 }
@@ -449,7 +449,7 @@ func (a *Applier) applyGreen(ctx context.Context, tx *sql.Tx, at applyContext, g
 		return 0, fmt.Errorf("%w (the green at %s)", err, at.position)
 	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, g.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", g.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", g.RepoID, at.position, err)
 	}
 	return 2 + settled, nil
 }
@@ -469,7 +469,7 @@ func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, 
 	}
 	if _, err = tx.ExecContext(ctx, brokenLandingSQL, b.RepoID, b.TargetRef, b.Position.Packed(),
 		b.Ordinal); err != nil {
-		return 0, fmt.Errorf("code: mark %s's landing at %s broken at %s: %w", b.TargetRef, b.Position,
+		return 0, fmt.Errorf("gitlet: mark %s's landing at %s broken at %s: %w", b.TargetRef, b.Position,
 			at.position, err)
 	}
 	green, held, err := greenIn(ctx, tx, b.RepoID, b.TargetRef)
@@ -485,7 +485,7 @@ func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, 
 		return 0, fmt.Errorf("%w (the broken at %s)", err, at.position)
 	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, b.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", b.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", b.RepoID, at.position, err)
 	}
 	return 2 + settled, nil
 }
@@ -501,7 +501,7 @@ func (a *Applier) applyQueueSweep(ctx context.Context, tx *sql.Tx, at applyConte
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, s.RepoID); err != nil {
-		return 0, fmt.Errorf("code: move %s's version at %s: %w", s.RepoID, at.position, err)
+		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", s.RepoID, at.position, err)
 	}
 	return swept + 1, nil
 }
@@ -553,7 +553,7 @@ func addQueuePack(ctx context.Context, tx *sql.Tx, at applyContext, repoID strin
 
 	if pack == nil {
 		if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, repoID); err != nil {
-			return 0, fmt.Errorf("code: move %s's version at %s: %w", repoID, at.position, err)
+			return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", repoID, at.position, err)
 		}
 		return 1, nil
 	}
@@ -564,12 +564,12 @@ func addQueuePack(ctx context.Context, tx *sql.Tx, at applyContext, repoID strin
 		pack.Size, pack.IndexBytes, pack.ReverseBytes, pack.GitChecksum, pack.Objects, string(kind), at.packed,
 		at.packed, at.at())
 	if err != nil {
-		return 0, fmt.Errorf("code: write pack %s at %s: %w", pack.PackID, at.position, err)
+		return 0, fmt.Errorf("gitlet: write pack %s at %s: %w", pack.PackID, at.position, err)
 	}
 	added, _ := res.RowsAffected()
 	if _, err := tx.ExecContext(ctx, queuePackCountersSQL, added, added*pack.Size, added*pack.Objects, at.packed,
 		repoID); err != nil {
-		return 0, fmt.Errorf("code: count pack %s at %s: %w", pack.PackID, at.position, err)
+		return 0, fmt.Errorf("gitlet: count pack %s at %s: %w", pack.PackID, at.position, err)
 	}
 	return 2, nil
 }
@@ -591,7 +591,7 @@ func sweepQueueHistory(ctx context.Context, tx *sql.Tx, repoID string, cutoff in
 	if cut.entries > 0 {
 		res, err := tx.ExecContext(ctx, sweepEndedSQL, repoID, cut.endedAt, cut.endedAt, cut.entryID)
 		if err != nil {
-			return 0, fmt.Errorf("code: remove %s's ended queue entries: %w", repoID, err)
+			return 0, fmt.Errorf("gitlet: remove %s's ended queue entries: %w", repoID, err)
 		}
 		n, _ := res.RowsAffected()
 		removed += int(n)
@@ -599,7 +599,7 @@ func sweepQueueHistory(ctx context.Context, tx *sql.Tx, repoID string, cutoff in
 	for _, l := range cut.landings {
 		res, err := tx.ExecContext(ctx, sweepLandingsSQL, repoID, l.target, l.position, l.position, l.ordinal)
 		if err != nil {
-			return 0, fmt.Errorf("code: remove %s's landings on %s: %w", repoID, l.target, err)
+			return 0, fmt.Errorf("gitlet: remove %s's landings on %s: %w", repoID, l.target, err)
 		}
 		n, _ := res.RowsAffected()
 		removed += int(n)
@@ -684,7 +684,7 @@ func queueHistoryIn(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64
 		}
 		rows, err := tx.QueryContext(ctx, landingsBelowSQL, repoID, g.TargetRef, g.Position.Packed(), left+1)
 		if err != nil {
-			return historyCut{}, false, fmt.Errorf("code: read %s's landings below its green: %w", g.TargetRef, err)
+			return historyCut{}, false, fmt.Errorf("gitlet: read %s's landings below its green: %w", g.TargetRef, err)
 		}
 		l := landingCut{target: g.TargetRef}
 		for rows.Next() {
@@ -694,7 +694,7 @@ func queueHistoryIn(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64
 			)
 			if err := rows.Scan(&position, &ordinal, &instant); err != nil {
 				_ = rows.Close()
-				return historyCut{}, false, fmt.Errorf("code: read %s's landings below its green: %w",
+				return historyCut{}, false, fmt.Errorf("gitlet: read %s's landings below its green: %w",
 					g.TargetRef, err)
 			}
 			if instant >= cutoff {
@@ -731,7 +731,7 @@ func endedWithin(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, b
 
 	rows, err := tx.QueryContext(ctx, endedWithinSQL, repoID, cutoff, budget+1)
 	if err != nil {
-		return false, fmt.Errorf("code: read %s's ended queue entries: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: read %s's ended queue entries: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -740,13 +740,13 @@ func endedWithin(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, b
 		}
 		var weighs int64
 		if err := rows.Scan(&cut.endedAt, &cut.entryID, &weighs); err != nil {
-			return false, fmt.Errorf("code: read %s's ended queue entries: %w", repoID, err)
+			return false, fmt.Errorf("gitlet: read %s's ended queue entries: %w", repoID, err)
 		}
 		cut.entries++
 		cut.weighed += weighs
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("code: read %s's ended queue entries: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: read %s's ended queue entries: %w", repoID, err)
 	}
 	return false, nil
 }
@@ -755,7 +755,7 @@ func endedWithin(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, b
 func greenRowsIn(ctx context.Context, tx *sql.Tx, repoID string) ([]GreenRow, error) {
 	rows, err := tx.QueryContext(ctx, greensSQL, repoID)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %s's green rows: %w", repoID, err)
+		return nil, fmt.Errorf("gitlet: read %s's green rows: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []GreenRow
@@ -765,7 +765,7 @@ func greenRowsIn(ctx context.Context, tx *sql.Tx, repoID string) ([]GreenRow, er
 			packed, t int64
 		)
 		if err := rows.Scan(&g.TargetRef, &g.CommitOID, &packed, &t); err != nil {
-			return nil, fmt.Errorf("code: read %s's green rows: %w", repoID, err)
+			return nil, fmt.Errorf("gitlet: read %s's green rows: %w", repoID, err)
 		}
 		g.Position, g.At = unpacked(packed), store.DecodeTime(t)
 		out = append(out, g)
@@ -780,7 +780,7 @@ func moveGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, ta
 	position int64) error {
 
 	if _, err := tx.ExecContext(ctx, advanceGreenSQL, repoID, target, commit, position, at.at()); err != nil {
-		return fmt.Errorf("code: move %s's green row on %s to %s at %s: %w", target, repoID, short(commit),
+		return fmt.Errorf("gitlet: move %s's green row on %s to %s at %s: %w", target, repoID, short(commit),
 			at.position, err)
 	}
 	return nil

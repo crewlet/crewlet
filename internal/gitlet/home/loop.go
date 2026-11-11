@@ -297,7 +297,7 @@ func New(o Options) (*Loop, error) {
 		pending: map[turnKey]statelog.Position{}, busy: map[turnKey]bool{}, again: map[turnKey]statelog.Position{},
 		ready: make(chan struct{}, 1), kick: make(chan struct{}, 1)}
 	if l.log == nil {
-		l.log = logging.Get("code.home")
+		l.log = logging.Get("gitlet.home")
 	}
 	if l.now == nil {
 		l.now = time.Now

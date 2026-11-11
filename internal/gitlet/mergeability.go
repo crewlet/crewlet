@@ -161,7 +161,7 @@ func ConflictsCost(paths []string) int {
 	if err != nil {
 		// A list of strings always encodes; reaching here is a broken
 		// encoder, against which no list could be measured.
-		panic(fmt.Sprintf("code: encoding a conflict list: %v", err))
+		panic(fmt.Sprintf("gitlet: encoding a conflict list: %v", err))
 	}
 	return len(out)
 }
@@ -503,11 +503,11 @@ func stampedMergeabilityBytes(m Mergeability) int {
 	}
 	stamped, err := json.Marshal(widest)
 	if err != nil {
-		panic(fmt.Sprintf("code: encoding a mergeability: %v", err))
+		panic(fmt.Sprintf("gitlet: encoding a mergeability: %v", err))
 	}
 	sent, err := json.Marshal(m)
 	if err != nil {
-		panic(fmt.Sprintf("code: encoding a mergeability: %v", err))
+		panic(fmt.Sprintf("gitlet: encoding a mergeability: %v", err))
 	}
 	return len(stamped) - len(sent)
 }
@@ -549,7 +549,7 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 	case errors.Is(err, sql.ErrNoRows):
 		return mergeRow{}, false, nil
 	case err != nil:
-		return mergeRow{}, false, fmt.Errorf("code: read %s's mergeability: %w", changeID, err)
+		return mergeRow{}, false, fmt.Errorf("gitlet: read %s's mergeability: %w", changeID, err)
 	}
 	m.state = MergeState(state)
 	if conflicts != "" {
@@ -743,7 +743,7 @@ func mergeabilityRowIn(ctx context.Context, tx *sql.Tx, changeID string) (*Merge
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
 	case err != nil:
-		return nil, fmt.Errorf("code: read %s's mergeability: %w", changeID, err)
+		return nil, fmt.Errorf("gitlet: read %s's mergeability: %w", changeID, err)
 	}
 	m.State, m.TargetPosition, m.Position, m.At = MergeState(state), unpacked(targetPosition), unpacked(position),
 		store.DecodeTime(t)
@@ -836,7 +836,7 @@ type MergePreviewAnswer struct {
 func headChecksPositionIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) (int64, error) {
 	var at int64
 	if err := tx.QueryRowContext(ctx, headChecksPositionSQL, repoID, oid, target).Scan(&at); err != nil {
-		return 0, fmt.Errorf("code: read the position of %s's checks for %s: %w", oid, target, err)
+		return 0, fmt.Errorf("gitlet: read the position of %s's checks for %s: %w", oid, target, err)
 	}
 	return at, nil
 }

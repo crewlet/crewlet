@@ -68,7 +68,7 @@ func (r *Retention) expire(ctx context.Context, now time.Time, pace *pacer, repo
 	for {
 		page, err := r.Reader.idleSeatRefs(ctx, q)
 		if err != nil {
-			return false, fmt.Errorf("code: list the seat branches idle since %s: %w",
+			return false, fmt.Errorf("gitlet: list the seat branches idle since %s: %w",
 				q.cutoff.UTC().Format(time.RFC3339), err)
 		}
 		if len(page.refs) == 0 {
@@ -242,7 +242,7 @@ func expiryCut(p Proposal, cmds []Command) (int, error) {
 	case failed != nil:
 		return 0, failed
 	case n == 0:
-		return 0, fmt.Errorf("code: one deletion of %s alone is wider than one push's record may be",
+		return 0, fmt.Errorf("gitlet: one deletion of %s alone is wider than one push's record may be",
 			cmds[0].Ref)
 	}
 	return n, nil

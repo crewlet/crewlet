@@ -105,15 +105,15 @@ func (Domain) EvictionSubject(node string) statelog.Subject {
 func (Domain) Evicts(payload []byte) (bool, error) {
 	record, err := Decode(payload)
 	if err != nil {
-		return false, fmt.Errorf("code: decode a record from an eviction subject: %w", err)
+		return false, fmt.Errorf("gitlet: decode a record from an eviction subject: %w", err)
 	}
 	mutation, err := DecodeMutation(record)
 	if err != nil {
-		return false, fmt.Errorf("code: decode the eviction: %w", err)
+		return false, fmt.Errorf("gitlet: decode the eviction: %w", err)
 	}
 	eviction, ok := mutation.(Eviction)
 	if !ok {
-		return false, fmt.Errorf("code: the record on an eviction subject carries a %T", mutation)
+		return false, fmt.Errorf("gitlet: the record on an eviction subject carries a %T", mutation)
 	}
 	return !eviction.Readmitted, nil
 }
@@ -211,7 +211,7 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("code: read the evictions on this log: %w", err)
+		return nil, fmt.Errorf("gitlet: read the evictions on this log: %w", err)
 	}
 	return out, nil
 }

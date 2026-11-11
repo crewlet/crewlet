@@ -1389,7 +1389,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 				}
 				var held int
 				if err := tx.QueryRowContext(ctx, scratchCountSQL, settings.Owner.Ref).Scan(&held); err != nil {
-					return statelog.Decision{}, fmt.Errorf("code: count seat %s's scratch repositories: %w",
+					return statelog.Decision{}, fmt.Errorf("gitlet: count seat %s's scratch repositories: %w",
 						settings.Owner.Ref, err)
 				}
 				if held >= policy.ScratchMaxPerSeat {
@@ -1405,7 +1405,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 				case errors.Is(err, sql.ErrNoRows):
 					// No project counted in yet.
 				case err != nil:
-					return statelog.Decision{}, fmt.Errorf("code: count the project repositories: %w", err)
+					return statelog.Decision{}, fmt.Errorf("gitlet: count the project repositories: %w", err)
 				}
 				if held >= policy.MaxRepos {
 					d.refuse(LifecycleRepoLimit, "Gitlet holds %d project repositories, the most "+
@@ -1838,7 +1838,7 @@ func decideHold(ctx context.Context, tx *sql.Tx, req LifecycleRequest, v RepoRef
 			"push, or by the ref lifecycle once nobody had set it for %s", req.Ref, v.Name, expiryWindow)
 		return nil, "", nil
 	case err != nil:
-		return nil, "", fmt.Errorf("code: read %s of %s for a hold: %w", req.Ref, v.Name, err)
+		return nil, "", fmt.Errorf("gitlet: read %s of %s for a hold: %w", req.Ref, v.Name, err)
 	case seat == "":
 		return nil, "", nil
 	}
@@ -2098,10 +2098,10 @@ func (s *Store) lifecycleRefused(err error, req LifecycleRequest, id string) (Li
 	case errors.As(err, &refusal) && nodeRefusals[refusal.Reason] && !refusal.Landed():
 		return LifecycleResult{}, fmt.Errorf("%w: %w", ErrNotServing, refusal)
 	case errors.Is(err, statelog.ErrConflict):
-		return LifecycleResult{}, fmt.Errorf("code: the %s of %s kept changing under every round the "+
+		return LifecycleResult{}, fmt.Errorf("gitlet: the %s of %s kept changing under every round the "+
 			"request may take; make the same request again: %w", req.Kind, cmpOr(req.Name, id), err)
 	}
-	return LifecycleResult{}, fmt.Errorf("code: the %s of %s: %w", req.Kind, cmpOr(req.Name, id), err)
+	return LifecycleResult{}, fmt.Errorf("gitlet: the %s of %s: %w", req.Kind, cmpOr(req.Name, id), err)
 }
 
 // cmpOr is the first of two names that is not empty.
@@ -2140,7 +2140,7 @@ func (s *Store) readRepo(ctx context.Context, id, pattern string) (RepoRef, *Pro
 		return err
 	})
 	if err != nil {
-		return RepoRef{}, nil, fmt.Errorf("code: read back repository %s: %w", id, err)
+		return RepoRef{}, nil, fmt.Errorf("gitlet: read back repository %s: %w", id, err)
 	}
 	return out, rule, nil
 }
@@ -2155,7 +2155,7 @@ func claimRowIn(ctx context.Context, tx *sql.Tx, token string) (holder string, r
 	case errors.Is(err, sql.ErrNoRows):
 		return "", sql.NullInt64{}, false, nil
 	case err != nil:
-		return "", sql.NullInt64{}, false, fmt.Errorf("code: read the claim %s: %w", token, err)
+		return "", sql.NullInt64{}, false, fmt.Errorf("gitlet: read the claim %s: %w", token, err)
 	}
 	return holder, redirect, true, nil
 }
@@ -2164,7 +2164,7 @@ func claimRowIn(ctx context.Context, tx *sql.Tx, token string) (holder string, r
 func purgedIn(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
 	var marked int
 	if err := tx.QueryRowContext(ctx, purgedSQL, id).Scan(&marked); err != nil {
-		return false, fmt.Errorf("code: read %s's deletion marker: %w", id, err)
+		return false, fmt.Errorf("gitlet: read %s's deletion marker: %w", id, err)
 	}
 	return marked > 0, nil
 }
@@ -2252,11 +2252,11 @@ func (s *Store) ExpireScratch(ctx context.Context, repoID string, x ScratchExpir
 	})
 	switch {
 	case err != nil:
-		return false, fmt.Errorf("code: expire scratch repository %s: %w", repoID, err)
+		return false, fmt.Errorf("gitlet: expire scratch repository %s: %w", repoID, err)
 	case !wrote:
 		return false, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return false, unknownOutcome(ctx, "code: whether scratch repository %s was expired is unknown "+
+		return false, unknownOutcome(ctx, "gitlet: whether scratch repository %s was expired is unknown "+
 			"(operation %s); the next pass decides it again", repoID, opID)
 	}
 	return true, nil
@@ -2293,11 +2293,11 @@ func (s *Store) ReleaseName(ctx context.Context, name, repoID string) (bool, err
 	})
 	switch {
 	case err != nil:
-		return false, fmt.Errorf("code: release the name %q: %w", name, err)
+		return false, fmt.Errorf("gitlet: release the name %q: %w", name, err)
 	case !wrote:
 		return false, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return false, unknownOutcome(ctx, "code: whether the name %q was released is unknown (operation "+
+		return false, unknownOutcome(ctx, "gitlet: whether the name %q was released is unknown (operation "+
 			"%s); the next pass decides it again", name, opID)
 	}
 	return true, nil

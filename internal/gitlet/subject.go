@@ -277,20 +277,20 @@ func (s Subject) statelog() statelog.Subject {
 // its own subject without being able to act on it.
 func (s Subject) Validate() error {
 	if s.Kind == "" {
-		return fmt.Errorf("code: a subject with no kind addresses the log's " +
+		return fmt.Errorf("gitlet: a subject with no kind addresses the log's " +
 			"own prefix, which is a real subject inside the stream's wildcard " +
 			"that no applier has a case for")
 	}
 	if strings.ContainsAny(string(s.Kind), ". \t\n*>") {
-		return fmt.Errorf("code: subject kind %q carries a separator or a "+
+		return fmt.Errorf("gitlet: subject kind %q carries a separator or a "+
 			"wildcard, so the kind and the id could not be told apart again", s.Kind)
 	}
 	if s.ID == "" && s.Kind != KindBarrier {
-		return fmt.Errorf("code: a %s subject needs an id — only the barrier "+
+		return fmt.Errorf("gitlet: a %s subject needs an id — only the barrier "+
 			"is a kind with exactly one object and no name for it", s.Kind)
 	}
 	if strings.ContainsAny(s.ID, " \t\n*>") {
-		return fmt.Errorf("code: subject id %q carries whitespace or a "+
+		return fmt.Errorf("gitlet: subject id %q carries whitespace or a "+
 			"wildcard, which the broker would read as a subject pattern", s.ID)
 	}
 	return nil

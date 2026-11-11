@@ -296,20 +296,20 @@ func (w changeWalk) readByID(ctx context.Context, tx *sql.Tx, first, after, curs
 	}
 	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
 	if err != nil {
-		return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
+		return nil, fmt.Errorf("gitlet: list the changes %s: %w", what, err)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err = rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
+			return nil, fmt.Errorf("gitlet: list the changes %s: %w", what, err)
 		}
 		ids = append(ids, id)
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()
-		return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
+		return nil, fmt.Errorf("gitlet: list the changes %s: %w", what, err)
 	}
 	_ = rows.Close()
 	if len(ids) == 0 {
@@ -323,7 +323,7 @@ func (w changeWalk) readByID(ctx context.Context, tx *sql.Tx, first, after, curs
 	for _, id := range ids {
 		row, found := byID[id]
 		if !found {
-			return nil, fmt.Errorf("code: the changes %s name change %s, which the rows do not hold", what, id)
+			return nil, fmt.Errorf("gitlet: the changes %s name change %s, which the rows do not hold", what, id)
 		}
 		out = append(out, row)
 	}
@@ -339,14 +339,14 @@ func changesByIDIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]ch
 	}
 	rows, err := tx.QueryContext(ctx, changesByIDSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read %d changes by id: %w", len(ids), err)
+		return nil, fmt.Errorf("gitlet: read %d changes by id: %w", len(ids), err)
 	}
 	defer func() { _ = rows.Close() }()
 	out := make(map[string]changeRow, len(ids))
 	for rows.Next() {
 		row, err := scanChange(rows.Scan)
 		if err != nil {
-			return nil, fmt.Errorf("code: read %d changes by id: %w", len(ids), err)
+			return nil, fmt.Errorf("gitlet: read %d changes by id: %w", len(ids), err)
 		}
 		out[row.id] = row
 	}
@@ -374,19 +374,19 @@ func needingFixIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asked st
 	}
 	rows, err := tx.QueryContext(ctx, needingFixSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read which of %d changes await a fix: %w", len(ids), err)
+		return nil, fmt.Errorf("gitlet: read which of %d changes await a fix: %w", len(ids), err)
 	}
 	if err = eachID(rows, func(id string) { out[id] = true }); err != nil {
-		return nil, fmt.Errorf("code: read which of %d changes await a fix: %w", len(ids), err)
+		return nil, fmt.Errorf("gitlet: read which of %d changes await a fix: %w", len(ids), err)
 	}
 	if asked == "" || len(out) == 0 {
 		return out, nil
 	}
 	if rows, err = tx.QueryContext(ctx, askedAmongSQL, list, asked); err != nil {
-		return nil, fmt.Errorf("code: read which of %d changes ask %s's review: %w", len(ids), asked, err)
+		return nil, fmt.Errorf("gitlet: read which of %d changes ask %s's review: %w", len(ids), asked, err)
 	}
 	if err := eachID(rows, func(id string) { delete(out, id) }); err != nil {
-		return nil, fmt.Errorf("code: read which of %d changes ask %s's review: %w", len(ids), asked, err)
+		return nil, fmt.Errorf("gitlet: read which of %d changes ask %s's review: %w", len(ids), asked, err)
 	}
 	return out, nil
 }
@@ -420,7 +420,7 @@ func conversationRowIn(ctx context.Context, tx *sql.Tx, id string) (*Conversatio
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, 0, nil
 	case err != nil:
-		return nil, 0, fmt.Errorf("code: read change %s's conversation: %w", id, err)
+		return nil, 0, fmt.Errorf("gitlet: read change %s's conversation: %w", id, err)
 	}
 	c.Position = unpacked(position)
 	if spoken > 0 {
@@ -444,7 +444,7 @@ func (r *Reader) changeReviewers(ctx context.Context, tx *sql.Tx, q ReadQuery, n
 	}
 	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
 	if err != nil {
-		return fmt.Errorf("code: read the reviewers of %s: %w", named, err)
+		return fmt.Errorf("gitlet: read the reviewers of %s: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
@@ -456,7 +456,7 @@ func (r *Reader) changeReviewers(ctx context.Context, tx *sql.Tx, q ReadQuery, n
 		)
 		if err := rows.Scan(&rv.Reviewer, &kind, &reason, &state, &rv.RequestedBy, &byKind, &rv.Note,
 			&position); err != nil {
-			return fmt.Errorf("code: read the reviewers of %s: %w", named, err)
+			return fmt.Errorf("gitlet: read the reviewers of %s: %w", named, err)
 		}
 		rv.Kind, rv.Reason, rv.State = PartyKind(kind), ReviewerReason(reason), ReviewerState(state)
 		rv.RequestedByKind, rv.Position = PartyKind(byKind), unpacked(position)
@@ -492,7 +492,7 @@ func (r *Reader) changeComments(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 	}
 	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
 	if err != nil {
-		return fmt.Errorf("code: read the comments of %s: %w", named, err)
+		return fmt.Errorf("gitlet: read the comments of %s: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
@@ -505,14 +505,14 @@ func (r *Reader) changeComments(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 		)
 		if err := rows.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.Author, &kind, &c.AuthorOperatorID, &anchor,
 			&c.Resolved, &c.ResolvedBy, &byKind, &c.TurnID, &position, &at, &c.Body, &c.FindingID); err != nil {
-			return fmt.Errorf("code: read the comments of %s: %w", named, err)
+			return fmt.Errorf("gitlet: read the comments of %s: %w", named, err)
 		}
 		c.AuthorKind, c.ResolvedByKind = PartyKind(kind), PartyKind(byKind)
 		c.Position, c.At = unpacked(position), store.DecodeTime(at)
 		if anchor != "" {
 			c.Anchor = &CommentAnchor{}
 			if err := json.Unmarshal([]byte(anchor), c.Anchor); err != nil {
-				return fmt.Errorf("code: read comment %s of %s: its anchor: %w", c.ID, named, err)
+				return fmt.Errorf("gitlet: read comment %s of %s: its anchor: %w", c.ID, named, err)
 			}
 		}
 		out.Comments = append(out.Comments, c)
@@ -546,7 +546,7 @@ func (r *Reader) changeReviews(ctx context.Context, tx *sql.Tx, q ReadQuery, nam
 	}
 	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
 	if err != nil {
-		return fmt.Errorf("code: read the reviews of %s: %w", named, err)
+		return fmt.Errorf("gitlet: read the reviews of %s: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
@@ -558,7 +558,7 @@ func (r *Reader) changeReviews(ctx context.Context, tx *sql.Tx, q ReadQuery, nam
 		)
 		if err := rows.Scan(&rv.ID, &rv.Revision, &rv.Reviewer, &kind, &rv.OperatorID, &verdict, &rv.Findings,
 			&rv.TurnID, &rv.Model, &position, &at, &rv.Summary); err != nil {
-			return fmt.Errorf("code: read the reviews of %s: %w", named, err)
+			return fmt.Errorf("gitlet: read the reviews of %s: %w", named, err)
 		}
 		rv.ReviewerKind, rv.Verdict = PartyKind(kind), Verdict(verdict)
 		rv.Position, rv.At = unpacked(position), store.DecodeTime(at)
@@ -627,14 +627,14 @@ func (r *Reader) changeFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 	}
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("code: read the findings of %s: %w", named, err)
+		return fmt.Errorf("gitlet: read the findings of %s: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
 		f, err := scanFinding(rows)
 		if err != nil {
-			return fmt.Errorf("code: read the findings of %s: %w", named, err)
+			return fmt.Errorf("gitlet: read the findings of %s: %w", named, err)
 		}
 		out.Findings = append(out.Findings, f)
 		if pg.add(f.encodedBytes()) {
@@ -719,23 +719,23 @@ func findingsNamed(ctx context.Context, tx *sql.Tx, named, id string, asked []st
 	}
 	list, err := json.Marshal(asked)
 	if err != nil {
-		return nil, fmt.Errorf("code: name the findings of %s: %w", named, err)
+		return nil, fmt.Errorf("gitlet: name the findings of %s: %w", named, err)
 	}
 	rows, err := tx.QueryContext(ctx, findingsNamedSQL, string(list), id)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the named findings of %s: %w", named, err)
+		return nil, fmt.Errorf("gitlet: read the named findings of %s: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var read []FindingRow
 	for rows.Next() {
 		f, err := scanFinding(rows)
 		if err != nil {
-			return nil, fmt.Errorf("code: read the named findings of %s: %w", named, err)
+			return nil, fmt.Errorf("gitlet: read the named findings of %s: %w", named, err)
 		}
 		read = append(read, f)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read the named findings of %s: %w", named, err)
+		return nil, fmt.Errorf("gitlet: read the named findings of %s: %w", named, err)
 	}
 	slices.SortFunc(read, func(a, b FindingRow) int { return strings.Compare(a.ID, b.ID) })
 	return read, nil
@@ -937,7 +937,7 @@ func (r *Reader) reviewsGiven(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 	}
 	scanned, err := read()
 	if err != nil {
-		return fmt.Errorf("code: read the reviews %s gave: %w", q.Reviewer, err)
+		return fmt.Errorf("gitlet: read the reviews %s gave: %w", q.Reviewer, err)
 	}
 	ids := make([]string, 0, len(scanned))
 	for _, g := range scanned {

@@ -251,7 +251,7 @@ func ChecksWeight(r ChecksRequest) (int, error) { return r.weight() }
 func StandingStates() []string {
 	var states []string
 	if err := json.Unmarshal([]byte(standingStates), &states); err != nil {
-		panic("code: standingStates is no JSON list of strings: " + err.Error())
+		panic("gitlet: standingStates is no JSON list of strings: " + err.Error())
 	}
 	return states
 }

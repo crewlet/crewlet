@@ -96,7 +96,7 @@ func (r *Reader) commit(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	rows, err := tx.QueryContext(ctx, commitMergedSQL, repo.ID, q.Commit, MaxCommitChanges+1)
 	if err != nil {
-		return fmt.Errorf("code: read the changes %s merged in %s: %w", q.Commit, repo.Name, err)
+		return fmt.Errorf("gitlet: read the changes %s merged in %s: %w", q.Commit, repo.Name, err)
 	}
 	err = eachRow(rows, func(s scanner) (err error) {
 		var (
@@ -110,10 +110,10 @@ func (r *Reader) commit(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("code: read the changes %s merged in %s: %w", q.Commit, repo.Name, err)
+		return fmt.Errorf("gitlet: read the changes %s merged in %s: %w", q.Commit, repo.Name, err)
 	}
 	if rows, err = tx.QueryContext(ctx, commitHeadsSQL, q.Commit, repo.ID, MaxCommitChanges+1); err != nil {
-		return fmt.Errorf("code: read the revisions %s heads in %s: %w", q.Commit, repo.Name, err)
+		return fmt.Errorf("gitlet: read the revisions %s heads in %s: %w", q.Commit, repo.Name, err)
 	}
 	err = eachRow(rows, func(s scanner) (err error) {
 		var (
@@ -127,7 +127,7 @@ func (r *Reader) commit(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("code: read the revisions %s heads in %s: %w", q.Commit, repo.Name, err)
+		return fmt.Errorf("gitlet: read the revisions %s heads in %s: %w", q.Commit, repo.Name, err)
 	}
 	if len(c.Merged) > MaxCommitChanges || len(c.Revisions) > MaxCommitChanges {
 		c.More = true

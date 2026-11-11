@@ -517,7 +517,7 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	case seats.Roster == nil:
 		// THE CALLER'S BUG: the committer hands a merge to the repository's
 		// next committer before deciding it with no chart.
-		return mergeDecision{}, fmt.Errorf("code: a merge on %s reached the decide with no chart to judge it "+
+		return mergeDecision{}, fmt.Errorf("gitlet: a merge on %s reached the decide with no chart to judge it "+
 			"by — the committer hands such a write to the repository's next committer", m.RepoID)
 	}
 	f, found, err := LoadGateFacts(ctx, tx, m.RepoID, m.ChangeID)
@@ -549,7 +549,7 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	// onto it only where the branch is still there.
 	refs, err := refsNamed(ctx, tx, m.RepoID, []string{c.TargetRef, c.SourceRef})
 	if err != nil {
-		return mergeDecision{}, fmt.Errorf("code: read %s's and %s's tips on %s: %w", c.TargetRef, c.SourceRef,
+		return mergeDecision{}, fmt.Errorf("gitlet: read %s's and %s's tips on %s: %w", c.TargetRef, c.SourceRef,
 			repo.name, err)
 	}
 	tip := refTip(refs, c.TargetRef)
@@ -762,7 +762,7 @@ func (c *Committer) mergeAnswer(ctx context.Context, p MergeProposal, last merge
 			return MergeResult{MergeID: p.Merge.MergeID, Refusal: last.refusal, Detail: last.detail,
 				Unmet: last.unmet}, nil, nil
 		}
-		return MergeResult{}, nil, fmt.Errorf("code: the publish of operation %s answered applied with no "+
+		return MergeResult{}, nil, fmt.Errorf("gitlet: the publish of operation %s answered applied with no "+
 			"record, and its decide refused nothing", p.OpID)
 	case statelog.OutcomePending:
 		return MergeResult{Outcome: statelog.OutcomePending, MergeID: p.Merge.MergeID, Position: res.Position},
@@ -798,7 +798,7 @@ func (c *Committer) appliedMerge(ctx context.Context, p MergeProposal, res state
 		}
 		return nil
 	}); err != nil {
-		failed := fmt.Errorf("code: the record of operation %s applied at %s and its change's row could not be "+
+		failed := fmt.Errorf("gitlet: the record of operation %s applied at %s and its change's row could not be "+
 			"read: %w", p.OpID, at, err)
 		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindMerge, "repo", m.RepoID, "op_id", p.OpID,
 			"error", failed)
@@ -865,5 +865,5 @@ func (c *Committer) refusedMerge(ctx context.Context, p MergeProposal, err error
 	}
 	c.log.WarnContext(ctx, "code_commit_failed", "kind", kindMerge, "repo", p.RepoID(), "op_id", p.OpID,
 		"error", err)
-	return MergeResult{}, fmt.Errorf("code: merge operation %s: %w", p.OpID, err)
+	return MergeResult{}, fmt.Errorf("gitlet: merge operation %s: %w", p.OpID, err)
 }

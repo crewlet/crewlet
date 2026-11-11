@@ -167,7 +167,7 @@ func NewPreviews(o PreviewOptions) (*Previews, error) {
 	}
 	p := &Previews{o: o, log: o.Logger, now: o.Now, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline}
 	if p.log == nil {
-		p.log = logging.Get("code.home")
+		p.log = logging.Get("gitlet.home")
 	}
 	if p.now == nil {
 		p.now = time.Now

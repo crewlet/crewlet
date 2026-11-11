@@ -229,7 +229,7 @@ func HumanPathsDigest(gates []RuleGate) string {
 	if err != nil {
 		// A list of strings and named strings always encodes; reaching here
 		// is a broken encoder, which no digest could be taken past.
-		panic(fmt.Sprintf("code: encoding human paths: %v", err))
+		panic(fmt.Sprintf("gitlet: encoding human paths: %v", err))
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])

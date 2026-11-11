@@ -838,7 +838,7 @@ type ErrFutureVersion struct {
 }
 
 func (e *ErrFutureVersion) Error() string {
-	return fmt.Sprintf("code: the record on %s is version %d and this build "+
+	return fmt.Sprintf("gitlet: the record on %s is version %d and this build "+
 		"reads %d — it is RETAINED at its position rather than skipped, and "+
 		"reprocessed by a build that knows the shape", e.Subject, e.Got, e.Want)
 }
@@ -847,10 +847,10 @@ func (e *ErrFutureVersion) Error() string {
 func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 	var env RecordEnvelope
 	if err := json.Unmarshal(payload, &env); err != nil {
-		return RecordEnvelope{}, fmt.Errorf("code: decode the record envelope: %w", err)
+		return RecordEnvelope{}, fmt.Errorf("gitlet: decode the record envelope: %w", err)
 	}
 	if env.V <= 0 {
-		return RecordEnvelope{}, fmt.Errorf("code: a record carries version %d — "+
+		return RecordEnvelope{}, fmt.Errorf("gitlet: a record carries version %d — "+
 			"every record states its version, and one that does not cannot be "+
 			"told apart from a newer build's", env.V)
 	}
@@ -882,7 +882,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 	var rec MutationRecord
 	extra, err := decodeInto(payload, &rec, recordFields)
 	if err != nil {
-		return MutationRecord{RecordEnvelope: env}, fmt.Errorf("code: decode "+
+		return MutationRecord{RecordEnvelope: env}, fmt.Errorf("gitlet: decode "+
 			"the record on %s: %w", env.Subject, err)
 	}
 	rec.Scope = env.Scope
@@ -910,15 +910,15 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 	}
 	data, err := encode(rec, rec.Extra)
 	if err != nil {
-		return nil, fmt.Errorf("code: encode the record on %s: %w", rec.Subject, err)
+		return nil, fmt.Errorf("gitlet: encode the record on %s: %w", rec.Subject, err)
 	}
 	minimum, err := fields.Minimum(string(rec.Op), data)
 	if err != nil {
-		return nil, fmt.Errorf("code: stamp the record on %s: %w", rec.Subject, err)
+		return nil, fmt.Errorf("gitlet: stamp the record on %s: %w", rec.Subject, err)
 	}
 	switch {
 	case rec.readByEveryBuild() && minimum > baseRecordVersion:
-		return nil, fmt.Errorf("code: the %s record on %s must be readable by "+
+		return nil, fmt.Errorf("gitlet: the %s record on %s must be readable by "+
 			"every build for ever — an older node defers a gate, and retains a "+
 			"barrier, a trimmed record or a generation, that it cannot read — and "+
 			"it carries %s, so a field it needs belongs somewhere else", rec.Op,
@@ -927,10 +927,10 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 	case stamp:
 		rec.V = minimum
 		if data, err = encode(rec, rec.Extra); err != nil {
-			return nil, fmt.Errorf("code: encode the record on %s: %w", rec.Subject, err)
+			return nil, fmt.Errorf("gitlet: encode the record on %s: %w", rec.Subject, err)
 		}
 	default:
-		return nil, fmt.Errorf("code: the %s record on %s is stamped version %d "+
+		return nil, fmt.Errorf("gitlet: the %s record on %s is stamped version %d "+
 			"and carries %s — a build reading %d would decode it, drop what it has "+
 			"no field for and apply the rest; leave the version unset and the "+
 			"encoder stamps the lowest one that reads it", rec.Op, rec.Subject,
@@ -972,7 +972,7 @@ func recordFor(stamp statelog.Stamp, subject Subject, op OpKind, scope []string,
 	if payload != nil {
 		body, err := json.Marshal(payload)
 		if err != nil {
-			return statelog.Decision{}, fmt.Errorf("code: encode the %s payload "+
+			return statelog.Decision{}, fmt.Errorf("gitlet: encode the %s payload "+
 				"for %s: %w", op, subject, err)
 		}
 		record.Mutation = body
@@ -993,10 +993,10 @@ func recordFor(stamp statelog.Stamp, subject Subject, op OpKind, scope []string,
 // — a position nothing confirmed, which is the claim a barrier must never fake.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
-		return nil, fmt.Errorf("code: %q is not a barrier envelope", env.Kind)
+		return nil, fmt.Errorf("gitlet: %q is not a barrier envelope", env.Kind)
 	}
 	if env.OpID != "" {
-		return nil, errors.New("code: a barrier carries no op id and this one " +
+		return nil, errors.New("gitlet: a barrier carries no op id and this one " +
 			"has one — an op id becomes a message id, and a duplicate ack is " +
 			"served with no quorum round trip at all")
 	}
@@ -1020,17 +1020,17 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 // which the read path runs too.
 func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
-		return nil, fmt.Errorf("code: a %q envelope on %q is not a trimmed record",
+		return nil, fmt.Errorf("gitlet: a %q envelope on %q is not a trimmed record",
 			env.Kind, env.Subject)
 	}
 	if env.OpID != "" {
-		return nil, errors.New("code: a trimmed record carries no op id and this " +
+		return nil, errors.New("gitlet: a trimmed record carries no op id and this " +
 			"one has one — an op id becomes a message id and a ledger row nothing " +
 			"resolves")
 	}
 	floor, err := statelog.TrimmedFloor(Domain{}.Stream().Name, env.Subject)
 	if err != nil {
-		return nil, fmt.Errorf("code: %w", err)
+		return nil, fmt.Errorf("gitlet: %w", err)
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{

@@ -130,10 +130,10 @@ func TestAFailureTheWholeReconcileSharesIsLoggedOnce(t *testing.T) {
 			fmt.Errorf("%w (activation 1)", gitlet.ErrSuperseded), nil},
 		{"a context that ended", "code_repos_not_applied", context.Canceled, nil},
 		{"a newer activation's request", "code_repos_superseded",
-			fmt.Errorf("code: create %q: %w", "r0001", context.Canceled),
+			fmt.Errorf("gitlet: create %q: %w", "r0001", context.Canceled),
 			fmt.Errorf("%w: a newer activation asked", gitlet.ErrSuperseded)},
 		{"the engine stopping", "code_repos_interrupted",
-			fmt.Errorf("code: create %q: %w", "r0001", context.Canceled), errCodeReconcileStopped},
+			fmt.Errorf("gitlet: create %q: %w", "r0001", context.Canceled), errCodeReconcileStopped},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -282,7 +282,7 @@ func TestAReconcileAnswersWhatRunningItAgainCanDo(t *testing.T) {
 	deleted := func(ids []string) ([]gitlet.DeleteResult, error) {
 		return make([]gitlet.DeleteResult, len(ids)), nil
 	}
-	cancelled := fmt.Errorf("code: create %q: %w", "r0001", context.Canceled)
+	cancelled := fmt.Errorf("gitlet: create %q: %w", "r0001", context.Canceled)
 	stray := append([]config.CodeRepo(nil), repos...)
 	stray[0].Owner = config.CodeOwner{Seat: "nobody"}
 	for _, tc := range []struct {
@@ -305,7 +305,7 @@ func TestAReconcileAnswersWhatRunningItAgainCanDo(t *testing.T) {
 		{name: "the engine stopping", store: &fakeLifecycle{ensure: every(cancelled)},
 			endedBy: errCodeReconcileStopped},
 		{name: "an outcome the log did not answer", store: &fakeLifecycle{
-			ensure: one(errors.New("code: whether \"r0001\" was created is unknown")), delete: deleted},
+			ensure: one(errors.New("gitlet: whether \"r0001\" was created is unknown")), delete: deleted},
 			undone: true},
 		{name: "a purge to wait out", store: &fakeLifecycle{
 			ensure: one(fmt.Errorf("%w: repository x", gitlet.ErrPurging)), delete: deleted}},
@@ -321,11 +321,11 @@ func TestAReconcileAnswersWhatRunningItAgainCanDo(t *testing.T) {
 		{name: "a deletion that failed", store: &fakeLifecycle{ensure: one(nil),
 			delete: func(ids []string) ([]gitlet.DeleteResult, error) {
 				out := make([]gitlet.DeleteResult, len(ids))
-				out[0].Err = errors.New("code: whether repository gone-0000 was deleted is unknown")
+				out[0].Err = errors.New("gitlet: whether repository gone-0000 was deleted is unknown")
 				return out, nil
 			}}, undone: true},
 		{name: "the deletions a failed walk skipped", store: &fakeLifecycle{ensure: one(nil)},
-			lives: unlistedLives{errors.New("code: walk the repositories: database is locked")}, undone: true},
+			lives: unlistedLives{errors.New("gitlet: walk the repositories: database is locked")}, undone: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

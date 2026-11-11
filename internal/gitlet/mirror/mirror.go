@@ -322,7 +322,7 @@ func New(o Options) (*Mirrors, error) {
 		memory: map[mirrorKey]memory{}, health: map[mirrorKey]health{}, levels: map[mirrorKey]level{},
 		queued: map[mirrorKey]queuedAttempt{}}
 	if m.log == nil {
-		m.log = logging.Get("code.mirror")
+		m.log = logging.Get("gitlet.mirror")
 	}
 	if m.now == nil {
 		m.now = time.Now

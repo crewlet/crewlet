@@ -69,7 +69,7 @@ type ParserOptions struct {
 func NewParser(opts ParserOptions) *Parser {
 	logger := opts.Logger
 	if logger == nil {
-		logger = logging.Get("code.feed")
+		logger = logging.Get("gitlet.feed")
 	}
 	return &Parser{logger: logger}
 }
@@ -311,11 +311,11 @@ func wakeText(payload any, change string) (string, provenance.Source) {
 // everything it carried.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
-		return MutationRecord{}, fmt.Errorf("code: the delivery carries no record")
+		return MutationRecord{}, fmt.Errorf("gitlet: the delivery carries no record")
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return MutationRecord{}, fmt.Errorf("code: read the delivery: %w", err)
+		return MutationRecord{}, fmt.Errorf("gitlet: read the delivery: %w", err)
 	}
 	return Decode(data)
 }
