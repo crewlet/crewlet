@@ -414,6 +414,15 @@ func GitTook(s *Server, args ...string) func() (time.Duration, int) {
 	}
 }
 
+// SetKeepaliveTicks has every push session of s take its keepalive's ticks
+// from ticks, in place of a ticker of its Timing.Keepalive: one line on the
+// push's stderr a tick, each written before the session takes the next. Set
+// before s's first push: the server reads the field on every session's
+// goroutine.
+func SetKeepaliveTicks(s *Server, ticks <-chan time.Time) {
+	s.keepaliveTicks = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
+}
+
 // SetChainMerges scales what a chain's merges are given together after its
 // first entry, which is always given a merge's whole budget (chain.go).
 func SetChainMerges(s *Server, d time.Duration) { s.chainMerges = d }

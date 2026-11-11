@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // THE COMPANY'S REMOTE CELLS HOLD THE CONCURRENCY CAP: with
@@ -22,15 +23,18 @@ import (
 // queued, two Gitlet nodes each FIRST in its own order, so both claim every
 // attempt at once, run sixteen boxes between them and leave the seventeenth
 // queued, claimed by nobody; one box ending frees its slot, and the
-// seventeenth runs.
+// seventeenth runs. The seventeenth is read as queued once each node has
+// held it back at the cap on a walk begun after the sixteenth box (heldBack).
 //
 // Mutation: grant every slot whatever the live leases (Take ignores
-// max_running) — seventeen boxes, red.
+// max_running) — seventeen boxes, and no walk holds one back, red.
 func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	f.runner(f.options("git-a", 0, &order{nodes: []string{"git-a", "git-b"}}))
-	f.runner(f.options("git-b", 0, &order{nodes: []string{"git-b", "git-a"}}))
+	a, recA := recording(t, f.options("git-a", 0, &order{nodes: []string{"git-a", "git-b"}}))
+	b, recB := recording(t, f.options("git-b", 0, &order{nodes: []string{"git-b", "git-a"}}))
+	f.runner(a)
+	f.runner(b)
 	var keys []code.CheckKey
 	for i := range config.CodeDefaultRemoteMaxRunning + 1 {
 		keys = append(keys, f.queue(oidOf(fmt.Sprintf("%02x", i+1)), remote("lint", time.Minute)))
@@ -39,7 +43,8 @@ func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
 	for range config.CodeDefaultRemoteMaxRunning {
 		boxes = append(boxes, f.e2b.box(t))
 	}
-	time.Sleep(20 * fast.Walk)
+	heldBack(t, recA, checkrun.HoldMaxRunning)
+	heldBack(t, recB, checkrun.HoldMaxRunning)
 	if n := f.e2b.count(); n != config.CodeDefaultRemoteMaxRunning {
 		t.Fatalf("two Gitlet nodes made %d remote boxes under a cap of %d", n, config.CodeDefaultRemoteMaxRunning)
 	}
@@ -72,11 +77,14 @@ func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
 // box-minutes a UTC day — a remote box held for sixty minutes spends the day,
 // each minute charged as it begins; a check queued then waits queued, claimed
 // by nobody, while that box runs on to its own end and after it; and once the
-// next UTC midnight comes it runs.
+// next UTC midnight comes it runs. The second check is read as queued once
+// the node has held it back on the spent day on a walk begun after it was
+// queued, and again after the first box ended (heldBack).
 //
 // Mutation: charge no minute after a box's first — the sixty-first is never
 // refused, red; neither remember a refused minute nor heed one at a box's
-// first — the second check runs at once, red. (Either alone is held by
+// first — the second check runs at once, and no walk holds it back, red.
+// (Either alone is held by
 // TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox: here the node's own
 // memory of the refusal holds the second check before its first minute.)
 func TestTheDailyBoxTimeCapHoldsNewChecks(t *testing.T) {
@@ -88,7 +96,7 @@ func TestTheDailyBoxTimeCapHoldsNewChecks(t *testing.T) {
 	// instant it reads is past every attempt's real queuing.
 	clock := &clock{at: time.Now().UTC().Truncate(24 * time.Hour).Add(25 * time.Hour)}
 	minutes := &charges{Fleet: f.counter}
-	o := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+	o, rec := recording(t, f.options("git-a", 0, &order{nodes: []string{"git-a"}}))
 	o.Now, o.Minutes = clock.now, minutes
 	f.runner(o)
 
@@ -107,10 +115,14 @@ func TestTheDailyBoxTimeCapHoldsNewChecks(t *testing.T) {
 	}
 
 	second := f.queue(oidOf("b"), remote("build", 3*time.Hour))
-	time.Sleep(20 * fast.Walk)
+	heldBack(t, rec, checkrun.HoldBoxHours)
+	if row, _ := f.row(second); row.State != code.CheckStateQueued || f.e2b.count() != 1 {
+		t.Fatalf("a check queued after the day's hours were spent = %+v with %d remote boxes while the box "+
+			"that spent them runs, want it queued and no box of its own", row, f.e2b.count())
+	}
 	f.e2b.end(box, 0, "")
 	f.ended(first)
-	time.Sleep(20 * fast.Walk)
+	heldBack(t, rec, checkrun.HoldBoxHours)
 	if row, _ := f.row(second); row.State != code.CheckStateQueued || f.e2b.count() != 1 {
 		t.Fatalf("a check queued after the day's hours were spent = %+v with %d remote boxes, want it "+
 			"queued and no box", row, f.e2b.count())
@@ -165,10 +177,12 @@ func TestARemoteBoxIsChargedEveryMinuteItWasHeld(t *testing.T) {
 // cannot list or lease the slots, or cannot count a minute, a queued e2b check
 // waits queued, claimed by nobody — a cap nobody can ask about cannot hold —
 // and no slot is left leased behind the minute it could not count; once the
-// store answers, the check runs.
+// store answers, the check runs. It is read as queued once the node has held
+// it back on the store's silence on a walk begun after it was queued
+// (heldBack).
 //
 // Mutation: read a store's error as room (Take answers a slot on one) — a
-// box made while the store is away, red.
+// box made while the store is away, and no walk holds the check back, red.
 func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
 	t.Parallel()
 	for name, down := range map[string]func(f *fleet, o *checkrun.Options, away *atomic.Bool){
@@ -184,11 +198,11 @@ func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
 			f := newFleet(t)
 			var away atomic.Bool
 			away.Store(true)
-			o := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+			o, rec := recording(t, f.options("git-a", 0, &order{nodes: []string{"git-a"}}))
 			down(f, &o, &away)
 			f.runner(o)
 			key := f.queue(oidOf("c"), remote("lint", time.Minute))
-			time.Sleep(4 * fast.Backstop)
+			heldBack(t, rec, checkrun.HoldUnknown)
 			if row, _ := f.row(key); row.State != code.CheckStateQueued || f.e2b.count() != 0 {
 				t.Fatalf("with %s away the check = %+v and %d remote boxes, want it queued and none", name, row,
 					f.e2b.count())
@@ -210,11 +224,15 @@ func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
 // mid-day — finds the UTC day's box-hours spent by another at its first box's
 // first minute: the slot it took for that box is given back, no box is made
 // and the check waits queued; and the refusal is remembered, so the node's
-// later walks take no slot and ask the counter nothing more.
+// later walks take no slot and ask the counter nothing more. What it asked is
+// read once it has held the check back on the spent day on two walks begun
+// after it was queued (heldBack): the one that found it, and one that
+// remembered.
 //
 // Mutation: start a box whatever the first minute's charge answers — a box
-// made on a spent day, red; forget a refused day between walks (daySpent
-// answers false) — a slot taken and a minute refused every walk, red.
+// made on a spent day, and no walk holds the check back, red; forget a
+// refused day between walks (daySpent answers false) — a slot taken and a
+// minute refused every walk, red.
 func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -230,12 +248,12 @@ func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
 	}
 	minutes := &charges{Fleet: f.counter}
 	leases := &countedLeases{Leases: f.leases}
-	o := f.options("git-b", 0, &order{nodes: []string{"git-b"}})
+	o, rec := recording(t, f.options("git-b", 0, &order{nodes: []string{"git-b"}}))
 	o.Now, o.Minutes, o.Leases = clock.now, minutes, leases
 	f.runner(o)
 
 	key := f.queue(oidOf("9"), remote("build", time.Hour))
-	time.Sleep(4 * fast.Backstop)
+	heldBack(t, rec, checkrun.HoldBoxHours)
 	if row, _ := f.row(key); row.State != code.CheckStateQueued || f.e2b.count() != 0 {
 		t.Fatalf("a check on a day another node spent = %+v with %d remote boxes, want it queued and no box", row,
 			f.e2b.count())
@@ -257,17 +275,21 @@ func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
 // cap meanwhile. Once its node reaches the store again the box takes a slot
 // again, past the cap, so the company counts it: no further box starts while
 // it runs, even after the box that filled the cap ends, and the queued check
-// runs only once the box over the cap has ended too.
+// runs only once the box over the cap has ended too. The third check is read
+// as queued once each node has held it back at the cap on a walk begun after
+// it was queued, and again after the box that filled the cap ended
+// (heldBack).
 //
 // Mutation: leave a lost renewal as it is (no slot taken again) — the box is
 // never counted again, red; take a slot again only under the cap — the cap
-// is full, so it is never counted, red.
+// is full, so it is never counted, red; grant every slot whatever the live
+// leases — the third check runs at once, and no walk holds it back, red.
 func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	f.company.Code.Checks.Remote.MaxRunning = new(1)
 	var away atomic.Bool
-	a := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+	a, recA := recording(t, f.options("git-a", 0, &order{nodes: []string{"git-a"}}))
 	a.Leases = awayLeases{Backend: f.leases, away: &away}
 	f.runner(a)
 	first := f.queue(oidOf("e"), remote("build", 3*time.Hour))
@@ -282,7 +304,8 @@ func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
 		t.Fatalf("%d remote slots live once git-a's lapsed, want none", live)
 	}
 	// GIT-B FILLS THE CAP meanwhile.
-	f.runner(f.options("git-b", 0, &order{nodes: []string{"git-b"}}))
+	b, recB := recording(t, f.options("git-b", 0, &order{nodes: []string{"git-b"}}))
+	f.runner(b)
 	second := f.queue(oidOf("f"), remote("build", 3*time.Hour))
 	boxB := f.e2b.box(t)
 	f.await(second, "named its box", func(r code.CheckRow) bool { return r.Box == boxB.ID() })
@@ -290,14 +313,16 @@ func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
 	away.Store(false)
 	eventually(t, "git-a's box counted again", func() bool { return f.slots() == 2 })
 	third := f.queue(oidOf("8"), remote("build", time.Hour))
-	time.Sleep(4 * fast.Backstop)
+	heldBack(t, recA, checkrun.HoldMaxRunning)
+	heldBack(t, recB, checkrun.HoldMaxRunning)
 	if row, _ := f.row(third); row.State != code.CheckStateQueued || f.e2b.count() != 2 {
 		t.Fatalf("with two boxes running under a cap of one the third check = %+v with %d remote boxes, want it "+
 			"queued", row, f.e2b.count())
 	}
 	f.e2b.end(boxB, 0, "")
 	f.ended(second)
-	time.Sleep(4 * fast.Backstop)
+	heldBack(t, recA, checkrun.HoldMaxRunning)
+	heldBack(t, recB, checkrun.HoldMaxRunning)
 	if row, _ := f.row(third); row.State != code.CheckStateQueued || f.e2b.count() != 2 {
 		t.Fatalf("with git-a's box still running under a cap of one the third check = %+v with %d remote boxes, "+
 			"want it queued", row, f.e2b.count())
@@ -421,6 +446,46 @@ func (f *fleet) slots() int {
 		f.t.Fatalf("list the remote slots: %v", err)
 	}
 	return len(live)
+}
+
+// recording is o with a recorder of its own, which the runner built from it
+// counts on — among the rest, the remote checks its walks hold back
+// (metrics.CodeChecksRemoteCapped).
+func recording(t *testing.T, o checkrun.Options) (checkrun.Options, *metrics.Recorder) {
+	t.Helper()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Metrics = rec
+	return o, rec
+}
+
+// capped is how many remote checks a runner's walks have held back for hold:
+// the runner's own count, made in the walk as it leaves the check queued.
+func capped(rec *metrics.Recorder, hold checkrun.RemoteHold) uint64 {
+	var n uint64
+	for _, s := range rec.Read() {
+		if s.Name == metrics.CodeChecksRemoteCapped && s.Attrs["reason"] == string(hold) {
+			n += s.Total
+		}
+	}
+	return n
+}
+
+// heldBack waits until a walk the runner recording to rec began after the
+// call has held a remote check back for hold, starting none of what was
+// queued: until two more are counted than at the call. A walk holds back one
+// check at the most — the first a cap leaves queued, the walk trying no
+// remote check after it — and a runner walks one walk at a time, so the walk
+// that counted the second began once the walk that counted the first, after
+// the call, had ended.
+func heldBack(t *testing.T, rec *metrics.Recorder, hold checkrun.RemoteHold) {
+	t.Helper()
+	from := capped(rec, hold)
+	eventually(t, "two walks holding a remote check back for "+string(hold), func() bool {
+		return capped(rec, hold) >= from+2
+	})
 }
 
 // eventually waits, a few seconds at most, for ok.

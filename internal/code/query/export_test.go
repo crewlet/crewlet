@@ -56,3 +56,6 @@ func HoldPatchSpools(s *Server, n int) func() {
 // SetPatchSpoolWait scales how long s's facts reads wait for a patch spool —
 // production's code.GitShareWait — so a case waits milliseconds.
 func SetPatchSpoolWait(s *Server, d time.Duration) { s.patchSpoolWait = d }
+
+// ErrStopped is the cause a read's context ends with when its server stops.
+var ErrStopped = errStopped

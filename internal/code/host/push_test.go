@@ -1145,24 +1145,39 @@ func TestASynthesizedReportIsWhatGitPrints(t *testing.T) {
 
 // A push waiting on its record keeps the connection alive with a line on the
 // client's stderr naming the step it waits on.
+//
+// The keepalive is paced by ticks the case sends (host.SetKeepaliveTicks)
+// while the push waits at its proposal: a session takes a tick only once it
+// has written the line before it, so once three are taken two lines naming
+// that step are written, however a loaded runner schedules the session.
+//
+// Mutation: stop the keepalive before the proposal — no tick is taken and no
+// line printed, red.
 func TestAKeepaliveFlowsWhileAPushWaits(t *testing.T) {
-	timing := fast
-	timing.Keepalive = 50 * time.Millisecond
+	ticks := make(chan time.Time)
 	e := &recording{propose: func(ctx context.Context, inner host.Estate, p code.Proposal) (code.ProposeResult, error) {
-		time.Sleep(400 * time.Millisecond)
+		for range 3 {
+			select {
+			case ticks <- time.Time{}:
+			case <-time.After(10 * time.Second): //fixedwait:liveness
+				t.Error("the session took no keepalive tick in 10 s while its push waited at its proposal")
+				return inner.Propose(ctx, p)
+			}
+		}
 		return inner.Propose(ctx, p)
 	}}
-	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{Timing: timing, WrapEstate: e.wrap}},
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{Timing: fast, WrapEstate: e.wrap}},
 		codetest.Settings())
+	host.SetKeepaliveTicks(c.Fleet.Nodes()[0].Host(), ticks)
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 	res := p.Push(c.Ctx, work, c.URL(0), "main")
 	if !res.OK("refs/heads/main") {
-		t.Fatalf("a push held 400 ms at its proposal: %s", res)
+		t.Fatalf("a push held at its proposal for three keepalive ticks: %s", res)
 	}
 	if n := strings.Count(res.Stderr, "remote: crewlet: committing the push ("); n < 2 {
-		t.Errorf("a push held 400 ms at a keepalive of 50 ms printed %d keepalives: %s", n, res)
+		t.Errorf("a push held at its proposal for three keepalive ticks printed %d keepalives: %s", n, res)
 	}
 }
 

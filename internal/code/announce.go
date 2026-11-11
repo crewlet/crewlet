@@ -61,8 +61,10 @@ import (
 // that is dropped and logged, never waited for, which costs what a publish the
 // stream refused costs — the day one count, the feed one line — and leaves the
 // rows on the code log whole. Its events carry the instant it was handed over,
-// as the inline publish's did, so a backlog that crosses midnight still counts
-// each on the day its record landed. One announcer, rather than one a
+// as the inline publish's did — by the committer's clock
+// ([CommitterOptions.Now]), the one its records are authored at and a seat's
+// push is counted on — so a backlog that crosses midnight still counts each on
+// the day its record landed. One announcer, rather than one a
 // repository, keeps every event of a repository in its landing order; and an
 // announcement is a record's — an opening, a merge, a queue's ejections — not
 // a push's: a change opens and merges once, so they come at the rate changes
@@ -213,7 +215,7 @@ func (c *Committer) announceLater(a announcement) {
 	if c.announcements == nil {
 		return
 	}
-	a.when = time.Now().UTC()
+	a.when = c.now()
 	select {
 	case c.announcements <- a:
 	default:

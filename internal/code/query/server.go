@@ -104,8 +104,10 @@ type Options struct {
 	// repository (step 11) — filed by the engine in the node's reads ledger
 	// (internal/code/readaudit), which publishes every reader's reads of a
 	// flush as one record into the node's event log, from which the usage
-	// domain derives who read it. It returns at once: no read, and no read
-	// waiting on the page one cuts, waits on the broker for a record.
+	// domain derives who read it. It is called inside the read, on the
+	// read's own context, which the server's stop cuts and waits for
+	// ([Server.Stop]). It returns at once: no read, and no read waiting on
+	// the page one cuts, waits on the broker for a record.
 	// REQUIRED, for the host's reason: a read answered and recorded by nobody
 	// is an audit short of what the node served.
 	Fetched func(ctx context.Context, e types.CodeFetched)

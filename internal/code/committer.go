@@ -247,8 +247,9 @@ type CommitterOptions struct {
 	// for as long as it stayed stuck.
 	Current func() bool
 	// Now is the decide's clock — what upload_expired judges a pack's age by,
-	// the company day a seat's push is counted on, and a record's authored
-	// instant; nil takes the wall clock in UTC.
+	// the company day a seat's push is counted on, a record's authored
+	// instant, and the instant a landed record's announcement carries
+	// (announce.go); nil takes the wall clock in UTC.
 	Now func() time.Time
 	// Events is this node's event stream, which a merge whose record this
 	// committer landed is announced on (`change_merged`), a change it opened

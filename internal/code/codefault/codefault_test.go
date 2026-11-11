@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/codefault"
@@ -329,57 +330,61 @@ func TestConcurrentHitsFireAOnceActionOnce(t *testing.T) {
 // held, a client hanging up on a held request — so it ends with its channel
 // or with the hit's context, whichever comes first, and the call site goes on
 // as it would.
+//
+// In a bubble, where synctest.Wait returns once every goroutine but the
+// case's is durably blocked: a hit that was going to return without its hold
+// has returned by then, and Reached is closed by the firing that holds.
+//
+// Mutations: return from a Block's hit without waiting on it — it has
+// returned while its Block is open, red; wait on the Block alone — the hit
+// whose context ended never returns, red.
 func TestABlockHoldsUntilReleasedOrCancelled(t *testing.T) {
 	t.Run("released", func(t *testing.T) {
-		s := new(codefault.Script)
-		block, reached := make(chan struct{}), make(chan struct{})
-		s.Arm(codefault.HostHookAdmitted, codefault.Action{Block: block, Reached: reached, Err: errCrash})
+		synctest.Test(t, func(t *testing.T) {
+			s := new(codefault.Script)
+			block, reached := make(chan struct{}), make(chan struct{})
+			s.Arm(codefault.HostHookAdmitted, codefault.Action{Block: block, Reached: reached, Err: errCrash})
+			open := sync.OnceFunc(func() { close(block) })
+			t.Cleanup(open)
 
-		done := make(chan error, 1)
-		go func() { done <- s.Hit(t.Context(), codefault.HostHookAdmitted, 0) }()
-		select {
-		case <-reached:
-		case <-time.After(hang):
-			t.Fatalf("Reached was not closed %s after the hit", hang)
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("the hit returned %v while its Block was still open", err)
-		case <-time.After(50 * time.Millisecond):
-		}
-		close(block)
-		select {
-		case err := <-done:
-			if !errors.Is(err, errCrash) {
-				t.Fatalf("the released hit = %v, want its Err %v", err, errCrash)
+			done := make(chan error, 1)
+			go func() { done <- s.Hit(t.Context(), codefault.HostHookAdmitted, 0) }()
+			stillHeld(t, done, "while its Block was still open")
+			requireReached(t, reached)
+			open()
+			select {
+			case err := <-done:
+				if !errors.Is(err, errCrash) {
+					t.Fatalf("the released hit = %v, want its Err %v", err, errCrash)
+				}
+			case <-time.After(hang):
+				t.Fatalf("the hit has not returned %s after its Block closed", hang)
 			}
-		case <-time.After(hang):
-			t.Fatalf("the hit has not returned %s after its Block closed", hang)
-		}
+		})
 	})
 
 	t.Run("cancelled", func(t *testing.T) {
-		s := new(codefault.Script)
-		reached := make(chan struct{})
-		s.Arm(codefault.HostHookAdmitted, codefault.Action{Block: make(chan struct{}), Reached: reached})
+		synctest.Test(t, func(t *testing.T) {
+			s := new(codefault.Script)
+			reached := make(chan struct{})
+			s.Arm(codefault.HostHookAdmitted, codefault.Action{Block: make(chan struct{}), Reached: reached})
 
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- s.Hit(ctx, codefault.HostHookAdmitted, 0) }()
-		select {
-		case <-reached:
-		case <-time.After(hang):
-			t.Fatalf("Reached was not closed %s after the hit", hang)
-		}
-		cancel()
-		select {
-		case err := <-done:
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("a hit whose context ended = %v, want context.Canceled", err)
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			done := make(chan error, 1)
+			go func() { done <- s.Hit(ctx, codefault.HostHookAdmitted, 0) }()
+			stillHeld(t, done, "before its context ended")
+			requireReached(t, reached)
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("a hit whose context ended = %v, want context.Canceled", err)
+				}
+			case <-time.After(hang):
+				t.Fatalf("a held hit outlived its context by %s", hang)
 			}
-		case <-time.After(hang):
-			t.Fatalf("a held hit outlived its context by %s", hang)
-		}
+		})
 	})
 
 	t.Run("cause", func(t *testing.T) {
@@ -395,20 +400,36 @@ func TestABlockHoldsUntilReleasedOrCancelled(t *testing.T) {
 }
 
 // stillHeld fails the test if the hit whose answer arrives on done has
-// returned within held: how long a case watches a hold it expects to last
-// before it ends it.
+// returned once every other goroutine of the case's bubble is durably blocked:
+// a hit that was going to return has returned by then, and one held is parked
+// on its hold. Called inside a synctest bubble — synctest.Wait panics outside
+// one.
 func stillHeld(t *testing.T, done <-chan error, why string) {
 	t.Helper()
-	const held = 100 * time.Millisecond
+	synctest.Wait()
 	select {
 	case err := <-done:
 		t.Fatalf("the hit returned %v %s", err, why)
-	case <-time.After(held):
+	default:
+	}
+}
+
+// requireReached fails the test unless reached is closed: called once the
+// hit that closes it is parked, inside a synctest bubble.
+func requireReached(t *testing.T, reached <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-reached:
+	default:
+		t.Fatal("Reached was not closed by the hit's firing")
 	}
 }
 
 // answer waits, under the hang detector, for the hit whose answer arrives on
-// done.
+// done — inside a synctest bubble, whose clock reaches the detector only once
+// every goroutine of the case is durably blocked: a hit that never returns.
+//
+//fixedwait:bubble
 func answer(t *testing.T, done <-chan error, why string) error {
 	t.Helper()
 	select {
@@ -420,18 +441,6 @@ func answer(t *testing.T, done <-chan error, why string) error {
 	}
 }
 
-// waitHits waits, under the hang detector, until p has been hit n times.
-func waitHits(t *testing.T, s *codefault.Script, p codefault.Point, n int) {
-	t.Helper()
-	deadline := time.Now().Add(hang)
-	for s.Hits(p) < n {
-		if time.Now().After(deadline) {
-			t.Fatalf("Hits(%s) = %d after %s, want %d", p, s.Hits(p), hang, n)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 // A crash is the process-death shape, and a node killed inside a test process
 // cancels every request it was serving. So a crash hit must OUTLIVE its
 // context: one that ended with it would run the call site's error path — its
@@ -439,69 +448,83 @@ func waitHits(t *testing.T, s *codefault.Script, p codefault.Point, n int) {
 // restart assertions would pass on what that path tidied. It ends only when
 // the case has judged the restarted node and its cleanup releases the
 // crashes, and then it answers ErrCrashed so nothing after the point runs.
+//
+// Each hold in a bubble, where synctest.Wait returns once every goroutine but
+// the case's is durably blocked: a hit that was going to return without its
+// hold has returned by then.
+//
+// Mutations: answer a crash at its context's end — the hit has returned once
+// its context ended, red; answer a crash at once, unheld — it has returned
+// before ReleaseCrashes, red; end a Block at ReleaseCrashes — it has returned
+// before its context ended, red.
 func TestACrashOutlivesItsContextUntilReleased(t *testing.T) {
 	t.Run("held past its context", func(t *testing.T) {
-		s := new(codefault.Script)
-		reached := make(chan struct{})
-		s.Arm(codefault.HostAfterScratch, codefault.Action{Crash: true, Reached: reached})
+		synctest.Test(t, func(t *testing.T) {
+			s := new(codefault.Script)
+			t.Cleanup(s.ReleaseCrashes)
+			reached := make(chan struct{})
+			s.Arm(codefault.HostAfterScratch, codefault.Action{Crash: true, Reached: reached})
 
-		ctx, cancel := context.WithCancelCause(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- s.Hit(ctx, codefault.HostAfterScratch, 0) }()
-		select {
-		case <-reached:
-		case <-time.After(hang):
-			t.Fatalf("Reached was not closed %s after the hit", hang)
-		}
-		cancel(errors.New("the node was killed"))
-		stillHeld(t, done, "once its context ended, as a request of a killed node: a crash runs no error path")
+			ctx, cancel := context.WithCancelCause(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- s.Hit(ctx, codefault.HostAfterScratch, 0) }()
+			stillHeld(t, done, "before its context ended")
+			requireReached(t, reached)
+			cancel(errors.New("the node was killed"))
+			stillHeld(t, done, "once its context ended, as a request of a killed node: a crash runs no error "+
+				"path")
 
-		s.ReleaseCrashes()
-		err := answer(t, done, "after ReleaseCrashes")
-		if !errors.Is(err, codefault.ErrCrashed) || !strings.Contains(err.Error(), "host.after_scratch") {
-			t.Fatalf("a released crash = %v, want ErrCrashed naming host.after_scratch", err)
-		}
-		if errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "the node was killed") {
-			t.Fatalf("a released crash = %v, which answers its context: it must answer only the crash", err)
-		}
+			s.ReleaseCrashes()
+			err := answer(t, done, "after ReleaseCrashes")
+			if !errors.Is(err, codefault.ErrCrashed) || !strings.Contains(err.Error(), "host.after_scratch") {
+				t.Fatalf("a released crash = %v, want ErrCrashed naming host.after_scratch", err)
+			}
+			if errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "the node was killed") {
+				t.Fatalf("a released crash = %v, which answers its context: it must answer only the crash", err)
+			}
+		})
 	})
 
 	t.Run("a context already ended", func(t *testing.T) {
-		s := new(codefault.Script)
-		reached := make(chan struct{})
-		s.Arm(codefault.HostUpload, codefault.Action{Crash: true, Reached: reached, At: 10})
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		done := make(chan error, 1)
-		go func() { done <- s.Hit(ctx, codefault.HostUpload, 10) }()
-		select {
-		case <-reached:
-		case <-time.After(hang):
-			t.Fatalf("Reached was not closed %s after the hit", hang)
-		}
-		stillHeld(t, done, "on a context ended before it fired")
-		s.ReleaseCrashes()
-		if err := answer(t, done, "after ReleaseCrashes"); !errors.Is(err, codefault.ErrCrashed) {
-			t.Fatalf("a released crash = %v, want ErrCrashed", err)
-		}
-	})
-
-	t.Run("every hold, one release", func(t *testing.T) {
-		s := new(codefault.Script)
-		s.Arm(codefault.HostAfterUpload, codefault.Action{Crash: true})
-		const pushes = 3
-		done := make(chan error, pushes)
-		for range pushes {
-			go func() { done <- s.Hit(t.Context(), codefault.HostAfterUpload, 0) }()
-		}
-		waitHits(t, s, codefault.HostAfterUpload, pushes)
-		stillHeld(t, done, "before ReleaseCrashes")
-		s.ReleaseCrashes()
-		for range pushes {
+		synctest.Test(t, func(t *testing.T) {
+			s := new(codefault.Script)
+			t.Cleanup(s.ReleaseCrashes)
+			reached := make(chan struct{})
+			s.Arm(codefault.HostUpload, codefault.Action{Crash: true, Reached: reached, At: 10})
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			done := make(chan error, 1)
+			go func() { done <- s.Hit(ctx, codefault.HostUpload, 10) }()
+			stillHeld(t, done, "on a context ended before it fired")
+			requireReached(t, reached)
+			s.ReleaseCrashes()
 			if err := answer(t, done, "after ReleaseCrashes"); !errors.Is(err, codefault.ErrCrashed) {
 				t.Fatalf("a released crash = %v, want ErrCrashed", err)
 			}
-		}
+		})
+	})
+
+	t.Run("every hold, one release", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := new(codefault.Script)
+			t.Cleanup(s.ReleaseCrashes)
+			s.Arm(codefault.HostAfterUpload, codefault.Action{Crash: true})
+			const pushes = 3
+			done := make(chan error, pushes)
+			for range pushes {
+				go func() { done <- s.Hit(t.Context(), codefault.HostAfterUpload, 0) }()
+			}
+			stillHeld(t, done, "before ReleaseCrashes")
+			if got := s.Hits(codefault.HostAfterUpload); got != pushes {
+				t.Fatalf("Hits(%s) = %d with every hit parked, want %d", codefault.HostAfterUpload, got, pushes)
+			}
+			s.ReleaseCrashes()
+			for range pushes {
+				if err := answer(t, done, "after ReleaseCrashes"); !errors.Is(err, codefault.ErrCrashed) {
+					t.Fatalf("a released crash = %v, want ErrCrashed", err)
+				}
+			}
+		})
 	})
 
 	t.Run("after the release", func(t *testing.T) {
@@ -519,18 +542,24 @@ func TestACrashOutlivesItsContextUntilReleased(t *testing.T) {
 	})
 
 	t.Run("a block is not a crash", func(t *testing.T) {
-		s := new(codefault.Script)
-		s.Arm(codefault.HostAfterSync, codefault.Action{Block: make(chan struct{})})
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- s.Hit(ctx, codefault.HostAfterSync, 0) }()
-		waitHits(t, s, codefault.HostAfterSync, 1)
-		s.ReleaseCrashes()
-		stillHeld(t, done, "on ReleaseCrashes, which ends crashes and never a Block")
-		cancel()
-		if err := answer(t, done, "after its context ended"); !errors.Is(err, context.Canceled) {
-			t.Fatalf("a Block whose context ended = %v, want context.Canceled", err)
-		}
+		synctest.Test(t, func(t *testing.T) {
+			s := new(codefault.Script)
+			s.Arm(codefault.HostAfterSync, codefault.Action{Block: make(chan struct{})})
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			done := make(chan error, 1)
+			go func() { done <- s.Hit(ctx, codefault.HostAfterSync, 0) }()
+			stillHeld(t, done, "before ReleaseCrashes")
+			if got := s.Hits(codefault.HostAfterSync); got != 1 {
+				t.Fatalf("Hits(%s) = %d with the hit parked, want 1", codefault.HostAfterSync, got)
+			}
+			s.ReleaseCrashes()
+			stillHeld(t, done, "on ReleaseCrashes, which ends crashes and never a Block")
+			cancel()
+			if err := answer(t, done, "after its context ended"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("a Block whose context ended = %v, want context.Canceled", err)
+			}
+		})
 	})
 }
 

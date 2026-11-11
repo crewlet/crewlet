@@ -269,28 +269,37 @@ func TestADeadRunnersCheckRunsAtMostThreeAttempts(t *testing.T) {
 // runs — its head moved on — is found ended at the runner's next poll, its box
 // closed, and nothing more recorded: the row keeps the cancellation.
 //
-// Mutation: poll the box alone, never the row — the box runs on, red.
+// The runner's clock is the case's, frozen an hour into tomorrow: past the
+// attempt's queuing, so it falls due at once, and never past its one-minute
+// timeout, so its run ends by its row's cancellation or not at all. And the
+// run has returned once its slot is free (Runner.run gives it back last), so
+// whatever it records is recorded by then.
+//
+// Mutation: poll the box alone, never the row — the box runs on, red; record
+// the run's own ending over the row's — a measurement, which replaces the
+// cancellation — red.
 func TestACancelledRowStopsItsBox(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	f.runner(f.options("git-a", 1, &order{nodes: []string{"git-a"}}))
+	clock := &clock{at: time.Now().UTC().Truncate(24 * time.Hour).Add(25 * time.Hour)}
+	o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+	o.Now = clock.now
+	r := f.runner(o)
 	key := f.queue(oidOf("f"), def("unit", time.Minute))
 	box := f.container.box(t)
 	f.await(key, "named its box", func(r code.CheckRow) bool { return r.Box == box.ID() })
 	res, err := f.d.Served().PublishChecks(t.Context(), code.ChecksRequest{OpID: newOpID("code_check_cancel"),
 		Finished: &code.CheckFinished{CheckKey: key, State: code.CheckStateCancelled,
-			Reason: code.CheckReasonSuperseded, FinishedAt: time.Now().UTC()}})
+			Reason: code.CheckReasonSuperseded, FinishedAt: clock.now()}})
 	if err != nil || res.Refusal != "" {
 		t.Fatalf("cancel the running attempt: (%+v, %v)", res, err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for !box.Closed() {
-		if time.Now().After(deadline) {
-			t.Fatal("the box of a cancelled attempt was never closed")
-		}
-		time.Sleep(5 * time.Millisecond)
+	eventually(t, "the cancelled attempt's run returned", func() bool {
+		return r.Held(config.PlacementContainer) == 0
+	})
+	if !box.Closed() {
+		t.Error("the run of a cancelled attempt returned with its box open")
 	}
-	time.Sleep(10 * fast.Poll)
 	if row, _ := f.row(key); row.State != code.CheckStateCancelled || row.Reason != code.CheckReasonSuperseded {
 		t.Errorf("the cancelled attempt's row = %+v, want its cancellation kept", row)
 	}
@@ -299,13 +308,22 @@ func TestACancelledRowStopsItsBox(t *testing.T) {
 // GIT.MAX_CHECKS BOUNDS CONTAINER CELLS: a runner of two container slots runs
 // two of five queued container checks and leaves three queued; each that ends
 // frees a slot the next takes; and a remote (e2b) check runs beside them,
-// taking none.
+// taking none. The three are read as queued once a walk begun after the
+// remote check's claim, and after every run started has made its box, has
+// ended (walks.walked): that check, queued last, was claimed by a walk that
+// took the queue oldest first, so it had considered every container check,
+// and the walk after it considered what was left.
 //
-// Mutation: claim whatever is queued, slots or not — five boxes at once, red.
+// Mutation: claim whatever is queued, slots or not — five boxes at once, red;
+// take a container slot past max_checks on the walks after the first — the
+// walk after the claims takes a third, red.
 func TestMaxChecksBoundsContainerCells(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	r := f.runner(f.options("git-a", 2, &order{nodes: []string{"git-a"}}))
+	o := f.options("git-a", 2, &order{nodes: []string{"git-a"}})
+	var w walks
+	w.counting(&o)
+	r := f.runner(o)
 	var keys []code.CheckKey
 	for _, s := range []string{"1", "2", "3", "4", "5"} {
 		keys = append(keys, f.queue(oidOf(s), def("unit", time.Minute)))
@@ -316,7 +334,7 @@ func TestMaxChecksBoundsContainerCells(t *testing.T) {
 	first, second := f.container.box(t), f.container.box(t)
 	f.e2b.box(t)
 	f.await(lint, "run remotely", func(row code.CheckRow) bool { return row.Placement == code.PlacementE2B })
-	time.Sleep(20 * fast.Walk)
+	w.walked(t, r, 1)
 	if n := f.container.count(); n != 2 || r.Held(config.PlacementContainer) != 2 {
 		t.Fatalf("a runner of two slots made %d container boxes and holds %d", n, r.Held(config.PlacementContainer))
 	}

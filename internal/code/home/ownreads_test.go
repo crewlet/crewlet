@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -57,6 +58,12 @@ func (h *heldReads) peak() int {
 // ahead of the seats in the share's own queue; and OwnReads is all but one of
 // a wider share.
 //
+// In a bubble, where synctest.Wait returns once every goroutine but the
+// case's is durably blocked: by then both turns have gone as far as they can
+// — the first parked in its held read, the second parked waiting for a read
+// of its own, or, unbounded, beside it in the estate — and the bubble's clock,
+// which holds the loop's passes and its turns' bounds, has not moved.
+//
 // Mutations: build the loop's workers over the estate as given, its reads
 // unbounded — two in flight on a one-unit share, red; OwnReads answering the
 // whole share — the table, red.
@@ -68,41 +75,48 @@ func TestAHomeLeavesItsSeatsAUnit(t *testing.T) {
 		}
 	}
 
-	e := newEstate()
-	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
-		Touched: []string{"a.go"}})
-	e.hold(repoB, 1, oid("b"), oid("2"), code.RevisionFactsAnswer{MergeBase: oid("2"), PatchID: oid("f"),
-		Touched: []string{"b.go"}})
-	held := newHeldReads(e)
-	p := &placement{homes: map[string]string{repoA: "node-a", repoB: "node-a"}}
-	loopOver(t, home.Options{Chart: noChart,
-		Estate: held, Placement: asNode{placement: p, node: "node-a"}, Nudges: newNudges(),
-		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: "node-a",
-		Share: units(1)}, time.Hour)
-	select {
-	case <-held.began:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the home read no facts in 10s")
-	}
-	// BOTH TURNS ARE UNDER WAY once both repositories' due changes are read;
-	// the second's facts read, unbounded, would be in flight within moments.
-	deadline := time.Now().Add(10 * time.Second)
-	for e.countAsked(repoA) == 0 || e.countAsked(repoB) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the home did not work both repositories at once in 10s")
+	synctest.Test(t, func(t *testing.T) {
+		e := newEstate()
+		e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
+			Touched: []string{"a.go"}})
+		e.hold(repoB, 1, oid("b"), oid("2"), code.RevisionFactsAnswer{MergeBase: oid("2"), PatchID: oid("f"),
+			Touched: []string{"b.go"}})
+		held := newHeldReads(e)
+		p := &placement{homes: map[string]string{repoA: "node-a", repoB: "node-a"}}
+		loopOver(t, home.Options{Chart: noChart,
+			Estate: held, Placement: asNode{placement: p, node: "node-a"}, Nudges: newNudges(),
+			Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
+			NodeID: "node-a", Share: units(1)}, time.Hour)
+		synctest.Wait()
+		// BOTH TURNS ARE UNDER WAY, each having read its repository's due
+		// changes, and one facts read is held.
+		if e.countAsked(repoA) == 0 || e.countAsked(repoB) == 0 || len(held.began) == 0 {
+			t.Fatalf("with the loop parked the home read repo A's due changes %d times and repo B's %d, and "+
+				"began %d facts reads: want both turns under way, one read held", e.countAsked(repoA),
+				e.countAsked(repoB), len(held.began))
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if got := held.peak(); got != 1 {
-		t.Errorf("%d of the home's facts reads were in flight at once on a share of one unit, want 1", got)
-	}
-	close(held.release)
-	e.waitDone(t, repoA, 10*time.Second)
-	e.waitDone(t, repoB, 10*time.Second)
-	if got := held.peak(); got != 1 {
-		t.Errorf("%d of the home's facts reads were in flight at once on a share of one unit, want 1", got)
-	}
+		if got := held.peak(); got != 1 {
+			t.Errorf("%d of the home's facts reads were in flight at once on a share of one unit, want 1", got)
+		}
+		close(held.release)
+		synctest.Wait()
+		for _, repo := range []string{repoA, repoB} {
+			if left := e.left(repo); left != 0 {
+				t.Errorf("repository %s still holds %d due changes once the loop is parked again, want none",
+					repo, left)
+			}
+		}
+		if got := held.peak(); got != 1 {
+			t.Errorf("%d of the home's facts reads were in flight at once on a share of one unit, want 1", got)
+		}
+	})
+}
+
+// left is how many changes repo's due list and its rechecks hold.
+func (e *estate) left(repo string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.due[repo]) + len(e.rechecks[repo])
 }
 
 // countAsked is how many times the loop has read repo's due changes.

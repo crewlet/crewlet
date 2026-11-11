@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,11 +38,46 @@ func (e *queueReads) count() int {
 	return len(e.cells)
 }
 
+// walks counts a runner's walks by the read each begins with: the epoch it
+// runs under (Runner.walk reads its Company first). A run reads it too, as it
+// starts, so a count read while no check starts counts walks alone.
+type walks struct {
+	company func() (checkrun.Company, bool)
+	begun   atomic.Int64
+}
+
+// counting has the runner built from o count its walks on w.
+func (w *walks) counting(o *checkrun.Options) {
+	w.company = o.Company
+	o.Company = w.read
+}
+
+func (w *walks) read() (checkrun.Company, bool) {
+	w.begun.Add(1)
+	return w.company()
+}
+
+// walked waits until n walks of r begun after the call have ended: r is
+// nudged into each, and into one more, which begins only once those before it
+// have ended — a runner walks one walk at a time.
+func (w *walks) walked(t *testing.T, r *checkrun.Runner, n int) {
+	t.Helper()
+	from := w.begun.Load()
+	for i := range int64(n) + 1 {
+		r.Nudge()
+		eventually(t, "a nudged walk", func() bool { return w.begun.Load() > from+i })
+	}
+}
+
 // A NODE READS NO QUEUE IT CANNOT CLAIM FROM: its catalogue holds an e2b cell
 // — its seats' — but its company runs checks only in containers, and with its
 // one container slot held a nudged walk reads nothing of the queue, however
 // much of it waits; once the slot frees, the walk reads again and claims the
 // next attempt.
+//
+// The walk that claimed the first attempt read the queue before its claim, so
+// every read of it is counted once the box is named; and the five nudged walks
+// are read once each has ended (walks.walked).
 //
 // Mutation: count a cell the catalogue configures as room whatever the
 // company allows — the e2b cell keeps every walk reading the queue, red.
@@ -59,24 +95,13 @@ func TestAFullNodeReadsNoQueueItCannotClaimFrom(t *testing.T) {
 	// NO BACKSTOP WITHIN THE CASE: a walk at the start, at each nudge and at
 	// each check's ending, and nothing else.
 	o.Timing.Backstop = time.Hour
+	var w walks
+	w.counting(&o)
 	r := f.runner(o)
 	first := f.container.box(t)
 	f.await(keys[0], "named its box", func(row code.CheckRow) bool { return row.Box == first.ID() })
-	// The first walk has run its course once the slot is held and no read
-	// has followed for many walks' gaps.
 	settled := reads.count()
-	for {
-		time.Sleep(40 * fast.Walk)
-		if n := reads.count(); n == settled {
-			break
-		} else {
-			settled = n
-		}
-	}
-	for range 5 {
-		r.Nudge()
-		time.Sleep(10 * fast.Walk)
-	}
+	w.walked(t, r, 5)
 	if n := reads.count(); n != settled {
 		t.Fatalf("a node whose one container slot is held read the queue %d times over five nudged walks, "+
 			"want none: it claims nothing it reads", n-settled)

@@ -2,6 +2,7 @@ package query_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -94,8 +95,14 @@ func TestAStopCutsTheReadsInFlightAndRefusesTheRest(t *testing.T) {
 // its records once Gitlet has stopped on it — the usage day's last flush —
 // is short of no read this server answered.
 //
-// Mutation: return from the stop without waiting for the reads in flight, and
-// it returns while the read is still being recorded.
+// A read is recorded inside the span a stop waits for
+// (TestAStopWaitsForEveryReadInFlight): its recording runs on the read's own
+// context (Options.Fetched), which the stop cuts while the read is in flight
+// — so the recording sees the stop's cut, where one made once its read had
+// ended would see that end first.
+//
+// Mutation: record a read on a context that has ended, as one recorded once
+// its read had ended — red.
 func TestAStopWaitsForAReadStillBeingRecorded(t *testing.T) {
 	t.Parallel()
 	settings := codetest.Settings()
@@ -103,10 +110,10 @@ func TestAStopWaitsForAReadStillBeingRecorded(t *testing.T) {
 	x := newFixture(t, codetest.SoloOptions{}, settings)
 	head := x.commit(map[string]string{"f": "1\n"}, "one")
 	repo := x.repo(codetest.RepoName)
-	recording, release := make(chan struct{}, 1), make(chan struct{})
+	recording, release := make(chan context.Context, 1), make(chan struct{})
 	var recorded atomic.Int64
-	s := x.server(0, query.Options{Fetched: func(context.Context, types.CodeFetched) {
-		recording <- struct{}{}
+	s := x.server(0, query.Options{Fetched: func(ctx context.Context, _ types.CodeFetched) {
+		recording <- ctx
 		<-release
 		recorded.Add(1)
 	}})
@@ -116,23 +123,28 @@ func TestAStopWaitsForAReadStillBeingRecorded(t *testing.T) {
 		_, err := s.Read(context.Background(), treeQ(repo, code.TreeQuery{Rev: head}))
 		answered <- err
 	}()
-	<-recording
+	in := <-recording
+	if err := in.Err(); err != nil {
+		t.Fatalf("the read was recorded on a context that had ended (%v): outside the span a stop waits for",
+			context.Cause(in))
+	}
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		s.Stop(context.Background())
 	}()
-	// AN ABSENCE, held for a moment: a stop that does not wait returns at
-	// once, well inside it, and one that waits cannot return before release.
 	select {
-	case <-stopped:
-		t.Fatal("the stop returned while a read it let answer was still being recorded")
-	case <-time.After(200 * time.Millisecond):
+	case <-in.Done():
+	case <-time.After(10 * time.Second): //fixedwait:liveness
+		t.Fatal("the stop never cut the read being recorded")
+	}
+	if cause := context.Cause(in); !errors.Is(cause, query.ErrStopped) {
+		t.Fatalf("the read being recorded was ended by %v, want the stop's cut: the read the stop waits for", cause)
 	}
 	close(release)
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the stop never returned once the read was recorded")
 	}
 	if recorded.Load() != 1 {

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -86,59 +87,60 @@ func (b *busyRepo) turned() ([]statelog.Freshness, int) {
 // hold every record of it; never a turn a record, and never two turns of one
 // repository at once.
 //
+// In a bubble, where synctest.Wait returns once every goroutine but the
+// case's is durably blocked: once the burst has been told, a turn it wrongly
+// scheduled beside the busy one — the loop's second goroutine is idle — has
+// begun its read by then, beside the held one; and once the busy turn is let
+// go, every turn the burst scheduled has run by then, while the bubble's
+// clock, which holds the loop's passes, has not moved.
+//
 // Mutations: schedule a busy pair as an idle one, queued at once — a second
 // turn runs beside the first, red; keep the last floor asked rather than the
 // furthest — the turn after reads at 53, red.
 func TestABurstOnABusyRepositoryCostsOneMoreTurn(t *testing.T) {
 	t.Parallel()
-	e := newEstate()
-	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
-		Touched: []string{"a.go"}})
-	b := &busyRepo{estate: e, repo: repoA, first: make(chan struct{}), release: make(chan struct{})}
-	p := &placement{homes: map[string]string{repoA: "node-a"}}
-	n := newNudges()
-	loopOver(t, home.Options{Chart: noChart, Estate: b, Placement: asNode{placement: p, node: "node-a"}, Nudges: n,
-		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: "node-a",
-		Share: units(2)}, time.Hour)
-	select {
-	case <-b.first:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the home's first pass worked no turn of the repository in 10s")
-	}
-	for _, seq := range []uint64{50, 59, 53} {
-		n.subject(t, repoA, seq)
-	}
-	// THE BUSY TURN STAYS HELD a while after the burst: a turn the burst
-	// wrongly scheduled beside it — the loop's second goroutine is idle —
-	// would begin its read within moments, and released at once the busy
-	// turn would end before that read began, the two never seen at once.
-	time.Sleep(100 * time.Millisecond)
-	close(b.release)
-	e.waitDone(t, repoA, 10*time.Second)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if reads, _ := b.turned(); len(reads) >= 2 {
-			break
+	synctest.Test(t, func(t *testing.T) {
+		e := newEstate()
+		e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
+			Touched: []string{"a.go"}})
+		b := &busyRepo{estate: e, repo: repoA, first: make(chan struct{}), release: make(chan struct{})}
+		p := &placement{homes: map[string]string{repoA: "node-a"}}
+		n := newNudges()
+		loopOver(t, home.Options{Chart: noChart, Estate: b, Placement: asNode{placement: p, node: "node-a"},
+			Nudges: n, Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
+			NodeID: "node-a", Share: units(2)}, time.Hour)
+		synctest.Wait()
+		if reads, _ := b.turned(); len(reads) != 1 {
+			t.Fatalf("the home's first pass read the repository's due changes %d times with the loop parked, "+
+				"want its one turn, held", len(reads))
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the burst on the busy repository scheduled no turn after it in 10s")
+		for _, seq := range []uint64{50, 59, 53} {
+			n.subject(t, repoA, seq)
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	// ANY FURTHER TURN the burst scheduled would begin within moments.
-	time.Sleep(200 * time.Millisecond)
-	reads, most := b.turned()
-	if len(reads) != 2 {
-		t.Fatalf("the repository's change work took %d turns, want the busy one and ONE more for the burst",
-			len(reads))
-	}
-	if most != 1 {
-		t.Errorf("%d turns of the repository's change work ran at once, want one", most)
-	}
-	furthest := statelog.Position{Stream: topics.CodeLogStream, Seq: 59}
-	if f := reads[1]; f.Level != statelog.ReadSession || !slices.Equal(f.Floors, []statelog.Position{furthest}) {
-		t.Errorf("the turn after the burst read at %+v, want the burst's furthest position %s", f, furthest)
-	}
+		synctest.Wait()
+		if reads, most := b.turned(); len(reads) != 1 || most != 1 {
+			t.Fatalf("with the busy turn held the burst began %d reads of the repository's due changes, %d at "+
+				"once: want the busy turn's alone, the burst's one turn waiting for it", len(reads), most)
+		}
+
+		close(b.release)
+		synctest.Wait()
+		reads, most := b.turned()
+		if len(reads) != 2 {
+			t.Fatalf("the repository's change work took %d turns, want the busy one and ONE more for the burst",
+				len(reads))
+		}
+		if most != 1 {
+			t.Errorf("%d turns of the repository's change work ran at once, want one", most)
+		}
+		furthest := statelog.Position{Stream: topics.CodeLogStream, Seq: 59}
+		if f := reads[1]; f.Level != statelog.ReadSession || !slices.Equal(f.Floors, []statelog.Position{furthest}) {
+			t.Errorf("the turn after the burst read at %+v, want the burst's furthest position %s", f, furthest)
+		}
+		if left := e.left(repoA); left != 0 {
+			t.Errorf("the repository still holds %d due changes once the loop is parked again, want none", left)
+		}
+	})
 }
 
 // stalledReads is an estate whose git reads never answer before their turn's

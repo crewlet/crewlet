@@ -18,10 +18,12 @@ import (
 // reconcile makes on a repository's own subjects — a name's claim, a
 // repository's settings or lifecycle — as they run: how many are in flight,
 // the most there ever were, and how many began. Each such publish is HELD
-// until hold of them are in flight together (or a moment has passed, for the
-// tail of a run with fewer left), so a run that can reach its bound does; and
-// refuse, when it answers non-nil for a publish, is that publish's answer in
-// place of the broker's. lose, when set, is asked once the broker has answered
+// until hold of them have been in flight together, so a run that can reach its
+// bound does, and none is held once they have: the tail of a run, fewer left
+// than the bound, goes straight on. A run that never reaches it — decided a
+// repository at a time — is let go after gateHang, and the most it held is
+// then its case's to fail; and refuse, when it answers non-nil for a publish,
+// is that publish's answer in place of the broker's. lose, when set, is asked once the broker has answered
 // any publish, and where it says so that answer is LOST: the publish answers
 // OutcomeUnknown with no error, as statelog does for an append whose context
 // ended while it was in flight — the cancelled append is classified by a probe
@@ -39,7 +41,15 @@ type gatedPublisher struct {
 	inFlight int
 	most     int
 	began    int
+	// reached is set once hold publishes have been in flight together, or
+	// the gate has given up waiting for them (gateHang).
+	reached bool
 }
+
+// gateHang is how long a gated publish waits for the bound to be reached
+// before the gate lets every publish go: a hang detector, which only a run
+// that never reaches the bound meets.
+const gateHang = 30 * time.Second
 
 func newGatedPublisher(inner code.Publisher, hold int) *gatedPublisher {
 	g := &gatedPublisher{Publisher: inner, hold: hold}
@@ -56,16 +66,20 @@ func (g *gatedPublisher) Publish(ctx context.Context, req statelog.Request) (sta
 	g.inFlight++
 	g.began++
 	g.most = max(g.most, g.inFlight)
+	g.reached = g.reached || g.inFlight >= g.hold
 	g.cond.Broadcast()
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for g.inFlight < g.hold && time.Now().Before(deadline) && ctx.Err() == nil {
-		// A TIMED WAIT, so the tail of a run — fewer left than the bound
-		// — goes on after a moment rather than for ever.
-		wake := time.AfterFunc(10*time.Millisecond, g.cond.Broadcast)
+	// HELD UNTIL THE BOUND HAS BEEN REACHED ONCE, or the publish's context
+	// ends, or the gate gives up — a hang detector a run that reaches the
+	// bound never meets. Each wakes the wait under the gate's mutex, so none
+	// is lost between its check and the wait.
+	ended := context.AfterFunc(ctx, g.wake)
+	hung := time.AfterFunc(gateHang, g.release) //fixedwait:liveness
+	for !g.reached && ctx.Err() == nil {
 		g.cond.Wait()
-		wake.Stop()
 	}
 	g.mu.Unlock()
+	ended()
+	hung.Stop()
 	defer func() {
 		g.mu.Lock()
 		g.inFlight--
@@ -78,6 +92,22 @@ func (g *gatedPublisher) Publish(ctx context.Context, req statelog.Request) (sta
 		}
 	}
 	return g.answer(ctx, req)
+}
+
+// wake wakes every held publish to look at the gate again.
+func (g *gatedPublisher) wake() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cond.Broadcast()
+}
+
+// release lets every publish go, held or to come: the gate has waited its
+// hang out.
+func (g *gatedPublisher) release() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.reached = true
+	g.cond.Broadcast()
 }
 
 // answer is the broker's answer to req — or, where lose says so once it is
