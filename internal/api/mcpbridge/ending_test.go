@@ -689,9 +689,9 @@ func TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans(t *testing.T) {
 // context, and is recorded once its tool returns; a caller that must not tear
 // down what such a call writes through — a node that has given its seats back
 // and is stopping — asks the bridge to wait for it. It returns at once where no
-// such call runs, a call on an opening still serving being its run's own; it
-// returns once each call whose opening had ended is recorded; and it returns
-// once its context ends, the call running on.
+// such call runs, a call on an opening still serving not being one; it returns
+// once each call whose opening had ended is recorded; and it returns once its
+// context ends, the call running on.
 //
 // Mutation: wait for no call (`false &&` before the bridge's test of a call's
 // opening), and the bridge answers that its calls are done while one still
@@ -712,7 +712,7 @@ func TestABridgeAwaitsEveryCallItRunsUntilItIsRecorded(t *testing.T) {
 				Arguments: map[string]any{"value": "hold"}, Abandoned: make(chan struct{})})
 		}()
 		<-held.entered
-		// A CALL ON AN OPENING STILL SERVING is its run's own to wait for.
+		// A CALL ON AN OPENING STILL SERVING is not waited for.
 		b.bridge.AwaitCalls(t.Context())
 
 		b.bridge.Close("run-1")

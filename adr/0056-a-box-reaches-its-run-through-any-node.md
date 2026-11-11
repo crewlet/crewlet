@@ -196,8 +196,9 @@ whose tool has not returned, in the words of how it ended. Where the run is over
 for the box (a close, a relaunch's opening) the answer is "This run has ended;
 this call is still running, so do not make it again. End your turn now." Where
 the box goes on (the seat leaving, a recovery) it is "This call is still
-running; do not make it again. Its result reaches the run's log." Neither is
-marked failed, as the tool loop's own answer to a call still running near its
+running; do not make it again." Neither says where the call's result goes,
+which would not hold for every call so answered (below). Neither is marked
+failed, as the tool loop's own answer to a call still running near its
 harness's tool timeout is not: a harness hands its model a failed result as a
 call that failed, and a model makes a failed call again, while this call is
 running and its effect is still to come. The call's handler stops its beat and
@@ -222,14 +223,20 @@ answers are out, at the latest when the box's connection ends.
 
 **The call runs on, and the bridge holds it.** The call's tool runs on a
 goroutine of the bridge's, under the run's context, until the call's own bound
-ends it, and the call is recorded once its tool returns, in one step, as one
-nobody waited for, after the session's ledger has ended
+ends it, and the call's record is appended once its tool returns, in one step,
+as one nobody waited for, after the session's ledger has ended
 ([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
-amendment on such a call). A call that reaches an opening after its end is
-refused and runs nothing, as before, now in the words of how the opening ended:
-told to end its turn where the run ended, and, where the box goes on, that the
-session it reached was closing and to call again, which reaches the opening
-that serves the box now.
+amendment on such a call). It lands only where the run's log still takes it: the
+paths that end a run go on, waiting for no call, to read the run's log and
+delete its record, so a call still running as a stop, the turn's cap, a reclaim
+or the run's settle ends its job is in no collection of the run where it returns
+after that read, and on no record of it where it returns after the delete. A
+relaunch's job takes it as a late call of the round, and a run whose box goes on
+takes it as its own while its record stands. A call that reaches an opening
+after its end is refused and runs nothing, as before, now in the words of how
+the opening ended: told to end its turn where the run ended, and, where the box
+goes on, that the session it reached was closing and to call again, which
+reaches the opening that serves the box now.
 
 **A stopping node waits for those calls once its seats are given back.** Its
 drain releases every seat, which ends each seat's openings and answers their

@@ -36,9 +36,12 @@ const (
 
 // The answers a call is handed as the opening it was made on ends. Each says
 // only what holds as it is written: the call was admitted before the end, so
-// its tool runs to its end and its effect is still to come — which is why it
-// must not be made again — and, where the box goes on, the call's record
-// reaches the run's log, as every call's does.
+// its tool runs to its end and its effect is still to come, which is why it
+// must not be made again. NEITHER SAYS WHERE ITS RESULT GOES: its record is
+// appended once its tool returns, and lands only where the run's log still
+// takes it — a run that ends before the call returns has its record read and
+// deleted without it (see the package doc) — so a promise that the result
+// reaches the run's log would not hold for every call so answered.
 const (
 	// endedRunningNote answers a call still running as its opening ends where
 	// the run ended for its box. NOT A FAILURE, as the tool loop's own "still
@@ -48,8 +51,7 @@ const (
 
 	// stillRunningNote answers a call still running as its opening ends where
 	// the box goes on calling. Not a failure either.
-	stillRunningNote = "This call is still running; do not make it again. " +
-		"Its result reaches the run's log."
+	stillRunningNote = "This call is still running; do not make it again."
 
 	// closingNote answers a call that reaches an opening after its end where
 	// the box goes on: the call never ran, and its box's next call reaches the
@@ -191,11 +193,14 @@ func (r *bridgedCalls) running() []*bridgedCall {
 // by the time it is asked has been recorded ([binding.conclude]), or until ctx
 // ends: what a node's drain asks once it has given its seats back
 // (internal/engine's Engine.Drain), which ended every seat's openings, so a
-// call those ends answered as still running reaches the run's log before the
-// node tears down what it writes through. A call on an opening still
-// serving is its run's own to wait for, and a call admitted after this is
-// asked is not waited for. No bound of its own: ctx's is the caller's, and a
-// call's own bound ends it (wait.go). Nil-safe.
+// call those ends answered as still running makes its record before the node
+// tears down what it writes through. NOTHING ELSE IS WAITED FOR, by this or by
+// anything: a call on an opening still serving when this is asked — the
+// Dashboard Assistant's deep work, whose opening ends with its own run and
+// answers its calls as any end does — runs on to its own bound, and a process
+// stopped first ends it, and so does a call admitted after this is asked. No
+// bound of its own: ctx's is the caller's, and a call's own bound ends it
+// (wait.go). Nil-safe.
 func (b *Bridge) AwaitCalls(ctx context.Context) {
 	if b == nil {
 		return

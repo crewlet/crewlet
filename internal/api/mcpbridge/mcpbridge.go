@@ -134,8 +134,10 @@
 // first waited out every call still running, and that call's answer was never
 // written: measured with the SDK's own client as the box, a close and a
 // relaunch's opening each returned only once the held call's tool did, and the
-// box read "request terminated without response"; a seat leaving this node
-// held the seat's lease for as long.
+// box read "request terminated without response"; the seat leaving this node,
+// and a recovery's opening, had not returned when the measurement stopped
+// waiting — and a node gives a seat's lease back only once its release of the
+// seat has returned.
 //
 // AN ENDING ANSWERS EVERY CALL STILL RUNNING, THEN CLOSES. Under the opening's
 // lock it refuses every later call and answers each call it admitted whose tool
@@ -143,23 +145,22 @@
 // over for the box — a close, a relaunch's opening — that the run has ended,
 // the call is still running and must not be made again, and the turn should
 // end; where the box goes on — the seat leaving, a recovery — that the call is
-// still running and must not be made again, and that its result reaches the
-// run's log. NOT A FAILURE, as the tool loop's own "still running" is not
-// (internal/agent/toolloop): a harness hands its model a failed result as a
-// call that failed, and a model makes a failed call again, where this one is
-// running and its effect is still to come. The call's handler stops its beat
-// and waits for it, as before any answer, so no progress follows. The ending
-// waits for each answer it gave to be out ([toolsession.Call.Over]); for the
-// answer of a call whose tool returned just before it, which its own result
-// answers, once its record is made; and for every answer the opening gave
-// without running a call, the refusal of one that reached it after its end
-// among them — for at most [endAnswerWait], and only then closes the
-// sessions, which by then hold no request a tool is behind: so it returns
-// once those answers are out, which a box that reads takes no time over, and
-// a seat leaving this node gives its lease back then rather than once the
-// call returns. A call that reaches the opening as that close begins is
-// refused all the same, and its box reads the close's failure in place of
-// that refusal: the SDK writes no answer once a close has begun.
+// still running and must not be made again. NOT A FAILURE, as the tool loop's
+// own "still running" is not (internal/agent/toolloop): a harness hands its
+// model a failed result as a call that failed, and a model makes a failed call
+// again, where this one is running and its effect is still to come. The call's
+// handler stops its beat and waits for it, as before any answer, so no progress
+// follows. The ending waits for each answer it gave to be out
+// ([toolsession.Call.Over]); for the answer of a call whose tool returned just
+// before it, which its own result answers, once its record is made; and for
+// every answer the opening gave without running a call, the refusal of one that
+// reached it after its end among them — for at most [endAnswerWait], and only
+// then closes the sessions, which by then hold no request a tool is behind: so
+// it returns once those answers are out, which a box that reads takes no time
+// over, and a seat leaving this node gives its lease back then rather than once
+// the call returns. A call that reaches the opening as that close begins is
+// refused all the same, and its box reads the close's failure in place of that
+// refusal: the SDK writes no answer once a close has begun.
 //
 // PAST THAT BOUND THE ENDING DOES NOT WAIT: an answer still on its way is one a
 // box is not reading, and a box that does not read must not hold an ending. It
@@ -170,11 +171,19 @@
 // fails is one its box never reads: its harness sees the call's request fail,
 // and the call is recorded as nobody waited for it, as below.
 //
-// THE CALL'S TOOL RUNS ON TO ITS OWN END, and the call is recorded once it
-// returns ([binding.conclude]) — after the opening ended, and after its
-// ledger's end, which the ledger takes as it takes any call in flight as its
-// session ends ([Ledger.End]) — as one nobody waited for, since its harness
-// was handed the ending's answer and not the tool's. WHO WAITS FOR IT IS THE
+// THE CALL'S TOOL RUNS ON TO ITS OWN END, and the call's record is appended
+// once it returns ([binding.conclude]) — after the opening ended, and after
+// its ledger's end, which the ledger takes as it takes any call in flight as
+// its session ends ([Ledger.End]) — as one nobody waited for, since its
+// harness was handed the ending's answer and not the tool's. IT LANDS ONLY
+// WHERE THE RUN'S LOG STILL TAKES IT: every path that ends a run goes on, not
+// waiting for the call, to read the run's log and delete its record — a
+// stop's collection, the cap's, a reclaim's, the run's settle — so a call that
+// returns after that read is in no collection of the run, what it committed
+// in no outcome, and one that returns after the delete is on no record of the
+// run at all, though its effect happened. A relaunch's job takes it as a late
+// call of the round, and a run whose box goes on takes it as its own while its
+// record stands. WHO WAITS FOR IT IS THE
 // BRIDGE, under the run's context, which nothing cancels, until the call's
 // own bound ends it — a seat MCP server's request timeout, `delegate`'s call
 // cap, a builtin's own (wait.go): [binding.Call] starts the goroutine that
@@ -1142,8 +1151,11 @@ func (b *Bridge) routeOf(s *Session) (route, error) {
 // read its record, or to delete it.
 //
 // IT WAITS FOR NO CALL STILL RUNNING: each is answered that the run has ended
-// and the call is still running ([endedRunningNote]), and runs on to be
-// recorded after ([binding.endKeeping]).
+// and the call is still running ([endedRunningNote]), and runs on, its record
+// appended as its tool returns ([binding.endKeeping]) — after the reads and
+// the delete that follow this where it returns later, which then hold
+// nothing of it (see the package doc, "An opening ends without waiting for
+// its calls").
 func (b *Bridge) Close(runID string) {
 	if b == nil {
 		return
@@ -2026,7 +2038,10 @@ type answer struct {
 //   - IT MAY RUN AFTER THE OPENING ENDED, and after the session's ledger
 //     ended, which the ledger takes as it takes any call still in flight as
 //     its session ends ([Ledger.End]): under the run's context, never the
-//     request's, which the call has no part of.
+//     request's, which the call has no part of. And after the run's
+//     collection read its log, or its ending deleted the run's record, which
+//     the ending of an opening does not wait for: what it appends then is in
+//     no collection of the run, or on no record of it.
 //   - IT NEVER FAILS THE CALL BACK over its record ([binding.record]): the
 //     tool ran, and its effect happened.
 //
@@ -2080,9 +2095,10 @@ func (o *binding) conclude(c *bridgedCall, r ran) answer {
 			Source: res.Source, Absorbed: res.Absorbed}
 	}
 
-	// AND THE FENCE AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered
-	// — it ran, and what it did is done — but nothing after it runs as a seat
-	// this node no longer holds.
+	// AND THE FENCE AGAIN ONCE THE TOOL HAS RETURNED. It ran, and what it did
+	// is done, whichever answer its box was handed — its own, or its
+	// opening's end's — but nothing after it runs as a seat this node no
+	// longer holds.
 	if after := fence(s); after != nil {
 		o.stop(after)
 	}

@@ -1941,13 +1941,14 @@ opening replaced it, the seat left the node, or a recovery opened the job again
 — and the end answers the call at once that it is still running (ADR-0056's
 amendment on an opening's end), so its harness is handed that answer and never
 the call's own. The call's effect happens all the same. A harness that gave up
-on a call can still end its own run, since it waits for no answer it gave up
-on, and its job can park on a question with the call still running. Landing before a relaunch read the round's log, the call
-was listed as its job's own and unmarked: the job's own copy in its box, where
-its harness ended its own run, held it by the line the amendment on that copy
-draws, and a capture of that session placed by its own read counted it at its
-save point — while the session held only that the call timed out. No
-continuation was told it, and a run could make it again.
+on a call can still end its own run, since it waits for no answer it gave up on,
+and its job can park on a question with the call still running. Landing before a
+relaunch read the round's log, the call was listed as its job's own and
+unmarked: the job's own copy in its box, where its harness ended its own run,
+held it by the line the amendment on that copy draws, and a capture of that
+session placed by its own read counted it at its save point — while the session
+held only that the call timed out. No continuation was told it, and a run could
+make it again.
 
 **Marked by the bridge, as its tool returns.** The tool session hands the
 dispatcher whether anybody can still read the answer
@@ -2033,8 +2034,12 @@ moment between the tool's answer and that answer's delivery, while the bridge
 records the call. And what such a call committed counts in the turn's outcome
 only where the log takes it before its round's last collection reads the log,
 as a late call's does: a call still running as its run settles lands after that
-read, and so does one still running as a send-back's new round opens the log
-afresh, so what either committed is in no outcome. And a call still running
-when the process running it is killed is on no record at all: a node's
-graceful stop waits for it once it has given its seats back, and nothing of a
-process killed first outlives it to record it.
+read; so, since no end of its job's session waits for it, does one still
+running as a person's stop, the turn's cap or a reclaim ends its job, each of
+which ends the session and then reads the box and the log; and so does one
+still running as a send-back's new round opens the log afresh; so what any of
+them committed is in no outcome. One that lands once its run's ending has
+deleted the run's record is on no record of the run at all, though its effect
+happened. And a call still running when the process running it is killed is on
+no record at all: a node's graceful stop waits for it once it has given its
+seats back, and nothing of a process killed first outlives it to record it.
