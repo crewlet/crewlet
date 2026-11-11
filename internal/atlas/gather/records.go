@@ -127,12 +127,23 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 		}
 		note(SourceSeatAccess, errors.Join(failed...))
 	}
-	if src.ToolServers == nil {
-		note(SourceToolServers, ErrNoSource)
+	var leases []coord.Lease
+	var leaseErr error
+	if src.Nodes == nil {
+		leaseErr = ErrNoSource
 	} else {
+		leases, leaseErr = src.Nodes.ListLive(ctx, coord.ClassNode)
+	}
+	switch {
+	case src.ToolServers == nil:
+		note(SourceToolServers, ErrNoSource)
+	case leaseErr != nil:
+		note(SourceToolServers, fmt.Errorf("a listing counts only while its node is live, and the nodes are unread: %w",
+			leaseErr))
+	default:
 		listings, listErr := src.ToolServers.ListMCPListings(ctx)
-		for _, l := range listings {
-			p := derive.ToolServerListing{Server: l.Server, ToolCount: l.ToolCount, At: l.At}
+		for _, l := range coord.LiveMCPListings(listings, leases) {
+			p := derive.ToolServerListing{Server: l.Server, ToolCount: len(l.Tools), At: l.At}
 			if l.Info != nil {
 				p.Name, p.Version = l.Info.Name, l.Info.Version
 			}
@@ -151,10 +162,9 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 		}
 		note(SourceToolServers, errors.Join(listErr, grantErr))
 	}
-	if src.Nodes == nil {
-		note(SourceNodes, ErrNoSource)
+	if leaseErr != nil {
+		note(SourceNodes, leaseErr)
 	} else {
-		leases, err := src.Nodes.ListLive(ctx, coord.ClassNode)
 		for _, lease := range leases {
 			status, ok := coord.StatusFromMeta(lease.Meta)
 			if !ok {
@@ -175,7 +185,7 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 				r.Models = append(r.Models, p)
 			}
 		}
-		note(SourceNodes, err)
+		note(SourceNodes, nil)
 	}
 	if src.ServerTests == nil {
 		note(SourceServerTests, ErrNoSource)

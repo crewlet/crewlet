@@ -72,7 +72,7 @@ func (f fakeNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error)
 		if err := json.Unmarshal(raw, &meta); err != nil {
 			return nil, err
 		}
-		out = append(out, coord.Lease{Resource: fmt.Sprintf("node/n%d", i), Meta: meta})
+		out = append(out, coord.Lease{Resource: coord.NodeResource(fmt.Sprintf("n%d", i)), Epoch: 1, Meta: meta})
 	}
 	return out, nil
 }
@@ -145,9 +145,12 @@ func records(t *testing.T, c *config.Company) gather.Sources {
 					ObservedAt: now.Add(-time.Hour)}}},
 		}},
 		ToolServers: fakeTools{
-			listings: []coord.MCPListing{{Server: "tickets", Node: "n0", At: now.Add(-time.Minute), ToolCount: 12,
-				Info: &coord.MCPServerInfo{Name: "Tickets", Version: "2.4.1"}, Instructions: "atlas-instructions-canary",
-				Tools: []coord.MCPListedTool{{Name: "search", Description: "atlas-description-canary"}}}},
+			listings: []coord.MCPListing{
+				{Server: "tickets", Node: "n0", Epoch: 1, At: now.Add(-time.Minute),
+					Info: &coord.MCPServerInfo{Name: "Tickets", Version: "2.4.1"}, Instructions: "atlas-instructions-canary",
+					Tools: []coord.MCPListedTool{{Name: "search", Description: "atlas-description-canary"}, {Name: "create"}}},
+				{Server: "tickets", Node: "n0", Epoch: 0, At: now, Info: &coord.MCPServerInfo{Name: "Tickets", Version: "1.0.0"}},
+			},
 			grants: []coord.MCPGrant{{Server: "tickets", Issuer: "https://auth.tickets.example", Expiry: &expiry,
 				By: "ops@acme.example"}},
 		},
@@ -187,8 +190,10 @@ func signalsOf(e atlas.Entry) []atlas.SignalKind {
 
 // WHAT THE ENGINE'S RECORDS SAY JOINS THE ENTRY IT IS ABOUT: an integration's
 // inbound address and standing on its account, the agents holding accounts
-// there, a tool server's own name, version and sign-in, the health the nodes
-// beat, a server's current test, and each entry's use.
+// there, a tool server's own name, version and sign-in as a live node listed
+// them (a listing from a node's previous epoch counts for nothing, however
+// new), the health the nodes beat, a server's current test, and each entry's
+// use.
 func TestRecordsJoinTheEntryTheyAreAbout(t *testing.T) {
 	t.Parallel()
 	c := company()
@@ -221,7 +226,7 @@ func TestRecordsJoinTheEntryTheyAreAbout(t *testing.T) {
 	}
 	tickets := find(atlas.KindToolServer, "mcp/tickets")
 	for f, want := range map[atlas.Fact]string{atlas.FactServerName: "Tickets", atlas.FactServerVersion: "2.4.1",
-		atlas.FactToolCount: "12", atlas.FactOAuthIssuer: "https://auth.tickets.example"} {
+		atlas.FactToolCount: "2", atlas.FactOAuthIssuer: "https://auth.tickets.example"} {
 		if got := value(tickets, f); got != want {
 			t.Errorf("the tickets server's %s is %q, want %q", f, got, want)
 		}
@@ -352,8 +357,8 @@ func realistic(tb testing.TB) (*config.Company, gather.Sources) {
 	var health []coord.MCPServerStatus
 	calls := map[string][]usage.ServerToolCallsRow{}
 	for _, m := range c.MCPServers {
-		tools.listings = append(tools.listings, coord.MCPListing{Server: m.Name, Node: "n0", At: now, ToolCount: 20,
-			Info: &coord.MCPServerInfo{Name: m.Name, Version: "1.0.0"}})
+		tools.listings = append(tools.listings, coord.MCPListing{Server: m.Name, Node: "n0", Epoch: 1, At: now,
+			Info: &coord.MCPServerInfo{Name: m.Name, Version: "1.0.0"}, Tools: make([]coord.MCPListedTool, 20)})
 		health = append(health, coord.MCPServerStatus{Server: m.Name, Started: 3})
 		for _, s := range seats[:40] {
 			calls[m.Name] = append(calls[m.Name], usage.ServerToolCallsRow{Tool: "search", Handle: s, Calls: 30, LastAt: now})
