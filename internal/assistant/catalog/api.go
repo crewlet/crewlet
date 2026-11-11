@@ -724,15 +724,15 @@ func queryValues(v any) (url.Values, error) {
 
 // outsideRoutes are the read routes whose answers carry text from outside the
 // company, by path prefix: the events, turns and executors that quote what was
-// said on chat surfaces this engine does not own, a seat's executor
-// sessions — a harness's whole record of a run, every file it read and every
-// command's output, and the listing beside it, whose asks and endings quote
-// them — and the integrations and their agents' access, which carry a
-// vendor's refusals and its names for levels, accounts and scope entries, as
-// the curated read of one agent's access is fenced. An answer of one is fenced
-// as external; every other route's as a colleague's, unless it carries an
-// executor's question (the decisions waiting on a person, and the ones they
-// answered: [decisionRows]) or names a connected knowledge base as its backend.
+// said on chat surfaces this engine does not own; a seat's executor sessions
+// (a harness's whole record of a run, every file it read and every command's
+// output, and the listing beside it, whose asks and endings quote them); and
+// the integrations and their agents' access, which carry a vendor's refusals
+// and its names for levels, accounts and scope entries, as the curated read of
+// one agent's access is fenced. An answer of one is fenced as external; every
+// other route's as a colleague's, unless it carries an executor's question
+// (the decisions waiting on a person, and the ones they answered:
+// [decisionRows]) or names a connected knowledge base as its backend.
 var outsideRoutes = []string{
 	"/agents/{id}/sessions", "/agents/{id}/sessions/{turn_id}",
 	"/events", "/turns", "/executors", "/query/{what}",
