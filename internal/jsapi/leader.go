@@ -196,7 +196,7 @@ func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 // than the message, and it is heard only once its last byte is in: the one
 // rule for how long such a reply is given before a read is presumed lost,
 // whoever reads ([Leader.Carrying], and a state log's read of a record by its
-// position).
+// position). A write's request crosses the other way, raw ([Sending]).
 func Crossing(messageBytes int, pace time.Duration) time.Duration {
 	reply := base64.StdEncoding.EncodedLen(messageBytes) + replyOverhead
 	return time.Duration(float64(pace) * float64(reply) / mebibyte)
@@ -209,6 +209,32 @@ func Crossing(messageBytes int, pace time.Duration) time.Duration {
 // metadata, its own data, is a few hundred bytes; a state log record's are the
 // few its append carried).
 const replyOverhead = 1 << 10
+
+// Sending is how long the REQUEST of an acknowledged write — a publish that
+// carries a message of messageBytes, its header block and its payload — takes
+// to cross a link carrying a mebibyte in as long as pace: [Crossing]'s twin
+// for the other direction, and the time [WriteBound] gives a write beyond the
+// request term, since the stream acknowledges a message only once its last
+// byte is in.
+//
+// RAW, where a read's reply is not: a publish carries its message as it is,
+// behind the protocol line that names it ([requestOverhead]) — never
+// base64-encoded and never inside JSON — so a write crosses in three quarters
+// of the time the reply to a read of the same message does, and a bound
+// counted as a read's would hold a write on a dead link a third longer than
+// its bytes need.
+func Sending(messageBytes int, pace time.Duration) time.Duration {
+	request := messageBytes + requestOverhead
+	return time.Duration(float64(pace) * float64(request) / mebibyte)
+}
+
+// requestOverhead is the most a write's request carries beside its message:
+// the protocol line ahead of it — the verb, the subject, the reply subject its
+// acknowledgement comes back on and the message's two sizes — and the line
+// ends. A kibibyte, as a reply's envelope is ([replyOverhead]): the longest
+// subject the engine publishes on is a few hundred bytes, and a reply subject
+// a few dozen.
+const requestOverhead = 1 << 10
 
 // mebibyte is the unit a pace is stated in.
 const mebibyte = 1 << 20
