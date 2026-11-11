@@ -127,6 +127,7 @@ var routeExposures = []Exposure{
 	routeProposed(seatWriteRoute, "set_token_budget"),
 	routeProposed(companyWriteRoute, "set_token_budget"),
 	// AN AGENT'S ACCESS AT A VENDOR IS SAVED AS ITS AGENTS TAB SAVES IT.
+	routed(accessSeatRoute, seatAccessReadTool),
 	routeProposed(accessWriteRoute, "set_seat_access"),
 }
 
