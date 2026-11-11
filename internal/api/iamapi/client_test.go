@@ -147,6 +147,57 @@ func TestTheDashboardChecksALoginByTheEnginesGrammar(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD CHECKS A SEAT'S HANDLE BY THE ENGINE'S GRAMMAR, handle for
+// handle.
+//
+// A screen that names seats past what an action's enum may list holds a
+// proposed seat to `SEAT_HANDLE` and `MAX_LOGIN` instead (the Budgets
+// ceiling), so the engine refuses a malformed handle before any card. Held by
+// BEHAVIOUR, as the login grammars are: the pattern is compiled here and a
+// corpus run through it and through [iam.ValidSeatHandle], so a grammar change
+// on either side that answers any of these differently fails.
+//
+// Mutation: let `SEAT_HANDLE` take an underscore or a capital, or anchor only
+// one end, and this fails.
+func TestTheDashboardChecksASeatHandleByTheEnginesGrammar(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	source, err := clientsource.Scalar(tree, "SEAT_HANDLE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := regexp.Compile(source)
+	if err != nil {
+		t.Fatalf("SEAT_HANDLE does not compile: %v", err)
+	}
+	raw, err := clientsource.Scalar(tree, "MAX_LOGIN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxLogin, err := strconv.Atoi(raw)
+	if err != nil {
+		t.Fatalf("MAX_LOGIN is %q: %v", raw, err)
+	}
+	corpus := []string{
+		"qa", "sre", "vp-eng", "sarah-chen", "3d-artist", "a", "0",
+		"QA", "Qa", "sre_bot", "sre.bot", "vp eng", "-eng", "é", "", "qa\n", "a:b",
+		strings.Repeat("a", 64), strings.Repeat("a", 65),
+	}
+	admitted := 0
+	for _, h := range corpus {
+		engine := iam.ValidSeatHandle(h)
+		if engine {
+			admitted++
+		}
+		if got := handle.MatchString(h) && len(h) <= maxLogin; got != engine {
+			t.Errorf("the handle %q: the dashboard answers %v, the engine %v", h, got, engine)
+		}
+	}
+	if admitted == 0 {
+		t.Fatal("the engine admits nothing in the corpus, so it certifies nothing")
+	}
+}
+
 // THE DASHBOARD MINTS WITHIN THE ENGINE'S TOKEN LIFETIMES.
 //
 // The token dialog says what an empty lifetime takes and refuses one past the

@@ -125,18 +125,22 @@ func (t *ArgTypes) UnmarshalJSON(raw []byte) error {
 // about sixty nodes) and small enough that checking a value against one is
 // cheap and the schema reads in a few lines of the prompt.
 //
-// THE THREE EXPORTED ONES ARE THE DASHBOARD'S TOO: the arguments of
-// `draft.set` grow with the open draft (a member per editable field, each
-// described by its label and hint), so the dashboard declares them only while
-// they fit, and otherwise lets the draft's editable fields say what it takes.
-// `contract/assistant.ts` copies them, held here by the client gate.
+// THE EXPORTED ONES ARE THE DASHBOARD'S TOO: they are the bounds a screen's
+// data can push a declaration past (a member per field of an open draft, a
+// value per seat a screen draws, words a person wrote), so the frame holds
+// every action's arguments to them before a page context is sent, and leaves
+// out what does not fit rather than send it to be refused with the question.
+// `contract/assistant.ts` copies them, held here by the client gate. The rest
+// are the shape a screen's code writes, held for every declaration by
+// TestTheEngineReadsEverySchemaTheDashboardDeclares.
 const (
 	actionArgsMaxDepth    = 8
 	actionArgsMaxNodes    = 160
-	actionArgsMaxEnum     = 64
 	actionArgsMaxVariants = 16
 	actionArgsMaxExamples = 4
 	actionArgsMaxPattern  = 128
+	// ActionArgsMaxEnum is the most values one enum lists.
+	ActionArgsMaxEnum = 64
 	// ActionArgsMaxMembers is the most members one object of a schema
 	// declares, by name and by pattern together.
 	ActionArgsMaxMembers = 32
@@ -217,9 +221,9 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 	case *nodes > actionArgsMaxNodes:
 		return fmt.Errorf("%w: an action's arguments have more than %d parts", ErrInvalid,
 			actionArgsMaxNodes)
-	case len(s.Enum) > actionArgsMaxEnum:
+	case len(s.Enum) > ActionArgsMaxEnum:
 		return fmt.Errorf("%w: %s lists %d values, over %d", ErrInvalid, path, len(s.Enum),
-			actionArgsMaxEnum)
+			ActionArgsMaxEnum)
 	case len(s.Properties)+len(s.PatternProperties) > ActionArgsMaxMembers:
 		return fmt.Errorf("%w: %s declares more than %d members", ErrInvalid, path,
 			ActionArgsMaxMembers)

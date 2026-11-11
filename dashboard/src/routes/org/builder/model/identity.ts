@@ -29,11 +29,13 @@
  * company a lead's draft of one unit does not hold.
  */
 
+import { SEAT_HANDLE } from "~/contract/identity.ts";
+
 /** The longest handle or key: a seat handle's width (`iam.MaxLogin`) and the key grammar's own bound. */
 export const MAX_IDENTITY = 64;
 
-/** A seat handle: one segment of lowercase letters, digits and hyphens (`org.ValidHandle`). */
-export const HANDLE_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/** A seat handle: one segment of lowercase letters, digits and hyphens (`org.ValidHandle`, held as `SEAT_HANDLE`). */
+export const HANDLE_PATTERN = new RegExp(SEAT_HANDLE);
 
 /** A unit key: a lowercase letter, then letters, digits, `-` and `_` (`config.entityID`). */
 export const UNIT_KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;

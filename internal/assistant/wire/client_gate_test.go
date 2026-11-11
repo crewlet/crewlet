@@ -116,9 +116,10 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_PAGE_ID_MAX_BYTES":              strconv.Itoa(wire.PageIDMaxBytes),
 		"ASSISTANT_PAGE_MAP_MAX_KEYS":              strconv.Itoa(wire.PageMapMaxKeys),
 		"ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES": strconv.Itoa(wire.PageDraftFileNameMaxBytes),
-		// --- a schema's bounds, which draft.set's arguments are declared within ---
+		// --- a schema's bounds, which every action's arguments are held within ---
 		"ASSISTANT_ACTION_ARGS_MAX_BYTES":             strconv.Itoa(wire.ActionArgsMaxBytes),
 		"ASSISTANT_ACTION_ARGS_MAX_MEMBERS":           strconv.Itoa(wire.ActionArgsMaxMembers),
+		"ASSISTANT_ACTION_ARGS_MAX_ENUM":              strconv.Itoa(wire.ActionArgsMaxEnum),
 		"ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES": strconv.Itoa(wire.ActionArgsDescriptionMaxRunes),
 		// --- deep work (im-deep) ---
 		"ASSISTANT_DEEP_ACTIVITY_LINES":     strconv.Itoa(wire.DeepActivityLines),

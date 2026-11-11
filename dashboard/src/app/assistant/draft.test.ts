@@ -13,7 +13,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
-  ASSISTANT_ACTION_ARGS_MAX_BYTES,
   ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
   ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
@@ -180,23 +179,49 @@ function editable(n: number, label: number, hint: number, value = "v"): Assistan
  * the whole page context, and the question asked with it, for an action
  * declaring more members than one object may hold, encoding past its bytes,
  * or carrying a description past its bound
- * (`internal/assistant/wire.ActionArgs`). Past the members or the bytes,
- * `draft.set` declares nothing, which the engine takes for it alone, reading
- * the draft's editable fields instead.
+ * (`internal/assistant/wire.ActionArgs`). Past the members or the bytes, the
+ * frame sends `draft.set` with no arguments (`buildPageContext`), which the
+ * engine takes for it alone, reading the draft's editable fields instead; a
+ * description is cut to its bound, and the example offered only where it still
+ * fits, since either is better cut than the whole declaration lost.
  */
 describe("what draft.set declares it takes", () => {
-  // Mutation: drop the members check, or the bytes check, and the 33-member
-  // or the twenty wide members are declared.
-  test("a member per editable field while one schema may hold them, and nothing past that", () => {
-    const most = draftSetArgs(editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS, 10, 0));
-    expect(Object.keys(most?.properties?.values?.properties ?? {})).toHaveLength(
-      ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
-    );
-    expect(wireBytes(most)).toBeLessThanOrEqual(ASSISTANT_ACTION_ARGS_MAX_BYTES);
-    expect(draftSetArgs(editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS + 1, 10, 0))).toBeUndefined();
-    // TWENTY MEMBERS at the longest label and hint a field carries: under the
-    // member bound, over the bytes.
-    expect(draftSetArgs(editable(20, 120, 200))).toBeUndefined();
+  // Mutation: drop the guard's members check, or its bytes check, and the
+  // 33-member or the twenty wide members are declared.
+  test("a member per editable field while one schema may hold them, and none past that", () => {
+    const page: FramePage = {
+      screen: "brand-setup",
+      title: "Brand › Set up",
+      path: ["company"],
+      params: {},
+      query: {},
+    };
+    const sent = (draft: AssistantPageDraft) =>
+      buildPageContext(page, {
+        draft,
+        actions: {
+          "draft.set": {
+            ...draftSetAction(() => null),
+            args: draftSetArgs(draft),
+          } as PageActionSpec<unknown>,
+        },
+      });
+    const most = sent(editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS, 10, 0));
+    expect(
+      Object.keys(most.action_args?.["draft.set"]?.properties?.values?.properties ?? {}),
+    ).toHaveLength(ASSISTANT_ACTION_ARGS_MAX_MEMBERS);
+    // PAST THE MEMBERS, and TWENTY MEMBERS at the longest label and hint a
+    // field carries, under the member bound and over the bytes: still
+    // offered, with no arguments.
+    for (const past of [
+      editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS + 1, 10, 0),
+      editable(20, 120, 200),
+    ]) {
+      const context = sent(past);
+      expect(context.accepts).toEqual(["draft.set"]);
+      expect(context.action_args?.["draft.set"]).toBeUndefined();
+      expect(pageContextFits(context)).toBe(true);
+    }
   });
 
   // Mutation: send the label and hint whole, and the description runs past

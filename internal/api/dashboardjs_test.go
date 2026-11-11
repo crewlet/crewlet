@@ -1357,7 +1357,13 @@ const (
 	// (the attention queue's notice rows and each unread source's sentence), the
 	// alarm words already in the shell's engine panel and no screen's module in
 	// the entry. So it moved to 401 KiB, 2.19 seconds.
-	initialBudget = 401 << 10
+	// Every page action's arguments held to the engine's bounds for a schema
+	// before a page context is sent took it from 400.8 KiB to 401.3 KiB: the
+	// chunk the assistant's page registry is built in +404 bytes gzipped (the
+	// guard, and the words it names an action it leaves out in), since every
+	// page context is built there, and the rest within a few bytes, with no
+	// screen's module in the entry. So it moved to 402 KiB, 2.20 seconds.
+	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2198,8 +2204,12 @@ const (
 	// the agents' access draft (an integration's Agents tab and an agent's
 	// Access tab, one draft over its tabs) and draft.set written in its fields'
 	// order took it to 5725.3 KiB (5,862,652 bytes, +9,120, all script):
-	// 5726 KiB.
-	treeBudget = 5<<20 + 606<<10
+	// 5726 KiB. Every page action's arguments held to the engine's bounds
+	// for a schema before a page context is sent, the page context's own
+	// bounds held to the engine's, and the Budgets ceiling's seat held to a
+	// handle's grammar past an enum's 64 took it to 5726.6 KiB (5,864,019
+	// bytes, +1,367, all script): 5727 KiB.
+	treeBudget = 5<<20 + 607<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

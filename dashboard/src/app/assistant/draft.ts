@@ -35,7 +35,6 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import {
   ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
   ASSISTANT_ACTION_ARGS_MAX_BYTES,
-  ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
   ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES,
   ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES,
@@ -472,22 +471,19 @@ function fieldArgs(field: AssistantPageDraft["fields"][number]): AssistantAction
  * its path, in its kind's shape. Built from the snapshot the page sends, so
  * the model reads the same fields the screen's parser sets.
  *
- * UNDEFINED PAST WHAT ONE SCHEMA MAY DECLARE. A member per editable field
- * grows with the draft, and the engine refuses a page context whose action
- * declares more members than [ASSISTANT_ACTION_ARGS_MAX_MEMBERS] in one object
- * or encodes past [ASSISTANT_ACTION_ARGS_MAX_BYTES], and every question asked
- * with it. Past either, `draft.set` declares nothing, which the engine takes
- * for it alone, reading what it takes from the draft's editable fields
- * (`catalog.PageActionFor`). Its other bounds hold by construction: three
- * levels deep, at most two parts a member, one example, and each description
- * cut to its bound ([described]).
+ * A MEMBER PER EDITABLE FIELD grows with the draft past what one schema may
+ * declare (its members, its bytes), and the frame then sends `draft.set`
+ * without its arguments (`buildPageContext`), which the engine takes for it
+ * alone, reading what it takes from the draft's editable fields
+ * (`catalog.PageActionFor`). What is better cut than lost with the rest is cut
+ * here: each description to its bound ([described]), and the example offered
+ * only where it still fits.
  */
-export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs | undefined {
+export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs {
   const properties: Record<string, AssistantActionArgs> = {};
   for (const field of draft.fields) {
     if (field.editable === true) properties[field.path] = fieldArgs(field);
   }
-  if (Object.keys(properties).length > ASSISTANT_ACTION_ARGS_MAX_MEMBERS) return undefined;
   const args: AssistantActionArgs = {
     type: "object",
     description: "Values for the open draft's editable fields, by path.",
@@ -497,7 +493,6 @@ export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs | u
       values: { type: "object", additionalProperties: false, properties },
     },
   };
-  if (wireBytes(args) > ASSISTANT_ACTION_ARGS_MAX_BYTES) return undefined;
   // THE FIELD'S OWN VALUE is the one example every field takes as it stands,
   // offered where it still fits: a value runs to a thousand characters.
   const first = draft.fields.find((f) => f.editable === true && f.kind === "text" && f.value);

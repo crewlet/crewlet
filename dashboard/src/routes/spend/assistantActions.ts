@@ -10,7 +10,8 @@
  */
 
 import type { PageActionParse } from "~/app/assistant/context.ts";
-import type { AssistantActionArgs } from "~/contract/assistant.ts";
+import { ASSISTANT_ACTION_ARGS_MAX_ENUM, type AssistantActionArgs } from "~/contract/assistant.ts";
+import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
 import { choiceKey, windowKey, type UrlActionKey } from "~/app/assistant/urlAction.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { GROUPS } from "~/contract/spend.ts";
@@ -43,6 +44,22 @@ export interface CeilingProposal {
 const CEILING_MAX = 32;
 
 /**
+ * The seat a ceiling is for: one the screen draws, listed while an enum may
+ * list every one, and past that held to a handle's grammar (`SEAT_HANDLE`, at
+ * most `MAX_LOGIN`). The engine refuses an enum past
+ * [ASSISTANT_ACTION_ARGS_MAX_ENUM] values, and the page context declaring it
+ * with every question asked on the page, so a company of more seats than that
+ * lost its Budgets page to the assistant. A seat the screen does not draw is
+ * refused by [parseCeilingPrefill] either way.
+ */
+function seatArgs(handles: readonly string[]): AssistantActionArgs {
+  const description = "The seat's handle. Leave it out for the company's own ceiling.";
+  return handles.length <= ASSISTANT_ACTION_ARGS_MAX_ENUM
+    ? { type: "string", enum: [...handles], description }
+    : { type: "string", pattern: SEAT_HANDLE, maxLength: MAX_LOGIN, description };
+}
+
+/**
  * What a prepared ceiling takes, from the same seats and windows
  * [parseCeilingPrefill] holds it to: a seat the screen draws (none for the
  * company), one of the windows, and the value as the field is typed.
@@ -58,15 +75,7 @@ export function ceilingPrefillArgs(seats: ReadonlySet<string>): AssistantActionA
     additionalProperties: false,
     required: ["period", "ceiling"],
     properties: {
-      ...(handles.length > 0
-        ? {
-            seat: {
-              type: "string",
-              enum: handles,
-              description: "The seat's handle. Leave it out for the company's own ceiling.",
-            },
-          }
-        : {}),
+      ...(handles.length > 0 ? { seat: seatArgs(handles) } : {}),
       period: { type: "string", enum: periods, description: "The window the ceiling is for." },
       ceiling: {
         type: ["string", "null"],

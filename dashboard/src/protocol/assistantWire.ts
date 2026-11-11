@@ -16,6 +16,10 @@
  */
 
 import {
+  ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
+  ASSISTANT_ACTION_ARGS_MAX_BYTES,
+  ASSISTANT_ACTION_ARGS_MAX_ENUM,
+  ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
   ASSISTANT_ACTION_CONTEXT_INVALIDATE,
   ASSISTANT_AUDIT_REASON_MAX_RUNES,
   ASSISTANT_DIGEST_PREFIX,
@@ -24,10 +28,12 @@ import {
   ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS,
   ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
+  ASSISTANT_PAGE_VALUE_MAX_BYTES,
   ASSISTANT_PROTOCOL_VERSION,
 } from "../contract/assistant.ts";
 import type {
   AssistantActionAnswer,
+  AssistantActionArgs,
   AssistantActionEvent,
   AssistantActionReport,
   AssistantAuditReadRequest,
@@ -324,6 +330,80 @@ export function wireBytes(value: unknown): number {
   const html = text.match(/[<>&]/g)?.length ?? 0;
   const separators = text.match(/[\u2028\u2029]/g)?.length ?? 0;
   return encoder.encode(text).length + 5 * html + 3 * separators;
+}
+
+/** Every control character but a line break and a tab: what a description may not hold. */
+const DESCRIPTION_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+/** Every control character: what an enumerated or constant value may not hold. */
+const VALUE_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * Why a page action's arguments are a schema the engine refuses, or null
+ * where they are one it takes (`internal/assistant/wire.ActionArgs`): the
+ * bounds a screen's DATA can push a declaration past, a member per field of
+ * an open draft, a value per seat a screen draws, words somebody wrote. Its
+ * bytes as the engine encodes them, and in every part the members of an
+ * object, the values an enum lists, each enumerated or constant value, and a
+ * description. The engine refuses the whole page context over any of them,
+ * and every question asked with it.
+ *
+ * Its other rules (depth, parts, shapes, examples, a pattern that compiles)
+ * are the shape a screen's CODE writes, the same whatever the company holds,
+ * and held for every declaration by the engine's own reader
+ * (`TestTheEngineReadsEverySchemaTheDashboardDeclares`).
+ */
+export function actionArgsProblem(args: AssistantActionArgs): string | null {
+  const bytes = wireBytes(args);
+  if (bytes > ASSISTANT_ACTION_ARGS_MAX_BYTES) {
+    return `its arguments are ${bytes} bytes, over ${ASSISTANT_ACTION_ARGS_MAX_BYTES}`;
+  }
+  return partProblem("args", args);
+}
+
+/** What is wrong with one part of a schema and every part under it, or null. */
+function partProblem(path: string, part: AssistantActionArgs): string | null {
+  const members =
+    Object.keys(part.properties ?? {}).length + Object.keys(part.patternProperties ?? {}).length;
+  if (members > ASSISTANT_ACTION_ARGS_MAX_MEMBERS) {
+    return `${path} declares ${members} members, over ${ASSISTANT_ACTION_ARGS_MAX_MEMBERS}`;
+  }
+  const listed = part.enum ?? [];
+  if (listed.length > ASSISTANT_ACTION_ARGS_MAX_ENUM) {
+    return `${path} lists ${listed.length} values, over ${ASSISTANT_ACTION_ARGS_MAX_ENUM}`;
+  }
+  for (const value of part.const === undefined ? listed : [...listed, part.const]) {
+    if (
+      encoder.encode(value).length > ASSISTANT_PAGE_VALUE_MAX_BYTES ||
+      VALUE_CONTROL.test(value)
+    ) {
+      return `${path} lists a value that is not plain text of at most ${ASSISTANT_PAGE_VALUE_MAX_BYTES} bytes`;
+    }
+  }
+  const described = part.description ?? "";
+  if (
+    runes(described) > ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES ||
+    DESCRIPTION_CONTROL.test(described)
+  ) {
+    return `${path}'s description is not text of at most ${ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES} characters`;
+  }
+  const under: [string, AssistantActionArgs][] = [
+    ...Object.entries(part.properties ?? {}).map(
+      ([name, member]): [string, AssistantActionArgs] => [`${path}.${name}`, member],
+    ),
+    ...Object.entries(part.patternProperties ?? {}).map(
+      ([name, member]): [string, AssistantActionArgs] => [`${path}.${name}`, member],
+    ),
+    ...(part.items ? [[`${path}[]`, part.items] as [string, AssistantActionArgs]] : []),
+    ...(part.oneOf ?? []).map((variant, i): [string, AssistantActionArgs] => [
+      `${path}(${i + 1})`,
+      variant,
+    ]),
+  ];
+  for (const [at, member] of under) {
+    const problem = partProblem(at, member);
+    if (problem !== null) return problem;
+  }
+  return null;
 }
 
 /**

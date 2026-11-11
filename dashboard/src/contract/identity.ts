@@ -59,6 +59,15 @@ export const MACHINE_LOGIN = "^[a-z0-9]+(?:-[a-z0-9]+)*(?::[a-z0-9]+(?:-[a-z0-9]
 export const MAX_LOGIN = 64;
 
 /**
+ * A seat's handle, as the engine holds one (`iam.ValidSeatHandle`): a
+ * lowercase letter or a digit, then lowercase letters, digits and hyphens, at
+ * most [MAX_LOGIN] characters. HELD BY BEHAVIOUR, as the login grammars are:
+ * `internal/api/iamapi.TestTheDashboardChecksASeatHandleByTheEnginesGrammar`
+ * runs a corpus through it and through the engine's own check.
+ */
+export const SEAT_HANDLE = "^[a-z0-9][a-z0-9-]*$";
+
+/**
  * The prefixes that name a CREDENTIAL in the operator column (`pat:` a
  * machine token, `session:` a browser session), which no machine's login may
  * begin with.

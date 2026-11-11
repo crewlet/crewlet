@@ -63,7 +63,7 @@ import {
   type AssistantRecordNoun,
   type AssistantResourceRef,
 } from "~/contract/assistant.ts";
-import { pageContextFits } from "~/protocol/assistantWire.ts";
+import { actionArgsProblem, pageContextFits } from "~/protocol/assistantWire.ts";
 import { resolve } from "../routes.ts";
 import type { Crumb } from "../crumbs.ts";
 import { LENS_LABELS, scopeAt } from "../scope.ts";
@@ -200,14 +200,10 @@ export interface PageActionSpec<P> {
    * screen draws), so the two cannot disagree. Sent in the page context's
    * `action_args`; the model reads it, and the engine holds every proposal to
    * it before a card is drawn, so a call the screen could only refuse never
-   * reaches the person.
-   *
-   * Undefined only for `draft.set` on a draft whose fields are more than one
-   * schema may declare (`draftSetArgs`): the engine takes `draft.set` alone
-   * with no arguments, reading what it takes from the draft's editable
-   * fields, and never proposes any other action that declares none.
+   * reaches the person. Held to the engine's bounds for a schema before it
+   * is sent ([buildPageContext]).
    */
-  args: AssistantActionArgs | undefined;
+  args: AssistantActionArgs;
   /**
    * What a change by this action depends on, beyond the screen and its path:
    * the address's query, the selection, the screen's data. All three where
@@ -427,6 +423,19 @@ function revisionOf(
   return `${page.screen}@${hashOf(parts)}`;
 }
 
+/** The actions left out of a page context for arguments past the engine's bounds, by screen and id. */
+const leftOutSaid = new Set<string>();
+
+/** Say once, to whoever builds the dashboard, that an action was left out of a screen's context, and why. */
+function leftOut(screen: string, id: string, problem: string): void {
+  const key = `${screen} ${id}`;
+  if (leftOutSaid.has(key)) return;
+  leftOutSaid.add(key);
+  console.warn(
+    `Ask Crewlet is not offered ${id} on ${screen}: ${problem}, which the engine refuses.`,
+  );
+}
+
 /** The wire context for a page and its registration, held to the engine's bounds. */
 export function buildPageContext(
   page: FramePage,
@@ -449,18 +458,30 @@ export function buildPageContext(
       : null;
   // ONLY THE CONTRACT'S IDS, which the engine's catalogue holds too (its
   // client gate keeps the two equal): an id the engine does not know is one
-  // every proposal for would be refused, so it is never offered.
-  const accepts = Object.keys(reg?.actions ?? {})
-    .filter(isPageActionId)
-    .slice(0, ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS);
-  // WHAT EACH TAKES AND WHAT EACH DEPENDS ON, by its id: the engine holds a
-  // proposal to the first and binds it to the second.
+  // every proposal for would be refused, so it is never offered. WHAT EACH
+  // TAKES AND WHAT EACH DEPENDS ON, by its id: the engine holds a proposal to
+  // the first and binds it to the second.
+  //
+  // EVERY ACTION'S ARGUMENTS ARE HELD TO THE ENGINE'S BOUNDS FIRST
+  // ([actionArgsProblem]): one past them is a page context the engine
+  // refuses, and every question asked with it. `draft.set` past them goes
+  // without its arguments, which the engine takes for it alone, reading the
+  // draft's editable fields instead; any other action past them is left out,
+  // said once to the console, rather than take the page down with it.
+  const accepts: PageActionId[] = [];
   const actionArgs: Record<string, AssistantActionArgs> = {};
   const actionRevisions: Record<string, string> = {};
-  for (const id of accepts) {
+  for (const id of Object.keys(reg?.actions ?? {}).filter(isPageActionId)) {
+    if (accepts.length >= ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS) break;
     const spec = reg?.actions?.[id];
     if (!spec) continue;
-    if (spec.args !== undefined) actionArgs[id] = spec.args;
+    const problem = actionArgsProblem(spec.args);
+    if (problem !== null && id !== "draft.set") {
+      leftOut(page.screen, id, problem);
+      continue;
+    }
+    accepts.push(id);
+    if (problem === null) actionArgs[id] = spec.args;
     actionRevisions[id] = revisionOf(page, reg, spec.tracks ?? ALL_PARTS);
   }
   const context: AssistantPageContext = {
@@ -741,6 +762,7 @@ on("assistant.action.apply", (request) => {
 /** Test seam: the registry as a fresh page has it. */
 export function resetPageContextForTest(): void {
   undos.clear();
+  leftOutSaid.clear();
   frame = null;
   registrations = [];
   registration = null;

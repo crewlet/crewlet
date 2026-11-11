@@ -71,6 +71,8 @@ export const ASSISTANT_PAGE_DRAFT_SECRET_PATH =
 export const ASSISTANT_ACTION_ARGS_MAX_BYTES = 6144;
 /** The most members one object of a page action's arguments declares, by name and by pattern together. */
 export const ASSISTANT_ACTION_ARGS_MAX_MEMBERS = 32;
+/** The most values one enum of a page action's arguments lists. */
+export const ASSISTANT_ACTION_ARGS_MAX_ENUM = 64;
 /** The longest description one part of a page action's arguments carries, in characters. */
 export const ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES = 300;
 /** The longest reason an administrator gives for a compliance read. */
