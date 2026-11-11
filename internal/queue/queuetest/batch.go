@@ -437,6 +437,63 @@ func (s *suite) runBatch(t *testing.T) {
 		})
 	})
 
+	// A PASSED PARTITION GOES BACK FOR A PEER, AND THE REST OF ITS DRAIN RUNS.
+	// A backend answers a partition's outcome in a switch of its own, so the
+	// batch path owes what the single path owes a pass (Core's
+	// a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent):
+	// the passed conversation comes back until its budget is spent and is then
+	// dead-lettered, the other conversation of the same flush is handled once,
+	// and the attachment is never quiesced.
+	//
+	// QUEUED BEFORE THE ATTACHMENT, so the two conversations are one flush,
+	// for failing_partition_redelivers_only_itself's reason.
+	//
+	// Mutation: leave the pass out of a backend's partition outcomes, and c1
+	// is never returned or dead-lettered; quiesce on a passed partition, and
+	// c2 is never handled.
+	t.Run("a_passed_partition_returns_for_a_peer_and_the_rest_of_its_drain_runs", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		deadLetters := s.needDeadLetters(t)
+		quiescing := s.needQuiescing(t)
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		queueBacklog(ctx, t, q, "t", "g", newConvEvent("a", "c1"), newConvEvent("b", "c2"))
+
+		attempts := newJournal()
+		if err := q.SubscribeBatch(ctx, "t", "g",
+			func(_ context.Context, evs []*events.Event) queue.Result {
+				conv := firstConv(t, evs)
+				attempts.record(conv)
+				if conv == "c1" {
+					return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+				}
+				return queue.Ack()
+			}, convKey, queue.NewBatchOptions(lingerFor.Seconds(), 20)); err != nil {
+			t.Fatalf("SubscribeBatch: %v", err)
+		}
+
+		attempts.await(t, "c1 to spend its budget on passes while c2 runs once", func(seen []string) bool {
+			var c1, c2 int
+			for _, conv := range seen {
+				switch conv {
+				case "c1":
+					c1++
+				case "c2":
+					c2++
+				}
+			}
+			return c1 == 3 && c2 == 1
+		})
+		attempts.staysAt(ctx, t, 4, "a dead-lettered partition kept being redelivered")
+		if quiescing(q, "t", "g") {
+			t.Error("a passed partition quiesced the attachment: nothing is wrong with a " +
+				"node that passes a message, and a quiesced one takes none of its other mail")
+		}
+		awaitState(t, "c1's event to reach the dead-letter subject", func() bool {
+			return equalStrings(labelsOf(deadLetters(q, "t", "g")), []string{"a"})
+		})
+	})
+
 	t.Run("batch_key_failure_falls_back_to_unique_key", func(t *testing.T) {
 		t.Parallel()
 		// Key derivation must never block delivery — a key function that

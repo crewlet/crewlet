@@ -20,11 +20,13 @@
 //     consumer, retains what is published while nothing is attached, and
 //     replays in order when someone attaches. Publishing to a topic with no
 //     subscription drops the event silently — hence EnsureSubscription.
-//   - Handlers have three outcomes, not two. Ack, Nak, and Defer (leave it
-//     unacked, stop consuming) — see Result. The two returns keep different
-//     places, on every backend: a Nak comes back BEHIND the mail that was
-//     waiting when it failed, a Defer at the HEAD. A handler whose message
-//     must keep its place in its conversation does not Nak.
+//   - Handlers have four outcomes, not two. Ack, Nak (a failure), Defer
+//     (hand it back and stop consuming: a condition of the node) and Pass
+//     (hand it back for a peer and go on consuming: this node will not
+//     handle this message, another may) — see Result. The returns keep
+//     different places, on every backend: a Nak and a Pass come back BEHIND
+//     the mail that was waiting, a Defer at the HEAD. A handler whose
+//     message must keep its place in its conversation does not Nak.
 //   - A handler is told how many deliveries are LEFT before the backend
 //     dead-letters a message, because every outcome that puts one back spends
 //     one and the count rides on the message rather than on the process
@@ -243,6 +245,41 @@ const (
 	// sends the event to the topic tail while its prefetched siblings
 	// replay from the head, reordering the conversation.
 	OutcomeDefer
+
+	// OutcomePass hands the delivery back to its group for a PEER and goes
+	// on consuming: this node will not handle this message and another
+	// may, and nothing is wrong with this node — only with this message
+	// here. It is the outcome for a delivery one build cannot read and
+	// another can: a record a newer build wrote, met by an older one during
+	// a roll (internal/notify's Deferral, crewlet#993). Acked, a delivery
+	// of a group every node takes from is gone for all of them.
+	//
+	// NEITHER OF THE OTHER RETURNS FITS IT. A Nak is a FAILURE, logged as
+	// one at Warn, for a delivery that failed nothing. A Defer is a
+	// condition of the NODE: it quiesces the attachment, so one message
+	// this build cannot read would stop the node taking every other; and
+	// it returns the message at the head, unspaced, so a fleet whose every
+	// node passes it would hand it round as fast as the broker delivers,
+	// spending its whole budget before the peer that reads it has started.
+	//
+	// SO IT IS SPACED AS A FAILURE IS, BY ITS DELIVERY COUNT. The shipped
+	// broker withholds the n-th delivery's pass for the failure path's n-th
+	// spacing — a second, doubling to thirty — counted off the MESSAGE
+	// rather than off the node that passes it, so a message handed from
+	// node to node ages at every hand. Like a failure it comes back BEHIND
+	// the mail that was waiting, and like every return it spends one
+	// delivery: a subscription's budget is 25 deliveries
+	// (internal/queue/jetstream's maxDeliver), so a passed message is
+	// offered to its group for about ten minutes — 1, 2, 4, 8 and 16
+	// seconds, then thirty for each of the nineteen returns after those —
+	// and is then dead-lettered with its copy, never circling for ever. The
+	// ack window (internal/queue/jetstream's DefaultAckWait, thirty
+	// minutes) does not delay it: a pass is a delayed Nak, not a timeout.
+	//
+	// The in-memory twin redelivers it as it redelivers a Nak, behind the
+	// mail that was waiting with no timer, and spends and dead-letters it
+	// alike.
+	OutcomePass
 )
 
 // String renders an outcome for logs.
@@ -252,6 +289,8 @@ func (o Outcome) String() string {
 		return "nak"
 	case OutcomeDefer:
 		return "defer"
+	case OutcomePass:
+		return "pass"
 	default:
 		return "ack"
 	}
@@ -260,13 +299,14 @@ func (o Outcome) String() string {
 // Result is a handler's decision about its delivery.
 type Result struct {
 	Outcome Outcome
-	// Reason is logged. For a deferral it is the deferral reason, which
-	// is the only record of why a message went back to the broker.
+	// Reason is logged. For a deferral or a pass it is why the message
+	// went back to the broker, which is the only record of it.
 	Reason string
 	// Cause is a deferral's class, from a closed set: what a report about a
 	// message its hand-backs retired may say, where Reason is free text.
 	Cause DeferCause
-	// Err is the failure that caused a Nak.
+	// Err is the failure that caused a Nak, or what a pass met, logged
+	// beside its reason.
 	Err error
 }
 
@@ -311,6 +351,12 @@ func Nak(err error) Result { return Result{Outcome: OutcomeNak, Err: err} }
 // Defer leaves the delivery unacked and quiesces the attachment, for cause.
 func Defer(cause DeferCause, reason string) Result {
 	return Result{Outcome: OutcomeDefer, Cause: cause, Reason: reason}
+}
+
+// Pass hands the delivery back to its group for a peer and goes on consuming
+// ([OutcomePass]): reason is why, and err what this node met, both logged.
+func Pass(reason string, err error) Result {
+	return Result{Outcome: OutcomePass, Reason: reason, Err: err}
 }
 
 // Handler processes one event.
@@ -1283,12 +1329,12 @@ func eventType(ev *events.Event) string {
 // Within a partition: event timestamp, not delivery order. This is what
 // makes a partition read correctly however redeliveries interleave with fresh
 // arrivals — a hand-back (a deferral, a hold, a stop) returns at the head and
-// a FAILED delivery is withheld for its redelivery backoff behind
-// never-delivered mail (see OutcomeNak and OutcomeDefer), and a drain that
-// carries both a returned message and newer ones has them in that order, not
-// in the order they were written. Relying on the timestamps the engine
-// already trusts removes a correctness dependency on how one drain happened
-// to be assembled.
+// a FAILED or PASSED delivery is withheld for its redelivery backoff behind
+// never-delivered mail (see OutcomeNak, OutcomePass and OutcomeDefer), and a
+// drain that carries both a returned message and newer ones has them in that
+// order, not in the order they were written. Relying on the timestamps the
+// engine already trusts removes a correctness dependency on how one drain
+// happened to be assembled.
 //
 // IT ORDERS ONE HANDLER CALL, AND NOTHING ACROSS TWO. A drain is what was
 // available when it opened plus what arrived inside its linger window, so a
@@ -1380,7 +1426,12 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 
 // LogResult emits the standard structured line for a single delivery's
 // outcome. An Ack logs nothing: the normal case is the overwhelming majority
-// of deliveries, and a line per success buries the two that matter.
+// of deliveries, and a line per success buries the ones that matter.
+//
+// A PASS IS NO FAILURE, and is never logged as one: it is a delivery this node
+// hands to a peer that can read it, a roll's ordinary minutes, and a
+// `handler_failed` at Warn for each would read as a fleet failing its mail. It
+// is logged at Info under its own name, with its reason and what the node met.
 //
 // UNDER ctx, because the line is correlated by the trace a context carries
 // (internal/logging), and a backend that logs under its handler's context
@@ -1394,6 +1445,9 @@ func LogResult(ctx context.Context, l *slog.Logger, topic, group string, ev *eve
 	case OutcomeDefer:
 		l.InfoContext(ctx, "delivery_deferred", "topic", topic, "group", group,
 			"event_type", eventType(ev), "reason", r.Reason)
+	case OutcomePass:
+		l.InfoContext(ctx, "delivery_passed", "topic", topic, "group", group,
+			"event_type", eventType(ev), "reason", r.Reason, "error", errText(r.Err))
 	}
 }
 
@@ -1420,6 +1474,10 @@ func LogBatchResult(ctx context.Context, l *slog.Logger, topic, group, batchKey 
 		l.InfoContext(ctx, "batch_delivery_deferred", "topic", topic, "group", group,
 			"batch_key", batchKey, "event_count", len(evs),
 			"event_type", eventType(head), "reason", r.Reason)
+	case OutcomePass:
+		l.InfoContext(ctx, "batch_delivery_passed", "topic", topic, "group", group,
+			"batch_key", batchKey, "event_count", len(evs),
+			"event_type", eventType(head), "reason", r.Reason, "error", errText(r.Err))
 	}
 }
 

@@ -271,11 +271,12 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 	// The identities of this chunk's events, so a mid-batch quiesce can
 	// tell what a deferral pushed back to the FRONT from what was already
 	// queued behind it — and slot the undispatched partitions between the
-	// two. A partition that FAILED leaves this set as soon as it does: a
-	// failure goes to the BACK ([Broker.retryLaterLocked]), and on a mailbox
-	// that held nothing else it would otherwise read as part of the leading
-	// run a deferral made, so the undispatched partitions were spliced in
-	// behind a retry the broker serves after them.
+	// two. A partition that FAILED leaves this set as soon as it does, and
+	// one that PASSED with it: each goes to the BACK
+	// ([Broker.retryLaterLocked]), and on a mailbox that held nothing else it
+	// would otherwise read as part of the leading run a deferral made, so the
+	// undispatched partitions were spliced in behind a retry the broker
+	// serves after them.
 	inChunk := make(map[*events.Event]struct{}, len(chunk))
 	for _, ev := range chunk {
 		inChunk[ev] = struct{}{}
@@ -343,7 +344,7 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 				queue.LogBatchResult(lctx, log, sub.topic, sub.group, part.Key, evs, res)
 			},
 		)
-		if outcome == queue.OutcomeNak {
+		if outcome == queue.OutcomeNak || outcome == queue.OutcomePass {
 			for _, ev := range evs {
 				delete(inChunk, ev)
 			}
@@ -416,9 +417,9 @@ func (b *Broker) restoreLocked(
 // invoke runs one delivery and applies the handler's outcome.
 //
 // Ack drops the events — they were removed from the mailbox before the call.
-// The two returns put them back in DIFFERENT places, because that is what the
+// The returns put them back in DIFFERENT places, because that is what the
 // only broker this engine ships does and the contract now states it (see
-// queue.OutcomeNak and queue.OutcomeDefer):
+// queue.OutcomeNak, queue.OutcomePass and queue.OutcomeDefer):
 //
 //   - A NAK — a failure — goes BEHIND every event that was waiting when it
 //     failed. JetStream withholds a failed delivery for its redelivery backoff
@@ -429,6 +430,10 @@ func (b *Broker) restoreLocked(
 //     retried a failure before a newer message of the same conversation, which
 //     production never does — the order a parked executor's answer route
 //     and the ordinary turn's retry were both written against.
+//   - A PASS — a hand-back for a peer — goes BEHIND them too, and quiesces
+//     nothing: JetStream withholds it for the failure path's backoff, by its
+//     delivery count, while the attachment that passed it goes on taking
+//     mail.
 //   - A DEFER — a hand-back — goes back at the HEAD, which is where JetStream
 //     puts a plain Nak (it serves redeliveries before new mail): measured 100
 //     of 100, 60 of them under CPU pressure, in 76ad6f656.
@@ -508,6 +513,11 @@ func (b *Broker) invoke(
 		// than circling a mailbox no budget can ever retire it from.
 		dead = b.handBackLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeNak:
+		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries)
+	case queue.OutcomePass:
+		// BEHIND THE WAITING MAIL, AS A FAILURE, AND NOTHING QUIESCED: the
+		// broker withholds a pass for the failure path's backoff, and the
+		// attachment that passed goes on taking mail — see the doc above.
 		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeAck:
 		// Acked: the events left the mailbox before the call, so there
@@ -609,10 +619,10 @@ func (b *Broker) handBackLocked(sub *subscription, evs []*events.Event, budget i
 	return dead
 }
 
-// retryLaterLocked charges a FAILURE and returns the events BEHIND everything
-// already waiting, which is where the shipped broker's redelivery backoff puts
-// them: see [Broker.invoke] for why, and for what the virtual backoff does and
-// does not reproduce.
+// retryLaterLocked charges a FAILURE, or a PASS, and returns the events BEHIND
+// everything already waiting, which is where the shipped broker's redelivery
+// backoff puts them: see [Broker.invoke] for why, and for what the virtual
+// backoff does and does not reproduce.
 //
 // A failure that is the only thing in the mailbox therefore comes straight
 // back, exactly as it would on the broker once its backoff elapsed with

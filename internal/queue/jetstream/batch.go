@@ -310,6 +310,12 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 		for _, d := range items {
 			a.nakOrDeadLetter(ctx, d.msg)
 		}
+	case queue.OutcomePass:
+		// Each message by its own delivery count, and the attachment goes
+		// on taking mail: see [attachment.pass].
+		for _, d := range items {
+			a.pass(ctx, d.msg)
+		}
 	}
 }
 

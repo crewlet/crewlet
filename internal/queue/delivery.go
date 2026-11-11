@@ -110,11 +110,12 @@ func WithHeadroom(ctx context.Context, perMessage []Headroom) context.Context {
 //
 // It is the headroom AFTER the delivery in hand: 0 means the next hand-back
 // dead-letters the message, 1 means it comes back exactly once more. A Nak, a
-// Defer and any other return that puts a message back all spend one of them,
-// because no backend here has a free handoff — see internal/queue/jetstream,
-// whose delivery budget is sized for handoffs for exactly that reason, and
-// internal/queue/memory, whose twin spends one for the same reason the broker
-// does rather than modelling a cheaper broker nobody runs.
+// Defer, a Pass and any other return that puts a message back all spend one
+// of them, because no backend here has a free handoff — see
+// internal/queue/jetstream, whose delivery budget is sized for handoffs for
+// exactly that reason, and internal/queue/memory, whose twin spends one for
+// the same reason the broker does rather than modelling a cheaper broker
+// nobody runs.
 //
 // "ANY OTHER RETURN" INCLUDES THE ONE NO HANDLER ASKED FOR. A batch loop that
 // finds itself blocked between partitions — a deferral it just applied, a

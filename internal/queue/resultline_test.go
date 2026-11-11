@@ -86,6 +86,79 @@ func TestEachPathLogsAnOutcomeUnderItsOwnName(t *testing.T) {
 	}
 }
 
+// A PASS IS LOGGED AS A PASS, NEVER AS A FAILURE, on both paths.
+//
+// A pass hands a message to a peer that can read it — an older build's
+// ordinary minutes during a roll — and nothing failed. Logged as the failure
+// path's `handler_failed` at Warn, every roll would read as a fleet failing
+// its mail, and an operator would go looking for a fault in the one outcome
+// that is none. So each path names it in its own words, at Info, with why it
+// was passed and what the node met.
+//
+// Mutation: log a pass in LogResult's Nak arm, and a delivery's pass reads
+// `handler_failed` at Warn; drop LogBatchResult's pass arm, and a passed
+// partition logs nothing.
+func TestAPassIsLoggedAsAPassNeverAsAFailure(t *testing.T) {
+	t.Parallel()
+	ev := &events.Event{Type: "external_notification"}
+	met := errors.New("worklet: the record is version 9 and this build reads 8")
+	for _, tc := range []struct {
+		name string
+		emit func(context.Context, *slog.Logger, queue.Result)
+		want map[string]any
+	}{
+		{"a delivery", func(ctx context.Context, l *slog.Logger, r queue.Result) {
+			queue.LogResult(ctx, l, "crewlet.notifications.inbound", "notify-inbound", ev, r)
+		}, map[string]any{"msg": "delivery_passed"}},
+		{"a partition", func(ctx context.Context, l *slog.Logger, r queue.Result) {
+			queue.LogBatchResult(ctx, l, "crewlet.notifications.inbound", "notify-inbound",
+				"conversation-1", []*events.Event{ev}, r)
+		}, map[string]any{"msg": "batch_delivery_passed", "batch_key": "conversation-1",
+			"event_count": float64(1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			tc.emit(t.Context(), slog.New(slog.NewJSONHandler(&buf, nil)),
+				queue.Pass("newer_record", met))
+
+			var line map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+				t.Fatalf("decoding %q: %v", buf.String(), err)
+			}
+			want := map[string]any{"level": "INFO", "reason": "newer_record", "error": met.Error(),
+				"topic": "crewlet.notifications.inbound", "group": "notify-inbound",
+				"event_type": "external_notification"}
+			for key, value := range tc.want {
+				want[key] = value
+			}
+			for key, value := range want {
+				if got := line[key]; got != value {
+					t.Errorf("%s = %v, want %v, in %s", key, got, value, buf.String())
+				}
+			}
+		})
+	}
+}
+
+// EVERY OUTCOME RENDERS ITS OWN NAME, because String is what a line reads an
+// outcome by and its fallback is "ack": an outcome it does not name would read
+// as a delivery that was settled.
+//
+// Mutation: drop the pass case from Outcome.String, and a pass renders as
+// "ack".
+func TestEveryOutcomeRendersItsOwnName(t *testing.T) {
+	t.Parallel()
+	for outcome, want := range map[queue.Outcome]string{
+		queue.OutcomeAck: "ack", queue.OutcomeNak: "nak",
+		queue.OutcomeDefer: "defer", queue.OutcomePass: "pass",
+	} {
+		if got := outcome.String(); got != want {
+			t.Errorf("outcome %d renders %q, want %q", int(outcome), got, want)
+		}
+	}
+}
+
 // NO BACKEND WRITES ITS OWN OUTCOME LINE, for the reason
 // [TestNoBackendWritesItsOwnPanicLine] gives about panics: a line a backend
 // spells is a line that drifts. The twin's did, and a partition it deferred
@@ -102,6 +175,8 @@ func TestNoBackendWritesItsOwnResultLine(t *testing.T) {
 		`"batch_handler_failed"`,
 		`"delivery_deferred"`,
 		`"batch_delivery_deferred"`,
+		`"delivery_passed"`,
+		`"batch_delivery_passed"`,
 	}
 	for file, raw := range backendSources(t) {
 		for _, bad := range forbidden {

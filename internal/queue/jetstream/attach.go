@@ -118,25 +118,27 @@ func (q *Queue) nakCeiling() time.Duration {
 // not all come back on the same second.
 const nakJitter = 0.2
 
-// nakBackoff is how long the nth redelivery of a failing message waits: its
+// nakBackoff is how long the nth spaced return of a message waits: its
 // [Queue.nakSpacing], spread by [nakJitter].
-func (q *Queue) nakBackoff(failures uint64) time.Duration {
-	return backoff.Jitter(q.nakSpacing(failures), nakJitter)
+func (q *Queue) nakBackoff(n uint64) time.Duration {
+	return backoff.Jitter(q.nakSpacing(n), nakJitter)
 }
 
-// nakSpacing is the wait the nth redelivery is spread around.
+// nakSpacing is the wait the nth spaced return is spread around.
 //
-// The first failure waits [Queue.nakDelay] and each one after that waits
-// twice as long, up to [Queue.nakCeiling]. failures is how many times THIS
-// MESSAGE HAS FAILED, so the first is 1. See [attachment.failures] for why
-// that is not JetStream's delivery count.
+// The first waits [Queue.nakDelay] and each one after that waits twice as
+// long, up to [Queue.nakCeiling]. n counts from 1, and what it counts is the
+// caller's: for a FAILURE, how many times this message has failed HERE — see
+// [attachment.failures] for why that is not JetStream's delivery count — and
+// for a PASS, that delivery count itself — see [attachment.pass] for why it
+// is not the failures.
 //
 // The arithmetic is [backoff.Doubling]'s, which is what keeps a count off the
 // wire from overflowing into a negative wait. The count is clamped to an int
 // before it gets there, because a uint64 past the int range would convert to
-// a negative attempt and read as the first failure rather than the latest.
-func (q *Queue) nakSpacing(failures uint64) time.Duration {
-	return backoff.Doubling(int(min(failures, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
+// a negative attempt and read as the first return rather than the latest.
+func (q *Queue) nakSpacing(n uint64) time.Duration {
+	return backoff.Doubling(int(min(n, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
 }
 
 // attachment is ONE consumer this process runs for a (topic, group) pair.
@@ -1041,7 +1043,41 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 
 	case queue.OutcomeNak:
 		a.nakOrDeadLetter(ctx, msg)
+
+	case queue.OutcomePass:
+		// Neither a failure nor a deferral, and the attachment goes on
+		// taking mail: see [attachment.pass].
+		a.pass(ctx, msg)
 	}
+}
+
+// pass returns a message this node will not handle and a peer may
+// ([queue.OutcomePass]) — through the budget boundary every return crosses,
+// so a message no node reads is dead-lettered with its copy rather than handed
+// round for ever, and spaced as a failure is, by [Queue.nakBackoff].
+//
+// BY ITS DELIVERY COUNT, NOT [attachment.failures]. A pass is no failure, so
+// counting it as one would start this node's first genuine failure of the
+// message up the curve, which is what that map exists to prevent; and the count
+// that has to grow is the one every node shares. A group's older nodes passing
+// a message from one to the next would each bring it back at their own count:
+// four of them taking it in turn wait a second four times, then two seconds
+// four times, and give it up in about four minutes rather than the ten its
+// budget spans.
+//
+// NOT QUIESCED, which is the whole difference from a deferral: nothing is
+// wrong with this node, only with this message here, so the attachment keeps
+// taking the rest of its mail while the message waits out its spacing.
+func (a *attachment) pass(ctx context.Context, msg jetstream.Msg) {
+	// A MESSAGE WHOSE METADATA WILL NOT PARSE is passed at the shortest
+	// spacing, for [attachment.nakOrDeadLetter]'s reason: returnMsg reads
+	// the same metadata for the budget and treats an unreadable one as "not
+	// yet spent".
+	var delivered uint64 = 1
+	if md, err := msg.Metadata(); err == nil {
+		delivered = md.NumDelivered
+	}
+	a.returnMsg(ctx, msg, a.q.nakBackoff(delivered))
 }
 
 // nakOrDeadLetter redelivers a FAILED message until its budget is spent, then

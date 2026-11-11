@@ -614,6 +614,66 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
+	// A PASS HANDS A MESSAGE BACK TO ITS GROUP AND KEEPS CONSUMING: the
+	// fourth outcome, for a delivery THIS node will not handle and a peer may
+	// (an older build during a roll, meeting a record a newer one wrote).
+	// Three things are owed, on every backend:
+	//
+	//   - it comes back, and BEHIND the mail that was waiting, as a failure
+	//     does: the shipped broker spaces it on the failure path's backoff;
+	//   - the attachment that passed it goes on taking mail and is never
+	//     quiesced. Nothing is wrong with the node, so one message it cannot
+	//     read must not stop it taking every other;
+	//   - it spends a delivery like every return, and is dead-lettered with
+	//     its copy once the budget is spent: a message no node reads must not
+	//     circle its group for ever.
+	//
+	// The mail is HELD while it is published, as the return-order case holds
+	// it, so both events are waiting before anything is fetched and nothing
+	// races the backoff.
+	//
+	// Mutation: quiesce the attachment on a pass, and e2 is never handled;
+	// return a pass at the head as a deferral's, and e1 comes back ahead of
+	// e2; return it without the budget's check, and it is never
+	// dead-lettered; ack it, and it never comes back.
+	t.Run("a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		deadLetters := s.needDeadLetters(t)
+		quiescing := s.needQuiescing(t)
+		const topic, group = "topic.pass", "grp"
+		// Three attempts in all, however this backend's broker counts them.
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		seen := newJournal()
+		subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			seen.record(labelOf(ev))
+			if labelOf(ev) == "e1" {
+				return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+			}
+			return queue.Ack()
+		})
+		if err := q.PauseTopic(ctx, topic, group, "test"); err != nil {
+			t.Fatalf("PauseTopic: %v", err)
+		}
+		publish(ctx, t, q, topic, newEvent("e1"))
+		publish(ctx, t, q, topic, newEvent("e2"))
+		if err := q.ResumeTopic(ctx, topic, group, "test"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+
+		seen.awaitLabels(t, "the passed e1 to come back behind e2, and again until its "+
+			"budget is spent", "e1", "e2", "e1", "e1")
+		seen.staysAt(ctx, t, 4, "a message whose three deliveries its passes spent")
+		if quiescing(q, topic, group) {
+			t.Error("a pass quiesced the attachment: nothing is wrong with a node that " +
+				"passes a message, and a quiesced one takes none of its other mail")
+		}
+		awaitState(t, "the passed e1 to be dead-lettered once its budget is spent", func() bool {
+			return equalStrings(labelsOf(deadLetters(q, topic, group)), []string{"e1"})
+		})
+	})
+
 	t.Run("pause_topic_buffers_then_resume_flushes", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
