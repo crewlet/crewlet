@@ -2216,8 +2216,15 @@ const (
 	// under delegation (a held merge's and a deploy's request drawn as text,
 	// who may answer it, a rule's always-escalate paths and the merge and
 	// deploy conditions' words) took it to 5741.6 KiB (5,879,381 bytes,
-	// +4,409: script +4,310, the sheets +99): 5742 KiB.
-	treeBudget = 5<<20 + 622<<10
+	// +4,409: script +4,310, the sheets +99): 5742 KiB. A lane status this
+	// bundle does not know drawn in the engine's words, an image dropped where
+	// none is taken refused in place, a server's tools drawn a page at a time,
+	// a tool change's schema always drawn whole, the wording list frozen at its
+	// first press, a decision written in part said as such and a work list
+	// starting again from its first page when the engine refuses its cursor,
+	// merged on top of it, took it to 5743.0 KiB (5,880,861 bytes, +1,480, all
+	// script): 5744 KiB.
+	treeBudget = 5<<20 + 624<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
