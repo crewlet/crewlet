@@ -34,10 +34,10 @@ import type { LinkHost } from "~/contract/integrations.ts";
 afterEach(cleanup);
 
 const ORG = {
-  name: "GoPhrase",
+  name: "Acme",
   timezone: "UTC",
   roles: [
-    { name: "Miles", handle: "miles", kind: "human" },
+    { name: "Morgan", handle: "morgan", kind: "human" },
     { name: "Backend Engineer", handle: "backend-engineer", kind: "agent" },
   ],
   units: [],
@@ -46,9 +46,9 @@ const ORG = {
 const VIEWER = {
   login: "U0MILES",
   grants: ["worklet", "doclet"],
-  handle: "miles",
-  owner: "miles",
-  name: "Miles",
+  handle: "morgan",
+  owner: "morgan",
+  name: "Morgan",
   kind: "human",
   acts: [],
 };
@@ -74,7 +74,7 @@ async function draw(
   const answers: Record<string, unknown> = {
     viewer,
     // The frame's own readings, answered empty.
-    inbox: { handle: "miles", notices: [], sources: [], unread: 0, primary: 0, complete: true },
+    inbox: { handle: "morgan", notices: [], sources: [], unread: 0, primary: 0, complete: true },
     link_hosts: { hosts },
     work_projects: {
       projects: projects.map((key) => ({ key, name: key })),
@@ -108,7 +108,7 @@ async function draw(
 const md = (source: string, options: RenderOptions = {}) => renderMarkdown(source, options);
 
 /** GitHub with the company's organization, as `link_hosts` answers it. */
-const GOPHRASE: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }];
+const ACME: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["acme"] }];
 
 /** The colour a swatch is drawn in, or null. */
 function swatch(el: Element | null): string | null {
@@ -133,23 +133,23 @@ describe("colours", () => {
 
 describe("addresses and links", () => {
   test("a bare address carries its app's mark, says the reference it is and links where it goes", async () => {
-    const el = await draw(md("See https://github.com/gophrase/backend/pull/14 now."));
+    const el = await draw(md("See https://github.com/acme/backend/pull/14 now."));
     const link = el.querySelector("a")!;
-    expect(link.getAttribute("href")).toBe("https://github.com/gophrase/backend/pull/14");
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/backend/pull/14");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
     // ITS NAME IS ITS WORDS, the app read before them and the tab after:
     // no aria-label replaces what a voice user sees (WCAG 2.5.3).
     expect(link.getAttribute("aria-label")).toBeNull();
-    expect(link.textContent).toBe("GitHub: gophrase/backend#14 (opens in a new tab)");
-    expect(link.getAttribute("title")).toBe("https://github.com/gophrase/backend/pull/14");
+    expect(link.textContent).toBe("GitHub: acme/backend#14 (opens in a new tab)");
+    expect(link.getAttribute("title")).toBe("https://github.com/acme/backend/pull/14");
     expect(link.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
-    expect(el.textContent).toContain("gophrase/backend#14");
+    expect(el.textContent).toContain("acme/backend#14");
   });
 
   test("a labelled link carries the mark of where it goes, never of what its words say", async () => {
     const el = await draw(
       md(
-        "[github.com/gophrase/backend](https://login.example.net/github) and [the spec](https://github.com/gophrase/web/pull/31)",
+        "[github.com/acme/backend](https://login.example.net/github) and [the spec](https://github.com/acme/web/pull/31)",
       ),
     );
     const [spoof, real] = [...el.querySelectorAll("a")];
@@ -176,7 +176,7 @@ describe("addresses and links", () => {
   });
 
   test("a look-alike host earns no vendor's mark", async () => {
-    const el = await draw(md("https://github.com.login.example.net/gophrase/backend/pull/14"));
+    const el = await draw(md("https://github.com.login.example.net/acme/backend/pull/14"));
     expect(el.querySelector("[data-vendor]")).toBeNull();
     expect(el.textContent).toContain("github.com.login.example.net");
   });
@@ -185,12 +185,12 @@ describe("addresses and links", () => {
   // Mutation: tokenise a label again and each case draws GitHub's mark on a
   // link to another host.
   test.each([
-    ["an address", "[https://github.com/gophrase/backend/pull/14](https://evil.example.net/x)"],
-    ["a reference", "[gophrase/backend#14](https://evil.example.net/x)"],
-    ["a repository", "[gophrase/backend](https://evil.example.net/x)"],
+    ["an address", "[https://github.com/acme/backend/pull/14](https://evil.example.net/x)"],
+    ["a reference", "[acme/backend#14](https://evil.example.net/x)"],
+    ["a repository", "[acme/backend](https://evil.example.net/x)"],
   ])("a label that spells %s draws no mark on a link that goes elsewhere", async (_, source) => {
     for (const options of [{}, ASSISTANT_WORDS, CHECKED_WORDS]) {
-      const el = await draw(md(source, options), { hosts: GOPHRASE });
+      const el = await draw(md(source, options), { hosts: ACME });
       expect(el.querySelector("[data-vendor]")).toBeNull();
       expect(el.textContent).not.toContain("GitHub");
       // THE WORDS AS WRITTEN, never the reference a token would have said.
@@ -221,59 +221,57 @@ describe("addresses and links", () => {
 
 describe("references, keys and seats", () => {
   test("a bare reference links to the company's code host, and its commit after it too", async () => {
-    const el = await draw(md("PR gophrase/backend#14 at b5362d2."), { hosts: GOPHRASE });
+    const el = await draw(md("PR acme/backend#14 at b5362d2."), { hosts: ACME });
     const hrefs = [...el.querySelectorAll("a")].map((a) => a.getAttribute("href"));
     expect(hrefs).toEqual([
-      "https://github.com/gophrase/backend/issues/14",
-      "https://github.com/gophrase/backend/commit/b5362d2",
+      "https://github.com/acme/backend/issues/14",
+      "https://github.com/acme/backend/commit/b5362d2",
     ]);
   });
 
   test("with no code host a reference is its mark and its words, linked nowhere", async () => {
-    const el = await draw(md("PR gophrase/backend#14."), { hosts: [] });
+    const el = await draw(md("PR acme/backend#14."), { hosts: [] });
     expect(el.querySelector("a")).toBeNull();
     expect(el.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
   });
 
   test("a bare repository under one of the company's owners links to its code host", async () => {
-    const el = await draw(md("Assigned to you in gophrase/backend, and/or src/app or 2024/10."), {
-      hosts: GOPHRASE,
+    const el = await draw(md("Assigned to you in acme/backend, and/or src/app or 2024/10."), {
+      hosts: ACME,
     });
     const links = [...el.querySelectorAll("a")];
-    expect(links.map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/backend",
-    ]);
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://github.com/acme/backend"]);
     expect(links[0]!.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
     expect(el.textContent).toContain("and/or src/app or 2024/10");
   });
 
   test("a repository quoted in code is code", async () => {
-    const el = await draw(md("Clone `gophrase/backend` first."), { hosts: GOPHRASE });
+    const el = await draw(md("Clone `acme/backend` first."), { hosts: ACME });
     expect(el.querySelector("a")).toBeNull();
     expect(el.querySelector("[data-vendor]")).toBeNull();
   });
 
   test("with no owners a bare owner/repo is words", async () => {
-    const el = await draw(md("Assigned to you in gophrase/backend."));
+    const el = await draw(md("Assigned to you in acme/backend."));
     expect(el.querySelector("a")).toBeNull();
     expect(el.querySelector("[data-vendor]")).toBeNull();
   });
 
   test("with two code hosts a reference goes to the host whose owners hold it", async () => {
-    const el = await draw(md("PR gophrase/backend#14 and platform/api#3."), {
+    const el = await draw(md("PR acme/backend#14 and platform/api#3."), {
       hosts: [
-        { kind: "github", url: "https://github.com", owners: ["gophrase"] },
+        { kind: "github", url: "https://github.com", owners: ["acme"] },
         { kind: "gitlab", url: "https://gitlab.example.com", owners: ["platform"] },
       ],
     });
     expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/backend/issues/14",
+      "https://github.com/acme/backend/issues/14",
       "https://gitlab.example.com/platform/api/-/issues/3",
     ]);
   });
 
   test("with two code hosts a reference either could own is words", async () => {
-    const el = await draw(md("PR gophrase/backend#14."), {
+    const el = await draw(md("PR acme/backend#14."), {
       hosts: [
         { kind: "github", url: "https://github.com" },
         { kind: "gitlab", url: "https://gitlab.example.com" },
@@ -308,7 +306,7 @@ describe("references, keys and seats", () => {
 describe("where nothing may be a link", () => {
   test("words inside a control carry their marks and swatches and never a link", async () => {
     const el = await draw(
-      <button type="button">{renderTokens("Ship #ffe100 for gophrase/backend#14")}</button>,
+      <button type="button">{renderTokens("Ship #ffe100 for acme/backend#14")}</button>,
     );
     expect(el.querySelector("a")).toBeNull();
     expect(swatch(el)).toBe("#ffe100");
@@ -350,7 +348,7 @@ describe("reading order", () => {
   });
 
   test("a search's marks fall in the words around a token, never inside it", async () => {
-    const el = await draw(md("backend ships gophrase/backend#14", { highlight: ["backend"] }));
+    const el = await draw(md("backend ships acme/backend#14", { highlight: ["backend"] }));
     const marks = [...el.querySelectorAll("mark")].map((m) => m.textContent);
     expect(marks).toEqual(["backend"]);
   });
@@ -366,38 +364,38 @@ describe.each([
   ["the Inbox", CHECKED_WORDS],
 ])("checked links, in %s", (_, options) => {
   const COMPANY: LinkHost[] = [
-    { kind: "github", url: "https://github.com", owners: ["gophrase"] },
-    { kind: "jira", url: "https://gophrase.atlassian.net" },
+    { kind: "github", url: "https://github.com", owners: ["acme"] },
+    { kind: "jira", url: "https://acme.atlassian.net" },
     { kind: "mattermost", url: "https://chat.example.com" },
   ];
   const hrefs = (el: Element) => [...el.querySelectorAll("a")].map((a) => a.getAttribute("href"));
 
   test("a key, a handle, a reference and a repository link where they name", async () => {
     const el = await draw(
-      md("GP-66 for @backend-engineer: gophrase/backend#14 in gophrase/web.", options),
+      md("GP-66 for @backend-engineer: acme/backend#14 in acme/web.", options),
       { hosts: COMPANY },
     );
     expect(hrefs(el)).toEqual([
       "#/worklet/GP-66",
       "#/company/org/seats/backend-engineer",
-      "https://github.com/gophrase/backend/issues/14",
-      "https://github.com/gophrase/web",
+      "https://github.com/acme/backend/issues/14",
+      "https://github.com/acme/web",
     ]);
   });
 
   test("an address on a host the company configured opens as rebuilt, with nothing it carried", async () => {
     const el = await draw(
       md(
-        "https://github.com/gophrase/backend/pull/14?ref=x#discussion_r1 and " +
-          "https://gophrase.atlassian.net/browse/GP-1?atl=1 and " +
+        "https://github.com/acme/backend/pull/14?ref=x#discussion_r1 and " +
+          "https://acme.atlassian.net/browse/GP-1?atl=1 and " +
           "[the room](https://chat.example.com/team/channels/design-review?leak=1)",
         options,
       ),
       { hosts: COMPANY },
     );
     expect(hrefs(el)).toEqual([
-      "https://github.com/gophrase/backend/pull/14",
-      "https://gophrase.atlassian.net/browse/GP-1",
+      "https://github.com/acme/backend/pull/14",
+      "https://acme.atlassian.net/browse/GP-1",
       "https://chat.example.com/team/channels/design-review",
     ]);
   });
@@ -416,8 +414,8 @@ describe.each([
   // grows an anchor.
   test.each([
     ["an address that would carry what it read", "https://evil.example.net/c?q=the%20secret"],
-    ["a look-alike host", "https://github.com.login.example.net/gophrase/backend/pull/14"],
-    ["a credential before the host", "https://github.com@login.example.net/gophrase/backend"],
+    ["a look-alike host", "https://github.com.login.example.net/acme/backend/pull/14"],
+    ["a credential before the host", "https://github.com@login.example.net/acme/backend"],
     ["a tenant anybody can register", "https://evil.slack.com/archives/C1/p1"],
     ["a code host the company did not configure", "https://gitlab.com/g/app/-/issues/3"],
   ])("%s is its words and no link", async (__, address) => {
@@ -451,7 +449,7 @@ describe("somebody else's repository", () => {
     ["a commit after one", "attacker/x#1 at b5362d2"],
   ])("%s under an owner the company does not name is its mark and no link", async (_, text) => {
     for (const options of [{}, CHECKED_WORDS]) {
-      const el = await draw(md(`See ${text}.`, options), { hosts: GOPHRASE });
+      const el = await draw(md(`See ${text}.`, options), { hosts: ACME });
       expect(el.querySelector("a")).toBeNull();
       expect(el.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
       cleanup();
@@ -461,7 +459,7 @@ describe("somebody else's repository", () => {
   test("a host that names no owners links no reference and opens no address where links are checked", async () => {
     const bare: LinkHost[] = [{ kind: "github", url: "https://github.com" }];
     const el = await draw(
-      md("See gophrase/backend#14 and https://github.com/gophrase/backend/pull/14.", CHECKED_WORDS),
+      md("See acme/backend#14 and https://github.com/acme/backend/pull/14.", CHECKED_WORDS),
       { hosts: bare },
     );
     expect(el.querySelector("a")).toBeNull();
@@ -469,29 +467,26 @@ describe("somebody else's repository", () => {
   });
 
   test("a longer path than owner/repo is no GitHub reference", async () => {
-    const el = await draw(md("See a/b/c/d/SECRET#2."), { hosts: GOPHRASE });
+    const el = await draw(md("See a/b/c/d/SECRET#2."), { hosts: ACME });
     expect(el.querySelector("a")).toBeNull();
     expect(el.querySelector("[data-vendor]")).toBeNull();
   });
 
   test("an address to it on the configured host opens nothing where links are checked", async () => {
     const el = await draw(md("See https://github.com/attacker/x now.", CHECKED_WORDS), {
-      hosts: GOPHRASE,
+      hosts: ACME,
     });
     expect(el.querySelector("a")).toBeNull();
     expect(el.textContent).toContain("https://github.com/attacker/x");
   });
 
   test("the company's own owner still links", async () => {
-    const el = await draw(
-      md("See gophrase/backend#1 and https://github.com/gophrase/x.", CHECKED_WORDS),
-      {
-        hosts: GOPHRASE,
-      },
-    );
+    const el = await draw(md("See acme/backend#1 and https://github.com/acme/x.", CHECKED_WORDS), {
+      hosts: ACME,
+    });
     expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/backend/issues/1",
-      "https://github.com/gophrase/x",
+      "https://github.com/acme/backend/issues/1",
+      "https://github.com/acme/x",
     ]);
   });
 });
@@ -508,14 +503,14 @@ describe("rooms", () => {
 
   test("a room the reader may read links to it, though its name is spelled as a colour or a number", async () => {
     const el = await draw(
-      md("Ask in #e2e, not #2026, about gophrase/backend; ship #ffe100.", ASSISTANT_WORDS),
-      { hosts: GOPHRASE, viewer: CHATTER, rooms: ROOMS },
+      md("Ask in #e2e, not #2026, about acme/backend; ship #ffe100.", ASSISTANT_WORDS),
+      { hosts: ACME, viewer: CHATTER, rooms: ROOMS },
     );
     const links = [...el.querySelectorAll("a")];
     expect(links.map((a) => a.getAttribute("href"))).toEqual([
       "#/chatlet/room-e2e",
       "#/chatlet/room-2026",
-      "https://github.com/gophrase/backend",
+      "https://github.com/acme/backend",
     ]);
     // ITS NAME IS ITS WORDS, what it is read before them, and its mark drawn.
     expect(links[0]!.textContent).toBe("Room: #e2e");
@@ -622,44 +617,44 @@ describe("rooms", () => {
 // across its question, context and options.
 describe("bare numbers", () => {
   test("a number the sentence binds is one reference to that repository", async () => {
-    const el = await draw(md("See pull request #7 in gophrase/frontend, or gophrase/web PR #9."), {
-      hosts: GOPHRASE,
+    const el = await draw(md("See pull request #7 in acme/frontend, or acme/web PR #9."), {
+      hosts: ACME,
     });
     expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/frontend/issues/7",
-      "https://github.com/gophrase/web/issues/9",
+      "https://github.com/acme/frontend/issues/7",
+      "https://github.com/acme/web/issues/9",
     ]);
   });
 
   test("a number the message names in full, or its one repository, places it", async () => {
     const el = await draw(
-      md("The review on gophrase/backend#11 asks for changes.\n\nStart after #11 and #12."),
-      { hosts: GOPHRASE },
+      md("The review on acme/backend#11 asks for changes.\n\nStart after #11 and #12."),
+      { hosts: ACME },
     );
     expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/backend/issues/11",
-      "https://github.com/gophrase/backend/issues/11",
-      "https://github.com/gophrase/backend/issues/12",
+      "https://github.com/acme/backend/issues/11",
+      "https://github.com/acme/backend/issues/11",
+      "https://github.com/acme/backend/issues/12",
     ]);
   });
 
   test("a message naming two repositories places no bare number", async () => {
-    const el = await draw(md("gophrase/backend and gophrase/web, then #11."), {
-      hosts: GOPHRASE,
+    const el = await draw(md("acme/backend and acme/web, then #11."), {
+      hosts: ACME,
     });
     expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/backend",
-      "https://github.com/gophrase/web",
+      "https://github.com/acme/backend",
+      "https://github.com/acme/web",
     ]);
   });
 
   test("a scope spans the renders of one message: a title placed by its context", async () => {
     const el = await draw(
-      <TokenScope texts={["Apply the #11 PR body?", "Assigned to you in gophrase/backend."]}>
+      <TokenScope texts={["Apply the #11 PR body?", "Assigned to you in acme/backend."]}>
         <h1>{renderTokens("Apply the #11 PR body?", "q", "text", true)}</h1>
-        {md("Assigned to you in gophrase/backend.", { scoped: true })}
+        {md("Assigned to you in acme/backend.", { scoped: true })}
       </TokenScope>,
-      { hosts: GOPHRASE },
+      { hosts: ACME },
     );
     // THE TITLE IS NO CONTROL: its reference carries the mark and no link.
     expect(el.querySelector("h1 [data-vendor]")?.getAttribute("data-vendor")).toBe("github");
@@ -675,28 +670,28 @@ describe("bare numbers", () => {
   // and the reply's #11 links to the ask's repository.
   test("a render under a scope that is not part of it is its own message", async () => {
     const el = await draw(
-      <TokenScope texts={["Apply the #11 PR body?", "Assigned to you in gophrase/backend."]}>
+      <TokenScope texts={["Apply the #11 PR body?", "Assigned to you in acme/backend."]}>
         <section data-reply="plain">{md("Done with #11.")}</section>
-        <section data-reply="own">{md("Merged in gophrase/web, see #5.")}</section>
+        <section data-reply="own">{md("Merged in acme/web, see #5.")}</section>
       </TokenScope>,
-      { hosts: GOPHRASE },
+      { hosts: ACME },
     );
     expect(el.querySelector("[data-reply=plain] [data-vendor]")).toBeNull();
     expect(
       [...el.querySelectorAll("[data-reply=own] a")].map((a) => a.getAttribute("href")),
-    ).toEqual(["https://github.com/gophrase/web", "https://github.com/gophrase/web/issues/5"]);
+    ).toEqual(["https://github.com/acme/web", "https://github.com/acme/web/issues/5"]);
   });
 
   test("with nothing to place it, a number is a word", async () => {
-    const el = await draw(md("Our #1 priority is #11."), { hosts: GOPHRASE });
+    const el = await draw(md("Our #1 priority is #11."), { hosts: ACME });
     expect(el.querySelector("a")).toBeNull();
     expect(el.querySelector("[data-vendor]")).toBeNull();
   });
 
   test("a number in code is code", async () => {
-    const el = await draw(md("gophrase/backend: `#11` stays."), { hosts: GOPHRASE });
+    const el = await draw(md("acme/backend: `#11` stays."), { hosts: ACME });
     expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/backend",
+      "https://github.com/acme/backend",
     ]);
   });
 });

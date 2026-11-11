@@ -110,9 +110,9 @@ type Fleet struct {
 	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
 
 	// listings are each node's listing of each MCP server, by its key, and
-	// schemas each definition's schemas by its digest.
-	listings entryRecords[coord.MCPListing, coord.MCPListingUpdate]
-	schemas  map[string]coord.MCPToolSchema
+	// definitions each tool definition by its digest.
+	listings    entryRecords[coord.MCPListing, coord.MCPListingUpdate]
+	definitions map[string]coord.MCPToolDefinition
 
 	// restarts are the MCP restarts people asked for, by entry
 	// ([coord.MCPRestartEntry]).

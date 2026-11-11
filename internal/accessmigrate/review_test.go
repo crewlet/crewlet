@@ -42,14 +42,14 @@ func run(t *testing.T, root map[string]any, vs *vendors, vault *fakeSecrets,
 // one of several roles, and a case here fails.
 func TestAnAccountKeepsTheRoleItHolds(t *testing.T) {
 	t.Parallel()
-	vs := gophraseVendors()
+	vs := acmeVendors()
 	vs.accounts[integration.KindDatadog]["sre"] = map[seataccess.Lane]seataccess.Observed{
 		seataccess.LaneDatadog: {Exists: true, Enabled: true, AccountID: "dd-user-sre",
 			Level: "role-std"}}
 	vs.accounts[integration.KindGitLab]["qa"] = map[seataccess.Lane]seataccess.Observed{
 		seataccess.LaneGitLab: {Exists: true, Enabled: true, AccountID: "42", Level: "20"}}
 	delete(vs.accounts[integration.KindGitLab], "backend-engineer")
-	m := plan(t, gophrase(t), vs)
+	m := plan(t, acme(t), vs)
 	for _, tc := range []struct {
 		handle string
 		lane   seataccess.Lane
@@ -64,11 +64,11 @@ func TestAnAccountKeepsTheRoleItHolds(t *testing.T) {
 		}
 	}
 
-	several := gophraseVendors()
+	several := acmeVendors()
 	several.accounts[integration.KindDatadog]["sre"] = map[seataccess.Lane]seataccess.Observed{
 		seataccess.LaneDatadog: {Exists: true, Enabled: true, AccountID: "dd-user-sre",
 			Level: "role-std role-admin"}}
-	m = plan(t, gophrase(t), several)
+	m = plan(t, acme(t), several)
 	why := m.Pending[integration.KindDatadog]
 	if why == nil || !errors.Is(why, seataccess.ErrSeveralRoles) || !strings.Contains(why.Error(), "SRE") ||
 		slices.Contains(m.Migrated, integration.KindDatadog) {
@@ -85,11 +85,11 @@ func TestAnAccountKeepsTheRoleItHolds(t *testing.T) {
 // designer is recorded as the engine's.
 func TestOnlyASeatInTheOldPlanIsSeeded(t *testing.T) {
 	t.Parallel()
-	vs := gophraseVendors()
+	vs := acmeVendors()
 	vs.accounts[integration.KindGitLab]["designer"] = map[seataccess.Lane]seataccess.Observed{
 		seataccess.LaneGitLab: {Exists: true, Enabled: true, AccountID: "43",
 			Account: "crewlet-designer", Level: "30"}}
-	m := plan(t, gophrase(t), vs)
+	m := plan(t, acme(t), vs)
 	var seeded []string
 	for _, s := range m.Seeds {
 		if s.Kind == integration.KindGitLab {
@@ -112,12 +112,12 @@ func TestOnlyASeatInTheOldPlanIsSeeded(t *testing.T) {
 // the agents come out off with the unit still feeding them the shared key.
 func TestAUnitsSharedKeyIsMigratedForEveryAgent(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
+	root := acme(t)
 	unit := root["units"].([]any)[0].(map[string]any)
 	unit["mcp_env"] = map[string]any{"datadog": map[string]any{
 		"DD_APP_KEY": "${DATADOG_TEAM_KEY}"}}
 	delete(seat(t, root, "sre"), "mcp_env")
-	m := plan(t, root, gophraseVendors())
+	m := plan(t, root, acmeVendors())
 	for _, handle := range []string{"sre", "designer", "pm"} {
 		if got := m.Seats[handle][seataccess.LaneDatadog]; !got.Enabled {
 			t.Errorf("%s on Datadog = %+v, want on through its unit's key", handle, got)
@@ -155,7 +155,7 @@ func TestAUnitsSharedKeyIsMigratedForEveryAgent(t *testing.T) {
 // drop the record of a credential already in place, and a case here fails.
 func TestAMigrationNeverSealsOverAHeldCredential(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
+	root := acme(t)
 	qa := seat(t, root, "qa")
 	qa["mcp_env"].(map[string]any)["gitlab"] = map[string]any{
 		"Authorization": "Bearer ${GITLAB_TOKEN_QA}"}
@@ -168,7 +168,7 @@ func TestAMigrationNeverSealsOverAHeldCredential(t *testing.T) {
 			Handle: "backend-engineer", Credential: &seataccess.Credential{
 				Variable: "GITLAB_TOKEN_BACKEND_ENGINEER", Source: seataccess.CredentialMinted}}},
 	}}
-	result := run(t, root, gophraseVendors(), vault, ledger)
+	result := run(t, root, acmeVendors(), vault, ledger)
 	if _, sealed := vault.sealed["GITLAB_TOKEN_BACKEND_ENGINEER"]; sealed || result.Moved != 0 {
 		t.Errorf("the old token was sealed over the backend engineer's own (moved %d)",
 			result.Moved)

@@ -125,9 +125,9 @@ test("a direct conversation, which has no name, is never matched by its heading"
 test("a table and a record of no kind are never matched in words", () => {
   const { reads } = readsOf([
     table("Workload"),
-    event({ type: "entity", entity: { id: "gophrase", title: "GoPhrase" } }),
+    event({ type: "entity", entity: { id: "acmeworks", title: "AcmeWorks" } }),
   ]);
-  expect(mark("The Workload of GoPhrase is light.", reads).named.size).toBe(0);
+  expect(mark("The Workload of AcmeWorks is light.", reads).named.size).toBe(0);
 });
 
 test("the earliest mention wins, and at one place the longer", () => {
@@ -222,11 +222,11 @@ test("a name no ordinary word is spelled like, or of two words, starts a sentenc
   const { reads } = readsOf([
     unit("brand", "Brand Studio"),
     seat("qa", "QA"),
-    seat("gp", "GoPhrase"),
+    seat("aw", "AcmeWorks"),
   ]);
   expect(mark("Brand Studio owns it.", reads).text).toBe("[unit:brand|Brand Studio] owns it.");
   expect(mark("QA holds it.", reads).text).toBe("[seat:qa|QA] holds it.");
-  expect(mark("GoPhrase ships it.", reads).text).toBe("[seat:gp|GoPhrase] ships it.");
+  expect(mark("AcmeWorks ships it.", reads).text).toBe("[seat:aw|AcmeWorks] ships it.");
 });
 
 test("a name two reads share names neither, and a key still names its record", () => {

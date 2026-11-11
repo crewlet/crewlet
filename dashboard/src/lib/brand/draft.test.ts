@@ -25,7 +25,7 @@ function file(name: string, size: number, type = ""): File {
 
 const DOC: BrandDocument = {
   v: 1,
-  name: "FairSplit",
+  name: "Acme",
   logos: { primary: "logos/primary.svg", mark: "logos/mark.png" },
   colors: { primary: "#0f7b5f" },
   type: {
@@ -127,7 +127,7 @@ describe("the edit as a source", () => {
   test("a name typed changes no key, so the logos are not read again while it is typed", () => {
     const base = adopted();
     const a = draftSource(base, { document: DOC, files: new Map() });
-    const b = draftSource(base, { document: { ...DOC, name: "FairSplit Inc" }, files: new Map() });
+    const b = draftSource(base, { document: { ...DOC, name: "Acme Inc" }, files: new Map() });
     expect(b.key).toBe(a.key);
   });
 });

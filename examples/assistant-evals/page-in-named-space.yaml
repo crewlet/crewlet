@@ -18,11 +18,11 @@ answers:
   - route: GET /containers
     body:
       containers:
-        - {key: FAIR, name: FairSplit}
+        - {key: FAIR, name: Acme}
         - {key: HOME, name: Company}
         - {key: TS, name: Tool skills}
   - route: GET /viewer
-    body: {handle: miles, project: FAIR, space: FAIR}
+    body: {handle: morgan, project: FAIR, space: FAIR}
 script:
   - call: create_page
     args:

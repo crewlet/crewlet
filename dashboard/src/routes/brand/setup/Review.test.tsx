@@ -21,7 +21,7 @@ const ASSETS: BrandAssets = {
 function doc(over: Partial<BrandDocument> = {}): BrandDocument {
   return {
     v: 1,
-    name: "FairSplit",
+    name: "Acme",
     logos: {},
     colors: { primary: "#0f7b5f" },
     type: { heading: { kit: "geist" }, body: { kit: "geist" } },

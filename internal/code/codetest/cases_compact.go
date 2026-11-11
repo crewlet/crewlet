@@ -842,7 +842,9 @@ func compactCrashAt(t *testing.T, newFleet NewFleet, crash compactCrash) {
 // reads the merged packs as the retirements they are (the state's
 // LeavingSince), so it sheds them in place — a boot's first round is an
 // incarnation nobody holds yet (cache's doc, "A swap") — keeps the
-// commit-graph, the same file, and converges.
+// commit-graph, the same file, and converges. Every maintainer is held from
+// before the restart, and the graph read once the run the round's end owes the
+// maintainer is held at its step (holdMaintainers, heldRun).
 func aCrashMidSwapLeavesTheOldIncarnation(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -890,6 +892,8 @@ func aCrashMidSwapLeavesTheOldIncarnation(t *testing.T, newFleet NewFleet) {
 	c.Fleet.Kill(t, node.ID())
 	diskAsTheCrashLeftIt(t, dir)
 	graph := gittest.FileIdentity(t, filepath.Join(repos, crashedAt, "objects", "info", "commit-graph"))
+	heldAt, resume := holdMaintainers(c)
+	defer resume()
 	c.Fleet.Restart(t, node.ID())
 	node = c.Fleet.Nodes()[0]
 	if got := highest(); got != crashedAt {
@@ -899,14 +903,48 @@ func aCrashMidSwapLeavesTheOldIncarnation(t *testing.T, newFleet NewFleet) {
 	if got := entries(filepath.Join(node.CacheDir(), "scratch")); len(got) > 0 {
 		t.Errorf("after the restart scratch/ holds %v, want it emptied at boot", got)
 	}
-	switch path, ok := graphOf(c, node, repoID); {
+	path, ok := graphOf(c, node, repoID)
+	heldRun(t, heldAt)
+	switch {
 	case !ok:
 		t.Error("the first round after the restart dropped the commit-graph of a copy a compaction retired " +
 			"packs from: it read them as packs no row accounts for")
 	case gittest.FileIdentity(t, path) != graph:
 		t.Error("the first round after the restart wrote the commit-graph again rather than keeping it")
 	}
+	resume()
 	assertConverged(t, c.Fleet)
+}
+
+// holdMaintainers holds every Gitlet node's maintainer at its next step, and
+// at each after it, until resume (codefault.MaintainBeforeStep), and closes
+// reached when the first run is held there: what a case that judges a round
+// by the identity of a file the maintainer also writes does across that round.
+// The round's end owes the maintainer a run, and the index that run writes
+// takes the commit-graph with it (cache.Cache's plan: the graph rides every
+// index), so a case that read the graph once the round let go read whichever
+// came first, the round's file or the run's (#945).
+func holdMaintainers(c *Case) (reached <-chan struct{}, resume func()) {
+	held, at := make(chan struct{}), make(chan struct{})
+	c.Fleet.Faults().Arm(codefault.MaintainBeforeStep, codefault.Action{Block: held, Reached: at})
+	return at, sync.OnceFunc(func() {
+		close(held)
+		c.Fleet.Faults().Disarm(codefault.MaintainBeforeStep)
+	})
+}
+
+// heldRun waits until a maintenance run is held at its step (holdMaintainers'
+// reached), a minute at the most: the run the round's end owes the maintainer,
+// stopped before it writes, so what the case reads of the copy next is what
+// the round left. A run that never arrives is a hold that holds nothing,
+// which fails the case rather than leave it to race the maintainer.
+func heldRun(t *testing.T, reached <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-reached:
+	case <-time.After(time.Minute): //fixedwait:liveness
+		t.Fatal("no maintenance run was held at its step in a minute: the case would read a copy nothing held")
+	}
 }
 
 // diskAsTheCrashLeftIt puts in dir's place a copy of what it holds now, while
@@ -968,7 +1006,9 @@ func diskAsTheCrashLeftIt(t *testing.T, dir string) {
 // repository whole at its first round — and the retirements above its own
 // position with it — so it sheds the merged packs keeping the commit-graph it
 // had, the same file; without those retirements (the control) it cannot tell
-// the merged packs from strays, and drops it.
+// the merged packs from strays, and drops it. Every maintainer is held from
+// before the node starts again, and the graph read once a run is held at its
+// step (holdMaintainers, heldRun).
 func aRestartedNodeKeepsTheCommitGraphOfACompactedRepository(t *testing.T, newFleet NewFleet) {
 	for _, control := range []bool{false, true} {
 		name := "the retirements served"
@@ -1007,6 +1047,8 @@ func restartedNodeKeepsGraph(t *testing.T, newFleet NewFleet, control bool) {
 	if out := compactOn(c, a); out != compact.OutcomeApplied {
 		t.Fatalf("the compaction through %s with %s down: %s, want applied", a.ID(), bID, out)
 	}
+	heldAt, resume := holdMaintainers(c)
+	defer resume()
 	c.Fleet.StartGit(t, bID)
 	var restarted Node
 	for _, n := range c.Fleet.Nodes() {
@@ -1015,6 +1057,7 @@ func restartedNodeKeepsGraph(t *testing.T, newFleet NewFleet, control bool) {
 		}
 	}
 	path, ok := graphOf(c, restarted, repoID)
+	heldRun(t, heldAt)
 	switch {
 	case control && ok && gittest.FileIdentity(t, path) == before:
 		t.Errorf("with the retirements withheld the first round kept the commit-graph: the case cannot tell " +
@@ -1024,5 +1067,6 @@ func restartedNodeKeepsGraph(t *testing.T, newFleet NewFleet, control bool) {
 	case !control && gittest.FileIdentity(t, path) != before:
 		t.Errorf("%s's first round after its restart wrote the commit-graph again rather than linking it", bID)
 	}
+	resume()
 	assertConverged(t, c.Fleet)
 }
