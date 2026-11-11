@@ -14,6 +14,15 @@ func msg(id, who, what string) notify.Message {
 	return notify.Message{ID: id, SenderID: who, Text: what}
 }
 
+// idsOf is the ids of the messages a block reported as answered.
+func idsOf(answered []prefetch.Answered) []string {
+	ids := make([]string, 0, len(answered))
+	for _, a := range answered {
+		ids = append(ids, a.ID)
+	}
+	return ids
+}
+
 // THE BLOCK SAYS WHICH WAITING MESSAGES IT SHOWED THE TURN — and only those.
 //
 // A message that failed and comes round behind its conversation's newer mail
@@ -34,7 +43,7 @@ func TestTheThreadBlockNamesTheWaitingMessagesItShowed(t *testing.T) {
 	r := threadRequest(t)
 	r.Message = "103"
 	blocks := fetch(t, prefetch.Sources{Threads: source}, r)
-	if got := blocks.ThreadContextAnswered; !slices.Equal(got, []string{"102"}) {
+	if got := idsOf(blocks.ThreadContextAnswered); !slices.Equal(got, []string{"102"}) {
 		t.Fatalf("answered = %v, want [102]: the one message after the seat's own reply "+
 			"and before the trigger", got)
 	}
@@ -80,7 +89,7 @@ func TestAnotherWritersWaitingMessageIsOwedItsOwnTurn(t *testing.T) {
 	}}
 	r := threadRequest(t)
 	r.Message = "105"
-	if got := fetch(t, prefetch.Sources{Threads: source}, r).ThreadContextAnswered; !slices.Equal(got, []string{"102"}) {
+	if got := idsOf(fetch(t, prefetch.Sources{Threads: source}, r).ThreadContextAnswered); !slices.Equal(got, []string{"102"}) {
 		t.Fatalf("answered = %v, want [102]: A's own waiting message, never S's or an unnamed sender's", got)
 	}
 	unnamed := &threads{messages: []notify.Message{
@@ -113,10 +122,37 @@ func TestAMessageTheBlockDroppedIsNotReportedAsShown(t *testing.T) {
 	if !strings.Contains(blocks.ThreadContext, "not shown") {
 		t.Fatalf("the ceiling dropped nothing, so this case proves nothing:\n%s", blocks.ThreadContext)
 	}
-	if slices.Contains(blocks.ThreadContextAnswered, "101") {
+	if slices.Contains(idsOf(blocks.ThreadContextAnswered), "101") {
 		t.Fatalf("answered = %v names a message the bound dropped", blocks.ThreadContextAnswered)
 	}
 	if len(blocks.ThreadContextAnswered) == 0 {
 		t.Fatal("no shown waiting message was reported")
+	}
+}
+
+// A WAITING MESSAGE IS REPORTED AT THE VERSION THE BLOCK SHOWED IT: an edited
+// message by the version its reader named, an unedited one by none. The mark
+// the dispatch writes from it drops the wake of that very edit and no later
+// one, whose words the turn never saw.
+//
+// Mutation: report the id alone, and the edited message's version is lost.
+func TestAWaitingMessageIsReportedAtTheEditTheBlockShowed(t *testing.T) {
+	t.Parallel()
+	edited := msg("102", "U1", "it loops on /login, and on /health")
+	edited.Version = "chat@1:41"
+	source := &threads{messages: []notify.Message{
+		msg("100", "U1", "can you look at staging"),
+		{ID: "101", Text: "on it", Own: true},
+		edited,
+		msg("103", "U1", "and on /logout"),
+		msg("104", "U1", "and now?"), // what woke this turn
+	}}
+	r := threadRequest(t)
+	r.Message = "104"
+	got := fetch(t, prefetch.Sources{Threads: source}, r).ThreadContextAnswered
+	want := []prefetch.Answered{{ID: "102", Version: "chat@1:41"}, {ID: "103"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("answered = %+v, want %+v: each waiting message at the version it was shown at, "+
+			"and an unedited one at none", got, want)
 	}
 }

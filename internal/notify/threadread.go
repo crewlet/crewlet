@@ -26,10 +26,11 @@ import "context"
 
 // Message is one thing somebody said in a thread.
 //
-// Every field is read by the renderer — the text, the speaker, whose it is,
-// and which message it was ([Message.ID]): a value type here exists to be
-// rendered, and a field nothing reads is a field that drifts out of step with
-// the vendor that fills it.
+// Every field but two is read by the renderer — the text, the speaker and
+// whose it is: a value type here exists to be rendered, and a field nothing
+// reads is a field that drifts out of step with the vendor that fills it. The
+// two that are not rendered, [Message.ID] and [Message.Version], say which
+// message a turn was shown, and which version of it.
 type Message struct {
 	// SenderID is the sender's id ON THAT BACKEND — a Slack `U…`, a
 	// Mattermost user id — which is what the party registry resolves a
@@ -60,13 +61,27 @@ type Message struct {
 	// trigger's metadata carries as `ts` (a Slack message ts, a Mattermost
 	// post id) — and empty for the stand-in a missing root is read as.
 	//
-	// NOT RENDERED, and the one field here that is not: it is what lets the
-	// reader say WHICH messages a turn was shown, which the turn's dispatch
-	// records so that a message a later turn already saw in this block is
-	// not run again as a turn of its own when it comes back behind that one
-	// (see engine's worked-through record). An opaque string in the
-	// backend's own format, compared for equality and nothing else.
+	// NOT RENDERED: it is what lets the reader say WHICH messages a turn was
+	// shown, which the turn's dispatch records so that a message a later turn
+	// already saw in this block is not run again as a turn of its own when it
+	// comes back behind that one (see engine's worked-through record). An
+	// opaque string in the backend's own format, compared for equality and
+	// nothing else.
 	ID string
+
+	// Version names the edit of the message the reader handed over: empty for
+	// a message never edited, and on every vendor surface, whose wakes never
+	// carry an edit.
+	//
+	// NOT RENDERED either. A message's id names every version of it, and an
+	// edit's wake carries that same id, so a mark made of the id alone dropped
+	// every later edit's wake — an edit made after the turn read the thread
+	// among them, whose words no turn ever saw. The mark of an edited message
+	// names this version too, and an edit's wake is dropped only by the mark
+	// of its own version. An opaque token, compared for equality and nothing
+	// else: on Chatlet, the log position of the record that last wrote the
+	// message, which is what that edit's wake carries as its trigger.
+	Version string
 }
 
 // Transcript is what a backend read back from a thread.
