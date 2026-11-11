@@ -25,8 +25,6 @@ import { fmtCount } from "~/lib/format.ts";
 /** How often Home asks again: the digest moves once a day. */
 const NOTICES_POLL_MS = 600_000;
 
-const VIEW = href(["settings", "delegated-decisions"]);
-
 /** The browser's own storage, read through the module's never-throwing helpers. */
 const local = () => window.localStorage;
 
@@ -90,7 +88,12 @@ export function DelegatedNotices({ viewer }: { viewer: Pick<ViewerState, "owner"
           title={`Delegates decided ${requests(decidedRows.length, data.decided_more)} yesterday`}
           action={
             <span className="row gap-1">
-              <ButtonLink size="small" variant="secondary" href={VIEW}>
+              {/* THE DIGEST'S OWN DAY: the Settings view opens on today, so far. */}
+              <ButtonLink
+                size="small"
+                variant="secondary"
+                href={href(["settings", "delegated-decisions"], { day: data.day })}
+              >
                 See what
               </ButtonLink>
               <IconButton

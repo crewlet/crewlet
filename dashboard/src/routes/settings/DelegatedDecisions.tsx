@@ -13,8 +13,10 @@
  *
  * # What was decided, in three lists
  *
- * The digest is one company day of verdicts that decided a request (the last
- * whole day unless `day=` names another). The spot-checks and the flagged
+ * The digest is one company day of verdicts that decided a request: the day
+ * still running, so far, unless `day=` names an earlier one. The pager goes
+ * back a day at a time and forward no further than today. The spot-checks and
+ * the flagged
  * denials are the week before now, as the engine reads them: one decision in
  * a rule's `sample_one_in`, and every denial a delegate gave with high
  * confidence. One toolbar narrows all three, and each list's foot says how
@@ -78,6 +80,13 @@ import type {
 /** How often the read is asked again: the digest moves once a day, the week's lists slowly. */
 const DELEGATED_POLL_MS = 300_000;
 
+/**
+ * How often today, so far, is asked again: a delegate answers within the
+ * engine's 15-minute deadline, and a person watching the day sees its verdict
+ * within a minute of it, for one read of three short pages.
+ */
+const RUNNING_POLL_MS = 60_000;
+
 /** The verdict filter's choices: every verdict, and none. */
 const VERDICT_OPTIONS = [
   { value: "", label: "Any verdict" },
@@ -139,9 +148,11 @@ export function DelegatedDecisions() {
   const [q, setQ] = useParam("q", "");
   const [verdict, setVerdict] = useParam("verdict", "");
   const [giver, setGiver] = useParam("by", "");
-  const params = useMemo(() => (day ? { day } : undefined), [day]);
+  // TODAY, SO FAR, unless the reader went back: the engine's own default is the
+  // last whole day, which Home's digest reads.
+  const params = useMemo(() => ({ day: day || "today" }), [day]);
   const { data, loading, error, refusal, detail } = useQuery("delegated_decisions", params, {
-    pollMs: DELEGATED_POLL_MS,
+    pollMs: day === "" ? RUNNING_POLL_MS : DELEGATED_POLL_MS,
   });
   const org = useOrg();
   const nameOf = useMemo(() => nameOfIn(indexOrg(org)), [org]);
@@ -206,9 +217,8 @@ export function DelegatedDecisions() {
                   variant="ghost"
                   label="The day after"
                   icon={<ChevronRightGlyph size="sm" />}
-                  // THE LAST WHOLE DAY IS THE LATEST DIGEST: past it is a day
-                  // still running, which no digest covers yet.
-                  disabled={day === ""}
+                  // TODAY IS THE LATEST DAY: past it is one that has not begun.
+                  disabled={!data.complete}
                   onClick={() => setDay(shiftDay(data.day, 1))}
                 />
               </span>
@@ -216,13 +226,21 @@ export function DelegatedDecisions() {
             <VerdictsCard
               name="decided"
               icon={<ListChecksGlyph size="sm" />}
-              title={day === "" ? "Decided yesterday" : `Decided on ${data.day}`}
-              subtitle="Every request a verdict decided on that company day"
+              title={data.complete ? `Decided on ${data.day}` : "Decided today, so far"}
+              subtitle={
+                data.complete
+                  ? "Every request a verdict decided on that company day"
+                  : "The company day is still running: requests decided later today join this list."
+              }
               all={data.decided}
               rows={shown(data.decided)}
               more={data.decided_more}
               filtered={filtered}
-              empty="No request was decided that day."
+              empty={
+                data.complete
+                  ? "No request was decided that day."
+                  : "No request has been decided yet today."
+              }
             />
             <VerdictsCard
               name="sampled"

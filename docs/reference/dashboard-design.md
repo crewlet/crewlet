@@ -9712,10 +9712,12 @@ command rule), and the limits
 the engine holds every delegate to, the deadline and the two hourly caps, as a
 settings table, since no document changes them. Under them one toolbar (a
 search over the seat, the request, the server and the reason; a verdict and
-who gave it, each the kit's `Select`; the day the digest covers, back and
-forward a company day) narrows three grids: **Decided yesterday** (or the day
-`day=` names), **Spot-checks** and **Flagged denials**, the last two over the
-week before now. Each row is the requesting seat, what was decided and where
+who gave it, each the kit's `Select`; the day the digest covers, back a
+company day at a time and forward no further than today) narrows three grids:
+**Decided today, so far** (the day still running, `day=today`, which the page
+opens on and asks again every minute, its subtitle saying the day is still
+running), or **Decided on** the day `day=` names, then **Spot-checks** and
+**Flagged denials**, the last two over the week before now. Each row is the requesting seat, what was decided and where
 (a merge or a deploy names no server, and says so), the verdict in its
 state's tone, why the engine changed or made it on hover (each of its closed
 words as a phrase), who gave it under which rule (Crewlet for the
@@ -9725,8 +9727,9 @@ the company document's, changed there. The read admits an administrator and
 the people a rule escalates to, so the row names no grant and anybody else is
 shown the engine's refusal. Home draws two notices off the same read for those
 people, above the board: "Delegates decided N requests yesterday", put away
-for its company day, and "A delegate flagged N requests as harmful", put away
-until a newer flag, each linking here (`DelegatedNotices`).
+for its company day and linking here at that day (`day=`), and "A delegate
+flagged N requests as harmful", put away until a newer flag and linking here
+(`DelegatedNotices`). Home's digest stays about the last whole day.
 
 **An admin writes the directory from here** (see [A write control is never hidden](#a-write-control-is-never-hidden)
 for why the directory's writes are drawn for an admin alone). A person holds
