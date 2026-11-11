@@ -117,6 +117,21 @@ func TestARunnerIsBuiltPerSeat(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Launcher") {
 		t.Errorf("a runner with no executor launcher = %v, want it refused naming the launcher", err)
 	}
+	// AND NEVER A PICKUP'S WITHOUT THE READ OF ITS TYPED ANSWER (ADR-0122):
+	// with none, the submission check would hold the turn to nothing on its
+	// item, so it is refused where it is assembled.
+	pickup := turn.ToolReply("")
+	pickup.Item = "t-1"
+	_, err = c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "pick it up", Reply: pickup,
+		Launcher: noLaunch{}, Sessions: toolSessions(t)})
+	if err == nil || !strings.Contains(err.Error(), "TypedAnswer") {
+		t.Errorf("a pickup's runner with no typed-answer read = %v, want it refused naming it", err)
+	}
+	if _, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "pick it up", Reply: pickup,
+		Launcher: noLaunch{}, Sessions: toolSessions(t),
+		TypedAnswer: func(context.Context) (bool, error) { return true, nil }}); err != nil {
+		t.Errorf("a pickup's runner with its typed-answer read: %v", err)
+	}
 	// A human seat has no runner, and the refusal must name the seat —
 	// "not an agent seat" sent to the wrong place is a debugging session.
 	_, err = c.RunnerFor(t.Context(), "founder", nil, engine.RunnerInput{})

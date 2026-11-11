@@ -26,7 +26,7 @@ func part(seed string) string { return digest(seed)[:coord.MCPToolPartLength] }
 func tool(raw, title, description, schema string, hints coord.MCPToolHints) coord.MCPListedTool {
 	return coord.MCPListedTool{
 		Name: "wiki_" + raw, Raw: raw, Title: title, Description: description,
-		Hints: hints, Declared: hints, Instances: 1, SchemaKept: true,
+		Hints: hints, Declared: hints, Instances: 1, DefinitionKept: true,
 		Digest: digest(raw + title + description + schema + hints.ReadOnly + hints.Destructive + hints.OpenWorld),
 		Parts: coord.MCPToolParts{Title: part(title), Description: part(description), Schema: part(schema),
 			Hints: part(hints.ReadOnly + hints.Destructive + hints.Idempotent + hints.OpenWorld)},
@@ -161,7 +161,7 @@ func TestAChangeSaysWhichPartsOfTheDefinitionMoved(t *testing.T) {
 	t.Parallel()
 	was := tool("search", "Search", "Search the wiki", "s1", readOnly)
 	now := tool("search", "Find", "Search the wiki", "s2", readOnly)
-	now.SchemaKept = false
+	now.DefinitionKept = false
 	changes := mcpreview.Changes([]coord.MCPListing{listing("node-a", now)}, accepted(was))
 	if len(changes) != 1 ||
 		!slices.Equal(changes[0].Parts, []mcpreview.Part{mcpreview.PartTitle, mcpreview.PartSchema}) {

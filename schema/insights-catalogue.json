@@ -55,8 +55,8 @@
     },
     {
       "class": "person.requests_without_ask",
-      "title": "Agents named a person without asking them a question",
-      "summary": "Comments naming the most-named person, and how many people were named.",
+      "title": "Agents asked a person for something without asking them a question",
+      "summary": "Comments asking the most-asked person for something, and how many people were asked.",
       "facts": [
         {
           "key": "count",

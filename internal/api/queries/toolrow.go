@@ -146,7 +146,7 @@ func CatalogueRow(entry tools.Entry, delivers string) ToolRow {
 // the agents are offered, and a blocked tool is offered to none. Its name is
 // left free, as no instance filed it.
 func ListedRows(taken []ToolRow, listings []coord.MCPListing,
-	schemas map[string]coord.MCPToolSchema) []ToolRow {
+	schemas map[string]coord.MCPToolDefinition) []ToolRow {
 
 	held := make(map[string]struct{}, len(taken))
 	for _, row := range taken {
