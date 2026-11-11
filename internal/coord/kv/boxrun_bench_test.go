@@ -26,7 +26,7 @@ import (
 // where two of a fleet's three members stand for any one bucket:
 //
 //   - read: the read of the box's run every /box/git/ request makes before
-//     anything else (internal/code/host's admission, through the engine's
+//     anything else (internal/gitlet/host's admission, through the engine's
 //     host.Runs over sandbox.PendingStore.Get);
 //   - raise: the raise of the run's code floor every ref answer past it and
 //     every applied push makes before it answers (host.Runs.RaiseFloor, through

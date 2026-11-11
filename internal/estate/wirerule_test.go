@@ -570,17 +570,17 @@ var zeroByMethod = map[string]string{
 		"every reader of a position an operation takes asks IsZero, Seq or statelog's On before " +
 		"its stream (accessdomain's told check by On, code's decides by IsZero, the executor log's " +
 		"by Seq), and On takes a zero position on any log",
-	"code.RunProvenance": "Go's own zero: its method compares the value with RunProvenance{}",
-	"code.RevisionClasses": "no path classed and the revision not complete: the decide reads the " +
+	"gitlet.RunProvenance": "Go's own zero: its method compares the value with RunProvenance{}",
+	"gitlet.RevisionClasses": "no path classed and the revision not complete: the decide reads the " +
 		"lists' lengths, so their absence is the same answer",
-	"code.RevisionClasses.CommentOnly": "an empty list and none are one answer to the decide, " +
+	"gitlet.RevisionClasses.CommentOnly": "an empty list and none are one answer to the decide, " +
 		"which reads its length",
-	"code.RevisionClasses.WhitespaceOnly": "an empty list and none are one answer to the decide, " +
+	"gitlet.RevisionClasses.WhitespaceOnly": "an empty list and none are one answer to the decide, " +
 		"which reads its length",
-	"code.HumanPathMatch": "no place held or waived: the decide reads the lists' lengths, so " +
+	"gitlet.HumanPathMatch": "no place held or waived: the decide reads the lists' lengths, so " +
 		"their absence is the same answer",
-	"code.HumanPathMatch.Held":   "an empty list and none are one answer to the decide, which reads its length",
-	"code.HumanPathMatch.Waived": "an empty list and none are one answer to the decide, which reads its length",
+	"gitlet.HumanPathMatch.Held":   "an empty list and none are one answer to the decide, which reads its length",
+	"gitlet.HumanPathMatch.Waived": "an empty list and none are one answer to the decide, which reads its length",
 	"objstore.Key":               "Go's own zero: its method compares the key with Key{}",
 	"artifacts.ID":               "Go's own zero: its method compares the id with ID{}",
 	"types.WrittenFor": "a carrier of nobody, stated or not: the asking node refuses an agent's " +
@@ -699,7 +699,7 @@ var zeroThroughPointer = map[string]string{
 		"that names nothing is no position to every reader of a gesture — Gesture.Empty, " +
 		"CheckGesture and Apply, in the tracker's MarkInbox decide — each asking IsZero first " +
 		"(Gesture.readThrough), so nil, which is what crosses, reads the same",
-	"code.MarkGesture.ReadThrough": "read only as inbox's gesture (MarkGesture.Gesture), by " +
+	"gitlet.MarkGesture.ReadThrough": "read only as inbox's gesture (MarkGesture.Gesture), by " +
 		"Gesture.Empty, CheckGesture and Apply in code's mark decide and its marks record's apply, " +
 		"each asking IsZero first (inbox's Gesture.readThrough): a position that names nothing is no " +
 		"position, so nil, which is what crosses, reads the same",
@@ -898,8 +898,8 @@ var answeredWholeBy = map[string]string{
 		"its change (internal/agent/builtin)",
 	"tracker.expanded_query": "tracker.tasks: the query a list's parameters expand to is the query " +
 		"its read asks (internal/agent/builtin's list_work_items, internal/api/queries' work items)",
-	"code.repo_state": "code.repo_state: a page's cursor (code.RepoSnapshot.Next) is the next " +
-		"page's request (internal/code/cache)",
+	"code.repo_state": "code.repo_state: a page's cursor (gitlet.RepoSnapshot.Next) is the next " +
+		"page's request (internal/gitlet/cache)",
 }
 
 // EVERY ANSWER READ WHOLE IS ONE A CALLER CARRIES INTO ANOTHER REQUEST, and

@@ -13,9 +13,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -57,7 +57,7 @@ import (
 // that could name a seat's branch is searched only in repositories the search
 // names: one searched in every repository the seat may read is a branch held
 // in none of them. Those reads also floor the search, as a read by object id
-// is floored ([code.RefsFloor]): each copy searched holds this node's own
+// is floored ([gitlet.RefsFloor]): each copy searched holds this node's own
 // pushes to the repositories named and every push that set the ref named, so
 // a seat that pushed and then searched finds what it pushed. An unfiltered
 // search is floored at nothing — each copy as it stands, the question's own
@@ -172,7 +172,7 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the Gitlet nodes the lines it answers, never the whole search again.
 	q := codesearch.Query{Search: search, Limit: searchPageHits, After: after, Asker: c.asker,
 		CeilingSeat: c.ceiling, Rows: seatRead}
-	if turn != nil && c.asker.Kind == code.PrincipalAgent {
+	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
 		// A SEAT'S SEARCH NAMES ITS TURN, whose bucket on each answering
 		// Gitlet node pays the search's second look at the log's head, as a
 		// read by object id's does ([CodeDeps.gitRead]).
@@ -190,7 +190,7 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return labelFault(ctx, t.Name(), err), nil
 	case k == 0 && len(answer.Hits) > 0:
-		// A HIT is a path, a line of at most code.MaxSearchLineBytes and a
+		// A HIT is a path, a line of at most gitlet.MaxSearchLineBytes and a
 		// blob's id, fenced; and the coverage's names and reasons share
 		// codesearch.MaxCoverageText, a sixteenth of an answer, beside an
 		// entry per Gitlet node that did not answer — together far under one
@@ -210,7 +210,7 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // page of short lines would be shorter than one answer holds, and the search
 // cut into more pages. Lines that are longer, as nearly all are, fill a page
 // sooner, and the lines past the page's last are the next page's to read
-// again — less than one page's worth at most. Under code.MaxSearchHits (500),
+// again — less than one page's worth at most. Under gitlet.MaxSearchHits (500),
 // which a page of the shortest lines could not carry.
 const searchPageHits = 315
 
@@ -293,7 +293,7 @@ func searchWords(err error) string {
 // ref it names in each, holding a seat's branch ([CodeDeps.refsOf]), and
 // answers the floor each copy searched is brought to: this node's own pushes
 // to those repositories and every push that set the ref there
-// ([code.RefsFloor]). A ref that could be a seat's branch, in a search naming
+// ([gitlet.RefsFloor]). A ref that could be a seat's branch, in a search naming
 // no repository, is refused: it would be read in every repository the seat
 // may read and held in none.
 //
@@ -309,8 +309,8 @@ func searchWords(err error) string {
 func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	search codeindex.Query, after *codesearch.Key) (statelog.Freshness, *tools.Result) {
 
-	named := search.Ref != "" && !code.ValidRev(search.Ref)
-	if named && len(search.Repos) == 0 && (code.Holdable(search.Ref) || code.Holdable("refs/heads/"+search.Ref)) {
+	named := search.Ref != "" && !gitlet.ValidRev(search.Ref)
+	if named && len(search.Repos) == 0 && (gitlet.Holdable(search.Ref) || gitlet.Holdable("refs/heads/"+search.Ref)) {
 		r := failed(fmt.Sprintf("%s: ref %s may be a seat's branch, which a turn holds while it reads it, "+
 			"and a search naming no repository would read it in every one. Name the repositories to search "+
 			"it in with repo:.", tool, search.Ref))
@@ -318,7 +318,7 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 	}
 	var (
 		own  statelog.Position
-		refs []code.ResolvedRef
+		refs []gitlet.ResolvedRef
 	)
 	for _, name := range search.Repos {
 		if after != nil && name < after.Repo {
@@ -334,7 +334,7 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 		}
 		key := searchRefKey{asker: c.asker, repoID: repo.ID, ref: search.Ref}
 		if held, ok := turn.LookedUp().Load(key); ok {
-			if live, ok := held.([]code.ResolvedRef); ok {
+			if live, ok := held.([]gitlet.ResolvedRef); ok {
 				refs = append(refs, live...)
 				continue
 			}
@@ -343,7 +343,7 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 		if refusal != nil {
 			return statelog.Freshness{}, refusal
 		}
-		var live []code.ResolvedRef
+		var live []gitlet.ResolvedRef
 		for _, ref := range answer.Refs {
 			if ref.Missing == "" {
 				live = append(live, ref)
@@ -357,7 +357,7 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 		turn.LookedUp().LoadOrStore(key, live)
 		refs = append(refs, live...)
 	}
-	return code.RefsFloor(own, refs...), nil
+	return gitlet.RefsFloor(own, refs...), nil
 }
 
 // searchRefKey keys, in a turn's lookups, a search's ref as one repository
@@ -368,7 +368,7 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 // seam's, [CodeDeps.repoRead], which keeps what a repository's name resolved
 // to, once the turn's hold is taken.
 type searchRefKey struct {
-	asker  code.Principal
+	asker  gitlet.Principal
 	repoID string
 	ref    string
 }
@@ -382,7 +382,7 @@ func searchFailure(ctx context.Context, tool string, err error) tools.Result {
 	switch {
 	case errors.As(err, &refusal):
 		return codeFailure(ctx, tool, refusal.Repo, err)
-	case errors.Is(err, code.ErrInvalid):
+	case errors.Is(err, gitlet.ErrInvalid):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the search: %s. Change it — the "+
 			"same one is refused again.", tool, domainWords(err)))
 	}
@@ -438,12 +438,12 @@ func searchCursorArg(tool string, search codeindex.Query, cursor string) (*codes
 	if err == nil {
 		err = json.Unmarshal(data, &c)
 	}
-	key := codesearch.Key{Repo: c.Repo, Tip: c.Tip, SearchAfter: code.SearchAfter{Path: c.Path,
+	key := codesearch.Key{Repo: c.Repo, Tip: c.Tip, SearchAfter: gitlet.SearchAfter{Path: c.Path,
 		PathB64: c.PathB64, Line: c.Line}}
 	if err == nil {
 		_, err = key.Raw()
 	}
-	if err != nil || !code.ValidName(c.Repo) || !gitref.ValidOID(c.Tip) {
+	if err != nil || !gitlet.ValidName(c.Repo) || !gitref.ValidOID(c.Tip) {
 		r := failed(fmt.Sprintf("%s: `cursor` is not a page of a search — hand back the `next` a "+
 			"page answered, unchanged.", tool))
 		return nil, &r

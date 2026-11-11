@@ -19,19 +19,19 @@ import (
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/checkrun"
-	codecompact "github.com/crewlet/crewlet/internal/code/compact"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/code/mirror"
-	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
+	gitletcompact "github.com/crewlet/crewlet/internal/gitlet/compact"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/gitlet/mirror"
+	"github.com/crewlet/crewlet/internal/gitlet/query"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -138,7 +138,7 @@ type native struct {
 	// every runtime [Engine.startNative] publishes — the code log is the
 	// core's and runs in every register, whatever the company's tools are,
 	// so its pack rows are the object store's to keep from the first push.
-	codeReader *code.Reader
+	codeReader *gitlet.Reader
 
 	// codeStore and committer are Gitlet's WRITE side — the
 	// lifecycle store the repositories' reconcile and retention write
@@ -157,13 +157,13 @@ type native struct {
 	// subject, and of repositories' checks, each on its repository's checks
 	// subject; and marks the writer of persons' code inbox marks, each on the
 	// person's own subject.
-	codeStore    *code.Store
-	committer    *code.Committer
-	changeWriter *code.ChangeWriter
-	checksWriter *code.ChecksWriter
-	marks        *code.Marks
+	codeStore    *gitlet.Store
+	committer    *gitlet.Committer
+	changeWriter *gitlet.ChangeWriter
+	checksWriter *gitlet.ChecksWriter
+	marks        *gitlet.Marks
 
-	// gitletHost is this node's git surface (internal/code/host) — its cache,
+	// gitletHost is this node's git surface (internal/gitlet/host) — its cache,
 	// its git pool, the hook relay, and the engine writes it builds — built
 	// only where the company that started this runtime set `code.backend: gitlet` AND
 	// this node has the gitlet role ([Engine.hostsGit]), nil otherwise. Read per
@@ -172,7 +172,7 @@ type native struct {
 	gitletHost *host.Server
 
 	// gitReads is this node's server-side reads of a repository by object id
-	// (internal/code/query), built beside gitletHost over the same cache and
+	// (internal/gitlet/query), built beside gitletHost over the same cache and
 	// pool and nil where it is: what the estate's router and server ask of
 	// this node as a repository's home Gitlet node — the reading half of its git
 	// half, gitletHost's engine writes the other ([gitHalf]) — through
@@ -181,7 +181,7 @@ type native struct {
 	// cache they read ([native.stopGitletHost]).
 	gitReads *query.Server
 
-	// mergePreviews is this node's merge previews (internal/code/home's
+	// mergePreviews is this node's merge previews (internal/gitlet/home's
 	// Previews), built beside gitReads over the same cache, pool and share
 	// and nil where it is: what the estate's router and server ask of this
 	// node for a comparison's preview — the third half of its git half
@@ -189,7 +189,7 @@ type native struct {
 	// change's mergeability by. It holds no goroutine, and Gitlet's
 	// stop stops it with gitReads, cutting its previews in flight before the
 	// cache they read.
-	mergePreviews *codehome.Previews
+	mergePreviews *gitlethome.Previews
 
 	// gitCache is the cache gitletHost serves from, built and stopped with it
 	// and nil where it is: held only to be READ, at each alarm evaluation
@@ -198,28 +198,28 @@ type native struct {
 	gitCache *cache.Cache
 
 	// compactor merges the packs of the repositories this node maintains and
-	// publishes their layers (internal/code/compact), built with gitletHost
+	// publishes their layers (internal/gitlet/compact), built with gitletHost
 	// and nil where it is, started with the native half's duties
 	// ([Engine.startNativeDuties]); stopped first in Gitlet's one
 	// bounded stop. A CONCRETE type, never an interface this package declares,
 	// because the alarm reading's producers gate follows a call only
 	// through one ([Engine.codeReading]).
-	compactor *codecompact.Compactor
+	compactor *gitletcompact.Compactor
 
 	// home is the change work of the repositories this node is the home Gitlet
-	// node of (internal/code/home), built and started with gitletHost and the
+	// node of (internal/gitlet/home), built and started with gitletHost and the
 	// compactor, and nil where they are; stopped first in Gitlet's one
 	// bounded stop, before the compactor.
-	home *codehome.Loop
+	home *gitlethome.Loop
 
 	// mirrors is the imports and pull mirrors of the repositories this node
-	// is home to (internal/code/mirror), a worker of home built with it, and
+	// is home to (internal/gitlet/mirror), a worker of home built with it, and
 	// nil where it is; stopped after home in Gitlet's one bounded
 	// stop, so no turn starts an attempt it would not wait for.
 	mirrors *mirror.Mirrors
 
 	// checkRunner claims and runs the company's queued checks in boxes of
-	// this node's sandbox catalogue (internal/code/checkrun), built with
+	// this node's sandbox catalogue (internal/gitlet/checkrun), built with
 	// gitletHost and started with home, and nil where they are or where this
 	// node sets no CREWLET_BOX_GIT_URL; stopped FIRST in Gitlet's one
 	// bounded stop. A concrete type, as the compactor is.
@@ -418,7 +418,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// the pack bundles its rows name are kept, audited and backed up from
 	// here.
 	{
-		running := sl.Domain(code.Domain{}.Name())
+		running := sl.Domain(gitlet.Domain{}.Name())
 		if running == nil {
 			return fmt.Errorf("engine: this node runs no code domain, so its rows " +
 				"have no reader — the domain is in the register and its stream " +
@@ -427,7 +427,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail
 		// reports what a push to it is held to now, which is what an
 		// import chunks its pushes by.
-		if n.codeReader, err = code.NewReader(code.ReaderOptions{Log: running.reader, Limits: e.codeLimits,
+		if n.codeReader, err = gitlet.NewReader(gitlet.ReaderOptions{Log: running.reader, Limits: e.codeLimits,
 			Now:    e.now,
 			Roster: e.codeRoster}); err != nil {
 			return fmt.Errorf("engine: code reader: %w", err)
@@ -436,7 +436,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// runs in every register (above); its committer and its lifecycle
 		// store exist only where a push may be decided.
 		if built.runsCode() {
-			if n.codeStore, err = code.NewStore(code.StoreOptions{
+			if n.codeStore, err = gitlet.NewStore(gitlet.StoreOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				// A TOOL'S LIFECYCLE REQUEST is judged by the committer's
 				// own chart, read per request off the current epoch, and held
@@ -451,11 +451,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			}); err != nil {
 				return fmt.Errorf("engine: code store: %w", err)
 			}
-			var publisher code.Publisher = running.publisher
+			var publisher gitlet.Publisher = running.publisher
 			if e.committerPublisher != nil {
 				publisher = e.committerPublisher(publisher)
 			}
-			if n.committer, err = code.NewCommitter(code.CommitterOptions{
+			if n.committer, err = gitlet.NewCommitter(gitlet.CommitterOptions{
 				Publisher: publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				// THE DECIDING NODE'S EPOCH, read per decision, so a
 				// limit an activation moves holds from that activation
@@ -485,7 +485,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// person an ask names is asked only where they use Gitlet,
 			// composed as the requester ceiling composes a person
 			// (turnRequesters, ADR-0109 and ADR-0110).
-			if n.changeWriter, err = code.NewChangeWriter(code.ChangeWriterOptions{
+			if n.changeWriter, err = gitlet.NewChangeWriter(gitlet.ChangeWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
 				Events: e.codeEvents(), AgentIDs: e.codeAgentID, People: turnRequesters{engine: e},
@@ -497,7 +497,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// a check's record of on the same node: the retention its
 			// repo_deleted sentence names, and the node's event stream an
 			// applied ending is announced on, once, from here.
-			if n.checksWriter, err = code.NewChecksWriter(code.ChecksWriterOptions{
+			if n.checksWriter, err = gitlet.NewChecksWriter(gitlet.ChecksWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
 				Events: e.codeEvents(), AgentIDs: e.codeAgentID, Metrics: e.metrics, Logger: logging.Get("code"),
@@ -508,7 +508,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// asks a mark of on any node that publishes: a mark judges no
 			// chart — it is the person's own, refused for anybody else —
 			// so it needs neither the epoch's chart nor the posture gate.
-			if n.marks, err = code.NewMarks(code.MarksOptions{
+			if n.marks, err = gitlet.NewMarks(gitlet.MarksOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 			}); err != nil {
 				return fmt.Errorf("engine: code marks writer: %w", err)
@@ -772,7 +772,7 @@ func (n *native) objectEstates() []collect.Estate {
 	}
 	estates := []collect.Estate{worklet.ObjectEstate{Reader: n.trackerFiles}}
 	if n.codeReader != nil {
-		estates = append(estates, code.ObjectEstate{Reader: n.codeReader})
+		estates = append(estates, gitlet.ObjectEstate{Reader: n.codeReader})
 	}
 	return estates
 }
@@ -1374,8 +1374,8 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		// chart — the repository owner's lead for a change nobody may
 		// review among them — and the woken seat reads the change with its
 		// code tools rather than a link.
-		parsers = append(parsers, code.NewParser(code.ParserOptions{}))
-		prompts = append(prompts, code.Prompt{})
+		parsers = append(parsers, gitlet.NewParser(gitlet.ParserOptions{}))
+		prompts = append(prompts, gitlet.Prompt{})
 	}
 	return parsers, prompts
 }

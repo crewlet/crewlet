@@ -4,7 +4,7 @@
  *
  * A BRANCH IS NAMED BY ITS NAME and a tag by its whole ref, as the address
  * carries them: the engine resolves a short name as a branch first
- * (`code.ResolveRef`), so a tag spelled short is read as the branch of that
+ * (`gitlet.Reader.ResolveRef`), so a tag spelled short is read as the branch of that
  * name where both exist, and a tag's whole ref is the one spelling that cannot
  * be.
  */
@@ -15,7 +15,7 @@ import { isWholeOID, refName, shortOID } from "~/lib/code.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeRefRow, CodeRepoDetail } from "~/protocol/index.ts";
 
-/** Where a repository's tags are listed (`code.ReadQuery.Prefix`). */
+/** Where a repository's tags are listed (`gitlet.ReadQuery.Prefix`). */
 const TAG_PREFIX = "refs/tags/";
 
 /** No ref listed — one constant, so a listing not read yet is not a new array each render. */
@@ -31,7 +31,7 @@ export interface Revisions {
  * Read a repository's branch and tag listings ONCE for a page, which hands
  * them to every picker it draws.
  *
- * EACH LISTING IS UP TO A THOUSAND ROWS (`code.MaxRefsPerPage`), each a ref, a
+ * EACH LISTING IS UP TO A THOUSAND ROWS (`gitlet.MaxRefsPerPage`), each a ref, a
  * commit id and a log position — over a hundred kilobytes at that bound, which
  * a repository whose seats push a branch a run reaches — and a hook
  * keeps its own answer, so every picker that asked for itself read both

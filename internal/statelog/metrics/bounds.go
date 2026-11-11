@@ -27,7 +27,7 @@ import (
 //     TestEveryPercentileAlarmIsDecidedAtABoundary holds every budget to a
 //     boundary.
 //   - A BYTE COUNT IS NOT A DURATION. A push's bundle runs to 1.25 GiB
-//     (code.MaxPackBytes), and against boundaries ending at 65 536 every push
+//     (gitlet.MaxPackBytes), and against boundaries ending at 65 536 every push
 //     past 64 KiB — every push worth measuring — landed in the overflow bucket,
 //     as did every transfer, cold sync and backup longer than 64 s.
 //
@@ -42,7 +42,7 @@ import (
 // TOP is past the longest: no transfer the engine paces outlives
 // objstore.RecordWithin (12 h) — a push of the largest bundle at the pacing
 // floor takes 10 h 40 min — and a backup's first copy of the large model was
-// measured at about five hours. internal/code's
+// measured at about five hours. internal/gitlet's
 // TestEveryPushIsCountedBelowTheTopBoundary holds the first.
 var durationBounds = oneTwoFive(-2, 7)
 
@@ -55,7 +55,7 @@ var countBounds = oneTwoFive(0, 5)
 // byteBounds are the boundaries of a histogram in bytes: every power of two
 // from 1 KiB to 2 GiB — a push's smallest bundle is over a kibibyte (its
 // index alone is at least 1 072 bytes), and its largest is under 2 GiB,
-// which no stored pack may reach (code.MaxPackBytes). Powers of two rather
+// which no stored pack may reach (gitlet.MaxPackBytes). Powers of two rather
 // than 1-2-5 because the sizes a byte count is read against here are binary
 // — the gibibyte push ceiling, the mebibyte parts a bundle moves in — and no
 // alarm holds a byte percentile to a budget it would have to be exact at.

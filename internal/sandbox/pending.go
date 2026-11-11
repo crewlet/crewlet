@@ -1636,7 +1636,7 @@ type PendingRun struct {
 	// read the colleague could not make, or a push outside the seat's own
 	// work (its own namespace, and a repository it owns) the colleague could
 	// not make, is refused the box (Gitlet's
-	// box admission, code.Grant.Under). Empty for a job no colleague
+	// box admission, gitlet.Grant.Under). Empty for a job no colleague
 	// seat bounds: a turn nobody woke, one the seat itself woke, and one a
 	// person woke, since a person maintains every repository.
 	//
@@ -3996,14 +3996,14 @@ type PriorBox struct {
 // a reviewer's send-backs, and a person's answers to a job parked for as long
 // as the seat's pause_ttl_seconds (which has no ceiling), would otherwise keep
 // one checkout working for as long as the turn lasts. Gitlet
-// keeps a deleted seat branch's engine commits code.PruneGrace (fourteen
+// keeps a deleted seat branch's engine commits gitlet.PruneGrace (fourteen
 // days) after the deletion, and refuses a box's push carrying one it no
 // longer holds as a forgery (forged_committer); a job's credential is valid
-// code/host's RunTokenTTL (seven days) from its launch. So SEVEN DAYS — the
+// gitlet/host's RunTokenTTL (seven days) from its launch. So SEVEN DAYS — the
 // grace less the credential: a job launched into a box younger than that
 // pushes, at the latest, before fourteen days from the box's first attach,
 // and so from the deletion of any branch a job in it checked out, which came
-// after. code/host holds the three to that sum at compile time.
+// after. gitlet/host holds the three to that sum at compile time.
 //
 // EVERY KEPT BOX IS HELD TO IT, a run given no repository on Gitlet
 // included: whether a job may push there is its own launch's grant, which a

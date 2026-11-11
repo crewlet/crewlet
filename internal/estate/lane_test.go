@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -89,7 +89,7 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 				"answered: a queued push held a slot the node's reads are answered through",
 				held, err)
 		}
-		if _, err := f.client.Code().Resolve(reads, code.ResolveQuery{Name: "app"}); err != nil {
+		if _, err := f.client.Code().Resolve(reads, gitlet.ResolveQuery{Name: "app"}); err != nil {
 			cancelReads()
 			t.Fatalf("with %d pushes held on the node, a git fetch's code.resolve of it = "+
 				"%v, want it answered", held, err)
@@ -164,12 +164,12 @@ func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	// EVERY HOLDER'S SHARE AT ONCE: the committer's node-wide count holds at
 	// least one repository's full queue and the batch ahead of it, and the
 	// lane holds it beside both writers' counts.
-	if code.CommitterNodeProposals < code.CommitterInbox+code.MaxPushesPerRecord {
+	if gitlet.CommitterNodeProposals < gitlet.CommitterInbox+gitlet.MaxPushesPerRecord {
 		t.Errorf("the committer holds %d proposals a node, under one repository's full queue and the batch "+
 			"ahead of it (%d): a burst to one repository would be refused before its queue filled",
-			code.CommitterNodeProposals, code.CommitterInbox+code.MaxPushesPerRecord)
+			gitlet.CommitterNodeProposals, gitlet.CommitterInbox+gitlet.MaxPushesPerRecord)
 	}
-	if held := code.CommitterNodeProposals + code.ChangeWriterNodeWrites + code.ChecksWriterNodeWrites; proposalAnswers < held {
+	if held := gitlet.CommitterNodeProposals + gitlet.ChangeWriterNodeWrites + gitlet.ChecksWriterNodeWrites; proposalAnswers < held {
 		t.Errorf("the proposal lane answers %d at once, under the %d its committer and its two writers hold "+
 			"together: a burst would wait unseen for a slot before its component could answer it busy, "+
 			"and one component's burst would hold the slots another's requests need", proposalAnswers, held)
@@ -208,7 +208,7 @@ func TestEveryHolderOnTheProposalLaneHasItsShareAtOnce(t *testing.T) {
 	r := f.router(t, "agent-2", nil)
 	asking, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
-	total := code.CommitterNodeProposals + code.ChangeWriterNodeWrites + code.ChecksWriterNodeWrites
+	total := gitlet.CommitterNodeProposals + gitlet.ChangeWriterNodeWrites + gitlet.ChecksWriterNodeWrites
 	failed := make(chan error, total)
 	ask := func(each func() error) {
 		asks.Add(1)
@@ -219,30 +219,30 @@ func TestEveryHolderOnTheProposalLaneHasItsShareAtOnce(t *testing.T) {
 			}
 		}()
 	}
-	for i := range code.CommitterNodeProposals {
+	for i := range gitlet.CommitterNodeProposals {
 		repo := fmt.Sprintf("019a0c2e-0000-7000-8000-%012x", i)
 		ask(func() error {
 			_, err := r.Code().Propose(asking, proposalTo(repo, "push-"+repo))
 			return err
 		})
 	}
-	for i := range code.ChangeWriterNodeWrites {
+	for i := range gitlet.ChangeWriterNodeWrites {
 		ask(func() error {
-			_, err := r.Code().Converse(asking, code.ConversationWrite{
+			_, err := r.Code().Converse(asking, gitlet.ConversationWrite{
 				OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_comment_on_change", i),
-				Comment: &code.Comment{RepoID: fmt.Sprintf("repo-%04d", i),
+				Comment: &gitlet.Comment{RepoID: fmt.Sprintf("repo-%04d", i),
 					ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100_000+i), Body: "why?"}})
 			return err
 		})
 	}
-	for i := range code.ChecksWriterNodeWrites {
+	for i := range gitlet.ChecksWriterNodeWrites {
 		ask(func() error {
-			_, err := r.Code().Checks(asking, code.ChecksRequest{
+			_, err := r.Code().Checks(asking, gitlet.ChecksRequest{
 				OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_check_claim", i),
-				Started: &code.CheckStarted{CheckKey: code.CheckKey{
+				Started: &gitlet.CheckStarted{CheckKey: gitlet.CheckKey{
 					RepoID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 200_000+i),
 					OID:    "1111111111111111111111111111111111111111", Name: "unit", Attempt: 1},
-					Runner: "git-1", Placement: code.PlacementContainer,
+					Runner: "git-1", Placement: gitlet.PlacementContainer,
 					StartedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)}})
 			return err
 		})
@@ -254,9 +254,9 @@ func TestEveryHolderOnTheProposalLaneHasItsShareAtOnce(t *testing.T) {
 		reached *atomic.Int32
 		share   int
 	}{
-		{"pushes reached the committer", &node.proposing, code.CommitterNodeProposals},
-		{"conversation writes reached the change writer", &node.conversing, code.ChangeWriterNodeWrites},
-		{"check writes reached the checks writer", &node.checking, code.ChecksWriterNodeWrites},
+		{"pushes reached the committer", &node.proposing, gitlet.CommitterNodeProposals},
+		{"conversation writes reached the change writer", &node.conversing, gitlet.ChangeWriterNodeWrites},
+		{"check writes reached the checks writer", &node.checking, gitlet.ChecksWriterNodeWrites},
 	} {
 		for int(c.reached.Load()) < c.share {
 			if time.Now().After(deadline) {

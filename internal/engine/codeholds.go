@@ -39,7 +39,7 @@ import (
 //
 // # One reader, asked once a page of due repositories
 //
-// [Engine.codeHolds] is the code-retention pass's [code.Retention.Holds]: the
+// [Engine.codeHolds] is the code-retention pass's [gitlet.Retention.Holds]: the
 // keys of a page held by (a) any run row the store holds, WHATEVER ITS STATUS
 // — a status a newer build added included ([sandbox.PendingStore.ListRuns]),
 // since a run is unended exactly while it has a record — and (b) any running
@@ -252,7 +252,7 @@ func answerCodeHolds(owner string, turns *runningTurns) queue.AnswerFunc {
 	}
 }
 
-// codeHolds is the code-retention pass's [code.Retention.Holds]: which of keys
+// codeHolds is the code-retention pass's [gitlet.Retention.Holds]: which of keys
 // a live turn holds — see the file's doc.
 func (e *Engine) codeHolds(ctx context.Context, keys []string) (map[string]bool, error) {
 	return e.holdsReader().holds(ctx, keys)

@@ -153,7 +153,7 @@ func DatastoreQuotaReached() Refusal {
 
 // GateCondition is one condition of a merge gate that a change does not meet
 // yet, as Gitlet judged it: its kind, by the host's own name for it
-// (internal/code's PreconditionKind), and the handles of whoever it waits on.
+// (internal/gitlet's PreconditionKind), and the handles of whoever it waits on.
 //
 // THE WORDS ARE THIS CATALOG'S: a kind is a value off the host's closed set,
 // said here as what the change still waits for, and a kind this build does

@@ -177,13 +177,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		//
 		// NOR GITLET'S RETIRED PACKS, `code_packs_retired`, for the
 		// same reason: replicated rows, which the code-retention duty's
-		// retire_sweep records remove once code.RetireGrace has passed —
+		// retire_sweep records remove once gitlet.RetireGrace has passed —
 		// every applier at one position — and a job here deleting them by
 		// one node's clock would be the second writer again. The
 		// references gate reviews that table's sweep as the duty's, and
 		// TestARetirementIsSweptByARecordTheEngineRuns holds the duty the
 		// engine runs to publishing it. NOR ITS CHECKS past
-		// code.CheckHistory, `code_checks` and `code_check_logs`, for the
+		// gitlet.CheckHistory, `code_checks` and `code_check_logs`, for the
 		// same reason again: every ending removes its own repository's,
 		// and the duty's checks_sweep records an idle repository's.
 		"pages_ops",

@@ -10,9 +10,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -26,10 +26,10 @@ import (
 // title, description or work item, a draft's state, its target), closed and
 // reopened — each ONE write of Gitlet's change domain, decided where
 // the change is decided: a change's lifecycle by the repository's committer,
-// from its own chart (code.ChangeProposal), on the repository's subject beside
+// from its own chart (gitlet.ChangeProposal), on the repository's subject beside
 // its pushes. Every one is in [CodeTools] beside the reads and the other code
 // writes ([CodeWrites]), so a seat's registry and the operator catalogue take
-// one list, and each delivers to Gitlet's surface (code.Source): a turn
+// one list, and each delivers to Gitlet's surface (gitlet.Source): a turn
 // woken about a change that answered by writing it delivered on the surface
 // the work came from.
 //
@@ -45,7 +45,7 @@ import (
 // anything is read or routed ([CodeDeps.writeCaller]). [changeToolNeeds] names
 // the least access each one's call may be admitted at — and, inside a seat's
 // turn somebody woke, the access the committer holds them to as well
-// (code.ChangeProposal.Ceiling and code.ConversationWrite.Ceiling, which every
+// (gitlet.ChangeProposal.Ceiling and gitlet.ConversationWrite.Ceiling, which every
 // write here carries), the seat's own work excepted.
 //
 // # One operation, so a retry is the same write
@@ -54,7 +54,7 @@ import (
 // takes ([operations], [opIDFor]): verb `code-change`, object the repository's
 // id — bounded, so no branch or title carries an id past
 // statelog.MaxCallerOpIDBytes. An open's change is derived from it
-// (code.OpenChangeID), so the same call made again — after an `unknown`, by a
+// (gitlet.OpenChangeID), so the same call made again — after an `unknown`, by a
 // re-run turn — opens the change the first opened, which the ledger collapses,
 // and never a second. A second write the call makes is a STEP of the first's
 // operation ([stepTwo]): an open's ask of its reviewers, made once the change
@@ -70,7 +70,7 @@ import (
 // asking for what the change already says is answered unchanged, with no
 // record. And each is decided at or past where its caller read: the
 // repository's resolution for an open, the call's own read of the change for
-// the rest (code.ChangeProposal.Seen).
+// the rest (gitlet.ChangeProposal.Seen).
 //
 // # The work a change carries
 //
@@ -135,12 +135,12 @@ const stepTwo = "2"
 // call's own read of it found it: its row in detail, and the position it was
 // read at, which the write is decided at or past.
 type changeWritten struct {
-	detail *code.ChangeDetail
+	detail *gitlet.ChangeDetail
 	at     statelog.Position
 }
 
 // changeOf reads the change g names, at the seat's level — ONE read a call, of
-// its detail alone (code.ReadQuery.DetailOnly: no write reads a revision),
+// its detail alone (gitlet.ReadQuery.DetailOnly: no write reads a revision),
 // held to the caller's grant on the repository where it is answered, and the
 // call's resolution of the repository too where the turn has none
 // ([changeRead.ask]) — for the id a write names it by and the position the
@@ -148,7 +148,7 @@ type changeWritten struct {
 // one the turn resolved the name to is refused as a name taken again between
 // the two reads ([changeRead.read]).
 func (d CodeDeps) changeOf(ctx context.Context, g *changeRead) (changeWritten, *tools.Result) {
-	answer, refusal := g.read(ctx, code.ReadQuery{DetailOnly: true}, statelog.Position{})
+	answer, refusal := g.read(ctx, gitlet.ReadQuery{DetailOnly: true}, statelog.Position{})
 	if refusal != nil {
 		return changeWritten{}, refusal
 	}
@@ -164,8 +164,8 @@ func (d CodeDeps) changeOf(ctx context.Context, g *changeRead) (changeWritten, *
 // read of the repository — for a seat, this node's own writes to it and the
 // turn's resolution of it, whichever is later (as a seat's engine write is
 // built at); for a person, the resolution, read at the log's head.
-func (d CodeDeps) openSeen(c codeCaller, repo code.RepoRef) statelog.Position {
-	if c.asker.Kind != code.PrincipalAgent {
+func (d CodeDeps) openSeen(c codeCaller, repo gitlet.RepoRef) statelog.Position {
+	if c.asker.Kind != gitlet.PrincipalAgent {
 		return repo.Position
 	}
 	return furthestOnLog(d.Code.FloorOf(repo.ID), repo.Position)
@@ -175,7 +175,7 @@ func (d CodeDeps) openSeen(c codeCaller, repo code.RepoRef) statelog.Position {
 // ([CodeDeps.Mentions]), each once in the order first named — what a change
 // write's Mentions carries (rule D38: a mention is resolved at the write, by
 // its asker, and held to the deciding node's chart there) — or the refusal of
-// a write naming more than code.MaxMentions of them, made before anything is
+// a write naming more than gitlet.MaxMentions of them, made before anything is
 // read: the deciding node refuses that list anyway, and refusing here names
 // the bound rather than letting a mention go unheard.
 func (d CodeDeps) mentionsOf(tool string, texts ...string) ([]string, *tools.Result) {
@@ -190,9 +190,9 @@ func (d CodeDeps) mentionsOf(tool string, texts ...string) ([]string, *tools.Res
 			}
 		}
 	}
-	if len(out) > code.MaxMentions {
+	if len(out) > gitlet.MaxMentions {
 		r := failed(fmt.Sprintf("%s: the text names %d colleagues, past the %d one write of a change mentions — "+
-			"mention fewer, and say the rest without an @.", tool, len(out), code.MaxMentions))
+			"mention fewer, and say the rest without an @.", tool, len(out), gitlet.MaxMentions))
 		return nil, &r
 	}
 	return out, nil
@@ -313,7 +313,7 @@ func (d CodeDeps) listedWorkItem(ctx context.Context, tool, arg, named string) (
 // fitted; or the Worklet name, a key or an id, bare or under `native:`, left
 // as local for the caller to resolve; or the refusal, naming arg, of a
 // tracker named with no item in it. Every field is FITTED to the bound a
-// change's row holds a label to (code.FitProvenance), as the run a seat's
+// change's row holds a label to (gitlet.FitProvenance), as the run a seat's
 // write names is: an item is another system's label, copied as it arrived,
 // and never a reason to refuse a write — and a listing asks for the item as
 // its rows hold it.
@@ -367,10 +367,10 @@ func turnItem(turn *turnctx.Turn) *types.WorkItem {
 }
 
 // fittedItem is w with each of its labels fitted to what a change's row holds
-// (code.FitProvenance).
+// (gitlet.FitProvenance).
 func fittedItem(w types.WorkItem) *types.WorkItem {
-	return &types.WorkItem{Backend: types.WorkBackend(code.FitProvenance(string(w.Backend))),
-		ID: code.FitProvenance(w.ID), Key: code.FitProvenance(w.Key), Project: code.FitProvenance(w.Project)}
+	return &types.WorkItem{Backend: types.WorkBackend(gitlet.FitProvenance(string(w.Backend))),
+		ID: gitlet.FitProvenance(w.ID), Key: gitlet.FitProvenance(w.Key), Project: gitlet.FitProvenance(w.Project)}
 }
 
 // ---- code_open_change ------------------------------------------------------- //
@@ -448,7 +448,7 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	open := code.ChangeOpen{SourceRef: source, TargetRef: target, Title: argString(args, "title"),
+	open := gitlet.ChangeOpen{SourceRef: source, TargetRef: target, Title: argString(args, "title"),
 		Body: argString(args, "body"), Draft: argBool(args, "draft")}
 	if open.Mentions, refusal = t.deps.mentionsOf(tool, open.Title, open.Body); refusal != nil {
 		return *refusal, nil
@@ -483,11 +483,11 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	op := opIDFor(actor, tool, changeVerb, repo.ID, args)
-	open.RepoID, open.ChangeID = repo.ID, code.OpenChangeID(op)
-	if turn != nil && c.asker.Kind == code.PrincipalAgent {
+	open.RepoID, open.ChangeID = repo.ID, gitlet.OpenChangeID(op)
+	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
 		open.TurnID = turn.RunID
 	}
-	p := code.ChangeProposal{OpID: op, Asker: c.asker, Ceiling: c.write, Seen: t.deps.openSeen(c, repo),
+	p := gitlet.ChangeProposal{OpID: op, Asker: c.asker, Ceiling: c.write, Seen: t.deps.openSeen(c, repo),
 		Open: &open}
 	res, refusal := t.deps.proposeChange(ctx, turn, tool, c, repo, p)
 	if refusal != nil {
@@ -498,7 +498,7 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if res.Number > 0 {
 		// A PENDING OPEN NAMES NO NUMBER: the apply that opens the change
 		// numbers it, and none has run where the answer was formed.
-		out.Change = code.ChangeRef(repo.Name, res.Number)
+		out.Change = gitlet.ChangeRef(repo.Name, res.Number)
 	}
 	if len(reviewers) > 0 {
 		t.deps.askOpened(ctx, c, repo, op, res, reviewers, &out)
@@ -508,15 +508,15 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // reviewersArg is a call's list of reviewers to ask — handles, each a seat's
 // or the human seat a person holds — or the refusal of one no ask could name:
-// a handle no seat may have, past code.MaxReviewersPerChange, or the caller
+// a handle no seat may have, past gitlet.MaxReviewersPerChange, or the caller
 // themselves, the change's author, whose review of their own change counts
 // for nothing. Refused before anything is written, so a call whose ask could
 // never be made writes nothing.
-func reviewersArg(tool, arg string, args map[string]any, asker code.Principal) ([]string, *tools.Result) {
+func reviewersArg(tool, arg string, args map[string]any, asker gitlet.Principal) ([]string, *tools.Result) {
 	handles := argStrings(args, arg)
-	if len(handles) > code.MaxReviewersPerChange {
+	if len(handles) > gitlet.MaxReviewersPerChange {
 		r := failed(fmt.Sprintf("%s: `%s` names %d reviewers, past the %d a change asks at once.", tool, arg,
-			len(handles), code.MaxReviewersPerChange))
+			len(handles), gitlet.MaxReviewersPerChange))
 		return nil, &r
 	}
 	for _, h := range handles {
@@ -541,17 +541,17 @@ func reviewersArg(tool, arg string, args map[string]any, asker code.Principal) (
 // the answer beside the change it was made of, never as the open's failure:
 // the change WAS opened, and a call made again to finish the ask opens nothing
 // twice.
-func (d CodeDeps) askOpened(ctx context.Context, c codeCaller, repo code.RepoRef,
-	openOp string, opened code.ChangeResult, reviewers []string, out *codeChangeWriteAnswer) {
+func (d CodeDeps) askOpened(ctx context.Context, c codeCaller, repo gitlet.RepoRef,
+	openOp string, opened gitlet.ChangeResult, reviewers []string, out *codeChangeWriteAnswer) {
 
 	if opened.Outcome != statelog.OutcomeApplied && opened.Outcome != statelog.OutcomePending {
 		return
 	}
-	ask := code.ReviewerRequest{RepoID: repo.ID, ChangeID: opened.ChangeID}
+	ask := gitlet.ReviewerRequest{RepoID: repo.ID, ChangeID: opened.ChangeID}
 	for _, h := range reviewers {
-		ask.Request = append(ask.Request, code.Reviewer{Handle: h})
+		ask.Request = append(ask.Request, gitlet.Reviewer{Handle: h})
 	}
-	w := code.ConversationWrite{OpID: statelog.StepOpID(openOp, stepTwo), Asker: c.asker, Ceiling: c.write,
+	w := gitlet.ConversationWrite{OpID: statelog.StepOpID(openOp, stepTwo), Asker: c.asker, Ceiling: c.write,
 		Seen: opened.Position, Reviewers: &ask}
 	named := out.Change
 	if named == "" {
@@ -672,9 +672,9 @@ func (t *codeUpdateChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // change says, a draft's state or a retarget — with every field but the
 // change's own ids, which the call fills once it has read the change, or the
 // refusal of a call that asks for none of them or for more than one.
-func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (code.ChangeProposal, *tools.Result) {
+func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (gitlet.ChangeProposal, *tools.Result) {
 	tool := t.Name()
-	var edit code.ChangeEdit
+	var edit gitlet.ChangeEdit
 	// PRESENCE IS THE ASK, read by the check's own text reader: a null
 	// `title` never reaches a tool (the entry leaves it out, toolargs.Of),
 	// and an empty one is an edit to an empty title, which the change
@@ -703,22 +703,22 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 	if asked != 1 {
 		r := failed(fmt.Sprintf("%s changes ONE thing a call: what the change says (any of `title`, `body`, "+
 			"`work_item`), `draft`, or `target` — each is a record of its own.", tool))
-		return code.ChangeProposal{}, &r
+		return gitlet.ChangeProposal{}, &r
 	}
 	var refusal *tools.Result
 	switch {
 	case draft:
-		return code.ChangeProposal{Draft: &code.ChangeDraft{Draft: argBool(args, "draft")}}, nil
+		return gitlet.ChangeProposal{Draft: &gitlet.ChangeDraft{Draft: argBool(args, "draft")}}, nil
 	case retarget:
 		var target string
 		if target, refusal = branchArg(tool, "target", args); refusal != nil {
-			return code.ChangeProposal{}, refusal
+			return gitlet.ChangeProposal{}, refusal
 		}
-		return code.ChangeProposal{Retarget: &code.ChangeRetarget{TargetRef: target}}, nil
+		return gitlet.ChangeProposal{Retarget: &gitlet.ChangeRetarget{TargetRef: target}}, nil
 	}
 	item, _, clear, refusal := t.deps.workItemArg(ctx, tool, args)
 	if refusal != nil {
-		return code.ChangeProposal{}, refusal
+		return gitlet.ChangeProposal{}, refusal
 	}
 	edit.WorkItem, edit.ClearWorkItem = item, clear
 	// WHAT THE EDIT SETS NAMES ITS MENTIONS, and nothing it leaves standing:
@@ -730,9 +730,9 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 		}
 	}
 	if edit.Mentions, refusal = t.deps.mentionsOf(tool, said...); refusal != nil {
-		return code.ChangeProposal{}, refusal
+		return gitlet.ChangeProposal{}, refusal
 	}
-	return code.ChangeProposal{Edit: &edit}, nil
+	return gitlet.ChangeProposal{Edit: &edit}, nil
 }
 
 // ---- code_close_change ------------------------------------------------------ //
@@ -781,13 +781,13 @@ func (t *codeCloseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	p := code.ChangeProposal{Close: &code.ChangeClose{Reason: strings.TrimSpace(argString(args, "reason"))}}
+	p := gitlet.ChangeProposal{Close: &gitlet.ChangeClose{Reason: strings.TrimSpace(argString(args, "reason"))}}
 	if argBool(args, "reopen") {
 		if p.Close.Reason != "" {
 			return failed(fmt.Sprintf("%s: a reopen takes no `reason` — it is the close that says why.",
 				tool)), nil
 		}
-		p = code.ChangeProposal{Reopen: &code.ChangeReopen{}}
+		p = gitlet.ChangeProposal{Reopen: &gitlet.ChangeReopen{}}
 	}
 	return t.deps.steer(ctx, turn, tool, c, args, name, number, version, p)
 }
@@ -801,7 +801,7 @@ func (t *codeCloseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // resolution too where the turn has none ([CodeDeps.changeOf]) — then the
 // write decided at or past that read, and its answer.
 func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	args map[string]any, name string, number, version int64, p code.ChangeProposal) (tools.Result, error) {
+	args map[string]any, name string, number, version int64, p gitlet.ChangeProposal) (tools.Result, error) {
 
 	actor, bound := d.bindOperation(c.actor, tool, args)
 	if bound != "" {
@@ -850,7 +850,7 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 		return *refusal, nil
 	}
 	out := codeChangeWriteAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
-		Change: code.ChangeRef(repo.Name, number), Outcome: res.Outcome, Unchanged: res.Unchanged,
+		Change: gitlet.ChangeRef(repo.Name, number), Outcome: res.Outcome, Unchanged: res.Unchanged,
 		Version: res.Version, Position: positionText(res.Position), OpID: c.actor.Operation}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
@@ -877,27 +877,27 @@ type codeChangeWriteAnswer struct {
 }
 
 // proposeChange asks the repository's committer to decide p — held first to
-// the rule every committer holds a proposal to (code.ChangeProposal.Validate),
+// the rule every committer holds a proposal to (gitlet.ChangeProposal.Validate),
 // so one no node would decide is refused naming its field before it is routed
 // — and answers what it came to, or the refusal the call is answered with: a
 // refusal of the write in its class, an outcome unknown, or a failure to
 // reach any committer.
 func (d CodeDeps) proposeChange(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	repo code.RepoRef, p code.ChangeProposal) (code.ChangeResult, *tools.Result) {
+	repo gitlet.RepoRef, p gitlet.ChangeProposal) (gitlet.ChangeResult, *tools.Result) {
 
 	if err := p.Validate(); err != nil {
 		r := codeWriteFailure(ctx, tool, c.actor, repo.Name, err)
-		return code.ChangeResult{}, &r
+		return gitlet.ChangeResult{}, &r
 	}
 	res, err := d.Writer.Change(ctx, p)
 	if err != nil {
 		r := d.failedWrite(ctx, turn, tool, c, repo, p.OpID, err)
-		return code.ChangeResult{}, &r
+		return gitlet.ChangeResult{}, &r
 	}
 	commit(turn, res.Outcome, types.CommittedCode)
 	if res.Refusal != "" {
 		r := changeRefused(tool, res)
-		return code.ChangeResult{}, &r
+		return gitlet.ChangeResult{}, &r
 	}
 	switch res.Outcome {
 	case statelog.OutcomeApplied, statelog.OutcomePending:
@@ -906,19 +906,19 @@ func (d CodeDeps) proposeChange(ctx context.Context, turn *turnctx.Turn, tool st
 		r := unknownWrite(c.actor, tool, fmt.Sprintf("the write of a change on %s landed", repo.Name), p.OpID, false,
 			unknownNext(false, sameCall(c.actor, tool), fmt.Sprintf("Read the change with %s", CodeGetChangeTool),
 				"the same write would be asked twice"))
-		return code.ChangeResult{}, &r
+		return gitlet.ChangeResult{}, &r
 	}
 	r := faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a change write with outcome %q and no "+
 		"refusal", res.Outcome), fmt.Sprintf("%s could not tell what became of the write: %s.", tool, faultSaid))
-	return code.ChangeResult{}, &r
+	return gitlet.ChangeResult{}, &r
 }
 
 // converse asks the repository's committing data node to decide w — held first
-// to the rule every change writer holds a write to (code.ConversationWrite's
+// to the rule every change writer holds a write to (gitlet.ConversationWrite's
 // Validate) — and answers what it came to.
-func (d CodeDeps) converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+func (d CodeDeps) converse(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
 	if err := w.Validate(); err != nil {
-		return code.ConversationResult{}, err
+		return gitlet.ConversationResult{}, err
 	}
 	return d.Writer.Converse(ctx, w)
 }
@@ -936,25 +936,25 @@ func (d CodeDeps) converse(ctx context.Context, w code.ConversationWrite) (code.
 // among it, as a push's repo_importing is. The two only a push's receiver
 // answers (ambiguous_source, bad_option) are INVALID on the same reading,
 // though no tool's write is ever refused either.
-func changeClass(r code.ChangeRefusal) (tools.Refusal, bool) {
+func changeClass(r gitlet.ChangeRefusal) (tools.Refusal, bool) {
 	switch r {
-	case code.ChangeRefusalNotPermitted:
+	case gitlet.ChangeRefusalNotPermitted:
 		return tools.RefusalForbidden, true
-	case code.ChangeRefusalRepoArchived, code.ChangeRefusalRepoMirrored:
+	case gitlet.ChangeRefusalRepoArchived, gitlet.ChangeRefusalRepoMirrored:
 		return tools.RefusalConflict, true
-	case code.ChangeRefusalStale:
+	case gitlet.ChangeRefusalStale:
 		return tools.RefusalStaleVersion, true
-	case code.ChangeRefusalChangeExists:
+	case gitlet.ChangeRefusalChangeExists:
 		return tools.RefusalExists, true
-	case code.ChangeRefusalNoSource, code.ChangeRefusalNoTarget, code.ChangeRefusalSameRef,
-		code.ChangeRefusalNoDifference, code.ChangeRefusalAmbiguousSource, code.ChangeRefusalBadOption:
+	case gitlet.ChangeRefusalNoSource, gitlet.ChangeRefusalNoTarget, gitlet.ChangeRefusalSameRef,
+		gitlet.ChangeRefusalNoDifference, gitlet.ChangeRefusalAmbiguousSource, gitlet.ChangeRefusalBadOption:
 		return tools.RefusalInvalid, true
-	case code.ChangeRefusalChangeClosed, code.ChangeRefusalChangeMerged:
+	case gitlet.ChangeRefusalChangeClosed, gitlet.ChangeRefusalChangeMerged:
 		return tools.RefusalConflict, true
-	case code.ChangeRefusalRepoDeleted, code.ChangeRefusalChangeNotFound:
+	case gitlet.ChangeRefusalRepoDeleted, gitlet.ChangeRefusalChangeNotFound:
 		return tools.RefusalNotFound, true
-	case code.ChangeRefusalBusy, code.ChangeRefusalNotApplied, code.ChangeRefusalUnavailable,
-		code.ChangeRefusalRepoImporting:
+	case gitlet.ChangeRefusalBusy, gitlet.ChangeRefusalNotApplied, gitlet.ChangeRefusalUnavailable,
+		gitlet.ChangeRefusalRepoImporting:
 		return tools.RefusalUnavailable, true
 	}
 	return "", false
@@ -962,7 +962,7 @@ func changeClass(r code.ChangeRefusal) (tools.Refusal, bool) {
 
 // changeRefused is a change write the committer refused, in its class, with
 // the decide's own sentence and what to do about it.
-func changeRefused(tool string, res code.ChangeResult) tools.Result {
+func changeRefused(tool string, res gitlet.ChangeResult) tools.Result {
 	cause := writeRefusalError(string(res.Refusal), res.Detail)
 	said := fmt.Sprintf("%s changed nothing: %s (%s).", tool, res.Detail, res.Refusal)
 	class, known := changeClass(res.Refusal)

@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -55,17 +55,17 @@ func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 	boxes, checks := tokensOver(t, fleet)
 	otherBoxes, otherChecks := tokensOver(t, runtoken.OneKey("k", "another fleet's key"))
 	run := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
-	check := host.CheckRunRef{Repo: "web", Attempt: code.CheckKey{RepoID: uuid.NewString(),
+	check := host.CheckRunRef{Repo: "web", Attempt: gitlet.CheckKey{RepoID: uuid.NewString(),
 		OID: strings.Repeat("ab", 20), Target: "refs/heads/main", Name: "unit", Attempt: 1}}
 	presented := []struct {
 		name, user, token string
 		signed            bool
 	}{
 		{"a run's token this fleet signed", host.BoxUser, boxes.Mint(run), true},
-		{"a check's token this fleet signed", code.CheckUser, checks.Mint(check, time.Minute), true},
+		{"a check's token this fleet signed", gitlet.CheckUser, checks.Mint(check, time.Minute), true},
 		{"a run's token another fleet signed", host.BoxUser, otherBoxes.Mint(run), false},
-		{"a check's token another fleet signed", code.CheckUser, otherChecks.Mint(check, time.Minute), false},
-		{"this fleet's run token as a check's", code.CheckUser, boxes.Mint(run), false},
+		{"a check's token another fleet signed", gitlet.CheckUser, otherChecks.Mint(check, time.Minute), false},
+		{"this fleet's run token as a check's", gitlet.CheckUser, boxes.Mint(run), false},
 		{"this fleet's check token as a run's", host.BoxUser, checks.Mint(check, time.Minute), false},
 	}
 	routes := []struct {
@@ -74,7 +74,7 @@ func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 		path string
 	}{
 		{"a box's git", a.boxGitRoute(GitRoutes.BoxInfoRefs), "/box/git/web.git/info/refs?service=git-upload-pack"},
-		{"a check's box's read", a.boxCodeRoute(code.GitTree), "/box/gitlet/web/tree"},
+		{"a check's box's read", a.boxCodeRoute(gitlet.GitTree), "/box/gitlet/web/tree"},
 	}
 
 	// WHAT A PERSON IS TOLD on /git/ by a node whose company hosts no code.

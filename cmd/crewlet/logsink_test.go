@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
@@ -45,7 +45,7 @@ func TestMain(m *testing.M) {
 	// starts this binary as its proc-receive hook through the engine's
 	// DEFAULT hook — os.Executable, which is this test binary — so the
 	// production argv is the one exercised.
-	if status, ok := codetest.RunHookIfAsked(); ok {
+	if status, ok := gitlettest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
 	// THE CASES THAT RE-EXECUTE THIS BINARY: as the node they stop, by a

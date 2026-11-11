@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -30,7 +30,7 @@ import (
 // position on the code log, answering as the operation its own node's name —
 // so a case can tell which node decided — or refuses every push with codeErr;
 // and, while holdProposals is set, decides nothing until it is closed.
-func (f *fakeNode) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+func (f *fakeNode) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error) {
 	f.note("code.propose")
 	f.mu.Lock()
 	f.proposals = append(f.proposals, p)
@@ -38,107 +38,107 @@ func (f *fakeNode) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 	f.mu.Unlock()
 	if hold != nil {
 		if err := waitHeld(ctx, hold, &f.proposing); err != nil {
-			return code.ProposeResult{}, err
+			return gitlet.ProposeResult{}, err
 		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.codeErr != nil {
-		return code.ProposeResult{}, f.codeErr
+		return gitlet.ProposeResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.ProposeResult{
+	return gitlet.ProposeResult{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq},
-		OpID:     f.name, Answer: code.PushAnswer{PushID: p.PushID},
+		OpID:     f.name, Answer: gitlet.PushAnswer{PushID: p.PushID},
 	}, nil
 }
 
 // ProposeCompaction is a committer that commits every compaction it is given
 // at the next position on the code log — or refuses every one with codeErr.
-func (f *fakeNode) ProposeCompaction(_ context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+func (f *fakeNode) ProposeCompaction(_ context.Context, p gitlet.CompactionProposal) (gitlet.CompactResult, error) {
 	f.note("code.compact")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.compactions = append(f.compactions, p)
 	if f.codeErr != nil {
-		return code.CompactResult{}, f.codeErr
+		return gitlet.CompactResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.CompactResult{Outcome: statelog.OutcomeApplied,
+	return gitlet.CompactResult{Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
 // ProposeImport is a committer that answers every import record applied —
 // which node a record is routed to is all its callers here read.
-func (f *fakeNode) ProposeImport(context.Context, code.ImportProposal) (code.SyncResult, error) {
+func (f *fakeNode) ProposeImport(context.Context, gitlet.ImportProposal) (gitlet.SyncResult, error) {
 	f.note("code.import")
-	return code.SyncResult{Outcome: statelog.OutcomeApplied}, nil
+	return gitlet.SyncResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 // ProposeMirrorSync is a committer that answers every sync applied.
-func (f *fakeNode) ProposeMirrorSync(context.Context, code.MirrorSyncProposal) (code.SyncResult, error) {
+func (f *fakeNode) ProposeMirrorSync(context.Context, gitlet.MirrorSyncProposal) (gitlet.SyncResult, error) {
 	f.note("code.mirror_sync")
-	return code.SyncResult{Outcome: statelog.OutcomeApplied}, nil
+	return gitlet.SyncResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 // ProposeExpunge is a committer that commits every expunge record it is given
 // at the next position on the code log — or refuses every one with codeErr.
-func (f *fakeNode) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+func (f *fakeNode) ProposeExpunge(_ context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 	f.note("code.expunge")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.expunges = append(f.expunges, p)
 	if f.codeErr != nil {
-		return code.ExpungeResult{}, f.codeErr
+		return gitlet.ExpungeResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.ExpungeResult{Outcome: statelog.OutcomeApplied,
+	return gitlet.ExpungeResult{Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
 // ProposeChange is a committer that commits every write of a change it is
 // given at the next position on the code log — or refuses every one with
 // codeErr.
-func (f *fakeNode) ProposeChange(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+func (f *fakeNode) ProposeChange(_ context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
 	f.note("code.change")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.changes = append(f.changes, p)
 	if f.codeErr != nil {
-		return code.ChangeResult{}, f.codeErr
+		return gitlet.ChangeResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 1, Version: 1,
+	return gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 1, Version: 1,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
 // ProposeQueue is a committer that lands every write of a merge queue it is
 // given at the next position on the code log — or refuses every one with
 // codeErr.
-func (f *fakeNode) ProposeQueue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+func (f *fakeNode) ProposeQueue(_ context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error) {
 	f.note("code.queue")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.codeErr != nil {
-		return code.QueueResult{}, f.codeErr
+		return gitlet.QueueResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: p.EntryID(), State: code.QueueWaiting,
+	return gitlet.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: p.EntryID(), State: gitlet.QueueWaiting,
 		Place: 1, Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
 // ProposeMerge is a committer that lands every merge it is given at the next
 // position on the code log — or refuses every one with codeErr.
-func (f *fakeNode) ProposeMerge(_ context.Context, p code.MergeProposal) (code.MergeResult, error) {
+func (f *fakeNode) ProposeMerge(_ context.Context, p gitlet.MergeProposal) (gitlet.MergeResult, error) {
 	f.note("code.merge")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.codeErr != nil {
-		return code.MergeResult{}, f.codeErr
+		return gitlet.MergeResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.MergeResult{Outcome: statelog.OutcomeApplied, MergeID: p.Merge.MergeID,
+	return gitlet.MergeResult{Outcome: statelog.OutcomeApplied, MergeID: p.Merge.MergeID,
 		MergeOID: p.Merge.CommitOID, Position: statelog.Position{Stream: codeStream, Generation: 1,
 			Seq: f.codeSeq}}, nil
 }
@@ -147,39 +147,39 @@ func (f *fakeNode) ProposeMerge(_ context.Context, p code.MergeProposal) (code.M
 // conversation it is given at the next position on the code log — or refuses
 // every one with codeErr; and, while holdConversations is set, writes nothing
 // until it is closed.
-func (f *fakeNode) Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+func (f *fakeNode) Converse(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
 	f.note("code.conversation")
 	f.mu.Lock()
 	hold := f.holdConversations
 	f.mu.Unlock()
 	if hold != nil {
 		if err := waitHeld(ctx, hold, &f.conversing); err != nil {
-			return code.ConversationResult{}, err
+			return gitlet.ConversationResult{}, err
 		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.conversations = append(f.conversations, w)
 	if f.codeErr != nil {
-		return code.ConversationResult{}, f.codeErr
+		return gitlet.ConversationResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.ConversationResult{Outcome: statelog.OutcomeApplied,
+	return gitlet.ConversationResult{Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
 // Mark is a marks writer that writes every mark it is given at the next
 // position on the code log — or refuses every one with codeErr.
-func (f *fakeNode) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, error) {
+func (f *fakeNode) Mark(_ context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 	f.note("code.mark")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.marks = append(f.marks, w)
 	if f.codeErr != nil {
-		return code.MarkResult{}, f.codeErr
+		return gitlet.MarkResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.MarkResult{Outcome: statelog.OutcomeApplied,
+	return gitlet.MarkResult{Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
@@ -187,24 +187,24 @@ func (f *fakeNode) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, e
 // checks it is given at the next position on the code log — or refuses every
 // one with codeErr; and, while holdChecks is set, writes nothing until it is
 // closed.
-func (f *fakeNode) PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+func (f *fakeNode) PublishChecks(ctx context.Context, r gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
 	f.note("code.checks")
 	f.mu.Lock()
 	hold := f.holdChecks
 	f.mu.Unlock()
 	if hold != nil {
 		if err := waitHeld(ctx, hold, &f.checking); err != nil {
-			return code.ChecksResult{}, err
+			return gitlet.ChecksResult{}, err
 		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checks = append(f.checks, r)
 	if f.codeErr != nil {
-		return code.ChecksResult{}, f.codeErr
+		return gitlet.ChecksResult{}, f.codeErr
 	}
 	f.codeSeq++
-	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Holder: f.name,
+	return gitlet.ChecksResult{Outcome: statelog.OutcomeApplied, Holder: f.name,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
@@ -218,47 +218,47 @@ func (f *fakeNode) codeRefusal() error {
 
 // Resolve answers a repository named for the query, on this node — or
 // refuses with codeErr.
-func (f *fakeNode) Resolve(_ context.Context, q code.ResolveQuery) (code.RepoRef, error) {
+func (f *fakeNode) Resolve(_ context.Context, q gitlet.ResolveQuery) (gitlet.RepoRef, error) {
 	f.note("code.resolve")
 	if err := f.codeRefusal(); err != nil {
-		return code.RepoRef{}, err
+		return gitlet.RepoRef{}, err
 	}
-	return code.RepoRef{ID: "repo-on-" + f.name, Name: q.Name}, nil
+	return gitlet.RepoRef{ID: "repo-on-" + f.name, Name: q.Name}, nil
 }
 
 // Snapshot answers one empty full page — or refuses with codeErr.
-func (f *fakeNode) Snapshot(_ context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+func (f *fakeNode) Snapshot(_ context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error) {
 	f.note("code.repo_state")
 	if err := f.codeRefusal(); err != nil {
-		return code.RepoSnapshot{}, err
+		return gitlet.RepoSnapshot{}, err
 	}
-	return code.RepoSnapshot{Repo: code.RepoRef{ID: q.RepoID}, Full: true}, nil
+	return gitlet.RepoSnapshot{Repo: gitlet.RepoRef{ID: q.RepoID}, Full: true}, nil
 }
 
 // PushOutcome answers that the push was not found — or refuses with codeErr.
-func (f *fakeNode) PushOutcome(context.Context, code.OutcomeQuery) (code.PushOutcome, error) {
+func (f *fakeNode) PushOutcome(context.Context, gitlet.OutcomeQuery) (gitlet.PushOutcome, error) {
 	f.note("code.push_outcome")
 	if err := f.codeRefusal(); err != nil {
-		return code.PushOutcome{}, err
+		return gitlet.PushOutcome{}, err
 	}
-	return code.PushOutcome{}, nil
+	return gitlet.PushOutcome{}, nil
 }
 
 // Read answers an empty listing, read at a position past every one this node
 // committed at — or refuses with codeErr.
-func (f *fakeNode) Read(context.Context, code.ReadQuery) (code.ReadAnswer, error) {
+func (f *fakeNode) Read(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	f.note("code.read")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.codeErr != nil {
-		return code.ReadAnswer{}, f.codeErr
+		return gitlet.ReadAnswer{}, f.codeErr
 	}
-	return code.ReadAnswer{Position: statelog.Position{Stream: codeStream, Generation: 1,
+	return gitlet.ReadAnswer{Position: statelog.Position{Stream: codeStream, Generation: 1,
 		Seq: f.codeSeq + 1_000}}, nil
 }
 
 // TurnsMovedCode answers that no turn moved code, or refuses with codeErr.
-func (f *fakeNode) TurnsMovedCode(context.Context, code.TurnsMovedQuery) (map[string]bool, error) {
+func (f *fakeNode) TurnsMovedCode(context.Context, gitlet.TurnsMovedQuery) (map[string]bool, error) {
 	f.note("code.turns_moved")
 	if err := f.codeRefusal(); err != nil {
 		return nil, err
@@ -268,17 +268,17 @@ func (f *fakeNode) TurnsMovedCode(context.Context, code.TurnsMovedQuery) (map[st
 
 // ResolveRef answers the ref named for the query at the next position past
 // every one this node committed at — or refuses with codeErr.
-func (f *fakeNode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (f *fakeNode) ResolveRef(_ context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	f.note("code.resolve_ref")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.codeErr != nil {
-		return code.RefAnswer{}, f.codeErr
+		return gitlet.RefAnswer{}, f.codeErr
 	}
 	at := statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq + 1_000}
-	out := code.RefAnswer{Repo: code.RepoRef{ID: "repo-on-" + f.name, Name: q.Repo}, Position: at}
+	out := gitlet.RefAnswer{Repo: gitlet.RepoRef{ID: "repo-on-" + f.name, Name: q.Repo}, Position: at}
 	for _, name := range q.Refs {
-		out.Refs = append(out.Refs, code.ResolvedRef{Name: name, Ref: name, Moved: at})
+		out.Refs = append(out.Refs, gitlet.ResolvedRef{Name: name, Ref: name, Moved: at})
 	}
 	return out, nil
 }
@@ -286,17 +286,17 @@ func (f *fakeNode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 // Lifecycle decides every lifecycle request it is given at the next position
 // on the code log, answering the repository the request names as applied — or
 // refuses every one with codeErr.
-func (f *fakeNode) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+func (f *fakeNode) Lifecycle(_ context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	f.note("code.lifecycle")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.codeErr != nil {
-		return code.LifecycleResult{}, f.codeErr
+		return gitlet.LifecycleResult{}, f.codeErr
 	}
 	f.codeSeq++
 	at := statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}
-	return code.LifecycleResult{Outcome: statelog.OutcomeApplied,
-		Repo: code.RepoRef{ID: cmp.Or(r.RepoID, "repo-on-"+f.name), Name: r.Name, Position: at}, Position: at}, nil
+	return gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied,
+		Repo: gitlet.RepoRef{ID: cmp.Or(r.RepoID, "repo-on-"+f.name), Name: r.Name, Position: at}, Position: at}, nil
 }
 
 // codeReads is every read Gitlet makes through the seam, by the name
@@ -311,29 +311,29 @@ func codeReads(ctx context.Context, seam CodeSeam) []struct {
 		read func() error
 	}{
 		{opCodeResolve.spec.name, func() error {
-			_, err := seam.Resolve(ctx, code.ResolveQuery{Name: "app"})
+			_, err := seam.Resolve(ctx, gitlet.ResolveQuery{Name: "app"})
 			return err
 		}},
 		{opCodeRepoState.spec.name, func() error {
-			_, err := seam.RepoState(ctx, code.StateQuery{RepoID: "019a0c2e-0000-7000-8000-0000000000a1"})
+			_, err := seam.RepoState(ctx, gitlet.StateQuery{RepoID: "019a0c2e-0000-7000-8000-0000000000a1"})
 			return err
 		}},
 		{opCodePushOutcome.spec.name, func() error {
-			_, err := seam.PushOutcome(ctx, code.OutcomeQuery{RepoID: "019a0c2e-0000-7000-8000-0000000000a1",
+			_, err := seam.PushOutcome(ctx, gitlet.OutcomeQuery{RepoID: "019a0c2e-0000-7000-8000-0000000000a1",
 				PushID: "019a0c2e-0000-7000-8000-0000000000e1"})
 			return err
 		}},
 		{opCodeRead.spec.name, func() error {
-			_, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos})
+			_, err := seam.Read(ctx, gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: gitlet.ReadRepos})
 			return err
 		}},
 		{opCodeTurnsMoved.spec.name, func() error {
-			_, err := seam.TurnsMovedCode(ctx, code.TurnsMovedQuery{Turns: []string{"t-1"}, Level: statelog.ReadStale})
+			_, err := seam.TurnsMovedCode(ctx, gitlet.TurnsMovedQuery{Turns: []string{"t-1"}, Level: statelog.ReadStale})
 			return err
 		}},
 		{opCodeResolveRef.spec.name, func() error {
-			_, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Refs: []string{"main"},
-				Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}})
+			_, err := seam.ResolveRef(ctx, gitlet.RefQuery{Repo: "app", Refs: []string{"main"},
+				Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}})
 			return err
 		}},
 	}
@@ -351,10 +351,10 @@ func requireEveryCodeRead(t *testing.T, covered map[string]bool) {
 }
 
 // proposalsTo is every push this node was proposed to repo.
-func (f *fakeNode) proposalsTo(repo string) []code.Proposal {
+func (f *fakeNode) proposalsTo(repo string) []gitlet.Proposal {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []code.Proposal
+	var out []gitlet.Proposal
 	for _, p := range f.proposals {
 		if p.RepoID == repo {
 			out = append(out, p)
@@ -369,7 +369,7 @@ func (f *fleet) conversedOn(repo string) []string {
 	var out []string
 	for name, n := range f.nodes {
 		n.mu.Lock()
-		asked := slices.ContainsFunc(n.conversations, func(w code.ConversationWrite) bool {
+		asked := slices.ContainsFunc(n.conversations, func(w gitlet.ConversationWrite) bool {
 			return w.RepoID() == repo
 		})
 		n.mu.Unlock()
@@ -399,8 +399,8 @@ func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 	for i := range 16 {
 		repo := fmt.Sprintf("repo-%02d", i)
 		committer := rendezvous.Order(repo, holders)[0]
-		w := code.ConversationWrite{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_comment_on_change", i),
-			Comment: &code.Comment{RepoID: repo, ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100+i),
+		w := gitlet.ConversationWrite{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_comment_on_change", i),
+			Comment: &gitlet.Comment{RepoID: repo, ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100+i),
 				Body: "why?"}}
 		if _, err := r.Code().Converse(t.Context(), w); err != nil {
 			t.Fatalf("converse on %s: %v", repo, err)
@@ -421,15 +421,15 @@ func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 	// nothing.
 	repo := "repo-handed-on"
 	order := rendezvous.Order(repo, holders)
-	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = code.ErrNotServing })
-	w := code.ConversationWrite{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_comment_on_change",
-		Comment: &code.Comment{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000f1", Body: "why?"}}
+	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = gitlet.ErrNotServing })
+	w := gitlet.ConversationWrite{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_comment_on_change",
+		Comment: &gitlet.Comment{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000f1", Body: "why?"}}
 	if _, err := r.Code().Converse(t.Context(), w); err != nil {
 		t.Fatalf("converse: %v", err)
 	}
 	runnerUp := f.nodes[order[1]]
 	runnerUp.mu.Lock()
-	var asked []code.ConversationWrite
+	var asked []gitlet.ConversationWrite
 	for _, got := range runnerUp.conversations {
 		if got.RepoID() == repo {
 			asked = append(asked, got)
@@ -448,7 +448,7 @@ func (f *fleet) checkedOn(repo string) []string {
 	var out []string
 	for name, n := range f.nodes {
 		n.mu.Lock()
-		asked := slices.ContainsFunc(n.checks, func(r code.ChecksRequest) bool { return r.RepoID() == repo })
+		asked := slices.ContainsFunc(n.checks, func(r gitlet.ChecksRequest) bool { return r.RepoID() == repo })
 		n.mu.Unlock()
 		if asked {
 			out = append(out, name)
@@ -473,11 +473,11 @@ func TestACheckRecordIsPublishedByADataNode(t *testing.T) {
 	holders := []string{"data-a", "data-b", "data-c", "data-d"}
 	f := newFleet(t, holders...)
 	r := f.router(t, "git-1", nil)
-	claim := func(repo string, i int) code.ChecksRequest {
-		return code.ChecksRequest{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_check_claim", i),
-			Started: &code.CheckStarted{CheckKey: code.CheckKey{RepoID: repo,
+	claim := func(repo string, i int) gitlet.ChecksRequest {
+		return gitlet.ChecksRequest{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_check_claim", i),
+			Started: &gitlet.CheckStarted{CheckKey: gitlet.CheckKey{RepoID: repo,
 				OID: "1111111111111111111111111111111111111111", Target: "refs/heads/main", Name: "unit", Attempt: 1},
-				Runner: "git-1", Placement: code.PlacementContainer,
+				Runner: "git-1", Placement: gitlet.PlacementContainer,
 				StartedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)}}
 	}
 	for i := range 16 {
@@ -502,14 +502,14 @@ func TestACheckRecordIsPublishedByADataNode(t *testing.T) {
 	// nothing.
 	repo := "019a0c2e-0000-7000-8000-0000000002f0"
 	order := rendezvous.Order(repo, holders)
-	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = code.ErrNotServing })
+	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = gitlet.ErrNotServing })
 	w := claim(repo, 99)
 	if _, err := r.Code().Checks(t.Context(), w); err != nil {
 		t.Fatalf("a claim: %v", err)
 	}
 	runnerUp := f.nodes[order[1]]
 	runnerUp.mu.Lock()
-	var asked []code.ChecksRequest
+	var asked []gitlet.ChecksRequest
 	for _, got := range runnerUp.checks {
 		if got.RepoID() == repo {
 			asked = append(asked, got)
@@ -535,12 +535,12 @@ func (f *fleet) proposedOn(repo string) []string {
 }
 
 // proposalTo is a push of one branch to repo under pushID.
-func proposalTo(repo, pushID string) code.Proposal {
-	return code.Proposal{
+func proposalTo(repo, pushID string) gitlet.Proposal {
+	return gitlet.Proposal{
 		PushID: pushID, RepoID: repo, Node: "agent-1",
-		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
-		Via:       code.ViaGit,
-		Commands: []code.Command{{Ref: "refs/heads/main", Old: code.ZeroOID,
+		Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+		Via:       gitlet.ViaGit,
+		Commands: []gitlet.Command{{Ref: "refs/heads/main", Old: gitlet.ZeroOID,
 			New: "1111111111111111111111111111111111111111"}},
 		ReceivedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC),
 	}
@@ -550,17 +550,17 @@ func proposalTo(repo, pushID string) code.Proposal {
 // commands, one the receiver already refused, a pack bundle, the objects it
 // introduced, and the code log's position and the drop epoch the receiver
 // checked it against.
-func richProposal(repo string) code.Proposal {
+func richProposal(repo string) gitlet.Proposal {
 	p := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11d")
 	p.Atomic = true
-	p.Commands = append(p.Commands, code.Command{
-		Ref: "refs/tags/v1", Old: code.ZeroOID, New: "2222222222222222222222222222222222222222",
-		Result: code.ResultNG, Reason: code.RefusalTagMoved, Detail: "refs/tags/v1 already exists",
+	p.Commands = append(p.Commands, gitlet.Command{
+		Ref: "refs/tags/v1", Old: gitlet.ZeroOID, New: "2222222222222222222222222222222222222222",
+		Result: gitlet.ResultNG, Reason: gitlet.RefusalTagMoved, Detail: "refs/tags/v1 already exists",
 	})
-	p.Pack = &code.PackRef{
+	p.Pack = &gitlet.PackRef{
 		PackID: p.PushID, Object: objstore.KeyAt(p.ReceivedAt), Hash: objstore.HashOf([]byte("pack")),
-		Size:       4_096 + code.IndexBytesFor(3) + code.ReverseBytesFor(3),
-		IndexBytes: code.IndexBytesFor(3), ReverseBytes: code.ReverseBytesFor(3),
+		Size:       4_096 + gitlet.IndexBytesFor(3) + gitlet.ReverseBytesFor(3),
+		IndexBytes: gitlet.IndexBytesFor(3), ReverseBytes: gitlet.ReverseBytesFor(3),
 		GitChecksum: "3333333333333333333333333333333333333333", Objects: 3,
 	}
 	p.Introduced = []string{"1111111111111111111111111111111111111111",
@@ -586,25 +586,25 @@ type codeDesk struct {
 
 // codeAnswers is what a desk answers each operation with.
 type codeAnswers struct {
-	read      code.ReadAnswer
-	snap      code.RepoSnapshot
-	ref       code.RepoRef
-	out       code.PushOutcome
+	read      gitlet.ReadAnswer
+	snap      gitlet.RepoSnapshot
+	ref       gitlet.RepoRef
+	out       gitlet.PushOutcome
 	pos       statelog.Position
-	resolved  code.RefAnswer
-	git       code.GitAnswer
-	compacted code.CompactResult
-	expunged  code.ExpungeResult
-	synced    code.SyncResult
-	changed   code.ChangeResult
-	queued    code.QueueResult
-	merged    code.MergeResult
-	lifecycle code.LifecycleResult
-	conversed code.ConversationResult
-	marked    code.MarkResult
-	checked   code.ChecksResult
-	wrote     code.EngineWriteResult
-	previewed code.MergePreviewAnswer
+	resolved  gitlet.RefAnswer
+	git       gitlet.GitAnswer
+	compacted gitlet.CompactResult
+	expunged  gitlet.ExpungeResult
+	synced    gitlet.SyncResult
+	changed   gitlet.ChangeResult
+	queued    gitlet.QueueResult
+	merged    gitlet.MergeResult
+	lifecycle gitlet.LifecycleResult
+	conversed gitlet.ConversationResult
+	marked    gitlet.MarkResult
+	checked   gitlet.ChecksResult
+	wrote     gitlet.EngineWriteResult
+	previewed gitlet.MergePreviewAnswer
 	moved     map[string]bool
 }
 
@@ -628,97 +628,97 @@ func (d *codeDesk) last() any {
 	return d.got[len(d.got)-1]
 }
 
-func (d *codeDesk) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+func (d *codeDesk) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error) {
 	deadline, _ := ctx.Deadline()
 	d.mu.Lock()
 	d.deadlines = append(d.deadlines, deadline)
 	d.mu.Unlock()
 	held, err := d.took(p)
-	return code.ProposeResult{Outcome: statelog.OutcomeApplied, Position: held.pos, OpID: "op-batch",
-		Answer: code.PushAnswer{PushID: p.PushID, Commands: p.Commands}}, err
+	return gitlet.ProposeResult{Outcome: statelog.OutcomeApplied, Position: held.pos, OpID: "op-batch",
+		Answer: gitlet.PushAnswer{PushID: p.PushID, Commands: p.Commands}}, err
 }
 
-func (d *codeDesk) ProposeCompaction(_ context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+func (d *codeDesk) ProposeCompaction(_ context.Context, p gitlet.CompactionProposal) (gitlet.CompactResult, error) {
 	held, err := d.took(p)
 	return held.compacted, err
 }
 
-func (d *codeDesk) ProposeImport(_ context.Context, p code.ImportProposal) (code.SyncResult, error) {
+func (d *codeDesk) ProposeImport(_ context.Context, p gitlet.ImportProposal) (gitlet.SyncResult, error) {
 	held, err := d.took(p)
 	return held.synced, err
 }
 
-func (d *codeDesk) ProposeMirrorSync(_ context.Context, p code.MirrorSyncProposal) (code.SyncResult, error) {
+func (d *codeDesk) ProposeMirrorSync(_ context.Context, p gitlet.MirrorSyncProposal) (gitlet.SyncResult, error) {
 	held, err := d.took(p)
 	return held.synced, err
 }
 
-func (d *codeDesk) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+func (d *codeDesk) ProposeExpunge(_ context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 	held, err := d.took(p)
 	return held.expunged, err
 }
 
-func (d *codeDesk) ProposeChange(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+func (d *codeDesk) ProposeChange(_ context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
 	held, err := d.took(p)
 	return held.changed, err
 }
 
-func (d *codeDesk) ProposeQueue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+func (d *codeDesk) ProposeQueue(_ context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error) {
 	held, err := d.took(p)
 	return held.queued, err
 }
 
-func (d *codeDesk) ProposeMerge(_ context.Context, p code.MergeProposal) (code.MergeResult, error) {
+func (d *codeDesk) ProposeMerge(_ context.Context, p gitlet.MergeProposal) (gitlet.MergeResult, error) {
 	held, err := d.took(p)
 	return held.merged, err
 }
 
-func (d *codeDesk) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+func (d *codeDesk) Converse(_ context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
 	held, err := d.took(w)
 	return held.conversed, err
 }
 
-func (d *codeDesk) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, error) {
+func (d *codeDesk) Mark(_ context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 	held, err := d.took(w)
 	return held.marked, err
 }
 
-func (d *codeDesk) PublishChecks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+func (d *codeDesk) PublishChecks(_ context.Context, r gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
 	held, err := d.took(r)
 	return held.checked, err
 }
 
-func (d *codeDesk) Resolve(_ context.Context, q code.ResolveQuery) (code.RepoRef, error) {
+func (d *codeDesk) Resolve(_ context.Context, q gitlet.ResolveQuery) (gitlet.RepoRef, error) {
 	held, err := d.took(q)
 	return held.ref, err
 }
 
-func (d *codeDesk) Snapshot(_ context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+func (d *codeDesk) Snapshot(_ context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error) {
 	held, err := d.took(q)
 	return held.snap, err
 }
 
-func (d *codeDesk) PushOutcome(_ context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
+func (d *codeDesk) PushOutcome(_ context.Context, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error) {
 	held, err := d.took(q)
 	return held.out, err
 }
 
-func (d *codeDesk) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (d *codeDesk) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	held, err := d.took(q)
 	return held.read, err
 }
 
-func (d *codeDesk) TurnsMovedCode(_ context.Context, q code.TurnsMovedQuery) (map[string]bool, error) {
+func (d *codeDesk) TurnsMovedCode(_ context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error) {
 	held, err := d.took(q)
 	return held.moved, err
 }
 
-func (d *codeDesk) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (d *codeDesk) ResolveRef(_ context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	held, err := d.took(q)
 	return held.resolved, err
 }
 
-func (d *codeDesk) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+func (d *codeDesk) Lifecycle(_ context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	held, err := d.took(r)
 	return held.lifecycle, err
 }
@@ -730,17 +730,17 @@ type deskGit struct{ d *codeDesk }
 
 func (g deskGit) Git() (GitServer, bool) { return g, true }
 
-func (g deskGit) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (g deskGit) Read(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	held, err := g.d.took(q)
 	return held.git, err
 }
 
-func (g deskGit) Write(_ context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+func (g deskGit) Write(_ context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	held, err := g.d.took(w)
 	return held.wrote, err
 }
 
-func (g deskGit) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+func (g deskGit) MergePreview(_ context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
 	held, err := g.d.took(q)
 	return held.previewed, err
 }
@@ -779,84 +779,84 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	f := newFleet(t)
 	at := statelog.Position{Stream: codeStream, Generation: 2, Seq: 41}
 	created := time.Date(2031, 3, 1, 9, 0, 0, 0, time.UTC)
-	ref := code.RepoRef{
-		ID: "019a0c2e-0000-7000-8000-0000000000a1", Name: "app", Status: code.RepoStatusActive,
-		ManagedBy: code.ManagedTools, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
-		DefaultBranch: "main", Description: "the app", Search: code.SearchGrep,
-		Protections:    []code.PushRule{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
+	ref := gitlet.RepoRef{
+		ID: "019a0c2e-0000-7000-8000-0000000000a1", Name: "app", Status: gitlet.RepoStatusActive,
+		ManagedBy: gitlet.ManagedTools, Kind: gitlet.RepoProject, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "eng"},
+		DefaultBranch: "main", Description: "the app", Search: gitlet.SearchGrep,
+		Protections:    []gitlet.PushRule{{Pattern: "refs/heads/main", DirectPush: gitlet.DirectNone}},
 		LastActivityAt: created.Add(-time.Hour), Refs: 3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200,
 		DropEpoch: 3, Redirect: "app-2", RedirectUntil: created.Add(24 * time.Hour), Position: at,
 	}
-	pack := code.PackRow{
+	pack := gitlet.PackRow{
 		PackID: "push-1", Part: "push", Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("p1")),
 		Size: 100, IndexBytes: 40, ReverseBytes: 20, GitChecksum: "5555555555555555555555555555555555555555",
 		Objects: 2, Kind: "push", State: "live", Added: at,
 	}
-	cursor := &code.StateCursor{Phase: "pushes", Pushes: true, From: at, Since: at, Seen: at, Stream: created,
+	cursor := &gitlet.StateCursor{Phase: "pushes", Pushes: true, From: at, Since: at, Seen: at, Stream: created,
 		RetiredFrom: at, DropEpoch: 3, After: "1000041/push-1"}
-	retired := code.RetiredRow{PackID: "push-0", Part: "pack",
+	retired := gitlet.RetiredRow{PackID: "push-0", Part: "pack",
 		GitChecksum: "7777777777777777777777777777777777777777", RetiredAt: created, Position: at}
-	introduced := code.IntroducedRow{
-		PushedBy: code.PushedBy{PushID: "push-1", Position: at, At: created, Via: code.ViaGit,
-			Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}},
-		Moves: []code.RefMove{{Ref: "refs/heads/main", Old: code.ZeroOID,
+	introduced := gitlet.IntroducedRow{
+		PushedBy: gitlet.PushedBy{PushID: "push-1", Position: at, At: created, Via: gitlet.ViaGit,
+			Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}},
+		Moves: []gitlet.RefMove{{Ref: "refs/heads/main", Old: gitlet.ZeroOID,
 			New: "6666666666666666666666666666666666666666", Forced: true}},
 		Introduced: []string{"6666666666666666666666666666666666666666"}, Count: 2,
 	}
 	// A PUBLISHED LAYER, every field of it: what a publication carries and
 	// what a snapshot's layers phase serves.
-	layer := code.LayerRef{LayerID: "9999999999999999999999999999999999999999",
+	layer := gitlet.LayerRef{LayerID: "9999999999999999999999999999999999999999",
 		BaseID:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Replaces: []string{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		GraphID:  "cccccccccccccccccccccccccccccccccccccccc",
 		Packs:    []string{"5555555555555555555555555555555555555555", "8888888888888888888888888888888888888888"},
-		Parts: []code.LayerPart{{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l1")),
+		Parts: []gitlet.LayerPart{{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l1")),
 			Size: 300}},
 		MidxBytes: 200, BitmapBytes: 60, GraphBytes: 40, Objects: 4, Commits: 2, Git: "2.56.0", TookMs: 1_200,
 	}
 	row := layer
 	row.Replaces = nil
 	d := &codeDesk{codeAnswers: codeAnswers{
-		pos: at, ref: ref, out: code.PushOutcome{Found: true, Position: at,
-			Push: code.PushRow{PushID: "push-1", RepoID: ref.ID, Position: at, At: created,
-				Actor: "founder", ActorKind: "operator", Commands: []code.Command{{
-					Ref: "refs/heads/main", Old: code.ZeroOID,
-					New: "6666666666666666666666666666666666666666", Result: code.ResultOK}},
+		pos: at, ref: ref, out: gitlet.PushOutcome{Found: true, Position: at,
+			Push: gitlet.PushRow{PushID: "push-1", RepoID: ref.ID, Position: at, At: created,
+				Actor: "founder", ActorKind: "operator", Commands: []gitlet.Command{{
+					Ref: "refs/heads/main", Old: gitlet.ZeroOID,
+					New: "6666666666666666666666666666666666666666", Result: gitlet.ResultOK}},
 				ReceivedAt: created}},
-		snap: code.RepoSnapshot{Repo: ref, Position: at, StreamCreated: created,
-			Layers: []code.LayerRow{{Seq: 2, Layer: row, Added: at}}, LayersServed: true,
-			Packs: []code.PackRow{pack},
-			Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
+		snap: gitlet.RepoSnapshot{Repo: ref, Position: at, StreamCreated: created,
+			Layers: []gitlet.LayerRow{{Seq: 2, Layer: row, Added: at}}, LayersServed: true,
+			Packs: []gitlet.PackRow{pack},
+			Refs: []gitlet.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 				Position: at}},
-			Pushes:      []code.IntroducedRow{introduced},
-			Retired:     []code.RetiredRow{retired},
+			Pushes:      []gitlet.IntroducedRow{introduced},
+			Retired:     []gitlet.RetiredRow{retired},
 			RetiredFrom: at,
 			Next:        cursor},
-		read: code.ReadAnswer{Repo: &code.RepoDetail{
-			RepoSummary: code.RepoSummary{RepoRef: ref, Head: "6666666666666666666666666666666666666666",
+		read: gitlet.ReadAnswer{Repo: &gitlet.RepoDetail{
+			RepoSummary: gitlet.RepoSummary{RepoRef: ref, Head: "6666666666666666666666666666666666666666",
 				Pushes: 7, LastPushAt: created},
 			Branches: 2, Tags: 1, Tombstones: 4, CreatedAt: created,
-			Limits: code.Limits{MaxPushBytes: 1 << 20, MaxBlobBytes: 1 << 10, RepoMaxBytes: 1 << 30,
+			Limits: gitlet.Limits{MaxPushBytes: 1 << 20, MaxBlobBytes: 1 << 10, RepoMaxBytes: 1 << 30,
 				PushesPerSeatDay: 40},
-			PathOwners: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "plat"},
+			PathOwners: []gitlet.PathOwner{{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "plat"},
 				Paths: []string{"deploy/**", "web/**"}}},
-			Gates: []code.RuleGate{{Pattern: "refs/heads/main", Gate: code.MergeGate{
-				MergeBy: code.MergeByMaintainers, Approvals: code.ApprovalsOne,
-				HumanPaths: []code.HumanPath{{Glob: "deploy/**", Unless: []code.ChangeClass{
-					code.ChangeClassCommentOnly}}},
+			Gates: []gitlet.RuleGate{{Pattern: "refs/heads/main", Gate: gitlet.MergeGate{
+				MergeBy: gitlet.MergeByMaintainers, Approvals: gitlet.ApprovalsOne,
+				HumanPaths: []gitlet.HumanPath{{Glob: "deploy/**", Unless: []gitlet.ChangeClass{
+					gitlet.ChangeClassCommentOnly}}},
 				Checks:  []string{"lint", "unit"},
-				Landing: code.Landing{Depth: 2, Batch: 3}, OwnersApprove: true,
-				DeleteSource: code.DeleteNone, AgentsEditChecks: true}}},
-			RuleSources: []code.RuleSource{{Pattern: "refs/heads/main", SetBy: "founder",
-				SetByKind: code.ActorOperator, SetAt: created}},
-		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
-			Position: at}}, Introduced: []code.IntroducedRow{introduced},
-			Due: []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,
+				Landing: gitlet.Landing{Depth: 2, Batch: 3}, OwnersApprove: true,
+				DeleteSource: gitlet.DeleteNone, AgentsEditChecks: true}}},
+			RuleSources: []gitlet.RuleSource{{Pattern: "refs/heads/main", SetBy: "founder",
+				SetByKind: gitlet.ActorOperator, SetAt: created}},
+		}, Refs: []gitlet.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
+			Position: at}}, Introduced: []gitlet.IntroducedRow{introduced},
+			Due: []gitlet.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,
 				Version: at}},
-			Publish: []code.PublicationCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, PublishedPacks: 30,
+			Publish: []gitlet.PublicationCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, PublishedPacks: 30,
 				LiveObjects: 4_000, PublishedObjects: 3_000, LastPushAt: created, PublishedAt: created,
 				PublishTook: 1200 * time.Millisecond, Version: at}},
-			Expunge: []code.ExpungeCandidate{{ID: ref.ID, Name: "app", Open: "019a0c2e-0000-7000-8000-0000000000e1",
+			Expunge: []gitlet.ExpungeCandidate{{ID: ref.ID, Name: "app", Open: "019a0c2e-0000-7000-8000-0000000000e1",
 				Request: "019a0c2e-0000-7000-8000-0000000000e0", Requested: at, ExpungedAt: created, LivePacks: 40,
 				LiveBytes: 90_000, Version: at}},
 			// THE HOME'S DUE CHANGE WORK, every field: a change owing its
@@ -865,106 +865,106 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			// and a target due a reading of its checks file, as a checks_due
 			// read names them.
 			DueRepos: []string{ref.ID},
-			DueChanges: []code.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e7", Number: 3, Revision: 2,
+			DueChanges: []gitlet.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e7", Number: 3, Revision: 2,
 				Head: "7777777777777777777777777777777777777777", SourceRef: "refs/heads/fix",
 				TargetRef: "refs/heads/main", Tip: "6666666666666666666666666666666666666666", TipPosition: at,
-				FactsDue: true, MergeDue: true, RefreshDue: true, Checks: &code.CheckWork{Dispatch: true,
+				FactsDue: true, MergeDue: true, RefreshDue: true, Checks: &gitlet.CheckWork{Dispatch: true,
 					Held: []string{"unit"}, Required: []string{"lint", "unit"},
-					Invalid: []code.CheckKey{{RepoID: ref.ID, OID: "7777777777777777777777777777777777777777",
+					Invalid: []gitlet.CheckKey{{RepoID: ref.ID, OID: "7777777777777777777777777777777777777777",
 						Target: "refs/heads/main", Name: "lint", Attempt: 1}},
-					Stale: []code.CheckKey{{RepoID: ref.ID, OID: "5555555555555555555555555555555555555555",
+					Stale: []gitlet.CheckKey{{RepoID: ref.ID, OID: "5555555555555555555555555555555555555555",
 						Target: "refs/heads/main", Name: "unit", Attempt: 1}},
-					Requeue: []code.CheckQueued{{CheckKey: code.CheckKey{RepoID: ref.ID,
+					Requeue: []gitlet.CheckQueued{{CheckKey: gitlet.CheckKey{RepoID: ref.ID,
 						OID: "7777777777777777777777777777777777777777", Target: "refs/heads/main", Name: "unit",
 						Attempt: 2},
-						Purpose: code.PurposeHead, ChangeID: "019a0c2e-0000-7000-8000-0000000000e7", Revision: 2,
+						Purpose: gitlet.PurposeHead, ChangeID: "019a0c2e-0000-7000-8000-0000000000e7", Revision: 2,
 						DefsOID:  "8888888888888888888888888888888888888888",
-						Def:      &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600},
-						Required: true, Reason: code.QueueRequeue}}}}},
-			DueTargets: []code.CheckTargetDue{{TargetRef: "refs/heads/main",
+						Def:      &gitlet.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600},
+						Required: true, Reason: gitlet.QueueRequeue}}}}},
+			DueTargets: []gitlet.CheckTargetDue{{TargetRef: "refs/heads/main",
 				Tip: "6666666666666666666666666666666666666666", TipPosition: at}},
-			Rechecks: []code.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e8", Number: 4, Revision: 1,
+			Rechecks: []gitlet.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e8", Number: 4, Revision: 1,
 				Head: "8888888888888888888888888888888888888888", SourceRef: "refs/heads/more",
 				TargetRef: "refs/heads/main", Tip: "6666666666666666666666666666666666666666", TipPosition: at,
 				Checked: created}},
 			// A CHANGE'S MERGEABILITY AND ITS READINESS as its read carries
 			// them, every field.
-			Change: &code.ChangeDetail{ChangeSummary: code.ChangeSummary{Readiness: &code.Readiness{Met: 3, Total: 5,
+			Change: &gitlet.ChangeDetail{ChangeSummary: gitlet.ChangeSummary{Readiness: &gitlet.Readiness{Met: 3, Total: 5,
 				First: "app!42 conflicts with refs/heads/main",
-				Preconditions: []code.Precondition{{Kind: code.PreconditionBlocker, State: code.PreconditionUnmet,
-					WaitsOn: []code.Party{{Handle: "dev", Kind: code.PartyAgent}},
-					Blockers: []code.Blocker{{FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
-						State: code.FindingDisputed, ClearedBy: code.ClearedBy{Raiser: code.Party{Handle: "founder",
-							Kind: code.PartyPerson}, Maintainers: []string{"cto"}, Persons: true}}},
+				Preconditions: []gitlet.Precondition{{Kind: gitlet.PreconditionBlocker, State: gitlet.PreconditionUnmet,
+					WaitsOn: []gitlet.Party{{Handle: "dev", Kind: gitlet.PartyAgent}},
+					Blockers: []gitlet.Blocker{{FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
+						State: gitlet.FindingDisputed, ClearedBy: gitlet.ClearedBy{Raiser: gitlet.Party{Handle: "founder",
+							Kind: gitlet.PartyPerson}, Maintainers: []string{"cto"}, Persons: true}}},
 					BlockersOmitted: 2, Detail: "3 blockers stand"}}}},
-				Mergeability: &code.MergeabilityRow{Revision: 2, TargetRef: "refs/heads/main",
+				Mergeability: &gitlet.MergeabilityRow{Revision: 2, TargetRef: "refs/heads/main",
 					TargetOID: "6666666666666666666666666666666666666666", TargetPosition: at,
-					State: code.MergeConflict, Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 3,
+					State: gitlet.MergeConflict, Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 3,
 					Node: "git-a", Position: at, At: created, ChangeVersion: 4, ReadinessVersion: 6, Ready: true,
 					WaitsPerson: true}},
 			// A CHANGE'S CONVERSATION'S PARTS, every field of each row.
-			Reviewers: []code.ReviewerRow{{Reviewer: "plat-lead", Kind: code.PartyAgent, Reason: code.ReviewerAsked,
-				State: code.ReviewerRequested, RequestedBy: "dev", RequestedByKind: code.PartyAgent,
+			Reviewers: []gitlet.ReviewerRow{{Reviewer: "plat-lead", Kind: gitlet.PartyAgent, Reason: gitlet.ReviewerAsked,
+				State: gitlet.ReviewerRequested, RequestedBy: "dev", RequestedByKind: gitlet.PartyAgent,
 				Note: "the retry loop", Position: at}},
-			Comments: []code.CommentRow{{ID: "019a0c2e-0000-7000-8000-0000000000e6",
+			Comments: []gitlet.CommentRow{{ID: "019a0c2e-0000-7000-8000-0000000000e6",
 				ThreadID: "019a0c2e-0000-7000-8000-0000000000e4", FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
-				Author: "founder", AuthorKind: code.PartyPerson, AuthorOperatorID: "op-founder", Resolved: true,
-				ResolvedBy: "dev", ResolvedByKind: code.PartyAgent, TurnID: "019a0c2e-0000-7000-8000-0000000000d2",
+				Author: "founder", AuthorKind: gitlet.PartyPerson, AuthorOperatorID: "op-founder", Resolved: true,
+				ResolvedBy: "dev", ResolvedByKind: gitlet.PartyAgent, TurnID: "019a0c2e-0000-7000-8000-0000000000d2",
 				Body: "Why two retries?", Position: at, At: created,
-				Anchor: &code.CommentAnchor{Revision: 3, Path: "upload/retry.go", Side: code.SideNew, Line: 42,
+				Anchor: &gitlet.CommentAnchor{Revision: 3, Path: "upload/retry.go", Side: gitlet.SideNew, Line: 42,
 					BlobOID: "8888888888888888888888888888888888888888"}}},
-			Reviews: []code.ReviewRow{{ID: "019a0c2e-0000-7000-8000-0000000000e3", Revision: 3, Reviewer: "founder",
-				ReviewerKind: code.PartyPerson, OperatorID: "op-founder", Verdict: code.VerdictRequestChanges,
+			Reviews: []gitlet.ReviewRow{{ID: "019a0c2e-0000-7000-8000-0000000000e3", Revision: 3, Reviewer: "founder",
+				ReviewerKind: gitlet.PartyPerson, OperatorID: "op-founder", Verdict: gitlet.VerdictRequestChanges,
 				Summary: "The retry loop never backs off.", Findings: 1, TurnID: "019a0c2e-0000-7000-8000-0000000000d3",
 				Model: "model-a", Position: at, At: created}},
-			Findings: []code.FindingRow{{ID: "019a0c2e-0000-7000-8000-0000000000e4",
-				ReviewID: "019a0c2e-0000-7000-8000-0000000000e3", Raiser: "founder", RaiserKind: code.PartyPerson,
+			Findings: []gitlet.FindingRow{{ID: "019a0c2e-0000-7000-8000-0000000000e4",
+				ReviewID: "019a0c2e-0000-7000-8000-0000000000e3", Raiser: "founder", RaiserKind: gitlet.PartyPerson,
 				Revision: 3, CommitOID: "9999999999999999999999999999999999999999", Path: "upload/retry.go",
-				BlobOID: "8888888888888888888888888888888888888888", Side: code.SideNew, LineStart: 40, LineEnd: 44,
-				Severity: code.SeverityBlocker, Category: code.CategoryCorrectness, Title: "No backoff",
+				BlobOID: "8888888888888888888888888888888888888888", Side: gitlet.SideNew, LineStart: 40, LineEnd: 44,
+				Severity: gitlet.SeverityBlocker, Category: gitlet.CategoryCorrectness, Title: "No backoff",
 				Body: "Two retries back to back.", Suggestion: new("time.Sleep(backoff)"),
-				State: code.FindingDisputed, ResolutionNote: "the client backs off", ResolvedBy: "dev",
-				ResolvedByKind: code.PartyAgent, ResolvedCommit: "7777777777777777777777777777777777777777",
+				State: gitlet.FindingDisputed, ResolutionNote: "the client backs off", ResolvedBy: "dev",
+				ResolvedByKind: gitlet.PartyAgent, ResolvedCommit: "7777777777777777777777777777777777777777",
 				ResolvedPosition: at, Position: at}},
 			// A PAGE OF CHECKS AND ONE ATTEMPT WHOLE, every field of each.
-			Checks: []code.CheckRow{{CheckKey: code.CheckKey{RepoID: ref.ID,
+			Checks: []gitlet.CheckRow{{CheckKey: gitlet.CheckKey{RepoID: ref.ID,
 				OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "unit", Attempt: 2},
-				State: code.CheckStateFailed, Purpose: code.PurposeCandidate, ChangeID: "change-1", Revision: 3,
+				State: gitlet.CheckStateFailed, Purpose: gitlet.PurposeCandidate, ChangeID: "change-1", Revision: 3,
 				CandidateID: "cand-1", EntryID: "entry-1",
 				Base: "7777777777777777777777777777777777777777", DefsOID: "8888888888888888888888888888888888888888",
-				Required: true, RunIn: code.CellE2B, TimeoutSeconds: 600, Reason: code.CheckReasonTimedOut,
-				Runner: "git-a", Placement: code.PlacementE2B, Box: "box-7", Reporter: "founder",
+				Required: true, RunIn: gitlet.CellE2B, TimeoutSeconds: 600, Reason: gitlet.CheckReasonTimedOut,
+				Runner: "git-a", Placement: gitlet.PlacementE2B, Box: "box-7", Reporter: "founder",
 				QueuedAt: created, StartedAt: created, FinishedAt: created, DurationMs: 600_000,
 				ExitCode: new(137), Summary: "timed out", FailuresOmitted: 2, URL: "https://ci.example.com/1",
 				Queued: at, Finished: at}},
-			Check: &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: ref.ID,
+			Check: &gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{RepoID: ref.ID,
 				OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "lint", Attempt: 1},
-				State: code.CheckStatePassed}, Def: &code.CheckDef{Name: "lint", Run: "make lint",
-				TimeoutSeconds: 60}, Tail: "ok", Failures: []code.CheckFailure{{Path: "a.go", Line: 3,
+				State: gitlet.CheckStatePassed}, Def: &gitlet.CheckDef{Name: "lint", Run: "make lint",
+				TimeoutSeconds: 60}, Tail: "ok", Failures: []gitlet.CheckFailure{{Path: "a.go", Line: 3,
 				TestID: "lint/a", Message: "unused"}},
-				Log: &code.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l")), Size: 9}},
+				Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l")), Size: 9}},
 			// A MERGE QUEUE'S ENTRIES, ITS TRAINS, A TARGET'S LANDINGS AND ITS
 			// GREEN ROW, every field of each.
-			Queue: []code.QueueRow{{RepoID: ref.ID, Repo: "app", EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+			Queue: []gitlet.QueueRow{{RepoID: ref.ID, Repo: "app", EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 				TargetRef: "refs/heads/main", ChangeID: "019a0c2e-0000-7000-8000-0000000000d1", Number: 42,
 				Place: 2, Seq: at, HeadOID: "7777777777777777777777777777777777777777",
-				Method: code.MergeMethodSquash, DeleteSource: true, CloseTask: true,
-				EnqueuedBy: code.Party{Handle: "founder", Kind: code.PartyPerson}, EnqueuedOperator: "op-founder",
-				State: code.QueueTesting, Train: "019a0c2e-0000-7000-8000-0000000000f2",
+				Method: gitlet.MergeMethodSquash, DeleteSource: true, CloseTask: true,
+				EnqueuedBy: gitlet.Party{Handle: "founder", Kind: gitlet.PartyPerson}, EnqueuedOperator: "op-founder",
+				State: gitlet.QueueTesting, Train: "019a0c2e-0000-7000-8000-0000000000f2",
 				CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
 				CommitOID:   "8888888888888888888888888888888888888888", EnqueuedAt: created}},
-			Trains: []code.CandidateRow{{RepoID: ref.ID, CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
+			Trains: []gitlet.CandidateRow{{RepoID: ref.ID, CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
 				TargetRef: "refs/heads/main", Train: "019a0c2e-0000-7000-8000-0000000000f2", Ordinal: 1,
 				BaseOID: "6666666666666666666666666666666666666666", TipOID: "8888888888888888888888888888888888888888",
-				Entries: []code.CandidateEntry{{EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+				Entries: []gitlet.CandidateEntry{{EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 					Commit: "8888888888888888888888888888888888888888"}},
 				PackID: "019a0c2e-0000-7000-8000-0000000000f4", State: "testing", Position: at}},
-			Landings: []code.LandingRow{{RepoID: ref.ID, TargetRef: "refs/heads/main", Position: at, Ordinal: 1,
+			Landings: []gitlet.LandingRow{{RepoID: ref.ID, TargetRef: "refs/heads/main", Position: at, Ordinal: 1,
 				Kind: "queue", ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
 				EntryID: "019a0c2e-0000-7000-8000-0000000000f1", BaseOID: "6666666666666666666666666666666666666666",
 				CommitOID: "8888888888888888888888888888888888888888", EnqueuedBy: "founder", MergedBy: "node-b",
 				Broken: true, At: created}},
-			Green: []code.GreenRow{{RepoID: ref.ID, TargetRef: "refs/heads/main",
+			Green: []gitlet.GreenRow{{RepoID: ref.ID, TargetRef: "refs/heads/main",
 				CommitOID: "8888888888888888888888888888888888888888", Position: at, At: created}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
@@ -976,8 +976,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("propose: %v", err)
 	}
-	if want := (code.ProposeResult{Outcome: statelog.OutcomeApplied, Position: at, OpID: "op-batch",
-		Answer: code.PushAnswer{PushID: proposal.PushID, Commands: proposal.Commands}}); !reflect.DeepEqual(proposed, want) {
+	if want := (gitlet.ProposeResult{Outcome: statelog.OutcomeApplied, Position: at, OpID: "op-batch",
+		Answer: gitlet.PushAnswer{PushID: proposal.PushID, Commands: proposal.Commands}}); !reflect.DeepEqual(proposed, want) {
 		t.Errorf("propose answered %+v, want %+v", proposed, want)
 	}
 	if got := d.last(); !reflect.DeepEqual(got, proposal) {
@@ -986,16 +986,16 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 
 	// A COMPACTION'S PROPOSAL, every field of it and of its answer — a
 	// publication's, so its layer crosses too.
-	compaction := code.CompactionProposal{Compaction: code.Compaction{
+	compaction := gitlet.CompactionProposal{Compaction: gitlet.Compaction{
 		RepoID: ref.ID, CompactionID: "019a0c2e-0000-7000-8000-0000000000c1", Node: "git-a", Seen: at,
 		Retire: []string{"push-0", "push-1"},
-		Add: []code.PackRef{{PackID: "019a0c2e-0000-7000-8000-0000000000c2", Object: objstore.KeyAt(created),
+		Add: []gitlet.PackRef{{PackID: "019a0c2e-0000-7000-8000-0000000000c2", Object: objstore.KeyAt(created),
 			Hash: objstore.HashOf([]byte("c2")), Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60,
 			GitChecksum: "8888888888888888888888888888888888888888", Objects: 2}},
 		Layer: &layer,
 	}}
 	d.mu.Lock()
-	d.compacted = code.CompactResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
+	d.compacted = gitlet.CompactResult{Outcome: statelog.OutcomePending, Refusal: gitlet.RefusalStale,
 		Detail: "pack push-0 is full; the next pass plans again", Position: at}
 	d.mu.Unlock()
 	if got, err := seam.Compact(ctx, compaction); err != nil || !reflect.DeepEqual(got, d.compacted) {
@@ -1007,30 +1007,30 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 
 	// AN EXPUNGE'S FOUR RECORDS, every field of each and of the answer: a
 	// person's request, and a maintainer's begin, commit and clean scan.
-	bundle := func(id, sum string) code.PackRef {
-		return code.PackRef{PackID: id, Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte(id)),
+	bundle := func(id, sum string) gitlet.PackRef {
+		return gitlet.PackRef{PackID: id, Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte(id)),
 			Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60, GitChecksum: sum, Objects: 2}
 	}
-	for name, p := range map[string]code.ExpungeProposal{
-		"a request": {Request: &code.ExpungeRequest{RepoID: ref.ID,
+	for name, p := range map[string]gitlet.ExpungeProposal{
+		"a request": {Request: &gitlet.ExpungeRequest{RepoID: ref.ID,
 			RequestID: "019a0c2e-0000-7000-8000-0000000000e0.code_purge_unreachable",
-			By:        code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}}},
-		"a begin": {Begin: &code.ExpungeBegin{RepoID: ref.ID, ExpungeID: "019a0c2e-0000-7000-8000-0000000000e1",
+			By:        gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}}},
+		"a begin": {Begin: &gitlet.ExpungeBegin{RepoID: ref.ID, ExpungeID: "019a0c2e-0000-7000-8000-0000000000e1",
 			RequestID: "019a0c2e-0000-7000-8000-0000000000e0.code_purge_unreachable", Node: "git-a", Seen: at,
 			DropEpoch: 4, Retire: []string{"push-0", "push-1"},
-			Add:        []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e2", "8888888888888888888888888888888888888888")},
-			Dropping:   []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e3", "9999999999999999999999999999999999999999")},
-			DropLayers: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Grace: code.PruneGrace}},
-		"a commit": {Commit: &code.ExpungeCommit{RepoID: ref.ID, ExpungeID: "019a0c2e-0000-7000-8000-0000000000e1",
+			Add:        []gitlet.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e2", "8888888888888888888888888888888888888888")},
+			Dropping:   []gitlet.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e3", "9999999999999999999999999999999999999999")},
+			DropLayers: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Grace: gitlet.PruneGrace}},
+		"a commit": {Commit: &gitlet.ExpungeCommit{RepoID: ref.ID, ExpungeID: "019a0c2e-0000-7000-8000-0000000000e1",
 			CommitID: "019a0c2e-0000-7000-8000-0000000000e4", RequestID: "019a0c2e-0000-7000-8000-0000000000e0",
 			Node: "git-a", Seen: at, DropEpoch: 4, Retire: []string{"019a0c2e-0000-7000-8000-0000000000e3"},
-			Add: []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e5",
+			Add: []gitlet.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e5",
 				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")}}},
-		"a scan": {Scan: &code.ExpungeScan{RepoID: ref.ID, ScanID: "019a0c2e-0000-7000-8000-0000000000e6",
+		"a scan": {Scan: &gitlet.ExpungeScan{RepoID: ref.ID, ScanID: "019a0c2e-0000-7000-8000-0000000000e6",
 			Node: "git-a", Seen: at}},
 	} {
 		d.mu.Lock()
-		d.expunged = code.ExpungeResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
+		d.expunged = gitlet.ExpungeResult{Outcome: statelog.OutcomePending, Refusal: gitlet.RefusalStale,
 			Detail: "the next pass plans again", Position: at, Request: "019a0c2e-0000-7000-8000-0000000000e0"}
 		d.mu.Unlock()
 		if got, err := seam.Expunge(ctx, p); err != nil || !reflect.DeepEqual(got, d.expunged) {
@@ -1043,31 +1043,31 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 
 	// AN IMPORT'S CHUNK AND END AND A PULL MIRROR'S SYNC, every field of
 	// each and of the answer.
-	forced := code.Command{Ref: "refs/heads/main", Old: "1111111111111111111111111111111111111111",
+	forced := gitlet.Command{Ref: "refs/heads/main", Old: "1111111111111111111111111111111111111111",
 		New: "2222222222222222222222222222222222222222", Forced: true}
-	tagged := code.Command{Ref: "refs/tags/v1", Old: code.ZeroOID, New: "3333333333333333333333333333333333333333"}
+	tagged := gitlet.Command{Ref: "refs/tags/v1", Old: gitlet.ZeroOID, New: "3333333333333333333333333333333333333333"}
 	for name, p := range map[string]any{
-		"a chunk": code.ImportProposal{Chunk: &code.ImportChunk{RepoID: ref.ID,
+		"a chunk": gitlet.ImportProposal{Chunk: &gitlet.ImportChunk{RepoID: ref.ID,
 			ChunkID: "019a0c2e-0000-7000-8000-0000000000f0", Node: "git-a", Seq: 3,
-			Packs:    []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f1", "cccccccccccccccccccccccccccccccccccccccc")},
-			Commands: []code.Command{forced, tagged}}},
-		"an end": code.ImportProposal{Done: &code.ImportDone{RepoID: ref.ID, Node: "git-a", Seq: 3,
+			Packs:    []gitlet.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f1", "cccccccccccccccccccccccccccccccccccccccc")},
+			Commands: []gitlet.Command{forced, tagged}}},
+		"an end": gitlet.ImportProposal{Done: &gitlet.ImportDone{RepoID: ref.ID, Node: "git-a", Seq: 3,
 			DefaultBranch: "trunk", Error: "a blob past max_blob_bytes"}},
-		"a sync": code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: ref.ID,
+		"a sync": gitlet.MirrorSyncProposal{Sync: gitlet.MirrorSync{RepoID: ref.ID,
 			SyncID: "019a0c2e-0000-7000-8000-0000000000f2", Node: "git-a", DropEpoch: 4,
-			Packs:    []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f3", "dddddddddddddddddddddddddddddddddddddddd")},
-			Commands: []code.Command{forced}, FetchedAt: created}},
+			Packs:    []gitlet.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f3", "dddddddddddddddddddddddddddddddddddddddd")},
+			Commands: []gitlet.Command{forced}, FetchedAt: created}},
 	} {
 		d.mu.Lock()
-		d.synced = code.SyncResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
+		d.synced = gitlet.SyncResult{Outcome: statelog.OutcomePending, Refusal: gitlet.RefusalStale,
 			Detail: "its home reads the repository again at its next round", Position: at}
 		d.mu.Unlock()
-		var got code.SyncResult
+		var got gitlet.SyncResult
 		var err error
 		switch p := p.(type) {
-		case code.ImportProposal:
+		case gitlet.ImportProposal:
 			got, err = seam.Import(ctx, p)
-		case code.MirrorSyncProposal:
+		case gitlet.MirrorSyncProposal:
 			got, err = seam.MirrorSync(ctx, p)
 		}
 		if err != nil || !reflect.DeepEqual(got, d.synced) {
@@ -1082,33 +1082,33 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// stamps among them, which cross whole whoever set them — and every
 	// field of the answer.
 	title, body := "Retry the flaky upload", "It fails one run in ten.\n\nSee ENG-412."
-	seat := code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}
-	item := &code.ChangeOpen{RepoID: ref.ID, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	item := &gitlet.ChangeOpen{RepoID: ref.ID, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
 		SourceRef: "refs/heads/fix", TargetRef: "refs/heads/main", Head: "6666666666666666666666666666666666666666",
 		Title: title, Body: body, Draft: true, Owner: seat,
 		WorkItem: &types.WorkItem{Backend: types.WorkWorklet, ID: "task-9", Key: "ENG-412", Project: "ENG"},
 		TurnID:   "019a0c2e-0000-7000-8000-0000000000d2", RunID: "019a0c2e-0000-7000-8000-0000000000d3"}
-	for name, p := range map[string]code.ChangeProposal{
+	for name, p := range map[string]gitlet.ChangeProposal{
 		"an open": {Open: item},
-		"an edit": {Edit: &code.ChangeEdit{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat, Title: &title,
+		"an edit": {Edit: &gitlet.ChangeEdit{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat, Title: &title,
 			Body: &body, WorkItem: item.WorkItem, ClearWorkItem: true}},
-		"a draft's state": {Draft: &code.ChangeDraft{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+		"a draft's state": {Draft: &gitlet.ChangeDraft{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
 			Draft: true}},
-		"a retarget": {Retarget: &code.ChangeRetarget{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+		"a retarget": {Retarget: &gitlet.ChangeRetarget{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
 			TargetRef: "refs/heads/release"}},
-		"a close": {Close: &code.ChangeClose{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+		"a close": {Close: &gitlet.ChangeClose{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
 			Reason: "superseded by web!43"}},
-		"a reopen": {Reopen: &code.ChangeReopen{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+		"a reopen": {Reopen: &gitlet.ChangeReopen{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
 			Head: "7777777777777777777777777777777777777777"}},
-		"a landing": {Landed: &code.ChangeLanded{RepoID: ref.ID, ChangeID: item.ChangeID, Revision: 3,
+		"a landing": {Landed: &gitlet.ChangeLanded{RepoID: ref.ID, ChangeID: item.ChangeID, Revision: 3,
 			HeadOID: "7777777777777777777777777777777777777777", TargetRef: "refs/heads/main",
 			TargetOID: "8888888888888888888888888888888888888888", Node: "node-b"}},
 	} {
 		p.OpID, p.Asker, p.Seen, p.ExpectedVersion = "019a0c2e-0000-7000-8000-0000000000d0.code_open_change",
 			seat, at, 4
 		d.mu.Lock()
-		d.changed = code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: item.ChangeID, Number: 42,
-			Version: 5, Position: at, Unchanged: true, Refusal: code.ChangeRefusalStale,
+		d.changed = gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: item.ChangeID, Number: 42,
+			Version: 5, Position: at, Unchanged: true, Refusal: gitlet.ChangeRefusalStale,
 			Detail: "app!42 is at version 5, and this write was formed against version 4"}
 		d.mu.Unlock()
 		if got, err := seam.Change(ctx, p); err != nil || !reflect.DeepEqual(got, d.changed) {
@@ -1123,21 +1123,21 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// committer stamps among them, which crosses whole whoever set it — and
 	// every field of the answer, the preconditions a gate_unmet names among
 	// them.
-	for name, p := range map[string]code.QueueProposal{
-		"an enqueue": {Enqueue: &code.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+	for name, p := range map[string]gitlet.QueueProposal{
+		"an enqueue": {Enqueue: &gitlet.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			ChangeID: item.ChangeID, TargetRef: "refs/heads/main",
-			HeadOID: "7777777777777777777777777777777777777777", Method: code.MergeMethodSquash,
+			HeadOID: "7777777777777777777777777777777777777777", Method: gitlet.MergeMethodSquash,
 			DeleteSource: true, CloseTask: true, Principal: seat}},
-		"a dequeue": {Dequeue: &code.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+		"a dequeue": {Dequeue: &gitlet.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			Principal: seat}},
 	} {
 		p.OpID, p.Asker, p.Seen = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at
 		d.mu.Lock()
-		d.queued = code.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
-			State: code.QueueWaiting, Place: 3, Position: at, Refusal: code.MergeRefusalGateUnmet,
+		d.queued = gitlet.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+			State: gitlet.QueueWaiting, Place: 3, Position: at, Refusal: gitlet.MergeRefusalGateUnmet,
 			Detail: "app!42 does not meet refs/heads/main's merge gate: unit failed on 7777777",
-			Unmet: []code.Precondition{{Kind: code.PreconditionCheck, State: code.PreconditionUnmet,
-				WaitsOn: []code.Party{{Handle: "dev", Kind: code.PartyAgent}}, Detail: "unit failed on 7777777"}}}
+			Unmet: []gitlet.Precondition{{Kind: gitlet.PreconditionCheck, State: gitlet.PreconditionUnmet,
+				WaitsOn: []gitlet.Party{{Handle: "dev", Kind: gitlet.PartyAgent}}, Detail: "unit failed on 7777777"}}}
 		d.mu.Unlock()
 		if got, err := seam.Queue(ctx, p); err != nil || !reflect.DeepEqual(got, d.queued) {
 			t.Errorf("queue %s = (%+v, %v), want %+v", name, got, err, d.queued)
@@ -1151,22 +1151,22 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// what the snapshot held of the target, which the committer stamps,
 	// among them, crossing whole whoever set them — and every field of the
 	// answer, the preconditions a gate_unmet names among them.
-	merge := code.MergeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", Asker: seat,
-		Seen: at, Merge: code.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
-			ChangeID: item.ChangeID, Method: code.MergeMethodSquash, TargetRef: "refs/heads/main",
+	merge := gitlet.MergeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", Asker: seat,
+		Seen: at, Merge: gitlet.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
+			ChangeID: item.ChangeID, Method: gitlet.MergeMethodSquash, TargetRef: "refs/heads/main",
 			BaseOID: "6666666666666666666666666666666666666666", HeadOID: "7777777777777777777777777777777777777777",
 			CommitOID: "8888888888888888888888888888888888888888",
-			Pack: &code.PackRef{PackID: "019a0c2e-0000-7000-8000-0000000000f6", Object: objstore.KeyAt(created),
+			Pack: &gitlet.PackRef{PackID: "019a0c2e-0000-7000-8000-0000000000f6", Object: objstore.KeyAt(created),
 				Hash: objstore.HashOf([]byte("f6")), Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60,
 				GitChecksum: "9999999999999999999999999999999999999999", Objects: 2},
 			DeleteSource: true, SourceRef: "refs/heads/seats/dev/fix", Override: "the release cannot wait",
 			Node: "git-a", ReceivedAt: created, Principal: seat, Protected: true, Green: true}}
 	d.mu.Lock()
-	d.merged = code.MergeResult{Outcome: statelog.OutcomeApplied, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
-		MergeOID: "8888888888888888888888888888888888888888", Position: at, Refusal: code.MergeRefusalGateUnmet,
+	d.merged = gitlet.MergeResult{Outcome: statelog.OutcomeApplied, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
+		MergeOID: "8888888888888888888888888888888888888888", Position: at, Refusal: gitlet.MergeRefusalGateUnmet,
 		Detail: "app!42 does not meet refs/heads/main's merge gate: no approval counts",
-		Unmet: []code.Precondition{{Kind: code.PreconditionApproval, State: code.PreconditionUnmet,
-			WaitsOn: []code.Party{{Handle: "plat-lead", Kind: code.PartyAgent}}, Detail: "no approval counts"}}}
+		Unmet: []gitlet.Precondition{{Kind: gitlet.PreconditionApproval, State: gitlet.PreconditionUnmet,
+			WaitsOn: []gitlet.Party{{Handle: "plat-lead", Kind: gitlet.PartyAgent}}, Detail: "no approval counts"}}}
 	d.mu.Unlock()
 	if got, err := seam.Merge(ctx, merge); err != nil || !reflect.DeepEqual(got, d.merged) {
 		t.Errorf("merge = (%+v, %v), want %+v", got, err, d.merged)
@@ -1178,59 +1178,59 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// A CHANGE'S CONVERSATION'S WRITES, every field of each — the fields the
 	// writer stamps among them, which cross whole whoever set them — and
 	// every field of the answer.
-	comment := &code.Comment{RepoID: ref.ID, ChangeID: item.ChangeID, CommentID: "019a0c2e-0000-7000-8000-0000000000e1",
+	comment := &gitlet.Comment{RepoID: ref.ID, ChangeID: item.ChangeID, CommentID: "019a0c2e-0000-7000-8000-0000000000e1",
 		ThreadID: "019a0c2e-0000-7000-8000-0000000000e2", ParentID: "019a0c2e-0000-7000-8000-0000000000e2",
 		FindingID: "019a0c2e-0000-7000-8000-0000000000e4", By: seat,
 		Body: "Why two retries?", TurnID: "019a0c2e-0000-7000-8000-0000000000d2",
-		Anchor: &code.CommentAnchor{Revision: 3, Path: "upload/retry.go", Side: code.SideNew, Line: 42,
+		Anchor: &gitlet.CommentAnchor{Revision: 3, Path: "upload/retry.go", Side: gitlet.SideNew, Line: 42,
 			BlobOID: "8888888888888888888888888888888888888888"}}
-	for name, w := range map[string]code.ConversationWrite{
-		"an ask for review": {Reviewers: &code.ReviewerRequest{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
-			Request:  []code.Reviewer{{Handle: "plat-lead", Kind: code.PartyAgent}, {Handle: "founder", Kind: code.PartyPerson}},
+	for name, w := range map[string]gitlet.ConversationWrite{
+		"an ask for review": {Reviewers: &gitlet.ReviewerRequest{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+			Request:  []gitlet.Reviewer{{Handle: "plat-lead", Kind: gitlet.PartyAgent}, {Handle: "founder", Kind: gitlet.PartyPerson}},
 			Withdraw: []string{"cto"}, Note: "the retry loop"}},
 		"a comment": {Comment: comment},
-		"a thread's resolution": {ThreadResolve: &code.ThreadResolve{RepoID: ref.ID, ChangeID: item.ChangeID,
+		"a thread's resolution": {ThreadResolve: &gitlet.ThreadResolve{RepoID: ref.ID, ChangeID: item.ChangeID,
 			ThreadID: comment.ThreadID, Resolved: true, By: seat}},
-		"a review": {Review: &code.Review{RepoID: ref.ID, ChangeID: item.ChangeID,
+		"a review": {Review: &gitlet.Review{RepoID: ref.ID, ChangeID: item.ChangeID,
 			ReviewID: "019a0c2e-0000-7000-8000-0000000000e3", By: seat, Revision: 3,
-			Verdict: code.VerdictRequestChanges, Summary: "The retry loop never backs off.",
-			Findings: []code.Finding{{ID: "019a0c2e-0000-7000-8000-0000000000e4", Path: "upload/retry.go",
-				Side: code.SideNew, LineStart: 40, LineEnd: 44, CommitOID: "9999999999999999999999999999999999999999",
-				BlobOID: "8888888888888888888888888888888888888888", Severity: code.SeverityBlocker,
-				Category: code.CategoryCorrectness, Title: "No backoff", Body: "Two retries back to back.",
+			Verdict: gitlet.VerdictRequestChanges, Summary: "The retry loop never backs off.",
+			Findings: []gitlet.Finding{{ID: "019a0c2e-0000-7000-8000-0000000000e4", Path: "upload/retry.go",
+				Side: gitlet.SideNew, LineStart: 40, LineEnd: 44, CommitOID: "9999999999999999999999999999999999999999",
+				BlobOID: "8888888888888888888888888888888888888888", Severity: gitlet.SeverityBlocker,
+				Category: gitlet.CategoryCorrectness, Title: "No backoff", Body: "Two retries back to back.",
 				Suggestion: new("time.Sleep(backoff)")}},
 			Carries: []string{"019a0c2e-0000-7000-8000-0000000000e5"},
 			TurnID:  "019a0c2e-0000-7000-8000-0000000000d3", Model: "model-a"}},
-		"an answer to findings": {FindingResolve: &code.FindingResolve{RepoID: ref.ID, ChangeID: item.ChangeID,
-			By: seat, Findings: []code.FindingResolution{{FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
-				Resolution: code.FindingResolved, Note: "backs off now",
+		"an answer to findings": {FindingResolve: &gitlet.FindingResolve{RepoID: ref.ID, ChangeID: item.ChangeID,
+			By: seat, Findings: []gitlet.FindingResolution{{FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
+				Resolution: gitlet.FindingResolved, Note: "backs off now",
 				Commit: "7777777777777777777777777777777777777777"}}}},
-		"a revision's facts": {Revise: &code.Revise{RepoID: ref.ID, ChangeID: item.ChangeID, N: 3,
+		"a revision's facts": {Revise: &gitlet.Revise{RepoID: ref.ID, ChangeID: item.ChangeID, N: 3,
 			HeadOID: "9999999999999999999999999999999999999999", TargetRef: "refs/heads/main",
 			TargetOID: "7777777777777777777777777777777777777777", TargetPosition: at,
 			BaseOID: "6666666666666666666666666666666666666666", BaseTree: "3333333333333333333333333333333333333333",
 			HeadTree: "2222222222222222222222222222222222222222", PatchID: "5555555555555555555555555555555555555555",
 			PatchIDOmitted: true, Touched: []string{"upload/retry.go"}, TouchesAll: true,
-			Classes:          code.RevisionClasses{WhitespaceOnly: []int{0}, CommentOnly: []int{1}, Complete: true},
+			Classes:          gitlet.RevisionClasses{WhitespaceOnly: []int{0}, CommentOnly: []int{1}, Complete: true},
 			Node:             "node-b",
-			RequestedOwners:  []code.Owner{{Kind: code.OwnerUnit, Ref: "Platform"}},
+			RequestedOwners:  []gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Platform"}},
 			OwnersDigest:     "4444444444444444444444444444444444444444444444444444444444444444",
-			HumanPaths:       code.HumanPathMatch{Held: []int{0}, Waived: []int{2}},
+			HumanPaths:       gitlet.HumanPathMatch{Held: []int{0}, Waived: []int{2}},
 			HumanPathsDigest: "8888888888888888888888888888888888888888888888888888888888888888",
-			Asked:            []code.Reviewer{{Handle: "plat-lead", Kind: code.PartyAgent}},
-			SkippedOwners: []code.SkippedOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "reader"},
-				Handle: "reader", Why: code.SkipBelowReview}}}},
-		"a change's mergeability": {Mergeability: &code.Mergeability{RepoID: ref.ID, ChangeID: item.ChangeID,
+			Asked:            []gitlet.Reviewer{{Handle: "plat-lead", Kind: gitlet.PartyAgent}},
+			SkippedOwners: []gitlet.SkippedOwner{{Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "reader"},
+				Handle: "reader", Why: gitlet.SkipBelowReview}}}},
+		"a change's mergeability": {Mergeability: &gitlet.Mergeability{RepoID: ref.ID, ChangeID: item.ChangeID,
 			Revision: 3, HeadOID: "9999999999999999999999999999999999999999", TargetRef: "refs/heads/main",
-			TargetOID: "7777777777777777777777777777777777777777", TargetPosition: at, State: code.MergeConflict,
+			TargetOID: "7777777777777777777777777777777777777777", TargetPosition: at, State: gitlet.MergeConflict,
 			Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 2, Node: "node-b", Refresh: true,
 			ChangeVersion: 4, ReadinessVersion: 6, Ready: true, WaitsPerson: true}},
 	} {
 		w.OpID, w.Asker, w.Seen = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change", seat, at
 		d.mu.Lock()
-		d.conversed = code.ConversationResult{Outcome: statelog.OutcomeApplied, ID: comment.CommentID,
+		d.conversed = gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, ID: comment.CommentID,
 			FindingIDs: []string{"019a0c2e-0000-7000-8000-0000000000e4"}, Position: at,
-			Unchanged: true, Refusal: code.ConversationRefusalThreadGone,
+			Unchanged: true, Refusal: gitlet.ConversationRefusalThreadGone,
 			Detail: "app!42 holds no thread 019a0c2e-0000-7000-8000-0000000000e2"}
 		d.mu.Unlock()
 		if got, err := seam.Converse(ctx, w); err != nil || !reflect.DeepEqual(got, d.conversed) {
@@ -1244,43 +1244,43 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// A REPOSITORY'S CHECK WRITES, every field of each — an attempt queued
 	// with its definition whole, a claim and its holder's naming of the box,
 	// an ending with its failures and log — and every field of the answer.
-	attempt := code.CheckKey{RepoID: ref.ID, OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "unit",
+	attempt := gitlet.CheckKey{RepoID: ref.ID, OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "unit",
 		Attempt: 2}
 	exit := 1
-	for name, req := range map[string]code.ChecksRequest{
-		"an attempt queued": {Queued: &code.CheckQueued{CheckKey: attempt, Purpose: code.PurposeHead,
+	for name, req := range map[string]gitlet.ChecksRequest{
+		"an attempt queued": {Queued: &gitlet.CheckQueued{CheckKey: attempt, Purpose: gitlet.PurposeHead,
 			ChangeID: item.ChangeID, Revision: 3, CandidateID: "cand-1", EntryID: "entry-1",
 			Base:    "7777777777777777777777777777777777777777",
 			DefsOID: "8888888888888888888888888888888888888888",
-			Def: &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600, Paths: []string{"**/*.go"},
-				Report: code.CheckReport{JUnit: "out/junit.xml", SARIF: "out/lint.sarif"}, RunIn: code.CellContainer,
-				Checkout: code.CheckCheckout{Cone: []string{"cmd", "internal"}}, Env: []string{"NPM_TOKEN"}},
-			Required: true, Reason: code.QueueRequeue, Skipped: true, Invalid: "the checks file is not YAML",
+			Def: &gitlet.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600, Paths: []string{"**/*.go"},
+				Report: gitlet.CheckReport{JUnit: "out/junit.xml", SARIF: "out/lint.sarif"}, RunIn: gitlet.CellContainer,
+				Checkout: gitlet.CheckCheckout{Cone: []string{"cmd", "internal"}}, Env: []string{"NPM_TOKEN"}},
+			Required: true, Reason: gitlet.QueueRequeue, Skipped: true, Invalid: "the checks file is not YAML",
 			QueuedAt: created}},
-		"a head dispatched": {Dispatched: &code.CheckDispatched{RepoID: ref.ID, Target: "refs/heads/main",
+		"a head dispatched": {Dispatched: &gitlet.CheckDispatched{RepoID: ref.ID, Target: "refs/heads/main",
 			Tip: "7777777777777777777777777777777777777777", TipPosition: at,
 			DefsOID: "8888888888888888888888888888888888888888",
-			Heads: []code.DispatchedHead{{OID: "6666666666666666666666666666666666666666",
+			Heads: []gitlet.DispatchedHead{{OID: "6666666666666666666666666666666666666666",
 				ChangeID: item.ChangeID, Revision: 3}}, DispatchedAt: created}},
-		"a claim naming its box": {Started: &code.CheckStarted{CheckKey: attempt, Runner: "git-a",
-			Placement: code.PlacementE2B, Box: "box-7", StartedAt: created}},
-		"an ending": {Finished: &code.CheckFinished{CheckKey: attempt, State: code.CheckStateFailed,
-			Reason: code.CheckReasonExit, ExitCode: &exit, DurationMs: 61_000, Summary: "2 of 40 failed",
-			Tail: "--- FAIL: TestRetry", Failures: []code.CheckFailure{{Path: "upload/retry_test.go", Line: 12,
+		"a claim naming its box": {Started: &gitlet.CheckStarted{CheckKey: attempt, Runner: "git-a",
+			Placement: gitlet.PlacementE2B, Box: "box-7", StartedAt: created}},
+		"an ending": {Finished: &gitlet.CheckFinished{CheckKey: attempt, State: gitlet.CheckStateFailed,
+			Reason: gitlet.CheckReasonExit, ExitCode: &exit, DurationMs: 61_000, Summary: "2 of 40 failed",
+			Tail: "--- FAIL: TestRetry", Failures: []gitlet.CheckFailure{{Path: "upload/retry_test.go", Line: 12,
 				TestID: "TestRetry", Message: "want 2, got 3"}}, FailuresOmitted: 4,
-			Log: &code.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("log")), Size: 900},
+			Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("log")), Size: 900},
 			URL: "https://ci.example.com/run/1", FinishedAt: created}},
 	} {
 		req.OpID, req.Seen = "019a0c2e-0000-7000-8000-0000000000f0.code_check", at
 		d.mu.Lock()
-		d.checked = code.ChecksResult{Outcome: statelog.OutcomeApplied, Unchanged: true,
-			Refusal: code.CheckRefusalClaimed, Detail: "attempt 2 of check unit is held by runner git-b",
-			Holder: "git-b", Position: at, Row: &code.CheckRow{CheckKey: attempt, State: code.CheckStateRunning,
-				Purpose: code.PurposeHead, ChangeID: item.ChangeID, Revision: 3, CandidateID: "cand-1",
+		d.checked = gitlet.ChecksResult{Outcome: statelog.OutcomeApplied, Unchanged: true,
+			Refusal: gitlet.CheckRefusalClaimed, Detail: "attempt 2 of check unit is held by runner git-b",
+			Holder: "git-b", Position: at, Row: &gitlet.CheckRow{CheckKey: attempt, State: gitlet.CheckStateRunning,
+				Purpose: gitlet.PurposeHead, ChangeID: item.ChangeID, Revision: 3, CandidateID: "cand-1",
 				EntryID: "entry-1", Base: "7777777777777777777777777777777777777777",
-				DefsOID: "8888888888888888888888888888888888888888", Required: true, RunIn: code.CellContainer,
-				TimeoutSeconds: 600, Reason: code.CheckReasonExit, Runner: "git-b",
-				Placement: code.PlacementContainer, Box: "box-8", Reporter: "founder",
+				DefsOID: "8888888888888888888888888888888888888888", Required: true, RunIn: gitlet.CellContainer,
+				TimeoutSeconds: 600, Reason: gitlet.CheckReasonExit, Runner: "git-b",
+				Placement: gitlet.PlacementContainer, Box: "box-8", Reporter: "founder",
 				QueuedAt: created, StartedAt: created, FinishedAt: created, DurationMs: 61_000, ExitCode: &exit,
 				Summary: "2 of 40 failed", FailuresOmitted: 4, URL: "https://ci.example.com/run/1",
 				Queued: at, Finished: at}}
@@ -1293,7 +1293,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	resolveQ := code.ResolveQuery{Name: "app", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}
+	resolveQ := gitlet.ResolveQuery{Name: "app", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}
 	if got, err := seam.Resolve(ctx, resolveQ); err != nil || !reflect.DeepEqual(got, ref) {
 		t.Errorf("resolve = (%+v, %v), want %+v", got, err, ref)
 	}
@@ -1301,7 +1301,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("resolve asked %+v, want %+v", got, resolveQ)
 	}
 
-	stateQ := code.StateQuery{RepoID: ref.ID, Since: at, Cursor: cursor, Pushes: true, RetiredSince: at,
+	stateQ := gitlet.StateQuery{RepoID: ref.ID, Since: at, Cursor: cursor, Pushes: true, RetiredSince: at,
 		Fresh: statelog.FloorAt(statelog.ReadSession, at)}
 	if got, err := seam.RepoState(ctx, stateQ); err != nil || !reflect.DeepEqual(got, d.snap) {
 		t.Errorf("repo state = (%+v, %v), want %+v", got, err, d.snap)
@@ -1310,7 +1310,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("repo state asked %+v, want %+v", got, stateQ)
 	}
 
-	outcomeQ := code.OutcomeQuery{RepoID: ref.ID, PushID: "push-1", At: at}
+	outcomeQ := gitlet.OutcomeQuery{RepoID: ref.ID, PushID: "push-1", At: at}
 	if got, err := seam.PushOutcome(ctx, outcomeQ); err != nil || !reflect.DeepEqual(got, d.out) {
 		t.Errorf("push outcome = (%+v, %v), want %+v", got, err, d.out)
 	}
@@ -1318,7 +1318,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("push outcome asked %+v, want %+v", got, outcomeQ)
 	}
 
-	readQ := code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos, Status: []code.RepoStatus{code.RepoStatusArchived},
+	readQ := gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: gitlet.ReadRepos, Status: []gitlet.RepoStatus{gitlet.RepoStatusArchived},
 		Cursor: "c-1", Limit: 10, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
 	if got, err := seam.Read(ctx, readQ); err != nil || !reflect.DeepEqual(got, d.read) {
 		t.Errorf("read = (%+v, %v), want %+v", got, err, d.read)
@@ -1326,71 +1326,71 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	if got := d.last(); !reflect.DeepEqual(got, readQ) {
 		t.Errorf("read asked %+v, want %+v", got, readQ)
 	}
-	for _, q := range []code.ReadQuery{
-		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: code.ReadRefs,
+	for _, q := range []gitlet.ReadQuery{
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: gitlet.ReadRefs,
 			Repo: "app", Prefix: "refs/heads/seats/dev/", Cursor: "refs/heads/seats/dev/a", Limit: 7,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
 		// ONE REPOSITORY WITH ITS PATH OWNERS AND ITS RULES' GATES: either
 		// ask dropped on the wire would answer the detail without them.
-		{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
-			Kind: code.ReadRepo, Repo: "app", PathOwners: true, Gates: true,
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+			Kind: gitlet.ReadRepo, Repo: "app", PathOwners: true, Gates: true,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
-		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, After: at,
+		{Kind: gitlet.ReadIntroduced, Introduced: &gitlet.IntroducedQuery{RepoID: ref.ID, After: at,
 			Through: statelog.Position{Stream: codeStream, Generation: 2, Seq: 90}}, Cursor: "1000041/push-1",
 			Limit: 1, Fresh: statelog.FloorAt(statelog.ReadSession, at)},
-		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, Descending: true,
+		{Kind: gitlet.ReadIntroduced, Introduced: &gitlet.IntroducedQuery{RepoID: ref.ID, Descending: true,
 			Before: at}, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Kind: code.ReadRunPushes, RunPushes: &code.RunPushesQuery{Run: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		{Kind: gitlet.ReadRunPushes, RunPushes: &gitlet.RunPushesQuery{Run: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b",
 			Repos: []string{ref.ID, "0190f3c4-0000-7000-8000-00000000b0b0"}, After: at},
 			Cursor: "1/1000041/push-1", Limit: 2, Fresh: statelog.FloorAt(statelog.ReadSession, at)},
-		{Kind: code.ReadCompactionDue, MinPacks: 8, Cursor: "40/" + ref.ID,
+		{Kind: gitlet.ReadCompactionDue, MinPacks: 8, Cursor: "40/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
+		{Kind: gitlet.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Kind: code.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: gitlet.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		// THE WEEKLY ARM'S INSTANT: dropped on the wire, the maintainer would
 		// be answered the open arm alone, and no expunge on its schedule
 		// would ever begin.
-		{Kind: code.ReadExpungeDue, ScannedBefore: created, Cursor: "weekly:0:" + ref.ID,
+		{Kind: gitlet.ReadExpungeDue, ScannedBefore: created, Cursor: "weekly:0:" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		// THE HOME'S DUE CHANGE WORK, of every repository and of one, each
 		// with the instant its refresh is paced by, and the rechecks one
 		// repository's asks.
-		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RecheckBefore: created}, Cursor: ref.ID,
+		{Kind: gitlet.ReadChangesDue, ChangesDue: &gitlet.ChangesDueQuery{RecheckBefore: created}, Cursor: ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RepoID: ref.ID, RecheckBefore: created,
+		{Kind: gitlet.ReadChangesDue, ChangesDue: &gitlet.ChangesDueQuery{RepoID: ref.ID, RecheckBefore: created,
 			Rechecks: 64}, Cursor: "refs/heads/fix", Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 		// THE CONVERSATION'S FILTERS AND PARTS, each crossing whole: a
 		// filter dropped on the wire would answer the wider listing.
-		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadChanges,
-			Reviewer: "plat-lead", Needs: code.NeedReview, Repo: "app", State: code.ChangeStateOpen,
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, Kind: gitlet.ReadChanges,
+			Reviewer: "plat-lead", Needs: gitlet.NeedReview, Repo: "app", State: gitlet.ChangeStateOpen,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadChange, Repo: "app",
-			Change: 3, Part: code.PartComments, Cursor: "40/" + ref.ID, Limit: 20,
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, Kind: gitlet.ReadChange, Repo: "app",
+			Change: 3, Part: gitlet.PartComments, Cursor: "40/" + ref.ID, Limit: 20,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		// A REPOSITORY'S CHECKS — a change's at a commit, the window since a
 		// moment, one attempt whole — and the home's due check work, of every
 		// repository and of one.
-		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: code.ReadChecks,
-			Repo: "app", Checks: &code.CheckQuery{Change: 3, OID: "6666666666666666666666666666666666666666"},
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: gitlet.ReadChecks,
+			Repo: "app", Checks: &gitlet.CheckQuery{Change: 3, OID: "6666666666666666666666666666666666666666"},
 			Cursor: "unit/1", Limit: 20, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
-			Kind: code.ReadChecks, Checks: &code.CheckQuery{Since: created}, Limit: 50,
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+			Kind: gitlet.ReadChecks, Checks: &gitlet.CheckQuery{Since: created}, Limit: 50,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadCheck, Repo: "app",
-			Checks: &code.CheckQuery{OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main",
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, Kind: gitlet.ReadCheck, Repo: "app",
+			Checks: &gitlet.CheckQuery{OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main",
 				Name: "unit", Attempt: 2},
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
-		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RefreshBefore: created}, Cursor: ref.ID,
+		{Kind: gitlet.ReadChecksDue, ChecksDue: &gitlet.ChecksDueQuery{RefreshBefore: created}, Cursor: ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RepoID: ref.ID, RefreshBefore: created},
+		{Kind: gitlet.ReadChecksDue, ChecksDue: &gitlet.ChecksDueQuery{RepoID: ref.ID, RefreshBefore: created},
 			Cursor: "refs/heads/fix", Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 		// ONE BRANCH'S MERGE QUEUE, and ONE REPOSITORY'S QUEUE WORK ITS HOME
 		// OWES: the target or the due query dropped on the wire would answer
 		// every branch's queue, or the repositories holding one.
-		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadQueue, Repo: "app",
+		{Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, Kind: gitlet.ReadQueue, Repo: "app",
 			Target: "refs/heads/main", Limit: 5, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
-		{Kind: code.ReadQueueDue, QueueDue: &code.QueueDueQuery{RepoID: ref.ID}, Cursor: "c-2",
+		{Kind: gitlet.ReadQueueDue, QueueDue: &gitlet.QueueDueQuery{RepoID: ref.ID}, Cursor: "c-2",
 			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {
@@ -1408,27 +1408,27 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// the git read's attempt itself (home, asked of its one Gitlet node first),
 	// so that is the one field it adds to what the caller sent.
 	d.mu.Lock()
-	d.resolved = code.RefAnswer{Repo: ref, Refs: []code.ResolvedRef{
+	d.resolved = gitlet.RefAnswer{Repo: ref, Refs: []gitlet.ResolvedRef{
 		{Name: "main", Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666", Moved: at},
 		{Name: "gone", Missing: "repository app holds no live refs/heads/gone or refs/tags/gone"},
 	}, Position: at}
-	d.git = code.GitAnswer{Kind: code.GitDiff, RepoID: ref.ID, Position: at, Next: "page-2",
-		Diff: &code.DiffAnswer{Base: "6666666666666666666666666666666666666666",
-			Head: "7777777777777777777777777777777777777777", Files: []code.DiffFile{{Path: "a.go",
+	d.git = gitlet.GitAnswer{Kind: gitlet.GitDiff, RepoID: ref.ID, Position: at, Next: "page-2",
+		Diff: &gitlet.DiffAnswer{Base: "6666666666666666666666666666666666666666",
+			Head: "7777777777777777777777777777777777777777", Files: []gitlet.DiffFile{{Path: "a.go",
 				Status: "M", Added: 3, Deleted: 1}}, Total: 1, Added: 3, Deleted: 1}}
 	d.mu.Unlock()
-	refQ := code.RefQuery{Repo: "app", Refs: []string{"main", "gone"},
+	refQ := gitlet.RefQuery{Repo: "app", Refs: []string{"main", "gone"},
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
-		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead"}
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead"}
 	if got, err := seam.ResolveRef(ctx, refQ); err != nil || !reflect.DeepEqual(got, d.resolved) {
 		t.Errorf("resolve ref = (%+v, %v), want %+v", got, err, d.resolved)
 	}
 	if got := d.last(); !reflect.DeepEqual(got, refQ) {
 		t.Errorf("resolve ref asked %+v, want %+v", got, refQ)
 	}
-	gitQ := code.GitQuery{Kind: code.GitDiff, RepoID: ref.ID, Asker: code.Principal{Kind: code.PrincipalAgent,
+	gitQ := gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: ref.ID, Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent,
 		Seat: "dev"}, CeilingSeat: "lead", Fresh: statelog.FloorAt(statelog.ReadSession, at), Cursor: "page-1",
-		Diff: &code.DiffQuery{Base: "6666666666", Head: "7777777777777777777777777777777777777777",
+		Diff: &gitlet.DiffQuery{Base: "6666666666", Head: "7777777777777777777777777777777777777777",
 			FileB64: "YS5nbw==", Renames: true}}
 	if got, err := seam.GitRead(ctx, gitQ); err != nil || !reflect.DeepEqual(got, d.git) {
 		t.Errorf("git read = (%+v, %v), want %+v", got, err, d.git)
@@ -1443,12 +1443,12 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// for the colleague it reads for, at its floor — and of its answer: the
 	// state, the conflicted paths it holds and how many more, and the
 	// position the copy was read at. Stamped home by the walk, as a read is.
-	previewQ := code.MergePreviewQuery{RepoID: ref.ID, Asker: code.Principal{Kind: code.PrincipalAgent,
+	previewQ := gitlet.MergePreviewQuery{RepoID: ref.ID, Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent,
 		Seat: "dev"}, CeilingSeat: "lead", Base: "6666666666666666666666666666666666666666",
 		Head: "7777777777777777777777777777777777777777", Fresh: statelog.FloorAt(statelog.ReadSession, at)}
 	d.mu.Lock()
-	d.previewed = code.MergePreviewAnswer{RepoID: ref.ID, Base: previewQ.Base, Head: previewQ.Head,
-		State: code.MergeConflict, Conflicts: []string{"a.go", "docs/b.md"}, ConflictsOmitted: 7, Position: at}
+	d.previewed = gitlet.MergePreviewAnswer{RepoID: ref.ID, Base: previewQ.Base, Head: previewQ.Head,
+		State: gitlet.MergeConflict, Conflicts: []string{"a.go", "docs/b.md"}, ConflictsOmitted: 7, Position: at}
 	d.mu.Unlock()
 	if got, err := seam.MergePreview(ctx, previewQ); err != nil || !reflect.DeepEqual(got, d.previewed) {
 		t.Errorf("merge preview = (%+v, %v), want %+v", got, err, d.previewed)
@@ -1468,35 +1468,35 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// sentence and every conflict's stages. As for a read, the walk stamps
 	// its attempt itself, home where it is asked of its one Gitlet node first.
 	content, target := "hello\n", "docs/guide.md"
-	seatRun := code.Principal{Kind: code.PrincipalAgent, Seat: "dev", Run: code.RunProvenance{
+	seatRun := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev", Run: gitlet.RunProvenance{
 		TurnID: "019a0c2e-0000-7000-8000-0000000000d2", WorkBackend: "native", WorkKey: "ENG-412",
 		Model: "fixture-model"}}
 	d.mu.Lock()
-	d.wrote = code.EngineWriteResult{Outcome: statelog.OutcomePending,
-		Command: code.Command{Ref: "refs/heads/seats/dev/fix", Old: code.ZeroOID,
-			New: "8888888888888888888888888888888888888888", Result: code.ResultNG, Reason: code.RefusalStale,
+	d.wrote = gitlet.EngineWriteResult{Outcome: statelog.OutcomePending,
+		Command: gitlet.Command{Ref: "refs/heads/seats/dev/fix", Old: gitlet.ZeroOID,
+			New: "8888888888888888888888888888888888888888", Result: gitlet.ResultNG, Reason: gitlet.RefusalStale,
 			Detail: "refs/heads/seats/dev/fix is at 6666666"},
 		Commit: "8888888888888888888888888888888888888888", PushID: "019a0c2e-0000-7000-8000-0000000000f2",
-		Position: at, Refusal: code.WriteConflict, Detail: "a.go does not apply cleanly",
-		Conflicts: []code.Conflict{{Path: "a.go", Kind: "CONFLICT (contents)",
+		Position: at, Refusal: gitlet.WriteConflict, Detail: "a.go does not apply cleanly",
+		Conflicts: []gitlet.Conflict{{Path: "a.go", Kind: "CONFLICT (contents)",
 			Base: "9999999999999999999999999999999999999999", Ours: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Theirs: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Marked: "<<<<<<< ours\n", Truncated: true}},
 		ConflictsOmitted: 3}
 	d.mu.Unlock()
-	for name, w := range map[string]code.EngineWrite{
-		"a commit onto a new branch": {Kind: code.WriteCommitFiles, RepoID: ref.ID, Principal: seatRun,
+	for name, w := range map[string]gitlet.EngineWrite{
+		"a commit onto a new branch": {Kind: gitlet.WriteCommitFiles, RepoID: ref.ID, Principal: seatRun,
 			OpID: "019a0c2e-0000-7000-8000-0000000000f1", Fresh: statelog.FloorAt(statelog.ReadSession, at),
 			Ref: "refs/heads/seats/dev/fix", Base: "6666666666666666666666666666666666666666",
-			Message: "fix the flaky upload", Files: []code.FileOp{
-				{Op: code.FileOpPut, Path: "a.go", Content: &content, Mode: code.ModeExecutable},
-				{Op: code.FileOpPut, Path: "b.go", BlobOID: "7777777777777777777777777777777777777777"},
-				{Op: code.FileOpPut, Path: "guide", Content: &target, Mode: code.ModeLink},
-				{Op: code.FileOpEdit, Path: "c.go", Old: "beta", New: "BETA"},
-				{Op: code.FileOpDelete, Path: "d.go"},
-				{Op: code.FileOpMove, Path: "e.go", To: "f.go"},
-				{Op: code.FileOpMode, Path: "g.sh", Mode: code.ModeFile},
+			Message: "fix the flaky upload", Files: []gitlet.FileOp{
+				{Op: gitlet.FileOpPut, Path: "a.go", Content: &content, Mode: gitlet.ModeExecutable},
+				{Op: gitlet.FileOpPut, Path: "b.go", BlobOID: "7777777777777777777777777777777777777777"},
+				{Op: gitlet.FileOpPut, Path: "guide", Content: &target, Mode: gitlet.ModeLink},
+				{Op: gitlet.FileOpEdit, Path: "c.go", Old: "beta", New: "BETA"},
+				{Op: gitlet.FileOpDelete, Path: "d.go"},
+				{Op: gitlet.FileOpMove, Path: "e.go", To: "f.go"},
+				{Op: gitlet.FileOpMode, Path: "g.sh", Mode: gitlet.ModeFile},
 			}},
-		"a cherry-pick onto a head": {Kind: code.WriteCherryPick, RepoID: ref.ID, Principal: seatRun,
+		"a cherry-pick onto a head": {Kind: gitlet.WriteCherryPick, RepoID: ref.ID, Principal: seatRun,
 			OpID: "019a0c2e-0000-7000-8000-0000000000f3", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 			Ref: "refs/heads/seats/dev/fix", ExpectedHead: "6666666666666666666666666666666666666666",
 			Commit: "7777777777777777777777777777777777777777", Message: "pick the fix"},
@@ -1513,12 +1513,12 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// AND A WRITE'S REFUSAL KEEPS ITS SENTINEL: an object the repository
 	// does not hold is the write's answer, whichever node is asked.
 	d.mu.Lock()
-	d.err = fmt.Errorf("commit 7777777: %w", code.ErrObjectNotFound)
+	d.err = fmt.Errorf("commit 7777777: %w", gitlet.ErrObjectNotFound)
 	d.mu.Unlock()
-	if _, err := seam.GitWrite(ctx, code.EngineWrite{Kind: code.WriteCreateBranch, RepoID: ref.ID,
+	if _, err := seam.GitWrite(ctx, gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: ref.ID,
 		Principal: seatRun, OpID: "019a0c2e-0000-7000-8000-0000000000f4",
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}, Ref: "refs/heads/seats/dev/new",
-		Commit: "7777777777777777777777777777777777777777"}); !errors.Is(err, code.ErrObjectNotFound) {
+		Commit: "7777777777777777777777777777777777777777"}); !errors.Is(err, gitlet.ErrObjectNotFound) {
 		t.Errorf("a served object-not-found crossed as %v", err)
 	}
 	d.mu.Lock()
@@ -1531,51 +1531,51 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// protection's — the changes the deciding node resolves — a delete's
 	// reason, and a hold's turn and the read it is decided at.
 	d.mu.Lock()
-	d.lifecycle = code.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
-		Rule: &code.Protection{PushRule: ref.Protections[0], Gate: &code.MergeGate{
-			MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne, Checks: []string{"lint"},
-			Landing:      code.Landing{Depth: 4, Batch: 4},
-			DeleteSource: code.DeleteSeats, OwnersApprove: true}},
-		Refusal: code.LifecycleStale, Detail: "another rename of the repository landed first", Position: at}
+	d.lifecycle = gitlet.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
+		Rule: &gitlet.Protection{PushRule: ref.Protections[0], Gate: &gitlet.MergeGate{
+			MergeBy: gitlet.MergeByPersons, Approvals: gitlet.ApprovalsOne, Checks: []string{"lint"},
+			Landing:      gitlet.Landing{Depth: 4, Batch: 4},
+			DeleteSource: gitlet.DeleteSeats, OwnersApprove: true}},
+		Refusal: gitlet.LifecycleStale, Detail: "another rename of the repository landed first", Position: at}
 	d.mu.Unlock()
-	desc, branch, vis, search := "the app, renamed", "trunk", code.VisibilityUnit, code.SearchIndexed
-	owner := code.Owner{Kind: code.OwnerUnit, Ref: "plat"}
+	desc, branch, vis, search := "the app, renamed", "trunk", gitlet.VisibilityUnit, gitlet.SearchIndexed
+	owner := gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "plat"}
 	// A PROTECT CHANGE OF EVERY CONTROL AND GATE FIELD, a list's items added
 	// and removed and a flag turned off among them: a false flag is a change,
 	// which must cross as itself and never as a field left out.
-	mergeBy, approvals, depth := code.MergeByMaintainers, code.ApprovalsOne, 2
-	classes := []code.ChangeClass{code.ChangeClassCommentOnly}
-	removed := []code.ChangeClass{code.ChangeClassWhitespaceOnly}
-	humanPaths := []code.HumanPath{{Glob: "deploy/**", Unless: classes}}
-	direct, deleteSource, on, off := code.DirectPersons, code.DeleteNone, true, false
+	mergeBy, approvals, depth := gitlet.MergeByMaintainers, gitlet.ApprovalsOne, 2
+	classes := []gitlet.ChangeClass{gitlet.ChangeClassCommentOnly}
+	removed := []gitlet.ChangeClass{gitlet.ChangeClassWhitespaceOnly}
+	humanPaths := []gitlet.HumanPath{{Glob: "deploy/**", Unless: classes}}
+	direct, deleteSource, on, off := gitlet.DirectPersons, gitlet.DeleteNone, true, false
 	op := "019a0c2e-0000-7000-8000-0000000000f0.code_test"
-	for name, r := range map[string]code.LifecycleRequest{
-		"a create": {Kind: code.LifecycleCreate, OpID: op, Actor: seat, Name: "dev.app",
-			Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
-				Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, DefaultBranch: "main",
-				Description: "an experiment", Visibility: code.VisibilityUnit, Search: code.SearchGrep}},
-		"a rename": {Kind: code.LifecycleRename, OpID: op, Actor: seat, RepoID: ref.ID, Name: "app-3"},
-		"a settings change": {Kind: code.LifecycleSettings, OpID: op,
-			Actor:  code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"},
-			RepoID: ref.ID, Change: &code.RepoChange{Description: &desc, DefaultBranch: &branch,
-				Visibility: &vis, Search: &search, Owner: &owner, PathOwners: &code.PathOwnersChange{
-					Add:    []code.PathOwner{{Owner: owner, Paths: []string{"deploy/**", "web/**"}}},
-					Remove: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Paths: []string{"a"}}},
+	for name, r := range map[string]gitlet.LifecycleRequest{
+		"a create": {Kind: gitlet.LifecycleCreate, OpID: op, Actor: seat, Name: "dev.app",
+			Create: &gitlet.RepoSettings{ManagedBy: gitlet.ManagedTools, Kind: gitlet.RepoScratch,
+				Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "dev"}, DefaultBranch: "main",
+				Description: "an experiment", Visibility: gitlet.VisibilityUnit, Search: gitlet.SearchGrep}},
+		"a rename": {Kind: gitlet.LifecycleRename, OpID: op, Actor: seat, RepoID: ref.ID, Name: "app-3"},
+		"a settings change": {Kind: gitlet.LifecycleSettings, OpID: op,
+			Actor:  gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"},
+			RepoID: ref.ID, Change: &gitlet.RepoChange{Description: &desc, DefaultBranch: &branch,
+				Visibility: &vis, Search: &search, Owner: &owner, PathOwners: &gitlet.PathOwnersChange{
+					Add:    []gitlet.PathOwner{{Owner: owner, Paths: []string{"deploy/**", "web/**"}}},
+					Remove: []gitlet.PathOwner{{Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "dev"}, Paths: []string{"a"}}},
 				}}},
-		"a protection": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
-			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", AllowForce: &on, AllowDelete: &off,
-				DirectPush: &direct, Gate: &code.GateChange{MergeBy: &mergeBy, Approvals: &approvals,
-					ApprovalsUnless: &code.ListChange[code.ChangeClass]{Add: classes, Remove: removed},
-					HumanPaths:      &code.HumanPathsChange{Put: humanPaths, Remove: []string{"web/**"}},
-					Checks:          &code.ListChange[string]{Remove: []string{"lint"}},
-					Landing:         &code.LandingChange{Depth: &depth, Batch: &depth},
+		"a protection": {Kind: gitlet.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
+			Protect: &gitlet.ProtectChange{Pattern: "refs/heads/release/*", AllowForce: &on, AllowDelete: &off,
+				DirectPush: &direct, Gate: &gitlet.GateChange{MergeBy: &mergeBy, Approvals: &approvals,
+					ApprovalsUnless: &gitlet.ListChange[gitlet.ChangeClass]{Add: classes, Remove: removed},
+					HumanPaths:      &gitlet.HumanPathsChange{Put: humanPaths, Remove: []string{"web/**"}},
+					Checks:          &gitlet.ListChange[string]{Remove: []string{"lint"}},
+					Landing:         &gitlet.LandingChange{Depth: &depth, Batch: &depth},
 					OwnersApprove:   &on, DeleteSource: &deleteSource, AgentsEditChecks: &off}}},
-		"a gate's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
-			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Gate: &code.GateChange{Remove: true}}},
-		"a rule's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
-			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Remove: true}},
-		"a delete": {Kind: code.LifecycleDelete, OpID: op, Actor: seat, RepoID: ref.ID, Reason: "done with it"},
-		"a hold": {Kind: code.LifecycleHold, OpID: op, Actor: seat, RepoID: ref.ID, TurnID: "turn-1",
+		"a gate's removal": {Kind: gitlet.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
+			Protect: &gitlet.ProtectChange{Pattern: "refs/heads/main", Gate: &gitlet.GateChange{Remove: true}}},
+		"a rule's removal": {Kind: gitlet.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
+			Protect: &gitlet.ProtectChange{Pattern: "refs/heads/main", Remove: true}},
+		"a delete": {Kind: gitlet.LifecycleDelete, OpID: op, Actor: seat, RepoID: ref.ID, Reason: "done with it"},
+		"a hold": {Kind: gitlet.LifecycleHold, OpID: op, Actor: seat, RepoID: ref.ID, TurnID: "turn-1",
 			Seen: at},
 	} {
 		if got, err := seam.Lifecycle(ctx, r); err != nil || !reflect.DeepEqual(got, d.lifecycle) {
@@ -1587,10 +1587,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 	// AND A CONFIGURATION'S REPOSITORY'S REFUSAL KEEPS ITS SENTINEL.
 	d.mu.Lock()
-	d.err = fmt.Errorf("rename app: %w", code.ErrConfigManaged)
+	d.err = fmt.Errorf("rename app: %w", gitlet.ErrConfigManaged)
 	d.mu.Unlock()
-	if _, err := seam.Lifecycle(ctx, code.LifecycleRequest{Kind: code.LifecycleArchive, OpID: op,
-		Actor: seat, RepoID: ref.ID}); !errors.Is(err, code.ErrConfigManaged) {
+	if _, err := seam.Lifecycle(ctx, gitlet.LifecycleRequest{Kind: gitlet.LifecycleArchive, OpID: op,
+		Actor: seat, RepoID: ref.ID}); !errors.Is(err, gitlet.ErrConfigManaged) {
 		t.Errorf("a served config_managed crossed as %v", err)
 	}
 	d.mu.Lock()
@@ -1601,8 +1601,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// repository 404, a cache reads a moved snapshot from its first page,
 	// and a newer build's record is a version this one cannot read.
 	for _, refusal := range []error{
-		fmt.Errorf("resolve app: %w", code.ErrRepoNotFound),
-		fmt.Errorf("page 3: %w", code.ErrSnapshotMoved),
+		fmt.Errorf("resolve app: %w", gitlet.ErrRepoNotFound),
+		fmt.Errorf("page 3: %w", gitlet.ErrSnapshotMoved),
 	} {
 		d.mu.Lock()
 		d.err = refusal
@@ -1612,12 +1612,12 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			t.Errorf("a served %v crossed as %v", refusal, err)
 		}
 	}
-	future := &code.ErrFutureVersion{Got: 9, Want: 1, Subject: code.RepoSubject(ref.ID)}
+	future := &gitlet.ErrFutureVersion{Got: 9, Want: 1, Subject: gitlet.RepoSubject(ref.ID)}
 	d.mu.Lock()
 	d.err = fmt.Errorf("apply: %w", future)
 	d.mu.Unlock()
 	_, err = seam.Read(ctx, readQ)
-	var crossed *code.ErrFutureVersion
+	var crossed *gitlet.ErrFutureVersion
 	if !errors.As(err, &crossed) || !reflect.DeepEqual(crossed, future) {
 		t.Errorf("a served future version crossed as %v (%+v), want %+v", err, crossed, future)
 	}
@@ -1642,11 +1642,11 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// read's own, a repository's, a snapshot's — and the outcome read finds
 	// a push this node did not propose there.
 	past := statelog.Position{Stream: codeStream, Generation: 1, Seq: 90}
-	repo := code.RepoRef{ID: "019a0c2e-0000-7000-8000-0000000000a1", Name: "app", Position: past}
+	repo := gitlet.RepoRef{ID: "019a0c2e-0000-7000-8000-0000000000a1", Name: "app", Position: past}
 	d := &codeDesk{codeAnswers: codeAnswers{pos: pushed, ref: repo,
-		snap: code.RepoSnapshot{Repo: repo, Position: past, Full: true},
-		out:  code.PushOutcome{Position: past},
-		read: code.ReadAnswer{Position: past}}}
+		snap: gitlet.RepoSnapshot{Repo: repo, Position: past, Full: true},
+		out:  gitlet.PushOutcome{Position: past},
+		read: gitlet.ReadAnswer{Position: past}}}
 	serveDesk(t, f, d)
 	if _, err := f.client.Code().Propose(t.Context(), proposalTo("repo-floor", "push-floor")); err != nil {
 		t.Fatalf("propose: %v", err)
@@ -1682,10 +1682,10 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// push's own position, for the proposal's reason.
 	landed := statelog.Position{Stream: codeStream, Generation: 1, Seq: 55}
 	d.mu.Lock()
-	d.out = code.PushOutcome{Found: true, Push: code.PushRow{PushID: "push-floor", Position: landed},
+	d.out = gitlet.PushOutcome{Found: true, Push: gitlet.PushRow{PushID: "push-floor", Position: landed},
 		Position: past}
 	d.mu.Unlock()
-	if _, err := f.client.Code().PushOutcome(t.Context(), code.OutcomeQuery{RepoID: "repo-floor",
+	if _, err := f.client.Code().PushOutcome(t.Context(), gitlet.OutcomeQuery{RepoID: "repo-floor",
 		PushID: "push-floor", At: landed}); err != nil {
 		t.Fatalf("push outcome: %v", err)
 	}
@@ -1703,19 +1703,19 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// the repository it compacted and of no other.
 	compacted := statelog.Position{Stream: codeStream, Generation: 1, Seq: 70}
 	for _, tc := range []struct {
-		answer code.CompactResult
+		answer gitlet.CompactResult
 		// want is the session's floor after it, and repo the compacted
 		// repository's own.
 		want, repo statelog.Position
 	}{
-		{code.CompactResult{Refusal: code.RefusalStale, Detail: "pack push-0 is full"}, landed, statelog.Position{}},
-		{code.CompactResult{Outcome: statelog.OutcomeApplied, Position: compacted}, compacted, compacted},
+		{gitlet.CompactResult{Refusal: gitlet.RefusalStale, Detail: "pack push-0 is full"}, landed, statelog.Position{}},
+		{gitlet.CompactResult{Outcome: statelog.OutcomeApplied, Position: compacted}, compacted, compacted},
 	} {
 		d.mu.Lock()
 		d.compacted = tc.answer
 		d.mu.Unlock()
-		if _, err := f.client.Code().Compact(t.Context(), code.CompactionProposal{
-			Compaction: code.Compaction{RepoID: "repo-compacted"}}); err != nil {
+		if _, err := f.client.Code().Compact(t.Context(), gitlet.CompactionProposal{
+			Compaction: gitlet.Compaction{RepoID: "repo-compacted"}}); err != nil {
 			t.Fatalf("compact: %v", err)
 		}
 		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
@@ -1736,19 +1736,19 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// floor of the repository it is about and of no other.
 	expunged := statelog.Position{Stream: codeStream, Generation: 1, Seq: 80}
 	for _, tc := range []struct {
-		answer code.ExpungeResult
+		answer gitlet.ExpungeResult
 		// want is the session's floor after it, and repo the expunged
 		// repository's own.
 		want, repo statelog.Position
 	}{
-		{code.ExpungeResult{Refusal: code.RefusalStale, Detail: "expunge e1 is open"}, compacted, statelog.Position{}},
-		{code.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: expunged}, expunged, expunged},
+		{gitlet.ExpungeResult{Refusal: gitlet.RefusalStale, Detail: "expunge e1 is open"}, compacted, statelog.Position{}},
+		{gitlet.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: expunged}, expunged, expunged},
 	} {
 		d.mu.Lock()
 		d.expunged = tc.answer
 		d.mu.Unlock()
-		if _, err := f.client.Code().Expunge(t.Context(), code.ExpungeProposal{
-			Request: &code.ExpungeRequest{RepoID: "repo-expunged"}}); err != nil {
+		if _, err := f.client.Code().Expunge(t.Context(), gitlet.ExpungeProposal{
+			Request: &gitlet.ExpungeRequest{RepoID: "repo-expunged"}}); err != nil {
 			t.Fatalf("expunge: %v", err)
 		}
 		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
@@ -1771,23 +1771,23 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// and of no other.
 	changed := statelog.Position{Stream: codeStream, Generation: 1, Seq: 85}
 	for _, tc := range []struct {
-		answer code.ChangeResult
+		answer gitlet.ChangeResult
 		// want is the session's floor after it, and repo the change's
 		// repository's own.
 		want, repo statelog.Position
 	}{
-		{code.ChangeResult{Refusal: code.ChangeRefusalStale, Detail: "app!1 is at version 3"}, expunged,
+		{gitlet.ChangeResult{Refusal: gitlet.ChangeRefusalStale, Detail: "app!1 is at version 3"}, expunged,
 			statelog.Position{}},
-		{code.ChangeResult{Outcome: statelog.OutcomeApplied, Number: 1, Version: 3, Unchanged: true,
+		{gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, Number: 1, Version: 3, Unchanged: true,
 			Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: 99}}, expunged, statelog.Position{}},
-		{code.ChangeResult{Outcome: statelog.OutcomeApplied, Number: 1, Version: 4, Position: changed}, changed,
+		{gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, Number: 1, Version: 4, Position: changed}, changed,
 			changed},
 	} {
 		d.mu.Lock()
 		d.changed = tc.answer
 		d.mu.Unlock()
-		if _, err := f.client.Code().Change(t.Context(), code.ChangeProposal{
-			Close: &code.ChangeClose{RepoID: "repo-changed"}}); err != nil {
+		if _, err := f.client.Code().Change(t.Context(), gitlet.ChangeProposal{
+			Close: &gitlet.ChangeClose{RepoID: "repo-changed"}}); err != nil {
 			t.Fatalf("change: %v", err)
 		}
 		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
@@ -1809,21 +1809,21 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// other.
 	lived := statelog.Position{Stream: codeStream, Generation: 1, Seq: 95}
 	for _, tc := range []struct {
-		answer code.LifecycleResult
+		answer gitlet.LifecycleResult
 		// want is the session's floor after it, and repo the repository's own.
 		want, repo statelog.Position
 	}{
-		{code.LifecycleResult{Refusal: code.LifecycleNotPermitted, Detail: "seat dev may not archive it",
-			Repo: code.RepoRef{ID: "repo-lived", Position: past}}, changed, statelog.Position{}},
-		{code.LifecycleResult{Outcome: statelog.OutcomeApplied,
-			Repo: code.RepoRef{ID: "repo-lived", Position: past}}, changed, statelog.Position{}},
-		{code.LifecycleResult{Outcome: statelog.OutcomeApplied,
-			Repo: code.RepoRef{ID: "repo-lived", Position: lived}, Position: lived}, lived, lived},
+		{gitlet.LifecycleResult{Refusal: gitlet.LifecycleNotPermitted, Detail: "seat dev may not archive it",
+			Repo: gitlet.RepoRef{ID: "repo-lived", Position: past}}, changed, statelog.Position{}},
+		{gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied,
+			Repo: gitlet.RepoRef{ID: "repo-lived", Position: past}}, changed, statelog.Position{}},
+		{gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied,
+			Repo: gitlet.RepoRef{ID: "repo-lived", Position: lived}, Position: lived}, lived, lived},
 	} {
 		d.mu.Lock()
 		d.lifecycle = tc.answer
 		d.mu.Unlock()
-		if _, err := f.client.Code().Lifecycle(t.Context(), code.LifecycleRequest{Kind: code.LifecycleArchive,
+		if _, err := f.client.Code().Lifecycle(t.Context(), gitlet.LifecycleRequest{Kind: gitlet.LifecycleArchive,
 			RepoID: "repo-lived"}); err != nil {
 			t.Fatalf("lifecycle: %v", err)
 		}
@@ -1848,20 +1848,20 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	// a read of its objects has its Gitlet node sync to.
 	conversed := statelog.Position{Stream: codeStream, Generation: 1, Seq: 97}
 	for _, tc := range []struct {
-		answer code.ConversationResult
+		answer gitlet.ConversationResult
 		want   statelog.Position
 	}{
-		{code.ConversationResult{Refusal: code.ConversationRefusalThreadGone, Detail: "app!1 holds no thread"},
+		{gitlet.ConversationResult{Refusal: gitlet.ConversationRefusalThreadGone, Detail: "app!1 holds no thread"},
 			lived},
-		{code.ConversationResult{Outcome: statelog.OutcomeApplied, Unchanged: true,
+		{gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, Unchanged: true,
 			Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: 99}}, lived},
-		{code.ConversationResult{Outcome: statelog.OutcomeApplied, ID: "c-1", Position: conversed}, conversed},
+		{gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, ID: "c-1", Position: conversed}, conversed},
 	} {
 		d.mu.Lock()
 		d.conversed = tc.answer
 		d.mu.Unlock()
-		if _, err := f.client.Code().Converse(t.Context(), code.ConversationWrite{
-			Comment: &code.Comment{RepoID: "repo-changed"}}); err != nil {
+		if _, err := f.client.Code().Converse(t.Context(), gitlet.ConversationWrite{
+			Comment: &gitlet.Comment{RepoID: "repo-changed"}}); err != nil {
 			t.Fatalf("converse: %v", err)
 		}
 		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
@@ -1885,19 +1885,19 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	applied := statelog.Position{Stream: codeStream, Generation: 1, Seq: 98}
 	pending := statelog.Position{Stream: codeStream, Generation: 1, Seq: 99}
 	for _, tc := range []struct {
-		answer code.EngineWriteResult
+		answer gitlet.EngineWriteResult
 		// want is the session's floor after it, and repo the written
 		// repository's own.
 		want, repo statelog.Position
 	}{
-		{code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "a.go does not apply cleanly"}, conversed,
+		{gitlet.EngineWriteResult{Refusal: gitlet.WriteConflict, Detail: "a.go does not apply cleanly"}, conversed,
 			statelog.Position{}},
-		{code.EngineWriteResult{Command: code.Command{Ref: "refs/heads/main", Result: code.ResultNG,
-			Reason: code.RefusalStale}, Position: past}, conversed, statelog.Position{}},
-		{code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Position: past}, conversed,
+		{gitlet.EngineWriteResult{Command: gitlet.Command{Ref: "refs/heads/main", Result: gitlet.ResultNG,
+			Reason: gitlet.RefusalStale}, Position: past}, conversed, statelog.Position{}},
+		{gitlet.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Position: past}, conversed,
 			statelog.Position{}},
-		{code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Position: applied}, applied, applied},
-		{code.EngineWriteResult{Outcome: statelog.OutcomePending, Position: pending}, pending, pending},
+		{gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Position: applied}, applied, applied},
+		{gitlet.EngineWriteResult{Outcome: statelog.OutcomePending, Position: pending}, pending, pending},
 	} {
 		d.mu.Lock()
 		d.wrote = tc.answer
@@ -2053,12 +2053,12 @@ func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 			Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes})
 		return err
 	}
-	bound := statelog.ReadBudget + code.CommitBudget + code.ReplyMargin
+	bound := statelog.ReadBudget + gitlet.CommitBudget + gitlet.ReplyMargin
 	if err := build(bound); err == nil || !strings.Contains(err.Error(), "Timing.WriteAttempt") {
 		t.Errorf("a router whose write attempt is the serving node's floor wait (%v), a batch "+
 			"(%v) and its answer (%v) answered %v, want a refusal naming Timing.WriteAttempt: no "+
 			"push asked of another node's committer could be decided, only answered busy",
-			statelog.ReadBudget, code.CommitBudget, code.ReplyMargin, err)
+			statelog.ReadBudget, gitlet.CommitBudget, gitlet.ReplyMargin, err)
 	}
 	for _, write := range []time.Duration{bound + time.Nanosecond, Production().WriteAttempt} {
 		if err := build(write); err != nil {
@@ -2072,8 +2072,8 @@ func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 // in it: as the code domain's grant rules read a chart.
 type platform struct{}
 
-func (platform) Seat(handle string) (code.RosterSeat, bool) {
-	return code.RosterSeat{Handle: "dev", Tier: code.TierFullAccess, Unit: "Platform"}, handle == "dev"
+func (platform) Seat(handle string) (gitlet.RosterSeat, bool) {
+	return gitlet.RosterSeat{Handle: "dev", Tier: gitlet.TierFullAccess, Unit: "Platform"}, handle == "dev"
 }
 func (platform) Lead(string) string                { return "" }
 func (platform) Leads(string) []string             { return nil }
@@ -2093,7 +2093,7 @@ func codeRows(t *testing.T, at statelog.Position) store.ReplicatedHandle {
 		{`INSERT INTO code_repos (id, name, status, managed_by, owner_kind, owner, visibility, default_branch,
 			created_at) VALUES ('repo-web', 'web', 'active', 'config', 'unit', 'Platform', 'unit', 'main', 0)`, nil},
 		{`INSERT INTO code_names (token, name, repo_id) VALUES (?, 'web', 'repo-web')`,
-			[]any{code.NameToken("web")}},
+			[]any{gitlet.NameToken("web")}},
 		{`INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at, applied_version)
 			VALUES (?, ?, ?, 1, 0, 0)`, []any{at.Stream, int64(at.Generation), int64(at.Seq)}},
 	} {
@@ -2110,7 +2110,7 @@ func codeRows(t *testing.T, at statelog.Position) store.ReplicatedHandle {
 // A SEAT'S READ ON A NODE WITH NO CHART IS ANSWERED BY A PEER (M3-O82). The
 // node the walk asks first holds no chart — between its code reader's start
 // and its first epoch's install — and its reader refuses the seat's read
-// ABOUT ITSELF, code.ErrNotServing, which the walk reads as a node that ran
+// ABOUT ITSELF, gitlet.ErrNotServing, which the walk reads as a node that ran
 // nothing; the next node, holding a chart, answers it. Both read the same
 // rows with REAL readers: what differs is the chart alone.
 //
@@ -2120,17 +2120,17 @@ func TestASeatsReadOnANodeWithNoChartIsAnsweredByAPeer(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-1", "data-2")
 	at := statelog.Position{Stream: codeStream, Generation: 1, Seq: 4}
-	authority, err := statelogtest.LocalReader(code.Domain{}, codeRows(t, at).Reader(), at)
+	authority, err := statelogtest.LocalReader(gitlet.Domain{}, codeRows(t, at).Reader(), at)
 	if err != nil {
 		t.Fatalf("the code log's read authority: %v", err)
 	}
-	half := func(chart code.Roster) CodeServer {
-		r, err := code.NewReader(code.ReaderOptions{Log: authority,
-			Roster: func() code.Roster { return chart }})
+	half := func(chart gitlet.Roster) CodeServer {
+		r, err := gitlet.NewReader(gitlet.ReaderOptions{Log: authority,
+			Roster: func() gitlet.Roster { return chart }})
 		if err != nil {
 			t.Fatalf("NewReader: %v", err)
 		}
-		return code.Served{Reader: r}
+		return gitlet.Served{Reader: r}
 	}
 	nodes, _ := f.placement.Holders()
 	order := f.client.order(opCodeRead.spec, nodes)
@@ -2138,10 +2138,10 @@ func TestASeatsReadOnANodeWithNoChartIsAnsweredByAPeer(t *testing.T) {
 	chartless.set(func(n *fakeNode) { n.codeHalf = half(nil) })
 	charted.set(func(n *fakeNode) { n.codeHalf = half(platform{}) })
 
-	answer, err := f.client.Code().Read(t.Context(), code.ReadQuery{
-		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadRepo, Repo: "web",
+	answer, err := f.client.Code().Read(t.Context(), gitlet.ReadQuery{
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, Kind: gitlet.ReadRepo, Repo: "web",
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
-	if err != nil || answer.Repo == nil || answer.Repo.Access != code.AccessWrite.String() {
+	if err != nil || answer.Repo == nil || answer.Repo.Access != gitlet.AccessWrite.String() {
 		t.Fatalf("dev's read of web through the walk = %+v, %v; want web at write, answered by "+
 			"the node holding a chart", answer.Repo, err)
 	}

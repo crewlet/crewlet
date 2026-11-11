@@ -773,7 +773,7 @@ other host the same one way.
 | | What it moves | Which way | How often |
 |---|---|---|---|
 | **Import** (`import`, `crewlet gitlet import`, `code_import_repo`) | Every branch and tag of the source, once, into a new repository that reads `importing` until they have landed | In | Until it is done; a restart fetches only what the landed refs do not reach |
-| **Pull mirror** (`mirror_from`) | The source's branches and tags as they are — a force-push followed, a deleted branch deleted — by the mirror's own sync records; every push to it and every change is refused `repo_mirrored` | In | Every 15 minutes (`code.MirrorInterval`), and a minute after a failure, doubling up to that |
+| **Pull mirror** (`mirror_from`) | The source's branches and tags as they are — a force-push followed, a deleted branch deleted — by the mirror's own sync records; every push to it and every change is refused `repo_mirrored` | In | Every 15 minutes (`gitlet.MirrorInterval`), and a minute after a failure, doubling up to that |
 | **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while a ref it covers moves — a minute's records that move none of them (a seat's pushes to its own branches, a check's results) dial nobody — and the other host read again every 15 minutes whatever moved |
 
 **A push mirror publishes what passed, never what was pushed last.** A branch
@@ -2626,7 +2626,7 @@ keeps the reading of the later tip.
 A head is due a **requeue** too, where the latest attempt of a check at it
 for its target ended `errored` for its infrastructure — its runner lost, its
 box or its setup failed — below the third attempt
-(`code.AutoRequeueAttempts`): the same check queued again as the next
+(`gitlet.AutoRequeueAttempts`): the same check queued again as the next
 attempt, under the definition it ran under. Past the third, only a rerun runs
 it again. A record on a repository's **checks** subject nudges its home as a
 record on the repository's own does, so a requeue follows an ending at once
@@ -2702,7 +2702,7 @@ run's as `check`, is refused as no token.
 
 **The attempt's row is the authority, the token its backstop.** A token is
 valid for its check's timeout and ten minutes more, the box's setup
-(`code.CheckBoxGrace`, a box's setup step's own budget); what admits the box
+(`gitlet.CheckBoxGrace`, a box's setup step's own budget); what admits the box
 is its attempt's row, read on every request, so an attempt that has ended
 admits its box to nothing more from the moment its row says so, whatever its
 token's expiry.
@@ -2851,7 +2851,7 @@ no model's sign-in, none of `providers.sandbox.setup`; exactly the
 company's check secrets its file names, what the check is, and Gitlet's
 base and its check's token, with no commit identity. It is made — its git's
 floor checked and its one commit checked out — within ten minutes of the claim
-(`code.CheckBoxGrace`); then its command runs in its checkout, detached, and
+(`gitlet.CheckBoxGrace`); then its command runs in its checkout, detached, and
 every fifteen seconds the runner asks whether it still runs, refreshes the
 box's lifetime, and reads the attempt's row:
 
@@ -6733,7 +6733,7 @@ holds.
   or its state (the trash, say) refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
   under `merged`, why the item was left open (`Change … was merged through
   its queue, and its work item was not closed: …`). A close no home could
-  make for `code.QueueHistory` is given up with its row, which the queue's
+  make for `gitlet.QueueHistory` is given up with its row, which the queue's
   history removes.
 
 #### How fast a queue lands
@@ -8190,7 +8190,7 @@ grant reads it ([Metrics](../reference/metrics.md)).
 it lacks when a command first needs it, and `git blame` needs every version
 of a file the lines it explains passed through. Measured on a file of 200
 lines rewritten by 1 000 commits, one line a commit
-(`internal/code/host`'s `BenchmarkLazyBlame`, by a credential bound to nobody,
+(`internal/gitlet/host`'s `BenchmarkLazyBlame`, by a credential bound to nobody,
 git 2.56.0 on both ends, one count of three blames on four E-cores of an
 Intel Core Ultra 7 265U): one blame was 201 lazy fetches — a version of the
 file each, each an advertisement and an upload-pack, so 402 runs of the
@@ -8207,7 +8207,7 @@ it holds and no fetch at all ([Who changed a line](#who-changed-a-line),
 [A path's history](#a-paths-history)).
 
 **Measured** on four E-cores of an Intel Core Ultra 7 265U with the transfer
-lane as wide as the cores (`internal/code/gitproc`'s `BenchmarkTransferShare`,
+lane as wide as the cores (`internal/gitlet/gitproc`'s `BenchmarkTransferShare`,
 git 2.56.0, real upload-packs of an 18.2 MiB pack to a reader that never
 waits, one count of twenty clones an arm, so the 99th percentile is the
 slowest of the twenty): a person's clone alone took 56 ms at the median and

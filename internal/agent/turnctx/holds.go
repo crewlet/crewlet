@@ -10,7 +10,7 @@ import (
 // Holds is what a turn has named that Gitlet could delete from under it
 // on nobody's request — the scratch repositories it reached, by id, which
 // expire idle, and the seats' branches it read, wrote or launched on, each by
-// its code.RefHoldKey — and where the turn's hold on each is kept. A key is
+// its gitlet.RefHoldKey — and where the turn's hold on each is kept. A key is
 // OPAQUE here: this package never decodes one, so every kind of hold a turn
 // takes rides the same set, row and reader.
 //

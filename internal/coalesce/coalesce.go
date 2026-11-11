@@ -9,7 +9,7 @@
 // Two records are made at rates no broker should be asked to keep pace with,
 // and a node's usage day counts both: what the seats' auxiliary model spends
 // (internal/auxspend: a compaction of seventy rewrites, a turn's prefetch) and
-// who read a `visibility: unit` repository (internal/code/readaudit: a CI
+// who read a `visibility: unit` repository (internal/gitlet/readaudit: a CI
 // token fetching on every build, a seat reading a file a line range at a
 // time). Each owner says what its records are — the key, how a bucket becomes
 // its event, what a lost one costs ([Records]) — and everything else is here,

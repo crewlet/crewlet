@@ -15,10 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -127,7 +127,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		iamdomain.Domain{}.Name(): true,
 		search.Domain{}.Name():    false,
 		usage.Domain{}.Name():     false,
-		code.Domain{}.Name():      true,
+		gitlet.Domain{}.Name():    true,
 
 		artifactsdomain.Domain{}.Name(): true,
 		artifactdata.Domain{}.Name():    true,
@@ -206,7 +206,7 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		assistantdomain.Domain{}.Name(): new(0),
 		executordomain.Domain{}.Name():  new(150),
 		// The tracker's figure: a seat's code tools read at linearizable.
-		code.Domain{}.Name(): new(125),
+		gitlet.Domain{}.Name(): new(125),
 		// One dispatch read a turn, at thirty turns a seat a day.
 		accessdomain.Domain{}.Name(): new(30),
 		// No read takes a barrier: a person's edit decides from the entry's
@@ -540,7 +540,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		assistantdomain.Domain{}.Name(),
 		chatlet.Domain{}.Name(),
 		executordomain.Domain{}.Name(),
-		code.Domain{}.Name(),
+		gitlet.Domain{}.Name(),
 		accessdomain.Domain{}.Name(),
 		atlasdomain.Domain{}.Name(),
 	}

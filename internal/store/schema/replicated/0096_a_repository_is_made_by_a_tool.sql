@@ -2,7 +2,7 @@
 --
 -- A repository was code.repos' alone. A person, a unit's lead and a seat now
 -- make, rename, archive, delete and restore repositories through tools
--- (code.LifecycleRequest), and every row says what the repository is FOR and
+-- (gitlet.LifecycleRequest), and every row says what the repository is FOR and
 -- who made it:
 --
 --   - kind: `project` — declared, or created by a person or the owning unit's
@@ -19,7 +19,7 @@
 --     repository while the turn lasts and moves no clock.
 --
 -- And a renamed repository's old name keeps redirecting to it until
--- code_names.redirect_until (code.RedirectWindow, a month after the rename),
+-- code_names.redirect_until (gitlet.RedirectWindow, a month after the rename),
 -- when the code-retention pass releases it; NULL is a name a repository holds
 -- as its own.
 --
@@ -31,7 +31,7 @@
 -- code_repo_kinds is how many repositories of each kind the log holds, every
 -- status short of purged — a create counts its repository in, the purge that
 -- removes its row counts it out — which a tool's create of a PROJECT is held
--- to (code.LifecyclePolicy.MaxRepos, refused repo_limit). A COUNTER RATHER
+-- to (gitlet.LifecyclePolicy.MaxRepos, refused repo_limit). A COUNTER RATHER
 -- THAN AN INDEX, the repository row's own idiom and code_seat_days': a count
 -- over a partial index of the project rows reads every entry of it — ten
 -- thousand at the bound — inside the create's snapshot, where the counter is
@@ -39,17 +39,17 @@
 --
 -- THREE INDEXES, each its reader's:
 --   - code_repos_scratch_idx: a scratch create's count of what its seat holds,
---     every status short of purged (code.scratchCountSQL) — a seek on the
+--     every status short of purged (gitlet.scratchCountSQL) — a seek on the
 --     owner, at most code.scratch.max_per_seat entries;
 --   - code_repos_idle_idx: the scratch expiry's listing of the active scratch
 --     repositories idle longest first, keyset on (last_activity_at, id)
---     (code.idleScratchSQL);
+--     (gitlet.idleScratchSQL);
 --   - code_names_redirect_idx: the release's listing of the redirects whose
---     window has ended, oldest first (code.redirectsDueSQL).
+--     window has ended, oldest first (gitlet.redirectsDueSQL).
 --
 -- Class: code_repos and code_names stay reproducible: every column is written
 -- only from the records the applier applies; an index carries no rows of its
--- own. code_repo_kinds is reproducible (code.ReproducibleTables): written only
+-- own. code_repo_kinds is reproducible (gitlet.ReproducibleTables): written only
 -- by the create and the purge applies, from those records, so a replay from
 -- zero rebuilds it.
 ALTER TABLE code_repos ADD COLUMN kind             TEXT    NOT NULL DEFAULT '';
@@ -62,6 +62,6 @@ ALTER TABLE code_names ADD COLUMN redirect_until INTEGER;
 CREATE INDEX code_names_redirect_idx ON code_names (redirect_until, token) WHERE redirect_until IS NOT NULL;      -- the release_name listing, oldest first
 
 CREATE TABLE code_repo_kinds (
-    kind  TEXT    NOT NULL PRIMARY KEY,   -- code.RepoKind
+    kind  TEXT    NOT NULL PRIMARY KEY,   -- gitlet.RepoKind
     repos INTEGER NOT NULL                -- its repositories, every status short of purged
 );

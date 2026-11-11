@@ -2,7 +2,7 @@
  * One file's patch, as git writes it, read into the hunks `DiffView` draws.
  *
  * The engine answers a change's diff a file at a time, as the text git's own
- * `diff` writes (`code.DiffAnswer.Patch`): header lines naming the paths, then
+ * `diff` writes (`gitlet.DiffAnswer.Patch`): header lines naming the paths, then
  * hunks, each opening `@@ -<old>,<n> +<new>,<m> @@` and holding its lines, a
  * space before an unchanged one, `+` before an added one and `-` before a
  * removed one. That text IS the diff — git chose which lines it pairs and

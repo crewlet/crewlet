@@ -17,8 +17,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -57,10 +57,10 @@ const apiRepo = "    - name: api\n      owner: {seat: swe}\n      protect: [{bra
 
 // repoNamed reads one repository through e's own router, linearizably, with
 // its path owners.
-func repoNamed(t *testing.T, e *Engine, name string) (*code.RepoDetail, error) {
+func repoNamed(t *testing.T, e *Engine, name string) (*gitlet.RepoDetail, error) {
 	t.Helper()
-	answer, err := e.router.Code().Read(t.Context(), code.ReadQuery{
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepo, Repo: name,
+	answer, err := e.router.Code().Read(t.Context(), gitlet.ReadQuery{
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: gitlet.ReadRepo, Repo: name,
 		PathOwners: true, Gates: true, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 	})
 	if err != nil {
@@ -70,7 +70,7 @@ func repoNamed(t *testing.T, e *Engine, name string) (*code.RepoDetail, error) {
 }
 
 // mustRepo is [repoNamed] for a repository that must be there.
-func mustRepo(t *testing.T, e *Engine, name string) *code.RepoDetail {
+func mustRepo(t *testing.T, e *Engine, name string) *gitlet.RepoDetail {
 	t.Helper()
 	repo, err := repoNamed(t, e, name)
 	if err != nil {
@@ -97,7 +97,7 @@ func applyReconciled(t *testing.T, e *Engine, doc string) {
 // codeLogEnd is the last sequence e's code log holds.
 func codeLogEnd(t *testing.T, e *Engine) uint64 {
 	t.Helper()
-	end, err := e.core.Load().log.Domain(code.Domain{}.Name()).log.End(t.Context())
+	end, err := e.core.Load().log.Domain(gitlet.Domain{}.Name()).log.End(t.Context())
 	if err != nil {
 		t.Fatalf("read the code log's end: %v", err)
 	}
@@ -107,21 +107,21 @@ func codeLogEnd(t *testing.T, e *Engine) uint64 {
 // codeLogWrites is every record on e's code log after the sequence after, by
 // subject — less the read index's barriers and the trim's records, which
 // readers and the trim append whatever a reconcile does.
-func codeLogWrites(t *testing.T, e *Engine, after uint64) []code.Subject {
+func codeLogWrites(t *testing.T, e *Engine, after uint64) []gitlet.Subject {
 	t.Helper()
-	running := e.core.Load().log.Domain(code.Domain{}.Name())
+	running := e.core.Load().log.Domain(gitlet.Domain{}.Name())
 	end := codeLogEnd(t, e)
-	var out []code.Subject
+	var out []gitlet.Subject
 	for seq := after + 1; seq <= end; seq++ {
 		wire, _, _, ok, err := running.log.At(t.Context(), seq)
 		if err != nil || !ok {
 			t.Fatalf("read the code log at %d: held %v, %v", seq, ok, err)
 		}
-		subject, ok := code.ParseSubject(wire)
+		subject, ok := gitlet.ParseSubject(wire)
 		if !ok {
 			t.Fatalf("the code log holds %q at %d, which is no code subject", wire, seq)
 		}
-		if subject.Kind != code.KindBarrier && subject.Kind != code.KindTrimmed {
+		if subject.Kind != gitlet.KindBarrier && subject.Kind != gitlet.KindTrimmed {
 			out = append(out, subject)
 		}
 	}
@@ -145,13 +145,13 @@ func TestDeclaredRepositoriesAreReconciledAtActivation(t *testing.T) {
 	servesCodeReads(t, e)
 	reconciled(t, e)
 	web := mustRepo(t, e, "web")
-	if web.Status != code.RepoStatusActive || web.ManagedBy != code.ManagedConfig {
+	if web.Status != gitlet.RepoStatusActive || web.ManagedBy != gitlet.ManagedConfig {
 		t.Errorf("web is %s, managed by %s; want active, managed by the configuration",
 			web.Status, web.ManagedBy)
 	}
 	// THE KEY the document mints for a unit that states none, from its name:
 	// what every durable row names a unit by.
-	if want := (code.Owner{Kind: code.OwnerUnit, Ref: config.MintUnitID("Engineering")}); web.Owner != want {
+	if want := (gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: config.MintUnitID("Engineering")}); web.Owner != want {
 		t.Errorf("web's owner is %+v, want the unit's key %+v", web.Owner, want)
 	}
 	if web.DefaultBranch != config.DefaultCodeBranch {
@@ -160,9 +160,9 @@ func TestDeclaredRepositoriesAreReconciledAtActivation(t *testing.T) {
 	var patterns []string
 	for _, p := range web.Protections {
 		patterns = append(patterns, p.Pattern)
-		if p.DirectPush != code.DirectPersons {
+		if p.DirectPush != gitlet.DirectPersons {
 			t.Errorf("rule %s takes direct pushes from %q, want an unset direct_push to read as %q",
-				p.Pattern, p.DirectPush, code.DirectPersons)
+				p.Pattern, p.DirectPush, gitlet.DirectPersons)
 		}
 	}
 	if want := []string{"refs/heads/main", "refs/heads/release/*"}; !slices.Equal(patterns, want) {
@@ -179,9 +179,9 @@ func TestDeclaredRepositoriesAreReconciledAtActivation(t *testing.T) {
 	before := codeLogEnd(t, e)
 	applyReconciled(t, e, codeReposDoc(webRepo("The customer-facing web app."), ""))
 	wrote := codeLogWrites(t, e, before)
-	if !slices.Equal(wrote, []code.Subject{code.CompanySubject()}) {
+	if !slices.Equal(wrote, []gitlet.Subject{gitlet.CompanySubject()}) {
 		t.Errorf("an activation that changed nothing wrote %v to the code log, want its "+
-			"activation fence alone, %v", wrote, code.CompanySubject())
+			"activation fence alone, %v", wrote, gitlet.CompanySubject())
 	}
 }
 
@@ -197,17 +197,17 @@ func TestARemovedRepositoryIsDeletedAndRestorable(t *testing.T) {
 
 	applyReconciled(t, e, codeReposDoc(webRepo(""), ""))
 	deleted := mustRepo(t, e, "api")
-	if deleted.Status != code.RepoStatusDeleted || deleted.DeletedAt.IsZero() {
+	if deleted.Status != gitlet.RepoStatusDeleted || deleted.DeletedAt.IsZero() {
 		t.Fatalf("after an activation that no longer declares it, api is %s deleted at %v, "+
 			"want deleted, with the instant", deleted.Status, deleted.DeletedAt)
 	}
-	if web := mustRepo(t, e, "web"); web.Status != code.RepoStatusActive {
+	if web := mustRepo(t, e, "web"); web.Status != gitlet.RepoStatusActive {
 		t.Errorf("web, still declared, is %s", web.Status)
 	}
 
 	applyReconciled(t, e, codeReposDoc(webRepo("")+apiRepo, ""))
 	restored := mustRepo(t, e, "api")
-	if restored.Status != code.RepoStatusActive || restored.ID != api.ID {
+	if restored.Status != gitlet.RepoStatusActive || restored.ID != api.ID {
 		t.Errorf("after an activation that declares it again, api is %s with id %s, want "+
 			"active under its old id %s", restored.Status, restored.ID, api.ID)
 	}
@@ -225,7 +225,7 @@ func TestARemovedRepositoryIsDeletedAndRestorable(t *testing.T) {
 // retention here is anything but the default, and the push goes through the
 // node's own router to the committer the runtime built.
 //
-// Mutation: wire the committer's Retention to code.DefaultDeletedRetention and
+// Mutation: wire the committer's Retention to gitlet.DefaultDeletedRetention and
 // the push is told the week's instant, and fails.
 func TestAPushToARemovedRepositoryIsToldTheEpochsRetention(t *testing.T) {
 	t.Parallel()
@@ -238,31 +238,31 @@ func TestAPushToARemovedRepositoryIsToldTheEpochsRetention(t *testing.T) {
 	servesCodeReads(t, e)
 	reconciled(t, e)
 	retention := days * 24 * time.Hour
-	if got := e.codeDeletedRetention(); got != retention || got == code.DefaultDeletedRetention {
+	if got := e.codeDeletedRetention(); got != retention || got == gitlet.DefaultDeletedRetention {
 		t.Fatalf("the premise: the epoch keeps a deleted repository %v, want %v — anything "+
-			"but the default %v", got, retention, code.DefaultDeletedRetention)
+			"but the default %v", got, retention, gitlet.DefaultDeletedRetention)
 	}
 
 	applyReconciled(t, e, retained(codeReposDoc(webRepo(""), "")))
 	api := mustRepo(t, e, "api")
-	if api.Status != code.RepoStatusDeleted || api.DeletedAt.IsZero() {
+	if api.Status != gitlet.RepoStatusDeleted || api.DeletedAt.IsZero() {
 		t.Fatalf("the premise: api, no longer declared, is %s deleted at %v", api.Status,
 			api.DeletedAt)
 	}
-	push := code.Proposal{
+	push := gitlet.Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: api.ID,
-		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"},
-		Via:       code.ViaGit, Node: e.id, ReceivedAt: time.Now().UTC(),
-		Commands: []code.Command{{Ref: "refs/heads/main", Old: code.ZeroOID,
+		Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"},
+		Via:       gitlet.ViaGit, Node: e.id, ReceivedAt: time.Now().UTC(),
+		Commands: []gitlet.Command{{Ref: "refs/heads/main", Old: gitlet.ZeroOID,
 			New: "0123456789abcdef0123456789abcdef01234567"}},
 	}
 	res, err := e.router.Code().Propose(t.Context(), push)
 	if err != nil {
 		t.Fatalf("a push to the deleted repository: %v; want it answered", err)
 	}
-	if res.Answer.Refused != code.RefusalRepoDeleted {
+	if res.Answer.Refused != gitlet.RefusalRepoDeleted {
 		t.Fatalf("a push to the deleted repository is answered %+v, want it refused %s",
-			res.Answer, code.RefusalRepoDeleted)
+			res.Answer, gitlet.RefusalRepoDeleted)
 	}
 	want := "repository api is deleted; declaring it again in code.repos restores it as it " +
 		"was, until its purge, which may begin from " +
@@ -282,18 +282,18 @@ func TestAPushToARemovedRepositoryIsToldTheEpochsRetention(t *testing.T) {
 func TestOnlyAConfigManagedRepositoryIsDeletedForBeingUndeclared(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		managed code.ManagedBy
-		status  code.RepoStatus
+		managed gitlet.ManagedBy
+		status  gitlet.RepoStatus
 		retired bool
 	}{
-		{code.ManagedConfig, code.RepoStatusActive, true},
-		{code.ManagedConfig, code.RepoStatusArchived, true},
-		{code.ManagedConfig, code.RepoStatusDeleted, false},
-		{code.ManagedConfig, code.RepoStatusPurging, false},
-		{code.ManagedBy("tools"), code.RepoStatusActive, false},
-		{code.ManagedBy("tools"), code.RepoStatusArchived, false},
+		{gitlet.ManagedConfig, gitlet.RepoStatusActive, true},
+		{gitlet.ManagedConfig, gitlet.RepoStatusArchived, true},
+		{gitlet.ManagedConfig, gitlet.RepoStatusDeleted, false},
+		{gitlet.ManagedConfig, gitlet.RepoStatusPurging, false},
+		{gitlet.ManagedBy("tools"), gitlet.RepoStatusActive, false},
+		{gitlet.ManagedBy("tools"), gitlet.RepoStatusArchived, false},
 	} {
-		l := code.RepoLife{ID: "id", Name: "old", Status: tc.status, ManagedBy: tc.managed}
+		l := gitlet.RepoLife{ID: "id", Name: "old", Status: tc.status, ManagedBy: tc.managed}
 		if got := retiredByOmission(l); got != tc.retired {
 			t.Errorf("an undeclared %s repository managed by %q is retired: %v, want %v — "+
 				"only the live repositories the configuration manages go for being absent",
@@ -316,7 +316,7 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 	reconciled(t, e)
 	old := mustRepo(t, e, "web")
 	applyReconciled(t, e, codeReposDoc("", ""))
-	if got := mustRepo(t, e, "web"); got.Status != code.RepoStatusDeleted {
+	if got := mustRepo(t, e, "web"); got.Status != gitlet.RepoStatusDeleted {
 		t.Fatalf("the premise: an activation that no longer declares web leaves it %s", got.Status)
 	}
 
@@ -330,7 +330,7 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 		t.Fatalf("the pass purged %v (%v), want web", report.Purged, err)
 	}
 	// THE CURRENT EPOCH DOES NOT DECLARE IT: the name is simply free.
-	if _, err := repoNamed(t, e, "web"); !errors.Is(err, code.ErrRepoNotFound) {
+	if _, err := repoNamed(t, e, "web"); !errors.Is(err, gitlet.ErrRepoNotFound) {
 		t.Fatalf("a purged name the epoch does not declare reads %v, want it free", err)
 	}
 
@@ -348,7 +348,7 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 		t.Fatalf("hand the purged name on: %v", err)
 	}
 	web := mustRepo(t, e, "web")
-	if web.Status != code.RepoStatusActive || web.ID == old.ID {
+	if web.Status != gitlet.RepoStatusActive || web.ID == old.ID {
 		t.Errorf("after its purge was handed on, web is %s with id %s, want a new active "+
 			"repository (the purged one was %s)", web.Status, web.ID, old.ID)
 	}
@@ -435,7 +435,7 @@ func TestTheReconcileDoesNotDependOnTheInboundEdge(t *testing.T) {
 	e.applyContainers(t.Context(), next)
 	e.applyCodeRepos(t.Context(), next, next.ActivatedAt)
 	reconciled(t, e)
-	if api, err := repoNamed(t, e, "api"); err != nil || api.Status != code.RepoStatusActive {
+	if api, err := repoNamed(t, e, "api"); err != nil || api.Status != gitlet.RepoStatusActive {
 		t.Errorf("a reconcile on a node with no inbound edge left api %+v (%v), want it created",
 			api, err)
 	}
@@ -457,14 +457,14 @@ func TestTheReconcileDoesNotDependOnTheInboundEdge(t *testing.T) {
 func TestEveryDeclaredDirectPushIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	for _, v := range config.CodeDirectPushes {
-		if !code.DirectPush(v.Resolved()).Valid() {
+		if !gitlet.DirectPush(v.Resolved()).Valid() {
 			t.Errorf("code.repos may declare direct_push %q, which the code domain refuses", v)
 		}
 	}
-	if !code.DirectPush(config.CodeDirectPush("").Resolved()).Valid() {
+	if !gitlet.DirectPush(config.CodeDirectPush("").Resolved()).Valid() {
 		t.Error("an unset direct_push resolves to a value the code domain refuses")
 	}
-	for _, v := range code.DirectPushes() {
+	for _, v := range gitlet.DirectPushes() {
 		if !config.CodeDirectPush(v).Valid() {
 			t.Errorf("the code domain records direct_push %q, which no document may declare", v)
 		}
@@ -481,21 +481,21 @@ func TestEveryDeclaredDirectPushIsOneTheDomainRecords(t *testing.T) {
 func TestEveryDeclaredVisibilityIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	for _, v := range config.CodeVisibilities {
-		if !code.Visibility(v.Resolved()).Valid() {
+		if !gitlet.Visibility(v.Resolved()).Valid() {
 			t.Errorf("code.repos may declare visibility %q, which the code domain refuses", v)
 		}
 	}
-	if !code.Visibility(config.CodeVisibility("").Resolved()).Valid() {
+	if !gitlet.Visibility(config.CodeVisibility("").Resolved()).Valid() {
 		t.Error("an unset visibility resolves to a value the code domain refuses")
 	}
-	for _, v := range code.Visibilities() {
+	for _, v := range gitlet.Visibilities() {
 		if !config.CodeVisibility(v).Valid() {
 			t.Errorf("the code domain records visibility %q, which no document may declare", v)
 		}
 	}
-	if len(config.CodeVisibilities) != len(code.Visibilities()) {
+	if len(config.CodeVisibilities) != len(gitlet.Visibilities()) {
 		t.Errorf("config declares %v, the code domain records %v", config.CodeVisibilities,
-			code.Visibilities())
+			gitlet.Visibilities())
 	}
 }
 
@@ -508,13 +508,13 @@ func TestEveryDeclaredVisibilityIsOneTheDomainRecords(t *testing.T) {
 // takes no unset value.
 func TestEveryDeclaredSearchModeIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
-	sameClosedSet(t, "search", config.CodeSearchModes, code.SearchModes())
+	sameClosedSet(t, "search", config.CodeSearchModes, gitlet.SearchModes())
 	for _, m := range config.CodeSearchModes {
-		if !code.SearchMode(m.Resolved()).Valid() {
+		if !gitlet.SearchMode(m.Resolved()).Valid() {
 			t.Errorf("code.repos may declare search %q, which the code domain refuses", m)
 		}
 	}
-	if !code.SearchMode(config.CodeSearchMode("").Resolved()).Valid() {
+	if !gitlet.SearchMode(config.CodeSearchMode("").Resolved()).Valid() {
 		t.Error("an unset search resolves to a value the code domain refuses")
 	}
 }
@@ -529,7 +529,7 @@ func TestEveryDeclaredSearchModeIsOneTheDomainRecords(t *testing.T) {
 //
 // Mutations: resolve an unset search to grep (config.CodeSearchMode.Resolved)
 // — web reads grep, red; compare settings without their mode
-// (code.RepoSettings.equal) — the changed mode never reaches the log, red;
+// (gitlet.RepoSettings.equal) — the changed mode never reaches the log, red;
 // leave the mode out of the reconcile's batch read (code's reposRowsSQL) — the
 // unchanged activation writes a settings record, red.
 func TestADeclaredRepositoryIsIndexedByDefault(t *testing.T) {
@@ -545,21 +545,21 @@ func TestADeclaredRepositoryIsIndexedByDefault(t *testing.T) {
 	servesCodeReads(t, e)
 	reconciled(t, e)
 	web := mustRepo(t, e, "web")
-	if web.Search != code.SearchIndexed {
-		t.Errorf("web, declaring no search, is recorded at %q, want %s", web.Search, code.SearchIndexed)
+	if web.Search != gitlet.SearchIndexed {
+		t.Errorf("web, declaring no search, is recorded at %q, want %s", web.Search, gitlet.SearchIndexed)
 	}
-	if api := mustRepo(t, e, "api"); api.Search != code.SearchGrep {
-		t.Errorf("api, declared search: grep, is recorded at %q, want %s", api.Search, code.SearchGrep)
+	if api := mustRepo(t, e, "api"); api.Search != gitlet.SearchGrep {
+		t.Errorf("api, declared search: grep, is recorded at %q, want %s", api.Search, gitlet.SearchGrep)
 	}
 
 	// THE MODE CHANGED: one settings record beside the fence.
 	before := codeLogEnd(t, e)
 	applyReconciled(t, e, doc("grep"))
-	if got := mustRepo(t, e, "web").Search; got != code.SearchGrep {
+	if got := mustRepo(t, e, "web").Search; got != gitlet.SearchGrep {
 		t.Errorf("after an activation declaring search: grep, web is recorded at %q", got)
 	}
 	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote,
-		[]code.Subject{code.CompanySubject(), code.RepoSubject(web.ID)}) {
+		[]gitlet.Subject{gitlet.CompanySubject(), gitlet.RepoSubject(web.ID)}) {
 		t.Errorf("an activation changing web's search wrote %v to the code log, want its fence and one "+
 			"settings record", wrote)
 	}
@@ -567,16 +567,16 @@ func TestADeclaredRepositoryIsIndexedByDefault(t *testing.T) {
 	// NOTHING CHANGED: the fence alone.
 	before = codeLogEnd(t, e)
 	applyReconciled(t, e, doc("grep"))
-	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote, []code.Subject{code.CompanySubject()}) {
+	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote, []gitlet.Subject{gitlet.CompanySubject()}) {
 		t.Errorf("an activation changing nothing wrote %v to the code log, want its fence alone, %v", wrote,
-			code.CompanySubject())
+			gitlet.CompanySubject())
 	}
 
 	// DROPPED: the default again.
 	applyReconciled(t, e, doc(""))
-	if got := mustRepo(t, e, "web").Search; got != code.SearchIndexed {
+	if got := mustRepo(t, e, "web").Search; got != gitlet.SearchIndexed {
 		t.Errorf("after an activation that names no search, web is recorded at %q, want %s", got,
-			code.SearchIndexed)
+			gitlet.SearchIndexed)
 	}
 }
 
@@ -608,15 +608,15 @@ func sameClosedSet[C, D ~string](t *testing.T, field string, declared []C, recor
 // value resolves to one the domain records, since the domain takes none.
 func TestEveryDeclaredMergeByIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
-	sameClosedSet(t, "merge_by", config.CodeMergeBys, code.MergeBys())
-	sameClosedSet(t, "approvals", config.CodeApprovalCounts, code.ApprovalCounts())
-	sameClosedSet(t, "delete_source", config.CodeDeleteSources, code.DeleteSources())
-	sameClosedSet(t, "a change class", config.CodeChangeClasses, code.ChangeClasses())
-	sameClosedSet(t, "an exempting class", config.CodePathClasses, code.PathClasses())
+	sameClosedSet(t, "merge_by", config.CodeMergeBys, gitlet.MergeBys())
+	sameClosedSet(t, "approvals", config.CodeApprovalCounts, gitlet.ApprovalCounts())
+	sameClosedSet(t, "delete_source", config.CodeDeleteSources, gitlet.DeleteSources())
+	sameClosedSet(t, "a change class", config.CodeChangeClasses, gitlet.ChangeClasses())
+	sameClosedSet(t, "an exempting class", config.CodePathClasses, gitlet.PathClasses())
 	for field, valid := range map[string]bool{
-		"merge_by":      code.MergeBy(config.CodeMergeBy("").Resolved()).Valid(),
-		"approvals":     code.Approvals(config.CodeApprovals("").Resolved()).Valid(),
-		"delete_source": code.DeleteSource(config.CodeDeleteSource("").Resolved()).Valid(),
+		"merge_by":      gitlet.MergeBy(config.CodeMergeBy("").Resolved()).Valid(),
+		"approvals":     gitlet.Approvals(config.CodeApprovals("").Resolved()).Valid(),
+		"delete_source": gitlet.DeleteSource(config.CodeDeleteSource("").Resolved()).Valid(),
 	} {
 		if !valid {
 			t.Errorf("an unset %s resolves to a value the code domain refuses", field)
@@ -638,9 +638,9 @@ func TestADeclaredGateWeighsWhatTheDomainRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the epoch: %v", err)
 	}
-	if config.CodeMaxGateBytes != code.MaxGateBytes {
+	if config.CodeMaxGateBytes != gitlet.MaxGateBytes {
 		t.Fatalf("config bounds a gate at %d bytes and the domain at %d", config.CodeMaxGateBytes,
-			code.MaxGateBytes)
+			gitlet.MaxGateBytes)
 	}
 	for name, rule := range map[string]config.CodeProtection{
 		"one field": {Branch: "main", MergeBy: config.CodeMergeByPersons},
@@ -696,9 +696,9 @@ func TestDeclaredPathOwnersWeighWhatTheDomainRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the epoch: %v", err)
 	}
-	if config.CodeMaxPathOwnersBytes != code.MaxPathOwnersBytes {
+	if config.CodeMaxPathOwnersBytes != gitlet.MaxPathOwnersBytes {
 		t.Fatalf("config bounds path owners at %d bytes and the domain at %d", config.CodeMaxPathOwnersBytes,
-			code.MaxPathOwnersBytes)
+			gitlet.MaxPathOwnersBytes)
 	}
 	repo := c.Config.Code.Repos[0]
 	repo.PathOwners = []config.CodePathOwner{
@@ -750,19 +750,19 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 			again.Settings.Protections, err, web.Settings.Protections)
 	}
 	api, err := declaredRepo(c.Org.Index(), c.Config.Code.Repos[1])
-	if err != nil || api.Settings.Owner != (code.Owner{Kind: code.OwnerSeat, Ref: "swe"}) {
+	if err != nil || api.Settings.Owner != (gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "swe"}) {
 		t.Errorf("api's owner is %+v (%v), want the seat swe", api.Settings.Owner, err)
 	}
 	// AN UNSET VISIBILITY IS RECORDED AS company, and a declared one as
 	// itself: the domain takes no unset value, so the default is applied
 	// here, by config's own Resolved.
-	if web.Settings.Visibility != code.VisibilityCompany {
+	if web.Settings.Visibility != gitlet.VisibilityCompany {
 		t.Errorf("web, declaring no visibility, is recorded at %q, want company", web.Settings.Visibility)
 	}
 	narrowed := c.Config.Code.Repos[0]
 	narrowed.Visibility = config.CodeVisibilityUnit
 	if unit, err := declaredRepo(c.Org.Index(), narrowed); err != nil ||
-		unit.Settings.Visibility != code.VisibilityUnit {
+		unit.Settings.Visibility != gitlet.VisibilityUnit {
 		t.Errorf("web at visibility: unit is declared as %+v (%v), want unit", unit.Settings, err)
 	}
 	stray := c.Config.Code.Repos[0]
@@ -780,9 +780,9 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 		{Paths: []string{"Makefile"}, Seat: "swe"},
 	}
 	owned, err := declaredRepo(c.Org.Index(), pathed)
-	want := []code.PathOwner{
-		{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "swe"}, Paths: []string{"Makefile"}},
-		{Owner: code.Owner{Kind: code.OwnerUnit, Ref: config.MintUnitID("Engineering")},
+	want := []gitlet.PathOwner{
+		{Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "swe"}, Paths: []string{"Makefile"}},
+		{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: config.MintUnitID("Engineering")},
 			Paths: []string{"docs/**", "web/**"}},
 	}
 	if err != nil || !reflect.DeepEqual(owned.Settings.PathOwners, want) {
@@ -809,12 +809,12 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("declare web with a gate: %v", err)
 	}
-	wantGate := code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
-		HumanPaths: []code.HumanPath{{Glob: ".crewlet/**"}, {Glob: "deploy/**", Unless: []code.ChangeClass{
-			code.ChangeClassCommentOnly, code.ChangeClassWhitespaceOnly}}},
+	wantGate := gitlet.MergeGate{MergeBy: gitlet.MergeByWriters, Approvals: gitlet.ApprovalsNone,
+		HumanPaths: []gitlet.HumanPath{{Glob: ".crewlet/**"}, {Glob: "deploy/**", Unless: []gitlet.ChangeClass{
+			gitlet.ChangeClassCommentOnly, gitlet.ChangeClassWhitespaceOnly}}},
 		Checks: []string{"lint", "unit"},
-		Landing: code.Landing{Depth: config.CodeDefaultQueueDepth,
-			Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
+		Landing: gitlet.Landing{Depth: config.CodeDefaultQueueDepth,
+			Batch: config.CodeDefaultQueueBatch}, DeleteSource: gitlet.DeleteSeats}
 	switch rules := recorded.Settings.Protections; {
 	case len(rules) != 2 || rules[0].Pattern != "refs/heads/main" || rules[1].Gate != nil:
 		t.Errorf("web's rules are declared as %+v, want main's gated and release/*'s with none", rules)
@@ -835,7 +835,7 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 // none.
 //
 // Mutations: compare settings without their path owners
-// (code.RepoSettings.equal) — the changed glob never reaches the log, red;
+// (gitlet.RepoSettings.equal) — the changed glob never reaches the log, red;
 // leave them out of the reconcile's batch read — the unchanged activation
 // writes a settings record, red.
 func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
@@ -851,12 +851,12 @@ func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
 		}
 		return codeReposDoc(repo, sales)
 	}
-	ownersWith := func(webGlob string) []code.PathOwner {
-		return []code.PathOwner{
-			{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "mgr"}, Paths: []string{"Makefile"}},
-			{Owner: code.Owner{Kind: code.OwnerUnit, Ref: config.MintUnitID("Engineering")},
+	ownersWith := func(webGlob string) []gitlet.PathOwner {
+		return []gitlet.PathOwner{
+			{Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "mgr"}, Paths: []string{"Makefile"}},
+			{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: config.MintUnitID("Engineering")},
 				Paths: []string{"docs/**", webGlob}},
-			{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "sales"}, Paths: []string{"sales/**"}},
+			{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "sales"}, Paths: []string{"sales/**"}},
 		}
 	}
 	e := newSandboxNode(t, parseCompany(t, doc("web/**", true)))
@@ -875,7 +875,7 @@ func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
 			ownersWith("web/**/*.go"))
 	}
 	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote,
-		[]code.Subject{code.CompanySubject(), code.RepoSubject(web.ID)}) {
+		[]gitlet.Subject{gitlet.CompanySubject(), gitlet.RepoSubject(web.ID)}) {
 		t.Errorf("an activation changing one glob wrote %v to the code log, want its fence and one "+
 			"settings record", wrote)
 	}
@@ -883,9 +883,9 @@ func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
 	// NOTHING CHANGED: the fence alone.
 	before = codeLogEnd(t, e)
 	applyReconciled(t, e, doc("web/**/*.go", true))
-	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote, []code.Subject{code.CompanySubject()}) {
+	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote, []gitlet.Subject{gitlet.CompanySubject()}) {
 		t.Errorf("an activation changing nothing wrote %v to the code log, want its fence alone, %v", wrote,
-			code.CompanySubject())
+			gitlet.CompanySubject())
 	}
 
 	// DROPPED: none.
@@ -903,9 +903,9 @@ func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
 // field of it settles that in one settings record; and one that drops the gate
 // leaves the rule with none.
 //
-// Mutations: compare two rules without their gates (code.Protection.Equal) —
+// Mutations: compare two rules without their gates (gitlet.Protection.Equal) —
 // the changed field never reaches the log, red; compare the rules with
-// slices.Equal (code.RepoSettings.equal) — the unchanged activation writes a
+// slices.Equal (gitlet.RepoSettings.equal) — the unchanged activation writes a
 // settings record, red.
 func TestAnUnchangedGateWritesNothing(t *testing.T) {
 	t.Parallel()
@@ -917,19 +917,19 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 		return "{branch: main, merge_by: maintainers, approvals: one, checks: [" + checks + "], " +
 			"human_paths: [{glob: 'deploy/**'}, {glob: '.crewlet/**', unless: [comment_only]}]}"
 	}
-	gateWith := func(checks ...string) *code.MergeGate {
-		return &code.MergeGate{MergeBy: code.MergeByMaintainers, Approvals: code.ApprovalsOne,
-			HumanPaths: []code.HumanPath{{Glob: ".crewlet/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}},
+	gateWith := func(checks ...string) *gitlet.MergeGate {
+		return &gitlet.MergeGate{MergeBy: gitlet.MergeByMaintainers, Approvals: gitlet.ApprovalsOne,
+			HumanPaths: []gitlet.HumanPath{{Glob: ".crewlet/**", Unless: []gitlet.ChangeClass{gitlet.ChangeClassCommentOnly}},
 				{Glob: "deploy/**"}},
 			Checks: checks,
-			Landing: code.Landing{Depth: config.CodeDefaultQueueDepth,
-				Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
+			Landing: gitlet.Landing{Depth: config.CodeDefaultQueueDepth,
+				Batch: config.CodeDefaultQueueBatch}, DeleteSource: gitlet.DeleteSeats}
 	}
 	node := newSandboxNode(t, parseCompany(t, doc(gated("unit, lint"))))
 	servesCodeReads(t, node)
 	reconciled(t, node)
 	web := mustRepo(t, node, "web")
-	read := func(stage string) *code.MergeGate {
+	read := func(stage string) *gitlet.MergeGate {
 		t.Helper()
 		repo := mustRepo(t, node, "web")
 		if rules := repo.Protections; len(rules) != 1 || rules[0].Pattern != "refs/heads/main" {
@@ -950,9 +950,9 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 	// THE SAME GATE, its checks written in another order: the fence alone.
 	before := codeLogEnd(t, node)
 	applyReconciled(t, node, doc(gated("lint, unit")))
-	if wrote := codeLogWrites(t, node, before); !slices.Equal(wrote, []code.Subject{code.CompanySubject()}) {
+	if wrote := codeLogWrites(t, node, before); !slices.Equal(wrote, []gitlet.Subject{gitlet.CompanySubject()}) {
 		t.Errorf("an activation whose gate is unchanged wrote %v to the code log, want its fence alone, %v",
-			wrote, code.CompanySubject())
+			wrote, gitlet.CompanySubject())
 	}
 
 	// ONE FIELD CHANGED: one settings record beside the fence.
@@ -963,7 +963,7 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 		t.Errorf("after an activation adding a check, web's gate is %+v, want %+v", got, *want)
 	}
 	if wrote := codeLogWrites(t, node, before); !slices.Equal(wrote,
-		[]code.Subject{code.CompanySubject(), code.RepoSubject(web.ID)}) {
+		[]gitlet.Subject{gitlet.CompanySubject(), gitlet.RepoSubject(web.ID)}) {
 		t.Errorf("an activation changing one field of a gate wrote %v to the code log, want its fence and "+
 			"one settings record", wrote)
 	}
@@ -982,12 +982,12 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 // context ended mid-flight, since the probe that would classify it runs on
 // that same dead context.
 type losingPublisher struct {
-	code.Publisher
+	gitlet.Publisher
 	lose func(ctx context.Context) bool
 }
 
 func (p losingPublisher) Publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
-	if code.ObjectKind(req.Subject.Kind) != code.KindName {
+	if gitlet.ObjectKind(req.Subject.Kind) != gitlet.KindName {
 		return p.Publisher.Publish(ctx, req)
 	}
 	res, err := p.Publisher.Publish(context.WithoutCancel(ctx), req)
@@ -1022,12 +1022,12 @@ func TestASupersededReconcileSaysOnlyThat(t *testing.T) {
 	const inFlight = 8
 	ctx, end := context.WithCancelCause(t.Context())
 	var answered atomic.Int32
-	store, err := code.NewStore(code.StoreOptions{
+	store, err := gitlet.NewStore(gitlet.StoreOptions{
 		Publisher: losingPublisher{
-			Publisher: rt.log.Domain(code.Domain{}.Name()).publisher,
+			Publisher: rt.log.Domain(gitlet.Domain{}.Name()).publisher,
 			lose: func(ctx context.Context) bool {
 				if answered.Add(1) == inFlight {
-					end(fmt.Errorf("%w: a newer activation asked", code.ErrSuperseded))
+					end(fmt.Errorf("%w: a newer activation asked", gitlet.ErrSuperseded))
 				}
 				select {
 				case <-ctx.Done():

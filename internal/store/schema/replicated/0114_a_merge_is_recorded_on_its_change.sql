@@ -6,15 +6,15 @@
 -- merger, or a person's override of it — that marks the change merged, moves
 -- its target onto the commit its merge built and lands that move as a push. The
 -- change's row keeps who merged it, beside how (merged_via `direct`, a value
--- code.MergedVias gains) and at which commit (merge_oid), which 0086 already
+-- gitlet.MergedVias gains) and at which commit (merge_oid), which 0086 already
 -- holds:
 --   - merged_by is who merged it through its gate — a seat by its handle, or a
 --     person by the human seat they hold — and merged_by_kind which (agent or
---     person, code.PartyKinds); merged_operator_id is the credential a person
+--     person, gitlet.PartyKinds); merged_operator_id is the credential a person
 --     merged with, as owner_operator_id is the one they opened it with
 --     (iam.ActorFor's attribution), and '' for a seat's.
 --   - override_reason is a person's reason for merging the change past its
---     gate, at most code.MaxOverrideReasonBytes (1 KiB), and '' for a merge
+--     gate, at most gitlet.MaxOverrideReasonBytes (1 KiB), and '' for a merge
 --     its gate held.
 -- Each is '' on every change no merge record merged: a change a push merged —
 -- its target pushed to its head, or past it — names its pusher on that push's
@@ -34,7 +34,7 @@
 -- already (TestAChangeWriteRewritesOnlyTheIndexesItMoves).
 --
 -- A merge's other writes take no column of their own: its push row's `via` is
--- `merge` (code.ViaMerge) and its pack's row's `kind` is `merge` (code.PackMerge),
+-- `merge` (gitlet.ViaMerge) and its pack's row's `kind` is `merge` (gitlet.PackMerge),
 -- both TEXT columns no CHECK closes, whose closed sets are the code's, and its
 -- landing and green rows are 0110's.
 --

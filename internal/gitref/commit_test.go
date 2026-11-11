@@ -14,7 +14,7 @@ import (
 // it would rewrite as Latin-1: bytes that are no UTF-8 at all, and each of
 // the 66 noncharacters, read from Unicode's own table so a code point the
 // rule's arithmetic missed or added is a failure, wherever in the text it
-// sits. internal/code/gitproc holds the same rule to git itself, through the
+// sits. internal/gitlet/gitproc holds the same rule to git itself, through the
 // identity parts a commit-tree is given
 // (TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven); this holds
 // the set to Unicode's.
@@ -69,7 +69,7 @@ func TestCommitTextIsGitsUTF8(t *testing.T) {
 // time: a lone high byte becomes its Latin-1 character, a noncharacter's three
 // bytes six, a surrogate's three six — and a text git takes is itself. What it
 // writes is always a text CommitText admits, so the pool takes it as given.
-// internal/code/host holds the rewrite to git's own, through a cherry-pick of
+// internal/gitlet/host holds the rewrite to git's own, through a cherry-pick of
 // a commit whose message is Latin-1 (TestACherryPickIsGitsCherryPick).
 //
 // Mutations: rewrite a whole bad sequence at once — U+FFFE's six bytes become

@@ -19,9 +19,9 @@
 --     no two of a repository's changes share one. The schema does not ask that
 --     of the rows: a constraint violation inside the apply aborts it on every
 --     node at once (0079, NO UNIQUE OUTSIDE A PRIMARY KEY).
---   - state is draft, open, closed or merged (code.ChangeStates). closed_at is
+--   - state is draft, open, closed or merged (gitlet.ChangeStates). closed_at is
 --     set exactly while it is closed and merged_at exactly while it is merged;
---     merged_via is how it was merged (code.MergedVia) and merge_oid the commit
+--     merged_via is how it was merged (gitlet.MergedVia) and merge_oid the commit
 --     its target was merged at.
 --   - head_oid is the source branch's head at its latest revision, and revision
 --     that revision's n in code_revisions.
@@ -66,7 +66,7 @@
 -- merged is never what a push, an open or a git node's work asks after, and a
 -- repository's history holds far more of those than of live ones. Every
 -- statement over the two partial indexes repeats the predicate VERBATIM, the
--- states in this order (internal/code's liveChanges): the pinned planner
+-- states in this order (internal/gitlet's liveChanges): the pinned planner
 -- matches the list as it is written, and with the states reversed, or one of
 -- them alone, a statement reads another index.
 -- code_changes_open_idx holds at most one row a source branch — a branch heads

@@ -1,7 +1,7 @@
 -- A queue's ejections are read by their own index.
 --
 -- A `queue` read of a named repository answers, beside its live entries, what
--- its queues put out in the last day (internal/code's queueread.go,
+-- its queues put out in the last day (internal/gitlet's queueread.go,
 -- QueueEjectionsShown, at most MaxEjectionsShown), and the dashboard's Queue
 -- section asks it every half minute for every reader watching. 0110 gave the
 -- read only code_queue_ended_idx, partial on every ENDED entry — landed,

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -29,8 +29,8 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 		t.Fatalf("the rebase answered %q, sending %d writes", got.Output, len(writes))
 	}
 	w := writes[0]
-	if w.Kind != code.WriteRebaseChange || w.Ref != "refs/heads/feature" || w.ExpectedHead != revHead(3) ||
-		w.Change != 7 || w.Principal.Kind != code.PrincipalAgent || w.Principal.Run.TurnID == "" ||
+	if w.Kind != gitlet.WriteRebaseChange || w.Ref != "refs/heads/feature" || w.ExpectedHead != revHead(3) ||
+		w.Change != 7 || w.Principal.Kind != gitlet.PrincipalAgent || w.Principal.Run.TurnID == "" ||
 		w.Validate() != nil {
 		t.Errorf("the rebase is %+v, want site!7's source rebased at revision 3's head", w)
 	}
@@ -39,18 +39,18 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 	}
 
 	for name, c := range map[string]struct {
-		res   code.EngineWriteResult
+		res   gitlet.EngineWriteResult
 		class tools.Refusal
 		says  string
 	}{
-		"a conflict": {code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "site!7's commit 1234567 (2 of " +
-			"2) does not apply cleanly", Conflicts: []code.Conflict{{Path: "conf.yaml", Kind: "CONFLICT (contents)",
+		"a conflict": {gitlet.EngineWriteResult{Refusal: gitlet.WriteConflict, Detail: "site!7's commit 1234567 (2 of " +
+			"2) does not apply cleanly", Conflicts: []gitlet.Conflict{{Path: "conf.yaml", Kind: "CONFLICT (contents)",
 			Marked: "<<<<<<< ours"}}}, tools.RefusalInvalid, "conf.yaml"},
-		"a merge among its commits": {code.EngineWriteResult{Refusal: code.WriteMergeCommit,
+		"a merge among its commits": {gitlet.EngineWriteResult{Refusal: gitlet.WriteMergeCommit,
 			Detail: "site!7's commit 89abcde merges others"}, tools.RefusalInvalid, "89abcde"},
 	} {
 		res := c.res
-		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) { return res, nil }}
+		writer := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) { return res, nil }}
 		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 			writerTurn(t), builtin.CodeRebaseChangeTool, args)
 		if !got.Failed || tools.RefusalOf(got) != c.class || !strings.Contains(got.Output, c.says) {
@@ -76,7 +76,7 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 func TestARebaseOfAnEndedChangeIsAConflict(t *testing.T) {
 	t.Parallel()
 	args := map[string]any{"change": "site!7", "expected_head": revHead(3)}
-	for _, state := range []code.ChangeState{code.ChangeStateClosed, code.ChangeStateMerged} {
+	for _, state := range []gitlet.ChangeState{gitlet.ChangeStateClosed, gitlet.ChangeStateMerged} {
 		ended := siteChange()
 		ended.detail.State = state
 		none := &codeWrites{}

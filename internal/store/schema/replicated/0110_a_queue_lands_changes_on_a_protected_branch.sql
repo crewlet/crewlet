@@ -3,7 +3,7 @@
 -- A branch whose merge gate requires a check is a QUEUE TARGET: its merges land
 -- through its queue — pre_land, the speculative queue testing each change merged
 -- on the branch before it lands, or post_land, a lane landing changes ahead of
--- the checks the branch's tip then runs (internal/code's queue.go). Every row
+-- the checks the branch's tip then runs (internal/gitlet's queue.go). Every row
 -- below is written by records on the REPOSITORY's own subject, the one its
 -- pushes and its changes' lifecycles are on, so a change's queue entry, its
 -- merge and its close are decided by one writer and arbitrated together: a

@@ -229,7 +229,7 @@ internal/
 │                         #   query/ answers a repository's content by object
 │                         #   id — trees, files' lines, diffs, comparisons —
 │                         #   over that cache, in half its read lane.
-│                         #   codefault/ names the fault points of the push
+│                         #   gitletfault/ names the fault points of the push
 │                         #   and sync paths, in the order a push reaches them.
 │                         #   host/ is smart HTTP for persons and for
 │                         #   coding boxes, each box admitted by its run's
@@ -238,10 +238,10 @@ internal/
 │                         #   told only from a push's applied row — and the
 │                         #   engine-built commit a seat's or a person's
 │                         #   tool asks for, built over the trees it
-│                         #   touches and landed as that same push. codetest/
+│                         #   touches and landed as that same push. gitlettest/
 │                         #   is the one suite every Gitlet topology
 │                         #   passes — Run on one data node (SoloNode), and
-│                         #   RunFleet on the three-member fleet codecluster/
+│                         #   RunFleet on the three-member fleet gitletcluster/
 │                         #   stands up, routing through the estate router
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   data node at query time, with coverage on every

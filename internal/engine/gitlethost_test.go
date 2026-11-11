@@ -19,18 +19,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	codecompact "github.com/crewlet/crewlet/internal/code/compact"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	gitletcompact "github.com/crewlet/crewlet/internal/gitlet/compact"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -140,7 +140,7 @@ func bootGitletNode(t *testing.T, b *config.Bootstrap, doc string) (*engine.Engi
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, doc),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-		GitHook:     codetest.HookCommand(t),
+		GitHook:     gitlettest.HookCommand(t),
 	})
 	if err == nil {
 		t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
@@ -209,7 +209,7 @@ func TestAGitletNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := host.CheckRunRef{Repo: "web", Attempt: code.CheckKey{RepoID: uuid.NewString(),
+	check := host.CheckRunRef{Repo: "web", Attempt: gitlet.CheckKey{RepoID: uuid.NewString(),
 		OID: strings.Repeat("ab", 20), Target: "refs/heads/main", Name: "unit", Attempt: 1}}
 	strangerChecks, err := host.NewCheckTokens(runtoken.OneKey("k", "another fleet's key"), nil)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestAVolumeWithNoRoomRefusesGitletByName(t *testing.T) {
 		e, err := engine.New(t.Context(), engine.WithCacheDisk(engine.Options{
 			Bootstrap: b, Company: parsedCompany(t, gitCompany),
 			ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-			GitHook:     codetest.HookCommand(t),
+			GitHook:     gitlettest.HookCommand(t),
 		}, 16*gib, 16*gib))
 		if err == nil {
 			t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
@@ -372,7 +372,7 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 	}
 	url := serveWeb(t, b, e)
 
-	founder := codetest.PersonWithToken(t, opsToken)
+	founder := gitlettest.PersonWithToken(t, opsToken)
 	dir := founder.Clone(url)
 	commit := founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
 	pushed := founder.Push(t.Context(), dir, url, "HEAD:refs/heads/main")
@@ -425,7 +425,7 @@ func TestAPushsChangeIsLinkedOnTheDeploymentsAddress(t *testing.T) {
 	}
 	url := serveWeb(t, b, e)
 
-	founder := codetest.PersonWithToken(t, opsToken)
+	founder := gitlettest.PersonWithToken(t, opsToken)
 	dir := founder.Clone(url)
 	founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
 	if pushed := founder.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
@@ -464,7 +464,7 @@ func TestAGitletNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	url := serveWeb(t, b, e)
-	founder := codetest.PersonWithToken(t, opsToken)
+	founder := gitlettest.PersonWithToken(t, opsToken)
 	dir := founder.Clone(url)
 	founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
 	if pushed := founder.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
@@ -472,8 +472,8 @@ func TestAGitletNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 	}
 	h, _ := e.GitletHost()
 	seam, _ := engine.OperatorCode(e)
-	repo, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepo, Repo: "web",
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("ops"), Seat: "founder"},
+	repo, err := seam.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadRepo, Repo: "web",
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: iam.TokenLogin("ops"), Seat: "founder"},
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
 	if err != nil || repo.Repo == nil {
 		t.Fatalf("the repository's detail: %+v, %v", repo.Repo, err)
@@ -558,14 +558,14 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsGitlet(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
 	b := gitletNodeBootstrap(t, nil)
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: b, GitHook: codetest.HookCommand(t)})
+	e, err := engine.New(t.Context(), engine.Options{Bootstrap: b, GitHook: gitlettest.HookCommand(t)})
 	if err != nil {
 		t.Fatalf("an engine with no company was refused: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
-	founder := code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("ops"), Seat: "founder"}
-	read := code.GitQuery{Kind: code.GitTree, RepoID: "019a0c2e-0000-7000-8000-0000000000a1", Asker: founder,
-		Tree: &code.TreeQuery{Rev: "1111111111111111111111111111111111111111"}}
+	founder := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: iam.TokenLogin("ops"), Seat: "founder"}
+	read := gitlet.GitQuery{Kind: gitlet.GitTree, RepoID: "019a0c2e-0000-7000-8000-0000000000a1", Asker: founder,
+		Tree: &gitlet.TreeQuery{Rev: "1111111111111111111111111111111111111111"}}
 	_, err = engine.GitReadForTest(t.Context(), e, read)
 	var unserved *estate.ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "does not run Gitlet") {
@@ -573,11 +573,11 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsGitlet(t *testing.T) {
 			"Gitlet", err)
 	}
 	guide := "# the guide\n"
-	write := func(repo, head string) code.EngineWrite {
-		return code.EngineWrite{Kind: code.WriteCommitFiles, RepoID: repo, Principal: founder,
+	write := func(repo, head string) gitlet.EngineWrite {
+		return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repo, Principal: founder,
 			OpID: statelog.NewOpID(time.Now(), ""), Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 			Ref: "refs/heads/main", ExpectedHead: head, Message: "a guide, written through a tool",
-			Files: []code.FileOp{{Op: code.FileOpPut, Path: "docs/guide.md", Content: &guide}}}
+			Files: []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "docs/guide.md", Content: &guide}}}
 	}
 	_, err = engine.GitWriteForTest(t.Context(), e, write(read.RepoID, read.Tree.Rev))
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "does not run Gitlet") {
@@ -590,7 +590,7 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsGitlet(t *testing.T) {
 		t.Fatalf("the first apply, which hosts code = (%s, %v)", status, err)
 	}
 	url := serveWeb(t, b, e)
-	person := codetest.PersonWithToken(t, opsToken)
+	person := gitlettest.PersonWithToken(t, opsToken)
 	dir := person.Clone(url)
 	commit := person.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
 	if pushed := person.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
@@ -600,14 +600,14 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsGitlet(t *testing.T) {
 	if !ok {
 		t.Fatal("the node serves no code operations after the apply")
 	}
-	repo, err := seam.Read(t.Context(), code.ReadQuery{Asker: founder, Kind: code.ReadRepo, Repo: "web",
+	repo, err := seam.Read(t.Context(), gitlet.ReadQuery{Asker: founder, Kind: gitlet.ReadRepo, Repo: "web",
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
 	if err != nil || repo.Repo == nil {
 		t.Fatalf("the repository's detail: %+v, %v", repo.Repo, err)
 	}
 	read.RepoID, read.Tree.Rev = repo.Repo.ID, commit
 	a, err := engine.GitReadForTest(t.Context(), e, read)
-	if err != nil || a.Tree == nil || !slices.ContainsFunc(a.Tree.Entries, func(entry code.TreeEntry) bool {
+	if err != nil || a.Tree == nil || !slices.ContainsFunc(a.Tree.Entries, func(entry gitlet.TreeEntry) bool {
 		return entry.Path == "README.md"
 	}) {
 		t.Fatalf("a git read once the apply built Gitlet = (%+v, %v), want web's root listing "+
@@ -621,7 +621,7 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsGitlet(t *testing.T) {
 	}
 	read.Tree.Rev = wrote.Commit
 	if a, err = engine.GitReadForTest(t.Context(), e, read); err != nil || a.Tree == nil ||
-		!slices.ContainsFunc(a.Tree.Entries, func(entry code.TreeEntry) bool { return entry.Path == "docs" }) {
+		!slices.ContainsFunc(a.Tree.Entries, func(entry gitlet.TreeEntry) bool { return entry.Path == "docs" }) {
 		t.Fatalf("a git read of the write's commit = (%+v, %v), want web's root listing docs", a.Tree, err)
 	}
 }
@@ -666,7 +666,7 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 	e, err := engine.New(t.Context(), engine.WithGitMemory(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, gitCompany),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-		GitHook:     codetest.HookCommand(t),
+		GitHook:     gitlettest.HookCommand(t),
 	}, memory))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -681,7 +681,7 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 		t.Fatalf("%s fires on a node holding no pack: %v", statelog.KindCodeMaintenanceRefused, kinds)
 	}
 
-	founder := codetest.PersonWithToken(t, opsToken)
+	founder := gitlettest.PersonWithToken(t, opsToken)
 	dir := founder.Clone(url)
 	founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
 	if pushed := founder.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
@@ -725,21 +725,21 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 // shown it without two thousand packs pushed into a repository — and every
 // listing counted.
 type atTheBound struct {
-	codecompact.Estate
+	gitletcompact.Estate
 	listings *atomic.Int64
 }
 
 // boundRepo is the repository atTheBound names.
 const boundRepo = "at-the-bound"
 
-func (e atTheBound) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
-	if q.Kind != code.ReadCompactionDue {
+func (e atTheBound) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	if q.Kind != gitlet.ReadCompactionDue {
 		return e.Estate.Read(ctx, q)
 	}
 	e.listings.Add(1)
-	return code.ReadAnswer{Due: []code.CompactionCandidate{{
+	return gitlet.ReadAnswer{Due: []gitlet.CompactionCandidate{{
 		ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte(boundRepo)).String(), Name: boundRepo,
-		LivePacks: code.MaxPacksPerRepo,
+		LivePacks: gitlet.MaxPacksPerRepo,
 	}}}, nil
 }
 
@@ -772,8 +772,8 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	e, err := engine.New(t.Context(), engine.WithCompactorEstate(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, gitCompany),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-		GitHook:     codetest.HookCommand(t),
-	}, func(inner codecompact.Estate) codecompact.Estate {
+		GitHook:     gitlettest.HookCommand(t),
+	}, func(inner gitletcompact.Estate) gitletcompact.Estate {
 		return atTheBound{Estate: inner, listings: &listings}
 	}))
 	if err != nil {
@@ -787,10 +787,10 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	// THE COMPACTOR'S READING, read until it names the repository: its first
 	// pass's, once the node's first beat is listed — which the presence view
 	// hears within about a second, the pass following within a
-	// codecompact.ListedRecheck — the next comes a Poll later, and the
+	// gitletcompact.ListedRecheck — the next comes a Poll later, and the
 	// deadline leaves room for it only so that a pass too early fails here by
 	// its count rather than by the clock.
-	deadline := time.Now().Add(codecompact.Poll + time.Minute)
+	deadline := time.Now().Add(gitletcompact.Poll + time.Minute)
 	for engine.CodeReadingForTest(t.Context(), e).CodeCompactionBehind == 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("the compactor's reading named no repository at the pack bound after %d listings",
@@ -837,7 +837,7 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 // releases it — or the batch's own budget ends — and then publishes through
 // the code log's own write authority.
 type heldPublisher struct {
-	inner   code.Publisher
+	inner   gitlet.Publisher
 	entered chan struct{}
 	release chan struct{}
 }
@@ -902,7 +902,7 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	e, err := engine.New(t.Context(), engine.WithCommitterPublisher(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, busyCompany),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-	}, func(inner code.Publisher) code.Publisher {
+	}, func(inner gitlet.Publisher) gitlet.Publisher {
 		held.inner = inner
 		return held
 	}))
@@ -928,8 +928,8 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	}
 	var web, api string
 	waitFor(t, "the declared repositories to exist", func() bool {
-		answer, err := seam.Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator,
-			OperatorID: "op-1", Seat: "founder"}, Kind: code.ReadRepos,
+		answer, err := seam.Read(t.Context(), gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator,
+			OperatorID: "op-1", Seat: "founder"}, Kind: gitlet.ReadRepos,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 		if err != nil {
 			return false
@@ -946,12 +946,12 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	})
 
 	// STALE, every one, so the batches append nothing once released.
-	stale := func(repo string, i int) code.Proposal {
-		return code.Proposal{
+	stale := func(repo string, i int) gitlet.Proposal {
+		return gitlet.Proposal{
 			PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo,
-			Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "founder"},
-			Via:       code.ViaGit, Node: "node-a", ReceivedAt: time.Now().UTC(),
-			Commands: []code.Command{{Ref: fmt.Sprintf("refs/heads/q%04d", i),
+			Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "founder"},
+			Via:       gitlet.ViaGit, Node: "node-a", ReceivedAt: time.Now().UTC(),
+			Commands: []gitlet.Command{{Ref: fmt.Sprintf("refs/heads/q%04d", i),
 				Old: "1111111111111111111111111111111111111111", New: "2222222222222222222222222222222222222222"}},
 		}
 	}
@@ -959,10 +959,10 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 		t.Fatalf("the premise: the proposal is one a committer would decide: %v", err)
 	}
 	type answer struct {
-		res code.ProposeResult
+		res gitlet.ProposeResult
 		err error
 	}
-	answers := make(chan answer, code.CommitterInbox+past+2)
+	answers := make(chan answer, gitlet.CommitterInbox+past+2)
 	propose := func(repo string, i int) {
 		res, err := c.Propose(t.Context(), stale(repo, i))
 		answers <- answer{res, err}
@@ -984,22 +984,22 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	// batch: queued with two seconds more than a batch and its answer —
 	// room for a loaded machine between the deadline and its arrival — and
 	// answered busy while it waits.
-	short, cancel := context.WithTimeout(t.Context(), code.CommitBudget+code.ReplyMargin+2*time.Second)
+	short, cancel := context.WithTimeout(t.Context(), gitlet.CommitBudget+gitlet.ReplyMargin+2*time.Second)
 	defer cancel()
-	if res, err := c.Propose(short, stale(api, 1)); err != nil || res.Answer.Refused != code.RefusalBusy ||
+	if res, err := c.Propose(short, stale(api, 1)); err != nil || res.Answer.Refused != gitlet.RefusalBusy ||
 		!strings.Contains(res.Answer.Detail, "stops waiting") {
 		t.Fatalf("a proposal that waited out its asker's attempt answered %+v, %v; want busy", res.Answer, err)
 	}
 
 	// THE QUEUE FILLED BEHIND THE HELD BATCH, and every proposal past it
 	// answered busy at once.
-	for i := 1; i <= code.CommitterInbox+past; i++ {
+	for i := 1; i <= gitlet.CommitterInbox+past; i++ {
 		go propose(web, i)
 	}
 	for range past {
 		select {
 		case a := <-answers:
-			if a.err != nil || a.res.Answer.Refused != code.RefusalBusy ||
+			if a.err != nil || a.res.Answer.Refused != gitlet.RefusalBusy ||
 				!strings.Contains(a.res.Answer.Detail, "queued for this repository") {
 				t.Fatalf("a proposal past the full queue answered %+v, %v; want busy, the queue full", a.res.Answer,
 					a.err)
@@ -1051,7 +1051,7 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	// EVERY CALLER ANSWERED once the batches are let through: web's lead and
 	// its full queue, and api's lead.
 	release()
-	for range code.CommitterInbox + 2 {
+	for range gitlet.CommitterInbox + 2 {
 		select {
 		case <-answers:
 		case <-time.After(time.Minute):
@@ -1075,7 +1075,7 @@ func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 		t.Fatal("the node serves no code operations")
 	}
 	waitFor(t, "the declared repository to exist", func() bool {
-		answer, err := seam.Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepos,
+		answer, err := seam.Read(t.Context(), gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: gitlet.ReadRepos,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 		if err != nil {
 			return false
@@ -1134,8 +1134,8 @@ func TestTheBacklogAlarmBorrowsEachChecksTimeout(t *testing.T) {
 	}
 	var web string
 	waitFor(t, "the declared repository to exist", func() bool {
-		answer, err := seam.Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator,
-			OperatorID: "op-1", Seat: "founder"}, Kind: code.ReadRepos,
+		answer, err := seam.Read(t.Context(), gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator,
+			OperatorID: "op-1", Seat: "founder"}, Kind: gitlet.ReadRepos,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 		if err != nil {
 			return false
@@ -1152,13 +1152,13 @@ func TestTheBacklogAlarmBorrowsEachChecksTimeout(t *testing.T) {
 		name    string
 		timeout int
 	}{{"lint", 60}, {"unit", 600}} {
-		res, err := seam.Checks(t.Context(), code.ChecksRequest{
+		res, err := seam.Checks(t.Context(), gitlet.ChecksRequest{
 			OpID: statelog.NewOpID(time.Now(), "code_check_dispatch"),
-			Queued: &code.CheckQueued{CheckKey: code.CheckKey{RepoID: web,
+			Queued: &gitlet.CheckQueued{CheckKey: gitlet.CheckKey{RepoID: web,
 				OID: "1111111111111111111111111111111111111111", Target: "refs/heads/main", Name: c.name, Attempt: 1},
-				Purpose: code.PurposeTip,
-				Def:     &code.CheckDef{Name: c.name, Run: "make " + c.name, TimeoutSeconds: c.timeout},
-				Reason:  code.QueueDispatch, QueuedAt: queued}})
+				Purpose: gitlet.PurposeTip,
+				Def:     &gitlet.CheckDef{Name: c.name, Run: "make " + c.name, TimeoutSeconds: c.timeout},
+				Reason:  gitlet.QueueDispatch, QueuedAt: queued}})
 		if err != nil || res.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("queue %s: (%+v, %v), want applied", c.name, res, err)
 		}

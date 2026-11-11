@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -44,7 +44,7 @@ import (
 // # And when it is RECORDED
 //
 // A hold the expiry could not see — taken after a pass in flight read its
-// holds — is safe for a repository idle less than [code.HoldRecordAfter] by
+// holds — is safe for a repository idle less than [gitlet.HoldRecordAfter] by
 // the clock read after the hold was taken: that pass fixed its cutoff before
 // it read its holds, so before this hold, and a day or more before it, and the
 // repository's last activity is later than any such cutoff. One idle longer
@@ -53,19 +53,19 @@ import (
 // delete arbitrates on too: landed first, it refuses the delete; landed after
 // it, its decide answers the repository deleted and the turn's request is
 // refused before it reads anything. Decided at the turn's own read of the
-// repository ([code.LifecycleRequest.Seen]), so a data node behind that read
+// repository ([gitlet.LifecycleRequest.Seen]), so a data node behind that read
 // never answers it from older rows.
 //
 // # A seat's branch, by the same rule
 //
 // A seat's branch — a ref under refs/heads/seats/<handle>/, the only refs whose
 // row names the seat that set it — is held the same way, through its own seam
-// ([HoldRef]) and its own key ([code.RefHoldKey]) in the same set and on the
+// ([HoldRef]) and its own key ([gitlet.RefHoldKey]) in the same set and on the
 // same row: every ref a turn READS through a code tool, every branch it
 // WRITES, whether or not the write moves it, and every ref an executor's
 // launch resolves. A read moves no ref, and a write that moves nothing appends
 // no record, so neither orders itself against a deletion of the branch; so a
-// hold on a branch unset [code.RefHoldRecordAfter] or more is RECORDED, as an
+// hold on a branch unset [gitlet.RefHoldRecordAfter] or more is RECORDED, as an
 // idle scratch repository's is, and decided at the turn's read of the ref.
 //
 // # Confirmed once a turn
@@ -80,7 +80,7 @@ import (
 // branch — on the repository's subject: the routed `code.lifecycle`, declared
 // here by its consumer (estate.CodeSeam satisfies it).
 type CodeHolder interface {
-	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
+	Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
 }
 
 // HoldRepo takes turn's hold on repo BEFORE the request that named it is sent
@@ -91,13 +91,13 @@ type CodeHolder interface {
 //
 // The repository's id goes into the turn's [turnctx.Holds] — written first
 // to its run row where the turn has one. A create's repository is held on the
-// id its decide will derive (code.RepoIDOf), before the create is sent: it
+// id its decide will derive (gitlet.RepoIDOf), before the create is sent: it
 // carries no status, since nothing has been made, so nothing is recorded —
 // a new repository is not idle. Then, where the repository is active
-// and its last activity is at least [code.HoldRecordAfter] before now — the
+// and its last activity is at least [gitlet.HoldRecordAfter] before now — the
 // clock read AFTER the hold was taken — the hold is RECORDED on its subject:
 // a lifecycle request of kind hold, as actor's seat, decided at the position
-// the turn read the repository at (repo.Position, [code.LifecycleRequest.Seen]).
+// the turn read the repository at (repo.Position, [gitlet.LifecycleRequest.Seen]).
 //
 // RECORDED ON EVERY RESOLUTION THAT NEEDS ONE, not only on a hold this call
 // took new: a record whose outcome the turn could not learn refuses the call,
@@ -113,24 +113,24 @@ type CodeHolder interface {
 // turn has confirmed answers nil at once, with no Take and no record. HoldRepo
 // confirms the repository's id when it returns nil having been handed a READ
 // of it (a resolution's RepoRef, its Position set), its Take done, and either
-// no record needed (archived, or active within [code.HoldRecordAfter]) or the
+// no record needed (archived, or active within [gitlet.HoldRecordAfter]) or the
 // record applied; a create's hold, on an id no row was read for, confirms
 // nothing. Every error after the Take clears the mark.
 //
 // Every error refuses the request, which then reads and writes nothing: a
 // hold the set or the run row refused ([turnctx.ErrHoldsFull],
 // [sandbox.ErrCodeHoldsFull], a row gone or ending); a record refused — the
-// repository deleted ([code.ErrRepoNotFound], in the deletion's own words) or
-// not readable by the seat ([code.ErrNotPermitted]); a record nothing served
+// repository deleted ([gitlet.ErrRepoNotFound], in the deletion's own words) or
+// not readable by the seat ([gitlet.ErrNotPermitted]); a record nothing served
 // or whose outcome is unknown.
-func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor Actor, repo code.RepoRef,
+func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor Actor, repo gitlet.RepoRef,
 	now func() time.Time) error {
 
-	if turn == nil || repo.Kind != code.RepoScratch {
+	if turn == nil || repo.Kind != gitlet.RepoScratch {
 		return nil
 	}
 	seat := CodeAskerOf(actor)
-	if seat.Kind != code.PrincipalAgent {
+	if seat.Kind != gitlet.PrincipalAgent {
 		// A TURN IS A SEAT'S, and only a seat's turn holds anything: a
 		// person's call has no turn, and an actor that is no seat inside
 		// one is a wiring that names nobody to hold for.
@@ -151,7 +151,7 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 	// listed what does not exist yet — so it confirms nothing, and the turn's
 	// next read of the repository confirms it.
 	read := !repo.Position.IsZero()
-	if repo.Status != code.RepoStatusActive || wallClock(now).Sub(repo.LastActivityAt) < code.HoldRecordAfter {
+	if repo.Status != gitlet.RepoStatusActive || wallClock(now).Sub(repo.LastActivityAt) < gitlet.HoldRecordAfter {
 		if read {
 			holds.Confirm(repo.ID)
 		}
@@ -161,8 +161,8 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 		holds.Unconfirm(repo.ID)
 		return errNoHolder
 	}
-	res, err := holder.Lifecycle(ctx, code.LifecycleRequest{
-		Kind: code.LifecycleHold, OpID: holdOpID(turn, repo.ID), Actor: seat,
+	res, err := holder.Lifecycle(ctx, gitlet.LifecycleRequest{
+		Kind: gitlet.LifecycleHold, OpID: holdOpID(turn, repo.ID), Actor: seat,
 		RepoID: repo.ID, TurnID: turn.RunID, Seen: repo.Position,
 	})
 	switch {
@@ -196,17 +196,17 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 // nothing else in a turn names a ref (TestOnlyTheSeamResolvesARefForATurn,
 // TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest).
 //
-// A ref [code.Holdable] refuses — main, a tag, a person's branch — keeps
+// A ref [gitlet.Holdable] refuses — main, a tag, a person's branch — keeps
 // nothing and takes no hold, and an operator's call, which has no turn, holds
 // nothing; a turn built outside the engine, which keeps no holds, is refused
 // rather than sent through a seat's branch unheld ([turnctx.ErrNoHolds]).
 //
-// The key ([code.RefHoldKey]) goes into the turn's [turnctx.Holds] — written
+// The key ([gitlet.RefHoldKey]) goes into the turn's [turnctx.Holds] — written
 // first to its run row where the turn has one; the ref read takes every key of
 // its answer in one Take first ([takeRefHolds]), so its HoldRefs find theirs
 // held and write nothing. Then, where seen — the ref's
 // row as the turn's read answered it, at the checkpoint read — is a SEAT'S
-// branch (seen.Seat set) last set at least [code.RefHoldRecordAfter] before
+// branch (seen.Seat set) last set at least [gitlet.RefHoldRecordAfter] before
 // now, the clock read AFTER the hold was taken, the hold is RECORDED on the
 // repository's subject: a lifecycle request of kind hold naming the ref,
 // decided at the position the turn read it at, as one operation per run and
@@ -226,20 +226,20 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 // [sandbox.ErrCodeHoldsFull], a row gone or ending); a record refused — the
 // ref deleted after the turn read it ([refDeletedError], naming the commit the
 // read answered so the branch can be restored at it), the repository deleted
-// ([code.ErrRepoNotFound]) or not readable by the seat ([code.ErrNotPermitted]);
+// ([gitlet.ErrRepoNotFound]) or not readable by the seat ([gitlet.ErrNotPermitted]);
 // a record nothing served or whose outcome is unknown.
-func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor Actor, repo code.RepoRef,
-	ref string, seen *code.ResolvedRef, read statelog.Position, now func() time.Time) error {
+func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor Actor, repo gitlet.RepoRef,
+	ref string, seen *gitlet.ResolvedRef, read statelog.Position, now func() time.Time) error {
 
-	if turn == nil || !code.Holdable(ref) {
+	if turn == nil || !gitlet.Holdable(ref) {
 		return nil
 	}
 	seat := CodeAskerOf(actor)
-	if seat.Kind != code.PrincipalAgent {
+	if seat.Kind != gitlet.PrincipalAgent {
 		// A TURN IS A SEAT'S, as HoldRepo says.
 		return nil
 	}
-	key := code.RefHoldKey(repo.ID, ref)
+	key := gitlet.RefHoldKey(repo.ID, ref)
 	holds := turn.Holding()
 	if holds.Confirmed(key) {
 		return nil
@@ -250,7 +250,7 @@ func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor A
 	if seen == nil {
 		return nil
 	}
-	if seen.Seat == "" || wallClock(now).Sub(seen.At) < code.RefHoldRecordAfter {
+	if seen.Seat == "" || wallClock(now).Sub(seen.At) < gitlet.RefHoldRecordAfter {
 		// NO RECORD NEEDED: a branch no seat set is no seat's to lose, and
 		// one set within the threshold is later than the cutoff of any
 		// deletion's listing in flight at this Take.
@@ -261,15 +261,15 @@ func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor A
 		holds.Unconfirm(key)
 		return errNoHolder
 	}
-	res, err := holder.Lifecycle(ctx, code.LifecycleRequest{
-		Kind: code.LifecycleHold, OpID: holdOpID(turn, key), Actor: seat,
+	res, err := holder.Lifecycle(ctx, gitlet.LifecycleRequest{
+		Kind: gitlet.LifecycleHold, OpID: holdOpID(turn, key), Actor: seat,
 		RepoID: repo.ID, TurnID: turn.RunID, Ref: ref, Seen: read,
 	})
 	switch {
 	case err != nil:
 		holds.Unconfirm(key)
 		return fmt.Errorf("builtin: record turn %s's hold on %s of %s: %w", turn.RunID, ref, repo.Name, err)
-	case res.Refusal == code.LifecycleRefDeleted:
+	case res.Refusal == gitlet.LifecycleRefDeleted:
 		holds.Unconfirm(key)
 		return &refDeletedError{ref: ref, oid: seen.OID, err: res.Err()}
 	case res.Refusal != "":
@@ -287,7 +287,7 @@ func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor A
 }
 
 // takeRefHolds takes, in ONE Take, turn's hold on every ref of refs that
-// [HoldRef] would take one on — each [code.Holdable] admits and the turn has
+// [HoldRef] would take one on — each [gitlet.Holdable] admits and the turn has
 // not confirmed — before the HoldRef of each, which then finds its key held
 // and goes straight on to its record and its confirmation. So a call that
 // depends on several seats' branches — a comparison's base and head, a commit
@@ -298,19 +298,19 @@ func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor A
 // read ([CodeDeps.branch]). What HoldRef takes nothing for — an operator's
 // call, a person's, no turn — it takes nothing for either. It answers the
 // refs it was taking, joined, for a refusal to name.
-func takeRefHolds(ctx context.Context, turn *turnctx.Turn, actor Actor, repo code.RepoRef,
+func takeRefHolds(ctx context.Context, turn *turnctx.Turn, actor Actor, repo gitlet.RepoRef,
 	refs []string) (string, error) {
 
-	if turn == nil || len(refs) == 0 || CodeAskerOf(actor).Kind != code.PrincipalAgent {
+	if turn == nil || len(refs) == 0 || CodeAskerOf(actor).Kind != gitlet.PrincipalAgent {
 		return "", nil
 	}
 	holds := turn.Holding()
 	var keys, names []string
 	for _, ref := range refs {
-		if !code.Holdable(ref) {
+		if !gitlet.Holdable(ref) {
 			continue
 		}
-		if key := code.RefHoldKey(repo.ID, ref); !holds.Confirmed(key) {
+		if key := gitlet.RefHoldKey(repo.ID, ref); !holds.Confirmed(key) {
 			keys, names = append(keys, key), append(names, ref)
 		}
 	}
@@ -354,7 +354,7 @@ var errNoHolder = errors.New("builtin: this surface records no hold on a scratch
 	"(CodeDeps.Holder is nil)")
 
 // holdOpID is the operation a turn's hold record is: ONE PER RUN AND KEY — a
-// scratch repository's id, or a seat branch's [code.RefHoldKey] — so the same
+// scratch repository's id, or a seat branch's [gitlet.RefHoldKey] — so the same
 // hold asked again in the run is one record, and the ledger answers the
 // repeat. A ref's key is fixed-width, so the id is at most 111 bytes (36, a
 // dot, "hold-" and 69), inside statelog.MaxCallerOpIDBytes however long the
@@ -376,8 +376,8 @@ var errNoHolder = errors.New("builtin: this surface records no hold on a scratch
 // ([turnctx.Turn.RebasedTo]), at the rebase. A turn resumed longer after its
 // run began than the operation ledger remembers (statelog.OpsRetention, the
 // code log's too) finds every repository it holds idle past
-// [code.HoldRecordAfter], and every seat branch it holds set longer ago than
-// [code.RefHoldRecordAfter], so it records its hold on each one it names
+// [gitlet.HoldRecordAfter], and every seat branch it holds set longer ago than
+// [gitlet.RefHoldRecordAfter], so it records its hold on each one it names
 // again; minted at the run's start, before what every node's ledger has
 // swept, each record is answered `unknown` on every node for good
 // ([statelog.MintAt]'s reason), and every call the resumed turn makes about
@@ -405,14 +405,14 @@ func wallClock(now func() time.Time) time.Time {
 
 // holdFailure explains a call refused because its turn's hold on repo could not
 // be taken or recorded: nothing about the repository was sent.
-func holdFailure(ctx context.Context, tool string, repo code.RepoRef, err error) tools.Result {
+func holdFailure(ctx context.Context, tool string, repo gitlet.RepoRef, err error) tools.Result {
 	switch {
 	case errors.Is(err, turnctx.ErrHoldsFull), errors.Is(err, sandbox.ErrCodeHoldsFull):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s did not run: this turn already holds "+
 			"the most repositories and branches one turn may (%d), and it reaches a scratch repository only "+
 			"while it holds it, so nothing was sent about %s. Finish this work in a later turn.", tool,
 			turnctx.MaxHolds, repo.Name))
-	case errors.Is(err, code.ErrRepoNotFound), errors.Is(err, code.ErrNotPermitted):
+	case errors.Is(err, gitlet.ErrRepoNotFound), errors.Is(err, gitlet.ErrNotPermitted):
 		// THE DOMAIN'S OWN ANSWER to the hold — a repository the expiry
 		// deleted first, or one the seat may not read — in its own words.
 		return codeFailure(ctx, tool, repo.Name, err)
@@ -420,7 +420,7 @@ func holdFailure(ctx context.Context, tool string, repo code.RepoRef, err error)
 		return faulted(ctx, tool, err, fmt.Sprintf("%s could not keep scratch repository %s from expiring "+
 			"while this turn uses it, so it sent nothing about it: %s.", tool, repo.Name, faultSaid))
 	}
-	if why, ok := Condition(err); ok || errors.Is(err, errHoldUnconfirmed) || errors.Is(err, code.ErrNotServing) {
+	if why, ok := Condition(err); ok || errors.Is(err, errHoldUnconfirmed) || errors.Is(err, gitlet.ErrNotServing) {
 		if !ok {
 			why = "the record of this turn's hold did not reach the code log in time"
 		}
@@ -438,7 +438,7 @@ func holdFailure(ctx context.Context, tool string, repo code.RepoRef, err error)
 // ([HoldRepo]'s, and the code tools' own): the branch deleted after the turn
 // read it is not_found, as a deleted repository is; a hold Gitlet could
 // not confirm is unavailable; a turn at its bound is forbidden.
-func refHoldFailure(ctx context.Context, tool string, repo code.RepoRef, ref string, err error) tools.Result {
+func refHoldFailure(ctx context.Context, tool string, repo gitlet.RepoRef, ref string, err error) tools.Result {
 	var deleted *refDeletedError
 	switch {
 	case errors.As(err, &deleted):
@@ -446,20 +446,20 @@ func refHoldFailure(ctx context.Context, tool string, repo code.RepoRef, ref str
 			"deleted after this turn read it at %s — by a push, or by Gitlet's ref lifecycle, which "+
 			"deletes a seat's branch nobody has set for %d days — so nothing was sent about it. Restore it "+
 			"with %s at %s if the work on it is still needed.", tool, ref, repo.Name, deleted.oid,
-			int(code.RefExpiry/(24*time.Hour)), CodeCreateBranchTool, deleted.oid))
+			int(gitlet.RefExpiry/(24*time.Hour)), CodeCreateBranchTool, deleted.oid))
 	case errors.Is(err, turnctx.ErrHoldsFull), errors.Is(err, sandbox.ErrCodeHoldsFull):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s did not run: this turn already holds "+
 			"the most repositories and branches one turn may (%d), and it reaches a seat's branch only while it "+
 			"holds it, so nothing was sent about %s. Finish this work in a later turn.", tool, turnctx.MaxHolds,
 			ref))
-	case errors.Is(err, code.ErrRepoNotFound), errors.Is(err, code.ErrNotPermitted):
+	case errors.Is(err, gitlet.ErrRepoNotFound), errors.Is(err, gitlet.ErrNotPermitted):
 		// THE DOMAIN'S OWN ANSWER to the hold, in its own words.
 		return codeFailure(ctx, tool, repo.Name, err)
 	case errors.Is(err, turnctx.ErrNoHolds), errors.Is(err, errNoHolder):
 		return faulted(ctx, tool, err, fmt.Sprintf("%s could not hold %s of repository %s for this turn, so "+
 			"it sent nothing about it: %s.", tool, ref, repo.Name, faultSaid))
 	}
-	if why, ok := Condition(err); ok || errors.Is(err, errHoldUnconfirmed) || errors.Is(err, code.ErrNotServing) {
+	if why, ok := Condition(err); ok || errors.Is(err, errHoldUnconfirmed) || errors.Is(err, gitlet.ErrNotServing) {
 		if !ok {
 			why = "the record of this turn's hold did not reach the code log in time"
 		}

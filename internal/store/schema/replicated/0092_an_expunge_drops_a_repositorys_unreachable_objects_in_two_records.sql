@@ -24,7 +24,7 @@
 -- from before it — by what each pack holds, never by when its row was added,
 -- which a rewrite moves past the request without judging anything (0095).
 --
--- The rows (internal/code's apply_expunge.go writes them all):
+-- The rows (internal/gitlet's apply_expunge.go writes them all):
 --
 --   - drop_epoch is how many begins the repository has taken. A push whose
 --     receiver read another is refused `expunging`, decided nothing.
@@ -44,7 +44,7 @@
 -- code_packs.state takes `dropping` beside `live`, and code_packs.kind the
 -- kinds a begin and a commit write — `expunge` for a kept pack, `cruft` for a
 -- dropping one, `rescue` for a commit's rescue — with no DDL: both columns are
--- TEXT the domain's closed sets name (internal/code's PackState and PackKind).
+-- TEXT the domain's closed sets name (internal/gitlet's PackState and PackKind).
 -- A dropping pack names its object as every row of code_packs does, Required,
 -- until its commit moves the row into code_packs_retired for RetireGrace.
 -- live_packs, live_bytes and live_objects count the live packs alone.

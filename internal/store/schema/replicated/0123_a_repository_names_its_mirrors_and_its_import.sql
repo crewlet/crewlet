@@ -1,7 +1,7 @@
 -- A repository names its mirrors and its import.
 --
 -- A repository may follow, publish to, or be filled from a repository at
--- another host (internal/code's mirror.go):
+-- another host (internal/gitlet's mirror.go):
 --
 --   - mirror_from makes it a PULL MIRROR: it is imported from its source
 --     first — when it is created, or when a settings record makes an active
@@ -14,8 +14,8 @@
 --     pull mirror's source — fixed while the import runs, so a mirror_from a
 --     settings change moves meanwhile is the next sync's to follow.
 --
--- Each is the JSON of code.MirrorSource, code.MirrorTarget and
--- code.ImportSource, and '' for none — the value that says there is no
+-- Each is the JSON of gitlet.MirrorSource, gitlet.MirrorTarget and
+-- gitlet.ImportSource, and '' for none — the value that says there is no
 -- mirror, and what SQLite requires of a NOT NULL column added to a table. A
 -- credential in one is a ${VAR} REFERENCE, never a token: the domain refuses
 -- any other, so no secret rests in a row.

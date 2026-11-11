@@ -7,8 +7,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -17,12 +17,12 @@ import (
 // THE REBASE: code_rebase_change replays a change's commits its target does
 // not hold onto the target's tip and moves the change's source branch to the
 // last of them, as ONE ENGINE WRITE the repository's Gitlet node builds and
-// lands as one forced push (code.WriteRebaseChange) — each commit keeping its
+// lands as one forced push (gitlet.WriteRebaseChange) — each commit keeping its
 // author and its author date (U43 a), the first that conflicts stopping it
 // with nothing stored. The push is the caller's, held to the grant's ref rule
 // and the protections of the source branch as a force-push of it is, and its
 // apply records the change's new revision. In a turn somebody woke, the write
-// carries whom it is made for (code.EngineWrite.Ceiling, [CodeDeps.writeCaller])
+// carries whom it is made for (gitlet.EngineWrite.Ceiling, [CodeDeps.writeCaller])
 // and the Gitlet node holds the push to that requester's grant too, the seat's own
 // work spared — as every branch write is, since a rebase is one.
 
@@ -93,7 +93,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	repo := cv.g.repo
 	op := opIDFor(cv.g.c.actor, tool, rebaseVerb, repo.ID, args)
-	w := code.EngineWrite{Kind: code.WriteRebaseChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := gitlet.EngineWrite{Kind: gitlet.WriteRebaseChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.SourceRef, ExpectedHead: head,
 		Change: cv.change.Number, Ceiling: cv.g.c.write}
 	if err := w.Validate(); err != nil {
@@ -113,7 +113,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	out := codeBranchAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Branch: strings.TrimPrefix(w.Ref, branchRoot), OpID: cv.g.c.actor.Operation}
 	switch {
-	case res.Refusal == code.WriteConflict:
+	case res.Refusal == gitlet.WriteConflict:
 		return conflictedWrite(ctx, turn, cv.g.c, tool, out, res)
 	case res.Refusal != "":
 		return refusedBy(tools.RefusalInvalid, writeRefusalError(string(res.Refusal), res.Detail),
@@ -126,7 +126,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return unknownWrite(cv.g.c.actor, tool, fmt.Sprintf("the rebase of %s landed", cv.g.ref()), op, false,
 			unknownNext(false, sameCall(cv.g.c.actor, tool), fmt.Sprintf("Read %s with %s", cv.g.ref(),
 				CodeGetChangeTool), "the same rebase would be pushed twice")), nil
-	case res.Command.Result == code.ResultNG:
+	case res.Command.Result == gitlet.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, out.Branch, res.Command, cv.g.c.actor), nil
 	default:
 		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a rebase with no outcome and no "+

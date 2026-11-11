@@ -23,7 +23,7 @@ import (
 //
 //	go test ./internal/engine -run '^$' -bench BenchmarkAChangedActivation -benchtime 1x
 //
-// internal/code's doc.go records what it measured, and why
+// internal/gitlet's doc.go records what it measured, and why
 // reconcileInFlight is what it is.
 func BenchmarkAChangedActivation(b *testing.B) {
 	const repos = config.CodeMaxRepos

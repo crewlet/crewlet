@@ -440,7 +440,7 @@ const (
 	// SO A COMPANY WHOSE SEATS WORK THROUGH CHANGES GIVES THE CODE LOG THE
 	// RATIO ITS BYTE RATE IS, below. What each log takes a day is its
 	// records and the barriers its linearizable reads append (176 bytes
-	// each in their signed frames, code.BarrierRecordBytes), at the
+	// each in their signed frames, gitlet.BarrierRecordBytes), at the
 	// reference company:
 	//
 	//   - the mutation log about 12.1 MB a day: 9.9 MB of records,
@@ -452,7 +452,7 @@ const (
 	//   - the code log 22.4–100.2 MB a day: 3 000 pushes at 1 625 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
 	//     most a seat's push takes, at which every one of the reference
-	//     company's is priced (internal/code's BenchmarkPushLogBytes, its
+	//     company's is priced (internal/gitlet's BenchmarkPushLogBytes, its
 	//     push=box arm beside a person's; 1 481 where the engine builds the
 	//     push for a tool, its push=agent arm, and which of its seats push
 	//     from their boxes is no figure the reference company has; about
@@ -461,7 +461,7 @@ const (
 	//     push, and the code-retention duty's sweeps of what they retired,
 	//     0.13 MB at 44, both MEASURED on a repository pushed once a minute,
 	//     whose every merge takes the floor's sixteen packs and is swept by a
-	//     record of its own a day later (internal/code/compact's
+	//     record of its own a day later (internal/gitlet/compact's
 	//     BenchmarkCompact, its steady arm at that floor) — the most the
 	//     reference company's pushes cost, since a few a minute across its
 	//     repositories never leave a merge more than the floor; the
@@ -483,7 +483,7 @@ const (
 	//     change ready, which goes to whoever may merge it — and, after the
 	//     ask, the reviews and the answer, only the readiness it kept, each
 	//     record MEASURED as its writer forms it at the reference company's
-	//     text (internal/code's
+	//     text (internal/gitlet's
 	//     TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt); at the
 	//     most beside them a queue entry a change, its train, its landing and
 	//     its candidate's three checks, a recheck recording only what it

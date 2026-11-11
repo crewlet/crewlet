@@ -927,7 +927,7 @@ func Catalogue() []Instrument {
 			Shows: "How many times each merge of a change this Gitlet node built " +
 				"was built again onto a target that moved under it, observed " +
 				"once a merge as it ends — from 0, a merge its first build " +
-				"landed, to 4 (`code.MergeRecomputes`), the most it is ever " +
+				"landed, to 4 (`gitlet.MergeRecomputes`), the most it is ever " +
 				"rebuilt — by how it ended, `outcome`: `merged`, its record " +
 				"applied or pending, or found already landed; `queued`, its " +
 				"target's queue took it, built nothing; a refusal's own code " +

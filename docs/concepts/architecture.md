@@ -972,9 +972,9 @@ here.
 | A conversation's next turn continuing its last turn's session | `internal/executordomain`, `internal/sandbox`, `internal/engine` (`conversation.go`) | [Conversation sessions](conversation-sessions.md) |
 | Models, each a harness, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
 | Every agent seat's executor run, detached in a box | `internal/sandbox`, `internal/hostbox`, `internal/agent/runner` (`agentrun.go`) | [Code sandbox](code-sandbox.md) |
-| The engine's own git repositories: their rows, the committer, the activation fence, the purge | `internal/code`, `internal/engine` (the reconcile of `code.repos` and the `code-retention` duty) | [Gitlet](gitlet.md) |
-| A Gitlet node's cache of each repository, and the git processes it runs | `internal/code/cache`, `internal/code/gitproc` | [The cache on a Gitlet node](gitlet.md#the-cache-on-a-gitlet-node) |
-| A person's git over HTTPS — fetch or push, their bound token, the receive pipeline — and the code reads | `internal/code/host`, `internal/api/auth` (which requests are pushes, the Basic credential), `internal/api` (the `/git/` and `/gitlet/` routes) | [Persons and their tokens](gitlet.md#persons-and-their-tokens) · [Hosting Code on Gitlet](../guides/gitlet.md) |
+| The engine's own git repositories: their rows, the committer, the activation fence, the purge | `internal/gitlet`, `internal/engine` (the reconcile of `code.repos` and the `code-retention` duty) | [Gitlet](gitlet.md) |
+| A Gitlet node's cache of each repository, and the git processes it runs | `internal/gitlet/cache`, `internal/gitlet/gitproc` | [The cache on a Gitlet node](gitlet.md#the-cache-on-a-gitlet-node) |
+| A person's git over HTTPS — fetch or push, their bound token, the receive pipeline — and the code reads | `internal/gitlet/host`, `internal/api/auth` (which requests are pushes, the Basic credential), `internal/api` (the `/git/` and `/gitlet/` routes) | [Persons and their tokens](gitlet.md#persons-and-their-tokens) · [Hosting Code on Gitlet](../guides/gitlet.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |

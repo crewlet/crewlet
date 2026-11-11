@@ -64,10 +64,10 @@ import (
 //
 // # The allowances, and why they are live
 //
-// internal/api/auth/git.go, where GitAccess is, and internal/code/host, which
+// internal/api/auth/git.go, where GitAccess is, and internal/gitlet/host, which
 // answers each service with its own process and so has to read which one was
 // asked for — after asking GitAccess what the request is. Each allowance is a
-// CONTROL as well: git.go must hold a hit, and internal/code/host must hold
+// CONTROL as well: git.go must hold a hit, and internal/gitlet/host must hold
 // one once it holds a file, so a matcher that went inert fails here rather
 // than certifying a clean tree, and an allowance the code moved away from is
 // deleted rather than kept as a place a second classifier could hide.
@@ -128,7 +128,7 @@ const modulePath = "github.com/crewlet/crewlet"
 // The allowances, relative to the module root.
 const (
 	classifierFile = "internal/api/auth/git.go"
-	hostDir        = "internal/code/host/"
+	hostDir        = "internal/gitlet/host/"
 )
 
 // gitServices are git's names for the two services, which a classifier cannot
@@ -894,19 +894,19 @@ func TestTheClassifierWalkFindsAGitLiteral(t *testing.T) {
 		{"a repeated constant", `package x; const ( first = "receive-pack"; second ); var _ = "git-" + second`, true},
 		{"a constant of another file", `package x; var _ = "git-" + otherFilePiece`, true},
 		{"a constant of another package, compared", `package x
-			import "example.com/fixture/internal/code/host"
+			import "example.com/fixture/internal/gitlet/host"
 			func f(p string) bool { return p == host.ReceivePackSuffix }`, true},
 		{"a constant of another package, searched for", `package x
-			import ("strings"; "example.com/fixture/internal/code/host")
+			import ("strings"; "example.com/fixture/internal/gitlet/host")
 			func f(p string) bool { return strings.HasSuffix(p, host.ReceivePackSuffix) }`, true},
 		{"a constant of another package, in a case", `package x
-			import "example.com/fixture/internal/code/host"
+			import "example.com/fixture/internal/gitlet/host"
 			func f(p string) bool { switch p { case host.PatternReceivePack: return true }; return false }`, true},
 		{"a constant of another package, concatenated", `package x
-			import "example.com/fixture/internal/code/host"
+			import "example.com/fixture/internal/gitlet/host"
 			var _ = "git-" + host.Part`, true},
 		{"a constant declared from another package's, compared", `package x
-			import "example.com/fixture/internal/code/host"
+			import "example.com/fixture/internal/gitlet/host"
 			const mine = host.ReceivePackSuffix
 			func f(p string) bool { return p == mine }`, true},
 		{"a constant two hops from the host, compared", `package x
@@ -946,7 +946,7 @@ func TestTheClassifierWalkFindsAGitLiteral(t *testing.T) {
 		// What it passes.
 		{"receive-pack alone", `package x; var _ = "receive-pack"`, false},
 		{"a mounted pattern", `package x
-			import "example.com/fixture/internal/code/host"
+			import "example.com/fixture/internal/gitlet/host"
 			type mux interface{ Handle(string, any) }
 			func f(m mux) { m.Handle(host.PatternReceivePack, nil) }`, false},
 		{"a header named service", `package x
@@ -958,7 +958,7 @@ func TestTheClassifierWalkFindsAGitLiteral(t *testing.T) {
 			import "net/http"
 			func f(r *http.Request) string { return r.URL.Query().Get("services") }`, false},
 		{"a comparison of something else", `package x
-			import "example.com/fixture/internal/code/host"
+			import "example.com/fixture/internal/gitlet/host"
 			func f(p string) bool { return p == host.Part }`, false},
 		{"a log key", `package x
 			import "log/slog"
@@ -968,12 +968,12 @@ func TestTheClassifierWalkFindsAGitLiteral(t *testing.T) {
 		{"a name split inside its piece", `package x; var _ = "git-receive-pa" + "ck"`, false},
 	}
 	files := map[string]string{
-		"internal/code/host/host.go": fixtureHost,
+		"internal/gitlet/host/host.go": fixtureHost,
 		classifierFile:               fixtureClassifier,
 		// A package declaring a constant from the host's, which another
 		// package compares against: the fixed point's second hop.
 		"internal/relay/relay.go": `package relay
-			import "example.com/fixture/internal/code/host"
+			import "example.com/fixture/internal/gitlet/host"
 			const Suffix = host.ReceivePackSuffix`,
 		// A package spelling nothing the walk looks for, which it must
 		// read past rather than parse.
@@ -1016,7 +1016,7 @@ func TestTheClassifierAllowancesAreLive(t *testing.T) {
 	// matcher inert), and so is the host's once it holds a file.
 	found := walkFixture(t, map[string]string{
 		classifierFile:               "package auth\n",
-		"internal/code/host/host.go": "package host\n",
+		"internal/gitlet/host/host.go": "package host\n",
 	})
 	if v := found.verdict(); len(v) != 2 {
 		t.Errorf("two allowances holding nothing gave %d failure(s), want 2: %v", len(v), v)

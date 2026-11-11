@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -31,7 +31,7 @@ import (
 //
 // A company that sets `code.backend: gitlet` gets a committer and a lifecycle store on
 // every data node ([Engine.startNative]), served to the estate router beside
-// the code log's reader ([Engine.estateBackend], [code.Served]); a push is
+// the code log's reader ([Engine.estateBackend], [gitlet.Served]); a push is
 // asked of its repository's committer — the first node rendezvous ranks for
 // it — whichever node received it (internal/estate). There is no committer
 // election and no per-repository lease: every node computes the same order,
@@ -45,7 +45,7 @@ import (
 // ([Engine.applyCodeRepos]), each deciding the same declaration: a create
 // arbitrates on the name's own subject, so two nodes creating one name land
 // one repository, and the reconcile raises the code log's ACTIVATION FENCE
-// first ([code.Store.Activate]) — one record per activation fleet-wide — so a
+// first ([gitlet.Store.Activate]) — one record per activation fleet-wide — so a
 // node applying an older activation late is refused on every node rather
 // than walking a newer one back, and an activation that changes nothing
 // writes that one record and nothing else.
@@ -55,7 +55,7 @@ import (
 // call: by the committer's decide and the reader's repository detail (the
 // limits), by the code-retention duty's every pass (the retention), and by the
 // committer's every batch (the retention again, for the repo_deleted sentence,
-// [code.RepoGone], which names when a deleted repository's purge may begin —
+// [gitlet.RepoGone], which names when a deleted repository's purge may begin —
 // the same reading the duty purges by, so under one revision the two name
 // one instant). So a revision's settings hold from its activation on, with no
 // restart: they are an epoch's, never the runtime's — and therefore each
@@ -79,29 +79,29 @@ func codeInForceAt(c *Company) config.Code {
 
 // codeLimits is Gitlet's limits in force at the current epoch
 // ([Engine.codeInForce]), the defaults applied.
-func (e *Engine) codeLimits() code.Limits { return code.LimitsOf(e.codeInForce()) }
+func (e *Engine) codeLimits() gitlet.Limits { return gitlet.LimitsOf(e.codeInForce()) }
 
 // codeSeatRules is the chart and the calendar the committer judges a SEAT'S
-// push by ([code.CommitterOptions.SeatRules]) — the current epoch's roster,
+// push by ([gitlet.CommitterOptions.SeatRules]) — the current epoch's roster,
 // the one a seat's code read is judged by ([Engine.codeRoster]), and the
 // company's clock its day's quota is counted on — and the activation the
 // chart is of, which a mergeability stamps the readiness it judges with
-// ([code.SeatRules.Epoch]) — all off ONE epoch, so a revision that moves a
+// ([gitlet.SeatRules.Epoch]) — all off ONE epoch, so a revision that moves a
 // seat and the clock together is judged by both or by neither, and false
 // where no epoch is installed yet: no chart, on which the committer hands a
 // seat's push to the repository's next committer rather than judge it. Read
 // once a batch that carries a seat's push.
-func (e *Engine) codeSeatRules() (code.SeatRules, bool) {
+func (e *Engine) codeSeatRules() (gitlet.SeatRules, bool) {
 	c := e.Company()
 	if c == nil || c.roster == nil {
-		return code.SeatRules{}, false
+		return gitlet.SeatRules{}, false
 	}
-	return code.SeatRules{Roster: c.roster(), Zone: c.Config.Location(), Epoch: chartEpochOf(c)}, true
+	return gitlet.SeatRules{Roster: c.roster(), Zone: c.Config.Location(), Epoch: chartEpochOf(c)}, true
 }
 
 // codeChartEpoch is the activation of the chart this node holds now
 // ([chartEpochOf]), 0 while it holds none: what the home's change work names
-// in its listings ([codehome.Options.Chart]), so a chart apply makes every
+// in its listings ([gitlethome.Options.Chart]), so a chart apply makes every
 // change its records judged by an earlier chart due a refresh.
 func (e *Engine) codeChartEpoch() int64 {
 	c := e.Company()
@@ -124,9 +124,9 @@ func chartEpochOf(c *Company) int64 {
 
 // codeDeletedRetention is how long a deleted repository waits for its purge at
 // the current epoch ([Engine.codeInForce]), the default applied. Two readers,
-// one reading: the code-retention pass's [code.Retention.Retention], read at
-// every pass, and the committer's [code.CommitterOptions.Retention], read at
-// every batch for the repo_deleted sentence ([code.RepoGone]) — so under one
+// one reading: the code-retention pass's [gitlet.Retention.Retention], read at
+// every pass, and the committer's [gitlet.CommitterOptions.Retention], read at
+// every batch for the repo_deleted sentence ([gitlet.RepoGone]) — so under one
 // revision a push to a deleted repository is told the instant the duty purges
 // from, and a revision that moves code.deleted_retention_days moves what a
 // push is told with it. Not the same instant at every moment: the duty runs on
@@ -144,13 +144,13 @@ func (e *Engine) codeDeletedRetention() time.Duration {
 // credentials a person's mirror or import may name — and how long a
 // seat's scratch repository may sit idle, at the current epoch
 // ([Engine.codeInForce]), the defaults applied through the code domain's one
-// conversion ([code.ScratchOf]). Two readers, one reading: the lifecycle
-// store's decide of a create ([code.StoreOptions.Policy]) and the
-// code-retention pass's scratch expiry ([code.Retention.Policy]) — so a
+// conversion ([gitlet.ScratchOf]). Two readers, one reading: the lifecycle
+// store's decide of a create ([gitlet.StoreOptions.Policy]) and the
+// code-retention pass's scratch expiry ([gitlet.Retention.Policy]) — so a
 // revision that moves code.scratch holds from its activation on, with no
 // restart, on each node's own epoch.
-func (e *Engine) codeLifecyclePolicy() code.LifecyclePolicy {
-	return code.ScratchOf(e.codeInForce())
+func (e *Engine) codeLifecyclePolicy() gitlet.LifecyclePolicy {
+	return gitlet.ScratchOf(e.codeInForce())
 }
 
 // codeRemoteCredentials is code.remote_credentials at the current epoch
@@ -158,7 +158,7 @@ func (e *Engine) codeLifecyclePolicy() code.LifecyclePolicy {
 // resolve, each for the hosts it declares — read at every dial (mirrorDial),
 // so a revision that withdraws one stops its value leaving at the next
 // attempt, with no restart. The lifecycle decide reads the same table through
-// its policy ([code.ScratchOf]).
+// its policy ([gitlet.ScratchOf]).
 func (e *Engine) codeRemoteCredentials() config.CodeRemoteCredentials {
 	return e.codeInForce().RemoteCredentials
 }
@@ -209,7 +209,7 @@ func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 // queue's, the one every event of this node is published to; and nil, never a
 // typed nil, where it holds none: a node with no queue records no event of any
 // kind.
-func (e *Engine) codeEvents() code.EventPublisher {
+func (e *Engine) codeEvents() gitlet.EventPublisher {
 	if e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
@@ -218,7 +218,7 @@ func (e *Engine) codeEvents() code.EventPublisher {
 
 // codeAgentID is the agent id a seat's day is counted under, off the LIVE
 // epoch at the moment an opened change or a review is announced
-// ([code.CommitterOptions.AgentIDs]) — the same resolution the event log files
+// ([gitlet.CommitterOptions.AgentIDs]) — the same resolution the event log files
 // a participant's handle by ([store.DB.SetEventSeats]), so the event's
 // `agent_id` and its party rows name one seat. False for a human seat, a
 // handle the chart does not hold, and a node with no company active.
@@ -251,7 +251,7 @@ func (e *Engine) codeAgentID(handle string) (string, bool) { return seatAgentID(
 func (e *Engine) stopCommitter(ctx context.Context) { e.native.Load().stopCommitter(ctx) }
 
 // stopCommitter is [Engine.stopCommitter] on this runtime, and the stop its
-// own failure path takes ([native.shutdown]). [code.Committer.Stop] is
+// own failure path takes ([native.shutdown]). [gitlet.Committer.Stop] is
 // idempotent, so the teardown's stop and the shutdown's after it are one.
 //
 // BOUNDED by [statelog.DefaultResolveBudget]: a batch in flight resolves
@@ -290,8 +290,8 @@ func (n *native) proposalWriters() []closingWriter {
 // closingWriter is a writer as the teardown stops it: Close refuses every new
 // write, and every one still waiting for its turn, as a node that ran nothing,
 // leaving the publishes in flight to run; Stop closes it and waits for those
-// publishes, cancelling them once its context ends. [code.Committer],
-// [code.ChangeWriter] and [code.ChecksWriter] satisfy it.
+// publishes, cancelling them once its context ends. [gitlet.Committer],
+// [gitlet.ChangeWriter] and [gitlet.ChecksWriter] satisfy it.
 type closingWriter interface {
 	Close()
 	Stop(ctx context.Context)
@@ -332,7 +332,7 @@ type clientTerm func(holds int64, minAge time.Duration) int
 
 // clientBarriers is the census term of a log's readers that are neither seats
 // nor the engine's own passes: the code log's git clients —
-// [code.GitReadsPerDay] over the ceiling the log's stream holds, so a resize
+// [gitlet.GitReadsPerDay] over the ceiling the log's stream holds, so a resize
 // of the log (`crewlet retention set-capacity`) moves the census with it. Nil
 // for every other log.
 //
@@ -350,10 +350,10 @@ type clientTerm func(holds int64, minAge time.Duration) int
 // code nothing appends a git barrier, so the term allows for reads that never
 // come.
 func clientBarriers(domain string) clientTerm {
-	if domain != (code.Domain{}).Name() {
+	if domain != (gitlet.Domain{}).Name() {
 		return nil
 	}
-	return code.GitReadsPerDay
+	return gitlet.GitReadsPerDay
 }
 
 // applyCodeRepos asks for the reconcile of code.repos at this activation
@@ -416,7 +416,7 @@ func (e *Engine) decideCodeRepos(ctx context.Context, w codeReposWanted) error {
 // codeReposSides is the lifecycle store a reconcile of the epoch c at the
 // activation activatedAt writes through and the rows it walks, and false where
 // none runs — the cases [Engine.applyCodeRepos] names.
-func (e *Engine) codeReposSides(c *Company, activatedAt time.Time) (*code.Store, *code.Reader, bool) {
+func (e *Engine) codeReposSides(c *Company, activatedAt time.Time) (*gitlet.Store, *gitlet.Reader, bool) {
 	n := e.native.Load()
 	store := e.writeSide().code
 	if n == nil || n.codeReader == nil || store == nil || c == nil || c.Config == nil ||
@@ -440,17 +440,17 @@ func (e *Engine) stopCodeRepos() {
 }
 
 // codeLifecycle is the lifecycle store as the reconcile of code.repos calls
-// it; *code.Store satisfies it.
+// it; *gitlet.Store satisfies it.
 type codeLifecycle interface {
-	Activate(ctx context.Context, activatedAt time.Time) (code.Activation, error)
-	EnsureRepos(ctx context.Context, a code.Activation, declared []code.Declared) ([]code.EnsureResult, error)
-	DeleteRepos(ctx context.Context, a code.Activation, ids []string) ([]code.DeleteResult, error)
+	Activate(ctx context.Context, activatedAt time.Time) (gitlet.Activation, error)
+	EnsureRepos(ctx context.Context, a gitlet.Activation, declared []gitlet.Declared) ([]gitlet.EnsureResult, error)
+	DeleteRepos(ctx context.Context, a gitlet.Activation, ids []string) ([]gitlet.DeleteResult, error)
 }
 
 // codeLives is this node's code rows as the reconcile walks them;
-// *code.Reader satisfies it.
+// *gitlet.Reader satisfies it.
 type codeLives interface {
-	WalkLives(ctx context.Context, visit func(code.RepoLife) error) error
+	WalkLives(ctx context.Context, visit func(gitlet.RepoLife) error) error
 }
 
 // reconcileCodeRepos is one reconcile of code.repos — the declaration repos,
@@ -460,28 +460,28 @@ type codeLives interface {
 // # The fence first
 //
 // It raises the code log's ACTIVATION FENCE to this activation before it
-// decides any repository ([code.Store.Activate]), and every decision after it
+// decides any repository ([gitlet.Store.Activate]), and every decision after it
 // waits for this node to have applied that fence (the session floor its
-// [code.Activation] carries). So every decision reads a snapshot in which each
+// [gitlet.Activation] carries). So every decision reads a snapshot in which each
 // older activation's EARLIER records have applied — a difference one of them
 // made is settled back — while each older activation's LATER record is refused
 // by the fence, identically on every node, because the fence is derived from
-// the log (internal/code's package doc). That is what lets an unchanged
+// the log (internal/gitlet's package doc). That is what lets an unchanged
 // repository cost nothing: an activation that changes nothing writes its one
 // fence record fleet-wide, never a settings record a repository a node, and
-// the unchanged declarations are read in one batch ([code.Store.EnsureRepos]).
+// the unchanged declarations are read in one batch ([gitlet.Store.EnsureRepos]).
 //
 // # What changed, side by side
 //
 // The repositories that changed — created, settled, restored, and the
 // configuration-managed ones the document no longer declares, deleted — are
-// decided several at a time ([code.Store.EnsureRepos],
-// [code.Store.DeleteRepos]), each its own subject, so their records reach the
+// decided several at a time ([gitlet.Store.EnsureRepos],
+// [gitlet.Store.DeleteRepos]), each its own subject, so their records reach the
 // applier together and are committed as one batch. One at a time, a create
 // was a publish, an append and a wait for this node to apply it — 6.7 ms, and
 // a deletion 7.0 ms — so the last of the ten thousand repositories a document
 // may declare existed over a minute after its first activation; side by side,
-// 16–19 s (internal/code's doc.go, measured section).
+// 16–19 s (internal/gitlet's doc.go, measured section).
 //
 // # A failure every repository shares is said once
 //
@@ -523,7 +523,7 @@ func reconcileCodeRepos(ctx context.Context, logger *slog.Logger, store codeLife
 			"created, settled or deleted at this activation")
 	}
 	declared := make(map[string]bool, len(repos))
-	decided := make([]code.Declared, 0, len(repos))
+	decided := make([]gitlet.Declared, 0, len(repos))
 	for _, r := range repos {
 		// DECLARED WHETHER OR NOT IT CAN BE RECORDED: a declaration this
 		// node cannot build must never read as a removal.
@@ -543,9 +543,9 @@ func reconcileCodeRepos(ctx context.Context, logger *slog.Logger, store codeLife
 	// snapshot after the fence: a row this walk missed is caught at the next
 	// apply, and one it showed wrongly is decided away. Held as it is read,
 	// a map of the declared names and a list of what goes — never the rows.
-	was := make(map[string]code.RepoStatus, len(declared))
-	var gone []code.RepoLife
-	listErr := lives.WalkLives(ctx, func(l code.RepoLife) error {
+	was := make(map[string]gitlet.RepoStatus, len(declared))
+	var gone []gitlet.RepoLife
+	listErr := lives.WalkLives(ctx, func(l gitlet.RepoLife) error {
 		switch {
 		case declared[l.Name]:
 			was[l.Name] = l.Status
@@ -623,13 +623,13 @@ type codeReposWritten struct {
 
 // ensured files a name whose declaration was written, by what it was before:
 // none is a create, deleted a restore, live a settings change.
-func (w *codeReposWritten) ensured(name string, was map[string]code.RepoStatus, listed bool) {
+func (w *codeReposWritten) ensured(name string, was map[string]gitlet.RepoStatus, listed bool) {
 	switch status, found := was[name]; {
 	case !listed:
 		w.written = append(w.written, name)
 	case !found:
 		w.created = append(w.created, name)
-	case status == code.RepoStatusDeleted:
+	case status == gitlet.RepoStatusDeleted:
 		w.restored = append(w.restored, name)
 	default:
 		w.changed = append(w.changed, name)
@@ -639,18 +639,18 @@ func (w *codeReposWritten) ensured(name string, was map[string]code.RepoStatus, 
 // importsIgnored says, in ONE line a run, which declarations name an import
 // for a repository that existed before the run — live or deleted, as the walk
 // of the rows found it (was) — and is not being imported: an import is read
-// by its repository's create alone ([code.Declared.Import]), so each of these
+// by its repository's create alone ([gitlet.Declared.Import]), so each of these
 // is passed by, and the line is what tells the person who added one to a
 // repository that already holds history that nothing will be fetched — and
 // the one who left one in place after its import that it can go. One still
 // being imported is its create's import running, and is not named. Its count,
 // and its first [codeReposLoggedNames] names; nothing where there are none.
-func importsIgnored(ctx context.Context, logger *slog.Logger, decided []code.Declared,
-	was map[string]code.RepoStatus) {
+func importsIgnored(ctx context.Context, logger *slog.Logger, decided []gitlet.Declared,
+	was map[string]gitlet.RepoStatus) {
 
 	var names []string
 	for _, d := range decided {
-		if status, existed := was[d.Name]; existed && status != code.RepoStatusImporting && d.Import != nil {
+		if status, existed := was[d.Name]; existed && status != gitlet.RepoStatusImporting && d.Import != nil {
 			names = append(names, d.Name)
 		}
 	}
@@ -698,7 +698,7 @@ func (w *codeReposWritten) log(ctx context.Context, logger *slog.Logger) {
 
 // failureOf is err as a reconcile reports it: where the reconcile's own
 // context ended it, the reason that context was ended ([codeReconciler]) — a
-// newer activation's request, [code.ErrSuperseded], or the engine stopping —
+// newer activation's request, [gitlet.ErrSuperseded], or the engine stopping —
 // rather than the bare cancellation every decision in flight answers.
 func failureOf(ctx context.Context, err error) error {
 	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
@@ -721,7 +721,7 @@ const codeReposRunAgain = "this node runs the reconcile of code.repos again unti
 // and an engine stopping are the design working, and answer nil.
 func codeReposNotApplied(ctx context.Context, logger *slog.Logger, err error, detail string) error {
 	switch {
-	case errors.Is(err, code.ErrSuperseded):
+	case errors.Is(err, gitlet.ErrSuperseded):
 		// A LATER ACTIVATION OWNS THE REPOSITORIES: this node applies an
 		// older configuration than one the fleet has already fenced, or
 		// has applied a later one itself, so every decision this one made
@@ -748,16 +748,16 @@ func codeReposNotApplied(ctx context.Context, logger *slog.Logger, err error, de
 // reconcile's to change, and each answers nil.
 func codeRepoNotApplied(ctx context.Context, logger *slog.Logger, name string, err error) error {
 	switch {
-	case errors.Is(err, code.ErrPurging):
+	case errors.Is(err, gitlet.ErrPurging):
 		logger.InfoContext(ctx, "code_repo_awaits_purge", "name", name,
 			"detail", "the purge of the repository that last held this name completes "+
 				"first; the code-retention duty declares it again when it does")
 		return nil
-	case errors.Is(err, code.ErrSuperseded):
+	case errors.Is(err, gitlet.ErrSuperseded):
 		logger.InfoContext(ctx, "code_repo_superseded", "name", name,
 			"detail", "a later configuration's reconcile owns this repository now")
 		return nil
-	case errors.Is(err, code.ErrNotConfigManaged):
+	case errors.Is(err, gitlet.ErrNotConfigManaged):
 		// SOMEBODY ELSE'S REPOSITORY HOLDS THE NAME, and a reconcile never
 		// takes over a repository the configuration does not manage — so
 		// no run of it changes this, and it is said at each one until a
@@ -767,7 +767,7 @@ func codeRepoNotApplied(ctx context.Context, logger *slog.Logger, name string, e
 				"configuration never takes one over: rename the declaration; the rest of "+
 				"code.repos is still applied")
 		return nil
-	case errors.Is(err, code.ErrInvalid):
+	case errors.Is(err, gitlet.ErrInvalid):
 		logger.ErrorContext(ctx, "code_repo_not_applied", "name", name, "error", err.Error(),
 			"detail", "the code log refuses this declaration as written, which the "+
 				"configuration's validation should have refused: the revision that corrects "+
@@ -788,12 +788,12 @@ func codeRepoNotApplied(ctx context.Context, logger *slog.Logger, name string, e
 // to retire, and this build is a newer build's OLDER PEER in a rolling
 // upgrade: deleting such a repository for being absent from code.repos would
 // throw away somebody's repository on every node this build runs on.
-// [code.Store.DeleteRepo] checks the manager again inside its own snapshot,
+// [gitlet.Store.DeleteRepo] checks the manager again inside its own snapshot,
 // so this is the reconcile not asking rather than the only guard.
-func retiredByOmission(l code.RepoLife) bool {
-	live := l.Status == code.RepoStatusImporting || l.Status == code.RepoStatusActive ||
-		l.Status == code.RepoStatusArchived
-	return live && l.ManagedBy == code.ManagedConfig
+func retiredByOmission(l gitlet.RepoLife) bool {
+	live := l.Status == gitlet.RepoStatusImporting || l.Status == gitlet.RepoStatusActive ||
+		l.Status == gitlet.RepoStatusArchived
+	return live && l.ManagedBy == gitlet.ManagedConfig
 }
 
 // declaredRepo is one code.repos entry as the domain records it, against the
@@ -801,10 +801,10 @@ func retiredByOmission(l code.RepoLife) bool {
 // ([codeOwners]): the owner and every path owner resolved to a unit's key (or
 // a seat's handle), every protection rule spelled as its namespaced pattern
 // ([config.CodeProtection.Pattern]) and SORTED, each one's merge gate resolved
-// ([config.CodeProtection.Gate]) and in its one form ([code.CanonicalGate]),
-// and the path owners in theirs ([code.CanonicalPathOwners]) — the record
+// ([config.CodeProtection.Gate]) and in its one form ([gitlet.CanonicalGate]),
+// and the path owners in theirs ([gitlet.CanonicalPathOwners]) — the record
 // carries one canonical order, so every node deciding one declaration forms
-// byte-identical records, and [code.RepoSettings.Validate] refuses any other —
+// byte-identical records, and [gitlet.RepoSettings.Validate] refuses any other —
 // and the default branch, the visibility and the search mode defaulted, the
 // last to indexed: a repository the company declares is searched across. Its
 // mirrors and its import are recorded as written — each credential the ${VAR}
@@ -814,54 +814,54 @@ func retiredByOmission(l code.RepoLife) bool {
 //
 // AN ERROR only for a revision validation refuses — an owner the chart does
 // not resolve: a runnable revision never reaches it, and one that does is
-// named rather than recorded with an empty owner. It is [code.ErrInvalid],
+// named rather than recorded with an empty owner. It is [gitlet.ErrInvalid],
 // since the declaration as written is what is wrong: no run of the reconcile
 // changes it, and only a revision that corrects it does.
-func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
+func declaredRepo(o *org.Index, r config.CodeRepo) (gitlet.Declared, error) {
 	if o == nil {
-		return code.Declared{}, fmt.Errorf("%w: the epoch has no chart to resolve the "+
-			"owner on", code.ErrInvalid)
+		return gitlet.Declared{}, fmt.Errorf("%w: the epoch has no chart to resolve the "+
+			"owner on", gitlet.ErrInvalid)
 	}
 	owner, err := declaredOwner(o, "owner", r.Owner.Unit, r.Owner.Seat)
 	if err != nil {
-		return code.Declared{}, err
+		return gitlet.Declared{}, err
 	}
-	protections := make([]code.Protection, 0, len(r.Protect))
+	protections := make([]gitlet.Protection, 0, len(r.Protect))
 	for _, rule := range r.Protect {
-		p := code.Protection{PushRule: code.PushRule{
+		p := gitlet.Protection{PushRule: gitlet.PushRule{
 			Pattern: rule.Pattern(), AllowForce: rule.AllowForce, AllowDelete: rule.AllowDelete,
-			DirectPush: code.DirectPush(rule.DirectPush.Resolved()),
+			DirectPush: gitlet.DirectPush(rule.DirectPush.Resolved()),
 		}}
 		if g := rule.Gate(); g != nil {
-			gate := code.CanonicalGate(declaredGate(*g))
+			gate := gitlet.CanonicalGate(declaredGate(*g))
 			p.Gate = &gate
 		}
 		protections = append(protections, p)
 	}
-	slices.SortFunc(protections, func(a, b code.Protection) int { return cmp.Compare(a.Pattern, b.Pattern) })
-	owners := make([]code.PathOwner, 0, len(r.PathOwners))
+	slices.SortFunc(protections, func(a, b gitlet.Protection) int { return cmp.Compare(a.Pattern, b.Pattern) })
+	owners := make([]gitlet.PathOwner, 0, len(r.PathOwners))
 	for i, po := range r.PathOwners {
 		who, err := declaredOwner(o, fmt.Sprintf("path_owners[%d]", i), po.Unit, po.Seat)
 		if err != nil {
-			return code.Declared{}, err
+			return gitlet.Declared{}, err
 		}
-		owners = append(owners, code.PathOwner{Owner: who, Paths: po.Paths})
+		owners = append(owners, gitlet.PathOwner{Owner: who, Paths: po.Paths})
 	}
-	d := code.Declared{Name: r.Name, Settings: code.RepoSettings{
-		ManagedBy: code.ManagedConfig, Owner: owner, Visibility: code.Visibility(r.Visibility.Resolved()),
-		Search: code.SearchMode(r.Search.Resolved()), DefaultBranch: r.ResolvedDefaultBranch(),
+	d := gitlet.Declared{Name: r.Name, Settings: gitlet.RepoSettings{
+		ManagedBy: gitlet.ManagedConfig, Owner: owner, Visibility: gitlet.Visibility(r.Visibility.Resolved()),
+		Search: gitlet.SearchMode(r.Search.Resolved()), DefaultBranch: r.ResolvedDefaultBranch(),
 		Description: r.Description, Archived: r.Archived, Protections: protections,
-		PathOwners: code.CanonicalPathOwners(owners),
+		PathOwners: gitlet.CanonicalPathOwners(owners),
 	}}
 	if m := r.MirrorFrom; m != nil {
-		d.Settings.MirrorFrom = &code.MirrorSource{URL: m.URL, Credential: m.Credential}
+		d.Settings.MirrorFrom = &gitlet.MirrorSource{URL: m.URL, Credential: m.Credential}
 	}
 	if m := r.MirrorTo; m != nil {
-		d.Settings.MirrorTo = &code.MirrorTarget{URL: m.URL, Credential: m.Credential,
+		d.Settings.MirrorTo = &gitlet.MirrorTarget{URL: m.URL, Credential: m.Credential,
 			As: strings.TrimSpace(m.As), Refs: slices.Clone(m.Refs)}
 	}
 	if i := r.Import; i != nil {
-		d.Import = &code.ImportSource{URL: i.URL, Credential: i.Credential}
+		d.Import = &gitlet.ImportSource{URL: i.URL, Credential: i.Credential}
 	}
 	return d, nil
 }
@@ -870,20 +870,20 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 // as the code domain records it: each value of config's closed sets the
 // domain's of the same spelling (TestEveryDeclaredMergeByIsOneTheDomainRecords
 // holds the sets to each other), its lists in the document's order —
-// [code.CanonicalGate] forms the record's — and nil where the document names
+// [gitlet.CanonicalGate] forms the record's — and nil where the document names
 // none, so a gate that names no human path records none.
-func declaredGate(g config.CodeGate) code.MergeGate {
-	out := code.MergeGate{
-		MergeBy: code.MergeBy(g.MergeBy), Approvals: code.Approvals(g.Approvals),
+func declaredGate(g config.CodeGate) gitlet.MergeGate {
+	out := gitlet.MergeGate{
+		MergeBy: gitlet.MergeBy(g.MergeBy), Approvals: gitlet.Approvals(g.Approvals),
 		ApprovalsUnless: declaredClasses(g.ApprovalsUnless), Checks: g.Checks,
-		Landing:       code.Landing{Depth: g.Landing.Depth, Batch: g.Landing.Batch},
-		OwnersApprove: g.OwnersApprove, DeleteSource: code.DeleteSource(g.DeleteSource),
+		Landing:       gitlet.Landing{Depth: g.Landing.Depth, Batch: g.Landing.Batch},
+		OwnersApprove: g.OwnersApprove, DeleteSource: gitlet.DeleteSource(g.DeleteSource),
 		AgentsEditChecks: g.AgentsEditChecks,
 	}
 	if g.HumanPaths != nil {
-		out.HumanPaths = make([]code.HumanPath, len(g.HumanPaths))
+		out.HumanPaths = make([]gitlet.HumanPath, len(g.HumanPaths))
 		for i, h := range g.HumanPaths {
-			out.HumanPaths[i] = code.HumanPath{Glob: h.Glob, Unless: declaredClasses(h.Unless)}
+			out.HumanPaths[i] = gitlet.HumanPath{Glob: h.Glob, Unless: declaredClasses(h.Unless)}
 		}
 	}
 	return out
@@ -891,39 +891,39 @@ func declaredGate(g config.CodeGate) code.MergeGate {
 
 // declaredClasses is a list of config's change classes as the domain's: nil
 // for none.
-func declaredClasses(classes []config.CodeChangeClass) []code.ChangeClass {
+func declaredClasses(classes []config.CodeChangeClass) []gitlet.ChangeClass {
 	if classes == nil {
 		return nil
 	}
-	out := make([]code.ChangeClass, len(classes))
+	out := make([]gitlet.ChangeClass, len(classes))
 	for i, c := range classes {
-		out[i] = code.ChangeClass(c)
+		out[i] = gitlet.ChangeClass(c)
 	}
 	return out
 }
 
 // declaredOwner is the owner a declaration names at field — exactly one of a
 // unit, resolved to its KEY whichever spelling the declaration used, or a seat,
-// by its handle — or [code.ErrInvalid] for one the configuration's validation
+// by its handle — or [gitlet.ErrInvalid] for one the configuration's validation
 // refuses.
-func declaredOwner(o *org.Index, field, unit, seat string) (code.Owner, error) {
+func declaredOwner(o *org.Index, field, unit, seat string) (gitlet.Owner, error) {
 	switch unit, seat = strings.TrimSpace(unit), strings.TrimSpace(seat); {
 	case unit != "" && seat == "":
 		u := o.UnitByRef(unit)
 		if u == nil {
-			return code.Owner{}, fmt.Errorf("%w: %s.unit: %q is no unit of the chart, which the "+
-				"configuration's validation refuses", code.ErrInvalid, field, unit)
+			return gitlet.Owner{}, fmt.Errorf("%w: %s.unit: %q is no unit of the chart, which the "+
+				"configuration's validation refuses", gitlet.ErrInvalid, field, unit)
 		}
-		return code.Owner{Kind: code.OwnerUnit, Ref: u.Key()}, nil
+		return gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: u.Key()}, nil
 	case seat != "" && unit == "":
 		if o.SeatByHandle(seat) == nil {
-			return code.Owner{}, fmt.Errorf("%w: %s.seat: %q is no seat's handle, which the "+
-				"configuration's validation refuses", code.ErrInvalid, field, seat)
+			return gitlet.Owner{}, fmt.Errorf("%w: %s.seat: %q is no seat's handle, which the "+
+				"configuration's validation refuses", gitlet.ErrInvalid, field, seat)
 		}
-		return code.Owner{Kind: code.OwnerSeat, Ref: seat}, nil
+		return gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: seat}, nil
 	}
-	return code.Owner{}, fmt.Errorf("%w: %s: a declaration names exactly one of a unit and a seat, "+
-		"which the configuration's validation requires", code.ErrInvalid, field)
+	return gitlet.Owner{}, fmt.Errorf("%w: %s: a declaration names exactly one of a unit and a seat, "+
+		"which the configuration's validation requires", gitlet.ErrInvalid, field)
 }
 
 // codeOwners is the epoch c's chart indexed for declaredRepo — built ONCE a
@@ -939,24 +939,24 @@ func codeOwners(c *Company) *org.Index {
 
 const (
 	// codeRetentionDutyName is the fleet singleton that sweeps the packs
-	// retired past code.RetireGrace and purges the repositories deleted past
+	// retired past gitlet.RetireGrace and purges the repositories deleted past
 	// their retention.
 	codeRetentionDutyName = "code-retention"
 
 	// codeRetentionDutyTTL is how long the duty outlives a holder that
-	// stopped renewing it: three ticks ([code.RetentionInterval]), every
+	// stopped renewing it: three ticks ([gitlet.RetentionInterval]), every
 	// other singleton's rule — a holder that died is replaced within three
 	// quarters of an hour, against a purge that is days late by design. A
 	// pass in flight renews it as it runs ([dutyRenewal.keep]), so no pass
 	// outlives its holder's claim.
-	codeRetentionDutyTTL = 3 * code.RetentionInterval
+	codeRetentionDutyTTL = 3 * gitlet.RetentionInterval
 )
 
 // codeRetentionDuty is the code-retention duty as one node runs it: the pass
-// ([code.Retention]), and the claim, the renewal, the decline and the give-back
+// ([gitlet.Retention]), and the claim, the renewal, the decline and the give-back
 // every fleet duty that decides from a domain's rows goes through.
 type codeRetentionDuty struct {
-	pass *code.Retention
+	pass *gitlet.Retention
 
 	// claim answers whether this node holds the duty this turn
 	// ([Engine.workerDuty]); nil is a node with nobody to claim from, which
@@ -987,9 +987,9 @@ type codeRetentionDuty struct {
 
 // newCodeRetentionDuty is the duty over this node's lifecycle store and code
 // reader, its ref expiry's pushes naming nodeID (the core's resolved id).
-func (e *Engine) newCodeRetentionDuty(store *code.Store, reader *code.Reader, nodeID string) *codeRetentionDuty {
+func (e *Engine) newCodeRetentionDuty(store *gitlet.Store, reader *gitlet.Reader, nodeID string) *codeRetentionDuty {
 	d := &codeRetentionDuty{
-		pass: &code.Retention{
+		pass: &gitlet.Retention{
 			Store: store, Reader: reader,
 			// THE CURRENT EPOCH'S, read at every pass: a revision that
 			// lengthens the retention saves a repository the next pass
@@ -1053,7 +1053,7 @@ func (e *Engine) stopCodeRetention() {
 
 // decidesFrom is the one domain the duty decides from: the code log's rows,
 // whose deleted repositories it purges.
-func (d *codeRetentionDuty) decidesFrom() []string { return []string{code.Domain{}.Name()} }
+func (d *codeRetentionDuty) decidesFrom() []string { return []string{gitlet.Domain{}.Name()} }
 
 // declined is whether this node declines the duty now, said on a change
 // ([dutyDecline.record]) — asked before every turn's claim, and before every
@@ -1071,7 +1071,7 @@ func (d *codeRetentionDuty) decidesFrom() []string { return []string{code.Domain
 //     replaced. Stronger than the posture on purpose, and cheap: a node
 //     merely applying the revision, or starting, asks again a reconcile
 //     interval later ([codeRetentionDuty.wait]), a node that failed it a
-//     [code.RetentionInterval] later, and a purge is days late by design.
+//     [gitlet.RetentionInterval] later, and a purge is days late by design.
 //
 // The pass's sweeps of retired packs are declined with its purges: they
 // decide from the same copy, and a sweep that waits for a node that serves
@@ -1092,12 +1092,12 @@ func (d *codeRetentionDuty) tick(ctx context.Context) time.Duration {
 }
 
 // wait is how long the loop waits after the turn that just ran:
-// [code.RetentionInterval], or sooner where the turn declined for a reason
+// [gitlet.RetentionInterval], or sooner where the turn declined for a reason
 // that clears by itself ([dutyDecline.again]) — the boot's first turn, which
 // runs before `crewlet run` has built the reconciler, and a turn that meets an
 // activation this node is still applying.
 func (d *codeRetentionDuty) wait() time.Duration {
-	return cmp.Or(d.declines.again(), code.RetentionInterval)
+	return cmp.Or(d.declines.again(), gitlet.RetentionInterval)
 }
 
 // turn is one turn of the duty: claimed, kept while its pass runs, and the
@@ -1106,10 +1106,10 @@ func (d *codeRetentionDuty) wait() time.Duration {
 // DECLINED FIRST, before the claim ([codeRetentionDuty.declined]), and the
 // duty given back if this node holds it, so a node that may purge takes it at
 // its own next tick rather than once the lease lapses.
-func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, bool) {
+func (d *codeRetentionDuty) turn(ctx context.Context) (gitlet.RetentionReport, bool) {
 	if d.declined(ctx) {
 		d.declines.giveBack(ctx, codeRetentionDecline, d.giveBack)
-		return code.RetentionReport{}, false
+		return gitlet.RetentionReport{}, false
 	}
 	asked := d.renewal.clock.Now() // BEFORE the claim: what it confirms runs from here
 	if d.claim != nil {
@@ -1118,9 +1118,9 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 			if ctx.Err() == nil {
 				log.WarnContext(ctx, "code_retention_duty_unclaimed", "error", err)
 			}
-			return code.RetentionReport{}, false
+			return gitlet.RetentionReport{}, false
 		case !held:
-			return code.RetentionReport{}, false
+			return gitlet.RetentionReport{}, false
 		}
 	}
 	// FROM HERE THE PASS KEEPS THE DUTY AS IT RUNS, and is ended the moment
@@ -1155,7 +1155,7 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 // said — is no failure; any other error is a warning. There is no /fleet view
 // of a pass: this line, and the scratch expiry's own
 // code_scratch_expiry_skipped warning, are where a pass is read.
-func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.RetentionReport, err error,
+func logCodeRetention(ctx context.Context, logger *slog.Logger, report gitlet.RetentionReport, err error,
 	ended bool) {
 	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows,
 		"checks_sweeps", report.ChecksSweeps, "checks_swept_rows", report.ChecksSweptRows,
@@ -1193,7 +1193,7 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.Rete
 	}
 }
 
-// redeclareCode is the retention pass's [code.Retention.OnPurged]: the purge
+// redeclareCode is the retention pass's [gitlet.Retention.OnPurged]: the purge
 // of a repository freed its name, and where the CURRENT epoch declares that
 // name again — a person re-added it while it purged, and the reconcile could
 // only wait the purge out (code_repo_awaits_purge) — it is created now rather

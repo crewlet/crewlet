@@ -12,7 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -281,7 +281,7 @@ func (t trackerInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.S
 // repository — at the floor the caller named on the code log.
 type codeInbox struct {
 	reads CodeReads
-	asker code.Principal
+	asker gitlet.Principal
 	fresh statelog.Freshness
 	now   time.Time
 }
@@ -297,8 +297,8 @@ func (e codeReadRefused) Error() string { return e.err.Error() }
 func (e codeReadRefused) Unwrap() error { return e.err }
 
 func (c codeInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
-	answer, err := c.reads.Read(ctx, code.ReadQuery{Kind: code.ReadInbox, Asker: c.asker, Cursor: q.Cursor,
-		Limit: q.Limit, Fresh: c.fresh, Inbox: &code.InboxQuery{Handle: q.Handle, Unread: q.Unread,
+	answer, err := c.reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadInbox, Asker: c.asker, Cursor: q.Cursor,
+		Limit: q.Limit, Fresh: c.fresh, Inbox: &gitlet.InboxQuery{Handle: q.Handle, Unread: q.Unread,
 			PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Now: c.now}})
 	if err != nil {
 		return inbox.SourcePage{}, codeReadRefused{err: err}
@@ -339,9 +339,9 @@ func (c codeInbox) Cards(ctx context.Context, page inbox.SourcePage, notices []i
 	error) {
 
 	var changes []string
-	saids := make([]code.InboxNotice, len(notices))
+	saids := make([]gitlet.InboxNotice, len(notices))
 	for i, n := range notices {
-		said, ok := n.Extra.(code.InboxNotice)
+		said, ok := n.Extra.(gitlet.InboxNotice)
 		if !ok {
 			return nil, fmt.Errorf("queries: a code notice carries %T, not Gitlet's notice", n.Extra)
 		}
@@ -360,7 +360,7 @@ func (c codeInbox) Cards(ctx context.Context, page inbox.SourcePage, notices []i
 	if !page.At.IsZero() {
 		fresh.Floors = []statelog.Position{page.At}
 	}
-	answer, err := c.reads.Read(ctx, code.ReadQuery{Kind: code.ReadNoticeCards, Asker: c.asker, Fresh: fresh,
+	answer, err := c.reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadNoticeCards, Asker: c.asker, Fresh: fresh,
 		NoticeCards: changes})
 	if err != nil {
 		return nil, codeReadRefused{err: err}

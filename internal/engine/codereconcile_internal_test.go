@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -23,30 +23,30 @@ import (
 // deletion call is counted.
 type fakeLifecycle struct {
 	activate error
-	ensure   func(declared []code.Declared) ([]code.EnsureResult, error)
-	delete   func(ids []string) ([]code.DeleteResult, error)
+	ensure   func(declared []gitlet.Declared) ([]gitlet.EnsureResult, error)
+	delete   func(ids []string) ([]gitlet.DeleteResult, error)
 	deletes  int
 }
 
-func (f *fakeLifecycle) Activate(context.Context, time.Time) (code.Activation, error) {
-	return code.Activation{}, f.activate
+func (f *fakeLifecycle) Activate(context.Context, time.Time) (gitlet.Activation, error) {
+	return gitlet.Activation{}, f.activate
 }
 
-func (f *fakeLifecycle) EnsureRepos(_ context.Context, _ code.Activation,
-	declared []code.Declared) ([]code.EnsureResult, error) {
+func (f *fakeLifecycle) EnsureRepos(_ context.Context, _ gitlet.Activation,
+	declared []gitlet.Declared) ([]gitlet.EnsureResult, error) {
 	return f.ensure(declared)
 }
 
-func (f *fakeLifecycle) DeleteRepos(_ context.Context, _ code.Activation,
-	ids []string) ([]code.DeleteResult, error) {
+func (f *fakeLifecycle) DeleteRepos(_ context.Context, _ gitlet.Activation,
+	ids []string) ([]gitlet.DeleteResult, error) {
 	f.deletes++
 	return f.delete(ids)
 }
 
 // fakeLives walks the rows it holds.
-type fakeLives []code.RepoLife
+type fakeLives []gitlet.RepoLife
 
-func (f fakeLives) WalkLives(_ context.Context, visit func(code.RepoLife) error) error {
+func (f fakeLives) WalkLives(_ context.Context, visit func(gitlet.RepoLife) error) error {
 	for _, l := range f {
 		if err := visit(l); err != nil {
 			return err
@@ -58,7 +58,7 @@ func (f fakeLives) WalkLives(_ context.Context, visit func(code.RepoLife) error)
 // unlistedLives is rows whose walk fails.
 type unlistedLives struct{ err error }
 
-func (u unlistedLives) WalkLives(context.Context, func(code.RepoLife) error) error { return u.err }
+func (u unlistedLives) WalkLives(context.Context, func(gitlet.RepoLife) error) error { return u.err }
 
 // reconcileFixture is a chart with one seat, count repositories it owns, and
 // the rows of count more the configuration manages and no longer declares.
@@ -70,8 +70,8 @@ func reconcileFixture(t *testing.T, count int) (*org.Index, []config.CodeRepo, f
 	lives := make(fakeLives, count)
 	for i := range repos {
 		repos[i] = config.CodeRepo{Name: fmt.Sprintf("r%04d", i), Owner: config.CodeOwner{Seat: "swe"}}
-		lives[i] = code.RepoLife{ID: fmt.Sprintf("gone-%04d", i), Name: fmt.Sprintf("gone%04d", i),
-			Status: code.RepoStatusActive, ManagedBy: code.ManagedConfig}
+		lives[i] = gitlet.RepoLife{ID: fmt.Sprintf("gone-%04d", i), Name: fmt.Sprintf("gone%04d", i),
+			Status: gitlet.RepoStatusActive, ManagedBy: gitlet.ManagedConfig}
 	}
 	return o.Index(), repos, lives
 }
@@ -127,11 +127,11 @@ func TestAFailureTheWholeReconcileSharesIsLoggedOnce(t *testing.T) {
 		{"a node the log refuses", "code_repos_not_applied",
 			&statelog.Unavailable{Reason: statelog.ReasonLogFull, Detail: "full"}, nil},
 		{"a later activation's fence", "code_repos_superseded",
-			fmt.Errorf("%w (activation 1)", code.ErrSuperseded), nil},
+			fmt.Errorf("%w (activation 1)", gitlet.ErrSuperseded), nil},
 		{"a context that ended", "code_repos_not_applied", context.Canceled, nil},
 		{"a newer activation's request", "code_repos_superseded",
 			fmt.Errorf("code: create %q: %w", "r0001", context.Canceled),
-			fmt.Errorf("%w: a newer activation asked", code.ErrSuperseded)},
+			fmt.Errorf("%w: a newer activation asked", gitlet.ErrSuperseded)},
 		{"the engine stopping", "code_repos_interrupted",
 			fmt.Errorf("code: create %q: %w", "r0001", context.Canceled), errCodeReconcileStopped},
 	} {
@@ -144,15 +144,15 @@ func TestAFailureTheWholeReconcileSharesIsLoggedOnce(t *testing.T) {
 				ctx = ended
 			}
 			store := &fakeLifecycle{
-				ensure: func(declared []code.Declared) ([]code.EnsureResult, error) {
-					out := make([]code.EnsureResult, len(declared))
-					out[0] = code.EnsureResult{Err: fmt.Errorf("%w: %s", code.ErrPurging, "id")}
+				ensure: func(declared []gitlet.Declared) ([]gitlet.EnsureResult, error) {
+					out := make([]gitlet.EnsureResult, len(declared))
+					out[0] = gitlet.EnsureResult{Err: fmt.Errorf("%w: %s", gitlet.ErrPurging, "id")}
 					for i := range out[1:] {
-						out[i+1] = code.EnsureResult{Err: tc.shared}
+						out[i+1] = gitlet.EnsureResult{Err: tc.shared}
 					}
 					return out, tc.shared
 				},
-				delete: func([]string) ([]code.DeleteResult, error) { return nil, nil },
+				delete: func([]string) ([]gitlet.DeleteResult, error) { return nil, nil },
 			}
 			var buf bytes.Buffer
 			reconcileCodeRepos(ctx, slog.New(slog.NewJSONHandler(&buf, nil)), store,
@@ -188,13 +188,13 @@ func TestAFailureTheWholeReconcileSharesIsLoggedOnce(t *testing.T) {
 		t.Parallel()
 		full := &statelog.Unavailable{Reason: statelog.ReasonLogFull, Detail: "full"}
 		store := &fakeLifecycle{
-			ensure: func(declared []code.Declared) ([]code.EnsureResult, error) {
-				return make([]code.EnsureResult, len(declared)), nil
+			ensure: func(declared []gitlet.Declared) ([]gitlet.EnsureResult, error) {
+				return make([]gitlet.EnsureResult, len(declared)), nil
 			},
-			delete: func(ids []string) ([]code.DeleteResult, error) {
-				out := make([]code.DeleteResult, len(ids))
+			delete: func(ids []string) ([]gitlet.DeleteResult, error) {
+				out := make([]gitlet.DeleteResult, len(ids))
 				for i := range out {
-					out[i] = code.DeleteResult{Err: full}
+					out[i] = gitlet.DeleteResult{Err: full}
 				}
 				return out, full
 			},
@@ -218,14 +218,14 @@ func TestWhatAReconcileWroteIsCountedAndNamedInPart(t *testing.T) {
 	t.Parallel()
 	owners, repos, _ := reconcileFixture(t, 100)
 	store := &fakeLifecycle{
-		ensure: func(declared []code.Declared) ([]code.EnsureResult, error) {
-			out := make([]code.EnsureResult, len(declared))
+		ensure: func(declared []gitlet.Declared) ([]gitlet.EnsureResult, error) {
+			out := make([]gitlet.EnsureResult, len(declared))
 			for i := range out {
-				out[i] = code.EnsureResult{Ensured: code.Ensured{Changed: true}}
+				out[i] = gitlet.EnsureResult{Ensured: gitlet.Ensured{Changed: true}}
 			}
 			return out, nil
 		},
-		delete: func([]string) ([]code.DeleteResult, error) { return nil, nil },
+		delete: func([]string) ([]gitlet.DeleteResult, error) { return nil, nil },
 	}
 	var buf bytes.Buffer
 	reconcileCodeRepos(t.Context(), slog.New(slog.NewJSONHandler(&buf, nil)), store,
@@ -263,24 +263,24 @@ func TestAReconcileAnswersWhatRunningItAgainCanDo(t *testing.T) {
 	t.Parallel()
 	owners, repos, lives := reconcileFixture(t, 4)
 	full := &statelog.Unavailable{Reason: statelog.ReasonLogFull, Detail: "full"}
-	every := func(err error) func([]code.Declared) ([]code.EnsureResult, error) {
-		return func(declared []code.Declared) ([]code.EnsureResult, error) {
-			out := make([]code.EnsureResult, len(declared))
+	every := func(err error) func([]gitlet.Declared) ([]gitlet.EnsureResult, error) {
+		return func(declared []gitlet.Declared) ([]gitlet.EnsureResult, error) {
+			out := make([]gitlet.EnsureResult, len(declared))
 			for i := range out {
 				out[i].Err = err
 			}
 			return out, err
 		}
 	}
-	one := func(err error) func([]code.Declared) ([]code.EnsureResult, error) {
-		return func(declared []code.Declared) ([]code.EnsureResult, error) {
-			out := make([]code.EnsureResult, len(declared))
+	one := func(err error) func([]gitlet.Declared) ([]gitlet.EnsureResult, error) {
+		return func(declared []gitlet.Declared) ([]gitlet.EnsureResult, error) {
+			out := make([]gitlet.EnsureResult, len(declared))
 			out[1].Err = err
 			return out, nil
 		}
 	}
-	deleted := func(ids []string) ([]code.DeleteResult, error) {
-		return make([]code.DeleteResult, len(ids)), nil
+	deleted := func(ids []string) ([]gitlet.DeleteResult, error) {
+		return make([]gitlet.DeleteResult, len(ids)), nil
 	}
 	cancelled := fmt.Errorf("code: create %q: %w", "r0001", context.Canceled)
 	stray := append([]config.CodeRepo(nil), repos...)
@@ -298,29 +298,29 @@ func TestAReconcileAnswersWhatRunningItAgainCanDo(t *testing.T) {
 		{name: "everything applied", store: &fakeLifecycle{ensure: one(nil), delete: deleted}},
 		{name: "a fence not raised", store: &fakeLifecycle{activate: full}, undone: true},
 		{name: "a later activation's fence", store: &fakeLifecycle{
-			activate: fmt.Errorf("%w (activation 1)", code.ErrSuperseded)}},
+			activate: fmt.Errorf("%w (activation 1)", gitlet.ErrSuperseded)}},
 		{name: "a failure every repository shares", store: &fakeLifecycle{ensure: every(full)}, undone: true},
 		{name: "a newer activation's request", store: &fakeLifecycle{ensure: every(cancelled)},
-			endedBy: fmt.Errorf("%w: a newer activation asked", code.ErrSuperseded)},
+			endedBy: fmt.Errorf("%w: a newer activation asked", gitlet.ErrSuperseded)},
 		{name: "the engine stopping", store: &fakeLifecycle{ensure: every(cancelled)},
 			endedBy: errCodeReconcileStopped},
 		{name: "an outcome the log did not answer", store: &fakeLifecycle{
 			ensure: one(errors.New("code: whether \"r0001\" was created is unknown")), delete: deleted},
 			undone: true},
 		{name: "a purge to wait out", store: &fakeLifecycle{
-			ensure: one(fmt.Errorf("%w: repository x", code.ErrPurging)), delete: deleted}},
+			ensure: one(fmt.Errorf("%w: repository x", gitlet.ErrPurging)), delete: deleted}},
 		{name: "a repository a later activation owns", store: &fakeLifecycle{
-			ensure: one(fmt.Errorf("%w (settling x)", code.ErrSuperseded)), delete: deleted}},
+			ensure: one(fmt.Errorf("%w (settling x)", gitlet.ErrSuperseded)), delete: deleted}},
 		{name: "a name another manager holds", store: &fakeLifecycle{
-			ensure: one(fmt.Errorf("%w: r0001 is managed by %q", code.ErrNotConfigManaged, "person")),
+			ensure: one(fmt.Errorf("%w: r0001 is managed by %q", gitlet.ErrNotConfigManaged, "person")),
 			delete: deleted}},
 		{name: "a declaration the log refuses", store: &fakeLifecycle{
-			ensure: one(fmt.Errorf("%w: settings.owner", code.ErrInvalid)), delete: deleted}},
+			ensure: one(fmt.Errorf("%w: settings.owner", gitlet.ErrInvalid)), delete: deleted}},
 		{name: "an owner the chart does not resolve", repos: stray,
 			store: &fakeLifecycle{ensure: one(nil), delete: deleted}},
 		{name: "a deletion that failed", store: &fakeLifecycle{ensure: one(nil),
-			delete: func(ids []string) ([]code.DeleteResult, error) {
-				out := make([]code.DeleteResult, len(ids))
+			delete: func(ids []string) ([]gitlet.DeleteResult, error) {
+				out := make([]gitlet.DeleteResult, len(ids))
 				out[0].Err = errors.New("code: whether repository gone-0000 was deleted is unknown")
 				return out, nil
 			}}, undone: true},

@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -22,7 +22,7 @@ import (
 // a review with its findings, a comment and a thread's resolution, and an
 // answer to findings — each ONE write of the change's conversation, decided by
 // the repository's committing data node in one snapshot
-// (code.ConversationWrite, CodeWriter.Converse) on the change's own subject:
+// (gitlet.ConversationWrite, CodeWriter.Converse) on the change's own subject:
 // its writer stamps who wrote it, a reviewer's kind, a comment's and a
 // review's ids, from the write's asker, the chart and its snapshot. Every one
 // is a change write ([ChangeWrites]) on the change writes' terms
@@ -36,7 +36,7 @@ import (
 // The call reads the change ONCE, at the seat's level, for the id a write
 // names it by — and a review or an anchored comment for the revision it
 // judges, the head unless the call names an earlier one — and the write is
-// decided at or past that read (code.ConversationWrite.Seen): a revision the
+// decided at or past that read (gitlet.ConversationWrite.Seen): a revision the
 // deciding node has not reached is refused unknown_revision rather than taken
 // for one that does not exist. An ask for review and a comment are additive —
 // the operation makes the same call made again the same write — so neither
@@ -48,7 +48,7 @@ import (
 // A finding, and a comment anchored to a line, names the commit and the blob
 // its lines were read in — the revision's head on the new side of its diff,
 // its recorded base on the old — so a later revision can carry it to where
-// those lines went (code.Reanchor). The call reads every blob it names in ONE
+// those lines went (gitlet.Reanchor). The call reads every blob it names in ONE
 // read by object id, the revision's diff kept to the files they are on, at the
 // floor of the records that moved the revision's head and its target: a
 // finding is about a file the revision CHANGES, and one about any other is
@@ -79,8 +79,8 @@ const emptyTreeID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 type conversing struct {
 	g      changeRead
 	args   map[string]any
-	change *code.ChangeSummary
-	head   code.RevisionRow
+	change *gitlet.ChangeSummary
+	head   gitlet.RevisionRow
 	at     statelog.Position
 }
 
@@ -126,7 +126,7 @@ func (cv conversing) op() string {
 // send asks the repository's committing data node to decide w — under the
 // call's operation, as its caller, at or past the call's read of the change —
 // and answers what it came to, or the refusal the call is answered with.
-func (cv conversing) send(ctx context.Context, w code.ConversationWrite) (code.ConversationResult,
+func (cv conversing) send(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult,
 	*tools.Result) {
 
 	w.OpID, w.Seen = cv.op(), cv.at
@@ -134,26 +134,26 @@ func (cv conversing) send(ctx context.Context, w code.ConversationWrite) (code.C
 }
 
 // decided completes w with its asker and asks it, held first to the rule every
-// change writer holds a write to (code.ConversationWrite's Validate), so one no
+// change writer holds a write to (gitlet.ConversationWrite's Validate), so one no
 // node would decide is refused naming its field before it is routed.
-func (cv conversing) decided(ctx context.Context, w code.ConversationWrite) (code.ConversationResult,
+func (cv conversing) decided(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult,
 	*tools.Result) {
 
 	g := cv.g
 	w.Asker, w.Ceiling = g.c.asker, g.c.write
 	if err := w.Validate(); err != nil {
 		r := codeWriteFailure(ctx, g.tool, g.c.actor, g.repo.Name, err)
-		return code.ConversationResult{}, &r
+		return gitlet.ConversationResult{}, &r
 	}
 	res, err := g.deps.Writer.Converse(ctx, w)
 	if err != nil {
 		r := g.deps.failedWrite(ctx, g.turn, g.tool, g.c, g.repo, w.OpID, err)
-		return code.ConversationResult{}, &r
+		return gitlet.ConversationResult{}, &r
 	}
 	commit(g.turn, res.Outcome, conversed(w))
 	if res.Refusal != "" {
 		r := conversationRefused(g.tool, res)
-		return code.ConversationResult{}, &r
+		return gitlet.ConversationResult{}, &r
 	}
 	switch res.Outcome {
 	case statelog.OutcomeApplied, statelog.OutcomePending:
@@ -162,12 +162,12 @@ func (cv conversing) decided(ctx context.Context, w code.ConversationWrite) (cod
 		r := unknownWrite(g.c.actor, g.tool, fmt.Sprintf("the write of %s's conversation landed", g.ref()), w.OpID,
 			false, unknownNext(false, sameCall(g.c.actor, g.tool), fmt.Sprintf("Read %s with %s", g.ref(),
 				CodeGetChangeTool), "the same write would be made twice"))
-		return code.ConversationResult{}, &r
+		return gitlet.ConversationResult{}, &r
 	}
 	r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered a conversation write with outcome %q "+
 		"and no refusal", res.Outcome), fmt.Sprintf("%s could not tell what became of the write: %s.", g.tool,
 		faultSaid))
-	return code.ConversationResult{}, &r
+	return gitlet.ConversationResult{}, &r
 }
 
 // codeConversationAnswer is a conversation write's answer: the change, what
@@ -193,7 +193,7 @@ type codeConversationAnswer struct {
 }
 
 // answerOf is res as the call answers it.
-func (cv conversing) answerOf(res code.ConversationResult) codeConversationAnswer {
+func (cv conversing) answerOf(res gitlet.ConversationResult) codeConversationAnswer {
 	g := cv.g
 	return codeConversationAnswer{Repo: g.repo.Name, RenamedTo: g.repo.Redirect, RedirectUntil: g.repo.RedirectUntil,
 		Change: g.ref(), Outcome: res.Outcome, Unchanged: res.Unchanged, ID: res.ID, Findings: res.FindingIDs,
@@ -215,24 +215,24 @@ func (cv conversing) page(ctx context.Context, out codeConversationAnswer) (tool
 // a review past its bound INVALID — the fix is another call; and what waiting
 // clears UNAVAILABLE. superseded is the home's own refusal, never a caller's,
 // and has none.
-func conversationClass(r code.ConversationRefusal) (tools.Refusal, bool) {
+func conversationClass(r gitlet.ConversationRefusal) (tools.Refusal, bool) {
 	switch r {
-	case code.ConversationRefusalNotPermitted, code.ConversationRefusalNotAuthor,
-		code.ConversationRefusalNotRaiser:
+	case gitlet.ConversationRefusalNotPermitted, gitlet.ConversationRefusalNotAuthor,
+		gitlet.ConversationRefusalNotRaiser:
 		return tools.RefusalForbidden, true
-	case code.ConversationRefusalRepoArchived:
+	case gitlet.ConversationRefusalRepoArchived:
 		return tools.RefusalConflict, true
-	case code.ConversationRefusalUnknownRevision:
+	case gitlet.ConversationRefusalUnknownRevision:
 		return tools.RefusalStaleVersion, true
-	case code.ConversationRefusalChangeClosed, code.ConversationRefusalChangeMerged:
+	case gitlet.ConversationRefusalChangeClosed, gitlet.ConversationRefusalChangeMerged:
 		return tools.RefusalConflict, true
-	case code.ConversationRefusalRepoDeleted, code.ConversationRefusalChangeNotFound,
-		code.ConversationRefusalThreadGone, code.ConversationRefusalFindingGone:
+	case gitlet.ConversationRefusalRepoDeleted, gitlet.ConversationRefusalChangeNotFound,
+		gitlet.ConversationRefusalThreadGone, gitlet.ConversationRefusalFindingGone:
 		return tools.RefusalNotFound, true
-	case code.ConversationRefusalNoReviewer, code.ConversationRefusalTooManyReviewers,
-		code.ConversationRefusalTooManyFindings:
+	case gitlet.ConversationRefusalNoReviewer, gitlet.ConversationRefusalTooManyReviewers,
+		gitlet.ConversationRefusalTooManyFindings:
 		return tools.RefusalInvalid, true
-	case code.ConversationRefusalBusy, code.ConversationRefusalNotApplied, code.ConversationRefusalUnavailable:
+	case gitlet.ConversationRefusalBusy, gitlet.ConversationRefusalNotApplied, gitlet.ConversationRefusalUnavailable:
 		return tools.RefusalUnavailable, true
 	}
 	return "", false
@@ -240,7 +240,7 @@ func conversationClass(r code.ConversationRefusal) (tools.Refusal, bool) {
 
 // conversationRefused is a conversation write the change's writer refused, in
 // its class, with the decide's own sentence and what to do about it.
-func conversationRefused(tool string, res code.ConversationResult) tools.Result {
+func conversationRefused(tool string, res gitlet.ConversationResult) tools.Result {
 	cause := writeRefusalError(string(res.Refusal), res.Detail)
 	said := fmt.Sprintf("%s wrote nothing: %s (%s).", tool, res.Detail, res.Refusal)
 	class, known := conversationClass(res.Refusal)
@@ -271,13 +271,13 @@ func conversationRefused(tool string, res code.ConversationResult) tools.Result 
 // side of its diff.
 type anchorAt struct {
 	path string
-	side code.Side
+	side gitlet.Side
 }
 
 // anchored is where a revision's lines were read: the commit each side's
 // lines are in, and the blob each anchored file is on its side.
 type anchored struct {
-	commit map[code.Side]string
+	commit map[gitlet.Side]string
 	blob   map[anchorAt]string
 }
 
@@ -290,14 +290,14 @@ type anchored struct {
 // records that moved its head and its target. A file the revision does not
 // change, or one absent on the side named, is refused: a finding and an
 // anchored comment are about the change's own lines.
-func (cv conversing) anchor(ctx context.Context, rev code.RevisionRow, at []anchorAt) (anchored, *tools.Result) {
+func (cv conversing) anchor(ctx context.Context, rev gitlet.RevisionRow, at []anchorAt) (anchored, *tools.Result) {
 	g := cv.g
-	old := slices.ContainsFunc(at, func(a anchorAt) bool { return a.side == code.SideOld })
+	old := slices.ContainsFunc(at, func(a anchorAt) bool { return a.side == gitlet.SideOld })
 	if refusal := g.recorded(cv.change, rev, old); refusal != nil {
 		return anchored{}, refusal
 	}
 	base := rev.Facts.BaseOID
-	out := anchored{commit: map[code.Side]string{code.SideNew: rev.Head, code.SideOld: base},
+	out := anchored{commit: map[gitlet.Side]string{gitlet.SideNew: rev.Head, gitlet.SideOld: base},
 		blob: map[anchorAt]string{}}
 	if base == "" {
 		base = emptyTreeID
@@ -309,11 +309,11 @@ func (cv conversing) anchor(ctx context.Context, rev code.RevisionRow, at []anch
 		}
 	}
 	slices.Sort(paths)
-	files := map[string]code.DiffFile{}
-	q := code.GitQuery{Kind: code.GitDiff, RepoID: g.repo.ID, Fresh: g.floor(rev),
-		Diff: &code.DiffQuery{Base: base, Head: rev.Head, Paths: paths}}
+	files := map[string]gitlet.DiffFile{}
+	q := gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: g.repo.ID, Fresh: g.floor(rev),
+		Diff: &gitlet.DiffQuery{Base: base, Head: rev.Head, Paths: paths}}
 	// THE DIFF'S PAGES, each its files in git's order: a page of at most
-	// code.MaxDiffPaths files is one page but where their paths fill one, so
+	// gitlet.MaxDiffPaths files is one page but where their paths fill one, so
 	// a page names where the next begins and the read goes on.
 	for {
 		page, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, q)
@@ -336,7 +336,7 @@ func (cv conversing) anchor(ctx context.Context, rev code.RevisionRow, at []anch
 	for _, a := range at {
 		f, changed := files[a.path]
 		blob := f.NewOID
-		if a.side == code.SideOld {
+		if a.side == gitlet.SideOld {
 			blob = f.OldOID
 		}
 		switch {
@@ -345,13 +345,13 @@ func (cv conversing) anchor(ctx context.Context, rev code.RevisionRow, at []anch
 				"are about the change's own lines — say what concerns another file in the review's summary or a "+
 				"comment of its own.", g.tool, rev.N, g.ref(), a.path))
 			return anchored{}, &r
-		case blob == "" && a.side == code.SideNew:
+		case blob == "" && a.side == gitlet.SideNew:
 			r := failed(fmt.Sprintf("%s: %s is deleted at revision %d of %s, so its lines are on side %s.",
-				g.tool, a.path, rev.N, g.ref(), code.SideOld))
+				g.tool, a.path, rev.N, g.ref(), gitlet.SideOld))
 			return anchored{}, &r
 		case blob == "":
 			r := failed(fmt.Sprintf("%s: %s is new in revision %d of %s, so its lines are on side %s.", g.tool,
-				a.path, rev.N, g.ref(), code.SideNew))
+				a.path, rev.N, g.ref(), gitlet.SideNew))
 			return anchored{}, &r
 		}
 		out.blob[a] = blob
@@ -362,7 +362,7 @@ func (cv conversing) anchor(ctx context.Context, rev code.RevisionRow, at []anch
 // revisionOf is the revision a call judges: the change's head, or the earlier
 // one `revision` names, read at session floored at the call's read of the
 // change.
-func (cv conversing) revisionOf(ctx context.Context, n int64) (code.RevisionRow, *tools.Result) {
+func (cv conversing) revisionOf(ctx context.Context, n int64) (gitlet.RevisionRow, *tools.Result) {
 	if n == 0 || n == cv.head.N {
 		return cv.head, nil
 	}
@@ -370,14 +370,14 @@ func (cv conversing) revisionOf(ctx context.Context, n int64) (code.RevisionRow,
 }
 
 // sideArg is a side a call names, new where it names none.
-func sideArg(tool, field string, raw string) (code.Side, *tools.Result) {
-	side := code.Side(strings.TrimSpace(raw))
+func sideArg(tool, field string, raw string) (gitlet.Side, *tools.Result) {
+	side := gitlet.Side(strings.TrimSpace(raw))
 	if side == "" {
-		return code.SideNew, nil
+		return gitlet.SideNew, nil
 	}
 	if !side.Valid() {
 		r := failed(fmt.Sprintf("%s: %s is %s (old is the revision's base and new its head), not %q.", tool, field,
-			words.Or(code.Sides()), clip(string(side))))
+			words.Or(gitlet.Sides()), clip(string(side))))
 		return "", &r
 	}
 	return side, nil
@@ -394,12 +394,12 @@ func revisionArg(tool string, args map[string]any) (int64, *tools.Result) {
 }
 
 // handlesArg is a list of handles a call names — refused where one is no
-// seat's handle or the list is past code.MaxReviewersPerChange.
+// seat's handle or the list is past gitlet.MaxReviewersPerChange.
 func handlesArg(tool, arg string, args map[string]any) ([]string, *tools.Result) {
 	handles := argStrings(args, arg)
-	if len(handles) > code.MaxReviewersPerChange {
+	if len(handles) > gitlet.MaxReviewersPerChange {
 		r := failed(fmt.Sprintf("%s: `%s` names %d, past the %d a change asks at once.", tool, arg, len(handles),
-			code.MaxReviewersPerChange))
+			gitlet.MaxReviewersPerChange))
 		return nil, &r
 	}
 	for _, h := range handles {
@@ -469,12 +469,12 @@ func (t *codeRequestReview) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	ask := code.ReviewerRequest{RepoID: cv.g.repo.ID, ChangeID: cv.change.ID, Withdraw: withdraw,
+	ask := gitlet.ReviewerRequest{RepoID: cv.g.repo.ID, ChangeID: cv.change.ID, Withdraw: withdraw,
 		Note: argString(args, "note")}
 	for _, h := range reviewers {
-		ask.Request = append(ask.Request, code.Reviewer{Handle: h})
+		ask.Request = append(ask.Request, gitlet.Reviewer{Handle: h})
 	}
-	res, refusal := cv.send(ctx, code.ConversationWrite{Reviewers: &ask})
+	res, refusal := cv.send(ctx, gitlet.ConversationWrite{Reviewers: &ask})
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -504,7 +504,7 @@ func (t *codeReviewChange) Parameters() map[string]any {
 			"repo":     changeRepoParam(),
 			"change":   changeParam(),
 			"revision": map[string]any{"type": "integer"},
-			"verdict":  enum(spelled(code.Verdicts())),
+			"verdict":  enum(spelled(gitlet.Verdicts())),
 			"summary":  map[string]any{"type": "string"},
 			"findings": map[string]any{
 				"type": "array",
@@ -515,8 +515,8 @@ func (t *codeReviewChange) Parameters() map[string]any {
 						"side":       sideParam(),
 						"line_start": map[string]any{"type": "integer"},
 						"line_end":   map[string]any{"type": "integer"},
-						"severity":   enum(spelled(code.Severities())),
-						"category":   enum(spelled(code.Categories())),
+						"severity":   enum(spelled(gitlet.Severities())),
+						"category":   enum(spelled(gitlet.Categories())),
 						"title":      map[string]any{"type": "string"},
 						"body":       map[string]any{"type": "string"},
 						"suggestion": map[string]any{"type": "string",
@@ -533,7 +533,7 @@ func (t *codeReviewChange) Parameters() map[string]any {
 
 // sideParam is a side argument as the conversation writes describe it.
 func sideParam() map[string]any {
-	return map[string]any{"type": "string", "enum": spelled(code.Sides()),
+	return map[string]any{"type": "string", "enum": spelled(gitlet.Sides()),
 		"description": "new (the revision's head, the default) or old (its base)."}
 }
 
@@ -588,10 +588,10 @@ func (t *codeReviewChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	review.RepoID, review.ChangeID, review.Revision = cv.g.repo.ID, cv.change.ID, rev.N
-	if turn != nil && c.asker.Kind == code.PrincipalAgent {
-		review.TurnID, review.Model = turn.RunID, code.FitProvenance(toolloop.CallModel(ctx))
+	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
+		review.TurnID, review.Model = turn.RunID, gitlet.FitProvenance(toolloop.CallModel(ctx))
 	}
-	res, refusal := cv.send(ctx, code.ConversationWrite{Review: &review})
+	res, refusal := cv.send(ctx, gitlet.ConversationWrite{Review: &review})
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -605,18 +605,18 @@ func (t *codeReviewChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // is read. What each field may hold beyond its shape — a title's bytes, a
 // body's — is the change writer's rule, which the write is held to before it
 // is routed.
-func reviewArgs(tool string, args map[string]any) (code.Review, []anchorAt, *tools.Result) {
-	review := code.Review{Verdict: code.Verdict(strings.TrimSpace(argString(args, "verdict"))),
+func reviewArgs(tool string, args map[string]any) (gitlet.Review, []anchorAt, *tools.Result) {
+	review := gitlet.Review{Verdict: gitlet.Verdict(strings.TrimSpace(argString(args, "verdict"))),
 		Summary: argString(args, "summary"), Carries: argStrings(args, "carries")}
 	if !review.Verdict.Valid() {
-		r := failed(fmt.Sprintf("%s needs `verdict`: one of %s.", tool, words.Or(code.Verdicts())))
-		return code.Review{}, nil, &r
+		r := failed(fmt.Sprintf("%s needs `verdict`: one of %s.", tool, words.Or(gitlet.Verdicts())))
+		return gitlet.Review{}, nil, &r
 	}
 	raw, _ := argval.List(args["findings"])
-	if len(raw) > code.MaxFindingsPerReview {
+	if len(raw) > gitlet.MaxFindingsPerReview {
 		r := failed(fmt.Sprintf("%s: %d findings, past the %d one review raises: split them into two reviews of "+
-			"the same revision, which supersede nothing of each other.", tool, len(raw), code.MaxFindingsPerReview))
-		return code.Review{}, nil, &r
+			"the same revision, which supersede nothing of each other.", tool, len(raw), gitlet.MaxFindingsPerReview))
+		return gitlet.Review{}, nil, &r
 	}
 	var places []anchorAt
 	for i, entry := range raw {
@@ -624,17 +624,17 @@ func reviewArgs(tool string, args map[string]any) (code.Review, []anchorAt, *too
 		if !ok {
 			r := failed(fmt.Sprintf("%s: findings[%d] is not an object of `path`, `line_start`, `severity`, "+
 				"`category` and `title`.", tool, i))
-			return code.Review{}, nil, &r
+			return gitlet.Review{}, nil, &r
 		}
 		at := fmt.Sprintf("findings[%d]", i)
 		side, refusal := sideArg(tool, at+".side", argString(m, "side"))
 		if refusal != nil {
-			return code.Review{}, nil, refusal
+			return gitlet.Review{}, nil, refusal
 		}
-		f := code.Finding{Path: strings.TrimSpace(argString(m, "path")), Side: side,
+		f := gitlet.Finding{Path: strings.TrimSpace(argString(m, "path")), Side: side,
 			LineStart: argInt(m, "line_start", 0), LineEnd: argInt(m, "line_end", 0),
-			Severity: code.Severity(strings.TrimSpace(argString(m, "severity"))),
-			Category: code.Category(strings.TrimSpace(argString(m, "category"))),
+			Severity: gitlet.Severity(strings.TrimSpace(argString(m, "severity"))),
+			Category: gitlet.Category(strings.TrimSpace(argString(m, "category"))),
 			Title:    argString(m, "title"), Body: argString(m, "body")}
 		if f.LineEnd == 0 {
 			f.LineEnd = f.LineStart
@@ -646,24 +646,24 @@ func reviewArgs(tool string, args map[string]any) (code.Review, []anchorAt, *too
 			if !ok {
 				r := failed(fmt.Sprintf("%s: %s.suggestion is the lines to put in place of the finding's, as text.",
 					tool, at))
-				return code.Review{}, nil, &r
+				return gitlet.Review{}, nil, &r
 			}
 			f.Suggestion = &text
 		}
 		switch {
 		case f.Path == "":
 			r := failed(fmt.Sprintf("%s: %s names no `path`: the file its lines are in.", tool, at))
-			return code.Review{}, nil, &r
+			return gitlet.Review{}, nil, &r
 		case f.LineStart < 1 || f.LineEnd < f.LineStart:
 			r := failed(fmt.Sprintf("%s: %s's lines %d to %d: a finding's lines count from 1, the last at or past "+
 				"the first.", tool, at, f.LineStart, f.LineEnd))
-			return code.Review{}, nil, &r
+			return gitlet.Review{}, nil, &r
 		case !f.Severity.Valid():
-			r := failed(fmt.Sprintf("%s: %s.severity is one of %s.", tool, at, words.Or(code.Severities())))
-			return code.Review{}, nil, &r
+			r := failed(fmt.Sprintf("%s: %s.severity is one of %s.", tool, at, words.Or(gitlet.Severities())))
+			return gitlet.Review{}, nil, &r
 		case !f.Category.Valid():
-			r := failed(fmt.Sprintf("%s: %s.category is one of %s.", tool, at, words.Or(code.Categories())))
-			return code.Review{}, nil, &r
+			r := failed(fmt.Sprintf("%s: %s.category is one of %s.", tool, at, words.Or(gitlet.Categories())))
+			return gitlet.Review{}, nil, &r
 		}
 		review.Findings = append(review.Findings, f)
 		places = append(places, anchorAt{path: f.Path, side: f.Side})
@@ -760,7 +760,7 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	}
 	if !saying {
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
-		res, refusal := cv.send(ctx, code.ConversationWrite{ThreadResolve: &code.ThreadResolve{RepoID: cv.g.repo.ID,
+		res, refusal := cv.send(ctx, gitlet.ConversationWrite{ThreadResolve: &gitlet.ThreadResolve{RepoID: cv.g.repo.ID,
 			ChangeID: cv.change.ID, ThreadID: thread, Resolved: resolve}})
 		if refusal != nil {
 			return *refusal, nil
@@ -769,9 +769,9 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 		out.ThreadResolved = &resolve
 		return cv.page(ctx, out)
 	}
-	comment := code.Comment{RepoID: cv.g.repo.ID, ChangeID: cv.change.ID, ParentID: thread, FindingID: finding,
+	comment := gitlet.Comment{RepoID: cv.g.repo.ID, ChangeID: cv.change.ID, ParentID: thread, FindingID: finding,
 		Body: body, Mentions: mentions}
-	if turn != nil && c.asker.Kind == code.PrincipalAgent {
+	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
 		comment.TurnID = turn.RunID
 	}
 	if anchor != nil {
@@ -779,7 +779,7 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 			return *refusal, nil
 		}
 	}
-	res, refusal := cv.send(ctx, code.ConversationWrite{Comment: &comment})
+	res, refusal := cv.send(ctx, gitlet.ConversationWrite{Comment: &comment})
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -793,7 +793,7 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 // anchorLine is a comment's anchor: the line of a file of a revision — the
 // head unless it names one — on one side of its diff, with the blob it was
 // read in.
-func (cv conversing) anchorLine(ctx context.Context, tool string, a anchorArg) (*code.CommentAnchor,
+func (cv conversing) anchorLine(ctx context.Context, tool string, a anchorArg) (*gitlet.CommentAnchor,
 	*tools.Result) {
 
 	side, refusal := sideArg(tool, "anchor.side", a.Side)
@@ -814,7 +814,7 @@ func (cv conversing) anchorLine(ctx context.Context, tool string, a anchorArg) (
 	if refusal != nil {
 		return nil, refusal
 	}
-	return &code.CommentAnchor{Revision: rev.N, Path: at.path, Side: side, Line: a.Line, BlobOID: lines.blob[at]},
+	return &gitlet.CommentAnchor{Revision: rev.N, Path: at.path, Side: side, Line: a.Line, BlobOID: lines.blob[at]},
 		nil
 }
 
@@ -824,12 +824,12 @@ func (cv conversing) anchorLine(ctx context.Context, tool string, a anchorArg) (
 // Whatever became of it is said on the answer beside the comment, never as the
 // comment's failure: the comment WAS said, and the call made again says it
 // once.
-func (cv conversing) setThread(ctx context.Context, said code.ConversationResult, thread string, resolved bool,
+func (cv conversing) setThread(ctx context.Context, said gitlet.ConversationResult, thread string, resolved bool,
 	out *codeConversationAnswer) {
 
 	g := cv.g
-	w := code.ConversationWrite{OpID: statelog.StepOpID(cv.op(), stepTwo), Seen: said.Position,
-		ThreadResolve: &code.ThreadResolve{RepoID: g.repo.ID, ChangeID: cv.change.ID, ThreadID: thread,
+	w := gitlet.ConversationWrite{OpID: statelog.StepOpID(cv.op(), stepTwo), Seen: said.Position,
+		ThreadResolve: &gitlet.ThreadResolve{RepoID: g.repo.ID, ChangeID: cv.change.ID, ThreadID: thread,
 			Resolved: resolved}}
 	if _, refusal := cv.decided(ctx, w); refusal != nil {
 		out.ThreadNotSet = fmt.Sprintf("The comment WAS said, as %s, but marking its thread did not finish: %s",
@@ -854,8 +854,8 @@ func (t *codeResolveFinding) Description() string {
 }
 
 func (t *codeResolveFinding) Parameters() map[string]any {
-	resolutions := []string{string(code.FindingResolved), string(code.FindingWontFix),
-		string(code.FindingDisputed), string(code.FindingDismissed)}
+	resolutions := []string{string(gitlet.FindingResolved), string(gitlet.FindingWontFix),
+		string(gitlet.FindingDisputed), string(gitlet.FindingDismissed)}
 	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -887,13 +887,13 @@ func (t *codeResolveFinding) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		return *refusal, nil
 	}
 	ids := argStrings(args, "findings")
-	resolution := code.FindingState(strings.TrimSpace(argString(args, "resolution")))
+	resolution := gitlet.FindingState(strings.TrimSpace(argString(args, "resolution")))
 	switch {
 	case len(ids) == 0:
 		return failed(fmt.Sprintf("%s needs `findings`: the ids of the findings it answers.", tool)), nil
-	case len(ids) > code.MaxFindingsPerReview:
+	case len(ids) > gitlet.MaxFindingsPerReview:
 		return failed(fmt.Sprintf("%s: %d findings, past the %d one answer names.", tool, len(ids),
-			code.MaxFindingsPerReview)), nil
+			gitlet.MaxFindingsPerReview)), nil
 	case !resolution.Resolution():
 		return failed(fmt.Sprintf("%s needs `resolution`: resolved, wont_fix, disputed or dismissed.", tool)), nil
 	}
@@ -911,12 +911,12 @@ func (t *codeResolveFinding) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		}
 		commit = resolved[0].oid
 	}
-	answer := code.FindingResolve{RepoID: cv.g.repo.ID, ChangeID: cv.change.ID}
+	answer := gitlet.FindingResolve{RepoID: cv.g.repo.ID, ChangeID: cv.change.ID}
 	for _, id := range ids {
-		answer.Findings = append(answer.Findings, code.FindingResolution{FindingID: id, Resolution: resolution,
+		answer.Findings = append(answer.Findings, gitlet.FindingResolution{FindingID: id, Resolution: resolution,
 			Note: argString(args, "note"), Commit: commit})
 	}
-	res, refusal := cv.send(ctx, code.ConversationWrite{FindingResolve: &answer})
+	res, refusal := cv.send(ctx, gitlet.ConversationWrite{FindingResolve: &answer})
 	if refusal != nil {
 		return *refusal, nil
 	}

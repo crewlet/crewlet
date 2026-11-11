@@ -288,7 +288,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
 	// GITLET'S ROWS: the repositories, one repository in detail, and
 	// one repository's push history, each decided per repository by the grant
-	// the serving node derives (code.GrantOf, ADR-0088) — and who read a
+	// the serving node derives (gitlet.GrantOf, ADR-0088) — and who read a
 	// unit's repository, an admin's, decided by its own verb. ON THESE PATHS
 	// ALONE: they were Gitlet's own routes, mounted beside git
 	// (code.go), and a question answered there too would be the second

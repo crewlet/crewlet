@@ -9,7 +9,7 @@ import (
 )
 
 // A REMOTE'S CREDENTIAL IS ONE code.remote_credentials DECLARES FOR ITS HOST,
-// in a declared repository as in a person's request (internal/code's decide)
+// in a declared repository as in a person's request (internal/gitlet's decide)
 // and at the dial (internal/engine's mirrorDial), all three through
 // [config.CodeRemoteCredentials.Refusal]: a variable the table does not
 // declare, or a declared one toward another host, another port or a name

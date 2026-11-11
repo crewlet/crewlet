@@ -7,8 +7,8 @@
 -- borrow against that fetch before any box takes one. Nothing set the
 -- column, so every row held 0, and the applier wrote and every reader and
 -- the dashboard read a flag describing a feature that does not exist.
--- code.CheckStarted's `borrowed` field goes with it, under the code domain's
--- stated condition (code.CheckStarted's doc).
+-- gitlet.CheckStarted's `borrowed` field goes with it, under the code domain's
+-- stated condition (gitlet.CheckStarted's doc).
 --
 -- DROPPED IN PLACE, as 0013 drops the sprint columns: Turso takes
 -- `ALTER TABLE … DROP COLUMN` for a column no index, view or trigger names,

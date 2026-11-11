@@ -70,7 +70,7 @@ func answer(t *testing.T, method, url string) (int, string) {
 // dial after a stop reaches whatever holds the port by then, and says nothing
 // of the listener that stopped: in round 140 of
 // [TestAStoppedListenerAcceptsNothing], with internal/engine and
-// internal/code/host binding beside it, a dial of 127.0.0.1:35409 was accepted
+// internal/gitlet/host binding beside it, a dial of 127.0.0.1:35409 was accepted
 // after its listener's Serve had returned, which closes that listener's socket
 // before it returns. The socket answers for itself: Go marks it closed as its
 // Close begins, and Close returns only once the descriptor is closed, which

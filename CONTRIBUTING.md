@@ -38,7 +38,7 @@ because another checkout still on them may be running one: `rm -rf
 pins). Every target that runs Go tests depends on it and puts the node
 pin first on `PATH`, and a one-package loop does the same by hand, as two
 statements:
-`bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/code/cache/`
+`bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/gitlet/cache/`
 — never `PATH="$(scripts/git.sh node):$PATH" go test …`, whose substitution
 is empty when the recipe fails (a missing header, a refused download), which
 leaves `PATH` starting with an empty entry and runs the loop on whatever git
@@ -48,7 +48,7 @@ run on the machine's own git instead FAILS the git-driven tests where that git
 is below the floor it stands for, rather than skipping, because git is a
 prerequisite of the suite, not something a machine may lack: every pool a test
 builds needs the node floor, 2.55 (`gitproc.NodeMinVersion`, held by
-`internal/code/gitproc/gittest.RequireNode`), and the client git a test drives
+`internal/gitlet/gitproc/gittest.RequireNode`), and the client git a test drives
 the client floor, 2.40 (`gitproc.ClientMinVersion`, `gittest.Require`). On
 macOS, Apple's bundled git is 2.39, below both, and Homebrew's is new enough for
 both — but the documented loop is the pin, the git the image ships. What the
@@ -61,7 +61,7 @@ what git says or does in a pool — so a pin bump re-measures it on the new git
 by itself, in `make check`, and the floor is measured on every run rather than
 by hand. A one-package loop names the floor's build the way the make targets
 do, or those cases' floor arms skip:
-`bin=$(scripts/git.sh node) && floor=$(scripts/git.sh node-floor) && PATH="$bin:$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$floor/git" go test -count=1 ./internal/code/gitproc/`
+`bin=$(scripts/git.sh node) && floor=$(scripts/git.sh node-floor) && PATH="$bin:$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$floor/git" go test -count=1 ./internal/gitlet/gitproc/`
 — and a row whose range does not hold names the format and the git that
 disagreed.
 
@@ -69,12 +69,12 @@ disagreed.
 floors' own builds — `CREWLET_TEST_GIT_NODE_FLOOR` and
 `CREWLET_TEST_GIT_CLIENT_FLOOR`, each `$(scripts/git.sh <pin>)/git` for
 `node-floor` and `client-floor` — and sets `CREWLET_REQUIRE_GIT_FLOOR=1` (the
-Makefile's `GIT_ENV`), so `internal/code/host`'s
+Makefile's `GIT_ENV`), so `internal/gitlet/host`'s
 `TestTheGitFloorsPassTheSuite` runs Gitlet's whole suite with every
 pool on the node floor's 2.55 and every person's git on the client floor's
 2.40 — the worst pairing the floors admit — and FAILS, naming the variable and
 `make git`, where either build is missing — as do gitproc's node-floor arms
-above. A bare `go test ./internal/code/host/` or `./internal/code/gitproc/`
+above. A bare `go test ./internal/gitlet/host/` or `./internal/gitlet/gitproc/`
 without them skips those arms, saying so, and runs everything else; export the
 three variables to run them by hand. A git named
 there must be an absolute path to a build of its floor's own series (2.55.x,
@@ -922,19 +922,19 @@ stream's leader takes to list the subjects it holds, a page at a time
 (`internal/jsapi`), the company's token counter charged by many nodes at once, each a leaf of its own,
 and a gated lease claim (`internal/coord/kv`), a git
 process through the pool and the index-pack a push runs
-(`internal/code/gitproc`), the git cache's cold and delta syncs and a
+(`internal/gitlet/gitproc`), the git cache's cold and delta syncs and a
 bundle's own file work, its index maintenance and what a request pays across
 many packs, a node's boot of its cache and what a directory sync costs a file
-(`internal/code/cache`), a home Gitlet node's compaction of a repository's packs
+(`internal/gitlet/cache`), a home Gitlet node's compaction of a repository's packs
 — its memory, the pushes a minute's poll keeps up with, the requests and bytes
 a fleet's Gitlet nodes pay for it, and a poll over thousands of repositories
-(`internal/code/compact`), the code domain's applier, decide, reconcile and
+(`internal/gitlet/compact`), the code domain's applier, decide, reconcile and
 snapshot reads and what one push's history costs every data node's disk
-(`internal/code`), Gitlet's commit chain on one and three members
-(`internal/code/codecluster`), a person's push, a warm fetch, and cold and
+(`internal/gitlet`), Gitlet's commit chain on one and three members
+(`internal/gitlet/gitletcluster`), a person's push, a warm fetch, and cold and
 warm clones of every shape end to end through Gitlet
-(`internal/code/host`), a seat's reads of a repository by object id on a Gitlet
-node, warm and cold (`internal/code/query`), a page of who read a repository
+(`internal/gitlet/host`), a seat's reads of a repository by object id on a Gitlet
+node, warm and cold (`internal/gitlet/query`), a page of who read a repository
 over the whole history its records keep and the count of the readers they
 left out (`internal/usage`), the pace a client's connection
 is held to, on a real connection (`internal/api/paced`), and what every push
@@ -948,24 +948,24 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code/compact`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/code/query`, `internal/usage`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/gitlet/gitproc`, `internal/gitlet/cache`, `internal/gitlet/compact`, `internal/gitlet`, `internal/gitlet/gitletcluster`, `internal/gitlet/host`, `internal/gitlet/query`, `internal/usage`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
-| `BENCH_TIMEOUT` | `8h`, and `24h` with `CREWLET_BENCH_LARGE=1` | `-timeout`, a hang detector, each package's: at six counts of every arm a default run measures, `internal/code/cache` takes about three and a quarter hours on four vCPUs, and with the large arms about thirteen — estimates for its published layers' arms, from one count of each; `internal/code/host` about two and a half hours with the large arms |
+| `BENCH_TIMEOUT` | `8h`, and `24h` with `CREWLET_BENCH_LARGE=1` | `-timeout`, a hang detector, each package's: at six counts of every arm a default run measures, `internal/gitlet/cache` takes about three and a quarter hours on four vCPUs, and with the large arms about thirteen — estimates for its published layers' arms, from one count of each; `internal/gitlet/host` about two and a half hours with the large arms |
 
 The packages run one at a time (`-p 1`) and without the race detector, and the
 output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
-— the real-bucket arms of `internal/objstore/s3obj`, `internal/code/cache`,
-`internal/code/host` and `internal/code/query` skip unless
+— the real-bucket arms of `internal/objstore/s3obj`, `internal/gitlet/cache`,
+`internal/gitlet/host` and `internal/gitlet/query` skip unless
 `CREWLET_BENCH_S3_BUCKET` names a bucket
 (`internal/objstore/s3obj`'s doc lists the variables that do), and the arms
-whose fixture takes minutes and gigabytes — in `internal/code/cache` cold
+whose fixture takes minutes and gigabytes — in `internal/gitlet/cache` cold
 syncs of 2 048 and of 10 000 pushes, repositories of 10 000 packs, a 5 GB
 index and its published layers, a gigabyte split into hundreds of packs, an
 installer catching up 10 000 repositories, and `BenchmarkBigNode`'s 5 GB
-monorepo; in `internal/code/host` a gigabyte history, a hundred thousand refs
-and a 100 000-file tree; in `internal/code/query` a gigabyte history under a
+monorepo; in `internal/gitlet/host` a gigabyte history, a hundred thousand refs
+and a 100 000-file tree; in `internal/gitlet/query` a gigabyte history under a
 100 000-file tree read by object id, and a gigabyte history blamed and logged
 by path; in `internal/jsapi` streams of a million and of three million
 subjects — skip unless `CREWLET_BENCH_LARGE=1`. `BenchmarkBigNode`'s 12 GB
@@ -973,7 +973,7 @@ monorepo, whose fixture builds for hours and whose bitmap holds tens of
 gigabytes beside the in-memory store, skips unless `CREWLET_BENCH_BIGNODE=1`
 is set beside it, on a machine of at least 64 GB of memory; run it alone,
 under the day's `BENCH_TIMEOUT` that `CREWLET_BENCH_LARGE=1` gives a run.
-`internal/code/gitproc`'s `BenchmarkTransferShare` runs its coding-box arms
+`internal/gitlet/gitproc`'s `BenchmarkTransferShare` runs its coding-box arms
 (`mix=runs`) on a transfer lane as wide as the machine's cores unless
 `CREWLET_BENCH_SHARE_SLOTS` names a width, in slots, of at least two: the
 search for the coding boxes' share weight is to be run on a lane of a
@@ -983,7 +983,7 @@ in for ([fair share](docs/concepts/gitlet.md#fair-share)).
 A Gitlet figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every
 test target does: every pool and every client a benchmark starts runs it, and
-never whichever git the machine has (`internal/code/codecluster`'s commit chain
+never whichever git the machine has (`internal/gitlet/gitletcluster`'s commit chain
 runs no git: its pushes carry no pack, or one it names and never builds). A
 figure the docs quote names that version, and a pin bump leaves the figures
 taken on the git before it as what they are — measured on the version they
@@ -1511,19 +1511,19 @@ credential, which the workflow does not take. It holds `contents: read` and
    suite on the new git.
 3. Measure what the published layers' rules rest on, on the new git and one
    idle machine:
-   `make bench BENCH_PKGS=./internal/code/cache BENCH_PATTERN='Midx/size=/^step='`
+   `make bench BENCH_PKGS=./internal/gitlet/cache BENCH_PATTERN='Midx/size=/^step='`
    (the `git=floor` arms run the node floor's own build). Each arm states the
    rule it holds, and the same pull request re-decides a rule its arm no
    longer holds:
    - **No node writes a multi-pack-index layer of its own**
-     (`internal/code/cache`'s package doc): re-decided once `step=tip`'s
+     (`internal/gitlet/cache`'s package doc): re-decided once `step=tip`'s
      `peak-MiB` stops growing with the history — a node's bitmapped layer
      costing the objects it adds rather than the history. On git 2.56.0 the
      same 64 pushes' layer held 88 MiB over 100 MB and 254 MiB over the
      gigabyte, and took longer there than `step=whole/write=bitmap`'s whole
      rewrite.
    - **A layer is written over exactly its base, never merged with
-     `multi-pack-index compact`** (`internal/code/compact`'s): re-decided once
+     `multi-pack-index compact`** (`internal/gitlet/compact`'s): re-decided once
      `merge=stacked` no longer reports `pathological`, or `merge=root-compact`
      beats `merge=root-write` by more than the tail's layer write a compaction
      from the root cannot skip (`step=publish/layer=tail`'s `midx-s/op`).
@@ -1531,8 +1531,8 @@ credential, which the workflow does not take. It holds `contents: read` and
      re-decided once `step=closure` fails, git having written a bitmap over
      packs that are not closed.
 
-   The constants the same arms measure — `internal/code/cache`'s bytes an
-   object, `internal/code/compact`'s publication cadence — say at their
+   The constants the same arms measure — `internal/gitlet/cache`'s bytes an
+   object, `internal/gitlet/compact`'s publication cadence — say at their
    definitions what moves each.
 4. Title the pull request as the report does: `build(deps): bump git from <a>
    to <b>` for the node pin, `build(deps): bump git's node floor from <a> to

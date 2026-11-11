@@ -25,7 +25,7 @@ const (
 
 // BoxGitPrefix is where a BOX reaches Gitlet's git with its own
 // credential: HTTP Basic, the user name host.BoxUser (`run`) with an
-// executor's token as the password (ADR-0093), or code.CheckUser (`check`) with a
+// executor's token as the password (ADR-0093), or gitlet.CheckUser (`check`) with a
 // check's.
 //
 // A PUBLIC prefix ([publicPrefixes]), unlike [GitPrefix]: a box holds no
@@ -42,7 +42,7 @@ const BoxGitPrefix = "/box/git/"
 // BoxGitletPrefix is where a CHECK'S BOX reads the one commit its check
 // measures by object id — its tree, a file of it, its diff — through the API
 // rather than a clone (a check whose checks file says `checkout: none`), with
-// the credential it fetches with: HTTP Basic, code.CheckUser and its check's
+// the credential it fetches with: HTTP Basic, gitlet.CheckUser and its check's
 // token.
 //
 // PUBLIC AND UNGUARDED for [BoxGitPrefix]'s reasons, its admission Gitlet's
@@ -102,7 +102,7 @@ const serviceKey = "service"
 // of a request's service is Gitlet, which runs a different git process
 // for each and so has to know which one was asked for — and it reads it only
 // after asking GitAccess what the request is, which is why that gate allows a
-// reading in internal/code/host and in no other place.
+// reading in internal/gitlet/host and in no other place.
 //
 // A CODING BOX'S REQUEST IS CLASSIFIED AS A PERSON'S: a path under
 // [BoxGitPrefix] answers exactly what the same path under [GitPrefix] does, so

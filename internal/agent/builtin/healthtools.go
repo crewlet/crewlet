@@ -15,12 +15,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -52,7 +52,7 @@ import (
 // — beside the facts the heartbeat states, and nothing judged from them. A
 // node that has no table it evaluated says so (`alarms_evaluated: false`)
 // rather than reading as healthy. code_status reports each Gitlet node's own
-// account (internal/code/host, Server.Status): its cache against its budget,
+// account (internal/gitlet/host, Server.Status): its cache against its budget,
 // what it spent on its own account, and what it served most. Neither tool
 // ranks a node, flags a number or names a level; a seat that wants to know
 // whether something is wrong reads the marks.
@@ -1145,7 +1145,7 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 func (t *codeStatus) hottest(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	entries []cache.RepoHeat) ([]int, int, *tools.Result) {
 
-	if c.asker.Kind != code.PrincipalAgent {
+	if c.asker.Kind != gitlet.PrincipalAgent {
 		return cache.Hottest(entries, cache.HotRepos), 0, nil
 	}
 	names := map[string]string{} // id -> the name a node counted it by
@@ -1174,7 +1174,7 @@ func (t *codeStatus) hottest(ctx context.Context, turn *turnctx.Turn, c codeCall
 			if _, judged := readable[id]; judged || slices.Contains(wave, id) {
 				continue
 			}
-			if name := names[id]; name == "" || !code.ValidName(name) {
+			if name := names[id]; name == "" || !gitlet.ValidName(name) {
 				// NO NODE NAMED IT BY A NAME GITLET RESOLVES, so
 				// nothing could judge it readable: left out unread.
 				readable[id], leftOut = false, true
@@ -1268,7 +1268,7 @@ func (t *codeStatus) judgeWave(ctx context.Context, turn *turnctx.Turn, c codeCa
 // seat the very name the answer exists to withhold.
 func unjudged(ctx context.Context, tool string, err error) tools.Result {
 	var (
-		unready  *code.ErrGitUnready
+		unready  *gitlet.ErrGitUnready
 		unserved *estate.ErrUnserved
 	)
 	why, isCondition := Condition(err)
@@ -1276,7 +1276,7 @@ func unjudged(ctx context.Context, tool string, err error) tools.Result {
 	case errors.As(err, new(*estate.ErrUnknownKeys)):
 		// THE FLEET RUNS TWO BUILDS: the condition's own words, AHEAD of the
 		// walk nobody served that it wraps, which would call it a wait.
-	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
+	case errors.As(err, &unready), errors.Is(err, gitlet.ErrNotServing):
 		why, isCondition = "no node holding Gitlet's rows could answer in time", true
 	case errors.As(err, &unserved) && unserved.Git:
 		why, isCondition = "none of the Gitlet nodes could answer in time", true
@@ -1299,9 +1299,9 @@ func unjudged(ctx context.Context, tool string, err error) tools.Result {
 // where it could not say.
 //
 // THE CODE TOOLS' ONE READ ([CodeDeps.read]), so the seat a turn reads for
-// rides on it ([code.ReadQuery.CeilingSeat]) exactly as on theirs, and a
+// rides on it ([gitlet.ReadQuery.CeilingSeat]) exactly as on theirs, and a
 // repository the asker may read and that seat may not is answered
-// code.ErrAboveCeiling — left out here as the asker's own refusal is. A
+// gitlet.ErrAboveCeiling — left out here as the asker's own refusal is. A
 // resolution the turn already holds (held) was made by that read, for the
 // same asker and in the same turn, so for the same ceiling, and answers with
 // no read.
@@ -1312,16 +1312,16 @@ func unjudged(ctx context.Context, tool string, err error) tools.Result {
 // resolution it kept in the turn's lookups would be one a later code tool
 // reused with no hold taken. Only [CodeDeps.repoRead] keeps a resolution,
 // once the turn's hold on it is taken ([HoldRepo]).
-func (t *codeStatus) readable(ctx context.Context, c codeCaller, held *code.RepoRef,
+func (t *codeStatus) readable(ctx context.Context, c codeCaller, held *gitlet.RepoRef,
 	id, name string) (bool, error) {
 
 	if held != nil {
 		return held.ID == id, nil
 	}
-	answer, err := t.deps.Code.read(ctx, c, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Fresh: seatRead})
+	answer, err := t.deps.Code.read(ctx, c, gitlet.ReadQuery{Kind: gitlet.ReadRepo, Repo: name, Fresh: seatRead})
 	switch {
-	case errors.Is(err, code.ErrNotPermitted), errors.Is(err, code.ErrAboveCeiling),
-		errors.Is(err, code.ErrRepoNotFound):
+	case errors.Is(err, gitlet.ErrNotPermitted), errors.Is(err, gitlet.ErrAboveCeiling),
+		errors.Is(err, gitlet.ErrRepoNotFound):
 		return false, nil
 	case err != nil:
 		return false, err

@@ -4,7 +4,7 @@
 -- and its push row now says which run that was: run_id, the run's LAUNCH (the
 -- id the engine minted when it launched the box, sandbox.PendingRun.LaunchID),
 -- and harness, the harness the box ran ('claude-code', 'opencode') —
--- code.RunProvenance.RunID and .Harness, beside the turn, the work item
+-- gitlet.RunProvenance.RunID and .Harness, beside the turn, the work item
 -- and the model replicated 0091 added. Both are stamped by the code host from
 -- the run's row when it admits the box, never read from a commit, whose
 -- trailers the box writes. Empty on every other push: a person's has no run,
@@ -15,7 +15,7 @@
 --
 -- WHAT A ROW WEIGHS GROWS WITH THE RUN: code_pushes.row_bytes counts the two
 -- beside the turn, the work item and the model — a run id is a UUID's 36
--- bytes, a harness at most code.MaxProvenanceBytes — so the history's
+-- bytes, a harness at most gitlet.MaxProvenanceBytes — so the history's
 -- horizon and a purge part stay bounded by what deleting the row frees.
 --
 -- NO INDEX OF ITS OWN. The engine reads a run's pushes once, when it collects

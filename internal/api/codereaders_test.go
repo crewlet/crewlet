@@ -14,10 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -65,17 +65,17 @@ const (
 // readersRepos is the code reads the readers route resolves a repository
 // through: `site` a unit's, `public` the company's, anything else undeclared.
 func readersRepos() *fakeCodeReads {
-	return &fakeCodeReads{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
-		ref := code.RepoRef{Name: q.Repo, Status: code.RepoStatusActive}
+	return &fakeCodeReads{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		ref := gitlet.RepoRef{Name: q.Repo, Status: gitlet.RepoStatusActive}
 		switch q.Repo {
 		case "site":
-			ref.ID, ref.Visibility = unitRepoID, code.VisibilityUnit
+			ref.ID, ref.Visibility = unitRepoID, gitlet.VisibilityUnit
 		case "public":
-			ref.ID, ref.Visibility = companyRepoID, code.VisibilityCompany
+			ref.ID, ref.Visibility = companyRepoID, gitlet.VisibilityCompany
 		default:
-			return code.ReadAnswer{}, code.ErrRepoNotFound
+			return gitlet.ReadAnswer{}, gitlet.ErrRepoNotFound
 		}
-		return code.ReadAnswer{Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: ref}},
+		return gitlet.ReadAnswer{Repo: &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{RepoRef: ref}},
 			Level: q.Fresh.Level}, nil
 	}}
 }
@@ -173,9 +173,9 @@ func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 		t.Errorf("the answer is %+v, want the domain's page over the thirty days ending today", answer)
 	}
 	asked := reads.queries()
-	if len(asked) != 1 || asked[0].Kind != code.ReadRepo || asked[0].Repo != "site" ||
+	if len(asked) != 1 || asked[0].Kind != gitlet.ReadRepo || asked[0].Repo != "site" ||
 		asked[0].Fresh.Level != statelog.ReadLinearizable ||
-		asked[0].Asker != (code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("founder")}) {
+		asked[0].Asker != (gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: iam.TokenLogin("founder")}) {
 		t.Errorf("the repository was read %+v, want once, by name, at linearizable, as the caller", asked)
 	}
 	if got := readers.asks(); len(got) != 1 || got[0].q != (usage.RepoReadsQuery{RepoID: unitRepoID,

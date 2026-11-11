@@ -12,8 +12,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -57,10 +57,10 @@ import (
 // does not know reads nothing, and neither does a person who may not act in
 // it now — and, for a requester that is a colleague SEAT, by that seat's own
 // grant on the repository, which rides on every read the call makes
-// ([code.ReadQuery.CeilingSeat]) for the node that answers it to judge beside
+// ([gitlet.ReadQuery.CeilingSeat]) for the node that answers it to judge beside
 // the asker's, from the same chart and the same row: a listing leaves out
 // what the colleague may not read, and a read of such a repository is refused
-// in Gitlet's own sentence ([code.ErrAboveCeiling]). Judged THERE,
+// in Gitlet's own sentence ([gitlet.ErrAboveCeiling]). Judged THERE,
 // never here against the repository the turn resolved once: the asker's
 // grant is judged afresh at every read, and a ceiling judged on the turn's
 // memo would keep reading for a colleague a later activation shut out. A
@@ -98,17 +98,17 @@ import (
 // attribute, so each goes out inside a fence of the turn's boundary at trust
 // `external`, naming no writer (ADR-0040); and so does each commit's subject
 // code_log and code_blame name (`repo_commit`), a message its pusher wrote,
-// up to code.MaxLogSubjectBytes of it — the long text a history is read by.
+// up to gitlet.MaxLogSubjectBytes of it — the long text a history is read by.
 // Every other string of every answer — paths, ref names, descriptions, a
 // commit's author and address, short and named beside a fenced subject — is
 // defused ([foreignRead]). The Gitlet node that cuts a history's or a blame's
 // page counts each of those fences and every string's defusing into the
-// page's bytes (internal/code/query's page.go), so a page of a hundred fenced
+// page's bytes (internal/gitlet/query's page.go), so a page of a hundred fenced
 // subjects is still one answer.
 //
 // # One page is one tool answer, sent as it was measured
 //
-// A Gitlet node cuts every page at code.MaxGitAnswerBytes of compact JSON, the
+// A Gitlet node cuts every page at gitlet.MaxGitAnswerBytes of compact JSON, the
 // tool answer less what these tools wrap round it, and these tools send it
 // compact ([compactAnswer]): indented, a page of short entries would arrive
 // past the answer it was cut to fit. A row listing is cut by these tools, whole
@@ -155,9 +155,9 @@ const (
 // serves, a data node's otherwise, and a repository's home Gitlet node for its
 // content.
 type CodeReader interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
-	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
-	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	ResolveRef(ctx context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error)
+	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 	// FloorOf is this node's floor on repository repoID — its own pushes to
 	// that repository, and none of its writes to any other — which every read
 	// by object id of the repository is asked with, so the copy that answers
@@ -375,16 +375,16 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 // behalf: a seat's turn and an operator's call here, and the REST reads, which
 // compose their caller with [ActorOf] first. Two conversions would be two
 // readings of one principal, free to judge the same person by two grants.
-func CodeAskerOf(a Actor) code.Principal {
+func CodeAskerOf(a Actor) gitlet.Principal {
 	switch a.Kind {
 	case worklet.AuthorAgent:
-		return code.Principal{Kind: code.PrincipalAgent, Seat: a.Handle}
+		return gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: a.Handle}
 	case worklet.AuthorHuman:
-		return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.OperatorID, Seat: a.Handle}
+		return gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: a.OperatorID, Seat: a.Handle}
 	}
 	// AN OPERATOR CREDENTIAL, AND THE ENGINE: a credential acting as itself,
 	// bound to no seat, which reads what an unbound token reads.
-	return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.OperatorID}
+	return gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: a.OperatorID}
 }
 
 // ---- who asks, and what a call names ------------------------------------ //
@@ -393,7 +393,7 @@ func CodeAskerOf(a Actor) code.Principal {
 // caller as a write would name them ([Actor], its run's call log on it, as
 // [WorkDeps.actor] puts it there) and the principal a repository's grant
 // judges.
-func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (Actor, code.Principal,
+func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (Actor, gitlet.Principal,
 	*tools.Result) {
 
 	resolve := func(turn *turnctx.Turn) (Actor, error) { return actorFor(ctx, turn, d.Requesters) }
@@ -406,12 +406,12 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (A
 		// this call makes would carry ([writtenForTurn]): asked again
 		// shortly, never answered as a caller with no seat.
 		r := unattributed(tool, err)
-		return Actor{}, code.Principal{}, &r
+		return Actor{}, gitlet.Principal{}, &r
 	}
 	if err != nil {
 		r := refusedBy(tools.RefusalForbidden, err, tool+" can only be called during a turn, on "+
 			"behalf of a seat, or by a signed-in caller.")
-		return Actor{}, code.Principal{}, &r
+		return Actor{}, gitlet.Principal{}, &r
 	}
 	// THE RUN'S CALL LOG IS THE TURN'S, whoever resolved the rest — a write's
 	// operation counts the run's earlier calls to the tool from it ([opIDFor]).
@@ -420,7 +420,7 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (A
 	if err := p.Validate(); err != nil {
 		r := refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s could not name who is asking "+
 			"in the terms a repository's grant is judged by, so it read nothing.", tool))
-		return Actor{}, code.Principal{}, &r
+		return Actor{}, gitlet.Principal{}, &r
 	}
 	return actor, p, nil
 }
@@ -428,7 +428,7 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (A
 // codeCaller is who one call of a code tool reads as: the caller as a write
 // and a hold name them, the asker its grant is judged by, and — inside a turn
 // a colleague seat woke — that seat, whose own grant bounds the asker's on
-// every read the call makes ([code.ReadQuery.CeilingSeat]), "" for a call made
+// every read the call makes ([gitlet.ReadQuery.CeilingSeat]), "" for a call made
 // for nobody else.
 //
 // A WRITE's call carries the same requester as its write's ceiling too
@@ -437,9 +437,9 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (A
 // nothing, whose turn the write is still made in for the seat's own work.
 type codeCaller struct {
 	actor   Actor
-	asker   code.Principal
+	asker   gitlet.Principal
 	ceiling string
-	write   *code.WriteCeiling
+	write   *gitlet.WriteCeiling
 }
 
 // caller is who this call reads as, or the refusal it is answered with: the
@@ -450,7 +450,7 @@ type codeCaller struct {
 // and a requester the node could not compose or decide is answered as a node
 // that could not tell, never as a turn nobody woke. A colleague seat the row
 // admits rides on every read as the call's ceiling, for the node that answers
-// to judge its grant on the repository ([code.JudgeRead]); a person the row
+// to judge its grant on the repository ([gitlet.JudgeRead]); a person the row
 // admits bounds nothing, since a person maintains every repository.
 //
 // FIRST, before any argument is read, as the artifacts tools compose theirs:
@@ -484,7 +484,7 @@ func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 		return codeCaller{}, refusal
 	}
 	c := codeCaller{actor: actor, asker: asker}
-	if asker.Kind != code.PrincipalAgent {
+	if asker.Kind != gitlet.PrincipalAgent {
 		return c, nil
 	}
 	ceiling, err := ceilingOf(ctx, turn, asker.Seat, d.Requesters)
@@ -547,7 +547,7 @@ func ceilingRefused(tool string, c authz.Ceiling) string {
 }
 
 // ceilingCause is the cause of a read Gitlet refused for the seat a
-// call reads for ([code.ErrAboveCeiling]): the authority table's own ceiling
+// call reads for ([gitlet.ErrAboveCeiling]): the authority table's own ceiling
 // refusal over the domain's error, so a surface reading the decision finds the
 // one reason every requester-ceiling refusal carries, and one reading the
 // domain finds its sentinel.
@@ -558,7 +558,7 @@ func ceilingCause(tool string, err error) error {
 
 // read is q asked of Gitlet as c: THE ONE ReadQuery a call sends, so
 // none can name its asker and forget whom it reads for.
-func (d CodeDeps) read(ctx context.Context, c codeCaller, q code.ReadQuery) (code.ReadAnswer, error) {
+func (d CodeDeps) read(ctx context.Context, c codeCaller, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	q.Asker, q.CeilingSeat = c.asker, c.ceiling
 	return d.Code.Read(ctx, q)
 }
@@ -566,7 +566,7 @@ func (d CodeDeps) read(ctx context.Context, c codeCaller, q code.ReadQuery) (cod
 // codeRepoKey is a repository a turn resolved, as the turn's lookups key it:
 // who asked, and the name they asked by.
 type codeRepoKey struct {
-	asker code.Principal
+	asker gitlet.Principal
 	name  string
 }
 
@@ -579,7 +579,7 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 			CodeListReposTool))
 		return "", &r
 	}
-	if !code.ValidName(name) {
+	if !gitlet.ValidName(name) {
 		r := failed(fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, "+
 			"digits and hyphens, as %s lists it.", tool, clip(name), CodeListReposTool))
 		return "", &r
@@ -595,7 +595,7 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 // surface has no turn, and resolves once a call. See [CodeDeps.repoRead],
 // whose read a call can make its own.
 func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	name string) (code.RepoRef, *tools.Result) {
+	name string) (gitlet.RepoRef, *tools.Result) {
 
 	ref, _, refusal := d.repoRead(ctx, turn, tool, c, name, nil)
 	return ref, refusal
@@ -606,7 +606,7 @@ func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c c
 // whose answer carries the repository — in detail, as code_get_repo's first
 // page of refs is held by the reader to carry it, or as the repository its
 // name resolved to, as a change read, a listing of a repository's changes and
-// one of its checks answer it when asked ([code.ReadQuery.Resolve]) — made in
+// one of its checks answer it when asked ([gitlet.ReadQuery.Resolve]) — made in
 // place of the read of kind `repo` and answered back for the call to use, so
 // that call is ONE linearizable read rather than the resolution's and then
 // its own: one barrier on the code log, where two were two serial quorum
@@ -633,12 +633,12 @@ func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c c
 // it, and takes its hold, again. A HIT takes none: its hold was taken with
 // it, and a turn's holds only grow.
 func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	name string, first *code.ReadQuery) (code.RepoRef, *code.ReadAnswer, *tools.Result) {
+	name string, first *gitlet.ReadQuery) (gitlet.RepoRef, *gitlet.ReadAnswer, *tools.Result) {
 
 	if held := lookedUpRepo(turn, c.asker, name); held != nil {
 		return *held, nil, nil
 	}
-	q := code.ReadQuery{Kind: code.ReadRepo}
+	q := gitlet.ReadQuery{Kind: gitlet.ReadRepo}
 	if first != nil {
 		q = *first
 	}
@@ -646,9 +646,9 @@ func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string,
 	answer, err := d.read(ctx, c, q)
 	if err != nil {
 		r := codeFailure(ctx, tool, name, err)
-		return code.RepoRef{}, nil, &r
+		return gitlet.RepoRef{}, nil, &r
 	}
-	var ref code.RepoRef
+	var ref gitlet.RepoRef
 	switch {
 	case answer.Repo != nil:
 		ref = answer.Repo.RepoRef
@@ -658,11 +658,11 @@ func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string,
 		r := faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered repository %s's %s read with "+
 			"neither its detail nor its resolution", name, q.Kind), fmt.Sprintf("%s could not read repository "+
 			"%q: %s.", tool, name, faultSaid))
-		return code.RepoRef{}, nil, &r
+		return gitlet.RepoRef{}, nil, &r
 	}
 	if err := HoldRepo(ctx, turn, d.Holder, c.actor, ref, d.Now); err != nil {
 		r := holdFailure(ctx, tool, ref, err)
-		return code.RepoRef{}, nil, &r
+		return gitlet.RepoRef{}, nil, &r
 	}
 	turn.LookedUp().Store(codeRepoKey{asker: c.asker, name: name}, ref)
 	if first == nil {
@@ -675,8 +675,8 @@ func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string,
 // the one the turn resolved the name to — a name released and taken again
 // between the two reads — and forgets the turn's resolution, so the call made
 // again resolves the name afresh. nil where they are one repository.
-func (d CodeDeps) sameRepo(turn *turnctx.Turn, tool string, asker code.Principal, repo,
-	answered code.RepoRef) *tools.Result {
+func (d CodeDeps) sameRepo(turn *turnctx.Turn, tool string, asker gitlet.Principal, repo,
+	answered gitlet.RepoRef) *tools.Result {
 
 	if answered.ID == "" || answered.ID == repo.ID {
 		return nil
@@ -691,17 +691,17 @@ func (d CodeDeps) sameRepo(turn *turnctx.Turn, tool string, asker code.Principal
 
 // failed explains a read about repo — the repository the turn resolved — that
 // did not answer ([codeFailure]), and where the read answered the repository
-// GONE (code.ErrRepoNotFound) forgets the turn's resolution of its name first,
+// GONE (gitlet.ErrRepoNotFound) forgets the turn's resolution of its name first,
 // as [CodeDeps.sameRepo] does for a name that answers another id: the
 // resolution is no longer true, whichever read found it out — one by name, or
 // one by the id the turn resolved, which no read by name ever re-checks. A name
 // purged and declared again names a repository of another id, so the next call
 // naming it resolves it afresh rather than asking again, for the rest of the
 // turn, about an id nothing serves.
-func (d CodeDeps) failed(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
-	repo code.RepoRef, err error) tools.Result {
+func (d CodeDeps) failed(ctx context.Context, turn *turnctx.Turn, tool string, asker gitlet.Principal,
+	repo gitlet.RepoRef, err error) tools.Result {
 
-	if errors.Is(err, code.ErrRepoNotFound) {
+	if errors.Is(err, gitlet.ErrRepoNotFound) {
 		forget(turn, asker, repo)
 	}
 	return codeFailure(ctx, tool, repo.Name, err)
@@ -710,12 +710,12 @@ func (d CodeDeps) failed(ctx context.Context, turn *turnctx.Turn, tool string, a
 // lookedUpRepo is the turn's resolution of name as asker resolved it — one
 // [CodeDeps.repoRead] kept, its hold taken — or nil where the turn holds none
 // (or there is no turn).
-func lookedUpRepo(turn *turnctx.Turn, asker code.Principal, name string) *code.RepoRef {
+func lookedUpRepo(turn *turnctx.Turn, asker gitlet.Principal, name string) *gitlet.RepoRef {
 	held, ok := turn.LookedUp().Load(codeRepoKey{asker: asker, name: name})
 	if !ok {
 		return nil
 	}
-	ref, ok := held.(code.RepoRef)
+	ref, ok := held.(gitlet.RepoRef)
 	if !ok {
 		return nil
 	}
@@ -723,7 +723,7 @@ func lookedUpRepo(turn *turnctx.Turn, asker code.Principal, name string) *code.R
 }
 
 // forget drops the turn's resolution of repo's name, as asker asked it.
-func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
+func forget(turn *turnctx.Turn, asker gitlet.Principal, repo gitlet.RepoRef) {
 	turn.LookedUp().Forget(codeRepoKey{asker: asker, name: repo.Name})
 }
 
@@ -736,14 +736,14 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 // moved, which a read by object id is then floored at ([resolvedRev.at]) — and
 // the checkpoint they were read at; a name no live ref holds refuses the call
 // in Gitlet's own sentence, every such name named. Its read is THE ONE
-// code.RefQuery in this package ([CodeDeps.refsOf]): code_resolve's `ref`
+// gitlet.RefQuery in this package ([CodeDeps.refsOf]): code_resolve's `ref`
 // calls it directly, [CodeDeps.resolveRevs] for every revision of a call that
 // is not an id, a write's branch ([CodeDeps.branch]) and an executor's launch
 // every ref it resolves ([CodeDeps.ResolveRunRepos]) — and so the one place a
 // call's caller and ceiling are stamped on a resolve, and the turn's hold on
 // every seat's branch it answers is taken ([HoldRef]).
 func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	repo code.RepoRef, names ...string) ([]code.ResolvedRef, statelog.Position, *tools.Result) {
+	repo gitlet.RepoRef, names ...string) ([]gitlet.ResolvedRef, statelog.Position, *tools.Result) {
 
 	answer, refusal := d.refsOf(ctx, turn, tool, c, repo, names...)
 	if refusal != nil {
@@ -757,7 +757,7 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 }
 
 // refsOf is [CodeDeps.resolveRef]'s read, ANSWERING a name no live ref holds
-// beside the rest ([code.ResolvedRef.Missing]) rather than refusing the call:
+// beside the rest ([gitlet.ResolvedRef.Missing]) rather than refusing the call:
 // for the callers to which a missing ref is an answer — an executor's launch,
 // whose own branch may not exist yet ([CodeDeps.ResolveRunRepos]), and a
 // write's branch, which its own head compare answers ([CodeDeps.branch]). The
@@ -772,22 +772,22 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 // seats' branches writes one compare-and-set on its run row, not two. A hold
 // that fails refuses the call with nothing sent.
 func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	repo code.RepoRef, names ...string) (code.RefAnswer, *tools.Result) {
+	repo gitlet.RepoRef, names ...string) (gitlet.RefAnswer, *tools.Result) {
 
-	answer, err := d.Code.ResolveRef(ctx, code.RefQuery{Repo: repo.Name, Refs: names, Fresh: seatRead,
+	answer, err := d.Code.ResolveRef(ctx, gitlet.RefQuery{Repo: repo.Name, Refs: names, Fresh: seatRead,
 		Asker: c.asker, CeilingSeat: c.ceiling})
 	if err != nil {
 		r := d.failed(ctx, turn, tool, c.asker, repo, err)
-		return code.RefAnswer{}, &r
+		return gitlet.RefAnswer{}, &r
 	}
 	if r := d.sameRepo(turn, tool, c.asker, repo, answer.Repo); r != nil {
-		return code.RefAnswer{}, r
+		return gitlet.RefAnswer{}, r
 	}
 	if len(answer.Refs) != len(names) {
 		r := faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered %d of the %d refs asked of %s",
 			len(answer.Refs), len(names), repo.Name), fmt.Sprintf("%s could not read repository %q: %s.", tool,
 			repo.Name, faultSaid))
-		return code.RefAnswer{}, &r
+		return gitlet.RefAnswer{}, &r
 	}
 	noteRefsRead(turn, repo.ID, answer.Refs)
 	var held []string
@@ -798,7 +798,7 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 	}
 	if taking, err := takeRefHolds(ctx, turn, c.actor, repo, held); err != nil {
 		r := refHoldFailure(ctx, tool, repo, taking, err)
-		return code.RefAnswer{}, &r
+		return gitlet.RefAnswer{}, &r
 	}
 	for i := range answer.Refs {
 		resolved := &answer.Refs[i]
@@ -808,7 +808,7 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, resolved.Ref, resolved, answer.Position,
 			d.Now); err != nil {
 			r := refHoldFailure(ctx, tool, repo, resolved.Ref, err)
-			return code.RefAnswer{}, &r
+			return gitlet.RefAnswer{}, &r
 		}
 	}
 	return answer, nil
@@ -834,20 +834,20 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 //
 // RESOLVED ONLY WHERE A HOLD WOULD BE TAKEN AND IS NOT YET CONFIRMED
 // (M3-decisions M3-O65): a turn's call, by a seat, on a branch
-// [code.Holdable] admits, whose key the turn has not confirmed. Every other
+// [gitlet.Holdable] admits, whose key the turn has not confirmed. Every other
 // write — an operator's, one on a branch outside refs/heads/seats/, one on a
 // branch this turn's read already confirmed — reads nothing here; its own
 // head compare decides it, unchanged.
-func (d CodeDeps) branch(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo code.RepoRef,
+func (d CodeDeps) branch(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo gitlet.RepoRef,
 	existing bool, refs ...string) *tools.Result {
 
-	if turn == nil || c.asker.Kind != code.PrincipalAgent {
+	if turn == nil || c.asker.Kind != gitlet.PrincipalAgent {
 		return nil
 	}
 	var held []string
 	for _, ref := range refs {
-		if code.Holdable(ref) && !slices.Contains(held, ref) &&
-			!turn.Holding().Confirmed(code.RefHoldKey(repo.ID, ref)) {
+		if gitlet.Holdable(ref) && !slices.Contains(held, ref) &&
+			!turn.Holding().Confirmed(gitlet.RefHoldKey(repo.ID, ref)) {
 			held = append(held, ref)
 		}
 	}
@@ -904,7 +904,7 @@ type refsRead struct {
 
 // noteRefsRead raises turn's [refsRead] on repoID to where each of refs last
 // moved; a ref no live ref holds, which moved nowhere, raises nothing.
-func noteRefsRead(turn *turnctx.Turn, repoID string, refs []code.ResolvedRef) {
+func noteRefsRead(turn *turnctx.Turn, repoID string, refs []gitlet.ResolvedRef) {
 	if turn == nil || turn.LookedUp() == nil {
 		return
 	}
@@ -943,10 +943,10 @@ const headRev = "HEAD"
 // object id — whole, or an abbreviation the Gitlet node expands — and, where the
 // argument was a ref, the ref it resolved through and the checkpoint that
 // read was at. A read of it is floored at the record that last moved its ref
-// (code.RefsFloor), and an id's at nothing of its own.
+// (gitlet.RefsFloor), and an id's at nothing of its own.
 type resolvedRev struct {
 	oid  string
-	ref  *code.ResolvedRef
+	ref  *gitlet.ResolvedRef
 	read statelog.Position
 }
 
@@ -970,14 +970,14 @@ func revArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 // given twice, once — so a call pays one barrier however many refs it names.
 // A branch whose name is all hex digits is named by its whole ref.
 func (d CodeDeps) resolveRevs(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	repo code.RepoRef, revs ...string) ([]resolvedRev, *tools.Result) {
+	repo gitlet.RepoRef, revs ...string) ([]resolvedRev, *tools.Result) {
 
 	out := make([]resolvedRev, len(revs))
 	refOf := make([]string, len(revs))
 	var names []string
 	for i, rev := range revs {
 		switch {
-		case code.ValidRev(rev):
+		case gitlet.ValidRev(rev):
 			out[i] = resolvedRev{oid: rev}
 			continue
 		case rev == headRev:
@@ -1021,16 +1021,16 @@ func revPairArg(tool string, args map[string]any) (base, head string, refusal *t
 // this node's own floor on the repository and the positions the call's refs
 // last moved at — a SYNC level for the copy that answers, so it holds the
 // commits those refs named and this node's own pushes to it — or none, which
-// reads the copy as it stands: the code domain's one rule (code.RefsFloor),
+// reads the copy as it stands: the code domain's one rule (gitlet.RefsFloor),
 // which a question's read by object id is floored by too.
-func (d CodeDeps) gitFresh(repo code.RepoRef, revs ...resolvedRev) statelog.Freshness {
-	var refs []code.ResolvedRef
+func (d CodeDeps) gitFresh(repo gitlet.RepoRef, revs ...resolvedRev) statelog.Freshness {
+	var refs []gitlet.ResolvedRef
 	for _, r := range revs {
 		if r.ref != nil {
 			refs = append(refs, *r.ref)
 		}
 	}
-	return code.RefsFloor(d.Code.FloorOf(repo.ID), refs...)
+	return gitlet.RefsFloor(d.Code.FloorOf(repo.ID), refs...)
 }
 
 // furthestOnLog is the later of two positions on the code log, a zero one
@@ -1054,25 +1054,25 @@ func furthestOnLog(a, b statelog.Position) statelog.Position {
 // Gitlet node would take, so a malformed argument costs no round trip and is
 // told in the domain's own words. A Gitlet node that answers the repository gone
 // ends the turn's resolution of its name ([CodeDeps.failed]).
-func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo code.RepoRef,
-	q code.GitQuery) (code.GitAnswer, *tools.Result) {
+func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo gitlet.RepoRef,
+	q gitlet.GitQuery) (gitlet.GitAnswer, *tools.Result) {
 
 	q.Asker, q.CeilingSeat = c.asker, c.ceiling
 	// A SEAT'S READ NAMES ITS TURN, whose bucket on the answering Gitlet node
-	// pays the read's one second look at the log's head (code.NewResyncs):
+	// pays the read's one second look at the log's head (gitlet.NewResyncs):
 	// so one turn naming what its floor lacks in a loop spends its own
 	// re-syncs and, past its seat's, the seat's — never the code log's.
-	if turn != nil && c.asker.Kind == code.PrincipalAgent {
+	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
 		q.Turn = turn.RunID
 	}
 	if err := q.Validate(); err != nil {
 		r := codeFailure(ctx, tool, repo.Name, err)
-		return code.GitAnswer{}, &r
+		return gitlet.GitAnswer{}, &r
 	}
 	answer, err := d.Code.GitRead(ctx, q)
 	if err != nil {
 		r := d.failed(ctx, turn, tool, c.asker, repo, err)
-		return code.GitAnswer{}, &r
+		return gitlet.GitAnswer{}, &r
 	}
 	return answer, nil
 }
@@ -1093,12 +1093,12 @@ type codeResolved struct {
 type codeGitAnswer struct {
 	Repo     string                  `json:"repo"`
 	Resolved map[string]codeResolved `json:"resolved,omitempty"`
-	code.GitAnswer
+	gitlet.GitAnswer
 }
 
 // gitAnswer is the answer to a read by object id over repo, the refs resolved
 // by argument name.
-func gitAnswer(repo code.RepoRef, page code.GitAnswer, revs map[string]resolvedRev) codeGitAnswer {
+func gitAnswer(repo gitlet.RepoRef, page gitlet.GitAnswer, revs map[string]resolvedRev) codeGitAnswer {
 	out := codeGitAnswer{Repo: repo.Name, GitAnswer: page}
 	for arg, r := range revs {
 		if r.ref == nil {
@@ -1119,25 +1119,25 @@ func gitAnswer(repo code.RepoRef, page code.GitAnswer, revs map[string]resolvedR
 // node's fault.
 //
 // A NODE THAT CANNOT JUDGE IS NEVER A REFUSAL OF THE CALLER: a data node with
-// no chart answers a seat's read about itself (code.ErrNotServing), a Gitlet node
-// unready (code.ErrGitUnready), and the router asks another — so what reaches
+// no chart answers a seat's read about itself (gitlet.ErrNotServing), a Gitlet node
+// unready (gitlet.ErrGitUnready), and the router asks another — so what reaches
 // here from them is the fleet having no node that could answer now, which a
-// retry clears. Only code.ErrNotPermitted is a decision about who asked, and
-// code.ErrAboveCeiling about whom the asker reads for.
+// retry clears. Only gitlet.ErrNotPermitted is a decision about who asked, and
+// gitlet.ErrAboveCeiling about whom the asker reads for.
 func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result {
 	var (
-		unready  *code.ErrGitUnready
+		unready  *gitlet.ErrGitUnready
 		unserved *estate.ErrUnserved
 	)
 	switch {
-	case errors.Is(err, code.ErrAboveCeiling):
+	case errors.Is(err, gitlet.ErrAboveCeiling):
 		// THE CEILING'S OWN SENTENCE: Gitlet names the seat this
 		// turn is working for, why it reads nothing of the repository and who
 		// does. That the asker could read it is no reason to: read for that
 		// seat, it would be the visibility set aside for whoever can message
 		// a seat that reads it — the refusal is the requester ceiling's, in
 		// the artifacts tools' terms.
-		said, ok := RefusalSentence(err, code.ErrAboveCeiling)
+		said, ok := RefusalSentence(err, gitlet.ErrAboveCeiling)
 		if !ok {
 			said = fmt.Sprintf("the seat this turn is working for may not read repository %q", repo)
 		}
@@ -1145,43 +1145,43 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 			"seat this turn is working for could not read this itself — %s — so you may not read it for them. "+
 			"That is a decision about whom you are reading for, not about the repository or the node, so the "+
 			"same call is refused again in this turn: tell them who does read it.", tool, said))
-	case errors.Is(err, code.ErrNotPermitted):
+	case errors.Is(err, gitlet.ErrNotPermitted):
 		// THE GRANT'S OWN SENTENCE names the visibility that shut the asker
 		// out and who does read the repository; nothing here suggests a way
 		// round it, since another seat reading it for this one would be the
 		// visibility set aside rather than answered.
-		said, ok := RefusalSentence(err, code.ErrNotPermitted)
+		said, ok := RefusalSentence(err, gitlet.ErrNotPermitted)
 		if !ok {
 			said = fmt.Sprintf("your grant does not let you read repository %q", repo)
 		}
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: %s. That is a decision about "+
 			"who is asking, not about the repository or the node, so the same call is refused again.",
 			tool, said))
-	case errors.Is(err, code.ErrRepoNotFound):
-		said, ok := RefusalSentence(err, code.ErrRepoNotFound)
+	case errors.Is(err, gitlet.ErrRepoNotFound):
+		said, ok := RefusalSentence(err, gitlet.ErrRepoNotFound)
 		if !ok || said == repo {
 			said = fmt.Sprintf("there is no repository %q", repo)
 		}
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s. List the repositories you "+
 			"can read with %s.", tool, said, CodeListReposTool))
-	case errors.Is(err, code.ErrRefNotFound):
-		said, _ := RefusalSentence(err, code.ErrRefNotFound)
+	case errors.Is(err, gitlet.ErrRefNotFound):
+		said, _ := RefusalSentence(err, gitlet.ErrRefNotFound)
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s. Its branches are listed by "+
 			"%s; a commit is named by its id.", tool, said, CodeGetRepoTool))
-	case errors.Is(err, code.ErrChangeNotFound):
+	case errors.Is(err, gitlet.ErrChangeNotFound):
 		// THE CHANGE IT NAMES, of a repository the asker reads: a number of
-		// one it may not read is never this answer (code.ErrNotPermitted).
-		said, ok := RefusalSentence(err, code.ErrChangeNotFound)
+		// one it may not read is never this answer (gitlet.ErrNotPermitted).
+		said, ok := RefusalSentence(err, gitlet.ErrChangeNotFound)
 		if !ok {
 			said = "of that number"
 		}
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: repository %q has no change %s. Its "+
 			"changes are listed by %s.", tool, repo, said, CodeListChangesTool))
-	case errors.Is(err, code.ErrObjectNotFound), errors.Is(err, code.ErrNotATree),
-		errors.Is(err, code.ErrNotABlob):
+	case errors.Is(err, gitlet.ErrObjectNotFound), errors.Is(err, gitlet.ErrNotATree),
+		errors.Is(err, gitlet.ErrNotABlob):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s.", tool, domainWords(err)))
-	case errors.Is(err, code.ErrSliceTooLarge), errors.Is(err, code.ErrInvalid),
-		errors.Is(err, code.ErrBadCursor), errors.Is(err, code.ErrBadLevel):
+	case errors.Is(err, gitlet.ErrSliceTooLarge), errors.Is(err, gitlet.ErrInvalid),
+		errors.Is(err, gitlet.ErrBadCursor), errors.Is(err, gitlet.ErrBadLevel):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused what it was asked: %s. "+
 			"Change the arguments — the same ones are refused again.", tool, domainWords(err)))
 	case errors.As(err, new(*estate.ErrUnknownKeys)):
@@ -1192,7 +1192,7 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 		why, _ := Condition(err)
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q "+
 			"(%s). This is NOT an answer about the repository. %s", tool, repo, why, stuckRead))
-	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
+	case errors.As(err, &unready), errors.Is(err, gitlet.ErrNotServing):
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read repository %q "+
 			"right now (no node holding it could answer in time). This is NOT an answer about the "+
 			"repository: try again shortly.", tool, repo))
@@ -1243,24 +1243,24 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 // asking node tells as its own fault, a stored object that is not what its
 // row says, and a record a newer build wrote.
 func codeClass(err error) (tools.Refusal, bool) {
-	var unready *code.ErrGitUnready
+	var unready *gitlet.ErrGitUnready
 	switch {
-	case errors.Is(err, code.ErrRepoNotFound), errors.Is(err, code.ErrRefNotFound),
-		errors.Is(err, code.ErrChangeNotFound), errors.Is(err, code.ErrCheckNotFound),
-		errors.Is(err, code.ErrObjectNotFound), errors.Is(err, code.ErrNotATree),
-		errors.Is(err, code.ErrNotABlob):
+	case errors.Is(err, gitlet.ErrRepoNotFound), errors.Is(err, gitlet.ErrRefNotFound),
+		errors.Is(err, gitlet.ErrChangeNotFound), errors.Is(err, gitlet.ErrCheckNotFound),
+		errors.Is(err, gitlet.ErrObjectNotFound), errors.Is(err, gitlet.ErrNotATree),
+		errors.Is(err, gitlet.ErrNotABlob):
 		return tools.RefusalNotFound, true
-	case errors.Is(err, code.ErrPurging), errors.Is(err, code.ErrNotYet), errors.Is(err, code.ErrNotDeleted),
-		errors.Is(err, code.ErrConfigManaged):
+	case errors.Is(err, gitlet.ErrPurging), errors.Is(err, gitlet.ErrNotYet), errors.Is(err, gitlet.ErrNotDeleted),
+		errors.Is(err, gitlet.ErrConfigManaged):
 		return tools.RefusalConflict, true
-	case errors.Is(err, code.ErrSnapshotMoved):
+	case errors.Is(err, gitlet.ErrSnapshotMoved):
 		return tools.RefusalStaleVersion, true
-	case errors.Is(err, code.ErrNotPermitted), errors.Is(err, code.ErrAboveCeiling):
+	case errors.Is(err, gitlet.ErrNotPermitted), errors.Is(err, gitlet.ErrAboveCeiling):
 		return tools.RefusalForbidden, true
-	case errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrBadCursor), errors.Is(err, code.ErrBadLevel),
-		errors.Is(err, code.ErrSliceTooLarge), errors.Is(err, code.ErrRecordCap):
+	case errors.Is(err, gitlet.ErrInvalid), errors.Is(err, gitlet.ErrBadCursor), errors.Is(err, gitlet.ErrBadLevel),
+		errors.Is(err, gitlet.ErrSliceTooLarge), errors.Is(err, gitlet.ErrRecordCap):
 		return tools.RefusalInvalid, true
-	case errors.Is(err, code.ErrNotServing), errors.Is(err, code.ErrAnswerDue), errors.As(err, &unready):
+	case errors.Is(err, gitlet.ErrNotServing), errors.Is(err, gitlet.ErrAnswerDue), errors.As(err, &unready):
 		return tools.RefusalUnavailable, true
 	}
 	return "", false
@@ -1269,8 +1269,8 @@ func codeClass(err error) (tools.Refusal, bool) {
 // domainWords is a code refusal's own sentence: the words its domain wrote for
 // the caller past the sentinel, whichever sentinel it carries.
 func domainWords(err error) string {
-	for _, sentinel := range []error{code.ErrObjectNotFound, code.ErrNotATree, code.ErrNotABlob,
-		code.ErrSliceTooLarge, code.ErrInvalid, code.ErrBadCursor, code.ErrBadLevel} {
+	for _, sentinel := range []error{gitlet.ErrObjectNotFound, gitlet.ErrNotATree, gitlet.ErrNotABlob,
+		gitlet.ErrSliceTooLarge, gitlet.ErrInvalid, gitlet.ErrBadCursor, gitlet.ErrBadLevel} {
 		if said, ok := RefusalSentence(err, sentinel); ok {
 			return said
 		}
@@ -1355,8 +1355,8 @@ func (t *codeListRepos) Parameters() map[string]any {
 		"properties": map[string]any{
 			"status": map[string]any{
 				"type": "string",
-				"enum": []string{string(code.RepoStatusImporting), string(code.RepoStatusActive),
-					string(code.RepoStatusArchived)},
+				"enum": []string{string(gitlet.RepoStatusImporting), string(gitlet.RepoStatusActive),
+					string(gitlet.RepoStatusArchived)},
 				"description": "Only those being imported, the active, or the archived (read-only); all three " +
 					"when left out.",
 			},
@@ -1379,27 +1379,27 @@ func (t *codeListRepos) Call(ctx context.Context, args map[string]any) (tools.Re
 // by and decides about — never the counts and ids that are Gitlet's own
 // bookkeeping.
 type codeRepoRow struct {
-	Name          string          `json:"name"`
-	Description   string          `json:"description,omitempty" untrusted:"name"`
-	Status        code.RepoStatus `json:"status"`
-	Owner         code.Owner      `json:"owner"`
-	Visibility    code.Visibility `json:"visibility"`
-	Search        code.SearchMode `json:"search"`
-	Access        string          `json:"access"`
-	DefaultBranch string          `json:"default_branch"`
-	Head          string          `json:"head,omitempty"`
-	Pushes        int64           `json:"pushes"`
-	LastPushAt    time.Time       `json:"last_push_at,omitzero"`
+	Name          string            `json:"name"`
+	Description   string            `json:"description,omitempty" untrusted:"name"`
+	Status        gitlet.RepoStatus `json:"status"`
+	Owner         gitlet.Owner      `json:"owner"`
+	Visibility    gitlet.Visibility `json:"visibility"`
+	Search        gitlet.SearchMode `json:"search"`
+	Access        string            `json:"access"`
+	DefaultBranch string            `json:"default_branch"`
+	Head          string            `json:"head,omitempty"`
+	Pushes        int64             `json:"pushes"`
+	LastPushAt    time.Time         `json:"last_push_at,omitzero"`
 	// Protections are its rules as a push is held to them, as its row
 	// answers them: never a rule's merge gate, which code_get_repo answers.
-	Protections []code.PushRule `json:"protections,omitempty"`
+	Protections []gitlet.PushRule `json:"protections,omitempty"`
 	// ProtectionsLeftOut is set, in place of Protections, on the one row of
 	// a listing whose rules alone are past an answer: how many there are and
 	// which tool pages them.
 	ProtectionsLeftOut string `json:"protections_left_out,omitempty"`
 }
 
-func repoRowOf(s code.RepoSummary) codeRepoRow {
+func repoRowOf(s gitlet.RepoSummary) codeRepoRow {
 	return codeRepoRow{
 		Name: s.Name, Description: s.Description, Status: s.Status, Owner: s.Owner,
 		Visibility: s.Visibility, Search: s.Search, Access: s.Access, DefaultBranch: s.DefaultBranch,
@@ -1421,15 +1421,15 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	q := code.ReadQuery{Kind: code.ReadRepos, Cursor: strings.TrimSpace(argString(args, "cursor")),
+	q := gitlet.ReadQuery{Kind: gitlet.ReadRepos, Cursor: strings.TrimSpace(argString(args, "cursor")),
 		Fresh: seatRead}
-	switch status := code.RepoStatus(strings.TrimSpace(argString(args, "status"))); status {
+	switch status := gitlet.RepoStatus(strings.TrimSpace(argString(args, "status"))); status {
 	case "":
-	case code.RepoStatusImporting, code.RepoStatusActive, code.RepoStatusArchived:
-		q.Status = []code.RepoStatus{status}
+	case gitlet.RepoStatusImporting, gitlet.RepoStatusActive, gitlet.RepoStatusArchived:
+		q.Status = []gitlet.RepoStatus{status}
 	default:
-		return failed(fmt.Sprintf("%s: `status` is %s, %s or %s, not %q.", t.Name(), code.RepoStatusImporting,
-			code.RepoStatusActive, code.RepoStatusArchived, clip(string(status)))), nil
+		return failed(fmt.Sprintf("%s: `status` is %s, %s or %s, not %q.", t.Name(), gitlet.RepoStatusImporting,
+			gitlet.RepoStatusActive, gitlet.RepoStatusArchived, clip(string(status)))), nil
 	}
 	q.Limit = argInt(args, "limit", defaultCodeRepoList)
 	if q.Limit < 1 || q.Limit > maxCodeRepoList {
@@ -1533,7 +1533,7 @@ func (t *codeGetRepo) Call(ctx context.Context, args map[string]any) (tools.Resu
 }
 
 // codeRepoDetail is one repository in detail, as code_get_repo answers it:
-// every field of the repository's detail (code.RepoDetail) a reader acts on,
+// every field of the repository's detail (gitlet.RepoDetail) a reader acts on,
 // copied by name, so one the detail grows is carried here or named left out
 // with its reason (TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy) — the
 // purge a person asked for, and an import's end, were each read on the
@@ -1541,24 +1541,24 @@ func (t *codeGetRepo) Call(ctx context.Context, args map[string]any) (tools.Resu
 // how it stood.
 type codeRepoDetail struct {
 	codeRepoRow
-	ManagedBy code.ManagedBy `json:"managed_by"`
-	Refs      int64          `json:"refs"`
-	Branches  int64          `json:"branches"`
-	Tags      int64          `json:"tags"`
-	LivePacks int64          `json:"live_packs"`
-	LiveBytes int64          `json:"live_bytes"`
-	CreatedAt time.Time      `json:"created_at,omitzero"`
-	DeletedAt time.Time      `json:"deleted_at,omitzero"`
+	ManagedBy gitlet.ManagedBy `json:"managed_by"`
+	Refs      int64            `json:"refs"`
+	Branches  int64            `json:"branches"`
+	Tags      int64            `json:"tags"`
+	LivePacks int64            `json:"live_packs"`
+	LiveBytes int64            `json:"live_bytes"`
+	CreatedAt time.Time        `json:"created_at,omitzero"`
+	DeletedAt time.Time        `json:"deleted_at,omitzero"`
 	// Expunge is where its expunges stand: the one open, a purge a person
 	// asked for and not yet served, and the last one committed — what the
 	// purge's own answer sends its asker here to read.
-	Expunge code.ExpungeState `json:"expunge,omitzero"`
+	Expunge gitlet.ExpungeState `json:"expunge,omitzero"`
 	// Remotes is where it stands with other hosts: its mirrors as its
 	// settings name them, the import its create filled it from and how that
 	// ended — its error, where it ended short, the engine's own sentence —
 	// and a pull mirror's last sync. Every credential in it is a ${VAR}
 	// reference, never a value.
-	Remotes code.RemoteState `json:"remotes,omitzero"`
+	Remotes gitlet.RemoteState `json:"remotes,omitzero"`
 }
 
 // codeBranch is one branch: its name under refs/heads/, and its commit.
@@ -1575,7 +1575,7 @@ type codeRepoAnswer struct {
 	// Protections are its rules WHOLE, each with the merge gate it holds a
 	// merge to and who last set it: what its detail's row answers of each
 	// rule beside the gates and the sources the read asked for
-	// (code.ReadQuery.Gates), on the detail's page alone, in pattern order —
+	// (gitlet.ReadQuery.Gates), on the detail's page alone, in pattern order —
 	// those that fit, and ProtectionsNext the pattern of the last answered
 	// where more follow it ([codeRepoRules]).
 	Protections     []codeRule        `json:"protections,omitempty"`
@@ -1597,30 +1597,30 @@ type codeRepoRules struct {
 
 // codeRule is one of a repository's rules WHOLE: what a push is held to, the
 // merge gate it holds a merge to, and who last set it and when
-// ([code.RuleSource]). The source tells a seat where a rule is changed: one
+// ([gitlet.RuleSource]). The source tells a seat where a rule is changed: one
 // the company document declares (SetByKind config, naming nobody) is the
 // document's to change, and one a tool set names the seat, the person's seat
 // or the credential that set it, which the change's conversation can reach.
 type codeRule struct {
-	code.Protection
-	SetBy     string         `json:"set_by,omitempty"`
-	SetByKind code.ActorKind `json:"set_by_kind,omitempty"`
-	SetAt     time.Time      `json:"set_at,omitzero"`
+	gitlet.Protection
+	SetBy     string           `json:"set_by,omitempty"`
+	SetByKind gitlet.ActorKind `json:"set_by_kind,omitempty"`
+	SetAt     time.Time        `json:"set_at,omitzero"`
 }
 
 // wholeRules is a repository's rules with their merge gates and sources: the
 // rules its row answers, each given the gate and the source its detail
 // answered for its pattern — both read beside the rules, in one transaction,
 // so every gate and every source names a rule of the row
-// ([code.RepoDetail.Gates], [code.RepoDetail.RuleSources]). Only for a
+// ([gitlet.RepoDetail.Gates], [gitlet.RepoDetail.RuleSources]). Only for a
 // detail read that asked for the gates: on one that did not, every rule
 // would read as ungated and set by nobody.
-func wholeRules(rules []code.PushRule, gates []code.RuleGate, sources []code.RuleSource) []codeRule {
-	gateOf := make(map[string]code.MergeGate, len(gates))
+func wholeRules(rules []gitlet.PushRule, gates []gitlet.RuleGate, sources []gitlet.RuleSource) []codeRule {
+	gateOf := make(map[string]gitlet.MergeGate, len(gates))
 	for _, g := range gates {
 		gateOf[g.Pattern] = g.Gate
 	}
-	sourceOf := make(map[string]code.RuleSource, len(sources))
+	sourceOf := make(map[string]gitlet.RuleSource, len(sources))
 	for _, s := range sources {
 		sourceOf[s.Pattern] = s
 	}
@@ -1651,7 +1651,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	q := code.ReadQuery{Kind: code.ReadRefs, Limit: codeBranchesPage,
+	q := gitlet.ReadQuery{Kind: gitlet.ReadRefs, Limit: codeBranchesPage,
 		Cursor: strings.TrimSpace(argString(args, "branches_cursor"))}
 	if after := strings.TrimSpace(argString(args, "protections_cursor")); after != "" {
 		if q.Cursor != "" {
@@ -1673,7 +1673,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// turn whose first word of a repository is one resolves it by its own.
 	// The detail's page asks for its rules' merge gates, which this tool
 	// answers and no other resolution reads.
-	var first *code.ReadQuery
+	var first *gitlet.ReadQuery
 	if q.Cursor == "" {
 		q.Gates = true
 		first = &q
@@ -1705,7 +1705,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// which would answer each rule's push half a second time.
 		out.Detail.Protections = nil
 		rules = wholeRules(d.Protections, d.Gates, d.RuleSources)
-		if c.asker.Kind == code.PrincipalOperator && t.deps.CloneURL != nil {
+		if c.asker.Kind == gitlet.PrincipalOperator && t.deps.CloneURL != nil {
 			out.CloneURL = t.deps.CloneURL(repo.Name)
 		}
 	}
@@ -1741,7 +1741,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// ITS DESCRIPTION IS A NAME somebody chose ([codeListRepos]'s reason), and
 	// so is every address its remotes name, a person's setting; an import's
 	// error is the engine's own sentence, naming objects by their ids.
-	if d := out.Detail; d != nil && (d.Description != "" || d.Remotes != (code.RemoteState{})) {
+	if d := out.Detail; d != nil && (d.Description != "" || d.Remotes != (gitlet.RemoteState{})) {
 		namesBy(read)
 	}
 	oneBranch := min(1, len(branches))
@@ -1775,7 +1775,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 func (t *codeGetRepo) rulesAfter(ctx context.Context, turn *turnctx.Turn, c codeCaller, name,
 	after string) (tools.Result, error) {
 
-	q := code.ReadQuery{Kind: code.ReadRefs, Limit: 1, Gates: true}
+	q := gitlet.ReadQuery{Kind: gitlet.ReadRefs, Limit: 1, Gates: true}
 	repo, resolved, refusal := t.deps.repoRead(ctx, turn, t.Name(), c, name, &q)
 	if refusal != nil {
 		return *refusal, nil
@@ -1988,13 +1988,13 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	rev := revs[0]
 	path, pathB64 := argString(args, "path"), argString(args, "path_b64")
-	q := code.GitQuery{RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, rev),
+	q := gitlet.GitQuery{RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, rev),
 		Cursor: strings.TrimSpace(argString(args, "cursor"))}
 	if recursive {
-		q.Kind, q.Tree = code.GitTree, &code.TreeQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
+		q.Kind, q.Tree = gitlet.GitTree, &gitlet.TreeQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
 			Recursive: true}
 	} else {
-		q.Kind, q.Blob = code.GitBlob, &code.BlobQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
+		q.Kind, q.Blob = gitlet.GitBlob, &gitlet.BlobQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
 			StartLine: start, EndLine: end}
 	}
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, q)
@@ -2016,7 +2016,7 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // fenced text outgrows one answer — text spelling fence markers, each longer
 // once escaped: the first half of the page's lines, or, for a page that is
 // one line, that the line cannot be read whole here.
-func blobNarrowing(b *code.BlobAnswer) string {
+func blobNarrowing(b *gitlet.BlobAnswer) string {
 	if b.EndLine > b.StartLine {
 		return fmt.Sprintf("Its text spells fence markers, which grow when they are escaped: read lines "+
 			"%d to %d with `start_line` and `end_line`, then the rest.", b.StartLine,
@@ -2052,7 +2052,7 @@ func (t *codeDiff) Parameters() map[string]any {
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 				"description": fmt.Sprintf("Only the files equal to one of these paths or under one as a "+
-					"directory, at most %d.", code.MaxDiffPaths),
+					"directory, at most %d.", gitlet.MaxDiffPaths),
 			},
 			"file": map[string]any{
 				"type": "string",
@@ -2110,9 +2110,9 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if v, set := argval.Bool(args["renames"]); set {
 		renames = v
 	}
-	diff := &code.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
+	diff := &gitlet.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
 		FileB64: argString(args, "file_b64"), Renames: renames}
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitDiff,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitDiff,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, base, head),
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Diff: diff})
 	if refusal != nil {
@@ -2217,9 +2217,9 @@ func (t *codeCompare) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	base, head := revs[0], revs[1]
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitCompare,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitCompare,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, base, head),
-		Compare: &code.CompareQuery{Base: base.oid, Head: head.oid}})
+		Compare: &gitlet.CompareQuery{Base: base.oid, Head: head.oid}})
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -2283,7 +2283,7 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch {
 	case target == "":
 		return failed(t.Name() + " needs a `target`: the branch asked about."), nil
-	case code.ValidRev(target):
+	case gitlet.ValidRev(target):
 		return failed(fmt.Sprintf("%s: `target` is the branch asked about, and %q reads as a commit "+
 			"id; a branch whose name is all hex digits is named by its whole ref (refs/heads/<name>).",
 			t.Name(), clip(target))), nil
@@ -2303,9 +2303,9 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE TIP'S OWN MOVE, never where the resolve read it: the target's moves
 	// up to the one that put the tip there are every move it had when it was
 	// resolved, which is all the index must hold.
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitLandedIn,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitLandedIn,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, commit, tip),
-		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.ref.Ref, TargetOID: tip.oid,
+		LandedIn: &gitlet.LandedInQuery{Commit: commit.oid, Target: tip.ref.Ref, TargetOID: tip.oid,
 			At: tip.ref.Moved}})
 	if refusal != nil {
 		return *refusal, nil
@@ -2352,7 +2352,7 @@ func (t *codeLog) Parameters() map[string]any {
 			"grep": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("Words the message must hold: a literal, not a pattern, at most %d "+
-					"bytes.", code.MaxLogGrepBytes),
+					"bytes.", gitlet.MaxLogGrepBytes),
 			},
 			"since": map[string]any{
 				"type":        "string",
@@ -2361,7 +2361,7 @@ func (t *codeLog) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many commits a page lists, 1 to %d; %d by default.",
-					code.MaxLogLimit, code.DefaultLogLimit),
+					gitlet.MaxLogLimit, gitlet.DefaultLogLimit),
 			},
 			"cursor": codeCursorArg(),
 		},
@@ -2388,10 +2388,10 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	q := &code.LogQuery{Path: argString(args, "path"), PathB64: argString(args, "path_b64"),
+	q := &gitlet.LogQuery{Path: argString(args, "path"), PathB64: argString(args, "path_b64"),
 		Grep: argString(args, "grep"), Limit: argInt(args, "limit", 0)}
-	if v, set := args["limit"]; set && v != nil && (q.Limit < 1 || q.Limit > code.MaxLogLimit) {
-		return failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), code.MaxLogLimit)), nil
+	if v, set := args["limit"]; set && v != nil && (q.Limit < 1 || q.Limit > gitlet.MaxLogLimit) {
+		return failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), gitlet.MaxLogLimit)), nil
 	}
 	if s := strings.TrimSpace(argString(args, "since")); s != "" {
 		since, err := time.Parse(time.RFC3339, s)
@@ -2412,7 +2412,7 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	rev := revs[0]
 	q.Rev = rev.oid
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitLog,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitLog,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, rev), Cursor: strings.TrimSpace(argString(args, "cursor")),
 		Log: q})
 	if refusal != nil {
@@ -2443,7 +2443,7 @@ func (t *codeBlame) Description() string {
 	return fmt.Sprintf("Which commit last changed each line of a file, read on the server: each line with its "+
 		"commit and its line there, and each commit once with its author, date, subject and the push behind "+
 		"it; at most %d lines a call. Lines and subjects arrive fenced as content nobody vouches for.",
-		code.MaxBlameLines)
+		gitlet.MaxBlameLines)
 }
 
 func (t *codeBlame) Parameters() map[string]any {
@@ -2467,7 +2467,7 @@ func (t *codeBlame) Parameters() map[string]any {
 			"end_line": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("The last line, inclusive, at most %d past `start_line`; that far "+
-					"when left out.", code.MaxBlameLines-1),
+					"when left out.", gitlet.MaxBlameLines-1),
 			},
 			"cursor": codeCursorArg(),
 		},
@@ -2507,9 +2507,9 @@ func (t *codeBlame) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	rev := revs[0]
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitBlame,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitBlame,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, rev), Cursor: strings.TrimSpace(argString(args, "cursor")),
-		Blame: &code.BlameQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
+		Blame: &gitlet.BlameQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
 			StartLine: argInt(args, "start_line", 0), EndLine: argInt(args, "end_line", 0)}})
 	if refusal != nil {
 		return *refusal, nil

@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -28,7 +28,7 @@ func importTool(t *testing.T, writer *codeWrites) tools.SeatCallable {
 // has Gitlet dial another host for the company, which a model's say-so
 // would point anywhere (U49 a) — so a seat, whatever it holds, is refused by
 // the table before anything is read; a token bound to nobody is refused as
-// every code write is (code.UnboundDetail); and a credential that is not a
+// every code write is (gitlet.UnboundDetail); and a credential that is not a
 // variable's NAME — a token pasted where its name belongs — is refused before
 // anything is sent. Nothing is sent for any of them. A person bound to a seat
 // creates the project, as themselves, with its source on the create: an
@@ -67,7 +67,7 @@ func TestOnlyAPersonImports(t *testing.T) {
 	tool := importTool(t, writer)
 	got, err := tool.CallForTurn(asUnboundToken(), nil, args(nil))
 	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
-		!strings.Contains(got.Output, code.UnboundDetail) {
+		!strings.Contains(got.Output, gitlet.UnboundDetail) {
 		t.Errorf("a token bound to nobody's import answered %v %q", err, got.Output)
 	}
 	const pasted = "ghp_0123456789abcdefABCDEF0123456789abcd"
@@ -89,24 +89,24 @@ func TestOnlyAPersonImports(t *testing.T) {
 		t.Fatalf("a person's import sent %d requests, want one create", len(writer.lifecycles))
 	}
 	r := writer.lifecycles[0]
-	want := code.ImportSource{URL: source, Credential: "${GITHUB_TOKEN}"}
-	if r.Kind != code.LifecycleCreate || r.Name != "web" || r.Actor.Kind != code.PrincipalOperator ||
+	want := gitlet.ImportSource{URL: source, Credential: "${GITHUB_TOKEN}"}
+	if r.Kind != gitlet.LifecycleCreate || r.Name != "web" || r.Actor.Kind != gitlet.PrincipalOperator ||
 		r.Actor.Seat != "founder" || r.Import == nil || *r.Import != want || r.Create.MirrorFrom != nil ||
-		r.Create.Owner != (code.Owner{Kind: code.OwnerUnit, Ref: "eng"}) ||
+		r.Create.Owner != (gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "eng"}) ||
 		statelog.CheckCallerOpID(r.OpID) != nil {
 		t.Errorf("a person's import sent %+v (import %+v), want founder's create of web importing %+v", r,
 			r.Import, want)
 	}
 	var answer struct {
 		Repository struct {
-			Name   string          `json:"name"`
-			Status code.RepoStatus `json:"status"`
+			Name   string            `json:"name"`
+			Status gitlet.RepoStatus `json:"status"`
 		} `json:"repository"`
 	}
 	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
 		t.Fatalf("the answer %q: %v", got.Output, err)
 	}
-	if answer.Repository.Name != "web" || answer.Repository.Status != code.RepoStatusImporting {
+	if answer.Repository.Name != "web" || answer.Repository.Status != gitlet.RepoStatusImporting {
 		t.Errorf("a person's import answered %+v, want web importing", answer.Repository)
 	}
 
@@ -116,7 +116,7 @@ func TestOnlyAPersonImports(t *testing.T) {
 	}
 	m := writer.lifecycles[1]
 	if m.Import != nil || m.Create.MirrorFrom == nil ||
-		*m.Create.MirrorFrom != (code.MirrorSource{URL: source, Credential: "${GITHUB_TOKEN}"}) {
+		*m.Create.MirrorFrom != (gitlet.MirrorSource{URL: source, Credential: "${GITHUB_TOKEN}"}) {
 		t.Errorf("a person's mirror sent import %+v and mirror_from %+v, want the source on the pull mirror "+
 			"alone", m.Import, m.Create.MirrorFrom)
 	}

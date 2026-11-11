@@ -451,7 +451,7 @@ GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
 # `make test` runs these packages with the rest, so `check` does not depend on
 # it.
 test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (ci: git recipe (macOS))
-	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/code/gitproc/...
+	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/gitlet/gitproc/...
 
 ##@ Gates — `make check` is all of them
 
@@ -787,19 +787,19 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # receive-pack's index-pack at one thread, and a person's clone on a transfer
 # lane one CI token has filled, with the fair share and without it, and beside
 # coding boxes with their cap and without it, and one
-# grant of a lane ten thousand waiters deep (internal/code/gitproc), the git
+# grant of a lane ten thousand waiters deep (internal/gitlet/gitproc), the git
 # cache's cold and delta syncs and a bundle's own file work, its index
 # maintenance and what a request pays across many packs, a node's boot of its
-# cache and what a directory sync costs a file (internal/code/cache), the code
+# cache and what a directory sync costs a file (internal/gitlet/cache), the code
 # domain's applier, decide, reconcile and snapshot reads and what a push's
-# history costs every data node's disk (internal/code), Gitlet's
+# history costs every data node's disk (internal/gitlet), Gitlet's
 # commit chain on one and three members and an engine write's route between
-# them (internal/code/codecluster), a push, a warm fetch, cold and warm
+# them (internal/gitlet/gitletcluster), a push, a warm fetch, cold and warm
 # clones, a blobless clone's lazy blame, and a seat's engine write from its
 # tool's call to its pack adopted and its build alone, end to end, and a
 # coding box's two clone recipes, its own git in a wide work tree and a copy
-# borrowed from the node (internal/code/host), a seat's reads of a
-# repository by object id on a Gitlet node, warm and cold (internal/code/query), the
+# borrowed from the node (internal/gitlet/host), a seat's reads of a
+# repository by object id on a Gitlet node, warm and cold (internal/gitlet/query), the
 # pace a client's connection is held to, on a real connection
 # (internal/api/paced), and what every push pays to start its proc-receive
 # hook (cmd/crewlet). Each package's doc records what it measured, and on what
@@ -812,7 +812,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 #
 # -p 1: one package's binary at a time. Two measuring at once measure each
 # other, and internal/statelog, internal/objstore/natsobj/replicated and
-# internal/code/codecluster stand up three-member clusters, which is what
+# internal/gitlet/gitletcluster stand up three-member clusters, which is what
 # internal/solo exists to keep alone.
 # Compiled first at full -p by PREBUILD, for test-solo's reason.
 # -run '^$': -bench alone runs every test as well.
@@ -821,12 +821,12 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # -v: a SKIPPED benchmark prints nothing without it. The real-bucket arms skip
 # unless CREWLET_BENCH_S3_BUCKET names a bucket (internal/objstore/s3obj's
 # package doc), and the arms whose fixture takes minutes and gigabytes —
-# internal/code/cache's cold syncs of 2 048 and of 10 000 pushes, its
+# internal/gitlet/cache's cold syncs of 2 048 and of 10 000 pushes, its
 # 10 000-pack repositories, its 5 GB index and its published layers, its
 # gigabyte split into hundreds of packs, its installer catching up 10 000
 # repositories and BenchmarkBigNode's 5 GB monorepo,
-# internal/code/host's gigabyte history, hundred thousand refs,
-# 100 000-file tree and a box's million-file one, internal/code/query's
+# internal/gitlet/host's gigabyte history, hundred thousand refs,
+# 100 000-file tree and a box's million-file one, internal/gitlet/query's
 # gigabyte history under a 100 000-file tree read by object id and its
 # gigabyte history blamed and logged by path, and internal/jsapi's streams of a
 # million and of three million subjects (about five minutes a count on four
@@ -844,7 +844,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # go's default of one second they are one or two operations whose first-touch
 # page faults are the figure; at three they are several.
 # BENCH_TIMEOUT is a hang detector, as TEST_TIMEOUT is. The longest package
-# is internal/code/cache, whose fixtures are real git: at BENCH_COUNT=6 on
+# is internal/gitlet/cache, whose fixtures are real git: at BENCH_COUNT=6 on
 # four vCPUs its arms took an hour and three quarters, half an hour of it
 # BenchmarkBoot's thousand repositories, and BenchmarkMidx's memory arms add
 # about five minutes a count (the gigabyte's clone walking its history a
@@ -854,7 +854,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # bound's 2 048 pushes and of an uncompacted 10 000, from memory and from the
 # S3 fake at 30, 100 and 200 ms (seven and a half minutes of syncs a count,
 # and a quarter of an hour of fixtures once). The next is
-# internal/code/host: fifty minutes at six counts, and with
+# internal/gitlet/host: fifty minutes at six counts, and with
 # CREWLET_BENCH_LARGE=1 about two and a half hours — half an hour of it
 # BenchmarkPushSmall's gigabyte history and an hour BenchmarkCloneCold's
 # 2 000-push tree; its coding boxes' (BenchmarkBoxClone, BenchmarkBoxWorktree,
@@ -870,7 +870,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 # run whatever BENCH_COUNT says,
 # since go test repeats only a leaf benchmark a count: the gigabyte's is ten
 # minutes and its arms four a count, the tree's eleven and its clones eight.
-# internal/code/cache's published layers' arms came after those runs, and add
+# internal/gitlet/cache's published layers' arms came after those runs, and add
 # — an ESTIMATE from each arm's one bounded count on two cores, never a run of
 # six — about an hour and a half at six counts (12 minutes a count, a quarter
 # of an hour of fixtures once), and with CREWLET_BENCH_LARGE=1 about five and
@@ -886,9 +886,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
-                 ./internal/jsapi ./internal/coord/kv ./internal/code/gitproc \
-                 ./internal/code/cache ./internal/code/compact ./internal/code \
-                 ./internal/code/codecluster ./internal/code/host ./internal/code/query \
+                 ./internal/jsapi ./internal/coord/kv ./internal/gitlet/gitproc \
+                 ./internal/gitlet/cache ./internal/gitlet/compact ./internal/gitlet \
+                 ./internal/gitlet/gitletcluster ./internal/gitlet/host ./internal/gitlet/query \
                  ./internal/usage ./internal/api/paced ./cmd/crewlet
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
