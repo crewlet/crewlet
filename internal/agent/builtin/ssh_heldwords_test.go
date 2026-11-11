@@ -29,7 +29,7 @@ func heldOperate(t *testing.T, args map[string]any) sandbox.Ask {
 	}
 	desk := &askDesk{outcome: sandbox.AskRecorded}
 	exec := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.SSHOperateTool}).
-		WithHolder(builtin.NewCallHold(desk, callSeal(t), nil)).ForTurn(sshTurn(o, "sre", "", nil))
+		WithHolder(builtin.NewCallHold(desk, callSeal(t), nil, nil)).ForTurn(sshTurn(o, "sre", "", nil))
 	res, err := exec.Execute(asExecutor("sre"), llm.ToolCall{Name: builtin.SSHOperateTool, Arguments: args})
 	if err != nil {
 		t.Fatal(err)

@@ -42,6 +42,7 @@ var gateRows = map[Gate]rowShape{
 	GateHealthTools:    {class: authz.ClassAdmin, seatGrant: authz.SeatGrantHealth},
 	GateSSHRead:        {class: authz.ClassAdmin, seatGrant: authz.SeatGrantSSHRead},
 	GateSSHOperate:     {class: authz.ClassAdmin, seatGrant: authz.SeatGrantSSHOperate},
+	GateDelegate:       {class: authz.ClassAdmin, seatGrant: authz.SeatGrantDelegate},
 }
 
 // shapeOf is a tool's authority row as a gate would name it, and false for a

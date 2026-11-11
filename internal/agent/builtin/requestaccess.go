@@ -140,13 +140,25 @@ func accessList() string {
 
 // grantChosen refuses an answer that chooses a grant its asker does not hold
 // yet: the grant is saved first and only then answered (ADR-0118), whoever sends it.
+//
+// EVERY CHOICE UNDER THE RESERVED PREFIX IS A GRANT, the engine's own options
+// alone carrying one, so a key this build no longer grants (a request asked
+// before its catalogue changed) is refused rather than answered as a plain yes.
 func (d WorkDeps) grantChosen(ctx context.Context, choice string,
 	thread worklet.ResolvedThread) *tools.Result {
 
-	if thread.AnswersDecision == nil || !advisor.IsAccessOption(choice) {
+	if thread.AnswersDecision == nil || !strings.HasPrefix(choice, advisor.AccessPrefix) {
 		return nil
 	}
 	key := advisor.AccessKey(choice)
+	if !key.Valid() {
+		refused := failed(fmt.Sprintf("%s: %q is a grant Crewlet no longer offers, so the "+
+			"answer was not posted and the agent was not told yes. Answer \"Not now\" and let "+
+			"the agent ask again, which offers the grants there are now; an administrator "+
+			"grants anything else under Settings, Integrations, then the integration's Agents tab.",
+			CommentOnWorkTool, choice))
+		return &refused
+	}
 	if d.FleetSeat == nil {
 		refused := failed(CommentOnWorkTool + ": this server cannot confirm the grant, so " +
 			"the answer was not posted. Answer from the dashboard, which applies it first.")

@@ -137,9 +137,10 @@ type Change struct {
 // not the accepted one, and one per accepted tool no listing names. In tool
 // order, then by definition. None for a server not yet baselined.
 //
-// A REMOVAL IS JUDGED ONLY WHERE THE LISTINGS CAN SAY: no live listing says
-// nothing about what the server lists, and a listing naming fewer tools than
-// its node counts ([coord.MaxMCPListedTools]) may name the tool past its cut.
+// EVERY LISTED TOOL IS REVIEWED, since a listing names every tool its node's
+// instances list (internal/coord's mcplisting.go). A REMOVAL IS JUDGED ONLY
+// WHERE THE LISTINGS CAN SAY: no live listing says nothing about what the
+// server lists.
 func Changes(listings []coord.MCPListing, accepted map[string]coord.MCPAcceptedTool) []Change {
 	if len(accepted) == 0 {
 		return nil
@@ -147,11 +148,7 @@ func Changes(listings []coord.MCPListing, accepted map[string]coord.MCPAcceptedT
 	type at struct{ tool, digest string }
 	found := map[at]*Change{}
 	named := map[string]struct{}{}
-	whole := len(listings) > 0
 	for _, l := range listings {
-		if len(l.Tools) < l.ToolCount {
-			whole = false
-		}
 		for _, t := range l.Tools {
 			named[t.Raw] = struct{}{}
 			before, ok := accepted[t.Raw]
@@ -177,7 +174,7 @@ func Changes(listings []coord.MCPListing, accepted map[string]coord.MCPAcceptedT
 	for _, c := range found {
 		out = append(out, *c)
 	}
-	if whole {
+	if len(listings) > 0 {
 		for _, tool := range slices.Sorted(maps.Keys(accepted)) {
 			before := accepted[tool]
 			if _, listed := named[tool]; listed || before.Removed {

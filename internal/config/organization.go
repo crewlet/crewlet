@@ -54,7 +54,19 @@ func (c *Company) organization() (*org.Organization, *identityIndex) {
 	c.bindSeatTools(o)
 	c.bindSeatCredentials(o)
 	c.markAccessLanes(o)
+	c.markDelegates(o)
 	return o, index
+}
+
+// markDelegates marks every agent seat an enabled delegated-decisions rule
+// names, which internal/authz's delegate grant admits to review_delegated. A
+// person's seat is never marked: a delegate is an agent's role alone.
+func (c *Company) markDelegates(o *org.Organization) {
+	for _, handle := range c.DelegatedDecisions.DelegateSeats() {
+		if r := o.Role(handle); r != nil && !r.IsHuman() {
+			r.Delegate = true
+		}
+	}
 }
 
 // DanglingRefs reports every reference this revision resolves to nothing

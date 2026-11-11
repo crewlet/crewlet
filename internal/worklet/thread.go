@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -416,6 +417,7 @@ type openAsk struct {
 	id, task, author, asked string
 	removed                 bool
 	decision                *decision.Decision
+	act                     *delegated.Act
 
 	// answeredBy is the comment that answered it, with its author and
 	// instant; resolvedBy and resolvedAt a resolve that closed it.
@@ -471,7 +473,7 @@ func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, er
 			return openAsk{}, fmt.Errorf("worklet: decode the ask %s: %w",
 				comment, err)
 		}
-		out.decision = stored.Decision
+		out.decision, out.act = stored.Decision, stored.Act
 	}
 	return out, nil
 }

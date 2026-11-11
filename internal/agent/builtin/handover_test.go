@@ -278,6 +278,12 @@ func sweepCalls(t *testing.T) []sweepCall {
 			if human, _ := authz.HumanOnlyOf(authz.Action(name)); human && surface == "seat" {
 				c.refused = tools.RefusalForbidden
 			}
+			// A CALL HELD FOR APPROVAL answers nothing until it is approved:
+			// called bare, it is refused before it reads anything, and once
+			// approved a merge answers as code_merge_change does.
+			if name == builtin.AskToMergeTool || name == builtin.AskToDeployTool {
+				c.refused = tools.RefusalForbidden
+			}
 			out = append(out, c)
 		}
 		for _, v := range sweepVariants(r) {

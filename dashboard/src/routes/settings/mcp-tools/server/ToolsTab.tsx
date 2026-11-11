@@ -49,6 +49,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useParam } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
+import { sortGridRows, useGridPage } from "~/lib/gridPage.ts";
 import { setLevels, type LevelsChange, type ServerDetail } from "../api.ts";
 import { BaselineSelect, LevelSelect, RiskChips, type OnFlow } from "../parts.tsx";
 import { BASELINE, LEVEL, LEVELS, refusedWords, RISK } from "../words.ts";
@@ -275,6 +276,10 @@ export function ToolsTab({
         ),
     },
   ];
+  // A SERVER LISTING HUNDREDS OF TOOLS is drawn a page at a time, the whole
+  // list sorted first so a page reads as part of one order.
+  const [sort] = useParam("sort.tools", "");
+  const page = useGridPage(sortGridRows(shown, columns, sort), [q, filter, sort].join("\n"));
 
   return (
     <div className="mcp-stack">
@@ -425,8 +430,8 @@ export function ToolsTab({
             </FilterChipGroup>
             {admin ? (
               <Menu
-                label={`Set ${shown.length} shown`}
-                trigger={`Set ${shown.length} shown`}
+                label={`Set ${plural(shown.length, "tool")}`}
+                trigger={`Set ${plural(shown.length, "tool")}`}
                 trailingIcon={<ChevronDownGlyph size="sm" />}
                 triggerVariant="secondary"
                 align="end"
@@ -445,17 +450,14 @@ export function ToolsTab({
           </div>
           <DataGrid<McpToolView>
             name="tools"
-            rows={shown}
+            rows={page.rows}
             rowKey={(t) => t.name}
             columns={columns}
+            serverSorted
             empty={{ title: "No tool matches", icon: "search" }}
+            onLoadMore={page.onLoadMore}
+            loadedNote={page.loadedNote}
           />
-          {detail.tool_count > detail.tools.length ? (
-            <Text as="p" variant="caption" tone="tertiary" className="mcp-note">
-              {detail.tool_count - detail.tools.length} more are listed than a node publishes, so
-              they are not shown here.
-            </Text>
-          ) : null}
           {server.shadowed_tools.length > 0 ? (
             <Text as="p" variant="caption" tone="tertiary" className="mcp-note">
               <Tag size="xs" variant="neutral" appearance="outline">

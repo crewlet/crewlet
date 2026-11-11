@@ -240,16 +240,23 @@ func answerRPC(line string) bool {
 		}
 		// A DEFINITION THAT CHANGES UNDER A RUNNING SERVER: the
 		// description is read at each listing from the file named, so a
-		// case changes the tool by writing it.
+		// case changes the tool by writing it; only the tool
+		// ToolServerDescribedEnv names, where it names one.
+		described := desc
 		if path := os.Getenv(engine.ToolServerDescribeEnv); path != "" {
 			if raw, err := os.ReadFile(path); err == nil {
-				desc = strings.TrimSpace(string(raw))
+				described = strings.TrimSpace(string(raw))
 			}
 		}
+		only := os.Getenv(engine.ToolServerDescribedEnv)
 		listed := make([]string, 0, 1)
 		for _, one := range strings.Split(name, ",") {
+			said := desc
+			if only == "" || only == one {
+				said = described
+			}
 			listed = append(listed, fmt.Sprintf(
-				`{"name":%q,"description":%q,"inputSchema":{"type":"object"}}`, one, desc))
+				`{"name":%q,"description":%q,"inputSchema":{"type":"object"}}`, one, said))
 		}
 		ttl := ""
 		if ms := os.Getenv(engine.ToolServerTTLEnv); ms != "" {

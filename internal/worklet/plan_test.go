@@ -542,6 +542,19 @@ func registeredQueries() map[string]map[string]any {
 		"the trash": {"container": "project:P01", "removed": "true",
 			"show_closed": "true"},
 		"the trash everywhere": {"removed": "true", "show_closed": "true"},
+
+		// THE ORDERS NO COLUMN HOLDS ([derivedOrders]), each over a real
+		// chart and catalogue ([planBasis]) at both scopes, and held to
+		// seeking a row's place by [TestEveryDerivedOrderSeeksItsPlaces].
+		"by key":                   {"container": "project:P01", "sort": "key"},
+		"by key everywhere":        {"sort": "-key"},
+		"by status":                {"container": "project:P01", "sort": "status"},
+		"by status everywhere":     {"sort": "-status"},
+		"by type order":            {"container": "project:P01", "sort": "type"},
+		"by type order everywhere": {"sort": "-type"},
+		"by assignee":              {"container": "project:P01", "sort": "-assignee"},
+		"by assignee everywhere":   {"sort": "assignee"},
+		"by type, then assignee":   {"sort": "type,-assignee"},
 	})
 }
 
@@ -1670,6 +1683,20 @@ func planFields(q Query) map[string]resolvedField {
 	return out
 }
 
+// planBasis is what the derived orders are built from over the plan fixture:
+// the builtin type catalogue, and a roster that has been applied.
+//
+// A REAL BASIS, never the zero one: compiled over no catalogue the type order
+// was `CASE t.type ELSE 0 END`, which is not SQL, so no derived order was
+// ever planned.
+func planBasis() orderBasis {
+	basis := orderBasis{roster: 1}
+	for _, kind := range EffectiveTypes(nil) {
+		basis.types = append(basis.types, kind.Slug)
+	}
+	return basis
+}
+
 // THE CONTAINER SURVIVES THE SUBTASK ROLLUP, and it is the only predicate the
 // outer row has to enter on.
 //
@@ -1965,7 +1992,7 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 		}
 		index := indexes[0]
 		walked[index] = true
-		terms := sortTerms(q, planFields(q), orderBasis{})
+		terms := sortTerms(q, planFields(q), planBasis())
 		leading := strings.TrimPrefix(terms[0].Column, rowAlias.col(""))
 		bound := regexp.MustCompile(`\(.*\b` + regexp.QuoteMeta(leading) + `[=<>]`)
 		t.Run(name, func(t *testing.T) {
@@ -2005,6 +2032,68 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 			t.Errorf("no registered query's first page walks %s unsorted, so "+
 				"this test never checks a later page of a listing in its "+
 				"order", index)
+		}
+	}
+}
+
+// AN ORDER BY THE SEATS' NAMES SEEKS EACH ROW'S PLACE.
+//
+// `sort=assignee` joins the roster's places on the seat's key
+// ([assigneeOrder]), and every statement that reads that join (a page, each
+// arm of the next one, the around read's) must seek it, so a row's place is
+// one seek however many seats the chart holds. Measured over 20 000 tasks and
+// a 5 000-seat chart: the order spelled as a CASE naming every seat cost 3 to
+// 5 s for a first page and 10 to 18 s for a later one or a task's neighbours;
+// the seats bound as a list and joined were scanned once per row under the
+// default listing's `status_group IN (…)`, whatever shape the list took
+// (BenchmarkADerivedOrder has the joined table's figures).
+//
+// NOT VACUOUS: a page, a later page and the around read must each have been
+// checked.
+//
+// Mutation: join the places on an expression of their key
+// (`ON lower(place.handle) = t.assignee`) and every case goes red.
+func TestAnOrderByTheSeatsNamesSeeksItsPlaces(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	checked := map[string]bool{}
+	for name, params := range registeredQueries() {
+		q := planQuery(t, params)
+		var joined []sortTerm
+		for _, term := range sortTerms(q, planFields(q), planBasis()) {
+			if strings.Contains(term.Join, "tracker_seat_places") {
+				joined = append(joined, term)
+			}
+		}
+		if len(joined) == 0 {
+			continue
+		}
+		statements := queryStatements(t, q)
+		t.Run(name, func(t *testing.T) {
+			for what, statement := range statements {
+				for _, term := range joined {
+					if !strings.Contains(statement.sql, term.Join) {
+						continue
+					}
+					checked[what] = true
+					if side, _, arm := strings.Cut(what, ", arm "); arm {
+						checked[side] = true
+					}
+					alias, _, _ := strings.Cut(term.Column, ".")
+					plan := storetest.Plan(t, db, statement.sql, statement.args)
+					if !storetest.SeeksJoined(plan, alias) {
+						t.Errorf("%s reads %s's places other than by a seek, so "+
+							"each row walks the chart:\n%s", what, alias,
+							strings.Join(plan, "\n"))
+					}
+				}
+			}
+		})
+	}
+	for _, want := range []string{"the page", nextPage + "0", rowsAhead,
+		previousRow, nextRow} {
+		if !checked[want] {
+			t.Errorf("no registered order by assignee checked %q", want)
 		}
 	}
 }
@@ -2468,7 +2557,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	terms := sortTerms(q, fields, orderBasis{})
+	terms := sortTerms(q, fields, planBasis())
 	page, pageArgs := taskRowsStatement(set, terms)
 	values, valueArgs := sortValuesStatement(terms, "t-00001")
 	out := map[string]plannedRead{
@@ -2491,7 +2580,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	if q.GroupBy == "" && !listOrdered(q) {
 		next := q
 		next.Cursor = mintCursor(keys, cursorOrder(terms))
-		resume, err := pageClause(next, fields, orderBasis{})
+		resume, err := pageClause(next, fields, planBasis())
 		if err != nil {
 			t.Fatalf("pageClause: %v", err)
 		}

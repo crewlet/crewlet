@@ -97,6 +97,10 @@ type Company struct {
 	// on which models, and the bounds of one turn. See [Assistant].
 	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
 
+	// DelegatedDecisions is which requests agent seats decide in a person's
+	// place, within the engine's rules. See [DelegatedDecisions].
+	DelegatedDecisions DelegatedDecisions `yaml:"delegated_decisions,omitempty" json:"delegated_decisions,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -348,7 +352,8 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
-		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")), c.validateSSHApprovers())
+		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")), c.validateSSHApprovers(),
+		c.validateDelegatedDecisions(o))
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

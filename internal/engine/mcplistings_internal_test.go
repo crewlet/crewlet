@@ -104,8 +104,8 @@ func TestANodesListingIsTheUnionOfItsInstances(t *testing.T) {
 			t.Errorf("tracker's %s names a schema its listing does not carry", tool.Name)
 		}
 	}
-	if !slices.Equal(names, []string{"probe_1", "probe_2"}) || tracker.ToolCount != 2 {
-		t.Errorf("tracker lists %v of %d, want both children's tools", names, tracker.ToolCount)
+	if !slices.Equal(names, []string{"probe_1", "probe_2"}) {
+		t.Errorf("tracker lists %v, want both children's tools", names)
 	}
 	if err := tracker.Validate(); err != nil {
 		t.Errorf("the derived listing is one the store refuses: %v", err)
@@ -117,7 +117,7 @@ func TestANodesListingIsTheUnionOfItsInstances(t *testing.T) {
 	// ONE TOOL BOTH CHILDREN LIST is named once, counted by both.
 	wiki := listings["wiki"].listing
 	if wiki.Shared || wiki.Instances != 2 || len(wiki.Tools) != 1 || wiki.Tools[0].Name != "lookup" ||
-		wiki.Tools[0].Instances != 2 || wiki.ToolCount != 1 {
+		wiki.Tools[0].Instances != 2 {
 		t.Errorf("wiki's listing = %+v, want one tool both instances list", wiki)
 	}
 }
@@ -158,7 +158,12 @@ type innerFleet = coord.Fleet
 // failPuts listing writes as a store that blinked does.
 type countingFleet struct {
 	innerFleet
-	puts, schemas, failPuts atomic.Int32
+	puts, schemas, failPuts, reads atomic.Int32
+}
+
+func (c *countingFleet) MCPToolDefinition(ctx context.Context, digest string) (coord.MCPToolDefinition, bool, error) {
+	c.reads.Add(1)
+	return c.innerFleet.MCPToolDefinition(ctx, digest)
 }
 
 func (c *countingFleet) PutMCPListing(ctx context.Context, l coord.MCPListing) (coord.MCPListing, error) {
@@ -340,6 +345,76 @@ func TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst(t *testing.T) {
 	e.writeMCPListings(ctx, "node-a", 3, map[string]nodeListing{"github": got})
 	if stored, err := fleet.ListMCPToolDefinitions(ctx); err != nil || len(stored) != len(want) {
 		t.Errorf("the fleet stores %d definitions (%v), want %d", len(stored), err, len(want))
+	}
+}
+
+// A DEFINITION THE STORE DOES NOT HOLD IS READ ONCE, NOT ON EVERY READ OF A
+// SERVER'S PAGE: the miss is remembered until a listing naming the digest as
+// kept arrives, since a node stores a definition before the listing that says
+// so; then it is read again and found.
+//
+// Mutation: read every missing digest from the store each time, or keep the
+// miss after a listing says it was kept, and this is red.
+func TestADefinitionTheStoreDoesNotHoldIsReadOnceUntilAListingKeepsIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	inner := coordmemory.NewFleet()
+	fleet := &countingFleet{innerFleet: inner}
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	unkept := fakeListing("github", "node-a", 3, "get_issue")
+	digest := unkept.listing.Tools[0].Digest
+	unkept.listing.Tools[0].DefinitionKept = false
+	e.applyMCPListing(ctx, coord.MCPListingUpdate{Listing: &unkept.listing, Server: "github", Node: "node-a"})
+	for range 3 {
+		if got, err := e.MCPToolDefinitions(ctx, []string{digest}); err != nil || len(got) != 0 {
+			t.Fatalf("a definition the store does not hold read as %+v (%v)", got, err)
+		}
+	}
+	if n := fleet.reads.Load(); n != 1 {
+		t.Fatalf("three reads of a missing definition read the store %d times, want once", n)
+	}
+
+	// ANOTHER NODE STORES IT, then its listing says so.
+	if _, err := inner.CreateMCPToolDefinition(ctx, unkept.definitions[digest]); err != nil {
+		t.Fatal(err)
+	}
+	kept := fakeListing("github", "node-b", 2, "get_issue")
+	e.applyMCPListing(ctx, coord.MCPListingUpdate{Listing: &kept.listing, Server: "github", Node: "node-b"})
+	got, err := e.MCPToolDefinitions(ctx, []string{digest})
+	if err != nil || len(got) != 1 || fleet.reads.Load() != 2 {
+		t.Fatalf("after a listing kept it the definition read as %+v (%v) in %d reads, want it found",
+			got, err, fleet.reads.Load())
+	}
+}
+
+// THE MOST TOOLS A SERVER MAY LIST FIT ONE LISTING, AT THEIR LONGEST: every
+// server the client takes is listed whole, never refused by the listing's
+// bytes, whatever its words. Names are of the characters a tool is filed
+// under, at the longest a listing keeps.
+//
+// Mutation: raise mcp.MaxServerTools past what MaxMCPListingBytes holds, and
+// this is red.
+func TestTheMostToolsAServerListsFitOneListing(t *testing.T) {
+	t.Parallel()
+	unknown := coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
+		Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown}
+	l := coord.MCPListing{Server: "cloud", Node: "node-a", Epoch: 1, At: time.Now(), Instances: 9999}
+	for i := range mcp.MaxServerTools {
+		name := fmt.Sprintf("%0*d", coord.MaxMCPToolNameBytes, i)
+		part := testDigest(name)[:coord.MCPToolPartLength]
+		l.Tools = append(l.Tools, coord.MCPListedTool{Name: name, Raw: name,
+			Title: strings.Repeat("t", coord.MaxMCPToolTitleBytes), Description: strings.Repeat("d",
+				coord.MaxMCPToolDescriptionBytes), Hints: unknown, Declared: unknown, Digest: testDigest(name),
+			DefinitionKept: true, Instances: 9999, Blocked: true,
+			Parts: coord.MCPToolParts{Title: part, Description: part, Schema: part, Hints: part}})
+	}
+	bounded := l.Bounded()
+	if err := bounded.Validate(); err != nil {
+		t.Fatalf("a listing of the most tools a server may list is refused: %v", err)
+	}
+	if len(bounded.Tools) != mcp.MaxServerTools || bounded.EncodedSize() > coord.MaxMCPListingBytes {
+		t.Errorf("the listing names %d tools in %d bytes, want %d within %d", len(bounded.Tools),
+			bounded.EncodedSize(), mcp.MaxServerTools, coord.MaxMCPListingBytes)
 	}
 }
 
