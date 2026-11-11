@@ -118,6 +118,17 @@ type RunNote struct {
 	// left waiting, nor recorded read and never handed over.
 	Read *NoteRead `json:"read,omitempty"`
 
+	// Served is the job the run's bridge served the note to while it waited
+	// ([PendingStore.ServeNotes]): a harness that polls for its notes —
+	// OpenCode's plugin — is answered one only once this records it, and
+	// the note is recorded read only once the harness confirms delivering it.
+	// So a note served and not read may have been delivered all the same — its
+	// confirmation lost, or its harness cut off before it landed — and a
+	// launch that continues a session tells it as a note the session may
+	// already show (internal/agent/runner). Kept once the note is read; the
+	// latest job served it, where more than one was.
+	Served string `json:"served,omitempty"`
+
 	// Extra is every key of the note this build does not know — see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
@@ -260,6 +271,18 @@ type NoteTake struct {
 	// answered an error can find what the call recorded
 	// ([PendingStore.SettleTake]).
 	Read NoteRead
+}
+
+// NoteServe is a poll of a run's notes serving them to the run's harness
+// ([PendingStore.ServeNotes]), PINNED as a take is ([NoteTake]): to the job the
+// poll serves, to the statuses it may serve in, and to an undecided ending.
+// Unlike a take it holds no lease: a poll is the bridge's, as its takes are.
+type NoteServe struct {
+	// IDs are the notes to serve, by id; one no longer waiting is skipped.
+	IDs []string
+
+	Launch   string
+	Statuses []string
 }
 
 // NoteSettle is a take settled once its answer was lost
@@ -436,6 +459,57 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 		return nil, err
 	}
 	return taken, nil
+}
+
+// ServeNotes records notes served to a job's harness, and answers every one
+// named that waits served to it. See the contract on [PendingStore].
+//
+// THROUGH THE WRITE A LIVE RUN TAKES, as a filing is ([CoordStore.FileNote]): a
+// run whose ending is decided serves nothing more, and the refusal is an answer,
+// never an error.
+func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error) {
+	if len(serve.IDs) == 0 {
+		return nil, nil
+	}
+	if serve.Launch == "" || len(serve.Statuses) == 0 {
+		return nil, fmt.Errorf("sandbox: a serve of run %s's notes names no job or no status it "+
+			"may serve in", turnID)
+	}
+	var served []RunNote
+	_, _, found, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
+		served = nil
+		if run.LaunchID != serve.Launch || !slices.Contains(serve.Statuses, run.Status) {
+			return false
+		}
+		notes := slices.Clone(run.Steer.Notes)
+		marked := false
+		for i, held := range notes {
+			if !held.Waiting() || !slices.Contains(serve.IDs, held.ID) {
+				continue
+			}
+			if held.Served != serve.Launch {
+				held.Served = serve.Launch
+				notes[i] = held
+				marked = true
+			}
+			served = append(served, held)
+		}
+		run.Steer.Notes = notes
+		// WRITTEN ONLY FOR A MARK NOT MADE YET: a poll answered again from the
+		// same view serves what an earlier one already recorded.
+		return marked
+	})
+	switch {
+	case errors.Is(err, ErrRunEnding):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case !found:
+		// NOTHING WAS DECIDED ON: the record is gone, whatever an earlier
+		// attempt decided before it lost.
+		return nil, nil
+	}
+	return served, nil
 }
 
 // errSettleUnnamed is a settle that names no take.

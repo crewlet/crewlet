@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARunIsSteerableAfterItsLaunchingNodeRestarts`, `internal/engine.TestATakenNoteIsRecordedDeliveredOnce`, `internal/engine.TestTheReviewerOpensWithANoteTheRunTook`, `internal/engine.TestAParkedRunHoldsItsNotesForWhatResumesIt`, `internal/engine.TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob`, `internal/engine.TestARunsRecordIsASteerSource`, `internal/engine.TestAnEndingExpiresWaitingNotesOnceUnderStableIDs`, `internal/engine.TestANoteLeftWaitingWhenARunEndsIsRecordedExpiredByTheEnginesCoordinator`, `internal/engine.TestAnOfferRacingTheLaunchIsNeverAnsweredClosed`, `internal/engine.TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord`, `internal/engine.TestTheBoxsNotesAreOnTheRecordAheadOfOneFiledAsItIsWritten`, `internal/engine.TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding`, `internal/engine.TestAResumedTurnCarriesItsNotesInTheOrderRead`, `internal/sandbox.TestAFailedLaunchsEndingReportsTheNotesItsWriteHeld`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestPendingStoreContract`, `internal/agent/builtin.TestARunRecordDecidesWithoutAScatter`, `internal/agent/builtin.TestAuthorityIsDecidedOnTheAnchoredSeat`, `internal/api/mcpbridge.TestSteerTakeIsServedUnlistedAndNeverRecorded`, `internal/sandbox/executor.TestARealBoxsHooksReachTheBridgeTool`, `internal/sandbox/executor.TestThePluginAdmitsNotesAtTheRunsNextStep`, `internal/sandbox/executor.TestThePluginReadsTheBridgesOwnNotesRoute`, `internal/sandbox/executor.TestARunCancelsTheNotesItsSessionNeverDelivered`, `internal/sandbox.TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad`, `internal/sandbox.TestEveryStampOfACaptureStatesTheNotesItsSessionHolds`, `internal/engine.TestAHooksTakeWhoseAnswerWasLostIsSettledUnanswered`, `internal/engine.TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver`, `internal/agent/runner.TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad`, `internal/agent/runner.TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead`, `internal/agent/runner.TestTheExecuteRecordListsItsRoundsReads`, `internal/engine.TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode`
+- **Enforced-by:** `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARunIsSteerableAfterItsLaunchingNodeRestarts`, `internal/engine.TestATakenNoteIsRecordedDeliveredOnce`, `internal/engine.TestTheReviewerOpensWithANoteTheRunTook`, `internal/engine.TestAParkedRunHoldsItsNotesForWhatResumesIt`, `internal/engine.TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob`, `internal/engine.TestARunsRecordIsASteerSource`, `internal/engine.TestAnEndingExpiresWaitingNotesOnceUnderStableIDs`, `internal/engine.TestANoteLeftWaitingWhenARunEndsIsRecordedExpiredByTheEnginesCoordinator`, `internal/engine.TestAnOfferRacingTheLaunchIsNeverAnsweredClosed`, `internal/engine.TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord`, `internal/engine.TestTheBoxsNotesAreOnTheRecordAheadOfOneFiledAsItIsWritten`, `internal/engine.TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding`, `internal/engine.TestAResumedTurnCarriesItsNotesInTheOrderRead`, `internal/sandbox.TestAFailedLaunchsEndingReportsTheNotesItsWriteHeld`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestPendingStoreContract`, `internal/agent/builtin.TestARunRecordDecidesWithoutAScatter`, `internal/agent/builtin.TestAuthorityIsDecidedOnTheAnchoredSeat`, `internal/api/mcpbridge.TestSteerTakeIsServedUnlistedAndNeverRecorded`, `internal/sandbox/executor.TestARealBoxsHooksReachTheBridgeTool`, `internal/sandbox/executor.TestThePluginAdmitsNotesAtTheRunsNextStep`, `internal/sandbox/executor.TestThePluginReadsTheBridgesOwnNotesRoute`, `internal/sandbox/executor.TestARunCancelsTheNotesItsSessionNeverDelivered`, `internal/sandbox.TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad`, `internal/sandbox.TestEveryStampOfACaptureStatesTheNotesItsSessionHolds`, `internal/engine.TestAHooksTakeWhoseAnswerWasLostIsSettledUnanswered`, `internal/engine.TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver`, `internal/agent/runner.TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad`, `internal/agent/runner.TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead`, `internal/agent/runner.TestTheExecuteRecordListsItsRoundsReads`, `internal/engine.TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode`, `internal/engine.TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered`, `internal/agent/runner.TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow`, `internal/agent/runner.TestARunCarriedOnInItsBoxIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow`
 - **Measured:** on Claude Code 2.1.263 and 2.1.310, against stub APIs: a hook's tool call that fails makes the CLI drop and re-initialise the run's whole MCP server, telling the model its tools are still connecting — so a hook's call is never answered with an error; a hook's timeout is in seconds, and at it the CLI cancels the call and discards a late answer — so the engine answers within half of it; additional context longer than 10,000 UTF-16 code units is moved to a file the model is shown a 2 KB preview of — so one answer carries at most 9,000. On OpenCode 2.0.32 and 2.1.4, a second admission under an id the session already holds is answered with the first — so a note's id is derived from the job and the note; a note admitted during a tool call, or during the final model call, is read in the same execution, and on 2.1.4 one admitted after the execution settles, with `resume: false`, starts nothing — so a note sent after a run's last step waits on the record for the review — but stays pending in the session, across the server's restart, and is handed to the next run in that session ahead of its prompt unless it is cancelled (`session.inbox.cancel`) — so a run's script cancels every admission OpenCode never delivered once the run has ended. A sealed note is at most about 11 KiB, and a turn takes at most ten.
 - **Cost-when-tried:** before this, a turn whose executor was its coding CLI's own run answered every note `steer_unsupported`, and a turn parked on its run answered `closed`: a person could not correct an executor at all, and a correction sent while a run worked never reached the reviewer that judged the work.
 - **Tag-status:** unreleased
@@ -170,4 +170,51 @@ takes name nothing and are never settled, as before; it reads a read marked
 unanswered as read, and its capture's cursor counts it held, as before — while
 this build's capture stops before it, so an older build continuing it tells
 every note past that cursor, the unanswered one among them, with no header. No
+state-log record and no `coord.ProtocolVersion` change.
+
+## Amendment: a note a harness may have delivered is on the record before the harness has it
+
+OpenCode's notes plugin is answered its notes by a poll of the run's notes
+route, admits each into the run's session, and confirms a note to the route
+only once OpenCode reports delivering it; only that confirmation recorded the
+note read. A harness cut off between the delivery and a confirmation that
+landed — killed, stopped at its turn's cap, or its confirmation refused because
+the run's claim had already moved it on — left a session that may hold the note
+while the record said it waited, and the next launch's brief told it as a note
+the turn had not read: the same note twice, the second time as an instruction
+of its own.
+
+**A poll answers a note only once the record says it was SERVED** to the job
+(`sandbox.RunNote.Served`, `sandbox.PendingStore.ServeNotes`), in a write before
+the answer, pinned as a take is to the job, its working statuses and an
+undecided ending; a note the record could not mark is not answered, nor is any
+after it, since the plugin's cursor moves past every note it is answered, and
+they wait for the next poll. The mark stays once the note is read. A segment resuming the
+turn carries the served notes' ids (`runner.Resume.Served`), final for the
+segment since no poll serves a run its claim has moved on; and a launch that
+continues a session — a kept capture, or the job's own copy in its box — tells a
+served note under the header of notes it may already show
+(`runner.toldNotes`): read since by a review, among the notes past its cursor,
+or still waiting, among the notes the brief is the first to read, the header
+taking every note up to the last served one, so the order the notes were read
+in is kept, and only the notes after it following plainly — each one the turn
+had not read before the brief, which is what the header says of them. A fresh
+run is told every note, as before.
+
+**Why the mark rather than reading the session.** Whether OpenCode delivered a
+note is OpenCode's to say, in a session the engine reads only once it is
+packed, and a delivery the plugin never confirmed leaves nothing on the engine's
+side but the poll that handed it over. The run's script cancels, once the run
+has ended, every steer the plugin admitted and OpenCode never delivered, so a
+served note may also be in no session at all: "may already show" is the most
+the record can say, and it says it.
+
+**What it does not reach.** A note a bridge of an older build served carries no
+mark, and a continuation tells it as one the turn had not read, as before. And
+a served note still waiting when the turn ends is reported `expired`, as every
+note no job's read recorded is, though the session may have read it.
+
+**Mid-upgrade.** The field is wire-additive (`omitempty`), and an older build
+keeps it in the note's `Extra` through every write it makes. An older build's
+poll serves without the mark, and reads a served note as waiting, as before. No
 state-log record and no `coord.ProtocolVersion` change.

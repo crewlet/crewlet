@@ -357,8 +357,10 @@ const notesAgainHeader = "## Notes this turn read that the session above may not
 // read that it may not show, each already rendered as the model reads a note
 // ([SteerMessage]), "" for none: every note the turn has read, to a session its
 // run may have been cut off in; every note from a read whose take's answer
-// never reached its harness on, to one whose harness ended its own run. The
-// session may not show them, and may show some.
+// never reached its harness on, to one whose harness ended its own run; and,
+// with them, a note the run's bridge served its harness, which may have
+// delivered it unconfirmed, whether the turn read it before this message or
+// reads it in it. The session may not show them, and may show some.
 //
 // NEVER "EVERY NOTE" IN ITS WORDS: the notes before such a read are the
 // session's, and are not told again.
@@ -371,9 +373,10 @@ const notesAgainHeader = "## Notes this turn read that the session above may not
 // AND THE NOTES AFTER THEM AS ONES THE TURN HAD NOT READ, never as new to the
 // session. Which notes the turn has read is the run's record's word, and a
 // harness can be handed a note before the record says it was read: OpenCode's
-// delivery is recorded read only once its plugin confirms it, so a harness gone
-// before its confirmation landed leaves a session that may show a note the
-// brief takes as waiting.
+// delivery is recorded read only once its plugin confirms it. A note the run's
+// bridge recorded serving is told among these, however it was delivered
+// (internal/agent/runner's toldNotes); one a bridge of an older build served is
+// not marked, and the record cannot tell it from a note no harness was handed.
 func NotesReadAgain(notes []string) string {
 	if len(notes) == 0 {
 		return ""

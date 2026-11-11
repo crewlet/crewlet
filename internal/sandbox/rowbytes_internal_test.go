@@ -318,13 +318,13 @@ func worstRow(t *testing.T) PendingRun {
 			Label: markup(decision.MaxEvidenceLabel)}
 	}
 	// TEN NOTES (internal/agent/steer's MaxTurnNotes), each sealed at the
-	// bound the store holds a note's seal to, each read by a take that named
-	// itself — the engine's takes name themselves by a fresh UUID — and was
-	// settled unanswered.
+	// bound the store holds a note's seal to, each served to a job before it
+	// was read, and read by a take that named itself — the engine's takes name
+	// themselves by a fresh UUID — and was settled unanswered.
 	notes := make([]RunNote, 10)
 	for i := range notes {
 		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
-			Read: &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
+			Served: uuid.NewString(), Read: &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
 				Boundary: "brief", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true}}
 	}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),

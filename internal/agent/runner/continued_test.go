@@ -546,6 +546,112 @@ func TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad(t *testing.
 	}
 }
 
+// A SESSION IS TOLD A NOTE ITS HARNESS WAS SERVED AS ONE IT MAY ALREADY SHOW. A
+// note the run's bridge served an OpenCode harness is recorded read only once
+// the harness confirms delivering it, so a session continued from that job may
+// hold one the record says waits, or that only a review read since. A relaunch
+// that continues it tells such a note under the header of notes it may already
+// show, never as one it had not read: still waiting, among the notes the brief
+// is the first to read — the header taking every note before it, so the order
+// read is kept, and only the notes after it following plainly — and read since
+// by a review, among the notes past the session's cursor. The fresh brief
+// beside it tells every note plainly, as it always does.
+//
+// Mutation: tell a served note plainly, take the notes after the last served
+// one under the header, or leave a served note a review read since plain, and a
+// case goes red.
+func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	read := func(id, text string, order int, ph types.Phase, boundary types.SteerBoundary) steer.Read {
+		return steer.Read{Note: steer.Note{ID: id, Text: text, By: "founder"},
+			Reading: steer.Reading{Phase: ph, Iteration: 1, Round: 1, Boundary: boundary, Order: order}}
+	}
+	held := read("held", "the note the session read in its brief", 1, types.PhaseExecute, types.SteerBoundaryBrief)
+	reviewed := read("reviewed", "the note a review read after the save", 2, types.PhaseReview,
+		types.SteerBoundaryRound)
+	note := func(id, text string) steer.Note { return steer.Note{ID: id, Text: text, By: "founder"} }
+	early := note("early", "the note waiting, never served")
+	served := note("served", "the note served to the job's harness, its confirmation lost")
+	late := note("late", "the note filed after it")
+	msg := func(by, text string) string { return prompts.SteerMessage(by, text) }
+	for name, tc := range map[string]struct {
+		steered []steer.Read
+		served  []string
+		waiting []steer.Note
+		// again is what the header holds, in order, and plain what follows
+		// it; none is the header absent.
+		again, plain []string
+	}{
+		"a served note still waiting": {steered: []steer.Read{held}, served: []string{"served"},
+			waiting: []steer.Note{early, served, late},
+			again:   []string{msg(early.By, early.Text), msg(served.By, served.Text)},
+			plain:   []string{msg(late.By, late.Text)}},
+		"a served note a review read since": {steered: []steer.Read{held, reviewed}, served: []string{"reviewed"},
+			waiting: []steer.Note{late},
+			again:   []string{msg(reviewed.By, reviewed.Text)}, plain: []string{msg(late.By, late.Text)}},
+		"no note served": {steered: []steer.Read{held, reviewed}, waiting: []steer.Note{early, late},
+			plain: []string{msg(reviewed.By, reviewed.Text), msg(early.By, early.Text), msg(late.By, late.Text)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box := steer.New()
+			for _, n := range tc.waiting {
+				box.Offer(n)
+			}
+			basis := keptBasis
+			basis.NoteCursor = 1
+			relauncher := &probingLauncher{basis: basis}
+			resume := &runner.Resume{State: parked.State, Steered: tc.steered, Served: tc.served,
+				Asked: &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+					SessionID: "s-1", BoxKept: true},
+				Bridged: []runner.BridgedCall{numbered("jira_create", map[string]any{"summary": "the job's issue"},
+					1, 1)}}
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				steer: box, resume: resume})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil {
+				t.Fatal("the relaunch continues no kept session")
+			}
+			brief := again.Session.Brief
+			if strings.Contains(brief, msg(held.By, held.Text)) {
+				t.Errorf("the session is told the note it holds:\n%s", brief)
+			}
+			header := strings.Index(brief, notesAgainHeader)
+			at := header
+			switch {
+			case len(tc.again) == 0 && header >= 0:
+				t.Errorf("a session no note was served to is told notes it may already show:\n%s", brief)
+			case len(tc.again) > 0 && (header < 0 || !strings.Contains(brief[header:],
+				map[int]string{1: "the note below", 2: "the 2 notes below"}[len(tc.again)])):
+				t.Fatalf("the notes it may already show are not headed and counted, %d of them:\n%s",
+					len(tc.again), brief)
+			}
+			for _, want := range append(slices.Clone(tc.again), tc.plain...) {
+				i := strings.Index(brief, want)
+				if i < 0 || i < at || strings.Count(brief, want) != 1 {
+					t.Errorf("the session is not told %q once, in the order read:\n%s", want, brief)
+				}
+				at = i
+			}
+			for _, w := range tc.waiting {
+				if !strings.Contains(again.Brief, msg(w.By, w.Text)) {
+					t.Errorf("the fresh brief does not carry note %q", w.ID)
+				}
+			}
+			if strings.Contains(again.Brief, notesAgainHeader) {
+				t.Errorf("the fresh brief tells its notes as ones it may already show:\n%s", again.Brief)
+			}
+		})
+	}
+}
+
 // AN ANSWERED OR A REFUSED RUN'S SESSION IS CONTINUED, TOLD WHAT CARRIES IT ON.
 // A person's answer carries the asking run on in the session that asked, and a
 // replaced sign-in the refused run's: the job each follows left its session

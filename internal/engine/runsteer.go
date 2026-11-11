@@ -97,6 +97,18 @@ import (
 // settle off the path asks until its store answers, or until the node stops
 // ([runSteers.settleUnanswered]).
 //
+// # A note a harness may have delivered is never one the record says nothing of
+//
+// OpenCode's plugin is handed its notes by a poll and confirms each once
+// OpenCode delivered it, and only the confirmation records the note read: a
+// harness cut off between the two — or whose confirmation the store never took —
+// leaves a session that may hold a note the record says waits, which the next
+// launch's brief would tell it as one it had not read. So a poll answers a note
+// only once the record says it was SERVED to the job
+// ([sandbox.PendingStore.ServeNotes]), in a write before its answer, and a
+// launch that continues the job's session tells a served note as one it may
+// already show ([servedNotes], internal/agent/runner).
+//
 // # Who records what became of a note
 //
 // The node whose step read it: the runner for a round of the engine's loop or
@@ -644,6 +656,21 @@ func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 			continue
 		}
 		out = append(out, steer.Read{Note: note, Reading: readingOf(*n.Read)})
+	}
+	return out
+}
+
+// servedNotes is every note on run's record its bridge served a harness
+// ([sandbox.RunNote.Served]), by id, in the order filed — read since, or waiting
+// still: what a segment resuming the turn tells a continued session as notes it
+// may already show ([runner.Resume.Served]). In the clear, as a note's id is:
+// a note whose seal does not open is never told, served or not.
+func servedNotes(run sandbox.PendingRun) []string {
+	var out []string
+	for _, n := range run.Steer.Notes {
+		if n.Served != "" {
+			out = append(out, n.ID)
+		}
 	}
 	return out
 }
@@ -1281,7 +1308,16 @@ func (i *runInbox) markPulled(ctx context.Context, launch string) {
 	}()
 }
 
-// Wait is the waiting notes past the cursor after — see [mcpbridge.SteerInbox].
+// Wait is the waiting notes past the cursor after, each served to the job on
+// the record first — see [mcpbridge.SteerInbox].
+//
+// SERVED BEFORE IT IS ANSWERED ([sandbox.PendingStore.ServeNotes]), in a write
+// of its own wherever the view does not show the mark yet: the harness admits
+// what it is answered and delivers it, and records it read only once it has, so
+// a note answered without the mark could sit in a session the record says
+// never read it. A note the serve did not answer — its write failed, or the
+// record moved on from the job — is not answered either, nor is any after it,
+// and they wait for the next poll.
 func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, <-chan struct{}) {
 	launch, watch := i.bound()
 	if launch == "" {
@@ -1292,10 +1328,37 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	if !liveFor(view, launch) {
 		return nil, changed
 	}
-	var out []mcpbridge.SteerNote
+	var due []openedNote
+	var unserved []string
 	for _, o := range opened {
 		if o.held.Seq <= after {
 			continue
+		}
+		due = append(due, o)
+		if o.held.Served != launch {
+			unserved = append(unserved, o.held.ID)
+		}
+	}
+	served := map[string]bool{}
+	if len(unserved) > 0 {
+		marked, err := i.steers.store.ServeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteServe{
+			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses})
+		if err != nil {
+			log.WarnContext(ctx, "steer_notes_unserved", "turn_id", i.ident.turn.TurnID, "error", err.Error(),
+				"detail", "the poll is answered without the notes the record could not mark served; they "+
+					"wait for the next poll")
+		}
+		for _, n := range marked {
+			served[n.ID] = true
+		}
+	}
+	var out []mcpbridge.SteerNote
+	for _, o := range due {
+		// UP TO THE FIRST NOTE NOT MARKED, never past it: the poller's cursor
+		// moves past every note it is answered, and one past an unmarked note
+		// would never ask for that note again.
+		if o.held.Served != launch && !served[o.held.ID] {
+			break
 		}
 		out = append(out, mcpbridge.SteerNote{
 			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.OpenCodeInboxID(launch, o.held.ID),

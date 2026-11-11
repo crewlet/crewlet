@@ -1805,6 +1805,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on: the briefs', the run's own and earlier reviews'.
 		Steered: steered,
+		// AND EVERY NOTE ITS BRIDGE SERVED A HARNESS, read since or waiting
+		// still: a continued session may show one the record says it had not
+		// read ([servedNotes]). Final for the segment: no poll serves a run
+		// once its claim has moved it on.
+		Served: servedNotes(in.Run),
 	}
 }
 

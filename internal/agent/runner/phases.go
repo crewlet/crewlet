@@ -359,7 +359,8 @@ type Resume struct {
 	// session there that it was cut off — that it may have been, where
 	// nothing was recorded — every call of the round and every note the turn
 	// has read, and arms none of the job's own loads ([Runner.inPlaceAfter],
-	// [Runner.sessionDecided]): the safe direction for a word that never came.
+	// [Runner.inPlaceNotes], [Runner.sessionDecided]): the safe direction for a
+	// word that never came.
 	// An own run's copy is told the calls the round's log took late alone,
 	// which it is not known to hold, and its guard counts none of their loads.
 	HarnessEnd sandbox.HarnessEnd
@@ -443,6 +444,15 @@ type Resume struct {
 	// resumed turn opens every phase with them ([Runner.steered]), and the
 	// collected run's own reads are its record's ([Runner.resumeAgentRun]).
 	Steered []steer.Read
+
+	// Served is every note, by id, the run's record says its bridge served a
+	// harness while it waited (sandbox.RunNote.Served), read since or waiting
+	// still: a harness polling for its notes is answered one only once it is
+	// recorded served, and records it read only once it confirms delivering
+	// it, so a session continued from a job served one may hold it whatever
+	// the record says of its read — and is told it as a note it may already
+	// show ([Runner.toldNotes]). A fresh run is told it as every note.
+	Served []string
 }
 
 // parked is the job's parked state as the session it ran in holds it: State,

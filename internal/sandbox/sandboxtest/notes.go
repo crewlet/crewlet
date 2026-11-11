@@ -50,6 +50,7 @@ var noteCases = []struct {
 	{"NotesRideABridgedCallStorm", testNotesRideABridgedCallStorm},
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
 	{"ATakeWhoseAnswerWasLostIsSettledByItsIdentity", testATakeWhoseAnswerWasLostIsSettledByItsIdentity},
+	{"ANoteIsServedOnlyToItsJobWhileItWaits", testANoteIsServedOnlyToItsJobWhileItWaits},
 }
 
 // noteRawCases are the note cases that read the raw record.
@@ -1439,5 +1440,108 @@ func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *vanish
 	}
 	if _, found, getErr := s.Get(ctx, "t-vanish"); getErr != nil || found {
 		t.Errorf("the record is found (%v, %v) after its removal", found, getErr)
+	}
+}
+
+// A NOTE IS SERVED ONLY TO ITS JOB, WHILE IT WAITS, AND STAYS SERVED. A harness
+// that polls for its notes is handed one only once the record says it was
+// served to the job, and the note is read only once the harness confirms
+// delivering it: so the mark is what tells a continuation a session may hold a
+// note the record says waits. A serve marks only the notes it names that wait,
+// on its own job's record in a status it names, and answers every one of them
+// served to that job, an earlier serve's included; a note served stays served
+// once a take reads it and through the next launch, and the latest job served
+// it is the one named. A serve for another job, in a status it does not name,
+// on a record whose ending is decided or one that is gone serves nothing, and
+// one naming no job is refused.
+//
+// Mutation: serve a note no longer waiting, serve for another job or in
+// another status, answer only what this call marked, drop the mark when the
+// note is read, or answer a serve naming no job, and a check goes red.
+func testANoteIsServedOnlyToItsJobWhileItWaits(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-serve"))
+	for _, id := range []string{"n-1", "n-2", "n-3"} {
+		mustFile(t, s, "t-serve", id)
+	}
+	if _, err := s.TakeNotes(ctx, "t-serve", bridgeTake(launch, "n-3")); err != nil {
+		t.Fatal(err)
+	}
+	serve := func(job string, ids ...string) sandbox.NoteServe {
+		return sandbox.NoteServe{IDs: ids, Launch: job,
+			Statuses: []string{sandbox.StatusLaunching, sandbox.StatusRunning}}
+	}
+	served, serveErr := s.ServeNotes(ctx, "t-serve", serve(launch, "n-1", "n-3"))
+	if serveErr != nil || len(served) != 1 || served[0].ID != "n-1" || served[0].Served != launch {
+		t.Fatalf("serving a waiting note and a read one = %+v, %v, want the waiting one served", served, serveErr)
+	}
+	// AN EARLIER SERVE'S MARK IS ANSWERED BESIDE THIS ONE'S.
+	served, serveErr = s.ServeNotes(ctx, "t-serve", serve(launch, "n-1", "n-2"))
+	if serveErr != nil || len(served) != 2 || served[0].ID != "n-1" || served[1].ID != "n-2" {
+		t.Fatalf("a second serve = %+v, %v, want both notes it names, in the record's order", served, serveErr)
+	}
+	if none, err := s.ServeNotes(ctx, "t-serve", serve("another-job", "n-1")); err != nil || len(none) != 0 {
+		t.Errorf("a serve for a job the record does not hold = %+v, %v, want nothing", none, err)
+	}
+	if none, err := s.ServeNotes(ctx, "t-serve", sandbox.NoteServe{IDs: []string{"n-1"}, Launch: launch,
+		Statuses: []string{sandbox.StatusResumed}}); err != nil || len(none) != 0 {
+		t.Errorf("a serve in a status the record is not in = %+v, %v, want nothing", none, err)
+	}
+	if _, err := s.ServeNotes(ctx, "t-serve", sandbox.NoteServe{IDs: []string{"n-1"}}); err == nil {
+		t.Error("a serve that names no job was answered")
+	}
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range mustGet(t, s, "t-serve").Steer.Notes {
+		byID[n.ID] = n
+	}
+	if n := byID["n-1"]; n.Served != launch || !n.Waiting() {
+		t.Errorf("n-1 is %+v, want it waiting, served to the job", n)
+	}
+	if n := byID["n-3"]; n.Served != "" {
+		t.Errorf("a note read before the serve was served: %+v", n)
+	}
+	// READ ONCE ITS HARNESS CONFIRMS IT, AND STILL SERVED.
+	if _, err := s.TakeNotes(ctx, "t-serve", bridgeTake(launch, "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range mustGet(t, s, "t-serve").Steer.Notes {
+		if n.ID == "n-1" && (n.Served != launch || n.Waiting()) {
+			t.Errorf("n-1 is %+v once its harness confirmed it, want it read and still served", n)
+		}
+	}
+	// THROUGH THE NEXT LAUNCH, which reads the served note in its brief, and
+	// the latest job served it named where a note waits through to it.
+	mustClaim(t, s, "t-serve")
+	again := run("t-serve")
+	again.BriefNotes = []sandbox.RunNote{{ID: "n-2", Sealed: []byte("sealed:n-2"),
+		Read: &sandbox.NoteRead{Phase: "execute", Boundary: "brief"}}}
+	relaunched, launchErr := s.BeginLaunch(ctx, again, sandbox.Fence{})
+	if launchErr != nil {
+		t.Fatalf("relaunch: %v", launchErr)
+	}
+	mustFile(t, s, "t-serve", "n-4")
+	if _, err := s.ServeNotes(ctx, "t-serve", serve(launch, "n-4")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ServeNotes(ctx, "t-serve", serve(relaunched.LaunchID, "n-4")); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range mustGet(t, s, "t-serve").Steer.Notes {
+		switch {
+		case n.ID == "n-2" && (n.Served != launch || n.Waiting()):
+			t.Errorf("the brief's note is %+v, want it read by the relaunch and still served to the job before", n)
+		case n.ID == "n-4" && n.Served != relaunched.LaunchID:
+			t.Errorf("a note served to the relaunch is %+v, want it served to the relaunch's job", n)
+		}
+	}
+	// A RUN WHOSE ENDING IS DECIDED, AND ONE WITH NO RECORD, SERVE NOTHING.
+	ending := mustLaunched(t, s, run("t-serve-ending"))
+	mustFile(t, s, "t-serve-ending", "n-1")
+	decide(t, s, "t-serve-ending", everyJob(sandbox.Fence{}, sandbox.Active))
+	if none, err := s.ServeNotes(ctx, "t-serve-ending", serve(ending, "n-1")); err != nil || len(none) != 0 {
+		t.Errorf("a serve on a run whose ending is decided = %+v, %v, want nothing", none, err)
+	}
+	if none, err := s.ServeNotes(ctx, "t-serve-gone", serve(ending, "n-1")); err != nil || len(none) != 0 {
+		t.Errorf("a serve on a run with no record = %+v, %v, want nothing", none, err)
 	}
 }

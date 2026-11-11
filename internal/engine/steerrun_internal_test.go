@@ -986,6 +986,79 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 	})
 }
 
+// unservingStore is a run store whose serves of a poll's notes fail.
+type unservingStore struct{ sandbox.PendingStore }
+
+func (unservingStore) ServeNotes(context.Context, string, sandbox.NoteServe) ([]sandbox.RunNote, error) {
+	return nil, context.DeadlineExceeded
+}
+
+// A POLLED NOTE IS SERVED ON ITS RECORD BEFORE IT IS ANSWERED. A harness that
+// polls for its notes — OpenCode's plugin — delivers what it is answered and
+// confirms it only once it has, so a note answered with nothing on the record
+// could sit in a session the record says never read it. The poll answers a note
+// only once its record says it was served to the run's job: still waiting, its
+// read the confirmation's alone, and the mark kept once the confirmation reads
+// it — and carried, by id, to the segment that resumes the turn. A poll whose
+// serve the store does not answer answers nothing from the note it could not
+// mark on, though a later note was marked by an earlier poll: the poller's
+// cursor moves past every note it is answered, and would never ask again for
+// the one passed over.
+//
+// Mutation: answer the poll without the serve, answer a note past one the serve
+// did not mark, drop the mark once the note is read, or carry none to the
+// resume, and a check goes red.
+func TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag the release", By: "founder"})
+	// THE LATER NOTE SERVED ALREADY, by an earlier poll.
+	if served, err := store.ServeNotes(ctx, "run-1", sandbox.NoteServe{IDs: []string{"n-2"}, Launch: launch,
+		Statuses: steerTakeStatuses}); err != nil || len(served) != 1 {
+		t.Fatalf("serving n-2 = %+v, %v", served, err)
+	}
+
+	// THE STORE NOT ANSWERING THE SERVE: nothing is answered, n-2 included.
+	unserved, _ := steersOver(t, steerRing, unservingStore{store})
+	refused := boundInbox(t, unserved, store, "run-1", launch)
+	viewHolds(t, refused, 2)
+	if notes, _ := refused.Wait(ctx, 0); len(notes) != 0 {
+		t.Fatalf("a poll whose serve failed was answered %+v, want nothing", notes)
+	}
+	if row, _, _ := store.Get(ctx, "run-1"); row.Steer.Notes[0].Served != "" || !row.Steer.Notes[0].Waiting() {
+		t.Fatalf("a serve that failed left n-1 %+v, want it waiting and unmarked", row.Steer.Notes[0])
+	}
+
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, inbox, 2)
+	notes, _ := inbox.Wait(ctx, 0)
+	if len(notes) != 2 || notes[0].ID != "n-1" || notes[1].ID != "n-2" {
+		t.Fatalf("the poll was answered %+v, want both notes, in order", notes)
+	}
+	row, _, err := store.Get(ctx, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := row.Steer.Notes[0]; n.Served != launch || !n.Waiting() {
+		t.Fatalf("the note answered is %+v on its record, want it waiting, served to job %s", n, launch)
+	}
+	if got := runnerResume(resumeInput{Run: row}, nil, nil).Served; !slices.Equal(got, []string{"n-1", "n-2"}) {
+		t.Errorf("the resume carries the served notes %v, want n-1 and n-2", got)
+	}
+	// CONFIRMED: read by the job, still served.
+	if err := inbox.Read(ctx, []string{"n-1"}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if row, _, _ := store.Get(ctx, "run-1"); row.Steer.Notes[0].Waiting() ||
+		row.Steer.Notes[0].Served != launch {
+		t.Errorf("the confirmed note is %+v, want it read and still served", row.Steer.Notes[0])
+	}
+}
+
 // THE FINISH READS THE STORE EVEN WHEN THE VIEW IS STALE: the run's last
 // boundary is its last chance to read a note in its own loop, so it asks the
 // record itself, where a batch answers from a view one write behind.

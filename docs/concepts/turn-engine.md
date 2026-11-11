@@ -853,7 +853,9 @@ sequenceDiagram
   harness ended its own run is told, the same way, every note from the first
   read its record marks unanswered — a take whose answer never reached the
   harness, below — since it lacks that note and holds the answered ones after
-  it.
+  it. And a note the run's bridge served its harness — OpenCode's, below, which
+  may have delivered it with its confirmation lost — is told to a continued
+  session the same way, among the new ones as much as among the read.
 - **Between the executor's own steps.** The executor's [tool bridge serves its
   notes](code-sandbox.md#notes-to-a-running-run) to its harness, and a harness
   that takes them there reads a note after its current step; the take is
@@ -874,7 +876,9 @@ sequenceDiagram
   nothing, because a note handed to a delegated loop binds that piece of work
   alone; the note waits for the main agent's next step. **OpenCode** takes
   them through a plugin its run's server loads, which hands each note to the
-  run's own session while it works; OpenCode puts it before the model at the
+  run's own session while it works, each recorded **served** to the run's job
+  before the plugin is handed it, and read only once the plugin confirms
+  OpenCode delivered it; OpenCode puts it before the model at the
   session's next step (`step`) — after the tool results of the step in flight,
   or after a final step that called no tool, so a note sent while the run
   writes its answer still reaches it, and the run's result is the answer given

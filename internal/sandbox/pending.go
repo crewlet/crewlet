@@ -3334,6 +3334,22 @@ type PendingStore interface {
 	// takers racing for it, nor delivered without a record that says so.
 	TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error)
 
+	// ServeNotes records the notes a serve names SERVED to its job
+	// ([RunNote.Served]) — each still waiting, the record still on that job,
+	// in a status the serve names, its ending undecided ([NoteServe]) — and
+	// answers every one of them that waits served to that job, marked by this
+	// call or an earlier one, in the record's order. A serve that fails its
+	// pin, a note no longer waiting, and a record that is gone or whose ending
+	// is decided are each nothing served, never an error; a serve that names no
+	// job or no status is an error.
+	//
+	// THE MARK BEFORE THE HANDOVER: a caller hands a harness a note to deliver
+	// itself only once this has answered it served, so a note the harness may
+	// have delivered is never one the record says nothing of — a harness gone
+	// before it confirmed the delivery ([PendingStore.TakeNotes]) leaves the
+	// note waiting, and served.
+	ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error)
+
 	// SettleTake settles a take whose TakeNotes answered an error, by the
 	// identity its read named ([NoteRead.Take]): the call's write may have
 	// landed with its answer lost, or may land yet. It answers every note
