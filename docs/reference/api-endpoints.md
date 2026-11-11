@@ -535,6 +535,11 @@ every other route.
 | `GET` | `/box/gitlet/{repo}/tree` | A **check's box's** listing of a directory of the commit its check measures — `path` (or `path_b64`), `recursive`, `cursor` — on a node whose roles name `gitlet`, with the credential its git presents: the user name `check` and its check's token as the Basic password, admitted by its attempt's row as its git is. Reads that one commit and no other: no revision is a parameter, and one named is refused `400`. Answered as the box's git is where a node serves none of Gitlet (see [Check boxes](../concepts/gitlet.md#check-boxes)) |
 | `GET` | `/box/gitlet/{repo}/blob` | A check's box's read of one file's lines of its commit — `path` (or `path_b64`), `start_line`, `end_line`, `cursor` (same) |
 | `GET` | `/box/gitlet/{repo}/diff` | A check's box's diff of its commit from the base its attempt was queued with — `paths` (repeated) for the stat of those, or `file` (or `file_b64`) for one file's patch, `renames`, `cursor` (same) |
+| `GET` | `/atlas` | The company's [atlas](../concepts/atlas.md), a page of its entries at a time. **Needs the `atlas` permission** (see [The atlas](#the-atlas)) |
+| `GET` | `/atlas/map` | The atlas drawn as its lanes: every lane, its groups, the entries of the open groups and the relations drawn at rest (same) |
+| `GET` | `/atlas/facets` | How many entries each filter value leaves (same) |
+| `GET` | `/atlas/{id}` | One entry in full: its facts with their sources, its relations, its use, the agents holding accounts at it, its open signals, and what relies on it (same) |
+| `GET` | `/atlas/{id}/trace` | What depends on one entry, or what it depends on, hop by hop (same) |
 | `GET` | `/gitlet/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a credential** (see [The code reads](#the-code-reads)) |
 | `GET` | `/gitlet/repos/{name}` | One repository in detail (same) |
 | `GET` | `/gitlet/repos/{name}/pushes` | One repository's push history, newest first in the order the pushes landed, each push naming who made it — a person by their credential and seat, a seat by its handle and the turn behind its push — and how its pack was built (same) |
@@ -8011,6 +8016,26 @@ an address — is resolved against the chart. The lead relation is then asked
 about the seat it all resolved to, so a lead may name their report either way.
 A name nothing answers to is refused, and the refusal lists the seats — the
 roster is everybody's overview.
+
+## The atlas
+
+The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through five questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
+
+| Question | Route | Parameters | Answer |
+|---|---|---|---|
+| `atlas_entries` | `GET /atlas` | the filters below; `sort` (`key`, the map's order, by default; `name`; `last_seen`); `cursor`; `limit` (50 by default, at most 500) | `rows`, one summary per entry; `next_cursor`, absent on the last page; `total` |
+| `atlas_map` | `GET /atlas/map` | the filters below; `closed`, the group keys the reader closed, comma separated | `lanes` (every lane, an empty one included), `groups`, `nodes`, `edges` (the relations drawn at rest), `collapsed` |
+| `atlas_entry` | `GET /atlas/{id}` | `id` | `entry`, in full; its `vendor`; `used_by`, every entry with a relation to it |
+| `atlas_trace` | `GET /atlas/{id}/trace` | `id`; `direction` (`up`, what depends on it, by default; `down`, what it depends on); `depth` (1 to 6, 6 by default); `relations` (`structural`, by default, or `all`) | `from`, `direction`, `hops` by distance, `edges`, `truncated` |
+| `atlas_facets` | `GET /atlas/facets` | the filters below | how many entries each `kinds`, `lanes`, `vendors`, `words` and `health` value leaves, each counted over every other filter, and `total` |
+
+The filters are `q` (part of a name or a key, or an entry's id), `kind`, `lane`, `vendor`, `confidence` (`confirmed`, `likely` or `unconfirmed`), `health` (`alerting`, `needs_look` or `quiet`) and `show` (`current`, every entry but the retired, by default; `retired`; `all`). A value outside its set is refused with `bad_params`, naming the parameter and the values it takes; an `id` no entry answers to is `not_found`. An entry merged into another by an exact key is found by its own id too.
+
+Every answer also carries `revision`, the settings revision it was read from (empty where the serving node cannot tell), `coverage`, each source the read reads and whether it was read in full, with the reason where it was not, and `withheld`, how many values were left out for being shaped like a credential, counted and never shown. A source that fails leaves the rest answering.
+
+**The atlas is never a way round another permission.** A reader without the `gitlet` permission is read no repository, and Gitlet is not asked; one with it is read the repositories Gitlet lists to them. An integration's standing and a server's connection test are signals only an administrator reads, as the screens they come from are. A standing alarm on a tool server or a model entry is every holder's.
+
+**The bounds.** A page is 50 entries and at most 500. The map draws at most 2,000 entries open: past that it closes groups, the largest first, and names them in `collapsed`, so an answer never draws a partial map as if it were whole. A trace walks at most 6 hops and stops at 200 entries, saying so in `truncated`.
 
 ## Worklet and Doclet
 

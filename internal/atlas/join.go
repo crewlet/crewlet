@@ -98,13 +98,16 @@ const (
 	// SignalServerTestFailed is a server whose last connection test, against
 	// its current settings, failed.
 	SignalServerTestFailed SignalKind = "server_test_failed"
+	// SignalStandingAlarm is a standing engine alarm about a tool server or a
+	// model entry (an `mcp_` or `llm_` alarm), named by the alarm's kind.
+	SignalStandingAlarm SignalKind = "standing_alarm"
 )
 
 // SignalKinds is every signal.
 var SignalKinds = []SignalKind{
 	SignalIntegrationBlocked, SignalIntegrationFailing, SignalToolServerDown, SignalToolServerWaiting,
 	SignalSignInExpired, SignalSignInExpiring, SignalSignInFailed, SignalModelSittingOut, SignalModelFailing,
-	SignalServerTestFailed,
+	SignalServerTestFailed, SignalStandingAlarm,
 }
 
 // Valid reports whether k is a member of the closed set.
@@ -124,6 +127,9 @@ const (
 	SeverityWarning Severity = "warning"
 )
 
+// Severities is every severity.
+var Severities = []Severity{SeverityDanger, SeverityWarning}
+
 // Audience is who may read a signal. The atlas is never a way round another
 // screen: what only administrators read elsewhere, they alone read here.
 type Audience string
@@ -135,12 +141,18 @@ const (
 	AudienceAdmins Audience = "admins"
 )
 
+// Audiences is every audience.
+var Audiences = []Audience{AudienceHolders, AudienceAdmins}
+
 // Signal is one open condition on an entry, since when, and who may read it.
 type Signal struct {
 	Kind     SignalKind `json:"kind"`
 	Severity Severity   `json:"severity"`
 	Audience Audience   `json:"audience"`
 	Since    time.Time  `json:"since,omitzero"`
+	// Alarm is a standing alarm's kind, the engine's own word for it; "" for
+	// every other signal.
+	Alarm string `json:"alarm,omitempty"`
 }
 
 // Joined is what the engine's records say about entries beyond claims: their
