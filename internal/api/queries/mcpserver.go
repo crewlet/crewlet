@@ -64,12 +64,9 @@ type MCPServerAnswer struct {
 
 	// Tools is every tool a live node's instances list, by name, blocked
 	// ones included: each once, its instances and nodes summed across the
-	// fleet, at the level it runs at. ALWAYS A LIST. ToolCount is how many
-	// tools the server lists, as the node counting the most counts them,
-	// never fewer than are here: a node names at most
-	// [coord.MaxMCPListedTools].
-	Tools     []MCPToolView `json:"tools"`
-	ToolCount int           `json:"tool_count"`
+	// fleet, at the level it runs at. ALWAYS A LIST, and whole: a listing
+	// names every tool its node's instances list.
+	Tools []MCPToolView `json:"tools"`
 
 	// Baseline is the level of every tool the entry's `tools.levels` does
 	// not name: its `tools.default`, or null where it sets none (or the
@@ -82,7 +79,7 @@ type MCPServerAnswer struct {
 	// node's listing names, sorted ([UnlistedLevels]): a level that decides
 	// nothing, misspelled or naming a tool the server no longer lists.
 	// Empty where the listings cannot say, because no live node lists the
-	// server or one lists more tools than its listing names. ALWAYS A LIST.
+	// server. ALWAYS A LIST.
 	UnlistedLevels []string `json:"unlisted_levels"`
 
 	// ServerInfo is what the server said of itself in its handshake, and
@@ -332,7 +329,7 @@ type MCPServerListing struct {
 	// At is when the node last changed its listing.
 	At time.Time `json:"at"`
 	// Instances is how many instances on the node the listing is the
-	// union of, and Tools how many tools it counts.
+	// union of, and Tools how many tools it names.
 	Instances int `json:"instances"`
 	Tools     int `json:"tools"`
 }
@@ -517,7 +514,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	}
 	for _, l := range listings {
 		out.Listed = append(out.Listed, MCPServerListing{
-			Node: l.Node, At: l.At, Instances: l.Instances, Tools: l.ToolCount,
+			Node: l.Node, At: l.At, Instances: l.Instances, Tools: len(l.Tools),
 		})
 	}
 	if latest := latestIdentified(listings); latest != nil {
@@ -528,7 +525,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		return MCPServerAnswer{}, err
 	}
 	review := reviewOf(name, listings, accepted, entry)
-	tools, counted, kept := serverTools(listings, entry)
+	tools, kept := serverTools(listings, entry)
 	digests := slices.Compact(slices.Sorted(slices.Values(slices.Concat(kept, changeDigests(review.Changes)))))
 	definitions, err := s.MCPListings.MCPToolDefinitions(ctx, digests)
 	if err != nil {
@@ -539,7 +536,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			tools[i].InputSchema, tools[i].OutputSchema = schemaObject(d.Input), schemaObject(d.Output)
 		}
 	}
-	out.Tools, out.ToolCount = tools, counted
+	out.Tools = tools
 	if entry != nil {
 		if entry.Tools.Default != "" {
 			baseline := entry.Tools.Default
@@ -664,9 +661,8 @@ func latestIdentified(listings []coord.MCPListing) *coord.MCPListing {
 }
 
 // serverTools is every tool one server's live listings name, each once at the
-// level it runs at, and how many tools they count in all, never fewer than are
-// named (a node names at most [coord.MaxMCPListedTools]); kept are the digests
-// whose definitions are stored ([mergeListedTools]).
+// level it runs at; kept are the digests whose definitions are stored
+// ([mergeListedTools]).
 //
 // THE ONE READING OF A SERVER'S TOOLS, which its page lists and each agent's
 // count is taken from ([Sources.mcpAgents]), so the two never disagree on which
@@ -675,20 +671,14 @@ func latestIdentified(listings []coord.MCPListing) *coord.MCPListing {
 // where the entry sets neither, the level its hints start it at
 // ([config.MCPToolPolicy.Level]); a server no entry declares (nil) keeps what
 // the nodes did.
-func serverTools(listings []coord.MCPListing, entry *config.MCPServer) (tools []MCPToolView, counted int,
-	kept []string,
-) {
+func serverTools(listings []coord.MCPListing, entry *config.MCPServer) (tools []MCPToolView, kept []string) {
 	tools, kept = mergeListedTools(listings)
 	if entry != nil {
 		for i := range tools {
 			tools[i].Level, tools[i].Custom = entry.Tools.Level(tools[i].Raw, tools[i].starting)
 		}
 	}
-	counted = len(tools)
-	for _, l := range listings {
-		counted = max(counted, l.ToolCount)
-	}
-	return tools, counted, kept
+	return tools, kept
 }
 
 // mergeListedTools is every tool the listings name, each once by name, sorted:
@@ -769,14 +759,13 @@ func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []
 // server no longer lists the tool. Always a list.
 //
 // JUDGED ONLY WHERE THE LISTING CAN SAY: no live node listing the server says
-// nothing about its tools (it is off, or has not started), and a node listing
-// more tools than its record names ([coord.MaxMCPListedTools]) may list the
-// tool past the cut, so either answers none. A level the fleet's union does
-// not name is named by no instance: a per-agent server's children each list
-// what their own credentials reach, and one child listing the tool is enough.
+// nothing about its tools (it is off, or has not started), so it answers none.
+// A level the fleet's union does not name is named by no instance: a per-agent
+// server's children each list what their own credentials reach, and one child
+// listing the tool is enough.
 func UnlistedLevels(policy config.MCPToolPolicy, detail MCPServerAnswer) []string {
 	out := []string{}
-	if len(detail.Listed) == 0 || len(detail.Tools) < detail.ToolCount {
+	if len(detail.Listed) == 0 {
 		return out
 	}
 	listed := make(map[string]struct{}, len(detail.Tools))

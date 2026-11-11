@@ -67,10 +67,10 @@ type changesRequest struct {
 // changesShape is the body, as a refusal names it.
 const changesShape = `{"accept": {"<tool>": "<digest>"|null}, "block": {"<tool>": "<digest>"|null}}`
 
-// maxChangesBody bounds the body: a decision for each of a listing's most tools
-// ([coord.MaxMCPListedTools]), each name and digest at their longest, with
-// room for the summary.
-const maxChangesBody = 256 << 10
+// maxChangesBody bounds the body: a decision for each of the most tools one
+// server lists (internal/mcp's MaxServerTools), each name and digest at their
+// longest (about 200 bytes), with room for the summary.
+const maxChangesBody = 1 << 20
 
 // ChangesAnswer is what the route answers.
 type ChangesAnswer struct {

@@ -583,13 +583,13 @@ func (e *Engine) nodeMCPListings(node string, epoch int64, now time.Time) map[st
 	return out
 }
 
-// bounded is the listing held to its bounds ([coord.MCPListing.Bounded]), its
-// definitions kept within budget bytes in all: first each tool whose
-// definition waits for a review (waiting, nil for none), so the change a person
-// is asked about is kept whole to show them, then the rest in name order while
-// what remains of the budget holds them. A tool past it is listed with
-// [coord.MCPListedTool.DefinitionKept] false and its definition not stored,
-// and the definition of a tool the bounds cut from the listing goes with it.
+// bounded is the listing held to its bounds ([coord.MCPListing.Bounded]), every
+// tool on it, and its definitions kept within budget bytes in all: first each
+// tool whose definition waits for a review (waiting, nil for none), so the
+// change a person is asked about is kept whole to show them, then the rest in
+// name order while what remains of the budget holds them. A tool past it is
+// listed with [coord.MCPListedTool.DefinitionKept] false and its definition
+// not stored.
 func (n nodeListing) bounded(budget int, waiting func(tool, digest string) bool) nodeListing {
 	n.listing = n.listing.Bounded()
 	kept := make(map[string]coord.MCPToolDefinition, len(n.listing.Tools))

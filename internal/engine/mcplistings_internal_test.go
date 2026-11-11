@@ -104,8 +104,8 @@ func TestANodesListingIsTheUnionOfItsInstances(t *testing.T) {
 			t.Errorf("tracker's %s names a schema its listing does not carry", tool.Name)
 		}
 	}
-	if !slices.Equal(names, []string{"probe_1", "probe_2"}) || tracker.ToolCount != 2 {
-		t.Errorf("tracker lists %v of %d, want both children's tools", names, tracker.ToolCount)
+	if !slices.Equal(names, []string{"probe_1", "probe_2"}) {
+		t.Errorf("tracker lists %v, want both children's tools", names)
 	}
 	if err := tracker.Validate(); err != nil {
 		t.Errorf("the derived listing is one the store refuses: %v", err)
@@ -117,7 +117,7 @@ func TestANodesListingIsTheUnionOfItsInstances(t *testing.T) {
 	// ONE TOOL BOTH CHILDREN LIST is named once, counted by both.
 	wiki := listings["wiki"].listing
 	if wiki.Shared || wiki.Instances != 2 || len(wiki.Tools) != 1 || wiki.Tools[0].Name != "lookup" ||
-		wiki.Tools[0].Instances != 2 || wiki.ToolCount != 1 {
+		wiki.Tools[0].Instances != 2 {
 		t.Errorf("wiki's listing = %+v, want one tool both instances list", wiki)
 	}
 }

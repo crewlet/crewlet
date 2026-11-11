@@ -51,8 +51,7 @@ func trackerReview() *fakeReviews {
 		a.Version = uint64(10 + i)
 		accepted[a.Tool] = a
 	}
-	listings := []coord.MCPListing{{Server: "tracker", Node: "node-a", Epoch: 1, Instances: 1, ToolCount: 2,
-		Tools: []coord.MCPListedTool{listedAs("close_issue", "v2"), listedAs("export", "e1")}}}
+	listings := []coord.MCPListing{{Server: "tracker", Node: "node-a", Epoch: 1, Instances: 1, Tools: []coord.MCPListedTool{listedAs("close_issue", "v2"), listedAs("export", "e1")}}}
 	return &fakeReviews{review: queries.MCPReview{Server: "tracker", Listings: listings, Accepted: accepted,
 		Changes: mcpreview.Changes(listings, accepted), Entry: entry}, moved: map[string]bool{}}
 }
