@@ -37,7 +37,14 @@ type GitletReads interface {
 // Sources is where the atlas reads what the engine keeps. A nil source is
 // one this node does not serve, or the reader may not read.
 type Sources struct {
-	Gitlet GitletReads
+	Gitlet       GitletReads
+	Integrations IntegrationStates
+	SeatAccess   SeatAccess
+	ToolServers  ToolServers
+	Nodes        Nodes
+	ServerTests  ServerTests
+	AccessLog    AccessLog
+	Usage        Usage
 }
 
 // Request is one read of the atlas.
@@ -61,8 +68,15 @@ type SourceName string
 
 // The places the atlas reads.
 const (
-	SourceSettings SourceName = "settings"
-	SourceGitlet   SourceName = "gitlet"
+	SourceSettings     SourceName = "settings"
+	SourceGitlet       SourceName = "gitlet"
+	SourceIntegrations SourceName = "integrations"
+	SourceSeatAccess   SourceName = "seat_access"
+	SourceToolServers  SourceName = "tool_servers"
+	SourceNodes        SourceName = "nodes"
+	SourceServerTests  SourceName = "server_tests"
+	SourceAccessLog    SourceName = "access_log"
+	SourceUsage        SourceName = "usage"
 )
 
 // Coverage is one source's part in a read: whether it was read in full, and
@@ -91,10 +105,10 @@ var ErrNoSource = errors.New("not served here, or not readable by this reader")
 // Read reads the atlas.
 func Read(ctx context.Context, src Sources, req Request) Answer {
 	settings := derive.FromSettings(req.Company, req.Revision, req.Deployment)
-	var claims []atlas.Claim
+	var derived []derive.Derived
 	answer := Answer{Revision: req.Revision}
 	take := func(d derive.Derived) {
-		claims = append(claims, d.Claims...)
+		derived = append(derived, d)
 		answer.Withheld = append(answer.Withheld, d.Withheld...)
 	}
 	take(settings.Claims(req.Now))
@@ -104,7 +118,24 @@ func Read(ctx context.Context, src Sources, req Request) Answer {
 	take(settings.Gitlet(repos, checks, req.Now))
 	answer.Coverage = append(answer.Coverage, gitlet)
 
-	answer.View = atlas.Fold(claims, req.Now)
+	pushes := make([]derive.RepoPush, 0, len(repos))
+	for _, r := range repos {
+		pushes = append(pushes, derive.RepoPush{Repo: r.Name, Last: r.LastPush})
+	}
+	records, covered := readRecords(ctx, src, settings, req, pushes, gitlet.Complete)
+	answer.Coverage = append(answer.Coverage, covered...)
+	recorded, joined := settings.Records(records, req.Now)
+	take(recorded)
+
+	total := 0
+	for _, d := range derived {
+		total += len(d.Claims)
+	}
+	claims := make([]atlas.Claim, 0, total)
+	for _, d := range derived {
+		claims = append(claims, d.Claims...)
+	}
+	answer.View = atlas.Join(atlas.Fold(claims, req.Now), joined, req.Now)
 	slices.SortFunc(answer.Coverage, func(a, b Coverage) int { return cmp.Compare(a.Source, b.Source) })
 	return answer
 }
@@ -138,7 +169,8 @@ func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req R
 	var failed []error
 	for _, r := range summaries {
 		repo := derive.GitletRepo{Name: r.Name, Status: string(r.Status), DefaultBranch: r.DefaultBranch,
-			Visibility: string(r.Visibility), OwnerKind: string(r.Owner.Kind), Owner: r.Owner.Ref}
+			Visibility: string(r.Visibility), OwnerKind: string(r.Owner.Kind), Owner: r.Owner.Ref,
+			LastPush: r.LastPushAt}
 		if !s.Declares(r.Name) {
 			if err := remotes(ctx, reads, req, &repo); err != nil {
 				failed = append(failed, fmt.Errorf("the other hosts of %s: %w", r.Name, err))
