@@ -694,7 +694,7 @@ func awaitAt[N int64 | uint64](ctx context.Context, at func() N, want N) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(10 * time.Millisecond): //fixedwait:liveness
 		}
 	}
 	return nil

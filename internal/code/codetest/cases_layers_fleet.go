@@ -65,10 +65,10 @@ func (rc *repoCase) publish(ctx context.Context, n Node) (compact.Outcome, error
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := n.Compactor().Publish(ctx, cand)
-		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) {
+		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: it answers the last outcome, which every caller holds
 			return out, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -193,7 +193,7 @@ func twoMaintainersLandOnePublication(t *testing.T, c Cluster) {
 	case out := <-aOut:
 		close(held)
 		t.Fatalf("%s's publication ended %s before its uploads did", a, out)
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		close(held)
 		t.Fatalf("%s's publication reached no upload in a minute", a)
 	}

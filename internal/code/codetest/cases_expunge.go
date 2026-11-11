@@ -511,7 +511,7 @@ func (m *mainPusher) now() pushedSoFar {
 
 func (m *mainPusher) run() {
 	defer close(m.stopped)
-	tick := time.NewTicker(expungePushEvery)
+	tick := time.NewTicker(expungePushEvery) //fixedwait:simulated a busy repository, a push to main every expungePushEvery
 	defer tick.Stop()
 	for i := 0; ; i++ {
 		select {

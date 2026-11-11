@@ -47,10 +47,10 @@ func publishedFleet(t *testing.T, groups ...int) (codetest.Node, string, string)
 			if out == compact.OutcomeApplied {
 				break
 			}
-			if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) {
+			if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 				t.Fatalf("publish group %d: %s, %v", g, out, err)
 			}
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 	if err := codetest.CopyHoldsItsLayers(t.Context(), n, repoID); err != nil {
