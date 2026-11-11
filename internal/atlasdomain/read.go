@@ -257,11 +257,11 @@ func (r *Reader) History(ctx context.Context, id, cursor string, limit int,
 	var out HistoryPage
 	answer, err := r.log.Read(ctx, fresh.Query(EntryScope(id), true), func(tx *sql.Tx) error {
 		out = HistoryPage{}
-		rows, err := tx.QueryContext(ctx, `SELECT `+claimColumns+`
+		rows, queryErr := tx.QueryContext(ctx, `SELECT `+claimColumns+`
 			FROM atlas_claims INDEXED BY atlas_claims_entry_idx
 			WHERE entry_id = ? AND position < ? ORDER BY position DESC LIMIT ?`, id, before, size+1)
-		if err != nil {
-			return err
+		if queryErr != nil {
+			return queryErr
 		}
 		for rows.Next() {
 			c, scanErr := scanClaim(rows)

@@ -241,18 +241,6 @@ func (n *writeNode) reader() *atlasdomain.Reader {
 	return r
 }
 
-// count is how many rows a statement counts on this node.
-func (n *writeNode) count(statement string, args ...any) int {
-	n.t.Helper()
-	var c int
-	if err := n.db.Read(n.t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(n.t.Context(), statement, args...).Scan(&c)
-	}); err != nil {
-		n.t.Fatalf("count: %v", err)
-	}
-	return c
-}
-
 // dump is every reproducible table on this node, row by row, in key order.
 func (n *writeNode) dump() map[string][]string {
 	n.t.Helper()
