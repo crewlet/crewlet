@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AtlasSearchTool reads the company's atlas: its entries, or those a query or a
@@ -109,8 +110,8 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	kind := atlas.Kind(strings.TrimSpace(argString(args, "kind")))
 	if kind != "" && !kind.Valid() {
-		return failed(fmt.Sprintf("%s: `kind` is one of %s, not %q.", t.Name(),
-			strings.Join(atlasKinds(), ", "), clip(string(kind)))), nil
+		return failed(fmt.Sprintf("%s: `kind` is %s, not %q.", t.Name(), words.Or(atlas.Kinds),
+			clip(string(kind)))), nil
 	}
 	limit := argInt(args, "limit", defaultAtlasList)
 	if limit < 1 || limit > maxAtlasList {

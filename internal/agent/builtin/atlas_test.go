@@ -61,7 +61,7 @@ type atlasAnswer struct {
 	Coverage []gather.Coverage `json:"coverage"`
 }
 
-func searchAtlas(t *testing.T, tool tools.SeatCallable, ctx context.Context, args map[string]any) atlasAnswer {
+func searchAtlas(ctx context.Context, t *testing.T, tool tools.SeatCallable, args map[string]any) atlasAnswer {
 	t.Helper()
 	got, err := tool.CallForTurn(ctx, nil, args)
 	if err != nil || got.Failed {
@@ -110,7 +110,7 @@ func TestTheAtlasIsReadOnlyByAHolderOfItsApp(t *testing.T) {
 	if len(host.reads) != 0 {
 		t.Errorf("a refused call read Gitlet: %+v", host.reads)
 	}
-	if a := searchAtlas(t, tool, atlasAs(iam.GrantAtlas), map[string]any{}); a.Total == 0 {
+	if a := searchAtlas(atlasAs(iam.GrantAtlas), t, tool, map[string]any{}); a.Total == 0 {
 		t.Error("a holder of atlas was answered with no entry")
 	}
 }
@@ -121,7 +121,7 @@ func TestTheAtlasIsReadOnlyByAHolderOfItsApp(t *testing.T) {
 func TestTheAtlasListsRepositoriesOnlyForAGitletHolder(t *testing.T) {
 	t.Parallel()
 	both := newGitletHost()
-	a := searchAtlas(t, atlasTool(t, both, runsAcme), atlasAs(iam.GrantAtlas, iam.GrantGitlet), map[string]any{})
+	a := searchAtlas(atlasAs(iam.GrantAtlas, iam.GrantGitlet), t, atlasTool(t, both, runsAcme), map[string]any{})
 	if !slices.Contains(kindsOf(a.Entries), atlas.KindRepository) {
 		t.Errorf("a holder of gitlet saw kinds %v, want the company's repository among them", kindsOf(a.Entries))
 	}
@@ -133,7 +133,7 @@ func TestTheAtlasListsRepositoriesOnlyForAGitletHolder(t *testing.T) {
 	}
 
 	alone := newGitletHost()
-	a = searchAtlas(t, atlasTool(t, alone, runsAcme), atlasAs(iam.GrantAtlas), map[string]any{})
+	a = searchAtlas(atlasAs(iam.GrantAtlas), t, atlasTool(t, alone, runsAcme), map[string]any{})
 	if slices.Contains(kindsOf(a.Entries), atlas.KindRepository) {
 		t.Errorf("a person without gitlet was shown a repository: %v", kindsOf(a.Entries))
 	}
@@ -154,27 +154,27 @@ func TestTheAtlasIsNarrowedByKindAndQuery(t *testing.T) {
 	t.Parallel()
 	tool := atlasTool(t, newGitletHost(), runsAcme)
 	holder := atlasAs(iam.GrantAtlas, iam.GrantGitlet)
-	every := searchAtlas(t, tool, holder, map[string]any{})
-	repos := searchAtlas(t, tool, holder, map[string]any{"kind": string(atlas.KindRepository)})
+	every := searchAtlas(holder, t, tool, map[string]any{})
+	repos := searchAtlas(holder, t, tool, map[string]any{"kind": string(atlas.KindRepository)})
 	if len(repos.Entries) == 0 || !slices.Equal(kindsOf(repos.Entries), []atlas.Kind{atlas.KindRepository}) ||
 		repos.Total >= every.Total {
 		t.Errorf("kind repository answered %d of %d, kinds %v; want repositories alone",
 			repos.Total, every.Total, kindsOf(repos.Entries))
 	}
-	named := searchAtlas(t, tool, holder, map[string]any{"query": "SITE", "kind": string(atlas.KindRepository)})
+	named := searchAtlas(holder, t, tool, map[string]any{"query": "SITE", "kind": string(atlas.KindRepository)})
 	if named.Total != 1 || named.Entries[0].Name != "site" {
 		t.Fatalf("query SITE among repositories answered %+v, want the one it names", named.Entries)
 	}
 	// A KEY HOLDING THE QUERY MATCHES TOO: the repository's check is keyed
 	// under it.
-	if keyed := searchAtlas(t, tool, holder, map[string]any{"query": "site"}); keyed.Total < 2 {
+	if keyed := searchAtlas(holder, t, tool, map[string]any{"query": "site"}); keyed.Total < 2 {
 		t.Errorf("query site answered %d entries, want the repository and its check", keyed.Total)
 	}
-	byID := searchAtlas(t, tool, holder, map[string]any{"query": named.Entries[0].ID.String()})
+	byID := searchAtlas(holder, t, tool, map[string]any{"query": named.Entries[0].ID.String()})
 	if byID.Total != 1 || byID.Entries[0].ID != named.Entries[0].ID {
 		t.Errorf("a query naming an entry's id answered %+v, want that entry", byID.Entries)
 	}
-	if one := searchAtlas(t, tool, holder, map[string]any{"limit": 1}); len(one.Entries) != 1 ||
+	if one := searchAtlas(holder, t, tool, map[string]any{"limit": 1}); len(one.Entries) != 1 ||
 		one.Total != every.Total {
 		t.Errorf("limit 1 answered %d entries of %d, want one entry and the whole count", len(one.Entries), one.Total)
 	}
