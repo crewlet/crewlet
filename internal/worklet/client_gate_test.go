@@ -277,7 +277,9 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 // engine refuses, and one below it refuses one the engine would take — which
 // the Save view dialog did, with a `maxLength` of 80 against 128, cutting a
 // pasted name in the browser where nobody saw it. The Ask dialog's option rows
-// are held to the engine's fewest and most options the same way.
+// are held to the engine's fewest and most options the same way, and every
+// screen's read of the projects to the most one listing answers: fewer, and a
+// company's later projects are missing from every switcher and picker.
 func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
@@ -288,6 +290,7 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		"DECISION_OPTION_MAX_BYTES":   decision.MaxOptionLabel,
 		"DECISION_MIN_OPTIONS":        decision.MinOptions,
 		"DECISION_MAX_OPTIONS":        decision.MaxOptions,
+		"PROJECT_PAGE":                worklet.MaxProjectsPerAnswer,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {

@@ -447,6 +447,40 @@ func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD READS A CHANGE'S CONVERSATION A PAGE OF THE ENGINE'S BOUND AT
+// A TIME: one page size for every part it lists (`CHANGE_PART_PAGE`,
+// `contract/code.ts`), which is the comments', reviews' and findings' (the
+// standing ones' too) own most and within the reviewers'. A page past a
+// part's bound is refused, and every page of that part with it; a smaller one
+// reads a long conversation in more round trips than it needs.
+//
+// Mutation: move CHANGE_PART_PAGE, or any one part's bound, and this fails.
+func TestTheDashboardReadsAChangesConversationAtTheEnginesPage(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "CHANGE_PART_PAGE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := strconv.Atoi(got)
+	if err != nil {
+		t.Fatalf("CHANGE_PART_PAGE is %q, no count of rows: %v", got, err)
+	}
+	for name, bound := range map[string]int{
+		"MaxCommentsPerPage": code.MaxCommentsPerPage,
+		"MaxReviewsPerPage":  code.MaxReviewsPerPage,
+		"MaxFindingsPerPage": code.MaxFindingsPerPage,
+	} {
+		if page != bound {
+			t.Errorf("the dashboard reads a change's parts %d rows a page and the engine's "+
+				"%s is %d: change CHANGE_PART_PAGE in contract/code.ts", page, name, bound)
+		}
+	}
+	if page > code.MaxReviewersPerPage {
+		t.Errorf("the dashboard reads %d reviewers a page, past the engine's %d", page,
+			code.MaxReviewersPerPage)
+	}
+}
+
 // THE DASHBOARD NAMES AN OBJECT AS THE ENGINE'S REPOSITORIES DO: a commit's
 // page is addressed by a whole id of [gitref.OIDHexLen] digits and git's null
 // id is that many zeros, and a row prints the fewest digits the engine takes

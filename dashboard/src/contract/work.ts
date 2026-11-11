@@ -251,6 +251,16 @@ export const DECISION_MIN_OPTIONS = 2;
 export const DECISION_MAX_OPTIONS = 4;
 
 /**
+ * The most projects one listing answers (`worklet.MaxProjectsPerAnswer`),
+ * every screen that draws projects asking for this many, so no company's live
+ * project is missing from a read of them: the project switcher, the palette's
+ * create step, the chart's unit keys, the keys prose links by, Home's and
+ * Worklet's project cards, the New task sheet, a create page's project and a
+ * service's. Held by the same gate.
+ */
+export const PROJECT_PAGE = 200;
+
+/**
  * The chat surfaces a structured ask's `inform` may name — where the asker
  * said it would report what was decided — as the engine's `InformSurfaces`
  * names them: `mattermost`, `slack`, and `chat`, the engine's own.

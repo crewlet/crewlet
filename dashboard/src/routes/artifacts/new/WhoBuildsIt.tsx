@@ -26,6 +26,7 @@ import { useMemo, useState } from "react";
 import { ChoiceList, FormField, Select, type SelectOption } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -72,7 +73,7 @@ export function useWhoBuildsIt(kind: MakeKind, suggested?: string): WhoBuildsItS
   const seat = builders.some((b) => b.seat.handle === picked)
     ? picked
     : (builders[0]?.seat.handle ?? "");
-  const listed = useQuery("work_projects", { limit: 200 }, { pollMs: 120_000 });
+  const listed = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
   const projects = useMemo(() => listed.data?.projects ?? [], [listed.data]);
   const [chosenProject, setProject] = useState("");
   const project =

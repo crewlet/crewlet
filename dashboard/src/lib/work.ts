@@ -112,14 +112,6 @@ export function itemAddress(ref: ItemRef): string {
 }
 
 /**
- * The project listing's cap: the engine's own page of projects (200), so no
- * company's live project is missing from a read of them. ONE VALUE for every
- * reader of the listing: the project switcher, the palette's create step,
- * the chart's unit keys and the keys prose links by (`lib/projectKeys.ts`).
- */
-export const PROJECT_PAGE = 200;
-
-/**
  * A cited task's evidence label without a leading copy of one of its `keys`
  * and the separator after it, as the Inbox draws it: after the task's
  * current key, a label that starts with a key read it twice ("GP-20 GP-20

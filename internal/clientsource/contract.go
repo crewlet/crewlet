@@ -119,6 +119,7 @@ var contract = []Entry{
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_MAX_OPTIONS", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"PROJECT_PAGE", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
 
 	// backups.ts
@@ -493,6 +494,7 @@ var contract = []Entry{
 	{"CODE_PHRASES", ReadLiteral, "internal/code.TestEveryCodeReasonReadsAsEnglishOnTheClient"},
 	{"CODE_ALARM_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryCodeAlarm"},
 	{"CODE_MAX_BLAME_LINES", ReadScalar, "internal/code.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers"},
+	{"CHANGE_PART_PAGE", ReadScalar, "internal/code.TestTheDashboardReadsAChangesConversationAtTheEnginesPage"},
 	{"CODE_SCRATCH_IDLE_DAYS", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CODE_SCRATCH_MAX_PER_SEAT", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},

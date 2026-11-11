@@ -22,15 +22,12 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
 import { projectPath } from "~/lib/work.ts";
 import { WidgetQuery, gapsOf } from "./board/kit.tsx";
 
 /** How many projects the card draws before "All projects". */
 export const PROJECT_ROWS = 3;
-
-/** The sidebar's own listing, asked with the same arguments so the two read
- *  one answer. */
-const PROJECTS_PAGE = 200;
 
 export function Projects() {
   // WORKLET'S LIST, asked only of a reader holding Worklet, of a company
@@ -39,7 +36,9 @@ export function Projects() {
   const ask = useServicesAsk();
   const read = useQuery(
     "work_projects",
-    { limit: PROJECTS_PAGE },
+    // THE SIDEBAR'S OWN LISTING, asked with the same arguments so the two
+    // read one answer.
+    { limit: PROJECT_PAGE },
     { pollMs: 120_000, enabled: viewer.worklet && ask.tracker },
   );
   const org = useOrg();
@@ -82,7 +81,7 @@ export function Projects() {
             // busier project may be one this card never saw.
             ...(read.data?.truncated
               ? [
-                  `Only the first ${PROJECTS_PAGE} projects were read, so a busier one may be missing.`,
+                  `Only the first ${PROJECT_PAGE} projects were read, so a busier one may be missing.`,
                 ]
               : []),
           ]}

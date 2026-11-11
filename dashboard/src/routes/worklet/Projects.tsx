@@ -77,7 +77,7 @@ import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
-import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
+import { PROJECT_PAGE, PROJECT_SORT_KEYS } from "~/contract/work.ts";
 import { projectPath, targetLabel } from "~/lib/work.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
@@ -234,7 +234,7 @@ export function Projects() {
   // AND THE ORDER IS ASKED FOR TOO, for the same reason — see the module doc.
   const state = useQuery(
     "work_projects",
-    { limit: 200, archived: ASKED[shown], sort },
+    { limit: PROJECT_PAGE, archived: ASKED[shown], sort },
     { pollMs: 60_000 },
   );
   usePageCoverage(state.data);
