@@ -472,9 +472,9 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// THE DELETE IS BUDGETED AND RE-ASKED LIKE THE CREATE AFTER IT. It is a
 	// request to the same metadata group, and on the caller's context it
 	// had neither: an adoption's context carries no deadline, which hands
-	// nats.go its undeclared five-second default, and a request the group
-	// dropped failed the reset when that expired rather than being asked
-	// again. Asking twice is safe — a delete that landed the first time is
+	// the client the request term alone (jsapi.RequestTerm, five seconds),
+	// and a request the group dropped failed the reset when that expired
+	// rather than being asked again. Asking twice is safe — a delete that landed the first time is
 	// not-found the second, and not-found is the answer this wants.
 	deleteCtx, cancelDelete := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelDelete()
@@ -504,8 +504,9 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// metadata group as the durable consumers beside it, so it meets the
 	// same two transient conditions — a placement refusal while the group
 	// is short of members, and a request the group never answers — and it
-	// met them with no budget at all, which is nats.go's undeclared
-	// five-second default on whatever context the applier happened to hold.
+	// met them with no budget of its own, which is the request term
+	// (jsapi.RequestTerm, five seconds) on whatever context the applier
+	// happened to hold.
 	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelCreate()
 	var cons jetstream.Consumer
