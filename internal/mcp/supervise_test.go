@@ -28,8 +28,19 @@ import (
 
 // supervisedBridge is a bridge with sup, its servers stopped at cleanup, and
 // its log recorded.
+//
+// ITS CHILDREN STOP BEFORE THE CASE'S DIRECTORY GOES. The first t.TempDir of
+// a test registers the test's one RemoveAll, and cleanups run last-registered
+// first. A case that took its first TempDir after this helper registered
+// StopAll — countedSpec does, for the file its children count their starts
+// in — had its directory removed while the bridge still supervised them, and
+// a child the supervisor restarted then re-created that file between its
+// unlink and its directory's, failing the removal (#982). So this helper
+// takes a TempDir first: that RemoveAll is registered before StopAll, and runs
+// after every child has stopped, whichever case's helpers come next.
 func supervisedBridge(t *testing.T, sup Supervision) (*Bridge, *logRecorder) {
 	t.Helper()
+	_ = t.TempDir()
 	log, rec := recorder()
 	b := NewBridge(log, sup)
 	t.Cleanup(func() {
@@ -250,6 +261,45 @@ func TestAHealthyChildIsNotRestarted(t *testing.T) {
 // identity at the vendor — from being restarted by a node whose lease has
 // lapsed; while it is shut, the server stays down and every call says so in
 // the engine's words, classed unavailable, rather than as a broken pipe.
+// A SUPERVISED BRIDGE STOPS ITS CHILDREN BEFORE ITS CASE'S DIRECTORY GOES
+// (#982): supervisedBridge takes its TempDir before it registers StopAll, so
+// the directory's removal runs last. The case's body stands in for a child the
+// supervisor restarts during teardown: for as long as the bridge serves its
+// child, it writes the start file the child counts in, and it pads that file's
+// directory so RemoveAll's last pass is long enough for a write to land in.
+// With the two registrations reversed, the removal runs while the child is
+// served, meets a file written after its unlink, and fails the body's
+// teardown every time; in order, StopAll ends the serving first.
+//
+// Mutation: drop supervisedBridge's early TempDir, so StopAll is registered
+// before the directory's removal and runs after it.
+func TestASupervisedBridgeStopsItsChildrenBeforeItsCaseDirectoryGoes(t *testing.T) {
+	t.Parallel()
+	torn := t.Run("the body", func(t *testing.T) {
+		b, _ := supervisedBridge(t, Supervision{})
+		spec, starts := countedSpec(t, "teardown-child", "serve", nil)
+		if _, err := b.Add(t.Context(), spec); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		for i := range 1500 {
+			pad := filepath.Join(filepath.Dir(starts), fmt.Sprintf("pad-%04d", i))
+			if err := os.WriteFile(pad, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		go func() {
+			for serving(b, "teardown-child") {
+				if f, err := os.OpenFile(starts, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+					_ = f.Close()
+				}
+			}
+		}()
+	})
+	if !torn {
+		t.Fatal("the body's teardown failed: its directory went while the bridge still served its child")
+	}
+}
+
 func TestADownServerIsRefusedHonestlyAndHeldBackByItsOwner(t *testing.T) {
 	t.Parallel()
 	var mayStart atomic.Bool
