@@ -268,8 +268,58 @@ func (k *sessionKeep) uploads() [][]byte {
 // handedToken is the secret every keeping rig's launch handed its box.
 const handedToken = "the-entrys-own-token"
 
+// inBubble runs f in a synctest bubble, where a timer fires at exactly its
+// time and time moves only once every goroutine of the case is blocked.
+//
+// EVERY CASE OF A KEEPING OR A LOGGING RIG RUNS IN ONE ([keepingRig],
+// [loggingRig]). A rig cuts a record's budget to 200 ms and ages a capture on
+// its own clock, which only a case moves, while an end, or a read standing by,
+// waits for a capture on the clock it runs on: an end for as long as the
+// turn's last capture can still land ([endCaptureWait], over 38 minutes), a
+// read standing by for as long as a standby may stand ([standbyBudget]). On
+// the machine's clock a runner starved for those 200 ms inside a keep's stamp
+// of its capture's outcome left the capture begun with nothing to settle it,
+// and the end's wait outlasted the package's timeout (#1022). In the bubble
+// the budget is spent by the stamp's own waits alone, and a wait that runs out
+// its bound does so in virtual time.
+func inBubble(t *testing.T, f func(*testing.T)) {
+	t.Helper()
+	synctest.Test(t, f)
+}
+
+// bubbleEpoch is where every synctest bubble's clock starts.
+var bubbleEpoch = time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// mustBeBubbled fails t unless it runs in a synctest bubble ([inBubble]): its
+// clock must read within a year of [bubbleEpoch], where every bubble's starts
+// and from where it moves by the case's own waits alone. No case waits a year,
+// and the machine's clock passed that in 2001.
+//
+// THE RIGS' BINDING AT RUN TIME. Their bubble declarations bind them where they
+// are written, and internal/fixedwait verifies that at every reference to them;
+// it judges a bubble lexically, so a literal written inside one but handed to
+// something that runs it after the bubble — the outer t's Cleanup — passes it.
+// This check does not.
+//
+//fixedwait:bubble
+func mustBeBubbled(t *testing.T) {
+	t.Helper()
+	if since := time.Since(bubbleEpoch); since >= 365*24*time.Hour {
+		t.Fatalf("a keeping or a logging rig runs only in a synctest bubble (inBubble), and this clock reads "+
+			"%s past where every bubble's starts", since)
+	}
+}
+
 // keepingRig is a coordinator rig that keeps sessions: its runner's boxes hold
 // one, and its records are the case's to read and to answer.
+//
+// ONLY IN A BUBBLE ([inBubble]), which it checks ([mustBeBubbled]): its budgets
+// are cut to a record's 200 ms, and its waits for a capture read the run's row
+// on production's tick ([captureWaitTick]), which only the bubble's clock makes
+// cheap — an end's wait that runs out its bound takes a thousand reads, not
+// millions.
+//
+//fixedwait:bubble
 func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	t.Helper()
 	return keepingRigWith(t, nil)
@@ -277,15 +327,18 @@ func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 
 // keepingRigWith is [keepingRig] whose coordinator is built with what with sets
 // on its options ([newCoordRigWith]).
+//
+//fixedwait:bubble
 func keepingRigWith(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *sessionWrites, *sessionKeep) {
 	t.Helper()
+	mustBeBubbled(t)
 	rig := newCoordRigWith(t, with)
 	writes := &sessionWrites{}
 	keep := &sessionKeep{policy: SessionPolicy{Keep: true, SeatBudget: 64 << 20},
 		now: func() time.Time { return rig.now }}
 	rig.coordinator.sessions, rig.coordinator.keep = writes, keep
 	rig.coordinator.sessionRetry, rig.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
-	rig.coordinator.captureTick = time.Millisecond
+	rig.coordinator.captureTick = captureWaitTick
 	// ITS SPOOLS ITS OWN, so what a case leaves in them is the case's to see.
 	rig.coordinator.spoolDir = t.TempDir()
 	// THE ENGINE'S ACCOUNTS OF A STOP AND A LOSS, as its hooks answer them.
@@ -538,53 +591,55 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 // check here goes red.
 func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
-		Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
 
-	takes := rig.runner.Takes()
-	if len(takes) != 1 || takes[0].Pack {
-		t.Fatalf("takes %+v, want one take of the archive the run's script packed", takes)
-	}
-	if !slices.Contains(takes[0].Scrub, handedToken) || takes[0].MaxBytes != executorkeep.SessionMaxBytes {
-		t.Errorf("the take scrubs %v within %d bytes, want what the launch handed the box within the "+
-			"session's bound", takes[0].Scrub, takes[0].MaxBytes)
-	}
-	if !rig.provider.Box(rig.get("t1").SandboxID).Paused() {
-		t.Error("the collection did not pause the box after taking its session")
-	}
-	captures := writes.captured()
-	if len(captures) != 1 {
-		t.Fatalf("recorded %d captures, want 1", len(captures))
-	}
-	got := captures[0].CaptureRecord
-	if stamp := got.Stamp; stamp.LaunchSeq != 1 || stamp.CaptureSeq != 1 || stamp.SessionID != "s-1" ||
-		stamp.Harness != "claude-code" || got.Object.Size != int64(len(session.Body)) ||
-		stamp.SeatBudget != 64<<20 || stamp.ContentKey != "k1" {
-		t.Errorf("the capture recorded %+v", got)
-	}
-	if uploads := keep.uploads(); len(uploads) != 1 || string(uploads[0]) != "the transcript" {
-		t.Errorf("uploaded %q, want the box's archive once", uploads)
-	}
-	if session.Kept() != 1 {
-		t.Errorf("the box recorded %d digests of the archive kept, want 1", session.Kept())
-	}
-	run := rig.get("t1")
-	if run.Kept == nil || run.Kept.State != CaptureLanded || run.Kept.Object != got.Object.Key.String() ||
-		!run.Kept.Final {
-		t.Fatalf("the row keeps %+v, want the landed, final capture", run.Kept)
-	}
-	recs := rig.collected()
-	if len(recs) != 1 || recs[0].SessionTakenBytes != int64(len(session.Body)) ||
-		recs[0].HarnessSession != "s-1" || recs[0].HarnessVersion != "2.1.310" || recs[0].SessionNotKept != "" {
-		t.Errorf("the launch's record is %+v, want the session it ran and what was taken of it", recs)
-	}
-	if left := rig.spools(t); len(left) != 0 {
-		t.Errorf("the kept session's spool is left on the node's disk: %v", left)
-	}
+		takes := rig.runner.Takes()
+		if len(takes) != 1 || takes[0].Pack {
+			t.Fatalf("takes %+v, want one take of the archive the run's script packed", takes)
+		}
+		if !slices.Contains(takes[0].Scrub, handedToken) || takes[0].MaxBytes != executorkeep.SessionMaxBytes {
+			t.Errorf("the take scrubs %v within %d bytes, want what the launch handed the box within the "+
+				"session's bound", takes[0].Scrub, takes[0].MaxBytes)
+		}
+		if !rig.provider.Box(rig.get("t1").SandboxID).Paused() {
+			t.Error("the collection did not pause the box after taking its session")
+		}
+		captures := writes.captured()
+		if len(captures) != 1 {
+			t.Fatalf("recorded %d captures, want 1", len(captures))
+		}
+		got := captures[0].CaptureRecord
+		if stamp := got.Stamp; stamp.LaunchSeq != 1 || stamp.CaptureSeq != 1 || stamp.SessionID != "s-1" ||
+			stamp.Harness != "claude-code" || got.Object.Size != int64(len(session.Body)) ||
+			stamp.SeatBudget != 64<<20 || stamp.ContentKey != "k1" {
+			t.Errorf("the capture recorded %+v", got)
+		}
+		if uploads := keep.uploads(); len(uploads) != 1 || string(uploads[0]) != "the transcript" {
+			t.Errorf("uploaded %q, want the box's archive once", uploads)
+		}
+		if session.Kept() != 1 {
+			t.Errorf("the box recorded %d digests of the archive kept, want 1", session.Kept())
+		}
+		run := rig.get("t1")
+		if run.Kept == nil || run.Kept.State != CaptureLanded || run.Kept.Object != got.Object.Key.String() ||
+			!run.Kept.Final {
+			t.Fatalf("the row keeps %+v, want the landed, final capture", run.Kept)
+		}
+		recs := rig.collected()
+		if len(recs) != 1 || recs[0].SessionTakenBytes != int64(len(session.Body)) ||
+			recs[0].HarnessSession != "s-1" || recs[0].HarnessVersion != "2.1.310" || recs[0].SessionNotKept != "" {
+			t.Errorf("the launch's record is %+v, want the session it ran and what was taken of it", recs)
+		}
+		if left := rig.spools(t); len(left) != 0 {
+			t.Errorf("the kept session's spool is left on the node's disk: %v", left)
+		}
+	})
 }
 
 // A JOB TAKEN ONCE IT HAD ENDED IS NOT TAKEN AGAIN, whatever that take came to.
@@ -600,20 +655,22 @@ func TestAJobTakenOnceItHadEndedIsNotTakenAgain(t *testing.T) {
 	for name, putErr := range map[string]error{"landed": nil, "refused": objstore.ErrFull} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, writes, keep := keepingRig(t)
-			keep.putErr = putErr
-			rig.launchKept(t, "t1")
-			session := rig.runner.Session
-			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-			collectHeld(t, rig, "t1")
-			collectHeld(t, rig, "t1")
-			if takes := rig.runner.Takes(); len(takes) != 1 {
-				t.Fatalf("took the finished job's session %d times, want once", len(takes))
-			}
-			if putErr == nil && (len(writes.captured()) != 1 || len(keep.uploads()) != 1) {
-				t.Fatalf("recorded %d captures and %d uploads of one finished job, want 1 each",
-					len(writes.captured()), len(keep.uploads()))
-			}
+			inBubble(t, func(t *testing.T) {
+				rig, writes, keep := keepingRig(t)
+				keep.putErr = putErr
+				rig.launchKept(t, "t1")
+				session := rig.runner.Session
+				rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+				collectHeld(t, rig, "t1")
+				collectHeld(t, rig, "t1")
+				if takes := rig.runner.Takes(); len(takes) != 1 {
+					t.Fatalf("took the finished job's session %d times, want once", len(takes))
+				}
+				if putErr == nil && (len(writes.captured()) != 1 || len(keep.uploads()) != 1) {
+					t.Fatalf("recorded %d captures and %d uploads of one finished job, want 1 each",
+						len(writes.captured()), len(keep.uploads()))
+				}
+			})
 		})
 	}
 }
@@ -638,7 +695,7 @@ func TestAJobTakenOnceItHadEndedIsNotTakenAgain(t *testing.T) {
 // collide.
 func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		rig, writes, _ := keepingRig(t)
 		rig.launchKept(t, "t1")
 		session := rig.runner.Session
@@ -706,42 +763,44 @@ func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 // turn's last.
 func TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.putErr = objstore.ErrFull
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.putErr = objstore.ErrFull
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
 
-	if n := len(writes.captured()); n != 0 {
-		t.Fatalf("recorded %d captures of an upload the store refused", n)
-	}
-	run := rig.get("t1")
-	if run.Capture == nil || run.Capture.State != CaptureRefused ||
-		!strings.Contains(run.Capture.Reason, "reservation is spent") || run.Kept != nil {
-		t.Fatalf("the row holds %+v, kept %+v, want the capture refused for the store's room",
-			run.Capture, run.Kept)
-	}
-	if recs := rig.collected(); len(recs) != 1 || recs[0].SessionTakenBytes == 0 {
-		t.Errorf("the launch's record is %+v, want it to say the session was taken to be kept", recs)
-	}
-	ctx := t.Context()
-	if _, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
-		Outcome: executorkeep.OutcomeCompleted}); err != nil {
-		t.Fatalf("OweEnd: %v", err)
-	}
-	if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
-		t.Fatalf("publishEnd: %v", err)
-	}
-	ends := writes.endedRecords()
-	if len(ends) != 1 {
-		t.Fatalf("recorded %d ends, want the turn's one", len(ends))
-	}
-	unkept := ends[0].Ending.Unkept
-	if unkept == nil || unkept.LaunchSeq != 1 || unkept.CaptureSeq != 1 ||
-		!strings.Contains(unkept.Reason, "reservation is spent") {
-		t.Fatalf("the end names %+v unkept, want the launch's refused capture and why", unkept)
-	}
+		if n := len(writes.captured()); n != 0 {
+			t.Fatalf("recorded %d captures of an upload the store refused", n)
+		}
+		run := rig.get("t1")
+		if run.Capture == nil || run.Capture.State != CaptureRefused ||
+			!strings.Contains(run.Capture.Reason, "reservation is spent") || run.Kept != nil {
+			t.Fatalf("the row holds %+v, kept %+v, want the capture refused for the store's room",
+				run.Capture, run.Kept)
+		}
+		if recs := rig.collected(); len(recs) != 1 || recs[0].SessionTakenBytes == 0 {
+			t.Errorf("the launch's record is %+v, want it to say the session was taken to be kept", recs)
+		}
+		ctx := t.Context()
+		if _, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+			Outcome: executorkeep.OutcomeCompleted}); err != nil {
+			t.Fatalf("OweEnd: %v", err)
+		}
+		if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+			t.Fatalf("publishEnd: %v", err)
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 {
+			t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+		}
+		unkept := ends[0].Ending.Unkept
+		if unkept == nil || unkept.LaunchSeq != 1 || unkept.CaptureSeq != 1 ||
+			!strings.Contains(unkept.Reason, "reservation is spent") {
+			t.Fatalf("the end names %+v unkept, want the launch's refused capture and why", unkept)
+		}
+	})
 }
 
 // THE SWITCH OFF KEEPS NOTHING, SEALS NOTHING, AND STILL ENDS THE TURN — through
@@ -757,37 +816,39 @@ func TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd(t *testing.T) {
 // turn's end goes unrecorded.
 func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.policy.Keep = false
-	ctx := t.Context()
-	if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq("t1")); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-	rig.suspend("t1")
-	if handed := rig.handedOf(t, "t1"); handed != "" {
-		t.Fatalf("the launch sealed %q for a scrub with the switch off", handed)
-	}
-	rig.runner.Finish(Result{Text: "halfway through"})
-	if err := rig.coordinator.StopSeat(ctx, "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.policy.Keep = false
+		ctx := t.Context()
+		if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq("t1")); err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		rig.suspend("t1")
+		if handed := rig.handedOf(t, "t1"); handed != "" {
+			t.Fatalf("the launch sealed %q for a scrub with the switch off", handed)
+		}
+		rig.runner.Finish(Result{Text: "halfway through"})
+		if err := rig.coordinator.StopSeat(ctx, "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
 
-	if takes := rig.runner.Takes(); len(takes) != 0 {
-		t.Fatalf("took %d sessions with the switch off", len(takes))
-	}
-	if captures := writes.captured(); len(captures) != 0 {
-		t.Fatalf("recorded %d captures with the switch off", len(captures))
-	}
-	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped {
-		t.Fatalf("recorded %+v with the switch off, want the stopped turn's one end", ends)
-	}
-	if _, found, _ := rig.pending.Get(ctx, "t1"); found {
-		t.Fatal("the stopped run's record was left behind its end")
-	}
+		if takes := rig.runner.Takes(); len(takes) != 0 {
+			t.Fatalf("took %d sessions with the switch off", len(takes))
+		}
+		if captures := writes.captured(); len(captures) != 0 {
+			t.Fatalf("recorded %d captures with the switch off", len(captures))
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped {
+			t.Fatalf("recorded %+v with the switch off, want the stopped turn's one end", ends)
+		}
+		if _, found, _ := rig.pending.Get(ctx, "t1"); found {
+			t.Fatal("the stopped run's record was left behind its end")
+		}
+	})
 }
 
 // A STOP TAKES THE STOPPED JOB'S SESSION OFF THE FRAME THAT DECIDED IT, BEFORE
@@ -802,36 +863,38 @@ func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 // packed over, or there is no box left to read.
 func TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	launched := rig.launchKept(t, "t1")
-	rig.runner.Finish(Result{Text: "halfway through"})
-	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder", Reason: "wrong repo"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	if takes := rig.runner.Takes(); len(takes) != 0 {
-		t.Fatalf("the frame that decided the stop took %d sessions itself", len(takes))
-	}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		launched := rig.launchKept(t, "t1")
+		rig.runner.Finish(Result{Text: "halfway through"})
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder", Reason: "wrong repo"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		if takes := rig.runner.Takes(); len(takes) != 0 {
+			t.Fatalf("the frame that decided the stop took %d sessions itself", len(takes))
+		}
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
 
-	takes := rig.runner.Takes()
-	if len(takes) != 1 || takes[0].Pack {
-		t.Fatalf("takes %+v, want the stopped job's session taken as its end left it", takes)
-	}
-	captures := writes.captured()
-	if len(captures) != 1 || captures[0].Stamp.LaunchSeq != launched.LaunchSeq || captures[0].err != nil {
-		t.Fatalf("recorded %+v, want the stopped launch's capture landed", captures)
-	}
-	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != launched.SandboxID {
-		t.Fatalf("killed %v, want the stopped job's box reclaimed after its session was taken", killed)
-	}
-	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
-		t.Fatalf("the log was written %v, want the capture before the turn's end", got)
-	}
-	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
-		t.Fatal("the stopped run's record was left behind its end")
-	}
+		takes := rig.runner.Takes()
+		if len(takes) != 1 || takes[0].Pack {
+			t.Fatalf("takes %+v, want the stopped job's session taken as its end left it", takes)
+		}
+		captures := writes.captured()
+		if len(captures) != 1 || captures[0].Stamp.LaunchSeq != launched.LaunchSeq || captures[0].err != nil {
+			t.Fatalf("recorded %+v, want the stopped launch's capture landed", captures)
+		}
+		if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != launched.SandboxID {
+			t.Fatalf("killed %v, want the stopped job's box reclaimed after its session was taken", killed)
+		}
+		if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+			t.Fatalf("the log was written %v, want the capture before the turn's end", got)
+		}
+		if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+			t.Fatal("the stopped run's record was left behind its end")
+		}
+	})
 }
 
 // AN END WAITS FOR ITS TURN'S CAPTURE TO LAND. A stop's take is kept off the read,
@@ -843,27 +906,29 @@ func TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim(t *testing.T) {
 // the end and is refused by its tombstone.
 func TestAnEndWaitsForItsTurnsCaptureToLand(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.gate = make(chan struct{})
-	rig.launchKept(t, "t1")
-	rig.runner.Finish(Result{Text: "halfway through"})
-	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		close(keep.gate)
-	}()
-	rig.fireRetries()
-	rig.awaitKeeps()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.gate = make(chan struct{})
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(Result{Text: "halfway through"})
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			close(keep.gate)
+		}()
+		rig.fireRetries()
+		rig.awaitKeeps()
 
-	captures := writes.captured()
-	if len(captures) != 1 || captures[0].err != nil {
-		t.Fatalf("recorded %+v, want the stop's capture landed", captures)
-	}
-	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
-		t.Fatalf("the log was written %v, want the end after the capture it waited for", got)
-	}
+		captures := writes.captured()
+		if len(captures) != 1 || captures[0].err != nil {
+			t.Fatalf("recorded %+v, want the stop's capture landed", captures)
+		}
+		if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+			t.Fatalf("the log was written %v, want the end after the capture it waited for", got)
+		}
+	})
 }
 
 // failsAReadOfABegunCapture fails the first read of a run whose ending is
@@ -902,41 +967,43 @@ func (s *failsAReadOfABegunCapture) Get(ctx context.Context, turnID string) (Pen
 // the end comes before the capture, which the log refuses.
 func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.gate = make(chan struct{})
-	rig.launchKept(t, "t1")
-	rig.runner.Finish(Result{Text: "halfway through"})
-	store := &failsAReadOfABegunCapture{PendingStore: rig.coordinator.pending, failed: make(chan struct{})}
-	rig.coordinator.pending = store
-	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	// THE KEEP LANDS once a read has failed while it was under way — or, should
-	// none ever fail, after a while, so the case reports that instead of hanging.
-	go func() {
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.gate = make(chan struct{})
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(Result{Text: "halfway through"})
+		store := &failsAReadOfABegunCapture{PendingStore: rig.coordinator.pending, failed: make(chan struct{})}
+		rig.coordinator.pending = store
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		// THE KEEP LANDS once a read has failed while it was under way — or, should
+		// none ever fail, after a while, so the case reports that instead of hanging.
+		go func() {
+			select {
+			case <-store.failed:
+			case <-time.After(5 * time.Second):
+			}
+			close(keep.gate)
+		}()
+		rig.fireRetries()
+		rig.awaitKeeps()
+
 		select {
 		case <-store.failed:
-		case <-time.After(5 * time.Second):
+		default:
+			t.Fatal("the premise: no read of the run failed while its capture was kept")
 		}
-		close(keep.gate)
-	}()
-	rig.fireRetries()
-	rig.awaitKeeps()
-
-	select {
-	case <-store.failed:
-	default:
-		t.Fatal("the premise: no read of the run failed while its capture was kept")
-	}
-	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
-		t.Fatalf("the log was written %v, want the end after the capture it waited for", got)
-	}
-	if captures := writes.captured(); len(captures) != 1 || captures[0].err != nil {
-		t.Fatalf("recorded %+v, want the stop's capture landed", captures)
-	}
-	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Unkept != nil {
-		t.Fatalf("ended %+v, want the turn's one end naming nothing unkept", ends)
-	}
+		if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+			t.Fatalf("the log was written %v, want the end after the capture it waited for", got)
+		}
+		if captures := writes.captured(); len(captures) != 1 || captures[0].err != nil {
+			t.Fatalf("recorded %+v, want the stop's capture landed", captures)
+		}
+		if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Unkept != nil {
+			t.Fatalf("ended %+v, want the turn's one end naming nothing unkept", ends)
+		}
+	})
 }
 
 // AN END NAMES WHAT ITS OWN ASK OF AN UNRESOLVED CAPTURE SETTLED, even where the
@@ -949,33 +1016,35 @@ func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
 // ([Coordinator.settleUnresolved]), and the end names the landed capture unkept.
 func TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-	if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved {
-		t.Fatalf("the premise: the row holds %+v, want its capture unresolved", run.Capture)
-	}
-	writes.answer(nil)
-	ctx := t.Context()
-	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
-		Outcome: executorkeep.OutcomeCompleted}); err != nil || !owed {
-		t.Fatalf("OweEnd = %v, %v", owed, err)
-	}
-	owing := rig.get("t1")
-	rig.coordinator.pending = &refusingStore{inner: rig.pending, refuse: []string{"Get"}}
-	if _, err := rig.coordinator.publishEnd(ctx, owing); err != nil {
-		t.Fatalf("publishEnd: %v", err)
-	}
-	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].Ending.Unkept != nil {
-		t.Fatalf("ended %+v, want the turn's one end naming nothing unkept: its capture landed", ends)
-	}
-	if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded {
-		t.Fatalf("the row keeps %+v, want the capture the end's ask landed", run.Kept)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved {
+			t.Fatalf("the premise: the row holds %+v, want its capture unresolved", run.Capture)
+		}
+		writes.answer(nil)
+		ctx := t.Context()
+		if owed, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+			Outcome: executorkeep.OutcomeCompleted}); err != nil || !owed {
+			t.Fatalf("OweEnd = %v, %v", owed, err)
+		}
+		owing := rig.get("t1")
+		rig.coordinator.pending = &refusingStore{inner: rig.pending, refuse: []string{"Get"}}
+		if _, err := rig.coordinator.publishEnd(ctx, owing); err != nil {
+			t.Fatalf("publishEnd: %v", err)
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 || ends[0].Ending.Unkept != nil {
+			t.Fatalf("ended %+v, want the turn's one end naming nothing unkept: its capture landed", ends)
+		}
+		if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded {
+			t.Fatalf("the row keeps %+v, want the capture the end's ask landed", run.Kept)
+		}
+	})
 }
 
 // A TAKE THAT CANNOT KNOW WHAT ITS BOX WAS HANDED IS REFUSED, never kept
@@ -987,24 +1056,26 @@ func TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled(t *testing.T) {
 // the row keeps none, and the session is kept.
 func TestATakeThatCannotKnowWhatItsBoxWasHandedIsRefused(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
 
-	if takes := rig.runner.Takes(); len(takes) != 0 {
-		t.Fatalf("took the session %d times with nothing known of what the box was handed", len(takes))
-	}
-	if len(writes.captured()) != 0 || len(keep.uploads()) != 0 {
-		t.Fatal("kept a session nobody could scrub")
-	}
-	run := rig.get("t1")
-	if run.Capture == nil || run.Capture.State != CaptureRefused ||
-		!strings.Contains(run.Capture.Reason, "cannot be read back") {
-		t.Fatalf("the row holds %+v, want the take refused saying why", run.Capture)
-	}
+		if takes := rig.runner.Takes(); len(takes) != 0 {
+			t.Fatalf("took the session %d times with nothing known of what the box was handed", len(takes))
+		}
+		if len(writes.captured()) != 0 || len(keep.uploads()) != 0 {
+			t.Fatal("kept a session nobody could scrub")
+		}
+		run := rig.get("t1")
+		if run.Capture == nil || run.Capture.State != CaptureRefused ||
+			!strings.Contains(run.Capture.Reason, "cannot be read back") {
+			t.Fatalf("the row holds %+v, want the take refused saying why", run.Capture)
+		}
+	})
 }
 
 // THE SCRUB READS THE BOX'S LOGIN AGAIN WHERE IT IS REFRESHED: in the box, whose
@@ -1015,33 +1086,35 @@ func TestATakeThatCannotKnowWhatItsBoxWasHandedIsRefused(t *testing.T) {
 // leaves the box in the session.
 func TestTheScrubReadsTheLoginAgainWhereItIsRefreshed(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	launched := rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
-	host := filepath.Join(t.TempDir(), "credentials.json")
-	if err := os.WriteFile(host, []byte(`{"accessToken":"host-refreshed-token-0001"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken},
-		Logins: map[string]string{".claude/.credentials.json": host}})
-	box := rig.provider.Box(launched.SandboxID)
-	if err := box.WriteFile(t.Context(), box.Home()+"/.claude/.credentials.json",
-		[]byte(`{"accessToken":"box-refreshed-token-0002"}`)); err != nil {
-		t.Fatal(err)
-	}
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-
-	takes := rig.runner.Takes()
-	if len(takes) != 1 {
-		t.Fatalf("took %d sessions, want one", len(takes))
-	}
-	for _, want := range []string{handedToken, "host-refreshed-token-0001", "box-refreshed-token-0002"} {
-		if !slices.Contains(takes[0].Scrub, want) {
-			t.Errorf("the take scrubs %v, which leaves %q in the session", takes[0].Scrub, want)
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		launched := rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		host := filepath.Join(t.TempDir(), "credentials.json")
+		if err := os.WriteFile(host, []byte(`{"accessToken":"host-refreshed-token-0001"}`), 0o600); err != nil {
+			t.Fatal(err)
 		}
-	}
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken},
+			Logins: map[string]string{".claude/.credentials.json": host}})
+		box := rig.provider.Box(launched.SandboxID)
+		if err := box.WriteFile(t.Context(), box.Home()+"/.claude/.credentials.json",
+			[]byte(`{"accessToken":"box-refreshed-token-0002"}`)); err != nil {
+			t.Fatal(err)
+		}
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+
+		takes := rig.runner.Takes()
+		if len(takes) != 1 {
+			t.Fatalf("took %d sessions, want one", len(takes))
+		}
+		for _, want := range []string{handedToken, "host-refreshed-token-0001", "box-refreshed-token-0002"} {
+			if !slices.Contains(takes[0].Scrub, want) {
+				t.Errorf("the take scrubs %v, which leaves %q in the session", takes[0].Scrub, want)
+			}
+		}
+	})
 }
 
 // A LOST RUN'S BOX IS TAKEN BEFORE ITS ENDING RECLAIMS IT: a launch whose engine
@@ -1054,26 +1127,28 @@ func TestTheScrubReadsTheLoginAgainWhereItIsRefreshed(t *testing.T) {
 // job's session is gone with its box.
 func TestALostRunsBoxIsTakenBeforeItsEndingReclaimsIt(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	launched := rig.launching("t1")
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		launched := rig.launching("t1")
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
+			t.Fatalf("RecoverSeat: %v", err)
+		}
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
 
-	takes := rig.runner.Takes()
-	if len(takes) != 1 || takes[0].Pack {
-		t.Fatalf("takes %+v, want the lost job's session taken as its end left it, before its box went", takes)
-	}
-	if len(writes.captured()) != 1 {
-		t.Fatalf("recorded %d captures of the lost job, want 1", len(writes.captured()))
-	}
-	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
-		t.Fatalf("killed %v, want the lost job's box reclaimed after", killed)
-	}
+		takes := rig.runner.Takes()
+		if len(takes) != 1 || takes[0].Pack {
+			t.Fatalf("takes %+v, want the lost job's session taken as its end left it, before its box went", takes)
+		}
+		if len(writes.captured()) != 1 {
+			t.Fatalf("recorded %d captures of the lost job, want 1", len(writes.captured()))
+		}
+		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+			t.Fatalf("killed %v, want the lost job's box reclaimed after", killed)
+		}
+	})
 }
 
 // A LOST RUN'S BOX ON ANOTHER NODE'S HOST IS ASKED OF THAT HOST, which takes the
@@ -1085,27 +1160,29 @@ func TestALostRunsBoxIsTakenBeforeItsEndingReclaimsIt(t *testing.T) {
 // box is read under a forged request.
 func TestALostRunsBoxOnAnotherHostIsAskedOfThatHost(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	asks := &boxAsks{result: Result{}}
-	rig.onNode(t, "node-b", asks, &nudges{})
-	run := rig.launchedBy("t1", "node-a")
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-	rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(run),
-		note: &failureNote{reason: "engine_restarted", detail: "the engine that ran the job restarted"}})
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
-	if got := asks.reads(); !slices.Contains(got, BoxReadLoss) {
-		t.Fatalf("asked the host %v, want the lost job's box read for its session", got)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		asks := &boxAsks{result: Result{}}
+		rig.onNode(t, "node-b", asks, &nudges{})
+		run := rig.launchedBy("t1", "node-a")
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(run),
+			note: &failureNote{reason: "engine_restarted", detail: "the engine that ran the job restarted"}})
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
+		if got := asks.reads(); !slices.Contains(got, BoxReadLoss) {
+			t.Fatalf("asked the host %v, want the lost job's box read for its session", got)
+		}
 
-	// AND THE HOST REFUSES A LOSS READ NO LOSS LICENSES.
-	host, _, _ := keepingRig(t)
-	live := host.launchKept(t, "t2")
-	if _, _, err := host.coordinator.ReadHostedBox(t.Context(), "t2", live.LaunchID, live.SandboxID,
-		BoxReadLoss); !errors.Is(err, ErrBoxNotHosted) {
-		t.Fatalf("a loss read of a live job was answered %v, want it refused", err)
-	}
+		// AND THE HOST REFUSES A LOSS READ NO LOSS LICENSES.
+		host, _, _ := keepingRig(t)
+		live := host.launchKept(t, "t2")
+		if _, _, err := host.coordinator.ReadHostedBox(t.Context(), "t2", live.LaunchID, live.SandboxID,
+			BoxReadLoss); !errors.Is(err, ErrBoxNotHosted) {
+			t.Fatalf("a loss read of a live job was answered %v, want it refused", err)
+		}
+	})
 }
 
 // A REFUSED RESERVATION UPLOADS NOTHING, AND A REFUSED OUTCOME CLAIMS NOTHING:
@@ -1117,20 +1194,22 @@ func TestALostRunsBoxOnAnotherHostIsAskedOfThatHost(t *testing.T) {
 // no row places, or the row claims a capture it never recorded.
 func TestARefusedCaptureStampUploadsAndClaimsNothing(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	rig.launchKept(t, "t1")
-	rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"StampCapture"}}
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		rig.launchKept(t, "t1")
+		rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"StampCapture"}}
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
 
-	if len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
-		t.Fatalf("uploaded %d and recorded %d captures whose place the row refused",
-			len(keep.uploads()), len(writes.captured()))
-	}
-	if run := rig.get("t1"); run.Capture != nil || run.Kept != nil {
-		t.Fatalf("the row claims %+v kept %+v though every stamp was refused", run.Capture, run.Kept)
-	}
+		if len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
+			t.Fatalf("uploaded %d and recorded %d captures whose place the row refused",
+				len(keep.uploads()), len(writes.captured()))
+		}
+		if run := rig.get("t1"); run.Capture != nil || run.Kept != nil {
+			t.Fatalf("the row claims %+v kept %+v though every stamp was refused", run.Capture, run.Kept)
+		}
+	})
 }
 
 // A ROW THAT OWES ITS TURN'S END IS NOT DELETED, and the end is decided once:
@@ -1189,25 +1268,27 @@ func TestARowOwingItsTurnsEndIsKeptUntilTheEndIsRecorded(t *testing.T) {
 // holding the store's room for a day each time.
 func TestACaptureTheSeatsBudgetCannotHoldIsNotUploaded(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.policy.SeatBudget = 20
-	rig.launchKept(t, "t0")
-	if _, err := rig.pending.StampCapture(t.Context(), "t0", SessionCapture{LaunchSeq: 1, CaptureSeq: 1,
-		Launch: rig.get("t0").LaunchID, State: CaptureLanded, ObjectSize: 15, Object: "o"}); err != nil {
-		t.Fatalf("StampCapture: %v", err)
-	}
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.policy.SeatBudget = 20
+		rig.launchKept(t, "t0")
+		if _, err := rig.pending.StampCapture(t.Context(), "t0", SessionCapture{LaunchSeq: 1, CaptureSeq: 1,
+			Launch: rig.get("t0").LaunchID, State: CaptureLanded, ObjectSize: 15, Object: "o"}); err != nil {
+			t.Fatalf("StampCapture: %v", err)
+		}
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
 
-	if len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
-		t.Fatal("uploaded a session the seat's budget could not hold")
-	}
-	if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureRefused ||
-		!strings.Contains(run.Capture.Reason, "max_bytes_per_seat") {
-		t.Fatalf("the row holds %+v, want the capture refused for the seat's budget", run.Capture)
-	}
+		if len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
+			t.Fatal("uploaded a session the seat's budget could not hold")
+		}
+		if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureRefused ||
+			!strings.Contains(run.Capture.Reason, "max_bytes_per_seat") {
+			t.Fatalf("the row holds %+v, want the capture refused for the seat's budget", run.Capture)
+		}
+	})
 }
 
 // EVERY COLLECTION TAKES WHAT ITS JOB LEFT, AND SAYS WHETHER THE JOB HAD ENDED:
@@ -1245,56 +1326,58 @@ func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, writes, _ := keepingRig(t)
-			if tc.capped {
-				launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
-				rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-				rig.coordinator.countRun("swe", StatusRunning)
-				if tc.pollFails {
-					// A POLL THAT CANNOT SAY is no reason to leave the job
-					// working past its cap: it is asked to end all the same.
-					rig.runner.PollErr = errors.New("the box's exec did not answer")
-				}
-				if tc.unstoppable {
-					// A SCRIPT THAT HEARS THE REQUEST AND GOES ON, and a kill
-					// past the wait that reaches nothing of the job.
-					rig.coordinator.endWait = 50 * time.Millisecond
-					rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
-						return EndAsked, nil
+			inBubble(t, func(t *testing.T) {
+				rig, writes, _ := keepingRig(t)
+				if tc.capped {
+					launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
+					rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+					rig.coordinator.countRun("swe", StatusRunning)
+					if tc.pollFails {
+						// A POLL THAT CANNOT SAY is no reason to leave the job
+						// working past its cap: it is asked to end all the same.
+						rig.runner.PollErr = errors.New("the box's exec did not answer")
 					}
-					rig.provider.Box(launched.SandboxID).KillJobFunc = func(context.Context, string) error {
-						return ErrNoJobGroup
+					if tc.unstoppable {
+						// A SCRIPT THAT HEARS THE REQUEST AND GOES ON, and a kill
+						// past the wait that reaches nothing of the job.
+						rig.coordinator.endWait = 50 * time.Millisecond
+						rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
+							return EndAsked, nil
+						}
+						rig.provider.Box(launched.SandboxID).KillJobFunc = func(context.Context, string) error {
+							return ErrNoJobGroup
+						}
 					}
+					// PAST ITS TURN'S CAP a resume that fails after the collection
+					// is the turn's last, and the run is ended rather than handed
+					// back: its row stays, its ending decided, until this node's
+					// retry finishes it — which this case never fires.
+					rig.resumer.failWith(errors.New("held for the case to read the row"))
+					payload, ev := rig.completion("t1")
+					if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+						t.Logf("OnCompleted: %v", err)
+					}
+					rig.awaitKeeps()
+				} else {
+					rig.launchKept(t, "t1")
+					res := Result{Success: true, SessionID: "s-1"}
+					if tc.packed {
+						res.Captured = &rig.runner.Session.Archive
+					}
+					rig.runner.Finish(res)
+					collectHeld(t, rig, "t1")
 				}
-				// PAST ITS TURN'S CAP a resume that fails after the collection
-				// is the turn's last, and the run is ended rather than handed
-				// back: its row stays, its ending decided, until this node's
-				// retry finishes it — which this case never fires.
-				rig.resumer.failWith(errors.New("held for the case to read the row"))
-				payload, ev := rig.completion("t1")
-				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-					t.Logf("OnCompleted: %v", err)
+				takes := rig.runner.Takes()
+				if len(takes) != 1 || takes[0].Pack != tc.wantPack {
+					t.Fatalf("takes %+v, want one, packed now: %v", takes, tc.wantPack)
 				}
-				rig.awaitKeeps()
-			} else {
-				rig.launchKept(t, "t1")
-				res := Result{Success: true, SessionID: "s-1"}
-				if tc.packed {
-					res.Captured = &rig.runner.Session.Archive
+				if captures := writes.captured(); len(captures) != 1 || captures[0].err != nil {
+					t.Fatalf("recorded %+v, want the one capture", captures)
 				}
-				rig.runner.Finish(res)
-				collectHeld(t, rig, "t1")
-			}
-			takes := rig.runner.Takes()
-			if len(takes) != 1 || takes[0].Pack != tc.wantPack {
-				t.Fatalf("takes %+v, want one, packed now: %v", takes, tc.wantPack)
-			}
-			if captures := writes.captured(); len(captures) != 1 || captures[0].err != nil {
-				t.Fatalf("recorded %+v, want the one capture", captures)
-			}
-			if kept := rig.get("t1").Kept; kept == nil || kept.State != CaptureLanded || kept.Final != tc.final {
-				t.Fatalf("the row keeps %+v, want a landed capture, final: %v", kept, tc.final)
-			}
+				if kept := rig.get("t1").Kept; kept == nil || kept.State != CaptureLanded || kept.Final != tc.final {
+					t.Fatalf("the row keeps %+v, want a landed capture, final: %v", kept, tc.final)
+				}
+			})
 		})
 	}
 }

@@ -303,6 +303,10 @@ func continuingBase(turnID string, read *ConversationBase) LaunchRequest {
 // conversingRig is a keeping coordinator rig recording on, and continuing
 // sessions from, one conversation log, whose runner restores what its harness
 // wrote: node A of every case below.
+//
+// Built on [keepingRig], and so only in a bubble ([inBubble]).
+//
+//fixedwait:bubble
 func conversingRig(t *testing.T) (*coordRig, *conversationLog, *sessionKeep) {
 	t.Helper()
 	rig, _, keep := keepingRig(t)
@@ -329,67 +333,69 @@ func conversingRig(t *testing.T) (*coordRig, *conversationLog, *sessionKeep) {
 // the read off the capture, and a check goes red.
 func TestATurnsFirstLaunchContinuesItsConversationsHead(t *testing.T) {
 	t.Parallel()
-	rig, logbook, _ := conversingRig(t)
-	base := logbook.endedTurn(t, "b1", "s-base", "the base's transcript")
-	read := frozenReadOf(logbook, base)
-	req := continuingBase("t2", read)
-	var decided []LaunchDecision
-	req.Decided = func(d LaunchDecision) { decided = append(decided, d) }
+	inBubble(t, func(t *testing.T) {
+		rig, logbook, _ := conversingRig(t)
+		base := logbook.endedTurn(t, "b1", "s-base", "the base's transcript")
+		read := frozenReadOf(logbook, base)
+		req := continuingBase("t2", read)
+		var decided []LaunchDecision
+		req.Decided = func(d LaunchDecision) { decided = append(decided, d) }
 
-	res, err := rig.coordinator.Launch(t.Context(), rig.manager, req)
-	if err != nil {
-		t.Fatalf("the turn's first launch: %v", err)
-	}
-	started := rig.runner.Started()
-	last := started[len(started)-1]
-	if res.Reused || last.Resume != "s-base" || last.Brief != req.Session.Replaced || last.FreshBrief != req.Brief {
-		t.Fatalf("the first launch started session %q (reused %v) with brief %q and fresh brief %q; want the "+
-			"base's session in a box of its own, the lead, and the fresh brief beside it",
-			last.Resume, res.Reused, last.Brief, last.FreshBrief)
-	}
-	carried := rig.runner.Carried()
-	if len(carried) != 1 || string(carried[0].Body) != "the base's transcript" ||
-		carried[0].Archive.SessionID != "s-base" || carried[0].Replace {
-		t.Fatalf("the box was handed %+v, want the base's archive", carried)
-	}
-	if res.Brief != BriefContinuedConversation || res.Continues != "s-base" ||
-		rig.get("t2").Launch.Brief != BriefContinuedConversation {
-		t.Errorf("the launch answered %+v and recorded brief %q, want the conversation's session continued",
-			res, rig.get("t2").Launch.Brief)
-	}
-	if want := (LaunchDecision{Brief: BriefContinuedConversation, Kept: true, Base: true}); len(decided) != 1 ||
-		decided[0] != want {
-		t.Errorf("the launch's caller was told %+v, want once: %+v", decided, want)
-	}
-	frozen := rig.get("t2").Base
-	if frozen == nil || frozen.Session == nil || frozen.Session.Turn != "b1" ||
-		frozen.ReadThrough != read.ReadThrough || !slices.Equal(frozen.Absorbs, []string{"b1"}) {
-		t.Fatalf("the record froze %+v, want the dispatch's read of b1", frozen)
-	}
-	begins := logbook.begun()
-	if len(begins) != 1 || begins[0].Turn != "t2" || begins[0].BaseTurn != "b1" ||
-		begins[0].ReadThrough != read.ReadThrough || !slices.Equal(begins[0].Absorbs, []string{"b1"}) ||
-		begins[0].BaseObject.Key != base.Object.Key {
-		t.Fatalf("the executor log was handed begins %+v, want the turn's one first read naming b1", begins)
-	}
-	if !logbook.holds("b1") {
-		t.Fatal("no row holds the base the turn continues")
-	}
+		res, err := rig.coordinator.Launch(t.Context(), rig.manager, req)
+		if err != nil {
+			t.Fatalf("the turn's first launch: %v", err)
+		}
+		started := rig.runner.Started()
+		last := started[len(started)-1]
+		if res.Reused || last.Resume != "s-base" || last.Brief != req.Session.Replaced || last.FreshBrief != req.Brief {
+			t.Fatalf("the first launch started session %q (reused %v) with brief %q and fresh brief %q; want the "+
+				"base's session in a box of its own, the lead, and the fresh brief beside it",
+				last.Resume, res.Reused, last.Brief, last.FreshBrief)
+		}
+		carried := rig.runner.Carried()
+		if len(carried) != 1 || string(carried[0].Body) != "the base's transcript" ||
+			carried[0].Archive.SessionID != "s-base" || carried[0].Replace {
+			t.Fatalf("the box was handed %+v, want the base's archive", carried)
+		}
+		if res.Brief != BriefContinuedConversation || res.Continues != "s-base" ||
+			rig.get("t2").Launch.Brief != BriefContinuedConversation {
+			t.Errorf("the launch answered %+v and recorded brief %q, want the conversation's session continued",
+				res, rig.get("t2").Launch.Brief)
+		}
+		if want := (LaunchDecision{Brief: BriefContinuedConversation, Kept: true, Base: true}); len(decided) != 1 ||
+			decided[0] != want {
+			t.Errorf("the launch's caller was told %+v, want once: %+v", decided, want)
+		}
+		frozen := rig.get("t2").Base
+		if frozen == nil || frozen.Session == nil || frozen.Session.Turn != "b1" ||
+			frozen.ReadThrough != read.ReadThrough || !slices.Equal(frozen.Absorbs, []string{"b1"}) {
+			t.Fatalf("the record froze %+v, want the dispatch's read of b1", frozen)
+		}
+		begins := logbook.begun()
+		if len(begins) != 1 || begins[0].Turn != "t2" || begins[0].BaseTurn != "b1" ||
+			begins[0].ReadThrough != read.ReadThrough || !slices.Equal(begins[0].Absorbs, []string{"b1"}) ||
+			begins[0].BaseObject.Key != base.Object.Key {
+			t.Fatalf("the executor log was handed begins %+v, want the turn's one first read naming b1", begins)
+		}
+		if !logbook.holds("b1") {
+			t.Fatal("no row holds the base the turn continues")
+		}
 
-	// THE JOB'S CAPTURE CARRIES THE READ, and lifts the hold.
-	rig.suspend("t2")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-base", HarnessVersion: "2.1.310",
-		Captured: &session.Archive})
-	collectHeld(t, rig, "t2")
-	captures := logbook.capturesOf("t2")
-	if len(captures) != 1 || captures[0].ReadThrough != read.ReadThrough ||
-		!slices.Equal(captures[0].Absorbs, read.Absorbs) {
-		t.Fatalf("the turn's captures %+v carry another read than its first launch froze", captures)
-	}
-	if logbook.holds("b1") {
-		t.Error("the turn's first landed capture left the base held")
-	}
+		// THE JOB'S CAPTURE CARRIES THE READ, and lifts the hold.
+		rig.suspend("t2")
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-base", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		collectHeld(t, rig, "t2")
+		captures := logbook.capturesOf("t2")
+		if len(captures) != 1 || captures[0].ReadThrough != read.ReadThrough ||
+			!slices.Equal(captures[0].Absorbs, read.Absorbs) {
+			t.Fatalf("the turn's captures %+v carry another read than its first launch froze", captures)
+		}
+		if logbook.holds("b1") {
+			t.Error("the turn's first landed capture left the base held")
+		}
+	})
 }
 
 // THE FREEZE IS WRITTEN AT THE FIRST LAUNCH ONLY. The write that creates the
@@ -460,115 +466,117 @@ func TestTheFreezeIsWrittenAtTheFirstLaunchOnly(t *testing.T) {
 // the capture, and a check goes red.
 func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	rig, logbook, keep := conversingRig(t)
-	b1 := logbook.endedTurn(t, "b1", "s-b1", "B1's transcript")
-	read := frozenReadOf(logbook, b1)
-	if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
-		t.Fatalf("T2's first launch on node A: %v", err)
-	}
-	rig.suspend("t2")
-	if !logbook.holds("b1") {
-		t.Fatal("T2's first launch holds no base")
-	}
+	inBubble(t, func(t *testing.T) {
+		ctx := t.Context()
+		rig, logbook, keep := conversingRig(t)
+		b1 := logbook.endedTurn(t, "b1", "s-b1", "B1's transcript")
+		read := frozenReadOf(logbook, b1)
+		if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+			t.Fatalf("T2's first launch on node A: %v", err)
+		}
+		rig.suspend("t2")
+		if !logbook.holds("b1") {
+			t.Fatal("T2's first launch holds no base")
+		}
 
-	// T3, which read B1 too, captures and ends.
-	if _, err := logbook.Capture(ctx, CaptureRecord{Handle: "swe", Turn: "t3",
-		ConversationKey: "chat:D1", WorkKey: "wk-t3",
-		Object: objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(strings.Repeat("d", 64)),
-			Size: 3},
-		Stamp: SessionCapture{Harness: "claude-code", SessionID: "s-t3", ArchiveFormat: FakeArchiveFormat,
-			LaunchSeq: 1, CaptureSeq: 1},
-		ReadThrough: read.ReadThrough, Absorbs: []string{"b1"}}); err != nil {
-		t.Fatalf("T3's capture: %v", err)
-	}
-	if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: "t3",
-		ConversationKey: "chat:D1", WorkKey: "wk-t3",
-		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
-		t.Fatalf("T3's end: %v", err)
-	}
-	if row, ok := logbook.row("b1"); !ok || row.Object.Key != b1.Object.Key {
-		t.Fatalf("T3's end took B1, which T2 holds: %+v (%v)", row, ok)
-	}
-	if head := logbook.head("chat:D1"); head != "t3" {
-		t.Fatalf("the conversation's head is %q, want T3, which ended since", head)
-	}
+		// T3, which read B1 too, captures and ends.
+		if _, err := logbook.Capture(ctx, CaptureRecord{Handle: "swe", Turn: "t3",
+			ConversationKey: "chat:D1", WorkKey: "wk-t3",
+			Object: objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(strings.Repeat("d", 64)),
+				Size: 3},
+			Stamp: SessionCapture{Harness: "claude-code", SessionID: "s-t3", ArchiveFormat: FakeArchiveFormat,
+				LaunchSeq: 1, CaptureSeq: 1},
+			ReadThrough: read.ReadThrough, Absorbs: []string{"b1"}}); err != nil {
+			t.Fatalf("T3's capture: %v", err)
+		}
+		if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: "t3",
+			ConversationKey: "chat:D1", WorkKey: "wk-t3",
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
+			t.Fatalf("T3's end: %v", err)
+		}
+		if row, ok := logbook.row("b1"); !ok || row.Object.Key != b1.Object.Key {
+			t.Fatalf("T3's end took B1, which T2 holds: %+v (%v)", row, ok)
+		}
+		if head := logbook.head("chat:D1"); head != "t3" {
+			t.Fatalf("the conversation's head is %q, want T3, which ended since", head)
+		}
 
-	// THE SEAT MOVES: node B holds it under a newer lease, over the same
-	// record and the same log.
-	resumer := &resumeSpy{}
-	nodeB, err := NewCoordinator(CoordinatorOptions{
-		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager, Pushes: rig.pushes,
-		Resume: resumer, Audience: &audienceSpy{},
-		Lease: leased(Fence{Owner: "node-b:1", Epoch: 2}), Node: "node-b",
-		Sessions: logbook, Keep: keep, Restore: logbook, SpoolDir: t.TempDir(),
+		// THE SEAT MOVES: node B holds it under a newer lease, over the same
+		// record and the same log.
+		resumer := &resumeSpy{}
+		nodeB, err := NewCoordinator(CoordinatorOptions{
+			Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager, Pushes: rig.pushes,
+			Resume: resumer, Audience: &audienceSpy{},
+			Lease: leased(Fence{Owner: "node-b:1", Epoch: 2}), Node: "node-b",
+			Sessions: logbook, Keep: keep, Restore: logbook, SpoolDir: t.TempDir(),
+		})
+		if err != nil {
+			t.Fatalf("NewCoordinator: %v", err)
+		}
+		t.Cleanup(nodeB.Stop)
+		continued, why := nodeB.ContinuedCapture(ctx, "t2", rig.runner)
+		if why != "" || continued.Base == nil || continued.Base.Turn != "b1" {
+			t.Fatalf("node B's relaunch continues %+v (%q), want B1, the base T2 froze", continued.Base, why)
+		}
+		relaunch := launchReq("t2")
+		relaunch.Brief = "the reseed, which tells the same endings"
+		relaunch.Session = &SessionContinuation{Base: true,
+			Replaced: "a new turn of this conversation begins here, then the reseed"}
+		res, err := nodeB.Launch(ctx, rig.manager, relaunch)
+		if err != nil {
+			t.Fatalf("T2's relaunch on node B: %v", err)
+		}
+		started := rig.runner.Started()
+		last := started[len(started)-1]
+		if res.Reused || res.Brief != BriefContinuedConversation || last.Resume != "s-b1" ||
+			last.Brief != relaunch.Session.Replaced || last.FreshBrief != relaunch.Brief {
+			t.Fatalf("node B's relaunch started session %q in a reused box %v, brief %q (%s); want B1's in a box "+
+				"of its own", last.Resume, res.Reused, last.Brief, res.Brief)
+		}
+		if carried := rig.runner.Carried(); len(carried) != 2 || string(carried[1].Body) != "B1's transcript" {
+			t.Fatalf("node B's box was handed %+v, want B1's archive", carried)
+		}
+		if frozen := rig.get("t2").Base; frozen == nil || frozen.Session == nil || frozen.Session.Turn != "b1" ||
+			frozen.ReadThrough != read.ReadThrough {
+			t.Fatalf("the relaunch's record holds read %+v, want the first launch's", frozen)
+		}
+		if begins := logbook.begun(); len(begins) != 1 {
+			t.Errorf("the relaunch recorded begins %+v: a turn's first read is recorded once", begins)
+		}
+		if row, ok := logbook.row("b1"); !ok || !row.HasObject() {
+			t.Fatalf("B1 names no object any more: %+v (%v)", row, ok)
+		}
+
+		// T2'S FIRST CAPTURE, ON NODE B, carries the first launch's read and lifts
+		// the hold.
+		rig.suspend("t2")
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-b1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		resumer.failWith(errors.New("held for the case to read the row"))
+		payload, ev := rig.completion("t2")
+		if err := nodeB.OnCompleted(ctx, payload, ev); err == nil {
+			t.Fatal("the refused resume was acknowledged")
+		}
+		nodeB.keeping.Wait()
+		captures := logbook.capturesOf("t2")
+		if len(captures) != 1 || captures[0].ReadThrough != read.ReadThrough ||
+			!slices.Equal(captures[0].Absorbs, []string{"b1"}) {
+			t.Fatalf("T2's captures %+v carry another read than its first launch froze", captures)
+		}
+		if logbook.holds("b1") {
+			t.Fatal("T2's first capture left B1 held")
+		}
+		// AND T2'S END ABSORBS B1, the head it was handed.
+		if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: "t2",
+			ConversationKey: "chat:D1", WorkKey: "wk-1",
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
+			t.Fatalf("T2's end: %v", err)
+		}
+		if row, ok := logbook.row("b1"); ok {
+			t.Fatalf("T2's end left B1, the head it was handed: %+v", row)
+		}
 	})
-	if err != nil {
-		t.Fatalf("NewCoordinator: %v", err)
-	}
-	t.Cleanup(nodeB.Stop)
-	continued, why := nodeB.ContinuedCapture(ctx, "t2", rig.runner)
-	if why != "" || continued.Base == nil || continued.Base.Turn != "b1" {
-		t.Fatalf("node B's relaunch continues %+v (%q), want B1, the base T2 froze", continued.Base, why)
-	}
-	relaunch := launchReq("t2")
-	relaunch.Brief = "the reseed, which tells the same endings"
-	relaunch.Session = &SessionContinuation{Base: true,
-		Replaced: "a new turn of this conversation begins here, then the reseed"}
-	res, err := nodeB.Launch(ctx, rig.manager, relaunch)
-	if err != nil {
-		t.Fatalf("T2's relaunch on node B: %v", err)
-	}
-	started := rig.runner.Started()
-	last := started[len(started)-1]
-	if res.Reused || res.Brief != BriefContinuedConversation || last.Resume != "s-b1" ||
-		last.Brief != relaunch.Session.Replaced || last.FreshBrief != relaunch.Brief {
-		t.Fatalf("node B's relaunch started session %q in a reused box %v, brief %q (%s); want B1's in a box "+
-			"of its own", last.Resume, res.Reused, last.Brief, res.Brief)
-	}
-	if carried := rig.runner.Carried(); len(carried) != 2 || string(carried[1].Body) != "B1's transcript" {
-		t.Fatalf("node B's box was handed %+v, want B1's archive", carried)
-	}
-	if frozen := rig.get("t2").Base; frozen == nil || frozen.Session == nil || frozen.Session.Turn != "b1" ||
-		frozen.ReadThrough != read.ReadThrough {
-		t.Fatalf("the relaunch's record holds read %+v, want the first launch's", frozen)
-	}
-	if begins := logbook.begun(); len(begins) != 1 {
-		t.Errorf("the relaunch recorded begins %+v: a turn's first read is recorded once", begins)
-	}
-	if row, ok := logbook.row("b1"); !ok || !row.HasObject() {
-		t.Fatalf("B1 names no object any more: %+v (%v)", row, ok)
-	}
-
-	// T2'S FIRST CAPTURE, ON NODE B, carries the first launch's read and lifts
-	// the hold.
-	rig.suspend("t2")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-b1", HarnessVersion: "2.1.310",
-		Captured: &session.Archive})
-	resumer.failWith(errors.New("held for the case to read the row"))
-	payload, ev := rig.completion("t2")
-	if err := nodeB.OnCompleted(ctx, payload, ev); err == nil {
-		t.Fatal("the refused resume was acknowledged")
-	}
-	nodeB.keeping.Wait()
-	captures := logbook.capturesOf("t2")
-	if len(captures) != 1 || captures[0].ReadThrough != read.ReadThrough ||
-		!slices.Equal(captures[0].Absorbs, []string{"b1"}) {
-		t.Fatalf("T2's captures %+v carry another read than its first launch froze", captures)
-	}
-	if logbook.holds("b1") {
-		t.Fatal("T2's first capture left B1 held")
-	}
-	// AND T2'S END ABSORBS B1, the head it was handed.
-	if _, err := logbook.End(ctx, EndRecord{Handle: "swe", Turn: "t2",
-		ConversationKey: "chat:D1", WorkKey: "wk-1",
-		Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}); err != nil {
-		t.Fatalf("T2's end: %v", err)
-	}
-	if row, ok := logbook.row("b1"); ok {
-		t.Fatalf("T2's end left B1, the head it was handed: %+v", row)
-	}
 }
 
 // THE LOG'S HEAD IS THE DOMAIN'S, so a case that asks it which session a head
@@ -692,51 +700,55 @@ func TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone(t *testing.T) {
 	t.Parallel()
 	t.Run("the turn kept nothing", func(t *testing.T) {
 		t.Parallel()
-		rig, logbook, _ := conversingRig(t)
-		read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-		if _, err := rig.coordinator.Launch(t.Context(), rig.manager, continuingBase("t2", read)); err != nil {
-			t.Fatalf("the first launch: %v", err)
-		}
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t2", rig.runner)
-		if why != "" || continued.Base == nil || continued.Base.Turn != "b1" || continued.Capture.CaptureSeq != 0 {
-			t.Fatalf("a relaunch of a turn that kept nothing continues %+v (%q), want the frozen base",
-				continued, why)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, logbook, _ := conversingRig(t)
+			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, continuingBase("t2", read)); err != nil {
+				t.Fatalf("the first launch: %v", err)
+			}
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t2", rig.runner)
+			if why != "" || continued.Base == nil || continued.Base.Turn != "b1" || continued.Capture.CaptureSeq != 0 {
+				t.Fatalf("a relaunch of a turn that kept nothing continues %+v (%q), want the frozen base",
+					continued, why)
+			}
+		})
 	})
 	t.Run("the turn kept a session of its own", func(t *testing.T) {
 		t.Parallel()
-		rig, logbook, _ := conversingRig(t)
-		read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-		ctx := t.Context()
-		if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
-			t.Fatalf("the first launch: %v", err)
-		}
-		own := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
-			Object: objstore.KeyAt(time.Now()).String(), ObjectHash: strings.Repeat("e", 64), ObjectSize: 5}
-		if _, err := rig.pending.StampCapture(ctx, "t2", own); err != nil {
-			t.Fatalf("StampCapture: %v", err)
-		}
-		// THE JOB AFTER IT, which kept nothing: the relaunch follows that one.
-		if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t2", AgentHandle: "swe",
-			AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
-			t.Fatalf("the second job: %v", err)
-		}
-		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
-		if continued.Base != nil || !strings.Contains(why, "kept a session of its own") {
-			t.Fatalf("a relaunch of a turn that kept a session continues base %+v (%q), want none, said",
-				continued.Base, why)
-		}
-		req := launchReq("t2")
-		req.Brief = "the fresh brief"
-		req.Session = &SessionContinuation{Base: true, Replaced: "a new turn begins here"}
-		if _, err := rig.coordinator.Launch(ctx, rig.manager, req); err != nil {
-			t.Fatalf("the relaunch: %v", err)
-		}
-		started := rig.runner.Started()
-		if last := started[len(started)-1]; last.Resume == "s-base" || last.Brief != "the fresh brief" {
-			t.Fatalf("the relaunch started session %q with brief %q, want a session of its own", last.Resume,
-				last.Brief)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, logbook, _ := conversingRig(t)
+			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+			ctx := t.Context()
+			if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+				t.Fatalf("the first launch: %v", err)
+			}
+			own := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
+				Object: objstore.KeyAt(time.Now()).String(), ObjectHash: strings.Repeat("e", 64), ObjectSize: 5}
+			if _, err := rig.pending.StampCapture(ctx, "t2", own); err != nil {
+				t.Fatalf("StampCapture: %v", err)
+			}
+			// THE JOB AFTER IT, which kept nothing: the relaunch follows that one.
+			if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t2", AgentHandle: "swe",
+				AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
+				t.Fatalf("the second job: %v", err)
+			}
+			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+			if continued.Base != nil || !strings.Contains(why, "kept a session of its own") {
+				t.Fatalf("a relaunch of a turn that kept a session continues base %+v (%q), want none, said",
+					continued.Base, why)
+			}
+			req := launchReq("t2")
+			req.Brief = "the fresh brief"
+			req.Session = &SessionContinuation{Base: true, Replaced: "a new turn begins here"}
+			if _, err := rig.coordinator.Launch(ctx, rig.manager, req); err != nil {
+				t.Fatalf("the relaunch: %v", err)
+			}
+			started := rig.runner.Started()
+			if last := started[len(started)-1]; last.Resume == "s-base" || last.Brief != "the fresh brief" {
+				t.Fatalf("the relaunch started session %q with brief %q, want a session of its own", last.Resume,
+					last.Brief)
+			}
+		})
 	})
 }
 
@@ -768,60 +780,62 @@ func TestARelaunchStartsWithoutACaptureItsRecordSettledRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, logbook, _ := conversingRig(t)
-			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-			ctx := t.Context()
-			if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
-				t.Fatalf("the first launch: %v", err)
-			}
-			job := rig.get("t2")
-			settled := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
-				State: CaptureRefused, Reason: takerStoppedWhy(takingProcess), Final: true,
-				At: rig.coordinator.now(), Through: new(0)}
-			if took, err := rig.pending.StampCapture(ctx, "t2", settled); err != nil || !took {
-				t.Fatalf("stamping the settled capture = %v, %v", took, err)
-			}
-			if landed {
-				late := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
-					Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
-						Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
-					Stamp: SessionCapture{LaunchSeq: settled.LaunchSeq, CaptureSeq: settled.CaptureSeq,
-						Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
-				if answer, err := logbook.Capture(ctx, late); err != nil || answer != LogLanded {
-					t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
+			inBubble(t, func(t *testing.T) {
+				rig, logbook, _ := conversingRig(t)
+				read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+				ctx := t.Context()
+				if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+					t.Fatalf("the first launch: %v", err)
 				}
-			}
-			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
-			if continued.Capture.CaptureSeq != 0 {
-				t.Fatalf("the relaunch continues %+v, a capture its run's record settled refused",
-					continued.Capture)
-			}
-			if !landed {
-				if why != "" || continued.Base == nil || continued.Base.Turn != "b1" {
-					t.Fatalf("the relaunch continues base %+v (%q), want the base the turn froze",
-						continued.Base, why)
+				job := rig.get("t2")
+				settled := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
+					State: CaptureRefused, Reason: takerStoppedWhy(takingProcess), Final: true,
+					At: rig.coordinator.now(), Through: new(0)}
+				if took, err := rig.pending.StampCapture(ctx, "t2", settled); err != nil || !took {
+					t.Fatalf("stamping the settled capture = %v, %v", took, err)
 				}
-				if continued.KeptTurn != "b1" {
-					t.Errorf("the relaunch names %q to its run as a session to read, want the base its row "+
-						"holds", continued.KeptTurn)
+				if landed {
+					late := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
+						Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
+							Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
+						Stamp: SessionCapture{LaunchSeq: settled.LaunchSeq, CaptureSeq: settled.CaptureSeq,
+							Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
+					if answer, err := logbook.Capture(ctx, late); err != nil || answer != LogLanded {
+						t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
+					}
 				}
-				return
-			}
-			if continued.KeptTurn != "t2" {
-				t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose "+
-					"capture the log keeps", continued.KeptTurn)
-			}
-			switch {
-			case continued.Base != nil:
-				t.Fatalf("the relaunch continues base %+v beside a capture of the turn's own the log took",
-					*continued.Base)
-			case !strings.Contains(why, "the executor log keeps it all the same"):
-				t.Errorf("the relaunch says %q, want it saying the log keeps the capture", why)
-			case !strings.Contains(why, "landed a capture of its own, which lifted its hold") ||
-				!strings.Contains(why, "no launch of the turn continues that one any more"):
-				t.Errorf("the relaunch says %q, want why the base is not continued, naming no session "+
-					"continued instead", why)
-			}
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				if continued.Capture.CaptureSeq != 0 {
+					t.Fatalf("the relaunch continues %+v, a capture its run's record settled refused",
+						continued.Capture)
+				}
+				if !landed {
+					if why != "" || continued.Base == nil || continued.Base.Turn != "b1" {
+						t.Fatalf("the relaunch continues base %+v (%q), want the base the turn froze",
+							continued.Base, why)
+					}
+					if continued.KeptTurn != "b1" {
+						t.Errorf("the relaunch names %q to its run as a session to read, want the base its row "+
+							"holds", continued.KeptTurn)
+					}
+					return
+				}
+				if continued.KeptTurn != "t2" {
+					t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose "+
+						"capture the log keeps", continued.KeptTurn)
+				}
+				switch {
+				case continued.Base != nil:
+					t.Fatalf("the relaunch continues base %+v beside a capture of the turn's own the log took",
+						*continued.Base)
+				case !strings.Contains(why, "the executor log keeps it all the same"):
+					t.Errorf("the relaunch says %q, want it saying the log keeps the capture", why)
+				case !strings.Contains(why, "landed a capture of its own, which lifted its hold") ||
+					!strings.Contains(why, "no launch of the turn continues that one any more"):
+					t.Errorf("the relaunch says %q, want why the base is not continued, naming no session "+
+						"continued instead", why)
+				}
+			})
 		})
 	}
 }
@@ -848,48 +862,50 @@ func TestARelaunchOfATurnThatFrozeNoBaseReadsItsRowForACaptureItsRecordRefused(t
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, logbook, _ := conversingRig(t)
-			ctx := t.Context()
-			if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq("t2")); err != nil {
-				t.Fatalf("the first launch: %v", err)
-			}
-			job := rig.get("t2")
-			if job.Base != nil {
-				t.Fatalf("the premise: the first launch froze base %+v, want none", *job.Base)
-			}
-			settled := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
-				State: CaptureRefused, Reason: takerStoppedWhy(takingProcess), Final: true,
-				At: rig.coordinator.now(), Through: new(0)}
-			if took, err := rig.pending.StampCapture(ctx, "t2", settled); err != nil || !took {
-				t.Fatalf("stamping the settled capture = %v, %v", took, err)
-			}
-			if landed {
-				late := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
-					Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
-						Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
-					Stamp: SessionCapture{LaunchSeq: settled.LaunchSeq, CaptureSeq: settled.CaptureSeq,
-						Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
-				if answer, err := logbook.Capture(ctx, late); err != nil || answer != LogLanded {
-					t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
+			inBubble(t, func(t *testing.T) {
+				rig, logbook, _ := conversingRig(t)
+				ctx := t.Context()
+				if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq("t2")); err != nil {
+					t.Fatalf("the first launch: %v", err)
 				}
-			}
-			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
-			if continued.Capture.CaptureSeq != 0 || continued.Base != nil {
-				t.Fatalf("the relaunch continues %+v, base %+v; want neither: its record settled the capture "+
-					"refused, and the turn froze no base", continued.Capture, continued.Base)
-			}
-			if !strings.Contains(why, "was not kept: refused") {
-				t.Errorf("the relaunch says %q, want the record's own account of the capture first", why)
-			}
-			keeps := strings.Contains(why, "the executor log keeps it all the same")
-			switch {
-			case landed && (!keeps || continued.KeptTurn != "t2"):
-				t.Errorf("the relaunch says %q and names %q to its run to read; want the log keeping the "+
-					"capture said, and the turn's own named", why, continued.KeptTurn)
-			case !landed && (keeps || continued.KeptTurn != ""):
-				t.Errorf("the relaunch says %q and names %q to its run to read; want neither, the log "+
-					"keeping no capture of the turn", why, continued.KeptTurn)
-			}
+				job := rig.get("t2")
+				if job.Base != nil {
+					t.Fatalf("the premise: the first launch froze base %+v, want none", *job.Base)
+				}
+				settled := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
+					State: CaptureRefused, Reason: takerStoppedWhy(takingProcess), Final: true,
+					At: rig.coordinator.now(), Through: new(0)}
+				if took, err := rig.pending.StampCapture(ctx, "t2", settled); err != nil || !took {
+					t.Fatalf("stamping the settled capture = %v, %v", took, err)
+				}
+				if landed {
+					late := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
+						Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
+							Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
+						Stamp: SessionCapture{LaunchSeq: settled.LaunchSeq, CaptureSeq: settled.CaptureSeq,
+							Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
+					if answer, err := logbook.Capture(ctx, late); err != nil || answer != LogLanded {
+						t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
+					}
+				}
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				if continued.Capture.CaptureSeq != 0 || continued.Base != nil {
+					t.Fatalf("the relaunch continues %+v, base %+v; want neither: its record settled the capture "+
+						"refused, and the turn froze no base", continued.Capture, continued.Base)
+				}
+				if !strings.Contains(why, "was not kept: refused") {
+					t.Errorf("the relaunch says %q, want the record's own account of the capture first", why)
+				}
+				keeps := strings.Contains(why, "the executor log keeps it all the same")
+				switch {
+				case landed && (!keeps || continued.KeptTurn != "t2"):
+					t.Errorf("the relaunch says %q and names %q to its run to read; want the log keeping the "+
+						"capture said, and the turn's own named", why, continued.KeptTurn)
+				case !landed && (keeps || continued.KeptTurn != ""):
+					t.Errorf("the relaunch says %q and names %q to its run to read; want neither, the log "+
+						"keeping no capture of the turn", why, continued.KeptTurn)
+				}
+			})
 		})
 	}
 }
@@ -915,54 +931,56 @@ func TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds(t *te
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, logbook, _ := conversingRig(t)
-			rig.coordinator.relaunchWait = 50 * time.Millisecond
-			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-			ctx := t.Context()
-			if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
-				t.Fatalf("the first launch: %v", err)
-			}
-			job := rig.get("t2")
-			// NO TAKER NAMED, as an older build's stamp: read by its age
-			// alone, it is in flight for a capture's whole budget.
-			begun := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
-				State: CaptureBegun, Final: true, At: rig.coordinator.now(), Through: new(0)}
-			if took, err := rig.pending.StampCapture(ctx, "t2", begun); err != nil || !took {
-				t.Fatalf("stamping the capture still being kept = %v, %v", took, err)
-			}
-			if landed {
-				early := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
-					Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
-						Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
-					Stamp: SessionCapture{LaunchSeq: begun.LaunchSeq, CaptureSeq: begun.CaptureSeq,
-						Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
-				if answer, err := logbook.Capture(ctx, early); err != nil || answer != LogLanded {
-					t.Fatalf("the keep's record = %s, %v; want the log to take it", answer, err)
+			inBubble(t, func(t *testing.T) {
+				rig, logbook, _ := conversingRig(t)
+				rig.coordinator.relaunchWait = 50 * time.Millisecond
+				read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+				ctx := t.Context()
+				if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+					t.Fatalf("the first launch: %v", err)
 				}
-			}
-			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
-			if continued.Capture.CaptureSeq != 0 {
-				t.Fatalf("the relaunch continues %+v, a capture still being kept", continued.Capture)
-			}
-			if !landed {
-				if why != "" || continued.Base == nil || continued.Base.Turn != "b1" || continued.KeptTurn != "b1" {
-					t.Fatalf("the relaunch continues base %+v (%q), naming %q to read; want the base its row "+
-						"still holds, continued and named", continued.Base, why, continued.KeptTurn)
+				job := rig.get("t2")
+				// NO TAKER NAMED, as an older build's stamp: read by its age
+				// alone, it is in flight for a capture's whole budget.
+				begun := SessionCapture{LaunchSeq: job.LaunchSeq, CaptureSeq: 1, Launch: job.LaunchID,
+					State: CaptureBegun, Final: true, At: rig.coordinator.now(), Through: new(0)}
+				if took, err := rig.pending.StampCapture(ctx, "t2", begun); err != nil || !took {
+					t.Fatalf("stamping the capture still being kept = %v, %v", took, err)
 				}
-				return
-			}
-			switch {
-			case continued.Base != nil:
-				t.Fatalf("the relaunch continues base %+v beside a capture of the turn's own the log took",
-					*continued.Base)
-			case !strings.Contains(why, "still being kept") ||
-				!strings.Contains(why, "landed a capture of its own, which lifted its hold"):
-				t.Errorf("the relaunch says %q, want the keep still under way and why the base is not "+
-					"continued", why)
-			case continued.KeptTurn != "t2":
-				t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, which "+
-					"its row names", continued.KeptTurn)
-			}
+				if landed {
+					early := CaptureRecord{Handle: "swe", Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
+						Object: objstore.Object{Key: objstore.KeyAt(time.Now()),
+							Hash: objstore.Hash(strings.Repeat("e", 64)), Size: 5},
+						Stamp: SessionCapture{LaunchSeq: begun.LaunchSeq, CaptureSeq: begun.CaptureSeq,
+							Harness: "claude-code", SessionID: "s-own", ArchiveFormat: FakeArchiveFormat}}
+					if answer, err := logbook.Capture(ctx, early); err != nil || answer != LogLanded {
+						t.Fatalf("the keep's record = %s, %v; want the log to take it", answer, err)
+					}
+				}
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				if continued.Capture.CaptureSeq != 0 {
+					t.Fatalf("the relaunch continues %+v, a capture still being kept", continued.Capture)
+				}
+				if !landed {
+					if why != "" || continued.Base == nil || continued.Base.Turn != "b1" || continued.KeptTurn != "b1" {
+						t.Fatalf("the relaunch continues base %+v (%q), naming %q to read; want the base its row "+
+							"still holds, continued and named", continued.Base, why, continued.KeptTurn)
+					}
+					return
+				}
+				switch {
+				case continued.Base != nil:
+					t.Fatalf("the relaunch continues base %+v beside a capture of the turn's own the log took",
+						*continued.Base)
+				case !strings.Contains(why, "still being kept") ||
+					!strings.Contains(why, "landed a capture of its own, which lifted its hold"):
+					t.Errorf("the relaunch says %q, want the keep still under way and why the base is not "+
+						"continued", why)
+				case continued.KeptTurn != "t2":
+					t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, which "+
+						"its row names", continued.KeptTurn)
+				}
+			})
 		})
 	}
 }
@@ -989,29 +1007,31 @@ func TestABaseIsContinuedOnlyInABoxOfItsOwn(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, logbook, _ := conversingRig(t)
-			read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-			if _, err := logbook.Begin(t.Context(), BeginRecord{Handle: "swe",
-				Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
-				ReadThrough: read.ReadThrough, Absorbs: read.Absorbs, BaseTurn: "b1",
-				BaseObject: objstore.Object{Key: mustKey(t, read.Session.Object),
-					Hash: objstore.Hash(read.Session.ObjectHash), Size: read.Session.ObjectSize}}); err != nil {
-				t.Fatalf("Begin: %v", err)
-			}
-			opened := PendingRun{TurnID: "t2", AgentHandle: "swe", LaunchSeq: 2, Base: read}
-			req := launchReq("t2")
-			req.Brief = "the fresh brief"
-			req.Session = &SessionContinuation{Base: true, Replaced: "a new turn begins here"}
-			if tc.inPlace {
-				req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
-			}
-			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false)
-			t.Cleanup(got.release)
-			if got.kind != tc.want || got.session != tc.session || (got.carried != nil) != tc.carried {
-				t.Fatalf("the launch hands %s on session %q, carrying %v; want %s on %q, carrying %v",
-					got.kind, got.session, got.carried != nil, tc.want, tc.session, tc.carried)
-			}
+			inBubble(t, func(t *testing.T) {
+				rig, logbook, _ := conversingRig(t)
+				read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+				if _, err := logbook.Begin(t.Context(), BeginRecord{Handle: "swe",
+					Turn: "t2", ConversationKey: "chat:D1", WorkKey: "wk-1",
+					ReadThrough: read.ReadThrough, Absorbs: read.Absorbs, BaseTurn: "b1",
+					BaseObject: objstore.Object{Key: mustKey(t, read.Session.Object),
+						Hash: objstore.Hash(read.Session.ObjectHash), Size: read.Session.ObjectSize}}); err != nil {
+					t.Fatalf("Begin: %v", err)
+				}
+				opened := PendingRun{TurnID: "t2", AgentHandle: "swe", LaunchSeq: 2, Base: read}
+				req := launchReq("t2")
+				req.Brief = "the fresh brief"
+				req.Session = &SessionContinuation{Base: true, Replaced: "a new turn begins here"}
+				if tc.inPlace {
+					req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
+				}
+				got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
+					rig.runner, tc.reused, false)
+				t.Cleanup(got.release)
+				if got.kind != tc.want || got.session != tc.session || (got.carried != nil) != tc.carried {
+					t.Fatalf("the launch hands %s on session %q, carrying %v; want %s on %q, carrying %v",
+						got.kind, got.session, got.carried != nil, tc.want, tc.session, tc.carried)
+				}
+			})
 		})
 	}
 }

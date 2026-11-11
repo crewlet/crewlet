@@ -8,7 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -224,25 +223,27 @@ func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceFails(t *testi
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, writes, keep := keepingRig(t)
-			run := rig.launchKept(t, "t1")
-			held := newHeldArchive(placeHolderArchive)
-			placed := holdingPlace(t, rig, run, held)
-			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
-				t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by at the "+
-					"stop's place", standby)
-			}
-			tc.fail(t, rig, keep, held, placed)
-			if row := rig.get("t1"); row.Capture == nil || row.Capture.State == CaptureLanded ||
-				!captureInFlight(row, rig.now) {
-				t.Fatalf("with the place-holder failed, the row holds %+v, which a turn's end would not wait on",
-					row.Capture)
-			}
-			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-				t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
-			}
-			keptByTheStandby(t, rig, writes, keep)
+			inBubble(t, func(t *testing.T) {
+				rig, writes, keep := keepingRig(t)
+				run := rig.launchKept(t, "t1")
+				held := newHeldArchive(placeHolderArchive)
+				placed := holdingPlace(t, rig, run, held)
+				standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
+				if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
+					t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by at the "+
+						"stop's place", standby)
+				}
+				tc.fail(t, rig, keep, held, placed)
+				if row := rig.get("t1"); row.Capture == nil || row.Capture.State == CaptureLanded ||
+					!captureInFlight(row, rig.now) {
+					t.Fatalf("with the place-holder failed, the row holds %+v, which a turn's end would not wait on",
+						row.Capture)
+				}
+				if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+					t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
+				}
+				keptByTheStandby(t, rig, writes, keep)
+			})
 		})
 	}
 }
@@ -275,10 +276,9 @@ func (s *settledBegun) SettleBegun(ctx context.Context, turnID string, capture S
 // and it waits for as long as that capture could take, and keeps nothing.
 func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceStopped(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		store := newTakerStore()
 		rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
-		rig.coordinator.captureTick = captureWaitTick
 		run := rig.launchKept(t, "t1")
 		lease := claimTaker(t, store, takingProcess)
 		begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
@@ -317,40 +317,42 @@ func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceStopped(t *tes
 // once did, and nothing is kept.
 func TestAReadWhoseReservationAnotherReadBeatStandsByForItsCapture(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	taking, proceed := make(chan struct{}), make(chan struct{})
-	second := make(chan *spooledCapture, 1)
-	go func() {
-		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-			takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
-			readCapture(BoxReadCollect, Result{}, true))
-		second <- spooled
-	}()
-	select {
-	case <-taking:
-	case got := <-second:
-		t.Fatalf("the collection's read ended before its take: %+v", got)
-	}
-	// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now the
-	// stop's read reserves the place, and holds in its spool.
-	held := newHeldArchive(placeHolderArchive)
-	placed := holdingPlace(t, rig, run, held)
-	rig.now = rig.now.Add(time.Second)
-	close(proceed)
-	standby := <-second
-	if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
-		t.Fatalf("the read whose reservation the stop's beat spooled %+v, want it standing by at the stop's "+
-			"place", standby)
-	}
-	held.end <- errScrubRefused
-	if spooled := <-placed; spooled != nil {
-		t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
-	}
-	if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-		t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
-	}
-	keptByTheStandby(t, rig, writes, keep)
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		taking, proceed := make(chan struct{}), make(chan struct{})
+		second := make(chan *spooledCapture, 1)
+		go func() {
+			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
+				readCapture(BoxReadCollect, Result{}, true))
+			second <- spooled
+		}()
+		select {
+		case <-taking:
+		case got := <-second:
+			t.Fatalf("the collection's read ended before its take: %+v", got)
+		}
+		// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now the
+		// stop's read reserves the place, and holds in its spool.
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		rig.now = rig.now.Add(time.Second)
+		close(proceed)
+		standby := <-second
+		if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
+			t.Fatalf("the read whose reservation the stop's beat spooled %+v, want it standing by at the stop's "+
+				"place", standby)
+		}
+		held.end <- errScrubRefused
+		if spooled := <-placed; spooled != nil {
+			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+		}
+		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+			t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
+		}
+		keptByTheStandby(t, rig, writes, keep)
+	})
 }
 
 // askedTakeOver is a run store that counts the asks to take the place after a
@@ -378,43 +380,45 @@ func (s *askedTakeOver) TakeOver(ctx context.Context, turnID string, standby, ca
 // that).
 func TestAReadStandingByKeepsNothingOnceTheCaptureItStoodByForLands(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	held := newHeldArchive(placeHolderArchive)
-	placed := holdingPlace(t, rig, run, held)
-	standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-	if standby == nil || !standby.standby {
-		t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
-	}
-	held.end <- nil
-	spooled := <-placed
-	if spooled == nil {
-		t.Fatal("the read holding the place spooled nothing")
-	}
-	if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
-		t.Fatalf("the place-holder's keep came to %+v, want the session kept", kept)
-	}
-	asks := &askedTakeOver{PendingStore: rig.coordinator.pending}
-	rig.coordinator.pending = asks
-	if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
-		t.Errorf("the standby's keep came to %+v beside a capture that landed, want nothing", kept)
-	}
-	if n := asks.asked.Load(); n != 0 {
-		t.Errorf("the standby asked the store %d times for the place after a capture that landed, want never", n)
-	}
-	row := rig.get("t1")
-	if row.Capture == nil || row.Capture.State != CaptureLanded || row.Capture.CaptureSeq != 1 {
-		t.Errorf("the row's newest capture is %+v, want the place-holder's, landed", row.Capture)
-	}
-	if uploads := keep.uploads(); len(uploads) != 1 || !bytes.Equal(uploads[0], placeHolderArchive) {
-		t.Errorf("uploaded %q, want the place-holder's session once", uploads)
-	}
-	if captured := writes.captured(); len(captured) != 1 {
-		t.Errorf("recorded %d captures, want the place-holder's alone", len(captured))
-	}
-	if left := rig.spools(t); len(left) > 0 {
-		t.Errorf("spools were left behind: %v", left)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
+		if standby == nil || !standby.standby {
+			t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
+		}
+		held.end <- nil
+		spooled := <-placed
+		if spooled == nil {
+			t.Fatal("the read holding the place spooled nothing")
+		}
+		if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
+			t.Fatalf("the place-holder's keep came to %+v, want the session kept", kept)
+		}
+		asks := &askedTakeOver{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending = asks
+		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
+			t.Errorf("the standby's keep came to %+v beside a capture that landed, want nothing", kept)
+		}
+		if n := asks.asked.Load(); n != 0 {
+			t.Errorf("the standby asked the store %d times for the place after a capture that landed, want never", n)
+		}
+		row := rig.get("t1")
+		if row.Capture == nil || row.Capture.State != CaptureLanded || row.Capture.CaptureSeq != 1 {
+			t.Errorf("the row's newest capture is %+v, want the place-holder's, landed", row.Capture)
+		}
+		if uploads := keep.uploads(); len(uploads) != 1 || !bytes.Equal(uploads[0], placeHolderArchive) {
+			t.Errorf("uploaded %q, want the place-holder's session once", uploads)
+		}
+		if captured := writes.captured(); len(captured) != 1 {
+			t.Errorf("recorded %d captures, want the place-holder's alone", len(captured))
+		}
+		if left := rig.spools(t); len(left) > 0 {
+			t.Errorf("spools were left behind: %v", left)
+		}
+	})
 }
 
 // A READ STANDING BY THAT CANNOT KEEP WHAT IT TOOK IS WITHDRAWN. Its spool
@@ -449,22 +453,24 @@ func TestAReadStandingByThatCannotKeepWhatItTookIsWithdrawn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, _ := keepingRig(t)
-			run := rig.launchKept(t, "t1")
-			held := newHeldArchive(placeHolderArchive)
-			placed := holdingPlace(t, rig, run, held)
-			tc.stand(t, rig, run)
-			if row := rig.get("t1"); row.Capture == nil || !row.Capture.StandbyAt.IsZero() {
-				t.Fatalf("the row holds %+v, want no read standing by for its capture", row.Capture)
-			}
-			held.end <- errScrubRefused
-			if spooled := <-placed; spooled != nil {
-				t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
-			}
-			if row := rig.get("t1"); row.Capture == nil || row.Capture.State != CaptureRefused ||
-				captureInFlight(row, rig.now) {
-				t.Errorf("the row holds %+v, want the place-holder's refusal, which no end waits on", row.Capture)
-			}
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				run := rig.launchKept(t, "t1")
+				held := newHeldArchive(placeHolderArchive)
+				placed := holdingPlace(t, rig, run, held)
+				tc.stand(t, rig, run)
+				if row := rig.get("t1"); row.Capture == nil || !row.Capture.StandbyAt.IsZero() {
+					t.Fatalf("the row holds %+v, want no read standing by for its capture", row.Capture)
+				}
+				held.end <- errScrubRefused
+				if spooled := <-placed; spooled != nil {
+					t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+				}
+				if row := rig.get("t1"); row.Capture == nil || row.Capture.State != CaptureRefused ||
+					captureInFlight(row, rig.now) {
+					t.Errorf("the row holds %+v, want the place-holder's refusal, which no end waits on", row.Capture)
+				}
+			})
 		})
 	}
 }
@@ -483,7 +489,7 @@ func TestAReadStandingByThatCannotKeepWhatItTookIsWithdrawn(t *testing.T) {
 // on its bound with the standby still standing.
 func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		store := newTakerStore()
 		rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 		run := rig.launchKept(t, "t1")
@@ -528,9 +534,8 @@ func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 // standby's capture begun and never finished.
 func TestATurnsEndWaitsForAStandbysTakeoverAndKeep(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		rig, writes, _ := keepingRig(t)
-		rig.coordinator.captureTick = captureWaitTick
 		run := rig.launchKept(t, "t1")
 		begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
 			State: CaptureBegun, Final: true, At: rig.coordinator.now(), Harness: "claude-code", SessionID: "s-1"}
@@ -604,51 +609,53 @@ func TestATurnsEndWaitsForAStandbysTakeoverAndKeep(t *testing.T) {
 // was, and the box is reclaimed unread beside a keep that then fails.
 func TestALossReadStandsByForACaptureOfTheJobStillBeingKept(t *testing.T) {
 	t.Parallel()
-	store := newTakerStore()
-	rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
-	run := rig.launchKept(t, "t1")
-	lease := claimTaker(t, store, takingProcess)
-	begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID, State: CaptureBegun,
-		Final: true, At: rig.coordinator.now(), Taker: takingProcess, TakerEpoch: lease.Epoch,
-		Harness: "claude-code", SessionID: "s-1"}
-	if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
-		t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
-	}
-	lostRow := func() PendingRun {
-		lost := rig.get("t1")
-		lost.Ending = &RecordedEnding{ID: "e-1", Reason: string(LossEngineRestarted), Reclaim: true}
-		lost.Lost = &JobLoss{Cause: LossEngineRestarted}
-		return lost
-	}
-	if !rig.coordinator.capturesLoss(lostRow()) {
-		t.Fatal("a lost run's ending passes its box over beside a capture of the job still being kept")
-	}
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	rig.now = rig.now.Add(time.Second)
-	spooled, _ := rig.coordinator.readLost(t.Context(), lostRow())
-	if spooled == nil || !spooled.standby || spooled.stamp.CaptureSeq != 1 {
-		t.Fatalf("the loss's read beside node-a's capture spooled %+v, want it standing by for it", spooled)
-	}
-	refused := begun
-	refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
-	if took, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil || !took {
-		t.Fatalf("refusing node-a's capture = %v, %v", took, err)
-	}
-	if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
-		t.Fatalf("the loss's read came to %+v, want the session kept", kept)
-	}
-	row := rig.get("t1")
-	if row.Kept == nil || row.Kept.CaptureSeq != 2 || row.Kept.State != CaptureLanded {
-		t.Errorf("the row keeps %+v, want the loss's read's capture landed in the next place", row.Kept)
-	}
-	if uploads := keep.uploads(); len(uploads) != 1 || len(writes.captured()) != 1 {
-		t.Errorf("uploaded %d sessions and recorded %d, want the loss's read's once", len(uploads),
-			len(writes.captured()))
-	}
-	if rig.coordinator.capturesLoss(lostRow()) {
-		t.Error("a lost run's ending reads its box again beside a final capture of the job that has landed")
-	}
+	inBubble(t, func(t *testing.T) {
+		store := newTakerStore()
+		rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
+		run := rig.launchKept(t, "t1")
+		lease := claimTaker(t, store, takingProcess)
+		begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID, State: CaptureBegun,
+			Final: true, At: rig.coordinator.now(), Taker: takingProcess, TakerEpoch: lease.Epoch,
+			Harness: "claude-code", SessionID: "s-1"}
+		if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+			t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
+		}
+		lostRow := func() PendingRun {
+			lost := rig.get("t1")
+			lost.Ending = &RecordedEnding{ID: "e-1", Reason: string(LossEngineRestarted), Reclaim: true}
+			lost.Lost = &JobLoss{Cause: LossEngineRestarted}
+			return lost
+		}
+		if !rig.coordinator.capturesLoss(lostRow()) {
+			t.Fatal("a lost run's ending passes its box over beside a capture of the job still being kept")
+		}
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		rig.now = rig.now.Add(time.Second)
+		spooled, _ := rig.coordinator.readLost(t.Context(), lostRow())
+		if spooled == nil || !spooled.standby || spooled.stamp.CaptureSeq != 1 {
+			t.Fatalf("the loss's read beside node-a's capture spooled %+v, want it standing by for it", spooled)
+		}
+		refused := begun
+		refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
+		if took, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil || !took {
+			t.Fatalf("refusing node-a's capture = %v, %v", took, err)
+		}
+		if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
+			t.Fatalf("the loss's read came to %+v, want the session kept", kept)
+		}
+		row := rig.get("t1")
+		if row.Kept == nil || row.Kept.CaptureSeq != 2 || row.Kept.State != CaptureLanded {
+			t.Errorf("the row keeps %+v, want the loss's read's capture landed in the next place", row.Kept)
+		}
+		if uploads := keep.uploads(); len(uploads) != 1 || len(writes.captured()) != 1 {
+			t.Errorf("uploaded %d sessions and recorded %d, want the loss's read's once", len(uploads),
+				len(writes.captured()))
+		}
+		if rig.coordinator.capturesLoss(lostRow()) {
+			t.Error("a lost run's ending reads its box again beside a final capture of the job that has landed")
+		}
+	})
 }
 
 // refusesPlace is an executor log that refuses every record of the capture at
@@ -688,47 +695,49 @@ func TestAReadStandingByTakesOverAnUnansweredCaptureOnlyOnceTheLogRefusesIt(t *t
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, writes, keep := keepingRig(t)
-			run := rig.launchKept(t, "t1")
-			held := newHeldArchive(placeHolderArchive)
-			placed := holdingPlace(t, rig, run, held)
-			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
-				t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
-			}
-			held.end <- nil
-			spooled := <-placed
-			if spooled == nil {
-				t.Fatal("the read holding the place spooled nothing")
-			}
-			writes.answer(errors.New("the log did not answer"))
-			rig.coordinator.keepCapture(t.Context(), spooled)
-			writes.answer(nil)
-			if row := rig.get("t1"); row.Capture == nil || row.Capture.State != CaptureUnresolved {
-				t.Fatalf("the place-holder's capture stands %+v, want its record unanswered", row.Capture)
-			}
-			if tc.refused {
-				rig.coordinator.sessions = refusesPlace{sessionWrites: writes, place: 1}
-			}
-			kept := rig.coordinator.keepCapture(t.Context(), standby)
-			row := rig.get("t1")
-			uploads := keep.uploads()
-			switch {
-			case !tc.refused && kept != nil:
-				t.Errorf("beside a record the log holds, the standby's keep came to %+v, want nothing", kept)
-			case !tc.refused && (row.Capture == nil || row.Capture.CaptureSeq != 1 || row.Capture.State != CaptureLanded):
-				t.Errorf("the row's newest capture is %+v, want the place-holder's landed once asked again",
-					row.Capture)
-			case !tc.refused && len(uploads) != 1:
-				t.Errorf("uploaded %d sessions, want the place-holder's once", len(uploads))
-			case tc.refused && (kept == nil || kept.NotKept != ""):
-				t.Errorf("beside a record the log refused, the standby's keep came to %+v, want the session kept",
-					kept)
-			case tc.refused && (row.Kept == nil || row.Kept.CaptureSeq != 2):
-				t.Errorf("the row keeps %+v, want the standby's capture in the next place", row.Kept)
-			case tc.refused && (len(uploads) != 2 || !bytes.Equal(uploads[1], standbyArchive)):
-				t.Errorf("uploaded %q, want the place-holder's and then the standby's", uploads)
-			}
+			inBubble(t, func(t *testing.T) {
+				rig, writes, keep := keepingRig(t)
+				run := rig.launchKept(t, "t1")
+				held := newHeldArchive(placeHolderArchive)
+				placed := holdingPlace(t, rig, run, held)
+				standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
+				if standby == nil || !standby.standby {
+					t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
+				}
+				held.end <- nil
+				spooled := <-placed
+				if spooled == nil {
+					t.Fatal("the read holding the place spooled nothing")
+				}
+				writes.answer(errors.New("the log did not answer"))
+				rig.coordinator.keepCapture(t.Context(), spooled)
+				writes.answer(nil)
+				if row := rig.get("t1"); row.Capture == nil || row.Capture.State != CaptureUnresolved {
+					t.Fatalf("the place-holder's capture stands %+v, want its record unanswered", row.Capture)
+				}
+				if tc.refused {
+					rig.coordinator.sessions = refusesPlace{sessionWrites: writes, place: 1}
+				}
+				kept := rig.coordinator.keepCapture(t.Context(), standby)
+				row := rig.get("t1")
+				uploads := keep.uploads()
+				switch {
+				case !tc.refused && kept != nil:
+					t.Errorf("beside a record the log holds, the standby's keep came to %+v, want nothing", kept)
+				case !tc.refused && (row.Capture == nil || row.Capture.CaptureSeq != 1 || row.Capture.State != CaptureLanded):
+					t.Errorf("the row's newest capture is %+v, want the place-holder's landed once asked again",
+						row.Capture)
+				case !tc.refused && len(uploads) != 1:
+					t.Errorf("uploaded %d sessions, want the place-holder's once", len(uploads))
+				case tc.refused && (kept == nil || kept.NotKept != ""):
+					t.Errorf("beside a record the log refused, the standby's keep came to %+v, want the session kept",
+						kept)
+				case tc.refused && (row.Kept == nil || row.Kept.CaptureSeq != 2):
+					t.Errorf("the row keeps %+v, want the standby's capture in the next place", row.Kept)
+				case tc.refused && (len(uploads) != 2 || !bytes.Equal(uploads[1], standbyArchive)):
+					t.Errorf("uploaded %q, want the place-holder's and then the standby's", uploads)
+				}
+			})
 		})
 	}
 }
@@ -746,46 +755,48 @@ func TestAReadStandingByTakesOverAnUnansweredCaptureOnlyOnceTheLogRefusesIt(t *t
 // session dropped beside it.
 func TestAFinalReadBesideACaptureTakenAsTheJobStoodTakesTheNextPlace(t *testing.T) {
 	t.Parallel()
-	rig, _, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	taking, proceed := make(chan struct{}), make(chan struct{})
-	second := make(chan *spooledCapture, 1)
-	go func() {
-		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-			takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
-			readCapture(BoxReadCollect, Result{}, true))
-		second <- spooled
-	}()
-	select {
-	case <-taking:
-	case got := <-second:
-		t.Fatalf("the collection's read ended before its take: %+v", got)
-	}
-	held := newHeldArchive(placeHolderArchive)
-	placed := holdingPlaceAt(t, rig, run, held, readCapture(BoxReadStop, Result{}, false))
-	rig.now = rig.now.Add(time.Second)
-	close(proceed)
-	final := <-second
-	if final == nil || final.standby || final.stamp.CaptureSeq != 2 || !final.stamp.Final {
-		t.Fatalf("the collection's read beside the stop's capture taken as the job stood spooled %+v, want its "+
-			"own final capture in the next place", final)
-	}
-	held.end <- nil
-	stopped := <-placed
-	if stopped == nil || stopped.stamp.Final {
-		t.Fatalf("the stop's read spooled %+v, want its capture of the job as it stood", stopped)
-	}
-	for _, spooled := range []*spooledCapture{stopped, final} {
-		if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
-			t.Fatalf("the keep of the capture at %d came to %+v, want it kept", spooled.stamp.CaptureSeq, kept)
+	inBubble(t, func(t *testing.T) {
+		rig, _, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		taking, proceed := make(chan struct{}), make(chan struct{})
+		second := make(chan *spooledCapture, 1)
+		go func() {
+			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
+				readCapture(BoxReadCollect, Result{}, true))
+			second <- spooled
+		}()
+		select {
+		case <-taking:
+		case got := <-second:
+			t.Fatalf("the collection's read ended before its take: %+v", got)
 		}
-	}
-	if row := rig.get("t1"); row.Kept == nil || row.Kept.CaptureSeq != 2 || !row.Kept.Final {
-		t.Errorf("the row keeps %+v, want the collection's final capture", row.Kept)
-	}
-	if uploads := keep.uploads(); len(uploads) != 2 || !bytes.Equal(uploads[1], standbyArchive) {
-		t.Errorf("uploaded %q, want the stop's and then the collection's", uploads)
-	}
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlaceAt(t, rig, run, held, readCapture(BoxReadStop, Result{}, false))
+		rig.now = rig.now.Add(time.Second)
+		close(proceed)
+		final := <-second
+		if final == nil || final.standby || final.stamp.CaptureSeq != 2 || !final.stamp.Final {
+			t.Fatalf("the collection's read beside the stop's capture taken as the job stood spooled %+v, want its "+
+				"own final capture in the next place", final)
+		}
+		held.end <- nil
+		stopped := <-placed
+		if stopped == nil || stopped.stamp.Final {
+			t.Fatalf("the stop's read spooled %+v, want its capture of the job as it stood", stopped)
+		}
+		for _, spooled := range []*spooledCapture{stopped, final} {
+			if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
+				t.Fatalf("the keep of the capture at %d came to %+v, want it kept", spooled.stamp.CaptureSeq, kept)
+			}
+		}
+		if row := rig.get("t1"); row.Kept == nil || row.Kept.CaptureSeq != 2 || !row.Kept.Final {
+			t.Errorf("the row keeps %+v, want the collection's final capture", row.Kept)
+		}
+		if uploads := keep.uploads(); len(uploads) != 2 || !bytes.Equal(uploads[1], standbyArchive) {
+			t.Errorf("uploaded %q, want the stop's and then the collection's", uploads)
+		}
+	})
 }
 
 // failsReservations is a run store that, once armed, answers no reservation of
@@ -816,44 +827,46 @@ func (s *failsReservations) StampCapture(ctx context.Context, turnID string, sta
 // went unanswered, as such a read once did, and nothing keeps the session.
 func TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	store := &failsReservations{PendingStore: rig.coordinator.pending}
-	rig.coordinator.pending = store
-	taking, proceed := make(chan struct{}), make(chan struct{})
-	second := make(chan *spooledCapture, 1)
-	go func() {
-		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-			takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
-			readCapture(BoxReadCollect, Result{}, true))
-		second <- spooled
-	}()
-	select {
-	case <-taking:
-	case got := <-second:
-		t.Fatalf("the collection's read ended before its take: %+v", got)
-	}
-	// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now the
-	// stop's read reserves the place and holds in its spool, and the store
-	// answers no reservation after it.
-	held := newHeldArchive(placeHolderArchive)
-	placed := holdingPlace(t, rig, run, held)
-	store.armed.Store(true)
-	rig.now = rig.now.Add(time.Second)
-	close(proceed)
-	standby := <-second
-	if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
-		t.Fatalf("the read whose reservation went unanswered spooled %+v, want it standing by for the stop's",
-			standby)
-	}
-	held.end <- errScrubRefused
-	if spooled := <-placed; spooled != nil {
-		t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
-	}
-	if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-		t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
-	}
-	keptByTheStandby(t, rig, writes, keep)
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		store := &failsReservations{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending = store
+		taking, proceed := make(chan struct{}), make(chan struct{})
+		second := make(chan *spooledCapture, 1)
+		go func() {
+			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
+				readCapture(BoxReadCollect, Result{}, true))
+			second <- spooled
+		}()
+		select {
+		case <-taking:
+		case got := <-second:
+			t.Fatalf("the collection's read ended before its take: %+v", got)
+		}
+		// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now the
+		// stop's read reserves the place and holds in its spool, and the store
+		// answers no reservation after it.
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		store.armed.Store(true)
+		rig.now = rig.now.Add(time.Second)
+		close(proceed)
+		standby := <-second
+		if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
+			t.Fatalf("the read whose reservation went unanswered spooled %+v, want it standing by for the stop's",
+				standby)
+		}
+		held.end <- errScrubRefused
+		if spooled := <-placed; spooled != nil {
+			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+		}
+		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+			t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
+		}
+		keptByTheStandby(t, rig, writes, keep)
+	})
 }
 
 // lostStandBy is a run store that makes every standby it is asked for and
@@ -879,23 +892,25 @@ func (s lostStandBy) StandBy(ctx context.Context, turnID string, capture Session
 // did, and nothing keeps the session.
 func TestAStandbyTheStoreNeverAnsweredKeepsTheSessionWhereItStands(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	held := newHeldArchive(placeHolderArchive)
-	placed := holdingPlace(t, rig, run, held)
-	rig.coordinator.pending = lostStandBy{PendingStore: rig.coordinator.pending}
-	standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-	if standby == nil || !standby.standby {
-		t.Fatalf("the read whose standby the store never answered spooled %+v, want it going on as one", standby)
-	}
-	held.end <- errScrubRefused
-	if spooled := <-placed; spooled != nil {
-		t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
-	}
-	if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-		t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
-	}
-	keptByTheStandby(t, rig, writes, keep)
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		rig.coordinator.pending = lostStandBy{PendingStore: rig.coordinator.pending}
+		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
+		if standby == nil || !standby.standby {
+			t.Fatalf("the read whose standby the store never answered spooled %+v, want it going on as one", standby)
+		}
+		held.end <- errScrubRefused
+		if spooled := <-placed; spooled != nil {
+			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+		}
+		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+			t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
+		}
+		keptByTheStandby(t, rig, writes, keep)
+	})
 }
 
 // lostTakeOver is a run store that makes every takeover it is asked for and
@@ -921,23 +936,25 @@ func (s lostTakeOver) TakeOver(ctx context.Context, turnID string, standby, capt
 // standby once did, and the place stands begun with nothing kept.
 func TestATakeoverTheStoreNeverAnsweredIsKeptUnderWhereItWasMade(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	held := newHeldArchive(placeHolderArchive)
-	placed := holdingPlace(t, rig, run, held)
-	standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-	if standby == nil || !standby.standby {
-		t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
-	}
-	held.end <- errScrubRefused
-	if spooled := <-placed; spooled != nil {
-		t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
-	}
-	rig.coordinator.pending = lostTakeOver{PendingStore: rig.coordinator.pending}
-	if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-		t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
-	}
-	keptByTheStandby(t, rig, writes, keep)
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
+		if standby == nil || !standby.standby {
+			t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
+		}
+		held.end <- errScrubRefused
+		if spooled := <-placed; spooled != nil {
+			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+		}
+		rig.coordinator.pending = lostTakeOver{PendingStore: rig.coordinator.pending}
+		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+			t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
+		}
+		keptByTheStandby(t, rig, writes, keep)
+	})
 }
 
 // refusedTake is a runner whose every take of a box's session is refused with
@@ -963,26 +980,28 @@ func (r refusedTake) TakeSession(context.Context, Sandbox, SessionTake) (TakenSe
 // stamps one, and the capture still being kept is buried under it.
 func TestAReadStandingByThatTookNothingLeavesTheCaptureItStoodByFor(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	held := newHeldArchive(placeHolderArchive)
-	placed := holdingPlace(t, rig, run, held)
-	rig.now = rig.now.Add(time.Second)
-	spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-		refusedTake{FakeRunner: rig.runner, err: errors.New("the box's session could not be read")},
-		readCapture(BoxReadCollect, Result{}, true))
-	if spooled != nil {
-		t.Fatalf("a read whose take was refused spooled %+v", spooled)
-	}
-	if row := rig.get("t1"); row.Capture == nil || row.Capture.CaptureSeq != 1 ||
-		row.Capture.State != CaptureBegun || !captureInFlight(row, rig.now) {
-		t.Errorf("beside the refused read, the row's newest capture is %+v, want the stop's, still begun",
-			row.Capture)
-	}
-	held.end <- nil
-	if stopped := <-placed; stopped != nil {
-		rig.coordinator.keepCapture(t.Context(), stopped)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		rig.now = rig.now.Add(time.Second)
+		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+			refusedTake{FakeRunner: rig.runner, err: errors.New("the box's session could not be read")},
+			readCapture(BoxReadCollect, Result{}, true))
+		if spooled != nil {
+			t.Fatalf("a read whose take was refused spooled %+v", spooled)
+		}
+		if row := rig.get("t1"); row.Capture == nil || row.Capture.CaptureSeq != 1 ||
+			row.Capture.State != CaptureBegun || !captureInFlight(row, rig.now) {
+			t.Errorf("beside the refused read, the row's newest capture is %+v, want the stop's, still begun",
+				row.Capture)
+		}
+		held.end <- nil
+		if stopped := <-placed; stopped != nil {
+			rig.coordinator.keepCapture(t.Context(), stopped)
+		}
+	})
 }
 
 // A WAIT LEAVES A READ STANDING BY WHOSE TAKER STILL HOLDS ITS LEASE. The read
@@ -997,10 +1016,9 @@ func TestAReadStandingByThatTookNothingLeavesTheCaptureItStoodByFor(t *testing.T
 // first pass withdraws one whose process is still keeping the session.
 func TestAWaitLeavesAReadStandingByWhoseTakerHolds(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		store := newTakerStore()
 		rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
-		rig.coordinator.captureTick = captureWaitTick
 		run := rig.launchKept(t, "t1")
 		refused := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
 			State: CaptureRefused, Reason: "the session could not be uploaded", Final: true,
@@ -1044,10 +1062,9 @@ func TestAWaitLeavesAReadStandingByWhoseTakerHolds(t *testing.T) {
 // standby's wait runs out and it keeps nothing.
 func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		store := newTakerStore()
 		rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
-		rig.coordinator.captureTick = captureWaitTick
 		run := rig.launchKept(t, "t1")
 		lease := claimTaker(t, store, takingProcess)
 		begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
