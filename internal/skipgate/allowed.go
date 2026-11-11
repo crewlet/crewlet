@@ -233,7 +233,10 @@ var allowed = []Allowance{
 	// -----------------------------------------------------------------
 	// Environment: a container runtime for a real sshd. Like the container
 	// mode's case above, these do not skip in CI, whose runners have docker;
-	// each entry covers a workstation without docker or podman.
+	// each entry covers a workstation without docker or podman. An entry names
+	// the case, never one of its images: a case that runs a server per image
+	// skips before its per-image subtests (sshdtest.Require), since a skip is
+	// matched to its entry by the test's exact name.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/ssh",
