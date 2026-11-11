@@ -170,11 +170,11 @@ func waitTurns(t *testing.T, rec *metrics.Recorder, n uint64) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges}) < n {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the home ended %d turns in 30s, want %d", counted(rec, metrics.CodeHomePasses,
 				metrics.Attrs{"worker": home.WorkerChanges}), n)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

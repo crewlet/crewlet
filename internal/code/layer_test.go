@@ -926,7 +926,7 @@ func (p *atOnce) Put(ctx context.Context, r io.Reader, limit int64, m objstore.P
 	case <-ctx.Done():
 		done(true)
 		return objstore.Object{}, ctx.Err()
-	case <-time.After(partsBegin):
+	case <-time.After(partsBegin): //fixedwait:liveness
 		done(false)
 		return objstore.Object{}, fmt.Errorf("only %d of %d parts began within %v: the parts are not uploaded "+
 			"at once", len(p.began), p.want, partsBegin)
@@ -940,7 +940,7 @@ func (p *atOnce) Put(ctx context.Context, r io.Reader, limit int64, m objstore.P
 		case <-ctx.Done():
 			done(true)
 			return objstore.Object{}, ctx.Err()
-		case <-time.After(partsBegin):
+		case <-time.After(partsBegin): //fixedwait:liveness
 			done(false)
 			return objstore.Object{}, fmt.Errorf("a failed part did not cancel this one within %v", partsBegin)
 		}

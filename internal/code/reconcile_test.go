@@ -401,7 +401,7 @@ func TestADecisionTheReconcilesEndLeftUnansweredIsPartOfIt(t *testing.T) {
 				}
 				select {
 				case <-ctx.Done():
-				case <-time.After(10 * time.Second):
+				case <-time.After(10 * time.Second): //fixedwait:liveness
 					t.Error("the reconcile's context never ended")
 				}
 				return true

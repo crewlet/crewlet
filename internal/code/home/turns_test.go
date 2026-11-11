@@ -172,11 +172,11 @@ func TestATurnPastItsBoundIsCutAndListedAgain(t *testing.T) {
 	cut := metrics.Attrs{"worker": home.WorkerChanges, "outcome": "cut"}
 	deadline := time.Now().Add(10 * time.Second)
 	for counted(rec, metrics.CodeHomePasses, cut) < 2 {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the home counted %d of the repository's turns cut in 10s, want the turn past its bound "+
 				"cut, and the next pass's turn again", counted(rec, metrics.CodeHomePasses, cut))
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	if got := e.countAsked(repoA); got < 2 {
 		t.Errorf("the repository's due changes were read %d times, want once a turn: listed again after the cut",

@@ -28,7 +28,7 @@ func returns(t *testing.T, hit func() error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(hang):
+	case <-time.After(hang): //fixedwait:liveness
 		t.Fatalf("the hit has not returned after %s", hang)
 		return nil
 	}

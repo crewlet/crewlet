@@ -128,7 +128,7 @@ func (c *cell) box(t *testing.T) *sandbox.FakeSandbox {
 	select {
 	case b := <-c.made:
 		return b
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("no box was made")
 		return nil
 	}
@@ -321,10 +321,10 @@ func (f *fleet) await(key code.CheckKey, what string, ok func(code.CheckRow) boo
 		if held && ok(row) {
 			return row
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			f.t.Fatalf("attempt %d of %s never %s: %+v", key.Attempt, key.Name, what, row)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

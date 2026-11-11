@@ -1263,7 +1263,7 @@ func TestACutWaitsForAMaintenanceSlotAndKeepsItsFetch(t *testing.T) {
 	h.listAndWork(m)
 	select {
 	case <-refused:
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		t.Fatal("the import never asked the full maintenance lane for its cut's slot")
 	}
 	if got := h.src.reads.Load(); got != 1 {
@@ -1413,7 +1413,7 @@ func TestAMirrorQueuedPastItsPromiseIsFailing(t *testing.T) {
 		turns = append(turns, at.Add(d))
 	}
 	if got := mirror.FailingWhileQueued(turns); got != 1 {
-		t.Fatalf("a mirror queued at every pass for %v counts %d failing; want 1", turns[len(turns)-1].Sub(at),
+		t.Fatalf("a mirror queued at every pass for %v counts %d failing; want 1", turns[len(turns)-1].Sub(at), //fixedwait:stated the case's own turns, a time.Date and whole minutes on
 			got)
 	}
 }
@@ -1438,7 +1438,7 @@ func TestAnAttemptRunningPastItsPromiseIsFailing(t *testing.T) {
 	}
 	if got, want := mirror.FailingPastThePromise(turns), mirror.MaxAttempts+1; got != want {
 		t.Fatalf("%d attempts running and a mirror queued behind them for %v count %d failing; want %d",
-			mirror.MaxAttempts, turns[len(turns)-1].Sub(at), got, want)
+			mirror.MaxAttempts, turns[len(turns)-1].Sub(at), got, want) //fixedwait:stated the case's own turns, a time.Date and whole minutes on
 	}
 }
 

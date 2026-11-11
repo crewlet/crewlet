@@ -52,7 +52,7 @@ func (h *heldStream) waitHeld(t *testing.T) {
 	t.Helper()
 	select {
 	case <-h.held:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("no announcement reached the stream in 10 s")
 	}
 }
@@ -108,7 +108,7 @@ func requireOpened(t *testing.T, ch <-chan error) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("the open was not answered in 30 s: it waited on an announcement")
 	}
 }

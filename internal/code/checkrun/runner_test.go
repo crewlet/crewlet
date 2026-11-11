@@ -59,8 +59,8 @@ func TestACheckEndsByItsCommandsExit(t *testing.T) {
 		t.Errorf("the failed run's tail = %q, want its output's end", tail)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for !box.Closed() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	for !box.Closed() && time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline: whether the box closed is asserted after it
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	if !box.Closed() {
 		t.Error("the box of an ended check was never closed")
@@ -141,8 +141,15 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 // the packages that charge one — and what an ended attempt records of its cost
 // is its duration alone.
 //
+// THE RUNNER'S CLOCK IS THE CASE'S, frozen an hour into tomorrow (past the
+// attempt's queuing, so it falls due at once) and moved only by the case, a
+// second and a half while the command runs: the duration is the span between
+// the runner's own two readings, claim and ending, so it is exactly what the
+// case moved, and no wall time has to pass for it.
+//
 // Mutation: import the LLM provider layer or the spend ledger into the runner,
-// red.
+// red; record no duration, or read it off the wall clock rather than the
+// runner's, red.
 func TestACheckSpendsNoTokens(t *testing.T) {
 	t.Parallel()
 	p, err := build.Default.ImportDir(filepath.Join(sourcetree.Root(t), "internal", "code", "checkrun"), 0)
@@ -158,14 +165,19 @@ func TestACheckSpendsNoTokens(t *testing.T) {
 		}
 	}
 	f := newFleet(t)
-	f.runner(f.options("git-a", 1, &order{nodes: []string{"git-a"}}))
+	clock := &clock{at: time.Now().UTC().Truncate(24 * time.Hour).Add(25 * time.Hour)}
+	o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+	o.Now = clock.now
+	f.runner(o)
 	key := f.queue(oidOf("d"), def("unit", time.Minute))
 	box := f.container.box(t)
 	f.await(key, "named its box", func(r code.CheckRow) bool { return r.Box != "" })
-	time.Sleep(30 * time.Millisecond)
+	const took = 1500 * time.Millisecond
+	clock.advance(took)
 	f.container.end(box, 0, "")
-	if row := f.ended(key); row.DurationMs <= 0 {
-		t.Errorf("an ended check's duration = %d ms, want the time its run took", row.DurationMs)
+	if row := f.ended(key); row.DurationMs != took.Milliseconds() {
+		t.Errorf("an ended check's duration = %d ms, want the %d ms its run took on the runner's clock",
+			row.DurationMs, took.Milliseconds())
 	}
 }
 

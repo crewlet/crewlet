@@ -42,7 +42,7 @@ func BenchmarkRevisionFacts(b *testing.B) {
 			for b.Loop() {
 				start := time.Now()
 				a, err := r.s.Read(b.Context(), factsQ(r.repo, r.head, r.base))
-				took = append(took, time.Since(start))
+				took = append(took, time.Since(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 				switch {
 				case err != nil:
 					b.Fatal(err)

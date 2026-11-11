@@ -442,7 +442,7 @@ func TestTheAdmissionIsReleasedBeforeTheUploads(t *testing.T) {
 	case <-entered:
 	case out := <-done:
 		t.Fatalf("the compaction ended %s before its upload", out)
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		t.Fatal("the compaction reached no upload in a minute")
 	}
 
@@ -453,10 +453,10 @@ func TestTheAdmissionIsReleasedBeforeTheUploads(t *testing.T) {
 	var adm *cache.Admission
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		adm, err = x.node().Cache().AdmitCompaction(s, 1, code.DefaultLimits())
-		if err == nil || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
+		if err == nil || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the admission is asserted after it
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 	if err != nil {
 		t.Errorf("a second admission while the first compaction's upload is held = %v, want it granted", err)

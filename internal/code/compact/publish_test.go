@@ -54,10 +54,10 @@ func publishWhileBusy(t testing.TB, c *compact.Compactor, cand code.PublicationC
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := c.Publish(t.Context(), cand)
-		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) {
+		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its caller judges the outcome it answers
 			return out, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -84,11 +84,11 @@ func (x *fixture) awaitInstalled(n int) cache.Chain {
 		if len(ch.Rows) == n && ch.Installed == n {
 			return ch
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			x.t.Fatalf("the copy holds %d of a chain of %d layers installed a minute on, want all %d: %+v",
 				ch.Installed, len(ch.Rows), n, ch.Refused)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -470,11 +470,11 @@ func TestTheBaseIsAskedOfTheStoreAtOnce(t *testing.T) {
 			held, err := compact.HeldBase(t.Context(), c, rows, len(rows))
 			done <- answer{held, err}
 		}()
-		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) { //fixedwait:liveness
 			if _, inFlight, _ := s.counts(); inFlight == cache.FetchConcurrency {
 				break
 			}
-			if time.Now().After(deadline) {
+			if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 				close(s.release)
 				_, _, most := s.counts()
 				t.Fatalf("the base's parts were asked %d at a time at the most, want %d at once", most,
@@ -661,7 +661,7 @@ func TestAPublicationUploadsItsPartsAndOutputsAtOnce(t *testing.T) {
 			return nil
 		case <-ctx.Done():
 			return errHeld
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			return errors.New("an upload waited thirty seconds for the publication's other upload to begin")
 		}
 	}
@@ -878,7 +878,7 @@ func TestThePublicationsAdmissionIsReleasedBeforeItsUploads(t *testing.T) {
 	case <-entered:
 	case out := <-done:
 		t.Fatalf("the publication ended %s before its upload", out)
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		t.Fatal("the publication reached no upload in a minute")
 	}
 	s, err := x.node().Cache().Sync(t.Context(), cand.ID, codetest.Linearizable)
@@ -888,10 +888,10 @@ func TestThePublicationsAdmissionIsReleasedBeforeItsUploads(t *testing.T) {
 	var adm *cache.Admission
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		adm, err = x.node().Cache().AdmitPublication(s, 0, 1, 0, code.DefaultLimits())
-		if err == nil || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
+		if err == nil || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the admission is asserted after it
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 	if err != nil {
 		t.Errorf("a second admission while the first publication's upload is held = %v, want it granted", err)
@@ -939,10 +939,10 @@ func TestAPublicationTheNodeCannotHoldIsPublishedWhenTheNodeGrows(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if report.Published == 1 || time.Now().After(deadline) {
+		if report.Published == 1 || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the report is asserted after it
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 	if report.Published != 1 {
 		t.Errorf("the pass once the node holds the publication reported %+v, want it published", report)
@@ -1183,10 +1183,10 @@ func compactBesideSlots(t testing.TB, c *compact.Compactor, cand code.Compaction
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := c.Compact(t.Context(), cand)
-		if out != compact.OutcomeBusy || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
+		if out != compact.OutcomeBusy || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its caller judges the outcome it answers
 			return out, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -1229,7 +1229,7 @@ func TestACompactionMergesBesideAPublicationNeverItsPacks(t *testing.T) {
 	case <-reached:
 	case out := <-done:
 		t.Fatalf("the publication ended %s before its proposal", out)
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		t.Fatal("the publication stored nothing in a minute")
 	}
 
@@ -1323,7 +1323,7 @@ func TestACompactionAndAPublicationOfOneRepositoryNeverPlanOverEachOther(t *test
 		}()
 		select {
 		case <-entered:
-		case <-time.After(time.Minute):
+		case <-time.After(time.Minute): //fixedwait:liveness
 			t.Fatal("the publication reached no sync in a minute")
 		}
 		if out, err := c.Compact(t.Context(), x.candidate()); out != compact.OutcomeBusy {
@@ -1355,7 +1355,7 @@ func TestACompactionAndAPublicationOfOneRepositoryNeverPlanOverEachOther(t *test
 		case <-reached:
 		case out := <-done:
 			t.Fatalf("the compaction ended %s before its proposal", out)
-		case <-time.After(time.Minute):
+		case <-time.After(time.Minute): //fixedwait:liveness
 			t.Fatal("the compaction stored nothing in a minute")
 		}
 		syncs, _ := cc.counts()
@@ -1589,9 +1589,9 @@ func publicationPassWhileBusy(t testing.TB, c *compact.Compactor, rec *metrics.R
 		}
 		again := counter(rec, metrics.CodePublishRuns, "outcome", string(compact.OutcomeBusy)) +
 			counter(rec, metrics.CodePublishRuns, "outcome", string(compact.OutcomeWaiting))
-		if again == held || time.Now().After(deadline) {
+		if again == held || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its caller judges the report it answers
 			return report
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }

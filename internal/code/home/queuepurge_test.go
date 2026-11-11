@@ -134,8 +134,8 @@ func (h *gitHome) purged() {
 				return
 			}
 			out, err := h.node().Compactor().Expunge(ctx, a.Expunge[i])
-			if out == compact.OutcomeBusy && time.Now().Before(deadline) {
-				time.Sleep(20 * time.Millisecond)
+			if out == compact.OutcomeBusy && time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline: a busy answer past it fails the case
+				time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 				continue
 			}
 			switch out {

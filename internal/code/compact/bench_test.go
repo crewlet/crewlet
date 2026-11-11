@@ -465,7 +465,7 @@ func (m *buildMeasure) run(ctx context.Context, adm *cache.Admission, cmd gitpro
 	)
 	began := time.Now()
 	peak, ok := gittest.PeakAnon(func() { res, err = compact.RunInSlot(ctx, adm, cmd) })
-	took := time.Since(began)
+	took := time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.peak, m.took, m.measured = max(m.peak, peak), m.took+took, ok

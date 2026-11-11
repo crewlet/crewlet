@@ -276,7 +276,7 @@ func TestABusyRefusalIsFiledInItsOwnMinuteAtAnyInstant(t *testing.T) {
 			// stamped by the committer's clock.
 			code.SetCommitterNodeBytes(c, 1)
 			for i, at := range tc.at {
-				clock.advance(at.Sub(clock.now()))
+				clock.advance(at.Sub(clock.now())) //fixedwait:stated the case's own instant against its fakeClock, which only the case moves
 				res, err := c.Propose(t.Context(), proposal(repo,
 					update(fmt.Sprintf("refs/heads/b%d", i), code.ZeroOID, oidOf("B"))))
 				if err != nil || res.Answer.Refused != code.RefusalBusy {

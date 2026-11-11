@@ -69,12 +69,12 @@ func TestAStopCutsTheReadsInFlightAndRefusesTheRest(t *testing.T) {
 		if !unready(err, code.UnreadyNodeFailed) {
 			t.Errorf("the read the stop cut answered %v, want ErrGitUnready{node_failed}", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the stop never cut the read whose git it found running")
 	}
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the stop never returned once the read it cut had answered")
 	}
 
