@@ -1189,6 +1189,11 @@ type DomainGroup struct {
 	stream   string
 	name     string
 
+	// progressEvery is how often a handler holding one of the group's
+	// deliveries past its ack window signals progress on it
+	// ([groupProgressEvery]).
+	progressEvery time.Duration
+
 	// closed ends the context watcher, and once guards the iterator's
 	// stop so a Stop from the caller and one from a cancelled context are
 	// the same Stop.
@@ -1228,6 +1233,15 @@ type DomainDelivery struct {
 	// a decision is handling.
 	Ack func() error
 	Nak func(time.Duration) error
+
+	// Progress tells the broker the record is still being handled, which
+	// restarts its ack window, and ProgressEvery is how often a handler
+	// holding it longer than that window sends it ([groupProgressEvery]).
+	// Unsent, a delivery held past the window — a dead letter's keep waiting
+	// as long as its bytes take to cross a slow link — is handed back while
+	// it is still being handled.
+	Progress      func() error
+	ProgressEvery time.Duration
 }
 
 // Group opens (or creates) a fleet-wide consumer over this log, and reports
@@ -1285,7 +1299,8 @@ func (l *DomainLog) Group(ctx context.Context, name string, from uint64) (*Domai
 	}
 	group := &DomainGroup{
 		cons: cons, messages: messages, stream: l.name, name: safe,
-		closed: make(chan struct{}),
+		progressEvery: groupProgressEvery(cons),
+		closed:        make(chan struct{}),
 	}
 	// The context is turned into a Stop by a goroutine, for the reason
 	// [DomainGroup.closed] gives. It exits with the group, so a
@@ -1299,6 +1314,20 @@ func (l *DomainLog) Group(ctx context.Context, name string, from uint64) (*Domai
 		}
 	}()
 	return group, created, nil
+}
+
+// groupProgressEvery is how often a handler holding one of cons's deliveries
+// past its ack window signals progress on it: a third of the window IN FORCE
+// on the consumer — which a group that existed is opened with, whatever this
+// build asks of a new one ([domainConsumerAckWait]) — so two signals can be
+// missed before the third is late, as a subscription's are
+// ([attachment.withProgress]).
+func groupProgressEvery(cons jetstream.Consumer) time.Duration {
+	window := domainConsumerAckWait
+	if info := cons.CachedInfo(); info != nil && info.Config.AckWait > 0 {
+		window = info.Config.AckWait
+	}
+	return window / 3
 }
 
 // domainGroupName escapes a group's name the way every derived consumer name
@@ -1352,8 +1381,9 @@ func (g *DomainGroup) Next(ctx context.Context) (*DomainDelivery, error) {
 	return &DomainDelivery{
 		Subject: msg.Subject(), Seq: meta.Sequence.Stream,
 		StoredAt: meta.Timestamp, Delivered: meta.NumDelivered, Payload: msg.Data(),
-		Ack: msg.Ack,
-		Nak: func(delay time.Duration) error { return msg.NakWithDelay(delay) },
+		Ack:      msg.Ack,
+		Nak:      func(delay time.Duration) error { return msg.NakWithDelay(delay) },
+		Progress: msg.InProgress, ProgressEvery: g.progressEvery,
 	}, nil
 }
 

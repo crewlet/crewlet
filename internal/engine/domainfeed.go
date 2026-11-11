@@ -196,6 +196,7 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 			continue
 		}
 		msg.Ack, msg.Nak = delivery.Ack, delivery.Nak
+		msg.Progress, msg.ProgressEvery = delivery.Progress, delivery.ProgressEvery
 		return msg, nil
 	}
 }

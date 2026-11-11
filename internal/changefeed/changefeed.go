@@ -94,8 +94,11 @@
 // dead-letter stream ([DeadLetters]) — its sealed frame the entry's body, and
 // what the feed recorded of it the entry's header ([DeadLetter]), which every
 // listing reads without the frame — and only then acked, so it stops holding
-// a slot of the consumer's pending set without anybody's wake being lost. An
-// entry is kept for the event stream's retention and then expires; the first
+// a slot of the consumer's pending set without anybody's wake being lost.
+// While the keep waits, which across a slow link is as long as the frame takes
+// to cross it, the feed sends the delivery's progress signal so the record is
+// not handed back and kept twice ([Feed.holding]). An entry is kept for the
+// event stream's retention and then expires; the first
 // node whose feed starts able to read it replays it ([Feed.replay]) through
 // the same claim a delivery passes — the one reader of its frame — and drops
 // it; and an operator who has decided its wake can be lost discards it (the
@@ -260,6 +263,16 @@ type Message struct {
 	// could not reach something it needs naks; one that decided the record
 	// means nothing to it ACKS, because a decision is handling.
 	Nak func(delay time.Duration) error
+
+	// Progress tells the estate the record is still being handled, which
+	// restarts its acknowledgement window, and ProgressEvery is how often a
+	// handler holding it longer than that window must send it. Nil (and
+	// zero) where the estate's deliveries do not time out, and then nothing
+	// is sent. The feed sends it while a dead letter's keep runs
+	// ([Feed.deadLetter]): the one wait it holds a delivery through that can
+	// outlast the window.
+	Progress      func() error
+	ProgressEvery time.Duration
 
 	// Deferred is set by an opener that met a record this node cannot open
 	// and a peer can — a frame sealed under a key it does not hold, an
@@ -907,7 +920,9 @@ func (f *Feed) deadLetter(ctx context.Context, msg *Message, d *Deferral, age ti
 	subject := DeadLetterSubject(src)
 	err := errNoDeadLetters
 	if f.deadLetters != nil {
+		release := f.holding(ctx, msg)
 		err = f.keep(ctx, src, subject, msg, d)
+		release()
 	}
 	if err != nil {
 		log.WarnContext(ctx, "changefeed_dead_letter_failed", "source", src.Name,
@@ -929,6 +944,53 @@ func (f *Feed) deadLetter(ctx context.Context, msg *Message, d *Deferral, age ti
 			"expires; the first node whose feed starts able to read it derives its "+
 			"wake, and `feed_dead_lettered` is raised until then")
 	f.ack(ctx, msg)
+}
+
+// holding keeps msg's delivery from being handed back while a keep the feed
+// waits on runs: its progress signal, every ProgressEvery, until the returned
+// release, which returns once the signaller has. A message whose estate states
+// no progress holds nothing.
+//
+// # Why a keep holds its delivery
+//
+// A keep waits for its entry's acknowledgement as long as the entry takes to
+// cross the node's link to the broker (internal/queue/jetstream's write
+// budget) — minutes, for a large frame across a link at the slowest pace the
+// engine allows — and the feed acks the record only once the keep returns.
+// The feed's group hands a delivery back once its acknowledgement window
+// passes with no word, so a keep that outlasted the window had its record
+// delivered again while it was still keeping it: the redelivery, still past
+// the age, was kept again, and the dead letters held the record twice, the
+// second copy crossing the link behind the first.
+func (f *Feed) holding(ctx context.Context, msg *Message) (release func()) {
+	if msg.Progress == nil || msg.ProgressEvery <= 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	var signaller sync.WaitGroup
+	signaller.Go(func() {
+		every := time.NewTicker(msg.ProgressEvery)
+		defer every.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-every.C:
+				if err := msg.Progress(); err != nil {
+					log.WarnContext(ctx, "changefeed_progress_failed", "key", msg.Key,
+						"position", msg.Position, "stream", msg.Stream, "error", err.Error(),
+						"detail", "the record may be handed back while its dead letter is "+
+							"still being kept, and kept again by whichever node it reaches")
+				}
+			}
+		}
+	})
+	return func() {
+		close(done)
+		signaller.Wait()
+	}
 }
 
 // keep writes msg's dead letter: the header the feed records of it, and its

@@ -53,7 +53,7 @@ func (r groupRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 	return &changefeed.Message{
 		Record: changefeed.Record{ID: d.Subject, Key: d.Subject, Position: d.Seq,
 			StoredAt: d.StoredAt, Payload: d.Payload},
-		Ack: d.Ack, Nak: d.Nak,
+		Ack: d.Ack, Nak: d.Nak, Progress: d.Progress, ProgressEvery: d.ProgressEvery,
 	}, nil
 }
 
