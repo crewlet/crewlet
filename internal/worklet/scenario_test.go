@@ -68,15 +68,18 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 			t.Parallel()
 			d := playTimeline(t, tl)
 			end := time.Now().UTC().Add(time.Microsecond)
-			var agents []string
+			var agents, people []string
 			for _, s := range tl.Seats {
-				if s.Kind == scenario.SeatAgent {
+				switch s.Kind {
+				case scenario.SeatAgent:
 					agents = append(agents, s.Handle)
+				case scenario.SeatPerson:
+					people = append(people, s.Handle)
 				}
 			}
 			work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
 				Since: d.start, Until: end, Level: statelog.ReadStale,
-				Reviewers: agents, QuietSince: d.quietSince()})
+				Reviewers: agents, QuietSince: d.quietSince(), People: people})
 			if err != nil {
 				t.Fatalf("WorkPatterns: %v", err)
 			}

@@ -30,6 +30,13 @@ func named(handle string, told, woken int) worklet.NamedWithoutAsk {
 		Comments: []string{"c-1"}, WokenComments: []string{"c-1"}}
 }
 
+// requested is a seat agents' words asked something of n times without an ask,
+// each also a mention of it.
+func requested(handle string, n int) worklet.NamedWithoutAsk {
+	return worklet.NamedWithoutAsk{Handle: handle, Told: n, Asked: n, Requested: n,
+		Comments: []string{"c-1"}, RequestedComments: []string{"c-1"}}
+}
+
 // EACH DETECTOR FIRES AT ITS THRESHOLD AND IS SILENT ONE BELOW IT, so a
 // threshold moved by accident is a red case rather than a quieter screen.
 func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
@@ -51,11 +58,15 @@ func TestEachDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 			Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 5, Asked: 5}}}, nil},
 		"a removed seat named 5 times": {worklet.WorkPatterns{AgentComments: 5,
 			Named: []worklet.NamedWithoutAsk{named("ghost", 5, 5)}}, nil},
-		"a person named 5 times": {worklet.WorkPatterns{AgentComments: 5,
-			Named: []worklet.NamedWithoutAsk{named("owner", 5, 5)}},
+		"a person asked 5 times without an ask": {worklet.WorkPatterns{AgentComments: 5,
+			Named: []worklet.NamedWithoutAsk{requested("owner", 5)}},
 			[]advisor.Class{advisor.ClassPersonRequestsWithoutAsk}},
-		"a person named 4 times": {worklet.WorkPatterns{AgentComments: 4,
-			Named: []worklet.NamedWithoutAsk{named("owner", 4, 4)}}, nil},
+		"a person asked 4 times without an ask": {worklet.WorkPatterns{AgentComments: 4,
+			Named: []worklet.NamedWithoutAsk{requested("owner", 4)}}, nil},
+		// AN INFORMING MENTION IS NO REQUEST, however often, by the comment
+		// tool's own rule (worklet.RequestedWithoutAsk).
+		"a person named 9 times in words that ask nothing": {worklet.WorkPatterns{AgentComments: 9,
+			Named: []worklet.NamedWithoutAsk{named("owner", 9, 0)}}, nil},
 		"3 overtaken of 60 answers": {worklet.WorkPatterns{Answers: 60, Superseded: 1, Moot: 2},
 			[]advisor.Class{advisor.ClassAskOvertaken}},
 		"3 overtaken of 61 answers": {worklet.WorkPatterns{Answers: 61, Superseded: 1, Moot: 2}, nil},
@@ -216,7 +227,8 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 	}
 	work := worklet.WorkPatterns{AgentComments: 9, Answers: 3, Moot: 3, Overtaken: many[:5],
 		Named: []worklet.NamedWithoutAsk{{Handle: "pm", Told: 9, Woken: 9, WokenComments: many[:5]},
-			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]}, {Handle: "owner", Told: 6, Comments: many[:5]}},
+			{Handle: "qa", Told: 4, Woken: 4, WokenComments: many[5:]},
+			{Handle: "owner", Told: 6, Requested: 6, Comments: many[:5], RequestedComments: many[:5]}},
 		IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}},
 		Notices:     []worklet.NoticeLoad{{Handle: "owner", Notices: 400}}}
 	ledger := []usage.TurnLedgerRow{started("app", "work_item:pickup", "words", 10),
@@ -272,7 +284,7 @@ func TestReadWithEvidenceAddsTheEnginesPatternsToTheDocuments(t *testing.T) {
 	in := advisor.Inputs{Company: c, Revision: "rev-1", Integrations: []integration.State{}}
 	static := advisor.Read(in)
 	work := worklet.WorkPatterns{AgentComments: 20,
-		Named: []worklet.NamedWithoutAsk{named("pm", 6, 6), named("owner", 5, 5)}}
+		Named: []worklet.NamedWithoutAsk{named("pm", 6, 6), requested("owner", 5)}}
 	got := advisor.ReadWithEvidence(in, advisor.Evidence{Work: work})
 	var engine []string
 	for _, f := range got.Findings {

@@ -2768,6 +2768,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	if refused := t.deps.checkWaitOnPerson(ctx, actor, before, patch); refused != nil {
+		return *refused, nil
+	}
 	if patch.Body != nil {
 		// The description get_work_item answered arrives fenced, and the
 		// likeliest edit sends the fence back with it; see [unfence].

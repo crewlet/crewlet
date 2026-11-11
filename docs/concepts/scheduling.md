@@ -646,13 +646,21 @@ the last word anybody said about that item.
   pickup and the wake decide by one rule: another agent's comment that asks
   nothing, or a watcher added, tells the seat and hands it nothing again. The fleet's completion ledger
   remembers it for seven days whichever node holds the seat, and a fleet claim
-  keeps two nodes from both sending it during a move. A seat that declines an
-  item, comments on it or records a blocker on it is not handed it again until
-  a change that would wake it lands. Started work the seat makes
+  keeps two nodes from both sending it during a move. A seat that answers an
+  item with a typed answer (below) is not handed it again until a change that
+  would wake it lands, or the date it set the item aside until comes. Started work the seat makes
   progress on (a field it changes, never a write of the value already there)
   is handed back when it is idle again, at most once per cooldown (the next
   ready item is handed over meanwhile), and a turn that changed nothing does
   not bring it back.
+- **Words hold an item for a day, not for good.** An item the seat left
+  without a typed answer, with a comment that it still waits or with nothing
+  at all, comes back to it once a day: a day after it went quiet (the later of
+  the change that last woke the seat, the date it waited until and the seat's
+  own last word on it), the pickup is new work and is handed once more, saying
+  so. A day is the stand-up rhythm a team rechecks a stalled item at, and it is
+  not configurable. An item answered in words before this rule comes back by
+  it too ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
 - **Past the first page.** Ready work is read twenty items at a time, so item
   twenty-one onwards is handed over once the first twenty were, and a seat
   whose whole ready set was handed over already is not asked about again until
@@ -680,13 +688,22 @@ the last word anybody said about that item.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under
-the item's own conversation so the turn continues the item's session. Its brief names the honest answers, each a change to the
-item: start or continue the work, ask whoever must answer first, record the
-item that blocks it (`waiting_on`), set it aside until a date with why
-(`wait_until` and `wait_reason`), or hand it back. A wait said only in a
-comment is not offered: it changes nothing, so nothing hands the item back
-when it ends. An item set aside until a date is handed once when the date
-comes. A company on a vendor tracker, or with no model, gets no pickups.
+the item's own conversation so the turn continues the item's session.
+
+**A pickup's turn is delivered only by a typed answer on its item**, and its
+brief names the five: change the item's own fields (start it, finish it, move
+it to review, edit its content); ask whoever must answer or decide first, with
+`comment_on_work_item` and `ask`, which puts the question in their Inbox;
+record the item or pull request that blocks it (`waiting_on`); set it aside
+until a real date with why (`wait_until` and `wait_reason`); or reassign it.
+A comment alone is not an answer: the engine cannot tell when the condition
+such words name is met, so nothing would hand the item back when it is. The
+engine reads the answer off the tracker's own record of the turn's writes,
+never off the model's account, and a submission, a round or a reviewer's
+`done` over words alone is sent back naming the five
+([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
+An item set aside until a date is handed once when the date comes. A company
+on a vendor tracker, or with no model, gets no pickups.
 
 `crewlet.work.pickups{outcome}` counts what each pickup decided for an idle
 seat (`woken`, `nothing_ready`, `all_offered`, `cooldown`, `claimed`,

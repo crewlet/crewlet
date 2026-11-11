@@ -130,6 +130,9 @@ type WorkPickup struct {
 	// WorkingFor is whom the item's work is for, so the turn is held to
 	// their apps (ADR-0109); nil for the seat's own work.
 	WorkingFor *WorkingFor `json:"working_for,omitempty"`
+	// Quiet is set on a recheck (ADR-0122): when the item went quiet with no
+	// typed answer from the seat, a day or more before this pickup.
+	Quiet *time.Time `json:"quiet,omitempty"`
 }
 
 // PickupWhy is what put an item first in a seat's ready work.
@@ -298,8 +301,9 @@ func (p WorkPickup) SummaryFor(actor string) string {
 	return lead(actor, "was handed its next ready work item "+p.Key)
 }
 
-// Brief is the pickup's ask: which item, why, and the honest answers, each a
-// change to the item, because a promise in words changes nothing.
+// Brief is the pickup's ask: which item, why, and the five typed answers, each
+// a record on the item the engine can act on, because a promise in words
+// changes nothing (ADR-0122).
 func (p WorkPickup) Brief() string {
 	var b strings.Builder
 	b.WriteString("Work pickup: you are idle and hold assigned work that is ready. ")
@@ -313,15 +317,28 @@ func (p WorkPickup) Brief() string {
 	case p.Ready > 1:
 		b.WriteString(" You hold " + strconv.Itoa(p.Ready) + " ready items in all.")
 	}
-	b.WriteString("\n\nRead it with " + toolname.GetWorkItem + ", then do one of these in this turn:\n" +
-		"- start or continue the work now;\n" +
-		"- if somebody must answer or decide first, ask them with " +
-		toolname.CommentOnWorkItem + " (`ask`);\n" +
-		"- if another item blocks it, record that item with " + toolname.UpdateWorkItem +
-		" (`waiting_on`);\n" +
-		"- if it should wait until a date, set `wait_until` and `wait_reason` with " +
-		toolname.UpdateWorkItem + ";\n" +
-		"- if it is not yours to do, hand it back or reassign it.\n" +
-		"You will not be handed this item again until it changes or the date it waits until comes.")
+	if p.Quiet != nil {
+		b.WriteString(" It comes back to you because nothing typed has answered it since " +
+			p.Quiet.UTC().Format(time.RFC3339) + ": a comment that it still waits records nothing " +
+			"the engine can act on.")
+	}
+	b.WriteString("\n\nRead it with " + toolname.GetWorkItem + ", then answer it in this turn with " +
+		"one of these five, each a change on " + p.Key + " itself:\n" + PickupAnswers + "\n" +
+		"A comment alone is not an answer: this turn is not delivered until one of the five is on " +
+		"the item. With one, you are not handed this item again until it changes or the date it " +
+		"waits until comes; with words only, it comes back to you a day later.")
 	return b.String()
 }
+
+// PickupAnswers is the five typed answers to a work pickup, one per line: the
+// brief lists them, and the refusal of an answer in words names them again.
+const PickupAnswers = "- work it: change the item's own fields, its status (start it, finish it, " +
+	"move it to review) or its content, with " + toolname.UpdateWorkItem + ";\n" +
+	"- if a person or a colleague must answer or decide first, ask them with " +
+	toolname.CommentOnWorkItem + " and `ask` (a person with a `decision`), which puts it in " +
+	"their Inbox;\n" +
+	"- if another item or a pull request blocks it, record it with " + toolname.UpdateWorkItem +
+	" (`waiting_on`);\n" +
+	"- if it waits until a real date, set `wait_until` and `wait_reason` with " +
+	toolname.UpdateWorkItem + " (a wait on a person is an `ask`, never a date);\n" +
+	"- if it is not yours to do, reassign it with " + toolname.UpdateWorkItem + " (`assignee`)."
