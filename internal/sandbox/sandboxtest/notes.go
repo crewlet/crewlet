@@ -517,7 +517,7 @@ func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandb
 	if err != nil || len(lost) != 1 {
 		t.Fatalf("the lost take took %d (%v), want n-1", len(lost), err)
 	}
-	if _, err := s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "answered", "n-2")); err != nil {
+	if _, err = s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "answered", "n-2")); err != nil {
 		t.Fatal(err)
 	}
 	mustClaim(t, s, "t-lost-brief")
