@@ -419,8 +419,10 @@ the client may make of it — the client sends a write nobody heard again,
 twice at most, inside the one wait it was given; on a member's own connection
 it waits the five seconds alone. A caller's own deadline is kept. Each node
 states how its connection reaches the store when it opens it, from its
-broker's kind, since the store cannot see how the connection was made. What
-this does not cover is the event system's to say, and the same:
+broker's kind, since the store cannot see how the connection was made. A
+node's MCP listings are written on a pass of their own beside its fifteen-second
+beat, each write waiting as long as its bytes take, so a slow listing holds up
+no beat. What this does not cover is the event system's to say, and the same:
 a link slower than the floor, a link busy with traffic ahead of the write, and
 the lease renewals a large write holds behind it
 ([Delivery Semantics](event-system.md#delivery-semantics)).
