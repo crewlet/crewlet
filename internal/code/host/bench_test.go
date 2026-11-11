@@ -239,7 +239,7 @@ func advertise(b *testing.B, n codetest.Node, token string) time.Duration {
 	}
 	_, err = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-	took := time.Since(at)
+	took := time.Since(at) //fixedwait:measure a benchmark reports this; no gate reads it
 	if err != nil || resp.StatusCode != http.StatusOK {
 		b.Fatalf("a push's advertisement answered %d (%v)", resp.StatusCode, err)
 	}
@@ -267,7 +267,7 @@ func firstByteMillis(b *testing.B, backend objstore.Backend, rows codetest.Rows)
 		if _, err := store.ReadAt(b.Context(), obj, int64(i)%obj.Size, 1); err != nil {
 			b.Fatalf("a one-byte read of %s: %v", obj.Key, err)
 		}
-		took[i] = time.Since(at)
+		took[i] = time.Since(at) //fixedwait:measure a benchmark reports this; no gate reads it
 	}
 	slices.Sort(took)
 	return quantile(took, 0.5)
@@ -724,7 +724,7 @@ func BenchmarkFetchWarm(b *testing.B) {
 								at := time.Now()
 								_, stderr, err := p.Git().TryContext(b.Context(), dir, nil,
 									"-c", "protocol.version=2", "fetch", "--quiet", "origin", "main")
-								elapsed := time.Since(at)
+								elapsed := time.Since(at) //fixedwait:measure a benchmark reports this; no gate reads it
 								if err != nil {
 									errs[c] = fmt.Errorf("git fetch: %w\n%s", err, stderr)
 								}
@@ -803,10 +803,11 @@ func publishChain(b *testing.B, f *codetest.SoloFleet, node codetest.Node) {
 		if out == compact.OutcomeApplied {
 			return
 		}
+		//fixedwait:measure a poll's own deadline, whose firing only fails the benchmark
 		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) {
 			b.Fatalf("node %s's publication of the repository: %s, %v", node.ID(), out, err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -832,11 +833,11 @@ func warmChain(b *testing.B, node codetest.Node, repoID string) {
 				indexed, held)
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the benchmark
 			b.Fatalf("node %s installed %d of the %d published layers in five minutes (refused: %v)", node.ID(),
 				ch.Installed, len(ch.Rows), ch.Refused)
 		}
-		time.Sleep(time.Second)
+		time.Sleep(time.Second) //fixedwait:liveness
 	}
 }
 
@@ -858,11 +859,11 @@ func warmIndex(b *testing.B, node codetest.Node, repoID string, packs int) {
 		if held > 0 && held == want && indexed == want && len(bitmaps) > 0 {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the benchmark
 			b.Fatalf("node %s indexed %d of %d packs (%d bitmaps) in five minutes, want all %d", node.ID(),
 				indexed, held, len(bitmaps), packs)
 		}
-		time.Sleep(time.Second)
+		time.Sleep(time.Second) //fixedwait:liveness
 	}
 }
 
@@ -1318,7 +1319,7 @@ func coldClones(b *testing.B, f *codetest.SoloFleet, people []*codetest.Person, 
 			wg.Go(func() {
 				at := time.Now()
 				dirs[c], errs[c] = cloneInto(b.Context(), people[c], root, target, shape, cone)
-				times[c] = time.Since(at)
+				times[c] = time.Since(at) //fixedwait:measure a benchmark reports this; no gate reads it
 			})
 		}
 		wg.Wait()
@@ -1375,10 +1376,10 @@ func warmBitmap(b *testing.B, node codetest.Node, repoID string) {
 		if len(found) > 0 {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the benchmark
 			b.Fatalf("node %s wrote no bitmap for the repository in five minutes", node.ID())
 		}
-		time.Sleep(time.Second)
+		time.Sleep(time.Second) //fixedwait:liveness
 	}
 }
 
@@ -1619,7 +1620,7 @@ func warmClones(b *testing.B, node codetest.Node, p *codetest.Person, shape, cli
 			wg.Go(func() {
 				at := time.Now()
 				dirs[c], errs[c] = cloneInto(b.Context(), p, root, repoURL(node), shape, cone)
-				times[c] = time.Since(at)
+				times[c] = time.Since(at) //fixedwait:measure a benchmark reports this; no gate reads it
 			})
 		}
 		wg.Wait()

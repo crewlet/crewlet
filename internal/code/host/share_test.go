@@ -130,6 +130,11 @@ func transferring(sub string) func(gitproc.Cmd) bool {
 // every read is served once released or answered unready, the share full,
 // never failed.
 //
+// THE PUSH LANDING IS THE PROOF IT NEVER WAITED OUT THE LANE: a scan or a peel
+// that waits gitproc.SlotWait for a slot is refused busy (gitproc.ErrBusy),
+// and the push with it (503) — so a push that lands was admitted to the free
+// half, whatever the runner's clock says it took.
+//
 // EVERY READ LISTS A DIRECTORY OF ITS OWN, so each is a page no other read is
 // cutting and runs its own listing under its own unit of the share: reads of
 // ONE page are a single flight (query.Server), the first leading and every
@@ -170,7 +175,7 @@ func TestAPushIsServedBesideAFullReadShare(t *testing.T) {
 	for range 2 {
 		select {
 		case <-hold.held:
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			t.Fatal("no read reached its listing within 30 s")
 		}
 	}
@@ -179,17 +184,12 @@ func TestAPushIsServedBesideAFullReadShare(t *testing.T) {
 	}
 
 	p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
-	start := time.Now()
 	pushed := p.Push(c.Ctx, work, c.URL(0), "main")
-	took := time.Since(start)
 	held := node.Share().Held()
 	close(hold.release)
 	if pushed.Err != nil || !pushed.OK("refs/heads/main") {
-		t.Errorf("a person's push beside a full read share: %s, want it landed", pushed)
-	}
-	if took >= gitproc.SlotWait {
-		t.Errorf("the push took %s, as long as the read lane's wait (%s): it queued behind the seats' reads",
-			took, gitproc.SlotWait)
+		t.Errorf("a person's push beside a full read share: %s, want it landed, never refused busy for the "+
+			"read lane's wait (%s) behind the seats' reads", pushed, gitproc.SlotWait)
 	}
 	if held > 2 {
 		t.Errorf("%d units of the share held during the push, past its 2", held)

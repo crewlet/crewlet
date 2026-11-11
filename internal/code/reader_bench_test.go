@@ -156,7 +156,7 @@ func BenchmarkRunPushes(b *testing.B) {
 					}); err != nil {
 						b.Fatal(err)
 					}
-					slowest = max(slowest, time.Since(began))
+					slowest = max(slowest, time.Since(began)) //fixedwait:measure a benchmark reports this; no gate reads it
 					pushes, pages = pushes+len(out.Pushes), pages+1
 					if out.Next == "" {
 						break

@@ -90,7 +90,7 @@ func TestAWindowListsEachChangeOnceAtItsLastMove(t *testing.T) {
 		t.Fatalf("the week listed %d changes, want 3", len(answer.Changes))
 	}
 	spoken, last := answer.Changes[0], answer.Changes[2]
-	if !spoken.UpdatedAt.After(last.UpdatedAt.Add(48 * time.Hour)) {
+	if !spoken.UpdatedAt.After(last.UpdatedAt.Add(48 * time.Hour)) { //fixedwait:stated both are record instants the case's storedAt hook states, three days apart
 		t.Errorf("web!1 was last moved at %s and web!2 at %s: the comment three days on moved web!1",
 			spoken.UpdatedAt, last.UpdatedAt)
 	}

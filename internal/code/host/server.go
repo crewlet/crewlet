@@ -322,6 +322,18 @@ type Options struct {
 // it 503 with Retry-After StoppingRetryAfter.
 var ErrStopping = errors.New("host: Gitlet is stopping")
 
+// keepaliveTicker paces a push session's keepalive (session.go): the ticks a
+// case set in keepaliveTicks, and otherwise a ticker of every, stopped by its
+// stop. A NIL HOOK IS PRODUCTION'S TICKER, so no way of building a Server — New,
+// or a literal in a case — leaves a session's keepalive nothing to tick on.
+func (s *Server) keepaliveTicker(every time.Duration) (<-chan time.Time, func()) {
+	if s.keepaliveTicks != nil {
+		return s.keepaliveTicks(every)
+	}
+	t := time.NewTicker(every)
+	return t.C, t.Stop
+}
+
 // ErrOptions is an Options value New refuses, wrapped naming every field.
 var ErrOptions = errors.New("host: refused options")
 
@@ -365,6 +377,14 @@ type Server struct {
 	// ones: a helper that adds the history term proves nothing about a call
 	// site that hands it no history.
 	runGit func(context.Context, gitproc.Cmd) (gitproc.Result, error)
+
+	// keepaliveTicks, when set, paces a push session's keepalive in place of
+	// its ticker ([Server.keepaliveTicker]) — a field so the suite can send
+	// each tick itself (export_test.go). The lines go to the push's hook,
+	// which prints them on the client's stderr only once the push ends, so
+	// how many a wait gets is otherwise how many a loaded runner's clock let
+	// fit into it. Nil, as in production, is a ticker.
+	keepaliveTicks func(every time.Duration) (ticks <-chan time.Time, stop func())
 
 	// writes is every engine write running on this node, by its push id,
 	// which a second write of the same push id waits for (write.go's
