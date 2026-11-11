@@ -1,10 +1,13 @@
 package collect
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -792,6 +796,36 @@ func TestARefusedSweepIsReportedBesideTheCollection(t *testing.T) {
 	}
 	if h.held(orphan) {
 		t.Fatal("the collection did not run beside a refused sweep")
+	}
+}
+
+// A COLLECTION THAT DID NOT COMPLETE IS LOGGED AS A WARNING, and one that did
+// is not: at INFO a failing hourly pass went unseen while its garbage stayed.
+// Not parallel: it installs the process's log sink.
+func TestACollectionThatDidNotCompleteWarns(t *testing.T) {
+	var out bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+
+	h := newHarness(t)
+	h.put("an orphan")
+	h.clock.advance(PendingGrace + time.Hour)
+	if r, err := h.c.Collect(t.Context()); err != nil || !r.Completed || r.Deleted != 1 {
+		t.Fatalf("a collection of one orphan = %+v, %v; want it deleted", r, err)
+	}
+	h.askByName()
+	if r, err := h.c.Collect(t.Context()); err == nil || r.Completed {
+		t.Fatalf("a collection whose listing failed = %+v, %v; want it incomplete", r, err)
+	}
+	var levels []string
+	for line := range strings.Lines(out.String()) {
+		if _, rest, ok := strings.Cut(line, "level="); ok && strings.Contains(line, "msg=objects_collected") {
+			level, _, _ := strings.Cut(rest, " ")
+			levels = append(levels, level)
+		}
+	}
+	if want := []string{"INFO", "WARN"}; !slices.Equal(levels, want) {
+		t.Fatalf("the two collections logged at %q, want %q:\n%s", levels, want, out.String())
 	}
 }
 

@@ -889,8 +889,17 @@ func (c *Collector) Collect(ctx context.Context) (CollectionReport, error) {
 	c.mu.Lock()
 	c.status.Collect = r
 	c.mu.Unlock()
-	if r.Deleted > 0 || r.Abandoned > 0 || r.Skipped != "" ||
-		r.SweepError != "" || err != nil {
+	switch {
+	case !r.Completed:
+		// A WARNING, as a failed audit is: logged at INFO, an hourly pass
+		// that kept failing went unseen while the garbage it missed stayed.
+		log.WarnContext(ctx, "objects_collected", "listed", r.Listed, "aged", r.Aged,
+			"deleted", r.Deleted, "abandoned", r.Abandoned,
+			"skipped", r.Skipped, "sweep_error", r.SweepError,
+			"completed", r.Completed, "error", r.Error,
+			"detail", "objects nothing names stay in the store, and are billed, until a "+
+				"collection completes")
+	case r.Deleted > 0 || r.Abandoned > 0 || r.SweepError != "":
 		log.InfoContext(ctx, "objects_collected", "listed", r.Listed, "aged", r.Aged,
 			"deleted", r.Deleted, "abandoned", r.Abandoned,
 			"skipped", r.Skipped, "sweep_error", r.SweepError,

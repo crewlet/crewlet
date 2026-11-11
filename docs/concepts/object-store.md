@@ -932,7 +932,10 @@ through a read that copy refuses — and gives the duty back if it holds it, so
 a node whose copies serve takes it at its next minute's turn
 ([singleton duties](seat-ownership.md#singleton-duties)).
 
-A pass that fails is tried again ten minutes later. The duty records each pass
+A pass that fails is tried again ten minutes later. A collection that does not
+complete, because the store failed it or because it stopped judging, is logged
+as a `WARN` line, `objects_collected`, with why; an audit that fails is
+`objects_audited` at `WARN`. The duty records each pass
 in the coordination store, so every node's [`/fleet`](../reference/api-endpoints.md#get-fleet)
 and `crewlet objects status` show the same report, naming the node that ran it,
 and a node taking the duty over picks up the schedule and the last audit's
