@@ -772,10 +772,8 @@ export interface McpServerAnswer {
   server: McpServerStatus;
   nodes: McpStatusNode[];
   listed: McpServerListing[];
-  /** Every tool a live node's instances list, by name. */
+  /** Every tool a live node's instances list, by name: a listing names every one. */
   tools: McpToolView[];
-  /** How many tools the server lists; never fewer than `tools` holds. */
-  tool_count: number;
   /**
    * The level of every tool `tools.levels` does not name, or null where the
    * entry sets no default, which leaves each such tool at the level its hints
@@ -994,7 +992,6 @@ export interface McpMemberServerAnswer {
   nodes: McpStatusNode[];
   listed: McpServerListing[];
   tools: McpToolView[];
-  tool_count: number;
   server_info: McpServerInfo | null;
   instances: McpMemberInstanceView[];
   instance_nodes: McpMemberInstanceNodeView[];
@@ -1393,4 +1390,17 @@ export interface McpChangesAnswer {
   moved: string[];
   /** The configuration's answer to the levels a block wrote; null where nothing was blocked. */
   revision: Record<string, unknown> | null;
+}
+
+/**
+ * The `503` of a decision written in part: the decisions are written one by
+ * one, and the store failed one. Beside the detail, what was decided and what
+ * was not, by the server's own tool names.
+ */
+export interface McpChangesPartial {
+  accepted: string[];
+  blocked: string[];
+  moved: string[];
+  /** The decision the store failed, then each one not tried after it. */
+  undecided: string[];
 }
