@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -137,6 +138,7 @@ func hostDigest(t *testing.T, c *config.Company, id string) string {
 func records(t *testing.T, c *config.Company) gather.Sources {
 	expiry, failed := now.Add(3*24*time.Hour), now.Add(-time.Hour)
 	return gather.Sources{
+		Log:    fakeLog{},
 		Gitlet: &fakeGitlet{page: 10},
 		Integrations: fakeIntegrations{
 			{Kind: integration.KindCloudflare, Endpoint: "https://hooks.acme.example", Outcome: integration.OutcomeBlocked,
@@ -400,4 +402,51 @@ func realistic(tb testing.TB) (*config.Company, gather.Sources) {
 	return c, gather.Sources{Gitlet: gitlet, Integrations: fakeIntegrations{}, SeatAccess: ledger, ToolServers: tools,
 		Nodes: fakeNodes{{MCP: health}}, ServerTests: fakeTests{}, AccessLog: fakeAccess{use: hostUse},
 		Usage: fakeUsage{spend: spend, calls: calls}}
+}
+
+// fakeLog is the atlas's own log: the claims it answers, or its error.
+type fakeLog struct {
+	claims []atlas.Claim
+	err    error
+}
+
+func (l fakeLog) Live(context.Context, statelog.Freshness) (atlasdomain.Live, error) {
+	if l.err != nil {
+		return atlasdomain.Live{}, l.err
+	}
+	return atlasdomain.Live{Claims: l.claims, Complete: true,
+		Position: statelog.Unpack(atlasdomain.Domain{}.Stream().Name, int64(len(l.claims)))}, nil
+}
+
+// WHAT PEOPLE RECORDED FOLDS INTO EVERY READ, beside what the engine computes,
+// and the answer hands the claims back for a writer that decides on them; a
+// log that cannot be read is reported as unread and the rest still answers.
+//
+// Mutation: leave the log's claims out of the fold and the service is never
+// shown.
+func TestWhatPeopleRecordedFoldsIntoTheRead(t *testing.T) {
+	t.Parallel()
+	c := company()
+	service := atlas.MustRef(atlas.KindService, "checkout-api")
+	added, err := atlas.Exists(service, atlas.PersonSource("ana"), now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	added.Position = 1
+	sources := records(t, c)
+	sources.Log = fakeLog{claims: []atlas.Claim{added}}
+	a := gather.Read(context.Background(), sources, gather.Request{Company: c, Revision: "r1", Now: now})
+	if _, ok := a.View.Find(service.ID()); !ok || len(a.Recorded) != 1 || a.RecordedAt.Packed() != 1 {
+		t.Errorf("a person's entry folded %v, the answer handed back %d claims at %v", ok, len(a.Recorded),
+			a.RecordedAt)
+	}
+	if !a.Complete(gather.SourceLog) {
+		t.Error("the log's coverage says it was not read in full")
+	}
+	sources.Log = fakeLog{err: errors.New("no data node answered")}
+	a = gather.Read(context.Background(), sources, gather.Request{Company: c, Revision: "r1", Now: now})
+	if a.Complete(gather.SourceLog) || len(a.View.Entries) == 0 {
+		t.Errorf("an unreadable log reads complete %v with %d entries; want it unread and the rest shown",
+			a.Complete(gather.SourceLog), len(a.View.Entries))
+	}
 }

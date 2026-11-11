@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
@@ -145,18 +146,16 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if limit < 1 || limit > maxAtlasList {
 		return failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxAtlasList)), nil
 	}
-	settings, running := t.deps.Settings(ctx)
-	if !running {
-		return failed(fmt.Sprintf("%s: this node runs no company yet, so there is no atlas to read. "+
-			"Try again once its settings are applied.", t.Name())), nil
+	answer, _, missing := t.atlas(ctx, turn, seatRead, time.Now().UTC())
+	if missing != "" {
+		return failed(fmt.Sprintf("%s: %s", t.Name(), missing)), nil
 	}
-	sources, asker, why := t.gitlet(ctx, turn)
-	answer := gather.Read(ctx, sources, gather.Request{
-		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
-		Asker: asker, Fresh: seatRead, Now: time.Now().UTC(),
-	})
-	coverage := gitletSaid(answer.Coverage, why)
-	matched := atlasMatches(answer.View.Entries, strings.TrimSpace(argString(args, "query")), kind)
+	// A SIGNAL ONLY ADMINISTRATORS READ ELSEWHERE is shown to one here, and
+	// to nobody else (ADR-0127).
+	principal, _ := iam.From(ctx)
+	view := atlas.For(answer.View, atlas.Reader{Admin: principal.Can(iam.GrantAdmin)})
+	coverage := answer.Coverage
+	matched := atlasMatches(view.Entries, strings.TrimSpace(argString(args, "query")), kind)
 	shown := matched[:min(limit, len(matched))]
 	rendered, err := fitPages(len(shown), func(k int) (json.RawMessage, error) {
 		return json.Marshal(atlasList{Entries: shown[:k], Total: len(matched),
@@ -166,6 +165,23 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return labelFault(ctx, t.Name(), err), nil
 	}
 	return compactAnswer(rendered, "Ask for fewer with `limit`, or narrow by `kind` or `query`.")
+}
+
+// atlas is the atlas as this call's caller reads it, at fresh: every source
+// this node reaches, what people recorded among them, and Gitlet as the caller
+// and only where they may read code (gitlet says whether it was read).
+// missing says why there is no atlas at all: a node that runs no company yet.
+func (t *atlasSearch) atlas(ctx context.Context, turn *turnctx.Turn, fresh statelog.Freshness,
+	now time.Time) (answer gather.Answer, gitlet bool, missing string) {
+
+	sources, asker, why := t.gitlet(ctx, turn)
+	answer, running := t.deps.AtlasRead(ctx, sources.Gitlet, asker, fresh, now)
+	if !running {
+		return gather.Answer{}, false, "this node runs no company yet, so there is no atlas to read. " +
+			"Try again once its settings are applied."
+	}
+	answer.Coverage = gitletSaid(answer.Coverage, why)
+	return answer, sources.Gitlet != nil, ""
 }
 
 // gitlet is the Gitlet source this call reads and who it reads as: none where
