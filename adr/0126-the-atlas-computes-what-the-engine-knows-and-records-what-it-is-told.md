@@ -1,0 +1,24 @@
+# ADR-0126: The atlas computes what the engine knows and records what it is told
+
+- **Status:** accepted
+- **Authority:** `internal/atlas`
+- **Enforced-by:** `internal/atlas.TestEveryKindRelationAndFactIsClosed`, `internal/atlas.TestAValueShapedLikeACredentialIsRefused`, `internal/atlas.TestAnAddressIsRecordedWithoutItsCredentials`, `internal/atlas.TestNoConfidenceIsChosenByTheCaller`, `internal/atlas.TestAnAgentNeverSetsMeaning`, `internal/atlas.TestTheFoldIsAPureFunctionOfItsClaims`, `internal/atlas.TestAPersonOutranksEveryInference`, `internal/atlas.TestTwoSourcesThatDisagreeAreShownNotSettled`, `internal/atlas.TestAnExactKeyMergesTwoEntries`, `internal/atlas.TestASharedPublicAddressNeverMerges`, `internal/atlas.TestAPersonsNotTheSameAlwaysWins`, `internal/atlas.TestAnAgentsClaimNeverMergesEntries`, `internal/atlas.TestTheAtlasImportsNoWritePath`, `internal/atlas/derive.TestTheSettingsTheAtlasReadsHoldNoSecret`, `internal/atlas/derive.TestNoSecretReachesTheAtlas`, `internal/atlas/derive.TestEveryIntegrationKindHasAnAtlasRow`, `internal/atlas/derive.TestGitletListsOnlyWhatTheReaderMayRead`, `internal/atlas/derive.TestDeriveImportsNoWritePath`, `internal/atlas/gather.TestASourceThatFailsIsReportedNotHidden`
+- **Tag-status:** unreleased
+
+## The decision
+
+**The atlas is one fold over attributed claims.** A claim the engine can compute from what it already keeps (the company settings, read only through the redacting copy, and the engine's own records: Gitlet's rows, an integration's status, the access log, the usage history) is computed every time the atlas is read and never stored. A claim only somebody can tell the engine (a person, an agent in a named turn, an integration's read beyond what the engine keeps) is a record on a log of the atlas's own, replicated on every data node. Every claim names its source and when it was seen, and carries a confidence the engine derives from its source and the evidence it checked; no writer passes a confidence in. `atlas.Fold` is pure and deterministic, so every node gives one answer and nothing is written for the answer to be right.
+
+**Values are typed so a secret has nowhere to go.** Kinds, relations, facts and value types are closed sets in `internal/atlas`. There is no value type for a connection string, a command line, a file body, an environment value or a vendor's raw answer, and a value shaped like a credential is refused, never masked and kept. The settings reach a derivation only through `derive.FromSettings`, which holds the redacting copy and nothing else.
+
+**Identity is an exact key, merged when the atlas is read.** An entry is its kind and its canonical natural key, and its id is a name-based UUID over the two. Two entries of one kind that share an exact key (a public address, a forge address, an account's own id) are one entry; a key one source carries on two entries is a shared address and merges nothing; an agent's claim never merges anything; and a person's "not the same" always wins. Similar names only ever produce a suggestion for a person.
+
+**A person outranks every inference, and disagreement is shown.** For each fact the most trusted source wins, then the newest. A fact of meaning (purpose, environment, importance, the owner) is decided only by a person or the settings; an integration or an agent only suggests it. A newer report that contradicts a person is contested, two equally trusted sources that disagree are disputed, and both values are shown; nothing is settled in silence. An entry's state is read off its claims on every read.
+
+## Why the obvious alternative is wrong
+
+**Copying what the engine knows into the atlas's log** makes a second copy of the settings and of every record, which drifts the moment one update is missed, and needs a writer on some node for the atlas to be right. Computed at read, a declared fact cannot disagree with its declaration, and the first slice of the atlas needs no storage at all. **Querying vendors live on every read** keeps no history, puts a vendor's rate limit on every page view, and cannot tell "gone" from "the call failed". **A confidence the writer chooses**, or a number, is a channel company content can steer (the reason ADR-0115 and ADR-0119 give for the advisor and for operating insights). **Merging by similar names** produces a tidier map that is sometimes wrong in the way that matters most: two production databases shown as one hides one of them. **Merging when a claim is written** makes a wrong key rule a migration; computed at read, it is a code change.
+
+## What this does not decide
+
+Who may read the atlas (its own permission's record). How the recorded claims are stored, arbitrated and retired on the atlas's log, which integrations read what and how often, what an agent may record and with which evidence, and how the atlas is shown and asked about: each is decided where it is built.
