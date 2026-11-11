@@ -309,3 +309,32 @@ test("the design being laid out is the assistant's to read, and a draft.set fill
   });
   expect(setDraft({ references: ["ftp://example.com"] })).toMatchObject({ outcome: "invalid" });
 });
+
+// THE WHOLE TASK TEXT IS HELD TO WHAT A TASK'S DESCRIPTION HOLDS before the
+// press: the brief, the boards' briefs and the references together. Past it,
+// the engine refused the task after the design was made. References in a
+// script of three bytes a character take it past the bound, and two of them
+// leave it inside. Mutation: drop the task text's hold, and Create and ask
+// makes the design.
+test("a task text past what a task holds is held before the design is made", async () => {
+  openFrame("artifacts-new");
+  mount();
+  expect(setDraft({ title: "Launch", layout: "landing" })).toMatchObject({ outcome: "applied" });
+  FakeResizeObserver.all.forEach((o) => o.resize(1000, 700));
+  const references = Array.from(
+    { length: 35 },
+    (_, i) => `https://example.com/${i}/${"設".repeat(400)}`,
+  );
+  expect(setDraft({ references })).toMatchObject({ outcome: "applied" });
+  const create = screen.getByRole("button", { name: "Create and ask" });
+  expect(create.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => {
+    fireEvent.click(create);
+  });
+  expect(run).not.toHaveBeenCalled();
+  expect(fileArtifactTask).not.toHaveBeenCalled();
+  expect(setDraft({ references: references.slice(0, 2) })).toMatchObject({ outcome: "applied" });
+  expect(
+    screen.getByRole("button", { name: "Create and ask" }).getAttribute("aria-disabled"),
+  ).not.toBe("true");
+});

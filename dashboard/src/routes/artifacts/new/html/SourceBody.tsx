@@ -64,7 +64,7 @@ import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import type { ArtifactCapability, ArtifactLintFinding } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate, type CreateAction } from "../CreateShell.tsx";
 import { titleHold, titleProblem, useNoPagesHold, useSaveIn, useWorkItem } from "../create.ts";
-import { artifactTaskBody, useFileArtifactTask } from "../fileTask.ts";
+import { filedTaskText, useFileArtifactTask } from "../fileTask.ts";
 import { useWhoBuildsIt } from "../WhoBuildsIt.tsx";
 import { createDraft, linesOf } from "../assistantDraft.ts";
 import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
@@ -180,7 +180,8 @@ export function SourceBody() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
-  const { folder } = useSaveIn();
+  const saveIn = useSaveIn();
+  const { folder } = saveIn;
   const access = useArtifactAccess({ app: true });
   const editor = useRef<SourceEditorHandle>(null);
 
@@ -230,7 +231,7 @@ export function SourceBody() {
   const handed = entrySource
     ? `${taskBody(asked)}\n\nBuild on the page as it stands (${entry}):\n\n\`\`\`html\n${entrySource.trimEnd()}\n\`\`\``
     : taskBody(asked);
-  const sent = artifactTaskBody("html", handed);
+  const sent = filedTaskText({ kind: "html", brief: handed }, saveIn);
   const sentBytes = utf8Bytes(sent);
   const noPages = useNoPagesHold();
   const askHold =

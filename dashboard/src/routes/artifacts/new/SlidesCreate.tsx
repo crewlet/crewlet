@@ -72,7 +72,14 @@ import { logoSlotOf } from "~/lib/brand/brand.ts";
 import { BRAND_DECK_THEME } from "~/components/brand.tsx";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } from "./create.ts";
-import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import {
+  artifactTaskBody,
+  filedTaskText,
+  UNMADE_ARTIFACT,
+  useFileArtifactTask,
+} from "./fileTask.ts";
+import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
+import { bytesOverWords, utf8Bytes } from "~/lib/format.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
 import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
@@ -284,7 +291,8 @@ export function SlidesCreate() {
 function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const create = useCreateArtifact();
   const workItem = useWorkItem();
-  const { folder } = useSaveIn();
+  const saveIn = useSaveIn();
+  const { folder } = saveIn;
   const { root, phone, arrangement, stripInMain } = useComposerArrangement();
   const opening = useMemo(() => rowsOf(starters.default), [starters.default]);
   const { adoption, assets } = useAdoptedBrand();
@@ -355,6 +363,14 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const agent = chosenAgent(who)?.seat;
 
   const hold = titleHold(title) ?? planHold(rows);
+  const handed = `${brief.trim()}\n\n${planBrief(theme, rows, title, layouts)}`;
+  // THE TASK TEXT AS IT IS FILED, the brief and every slide's line of the
+  // plan: a brief of 4,000 characters and a plan of 60 slides can be past
+  // what a task's description holds, which the engine refuses after the deck
+  // was made.
+  const taskBytes = utf8Bytes(
+    filedTaskText({ kind: "slides", brief: handed, artifact: made?.id ?? UNMADE_ARTIFACT }, saveIn),
+  );
   const askHold =
     files.held ??
     (brief.trim() === ""
@@ -365,7 +381,9 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
           ? "Add an agent to the chart first."
           : !who.project
             ? "Choose the project to file the task in."
-            : undefined)));
+            : taskBytes > TASK_BODY_MAX_BYTES
+              ? `The brief and the slides are ${bytesOverWords(taskBytes, TASK_BODY_MAX_BYTES)} for a task.`
+              : undefined)));
   const busy = create.busy || make.busy || files.busy;
   // WHAT IS OPEN, for the assistant: the title, the theme and each slide's
   // title, and the hand-off beside them, set through the composer's own
@@ -393,7 +411,6 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       blocked: () => (busy ? "The deck is being made." : null),
     }),
   );
-  const handed = `${brief.trim()}\n\n${planBrief(theme, rows, title, layouts)}`;
 
   const start = async () => {
     if (hold || busy) return;

@@ -72,7 +72,8 @@ import { DASHBOARD_COLUMNS, DASHBOARD_SPEC_PATH } from "~/contract/artifacts.ts"
 import { createFromUpload, readCatalogue, uploadTexts } from "~/lib/artifacts/api.ts";
 import { refreshWords } from "~/lib/artifacts/dashboard.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { plural } from "~/lib/format.ts";
+import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
+import { bytesOverWords, plural, utf8Bytes } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -84,7 +85,12 @@ import {
 import { DashboardWidget } from "../DashboardWidget.tsx";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useSaveIn, useWorkItem } from "./create.ts";
-import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import {
+  artifactTaskBody,
+  filedTaskText,
+  UNMADE_ARTIFACT,
+  useFileArtifactTask,
+} from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
 import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
@@ -210,7 +216,8 @@ export function DashboardCreate() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
-  const { folder } = useSaveIn();
+  const saveIn = useSaveIn();
+  const { folder } = saveIn;
   const [title, setTitle] = useState("");
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [open, setOpen] = useState<string | null>(null);
@@ -267,13 +274,29 @@ export function DashboardCreate() {
     titleHold(title) ??
     (resolved.length === 0 ? "Add at least one figure to the board." : undefined) ??
     tooMany;
+  // THE TASK TEXT AS IT IS FILED: the brief, which nothing else bounds, and
+  // the board it refines where figures are on it (made at the press), else
+  // the folder a new one is filed in.
+  const taskBytes = utf8Bytes(
+    filedTaskText(
+      {
+        kind: "dashboard",
+        brief,
+        ...(resolved.length > 0 ? { artifact: madeFor.current?.id ?? UNMADE_ARTIFACT } : {}),
+      },
+      saveIn,
+    ),
+  );
   const askHold =
     filer.held ??
     (brief.trim() === "" ? "Say what the board should answer." : undefined) ??
     askTitleHold(title, "dashboard") ??
     (who.seat === "" ? "Add an agent to the chart first." : undefined) ??
     (who.project === "" ? "Choose the project to file the task in." : undefined) ??
-    tooMany;
+    tooMany ??
+    (taskBytes > TASK_BODY_MAX_BYTES
+      ? `The brief is ${bytesOverWords(taskBytes, TASK_BODY_MAX_BYTES)} for a task.`
+      : undefined);
 
   const add = (src: DashboardEngineSource, r: Recipe) => {
     if (!hasRoom(draft)) return;

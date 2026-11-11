@@ -21,7 +21,9 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import {
   artifactTaskBody,
+  filedTaskText,
   notAttached,
+  UNMADE_ARTIFACT,
   useFileArtifactTask,
   type ArtifactTaskRequest,
   type FiledArtifactTask,
@@ -212,6 +214,29 @@ test("the description names the folder a new artifact is filed in by its id alon
     "Notes.\n\nPublish it as a Doc artifact (kind `doc`) for this task. File it in the folder whose id is f1 (`folder` on `create_artifact`).",
   );
   expect(artifactTaskBody("design", "Screens.", "a1", "f1")).not.toContain("f1");
+});
+
+// WHAT A PAGE MEASURES IS WHAT IS FILED: the folder's clause included where a
+// new artifact is filed in one and the tree has said it may be, and none
+// beside an artifact already made, which was filed when it was made; and an
+// artifact the press makes first measured by an id of an artifact id's width.
+// Measured without the folder's clause, a sheet or a page filed into a folder
+// was held about a hundred bytes short of the bound and refused after the
+// press. Mutation: write the text without the folder, and the first case
+// fails.
+test("the text a page measures is the text the task is filed with", () => {
+  const into = { folder: "f1", name: "Q4", path: "Q4", reading: false, set: () => {} };
+  expect(filedTaskText({ kind: "sheet", brief: "Rows." }, into)).toBe(
+    artifactTaskBody("sheet", "Rows.", undefined, "f1"),
+  );
+  expect(filedTaskText({ kind: "sheet", brief: "Rows." }, into)).toContain("f1");
+  expect(filedTaskText({ kind: "sheet", brief: "Rows." }, { ...into, reading: true })).toBe(
+    artifactTaskBody("sheet", "Rows."),
+  );
+  expect(filedTaskText({ kind: "design", brief: "Screens.", artifact: "a1" }, into)).toBe(
+    artifactTaskBody("design", "Screens.", "a1"),
+  );
+  expect(UNMADE_ARTIFACT).toHaveLength("0192f2c4-2222-7000-8000-000000000009".length);
 });
 
 // A REAL TASK, as the person: the tracker's own create, filed to the seat in

@@ -2632,7 +2632,14 @@ nothing) with the task exactly as it is filed behind a disclosure, then
 **What happens next**. The send is the panel's foot, "Ask SRE Lead" beside
 that agent's character, pressed by Enter in the brief or Command+Enter anywhere in the panel; held,
 it says why in words beside the button, and the engine's refusal is said
-above it. The bar's primary stays the direct create.
+above it. The task's text is held to what a task's description holds (32 KiB,
+`TASK_BODY_MAX_BYTES`) before the press, measured as it is filed
+(`filedTaskText`: the folder it is filed in named, and an artifact the press
+makes first named by an id of its width), on every kind: a design's boards
+and references, a deck's plan, a sheet's rows and a page's source ride the
+brief, and a text past the bound was refused by the engine after the press,
+for a design, a deck or a board after the artifact was made. The bar's
+primary stays the direct create.
 
 **Two kinds arrive with it open.** A design is drawn only by an agent, so its
 page opens with the panel beside the canvas and its bar's Ask an agent is the

@@ -396,3 +396,25 @@ test("the board being composed is the assistant's to read, and a draft.set start
   // A BOARD WITH FIGURES IS NOT STARTED OVER.
   expect(setDraft({ starter: "workload" })).toMatchObject({ outcome: "invalid" });
 });
+
+// THE TASK TEXT IS HELD TO WHAT A TASK'S DESCRIPTION HOLDS before the press:
+// the brief, which nothing else bounds. Past it, the engine refused the task,
+// after the board was made where it held figures. Mutation: drop the task
+// text's hold, and the task is filed.
+test("a task text past what a task holds is held before the press", async () => {
+  mount();
+  await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+    target: { value: "Team load" },
+  });
+  const brief = screen.getByRole("textbox", { name: "What should the board answer?" });
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  fireEvent.change(brief, { target: { value: "Who is carrying the most work." } });
+  const ask = await within(panel).findByRole("button", { name: "Ask" });
+  await waitFor(() => expect(ask.getAttribute("aria-disabled")).toBeNull());
+  fireEvent.change(brief, { target: { value: "設".repeat(11_000) } });
+  await waitFor(() => expect(ask.getAttribute("aria-disabled")).toBe("true"));
+  fireEvent.click(ask);
+  expect(filed()).toBeUndefined();
+});
