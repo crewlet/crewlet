@@ -177,8 +177,9 @@
 // runs the call's tool as it admits the call, the bridge holds it in its
 // registry ([bridgedCalls]) until the call is recorded, which
 // [Bridge.AwaitCalls] waits for, and the tool's return ends it.
-// [Bridge.Shutdown] leaves it running, and a process that ends first ends it
-// with the process, the call on no record.
+// [Bridge.Shutdown] leaves it running; a node's drain, once it has given its
+// seats back, waits for it (internal/engine's Engine.Drain); and a process
+// killed first ends it with the process, the call on no record.
 //
 // WHAT A LATER RUN OF THE WORK IS TOLD. A call so recorded is held by no save
 // point, so every continuation of its round built after it landed is told its

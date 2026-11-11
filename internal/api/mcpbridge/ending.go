@@ -146,7 +146,7 @@ func (c *bridgedCall) endsAnswer() toolsession.Result {
 // tool's own bound ends it ([binding.conclude]); a close behind an end ends
 // once the answers it waits for are out, at the latest when the box's
 // connection ends. [Bridge.Shutdown] stops neither. [Bridge.AwaitCalls] waits
-// for the calls.
+// for the calls, as a node's drain does once it has given its seats back.
 type bridgedCalls struct {
 	mu  sync.Mutex
 	set map[*bridgedCall]struct{}
@@ -188,13 +188,13 @@ func (r *bridgedCalls) running() []*bridgedCall {
 
 // AwaitCalls waits until every call this bridge runs whose opening has ended
 // by the time it is asked has been recorded ([binding.conclude]), or until ctx
-// ends: for a caller that must not tear down what such a call writes through
-// before it lands, as a node that has given its seats back and is stopping
-// must not, since a call its seat's openings' ends answered as still running
-// goes on to reach the run's log. A call on an opening still serving is its
-// run's own to wait for, and a call admitted after this is asked is not
-// waited for. No bound of its own: ctx's is the caller's, and a call's own
-// bound ends it (wait.go). Nil-safe.
+// ends: what a node's drain asks once it has given its seats back
+// (internal/engine's Engine.Drain), which ended every seat's openings, so a
+// call those ends answered as still running reaches the run's log before the
+// node tears down what it writes through. A call on an opening still
+// serving is its run's own to wait for, and a call admitted after this is
+// asked is not waited for. No bound of its own: ctx's is the caller's, and a
+// call's own bound ends it (wait.go). Nil-safe.
 func (b *Bridge) AwaitCalls(ctx context.Context) {
 	if b == nil {
 		return

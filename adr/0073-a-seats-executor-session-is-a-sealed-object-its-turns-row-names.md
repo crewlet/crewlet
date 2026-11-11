@@ -2033,7 +2033,7 @@ records the call. And what such a call committed counts in the turn's outcome
 only where the log takes it before its round's last collection reads the log,
 as a late call's does: a call still running as its run settles lands after that
 read, and so does one still running as a send-back's new round opens the log
-afresh, so what either committed is in no outcome. And a call still running as
-the process running it ends is on no record at all: the bridge runs it to its
-end under its run's context, and nothing of the process outlives it to record
-it.
+afresh, so what either committed is in no outcome. And a call still running
+when the process running it is killed is on no record at all: a node's
+graceful stop waits for it once it has given its seats back, and nothing of a
+process killed first outlives it to record it.
