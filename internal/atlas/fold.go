@@ -34,7 +34,7 @@ const (
 // sources the most trusted wins, then the newest. A person outranks every
 // inference, and a disagreement is shown beside the value, never settled.
 func Fold(claims []Claim, now time.Time) View {
-	view := View{Entries: []Entry{}}
+	var view View
 	live := make([]Claim, 0, len(claims))
 	for _, c := range claims {
 		if err := c.validate(); err != nil {
@@ -50,8 +50,9 @@ func Fold(claims []Claim, now time.Time) View {
 		return cmp.Or(compareRef(a.Subject, b.Subject), cmp.Compare(a.Reason, b.Reason))
 	})
 	canonical := merge(live)
-	byEntry := map[Ref][]Claim{}
-	for _, c := range live {
+	byEntry := map[Ref][]*Claim{}
+	for i := range live {
+		c := &live[i]
 		if c.Facet.Kind == FacetDistinct || c.Facet.Kind == FacetSame {
 			continue
 		}
@@ -64,6 +65,7 @@ func Fold(claims []Claim, now time.Time) View {
 		}
 		byEntry[c.Subject] = append(byEntry[c.Subject], c)
 	}
+	view.Entries = make([]Entry, 0, len(byEntry))
 	for ref, cs := range byEntry {
 		if e, ok := entryOf(ref, cs, canonical.members[ref], now); ok {
 			view.Entries = append(view.Entries, e)
@@ -99,42 +101,50 @@ func compareRef(a, b Ref) int {
 	return cmp.Or(cmp.Compare(a.Kind.rank(), b.Kind.rank()), cmp.Compare(a.Key, b.Key))
 }
 
-// facetKey is the one thing a facet claims, after merging: a fact that holds
-// many values is one facet per value.
-func facetKey(c Claim) string {
-	f := c.Facet
-	switch f.Kind {
-	case FacetFact:
-		if specs()[f.Fact].Many {
-			return "f\x00" + string(f.Fact) + "\x00" + c.Value.Text
-		}
-		return "f\x00" + string(f.Fact)
-	case FacetRelation:
-		if f.Target.External != "" {
-			return "r\x00" + string(f.Relation) + "\x00" + string(f.Target.External) + "\x00" + f.Target.Name
-		}
-		return "r\x00" + string(f.Relation) + "\x00" + f.Target.Entry.String()
-	case FacetDistinct, FacetSame:
-		return string(f.Kind) + "\x00" + f.Target.Entry.String()
+// facetID is the one thing a facet claims, after merging: a fact that holds
+// many values is one facet per value. A comparable value rather than a built
+// string, so grouping thousands of claims allocates no key.
+type facetID struct {
+	facet Facet
+	value string
+}
+
+func facetOf(c *Claim) facetID {
+	id := facetID{facet: c.Facet}
+	if c.Facet.Kind == FacetFact && specs()[c.Facet.Fact].Many {
+		id.value = c.Value.Text
 	}
-	return string(f.Kind)
+	return id
+}
+
+// voice is a source as one voice: a later claim of the same voice on the same
+// facet replaces its earlier one.
+type voice struct {
+	kind SourceKind
+	name string
+}
+
+func voiceOf(c *Claim) voice { return voice{c.Source.Kind, c.Source.Name} }
+
+func compareVoice(a, b *Claim) int {
+	return cmp.Or(cmp.Compare(a.Source.Kind, b.Source.Kind), cmp.Compare(a.Source.Name, b.Source.Name))
 }
 
 // newer orders two claims of one source on one facet: the later instant, then
 // the later log position, stands.
-func newer(a, b Claim) int {
+func newer(a, b *Claim) int {
 	return cmp.Or(b.ObservedAt.Compare(a.ObservedAt), cmp.Compare(b.Position, a.Position))
 }
 
 // order is the fold's total order over the claims on one facet: the most
 // trusted first, then the newest, then a recorded claim before one computed
 // at read, then by source and value so the order never depends on the input's.
-func order(a, b Claim) int {
+func order(a, b *Claim) int {
 	return cmp.Or(
 		cmp.Compare(a.Confidence().Rank(), b.Confidence().Rank()),
 		b.ObservedAt.Compare(a.ObservedAt),
 		cmp.Compare(b.Position, a.Position),
-		cmp.Compare(a.Source.identity(), b.Source.identity()),
+		compareVoice(a, b),
 		cmp.Compare(a.Value.Text, b.Value.Text),
 		compareBool(a.Denied, b.Denied),
 	)
@@ -152,38 +162,37 @@ func compareBool(a, b bool) int {
 
 // resolution is one facet as the fold reads it.
 type resolution struct {
-	winner    Claim
+	winner    *Claim
 	suggested bool
 	standing  Standing
-	others    []Claim
-	voices    []Claim
+	others    []*Claim
+	voices    []*Claim
 }
 
 // meaningful reports whether a facet is one only a person decides: a fact of
 // meaning, or an owner. The settings and the engine's records are people's
 // decisions written down, so they decide it too.
-func meaningful(c Claim) bool {
+func meaningful(c *Claim) bool {
 	return (c.Facet.Kind == FacetFact && specs()[c.Facet.Fact].Meaning) ||
 		(c.Facet.Kind == FacetRelation && c.Facet.Relation == RelationOwnedBy)
 }
 
-func decides(c Claim) bool { return c.Source.Kind == SourcePerson || c.Source.Kind.Computed() }
+func decides(c *Claim) bool { return c.Source.Kind == SourcePerson || c.Source.Kind.Computed() }
 
 // resolve folds the live claims on one facet. Each source's newest claim
 // stands for it; the most trusted then newest wins; a fact of meaning is won
 // only by a person, the settings or the engine's records, and is otherwise a
 // suggestion.
-func resolve(claims []Claim) resolution {
-	newest := map[string]Claim{}
+func resolve(claims []*Claim) resolution {
+	voices := make([]*Claim, 0, len(claims))
 	for _, c := range claims {
-		id := c.Source.identity()
-		if prior, ok := newest[id]; !ok || newer(c, prior) < 0 {
-			newest[id] = c
+		i := slices.IndexFunc(voices, func(v *Claim) bool { return voiceOf(v) == voiceOf(c) })
+		switch {
+		case i < 0:
+			voices = append(voices, c)
+		case newer(c, voices[i]) < 0:
+			voices[i] = c
 		}
-	}
-	voices := make([]Claim, 0, len(newest))
-	for _, c := range newest {
-		voices = append(voices, c)
 	}
 	slices.SortFunc(voices, order)
 	r := resolution{winner: voices[0], standing: StandingSettled, voices: voices}
@@ -195,7 +204,7 @@ func resolve(claims []Claim) resolution {
 		}
 	}
 	for _, c := range voices {
-		if c.Source.identity() == r.winner.Source.identity() || agrees(c, r.winner) {
+		if voiceOf(c) == voiceOf(r.winner) || agrees(c, r.winner) {
 			continue
 		}
 		r.others = append(r.others, c)
@@ -213,25 +222,25 @@ func resolve(claims []Claim) resolution {
 	return r
 }
 
-func agrees(a, b Claim) bool { return a.Denied == b.Denied && a.Value.Equal(b.Value) }
+func agrees(a, b *Claim) bool { return a.Denied == b.Denied && a.Value.Equal(b.Value) }
 
 // entryOf folds one entry's claims. An entry nothing live asserts is no entry.
-func entryOf(ref Ref, claims []Claim, members []Ref, now time.Time) (Entry, bool) {
-	facets := map[string][]Claim{}
+func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, bool) {
+	facets := map[facetID][]*Claim{}
 	for _, c := range claims {
-		k := facetKey(c)
+		k := facetOf(c)
 		facets[k] = append(facets[k], c)
 	}
 	e := Entry{ID: ref.ID(), Ref: ref, Lane: ref.Kind.Lane(), Name: ref.Key, Members: members,
 		Facts: []FactView{}, Relations: []Edge{}}
 	var exists *resolution
-	asserted, sources := false, map[string]Source{}
-	var support, winners []Claim
+	asserted, sources := false, map[voice]Source{}
+	var support, winners []*Claim
 	for k, cs := range facets {
 		r := resolve(cs)
 		for _, c := range r.voices {
 			if !c.Denied {
-				sources[c.Source.identity()] = c.Source
+				sources[voiceOf(c)] = c.Source
 				if c.ObservedAt.After(e.LastSeen) {
 					e.LastSeen = c.ObservedAt
 				}
@@ -240,7 +249,7 @@ func entryOf(ref Ref, claims []Claim, members []Ref, now time.Time) (Entry, bool
 		if r.standing != StandingSettled {
 			e.Review = true
 		}
-		if k == string(FacetExists) {
+		if k.facet.Kind == FacetExists {
 			exists = &r
 		}
 		if r.winner.Denied {
@@ -264,7 +273,9 @@ func entryOf(ref Ref, claims []Claim, members []Ref, now time.Time) (Entry, bool
 	for _, s := range sources {
 		e.Sources = append(e.Sources, s)
 	}
-	slices.SortFunc(e.Sources, func(a, b Source) int { return cmp.Compare(a.identity(), b.identity()) })
+	slices.SortFunc(e.Sources, func(a, b Source) int {
+		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
+	})
 	e.State, e.Confidence = stateOf(exists, support, winners, now)
 	e.Word = e.Confidence.Display()
 	for _, f := range e.Facts {
@@ -286,11 +297,11 @@ func entryOf(ref Ref, claims []Claim, members []Ref, now time.Time) (Entry, bool
 // stateOf reads an entry's state and confidence off the claims supporting it.
 // support is the live claims an entry's facts and relations rest on, winners
 // those and its suggestions too.
-func stateOf(exists *resolution, support, winners []Claim, now time.Time) (State, Confidence) {
+func stateOf(exists *resolution, support, winners []*Claim, now time.Time) (State, Confidence) {
 	if exists != nil && exists.winner.Denied {
 		return StateRetired, exists.winner.Confidence()
 	}
-	var best Claim
+	var best *Claim
 	switch {
 	case exists != nil:
 		best = exists.winner
@@ -302,7 +313,7 @@ func stateOf(exists *resolution, support, winners []Claim, now time.Time) (State
 	switch {
 	case slices.ContainsFunc(support, decides):
 		return StateConfirmed, best.Confidence()
-	case !slices.ContainsFunc(support, func(c Claim) bool {
+	case !slices.ContainsFunc(support, func(c *Claim) bool {
 		return c.Source.Kind != SourceAgent || now.Sub(c.ObservedAt) <= StaleAfter
 	}):
 		return StateStale, best.Confidence()
@@ -310,7 +321,7 @@ func stateOf(exists *resolution, support, winners []Claim, now time.Time) (State
 	return StateDiscovered, best.Confidence()
 }
 
-func claimed(cs []Claim) []Claimed {
+func claimed(cs []*Claim) []Claimed {
 	out := make([]Claimed, 0, len(cs))
 	for _, c := range cs {
 		out = append(out, Claimed{Value: c.Value, Denied: c.Denied, Source: c.Source,
@@ -344,7 +355,7 @@ func edge(r resolution) Edge {
 // public address for a server, a forge address for a repository, an account's
 // own id. Only these ever merge two entries, and only from a source the engine
 // trusts as confirmed: an agent's claim never merges anything.
-func joinKeysOf(c Claim) []string {
+func joinKeysOf(c *Claim) []string {
 	if c.Facet.Kind != FacetFact || c.Denied {
 		return nil
 	}
@@ -412,9 +423,14 @@ func merge(claims []Claim) merges {
 		}
 		keyed[key][r] = true
 	}
-	joinFacets := map[string][]Claim{}
-	distinct, same := map[[2]Ref][]Claim{}, map[[2]Ref][]Claim{}
-	for _, c := range claims {
+	type subjectFacet struct {
+		subject Ref
+		facet   facetID
+	}
+	joinFacets := map[subjectFacet][]*Claim{}
+	distinct, same := map[[2]Ref][]*Claim{}, map[[2]Ref][]*Claim{}
+	for i := range claims {
+		c := &claims[i]
 		nodes[c.Subject] = true
 		switch {
 		case c.Facet.Kind == FacetDistinct || c.Facet.Kind == FacetSame:
@@ -422,7 +438,6 @@ func merge(claims []Claim) merges {
 			if compareRef(pair[1], pair[0]) < 0 {
 				pair[0], pair[1] = pair[1], pair[0]
 			}
-			c.Subject, c.Facet.Target.Entry = pair[0], pair[1]
 			if c.Facet.Kind == FacetSame {
 				same[pair] = append(same[pair], c)
 			} else {
@@ -430,7 +445,7 @@ func merge(claims []Claim) merges {
 			}
 		case c.Facet.Kind == FacetFact && slices.Contains([]Fact{FactAddress, FactPullMirrorOf, FactPushMirrorTo,
 			FactImportedFrom, FactAccountRef}, c.Facet.Fact):
-			k := c.Subject.String() + "\x00" + facetKey(c)
+			k := subjectFacet{c.Subject, facetOf(c)}
 			joinFacets[k] = append(joinFacets[k], c)
 		}
 	}
@@ -445,7 +460,7 @@ func merge(claims []Claim) merges {
 			continue
 		}
 		for _, key := range joinKeysOf(w) {
-			note(string(w.Subject.Kind)+"\x00"+key, w.Subject, w.Source.identity())
+			note(string(w.Subject.Kind)+"\x00"+key, w.Subject, string(w.Source.Kind)+"\x00"+w.Source.Name)
 		}
 	}
 	apart := map[[2]Ref]bool{}

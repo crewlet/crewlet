@@ -286,6 +286,9 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Knowledge:    full.Knowledge,
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
+		// THE ATLAS, over the settings acme runs: the app's one person-facing
+		// tool, without which holding atlas would open nothing here.
+		Atlas: builtin.AtlasDeps{Settings: runsAcme},
 		// THE CODE TOOLS, over the seams the seat's registry is built with —
 		// Gitlet, its writes, and the requester ceiling's halves —
 		// read as the request's principal as the surface reads them.

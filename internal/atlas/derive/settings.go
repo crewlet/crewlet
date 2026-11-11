@@ -43,21 +43,62 @@ func FromSettings(c *config.Company, revision string, d Deployment) Settings {
 // Revision is the settings revision the claims are read from.
 func (s Settings) Revision() string { return s.revision }
 
+// Location is the company's clock, which its days of use are counted on.
+func (s Settings) Location() *time.Location {
+	if s.company == nil {
+		return time.UTC
+	}
+	return s.company.Location()
+}
+
+// ToolServers is the name of every tool server the agents may use.
+func (s Settings) ToolServers() []string {
+	if s.company == nil {
+		return nil
+	}
+	var out []string
+	for i := range s.company.MCPServers {
+		if m := &s.company.MCPServers[i]; m.IsEnabled() {
+			out = append(out, m.Name)
+		}
+	}
+	return out
+}
+
+// SSHHost is the server the settings declare under id, as the redacted copy
+// holds it: what a connection test was run against is judged by it.
+func (s Settings) SSHHost(id string) (config.SSHHost, bool) {
+	if s.company == nil {
+		return config.SSHHost{}, false
+	}
+	return s.company.Integrations.SSH.Host(id)
+}
+
 // Claims is every claim the settings make, as of at: the accounts of the
 // integrations they connect, the zones they declare, the servers, the tool
 // servers, the models, the sandbox and the addresses the deployment answers at.
-func (s Settings) Claims(at time.Time) Derived {
+func (s Settings) Claims(at time.Time) Derived { return s.derive(at).out }
+
+// Accounts is the account each connected integration is, as of at: where the
+// engine's records about an integration (its status, its agents' accounts)
+// attach.
+func (s Settings) Accounts(at time.Time) map[integration.Kind]atlas.Ref { return s.derive(at).accounts }
+
+func (s Settings) derive(at time.Time) *builder {
 	b := newBuilder(atlas.SettingsSource(s.revision), at)
+	b.accounts = map[integration.Kind]atlas.Ref{}
 	c := s.company
 	if c == nil {
-		return b.out
+		return b
 	}
 	zones := map[string]atlas.Ref{}
 	for _, kind := range integration.Kinds {
 		if derive := integrationRows[kind]; derive != nil {
+			b.kind = kind
 			derive(b, c, zones)
 		}
 	}
+	b.kind = ""
 	for _, address := range []struct{ where, raw, name string }{
 		{"api.external_url", s.deployment.APIAddress, "Crewlet"},
 		{"api.public.external_url", s.deployment.PublicAddress, "Crewlet for vendors"},
@@ -71,7 +112,7 @@ func (s Settings) Claims(at time.Time) Derived {
 		b.account("code.backend", atlas.VendorGitlet, "", "", "Gitlet", true,
 			atlas.CapabilityCodeHosting, atlas.CapabilityCI)
 	}
-	return b.out
+	return b
 }
 
 // integrationRows derives each integration's claims from its settings. Every
@@ -112,6 +153,9 @@ func (b *builder) account(where string, vendor atlas.Vendor, name, id, label str
 	r, ok := b.ref(where, atlas.KindAccount, key)
 	if !ok {
 		return r, false
+	}
+	if b.kind != "" {
+		b.accounts[b.kind] = r
 	}
 	b.says(where, r, atlas.FactName, label)
 	b.says(where, r, atlas.FactVendor, string(vendor))

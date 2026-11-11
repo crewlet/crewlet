@@ -78,6 +78,30 @@ The settings are read only through the same redacting copy the configuration sur
 
 Gitlet's repositories are read as the person reading the atlas, so a repository only its unit may read appears only to that unit. A value the atlas would refuse (a label shaped like a token, an address with credentials in it, a `${VAR}` reference it does not resolve) is left out, and the read says where it sat and why, never what it was.
 
+### What the engine's records add
+
+The engine already keeps a record of what agents and integrations use. The atlas reads it at every read and stores none of it.
+
+| Record | What it adds |
+|---|---|
+| Each integration's standing | the base address its registration at the vendor points at, on the integration's account; and, for administrators only, whether it waits on a person or its last pass failed |
+| The ledger of agents' accounts | on each integration's account, the agents holding an account there: which seat, on which lane, at which level, and whether it is on |
+| What each node's tool servers listed | each tool server's own name, version and number of tools; its instructions and its tools' descriptions are a vendor's text and are never read |
+| Each tool server's sign-in | who issued it and when it lapses; a sign-in that lapsed or failed to refresh is a signal, and one lapsing within a week a warning |
+| Each node's last beat | a tool server with a failed or waiting instance, and a model entry sitting out a spent plan or whose last call failed with no answer since |
+| Connection tests | a server whose last test against its current settings failed, for administrators only; a test of an address or a key since changed says nothing |
+| The access log | each server's use: commands agents ran there in the last week and month, the last one, and which seats |
+| The usage history | each tool server's calls and each model entry's calls over the week and the month, and which seats made them |
+| Gitlet | each repository's last push |
+
+An entry whose use the engine records (a server, a tool server, a model entry, a repository) that nothing used for 30 days is marked **not used recently**: a fact about use, never about existence. It is said only when that use was read in full; when the usage history cannot be read, the use is unknown rather than zero.
+
+A **signal** is something on an entry that needs attention now. It is read from the record that holds it on every read, never copied, so it cannot disagree with its source, and each says who may read it: what only administrators see elsewhere (an integration's standing, a connection test), they alone see here.
+
+Records are read as closed projections: the fields a map needs and nothing else. An email address is never read, whether it is a vendor account's name, the account an agent's lane observed, who signed a tool server in, who ran a test or a model plan's sign-in account; ownership and use name seats.
+
+Every read says which of these sources it read in full and why not where it did not. A source that fails leaves the rest of the atlas answering.
+
 ## One thing, one entry
 
 An entry's identity is its kind and its natural key, and its id is derived from the two, so every source that meets the same zone names the same entry. Two entries of one kind that share an **exact** key are one entry when the atlas is read:
@@ -104,10 +128,16 @@ What people record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG
 
 Secrets, tokens, passwords, private keys, signed addresses, connection strings, environment values, command lines, command output, file contents and raw vendor answers have no value type to go in, and a value shaped like a credential is refused rather than masked. A person's contact details are never read: ownership names a seat or a unit. Addresses on private networks are kept, because they are the company's own map, and marked as internal.
 
+## Who reads it
+
+Reading the atlas takes the **Atlas** permission (`atlas`), the one app a person is given only on purpose: an invitation and a person's create leave it unticked, and an administrator holds it as every app ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md), [Atlas is given on purpose](identity-and-access.md#atlas-is-given-on-purpose)). A holder reads every entry, private addresses included. The atlas is never a way round another permission: its repositories are read as the reader, so a holder who does not use Gitlet is shown none, and the answer says Gitlet was not read and why.
+
+A person reads it today with `atlas_search` on the operator surface (`/operator/mcp`): every entry, or those a `query` or a `kind` names, each with its facts, where each came from and its relations, beside which sources were read in full and how many values were left out for being shaped like a credential. Those values are counted and never shown. An agent seat holds the app as it holds every app, and in a turn a person woke it is held to whether that person does ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+
 ## Every piece of state, and who has to agree on it
 
 | State | Who has to agree | Where it lives |
 |---|---|---|
-| What the engine already keeps: the settings and Gitlet's rows | already agreed where it lives | not stored: computed when the atlas is read |
-| Entry states, merges on exact keys, contested and disputed facts | nobody: computed on every read | the read itself |
+| What the engine already keeps: the settings, Gitlet's rows, integration standings, agents' accounts, tool server listings and sign-ins, node beats, connection tests, the access log and the usage history | already agreed where it lives | not stored: computed when the atlas is read |
+| Entry states, merges on exact keys, contested and disputed facts, signals, use and "not used recently" | nobody: computed on every read | the read itself |
 | What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |

@@ -53,6 +53,11 @@ type OperatorDeps struct {
 	// hosts no code.
 	Code CodeDeps
 
+	// Atlas is the atlas tools' half: the settings this node runs, read per
+	// call. Gitlet is read through Code, as the caller. The zero value omits
+	// the tools.
+	Atlas AtlasDeps
+
 	// Readers is `code_repo_readers`' half beside Code — who read a
 	// `visibility: unit` repository — served only where Code serves the
 	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
@@ -181,6 +186,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&commentOnPage{deps: pages}, pages.Writer != nil && pages.Reader != nil},
 		{&searchKnowledge{search: deps.Knowledge, org: deps.Org},
 			deps.Knowledge != nil && deps.Org != nil},
+		// THE ATLAS, read as the caller: every entry to a holder of the app,
+		// and the repositories in it only where they use Gitlet (ADR-0127).
+		{&atlasSearch{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize},
+			deps.Atlas.Settings != nil},
 		// A SEAT IS NEVER GIVEN IT: a question an executor asked is a
 		// person's to answer, and a seat that could answer its own
 		// executor's question would be one guessing on its own behalf.
