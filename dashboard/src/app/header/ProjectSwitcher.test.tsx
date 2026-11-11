@@ -63,7 +63,7 @@ const listing = (
   ...over,
 });
 
-const FAIRSPLIT = [
+const ACME = [
   project("APP", "Mobile app", 3),
   project("FAIR", "Product and Engineering", 2),
   project("RCPT", "Receipt scanning", 1),
@@ -99,7 +99,7 @@ function panel(
   return panelOf(
     {
       base: {
-        data: over.data === undefined ? listing(FAIRSPLIT) : over.data,
+        data: over.data === undefined ? listing(ACME) : over.data,
         error: over.error ?? null,
       },
       searched: over.searched ?? null,
@@ -206,15 +206,15 @@ describe("the panel, as data", () => {
 
   test("a listing cut at the cap says so, and its open figure is a floor", () => {
     const p = panel({
-      data: listing(FAIRSPLIT, { truncated: true, census: { active: 340, archived: 0 } }),
+      data: listing(ACME, { truncated: true, census: { active: 340, archived: 0 } }),
     });
     expect(p.note).toBe("5 of 340. Type to search.");
     expect(p.pinned?.meta).toBe("10+");
-    expect(figuresOf(listing(FAIRSPLIT, { truncated: true })).open).toBe("10+");
+    expect(figuresOf(listing(ACME, { truncated: true })).open).toBe("10+");
   });
 
   test("past eight projects the ones opened last lead, the current one aside", () => {
-    const many = [...FAIRSPLIT, ...["P1", "P2", "P3", "P4"].map((k) => project(k, `Project ${k}`))];
+    const many = [...ACME, ...["P1", "P2", "P3", "P4"].map((k) => project(k, `Project ${k}`))];
     const recents: Recent[] = [
       { path: ["worklet", "FAIR"], label: "Product and Engineering", workspace: "worklet" },
       { path: ["worklet", "FAIR-3"], label: "A task", workspace: "worklet" },
@@ -258,7 +258,7 @@ describe("the panel, as data", () => {
   });
 
   test("past the cap, the engine's answer is the list once it lands, and nothing is said before", () => {
-    const cut = listing(FAIRSPLIT, { truncated: true, census: { active: 340, archived: 0 } });
+    const cut = listing(ACME, { truncated: true, census: { active: 340, archived: 0 } });
     const pending = panel({ data: cut, query: "billing" });
     expect(pending.loading).toBe(true);
     expect(pending.message).toBeUndefined();
@@ -274,10 +274,10 @@ describe("the panel, as data", () => {
   });
 
   test("All projects' figures are the active census and the open work", () => {
-    expect(figuresOf(listing(FAIRSPLIT))).toEqual({ projects: 5, open: 10 });
+    expect(figuresOf(listing(ACME))).toEqual({ projects: 5, open: 10 });
     expect(figuresOf(null)).toEqual({});
     // AN ANSWER WITH NO CENSUS IN IT IS NOT A CENSUS OF NOTHING.
-    const bare = { ...listing(FAIRSPLIT) } as Partial<WorkProjectsAnswer>;
+    const bare = { ...listing(ACME) } as Partial<WorkProjectsAnswer>;
     delete bare.census;
     expect(figuresOf(bare as WorkProjectsAnswer)).toEqual({ open: 10 });
   });
@@ -342,7 +342,7 @@ function key(k: string): void {
 describe("in the frame", () => {
   test("G then P away from Work opens the panel centred, and a row moves the page", async () => {
     location.hash = "#/home";
-    mount({ work_projects: listing(FAIRSPLIT) });
+    mount({ work_projects: listing(ACME) });
     await settle();
     key("g");
     key("p");
@@ -363,7 +363,7 @@ describe("in the frame", () => {
 
   test("on Work, the trail's heading is the button, and G then P opens the panel under it", async () => {
     location.hash = "#/worklet/tasks";
-    mount({ work_projects: listing(FAIRSPLIT) });
+    mount({ work_projects: listing(ACME) });
     await settle();
     const button = within(screen.getByRole("heading", { level: 1 })).getByRole("button", {
       name: "All projects",
@@ -388,7 +388,7 @@ describe("in the frame", () => {
 
   test("the lenses beside All projects carry the listing's figures", async () => {
     location.hash = "#/worklet";
-    mount({ work_projects: listing(FAIRSPLIT) });
+    mount({ work_projects: listing(ACME) });
     await settle();
     const lenses = screen.getByRole("navigation", { name: "Lens" });
     expect(within(lenses).getByRole("link", { name: /^Projects/ }).textContent).toContain("5");

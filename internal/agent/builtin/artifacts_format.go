@@ -29,7 +29,7 @@ const ArtifactsToolSkillKey = "skill:artifacts"
 // artifactFormat answers the exact format a kind's files are validated
 // against at publish, BEFORE the agent writes one.
 //
-// WHY A READ, AND WHY THE FORMAT PACKAGES WRITE IT. A turn on the GoPhrase
+// WHY A READ, AND WHY THE FORMAT PACKAGES WRITE IT. A turn on the Acme
 // engine (GP-38, a brand kit) spent fourteen rounds and eight minutes on
 // create_artifact refusals, one structural fault per attempt, and probed the
 // schema with keys it knew to be wrong to learn the keys it could write:

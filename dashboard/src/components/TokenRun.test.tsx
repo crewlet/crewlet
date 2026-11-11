@@ -25,7 +25,7 @@ test("a re-render that changes no words reads no run again", () => {
   function Surface() {
     const [n, setN] = useState(0);
     tick = () => setN((v) => v + 1);
-    return <div data-n={n}>{renderMarkdown("Ship gophrase/backend#14 before #ffe100 lands.")}</div>;
+    return <div data-n={n}>{renderMarkdown("Ship acme/backend#14 before #ffe100 lands.")}</div>;
   }
   render(<Surface />);
   const read = vi.mocked(inlineTokens).mock.calls.length;

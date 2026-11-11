@@ -57,7 +57,7 @@ func World() map[string]any {
 		"/artifacts/" + RecordID: map[string]any{"id": RecordID, "title": "Q3 deck",
 			"head_number": 5},
 		"/config/charter": Charter(WorldMission, "Settling up takes seconds.",
-			"Miles is the final authority.", "Money is an integer number of cents."),
+			"Morgan is the final authority.", "Money is an integer number of cents."),
 		// A PRIVATE ROOM pm follows whole and ada is in, and the message pm
 		// wrote in it, as the room's read and the thread read answer them.
 		"/chatlet/channels/" + RecordID: map[string]any{"read_level": "stale", "complete": true,
@@ -81,7 +81,7 @@ func World() map[string]any {
 		"/config/roles/qa": Entity(`"rev-4"`, map[string]any{"handle": "qa",
 			"name": "QA Engineer", "goal": "Review the tests.",
 			"token_budget": map[string]any{"day": 1000000}}),
-		"/config": Entity(`"rev-4"`, map[string]any{"name": "FairSplit",
+		"/config": Entity(`"rev-4"`, map[string]any{"name": "Acme",
 			"token_budget": map[string]any{"day": 10000000, "month": 120000000}}),
 		// DATADOG'S AGENTS TAB: the QA engineer off, and the roles the
 		// organization lists, under the company revision's tag.

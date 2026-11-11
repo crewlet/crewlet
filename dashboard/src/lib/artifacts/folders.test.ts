@@ -170,13 +170,13 @@ describe("matchDestinations", () => {
 });
 
 describe("visibilityWords", () => {
-  const who = { company: "FairSplit", mine: true, ownerName: "Ada" };
+  const who = { company: "Acme", mine: true, ownerName: "Ada" };
 
   test("everyone at the company, only you, and only its owner to anybody else who sees it", () => {
     expect(visibilityWords("company", who)).toEqual({
       access: "company",
       short: "Everyone",
-      long: "Everyone at FairSplit",
+      long: "Everyone at Acme",
     });
     expect(visibilityWords("private", who).long).toBe("Only you");
     expect(visibilityWords("private", { ...who, mine: false }).long).toBe("Only Ada");

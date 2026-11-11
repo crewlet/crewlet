@@ -21,14 +21,14 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// gophrase is GoPhrase's document as the engine before per-seat access stored
+// acme is Acme's document as the engine before per-seat access stored
 // it, its shape taken from the live company and every credential a fake: three
 // agents with their own GitHub Apps at three tiers, a backend engineer and a
 // QA engineer on GitLab (one under a per-seat override), and the SRE whose
 // Datadog key was sealed into the company's own variable (the incident).
-func gophrase(t *testing.T) map[string]any {
+func acme(t *testing.T) map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/gophrase.json")
+	raw, err := os.ReadFile("testdata/acme.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,10 +52,10 @@ type vendors struct {
 	asked    []integration.Kind
 }
 
-// gophraseVendors is what GoPhrase's vendors show: the SRE's Datadog service
+// acmeVendors is what Acme's vendors show: the SRE's Datadog service
 // account at the Admin Role, the two GitLab service accounts, and the roles
-// GoPhrase's Datadog organization lists.
-func gophraseVendors() *vendors {
+// Acme's Datadog organization lists.
+func acmeVendors() *vendors {
 	return &vendors{
 		accounts: map[integration.Kind]seataccess.Observation{
 			integration.KindDatadog: {"sre": {seataccess.LaneDatadog: {Exists: true,
@@ -121,7 +121,7 @@ func plan(t *testing.T, root map[string]any, vs *vendors) accessmigrate.Migratio
 	return m
 }
 
-// THE GOPHRASE DOCUMENT MIGRATES AS THE DESIGN SAYS (section 8, D12, D14).
+// THE ACME DOCUMENT MIGRATES AS THE DESIGN SAYS (section 8, D12, D14).
 //
 // Every agent seat gets `enabled` per integration from the old plan; the
 // company roles land in the seats in each vendor's terms (the SRE keeps the
@@ -132,13 +132,13 @@ func plan(t *testing.T, root map[string]any, vs *vendors) accessmigrate.Migratio
 // the danger notice; and every account the engine made before the ledger is
 // seeded, from what its vendor shows (the SRE's Datadog service account, the
 // GitLab service accounts) or from the seat's own block (the GitHub Apps).
-func TestTheGoPhraseDocumentMigrates(t *testing.T) {
+func TestTheAcmeDocumentMigrates(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
+	root := acme(t)
 	if !accessmigrate.Needed(root) {
 		t.Fatal("the premise: the old document needs a migration")
 	}
-	m := plan(t, root, gophraseVendors())
+	m := plan(t, root, acmeVendors())
 	if !slices.Equal(m.Migrated, []integration.Kind{integration.KindGitHub,
 		integration.KindGitLab, integration.KindDatadog}) || len(m.Pending) != 0 {
 		t.Fatalf("migrated %v, pending %v; want every connected integration", m.Migrated, m.Pending)
@@ -148,7 +148,7 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 			seataccess.LaneGitHub: {Enabled: true, Permissions: seataccess.Permissions{
 				"contents": "read", "issues": "read", "pull_requests": "read",
 				"checks": "read", "actions": "read", "deployments": "read"},
-				Scope: []string{"gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"}},
+				Scope: []string{"acme/backend", "acme/frontend", "acme/mobile-app"}},
 			seataccess.LaneGitLab:  {},
 			seataccess.LaneDatadog: {},
 		},
@@ -156,7 +156,7 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 			seataccess.LaneGitHub: {Enabled: true, Permissions: seataccess.Permissions{
 				"contents": "write", "issues": "write", "pull_requests": "write",
 				"checks": "write", "actions": "read", "deployments": "read", "workflows": "write"},
-				Scope: []string{"gophrase/backend"}},
+				Scope: []string{"acme/backend"}},
 			seataccess.LaneGitLab:  {Enabled: true, Level: "30"},
 			seataccess.LaneDatadog: {},
 		},
@@ -164,7 +164,7 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 			seataccess.LaneGitHub: {Enabled: true, Permissions: seataccess.Permissions{
 				"contents": "read", "issues": "write", "pull_requests": "write",
 				"checks": "read", "actions": "read", "deployments": "read"},
-				Scope: []string{"gophrase/backend", "gophrase/frontend"}},
+				Scope: []string{"acme/backend", "acme/frontend"}},
 			seataccess.LaneGitLab:  {Enabled: true, Level: "40"},
 			seataccess.LaneDatadog: {},
 		},
@@ -185,7 +185,7 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 			}
 		}
 	}
-	if _, human := m.Seats["miles"]; human {
+	if _, human := m.Seats["morgan"]; human {
 		t.Error("a person's seat was given agent access")
 	}
 	wantMoves := []accessmigrate.Move{
@@ -216,8 +216,8 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 // ASKS NOBODY ANYTHING.
 func TestTheMigratedDocumentCarriesNothingRetired(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
-	changed, err := accessmigrate.Apply(root, plan(t, root, gophraseVendors()))
+	root := acme(t)
+	changed, err := accessmigrate.Apply(root, plan(t, root, acmeVendors()))
 	if err != nil || !changed {
 		t.Fatalf("Apply = %v, %v; want a change", changed, err)
 	}
@@ -250,7 +250,7 @@ func TestTheMigratedDocumentCarriesNothingRetired(t *testing.T) {
 	if accessmigrate.Needed(root) {
 		t.Fatal("a migrated document still reports a migration needed")
 	}
-	vs := gophraseVendors()
+	vs := acmeVendors()
 	again := plan(t, root, vs)
 	if !again.Empty() || len(vs.asked) != 0 {
 		t.Errorf("a second plan = %+v asking %v; want nothing to do and nobody asked",
@@ -271,18 +271,18 @@ func TestAnUnansweredVendorLeavesOnlyItsIntegrationGated(t *testing.T) {
 	t.Parallel()
 	for name, vs := range map[string]*vendors{
 		"unreachable": func() *vendors {
-			v := gophraseVendors()
+			v := acmeVendors()
 			v.down = map[integration.Kind]bool{integration.KindDatadog: true}
 			return v
 		}(),
 		"no such role": func() *vendors {
-			v := gophraseVendors()
+			v := acmeVendors()
 			v.roles = v.roles[:2]
 			delete(v.accounts, integration.KindDatadog)
 			return v
 		}(),
 	} {
-		root := gophrase(t)
+		root := acme(t)
 		before := mustJSON(t, seat(t, root, "sre")["mcp_env"])
 		m := plan(t, root, vs)
 		if m.Pending[integration.KindDatadog] == nil ||
@@ -328,9 +328,9 @@ func TestAnUnansweredVendorLeavesOnlyItsIntegrationGated(t *testing.T) {
 // the token moves.
 func TestAnExternalCredentialStaysWhereTheSeatNamesIt(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
+	root := acme(t)
 	delete(root["integrations"].(map[string]any)["gitlab"].(map[string]any), "provisioning")
-	m := plan(t, root, gophraseVendors())
+	m := plan(t, root, acmeVendors())
 	for _, move := range m.Moves {
 		if move.Kind == integration.KindGitLab {
 			t.Errorf("an external GitLab token was moved: %+v", move)
@@ -371,8 +371,8 @@ func TestAMattermostBotsChannelsAreWrittenOut(t *testing.T) {
 		"the bot's own, where the plan named none": {member: []string{"engineering", "town-square"},
 			want: []string{"engineering", "town-square"}},
 	} {
-		root := gophrase(t)
-		provisioning := map[string]any{"team": "gophrase"}
+		root := acme(t)
+		provisioning := map[string]any{"team": "acme"}
 		if tc.company != nil {
 			provisioning["channels"] = tc.company
 		}
@@ -383,7 +383,7 @@ func TestAMattermostBotsChannelsAreWrittenOut(t *testing.T) {
 			block["channel"] = tc.own
 		}
 		seat(t, root, "qa")["integrations"].(map[string]any)["mattermost"] = block
-		vs := gophraseVendors()
+		vs := acmeVendors()
 		vs.accounts[integration.KindMattermost] = seataccess.Observation{"qa": {
 			seataccess.LaneMattermost: {Exists: true, Enabled: true, AccountID: "mm-qa",
 				Scope: tc.member}}}
@@ -398,13 +398,13 @@ func TestAMattermostBotsChannelsAreWrittenOut(t *testing.T) {
 // shared value, and writes one revision however often it runs.
 func TestRunSealsAndSeedsBeforeTheGatingRevision(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
+	root := acme(t)
 	vault := &fakeSecrets{values: map[string]string{
 		"BACKEND_GITLAB_PAT": "fake-gitlab-token", "DATADOG_APP_KEY": "fake-company-key",
 	}}
 	ledger := &fakeLedger{records: map[integration.Kind]map[string]seataccess.Record{}}
 	doc := &fakeDocument{root: root, revision: "rev-1", sealed: vault, ledger: ledger}
-	vs := gophraseVendors()
+	vs := acmeVendors()
 	deps := accessmigrate.Deps{
 		Document: doc, Secrets: vault, Records: &fakeRecords{ledger: ledger},
 		Open: vs.open, Env: config.NewResolver(),
@@ -584,16 +584,16 @@ func mustJSON(t *testing.T, v any) string {
 // them unwritten, and this fails.
 func TestJiraAndConfluenceSeatsComeOutWithProductAccessOnly(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
+	root := acme(t)
 	integrations := root["integrations"].(map[string]any)
 	integrations["atlassian"] = map[string]any{"deployment": "cloud", "org_id": "${ATLASSIAN_ORG_ID}",
 		"api_key": "${ATLASSIAN_ORG_KEY}"}
-	integrations["jira"] = map[string]any{"site_url": "https://gophrase.atlassian.net"}
-	integrations["confluence"] = map[string]any{"site_url": "https://gophrase.atlassian.net/wiki"}
+	integrations["jira"] = map[string]any{"site_url": "https://acme.atlassian.net"}
+	integrations["confluence"] = map[string]any{"site_url": "https://acme.atlassian.net/wiki"}
 	pm := seat(t, root, "pm")
 	pm["mcp_env"].(map[string]any)["atlassian"] = map[string]any{
 		"JIRA_API_TOKEN": "${PM_ATLASSIAN_TOKEN}", "JIRA_USERNAME": "${PM_ATLASSIAN_EMAIL}"}
-	m := plan(t, root, gophraseVendors())
+	m := plan(t, root, acmeVendors())
 	if !slices.Contains(m.Migrated, integration.KindAtlassian) {
 		t.Fatalf("migrated %v, pending %v; want Atlassian migrated", m.Migrated, m.Pending)
 	}
@@ -635,7 +635,7 @@ func TestJiraAndConfluenceSeatsComeOutWithProductAccessOnly(t *testing.T) {
 // unmarked and its access sync is gated for ever.
 func TestANewKindMigratesWithNothingToMove(t *testing.T) {
 	t.Parallel()
-	root := gophrase(t)
+	root := acme(t)
 	root["integrations"].(map[string]any)["expo"] = map[string]any{
 		"enabled": true,
 		"provisioning": map[string]any{
@@ -644,7 +644,7 @@ func TestANewKindMigratesWithNothingToMove(t *testing.T) {
 	}
 	qa := seat(t, root, "qa")
 	qa["integrations"].(map[string]any)["expo"] = map[string]any{"enabled": true, "level": "runner"}
-	vs := gophraseVendors()
+	vs := acmeVendors()
 	m := plan(t, root, vs)
 	if !slices.Contains(m.Migrated, integration.KindExpo) || m.Pending[integration.KindExpo] != nil {
 		t.Fatalf("migrated %v, pending %v; want Expo migrated", m.Migrated, m.Pending)

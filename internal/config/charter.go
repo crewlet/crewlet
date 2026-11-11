@@ -30,7 +30,7 @@ import (
 // company can make every turn carry before its own work. The figures sit well
 // above what a real charter is: the shipped Nimbus example's vision is under
 // 900 characters and its longest policy under 300, and a written charter of
-// eight long policies (the dashboard's FairSplit fixture) has none over 300.
+// eight long policies (the dashboard's Acme fixture) has none over 300.
 //
 // The dashboard holds the same figures (`dashboard/src/contract/config.ts`),
 // held to these by `TestTheDashboardBoundsTheCharterAtTheEnginesCaps`, so a

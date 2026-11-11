@@ -612,7 +612,7 @@ func TestEveryCoalescedRequesterReachesThePrompt(t *testing.T) {
 	turn.Event.Interactions = []types.InboundInteraction{
 		{Sender: types.CanonicalIdentity{DisplayName: "Sam", ExternalID: "U0TESTUSER1", Platform: "slack"},
 			Body: "please open replies with\nhey sam"},
-		{Sender: types.CanonicalIdentity{Handle: "miles"}, Body: "and cc me"},
+		{Sender: types.CanonicalIdentity{Handle: "morgan"}, Body: "and cc me"},
 		// No identifier at all: a scheduled tick or an internal
 		// assignment. Rendering "Requester: " for it would invite the
 		// model to attribute a fact to nobody.
@@ -625,7 +625,7 @@ func TestEveryCoalescedRequesterReachesThePrompt(t *testing.T) {
 	for _, want := range []string{
 		"- Requester: Sam (slack:U0TESTUSER1)\n- Inbound message:\n[untrusted:",
 		"\nplease open replies with\nhey sam\n[/untrusted:",
-		"- Requester: miles\n- Inbound message:\n[untrusted:",
+		"- Requester: morgan\n- Inbound message:\n[untrusted:",
 		"\nand cc me\n[/untrusted:",
 		"- Woken by: Help with reporting",
 		"- What it did: Summarise",

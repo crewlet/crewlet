@@ -26,7 +26,7 @@ func TestAnAnswerAfterARefusedReplyIsToldTheReplyWasNotTaken(t *testing.T) {
 	seal := answerSeal(t, "the fleet's key material")
 	run := parked(t, "t1", sandbox.StatusResumed)
 	refusal := sandbox.AnswerRefusal{EventIDs: []string{"reply-1"}, Bytes: 512<<10 + 1, MaxBytes: 512 << 10}
-	answer, err := seal.Seal(run, sandbox.AnswerWords{Via: types.AnswerViaChat, By: "miles", ByKind: "human",
+	answer, err := seal.Seal(run, sandbox.AnswerWords{Via: types.AnswerViaChat, By: "morgan", ByKind: "human",
 		Refusal: &refusal}, sandbox.RecordedAnswer{EventIDs: refusal.EventIDs,
 		RecordedAt: time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC)})
 	if err != nil {
@@ -42,7 +42,7 @@ func TestAnAnswerAfterARefusedReplyIsToldTheReplyWasNotTaken(t *testing.T) {
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalAlreadyAnswered {
 		t.Fatalf("answer_executor = %+v, want an already_answered refusal", result)
 	}
-	for _, want := range []string{"A reply from miles", "at 2026-10-28T00:35:06Z", "513 KiB", "512 KiB",
+	for _, want := range []string{"A reply from morgan", "at 2026-10-28T00:35:06Z", "513 KiB", "512 KiB",
 		"was not taken", "asks again"} {
 		if !strings.Contains(result.Output, want) {
 			t.Errorf("the model is not told %q: %s", want, result.Output)
@@ -52,7 +52,7 @@ func TestAnAnswerAfterARefusedReplyIsToldTheReplyWasNotTaken(t *testing.T) {
 		t.Errorf("the model is told the question was answered: %s", result.Output)
 	}
 	person := result.PersonRefusal.Person()
-	if !strings.Contains(person, "@miles") || !strings.Contains(person, "too long") ||
+	if !strings.Contains(person, "@morgan") || !strings.Contains(person, "too long") ||
 		strings.Contains(person, "answered") {
 		t.Errorf("a person is told %q, want whose reply was too long and no answer", person)
 	}

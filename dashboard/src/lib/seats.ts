@@ -209,7 +209,7 @@ export interface OrgIndex {
  * login has none of.
  *
  * THE LINE UNDER A NAME IS THE SEAT'S UNIT OR NOTHING. A handle there repeats
- * the name in lower case ("Miles", then "miles"), which tells a reader nothing
+ * the name in lower case ("Morgan", then "morgan"), which tells a reader nothing
  * the name did not.
  */
 export function principalOfSeat(seat: Seat | undefined, handle: string): Principal {

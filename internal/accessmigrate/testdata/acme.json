@@ -1,11 +1,11 @@
 {
-  "name": "GoPhrase",
+  "name": "Acme",
   "timezone": "America/Vancouver",
   "integrations": {
     "github": {
       "enabled": true,
       "webhook_secret": "${GITHUB_WEBHOOK_SECRET}",
-      "provisioning": {"org": "gophrase", "org_webhook": "false"}
+      "provisioning": {"org": "acme", "org_webhook": "false"}
     },
     "datadog": {
       "enabled": true,
@@ -23,7 +23,7 @@
       "url": "https://gitlab.example.invalid",
       "signing_secret": "${GITLAB_SIGNING_SECRET}",
       "provisioning": {
-        "group": "gophrase",
+        "group": "acme",
         "admin_token": "${GITLAB_ADMIN_TOKEN}",
         "access_level": "developer",
         "access_levels": {"qa": "maintainer"}
@@ -36,7 +36,7 @@
      "headers": {"DD_API_KEY": "${DATADOG_API_KEY}"}}
   ],
   "roles": [
-    {"name": "Miles", "kind": "human", "handle": "miles", "contact": {"github_login": "fake-owner"}}
+    {"name": "Morgan", "kind": "human", "handle": "morgan", "contact": {"github_login": "fake-owner"}}
   ],
   "units": [
     {
@@ -51,8 +51,8 @@
           "mcp_env": {"github": {"Authorization": "Bearer ${GITHUB_APP_TOKEN_PM}"}},
           "integrations": {"github": {
             "tier": "read_only",
-            "repos": ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
-            "app_id": 1000001, "app_slug": "gophrase-product-manager",
+            "repos": ["acme/backend", "acme/frontend", "acme/mobile-app"],
+            "app_id": 1000001, "app_slug": "acme-product-manager",
             "installation_id": 2000001, "private_key": "${GITHUB_APP_KEY_PM}"
           }}
         },
@@ -66,8 +66,8 @@
           "sandbox": {"env": {"GITHUB_TOKEN": "${GITHUB_APP_TOKEN_BACKEND_ENGINEER}"}},
           "integrations": {"github": {
             "tier": "full_access", "workflows": true,
-            "repos": ["gophrase/backend"],
-            "app_id": 1000002, "app_slug": "gophrase-senior-backend-engineer",
+            "repos": ["acme/backend"],
+            "app_id": 1000002, "app_slug": "acme-senior-backend-engineer",
             "installation_id": 2000002, "private_key": "${GITHUB_APP_KEY_BACKEND_ENGINEER}"
           }}
         },
@@ -77,8 +77,8 @@
           "mcp_env": {"gitlab": {"Authorization": "Bearer ${GITLAB_TOKEN_QA}"}},
           "integrations": {"github": {
             "tier": "review",
-            "repos": ["gophrase/backend", "gophrase/frontend"],
-            "app_id": 1000003, "app_slug": "gophrase-qa-engineer",
+            "repos": ["acme/backend", "acme/frontend"],
+            "app_id": 1000003, "app_slug": "acme-qa-engineer",
             "installation_id": 2000003, "private_key": "${GITHUB_APP_KEY_QA}"
           }}
         },
