@@ -88,9 +88,14 @@ func (s Sources) delegatedDecisions(ctx context.Context, p Params) (any, error) 
 	}
 	rules := make([]map[string]any, 0, len(company.Rules))
 	for i, r := range company.Rules {
+		checks := make([]map[string]any, 0, len(r.RequiredChecks))
+		for _, rc := range r.RequiredChecks {
+			checks = append(checks, map[string]any{"repo": rc.Repo, "branch": rc.Branch,
+				"checks": nonNilStrings(rc.Checks)})
+		}
 		rules = append(rules, map[string]any{"rule": i + 1, "kinds": r.Kinds, "delegates": nonNilStrings(r.Delegates),
 			"escalate_to": nonNilStrings(r.EscalateTo), "sample_one_in": r.SampleRate(),
-			"always_escalate_paths": nonNilStrings(r.AlwaysEscalatePaths)})
+			"always_escalate_paths": nonNilStrings(r.AlwaysEscalatePaths), "required_checks": checks})
 	}
 	return map[string]any{
 		"enabled": company.Enabled, "rules": rules,

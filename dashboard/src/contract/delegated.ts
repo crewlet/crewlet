@@ -74,6 +74,23 @@ export interface DelegatedRule {
    * for, beside the engine's built-in list; empty for none.
    */
   always_escalate_paths: string[];
+  /**
+   * The checks the rule requires on a GitHub repository's branch, beside
+   * what its branch protection requires; empty for none.
+   */
+  required_checks: DelegatedRequiredChecks[];
+}
+
+/**
+ * The checks one rule requires on one GitHub repository's branch: each passes
+ * only as a check run that succeeded on the commit decided.
+ */
+export interface DelegatedRequiredChecks {
+  /** The repository, as owner/name. */
+  repo: string;
+  branch: string;
+  /** The checks' names, as GitHub shows their check runs. */
+  checks: string[];
 }
 
 /** The limits the engine holds every delegate to, whatever the document says. */

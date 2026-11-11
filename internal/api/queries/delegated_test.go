@@ -61,7 +61,8 @@ func (l delegatedLog) OpenVerdict(v accessdomain.VerdictRow) (string, string, []
 func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	t.Parallel()
 	// A RULE OF EACH SHAPE: a panel on commands, and one delegate on merges
-	// and deploys with paths of its own that always go to people.
+	// and deploys with paths of its own that always go to people and checks
+	// it requires.
 	doc := "name: Acme\nroles:\n  - {name: Ops Lead, handle: ops-lead, kind: human}\n" +
 		"  - {name: Security A, handle: security-a}\n  - {name: Security B, handle: security-b}\n" +
 		"  - {name: Release Reviewer, handle: release-reviewer}\n" +
@@ -69,7 +70,8 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 		"    - {kinds: [ssh_operate], delegates: [security-a, security-b], escalate_to: [ops-lead], " +
 		"sample_one_in: 5}\n" +
 		"    - {kinds: [pr_merge, deploy], delegates: [release-reviewer], escalate_to: [ops-lead], " +
-		"always_escalate_paths: [billing/**]}\n"
+		"always_escalate_paths: [billing/**], required_checks: [{repo: acme/api, branch: main, " +
+		"checks: [test, lint]}]}\n"
 	company, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +111,12 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	}
 	body := asMap(t, raw)
 	holdShape(t, "DelegatedDecisionsAnswer", []map[string]any{body}, false)
-	holdShape(t, "DelegatedRule", rowsOf(t, body["rules"]), false)
+	rules := rowsOf(t, body["rules"])
+	holdShape(t, "DelegatedRule", rules, false)
+	if len(rules) != 2 || len(rowsOf(t, rules[1]["required_checks"])) != 1 {
+		t.Fatalf("the merge rule's required checks read %v", rules)
+	}
+	holdShape(t, "DelegatedRequiredChecks", rowsOf(t, rules[1]["required_checks"]), false)
 	limits, ok := body["limits"].(map[string]any)
 	if !ok {
 		t.Fatalf("the answer's limits are %v", body["limits"])

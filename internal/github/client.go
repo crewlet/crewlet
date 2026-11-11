@@ -165,6 +165,19 @@ func (e *APIError) NotFound() bool { return e.Status == http.StatusNotFound }
 // 403 that is not GitHub's rate limit ([APIError.RateLimited]).
 func (e *APIError) Forbidden() bool { return e.Status == http.StatusForbidden && !e.RateLimited }
 
+// PlanLacks reports a 403 that refuses a feature the account's plan does not
+// include for this repository, as GitHub answers branch protection and
+// rulesets on a private repository of a free plan ("Upgrade to GitHub Pro or
+// make this repository public to enable this feature."). Read off the message:
+// GitHub sends no header or code that tells it from a credential's refusal.
+func (e *APIError) PlanLacks() bool {
+	if !e.Forbidden() {
+		return false
+	}
+	detail := strings.ToLower(e.Detail)
+	return strings.Contains(detail, "upgrade to github") || strings.Contains(detail, "make this repository public")
+}
+
 // rateLimited reports whether res is GitHub refusing for its rate limit
 // ([APIError.RateLimited]).
 func rateLimited(res *http.Response) bool {

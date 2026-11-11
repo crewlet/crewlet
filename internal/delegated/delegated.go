@@ -22,8 +22,11 @@
 // touches access, budgets or spend, data deletion, secrets or the company
 // document, or one on an item labelled security, privacy or legal; and each
 // kind's own conditions, read from the server or the code host when the
-// verdict is given ([Unmet]). A request no delegate answered in [Deadline], and
-// every request once delegated decisions are turned off, goes to people.
+// verdict is given ([Unmet]), with what the kind's rule adds to them
+// ([Release]): its own paths, and the checks it requires on a repository's
+// branch where the code host requires none ([RequiredChecks]). A request no
+// delegate answered in [Deadline], and every request once delegated decisions
+// are turned off, goes to people.
 //
 // # What a person still sees
 //
