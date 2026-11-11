@@ -92,6 +92,7 @@ export function usePagedItems(
     itemsOf,
     itemIdOf,
     itemsAfter,
+    { restartWhenRefused: true },
   );
 
   return {

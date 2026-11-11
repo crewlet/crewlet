@@ -50,12 +50,12 @@ function answered(data: Answer): QueryResult<Answer> {
 }
 
 /** The hook over a history the test moves, paged back once. */
-async function pagedBack(start: readonly number[]) {
+async function pagedBack(start: readonly number[], options: { restartWhenRefused?: boolean } = {}) {
   const history = { now: start };
   const page = vi.fn(async (cursor: string) => pageOf(history.now, cursor));
   const view = renderHook(
     ({ first }: { first: QueryResult<Answer> }) =>
-      usePaged(first, PARAMS, page, pick, idOf, cursorOf),
+      usePaged(first, PARAMS, page, pick, idOf, cursorOf, options),
     { initialProps: { first: answered(pageOf(history.now)) } },
   );
   act(() => view.result.current.next());
@@ -579,7 +579,9 @@ test("a later page whose cursor is refused starts the list again", async () => {
   const history = { now: down(15, 1) };
   const page = vi.fn(async (cursor: string) => pageOf(history.now, cursor));
   const first = { ...answered(pageOf(history.now)), refetch };
-  const { result } = renderHook(() => usePaged(first, PARAMS, page, pick, idOf, cursorOf));
+  const { result } = renderHook(() =>
+    usePaged(first, PARAMS, page, pick, idOf, cursorOf, { restartWhenRefused: true }),
+  );
   act(() => result.current.next());
   await waitFor(() => expect(result.current.items).toHaveLength(2 * PAGE));
 
@@ -603,11 +605,25 @@ test("a later page whose cursor is refused starts the list again", async () => {
 // A HELD PAGE WHOSE CURSOR A RE-READ FINDS REFUSED starts the list again too:
 // that page can never be read again, and the pages after it were read from it.
 test("a re-read whose cursor is refused starts the list again", async () => {
-  const { result, page } = await pagedBack(down(15, 1));
+  const { result, page } = await pagedBack(down(15, 1), { restartWhenRefused: true });
   page.mockImplementationOnce(async () => {
     throw new Error("bad_params");
   });
   act(() => result.current.refresh());
   await waitFor(() => expect(result.current.restarted).toBe(true));
   expect(ids(result.current.items)).toEqual(down(15, 11).map((n) => `e-${n}`));
+});
+
+// WITHOUT `restartWhenRefused` A REFUSED CURSOR IS THE CALLER'S TO TELL: the held
+// pages stay and the refusal is its page error, as a transcript needs it to say
+// why its later pages no longer follow on and offer to read it again.
+test("a refused cursor is a page error for a caller that does not restart", async () => {
+  const { result, page } = await pagedBack(down(15, 1));
+  page.mockImplementationOnce(async () => {
+    throw new Error("bad_params");
+  });
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.pageError).toBe("bad_params"));
+  expect(result.current.restarted).toBe(false);
+  expect(ids(result.current.items)).toEqual(down(15, 6).map((n) => `e-${n}`));
 });

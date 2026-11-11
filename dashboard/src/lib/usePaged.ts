@@ -44,13 +44,15 @@
  * (`components/common.tsx`'s `PageFailed`), never in its place: in its place
  * it left the reader nothing to press, and nothing to do but reload.
  *
- * EXCEPT A PAGE REFUSED AS `bad_params`, which STARTS THE LIST AGAIN. A later
- * page is the first page's question and a cursor, and the first page was
- * answered, so the refusal is of the cursor: one the engine no longer resumes,
- * because what the order is built from changed (a seat added to the chart a
- * work list is sorted by), and asked again it is refused again for ever. So
- * the held pages go, the first page is asked again for a cursor of the order
- * as it is now, and `restarted` says so until the reader pages on.
+ * A PAGE REFUSED AS `bad_params` IS A CURSOR REFUSED. A later page is the
+ * first page's question and a cursor, and the first page was answered, so the
+ * engine no longer resumes that cursor, and asked again it is refused again
+ * for ever. What follows is the caller's: a transcript tells its reader why
+ * and offers to read it again, since what they read may be what they came
+ * for; a caller that asks `restartWhenRefused` (the work list, whose order
+ * moves when the chart it is sorted by does) has the held pages dropped and
+ * the first page asked again for a cursor of the order as it is now, and
+ * `restarted` says so until the reader pages on.
  *
  * # Every page has to meet the next one
  *
@@ -151,9 +153,9 @@ export interface Paged<T, A> {
   next: () => void;
   paging: boolean;
   /**
-   * The engine refused the cursor of a page after the first, so the list
-   * started again from the first page (the package doc), until the next page
-   * is asked for.
+   * The engine refused the cursor of a page after the first and the caller
+   * asked `restartWhenRefused`, so the list started again from the first page
+   * (the package doc), until the next page is asked for.
    */
   restarted: boolean;
   /**
@@ -247,6 +249,8 @@ export function usePaged<A, T>(
   idOf: (entry: T) => string,
   /** The cursor to the page after this answer, or "" where there is none. */
   cursorOf: (answer: A) => string,
+  /** Start the list again when the engine refuses a cursor (the package doc). */
+  options: { restartWhenRefused?: boolean } = {},
 ): Paged<T, A> {
   const question = JSON.stringify(params);
   // WHICH READING OF THE QUESTION THIS IS: a new question starts the next one,
@@ -277,6 +281,8 @@ export function usePaged<A, T>(
   reading.current = { pick, idOf, cursorOf };
   const asked = useRef(era);
   asked.current = era;
+  const restarts = useRef(false);
+  restarts.current = options.restartWhenRefused === true;
   const latest = useRef(first);
   latest.current = first;
 
@@ -359,7 +365,7 @@ export function usePaged<A, T>(
       // BOUNDED BY EVERYTHING HELD, all of which is below this gap.
       const gap = await bridge(answer, anchor, kept.pages.length);
       if (holding(q) !== kept) return;
-      if (gap.error === REFUSED_CURSOR) {
+      if (gap.error === REFUSED_CURSOR && restarts.current) {
         restart(q);
         return;
       }
@@ -397,7 +403,8 @@ export function usePaged<A, T>(
             // A PAGE THAT COULD NOT BE READ AGAIN keeps what it last said:
             // the next change that reaches it asks again. One whose cursor
             // was refused never will be, and the list starts again.
-            (err: unknown) => (errorOf(err) === REFUSED_CURSOR ? REFUSED : null),
+            (err: unknown) =>
+              restarts.current && errorOf(err) === REFUSED_CURSOR ? REFUSED : null,
           ),
         ),
       );
@@ -490,7 +497,7 @@ export function usePaged<A, T>(
         await changes.onward(era);
       } catch (err) {
         const code = errorOf(err);
-        if (code === REFUSED_CURSOR) changes.restart(era);
+        if (code === REFUSED_CURSOR && restarts.current) changes.restart(era);
         else setFailed({ era, code });
       } finally {
         pagingNow.current = false;
