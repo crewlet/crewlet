@@ -310,7 +310,7 @@ type Options struct {
 	Timing Timing
 	// Faults is nil in production (internal/gitlet/gitletfault).
 	Faults gitletfault.Injector
-	// Logger nil is the package's own (component code.host).
+	// Logger nil is the package's own (component gitlet.host).
 	Logger *slog.Logger
 	// Metrics nil records nothing.
 	Metrics *metrics.Recorder

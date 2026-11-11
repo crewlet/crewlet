@@ -188,7 +188,7 @@ type Options struct {
 	// Faults is nil in production (internal/gitlet/gitletfault).
 	Faults gitletfault.Injector
 	// Metrics nil records nothing; Logger nil is the package's own
-	// (component code.mirror); Now nil is time.Now.
+	// (component gitlet.mirror); Now nil is time.Now.
 	Metrics *metrics.Recorder
 	Logger  *slog.Logger
 	Now     func() time.Time

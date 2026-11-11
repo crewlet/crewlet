@@ -168,7 +168,7 @@ type Options struct {
 	// the chart is the one input of a readiness no record of the log moves.
 	Chart func() int64
 	// Metrics nil records nothing; Logger nil is the package's own
-	// (component code.home); Now nil is time.Now.
+	// (component gitlet.home); Now nil is time.Now.
 	Metrics *metrics.Recorder
 	Logger  *slog.Logger
 	Now     func() time.Time

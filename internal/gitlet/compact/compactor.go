@@ -166,7 +166,7 @@ type Options struct {
 	Faults gitletfault.Injector
 	// Metrics nil records nothing.
 	Metrics *metrics.Recorder
-	// Logger nil is the package's own (component code.compact).
+	// Logger nil is the package's own (component gitlet.compact).
 	Logger *slog.Logger
 	// Now nil is time.Now.
 	Now func() time.Time

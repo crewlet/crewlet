@@ -96,7 +96,7 @@ type Options struct {
 	// Faults is nil in production (internal/gitlet/gitletfault).
 	Faults gitletfault.Injector
 
-	// Logger nil is the package's own (component code.cache) — never a
+	// Logger nil is the package's own (component gitlet.cache) — never a
 	// discarding one, because a missing warning reads as a quiet node.
 	Logger *slog.Logger
 

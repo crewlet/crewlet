@@ -553,7 +553,7 @@ type Options struct {
 	Home string
 
 	// Logger is where the pool logs; nil is the package's own
-	// (component code.gitproc).
+	// (component gitlet.gitproc).
 	Logger *slog.Logger
 
 	// Metrics is where the pool records crewlet.code.git.wait (how long
