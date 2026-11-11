@@ -1360,7 +1360,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			return &sandbox.TurnRefused{Refusal: refusal}
 		}
 	}
-	input, tel, err := e.parkedTurnRunner(ctx, company, in)
+	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
+	// taken there, pinned to the claim — the job it collects, the resumed
+	// status and the lease the claim stamped — and carried from there, every
+	// note the turn read before this segment included. A note sent while the
+	// run worked or waited on its question was held there for exactly this.
+	// Closed on every way out: each return below is a retry, and the view
+	// it follows the record by must not outlive the attempt. Before the
+	// runner's input, whose launcher seals a relaunch's brief from it. See
+	// runsteer.go.
+	source := e.runSteers.source(ctx, in.Run,
+		sandbox.Fence{Owner: in.Run.Owner, Epoch: in.Run.OwnerEpoch})
+	defer source.Close(ctx)
+	input, tel, err := e.parkedTurnRunner(ctx, company, in, source)
 	if err != nil {
 		// A RETRY, like every early return here: nothing ran, and the
 		// coordinator hands its claim back so the next attempt judges the
@@ -1368,16 +1380,6 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return err
 	}
 	resumedReply := input.Reply
-	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
-	// taken there, pinned to the claim — the job it collects, the resumed
-	// status and the lease the claim stamped — and carried from there, every
-	// note the turn read before this segment included. A note sent while the
-	// run worked or waited on its question was held there for exactly this.
-	// Closed on every way out: each return below is a retry, and the view
-	// it follows the record by must not outlive the attempt. See runsteer.go.
-	source := e.runSteers.source(ctx, in.Run,
-		sandbox.Fence{Owner: in.Run.Owner, Epoch: in.Run.OwnerEpoch})
-	defer source.Close()
 	if source != nil {
 		input.Steer = source
 	}
@@ -1666,7 +1668,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 // building a RunnerInput: every literal of one is held to carrying the seat's
 // fence (internal/seat's TestEveryConfigThatCanCarryTheSeatFenceDoes). Every
 // error is a RETRY: nothing has run.
-func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput,
+//
+// notes is the segment's notes on the run's record, which the launcher of the
+// turn's later iterations seals their briefs from ([agentLauncher.notes]); nil
+// where the segment takes none — a reopened run's surface launches nothing.
+func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput, notes *rowSource,
 ) (input RunnerInput, tel turnTelemetry, err error) {
 	resumedReply, err := resumeReply(in.Run)
 	if err != nil {
@@ -1706,7 +1712,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
 		// whichever member of the pinned chain can take it then.
-		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil),
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil, notes),
 		Budget:   tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives
@@ -1809,6 +1815,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on: the briefs', the run's own and earlier reviews'.
 		Steered: steered,
+		// AND EVERY NOTE ITS BRIDGE SERVED A HARNESS, read since or waiting
+		// still: a continued session may show one the record says it had not
+		// read ([servedNotes]). Final for the segment: no poll serves a run
+		// once its claim has moved it on.
+		Served: servedNotes(in.Run),
 	}
 }
 

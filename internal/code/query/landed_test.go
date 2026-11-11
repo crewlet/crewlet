@@ -111,10 +111,10 @@ func (x *fixture) indexed(i int, repo string) {
 		switch {
 		case err == nil && p.Indexed():
 			return
-		case time.Now().After(deadline):
+		case time.Now().After(deadline): //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			x.t.Fatalf("node %d's index of %s is unreadable 30s on: %v", i, repo, err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

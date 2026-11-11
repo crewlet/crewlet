@@ -87,6 +87,13 @@ type Entry struct {
 	LastSeen time.Time `json:"last_seen"`
 	// Review is a fact or a relation on it that is contested or disputed.
 	Review bool `json:"review,omitempty"`
+	// Use, Holders and Signals are what the engine's records say about it
+	// beyond claims, joined on every read ([Join]); NotUsedRecently is an
+	// entry whose use is counted and that nothing used for [NotUsedFor].
+	Use             []Use    `json:"use,omitempty"`
+	Holders         []Holder `json:"holders,omitempty"`
+	Signals         []Signal `json:"signals,omitempty"`
+	NotUsedRecently bool     `json:"not_used_recently,omitempty"`
 }
 
 // Claimed is one source's live claim beside the value the atlas holds.

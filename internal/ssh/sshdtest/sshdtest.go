@@ -5,9 +5,15 @@
 // container starts and are thrown away with it; no test reaches any other
 // server.
 //
-// It needs a usable docker or podman. Where neither answers, [Start] skips the
-// test, and internal/skipgate declares each skip as an environment one: CI's
-// runners have docker, so the suites run there.
+// It needs a usable docker or podman. Where neither answers, [Require] skips
+// the test, and internal/skipgate declares each skip as an environment one:
+// CI's runners have docker, so the suites run there. skipgate matches a
+// declared skip by the test's exact name, so a case that runs one server per
+// image calls [Require] itself, before its per-image subtests: a skip taken
+// inside one of them is a skip of that subtest, which nothing declares, and a
+// workstation without a runtime would fail the gate on every image of every
+// such case. [Start] calls it too, for a case that starts its one server
+// directly.
 package sshdtest
 
 import (
@@ -100,13 +106,21 @@ type Server struct {
 	Image string
 }
 
-// Start runs a fresh server on base and removes it when t ends. It skips t
-// where no container runtime answers.
-func Start(t *testing.T, base string) *Server {
+// Require skips t where no container runtime answers. A case that runs a
+// server per image calls it before its subtests, so the skip is of the case
+// internal/skipgate declares (see the package doc).
+func Require(t *testing.T) {
 	t.Helper()
 	if runtimeName() == "" {
 		t.Skip("sshdtest: needs a usable docker or podman")
 	}
+}
+
+// Start runs a fresh server on base and removes it when t ends. It skips t
+// where no container runtime answers ([Require]).
+func Start(t *testing.T, base string) *Server {
+	t.Helper()
+	Require(t)
 	tag := image(t, base)
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()

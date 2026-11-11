@@ -3,6 +3,7 @@ package code_test
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -16,49 +17,58 @@ import (
 // context still live is none either. A zero deadline is no asker on a wire,
 // and cuts nothing.
 //
+// In a bubble, where a context's deadline ends it at that very instant and
+// the clock moves only while the case waits: the read's context is seen
+// ended at its cut — the asker's deadline less the margin, to the
+// nanosecond — however long the runner takes over what comes after.
+//
 // Mutation: cut at the deadline itself rather than a margin before it — red.
 func TestAReadIsServedUntilItsAnswerIsDue(t *testing.T) {
 	t.Parallel()
-	deadline := time.Now().Add(code.ReplyMargin + 50*time.Millisecond)
-	ctx, cancel := code.AnswerBy(t.Context(), deadline)
-	defer cancel()
-	if got, ok := ctx.Deadline(); !ok || !got.Equal(deadline.Add(-code.ReplyMargin)) {
-		t.Fatalf("a read served for an asker waiting until %v ends at %v (%v), want a reply's margin before it",
-			deadline, got, ok)
-	}
-	if code.AnswerDue(ctx) {
-		t.Error("a read whose answer is not due yet says it is")
-	}
-	<-ctx.Done()
-	if !code.AnswerDue(ctx) {
-		t.Errorf("a read cut at its answer's due instant ended %v (cause %v), want it due", ctx.Err(),
-			context.Cause(ctx))
-	}
-	if !time.Now().Before(deadline) {
-		t.Errorf("the read's answer fell due at %v, past its asker's deadline %v", time.Now(), deadline)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		deadline := time.Now().Add(code.ReplyMargin + 50*time.Millisecond)
+		cut := deadline.Add(-code.ReplyMargin)
+		ctx, cancel := code.AnswerBy(t.Context(), deadline)
+		defer cancel()
+		if got, ok := ctx.Deadline(); !ok || !got.Equal(cut) {
+			t.Fatalf("a read served for an asker waiting until %v ends at %v (%v), want a reply's margin before it",
+				deadline, got, ok)
+		}
+		if code.AnswerDue(ctx) {
+			t.Error("a read whose answer is not due yet says it is")
+		}
+		<-ctx.Done()
+		if !code.AnswerDue(ctx) {
+			t.Errorf("a read cut at its answer's due instant ended %v (cause %v), want it due", ctx.Err(),
+				context.Cause(ctx))
+		}
+		if at := time.Now(); !at.Equal(cut) {
+			t.Errorf("the read's answer fell due at %v, want its cut %v: a reply's margin before its asker's "+
+				"deadline %v", at, cut, deadline)
+		}
 
-	parent, leave := context.WithCancel(t.Context())
-	gone, stop := code.AnswerBy(parent, time.Now().Add(time.Hour))
-	defer stop()
-	leave()
-	<-gone.Done()
-	if code.AnswerDue(gone) {
-		t.Error("a read whose caller went away says its answer fell due: nobody listens for that answer")
-	}
+		parent, leave := context.WithCancel(t.Context())
+		gone, stop := code.AnswerBy(parent, time.Now().Add(time.Hour))
+		defer stop()
+		leave()
+		<-gone.Done()
+		if code.AnswerDue(gone) {
+			t.Error("a read whose caller went away says its answer fell due: nobody listens for that answer")
+		}
 
-	early, stopEarly := context.WithTimeout(t.Context(), 10*time.Millisecond)
-	defer stopEarly()
-	sooner, stopSooner := code.AnswerBy(early, time.Now().Add(time.Hour))
-	defer stopSooner()
-	<-sooner.Done()
-	if code.AnswerDue(sooner) {
-		t.Error("a read its caller's own earlier deadline ended says its answer fell due")
-	}
+		early, stopEarly := context.WithTimeout(t.Context(), 10*time.Millisecond)
+		defer stopEarly()
+		sooner, stopSooner := code.AnswerBy(early, time.Now().Add(time.Hour))
+		defer stopSooner()
+		<-sooner.Done()
+		if code.AnswerDue(sooner) {
+			t.Error("a read its caller's own earlier deadline ended says its answer fell due")
+		}
 
-	uncut, stopUncut := code.AnswerBy(t.Context(), time.Time{})
-	defer stopUncut()
-	if _, ok := uncut.Deadline(); ok {
-		t.Error("a read served with no asker's deadline was given one")
-	}
+		uncut, stopUncut := code.AnswerBy(t.Context(), time.Time{})
+		defer stopUncut()
+		if _, ok := uncut.Deadline(); ok {
+			t.Error("a read served with no asker's deadline was given one")
+		}
+	})
 }

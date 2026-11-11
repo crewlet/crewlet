@@ -111,10 +111,10 @@ func expungeWhileBusy(t testing.TB, c *compact.Compactor, cand code.ExpungeCandi
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := c.Expunge(t.Context(), cand)
-		if out != compact.OutcomeBusy || time.Now().After(deadline) {
+		if out != compact.OutcomeBusy || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its caller judges the outcome it answers
 			return out, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 		listed, ok, lerr := compact.Listed(t.Context(), c, cand.ID)
 		switch {
 		case lerr != nil:
@@ -383,7 +383,7 @@ func TestACompactionMergesBesideAnExpungeNeverItsInputs(t *testing.T) {
 		case <-reached:
 		case out := <-done:
 			t.Fatalf("the expunge ended %s before its build was stored", out)
-		case <-time.After(time.Minute):
+		case <-time.After(time.Minute): //fixedwait:liveness
 			t.Fatal("the expunge built nothing in a minute")
 		}
 
@@ -441,7 +441,7 @@ func TestACompactionMergesBesideAnExpungeNeverItsInputs(t *testing.T) {
 		case <-reached:
 		case out := <-done:
 			t.Fatalf("the resumed expunge ended %s before its rescue was stored", out)
-		case <-time.After(time.Minute):
+		case <-time.After(time.Minute): //fixedwait:liveness
 			t.Fatal("the resumed expunge stored no rescue in a minute")
 		}
 		x.pushN(code.CompactMinMerge, 4<<10)
@@ -472,7 +472,7 @@ func TestACompactionMergesBesideAnExpungeNeverItsInputs(t *testing.T) {
 		}()
 		select {
 		case <-entered:
-		case <-time.After(time.Minute):
+		case <-time.After(time.Minute): //fixedwait:liveness
 			t.Fatal("the expunge did not sync in a minute")
 		}
 		syncs, _ := h.counts()
@@ -526,7 +526,7 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 		case <-reached:
 		case out := <-done:
 			t.Fatalf("the expunge ended %s before its build was stored", out)
-		case <-time.After(time.Minute):
+		case <-time.After(time.Minute): //fixedwait:liveness
 			t.Fatal("the expunge built nothing in a minute")
 		}
 		syncs, _ := cc.counts()
@@ -591,7 +591,7 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 			case <-reached:
 			case out := <-done:
 				t.Fatalf("the build ended %s before its upload", out)
-			case <-time.After(time.Minute):
+			case <-time.After(time.Minute): //fixedwait:liveness
 				t.Fatal("the build stored nothing in a minute")
 			}
 			syncs, _ := cc.counts()
@@ -808,9 +808,9 @@ func TestARescueKeepsADropMadeBetweenScanAndBegin(t *testing.T) {
 			}
 			var out compact.Outcome
 			var err error
-			for deadline := time.Now().Add(time.Minute); ; time.Sleep(20 * time.Millisecond) {
+			for deadline := time.Now().Add(time.Minute); ; time.Sleep(20 * time.Millisecond) { //fixedwait:liveness
 				out, err = compact.FinishExpunge(t.Context(), c, open, tc.grace)
-				if out != compact.OutcomeBusy || time.Now().After(deadline) {
+				if out != compact.OutcomeBusy || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the outcome is asserted after it
 					break
 				}
 			}

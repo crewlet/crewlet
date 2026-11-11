@@ -81,6 +81,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// (the trash reaper's retention purge) rather than a local delete.
 		// Nor its anchors, which the trim removes (see pages_ops below).
 		"assistant_ops",
+		// The atlas log's operation ledger, swept per node like every
+		// domain's.
+		"atlas_ops",
 		// THE CHAT LOG'S operation ledger, per node, for the reason every
 		// registered domain's is (see pages_ops below), and not its
 		// anchors, for the same reason as every domain's.

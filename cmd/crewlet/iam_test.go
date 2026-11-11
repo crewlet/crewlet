@@ -445,20 +445,21 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 	}
 }
 
-// A PERSON LEFT WITHOUT -grants IS GIVEN EVERY APP, AND NEVER ADMIN.
+// A PERSON LEFT WITHOUT -grants IS GIVEN THE DEFAULT APPS, AND NEVER ADMIN.
 //
 // The node requires `grants` on an invitation and on a create — `[]` is a real
 // answer there, the overview alone — so what a person is given when the
 // command says nothing has to be the command's, and it is the colleague's:
-// every app, which is what a teammate needs to be sent work and to read what
-// the company wrote down. Admin is never a default. A token left without
+// every app but the opt-in ones ([iam.DefaultApps]), which is what a teammate
+// needs to be sent work and to read what the company wrote down. Atlas and
+// admin are never a default. A token left without
 // -grants is the opposite case: it sends no field at all, which the node reads
 // as everything the owner holds that the minting session may confer — the
 // default the help states for each.
 //
 // Mutation: send no grants on a person's invitation or create and the first
 // two rows fail; send the apps on a mint and the third does.
-func TestAPersonsInviteDefaultsToEveryApp(t *testing.T) {
+func TestAPersonsInviteDefaultsToTheDefaultApps(t *testing.T) {
 	t.Parallel()
 	var bodies []map[string]any
 	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -485,14 +486,18 @@ func TestAPersonsInviteDefaultsToEveryApp(t *testing.T) {
 	if len(bodies) != 3 {
 		t.Fatalf("the node was asked %d times, want 3", len(bodies))
 	}
-	apps := make([]any, 0, len(iam.Apps))
-	for _, g := range iam.Apps {
+	apps := make([]any, 0, len(iam.DefaultApps))
+	for _, g := range iam.DefaultApps {
 		apps = append(apps, string(g))
 	}
 	for i, what := range []string{"an invitation", "a person's create"} {
-		if got, _ := bodies[i]["grants"].([]any); !slices.Equal(got, apps) {
-			t.Errorf("%s naming no -grants sent %v, want every app %v and not "+
-				"admin", what, bodies[i]["grants"], apps)
+		got, _ := bodies[i]["grants"].([]any)
+		if !slices.Equal(got, apps) {
+			t.Errorf("%s naming no -grants sent %v, want the default apps %v and "+
+				"not admin", what, bodies[i]["grants"], apps)
+		}
+		if slices.Contains(got, any(string(iam.GrantAtlas))) {
+			t.Errorf("%s naming no -grants gave atlas, which is opt-in", what)
 		}
 	}
 	if grants, sent := bodies[2]["grants"]; sent {
@@ -2012,7 +2017,7 @@ func TestThePermissionListReadsAsAList(t *testing.T) {
 	if got, want := iamGrantWords(), words.Or(iam.AllGrants); got != want {
 		t.Errorf("the permissions read %q, want %q", got, want)
 	}
-	if got, want := iamAppWords(), words.And(iam.Apps); got != want {
+	if got, want := iamAppWords(), words.And(iam.DefaultApps); got != want {
 		t.Errorf("the apps read %q, want %q", got, want)
 	}
 	for _, g := range iam.AllGrants {

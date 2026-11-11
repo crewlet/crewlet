@@ -159,12 +159,14 @@ func TestACopyCutOffInItsBoxIsToldSoWithoutASave(t *testing.T) {
 // since the notes the brief is the first to read follow them in the same form.
 // Those are said to be ones the turn had not read before the message, never new
 // to the session: which notes the turn has read is its record's word, and a
-// harness can be handed a note before the record says so. None told again says
-// nothing.
+// harness can be handed a note before the record says so. Nor are the notes
+// told again said to be every note the turn has read: a session whose harness
+// ended its own run is told them from a read its harness was never handed on,
+// and holds every one before. None told again says nothing.
 //
 // Mutation: drop the header, its one-note sentence or its count, call the notes
-// after them new, or say something where there is no note, and a check goes
-// red.
+// after them new, call the notes told again every note the turn read, or say
+// something where there is no note, and a check goes red.
 func TestNotesToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	if got := NotesReadAgain(nil); got != "" {
@@ -179,10 +181,14 @@ func TestNotesToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 			t.Errorf("%d notes told again are not headed as ones the session may already show, counted as "+
 				"%q:\n%s", notes, count, got)
 		}
-		if header := strings.TrimSuffix(got, strings.Join(told, "\n\n")); strings.Contains(header, " new") ||
+		header := strings.TrimSuffix(got, strings.Join(told, "\n\n"))
+		if strings.Contains(header, " new") ||
 			!strings.Contains(header, "A note after them is one the turn had not read before this message.") {
 			t.Errorf("%d notes told again say the notes after them are new rather than ones the turn had not "+
 				"read:\n%s", notes, got)
+		}
+		if strings.Contains(strings.ToLower(header), "every note") {
+			t.Errorf("%d notes told again are said to be every note the turn has read:\n%s", notes, got)
 		}
 		if !strings.HasSuffix(got, "\n\n"+strings.Join(told, "\n\n")) {
 			t.Errorf("%d notes told again are not told after their header, in order:\n%s", notes, got)

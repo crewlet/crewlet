@@ -115,8 +115,12 @@ func (r rig) run(t *testing.T, user string, auth ssh.Signer, line string, stdin 
 	return res
 }
 
-// eachImage runs f on every image, in parallel.
+// eachImage runs f on every image, in parallel. Where no container runtime
+// answers it skips the case itself, before any subtest: skipgate declares the
+// case's skip, never one per image (sshdtest's package doc).
 func eachImage(t *testing.T, f func(t *testing.T, image string)) {
+	t.Helper()
+	sshdtest.Require(t)
 	for _, image := range sshdtest.Images {
 		t.Run(image, func(t *testing.T) {
 			t.Parallel()

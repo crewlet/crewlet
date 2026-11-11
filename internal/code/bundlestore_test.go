@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -321,10 +322,20 @@ func (p *recording) Put(ctx context.Context, r io.Reader, limit int64, m objstor
 // handed over so far, and an error from it ends the upload as that error with
 // nothing named; and a store with no room is answered as the store said it
 // (objstore.Full), for the caller to name the room.
+//
+// The bound is read IN A BUBBLE, whose clock moves only while every goroutine
+// of it is durably blocked — and nothing StoreBundle does blocks so: it reads
+// files and the store reads it — so the deadline the put is handed is the
+// instant the call began plus the bound, exactly, however long the runner
+// takes over the files.
+//
+// Mutation: bound the put by UploadDeadline less a second — red at the
+// deadline.
 func TestStoreBundleHandsTheStoreTheBundleUnderItsBound(t *testing.T) {
 	t.Parallel()
 	packPath, b := written(t)
-	lay := func() *code.PackRef {
+	lay := func(t *testing.T) *code.PackRef {
+		t.Helper()
 		ref, err := code.LayBundle("p1", packPath, b.Checksum)
 		if err != nil {
 			t.Fatal(err)
@@ -332,39 +343,40 @@ func TestStoreBundleHandsTheStoreTheBundleUnderItsBound(t *testing.T) {
 		return ref
 	}
 
-	ref := lay()
-	p := &recording{chunk: 1000}
-	var hits []int64
-	began := time.Now()
-	err := code.StoreBundle(t.Context(), p, packPath, ref, func(_ context.Context, at int64) error {
-		hits = append(hits, at)
-		return nil
+	synctest.Test(t, func(t *testing.T) {
+		ref := lay(t)
+		p := &recording{chunk: 1000}
+		var hits []int64
+		began := time.Now()
+		err := code.StoreBundle(t.Context(), p, packPath, ref, func(_ context.Context, at int64) error {
+			hits = append(hits, at)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("store through a recording store: %v", err)
+		}
+		if !bytes.Equal(p.got, b.Bytes) || p.limit != ref.Size || p.meta.ContentType != code.BundleContentType {
+			t.Errorf("the store was handed %d bytes limited at %d as %q, want the %d-byte bundle at its size "+
+				"as %q", len(p.got), p.limit, p.meta.ContentType, len(b.Bytes), code.BundleContentType)
+		}
+		bound := code.UploadDeadline(ref.Size)
+		if !p.hasDeadline || !p.deadline.Equal(began.Add(bound)) {
+			t.Errorf("the put ran under a deadline of %v (set: %v), want %v: its bound, %v, from its start",
+				p.deadline, p.hasDeadline, began.Add(bound), bound)
+		}
+		if !slices.Equal(hits, p.before) || len(hits) < 3 || hits[len(hits)-1] != ref.Size {
+			t.Errorf("the hit was asked at %v, and the store read at %v: want one hit before every read, "+
+				"at the bytes handed over, the last at the bundle's %d", hits, p.before, ref.Size)
+		}
 	})
-	ended := time.Now()
-	if err != nil {
-		t.Fatalf("store through a recording store: %v", err)
-	}
-	if !bytes.Equal(p.got, b.Bytes) || p.limit != ref.Size || p.meta.ContentType != code.BundleContentType {
-		t.Errorf("the store was handed %d bytes limited at %d as %q, want the %d-byte bundle at its size "+
-			"as %q", len(p.got), p.limit, p.meta.ContentType, len(b.Bytes), code.BundleContentType)
-	}
-	bound := code.UploadDeadline(ref.Size)
-	if !p.hasDeadline || p.deadline.Before(began.Add(bound)) || p.deadline.After(ended.Add(bound)) {
-		t.Errorf("the put ran under a deadline of %v (set: %v), want %v from its start", p.deadline,
-			p.hasDeadline, bound)
-	}
-	if !slices.Equal(hits, p.before) || len(hits) < 3 || hits[len(hits)-1] != ref.Size {
-		t.Errorf("the hit was asked at %v, and the store read at %v: want one hit before every read, "+
-			"at the bytes handed over, the last at the bundle's %d", hits, p.before, ref.Size)
-	}
 
 	// Past the first read and inside the bundle, whose index alone is over a
 	// kilobyte (code.IndexBytesFor).
 	const failAt = 1000
 	injected := errors.New("injected")
-	ref, p = lay(), &recording{chunk: 1000}
+	ref, p := lay(t), &recording{chunk: 1000}
 	laid := *ref
-	err = code.StoreBundle(t.Context(), p, packPath, ref, func(_ context.Context, at int64) error {
+	err := code.StoreBundle(t.Context(), p, packPath, ref, func(_ context.Context, at int64) error {
 		if at >= failAt {
 			return injected
 		}
@@ -376,7 +388,7 @@ func TestStoreBundleHandsTheStoreTheBundleUnderItsBound(t *testing.T) {
 	}
 
 	full := &objstore.Full{Remedy: "the bucket is given room", Err: fmt.Errorf("the provider's own answer")}
-	ref = lay()
+	ref = lay(t)
 	err = code.StoreBundle(t.Context(), &recording{chunk: 1000, refuse: full}, packPath, ref, nil)
 	var answered *objstore.Full
 	if !errors.As(err, &answered) || answered.Remedy != full.Remedy || !errors.Is(err, objstore.ErrFull) {

@@ -408,10 +408,10 @@ func (x *fixture) graphed(i int, repo string) string {
 		if whole == nil || chain == nil {
 			return dir
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			x.t.Fatalf("node %d's copy of %s holds no commit-graph a minute on", i, repo)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

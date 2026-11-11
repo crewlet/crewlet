@@ -60,8 +60,9 @@ func Read[T any](ctx context.Context, one func(context.Context) (T, error), agai
 // hedged: a caller that set no deadline of its own is held to bound — the
 // bound that one request had, its client's own DefaultTimeout
 // (jetstream.JetStreamOptions) — BEFORE the read begins, so the read is asked
-// again inside it rather than for the whole t.Lookup ceiling. A caller's own
-// deadline is kept, under the ceiling every read is held to.
+// again inside it rather than for the whole t.Lookup ceiling, and never past
+// it ([hedge]). A caller's own deadline is kept, under the ceiling every read
+// is held to.
 //
 // # Why such a read keeps its bound
 //
@@ -155,6 +156,12 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 // two seconds, measured on a fleet of three — and each later one recovers a
 // drop only across an election that much longer; to a leader that is merely
 // slow, every one of them is more work queued behind the first.
+//
+// And NOTHING PAST ctx's DEADLINE: a re-ask that comes due once it has passed
+// is not sent, though ctx cannot say so until the runtime runs the timer that
+// ends it ([overdue]). A stalled process runs that timer late, and a re-ask
+// taken first was a request past its caller's bound — one more on the queue
+// above, whose answer nobody would hear.
 //
 // Every request runs on one context, derived from ctx and cancelled as hedge
 // returns, which waits for each request to end and hears every reply: no
@@ -255,6 +262,16 @@ func hedge[T any](ctx context.Context, t Timing, one func(context.Context) (T, e
 			lost()
 		case <-reAsk:
 			reAsk = nil
+			if overdue(ctx) {
+				// THE DEADLINE PASSED DURING THE PAUSE, and ctx
+				// cannot say so until the runtime runs the timer
+				// that ends it: a request sent now is asked past
+				// the bound its caller set ([overdue]). Nothing
+				// more is asked, and ctx's ending, which is due,
+				// ends the read below — or an answer to a request
+				// already out comes first, and is taken.
+				continue
+			}
 			send()
 			term.Reset(t.ReadTerm)
 		case <-ctx.Done():

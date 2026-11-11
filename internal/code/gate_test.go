@@ -268,12 +268,21 @@ func (n *node) sourcesOf(name string) map[string]code.RuleSource {
 // description keeps them so. A node that replays the same records from zero
 // holds the same sources.
 //
+// EVERY RECORD IS STAMPED BY A CLOCK THE CASE HOLDS, on both nodes alike: a
+// minute past harnessAt for each place in the log — the broker's instant the
+// drain hands the applier — so a rule's instant is its record's, and the
+// order of two is the order of their records in the log, read with no wall
+// clock between them.
+//
 // Mutation: stamp every rule a record writes with the record's own source
 // (rulesSourced's comparison dropped) — the release protection moves main's
-// source to the agent, red.
+// source to the agent, red; stamp a rule with the applier's own now rather
+// than its record's instant — every rule set at one instant, red.
 func TestARuleNamesWhoLastChangedItAndWhen(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
+	stamped := func(seq uint64, _ time.Time) time.Time { return harnessAt.Add(time.Duration(seq) * time.Minute) }
+	a.storedAt, b.storedAt = stamped, stamped
 	a.chart = testChart()
 	set := func(stage, pattern string, got map[string]code.RuleSource, by string, kind code.ActorKind) {
 		t.Helper()
@@ -297,6 +306,7 @@ func TestARuleNamesWhoLastChangedItAndWhen(t *testing.T) {
 		t.Fatalf("protecting release/* moved main's source from %+v to %+v", first["refs/heads/main"],
 			second["refs/heads/main"])
 	}
+	//fixedwait:stated both are their records' instants, which the case's clock stamped by their places in the log
 	if !second["refs/heads/release/*"].SetAt.After(first["refs/heads/main"].SetAt) {
 		t.Errorf("release/* reads set at %s, not after main's %s", second["refs/heads/release/*"].SetAt,
 			first["refs/heads/main"].SetAt)
@@ -312,6 +322,7 @@ func TestARuleNamesWhoLastChangedItAndWhen(t *testing.T) {
 	gated := a.sourcesOf("gated")
 	set("a person gated main", "refs/heads/main", gated, "founder", code.ActorOperator)
 	switch {
+	//fixedwait:stated both are their records' instants, which the case's clock stamped by their places in the log
 	case !gated["refs/heads/main"].SetAt.After(second["refs/heads/release/*"].SetAt):
 		t.Errorf("main's gate reads set at %s, not after the release protection's %s",
 			gated["refs/heads/main"].SetAt, second["refs/heads/release/*"].SetAt)

@@ -490,7 +490,7 @@ func annotationsFor(name string) tools.Annotations {
 	}
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
-		LoadToolSkillTool, SearchKnowledgeTool, ListSessionsTool, ReadSessionTool:
+		LoadToolSkillTool, SearchKnowledgeTool, ListSessionsTool, ReadSessionTool, AtlasSearchTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing, which is what lets a phase retry one safely. The
 		// session tools are reads of the seat's own record that take no

@@ -52,22 +52,29 @@ func (h *heldStream) waitHeld(t *testing.T) {
 	t.Helper()
 	select {
 	case <-h.held:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("no announcement reached the stream in 10 s")
 	}
 }
 
 // heldCommitter is a committer on n announcing on stream, whose announcer
-// holds at most announcements unpublished. The stream is released before the
-// committer is stopped, so the stop never waits on a held publish.
-func heldCommitter(t *testing.T, n *node, stream *heldStream, announcements int) *code.Committer {
+// holds at most announcements unpublished, at the harness's clock unless tune
+// says otherwise. The stream is released before the committer is stopped, so
+// the stop never waits on a held publish.
+func heldCommitter(t *testing.T, n *node, stream *heldStream, announcements int,
+	tune ...func(*code.CommitterOptions)) *code.Committer {
+
 	t.Helper()
-	c, err := code.NewCommitterAnnouncing(code.CommitterOptions{
+	o := code.CommitterOptions{
 		Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id, Limits: code.DefaultLimits,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
 		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
 		Now:       func() time.Time { return harnessAt }, Events: stream, AgentIDs: agentIDs,
-	}, announcements)
+	}
+	for _, f := range tune {
+		f(&o)
+	}
+	c, err := code.NewCommitterAnnouncing(o, announcements)
 	if err != nil {
 		t.Fatalf("NewCommitterAnnouncing: %v", err)
 	}
@@ -101,7 +108,7 @@ func requireOpened(t *testing.T, ch <-chan error) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("the open was not answered in 30 s: it waited on an announcement")
 	}
 }
@@ -143,88 +150,57 @@ func TestARepositorysNextPushWaitsOnNoneOfItsAnnouncements(t *testing.T) {
 
 // AN ANNOUNCER THAT HOLDS ALL IT MAY DROPS THE NEXT, AND NEVER WAITS FOR ROOM:
 // behind a stream holding the first opening's publish, an announcer that holds
-// one more takes the second open's and drops the third's — whose open is
-// answered at once all the same — and, released, the stream takes the first
-// two, the second stamped the instant its record landed rather than when it
-// was published.
+// one more takes the second open's and drops the third's — whose repository's
+// next write is answered all the same — and, released, the stream takes the
+// first two, the second stamped the instant its record landed, by the
+// committer's clock, rather than when it was published.
 //
-// Mutations: wait for room in the announcer (a plain send) — the third open
+// Each handover is read off its repository's next write: a repository's
+// goroutine hands what a write landed to the announcer before it takes the
+// write after, so that write is answered only once the opening is held or
+// dropped. What the stream took is read once the committer has stopped, which
+// publishes everything its announcer holds. And the clock is the case's, moved
+// an hour between the handovers and the release.
+//
+// Mutations: wait for room in the announcer (a plain send) — api's next push
 // waits behind the held stream, red; stamp an announcement when it is
-// published (drop the Timestamp it was handed over at) — the second is
-// stamped after the release, red.
+// published (drop the Timestamp it was handed over at, or read the clock
+// then) — the second is stamped an hour late, red; hold one more than the
+// announcer may — the stream takes three, red.
 func TestAFullAnnouncerDropsWhatItCannotHoldAndNeverWaits(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	stream := newHeldStream()
-	c := heldCommitter(t, n, stream, 1)
+	clock := &fakeClock{at: harnessAt}
+	c := heldCommitter(t, n, stream, 1, func(o *code.CommitterOptions) { o.Now = clock.now })
 	web, api := changeRepo(t, n, "web"), changeRepo(t, n, "api")
 
 	requireOpened(t, openAsync(t.Context(), c, opening(web, featureRef, mainRef, dev)))
 	stream.waitHeld(t)
 	queued := opening(web, releaseRef, mainRef, dev)
 	requireOpened(t, openAsync(t.Context(), c, queued))
+	requireOK(t, await(t, proposeAsync(t.Context(), c, proposal(web, update("refs/heads/kept", code.ZeroOID,
+		oidOf("K"))))))
 	requireOpened(t, openAsync(t.Context(), c, opening(api, featureRef, mainRef, dev)))
+	requireOK(t, await(t, proposeAsync(t.Context(), c, proposal(api, update("refs/heads/kept", code.ZeroOID,
+		oidOf("K"))))))
 
-	time.Sleep(20 * time.Millisecond)
-	released := time.Now().UTC()
+	landed := clock.now()
+	clock.advance(time.Hour)
 	stream.release()
-	waitAnnouncedOf(t, &stream.announced, "change_opened", 2)
-	requireNoMore(t, &stream.announced, "change_opened", 2)
-	second := stream.of("change_opened")[1]
+	opened := settled(t, c, &stream.announced, "change_opened")
+	if len(opened) != 2 {
+		t.Fatalf("the stream took %d openings once released, want the first two: the announcer holds one, and "+
+			"drops the third", len(opened))
+	}
+	second := opened[1]
 	if got := second.Data.(*types.ChangeOpened); got.ChangeID != queued.Open.ChangeID || got.RepoID != web {
 		t.Fatalf("the stream's second opening is %+v, want web's second change, the one the announcer held", got)
 	}
-	if !second.Timestamp.Before(released) {
-		t.Fatalf("the held opening is stamped %s, at or after its release at %s: an announcement carries the "+
-			"instant its record landed", second.Timestamp, released)
-	}
-}
-
-// A STOPPING COMMITTER PUBLISHES WHAT IT LANDED BEFORE IT RETURNS: Stop waits
-// for the announcer to drain what the repositories handed it, so a node that
-// stops loses no announcement of a record it landed while its stream still
-// takes them.
-//
-// Mutation: return from Stop once the repositories' goroutines are done,
-// without waiting for the announcer — Stop returns while the stream still
-// holds the opening, red.
-func TestAStoppingCommitterPublishesWhatItLanded(t *testing.T) {
-	t.Parallel()
-	n := newNode(t)
-	stream := newHeldStream()
-	c := heldCommitter(t, n, stream, code.CommitterAnnouncements)
-	repo := changeRepo(t, n, "web")
-
-	requireOpened(t, openAsync(t.Context(), c, opening(repo, featureRef, mainRef, dev)))
-	stream.waitHeld(t)
-	stopped := make(chan struct{})
-	go func() {
-		c.Stop(context.WithoutCancel(t.Context()))
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-		t.Fatal("Stop returned while the stream still held the opening it landed")
-	case <-time.After(200 * time.Millisecond):
-	}
-	stream.release()
-	select {
-	case <-stopped:
-	case <-time.After(30 * time.Second):
-		t.Fatal("Stop did not return in 30 s once the stream took the opening")
-	}
-	if got := len(stream.of("change_opened")); got != 1 {
-		t.Fatalf("the stream holds %d openings once Stop returned, want the one the committer landed", got)
-	}
-}
-
-// requireNoMore fails t if stream comes to hold more than n events of
-// eventType once a late one would have arrived.
-func requireNoMore(t *testing.T, stream *announced, eventType string, n int) {
-	t.Helper()
-	time.Sleep(20 * time.Millisecond)
-	if got := len(stream.of(eventType)); got != n {
-		t.Fatalf("the stream holds %d %s events, want %d", got, eventType, n)
+	if !second.Timestamp.Equal(landed) {
+		t.Fatalf("the held opening is stamped %s, want %s: an announcement carries the instant its record "+
+			"landed by the committer's clock, never the instant it was published (%s)", second.Timestamp, landed,
+			clock.now())
 	}
 }
 
@@ -233,7 +209,8 @@ func requireNoMore(t *testing.T, stream *announced, eventType string, n int) {
 // is held to the announcer on its own: with the stream holding every publish,
 // dev's merge of web's change is answered merged, a push to web proposed
 // behind it is answered while the merge's change_merged is still held, and,
-// released, the stream takes the merge once, at its commit.
+// released, the stream takes the merge once, at its commit — read once the
+// committer has stopped, which publishes everything its announcer holds.
 //
 // Mutation: announce the merge inline in mergeWrite (announceMerged in place
 // of announceLater) — the push waits behind a publish the stream never
@@ -261,10 +238,11 @@ func TestAMergesAnnouncementHoldsNoPushOfItsRepository(t *testing.T) {
 	}
 
 	stream.release()
-	waitAnnouncedOf(t, &stream.announced, "change_merged", 1)
-	requireNoMore(t, &stream.announced, "change_merged", 1)
-	if got := stream.of("change_merged")[0].Data.(*types.ChangeMerged); got.ChangeID != change ||
-		got.Commit != oidOf("M") {
+	merged := settled(t, c, &stream.announced, "change_merged")
+	if len(merged) != 1 {
+		t.Fatalf("the stream took %d merges once released, want the merge once", len(merged))
+	}
+	if got := merged[0].Data.(*types.ChangeMerged); got.ChangeID != change || got.Commit != oidOf("M") {
 		t.Fatalf("the merge was announced as %+v, want web's change merged at its commit", got)
 	}
 }

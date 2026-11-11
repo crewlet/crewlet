@@ -912,7 +912,7 @@ test("unticking Admin keeps the apps it included", async () => {
   expect(admin).toHaveProperty("disabled", false);
   expect(tracker).toHaveProperty("checked", true);
   expect(tracker).toHaveProperty("disabled", true);
-  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(5);
+  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(6);
   fireEvent.click(admin);
   expect(within(edit).getByRole("checkbox", { name: "Worklet" })).toHaveProperty("checked", true);
   expect(within(edit).getByRole("checkbox", { name: "Worklet" })).toHaveProperty("disabled", false);
@@ -920,7 +920,7 @@ test("unticking Admin keeps the apps it included", async () => {
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
     {
-      add_grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet"],
+      add_grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet", "atlas"],
       remove_grants: ["admin"],
     },
   ]);
@@ -970,7 +970,7 @@ test("a service account's mint starts from its own access, and never a name this
   fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { grants: ["worklet", "admin", "doclet", "artifacts", "chatlet", "gitlet"] },
+    { grants: ["worklet", "admin", "doclet", "artifacts", "chatlet", "gitlet", "atlas"] },
   ]);
 });
 

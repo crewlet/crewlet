@@ -88,6 +88,11 @@ access_history:                         # optional: what each agent was told abo
   retention_days: 400                   #   and every SSH certificate and command, kept this long
                                         #   (default 400, 90..3650); each agent's newest told
                                         #   record stays while the agent exists.
+atlas:                                  # optional: the atlas, the map of what the company runs on
+  retention_days: 400                   #   how long its history is kept: a value somebody replaced,
+                                        #   and an entry a person retired that nothing has reported
+                                        #   since (default 400, 90..3650). What the atlas holds now
+                                        #   never expires.
 assistant: {...}                        # optional, Ask Crewlet; off unless enabled
                                         #   (see "Ask Crewlet" below)
 
@@ -1296,6 +1301,17 @@ stream:
                                     #   day. How long the records are kept is
                                     #   the company document's
                                     #   access_history.retention_days
+  # atlas_log_max_bytes: 134217728  #   the atlas log, where what people
+                                    #   record about what the company runs on
+                                    #   is kept with its history (64 MiB..64
+                                    #   GiB). UNSET TAKES 128 MiB, sized by
+                                    #   what people record rather than by the
+                                    #   disk, and scaled down as far as 64 MiB
+                                    #   where the broker is short: about four
+                                    #   months of a completely blocked trim at
+                                    #   the reference company's rate. How long
+                                    #   the history is kept is the company
+                                    #   document's atlas.retention_days
   # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
                                     #   the ordered stream a repository's refs,
                                     #   packs and settings move on. It runs on
@@ -1750,7 +1766,7 @@ api:
                         #   by colons (ci-pipeline, ci:release), at most 58
                         #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
-        grants: [admin]  # admin, worklet, doclet, artifacts, chatlet, gitlet:
+        grants: [admin]  # admin, worklet, doclet, artifacts, chatlet, gitlet, atlas:
                         #   what it may do, and the most an invitation or a
                         #   create it makes may confer — the first person's
                         #   included. admin includes every app; on a node
@@ -1916,7 +1932,7 @@ the artifact note in `SECURITY.md`).
 **`api.auth.admin` says whether this node serves admin**, and it is required
 once a port is set: `serve`, or `refuse`. A person's
 [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`) live in the replicated
+(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`, `gitlet`, `atlas`) live in the replicated
 store and are written by an administrator; this is each node's statement, in
 the tier that holds the keyring and never read from Tier B, of whether `admin`
 counts here at all. A `refuse` node clamps admin away from every principal composed on it and

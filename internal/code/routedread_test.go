@@ -91,7 +91,7 @@ func TestTheWokeAnswerTellsSweptFromNobody(t *testing.T) {
 		var lists [][]string
 		for _, r := range page.Records {
 			lists = append(lists, recipientsOf(r))
-			if !r.At.Before(page.RetainedFrom) {
+			if !r.At.Before(page.RetainedFrom) { //fixedwait:stated a record instant the case's storedBefore hook states, against the horizon the reader derives from harnessAt
 				t.Errorf("%s!%d's record at %v is not older than the page's horizon %v", tc.repo, tc.number,
 					r.At, page.RetainedFrom)
 			}

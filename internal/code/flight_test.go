@@ -34,7 +34,7 @@ func answeredWithin[R any](t *testing.T, what string, ch <-chan answerOf[R], d t
 	select {
 	case a := <-ch:
 		return a
-	case <-time.After(d):
+	case <-time.After(d): //fixedwait:liveness
 		t.Fatalf("%s was not answered within %s: it waits for a turn rather than being answered busy", what, d)
 		return answerOf[R]{}
 	}

@@ -155,7 +155,9 @@ func mergeStream(t *testing.T, n *node) (*code.Committer, *announced) {
 // Mutations: land the push before marking the change merged — the source's
 // deletion closes the change (M4's close on a deleted source), and it reads
 // closed, red; leave the stored readiness out of the merge's apply → it still
-// reads ready, red.
+// reads ready, red; announce a merge the ledger collapsed (drop
+// appliedMerge's res.Collapsed arm) → the stopped committer has published it
+// twice, red.
 func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -234,9 +236,9 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 		t.Fatalf("the merge asked again answered %+v, the log at %d; want the first record's answer and no "+
 			"second record", again, n.end())
 	}
-	time.Sleep(20 * time.Millisecond)
-	if got := len(stream.of("change_merged")); got != 1 {
-		t.Fatalf("the merge was announced %d times, want once", got)
+	if got := len(settled(t, c, stream, "change_merged")); got != 1 {
+		t.Fatalf("the stopped committer published %d merges, want the merge once: a merge the ledger collapsed "+
+			"is announced by its landing alone", got)
 	}
 }
 
