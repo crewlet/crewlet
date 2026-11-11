@@ -329,3 +329,44 @@ test("a call put to people at once carries no escalation", async () => {
   await mount(heldRun());
   expect(screen.queryByText(/Escalated by/)).toBeNull();
 });
+
+// A HELD MERGE'S ARGUMENTS READ AS THE MERGE, for whoever is sent them: the
+// change, the head, the method and the reason, each as text and never Markdown.
+// Mutation: draw them through the JSON block, and this is red.
+test("a held merge's arguments are drawn as the merge, its reason as text", async () => {
+  const reason = "**Ship it** [now](https://evil.example)";
+  await mount(
+    heldRun({
+      agent_handle: "sre",
+      question: "May sre merge web!42 at 4f1c2a9b7e3d?",
+      held_call: {
+        id: "0190f3a8-0000-7000-8000-000000000003",
+        server: "crewlet",
+        tool: "ask_to_merge",
+        raw: "ask_to_merge",
+        digest: "sha256:d3",
+        held_at: "2026-11-01T11:50:00Z",
+        fixed: true,
+        approvers: "release",
+        act: "pr_merge",
+        delegation: null,
+      },
+      held_arguments: {
+        change: "web!42",
+        head: "4f1c2a9b7e3d5f60718293a4b5c6d7e8f9012345",
+        method: "merge",
+        reason,
+      },
+    }),
+  );
+  const row = document.querySelector<HTMLElement>(".decision-list > li")!;
+  fireEvent.click(within(row).getByText("Arguments"));
+  expect(within(row).getByText("web!42")).toBeTruthy();
+  expect(within(row).getByText("4f1c2a9").getAttribute("title")).toBe(
+    "4f1c2a9b7e3d5f60718293a4b5c6d7e8f9012345",
+  );
+  expect(within(row).getByText("A merge commit")).toBeTruthy();
+  expect(within(row).getByText(reason)).toBeTruthy();
+  expect(row.querySelector("dl a, dl strong, pre")).toBeNull();
+  expect(within(row).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+});

@@ -2454,6 +2454,154 @@ describe("the pane", () => {
       expect(screen.getByRole("button", { name: "Review and allow once" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
     });
+
+    const HEAD = "4f1c2a9b7e3d5f60718293a4b5c6d7e8f9012345";
+    const HOSTILE =
+      "# Approve [the release](https://evil.example/approve) **urgent** <b>now</b> " +
+      "```rm -rf /``` see https://evil.example/ok";
+    /** The engine's own words for a held merge, which a reader not sent its arguments reads. */
+    const MERGE_CONTEXT =
+      "cto asks to merge the Gitlet change `web!42` at head `" +
+      HEAD +
+      "`, as a merge commit.\n\n**Reason given**\n\nFixes the login loop\\.";
+    function releaseRun(act: "pr_merge" | "deploy", args: Record<string, unknown> | undefined) {
+      return {
+        ...heldRun({
+          server: "crewlet",
+          tool: act === "pr_merge" ? "ask_to_merge" : "ask_to_deploy",
+          raw: act === "pr_merge" ? "ask_to_merge" : "ask_to_deploy",
+          fixed: true,
+          approvers: "release",
+          act,
+          delegation: {
+            rule: 1,
+            delegates: ["release-reviewer"],
+            given: [
+              {
+                by: "release-reviewer",
+                verdict: "escalate",
+                confidence: "high",
+                reason: "Touches the billing service.",
+                findings: ["Changes billing/charge.go"],
+                at: new Date(Date.now() - 6 * 60_000).toISOString(),
+              },
+            ],
+            escalated: {
+              overruled: ["rule_path"],
+              engine: ["It touches billing/**, which the rule always puts to people."],
+              at: new Date(Date.now() - 6 * 60_000).toISOString(),
+            },
+          },
+        }),
+        question:
+          act === "pr_merge" ? "May cto merge web!42 at 4f1c2a9b7e3d?" : "May cto deploy web?",
+        question_context: MERGE_CONTEXT,
+        ...(args ? { held_arguments: args } : {}),
+      };
+    }
+
+    // A HELD MERGE READS ITS DELEGATES, THEN THE MERGE (ADR-0125): the change,
+    // the head as a short id with the whole one kept, the method and the
+    // reason, each the agent's words as text, never Markdown; then what Allow
+    // once does and who may answer. Mutation: draw the merge before the
+    // delegates' answers, or its reason through the Markdown renderer.
+    test("an escalated merge shows its delegates' answers, then the merge as text", async () => {
+      approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = releaseRun("pr_merge", {
+        change: "web!42",
+        head: HEAD,
+        method: "squash",
+        reason: HOSTILE,
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const pane = screen
+        .getByText(/^Escalated by release-reviewer/)
+        .closest<HTMLElement>(".crewlet-reading-pane")!;
+      const finding = within(pane).getByText("Changes billing/charge.go");
+      const reason = within(pane).getByText(HOSTILE);
+      const before = (a: Node, b: Node) =>
+        Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(before(finding, reason), "the delegates' answers come before the merge").toBe(true);
+      expect(within(pane).getByText("web!42")).toBeTruthy();
+      expect(within(pane).getByText("4f1c2a9").getAttribute("title")).toBe(HEAD);
+      expect(within(pane).getByText("One squashed commit")).toBeTruthy();
+      const facts = pane.querySelector("dl.release-request")!;
+      expect(facts.querySelector("a, img, h1, h2, h3, pre, code, strong, em, b")).toBeNull();
+      // THE REQUEST IN PLACE OF THE ENGINE'S WORDS, never both.
+      expect(within(pane).queryByText(/asks to merge the Gitlet change/)).toBeNull();
+      const note = within(pane).getByText(/may answer it/);
+      expect(note.textContent).toMatch(/^Allow once merges exactly this head, once, as CTO\./);
+      expect(note.textContent).toContain(
+        "Administrators, CTO's leads and the people rule 1 escalates to may answer it.",
+      );
+      expect(within(pane).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+      expect(within(pane).getByRole("button", { name: "Deny" })).toBeTruthy();
+      expect(within(pane).queryByRole("button", { name: "Always allow" })).toBeNull();
+    });
+
+    test("a held deploy shows its commit, changes, environment, rollback and reason as text", async () => {
+      approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = releaseRun("deploy", {
+        repo: "web",
+        commit: HEAD,
+        changes: ["web!41", "web!42"],
+        environment: "production",
+        rollback: HOSTILE,
+        reason: "Ships the login fix.",
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const facts = document.querySelector<HTMLElement>(
+        ".crewlet-reading-pane dl.release-request",
+      )!;
+      const said = (term: string) =>
+        within(facts).getByText(term, { selector: "dt" }).nextElementSibling?.textContent;
+      expect(said("Repository")).toBe("web");
+      expect(said("Changes")).toBe("web!41, web!42");
+      expect(said("Environment")).toBe("production");
+      expect(said("Rollback")).toBe(HOSTILE);
+      expect(said("Reason")).toBe("Ships the login fix.");
+      expect(within(facts).getByText("4f1c2a9").getAttribute("title")).toBe(HEAD);
+      expect(facts.querySelector("a, img, h1, pre, code, strong, b")).toBeNull();
+      expect(screen.getByText(/may answer it/).textContent).toMatch(
+        /^Allow once tells CTO it may deploy exactly this commit there, once\./,
+      );
+    });
+
+    // A READER NOT SENT THE ARGUMENTS (a person the rule escalates to, who
+    // is neither an administrator nor the agent's lead) reads the engine's own
+    // words for the merge, and who may answer it.
+    test("a merge whose arguments this reader is not sent reads the engine's words", async () => {
+      approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = releaseRun("pr_merge", undefined);
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const pane = document.querySelector<HTMLElement>(".crewlet-reading-pane")!;
+      expect(pane.querySelector("dl.release-request")).toBeNull();
+      expect(within(pane).getByText(/asks to merge the Gitlet change/)).toBeTruthy();
+      expect(within(pane).getByText(/may answer it/).textContent).toMatch(
+        /^Administrators, CTO's leads and the people rule 1 escalates to/,
+      );
+    });
   });
 
   // A QUESTION THE READER CAN'T SEE IS NOT ASKED OF THEM: the pane asked for

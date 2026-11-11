@@ -73,6 +73,15 @@ const ANSWER: DelegatedDecisionsAnswer = {
       delegates: ["security-engineer"],
       escalate_to: ["ops-lead"],
       sample_one_in: 10,
+      always_escalate_paths: [],
+    },
+    {
+      rule: 2,
+      kinds: ["pr_merge", "deploy"],
+      delegates: ["release-reviewer"],
+      escalate_to: ["ops-lead"],
+      sample_one_in: 5,
+      always_escalate_paths: ["billing/**", "services/*/payments/**"],
     },
   ],
   limits: { deadline_minutes: 15, decisions_per_hour: 30, server_allows_per_hour: 10 },
@@ -125,6 +134,7 @@ function mount(hash = "#/settings/delegated-decisions") {
       roles: [
         { name: "Ops Lead", handle: "ops-lead", kind: "human" },
         { name: "Security Engineer", handle: "security-engineer", kind: "agent" },
+        { name: "Release Reviewer", handle: "release-reviewer", kind: "agent" },
         { name: "SRE", handle: "sre", kind: "agent" },
       ],
       units: [],
@@ -149,13 +159,70 @@ test("draws whether delegation is on, each rule and the limits the engine enforc
   const rules = screen.getByRole("table", { name: "Rules" });
   expect(within(rules).getByText("Commands on servers")).toBeTruthy();
   expect(within(rules).getByText("Security Engineer")).toBeTruthy();
-  expect(within(rules).getByText("Ops Lead")).toBeTruthy();
+  expect(within(rules).getAllByText("Ops Lead")).toHaveLength(2);
   expect(within(rules).getByText("1 in 10")).toBeTruthy();
   expect(screen.getByText("On")).toBeTruthy();
   const limits = screen.getByRole("table", { name: "What Crewlet enforces" });
   expect(within(limits).getByText("15 minutes")).toBeTruthy();
   expect(within(limits).getByText("30")).toBeTruthy();
   expect(within(limits).getByText("10")).toBeTruthy();
+});
+
+// A MERGE AND DEPLOY RULE NAMES ITS KINDS AND ITS OWN PATHS, each path as
+// written; a command rule has none to name, and says so rather than a blank.
+test("a rule's own always-escalate paths are listed beside its kinds", () => {
+  answer.data = ANSWER;
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  const [ssh, release] = dataRows(rules);
+  expect(within(release!).getByText("Merges")).toBeTruthy();
+  expect(within(release!).getByText("Deploys")).toBeTruthy();
+  expect(within(release!).getByText("billing/**")).toBeTruthy();
+  expect(within(release!).getByText("services/*/payments/**")).toBeTruthy();
+  expect(within(ssh!).getByText("Not for commands")).toBeTruthy();
+});
+
+test("a rule with more paths than its row shows counts the rest", () => {
+  const paths = ["a/**", "b/**", "c/**", "d/**", "e/**", "f/**"];
+  answer.data = {
+    ...ANSWER,
+    rules: [{ ...ANSWER.rules[1]!, always_escalate_paths: paths }],
+  };
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  expect(within(rules).getByText("d/**")).toBeTruthy();
+  expect(within(rules).queryByText("e/**")).toBeNull();
+  expect(within(rules).getByText("2 more")).toBeTruthy();
+});
+
+test("a merge or deploy rule with no paths of its own says it keeps the built-in ones", () => {
+  answer.data = { ...ANSWER, rules: [{ ...ANSWER.rules[1]!, always_escalate_paths: [] }] };
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  expect(within(rules).getByText("The built-in paths only")).toBeTruthy();
+});
+
+// A MERGE'S VERDICT names no server, and says the absence as its own.
+test("a merge's verdict reads its subject and names no server", () => {
+  answer.data = {
+    ...ANSWER,
+    decided: [
+      verdict({
+        kind: "pr_merge",
+        rule: 2,
+        by: "release-reviewer",
+        host: "",
+        subject: "merge web!42 at 4f1c2a9b7e3d5f60718293a4b5c6d7e8f9012345 (merge)",
+        overruled: [],
+      }),
+    ],
+  };
+  mount();
+  const digest = screen.getByRole("table", { name: "Decided yesterday" });
+  const [row] = dataRows(digest);
+  expect(within(row!).getByText(/^merge web!42 at/)).toBeTruthy();
+  expect(within(row!).getByText("Not on a server")).toBeTruthy();
+  expect(within(row!).getByText(/Release Reviewer · rule 2/)).toBeTruthy();
 });
 
 test("the digest lists each decision: the seat, what and where, the verdict, who and why", () => {

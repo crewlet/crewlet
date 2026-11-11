@@ -60,11 +60,16 @@ func (l delegatedLog) OpenVerdict(v accessdomain.VerdictRow) (string, string, []
 // DelegatedAct, and this is red.
 func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	t.Parallel()
+	// A RULE OF EACH SHAPE: a panel on commands, and one delegate on merges
+	// and deploys with paths of its own that always go to people.
 	doc := "name: Acme\nroles:\n  - {name: Ops Lead, handle: ops-lead, kind: human}\n" +
 		"  - {name: Security A, handle: security-a}\n  - {name: Security B, handle: security-b}\n" +
+		"  - {name: Release Reviewer, handle: release-reviewer}\n" +
 		"delegated_decisions:\n  enabled: true\n  rules:\n" +
 		"    - {kinds: [ssh_operate], delegates: [security-a, security-b], escalate_to: [ops-lead], " +
-		"sample_one_in: 5}\n"
+		"sample_one_in: 5}\n" +
+		"    - {kinds: [pr_merge, deploy], delegates: [release-reviewer], escalate_to: [ops-lead], " +
+		"always_escalate_paths: [billing/**]}\n"
 	company, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatal(err)

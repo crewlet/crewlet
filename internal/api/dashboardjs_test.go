@@ -2212,8 +2212,12 @@ const (
 	// (an escalated call's delegates read before the call, an answer a
 	// delegate gave marked with its rule, Settings › Delegated decisions and
 	// Home's digest notices) took it to 5737.3 KiB (5,874,972 bytes, +15,770:
-	// script +15,542, the sheets +228): 5738 KiB.
-	treeBudget = 5<<20 + 618<<10
+	// script +15,542, the sheets +228): 5738 KiB. Merges and deploys decided
+	// under delegation (a held merge's and a deploy's request drawn as text,
+	// who may answer it, a rule's always-escalate paths and the merge and
+	// deploy conditions' words) took it to 5741.6 KiB (5,879,381 bytes,
+	// +4,409: script +4,310, the sheets +99): 5742 KiB.
+	treeBudget = 5<<20 + 622<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

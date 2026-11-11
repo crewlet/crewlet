@@ -7,8 +7,9 @@
  *
  * The rules are the company document's `delegated_decisions` block and are
  * changed there; this screen draws them as the engine runs them, numbered as
- * an escalation names them ("rule 2"). The limits are the engine's own and no
- * document changes them.
+ * an escalation names them ("rule 2"), with the paths a merge or deploy rule
+ * always puts to people. The limits are the engine's own and no document
+ * changes them.
  *
  * # What was decided, in three lists
  *
@@ -62,6 +63,7 @@ import { andList } from "~/lib/words.ts";
 import {
   confidenceWords,
   giverWords,
+  isReleaseAct,
   kindWords,
   overruledWords,
   verdictWords,
@@ -90,6 +92,9 @@ const GIVER_OPTIONS = [
   { value: "person", label: "People" },
   { value: "engine", label: "Crewlet" },
 ];
+
+/** How many of a rule's own paths its row shows before it counts the rest. */
+const PATHS_SHOWN = 4;
 
 /** A company day label moved by `days`: `2026-11-09` back one is `2026-11-08`. */
 export function shiftDay(label: string, days: number): string {
@@ -156,7 +161,7 @@ export function DelegatedDecisions() {
                 onClear={() => setQ("")}
                 clearLabel="Clear the search"
                 leading={<SearchGlyph size="sm" />}
-                placeholder="Seat, command, server or reason"
+                placeholder="Seat, request, server or reason"
                 aria-label="Search decisions"
                 width="md"
               />
@@ -269,18 +274,48 @@ function RulesCard({ answer, nameOf }: { answer: DelegatedDecisionsAnswer; nameO
       key: "delegates",
       header: "Delegates",
       floor: "9rem",
-      cell: (r) => (
-        <TableTextCell>
-          {names(r.delegates)}
-          {r.delegates.length > 1 ? " (a panel: both must allow)" : ""}
-        </TableTextCell>
-      ),
+      // A PANEL READS WHOLE, its two names and that both must allow, beside
+      // the paths column that narrows it.
+      overflow: "wrap",
+      cell: (r) =>
+        `${names(r.delegates)}${r.delegates.length > 1 ? " (a panel: both must allow)" : ""}`,
     },
     {
       key: "escalate",
       header: "Escalates to",
       floor: "8rem",
       cell: (r) => <TableTextCell>{names(r.escalate_to)}</TableTextCell>,
+    },
+    {
+      key: "paths",
+      header: "Always escalates",
+      floor: "9rem",
+      drop: 2,
+      // A RULE'S OWN PATHS, beside the built-in list every merge and deploy
+      // rule carries; a command rule has none to name.
+      title: (r) =>
+        r.always_escalate_paths.length > 0 ? r.always_escalate_paths.join("\n") : undefined,
+      cell: (r) => {
+        const paths = r.always_escalate_paths;
+        if (paths.length === 0) {
+          return (
+            <EmptyValue
+              label={r.kinds.some(isReleaseAct) ? "The built-in paths only" : "Not for commands"}
+            />
+          );
+        }
+        const rest = paths.length - PATHS_SHOWN;
+        return (
+          <span className="row gap-1 wrap">
+            {paths.slice(0, PATHS_SHOWN).map((p) => (
+              <Tag key={p} appearance="outline" monospace>
+                {p}
+              </Tag>
+            ))}
+            {rest > 0 ? <Tag appearance="outline">{`${fmtCount(rest)} more`}</Tag> : null}
+          </span>
+        );
+      },
     },
     {
       key: "sample",
@@ -456,7 +491,7 @@ function useVerdictColumns(): DataGridColumn<DelegatedVerdictRow>[] {
             {r.host}
           </Tag>
         ) : (
-          <EmptyValue label="No server" />
+          <EmptyValue label={r.kind === "ssh_operate" ? "No server" : "Not on a server"} />
         ),
     },
     {
