@@ -61,6 +61,9 @@ import type { AgentRow, BudgetWindow, ExecutorRow, WorkAskRow } from "~/protocol
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { RunQuestionLine } from "./RunQuestion.tsx";
+import { EscalationNote } from "./Delegation.tsx";
+import { delegationEscalated } from "~/lib/delegation.ts";
+import type { HeldDelegation } from "~/contract/delegated.ts";
 
 /**
  * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
@@ -610,6 +613,8 @@ export interface HeldCall {
   approvers?: string;
   /** The decision the call carries out, where a person's answer woke its turn. */
   acting?: HeldCallActing | null;
+  /** Its delegates and why it reached people, for a call they escalated (ADR-0125). */
+  delegation?: HeldDelegation | null;
 }
 
 /** The decision a held call carries out: the question asked, and the answer given. */
@@ -643,6 +648,7 @@ export function heldCallOf(run: ExecutorRow): HeldCall | null {
     args: run.held_arguments,
     fixed: held.fixed,
     approvers: held.approvers,
+    delegation: held.delegation,
   };
 }
 
@@ -677,6 +683,8 @@ export function HeldCallRow({
     call.answered ? { words: call.answered, settled: true } : null,
   );
   const settled = said?.settled ?? false;
+  // AN ESCALATION READS ITS DELEGATES BEFORE THE CALL: see components/Delegation.tsx.
+  const escalated = delegationEscalated(call);
   const args =
     call.args === undefined ? null : (
       <Disclosure title="Arguments" size="compact" headingLevel="none" flush>
@@ -703,8 +711,11 @@ export function HeldCallRow({
       ])}
       meta={joined([relTime(call.at, now)])}
       line={
-        said || call.extra || args || call.acting ? (
+        said || call.extra || args || call.acting || escalated ? (
           <>
+            {escalated ? (
+              <EscalationNote delegation={escalated} name={(h) => seatOf(index, h).name} />
+            ) : null}
             {call.acting ? (
               <Text as="p" variant="caption">
                 {actingWords(call.acting, (h) => seatOf(index, h).name)}

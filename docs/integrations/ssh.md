@@ -16,9 +16,9 @@ An agent is on at one level across every server it is granted.
 | An agent at | Can | Cannot |
 |---|---|---|
 | `read` (the default) | Run each server's allowlisted read commands, such as uptime, disk and memory use, service status and journal reads, with no approval. The server forces every command through its allowlist. | Run anything off the allowlist, open a shell, or forward a port |
-| `operate` | Everything `read` can, plus run any command a person approves first. Each approval is for one command, once, exactly as shown to the approver. | Run a command nobody approved, or run an approved command twice |
+| `operate` | Everything `read` can, plus run any command a person, or the company's delegate, approves first. Each approval is for one command, once, exactly as shown to the approver. | Run a command nobody approved, or run an approved command twice |
 
-Granting `operate` asks for a fresh sign-in (step-up). Only administrators, and the people named in `integrations.ssh.approvers`, approve an operate command.
+Granting `operate` asks for a fresh sign-in (step-up). Only administrators, the people named in `integrations.ssh.approvers`, and the people an `ssh_operate` rule of [delegated decisions](../guides/delegated-decisions.md) escalates to approve an operate command, unless that rule's delegate allows it first.
 
 ## Connecting Crewlet
 
@@ -78,13 +78,38 @@ An agent is told each of its servers' read commands as it types them, in the "Yo
 An agent on at SSH has two tools; an agent at `read` has only the first.
 
 - **`ssh_read`** runs one command on one of the agent's servers as its read user, with no approval: `{host, command}`, the command one line of up to 4096 bytes. The server's gate decides what runs. A command it refuses exits 126, and the answer then lists that server's read commands again (`read_commands`, with `read_commands_more` counting any past the first 16) so the agent can retry in the same turn.
-- **`ssh_operate`** runs one command as the server's operate user once a person approves it: `{host, command, stdin, reason}`, the command up to 4096 bytes, the stdin up to 128 KiB of text, and a reason of up to 500 characters. Every call is put to a person, who reads the server, the command exactly as written, the stdin's size, SHA-256 and first 2 KiB, and the reason, and answers **Allow once** or **Deny**. Only an administrator, or a person `integrations.ssh.approvers` names by seat handle, answers, after a fresh sign-in, and Allow once is given only after reading the whole call: `GET /mcp-approvals/{id}` shows every byte of the stdin, and the answer names the digest of what it showed. On Allow once, Crewlet signs a five-minute certificate whose forced command is that command and runs it once itself, on the server as the approver was shown it: if its address, port, operate user or host keys changed while the call waited, nothing runs and the agent asks again. No certificate or key for operate ever reaches the agent's box.
+- **`ssh_operate`** runs one command as the server's operate user once it is approved: `{host, command, stdin, reason}`, the command up to 4096 bytes, the stdin up to 128 KiB of text, and a reason of up to 500 characters. Every call is put to a person, who reads the server, the command exactly as written, the stdin's size, SHA-256 and first 2 KiB, and the reason, and answers **Allow once** or **Deny**. Only an administrator, or a person `integrations.ssh.approvers` names by seat handle, answers, after a fresh sign-in, and Allow once is given only after reading the whole call: `GET /mcp-approvals/{id}` shows every byte of the stdin, and the answer names the digest of what it showed. On Allow once, Crewlet signs a five-minute certificate whose forced command is that command and runs it once itself, on the server as the approver was shown it: if its address, port, operate user or host keys changed while the call waited, nothing runs and the agent asks again. No certificate or key for operate ever reaches the agent's box.
+
+  Where the company delegates `ssh_operate` ([Delegated decisions](../guides/delegated-decisions.md)), the call goes to the rule's delegate first, which reads it whole and allows, escalates or denies it within the limits below; it reaches the people above only once escalated. A delegate's allow is the same Allow once.
+- **`ask_to_operate`** asks a person to approve one exact command before the agent calls it: `{item, ask, host, command, stdin, reason}` puts a decision on the work item quoting the server, the command and the stdin's SHA-256. Choosing **Run it once** is an SSH approval, so only the people above may choose it, after a fresh sign-in. The agent's `ssh_operate` call in the turn that answer starts runs without a second prompt where it matches byte for byte, once.
+
+### What a delegate never allows
+
+Whatever a delegate answers, Crewlet puts a command to people when its command or stdin matches the always-escalate list, case ignored:
+
+| Class | Matches, for example |
+|---|---|
+| `sshd_config` | `/etc/ssh`, `sshd_config`, `sshd` |
+| `sudoers` | `sudoers`, `visudo`, `/etc/sudo` |
+| `users_and_groups` | `useradd`, `usermod`, `userdel`, `passwd`, `chpasswd`, `groupadd`, `/etc/passwd`, `/etc/group` |
+| `authorized_keys` | `authorized_keys`, `.ssh/` |
+| `crewlet_gate` | `crewlet-gate`, `read-allowlist`, `/etc/ssh/crewlet`, `crewlet-ops` |
+| `certificate_authority` | `TrustedUserCAKeys`, `user_ca`, `ssh-keygen`, `ca.pub` |
+| `firewall` | `iptables`, `ip6tables`, `nft`, `ufw`, `firewall-cmd`, `/etc/nftables` |
+| `secret_files` | `/etc/shadow`, private key files (`id_rsa`, `ssh_host_*_key`, `.pem`, `.key`), a private key block, an `.env` file outside `/tmp` and `/var/tmp` |
+| `data_deletion` | `rm -r`, `find -delete`, `shred`, `dd of=/dev/…`, `mkfs`, `wipefs`, `DROP DATABASE`, `TRUNCATE`, `docker volume rm`, `docker system prune`, `kubectl delete` |
+| `crewlet_company` | `crewlet config`, `crewlet secrets`, `crewlet iam`, `crewlet budgets` |
+| `download_into_shell` | `curl … \| sh`, `wget … \| bash`, `base64 -d … \| sh`, `$(curl …)`, `source <(…)` |
+| `hidden_text` | `eval`, `\x41` escapes, `$'…'`, `base64 -d`, `xxd -r`, a glob in `/etc`, `/root`, `/boot`, `/usr` or `/var/log` |
+| `auditing_and_logging` | `auditctl`, `auditd`, `rsyslog`, `journald`, `journalctl --vacuum`, removing or truncating `/var/log`, `history -c`, `HISTFILE`, `setenforce` |
+
+A shell can spell any of these another way, which is why the list also escalates the spellings that hide what runs, and the delegate is told to escalate whatever it cannot read. `integrations.ssh.always_escalate` adds the company's own patterns; nothing removes a class. Delegates also allow at most 10 commands per server in one clock hour.
 
 Both answer `{host, exit_code, stdout, stderr, truncated, duration_ms}` (with `read_commands` and a `note` on a read the gate refused), each stream cut to `commands.max_output_bytes` and the answer to one tool answer, and marked as text a server printed so the agent reads it as data. The output goes only to the turn that ran the command: the run's call log and an operate call's recorded result keep its size and digest alone. The agent's own kept session transcript holds what it read, as it holds everything the agent worked with, readable only by administrators and the agent's lead.
 
 In a turn somebody woke, an agent reaches its servers only for somebody of the company: a person of the company, a colleague agent, a schedule or Crewlet itself. A turn a credential acting as no seat woke, such as a pipeline's token filing a task, reaches no server either: a token reaches only the apps its permissions name, and a server is no app. A turn woken by somebody the company does not know, such as a guest in a shared room or an unauthenticated webhook, reaches no server, and the tool says why. That holds through colleagues: an agent asked by a colleague acting for such a person acts for them too.
 
-Every certificate Crewlet signs is recorded before it is used, and every command once it ran, failed or was denied: the agent, the turn, the server and user, the command (sealed), the stdin's size and digest, the exit status, the output's size and digest (never its text), the approver and the certificate's serial. `GET /setup/integrations/ssh/audit` pages both.
+Every certificate Crewlet signs is recorded before it is used, and every command once it ran, failed or was denied: the agent, the turn, the server and user, the command (sealed), the stdin's size and digest, the exit status, the output's size and digest (never its text), the approver and the certificate's serial. Every verdict on an operate command is recorded too, before it acts: a delegate's, with its verdict, confidence, sealed reason and findings and why Crewlet overruled it, Crewlet's own escalation at a deadline, and a person's approval through a decision. `GET /setup/integrations/ssh/audit` pages all three (`kind=certificate`, `command` or `verdict`).
 
 ## Configuration
 
@@ -97,6 +122,8 @@ integrations:
       next_certificate_authority: ${SSH_CERTIFICATE_AUTHORITY_NEXT}   # only while a rotation is staged
       source_addresses: [203.0.113.7/32]                              # optional
     approvers: [ops-lead]          # optional: people who may approve operate commands, beside administrators
+    always_escalate:               # optional: patterns no delegate may allow, added to the engine's own list
+      - '\bkubectl\s+scale\b'
     commands:
       timeout_seconds: 120         # optional, 10 to 900
       max_output_bytes: 65536      # optional, 4096 to 1048576, per stream returned to the agent
@@ -127,6 +154,7 @@ roles:
 | `provisioning.next_certificate_authority` | A second authority, present only while a rotation is staged. Servers trust both lines; Crewlet never signs with this one until it is promoted. It must name a different value from `certificate_authority`. |
 | `provisioning.source_addresses` | Up to 16 address ranges, such as the engine's egress address `203.0.113.7/32`, written into every certificate's `source-address`. A range is written in its network form: `203.0.113.0/24`, never `203.0.113.7/24`. |
 | `approvers` | Handles of human seats who may approve an operate command, beside administrators. An agent's handle is refused: only people approve production commands. |
+| `always_escalate` | Up to 64 regular expressions (RE2), each up to 512 bytes, matched against an operate command and its stdin. A command any of them matches is put to people whatever a delegate answers. They add to the engine's own list and never shorten it. |
 | `commands.timeout_seconds` | How long a command may run before Crewlet stops it: 10 to 900 seconds, 120 when empty. |
 | `commands.max_output_bytes` | How much of each of a command's output streams reaches the agent, the rest cut: 4096 to 1048576 bytes, 65536 when empty. |
 | `hosts[].id` | Up to 40 lowercase letters, digits and hyphens, unique, at most 200 servers. |

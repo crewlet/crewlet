@@ -135,6 +135,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// AND THE SSH TOOLS, the same way: registered for every seat, offered
 	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
 	deps.SSH = SSHToolDeps(e)
+	deps.Delegated = DelegatedToolDeps(e)
 	// AND THE ROOMS. Without this the nine chat tools were built,
 	// documented and registered against a zero [builtin.ChatDeps] — which
 	// gates every one of them off — so a company on `chat.backend: chatlet`
@@ -157,7 +158,8 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	}
 	// AND ITS CALLS THAT NEED APPROVAL, on the same row, their arguments
 	// sealed under the fleet keyring.
-	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher), heldActs{engine: e}); hold != nil {
+	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher), heldActs{engine: e},
+		delegatedRules{engine: e}); hold != nil {
 		c.HoldTool = hold
 	}
 	// THE EXECUTOR RUN'S CHECKOUT, where the code tools serve on this

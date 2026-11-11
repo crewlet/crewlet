@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -20,9 +21,10 @@ import (
 // receivedAccess is a data node's access log as the router reaches it,
 // keeping what each write carried.
 type receivedAccess struct {
-	mu     sync.Mutex
-	issued []accessdomain.NewCertificate
-	ran    []accessdomain.SealedCommand
+	mu       sync.Mutex
+	issued   []accessdomain.NewCertificate
+	ran      []accessdomain.SealedCommand
+	verdicts []accessdomain.SealedVerdict
 }
 
 func (a *receivedAccess) For(context.Context, string) (estate.Backend, bool) {
@@ -49,9 +51,18 @@ func (a *receivedAccess) RanSealed(_ context.Context, _ accessdomain.Call, _ acc
 	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 }
 
-// A node holding no data records its SSH certificates and commands on a data
-// node's access log, through the router, sealed here: a seat's executor runs
-// wherever its seat is held, so its SSH calls do too (ADR-0103).
+func (a *receivedAccess) VerdictSealed(_ context.Context, _ accessdomain.Call, _ accessdomain.NewVerdict,
+	sealed accessdomain.SealedVerdict) (statelog.Result, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.verdicts = append(a.verdicts, sealed)
+	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
+}
+
+// A node holding no data records its SSH certificates, commands and verdicts
+// on a data node's access log, through the router, sealed here: a seat's
+// executor runs wherever its seat is held, so its SSH calls and a delegate's
+// verdicts do too (ADR-0103, ADR-0125).
 //
 // Mutation: read only this node's own access log, and every certificate a
 // stateless node signs is refused, so its seats reach no server.
@@ -101,13 +112,21 @@ func TestANodeWithoutDataRecordsItsSSHThroughADataNode(t *testing.T) {
 		Approver: "ops-lead", Decision: accessdomain.DecisionApproved}); err != nil {
 		t.Fatalf("a command from a node holding no data: %v", err)
 	}
+	first, err := audit.RecordVerdict(t.Context(), at, accessdomain.NewVerdict{Request: uuid.NewString(),
+		Kind: delegated.KindSSHOperate, Rule: 1, Handle: "sre", By: "security", ByKind: accessdomain.VerdictByAgent,
+		Through: accessdomain.VerdictThroughDelegation, Asked: delegated.Allow, Confidence: delegated.High,
+		Verdict: delegated.Allow, Final: true, Digest: strings.Repeat("ab", 32), Host: "api-1",
+		Subject: command, Reason: "routine"})
+	if err != nil || !first {
+		t.Fatalf("a verdict from a node holding no data: %v, %v", first, err)
+	}
 	served.mu.Lock()
 	defer served.mu.Unlock()
-	if len(served.issued) != 1 || len(served.ran) != 1 {
-		t.Fatalf("the data node received %d certificates and %d commands, want one each",
-			len(served.issued), len(served.ran))
+	if len(served.issued) != 1 || len(served.ran) != 1 || len(served.verdicts) != 1 {
+		t.Fatalf("the data node received %d certificates, %d commands and %d verdicts, want one each",
+			len(served.issued), len(served.ran), len(served.verdicts))
 	}
-	if strings.Contains(served.ran[0].Sealed, "billing-worker") {
+	if strings.Contains(served.ran[0].Sealed, "billing-worker") || strings.Contains(served.verdicts[0].Subject, "billing-worker") {
 		t.Fatal("a command's text crossed the router in the clear")
 	}
 	if _, err := (sshAudit{engine: &Engine{}}).writer(); err == nil {

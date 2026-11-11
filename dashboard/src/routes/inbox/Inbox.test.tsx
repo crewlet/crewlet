@@ -2388,6 +2388,72 @@ describe("the pane", () => {
       expect(lead.querySelectorAll("pre")).toHaveLength(1);
       expect(lead.querySelector("pre")!.textContent).toBe("logrotate --force /etc/logrotate.conf");
     });
+
+    // AN ESCALATION READS ITS DELEGATES BEFORE THE CALL (ADR-0125): who put it
+    // to people under which rule, each delegate's verdict, confidence, reason
+    // and findings in the order given, then the engine's sentences, all above
+    // the command; its answers are the operate call's own. Mutation: draw the
+    // note after the question, or sort the findings, and this is red.
+    test("an escalated operate call shows its delegates' answers before the command", async () => {
+      approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = heldRun({
+        server: "ssh",
+        tool: "ssh_operate",
+        raw: "ssh_operate",
+        fixed: true,
+        approvers: "ssh",
+        act: "ssh_operate",
+        delegation: {
+          rule: 2,
+          delegates: ["security-engineer"],
+          given: [
+            {
+              by: "security-engineer",
+              verdict: "escalate",
+              confidence: "low",
+              reason: "Restarts the API outside the change window.",
+              findings: ["Restarts a production service", "No item names this server"],
+              at: new Date(Date.now() - 6 * 60_000).toISOString(),
+            },
+          ],
+          escalated: {
+            overruled: ["low_confidence"],
+            engine: ["Its delegate was not sure, so it is yours to decide."],
+            at: new Date(Date.now() - 6 * 60_000).toISOString(),
+          },
+        },
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const by = screen.getByText("Escalated by security-engineer (rule 2)");
+      const findings = screen.getAllByText(
+        /Restarts a production service|No item names this server/,
+      );
+      // EACH SAID AS A FINDING, in the order the delegate gave them.
+      expect(findings.map((f) => f.textContent)).toEqual([
+        "Finding: Restarts a production service",
+        "Finding: No item names this server",
+      ]);
+      expect(screen.getByText("Low confidence")).toBeTruthy();
+      expect(screen.getByText("Restarts the API outside the change window.")).toBeTruthy();
+      const why = screen.getByText("Its delegate was not sure, so it is yours to decide.");
+      // THE PANE'S OWN COPY of the call, never the list row's beside it.
+      const pane = by.closest<HTMLElement>(".crewlet-reading-pane")!;
+      const command = within(pane).getByText(WHOLE.question);
+      const before = (a: Node, b: Node) =>
+        Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(before(by, findings[0]!)).toBe(true);
+      expect(before(findings[1]!, why)).toBe(true);
+      expect(before(why, command), "the delegates' answers come before the call").toBe(true);
+      expect(screen.getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+    });
   });
 
   // A QUESTION THE READER CAN'T SEE IS NOT ASKED OF THEM: the pane asked for

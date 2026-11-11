@@ -152,6 +152,7 @@ Work reaches a seat by being **published straight to its inbox subject** by what
 - the **scheduler**, which resolves a firing schedule's target seat and publishes `task_assigned` to that inbox, stamped with the schedule's conversation ([below](#inbox-batching--coalescing)), and records `scheduled_task_fired` on `crewlet.events.*`;
 - the **A2A service**, which publishes the `a2a_request` wake to the target's inbox and the `a2a_message` answer to the asker's;
 - the **work pickup**, which the node holding an agent seat runs once a minute: a seat idle with ready work on Worklet is handed its next item as a `work_pickup` naming it, filed under the item's conversation, once per item version ([Scheduling](scheduling.md#the-work-pickup), [ADR-0112](../../adr/0112-an-idle-seat-is-handed-its-next-ready-item-once-per-item-version.md)). It is the one wake derived from state rather than from a change: an assignment wakes its assignee once, and a turn that did not act on it was otherwise the last word on the item.
+- a **delegated review**, which the node that parks a held request of a [delegated](../guides/delegated-decisions.md) kind publishes to each of its delegates as a `delegated_review` naming the request, once per request and delegate. It carries no part of the request: the delegate's node reads it where it waits when the turn starts, and a review whose request no longer waits on the delegate starts no turn.
 
 A producer reads the organization from the epoch current when it handles the event (`Engine.Company`), never from a snapshot captured earlier, so an applied revision (including a seat-kind flip) re-routes from the next event on.
 
@@ -362,6 +363,7 @@ agent_spawned, agent_terminated
 #       lifecycle here: work's own record is the tracker's history
 task_assigned              # published to the seat's inbox by the scheduler
 work_pickup                # published to the seat's inbox by the work pickup
+delegated_review           # published to a delegate's inbox once a delegated request is parked
 executor_launched        # names the providers.llm entry the launch picked
                            # and its model (provider_key, model)
 executor_asked

@@ -60,7 +60,8 @@ type BuiltinGroupKey =
  * artifacts). `health_tools`: an agent whose role carries the `health_tools`
  * grant, the deployment's health being an admin's read. `ssh_read`,
  * `ssh_operate`: an agent whose SSH access is on with a server, and one at
- * operate.
+ * operate. `delegated_decisions`: an agent a delegated-decisions rule names a
+ * delegate (ADR-0125).
  */
 export type BuiltinGate =
   | "everybody"
@@ -77,7 +78,8 @@ export type BuiltinGate =
   | "artifact_owner"
   | "health_tools"
   | "ssh_read"
-  | "ssh_operate";
+  | "ssh_operate"
+  | "delegated_decisions";
 
 export interface ToolRow {
   name: string;

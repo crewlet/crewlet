@@ -575,6 +575,12 @@ type CoordinatorOptions struct {
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
 
+	// Parked is told every run whose question just landed on its row as
+	// awaiting, as the park wrote it: what a held call put to delegates
+	// wakes them from (ADR-0125). After the durable write, so a delegate
+	// woken by it always finds the call waiting; nil tells nobody.
+	Parked func(ctx context.Context, run PendingRun)
+
 	// CloseStopped ends the turn of a run a person stopped
 	// ([Coordinator.StopSeat]) and answers how it ended, for the executor log
 	// ([Coordinator.publishEnd]): stopped, by whom and why, whether its reply had
@@ -974,6 +980,7 @@ type Coordinator struct {
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
+	parked    func(ctx context.Context, run PendingRun)
 	// unresumable is [CoordinatorOptions.Unresumable].
 	unresumable func(ctx context.Context, run PendingRun) (*Unresumable, error)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
@@ -1194,6 +1201,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		recovered:     opts.Recovered,
 		unresumable:   opts.Unresumable,
 		stopped:       opts.Stopped,
+		parked:        opts.Parked,
 		closeStopped:  opts.CloseStopped,
 		turnLost:      opts.TurnLost,
 		steersExpired: opts.SteersExpired,
@@ -2781,6 +2789,9 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// Whatever the engine holds up while a turn works comes down here — see
 	// [CoordinatorOptions.Stopped].
 	c.reportStopped(ctx, run)
+	if c.parked != nil {
+		c.parked(ctx, run)
+	}
 
 	if run.PauseTTLSeconds == 0 {
 		c.teardown(ctx, run)
@@ -3143,6 +3154,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome, answerer{
 			by: given.AnsweredBy, kind: given.AnsweredByKind, operatorID: given.OperatorID,
 			choice: given.Choice, said: redact.Secrets(strings.TrimSpace(given.Answer)),
+			delegatedRule: given.DelegatedRule,
 		})
 	}
 	if given.LaunchID == "" {
@@ -3484,6 +3496,8 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 type answerer struct {
 	by, kind, operatorID string
 	choice, said         string
+	// delegatedRule is the rule a delegate answered under, 0 for a person.
+	delegatedRule int
 	// answerBytes is what an answer refused as too large came to, and
 	// answerMaxBytes what an answer may, on the measure it was refused on
 	// ([types.AnswerTooLarge]); zero on every other outcome.
@@ -3524,6 +3538,7 @@ func (c *Coordinator) announceAnsweredAs(ctx context.Context, run PendingRun,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
 		Via: via, Outcome: outcome,
 		AnsweredBy: by.by, AnsweredByKind: by.kind, OperatorID: by.operatorID,
+		DelegatedRule: by.delegatedRule,
 		// THE QUESTION AND ITS ANSWER, which the run's row forgets once the
 		// run moves on: this record is the one account of what a person was
 		// asked and what they chose that outlives the run, and a person's

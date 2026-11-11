@@ -1289,6 +1289,7 @@ describe("short words for a header", () => {
   test("a trigger is named by its kind, an integration by its name", () => {
     expect(triggerKind({ type: "executor_finished" })).toBe("Its executor finished");
     expect(triggerKind({ type: "task_assigned" })).toBe("A task");
+    expect(triggerKind({ type: "delegated_review" })).toBe("A delegated request");
     expect(triggerKind({ type: "external_notification", integration: "github" })).toBe("github");
     expect(triggerKind({ type: "external_notification", integration: "chat" })).toBe(
       "A chat message",

@@ -146,6 +146,9 @@ type Deps struct {
 	// SSH block grants them. The zero value omits both. Offered only to a seat
 	// whose role carries the grant, as Health is. See ssh.go.
 	SSH SSHDeps
+	// Delegated is what a delegate's verdict tool acts through (ADR-0125);
+	// a nil desk omits review_delegated.
+	Delegated DelegatedDeps
 
 	// Sessions are the seat's own executor sessions, which its executor
 	// lists and reads back: its rows, the objects they name and the switch
@@ -272,6 +275,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// option the engine builds. See requestaccess.go.
 		{&requestAccess{comment: &commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader}},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
+		// AND ASKING TO RUN ONE EXACT OPERATE COMMAND, a decision the comment
+		// tool posts whose run option the engine builds. See sshask.go.
+		{&askToOperate{deps: deps.SSH, comment: &commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader}},
+			deps.SSH.serves() && deps.Work.Writer != nil && deps.Work.Reader != nil},
 		// AND THE FOLD, which is a seat's for the reason the trash is
 		// not: it leaves the item where it was, cancelled and linked, so
 		// there is no absence for anybody to miss — and a seat can
@@ -343,7 +350,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	// (the switch below) — and the health tools after them, the same way
 	// ([HealthTools]).
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
-		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH))
+		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
+		delegatedCandidates(deps.Delegated))
 
 	var names []string
 	for _, c := range candidates {
@@ -463,6 +471,9 @@ func annotationsFor(name string) tools.Annotations {
 	}
 	if a, ok := sshAnnotations(name); ok {
 		return a
+	}
+	if name == ReviewDelegatedTool {
+		return reviewAnnotations()
 	}
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,

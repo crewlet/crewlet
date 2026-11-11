@@ -20,7 +20,7 @@
  * Settings is what the ENGINE runs, and nothing the company decides: a column
  * of four groups, Runtime (Models, MCP & tools, Secrets, Limits), Spend
  * (the readings, never the ceilings), Access (People, Service accounts, API
- * tokens, Sign-in policy, Audit log) and Engine (Nodes, Configuration,
+ * tokens, Sign-in policy, Delegated decisions, Audit log) and Engine (Nodes, Configuration,
  * Backups & retention, File storage). It lists only what lives in it: a row
  * that left for Company is found there, by the sidebar and the palette, and
  * never again as a second row here leading out.
@@ -1267,6 +1267,18 @@ export const WORKSPACES: WorkspaceRow[] = [
         keywords: ["password", "2fa", "mfa", "session", "step-up", "security"],
         group: "Access",
         grants: ["admin"],
+      },
+      {
+        // WHO DECIDES IN A PERSON'S PLACE (ADR-0125): the rules, the limits
+        // and what delegates decided. The engine admits an administrator and
+        // the people a rule escalates to, so the row names no grant.
+        key: "delegated-decisions",
+        label: "Delegated decisions",
+        icon: "badge-check",
+        path: ["settings", "delegated-decisions"],
+        hint: "What agent seats decide in a person's place, by which rules, and what they decided",
+        keywords: ["delegate", "delegation", "approvals", "escalation", "spot-check", "digest"],
+        group: "Access",
       },
       {
         key: "audit",

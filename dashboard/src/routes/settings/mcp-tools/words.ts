@@ -377,6 +377,11 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     detail:
       "Agents whose SSH access is at operate. Every call waits for an admin or a named approver.",
   },
+  delegated_decisions: {
+    label: "Delegates",
+    detail:
+      "Agents a delegated decisions rule names a delegate, on the requests put to them, within the rules Crewlet enforces.",
+  },
 };
 
 /** What an alarm row is about: the server by its title, and the agent or node it names. */

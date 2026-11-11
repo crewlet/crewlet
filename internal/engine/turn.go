@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -174,6 +175,11 @@ type Dispatcher struct {
 	// ReviewSettled reports an access review with nothing left to tell
 	// ([Engine.AccessReviewSettled]), acked without a turn. Nil settles nothing.
 	ReviewSettled func(ctx context.Context, handle string) bool
+
+	// DelegatedRequests reads each delegated review among a delivery where its
+	// request waits, and drops one whose request no longer waits on the seat
+	// ([Engine.readDelegatedRequests]). Nil reads nothing.
+	DelegatedRequests func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
 	// Observe publishes an engine-side observability event.
 	//
@@ -597,6 +603,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		log.InfoContext(ctx, "access_review_settled", "seat", handle, "events", len(surviving),
 			"detail", "the seat was already told its access as it stands; no review turn runs")
 		return queue.Ack()
+	}
+	// A DELEGATED REQUEST IS READ WHERE IT WAITS, sealed on its run's row
+	// and never on the stream, and one no longer waiting on this seat
+	// starts no turn (ADR-0125).
+	if d.DelegatedRequests != nil {
+		if surviving = d.DelegatedRequests(ctx, handle, surviving); len(surviving) == 0 {
+			return queue.Ack()
+		}
+		held.events = surviving
 	}
 
 	// THE ANSWER IS CLAIMED BEFORE ANYTHING ELSE EATS IT.
@@ -2020,6 +2035,12 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// engine has no basis to pick one. Naming a surface here
 			// would refuse the other two. See [turn.Reply.Surface].
 			owed = turn.ToolReply("")
+
+		case types.DelegatedReviewType:
+			// A REQUEST WAITS ON THE DELEGATE'S VERDICT, which only its tool
+			// gives (ADR-0125): a turn that ends without one leaves the
+			// request to its deadline, so the turn is told it owes one.
+			owed = turn.ToolReply(toolname.ReviewDelegated)
 
 		case types.WorkPickupType:
 			// A PICKUP IS ANSWERED ON ITS ITEM, TYPED (ADR-0122): the turn

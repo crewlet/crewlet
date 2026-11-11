@@ -490,6 +490,19 @@ const (
 	// hosts, held for a person's approval every time (ADR-0077); an agent's
 	// alone by its operate grant, in its own run.
 	ActionSSHOperate Action = "ssh_operate"
+	// ActionReviewDelegated answers a request delegated to an agent seat:
+	// allow it, escalate it to people or deny it (ADR-0125). A delegate's
+	// alone, by the grant an enabled delegated-decisions rule gives it, in
+	// its own run.
+	ActionReviewDelegated Action = "review_delegated"
+	// ActionDelegatedRead reads the delegated-decisions rules and what
+	// delegates decided (`GET /delegated-decisions`): an administrator's, or
+	// a person a rule names in escalate_to, whom delegates answer to.
+	ActionDelegatedRead Action = "delegated_decisions.read"
+	// ActionSSHAskOperate asks a person, on a work item, to approve one exact
+	// operate command before it is called, so the call it names runs without
+	// a second prompt (ADR-0125). An agent's alone, by its operate grant.
+	ActionSSHAskOperate Action = "ask_to_operate"
 	// ActionSSHRequester is a server reached FOR whoever woke the turn of an
 	// agent holding an SSH grant: anybody of the company who may act, a
 	// colleague seat among them, and nobody outside it.
@@ -810,10 +823,14 @@ const (
 	// SeatGrantSSHOperate is an agent on at SSH at operate: commands a
 	// person approves one at a time.
 	SeatGrantSSHOperate SeatGrant = "ssh_operate"
+
+	// SeatGrantDelegate is an agent an enabled delegated-decisions rule names: the
+	// requests that rule delegates to it (ADR-0125).
+	SeatGrantDelegate SeatGrant = "delegated_decisions"
 )
 
 // SeatGrants are every grant, in declaration order.
-var SeatGrants = []SeatGrant{SeatGrantHealth, SeatGrantSSHRead, SeatGrantSSHOperate}
+var SeatGrants = []SeatGrant{SeatGrantHealth, SeatGrantSSHRead, SeatGrantSSHOperate, SeatGrantDelegate}
 
 // Valid reports whether a grant is one this build knows.
 func (g SeatGrant) Valid() bool { return slices.Contains(SeatGrants, g) }
@@ -1749,6 +1766,16 @@ var rules = map[Action]rule{
 		assist: AssistRead},
 	ActionSSHOperate: {class: ClassAdmin, seatGrant: SeatGrantSSHOperate, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	ActionSSHAskOperate: {class: ClassAdmin, seatGrant: SeatGrantSSHOperate, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// A DELEGATED REQUEST IS DECIDED BY A SEAT A RULE NAMED, which can never
+	// request the kind it decides; the engine, not this row, bounds what its
+	// allow carries out (ADR-0125).
+	ActionReviewDelegated: {class: ClassAdmin, seatGrant: SeatGrantDelegate, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// WHAT DELEGATES DECIDED is read by the people they answer to: the
+	// names a rule's escalate_to lists, or an administrator.
+	ActionDelegatedRead: {class: ClassNamed, humanOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 	// AND REACHED FOR ANYBODY OF THE COMPANY WHO MAY ACT, as the health tools
 	// read for them ([ActionFleetHealthRead]): the seat's grant decides what is
 	// reached, and this row only whom it is reached for.

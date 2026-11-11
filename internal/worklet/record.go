@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/inbox"
 )
 
@@ -593,6 +594,11 @@ type Comment struct {
 	// changed after: an answer names an option by id, and options edited
 	// under it would turn that answer into an answer to something else.
 	Decision *decision.Decision `json:"decision,omitempty"`
+
+	// Act is what the ask is for, which only the engine sets, from the
+	// structured data of a question it composed (ADR-0125): nil is an ask
+	// for anything else. Immutable, as the decision is.
+	Act *delegated.Act `json:"act,omitempty"`
 
 	// Choice is the option an ANSWER chose, by id, checked against the
 	// decision of the ask it answers inside the write's own snapshot.

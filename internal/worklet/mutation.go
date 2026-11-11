@@ -61,7 +61,9 @@ import (
 // Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
 // Version 12 is a question its asker withdrew saying why ([Comment.Withdrawal]):
 // a build reading 11 would resolve it and drop the reason.
-const RecordVersion = 12
+// Version 13 is an ask the engine stamped with its act ([Comment.Act]): a
+// build reading 12 would keep the question and drop what approving it means.
+const RecordVersion = 13
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -131,6 +133,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.ClearDue", Since: 10, Op: string(OpPatch), Path: []string{"mutation", "clear_due"}},
 	{Name: "TaskPatch.ChangeSettled", Since: 11, Path: []string{"mutation", "change_settled"}},
 	{Name: "Comment.Withdrawal", Since: 12, Op: string(OpPatch), Path: []string{"mutation", "comment", "withdrawal"}},
+	{Name: "Comment.Act", Since: 13, Op: string(OpPatch), Path: []string{"mutation", "comment", "act"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

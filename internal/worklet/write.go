@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1384,7 +1385,17 @@ func settleAnswer(ctx context.Context, tx *sql.Tx, task string, comment *Comment
 	if err = ask.answerableBy(""); err != nil {
 		return err
 	}
-	return checkChoice(task, ask.id, ask.decision, comment.Choice)
+	if err = checkChoice(task, ask.id, ask.decision, comment.Choice); err != nil {
+		return err
+	}
+	// AN ACT'S APPROVING CHOICE IS ITS KIND'S APPROVAL, decided as one by
+	// whoever posts the answer before it reaches here (ADR-0125).
+	if a := ask.act; a != nil && comment.Choice == a.Approve && !delegated.Approves(ctx, a.Kind) {
+		return invalid("the ask %s on task %s approves one exact %s request, and only an administrator "+
+			"or a person the company names to approve it, signed in again recently, may choose %q",
+			ask.id, task, a.Kind, a.Approve)
+	}
+	return nil
 }
 
 // settleWaitReason holds a wait's reason to its start: a reason needs a start

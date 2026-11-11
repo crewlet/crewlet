@@ -51,6 +51,13 @@ const KINDS: Record<WakeKind, (reason: string, seat: string) => WakeWords> = {
     who: "Whoever fixes what raised the alarm",
     path: ["settings", "backups"],
   }),
+  // A REQUEST IT DECIDES as a delegate (ADR-0125): fewer come by delegating
+  // fewer kinds to it, which the company document's rules say.
+  delegated_request: () => ({
+    label: "Requests it decides as a delegate",
+    who: "An admin, by changing the delegated decisions rules",
+    path: ["settings", "delegated-decisions"],
+  }),
 };
 
 function why(reason: string): string {

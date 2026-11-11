@@ -3249,6 +3249,20 @@ type PendingStore interface {
 	// where the log lacks the held call's id.
 	RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade, fence Fence) (bool, error)
 
+	// GiveDelegateVerdict records one delegate's answer to a held call put
+	// to delegates (ADR-0125) and answers the held call as written. ONLY
+	// WHILE THE CALL WAITS ON ITS DELEGATES: the run awaiting on launch, its
+	// ending undecided, its held call heldID, not escalated, v.By one of its
+	// delegates with no answer of its own yet. False, and nothing written,
+	// otherwise; an answer past its bounds is an error.
+	GiveDelegateVerdict(ctx context.Context, turnID, launch, heldID string, v HeldVerdict) (HeldCall, bool, error)
+
+	// EscalateHeld puts a held call waiting on its delegates to people, on
+	// the terms of [PendingStore.GiveDelegateVerdict]: from then on it is put
+	// to the run's audience. False for a call answered, escalated or let go
+	// of meanwhile.
+	EscalateHeld(ctx context.Context, turnID, launch, heldID string, e HeldEscalation) (bool, error)
+
 	// ReviveAnswer gives a claim no resume holds back to the recorded answer
 	// it was taken for: the run returns to [StatusAnswered], owed the resume
 	// the answer drives, and the reviving node drives it. In the same write

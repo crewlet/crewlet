@@ -2622,8 +2622,18 @@ where the block is on with a server, `ssh_operate` where it is at `operate`.
 In a turn somebody woke, whoever woke it is decided on `ssh.requester.read`, a row
 everybody of the company holds, so a turn a stranger woke reaches no server.
 Answering an `ssh_operate` call is `ssh.operate.approve`, **human-only**: an
-administrator, or a person `integrations.ssh.approvers` names, at a fresh
-step-up. See [SSH](../integrations/ssh.md#the-agents-tools).
+administrator, or a person `integrations.ssh.approvers` or the `ssh_operate`
+rule's `escalate_to` names, at a fresh step-up; choosing the approving option
+of an `ask_to_operate` decision is decided on the same row. `ask_to_operate`
+is admin's with the `ssh_operate` seat grant. See [SSH](../integrations/ssh.md#the-agents-tools).
+
+**And a delegate's verdict.** `review_delegated` is admin's, and its row names
+the `delegated_decisions` seat grant an enabled rule of the company's
+`delegated_decisions` gives each seat it names a delegate; what its allow
+carries out is bounded by the engine's own limits, not by this row. Reading
+what delegates decided is `delegated_decisions.read`, **human-only**, named:
+an administrator, or a person a rule's `escalate_to` names. See
+[Delegated Decisions](../guides/delegated-decisions.md).
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat

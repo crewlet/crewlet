@@ -67,6 +67,8 @@ import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
 import type { McpHeldCall } from "~/contract/mcp.ts";
+import { EscalationNote } from "~/components/Delegation.tsx";
+import { delegationEscalated } from "~/lib/delegation.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -310,6 +312,7 @@ function OpenPane({
               run={row.subject.run}
               held={row.subject.run.held_call}
               frame={frame}
+              index={index}
               now={now}
               onSettled={onSettled}
             />
@@ -1425,12 +1428,14 @@ function HeldRunPane({
   run,
   held,
   frame,
+  index,
   now,
   onSettled,
 }: {
   run: ExecutorRow;
   held: McpHeldCall;
   frame: Frame;
+  index: OrgIndex;
   now: number;
   onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
@@ -1438,6 +1443,9 @@ function HeldRunPane({
   const landing = useFocusLanding(said !== null);
   const question = (run.question ?? "").trim();
   const context = run.question_context.trim();
+  // AN ESCALATION READS ITS DELEGATES BEFORE THE CALL (ADR-0125): who put it
+  // to people, what each answered, and why it reached them.
+  const escalated = delegationEscalated(held);
   return (
     <TokenScope texts={runAskTexts(run)}>
       <>
@@ -1447,6 +1455,9 @@ function HeldRunPane({
             {"’s executor asks to make a call"}
             {frame.task && <> on {frame.task}</>}
           </>,
+        )}
+        {escalated && (
+          <EscalationNote delegation={escalated} name={(h) => index.byHandle.get(h)?.name ?? h} />
         )}
         {question ? (
           <RunQuestion question={question} />

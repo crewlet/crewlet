@@ -265,3 +265,67 @@ test("a held call names the decision it carries out", async () => {
   await afterMicrotasks();
   expect(screen.queryByText(/It carries out a decision/)).toBeNull();
 });
+
+/** An agent's SSH command its delegate escalated (ADR-0125), with what it found. */
+function escalatedRun(): ExecutorRow {
+  return heldRun({
+    agent_handle: "sre",
+    question: "Run `ufw allow 22` on web-1?",
+    held_call: {
+      id: "0190f3a8-0000-7000-8000-000000000002",
+      server: "crewlet",
+      tool: "ssh_operate",
+      raw: "ssh_operate",
+      digest: "sha256:d2",
+      held_at: "2026-11-01T11:50:00Z",
+      fixed: true,
+      approvers: "ssh",
+      act: "ssh_operate",
+      delegation: {
+        rule: 1,
+        delegates: ["security-engineer"],
+        given: [
+          {
+            by: "security-engineer",
+            verdict: "escalate",
+            confidence: "high",
+            reason: "Opens the firewall, which the item does not ask for.",
+            findings: ["Changes firewall rules", "Not one of the item's servers"],
+            at: "2026-11-01T11:52:00Z",
+          },
+        ],
+        escalated: {
+          overruled: ["firewall"],
+          engine: ["The command changes firewall rules, which no delegate allows."],
+          at: "2026-11-01T11:52:00Z",
+        },
+      },
+    },
+    held_arguments: { host: "web-1", command: "ufw allow 22" },
+  });
+}
+
+// AN ESCALATION READS ITS DELEGATES BEFORE THE CALL: who put it to people and
+// under which rule, each finding as given, and the engine's own reason, all
+// ahead of what the call would send. Mutation: draw the note after the
+// arguments, or drop the findings, and this is red.
+test("an escalated call shows its delegate's answer and findings before the call", async () => {
+  await mount(escalatedRun());
+  const row = document.querySelector<HTMLElement>(".decision-list > li")!;
+  expect(within(row).getByText("Escalated by security-engineer (rule 1)")).toBeTruthy();
+  const finding = within(row).getByText("Changes firewall rules");
+  expect(within(row).getByText("Not one of the item's servers")).toBeTruthy();
+  expect(within(row).getByText("High confidence")).toBeTruthy();
+  expect(
+    within(row).getByText("The command changes firewall rules, which no delegate allows."),
+  ).toBeTruthy();
+  const args = within(row).getByText("Arguments");
+  expect(finding.compareDocumentPosition(args) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // ITS ANSWERS ARE UNCHANGED: a fixed call is reviewed whole before Allow once.
+  expect(within(row).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+});
+
+test("a call put to people at once carries no escalation", async () => {
+  await mount(heldRun());
+  expect(screen.queryByText(/Escalated by/)).toBeNull();
+});

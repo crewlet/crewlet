@@ -106,7 +106,7 @@ var groupWords = map[Group]struct{ label, description string }{
 	GroupHealth: {"Health",
 		"The deployment's health: every live node, and the Gitlet nodes' caches."},
 	GroupServers: {"Servers",
-		"The company's servers over SSH: allowlisted reads, and commands a person approves first."},
+		"The company's servers over SSH: allowlisted reads, and commands a person or a delegate approves first."},
 	GroupColleagues: {"Colleagues",
 		"Finding a colleague, and asking another agent a question."},
 	GroupMemory: {"Memory and skills",
@@ -191,13 +191,16 @@ const (
 	// GateSSHOperate names an agent whose SSH access is at operate
 	// ([authz.ClassAdmin] with [authz.SeatGrantSSHOperate]).
 	GateSSHOperate Gate = "ssh_operate"
+	// GateDelegate names an agent an enabled delegation rule names
+	// ([authz.ClassAdmin] with [authz.SeatGrantDelegate]).
+	GateDelegate Gate = "delegated_decisions"
 )
 
-// Gates are the fifteen, in declaration order.
+// Gates are the sixteen, in declaration order.
 var Gates = []Gate{
 	GateEverybody, GateSelf, GateWorklet, GateWorkletAsked, GateProjectLead,
 	GateDoclet, GateChatlet, GateArtifacts, GateGitlet, GateArtifactViewer,
-	GateArtifactEditor, GateArtifactOwner, GateHealthTools, GateSSHRead, GateSSHOperate,
+	GateArtifactEditor, GateArtifactOwner, GateHealthTools, GateSSHRead, GateSSHOperate, GateDelegate,
 }
 
 // Valid reports whether g is a gate this build names.
@@ -239,6 +242,7 @@ var filed = []struct {
 	// A SEAT'S OWN QUESTION, withdrawn: its own as its sessions are.
 	{WithdrawAskTool, GroupWork, GateSelf, reachesNoVendor},
 	{RequestAccessTool, GroupWork, GateSelf, reachesNoVendor},
+	{ReviewDelegatedTool, GroupWork, GateDelegate, reachesNoVendor},
 	{MergeWorkItemTool, GroupWork, GateWorklet, reachesNoVendor},
 	{worklet.MoveWorkItemTool, GroupWork, GateProjectLead, reachesNoVendor},
 
@@ -337,6 +341,7 @@ var filed = []struct {
 
 	{SSHReadTool, GroupServers, GateSSHRead, reachesNoVendor},
 	{SSHOperateTool, GroupServers, GateSSHOperate, reachesNoVendor},
+	{SSHAskOperateTool, GroupServers, GateSSHOperate, reachesNoVendor},
 
 	{LookupColleagueTool, GroupColleagues, GateEverybody, reachesNoVendor},
 	{A2AAskTool, GroupColleagues, GateEverybody, reachesNoVendor},

@@ -157,6 +157,8 @@ import {
   type Run,
   type Story,
 } from "~/lib/turnstory.ts";
+import { DelegatedMark } from "~/components/Delegation.tsx";
+import { delegatedRuleOf } from "~/lib/delegation.ts";
 import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, useConnection, useEvents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { seatOnTurn, UNSETTLED, WATCH_TAB } from "~/lib/turns.ts";
@@ -1474,6 +1476,13 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
                 />
               )}
               {withoutActor(r.event.summary, actor) || r.event.type}
+              {/* AN ANSWER A DELEGATE GAVE says so, with its rule (ADR-0125). */}
+              {delegatedRuleOf(r.event) !== null && (
+                <>
+                  {" "}
+                  <DelegatedMark rule={delegatedRuleOf(r.event)!} />
+                </>
+              )}
             </span>
           ),
         },

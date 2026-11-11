@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -213,6 +214,115 @@ type Command struct {
 	Failure CommandFailure `json:"failure,omitempty"`
 }
 
+// VerdictBy is who gave a verdict.
+type VerdictBy string
+
+// The givers.
+const (
+	// VerdictByAgent is an agent seat a delegation rule names: a delegate.
+	VerdictByAgent VerdictBy = "agent"
+	// VerdictByPerson is a person, approving through a decision the engine composed.
+	VerdictByPerson VerdictBy = "person"
+	// VerdictByEngine is the engine on its own: a deadline, delegation turned off.
+	VerdictByEngine VerdictBy = "engine"
+)
+
+// VerdictGivers are the three.
+var VerdictGivers = []VerdictBy{VerdictByAgent, VerdictByPerson, VerdictByEngine}
+
+// Valid reports whether a giver off the wire is one this build knows.
+func (b VerdictBy) Valid() bool { return slices.Contains(VerdictGivers, b) }
+
+// VerdictThrough is the path a verdict was given on.
+type VerdictThrough string
+
+// The two paths.
+const (
+	// VerdictThroughDelegation is a request a delegation rule routed.
+	VerdictThroughDelegation VerdictThrough = "delegation"
+	// VerdictThroughDecision is an ask on a work item the engine composed.
+	VerdictThroughDecision VerdictThrough = "decision"
+)
+
+// VerdictPaths are the two.
+var VerdictPaths = []VerdictThrough{VerdictThroughDelegation, VerdictThroughDecision}
+
+// Valid reports whether a path off the wire is one this build knows.
+func (t VerdictThrough) Valid() bool { return slices.Contains(VerdictPaths, t) }
+
+// Verdict is one decision on a delegated request, by one giver. The request
+// in clear (SubjectSealed) and the giver's reason and findings (WordsSealed)
+// are sealed by the writer like a command's text, since both are words a
+// model or a person wrote that may quote the request; the rest is closed
+// words, ids, sizes and digests.
+type Verdict struct {
+	V int `json:"v"`
+
+	// ID is the record's own id, [VerdictID] of Request and By, and Handle
+	// the seat whose request it is: the record's key.
+	ID      string `json:"id"`
+	Handle  string `json:"handle"`
+	Request string `json:"request"`
+	Turn    string `json:"turn,omitempty"`
+
+	Kind delegated.Kind `json:"kind"`
+
+	// Rule is the 1-based delegation rule that routed the request, zero for a
+	// person's approval through a decision.
+	Rule int `json:"rule,omitempty"`
+
+	// By is the giver's seat, empty for the engine.
+	By      string         `json:"by,omitempty"`
+	ByKind  VerdictBy      `json:"by_kind"`
+	Through VerdictThrough `json:"through"`
+
+	// Asked and Confidence are what a delegate answered, Verdict what took
+	// effect for this record, and Overruled the engine's closed words for why
+	// it changed or made it.
+	Asked      delegated.Verdict    `json:"asked,omitempty"`
+	Confidence delegated.Confidence `json:"confidence,omitempty"`
+	Verdict    delegated.Verdict    `json:"verdict"`
+	Overruled  []string             `json:"overruled,omitempty"`
+
+	// Final is the record that decided the request; Sampled one chosen for a
+	// person's spot-check after the fact.
+	Final   bool `json:"final,omitempty"`
+	Sampled bool `json:"sampled,omitempty"`
+
+	// Digest is the SHA-256 of the exact request the verdict is bound to.
+	Digest string `json:"digest"`
+
+	// Host, User and the stdin's size and digest are an ssh_operate's alone.
+	Host        string `json:"host,omitempty"`
+	User        string `json:"user,omitempty"`
+	StdinBytes  int64  `json:"stdin_bytes,omitempty"`
+	StdinSHA256 string `json:"stdin_sha256,omitempty"`
+
+	// Decision is the ask a verdict through a decision answered, and Item the
+	// work item the request is on.
+	Decision string `json:"decision,omitempty"`
+	Item     string `json:"item,omitempty"`
+
+	// SubjectSealed and WordsSealed are sealed under the fleet keyring, each
+	// bound to this record and its own place in it, and ContentKey the
+	// keyring key both are sealed under.
+	SubjectSealed string `json:"subject_sealed"`
+	WordsSealed   string `json:"words_sealed"`
+	ContentKey    string `json:"content_key"`
+}
+
+// VerdictResealed is one verdict's two texts sealed afresh under the keyring's
+// active key, in one record, so they never sit under two keys.
+type VerdictResealed struct {
+	V      int    `json:"v"`
+	ID     string `json:"id"`
+	Handle string `json:"handle"`
+
+	SubjectSealed string `json:"subject_sealed"`
+	WordsSealed   string `json:"words_sealed"`
+	ContentKey    string `json:"content_key"`
+}
+
 // Forget removes what a seat the company removed was told.
 type Forget struct {
 	V      int    `json:"v"`
@@ -272,6 +382,10 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Command](rec)
 	case k == KindCommand && op == OpResealed:
 		return decodePayload[Resealed](rec)
+	case k == KindVerdict && op == OpVerdict:
+		return decodePayload[Verdict](rec)
+	case k == KindVerdict && op == OpResealed:
+		return decodePayload[VerdictResealed](rec)
 	case k == KindSeat && op == OpForget:
 		return decodePayload[Forget](rec)
 	case k == KindExpiry && op == OpExpire:
