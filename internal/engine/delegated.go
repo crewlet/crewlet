@@ -221,6 +221,16 @@ func (e *Engine) wakeDelegates(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 	d := held.Delegation
+	if word, said := ownRequest(run); word != "" {
+		// A DELEGATE'S OWN REQUEST is put to people now, not at its deadline:
+		// its delegate never decides it, and a panel's other half never
+		// allows alone.
+		if e.backends != nil && e.backends.Fleet != nil {
+			escalateHeld(ctx, sandbox.NewCoordStore(e.backends.Fleet), sshServers{engine: e},
+				delegatedDesk{engine: e}.Arguments, run, word, said, time.Now())
+		}
+		return
+	}
 	var panel []string
 	if len(d.Delegates) > 1 {
 		panel = slices.Clone(d.Delegates)
@@ -524,43 +534,69 @@ func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules built
 			run.Ending != nil || run.LaunchID != held.LaunchID {
 			continue
 		}
-		delegates, _, _, live := rules.Rule(delegated.Kind(held.Act))
-		word, said := dueEscalation(*held, delegates, live, now)
+		word, said := ownRequest(run)
+		if word == "" {
+			delegates, _, _, live := rules.Rule(delegated.Kind(held.Act))
+			word, said = dueEscalation(*held, delegates, live, now)
+		}
 		if word == "" {
 			continue
 		}
-		escalated, err := store.EscalateHeld(ctx, run.TurnID, run.LaunchID, held.ID, sandbox.HeldEscalation{
-			Overruled: []string{word}, Engine: []string{said}, At: now.UTC()})
-		switch {
-		case err != nil:
-			log.WarnContext(ctx, "delegated_sweep_escalation_failed", "request", held.ID, "error", err.Error())
-			continue
-		case !escalated:
-			continue
-		}
-		// WHAT IT DECIDED, as every verdict on the request names it: the
-		// access log refuses a record that names nothing.
-		args, err := open(run)
-		if err != nil {
-			log.WarnContext(ctx, "delegated_sweep_unrecorded", "request", held.ID, "error", err.Error(),
-				"detail", "the request was put to people; its arguments do not open here, so its record "+
-					"in the access log names nothing it could hold")
-			continue
-		}
-		host, subject, stdin := builtin.RequestSubject(delegated.Kind(held.Act), args)
-		item := ""
-		if run.WorkItem != nil {
-			item = cmp.Or(run.WorkItem.Key, run.WorkItem.ID)
-		}
-		if _, err := audit.RecordVerdict(ctx, builtin.DelegatedVerdict{
-			At: held.HeldAt, Request: held.ID, Kind: held.Act, Rule: held.Delegation.Rule, Handle: run.AgentHandle,
-			Turn: run.TurnID, ByKind: builtin.VerdictByEngine, Through: builtin.VerdictThroughDelegation,
-			Verdict: string(delegated.Escalate), Final: true, Overruled: []string{word},
-			Digest: held.Delegation.Digest, Host: host, Subject: subject, Stdin: stdin, Item: item,
-		}); err != nil {
-			log.WarnContext(ctx, "delegated_sweep_unrecorded", "request", held.ID, "error", err.Error(),
-				"detail", "the request was put to people; its record in the access log did not land")
-		}
+		escalateHeld(ctx, store, audit, open, run, word, said, now)
+	}
+}
+
+// ownRequest is why a call one of its own delegates made goes to people at
+// once, "" for one a delegate did not make: a delegate never decides its own
+// request, and a panel's other delegate never allows alone.
+func ownRequest(run sandbox.PendingRun) (string, string) {
+	if !slices.Contains(run.HeldCall.Delegation.Delegates, run.AgentHandle) {
+		return "", ""
+	}
+	return delegated.OverruledSelf, run.AgentHandle + " is a delegate of this rule, and no delegate decides " +
+		"its own request, so it came to people."
+}
+
+// escalateHeld puts run's held call to people for word, said, and records the
+// engine's escalation in the access log, naming what it decided from the
+// call's arguments as open opens them. A call no longer waiting on its
+// delegates is left alone.
+func escalateHeld(ctx context.Context, store sandbox.PendingStore, audit delegatedRecorder,
+	open func(sandbox.PendingRun) (map[string]any, error), run sandbox.PendingRun, word, said string,
+	now time.Time) {
+
+	held := run.HeldCall
+	escalated, err := store.EscalateHeld(ctx, run.TurnID, run.LaunchID, held.ID, sandbox.HeldEscalation{
+		Overruled: []string{word}, Engine: []string{said}, At: now.UTC()})
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "delegated_escalation_failed", "request", held.ID, "error", err.Error())
+		return
+	case !escalated:
+		return
+	}
+	// WHAT IT DECIDED, as every verdict on the request names it: the access
+	// log refuses a record that names nothing.
+	args, err := open(run)
+	if err != nil {
+		log.WarnContext(ctx, "delegated_escalation_unrecorded", "request", held.ID, "error", err.Error(),
+			"detail", "the request was put to people; its arguments do not open here, so its record "+
+				"in the access log names nothing it could hold")
+		return
+	}
+	host, subject, stdin := builtin.RequestSubject(delegated.Kind(held.Act), args)
+	item := ""
+	if run.WorkItem != nil {
+		item = cmp.Or(run.WorkItem.Key, run.WorkItem.ID)
+	}
+	if _, err := audit.RecordVerdict(ctx, builtin.DelegatedVerdict{
+		At: held.HeldAt, Request: held.ID, Kind: held.Act, Rule: held.Delegation.Rule, Handle: run.AgentHandle,
+		Turn: run.TurnID, ByKind: builtin.VerdictByEngine, Through: builtin.VerdictThroughDelegation,
+		Verdict: string(delegated.Escalate), Final: true, Overruled: []string{word},
+		Digest: held.Delegation.Digest, Host: host, Subject: subject, Stdin: stdin, Item: item,
+	}); err != nil {
+		log.WarnContext(ctx, "delegated_escalation_unrecorded", "request", held.ID, "error", err.Error(),
+			"detail", "the request was put to people; its record in the access log did not land")
 	}
 }
 
