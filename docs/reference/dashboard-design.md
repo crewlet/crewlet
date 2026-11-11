@@ -9704,7 +9704,11 @@ words (Commands on servers, Merges, Deploys) and, for a merge or deploy rule,
 the paths it always puts to people (`always_escalate_paths`, each as written in
 an outlined monospace tag, the first four and a count of the rest, the whole
 list on hover; "the built-in paths only" where it names none, and "not for
-commands" for a command rule), and the limits
+commands" for a command rule) and the checks it requires (`required_checks`,
+each entry its repository and branch in an outlined monospace tag beside its
+check names, the first two and a count of the rest, every entry on hover;
+"what the branch requires" where it names none, and "not for commands" for a
+command rule), and the limits
 the engine holds every delegate to, the deadline and the two hourly caps, as a
 settings table, since no document changes them. Under them one toolbar (a
 search over the seat, the request, the server and the reason; a verdict and

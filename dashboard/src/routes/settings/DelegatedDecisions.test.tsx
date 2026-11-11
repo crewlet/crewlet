@@ -74,6 +74,7 @@ const ANSWER: DelegatedDecisionsAnswer = {
       escalate_to: ["ops-lead"],
       sample_one_in: 10,
       always_escalate_paths: [],
+      required_checks: [],
     },
     {
       rule: 2,
@@ -82,6 +83,7 @@ const ANSWER: DelegatedDecisionsAnswer = {
       escalate_to: ["ops-lead"],
       sample_one_in: 5,
       always_escalate_paths: ["billing/**", "services/*/payments/**"],
+      required_checks: [{ repo: "acme/api", branch: "main", checks: ["test", "lint"] }],
     },
   ],
   limits: { deadline_minutes: 15, decisions_per_hour: 30, server_allows_per_hour: 10 },
@@ -179,7 +181,8 @@ test("a rule's own always-escalate paths are listed beside its kinds", () => {
   expect(within(release!).getByText("Deploys")).toBeTruthy();
   expect(within(release!).getByText("billing/**")).toBeTruthy();
   expect(within(release!).getByText("services/*/payments/**")).toBeTruthy();
-  expect(within(ssh!).getByText("Not for commands")).toBeTruthy();
+  // NEITHER PATHS NOR CHECKS on a command rule.
+  expect(within(ssh!).getAllByText("Not for commands")).toHaveLength(2);
 });
 
 test("a rule with more paths than its row shows counts the rest", () => {
@@ -193,6 +196,41 @@ test("a rule with more paths than its row shows counts the rest", () => {
   expect(within(rules).getByText("d/**")).toBeTruthy();
   expect(within(rules).queryByText("e/**")).toBeNull();
   expect(within(rules).getByText("2 more")).toBeTruthy();
+});
+
+// A RULE'S REQUIRED CHECKS read per repository and branch, the whole list on
+// hover, and a release rule naming none relies on what the branch requires.
+test("a rule lists the checks it requires on each repository's branch", () => {
+  answer.data = ANSWER;
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  const release = dataRows(rules)[1];
+  expect(within(release!).getByText("acme/api main")).toBeTruthy();
+  expect(within(release!).getByText("test, lint")).toBeTruthy();
+});
+
+test("a rule with more required-check entries than its row shows counts the rest", () => {
+  const required_checks = ["api", "web", "jobs"].map((name) => ({
+    repo: `acme/${name}`,
+    branch: "main",
+    checks: ["test"],
+  }));
+  answer.data = {
+    ...ANSWER,
+    rules: [{ ...ANSWER.rules[1]!, always_escalate_paths: [], required_checks }],
+  };
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  expect(within(rules).getByText("acme/web main")).toBeTruthy();
+  expect(within(rules).queryByText("acme/jobs main")).toBeNull();
+  expect(within(rules).getByText("1 more")).toBeTruthy();
+});
+
+test("a merge or deploy rule with no checks of its own says the branch decides", () => {
+  answer.data = { ...ANSWER, rules: [{ ...ANSWER.rules[1]!, required_checks: [] }] };
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  expect(within(rules).getByText("What the branch requires")).toBeTruthy();
 });
 
 test("a merge or deploy rule with no paths of its own says it keeps the built-in ones", () => {
