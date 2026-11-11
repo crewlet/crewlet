@@ -28,7 +28,7 @@ func TestTheAccessDomainIsACertifiedDomain(t *testing.T) {
 			Domain:  accessdomain.Domain{},
 			Applier: accessdomain.NewApplier(),
 			// Migrate is nil: the tables ship in the replicated estate's own
-			// migrations (0151, and 0160 for the verdicts).
+			// migrations (0151, and 0161 for the verdicts).
 			Encode:        encodeSuiteRecord,
 			Fields:        accessdomain.VersionedFields(),
 			Carrying:      carryingSuiteRecord,

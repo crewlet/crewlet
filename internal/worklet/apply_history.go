@@ -529,7 +529,11 @@ func appsColumn(record MutationRecord) string {
 // [WorkingForVersion] or above that carries one, and NULL for every other, so
 // every node writes the same row (ADR-0109).
 //
-// KEPT FROM THE CARRIER'S FIRST BUILD ON, though nothing reads it yet: a
+// The work pickup reads it ([readyAssignedArm], [readyCreatedArm]): whom an
+// item's assignment, else its creation, was made for is whom its pickup works
+// for.
+//
+// KEPT FROM THE CARRIER'S FIRST BUILD ON, before anything read it: a
 // replicated migration runs on each node when it opens, not at a log
 // position, so a column a later build added and filled would hold NULL for
 // the records a node applied before it upgraded and the carrier for the same

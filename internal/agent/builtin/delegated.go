@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"fmt"
@@ -219,7 +220,7 @@ func (t *reviewDelegated) Parameters() map[string]any {
 			"request": map[string]any{"type": "string", "description": "The request's id, as your brief names it."},
 			"verdict": map[string]any{"type": "string", "enum": delegated.Verdicts(),
 				"description": "allow, escalate or deny."},
-			"confidence": map[string]any{"type": "string", "enum": []string{"high", "low"},
+			"confidence": map[string]any{"type": "string", "enum": delegated.Confidences(),
 				"description": "high only when you are sure; low always puts the request to people."},
 			"reason": map[string]any{"type": "string",
 				"description": fmt.Sprintf("Why, in one line of up to %d characters: people read it on an "+
@@ -294,7 +295,7 @@ func (t *reviewDelegated) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"this node, so it cannot be decided here. Escalate it."), nil
 	}
 	now := t.deps.now()
-	host, subject, stdin := t.deps.Release.subjectOf(kind, callArgs)
+	host, subject, stdin := RequestSubject(kind, callArgs)
 	given, overruled, said := a.verdict, []string(nil), []string(nil)
 	if a.verdict == delegated.Allow && a.confidence == delegated.High {
 		overruled, said = t.overrule(ctx, turn, run, handle, kind, callArgs, now)
@@ -442,8 +443,7 @@ func (t *reviewDelegated) carryOut(ctx context.Context, run sandbox.PendingRun, 
 		return tools.Result{Output: "Recorded. The request waits on the rest of its panel; it is carried out " +
 			"only if every delegate allows it."}
 	}
-	mark := fmt.Sprintf("Decided under delegation, rule %d, by %s.", rule,
-		strings.Join(written.Delegation.Delegates, " and "))
+	mark := fmt.Sprintf("Decided under delegation, rule %d, by %s.", rule, words.And(written.Delegation.Delegates))
 	switch outcome.Verdict {
 	case delegated.Allow:
 		if err := desk.Answer(ctx, run, sandbox.HeldOnce, mark, delegate, rule); err != nil {
@@ -513,4 +513,32 @@ func workItemOf(run sandbox.PendingRun) string {
 // delegatedCandidates are the verdict tool as a registry's candidate.
 func delegatedCandidates(deps DelegatedDeps) []candidate {
 	return []candidate{{&reviewDelegated{deps: deps}, deps.Desk != nil}}
+}
+
+// RequestSubject is what a request of kind decides, from its held call's
+// arguments, as the access log keeps it for a person to recognise: an
+// ssh_operate's server, its command and its stdin, and a merge's or a deploy's
+// one line. The digest binds the exact request; every verdict on it, the
+// engine's own among them, names this.
+func RequestSubject(kind delegated.Kind, args map[string]any) (host, subject string, stdin []byte) {
+	switch kind {
+	case delegated.KindSSHOperate:
+		return argString(args, "host"), argString(args, "command"), []byte(argString(args, "stdin"))
+	case delegated.KindPRMerge:
+		method := cmp.Or(argString(args, "method"), releaseMerge)
+		return "", fmt.Sprintf("merge %s at %s (%s)", argString(args, "change"), argString(args, "head"),
+			method), nil
+	case delegated.KindDeploy:
+		var changes []string
+		if list, ok := argval.List(args["changes"]); ok {
+			for _, c := range list {
+				if text, ok := argval.String(c); ok {
+					changes = append(changes, text)
+				}
+			}
+		}
+		return "", fmt.Sprintf("deploy %s of %s to %s, shipping %s", argString(args, "commit"),
+			argString(args, "repo"), argString(args, "environment"), words.And(changes)), nil
+	}
+	return "", string(kind) + " request", nil
 }

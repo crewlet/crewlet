@@ -103,8 +103,11 @@ const (
 	Low  Confidence = "low"
 )
 
+// Confidences is every confidence, the surer first.
+func Confidences() []Confidence { return []Confidence{High, Low} }
+
 // Valid reports whether c is a confidence.
-func (c Confidence) Valid() bool { return c == High || c == Low }
+func (c Confidence) Valid() bool { return slices.Contains(Confidences(), c) }
 
 // The engine's closed words for why a request reached people over its
 // delegates, or how its answers combined; each kind adds its own (an SSH

@@ -11,10 +11,11 @@
 
 /**
  * What a request is for: its act, set by the engine from the structured data
- * that made it (`delegated.Kind`). `other` is never delegated. OPEN, for an
- * act a newer engine adds.
+ * that made it (`delegated.Kind`). `other` is never delegated. CLOSED: the
+ * engine sends only the acts it declares and a gate holds this list to
+ * `delegated.Kinds()`; a reader still says an act it does not know as written.
  */
-export type DelegatedAct = "ssh_operate" | "other" | (string & {});
+export type DelegatedAct = "ssh_operate" | "other";
 
 /** A delegate's answer, or what a request's answers came to (`delegated.Verdict`). */
 export type DelegatedVerdict = "allow" | "escalate" | "deny";

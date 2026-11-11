@@ -414,7 +414,7 @@ func (v HeldVerdict) validate() error {
 		return errors.New("a delegate's answer names who gave it and when")
 	case !delegated.Verdict(v.Verdict).Valid() || !delegated.Confidence(v.Confidence).Valid():
 		return fmt.Errorf("a delegate's answer is %s with confidence %s", words.Or(delegated.Verdicts()),
-			words.Or([]delegated.Confidence{delegated.High, delegated.Low}))
+			words.Or(delegated.Confidences()))
 	case utf8.RuneCountInString(v.Reason) > MaxReviewReasonRunes:
 		return fmt.Errorf("a delegate's reason is at most %d characters", MaxReviewReasonRunes)
 	case len(v.Findings) > MaxReviewFindings:

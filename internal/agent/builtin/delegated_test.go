@@ -409,7 +409,7 @@ func TestAPanelRequestIsCarriedOutOnlyOnceBothAllow(t *testing.T) {
 	review(t, o, desk, "dev", verdict(desk, delegated.Allow, delegated.High))
 	review(t, o, desk, "reader", verdict(desk, delegated.Allow, delegated.High))
 	if len(desk.answers) != 1 || desk.answers[0].choice != sandbox.HeldOnce ||
-		!strings.Contains(desk.answers[0].words, "dev and reader") {
+		!strings.Contains(desk.answers[0].words, `"dev" and "reader"`) {
 		t.Fatalf("a panel that both allowed carried out %+v, want one allow naming both", desk.answers)
 	}
 }

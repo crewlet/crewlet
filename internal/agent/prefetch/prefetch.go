@@ -173,9 +173,12 @@ type Blocks struct {
 	// ([notify.Message.ID]), and an edited one by the version it was shown
 	// at ([notify.Message.Version]) — that this block SHOWED the turn and that
 	// were waiting for it: posted by the writer of the message that woke the
-	// turn after this seat's own last reply in the thread and before that
-	// message. Another writer's message waits for a turn of its own: one turn
-	// works for one writer (ADR-0109).
+	// turn, for whom the turn works ([Request.WorkingFor]), after this seat's
+	// own last reply in the thread and before that message. Another writer's
+	// message, or one written for somebody else, waits for a turn of its own:
+	// one turn works for one writer and one whom (ADR-0109). Nothing at all
+	// where the read could not say whom its messages were written for
+	// ([notify.Transcript.WorkingForUnread]).
 	//
 	// The turn answers them whether it was woken for them or not, because
 	// a turn answers its thread as the block shows it — so when one of them
@@ -290,6 +293,15 @@ type Request struct {
 	// say which of the messages it showed came before the trigger only if
 	// it knows which one the trigger is.
 	Message string
+
+	// WorkingFor is whom this turn works for (ADR-0109): the carrier the
+	// turn's own ceiling is composed from, handed over by the caller rather
+	// than derived again here, and nil for the seat's own work and a turn a
+	// person or a vendor woke. [Blocks.ThreadContextAnswered] holds only the
+	// waiting messages written for exactly this whom, as the partition keys
+	// a carrier ([notify.WorkingForKey]): a waiting message written for
+	// somebody else is owed a turn of its own, held to their apps.
+	WorkingFor *types.WorkingFor
 
 	// Told is the changes to the seat's access it was told of recently, for
 	// marking the selected notes each may contradict ([ToldChange]). Nil marks

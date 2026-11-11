@@ -172,7 +172,7 @@ func TestAChatActorCrossesTheWireAsItWasStated(t *testing.T) {
 // and nobody for a record that carries none or one below the carrier's
 // version, whatever it holds, since an older build's applier wrote that
 // post's document with no such field. Kept from the carrier's first build on,
-// before anything reads it, because the applier writes a message's document
+// before the turn-start read took it, because the applier writes a message's document
 // once, at its post's position: a field a later build began to fill would
 // differ between a node that applied the post before it upgraded and one that
 // applied it after.

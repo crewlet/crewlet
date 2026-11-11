@@ -727,23 +727,3 @@ func (t *askToDeploy) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		"wrong. A deploy of any other commit, or to another environment, is asked again.", approval.By, handle,
 		a.commit, a.where(), a.environment, a.changeRefs)}, nil
 }
-
-// subjectOf is what a request of kind decides, as the access log keeps it for
-// a person to recognise: an ssh_operate's server, command and stdin, and a
-// merge's or a deploy's one-line summary. The digest binds the exact request.
-func (d ReleaseDeps) subjectOf(kind delegated.Kind, args map[string]any) (host, subject string, stdin []byte) {
-	switch kind {
-	case delegated.KindPRMerge:
-		if a, refusal := d.mergeAskOf(AskToMergeTool, args); refusal == nil {
-			return "", fmt.Sprintf("merge %s at %s (%s)", a.ref, a.head, a.method), nil
-		}
-	case delegated.KindDeploy:
-		if a, refusal := d.deployAskOf(AskToDeployTool, args); refusal == nil {
-			return "", fmt.Sprintf("deploy %s of %s to %s, shipping %s", a.commit, a.where(), a.environment,
-				a.changeRefs), nil
-		}
-	default:
-		return argString(args, "host"), argString(args, "command"), []byte(argString(args, "stdin"))
-	}
-	return "", string(kind) + " request", nil
-}

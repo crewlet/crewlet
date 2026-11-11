@@ -115,9 +115,9 @@ type WorkPickup struct {
 	Item   string `json:"item"`
 	Key    string `json:"key"`
 	Status string `json:"status"`
-	// Moved is the log position of the last change somebody other than the
-	// seat made to the item, and Progressed the seat's own last progress on
-	// it when started: with the seat, the item and its status, the pickup's
+	// Moved is the log position of the last change to the item that would
+	// have woken the seat, and Progressed the seat's own last progress on it
+	// when started: with the seat, the item and its status, the pickup's
 	// identity.
 	Moved      uint64 `json:"moved"`
 	Progressed uint64 `json:"progressed,omitempty"`

@@ -992,7 +992,11 @@ func (o op[A, R]) answeredWhole() op[A, R] {
 //
 // A READ HAS NO ORIGINATOR a surface could be — the engine's reads are
 // ordinary reads, gated like every other — so declaring one is a build that
-// cannot mean what it says, and panics.
+// cannot mean what it says, and panics. One read's ANSWER is the engine's
+// alone, chat.turn_thread's, which hands over whom each chat message was
+// written for: no declaration says so, since the class is about writes, and the
+// gate over the packages that serve a person or a model holds it instead
+// ([TurnThreads]).
 func (o op[A, R]) byEngine() op[A, R] {
 	if o.spec.class == opRead {
 		panic(fmt.Sprintf("estate: %s is a read, and only a write has an originator: "+

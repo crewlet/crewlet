@@ -118,7 +118,7 @@ func (a ownAsks) OwnAsks(ctx context.Context, asker, person string, limit int) (
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
-	told *toldTurn,
+	told *toldTurn, workingFor *types.WorkingFor,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -173,6 +173,11 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// see [prefetch.Blocks.ThreadContextAnswered] and
 		// workedthrough.go.
 		Message: triggerMessageOf(req.Ask()),
+		// WHOM THIS TURN WORKS FOR, the turn's own carrier, from which its
+		// ceiling is composed: never derived again from the notification,
+		// whose trigger message's document keeps its post's carrier across
+		// an edit made for somebody else.
+		WorkingFor: workingFor,
 		// THE SEGMENT'S FENCE TOKEN, which its tools fence with too: the
 		// thread is somebody else's words, handed over in the prompt.
 		Boundary: boundary,

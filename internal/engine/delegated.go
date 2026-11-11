@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -497,7 +498,7 @@ func (s *delegatedSweep) holds(ctx context.Context) (bool, error) {
 // pass escalates every request due, and logs what it could not.
 func (s *delegatedSweep) pass(ctx context.Context) {
 	sweepDelegated(ctx, sandbox.NewCoordStore(s.engine.backends.Fleet), delegatedRules{engine: s.engine},
-		sshServers{engine: s.engine}, s.now())
+		sshServers{engine: s.engine}, delegatedDesk{engine: s.engine}.Arguments, s.now())
 }
 
 // delegatedRecorder records the engine's own escalation of a request.
@@ -507,9 +508,10 @@ type delegatedRecorder interface {
 
 // sweepDelegated puts to people every active held call that waited on its
 // delegates past its deadline, or whose delegation the live rules no longer
-// hold, recording each escalation once it is written.
+// hold, recording each escalation once it is written, naming what it decided
+// from the call's arguments as open opens them.
 func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules builtin.DelegatedRules,
-	audit delegatedRecorder, now time.Time) {
+	audit delegatedRecorder, open func(sandbox.PendingRun) (map[string]any, error), now time.Time) {
 
 	runs, err := store.ListActive(ctx)
 	if err != nil {
@@ -536,11 +538,25 @@ func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules built
 		case !escalated:
 			continue
 		}
+		// WHAT IT DECIDED, as every verdict on the request names it: the
+		// access log refuses a record that names nothing.
+		args, err := open(run)
+		if err != nil {
+			log.WarnContext(ctx, "delegated_sweep_unrecorded", "request", held.ID, "error", err.Error(),
+				"detail", "the request was put to people; its arguments do not open here, so its record "+
+					"in the access log names nothing it could hold")
+			continue
+		}
+		host, subject, stdin := builtin.RequestSubject(delegated.Kind(held.Act), args)
+		item := ""
+		if run.WorkItem != nil {
+			item = cmp.Or(run.WorkItem.Key, run.WorkItem.ID)
+		}
 		if _, err := audit.RecordVerdict(ctx, builtin.DelegatedVerdict{
 			At: held.HeldAt, Request: held.ID, Kind: held.Act, Rule: held.Delegation.Rule, Handle: run.AgentHandle,
 			Turn: run.TurnID, ByKind: builtin.VerdictByEngine, Through: builtin.VerdictThroughDelegation,
 			Verdict: string(delegated.Escalate), Final: true, Overruled: []string{word},
-			Digest: held.Delegation.Digest,
+			Digest: held.Delegation.Digest, Host: host, Subject: subject, Stdin: stdin, Item: item,
 		}); err != nil {
 			log.WarnContext(ctx, "delegated_sweep_unrecorded", "request", held.ID, "error", err.Error(),
 				"detail", "the request was put to people; its record in the access log did not land")

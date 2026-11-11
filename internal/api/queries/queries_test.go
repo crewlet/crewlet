@@ -328,6 +328,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"executor_sessions": "decided_by:" + string(authz.ActionSeatTrailRead),
 		"executor_session":  "decided_by:" + string(authz.ActionSeatTrailRead),
 
+		// WHAT DELEGATES DECIDED, read by the people a rule answers to and by
+		// administrators (ADR-0125).
+		"delegated_decisions": "decided_by:" + string(authz.ActionDelegatedRead),
+
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;
 		// every other question is decided per artifact by the artifacts' one

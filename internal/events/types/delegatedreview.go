@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 func init() { events.Register[DelegatedReview]() }
@@ -171,7 +172,7 @@ func (r DelegatedReview) brief(b provenance.Boundary, q *DelegatedRequest) strin
 		"would; escalate puts it to people with your findings first; deny refuses it and tells %s your "+
 		"reason.", r.Rule, r.Requester, r.Kind, toolname.ReviewDelegated, r.RequestID, r.Requester)
 	if len(r.Panel) > 1 {
-		w.WriteString(" You sit on a panel with " + strings.Join(r.Panel, " and ") + ": it is allowed only " +
+		w.WriteString(" You sit on a panel with " + words.And(r.Panel) + ": it is allowed only " +
 			"if every one of you allows it, and any disagreement goes to people.")
 	}
 	w.WriteString(" " + delegatedRules)
