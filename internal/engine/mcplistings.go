@@ -88,8 +88,16 @@ type mcpListings struct {
 
 	// definitions is every definition this node has read, by digest: a
 	// digest names one definition, so an entry is never stale, and one no
-	// listing names any more is dropped.
+	// listing and no accepted definition names any more is dropped.
 	definitions map[string]coord.MCPToolDefinition
+
+	// absent is every digest this node read and the store held nothing
+	// under, until a listing naming it as kept arrives ([applyMCPListing]):
+	// a node stores a definition before the listing that says so, so
+	// nothing else makes a missing one appear. applied counts the updates
+	// taken off the watch, so a read that overlapped one records no miss.
+	absent  map[string]struct{}
+	applied uint64
 
 	// unnamed is how many consecutive sweeps this node ran found each
 	// stored definition named by no listing ([mcpListingSweepPasses]).
@@ -203,9 +211,15 @@ func (e *Engine) applyMCPListing(ctx context.Context, u coord.MCPListingUpdate) 
 	}
 	if u.Listing != nil {
 		l.fleet[key] = *u.Listing
+		for _, t := range u.Listing.Tools {
+			if t.DefinitionKept {
+				delete(l.absent, t.Digest)
+			}
+		}
 	} else {
 		delete(l.fleet, key)
 	}
+	l.applied++
 	if l.answering != nil {
 		l.answering[key] = struct{}{}
 	}
@@ -301,9 +315,10 @@ func (e *Engine) HeldMCPToolDefinitions() map[string]coord.MCPToolDefinition {
 }
 
 // MCPToolDefinitions reads the definitions stored under digests: the ones this
-// node read before from memory, the rest from the store. A digest the store
-// holds nothing under is left out. An error is a store that could not be read;
-// the definitions read before it are kept for the next call.
+// node read before from memory, the rest from the store, but for a digest this
+// node already found the store holds nothing under ([mcpListings.absent]). A
+// digest the store holds nothing under is left out. An error is a store that
+// could not be read; the definitions read before it are kept for the next call.
 func (e *Engine) MCPToolDefinitions(ctx context.Context, digests []string) (map[string]coord.MCPToolDefinition, error) {
 	out := make(map[string]coord.MCPToolDefinition, len(digests))
 	var missing []string
@@ -312,16 +327,18 @@ func (e *Engine) MCPToolDefinitions(ctx context.Context, digests []string) (map[
 	for _, d := range digests {
 		if s, ok := l.definitions[d]; ok {
 			out[d] = s
-		} else {
+		} else if _, gone := l.absent[d]; !gone {
 			missing = append(missing, d)
 		}
 	}
+	applied := l.applied
 	l.mu.Unlock()
 	if len(missing) == 0 || e.backends == nil || e.backends.Fleet == nil {
 		return out, nil
 	}
 	var err error
 	read := map[string]coord.MCPToolDefinition{}
+	var absent []string
 	for _, d := range slices.Compact(slices.Sorted(slices.Values(missing))) {
 		s, found, readErr := e.backends.Fleet.MCPToolDefinition(ctx, d)
 		if readErr != nil {
@@ -331,23 +348,57 @@ func (e *Engine) MCPToolDefinitions(ctx context.Context, digests []string) (map[
 		if found {
 			read[d] = s
 			out[d] = s
+		} else {
+			absent = append(absent, d)
 		}
 	}
+	accepted := acceptedDigests(e.acceptedRecords())
 	l.mu.Lock()
 	if l.definitions == nil {
 		l.definitions = map[string]coord.MCPToolDefinition{}
 	}
+	if l.absent == nil {
+		l.absent = map[string]struct{}{}
+	}
 	maps.Copy(l.definitions, read)
-	// KEPT TO WHAT SOME LISTING NAMES, so the copy is bounded by the
-	// fleet's catalogue rather than by everything it ever listed.
+	if l.applied == applied {
+		// NO LISTING ARRIVED DURING THE READ that could say one of these
+		// was stored since.
+		for _, d := range absent {
+			l.absent[d] = struct{}{}
+		}
+	}
+	// KEPT TO WHAT SOME LISTING OR ACCEPTED DEFINITION NAMES, so each copy
+	// is bounded by the fleet's catalogue rather than by everything it
+	// ever listed.
 	named := digestSet(slices.Collect(maps.Values(l.fleet)))
+	maps.Copy(named, accepted)
 	for d := range l.definitions {
 		if _, ok := named[d]; !ok {
 			delete(l.definitions, d)
 		}
 	}
+	for _, d := range listedDigests(slices.Collect(maps.Values(l.fleet))) {
+		named[d] = struct{}{}
+	}
+	for d := range l.absent {
+		if _, ok := named[d]; !ok {
+			delete(l.absent, d)
+		}
+	}
 	l.mu.Unlock()
 	return out, err
+}
+
+// listedDigests is every digest the listings name, kept or not.
+func listedDigests(listings []coord.MCPListing) []string {
+	var out []string
+	for _, l := range listings {
+		for _, t := range l.Tools {
+			out = append(out, t.Digest)
+		}
+	}
+	return out
 }
 
 // publishMCPListings is one beat of this node's publisher: read the fleet's
