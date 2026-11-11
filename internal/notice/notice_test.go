@@ -161,3 +161,73 @@ func TestAHeldConversationIsANotice(t *testing.T) {
 		t.Errorf("the held conversations' notices are %+v, want %+v", got, want)
 	}
 }
+
+// A DISK HOVERING AT THE LINE STILL REACHES A PERSON. A volume whose free space
+// moves around the raise threshold every beat stays one alarm, and one that
+// clears past the wider margin and comes back keeps its first raise, so the
+// administrators get one notice once the grace has passed since that raise.
+//
+// Mutation: drop volume_low's wider clear, or the tracker's resumption of a
+// run, and a case is red.
+func TestAFlappingVolumeAlarmStillReachesTheAdministrators(t *testing.T) {
+	t.Parallel()
+	const store = 1900 << 20
+	free := func(factor float64) int64 { return int64(factor * store) }
+	clock := t0
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+	var said []statelog.AlarmTransition
+	tracker.OnTransition("node-a", func(tr statelog.AlarmTransition) { said = append(said, tr) })
+	volume := string(statelog.KindVolumeLow)
+
+	// The first ten minutes alternate every beat between short of the raise
+	// and short of the clear; then each six minutes spend two past the clear.
+	reading := func(at time.Duration, beat int) int64 {
+		if at < 10*time.Minute {
+			return free([]float64{1.05, 1.18}[beat%2])
+		}
+		if (at-10*time.Minute)%(6*time.Minute) < 2*time.Minute {
+			return free(1.4)
+		}
+		return free(1.05)
+	}
+	cleared := 0
+	notified := false
+	for beat := 0; ; beat++ {
+		at := time.Duration(beat) * statelog.AlarmInterval
+		if at > 45*time.Minute {
+			break
+		}
+		clock = t0.Add(at)
+		up, _ := tracker.Standing()
+		tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{Up: up,
+			FreeBytes: reading(at, beat), StoreBytes: store, StoreVolume: "/var/lib/crewlet"}))
+		for _, tr := range said {
+			if tr.Change == statelog.TransitionCleared {
+				cleared++
+			}
+		}
+		said = said[:0]
+		if at < 10*time.Minute && cleared > 0 {
+			t.Fatalf("at %v the alarm cleared on a reading short of its clear margin", at)
+		}
+		marks, _ := tracker.Marks()
+		got := notice.FromAlarms([]notice.NodeAlarms{{Node: "node-a", Marks: marks}}, clock)
+		standing := len(marks) > 0
+		switch {
+		case at < notice.AlarmAfter && len(got) != 0:
+			t.Fatalf("at %v, inside the grace, the notices are %+v, want none", at, got)
+		case at >= notice.AlarmAfter && standing:
+			want := []notice.Notice{alarm(volume, t0, "node-a")}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("at %v the notices are %+v, want one dated from the first raise %+v", at, got, want)
+			}
+			notified = true
+		}
+	}
+	if cleared < 3 {
+		t.Fatalf("the alarm cleared %d times, want the reading past the margin to clear it each cycle", cleared)
+	}
+	if !notified {
+		t.Fatal("no beat past the grace found the alarm standing: the case proves nothing")
+	}
+}
