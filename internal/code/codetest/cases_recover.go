@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
@@ -59,7 +58,7 @@ func crashAt(t *testing.T, newFleet NewFleet, point codefault.Point) {
 	for _, n := range c.Fleet.Nodes() {
 		for _, sub := range []string{"scratch", "tmp", "trash"} {
 			dir := filepath.Join(n.CacheDir(), sub)
-			if !within(10*time.Second, func() bool { return emptyDir(dir) }) {
+			if !within(cleanupWait, func() bool { return emptyDir(dir) }) {
 				t.Errorf("%s's %s/ still holds %v after the restart", n.ID(), sub, entries(dir))
 			}
 		}
@@ -118,7 +117,7 @@ func aRestartSweepsScratch(t *testing.T, newFleet NewFleet) {
 		t.Errorf("after the restart scratch/ holds %v", got)
 	}
 	trash := filepath.Join(node.CacheDir(), "trash")
-	if !within(10*time.Second, func() bool { return emptyDir(trash) }) {
+	if !within(cleanupWait, func() bool { return emptyDir(trash) }) {
 		t.Errorf("the janitor left %v in trash/", entries(trash))
 	}
 	assertConverged(t, c.Fleet)
@@ -149,7 +148,7 @@ func aPurgedRepositoryLeavesNothing(t *testing.T, newFleet NewFleet) {
 			t.Errorf("%s's cache still serves the purged repository", n.ID())
 		}
 		repos := filepath.Join(n.CacheDir(), "repos")
-		if !within(10*time.Second, func() bool {
+		if !within(cleanupWait, func() bool {
 			return !slices.ContainsFunc(entries(repos), func(e string) bool { return strings.HasPrefix(e, old+".") })
 		}) {
 			t.Errorf("%s's cache still holds a directory of the purged repository: %v", n.ID(), entries(repos))

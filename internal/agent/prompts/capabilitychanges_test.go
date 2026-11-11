@@ -9,7 +9,7 @@ import (
 // ASK, as their own section, and a turn with none carries no trace of them.
 func TestTheAccessChangesAreToldBeforeTheTask(t *testing.T) {
 	t.Parallel()
-	changes := "## What changed since your last turn\n- Cloudflare: your level is now Secure (was Operate)."
+	changes := "## What changed since your last turn\n- Cloudflare: your Crewlet grant now sets your level to Secure (was Operate)."
 	m := BuildPhaseUserMessage(UserMessage{TaskDescription: "Purge the cache.",
 		Endings: endingsHeader + "\n\n### Turn t-1", CapabilityChanges: changes})
 	endings, told, task := strings.Index(m.Text, endingsHeader), strings.Index(m.Text, changes),

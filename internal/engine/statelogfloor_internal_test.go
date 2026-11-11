@@ -25,6 +25,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -911,7 +912,7 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 		// arbitrates on a subject nobody has written.
 		chatlet.Domain{}.Name(): func(ctx context.Context, key string) error {
 			_, err := n.chat.CreateChannel(ctx,
-				chatlet.Actor{Handle: "ceo", Kind: chatlet.AuthorAgent},
+				chatlet.Actor{Handle: "ceo", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)},
 				chatlet.NewChannel{Name: "floor-" + strings.ToLower(key), Kind: chatlet.KindPublic})
 			return err
 		},

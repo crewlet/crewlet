@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -999,7 +1000,7 @@ func TestAnAgentHasNoReadStateToRecord(t *testing.T) {
 	deps := chatDeps(newFakeChat())
 	deps.Cursors = fakeCursors{flushed: &flushed}
 	deps.Actor = func(context.Context, *turnctx.Turn) (chatlet.Actor, error) {
-		return chatlet.Actor{Handle: "agent-cto", Kind: chatlet.AuthorAgent}, nil
+		return chatlet.Actor{Handle: "agent-cto", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}, nil
 	}
 	allowAll := func(context.Context, authz.Action, authz.Object) error { return nil }
 	var tool tools.Callable

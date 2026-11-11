@@ -3,12 +3,15 @@ package advisor
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // AccessKey is one grant an agent may ask a person for, from a closed list
@@ -21,14 +24,17 @@ type AccessKey string
 // from any other option by its id: an id no other decision may use.
 const AccessPrefix = decision.ReservedOptionPrefix
 
-// The grants an agent may ask for.
-const (
-	AccessHealth      AccessKey = "grant-health"
-	AccessGitHubPulls AccessKey = "grant-github-pull-requests"
-	AccessGitHubCode  AccessKey = "grant-github-contents"
-	AccessGitHubCheck AccessKey = "grant-github-checks"
-	AccessGitHubIssue AccessKey = "grant-github-issues"
-)
+// AccessHealth is the grant of the engine's health tools. Every other grant is
+// a GitHub permission at one level ([GitHubAccessKey]), derived from what a
+// seat can hold ([github.SeatPermissions]) rather than listed by hand.
+const AccessHealth AccessKey = "grant-health"
+
+// GitHubAccessKey is the grant of permission at level on the seat's own GitHub
+// App: `grant-github-<permission>-<level>`, the key's underscores as hyphens.
+func GitHubAccessKey(permission string, level config.GitHubAccess) AccessKey {
+	return AccessKey(AccessPrefix + "github-" + strings.ReplaceAll(permission, "_", "-") +
+		"-" + string(level))
+}
 
 // accessGrant is one key's meaning: what it lets an agent do, whether a seat
 // holds it, and the fields of the seat's entity that grant it.
@@ -36,6 +42,8 @@ type accessGrant struct {
 	key AccessKey
 	// does finishes "Allow <agent> to ..." and "<agent> can ...".
 	does string
+	// lane is the access lane whose grant holds it, "" for none.
+	lane seataccess.Lane
 	held func(seat *org.Role) bool
 	// set is the top-level fields of the role entity that grant it, and
 	// merge the nested ones; either may be nil.
@@ -44,32 +52,43 @@ type accessGrant struct {
 	takes func(seat *org.Role) bool
 }
 
-var accessGrants = []accessGrant{
-	{
+// accessGrants is the catalogue: the health tools, then every level of every
+// permission a seat's GitHub App may hold, in the Agents tab's order.
+var accessGrants = func() []accessGrant {
+	out := []accessGrant{{
 		key: AccessHealth, does: "watch the engine's health and wake on its alarms",
 		held:  func(s *org.Role) bool { return s.HealthTools },
 		takes: func(*org.Role) bool { return true },
 		set:   func() map[string]any { return map[string]any{"health_tools": true} },
-	},
-	gitHubWrite(AccessGitHubPulls, "pull_requests", "review and merge pull requests on GitHub"),
-	gitHubWrite(AccessGitHubCode, "contents", "push code to its repositories on GitHub"),
-	gitHubWrite(AccessGitHubCheck, "checks", "report checks on GitHub"),
-	gitHubWrite(AccessGitHubIssue, "issues", "write issues on GitHub"),
-}
+	}}
+	for _, p := range github.SeatPermissions {
+		for _, level := range p.Levels {
+			out = append(out, gitHubGrant(p, level))
+		}
+	}
+	return out
+}()
 
-// gitHubWrite is the grant of write on one permission of the seat's own
-// GitHub App, which it must already have: that one field, merged into the
-// seat's entity as the person's preview reads it.
-func gitHubWrite(key AccessKey, permission, does string) accessGrant {
+// gitHubGrant is the grant of permission p at level on the seat's own GitHub
+// App, which it must already have: that field and whatever the level needs
+// ([github.Needs]), merged into the seat's entity as the person's preview reads it.
+func gitHubGrant(p github.Permission, level config.GitHubAccess) accessGrant {
+	does := "hold GitHub's " + p.Name + " permission at " + level.Label()
+	fields := map[string]any{p.Key: string(level)}
+	for _, need := range github.Needs(p.Key, level) {
+		with, _ := github.LookupPermission(need.Key)
+		does += ", with " + with.Name + " at " + need.Level.Label() + ", which it needs"
+		fields[need.Key] = string(need.Level)
+	}
 	return accessGrant{
-		key: key, does: does,
+		key: GitHubAccessKey(p.Key, level), does: does, lane: seataccess.LaneGitHub,
 		held: func(s *org.Role) bool {
-			return s.GitHub != nil && s.GitHub.Permissions[permission] == string(config.GitHubWrite)
+			return s.GitHub != nil && config.GitHubAccess(s.GitHub.Permissions[p.Key]).Rank() >= level.Rank()
 		},
 		takes: func(s *org.Role) bool { return s.GitHub != nil && s.GitHub.Enabled },
 		merge: func() map[string]any {
 			return map[string]any{"integrations": map[string]any{"github": map[string]any{
-				"permissions": map[string]any{permission: string(config.GitHubWrite)}}}}
+				"permissions": maps.Clone(fields)}}}
 		},
 	}
 }
@@ -110,6 +129,15 @@ func (k AccessKey) Valid() bool {
 func (k AccessKey) Does() string {
 	g, _ := grantOf(k)
 	return g.does
+}
+
+// Place is where in Crewlet an administrator sets the integration grant k is
+// part of ([seataccess.GrantPlace]), "" for a grant no integration holds.
+func (k AccessKey) Place() string {
+	if g, ok := grantOf(k); ok && g.lane != "" {
+		return seataccess.GrantPlace(g.lane)
+	}
+	return ""
 }
 
 // CanAsk reports whether seat may ask for k: a key it does not hold, on

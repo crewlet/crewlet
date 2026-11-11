@@ -843,6 +843,7 @@ func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
 		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
+		OpenAsks:            r.cfg.Context.OpenAsks,
 		Workers:             r.workerCatalogue(),
 		Access:              r.cfg.Access,
 	})

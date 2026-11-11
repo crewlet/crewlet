@@ -4012,8 +4012,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 		// worked through beside its own triggers. Off the block this frame
 		// assembled, because the loop never knew what a prompt showed — see
 		// workedthrough.go. Only for a turn that RAN: a refused onboarding
-		// showed nothing to a model, so nothing was worked through.
-		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
+		// showed nothing to a model, so nothing was worked through. An edited
+		// message is recorded at the version shown and for whom this turn
+		// works: tel.workingFor, the carrier its ceiling is composed from, so
+		// the mark drops only that edit's wake made for the same whom.
+		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered,
+			tel.workingFor)
 	}
 	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later step of this
 	// segment will read a note, and one offered from here on is answered

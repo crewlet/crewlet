@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -340,7 +341,7 @@ func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
 	r := newRoundTrip(t)
 	task := r.createTask("My own thing")
 
-	mine := r.writer.As("alice", worklet.AuthorAgent, worklet.Provenance{})
+	mine := r.writer.As("alice", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	if _, err := mine.WritePriorities(t.Context(), "op-own", "alice",
 		[]string{task.ID}, nil, worklet.PersonAuthority{}); err != nil {
 
@@ -462,7 +463,9 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 			worklet.PersonAuthority{}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			writer := r.writer.As(tc.actor, tc.kind, worklet.Provenance{})
+			// FOR NOBODY ELSE, so a seat is refused by its authority and
+			// never because its actor stated nothing.
+			writer := r.writer.As(tc.actor, tc.kind, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 			_, err := writer.WritePriorities(t.Context(), "op-"+tc.actor,
 				"alice", []string{task.ID}, nil, tc.authority)
 			switch {

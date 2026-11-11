@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -40,7 +41,7 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 	r := newRoundTrip(t)
 	task := r.createTask("the circulating one")
 
-	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-1"})
+	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil), TurnID: "turn-1"})
 	hand := func(opID, to string) {
 		t.Helper()
 		if _, err := agent.UpdateTask(t.Context(), opID, task.ID, "ENG", worklet.NoIfMatch,
@@ -113,7 +114,7 @@ func TestTheHandOffRederivationWalksEachTaskWhole(t *testing.T) {
 	first := r.createTask("the first")
 	second := r.createTask("the second")
 
-	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-1"})
+	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil), TurnID: "turn-1"})
 	write := func(opID, id string, patch worklet.TaskPatch, kind worklet.ChangeKind) {
 		t.Helper()
 		if _, err := agent.UpdateTask(t.Context(), opID, id, "ENG", worklet.NoIfMatch,
@@ -186,7 +187,7 @@ func TestAnAssignmentReasonIsTheHandOffRowsExcerpt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("the explained one")
-	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-1"})
+	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil), TurnID: "turn-1"})
 
 	const why = "ops owns the rollout from here"
 	to := "ops"

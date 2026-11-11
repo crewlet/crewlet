@@ -162,6 +162,11 @@ export interface ViewerState {
    */
   assistantModel: AssistantModelNotice | null;
   /**
+   * Whether a question's images are read: only deep work reads them, so false
+   * where the company runs none, and the composer takes no image.
+   */
+  assistantReadsImages: boolean;
+  /**
    * On a company talking on a vendor's chat, which vendor surfaces it
    * declares, named to a reader holding Chatlet only: empty everywhere else.
    * WHETHER the company runs Chatlet is every reader's, on the org
@@ -252,6 +257,7 @@ function viewerState(
     configManagedBy: data?.config_managed_by ?? [],
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
+    assistantReadsImages: data?.assistant?.reads_images === true,
     chatVendors: data?.chat_vendors ?? [],
     artifactPages: data?.artifact_pages,
   };

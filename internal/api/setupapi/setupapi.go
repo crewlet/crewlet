@@ -432,6 +432,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// the connect verb: a rotate seals a credential, and a remove takes an
 	// account away at the vendor.
 	mount("GET /setup/integrations/{kind}/access", authz.ActionSetupRead, s.accessRead)
+	// ONE AGENT'S LANE, in words, for a reader that shows one agent's access.
+	mount("GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", authz.ActionSetupRead,
+		s.accessSeatRead)
 	// THE PLAN IS A READ sent as a POST, so it keeps the read verb and says
 	// it reads.
 	if err := router.Handle("POST /setup/integrations/{kind}/access/plan",

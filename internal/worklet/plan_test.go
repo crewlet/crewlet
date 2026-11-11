@@ -792,6 +792,24 @@ func taskReads() map[string]indexedRead {
 		"the asks waiting":       seek(key, asksPageStatement, person, 21),
 		"the asks closed lately": seek(key, answeredStatement, person,
 			store.EncodeTime(planNow), MaxAnswered+1),
+		// A SEAT'S OWN OPEN ASKS TO ONE PERSON, by the asker's index.
+		"a seat's own open asks": seek("tracker_comments_asked_of_idx", ownAsksPageStatement,
+			"agent", person, MaxOwnAsks),
+		"a seat's own open asks counted": seek("tracker_comments_asked_of_idx",
+			cappedCountStatement(ownAsksFrom, ownAsksWhere), "agent", person, TotalHintCeiling+1),
+		// WHOM AN IDLE REVIEW'S HOLDER ASKED, by the open asks' item index.
+		"whom a review waits on": seek("tracker_comments_open_asks_idx", reviewAsksStatement,
+			task, "agent"),
+		// WHAT A PERSON HOLDS BY BEING ASKED, its page and its count.
+		"what waits on a person's answers": func() indexedRead {
+			statement, open := heldByAsksStatement()
+			return seek(key, statement, append(append([]any{person, person}, open...), 101)...)
+		}(),
+		"what waits on a person's answers counted": func() indexedRead {
+			statement, open := heldByAsksCountStatement()
+			return seek(key, statement, append(append([]any{person, person}, open...),
+				TotalHintCeiling+1)...)
+		}(),
 		"the checklist items owned": seek("tracker_checklist_items_assignee_idx",
 			claimsPageStatement, person, 21),
 		"the checklist items counted": seek("tracker_checklist_items_assignee_idx",
@@ -1145,7 +1163,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			instant, task, at(9_000), instant),
 		"a task's newest status": seek(subject, newestStatusStatement, task),
 		"which of a schedule's turns moved work": seek("tracker_history_turn_idx", turnsMovedStatement,
-			`["t-1","t-2"]`, `["watchers","comment"]`),
+			`["t-1","t-2"]`),
 		"the decision an answer gave a seat": seek("sqlite_autoindex_tracker_comments_1",
 			answeredDecisionStatement, "c-1", "ana"),
 		"which of a task's asks the facts overtook": func() indexedRead {

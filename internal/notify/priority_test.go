@@ -103,23 +103,23 @@ func TestAFirstPartyNoticesStatedWriterDecidesWhetherAPersonWroteIt(t *testing.T
 		want   bool
 	}{{
 		name:   "a seat's review comment",
-		writer: notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil),
+		writer: notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil, nil),
 		want:   false,
 	}, {
 		name:   "the engine's own record",
-		writer: notify.FirstPartyWriter(iam.ActorSystem, "", nil),
+		writer: notify.FirstPartyWriter(iam.ActorSystem, "", nil, nil),
 		want:   false,
 	}, {
 		name:   "a person's review comment",
-		writer: notify.FirstPartyWriter(iam.ActorHuman, "dana-founder", nil),
+		writer: notify.FirstPartyWriter(iam.ActorHuman, "dana-founder", nil, nil),
 		want:   true,
 	}, {
 		name:   "an operator credential's write",
-		writer: notify.FirstPartyWriter(iam.ActorOperator, "ops-bot", nil),
+		writer: notify.FirstPartyWriter(iam.ActorOperator, "ops-bot", nil, nil),
 		want:   true,
 	}, {
 		name:   "the stated writer outranks the metadata",
-		writer: notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil),
+		writer: notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil, nil),
 		meta:   map[string]string{notify.BodyAuthorKindField: string(iam.ActorHuman)},
 		want:   false,
 	}}

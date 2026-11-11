@@ -106,6 +106,7 @@ import {
   askHeadline,
   askIsMessage,
   askTexts,
+  closedReplyPlaceholder,
   followThrough,
   budgetLine,
   changeCard,
@@ -685,8 +686,7 @@ function AnsweredPane({
   const ask = "run" in answered ? null : answered;
   const decision = run ? run.decision : ask?.ask.decision;
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
-  const said =
-    words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
+  const said = words.kind === "choice" ? words.said : words.said ? `“${words.said}”` : null;
   // An answered message is read whole, since its heading does not quote it.
   const context = run
     ? run.question_context.trim()
@@ -726,7 +726,7 @@ function AnsweredPane({
           />
         )}
         <ReadingPaneOutcome>
-          {`${words.who} ${words.verb}`}
+          {`${words.who} ${words.verb}${words.kind === "withdrawn" && said ? ":" : ""}`}
           {said && (
             <>
               {" "}
@@ -741,7 +741,8 @@ function AnsweredPane({
             </>
           )}
         </ReadingPaneOutcome>
-        {words.who !== "You" && words.kind !== "resolved" && (
+        {words.replaced && <ReplacedBy replaced={words.replaced} />}
+        {words.who !== "You" && words.kind !== "withdrawn" && (
           <Text as="p" variant="caption">
             {`${words.who} answered for you at ${moment(answered.answer.at, now)}. Reply below if you see it differently.`}
           </Text>
@@ -752,6 +753,23 @@ function AnsweredPane({
         )}
       </>
     </TokenScope>
+  );
+}
+
+/** What now covers a withdrawn question: another work item, or a link. */
+function ReplacedBy({ replaced }: { replaced: NonNullable<AnswerWords["replaced"]> }) {
+  const item = replaced.item;
+  return (
+    <Text as="p" variant="caption">
+      {"Now covered by "}
+      {item ? (
+        <TaskLink item={item} label={item.key} title={item.title} glyph />
+      ) : replaced.url ? (
+        <Link href={replaced.url} variant="quiet" size="inherit" external>
+          {replaced.url}
+        </Link>
+      ) : null}
+    </Text>
   );
 }
 
@@ -796,7 +814,7 @@ function AskFollowThrough({
         label="Replies to this question"
         to={frame.name}
         replyTo={ask.comment}
-        placeholder={`Add to your answer for ${frame.name}. @mention to bring someone in.`}
+        placeholder={closedReplyPlaceholder(words, frame.name)}
         index={index}
         now={now}
       />
@@ -848,7 +866,7 @@ function followSteps(
     { id: "asked", label: `${asker} asked`, description: moment(answered.ask.asked_at, now) },
     {
       id: "answered",
-      label: words.kind === "resolved" ? `${words.who} closed it` : `${words.who} answered`,
+      label: words.kind === "withdrawn" ? `${words.who} withdrew it` : `${words.who} answered`,
       description: moment(answered.answer.at, now),
     },
     picked,

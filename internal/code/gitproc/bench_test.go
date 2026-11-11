@@ -558,7 +558,7 @@ func buildHistory(b *testing.B, dst string) *history {
 	// one measured the same bytes.
 	b.Logf("the history: %d files of %d KiB, %d rewrites, a %.1f MiB pack %s of %d objects, built in %v",
 		historyFiles, historyFileBytes>>10, historyRewrites, float64(info.Size())/(1<<20), checksum, objects,
-		time.Since(began).Round(time.Millisecond))
+		time.Since(began).Round(time.Millisecond)) //fixedwait:measure logged with the history it built
 	return &history{
 		dir: dst, tip: tip, pack: pack, checksum: checksum, packBytes: info.Size(),
 		packVersion: version, packObjects: objects, ids: ids.String(),

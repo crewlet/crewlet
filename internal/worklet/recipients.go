@@ -206,7 +206,12 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 		return nil
 	}
 	task := n.Kind.TaskCommit()
-	finishedEdge := n.Snapshot.PrevStatusGroup.Finished() != n.Snapshot.StatusGroup.Finished()
+	// WHAT THE WRITE MOVED, never the one kind its record ended with
+	// ([Notify.moved]): a hand-off written with a status is a `status`
+	// record, and its old holder, its reporter and its new holder are told
+	// as for one written alone.
+	handedOff := n.moved("assignee")
+	finishedEdge := n.crossesFinished()
 
 	// TOLD UNDER THE FIRST REASON, WOKEN BY ANY: the builder keeps each
 	// handle's first reason and adds every later ordinary reason's wake to
@@ -257,15 +262,14 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 	add(n.Snapshot.CommentAsk, ReasonAsked, true)
 	add(n.Snapshot.AnsweredAuthor, ReasonAnswered, false)
 	if task {
-		add(n.Snapshot.Assignee, ReasonAssignee, n.assigneeAddressed(finishedEdge))
+		add(n.Snapshot.Assignee, ReasonAssignee, n.assigneeAddressed(handedOff, finishedEdge))
 	}
-	if n.Kind == ChangeAssignee {
+	if handedOff {
 		add(n.Snapshot.PrevAssignee, ReasonUnassigned, false)
 	}
 	switch {
-	case n.Kind == ChangeStatus && finishedEdge,
+	case finishedEdge, handedOff,
 		n.Kind == ChangeComment,
-		n.Kind == ChangeAssignee,
 		n.Kind == ChangeRemoved:
 		add(n.Snapshot.Reporter, ReasonReporter, false)
 	}
@@ -294,15 +298,16 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 	for _, party := range n.Snapshot.Unblocked {
 		add(party.Assignee, ReasonUnblocked, false)
 	}
-	if n.Kind == ChangeRouted {
-		add(n.Snapshot.RoutedTo, ReasonRoutedTo, false)
-	}
-	if n.Kind == ChangeStatus && finishedEdge {
-		add(n.Snapshot.ParentAssignee, ReasonParentAssignee, false)
-	}
-	if n.Kind == ChangeChecklist {
-		addAll(n.Snapshot.ChecklistAssignees, ReasonChecklist, false)
-	}
+	// THE TRANSITIONS A WRITE MADE, read wherever they are filled: the new
+	// unit's lead, the parent's assignee and the holders of the checklist
+	// items it touched are each filled where the write made that transition,
+	// whatever kind its record ended with, and on nothing else — by an
+	// update's decide ([Notify.restated]), or by [Wake.snapshot] for a record
+	// no decide restates — so an empty field is a transition that did not
+	// happen.
+	add(n.Snapshot.RoutedTo, ReasonRoutedTo, false)
+	add(n.Snapshot.ParentAssignee, ReasonParentAssignee, false)
+	addAll(n.Snapshot.ChecklistAssignees, ReasonChecklist, false)
 	if task {
 		addAll(n.Snapshot.Collaborators, ReasonCollaborator, false)
 	}
@@ -311,11 +316,10 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 	}
 	// AN UNWATCH IS A RECORD, NOT A WAKE: a human learns that a lead removed
 	// her watch, and an agent is not woken about a decision that was not its
-	// own.
-	if n.Kind == ChangeWatchers {
-		for _, h := range n.Snapshot.RemovedWatchers {
-			b.InboxOnly(h, ReasonUnwatched)
-		}
+	// own. Filled, like the transitions above, on any update that dropped a
+	// watcher, whatever kind its record ended with.
+	for _, h := range n.Snapshot.RemovedWatchers {
+		b.InboxOnly(h, ReasonUnwatched)
 	}
 	if n.Kind == ChangePurged {
 		add(n.Snapshot.ProjectLead, ReasonPurged, false)
@@ -328,7 +332,7 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 	// With one candidate, Route's actor drop removes it and the task
 	// reaches NOBODY; with the list, the unit lead is dropped as the actor
 	// and the project lead gets the copy.
-	if n.Kind.mayFallBack() {
+	if n.fallsBack() {
 		b.Fallback(ReasonLeadFallback, n.Snapshot.RoutingUnitLead, n.Snapshot.ProjectLead)
 	}
 	return b.Candidates()
@@ -369,15 +373,21 @@ func (n *Notify) asks(reason Reason) bool {
 //
 // NOT WHETHER THE ASSIGNEE IS WOKEN, which is [Notify.ownerAsked]: a status
 // move on your task asks you to look at it without obliging you to post.
-func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
+//
+// A HAND-OFF AND THE FINISHED EDGE ASK WHATEVER KIND CARRIES THEM, since both
+// are read off what the write moved ([Notify.moved]): the new holder of work
+// handed over with a status move owes it an answer as surely as the holder of
+// work handed over alone, and a reassertion to the holder hands nothing over.
+func (n *Notify) assigneeAddressed(handedOff, finishedEdge bool) bool {
+	if handedOff || finishedEdge {
+		return true
+	}
 	switch n.Kind {
-	case ChangeCreated, ChangeAssignee:
+	case ChangeCreated:
 		return true
 	// A CHANGE THE TASK WAITS ON SETTLED: whoever holds it is to update it.
 	case ChangeLinkSettled:
 		return true
-	case ChangeStatus:
-		return finishedEdge
 	case ChangeComment:
 		return n.personComment()
 	}
@@ -386,7 +396,8 @@ func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 
 // ownerAsked decides whether the change wakes the seats that answer for the
 // task ([ownerReasons]): every change to it except another agent's
-// conversation on it and a change to who watches it.
+// conversation on it and a change to who watches it and nothing else
+// ([Notify.watchOnly]).
 //
 // ANOTHER AGENT'S COMMENT WAKES THE OWNER ONLY BY NAMING IT, with an
 // @-mention, an `ask` or a reply in a thread the owner wrote in, each a reason
@@ -406,14 +417,120 @@ func (n *Notify) ownerAsked() bool {
 	if n.Kind.Conversation() {
 		return n.personComment() && !n.addressedToSomebody()
 	}
-	return n.Kind != ChangeWatchers
+	return !n.watchOnly()
 }
+
+// moved reports whether this change moved field on a task that already stood:
+// whether its write recorded that field's delta ([Notify.Fields]), whatever
+// kind its record ended with.
+//
+// BY THE DELTA, NEVER BY THE KIND. A record carries one kind, and a write that
+// moves several fields at once is filed under one of them
+// ([ChangeKind.MovedFields]): "assign it to ana and set it to todo" is a
+// `status` record with an assignee delta beside it. Decided by the kind, that
+// hand-off told its old holder and its reporter nothing and woke ana as a
+// status move she could absorb, the routing copy of what the work pickup's
+// history read did until it read the assignee delta (#930, #953).
+//
+// NEVER ON A CREATION, whose deltas are every field it was filed with, from
+// nothing ([Wake.Before]): filing work hands nobody anything, and the
+// creation's own arms route it. And a record built without a [Wake] carries
+// no deltas, so it moved nothing, which is what each of them is: a purge's
+// notice, a person's priority list, a repair's late wake.
+//
+// THE WHOLE OF IT FOR EVERY FIELD A ROUTE READS, which [cardFields] keeps
+// whatever it trims for a card.
+func (n *Notify) moved(field string) bool {
+	if n.Kind == ChangeCreated {
+		return false
+	}
+	_, ok := n.Fields[field]
+	return ok
+}
+
+// movedKinds is what this change moved, as the kinds a recipient is told a
+// change under: every kind whose field its write moved ([ChangeKind.MovedFields],
+// [Notify.moved]), whatever kind its record ended with, in [ChangeKinds] order.
+// Empty on a creation, and on a change that moved none of them. The parser
+// stamps it for the prompt ([MetaMoved]).
+//
+// NONE ON THE CONVERSATION, whose words are the change: the one field a
+// comment moves is the watch its writer picks up by commenting
+// ([WatchIntent.Auto]), which is the comment's own and nobody's news.
+func (n *Notify) movedKinds() []ChangeKind {
+	if n.Kind.Conversation() {
+		return nil
+	}
+	var out []ChangeKind
+	for _, kind := range ChangeKinds {
+		if slices.ContainsFunc(kind.MovedFields(), n.moved) {
+			out = append(out, kind)
+		}
+	}
+	return out
+}
+
+// crossesFinished reports a change that moved the task's status into or out
+// of a finished group, whatever kind its record ended with: the transition a
+// reporter and a parent's assignee are told of, read off the record as the
+// package's [crossesFinished] reads it off the two states. The status delta
+// is what keeps a snapshot built by hand, which may name a group and none it
+// left, from reading as an edge it never crossed.
+func (n *Notify) crossesFinished() bool {
+	return n.moved("status") &&
+		n.Snapshot.PrevStatusGroup.Finished() != n.Snapshot.StatusGroup.Finished()
+}
+
+// watchOnly reports a change to who watches the task and to nothing else:
+// deltas that name the watcher set and its mute alone ([watchFields]),
+// whatever kind its record ended with, or a record of kind `watchers` that
+// moved nothing at all. Such a change asks nothing of the seats that answer
+// for the task, and moves no work ([committedChange]).
+//
+// A WATCH WRITTEN WITH ANOTHER CHANGE IS THAT CHANGE: `update_work_item` files
+// a watch together with a due date, a priority, a title or a custom value
+// under `watchers` wherever nothing else named a kind, and decided by the kind
+// none of those reached the owners as more than a notice in their inbox. A
+// move the card left off counts too ([Notify.FieldsOmitted]), and so does a
+// checklist item the write touched, which moves no list's done count when it
+// is renamed or handed to somebody ([Snapshot.ChecklistAssignees]).
+func (n *Notify) watchOnly() bool {
+	if n.FieldsOmitted > 0 || len(n.Snapshot.ChecklistAssignees) > 0 {
+		return false
+	}
+	for field := range n.Fields {
+		if !slices.Contains(watchFields, field) {
+			return false
+		}
+	}
+	return len(n.Fields) > 0 || n.Kind == ChangeWatchers
+}
+
+// watchFields are the deltas that say who watches a task and who of them is
+// muted: what a change to who watches it moves, and all it moves. The reads
+// that decide on a history row ask the same of it in SQL ([movedBeyondWatch]).
+var watchFields = []string{watchersField, mutedField}
+
+// watchersField and mutedField name the two deltas of a change to who watches.
+const (
+	watchersField = "watchers"
+	mutedField    = "muted"
+)
 
 // reassertsHolder reports an assignment to the seat that already holds the
 // task with nothing else changed or named: no change, so it concerns nobody.
+//
+// NOTHING ELSE IS EVERYTHING THE RECORD SAYS THE WRITE DID: no delta, nothing
+// the card left off, no transition its snapshot names and nobody named. Read
+// off the deltas alone, a reassertion written beside a checklist item handed
+// to somebody, which moves no list's done count, reached nobody, the item's
+// new holder included.
 func (n *Notify) reassertsHolder() bool {
-	return n.Kind == ChangeAssignee && n.Snapshot.Assignee == n.Snapshot.PrevAssignee &&
-		len(n.Fields) == 0 && len(n.Mentions) == 0
+	s := n.Snapshot
+	return n.Kind == ChangeAssignee && s.Assignee == s.PrevAssignee &&
+		len(n.Fields) == 0 && n.FieldsOmitted == 0 && len(n.Mentions) == 0 &&
+		len(s.RemovedWatchers) == 0 && s.RoutedTo == "" && s.ParentAssignee == "" &&
+		len(s.ChecklistAssignees) == 0
 }
 
 // threadAsked decides whether a reply wakes one thread participant: one with
@@ -460,10 +577,6 @@ func (n *Notify) agentReference() bool {
 // personComment reports a comment a person wrote ([AuthorKind.Person]).
 func (n *Notify) personComment() bool { return n.Snapshot.CommentAuthorKind.Person() }
 
-// Moves reports whether a change of this kind moves work: neither the
-// conversation nor who watches. A turn's outcome is read by it.
-func (k ChangeKind) Moves() bool { return k != ChangeWatchers && !k.Conversation() }
-
 // Conversation reports a change that is talk on the task rather than a change
 // to it: a comment, and its edit, resolution or removal.
 func (k ChangeKind) Conversation() bool {
@@ -496,19 +609,24 @@ func (k ChangeKind) TaskCommit() bool {
 	return false
 }
 
-// mayFallBack reports the six kinds that reach a lead when nobody else is
-// there to hear them.
+// fallsBack reports a change that reaches a lead when nobody else is there to
+// hear it: a creation, a move to another project, a removal and a comment,
+// each an event of its own, and an update that moved the task's status or its
+// team, whatever kind its record ends with ([Notify.moved], #953).
 //
-// SIX RATHER THAN EVERY TASK KIND, because a fallback is for a change nobody
-// would otherwise learn about: a tag edit or a checklist tick on an
-// unassigned, unwatched task is not something to page a lead for.
-func (k ChangeKind) mayFallBack() bool {
-	switch k {
-	case ChangeCreated, ChangeStatus, ChangeMoved, ChangeRemoved,
-		ChangeComment, ChangeRouted:
+// NOT EVERY TASK CHANGE, because a fallback is for a change nobody would
+// otherwise learn about: a tag edit or a checklist tick on an unassigned,
+// unwatched task is not something to page a lead for. And never a status or a
+// team a write only restated beside another edit, which moved nothing a lead
+// acts on: decided by the kind, a priority set beside the status the task
+// already had paged the lead, while a re-route written beside labels paged
+// nobody.
+func (n *Notify) fallsBack() bool {
+	switch n.Kind {
+	case ChangeCreated, ChangeMoved, ChangeRemoved, ChangeComment:
 		return true
 	}
-	return false
+	return n.moved("status") || n.moved("routing_unit")
 }
 
 // Route is the post-filter — who is actually woken — with the tracker's one
@@ -547,6 +665,28 @@ func noticeWakes(n *Notify, actor string) (map[string]bool, bool) {
 		}
 	}
 	return woken, false
+}
+
+// mayWakeAnAgent reports whether a change actor made may wake an agent other
+// than actor (ADR-0109), proved from its Notify alone, as a writer's decide
+// holds it ([Writer.carries]): some candidate it offers, ordinary or the
+// fallback chain's, that hears the change and whose notice starts a turn. A
+// credential's inbox is no candidate, so the decide asks it of the Notify it
+// has already taken credentials out of.
+//
+// NOT [noticeWakes], [tellsWithoutWaking] or [Heard] with a nil registry: those
+// route with no registry, and with none a fallback is never reached while an
+// ordinary candidate is heard. The parser routes with the live one, so when a
+// watcher's or an assignee's seat is gone it wakes the lead instead — a wake a
+// nil registry's answer misses, and a turn that would then work for the
+// writing seat. So every offered candidate counts, the fallback's included.
+func mayWakeAnAgent(n *Notify, actor string) bool {
+	for _, c := range Candidates(n) {
+		if !c.InboxOnly && c.Hears(actor, Reason.WakesActor) && c.Wakes {
+			return true
+		}
+	}
+	return false
 }
 
 // Heard is [Route] without its last step: everybody told, woken or not.

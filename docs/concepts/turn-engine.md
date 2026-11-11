@@ -1415,7 +1415,7 @@ headed only when the map says so.
 
 | Prompt | Section keys, in the order they can appear |
 |---|---|
-| Executor system | `identity`, `company_context`, `background`, `responsibilities`, `behavioral_guidelines`, `unit`, `policies`, `team`, `human_colleagues`, `your_turn`, `escalation`, `untrusted_text`, `thread_context`, `personal_memory`, `synthesized_skills`, `relevant_knowledge`, `episode_recall`, `counterparty`, `workers`, `tool_skills`, `discoverable_tools` |
+| Executor system | `identity`, `company_context`, `background`, `responsibilities`, `behavioral_guidelines`, `unit`, `policies`, `team`, `human_colleagues`, `your_turn`, `escalation`, `untrusted_text`, `thread_context`, `open_asks`, `personal_memory`, `synthesized_skills`, `relevant_knowledge`, `episode_recall`, `counterparty`, `workers`, `tool_skills`, `discoverable_tools` |
 | Executor user | `conversation_endings`, `task`, `prior_work` |
 | Review system | `identity`, `review_phase`, `tool_skills`, `earlier_rounds`, `intent`, `outcome`, `blocked_by`, `tool_log`, `refused_replies`, `open_questions`, `produced`, `delivered_refs` |
 | Review user | `reference`, `task` |

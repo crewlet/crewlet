@@ -74,6 +74,7 @@ function cloudflareAccess(on: readonly string[]): AccessAnswer {
   const lane = (enabled: boolean) => ({
     desired: { enabled, level: "read" },
     observed: { exists: enabled, enabled },
+    status: enabled ? ("in_sync" as const) : ("off" as const),
     plan: [],
     tool: enabled ? ("live" as const) : ("off" as const),
   });

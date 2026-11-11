@@ -99,7 +99,7 @@ func heldPass(t *testing.T, c Cluster, n Node) (release func(), done <-chan stru
 	case <-ended:
 		release()
 		t.Fatalf("%s's pass ended before its compaction's uploads did: %+v", n.ID(), last)
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		close(stop)
 		release()
 		t.Fatalf("%s's pass reached no upload in a minute", n.ID())
@@ -126,10 +126,10 @@ func passUntilCompacted(t *testing.T, n Node) {
 			t.Fatalf("%s's pass: %v", n.ID(), err)
 		case report.Compacted > 0:
 			return
-		case report.Refused+report.Failed > 0 || time.Now().After(deadline):
+		case report.Refused+report.Failed > 0 || time.Now().After(deadline): //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("%s's pass did not compact the repository: %+v", n.ID(), report)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

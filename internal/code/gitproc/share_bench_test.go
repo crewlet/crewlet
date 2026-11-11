@@ -155,7 +155,7 @@ func BenchmarkTransferShare(b *testing.B) {
 					<-ended
 				}
 			}
-			b.ReportMetric(float64(64*b.N)/time.Since(at).Seconds(), "clones/s")
+			b.ReportMetric(float64(64*b.N)/time.Since(at).Seconds(), "clones/s") //fixedwait:measure reported as the benchmark's rate
 		})
 	}
 
@@ -299,14 +299,14 @@ func boxesHold(b *testing.B, p *gitproc.Pool, want int) {
 			since = time.Time{}
 		case since.IsZero():
 			since = now
-		case now.Sub(since) >= boxesSteady:
+		case now.Sub(since) >= boxesSteady: //fixedwait:measure a benchmark's settling, which only says when its measuring starts
 			return
 		}
-		if now.After(deadline) {
+		if now.After(deadline) { //fixedwait:measure a poll's own deadline
 			b.Fatalf("the boxes never held %d of the lane's %d slots for %v in %v", want,
 				p.Slots(gitproc.ClassTransfer), boxesSteady, boxesSteadyWait)
 		}
-		time.Sleep(boxSample)
+		time.Sleep(boxSample) //fixedwait:bench
 	}
 }
 
@@ -356,7 +356,7 @@ func startBoxes(b *testing.B, p *gitproc.Pool, h *history, n int) *boxLoad {
 		})
 	}
 	l.wg.Go(func() {
-		tick := time.NewTicker(boxSample)
+		tick := time.NewTicker(boxSample) //fixedwait:bench
 		defer tick.Stop()
 		for {
 			select {
@@ -433,7 +433,8 @@ func (w *paced) Write(p []byte) (int, error) {
 	w.n += int64(len(p))
 	due := w.at.Add(time.Duration(float64(w.n) / objstore.MiB * float64(objstore.MiBPace)))
 	select {
-	case <-time.After(time.Until(due)):
+	//fixedwait:simulated a client reading at objstore.MiBPace's floor
+	case <-time.After(time.Until(due)): //fixedwait:measure the remaining time only paces the client
 		return len(p), nil
 	case <-w.ctx.Done():
 		return 0, w.ctx.Err()
@@ -466,7 +467,7 @@ func startPushes(b *testing.B, p *gitproc.Pool, s gitproc.Share) *pushLoad {
 	ctx, cancel := context.WithCancel(b.Context())
 	l := &pushLoad{cancel: cancel}
 	l.wg.Go(func() {
-		tick := time.NewTicker(personPushEvery)
+		tick := time.NewTicker(personPushEvery) //fixedwait:bench
 		defer tick.Stop()
 		indexed := make(chan struct{})
 		close(indexed)
@@ -524,7 +525,7 @@ func shareClone(ctx context.Context, p *gitproc.Pool, h *history, s gitproc.Shar
 		Class: gitproc.ClassTransfer, Share: s,
 		Deadline: gitproc.UploadPackDeadline(h.packBytes), Stall: gitproc.TransferStall,
 	})
-	took = time.Since(at)
+	took = time.Since(at) //fixedwait:measure the clone's time, which the benchmark reports
 	if err == nil && sent.n.Load() < h.packBytes/2 {
 		err = fmt.Errorf("upload-pack sent %d bytes of a history whose pack is %d", sent.n.Load(), h.packBytes)
 	}
@@ -578,11 +579,11 @@ func shareLoad(b *testing.B, p *gitproc.Pool, h *history, s gitproc.Share, n int
 	asked.Wait()
 	deadline := time.Now().Add(time.Minute)
 	for free := p.Free(gitproc.ClassTransfer); free > 0; free = p.Free(gitproc.ClassTransfer) {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			b.Fatalf("%d clones left %d of the lane's %d slots free after a minute", n, free,
 				p.Slots(gitproc.ClassTransfer))
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:bench
 	}
 	return func() {
 		cancel()

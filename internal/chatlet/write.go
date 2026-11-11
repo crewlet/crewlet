@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
@@ -411,6 +415,21 @@ type Actor struct {
 
 	Chain []string
 
+	// WrittenFor is whom this actor's writes are made for (ADR-0109): for an
+	// [AuthorAgent], whoever the turn behind it works for, carried on every
+	// record it writes that routes to somebody ([MutationRecord.WorkingFor]) so
+	// the turn the record wakes works for them, and never for the writing
+	// seat. AN AGENT THAT STATES NOTHING WRITES NOTHING ([decide]), and every
+	// other kind carries nobody: see [types.WrittenFor]. A read ignores it.
+	//
+	// ASKED OF NO NODE UNSTATED: internal/estate refuses a chat write whose
+	// actor this field refuses before the write is asked anywhere, in process
+	// as routed, so no node ever sends a data node an agent's write that
+	// states nothing. Sent only where it carries somebody (`omitzero`), so an
+	// actor carrying nobody goes out byte for byte as a build without the
+	// field sends it, and decoded as stated ([Actor.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:",omitzero"`
+
 	// OpKey is the caller's own operation key: the value a RETRY of this
 	// same gesture reproduces, which every gesture here derives its
 	// operation id from when it is set ([Store.operation]).
@@ -430,6 +449,68 @@ type Actor struct {
 	// an actor carrying any other: the ids derived from it carry its instant
 	// — see [statelog.KeyedOpID].
 	OpKey string
+}
+
+// UnmarshalJSONFrom decodes an actor that crossed to a data node in a chat
+// write's arguments (internal/estate): whom its writes are for is what the
+// node that built it stated ([types.WrittenFor.Received]), WHATEVER ARRIVED,
+// since no node asks a chat write whose actor states nothing (the
+// [Actor.WrittenFor] field); an absent carrier is nobody, which is also what
+// an older node sends.
+//
+// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
+// estate's wire a member this build does not declare, in the actor or in its
+// carrier, refuses the request, named at its path, as one anywhere else in
+// the arguments does. An UnmarshalJSON would be handed bytes and decode them
+// again under encoding/json's own defaults, which drop such a member without
+// a word. NO ENCODER OF ITS OWN: what crosses is the plain encoding of its
+// fields under the caller's options.
+func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	type wire Actor
+	if err := jsonv2.UnmarshalDecode(dec, (*wire)(a)); err != nil {
+		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
+		// hands its caller a *jsonv2.SemanticError a method returns as it
+		// is, and wraps any other in a second one, typed as this actor and
+		// placed wherever the decoder stopped. The estate's wire names the
+		// member it refuses from the first SemanticError it finds, so
+		// returned bare that is the decoder's own, at the member's path as
+		// the decoder recorded it, never a position json/v2 inferred, which
+		// is the member's only because that is where the decoder stops.
+		return err
+	}
+	a.WrittenFor = a.WrittenFor.Received()
+	return nil
+}
+
+// recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
+// or why this actor may write none: an agent's carrier on a record that routes
+// to somebody ([Notify.Recipients]), the only records a later turn reads to
+// learn whom it works for; nobody on any other, a narration, an erase and a
+// prune among them, which every build reads; and a refusal for an agent that
+// states nobody, or for any other kind carrying somebody
+// ([types.WrittenFor.For]).
+//
+// DECIDED BY THE RECIPIENTS, which the write path routed the record to in the
+// decide's own snapshot and which every seat it wakes is among, never by
+// whether the message was silent: a silent message answering an asker still
+// wakes them. A seat the routing held back ([Notify.Held]) is woken by
+// nothing, so it does not count.
+//
+// ASKED OF EVERY RECORD, whether it carries or not, in the one builder every
+// gesture shares ([decide]): the rule is the actor's, and an agent's actor
+// whose builder forgot whom its turn works for is a bug however its next
+// record happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
+// ([Actor.UnmarshalJSONFrom]), so a data node never refuses a write for a key an
+// older node never sends.
+func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
+	carrier, err := a.WrittenFor.For(iam.ActorKind(a.Kind))
+	if err != nil {
+		return nil, fmt.Errorf("chatlet: %s's write: %w", a.Name(), err)
+	}
+	if notify == nil || len(notify.Recipients) == 0 {
+		return nil, nil
+	}
+	return carrier, nil
 }
 
 // Name is how this actor is recorded and rendered.
@@ -2057,7 +2138,7 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		return Written{}, err
 	}
 	return s.decided(ctx, OpPost, channelID, id, Written{
-		Channel: out, Message: message, Revision: writtenRevision(result, 0),
+		Channel: out, Message: message.forReaders(), Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
 }
@@ -2295,7 +2376,11 @@ func (s *Store) answer(ctx context.Context, channelID, messageID string,
 			case err != nil:
 				return err
 			default:
-				said = got
+				// THE STORED DOCUMENT AS ITS READERS ARE HANDED IT: the
+				// one place an answer reads a message back whole, so a
+				// repeat the ledger answers, a re-ask or an ambiguous
+				// publish hands over no requester either ([Message.forReaders]).
+				said = got.forReaders()
 			}
 		}
 		// ASSIGNED ONLY ONCE BOTH READS ARE IN: the store re-runs this
@@ -2487,7 +2572,7 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 		return Written{}, err
 	}
 	return s.decided(ctx, OpEdit, channelID, messageID, Written{
-		Channel: out, Message: message, Revision: writtenRevision(result, 0),
+		Channel: out, Message: message.forReaders(), Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
 }
@@ -2579,7 +2664,7 @@ func (s *Store) Delete(ctx context.Context, actor Actor, channelID,
 		return Written{}, err
 	}
 	return s.decided(ctx, OpDelete, channelID, messageID, Written{
-		Channel: out, Message: message, Revision: writtenRevision(result, 0),
+		Channel: out, Message: message.forReaders(), Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
 }
@@ -2927,6 +3012,10 @@ func decide(stamp statelog.Stamp, actor Actor, subject Subject, op OpKind,
 			"routing snapshot and no wake is ever derived from that kind — see "+
 			"ObjectKind.Routable", subject.Kind)
 	}
+	writtenFor, err := actor.recordedFor(notify)
+	if err != nil {
+		return statelog.Decision{}, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return statelog.Decision{}, fmt.Errorf("chatlet: encode the %s payload "+
@@ -2945,6 +3034,7 @@ func decide(stamp statelog.Stamp, actor Actor, subject Subject, op OpKind,
 		OperatorID: actor.OperatorID,
 		TurnID:     actor.TurnID,
 		Chain:      actor.Chain,
+		WorkingFor: writtenFor,
 		Notify:     notify,
 	}
 	// THE WHOLE RECORD'S SIZE IS THE FRAMEWORK'S TO REFUSE, against the

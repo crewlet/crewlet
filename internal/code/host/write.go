@@ -203,6 +203,9 @@ func (s *Server) Write(ctx context.Context, w code.EngineWrite) (code.EngineWrit
 			s.landWrite(pushID, f, res, err, ctx.Err() != nil)
 			return res, err
 		}
+		if err := s.fault(ctx, codefault.WriteJoined, 0); err != nil {
+			return code.EngineWriteResult{}, err
+		}
 		select {
 		case <-f.done:
 			if f.cut && ctx.Err() == nil {

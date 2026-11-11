@@ -762,7 +762,7 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 
 	actor, err := d.actor(ctx, turn)
 	if err != nil {
-		refusal := notInATurn(name)
+		refusal := unattributed(name, err)
 		return Actor{}, nil, &refusal
 	}
 	if d.PersonWriter == nil {
@@ -1101,6 +1101,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 			n.Kind, n.Actor, n.ActorKind, n.Excerpt)
 		if n.Ask != nil {
 			namesBy(read)
+			fenceWithdrawn(read, fieldPath{}.key("notices").index(i).key("ask"), n.Ask)
 		}
 	}
 	return read.answer(ctx, worklet.WorkInboxTool, answer,

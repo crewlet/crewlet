@@ -702,6 +702,7 @@ test("a vendor's refusal is said under the row with a retry", () => {
           action_url: "https://app.datadoghq.com/organization-settings/users",
         },
       },
+      status: "refused",
     }),
   );
   expect(screen.getByText("Refused")).toBeTruthy();
@@ -829,6 +830,41 @@ test("where the operator writes the document, only what writes a revision is hid
   expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
 });
 
+// TWO CLOCKS IN THE DETAILS: when a pass last read the vendor (Check now's dry
+// run included) and when a sync last applied the setting.
+// AT A STATED INSTANT, so the shell's clock and the fixture read one time.
+test("an agent's details say when it was checked and when its access was last applied", () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const now = Date.parse("2026-11-10T12:00:00Z");
+    vi.setSystemTime(now);
+    draw(
+      datadogAnswer({
+        observed_at: new Date(now - 60_000).toISOString(),
+        sync: { at: new Date(now - 10 * 60_000).toISOString(), outcome: "ok", steps: [] },
+      }),
+    );
+    details("SRE");
+    const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!;
+    expect(within(list).getByText("Sync")).toBeTruthy();
+    expect(list.textContent).toContain("Checked 1m ago, last applied 10m ago");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// THE APP'S PERMISSIONS ARE A CEILING TOKENS ARE NARROWED FROM, so one the
+// grant lacks is said under the row, and widening the draft quiets it.
+test("a permission the agent's app holds past its grant is said under the row", () => {
+  const data = githubAnswer();
+  const qa = data.seats[0]!.lanes.github!;
+  qa.observed.ceiling = { ...qa.observed.ceiling, workflows: "write" };
+  draw(data);
+  expect(
+    screen.getByText("The app also holds Workflows; this agent does not use it."),
+  ).toBeTruthy();
+});
+
 test("a credential provided externally says so, by its variable, and offers no rotation", () => {
   const base = datadogAnswer().seats[2]!.lanes.datadog!;
   draw(
@@ -854,7 +890,11 @@ test("an agent that left the company offers to remove its account", () => {
   const data = datadogAnswer();
   data.seats.push({
     ...seat("ops", "Ops", {
-      datadog: { ...offLane("r-ro"), observed: { exists: true, enabled: false } },
+      datadog: {
+        ...offLane("r-ro"),
+        observed: { exists: true, enabled: false },
+        status: "departed",
+      },
     }),
     departed: true,
   });

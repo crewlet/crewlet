@@ -97,6 +97,7 @@ const nobody: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  assistantReadsImages: false,
   chatVendors: [],
 };
 const ada: ViewerState = {

@@ -94,8 +94,8 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 			(id, subject_kind, subject_id, project_key, kind, actor, actor_kind,
 			 operator_id, comment_id, excerpt, fields_json, turn_id,
 			 notified, late, log_seq, log_stream, log_generation, created_at,
-			 broker_at, effective_at, skew_ms, document, actor_apps)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			 broker_at, effective_at, skew_ms, document, actor_apps, working_for)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (id) DO NOTHING`,
 		historyID(c), string(subject.Kind), subject.ID, keys.Project, kind,
 		c.record.Actor, string(c.record.ActorKind), c.record.OperatorID,
@@ -103,7 +103,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 		notified, late, c.packed, c.position.Stream, c.position.Generation,
 		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt),
 		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation),
-		appsColumn(c.record))
+		appsColumn(c.record), workingForColumn(c.record))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: write the history row at %s: %w", c.position, err)
 	}
@@ -522,6 +522,23 @@ func appsColumn(record MutationRecord) string {
 		return ""
 	}
 	return jsonOf(record.ActorApps)
+}
+
+// workingForColumn is whom a record was written for as
+// `tracker_history.working_for` holds it: the carrier's JSON from a record at
+// [WorkingForVersion] or above that carries one, and NULL for every other, so
+// every node writes the same row (ADR-0109).
+//
+// KEPT FROM THE CARRIER'S FIRST BUILD ON, though nothing reads it yet: a
+// replicated migration runs on each node when it opens, not at a log
+// position, so a column a later build added and filled would hold NULL for
+// the records a node applied before it upgraded and the carrier for the same
+// records on a node that applied them after.
+func workingForColumn(record MutationRecord) any {
+	if record.V < WorkingForVersion || record.WorkingFor == nil {
+		return nil
+	}
+	return jsonOf(record.WorkingFor)
 }
 
 // noticesWoke is who a record's change woke, for its notice rows to keep: nil,

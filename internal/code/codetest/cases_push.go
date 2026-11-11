@@ -161,7 +161,7 @@ func aClientThatHangsUpLeavesNoScratch(t *testing.T, newFleet NewFleet) {
 	close(held)
 	for _, n := range c.Fleet.Nodes() {
 		scratch := filepath.Join(n.CacheDir(), "scratch")
-		if !within(10*time.Second, func() bool { return emptyDir(scratch) }) {
+		if !within(cleanupWait, func() bool { return emptyDir(scratch) }) {
 			t.Errorf("%s's scratch/ still holds %v after the client hung up", n.ID(), entries(scratch))
 		}
 	}

@@ -24,14 +24,16 @@ import (
 // not in the trash, past its start date if it has one, waiting on no open
 // blocker, and not held on a question the seat itself asked on it and nobody
 // has answered yet. `in_review` is ready on the same terms for the seat that
-// holds it when somebody else moved it into review: a seat never reviews what
-// it submitted itself.
+// holds it: as its review when somebody else moved it into review, and, when
+// the seat moved it there itself, as a review nobody holds (a seat never
+// reviews what it submitted itself, so it acts on the review it was given or
+// names a reviewer).
 //
 // # The order
 //
-// Started work first, then the reviews the seat holds, then its priority list
-// in its lead's order, then the queue: priority, then due date, the order
-// `my_work` lists `assigned` in.
+// Started work first, then the reviews the seat holds, then its own items in
+// review that nobody reviews, then its priority list in its lead's order, then
+// the queue: priority, then due date, the order `my_work` lists `assigned` in.
 //
 // # What a pickup keys on, and whom its turn works for
 //
@@ -92,6 +94,10 @@ type ReadyItem struct {
 	// whatever kind its record ended with ([readyAssignedArm]), else the
 	// writer that filed it; nil for the seat's own work.
 	For *types.WorkingFor `json:"for,omitempty"`
+
+	// SubmittedBy is who moved an item in review into review (or filed it
+	// there): the review's asker, the seat itself on one nobody reviews.
+	SubmittedBy string `json:"submitted_by,omitempty"`
 }
 
 // ReadyWork is one page of a seat's ready items in pickup order.
@@ -184,7 +190,7 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 		blocks[i] = rows
 		out.Capped = out.Capped || more != ""
 	}
-	reviews, err := theirReviews(ctx, tx, q.Handle, blocks[1])
+	reviews, own, err := readyReviews(ctx, tx, q.Handle, blocks[1])
 	if err != nil {
 		return err
 	}
@@ -192,7 +198,7 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err != nil {
 		return err
 	}
-	all := orderReady(blocks[0], reviews, blocks[2], person.Priorities)
+	all := orderReady(blocks[0], reviews, own, blocks[2], person.Priorities)
 	out.Total = len(all)
 	out.Fingerprint = fingerprintOf(all)
 	from := min(q.Page*ReadyRows, len(all))
@@ -253,12 +259,14 @@ func loadProgressed(ctx context.Context, tx *sql.Tx, handle string, items []Read
 // readyLastWordArm is the seat's own last write to one item after the change
 // that last woke it (its log position) and the start it waited until (its
 // instant), and whether that write is a typed answer. A creation, a change of
-// who watches and a write that changed nothing are no answer at all.
+// who watches and nothing else, and a write that changed nothing are no
+// answer at all; a watch written beside a change is that change
+// ([movedBeyondWatch]).
 const readyLastWordArm = `SELECT h.subject_id, h.log_seq, h.created_at, ` + typedWrite + `
 	FROM tracker_history h
 	WHERE h.subject_id = ? AND h.actor = ? AND h.log_seq > ? AND h.created_at >= ?
-	  AND h.kind NOT IN ('` + string(ChangeCreated) + `', '` + string(ChangeWatchers) + `')
-	  AND (h.fields_json <> '{}' OR h.kind IN ` + conversationKinds + `)
+	  AND h.kind <> '` + string(ChangeCreated) + `'
+	  AND (` + movedBeyondWatch + ` OR h.kind IN ` + conversationKinds + `)
 	ORDER BY h.log_seq DESC LIMIT 1`
 
 // loadQuiet stamps each item with when it went quiet for the seat: the latest
@@ -316,15 +324,21 @@ func loadQuiet(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem
 }
 
 // orderReady is the pickup order over the blocks and the priority list:
-// started work in queue order, then the reviews the seat holds, then the
-// waiting items the list names in its order, then the rest in queue order.
-func orderReady(started, reviews, waiting []TaskRow, priorities []string) []ReadyItem {
-	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(waiting))
+// started work in queue order, then the reviews the seat holds, then its own
+// items in review nobody reviews, then the waiting items the list names in its
+// order, then the rest in queue order.
+func orderReady(started []TaskRow, reviews, own []reviewRow, waiting []TaskRow,
+	priorities []string) []ReadyItem {
+
+	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(waiting))
 	for _, row := range started {
 		out = append(out, ReadyItem{TaskRow: row, Why: types.PickupInProgress})
 	}
-	for _, row := range reviews {
-		out = append(out, ReadyItem{TaskRow: row, Why: types.PickupReview})
+	for _, r := range reviews {
+		out = append(out, ReadyItem{TaskRow: r.TaskRow, Why: types.PickupReview, SubmittedBy: r.by})
+	}
+	for _, r := range own {
+		out = append(out, ReadyItem{TaskRow: r.TaskRow, Why: types.PickupUnreviewed, SubmittedBy: r.by})
 	}
 	listed := make(map[string]bool, len(priorities))
 	byID := make(map[string]TaskRow, len(waiting))
@@ -368,11 +382,22 @@ const readyReviewArm = `SELECT h.subject_id, h.actor FROM tracker_history h
 	  AND (json_extract(h.fields_json, '$.status.to') IS NOT NULL OR h.kind = 'created')
 	ORDER BY h.log_seq DESC LIMIT 1`
 
-// theirReviews is the items in review handle holds that somebody else moved
-// into review: a seat never reviews what it submitted itself.
-func theirReviews(ctx context.Context, tx *sql.Tx, handle string, inReview []TaskRow) ([]TaskRow, error) {
+// reviewRow is an item in review and who moved it there.
+type reviewRow struct {
+	TaskRow
+	by string
+}
+
+// readyReviews splits the items in review handle holds by who moved them into
+// review: somebody else's are its reviews, and its own are reviews nobody
+// holds, since a seat never reviews what it submitted itself. Either way none
+// is held on a question the seat asked ([readyBlock]), which is how a review
+// put to a person waits on them.
+func readyReviews(ctx context.Context, tx *sql.Tx, handle string,
+	inReview []TaskRow) (reviews, own []reviewRow, err error) {
+
 	if len(inReview) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	args := make([]any, 0, len(inReview))
 	for _, row := range inReview {
@@ -380,27 +405,31 @@ func theirReviews(ctx context.Context, tx *sql.Tx, handle string, inReview []Tas
 	}
 	rows, err := tx.QueryContext(ctx, arms(len(inReview), readyReviewArm), args...)
 	if err != nil {
-		return nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
+		return nil, nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
 	}
 	defer rows.Close()
 	askedBy := make(map[string]string, len(inReview))
 	for rows.Next() {
 		var id, actor string
 		if err := rows.Scan(&id, &actor); err != nil {
-			return nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
+			return nil, nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
 		}
 		askedBy[id] = actor
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
+		return nil, nil, fmt.Errorf("worklet: read who asked for %s's reviews: %w", handle, err)
 	}
-	out := make([]TaskRow, 0, len(inReview))
 	for _, row := range inReview {
-		if by, known := askedBy[row.ID]; known && by != handle {
-			out = append(out, row)
+		by, known := askedBy[row.ID]
+		switch {
+		case !known:
+		case by != handle:
+			reviews = append(reviews, reviewRow{row, by})
+		default:
+			own = append(own, reviewRow{row, by})
 		}
 	}
-	return out, nil
+	return reviews, own, nil
 }
 
 // readyFirstArm is one item's first change, the creation the seat made itself.

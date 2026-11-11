@@ -635,10 +635,14 @@ the last word anybody said about that item.
   the seat itself asked on the item that nobody has answered. Work in review
   is ready on the same terms for the seat that holds it when somebody else
   moved it into review (or filed it there): a seat handed a review takes it up,
-  and never reviews what it submitted itself.
+  and the pickup names who asked for it. A seat never reviews what it submitted
+  itself: its own item in review is ready for it only while nobody reviews it
+  (no question of its own is open on the item), and the pickup says so, so it
+  acts on the review it was given or names a reviewer ([ADR-0124](../../adr/0124-a-question-and-a-review-say-whom-they-wait-on.md)).
 - **Next** is work the seat already started first, then the reviews it holds,
-  then its priority list in the order its lead set, then the rest by priority
-  and due date, the order `my_work` lists them in.
+  then its own items in review nobody reviews, then its priority list in the
+  order its lead set, then the rest by priority and due date, the order
+  `my_work` lists them in.
 - **Once per item version.** A pickup is made once per seat, item, last change
   to the item that would have woken the seat, status and, for started work, the
   seat's own last progress on it other than a comment. That change is the
@@ -680,7 +684,11 @@ the last word anybody said about that item.
   item already has moves nothing and is none. A seat the organisation no
   longer holds is worked for as a stranger, and a write an older build
   recorded carries no apps. Work the seat filed for itself is worked as its
-  own.
+  own. An agent's assignment made in a turn somebody woke is the
+  exception for now: the turn the assignment wakes works for that somebody,
+  but the pickup reads only the history row's writer, the agent, until
+  crewlet#798's piece 4b-ii reads its `working_for`, which the row already
+  keeps.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under

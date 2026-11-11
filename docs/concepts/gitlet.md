@@ -5030,14 +5030,20 @@ a revocation since the ask applies and a credential is narrowed again, never
 widened. The answer wakes the asking seat in a turn worked for them too, and a
 chain of asks carries them end to end
 ([ADR-0109](https://github.com/crewlet/crewlet/blob/main/adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
-**What a seat writes that wakes another seat does not carry them yet**: a
-work item it files or assigns, a comment, a page or a mention in it, and a
-Chatlet message each wake their seat in a turn worked for the seat that
-wrote them (crewlet#798's fourth piece). Nor does the ceiling reach what a
-seat already holds: its memory, or what it read in a turn nobody woke. What a
-seat was refused for somebody can therefore still reach them through such a
-write or the seat's own memory: the ceiling decides what a turn reads for
-somebody, not what a seat may go on to tell them.
+**So does what a seat writes on Worklet, Doclet and Chatlet**: a work item it
+files or assigns, a comment, a page or a comment on one, and a Chatlet message
+each wake their seat in a turn worked for whoever the writing turn worked for
+([An agent uses only the apps of the person it works
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
+**What Gitlet records does not carry them yet**: a change, a review, a comment
+on a change and the merge queue's close of a landed change's work item each
+wake their seat in a turn worked for the seat that wrote them, until
+crewlet#798's piece 4c carries the requester on code's records; nor does what
+a seat writes on a vendor's surface. Nor does the ceiling reach what a seat
+already holds: its memory, or what it read in a turn nobody woke. What a seat
+was refused for somebody can therefore still reach them through such a write
+or the seat's own memory: the ceiling decides what a turn reads for somebody,
+not what a seat may go on to tell them.
 
 ### Writes made for somebody else
 

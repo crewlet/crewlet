@@ -595,7 +595,7 @@ func TestAnAgentsAccessChangeIsDetailedOnlyToASetupReader(t *testing.T) {
 	}}
 	sources := viewerSources(t, work)
 	sources.Access = pendingReviews{pending: accessreview.Pending{Baseline: "t-1", Digest: "d",
-		ChangedAt: askedAt.Add(time.Hour), Lines: []string{"SSH: its level is now Read (was Operate)."}}}
+		ChangedAt: askedAt.Add(time.Hour), Lines: []string{"SSH: its Crewlet grant now sets its level to Read (was Operate)."}}}
 	noteOf := func(got any, err error) *queries.AccessChanged {
 		t.Helper()
 		if err != nil {

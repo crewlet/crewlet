@@ -1052,3 +1052,20 @@ test("the sync fact says when the next sync is, and never puts it in the past", 
   expect(syncWords(at(-30), at(-20), now)).toBe("30m ago · next overdue by 20m");
   expect(syncWords(null, null, now)).toBe("Not yet");
 });
+
+// THE HEADER'S CLOCK IS A CHECK: Check now moves it without applying anything,
+// so it never shares a word with an agent row's last applied sync.
+test("the integration's clock reads Last check", async () => {
+  const { integrationFacts } = await import("./catalogue.tsx");
+  const entry: Entry = {
+    key: "github",
+    name: "GitHub",
+    description: "Code and pull requests",
+    vendor: "github",
+    surfaces: [{ key: "github", name: "GitHub" }],
+    doc: "github",
+  };
+  const labels = integrationFacts(entry, new Map(), { known: true }).map((f) => f.label);
+  expect(labels).toContain("Last check");
+  expect(labels).not.toContain("Sync");
+});

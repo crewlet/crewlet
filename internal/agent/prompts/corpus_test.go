@@ -126,8 +126,9 @@ func richExecutorInput() ExecutorInput {
 		PersonalMemory:      "# Diary\n- Ana likes threads",
 		RelevantKnowledge:   "## Runbook: deploys\n1. tag\n2. ship 🚢",
 		ThreadContext:       "- Ana: ## not a heading of ours\n- Bo: ok",
+		OpenAsks:            "To Ana Lind (ana), 1 open:\n- ACME-12 \"Ship it\": \"Merge now?\"",
 		Access: "## Your access\nWhat you can reach with your own credentials now.\n" +
-			"- GitHub (acme/api): Contents Read and write. Not granted: Workflows.",
+			"- GitHub (acme/api): Contents Read and write. Not in your Crewlet grant: Workflows.",
 	}
 }
 
@@ -166,6 +167,6 @@ func richUserMessage() UserMessage {
 		Endings: endingsHeader + "\n\n### Turn t-1, which ended 2026-10-01T09:00:00Z\nIt completed.\n" +
 			"What its reviewer said landed:\n\"## Done ✅\"",
 		CapabilityChanges: "## What changed since your last turn\nYour access changed.\n" +
-			"- Cloudflare: your level is now Secure (was Operate).",
+			"- Cloudflare: your Crewlet grant now sets your level to Secure (was Operate).",
 	}
 }

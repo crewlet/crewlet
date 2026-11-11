@@ -83,6 +83,7 @@ func TestAMentionAndANewAssigneeAreAddressed(t *testing.T) {
 	n := &worklet.Notify{
 		Kind:     worklet.ChangeAssignee,
 		Mentions: []string{"ana"},
+		Fields:   map[string]worklet.Delta{"assignee": {To: "bo"}},
 		Snapshot: worklet.Snapshot{Assignee: "bo"},
 	}
 	reached := 0
@@ -416,6 +417,7 @@ func TestAnAssignmentToTheHolderConcernsNobody(t *testing.T) {
 		t.Errorf("an assignment to the holder concerns %+v, want nobody", got)
 	}
 	moved := &worklet.Notify{Kind: worklet.ChangeAssignee,
+		Fields:   map[string]worklet.Delta{"assignee": {From: "ana", To: "bo"}},
 		Snapshot: worklet.Snapshot{Assignee: "bo", PrevAssignee: "ana", Reporter: "pm"}}
 	if heard, ok := worklet.CandidateFor(moved, "bo"); !ok || !heard.Wakes || !heard.Addressed {
 		t.Errorf("the new holder of a real reassignment hears %+v, want woken and asked", heard)

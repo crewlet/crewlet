@@ -473,7 +473,10 @@ func inputRoots() map[reflect.Type]string {
 // inputTypes is every type reachable from [inputRoots] the way the encoder
 // reaches one — through a pointer, a slice, an array and a map's values, and
 // every field it carries — with the root it was reached from. A type that
-// writes its own encoding is reached, and nothing inside it.
+// writes or reads its own encoding ([encodesItself]) is reached, and nothing
+// inside it; but the actors decode themselves through the caller's own decoder
+// and have no encoder, so what crosses of them is their plain encoding
+// ([plainlyEncoded]), and they are walked into as any struct is.
 func inputTypes() map[reflect.Type]string {
 	found := map[reflect.Type]string{}
 	var walk func(ty reflect.Type, from string)
@@ -482,8 +485,7 @@ func inputTypes() map[reflect.Type]string {
 			return
 		}
 		found[ty] = from
-		if ty.Implements(reflect.TypeFor[json.Marshaler]()) ||
-			reflect.PointerTo(ty).Implements(reflect.TypeFor[json.Marshaler]()) {
+		if encodesItself(ty) {
 			return
 		}
 		switch ty.Kind() {
@@ -524,8 +526,7 @@ func TestEveryFieldAnOperationTakesLeavesTheWireAtItsZero(t *testing.T) {
 	for _, ty := range slices.SortedFunc(maps.Keys(types), func(a, b reflect.Type) int {
 		return strings.Compare(a.String(), b.String())
 	}) {
-		if ty.Kind() != reflect.Struct || ty.Implements(reflect.TypeFor[json.Marshaler]()) ||
-			reflect.PointerTo(ty).Implements(reflect.TypeFor[json.Marshaler]()) {
+		if ty.Kind() != reflect.Struct || encodesItself(ty) {
 			continue
 		}
 		structs++
@@ -582,6 +583,10 @@ var zeroByMethod = map[string]string{
 	"code.HumanPathMatch.Waived": "an empty list and none are one answer to the decide, which reads its length",
 	"objstore.Key":               "Go's own zero: its method compares the key with Key{}",
 	"artifacts.ID":               "Go's own zero: its method compares the id with ID{}",
+	"types.WrittenFor": "a carrier of nobody, stated or not: the asking node refuses an agent's " +
+		"actor that states nothing before anything is asked (estate's actorWrites), and the serving " +
+		"node reads the absence as stated nobody (each actor's UnmarshalJSONFrom calls " +
+		"types.WrittenFor.Received), which is what a build without the field sends",
 }
 
 // isZeroer is a type with an IsZero method of its own, which the encoder asks
@@ -807,6 +812,25 @@ var decodesItself = map[string]string{
 	"time.Time": "an RFC 3339 string: it holds no member to drop",
 	"jsontext.Value": "json.RawMessage: the bytes as their writer wrote them — a datastore " +
 		"document, a canonical snapshot — which are data, and which nothing on the wire decodes",
+	"estate.Actor": "refuses one there too: it decodes through the decoder it is handed " +
+		"(jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own error, " +
+		"so the wire's rule refuses a member its build does not declare inside it, its provenance " +
+		"or its carrier, as anywhere; all it adds is that whom its writes are for was stated " +
+		"(types.WrittenFor.Received)",
+	"doclet.Actor": "refuses one there too: it decodes through the decoder it is handed " +
+		"(jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own error, " +
+		"so the wire's rule refuses a member its build does not declare inside it or its carrier, " +
+		"as anywhere in a page write's arguments; all it adds is that whom its writes are for was " +
+		"stated (types.WrittenFor.Received)",
+	"chatlet.Actor": "refuses one there too: it decodes through the decoder it is handed " +
+		"(jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own error, " +
+		"so the wire's rule refuses a member its build does not declare inside it or its carrier, " +
+		"as anywhere in a chat gesture's arguments; all it adds is that whom its writes are for was " +
+		"stated (types.WrittenFor.Received)",
+	"types.WrittenFor": "refuses one there too: it decodes its carrier through the decoder it is " +
+		"handed (jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own " +
+		"error, so the wire's rule refuses a member the carrier does not declare inside it, as " +
+		"anywhere; all it adds is that the carrier was stated",
 }
 
 // NO TYPE AN OPERATION TAKES DECODES A KEY AWAY BY ITSELF. The wire's rule
@@ -814,7 +838,9 @@ var decodesItself = map[string]string{
 // and a type with an UnmarshalJSON of its own is a depth it does not: such a
 // method decoding an object with a plain json.Unmarshal would drop a newer
 // build's key with nothing to say so. Each one is named with why it cannot —
-// it decodes no object, or keeps what it does not know and writes it back.
+// it decodes no object, it decodes through the caller's own decoder so the
+// rule refuses such a key inside it too, or it keeps what it does not know and
+// writes it back.
 //
 // Mutation: delete time.Time from decodesItself and the gate names it.
 func TestNoTypeAnOperationTakesDecodesAKeyAwayByItself(t *testing.T) {

@@ -868,8 +868,9 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_integrations", Phrase: "read integration health",
-			Description: "Administrators: every integration's state, its traffic and the last " +
-				"thing its reconcile said.",
+			Description: "Administrators: every integration's state, its traffic, when its " +
+				"reconcile last checked it (Check now included) and the titles of what that " +
+				"check found. One agent's access at one integration is " + seatAccessReadTool + ".",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /integrations"}, Apps: adminOnly,
 			Build: func(map[string]any) (exec.Request, error) {
@@ -881,10 +882,13 @@ func readTools() []Tool {
 					col("enabled", "Enabled", "enabled", tText),
 					col("inbound", "Deliveries", "inbound", tNumber),
 					col("last", "Last delivery", "last_at", tDatetime),
-					col("phase", "State", "reconcile.phase_label", tText)},
+					col("phase", "State", "reconcile.phase_label", tText),
+					col("checked", "Last check", "reconcile.last_attempt_at", tDatetime),
+					col("findings", "Findings", "reconcile.findings", tText)},
 				Open: &cards.Open{Screen: "integrations"}}}),
 			Label: func(map[string]any) string { return "Reading integration health" },
 		},
+		seatAccessRead(),
 		{
 			Name: "get_fleet_health", Phrase: "read the fleet's health",
 			Description: "Administrators: the nodes and their configuration rollout, each MCP " +

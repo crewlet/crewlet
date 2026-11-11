@@ -151,7 +151,7 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	cmd.Stdout, cmd.Stderr = outW, errW
 	cmd.ExtraFiles = []*os.File{traceW}
 
-	start := time.Now()
+	start := p.now()
 	if err = cmd.Start(); err != nil {
 		closeAll(outR, outW, errR, errW, traceR, traceW, inR, inW)
 		return Result{}, fmt.Errorf("gitproc: starting git %s: %w", c.Args[0], err)
@@ -223,7 +223,7 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	}
 	w := p.watch(ctx, c, leader, cmd.Process, moved, lent)
 	waitErr := cmd.Wait()
-	reaped := time.Now()
+	reaped := p.now()
 	close(w.reaped)
 	<-w.done
 
@@ -460,17 +460,24 @@ func (p *Pool) watch(ctx context.Context, c Cmd, leader procgroup.Leader, proc *
 // that ignored the first spent through the grace.
 func (p *Pool) kill(c Cmd, leader procgroup.Leader, proc *os.Process, reaped <-chan struct{}, spent *time.Duration) {
 	p.signal(c, leader, "TERM", p.counted(c, spent, procgroup.Terminate))
-	grace := time.NewTimer(p.killGrace)
-	defer grace.Stop()
+	grace, stop := p.grace(p.killGrace)
+	defer stop()
 	select {
 	case <-reaped:
 		return
-	case <-grace.C:
+	case <-grace:
 	}
 	p.signal(c, leader, "KILL", p.counted(c, spent, procgroup.Kill))
 	// The handle, not the pid: os.Process knows when it was waited on, so
 	// this can never reach a recycled pid.
 	_ = proc.Kill()
+}
+
+// timer is the wait a pool arms in production (Pool.grace): a time.Timer's
+// channel, and its Stop.
+func timer(d time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(d)
+	return t.C, t.Stop
 }
 
 // signal sends to the group only once procgroup has confirmed it is still the
@@ -535,6 +542,9 @@ func (p *Pool) drain(c Cmd, copiers []*copier) {
 	tick := time.NewTicker(max(p.killGrace/4, time.Millisecond))
 	defer tick.Stop()
 	for _, cp := range copiers {
+		if p.draining != nil {
+			p.draining(cp.stream)
+		}
 		for waiting := true; waiting; {
 			select {
 			case <-cp.done:
