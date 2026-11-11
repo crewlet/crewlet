@@ -28,8 +28,19 @@ import (
 
 // supervisedBridge is a bridge with sup, its servers stopped at cleanup, and
 // its log recorded.
+//
+// ITS CHILDREN STOP BEFORE THE CASE'S DIRECTORY GOES. The first t.TempDir of
+// a test registers the test's one RemoveAll, and cleanups run last-registered
+// first. A case that took its first TempDir after this helper registered
+// StopAll — countedSpec does, for the file its children count their starts
+// in — had its directory removed while the bridge still supervised them, and
+// a child the supervisor restarted then re-created that file between its
+// unlink and its directory's, failing the removal (#982). So this helper
+// takes a TempDir first: that RemoveAll is registered before StopAll, and runs
+// after every child has stopped, whichever case's helpers come next.
 func supervisedBridge(t *testing.T, sup Supervision) (*Bridge, *logRecorder) {
 	t.Helper()
+	_ = t.TempDir()
 	log, rec := recorder()
 	b := NewBridge(log, sup)
 	t.Cleanup(func() {
