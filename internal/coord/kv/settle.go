@@ -25,7 +25,8 @@
 // Every bucket handle this package holds is [settled]: its conditional writes
 // go through [jsinflight.Decide], which retries the IDENTICAL publish while the
 // answer is in flight, within the write's own deadline or — when it has none —
-// the client's DefaultTimeout, the patience the publish it replaces was given.
+// the client's DefaultTimeout for each attempt (internal/jsapi's Budget), the
+// patience the publish it replaces was given.
 // A write still undecided at the end comes back as [jsinflight.Undecided],
 // which wraps the context error and never the mismatch, so it reaches every
 // caller as UNKNOWN rather than as a race somebody else won. That is also why
@@ -44,10 +45,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsinflight"
 )
 
@@ -56,9 +57,9 @@ import (
 type settledBucket struct {
 	jetstream.KeyValue
 
-	// timeout bounds a write whose caller set no deadline: the client's own
-	// DefaultTimeout, which is what it applies to a publish.
-	timeout time.Duration
+	// js is the client the bucket was opened on, whose DefaultTimeout bounds
+	// a write whose caller set no deadline, as the client bounds a publish.
+	js jetstream.JetStream
 }
 
 // settled wraps a bucket this node has opened. A handle already settled is
@@ -67,7 +68,7 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue) jetstream.KeyValue {
 	if _, done := kv.(settledBucket); done {
 		return kv
 	}
-	return settledBucket{KeyValue: kv, timeout: js.Options().DefaultTimeout}
+	return settledBucket{KeyValue: kv, js: js}
 }
 
 // Update writes a value only while the key is still at revision, SETTLED.
@@ -100,7 +101,12 @@ func (b settledBucket) Purge(ctx context.Context, key string, opts ...jetstream.
 // A write that names no revision is never answered in flight, so it runs once.
 // The op and key name an undecided write in its error.
 func (b settledBucket) settle(ctx context.Context, op, key string, write func(context.Context) error) error {
-	err := jsinflight.Decide(ctx, b.timeout, write)
+	sends := jsapi.Budget(b.js, 0)
+	err := jsinflight.Decide(ctx, sends, func(ctx context.Context) error {
+		send, done := sends.Next(ctx)
+		defer done()
+		return write(send)
+	})
 	var undecided *jsinflight.Undecided
 	if errors.As(err, &undecided) {
 		return fmt.Errorf("coord/kv: %s %s in %s: %w", op, key, b.Bucket(), err)

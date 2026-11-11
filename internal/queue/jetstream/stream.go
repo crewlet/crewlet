@@ -73,23 +73,40 @@
 // A write here — a Publish, a dead letter's keep (KeepDeadLetter, or the
 // delivery budget's), a state log's Append — returns once its stream has
 // acknowledged it, and the stream acknowledges a message only once its last
-// byte is in. A member's own connection reaches its broker in its own
-// process, but a leaf's crosses its link to the members and an external
-// cluster's client crosses the network to it, and the engine allows such a
-// link to be as slow as the object store's floor, a mebibyte in thirty
-// seconds (objstore.MiBPace) — the pace a read of a large message across the
-// same link is already given (DomainLog.At, the dead letters' frames). So a
-// write whose caller set no deadline waits the request term
-// (jsapi.RequestTerm, five seconds) and, where its connection crosses a link,
-// its bytes at that pace (jsapi.WriteBound): a write at the transport's
-// eight-mebibyte ceiling waits five seconds and about four minutes before it
-// reads as an outage, which is the price of never mistaking a slow link for a
-// dead broker. Held to the five seconds alone, such a write could not be
-// acknowledged on any link slower than 1.6 MiB/s and failed as
-// queue.ErrUnavailable while the link was still carrying it — and a keeper
-// retries an unavailable broker for ever, each copy of the entry crossing and
-// landing behind the last (crewlet/crewlet#1005). A caller's own deadline is
-// kept, never extended: a caller that cannot wait for a slow link says so.
+// byte is in. A member's own connection reaches its broker in its own process,
+// but a leaf's crosses its link to the members and an external cluster's
+// client crosses the network to it, and the engine allows such a link to be as
+// slow as the object store's floor, a mebibyte in thirty seconds
+// (objstore.MiBPace). The connection's pace is decided once, where it is made
+// (linkPaceOf), and every crossing on it reads it: a read's reply (DomainLog.At,
+// the dead letters' frames) and a write's request alike. So a write whose
+// caller set no deadline waits the request term (jsapi.RequestTerm, five
+// seconds) and, where its connection crosses a link, its bytes at that pace
+// for every time it is sent (Queue.writing, jsapi.Budget): a write is sent
+// again — the client's own re-sends turned off and made here, so each is a
+// send of the queue's (sendWithin) — where nobody heard it, and an append again
+// where the leader refused it while another write to its subject was in
+// flight, and each send carries the whole message across the link again. A
+// caller's own deadline is kept, never extended: a caller that cannot wait for
+// a slow link says so.
+//
+// Held to the five seconds alone, a write at the transport's eight-mebibyte
+// ceiling could not be acknowledged on any link slower than 1.6 MiB/s and
+// failed as queue.ErrUnavailable while the link was still carrying it — and a
+// keeper retries an unavailable broker for ever, each copy of the entry
+// crossing and landing behind the last (crewlet/crewlet#1005).
+//
+// WHAT THAT GIVES, AND WHAT IT DOES NOT. A write is given its own bytes at the
+// floor, so a link that carries it alone at the floor or faster never fails
+// it. A link slower than the floor still fails it, and so can a link busy
+// with something ahead of it — another large write, an object store put's
+// window — whose bytes no budget here counts. And the worst case is long, and
+// not only for the write: one at the ceiling across a link at the floor waits
+// five seconds and about four minutes more before it reads as an outage, and
+// everything the node sends behind it on that link waits as long — its lease
+// renewals among them, which at the shipped lease lapse long before it is in.
+// That is a defect of its own (crewlet/crewlet#1035), which these budgets do
+// not fix.
 //
 // # A pull allocates for what it receives, never for what it may
 //

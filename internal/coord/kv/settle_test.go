@@ -11,6 +11,17 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// termed is a client whose every request waits term where its caller set no
+// deadline: what a settled bucket asks of the client it was opened on.
+type termed struct {
+	jetstream.JetStream
+	term time.Duration
+}
+
+func (c termed) Options() jetstream.JetStreamOptions {
+	return jetstream.JetStreamOptions{DefaultTimeout: c.term}
+}
+
 // scripted is a bucket's client handle whose conditional writes answer from a
 // script, one answer per attempt, and which counts the attempts. An answer of
 // nil hands the write to the bucket underneath, when there is one.
@@ -75,7 +86,7 @@ func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 	decided := refusedAs(jetstream.JSErrCodeStreamWrongLastSequence)
 	bucket := func(answers ...error) (settledBucket, *scripted) {
 		s := &scripted{answers: answers}
-		return settledBucket{KeyValue: s, timeout: time.Minute}, s
+		return settledBucket{KeyValue: s, js: termed{term: time.Minute}}, s
 	}
 
 	t.Run("in flight, then landed", func(t *testing.T) {
@@ -184,7 +195,7 @@ func TestACreateWaitsOutTheLeadersInFlightAnswer(t *testing.T) {
 		KeyValue: underneath.KeyValue,
 		answers:  []error{refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)},
 	}
-	if _, err := createKey(ctx, f.js, settledBucket{KeyValue: s, timeout: time.Minute},
+	if _, err := createKey(ctx, f.js, settledBucket{KeyValue: s, js: termed{term: time.Minute}},
 		"turn-1", []byte(`{"n":1}`)); err != nil {
 		t.Fatalf("createKey = %v, want it written once the write ahead settled", err)
 	}

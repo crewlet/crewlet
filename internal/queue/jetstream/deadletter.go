@@ -13,7 +13,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -119,16 +118,14 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject string, header, body
 	}
 	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
 	// deadline: the request term, and across a link the time the entry takes
-	// at the slowest pace allowed ([jsapi.WriteBound]) — counted as the
-	// contract bounds it, its header and body and the framing a keep is held
-	// to beside them ([queue.LetterFraming]). An entry at the ceiling is
-	// about four minutes at that pace, and held to the request term alone it
-	// failed as an outage its keeper retried for ever while the link carried
-	// each copy. Classified on the CALLER's context, so a bound this set and
-	// the broker outlasted reads as the silence it is.
-	sending, stop := jsapi.Writing(ctx, q.js, len(header)+len(body)+queue.LetterFraming, q.linkPace())
-	defer stop()
-	if _, err := q.js.PublishMsg(sending, letterMsg(subject, stream, header, body)); err != nil {
+	// at the connection's pace, each time it is sent ([Queue.write]) —
+	// counted off the message as it is sent, its header block and its body
+	// ([letterMsg]). An entry at the ceiling is about four minutes at the
+	// slowest pace allowed, and held to the request term alone it failed as an
+	// outage its keeper retried for ever while the link carried each copy.
+	// Classified on the CALLER's context, so a budget this set and the broker
+	// outlasted reads as the silence it is.
+	if err := q.write(ctx, letterMsg(subject, stream, header, body)); err != nil {
 		// TRANSLATED, for Publish's reason: too large is the one refusal
 		// no retry changes, and nats.ErrMaxPayload is this backend's
 		// private word for it — met here only on a server announcing less
@@ -151,7 +148,8 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject string, header, body
 // arranged differently — a namespace another stream also claims — refuses the
 // entry rather than storing it where no listing reads. Written here rather than
 // through the option so the message this returns is the whole of what crosses
-// the wire, which the framing's test measures against [queue.LetterFraming].
+// the wire, which the framing's test measures against [queue.LetterFraming]
+// and the keep's budget counts ([carried]).
 func letterMsg(subject, stream string, header, body []byte) *nats.Msg {
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.ExpectedStreamHeader, stream)
@@ -364,7 +362,7 @@ type letterStream struct {
 // subject outside the namespace, provisioned through the one door every verb
 // passes ([Queue.streamFor]), and read from its leader with a term that covers
 // an entry as large as the transport carries where the connection crosses a
-// link ([Queue.recordCrossing]'s reason).
+// link, at the connection's one pace ([Queue.recordCrossing]'s reason).
 func (q *Queue) deadLetters(ctx context.Context, subject string) (letterStream, error) {
 	if err := deadLetterSubject(subject); err != nil {
 		return letterStream{}, err
@@ -381,8 +379,8 @@ func (q *Queue) deadLetters(ctx context.Context, subject string) (letterStream, 
 	if err != nil {
 		return letterStream{}, fmt.Errorf("jetstream: read the dead letters on %s: %w", subject, err)
 	}
-	if q.acrossLink() {
-		leader = leader.Carrying(int(q.nc.MaxPayload()), objstore.MiBPace)
+	if q.pace > 0 {
+		leader = leader.Carrying(int(q.nc.MaxPayload()), q.pace)
 	}
 	return letterStream{stream: stream, leader: leader, keep: spec.maxAge}, nil
 }

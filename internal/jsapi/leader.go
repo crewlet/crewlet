@@ -213,9 +213,9 @@ const replyOverhead = 1 << 10
 // Sending is how long the REQUEST of an acknowledged write — a publish that
 // carries a message of messageBytes, its header block and its payload — takes
 // to cross a link carrying a mebibyte in as long as pace: [Crossing]'s twin
-// for the other direction, and the time [WriteBound] gives a write beyond the
-// request term, since the stream acknowledges a message only once its last
-// byte is in.
+// for the other direction, and what a write is given beyond the request term
+// for every time it is sent ([WriteBound], [Budget]), since the stream
+// acknowledges a message only once its last byte is in.
 //
 // RAW, where a read's reply is not: a publish carries its message as it is,
 // behind the protocol line that names it ([requestOverhead]) — never

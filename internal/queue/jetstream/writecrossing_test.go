@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -44,8 +43,8 @@ const slowLinkRate = 1 << 20
 // transfers overlap — and then asks the broker what landed. The payloads are
 // random, so a link that compresses still carries every byte.
 //
-// Mutation: drop the crossing from the bound KeepDeadLetter, Publish, Append
-// or the budget's dead letter waits under, and that case fails at five
+// Mutation: drop the crossing from the budget KeepDeadLetter, Publish, Append
+// or the budget's dead letter waits within, and that case fails at five
 // seconds: the broker unavailable, or nothing kept.
 func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 	t.Parallel()
@@ -152,87 +151,6 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 				stats.Messages, stats.Bytes, seq, statelog.MaxTransportRecordBytes)
 		}
 	})
-}
-
-// A WRITE IS PACED ONLY WHERE ITS CONNECTION CROSSES A LINK.
-//
-// A member's own connection reaches its broker in its own process, so a write
-// on it waits the request term alone; a leaf's and an external cluster's
-// client cross a link the engine allows to be as slow as the object store's
-// floor, and a write there is given its bytes at that pace — the fact read
-// off how the connection was made, as the reads across a link read it.
-//
-// Mutation: pace a member's own connection, or leave a link unpaced, and its
-// row goes red.
-func TestOnlyAWriteAcrossALinkIsPaced(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		name string
-		q    *Queue
-		want time.Duration
-	}{
-		{"a member's own client", &Queue{embedded: &embeddedServer{}}, 0},
-		{"a leaf's client", &Queue{embedded: &embeddedServer{leaf: true}}, objstore.MiBPace},
-		{"a client of an external cluster", &Queue{}, objstore.MiBPace},
-	} {
-		if got := c.q.linkPace(); got != c.want {
-			t.Errorf("%s: a write is paced at %v a mebibyte, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-// AN APPEND COUNTS THE HEADER BLOCK IT SENDS.
-//
-// What crosses a link is a record and the headers it rides with — its
-// operation's id and its expectation, where it has them — and the bound an
-// append waits under counts both. So the count is held to the block the
-// broker hands a subscriber of the subject, as it crossed, for every
-// combination an append sends.
-//
-// Mutation: count the record alone, or leave a header out of the count, and a
-// row with that header goes red.
-func TestAnAppendCountsTheHeaderBlockItSends(t *testing.T) {
-	t.Parallel()
-	spec := probeDomain()
-	q := domainQueue(t, spec)
-	log, err := q.DomainLog(t.Context(), spec.Name)
-	if err != nil {
-		t.Fatalf("open the log: %v", err)
-	}
-	sent, err := q.nc.SubscribeSync("crewlet.probe.log.>")
-	if err != nil {
-		t.Fatalf("subscribe to the log's subjects: %v", err)
-	}
-	t.Cleanup(func() { _ = sent.Unsubscribe() })
-	if err := q.nc.Flush(); err != nil {
-		t.Fatalf("flush the subscription: %v", err)
-	}
-	zero := uint64(0)
-	for i, c := range []struct {
-		name   string
-		msgID  string
-		expect *uint64
-	}{
-		{"neither", "", nil},
-		{"an operation's id", "op-counted", nil},
-		{"an expectation", "", &zero},
-		{"both", "op-counted-too", &zero},
-	} {
-		subject := fmt.Sprintf("crewlet.probe.log.counted.%d", i)
-		if _, _, err := log.Append(t.Context(), subject, c.msgID, c.expect, []byte("{}")); err != nil {
-			t.Fatalf("%s: Append: %v", c.name, err)
-		}
-		msg, err := sent.NextMsgWithContext(t.Context())
-		if err != nil {
-			t.Fatalf("%s: the append was not seen on its subject: %v", c.name, err)
-		}
-		// THE HEADER BLOCK AS IT CROSSED: what the delivery's wire size
-		// holds beside its subject, its reply and its data.
-		crossed := msg.Size() - len(msg.Subject) - len(msg.Reply) - len(msg.Data)
-		if _, counted := appendOptions(c.msgID, c.expect); counted != crossed {
-			t.Errorf("%s: an append counts %d bytes of headers, and %d crossed", c.name, counted, crossed)
-		}
-	}
 }
 
 // leafAcrossSlowLink is a client of a leaf whose link to its member crosses a

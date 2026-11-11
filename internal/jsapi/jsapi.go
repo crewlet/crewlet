@@ -39,7 +39,6 @@
 package jsapi
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -109,10 +108,11 @@ func (a API) String() string {
 // # Five seconds, the engine's own
 //
 // The figure the client library defaults to, stated here rather than
-// inherited, because the engine is sized against it: a read asked as one
-// request keeps it as its bound ([Leader], [jsprovision.ReadBoundedWith]), a
+// inherited, because the engine is sized against it: a read that was one
+// request until it was hedged keeps it as its bound, and is asked at none, two
+// and four seconds inside it ([Leader], [jsprovision.ReadBoundedWith]); a
 // compare-and-set to a coordination bucket waits out a leader's in-flight
-// answer inside it (internal/jsinflight's Decide), and a boot's steps and a
+// answer inside it (internal/jsinflight's Decide); and a boot's steps and a
 // duty's tick count each call whose caller set no deadline at it. Inherited, a
 // library release that moved its default would move every one of those unseen.
 //
@@ -122,9 +122,10 @@ func (a API) String() string {
 //     answered in its own process, and a replicated one after one raft commit
 //     — about 1.5 ms on an idle loopback fleet (internal/jsinflight), tens
 //     under load, and a disk flush more where `stream.sync: always` asks for
-//     one. Five seconds is three orders of magnitude past that, so a request
-//     still unanswered then was sent to a leader that stepped down or died,
-//     or over a connection that went, and nobody is going to answer it.
+//     one. Five seconds is three orders of magnitude past an idle commit and
+//     about two past a loaded one, so a request still unanswered then was
+//     sent to a leader that stepped down or died, or over a connection that
+//     went, and nobody is going to answer it.
 //   - A write cannot be asked again as a read is — a second publish is a
 //     second write unless it carries a message id — so it holds its ONE
 //     request for the whole term, where a read is presumed lost after
@@ -135,7 +136,8 @@ func (a API) String() string {
 //     again where the new leader answers it.
 //
 // A WRITE ACROSS A LINK IS GIVEN MORE, the time its bytes take to cross it
-// ([WriteBound]); a request on a member's own connection crosses nothing.
+// every time it is sent ([WriteBound], [Budget]); a request on a member's own
+// connection crosses nothing.
 const RequestTerm = 5 * time.Second
 
 // Client is a JetStream client over nc that speaks this API, its every
@@ -150,54 +152,6 @@ func (a API) Client(nc *nats.Conn) (jetstream.JetStream, error) {
 		return jetstream.New(nc, jetstream.WithDefaultTimeout(RequestTerm))
 	}
 	return jetstream.NewWithDomain(nc, a.domain, jetstream.WithDefaultTimeout(RequestTerm))
-}
-
-// WriteBound is how long an acknowledged write of messageBytes — a publish's
-// header block and payload — on js waits for its stream's acknowledgement
-// when its caller set no deadline: the term every request of js waits (its
-// DefaultTimeout, [RequestTerm] on every client [API.Client] builds), and the
-// time its request takes to cross a link carrying a mebibyte in as long as
-// pace ([Sending]). A connection that crosses no link — a member's own, in
-// its own process — has no pace, and its writes keep the request term alone.
-//
-// # Why a write across a link is given its bytes
-//
-// The stream acknowledges a message only once its last byte is in, and a
-// connection that crosses a link — a leaf's link to the fleet's members, a
-// dial to an external cluster — carries it at the link's pace, which the
-// engine allows to be as slow as a mebibyte in thirty seconds
-// (internal/objstore's MiBPace, the pace a read of a large message across the
-// same link is already given: [Leader.Carrying]). Held to the request term
-// alone, a write at the transport's eight-mebibyte ceiling could not be
-// acknowledged on any link slower than 1.6 mebibytes a second, about fifty
-// times that floor, and failed as a broker that does not answer — which its
-// caller retries as an outage, so a keeper retried for ever, as unavailable,
-// an entry each of whose copies the link went on carrying
-// (crewlet/crewlet#1005).
-//
-// SO THE WORST CASE IS LONG, AND THAT IS THE PRICE: a write at the ceiling
-// across a link at the slowest pace allowed waits the request term and about
-// four minutes more before it reads as an outage, which is what never
-// mistaking a slow link for a dead one costs. A caller that cannot wait that
-// long says so with a deadline of its own, which this never extends
-// ([Writing]).
-func WriteBound(js jetstream.JetStream, messageBytes int, pace time.Duration) time.Duration {
-	return js.Options().DefaultTimeout + Sending(messageBytes, pace)
-}
-
-// Writing is the context an acknowledged write of messageBytes on js waits for
-// its acknowledgement in: ctx held to [WriteBound] where its caller set no
-// deadline, and ctx as it is where it did — a caller's own deadline is never
-// extended, and never shortened either. The client applies its own
-// DefaultTimeout only to a context with no deadline, so it leaves the one this
-// returns alone.
-func Writing(ctx context.Context, js jetstream.JetStream, messageBytes int,
-	pace time.Duration) (context.Context, context.CancelFunc) {
-
-	if _, set := ctx.Deadline(); set {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, WriteBound(js, messageBytes, pace))
 }
 
 // accountPrefix is the prefix of every subject the account's own JetStream

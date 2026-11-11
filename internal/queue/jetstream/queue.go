@@ -324,6 +324,13 @@ type Queue struct {
 	nc         *nats.Conn
 	js         jetstream.JetStream
 
+	// pace is the slowest nc may carry a mebibyte either way: the object
+	// store's floor where it crosses a link, none on a member's own
+	// connection ([linkPaceOf]). Decided once, where the connection is made,
+	// and read by every crossing on it, a read's reply and a write's request
+	// alike.
+	pace time.Duration
+
 	// lost is where this queue's own connection, and every second one
 	// dialled through [Queue.DialWatched], records being closed for good.
 	// See [Queue.Lost], and [Queue.AcksLost] for the queue's own alone.
@@ -432,6 +439,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		contract:    contract,
 		embedded:    embedded,
 		ownsServer:  owns,
+		pace:        linkPaceOf(embedded),
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},
@@ -1313,14 +1321,12 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	subject := queue.SubjectFor(topic, ev)
 	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
 	// deadline: the request term, and across a link the time the event takes
-	// at the slowest pace allowed ([jsapi.WriteBound]) — an event may be the
-	// transport's whole eight mebibytes, about four minutes at that pace, and
-	// held to the request term alone it failed as an outage while the link
-	// was carrying it. Classified on the CALLER's context, for the keep's
-	// reason ([Queue.KeepDeadLetter]).
-	sending, stop := jsapi.Writing(ctx, q.js, len(data), q.linkPace())
-	defer stop()
-	if _, err := q.js.Publish(sending, subject, data); err != nil {
+	// at the connection's pace, each time it is sent ([Queue.write]) — an
+	// event may be the transport's whole eight mebibytes, about four minutes
+	// at the slowest pace allowed, and held to the request term alone it
+	// failed as an outage while the link was carrying it. Classified on the
+	// CALLER's context, for the keep's reason ([Queue.KeepDeadLetter]).
+	if err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {
 		// TRANSLATED, not passed through. "Too large" is the one publish
 		// failure a producer must not retry, and nats.ErrMaxPayload is
 		// this backend's private word for it — a caller matching on that
@@ -2014,22 +2020,18 @@ func (q *Queue) attachmentsLocked() []*attachment {
 // stream cannot resurface poison as live traffic, and answers why it could
 // not, which its caller logs ([attachment.returnMsg]).
 //
-// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([jsapi.WriteBound]), as
-// every write of this queue's whose caller set no deadline is: the consume
-// loop's context carries none, and the message may be as large as the
-// transport carries. Held to the request term alone, a large one dead-lettered
-// across a slow link was reported as failed while its bytes were still
-// crossing to land: a `dead_letter_failed` line for a message the stream went
-// on to keep.
+// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([Queue.write]), as every
+// write of this queue's whose caller set no deadline is: the consume loop's
+// context carries none, and the message may be as large as the transport
+// carries. Held to the request term alone, a large one dead-lettered across a
+// slow link was reported as failed while its bytes were still crossing to
+// land: a `dead_letter_failed` line for a message the stream went on to keep.
 func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) error {
 	subject := topics.DeadLetter(topic, group)
 	if _, err := q.streamFor(ctx, subject); err != nil {
 		return err
 	}
-	sending, stop := jsapi.Writing(ctx, q.js, len(data), q.linkPace())
-	defer stop()
-	_, err := q.js.Publish(sending, subject, data)
-	return err
+	return q.write(ctx, &nats.Msg{Subject: subject, Data: data})
 }
 
 var _ queue.EventQueue = (*Queue)(nil)

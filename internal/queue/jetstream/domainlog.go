@@ -19,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsinflight"
 	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -56,14 +55,6 @@ type DomainLog struct {
 	// log stores, at the object store's floor ([DomainLog.At]). Fixed at
 	// open.
 	crossing time.Duration
-
-	// pace is the slowest this node's connection may carry a mebibyte of an
-	// append towards the stream ([Queue.linkPace]): none on a member's own
-	// connection, the object store's floor across a link — what
-	// [DomainLog.Append] is given beyond the request term to cross when its
-	// caller set no deadline. Fixed at open; zero, a log reached across
-	// nothing, where a case builds a log by hand.
-	pace time.Duration
 
 	// info reads the stream's info — its ends, its size, its ceiling, its
 	// identity — through A HANDLE OF ITS OWN EVERY TIME it is asked
@@ -131,7 +122,6 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
 	l := &DomainLog{js: q.js, stream: s, name: stream, q: q, crossing: q.recordCrossing(s),
-		pace: q.linkPace(),
 		info: func(ctx context.Context) (*jetstream.StreamInfo, error) {
 			// A HANDLE OF THIS REQUEST'S OWN — see [DomainLog.info].
 			fresh, err := q.js.Stream(ctx, stream)
@@ -168,40 +158,21 @@ func (l *DomainLog) noteMembers(info *jetstream.StreamInfo) {
 // position is given beyond the read term to cross this queue's connection to
 // the stream's leader — see [DomainLog.At]: nothing where the connection is to
 // the node's own member, in its own process, and where it crosses a link the
-// crossing of the largest message s stores ([jsapi.Crossing]) at the object
-// store's floor, [objstore.MiBPace], the one pace the engine allows a link to
-// be as slow as — the pace internal/objstore/natsobj sizes its piece reads
-// and its puts' window by on this same connection. s is the handle just
-// opened, whose info is its open's and is read by nothing that writes it.
+// crossing of the largest message s stores ([jsapi.Crossing]) at the
+// connection's pace ([Queue.pace]) — the one decision of how slow this
+// connection may be, which its writes are paced by too, and the object store's
+// floor, the pace internal/objstore/natsobj sizes its piece reads and its
+// puts' window by on this same connection. s is the handle just opened, whose
+// info is its open's and is read by nothing that writes it.
 func (q *Queue) recordCrossing(s jetstream.Stream) time.Duration {
-	if !q.acrossLink() {
+	if q.pace == 0 {
 		return 0
 	}
 	largest := q.nc.MaxPayload()
 	if info := s.CachedInfo(); info != nil && info.Config.MaxMsgSize > 0 {
 		largest = min(largest, int64(info.Config.MaxMsgSize))
 	}
-	return jsapi.Crossing(int(largest), objstore.MiBPace)
-}
-
-// acrossLink reports whether this queue's connection reaches JetStream across
-// a LINK — a dial to a broker somebody else runs, or a leaf's link to the
-// members — rather than reaching the node's own member in its own process:
-// the fact the engine hands the object store as natsobj.Config.AcrossLink
-// (every broker but a member's), read here off how the connection was made.
-func (q *Queue) acrossLink() bool { return q.embedded == nil || q.embedded.leaf }
-
-// linkPace is the slowest this queue's connection may carry a mebibyte towards
-// the streams it writes: the object store's floor, [objstore.MiBPace], where it
-// crosses a link ([Queue.acrossLink]), and no pace at all where it reaches the
-// node's own member in its own process, which crosses nothing. It is what an
-// acknowledged write is given beyond the request term to cross
-// ([jsapi.WriteBound]).
-func (q *Queue) linkPace() time.Duration {
-	if q.acrossLink() {
-		return objstore.MiBPace
-	}
-	return 0
+	return jsapi.Crossing(int(largest), q.pace)
 }
 
 // stateInfo is the stream's info, read through a handle of its own
@@ -288,7 +259,7 @@ func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.S
 // quorum round trip, so an acknowledgement carrying one would prove nothing
 // about the log's end.
 func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
-	opts, headers := appendOptions(msgID, expect)
+	msg := appendMsg(subject, msgID, expect, body)
 	// DECIDED BEFORE IT IS ANSWERED. A conditional append the leader refuses
 	// because another write to the subject is still in flight has not been
 	// compared with anything — the write ahead may be this node's own, already
@@ -300,18 +271,21 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	// still in flight at the deadline is [jsinflight.Undecided], which carries
 	// no API error, so the state log reads it as the no-answer it is.
 	//
-	// AND WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set
-	// no deadline: the request term, and across a link the time the record
-	// and the headers it rides with take at the slowest pace allowed
-	// ([jsapi.WriteBound]). A record may be the transport's whole eight
-	// mebibytes, about four minutes at that pace, and held to the request
-	// term alone it failed as no answer every attempt the link was carrying.
-	// The one budget every attempt shares; a caller's own deadline is kept.
+	// AND EVERY SEND WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its
+	// caller set no deadline: the request term, and across a link the time
+	// the record and the headers it rides with take at the connection's pace
+	// for each time they are sent ([Queue.writing]) — an attempt after an
+	// in-flight answer, and a send again after nobody heard one, carry the
+	// whole record again. A record may be the transport's whole eight
+	// mebibytes, about four minutes at the slowest pace allowed; held to the
+	// request term alone it failed as no answer while the link was carrying
+	// it, and held to one crossing, so did the attempt after an in-flight
+	// answer. A caller's own deadline is kept.
 	var ack *jetstream.PubAck
-	bound := jsapi.WriteBound(l.js, headers+len(body), l.pace)
-	err := jsinflight.Decide(ctx, bound, func(ctx context.Context) error {
+	sends := l.q.writing(msg)
+	err := jsinflight.Decide(ctx, sends, func(ctx context.Context) error {
 		var err error
-		ack, err = l.js.Publish(ctx, subject, body, opts...)
+		ack, err = sendWithin(ctx, sends, l.js, msg)
 		return err
 	})
 	if err != nil {
@@ -329,23 +303,20 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	return ack.Sequence, ack.Duplicate, nil
 }
 
-// appendOptions is the options an append publishes under — its operation's id
-// and its expectation, where it has them — and the bytes of the header block
-// they put beside its record, as the client encodes it. Each option is counted
-// in the branch that sets it, so the count is of the headers this append
-// sends, whichever of them it has.
-func appendOptions(msgID string, expect *uint64) ([]jetstream.PublishOpt, int) {
-	opts := make([]jetstream.PublishOpt, 0, 2)
-	headers := nats.Header{}
+// appendMsg is the message an append publishes: its record as the payload,
+// and as headers its operation's id and its expectation, where it has them —
+// the headers the client's WithMsgID and WithExpectLastSequencePerSubject
+// write, set on the message itself so it is the whole of what the append
+// sends, and the count its budget is given is of what crosses ([carried]).
+func appendMsg(subject, msgID string, expect *uint64, body []byte) *nats.Msg {
+	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	if msgID != "" {
-		opts = append(opts, jetstream.WithMsgID(msgID))
-		headers.Set(jetstream.MsgIDHeader, msgID)
+		msg.Header.Set(jetstream.MsgIDHeader, msgID)
 	}
 	if expect != nil {
-		opts = append(opts, jetstream.WithExpectLastSequencePerSubject(*expect))
-		headers.Set(jetstream.ExpectedLastSubjSeqHeader, strconv.FormatUint(*expect, 10))
+		msg.Header.Set(jetstream.ExpectedLastSubjSeqHeader, strconv.FormatUint(*expect, 10))
 	}
-	return opts, (&nats.Msg{Header: headers}).Size()
+	return msg
 }
 
 // LastSeq answers the last sequence on a subject, reporting false with a nil

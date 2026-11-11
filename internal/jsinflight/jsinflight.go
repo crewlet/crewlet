@@ -63,14 +63,13 @@ import (
 // took. Jitter spreads the racers one write refused, so they do not all return
 // on the same instant.
 //
-// The whole wait is held to the publish's own budget — the caller's deadline,
-// or the fallback [Decide] is handed, which is what the publish alone would
-// have waited for its acknowledgement where its caller set none: a
-// coordination bucket's writes their JetStream context's DefaultTimeout, and a
-// state log's append that and, across a link, the time its record takes to
-// cross it (internal/jsapi's WriteBound) — because waiting for the write ahead
-// to settle is waiting for THAT write's acknowledgement, and no publish here
-// is promised more patience than its own.
+// The whole wait is held to the publish's own budget ([Sends]) — the caller's
+// deadline, or where it set none what the publish alone would have waited for
+// its acknowledgement, the request term and across a link its bytes' crossing,
+// one more crossing for every attempt after the first, since each sends the
+// whole message again (internal/jsapi's Budget) — because waiting for the
+// write ahead to settle is waiting for THAT write's acknowledgement, and no
+// publish here is promised more patience than its own.
 const (
 	FirstWait = time.Millisecond
 	MaxWait   = 64 * time.Millisecond
@@ -116,33 +115,35 @@ func (u *Undecided) Error() string {
 // Unwrap is the context error, never the refusal.
 func (u *Undecided) Unwrap() error { return u.Cause }
 
+// Sends is the budget a decided publish waits within across every attempt of
+// it, as the wait between two attempts needs it: the one internal/jsapi's
+// Budget starts, whose every send — each attempt's, made by the publish
+// itself through it — is given the time its bytes take to cross a link, an
+// attempt after an in-flight answer carrying the whole message again.
+type Sends interface {
+	// Pause waits d inside ctx and the budget as it stands, answering why
+	// it could not: the budget's end, or its caller going away.
+	Pause(ctx context.Context, d time.Duration) error
+}
+
 // Decide runs one conditional publish until the leader DECIDES it: it lands,
 // or it is refused on a comparison. An in-flight refusal is retried — the
 // identical publish, which the leader stored nothing of — after a doubling,
-// jittered wait, within the publish's budget: ctx's deadline, or fallback
-// when ctx carries none. A publish still refused as in flight when that runs
-// out is [*Undecided].
+// jittered wait, within the publish's budget, sends. A publish still refused
+// as in flight when that runs out is [*Undecided].
 //
-// publish is handed the budgeted context, so a single attempt can never
-// outlast the whole.
-func Decide(ctx context.Context, fallback time.Duration, publish func(context.Context) error) error {
-	budget := ctx
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		budget, cancel = context.WithTimeout(ctx, fallback)
-		defer cancel()
-	}
+// publish is handed ctx, its caller's, and makes each attempt's send within
+// sends (internal/jsapi's Sends.Next), so no send outlasts the budget and each
+// is given its own crossing; the wait between two attempts is held to the
+// budget as it stands.
+func Decide(ctx context.Context, sends Sends, publish func(context.Context) error) error {
 	for attempt := 1; ; attempt++ {
-		err := publish(budget)
+		err := publish(ctx)
 		if !InFlight(err) {
 			return err
 		}
-		timer := time.NewTimer(backoff.Jitter(backoff.Doubling(attempt, FirstWait, MaxWait), Jitter))
-		select {
-		case <-budget.Done():
-			timer.Stop()
-			return &Undecided{Last: err, Cause: budget.Err()}
-		case <-timer.C:
+		if cause := sends.Pause(ctx, backoff.Jitter(backoff.Doubling(attempt, FirstWait, MaxWait), Jitter)); cause != nil {
+			return &Undecided{Last: err, Cause: cause}
 		}
 	}
 }
