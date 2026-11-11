@@ -3,6 +3,7 @@ package capability_test
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -114,29 +115,37 @@ func TestASnapshotReadsWhatTheSeatReaches(t *testing.T) {
 }
 
 // A PERMISSION THE APP HOLDS AND THE GRANT LEAVES OUT is said to be the grant's
-// alone, so an agent asks for it in Crewlet rather than at GitHub; and since the
-// app's registration is not the seat's access, its moving is never a change.
+// alone, at the level the app holds it, so an agent asks for it in Crewlet and
+// knows what past that level still waits on an organization owner; and since
+// the app's registration is not the seat's access, its moving is never a
+// change and leaves the digest as it was.
 func TestAPermissionOnlyTheAppHoldsIsTheGrantsToAdd(t *testing.T) {
 	t.Parallel()
-	in := input(company())
+	c := company()
+	delete(c.Roles[0].Integrations.GitHub.Permissions, "checks")
+	in := input(c)
 	gh := in.Observed[seataccess.LaneGitHub]
 	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "checks": config.GitHubRead,
 		"statuses": config.GitHubRead, "workflows": config.GitHubWrite}
 	in.Observed[seataccess.LaneGitHub] = gh
 	held := capability.Take(in)
-	if got := held.Integrations[1].AppHolds; !slices.Equal(got, []string{"workflows"}) {
-		t.Fatalf("app holds = %v, want workflows alone", got)
+	if got := held.Integrations[1].AppHolds; !maps.Equal(got, map[string]string{"checks": "read", "workflows": "write"}) {
+		t.Fatalf("app holds = %v, want checks read-only and workflows", got)
 	}
 	if text := capability.YourAccess(held); !strings.Contains(text,
-		"Not in your Crewlet grant: Workflows (the app already holds it, so nothing at GitHub waits).") {
-		t.Errorf("Your access does not say the app holds Workflows:\n%s", text)
+		"Not in your Crewlet grant: Checks (the app already holds it at Read-only, so that waits on "+
+			"nothing at GitHub; Read and write waits on an organization owner accepting it there), "+
+			"Workflows (the app already holds it at Read and write, so nothing at GitHub waits).") {
+		t.Errorf("Your access does not say what the app holds, at its level:\n%s", text)
 	}
-	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "checks": config.GitHubRead,
-		"statuses": config.GitHubRead}
+	gh.Ceiling = seataccess.Permissions{"contents": config.GitHubWrite, "statuses": config.GitHubRead}
 	in.Observed[seataccess.LaneGitHub] = gh
 	notHeld := capability.Take(in)
-	if held.Digest() == notHeld.Digest() {
-		t.Fatal("the app's registration moved and the snapshot did not")
+	if string(held.JSON()) == string(notHeld.JSON()) {
+		t.Fatal("the app's registration moved and the snapshot did not say so")
+	}
+	if held.Digest() != notHeld.Digest() {
+		t.Error("the app's registration alone moved the digest, which unsettles a pending review")
 	}
 	if changes := capability.Diff(held, notHeld); len(changes) != 0 {
 		t.Errorf("the app's registration alone moved, and a change was told: %+v", changes)
@@ -504,13 +513,14 @@ func TestYourAccessListsEachHostsReadCommands(t *testing.T) {
 	}
 }
 
-// A CHANGED ALLOWLIST MOVES THE DIGEST AND IS TOLD BY THE NEXT SECTION: the
+// A CHANGED ALLOWLIST IS TOLD BY THE NEXT SECTION AND IS NO CHANGE: the
 // commands are part of the snapshot, so the seat is never left with a list
-// its host no longer admits, and no change line is invented for it.
+// its host no longer admits, and no change line is invented for it, nor a
+// digest moved that a pending review is measured to.
 //
-// Mutation: leave the commands out of the snapshot's encoding and the digest
-// stays put.
-func TestAChangedAllowlistMovesTheDigest(t *testing.T) {
+// Mutation: leave the commands out of the snapshot's encoding and the
+// snapshot stays put; digest them and the digest moves.
+func TestAChangedAllowlistIsSaidAndIsNoChange(t *testing.T) {
 	t.Parallel()
 	in := input(sshCompany())
 	in.Observed[seataccess.LaneSSH] = seataccess.Observed{Exists: true, Enabled: true}
@@ -519,8 +529,11 @@ func TestAChangedAllowlistMovesTheDigest(t *testing.T) {
 	changed.Integrations.SSH.Hosts[0].Containers = false
 	in.Company = changed
 	now := capability.Take(in)
-	if was.Digest() == now.Digest() {
-		t.Fatal("the host stopped admitting docker and the digest did not move")
+	if string(was.JSON()) == string(now.JSON()) {
+		t.Fatal("the host stopped admitting docker and the snapshot did not move")
+	}
+	if was.Digest() != now.Digest() {
+		t.Error("the allowlist alone moved the digest, which unsettles a pending review")
 	}
 	if strings.Contains(capability.YourAccess(now), "docker") {
 		t.Error("Your access still lists docker after the host stopped admitting it")

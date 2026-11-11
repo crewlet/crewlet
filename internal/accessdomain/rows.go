@@ -31,6 +31,8 @@ func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, gu
 		statement = `SELECT COUNT(*) FROM access_certificates WHERE agent_handle = ? AND serial = ?`
 	case KindCommand:
 		statement = `SELECT COUNT(*) FROM access_commands WHERE agent_handle = ? AND command_id = ?`
+	case KindVerdict:
+		statement = `SELECT COUNT(*) FROM access_verdicts WHERE agent_handle = ? AND verdict_id = ?`
 	default:
 		return false, false, nil
 	}

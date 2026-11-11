@@ -45,6 +45,28 @@ const (
 	// CommandMaxBytes bounds a command's text, the SSH tools' own bound.
 	CommandMaxBytes = 4096
 
+	// VerdictSubjectMaxBytes bounds what a verdict decided, in clear: an
+	// ssh_operate's command at the SSH tools' own bound, and a later kind's
+	// summary cut to the same by its writer. The digest binds the exact
+	// request; the subject is for a person to recognise it.
+	VerdictSubjectMaxBytes = CommandMaxBytes
+
+	// VerdictReasonMaxRunes, MaxVerdictFindings and VerdictFindingMaxRunes
+	// bound a delegate's reason and findings: the answer's own bounds, which
+	// the held call holds a delegate to before a verdict is recorded.
+	VerdictReasonMaxRunes  = 500
+	MaxVerdictFindings     = 8
+	VerdictFindingMaxRunes = 300
+
+	// MaxVerdictRule bounds a verdict's rule number: the company's own cap on
+	// delegation rules (`delegated_decisions.rules`).
+	MaxVerdictRule = 16
+
+	// MaxOverruled bounds the engine's words on one verdict, and OverruledMaxBytes
+	// each: a reason per limit the engine checks, with room.
+	MaxOverruled      = 16
+	OverruledMaxBytes = 40
+
 	// MaxPageSize is the most rows a page answers, DefaultPageSize what a page
 	// that names none takes.
 	MaxPageSize     = 100

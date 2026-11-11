@@ -7,13 +7,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE ACCESS LOG'S SUBJECTS. Every audit record is its own object, created once
 // on a subject naming its seat and its own id, so a retried write lands once and
-// a second write for the same turn, serial or command is refused as existing.
+// a second write for the same turn, serial, command or giver's verdict is
+// refused as existing.
 
 // ObjectKind is what an object on the access log is. A kind this build has never
 // heard of is retained as its literal, so a newer peer's records are deferred.
@@ -37,6 +40,9 @@ const (
 	// person's denial.
 	KindCommand ObjectKind = "command"
 
+	// KindVerdict is one giver's verdict on a delegated request.
+	KindVerdict ObjectKind = "verdict"
+
 	// KindExpiry is the retention of one hour of records.
 	KindExpiry ObjectKind = "expiry"
 
@@ -56,7 +62,7 @@ const (
 // suite publishes the first three, twice each, in order, and these are a real
 // sequence (a told record, its seat's removal, a node's eviction).
 var ObjectKinds = []ObjectKind{
-	KindTold, KindSeat, KindEviction, KindCertificate, KindCommand, KindExpiry,
+	KindTold, KindSeat, KindEviction, KindCertificate, KindCommand, KindVerdict, KindExpiry,
 	KindGeneration, KindBarrier, KindTrimmed,
 }
 
@@ -77,7 +83,7 @@ func (k ObjectKind) InstallsGate() bool { return k == KindEviction }
 // seatOwned reports a kind whose subject id is a seat's handle, a dot and the
 // object's own id.
 func (k ObjectKind) seatOwned() bool {
-	return k == KindTold || k == KindCertificate || k == KindCommand
+	return k == KindTold || k == KindCertificate || k == KindCommand || k == KindVerdict
 }
 
 // Subject is the object a record arbitrates over.
@@ -99,6 +105,29 @@ func CertificateSubject(handle string, serial uint64) Subject {
 // CommandSubject names one command by its seat and id.
 func CommandSubject(handle, id string) Subject {
 	return Subject{Kind: KindCommand, ID: handle + "." + id}
+}
+
+// VerdictSubject names one giver's verdict on a request of seat handle: by
+// is the giver's seat, empty for the engine.
+func VerdictSubject(handle, request, by string) Subject {
+	return verdictSubjectOf(handle, VerdictID(request, by))
+}
+
+// verdictSubjectOf names one verdict by its seat and its own id.
+func verdictSubjectOf(handle, id string) Subject {
+	return Subject{Kind: KindVerdict, ID: handle + "." + id}
+}
+
+// verdictSpace is the UUIDv5 namespace a verdict's id is derived in. FIXED for
+// the life of the format: a new one would give a giver answering across an
+// upgrade a second record.
+var verdictSpace = uuid.MustParse("6f1e3c52-9a0b-5d47-8e21-3b7c4d90a8f6")
+
+// VerdictID is the id of by's verdict on request: derived from the two, so a
+// giver answering one request twice lands on one record, and the engine,
+// which names no seat, on one of its own. A request and a seat hold no slash.
+func VerdictID(request, by string) string {
+	return uuid.NewSHA1(verdictSpace, []byte(request+"/"+by)).String()
 }
 
 // SeatSubject names one seat's hold on what it was told.

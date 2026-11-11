@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
-- **Enforced-by:** `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestANodesListingIsTheUnionOfItsInstances`, `internal/engine.TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst`, `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`, `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`, `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`, `internal/engine.TestANodeThatStopsRemovesItsOwnListings`, `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`, `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
+- **Enforced-by:** `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`, `internal/coord.TestADefinitionIsBoundedAsItIsStored`, `internal/mcp.TestAServerListingMoreToolsThanTheLimitIsRefusedWhole`, `internal/engine.TestTheMostToolsAServerListsFitOneListing`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestANodesListingIsTheUnionOfItsInstances`, `internal/engine.TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst`, `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`, `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`, `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`, `internal/engine.TestANodeThatStopsRemovesItsOwnListings`, `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`, `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
 - **Cost-when-tried:** the tool catalogue was each node's own registry, which holds a shared server's tools and none of a per-agent server's, whose children run only on the node holding each seat. A company running GitHub's and Datadog's servers per agent showed none of their tools on any screen, though every agent was offered them, and a node's answer about a server depended on which seats it happened to hold.
 - **Tag-status:** unreleased
 
@@ -32,16 +32,24 @@ sweep removes a listing no reader counts, reading the listings before the
 presence and removing each at the version it read, and a definition no listing
 has named for two sweeps in a row.
 
-**Every listing is bounded where it is built and again by the store**: at most
-256 tools (the count travels whole), each text cut, a definition whose schemas
-pass 64 KiB or whose words pass 64 KiB listed without being stored. **The
-definitions one listing stores are bounded too**, to 1 MiB in all
+**Every listing names every tool, and is bounded where it is built and again
+by the store by the bytes it is stored as**, never by a count of tools: a tool
+a listing left out is never reviewed (ADR-0078), so every call to it would ask
+a person for ever. A listing is held to 896 KiB encoded, under the 1 MiB a
+NATS server carries by default (`coord.MaxMCPListingBytes`): each text cut,
+and where that is not enough the words cut shorter, every description and
+then every title, while each tool's identity (its names, digest, parts and
+hints) stays; one whose identities alone pass it is refused rather than cut. A server listing more than 1,024 tools
+(`mcp.MaxServerTools`) is refused by the client that lists it, so one
+instance's listing always fits. A definition whose schemas pass 64 KiB or
+whose words pass 64 KiB, as stored, is listed without being stored. **The
+definitions one listing stores are bounded too**, to 1 MiB in all as stored
 (`coord.MaxMCPListingDefinitionBytes`), a definition waiting for a review
 (ADR-0078) kept first so its change can be shown whole, then the rest in
 tool-name order while they fit, by the node that builds the listing, since
-the store names definitions by digest and cannot weigh them: 256 definitions
-at their own bound would be 32 MiB per (server, node), minted again by every
-restart that changes them. A
+the store names definitions by digest and cannot weigh them: every definition
+at its own bound would be 128 KiB a tool per (server, node), minted again by
+every restart that changes them. A
 record's key names its server and node and the store stamps both from it, so
 a node describes only its own listing of the server the key names.
 

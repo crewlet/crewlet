@@ -8,6 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -113,7 +116,7 @@ func TestAHeldOperateCallIsInItsApproversInbox(t *testing.T) {
 		Status: sandbox.StatusAwaiting, HeldCall: &held, ConversationKey: "chatlet:room-1:thread-9",
 		AudienceHandles: []string{"ops-lead", "founder"}}
 	for handle, want := range map[string]bool{"ops-lead": true, "founder": true, "pm": false, "": false} {
-		if got := putTo(run, handle); got != want {
+		if got := putTo(run, handle, Sources{}.delegating); got != want {
 			t.Errorf("the decisions read puts the held call to %q: %v, want %v", handle, got, want)
 		}
 	}
@@ -125,5 +128,49 @@ func TestAHeldOperateCallIsInItsApproversInbox(t *testing.T) {
 	unheld.HeldCall = nil
 	if row := serialiseRun(unheld, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(unheld)); row["answerable_in_chat"] != true {
 		t.Fatalf("the premise: a question on a conversation reads answerable in chat, got %v", row["answerable_in_chat"])
+	}
+}
+
+// A delegated call is put to nobody until escalated (ADR-0125): while it waits
+// on its delegates its approvers' decisions do not list it, once escalated
+// they do, and turning delegated decisions off lists it on the next read,
+// before any sweep has written why.
+//
+// Mutation: drop the delegating check from putTo, or read the row alone
+// without the live rules, and the owner's Inbox fills with routine commands,
+// or a switched-off rule hides them until the sweep.
+func TestADelegatedCallIsPutToNobodyUntilEscalated(t *testing.T) {
+	t.Parallel()
+	doc := "name: Acme\nroles:\n  - {name: Ops Lead, handle: ops-lead, kind: human}\n" +
+		"  - {name: Security, handle: security-a}\n" +
+		"delegated_decisions:\n  enabled: true\n  rules:\n" +
+		"    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: [ops-lead]}\n"
+	company, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Sources{Company: func() (*config.Company, *org.Organization) { return company, nil }}
+	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-0000000000f1", LaunchID: "launch-5",
+		Server: "crewlet", Tool: "ssh_operate", Raw: "ssh_operate", Fixed: true,
+		Approvers: sandbox.HeldApproversSSH, Act: string(delegated.KindSSHOperate), HeldAt: time.Now().UTC(),
+		Delegation: &sandbox.HeldDelegation{Rule: 1, Delegates: []string{"security-a"}}}
+	run := sandbox.PendingRun{TurnID: "t-del", LaunchID: "launch-5", AgentHandle: "sre",
+		Status: sandbox.StatusAwaiting, HeldCall: &held, AudienceHandles: []string{"ops-lead"}}
+	if putTo(run, "ops-lead", s.delegating) {
+		t.Fatal("a call waiting on its delegates is put to ops-lead")
+	}
+	escalated := held
+	delegation := *held.Delegation
+	delegation.Escalated = &sandbox.HeldEscalation{Overruled: []string{delegated.OverruledDeadline},
+		At: time.Now().UTC()}
+	escalated.Delegation = &delegation
+	run.HeldCall = &escalated
+	if !putTo(run, "ops-lead", s.delegating) {
+		t.Fatal("an escalated call is not put to ops-lead")
+	}
+	run.HeldCall = &held
+	company.DelegatedDecisions.Enabled = false
+	if !putTo(run, "ops-lead", s.delegating) {
+		t.Fatal("a call whose delegation was turned off is not put to ops-lead")
 	}
 }

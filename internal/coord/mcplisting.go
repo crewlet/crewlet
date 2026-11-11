@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -54,12 +55,16 @@ import (
 // sweep may have removed them). The sweep removes exactly what readers
 // already ignore.
 //
-// # Bounded, and somebody else's words
+// # Every tool, bounded by bytes, and somebody else's words
 //
+// A listing names EVERY tool its node's instances list, because what it does
+// not name is never reviewed, so a call to it would ask a person for ever
+// (ADR-0078). It is bounded by the bytes it is stored as rather than by a
+// count of tools: each tool's identity (its names, digest, parts and hints) is
+// always on it, and its words give way first ([MCPListing.Bounded]).
 // Every field of a listing but its counts came from a remote MCP server, so
-// every one is bounded where the record is built ([MCPListing.Bounded]) and
-// again by the store that writes it, and a reader treats them as the server's
-// words. A record's key names its server and node, and a store stamps both
+// every one is bounded where the record is built and again by the store that
+// writes it, and a reader treats them as the server's words. A record's key names its server and node, and a store stamps both
 // from the key it files the record under, so a node can describe only its
 // own listing of the server the key names.
 
@@ -114,27 +119,26 @@ func IsMCPDigest(s string) bool {
 	return true
 }
 
-// The bounds a listing is held to. Together they keep the largest listing a
-// node can write under half a mebibyte (256 tools of at most about 1.7 KiB
-// each, plus the instructions and the server's identity), half the 1 MiB
-// payload an external NATS server allows by default, so a server listing
-// thousands of tools with essays for descriptions costs the fleet one bounded
-// record rather than a write the broker refuses; and the definitions one
-// listing stores to [MaxMCPListingDefinitionBytes] in all, so a server that
-// lists many large definitions, or mints new ones at every restart, costs the
-// fleet a bounded amount per listing rather than up to 256 times a
-// definition's bound.
+// The bounds a listing is held to, each measured as the record is stored:
+// encoded as JSON, where `<`, `>`, `&`, a control character or U+2028 takes six
+// bytes and an invalid byte three, so a bound on the raw text would let a
+// record grow several times past it.
 const (
-	// MaxMCPListedTools is the most tools one listing names, the first by
-	// name; [MCPListing.ToolCount] travels whole beside them. 256 is past
-	// every catalogue entry's server and well past the 100 tools an agent
-	// is budgeted.
-	MaxMCPListedTools = 256
+	// MaxMCPListingBytes bounds one listing's record, encoded. 896 KiB keeps
+	// it, with its key and headers, under the 1 MiB a NATS server carries by
+	// default, as every coordination record stays. It holds the identity of
+	// the most tools the engine takes from one server (internal/mcp's
+	// MaxServerTools, 1,024) at about 775 bytes each at their longest, with
+	// room for their words; the largest server seen in use, at 461 tools,
+	// writes about 300 KiB with its words whole. A listing whose identities
+	// alone are past it is refused, never cut.
+	MaxMCPListingBytes = 896 << 10
 
 	// MaxMCPToolTitleBytes bounds a tool's title on a listing, and
 	// MaxMCPToolDescriptionBytes its description: what a person reading a
 	// list needs. The digest covers every byte, and the definition's record
-	// keeps its words whole ([MCPToolDefinition]).
+	// keeps its words whole ([MCPToolDefinition]). Raw bytes, as a cut is
+	// made; the record holding them is bounded encoded.
 	MaxMCPToolTitleBytes       = 256
 	MaxMCPToolDescriptionBytes = 1024
 
@@ -146,13 +150,13 @@ const (
 	MaxMCPServerInfoBytes = 256
 
 	// MaxMCPToolSchemaBytes bounds one definition's schemas, input and
-	// output together, as encoded. A definition whose schemas are larger is
+	// output together, as stored. A definition whose schemas are larger is
 	// listed without its record ([MCPListedTool.DefinitionKept] false): 64
 	// KiB is past any schema a model is usefully offered.
 	MaxMCPToolSchemaBytes = 64 << 10
 
-	// MaxMCPToolWordsBytes bounds one definition's words whole: its title,
-	// the title its hints carry and its description, together. The engine
+	// MaxMCPToolWordsBytes bounds one definition's words whole, as stored:
+	// its title, the title its hints carry and its description, together. The engine
 	// bounds nothing a server sends and hands a model every byte of a
 	// description on every request, so 64 KiB, some 16,000 tokens of one
 	// tool, is past any description a server usefully sends (real ones run
@@ -161,7 +165,7 @@ const (
 	MaxMCPToolWordsBytes = 64 << 10
 
 	// MaxMCPListingDefinitionBytes bounds the records one listing keeps,
-	// every kept definition's schemas and words together: a tool whose
+	// every kept definition's schemas and words together, as stored: a tool whose
 	// definition waits for a review is kept first, so its change can be
 	// shown, then the rest in name order while they fit, and a tool past
 	// the budget is listed without its record. Held by the node that builds
@@ -209,12 +213,9 @@ type MCPListing struct {
 	Info         *MCPServerInfo `json:"info,omitempty"`
 	Instructions string         `json:"instructions,omitempty"`
 
-	// Tools are the tools the node's instances list, offered and blocked
-	// ([MCPListedTool.Blocked]) alike, sorted by name, at most
-	// [MaxMCPListedTools]; ToolCount is how many there are in all, never
-	// fewer than are listed.
-	Tools     []MCPListedTool `json:"tools"`
-	ToolCount int             `json:"tool_count"`
+	// Tools are every tool the node's instances list, offered and blocked
+	// ([MCPListedTool.Blocked]) alike, sorted by name.
+	Tools []MCPListedTool `json:"tools"`
 
 	// Version is the store's version of the record as it was read. Not on
 	// the wire.
@@ -236,6 +237,9 @@ type MCPListedTool struct {
 	Name string `json:"name"`
 	Raw  string `json:"raw"`
 
+	// Title and Description are its words, cut to
+	// [MaxMCPToolTitleBytes] and [MaxMCPToolDescriptionBytes], and shorter
+	// where the listing's bytes would not hold them ([MCPListing.Bounded]).
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description"`
 
@@ -289,8 +293,10 @@ func validHints(h MCPToolHints) bool {
 }
 
 // Bounded is the listing held to its bounds: every text cut, the tools sorted
-// by name and cut to [MaxMCPListedTools], ToolCount never below what is
-// listed.
+// by name, and, while the record is past [MaxMCPListingBytes] as stored,
+// every description cut to half as many bytes again, then every title, each
+// cut marked. EVERY TOOL STAYS: a listing whose identities alone are past the
+// bound is refused by [MCPListing.Validate].
 func (l MCPListing) Bounded() MCPListing {
 	out := l
 	out.At = l.At.UTC()
@@ -305,10 +311,6 @@ func (l MCPListing) Bounded() MCPListing {
 	}
 	tools := slices.Clone(l.Tools)
 	slices.SortFunc(tools, func(a, b MCPListedTool) int { return cmp.Compare(a.Name, b.Name) })
-	out.ToolCount = max(l.ToolCount, len(tools))
-	if len(tools) > MaxMCPListedTools {
-		tools = tools[:MaxMCPListedTools]
-	}
 	for i := range tools {
 		t := &tools[i]
 		t.Name = textcut.Within(t.Name, MaxMCPToolNameBytes)
@@ -320,7 +322,54 @@ func (l MCPListing) Bounded() MCPListing {
 		tools = []MCPListedTool{}
 	}
 	out.Tools = tools
+	// THE WORDS GIVE WAY, never a tool, all alike: the definition's record
+	// keeps each tool's words whole.
+	description, title := MaxMCPToolDescriptionBytes, MaxMCPToolTitleBytes
+	for out.EncodedSize() > MaxMCPListingBytes && title > 0 {
+		if description > 0 {
+			description /= 2
+		} else {
+			title /= 2
+		}
+		out.Tools = slices.Clone(tools)
+		for i := range out.Tools {
+			t := &out.Tools[i]
+			t.Description = textcut.Within(t.Description, description)
+			t.Title = textcut.Within(t.Title, title)
+		}
+	}
 	return out
+}
+
+// EncodedSize is how many bytes the listing is stored as.
+func (l MCPListing) EncodedSize() int { return encodedLen(l) }
+
+// encodedLen is how many bytes v encodes to as the store writes it, or one
+// past every bound for a value that does not encode.
+func encodedLen(v any) int {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return math.MaxInt32
+	}
+	return len(raw)
+}
+
+// encodedText is how many bytes s takes inside a stored record, its quotes
+// left out.
+func encodedText(s string) int {
+	if s == "" {
+		return 0
+	}
+	return encodedLen(s) - 2
+}
+
+// encodedJSON is how many bytes an encoded JSON value takes inside a stored
+// record, which compacts it and escapes it as it does a string.
+func encodedJSON(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	return encodedLen(raw)
 }
 
 // Validate reports why a listing cannot be written.
@@ -334,8 +383,15 @@ func (l MCPListing) Validate() error {
 			"written under: a reader counts it only while the node holds that epoch", l.Node, l.Server)
 	case l.At.IsZero():
 		return fmt.Errorf("coord: %s's listing of %s needs when it was written", l.Node, l.Server)
-	case l.Instances < 0 || l.ToolCount < 0:
+	case l.Instances < 0:
 		return fmt.Errorf("coord: %s's listing of %s counts below zero", l.Node, l.Server)
+	}
+	if size := l.EncodedSize(); size > MaxMCPListingBytes {
+		return fmt.Errorf("coord: %s's listing of %s names %d tools in %d bytes as stored, past the %d "+
+			"one listing holds even with their words left off: every tool a listing does not name "+
+			"asks a person before each call, so the listing is refused rather than cut. Narrow what "+
+			"the server lists (its own toolsets or filters), or split it into several entries",
+			l.Node, l.Server, len(l.Tools), size, MaxMCPListingBytes)
 	}
 	for _, t := range l.Tools {
 		switch {
@@ -381,18 +437,23 @@ type MCPToolDefinition struct {
 	Version uint64 `json:"-"`
 }
 
-// Fits reports whether the definition is within the bounds a record keeps:
-// its schemas within [MaxMCPToolSchemaBytes] and its words within
-// [MaxMCPToolWordsBytes].
+// Fits reports whether the definition is within the bounds a record keeps, as
+// it is stored: its schemas within [MaxMCPToolSchemaBytes] and its words
+// within [MaxMCPToolWordsBytes].
 func (d MCPToolDefinition) Fits() bool {
-	return len(d.Input)+len(d.Output) <= MaxMCPToolSchemaBytes &&
-		len(d.Title)+len(d.HintsTitle)+len(d.Description) <= MaxMCPToolWordsBytes
+	return d.schemaBytes() <= MaxMCPToolSchemaBytes && d.wordBytes() <= MaxMCPToolWordsBytes
 }
 
 // Size is what the record weighs against its listing's
-// [MaxMCPListingDefinitionBytes]: its schemas and its words.
-func (d MCPToolDefinition) Size() int {
-	return len(d.Input) + len(d.Output) + len(d.Title) + len(d.HintsTitle) + len(d.Description)
+// [MaxMCPListingDefinitionBytes]: its schemas and its words, as stored.
+func (d MCPToolDefinition) Size() int { return d.schemaBytes() + d.wordBytes() }
+
+// schemaBytes is the definition's two schemas as stored.
+func (d MCPToolDefinition) schemaBytes() int { return encodedJSON(d.Input) + encodedJSON(d.Output) }
+
+// wordBytes is the definition's three texts as stored.
+func (d MCPToolDefinition) wordBytes() int {
+	return encodedText(d.Title) + encodedText(d.HintsTitle) + encodedText(d.Description)
 }
 
 // Validate reports why a definition record cannot be written.
@@ -407,8 +468,8 @@ func (d MCPToolDefinition) Validate() error {
 		return fmt.Errorf("coord: the output schema stored under %s is not JSON", d.Digest)
 	case !d.Fits():
 		return fmt.Errorf("coord: the definition stored under %s holds %d bytes of schemas and %d of "+
-			"words, past the %d and %d a record keeps", d.Digest, len(d.Input)+len(d.Output),
-			len(d.Title)+len(d.HintsTitle)+len(d.Description), MaxMCPToolSchemaBytes, MaxMCPToolWordsBytes)
+			"words as stored, past the %d and %d a record keeps", d.Digest, d.schemaBytes(),
+			d.wordBytes(), MaxMCPToolSchemaBytes, MaxMCPToolWordsBytes)
 	case d.At.IsZero():
 		return fmt.Errorf("coord: the definition stored under %s needs when it was stored", d.Digest)
 	}

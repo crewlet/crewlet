@@ -996,7 +996,7 @@ func TestARekeyMovesTheAccessLogsCommandsToo(t *testing.T) {
 	}
 	moved := &fakeAccess{report: accessdomain.ResealReport{Commands: 2}}
 	code, body := call(t, mounted(t, opts(moved), iam.AllGrants...), http.MethodPost, "/secrets/rekey", "")
-	if code != http.StatusOK || moved.resealed != 1 || !strings.Contains(body, `"access":{"commands":2}`) {
+	if code != http.StatusOK || moved.resealed != 1 || !strings.Contains(body, `"access":{"commands":2,"verdicts":0}`) {
 		t.Errorf("rekey = %d %s (re-sealed %d times), want the commands moved once and counted",
 			code, body, moved.resealed)
 	}
@@ -1011,7 +1011,7 @@ func TestARekeyMovesTheAccessLogsCommandsToo(t *testing.T) {
 	} {
 		code, body := call(t, mounted(t, opts(access), iam.AllGrants...), http.MethodPost, "/secrets/rekey", "")
 		if code != http.StatusInternalServerError || !strings.Contains(body, `"rekey_incomplete"`) ||
-			!strings.Contains(body, `"access":{"commands":1}`) {
+			!strings.Contains(body, `"access":{"commands":1,"verdicts":0}`) {
 			t.Errorf("%s: rekey = %d %s, want rekey_incomplete carrying what did move", name, code, body)
 		}
 	}

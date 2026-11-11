@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/mcpreview`
-- **Enforced-by:** `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/mcpreview.TestALoosenedHintIsFlagged`, `internal/mcpreview.TestARemovedToolKeepsItsRow`, `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`, `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`, `internal/engine.TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames`, `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`, `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`, `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`, `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`, `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`, `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`, `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`, `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/api/queries.TestADescriptionChangedPastTheListingsCutIsServedWhole`, `internal/api/queries.TestAPartNoRecordCanShowIsSaidUnshown`
+- **Enforced-by:** `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/mcpreview.TestALoosenedHintIsFlagged`, `internal/mcpreview.TestARemovedToolKeepsItsRow`, `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`, `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`, `internal/engine.TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames`, `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`, `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`, `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`, `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`, `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`, `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`, `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`, `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`, `internal/api/mcpapi.TestAlwaysAllowOnAToolPastThe256thAcceptsItsDefinition`, `internal/api/mcpapi.TestAnAlwaysAllowThatAcceptsNothingSaysWhy`, `internal/engine.TestAlwaysAllowOnTheThreeHundredThirtySixthToolSticks`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/api/queries.TestADescriptionChangedPastTheListingsCutIsServedWhole`, `internal/api/queries.TestAPartNoRecordCanShowIsSaidUnshown`
 - **Cost-when-tried:** a tool's level was read off its name alone, so a server could change what a tool its operator had set to Always allow does (a description that now says it deletes, a read-only hint dropped, a new tool behind a familiar prefix) and every agent went on calling it unasked; and the engine listed a running server only when it started it, so nothing would have seen the change anyway.
 - **Tag-status:** unreleased
 
@@ -43,7 +43,12 @@ each call, exactly as a tool at Needs approval does (ADR-0077).
    that swaps a definition between the review and the answer cannot have its
    swap accepted. Accepting writes the record; blocking also sets the tool to
    blocked. Both are `config.write` at a recent step-up. An approval's Always
-   allow accepts the definition its call was made under.
+   allow accepts the definition its call was made under, by the held call's
+   own digest where a live listing names the tool under it, and logs why
+   wherever it accepts nothing. Every listed tool is reviewed: a listing
+   names every tool its node's instances list (ADR-0074), since a tool left
+   out of it would never be reviewed and every call to it would ask a person
+   for ever.
 5. **A running server is listed again**, on the `ttlMs` its listing states,
    held between one minute and a quarter of an hour (fifteen minutes when it
    states none), and on a list-changed notification, never sooner than the

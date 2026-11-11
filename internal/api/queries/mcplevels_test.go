@@ -38,7 +38,7 @@ func TestADetailSaysTheLevelEachToolRunsAt(t *testing.T) {
 	deleteRepo.Blocked = true
 	listings := []coord.MCPListing{{Server: "github", Node: "node-a", Epoch: live["node-a"],
 		At: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC), Instances: 1,
-		Tools: []coord.MCPListedTool{deleteRepo, getIssue}, ToolCount: 2}}
+		Tools: []coord.MCPListedTool{deleteRepo, getIssue}}}
 	surface, _ := configSurface(t, mcpCompany)
 	s := mcpSources(t, backend)
 	s.Company = companySource(t, cfg)
@@ -80,23 +80,18 @@ func TestADetailSaysTheLevelEachToolRunsAt(t *testing.T) {
 }
 
 // UNLISTED LEVELS ARE JUDGED ONLY WHERE THE LISTING CAN SAY: with no live
-// listing (a server off or not started) and with a listing cut short of the
-// tools it counts, a level the listing does not name may name a tool the
-// server lists, so none is named.
+// listing (a server off or not started), a level the listing does not name may
+// name a tool the server lists, so none is named.
 func TestUnlistedLevelsAreJudgedOnlyWhereTheListingCanSay(t *testing.T) {
 	t.Parallel()
 	policy := config.MCPToolPolicy{Levels: map[string]config.MCPToolLevel{"zeta": config.MCPToolBlocked,
 		"alpha": config.MCPToolBlocked, "search": config.MCPToolAllow}}
 	whole := queries.MCPServerAnswer{Listed: []queries.MCPServerListing{{Node: "node-a", Tools: 1}},
-		Tools: []queries.MCPToolView{{Name: "x_search", Raw: "search"}}, ToolCount: 1}
+		Tools: []queries.MCPToolView{{Name: "x_search", Raw: "search"}}}
 	if got := queries.UnlistedLevels(policy, whole); !slices.Equal(got, []string{"alpha", "zeta"}) {
 		t.Errorf("unlisted = %v, want alpha and zeta, sorted", got)
 	}
-	cut := whole
-	cut.ToolCount = 300
-	for name, detail := range map[string]queries.MCPServerAnswer{"no listing": {}, "a cut listing": cut} {
-		if got := queries.UnlistedLevels(policy, detail); got == nil || len(got) != 0 {
-			t.Errorf("%s: unlisted = %v, want an empty list", name, got)
-		}
+	if got := queries.UnlistedLevels(policy, queries.MCPServerAnswer{}); got == nil || len(got) != 0 {
+		t.Errorf("with no listing, unlisted = %v, want an empty list", got)
 	}
 }

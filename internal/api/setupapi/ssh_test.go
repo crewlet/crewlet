@@ -5,8 +5,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -178,9 +181,10 @@ func TestAnSSHScanOfTheEngineHostIsRefused(t *testing.T) {
 // fakeSSHAccess answers Test connection with steps a case scripts, and records
 // what it was asked.
 type fakeSSHAccess struct {
-	mu    sync.Mutex
-	steps []sshint.TestStep
-	asked []sshint.TestInput
+	mu            sync.Mutex
+	steps         []sshint.TestStep
+	asked         []sshint.TestInput
+	verdictsAsked []accessdomain.VerdictQuery
 }
 
 func (f *fakeSSHAccess) TestConnection(_ context.Context, in sshint.TestInput) []sshint.TestStep {
@@ -204,6 +208,31 @@ func (*fakeSSHAccess) Commands(context.Context, accessdomain.AuditQuery,
 
 func (*fakeSSHAccess) OpenCommand(accessdomain.CommandRow) (string, error) {
 	return "systemctl restart api", nil
+}
+
+// Verdicts answers two verdicts, the second of which does not open, and
+// records the query it was asked.
+func (f *fakeSSHAccess) Verdicts(_ context.Context, q accessdomain.VerdictQuery,
+	_ statelog.Freshness) (accessdomain.VerdictPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.verdictsAsked = append(f.verdictsAsked, q)
+	return accessdomain.VerdictPage{Rows: []accessdomain.VerdictRow{{Handle: "sre", ID: "v1",
+		Request: "call-1", Kind: delegated.KindSSHOperate, Rule: 1, By: "reviewer",
+		ByKind: accessdomain.VerdictByAgent, Through: accessdomain.VerdictThroughDelegation,
+		Asked: delegated.Allow, Confidence: delegated.Low,
+		Verdict: delegated.Escalate, Overruled: []string{"low_confidence"}, Final: true,
+		Host: "api-1", WordsSealed: "sealed"}, {Handle: "sre", ID: "v2", Request: "call-2",
+		Kind: delegated.KindSSHOperate, ByKind: accessdomain.VerdictByEngine,
+		Verdict: delegated.Escalate, Overruled: []string{"deadline"}}},
+		Next: "17", Complete: true}, nil
+}
+
+func (*fakeSSHAccess) OpenVerdict(row accessdomain.VerdictRow) (string, string, []string, error) {
+	if row.ID != "v1" {
+		return "", "", nil, accessdomain.ErrUnreadable
+	}
+	return "systemctl restart api", "the item names this service", []string{"no sudo"}, nil
 }
 
 // TEST CONNECTION IS KEPT AS THE SERVER'S LATEST TEST WITH ITS AUTHORITY: the
@@ -246,6 +275,105 @@ func TestTestConnectionIsKeptAsTheServersLatestTest(t *testing.T) {
 	if audit.Code != http.StatusOK || !strings.Contains(audit.Body.String(), `"command":"systemctl restart api"`) {
 		t.Errorf("the command audit = %d: %s", audit.Code, audit.Body)
 	}
+}
+
+// THE AUDIT ANSWERS VERDICTS WITH THEIR FILTERS: kind=verdict hands the
+// reader every filter the query names, the verdict's own words included, and
+// answers each row's fields with what it decided and its giver's words opened,
+// or says a row did not open rather than leaving it out; a verdict filter on
+// another kind, and a flag that is not true or false, are refused naming the
+// field; and the page's bound is the reader's own, so every limit the route
+// admits is one the reader answers.
+//
+// Mutation: bound the limit at 200 again and a limit of MaxPageSize+1 reaches
+// the reader; drop verdictFilters and a command page answered verdict=deny
+// unnarrowed.
+func TestTheSSHAuditAnswersVerdictsWithTheirFilters(t *testing.T) {
+	t.Parallel()
+	access := &fakeSSHAccess{}
+	s := newSurfaceWithSSH(t, access, coordmemory.NewFleet())
+	s.seed(t)
+	limit := strconv.Itoa(accessdomain.MaxPageSize)
+	res := s.do(t, http.MethodGet, "/setup/integrations/ssh/audit?kind=verdict&seat=sre&host=api-1"+
+		"&by=reviewer&request=call-1&verdict=escalate&by_kind=agent&delegation_kind=ssh_operate"+
+		"&final=true&sampled=false&since=2026-11-08T09:00:00Z&cursor=40&limit="+limit, "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("the verdict audit = %d: %s", res.Code, res.Body)
+	}
+	yes, no := true, false
+	want := accessdomain.VerdictQuery{Handle: "sre", Host: "api-1", By: "reviewer", Request: "call-1",
+		Verdict: delegated.Escalate, ByKind: accessdomain.VerdictByAgent,
+		Kind: delegated.KindSSHOperate, Final: &yes, Sampled: &no,
+		Since: time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC), Cursor: "40", Limit: accessdomain.MaxPageSize}
+	if len(access.verdictsAsked) != 1 || fmt.Sprintf("%+v", deref(access.verdictsAsked[0])) != fmt.Sprintf("%+v", deref(want)) {
+		t.Fatalf("the reader was asked %+v, want %+v", access.verdictsAsked, deref(want))
+	}
+	var page struct {
+		Kind     string           `json:"kind"`
+		Rows     []map[string]any `json:"rows"`
+		Next     string           `json:"next"`
+		Complete bool             `json:"complete"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Kind != "verdict" || len(page.Rows) != 2 || page.Next != "17" || !page.Complete {
+		t.Fatalf("the page is %s", res.Body)
+	}
+	opened, unopened := page.Rows[0], page.Rows[1]
+	for field, value := range map[string]any{"seat": "sre", "request": "call-1", "kind": "ssh_operate",
+		"rule": float64(1), "by": "reviewer", "by_kind": "agent", "through": "delegation", "asked": "allow",
+		"confidence": "low", "verdict": "escalate", "final": true, "sampled": false, "host": "api-1",
+		"subject": "systemctl restart api", "reason": "the item names this service"} {
+		if opened[field] != value {
+			t.Errorf("the verdict's %s is %v, want %v", field, opened[field], value)
+		}
+	}
+	if fmt.Sprint(opened["overruled"]) != "[low_confidence]" || fmt.Sprint(opened["findings"]) != "[no sudo]" {
+		t.Errorf("the verdict's lists are %v and %v", opened["overruled"], opened["findings"])
+	}
+	for _, field := range []string{"seat", "request", "kind", "rule", "turn", "by", "by_kind", "through",
+		"asked", "confidence", "verdict", "final", "overruled", "sampled", "digest", "host", "user",
+		"stdin_bytes", "stdin_sha256", "decision", "item", "at"} {
+		if _, ok := unopened[field]; !ok {
+			t.Errorf("a verdict that did not open answers no %s", field)
+		}
+	}
+	if _, ok := unopened["subject"]; ok || unopened["subject_unopened"] == nil {
+		t.Errorf("a verdict that did not open answers %v", unopened)
+	}
+	for _, refused := range []struct{ query, field string }{
+		{"kind=command&verdict=deny", "verdict"},
+		{"by_kind=engine", "by_kind"},
+		{"kind=certificate&delegation_kind=ssh_operate", "delegation_kind"},
+		{"kind=verdict&final=yes", "final"},
+		{"kind=verdict&limit=" + strconv.Itoa(accessdomain.MaxPageSize+1), "limit"},
+		{"kind=decision", "kind"},
+	} {
+		res := s.do(t, http.MethodGet, "/setup/integrations/ssh/audit?"+refused.query, "", nil)
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"field":"`+refused.field+`"`) {
+			t.Errorf("%s = %d: %s; want 400 naming %s", refused.query, res.Code, res.Body, refused.field)
+		}
+	}
+	if len(access.verdictsAsked) != 1 {
+		t.Errorf("a refused audit reached the reader: %+v", access.verdictsAsked[1:])
+	}
+}
+
+// deref is a query with its flags as values, for a comparison by value.
+func deref(q accessdomain.VerdictQuery) any {
+	flag := func(b *bool) string {
+		if b == nil {
+			return "unset"
+		}
+		return strconv.FormatBool(*b)
+	}
+	out := q
+	out.Final, out.Sampled = nil, nil
+	return struct {
+		Query          accessdomain.VerdictQuery
+		Final, Sampled string
+	}{out, flag(q.Final), flag(q.Sampled)}
 }
 
 // newSurfaceWithSSH is the fixture surface over access and tests.
@@ -410,5 +538,27 @@ func TestARotationPromotesOnlyOnceEveryServerPassedWithTheStagedAuthority(t *tes
 	}
 	if res := rotate("rotate"); res.Code != http.StatusBadRequest {
 		t.Errorf("an unknown action = %d: %s", res.Code, res.Body)
+	}
+}
+
+// THE AUDIT'S PAGE IS THE READER'S OWN: the route admits every limit up to the
+// access log's page and refuses the first past it, naming the field, rather
+// than admitting a page the reader then refuses as an error of its own.
+//
+// Mutation: bound the route at 200 again, and a limit one past the reader's
+// page is admitted.
+func TestTheSSHAuditsPageIsTheReadersOwn(t *testing.T) {
+	t.Parallel()
+	s := newSurfaceWithSSH(t, &fakeSSHAccess{}, coordmemory.NewFleet())
+	s.seed(t)
+	at := func(limit int) *httptest.ResponseRecorder {
+		return s.do(t, http.MethodGet, "/setup/integrations/ssh/audit?kind=command&limit="+strconv.Itoa(limit), "", nil)
+	}
+	if res := at(accessdomain.MaxPageSize); res.Code != http.StatusOK {
+		t.Errorf("a page of the reader's own size = %d: %s", res.Code, res.Body)
+	}
+	if res := at(accessdomain.MaxPageSize + 1); res.Code != http.StatusBadRequest ||
+		!strings.Contains(res.Body.String(), `"field":"limit"`) {
+		t.Errorf("a page past the reader's = %d: %s", res.Code, res.Body)
 	}
 }

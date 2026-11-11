@@ -989,6 +989,36 @@ func TestARequestTheTrackerRefusedIsNotToldToTryAgain(t *testing.T) {
 	}
 }
 
+// A CURSOR THE TRACKER REFUSES IS DROPPED, NEVER RETRIED. A listing sorted by
+// the org chart or the type catalogue refuses a cursor minted before either
+// was edited, and the same cursor is refused on every attempt, so the tool
+// names the argument to drop: `cursor` on a listing, `comments_cursor` on an
+// item. It was a node's failure once, and the model was told to try again.
+//
+// Mutation: drop either tool's ErrBadCursor arm and its case goes red.
+func TestARefusedCursorIsToldToBeDropped(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.readErr = fmt.Errorf("%w: it was minted for another order", worklet.ErrBadCursor)
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	for name, drop := range map[string]string{
+		builtin.ListWorkItemsTool: "without `cursor`",
+		builtin.GetWorkItemTool:   "without `comments_cursor`",
+	} {
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		got := callWork(t, reg, name, declaredOf(entry.Tool,
+			map[string]any{"item": "ENG-1"}))
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+			!strings.Contains(got.Output, drop) || strings.Contains(got.Output, "worklet:") {
+			t.Errorf("%s on a refused cursor says %q (%s), want it to ask again %s",
+				name, got.Output, tools.RefusalOf(got), drop)
+		}
+	}
+}
+
 // A FAILED WRITE SAYS THE CHANGE WAS NOT MADE, or the model reports work it
 // did not do — and one that met a FAULT of the node says it was not done
 // without claiming either way, and keeps the fault's own words out of the

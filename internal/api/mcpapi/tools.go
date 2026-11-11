@@ -73,9 +73,9 @@ func (o *optionalLevel) UnmarshalJSON(raw []byte) error {
 // toolsShape is the body, as a refusal names it.
 const toolsShape = `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": "allow"|"approve"|"blocked"|null}}`
 
-// maxToolsBody bounds the body: a level for each of a listing's most tools
-// ([coord.MaxMCPListedTools], 256), each name at a tool name's longest, with
-// room for the summary.
+// maxToolsBody bounds the body: a level for each of the most tools one server
+// lists (internal/mcp's MaxServerTools, 1,024), each name at a tool name's
+// longest (about 150 bytes a level), with room for the summary.
 const maxToolsBody = 256 << 10
 
 // ToolsAnswer is what the route answers beside the configuration's own answer

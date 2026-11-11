@@ -115,19 +115,21 @@ var mcpListingCases = []fleetCase{{
 		}
 	},
 }, {
-	// A LISTING IS SOMEBODY ELSE'S WORDS, BOUNDED BY THE STORE: a server
-	// lists as many tools as it likes with descriptions as long as it
-	// likes, and whatever the writer hands over, the record holds at most
-	// MaxMCPListedTools, the first by name, each text cut, with the count
-	// travelling whole.
-	name: "a listing is held to its bounds and counted whole",
+	// A LISTING NAMES EVERY TOOL, BOUNDED BY THE BYTES IT IS STORED AS: a
+	// server lists as many tools as it likes with descriptions as long as
+	// it likes, and whatever the writer hands over, the record holds every
+	// tool by name, each text cut and the words cut further, marked, until
+	// the record encodes within MaxMCPListingBytes. A tool a listing did not
+	// name could never be reviewed, so a call to it would ask for ever.
+	name: "a listing names every tool, its words cut to fit its bytes",
 	fn: func(h *fleetHarness) {
 		l := h.listing("big", "node-a", 1)
-		total := coord.MaxMCPListedTools + 9
+		const total = 1000
 		for i := range total {
 			name := fmt.Sprintf("tool_%04d", total-i)
 			l.Tools = append(l.Tools, coord.MCPListedTool{
-				Name: name, Raw: name, Description: strings.Repeat("d", 3*coord.MaxMCPToolDescriptionBytes),
+				// `<` is stored as six bytes: the bound is on what is stored.
+				Name: name, Raw: name, Description: strings.Repeat("<", 3*coord.MaxMCPToolDescriptionBytes),
 				Title: strings.Repeat("t", 3*coord.MaxMCPToolTitleBytes),
 				Hints: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
 					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
@@ -144,17 +146,19 @@ var mcpListingCases = []fleetCase{{
 			h.t.Fatalf("listed %+v", got)
 		}
 		read := got[0]
-		if len(read.Tools) != coord.MaxMCPListedTools || read.ToolCount != total {
-			h.t.Fatalf("stored %d tools of %d, want %d of %d",
-				len(read.Tools), read.ToolCount, coord.MaxMCPListedTools, total)
+		if len(read.Tools) != total {
+			h.t.Fatalf("stored %d tools of %d", len(read.Tools), total)
 		}
-		if read.Tools[0].Name != "tool_0001" {
-			h.t.Errorf("the first tool kept is %q, want the first by name", read.Tools[0].Name)
+		for i, tool := range read.Tools {
+			if want := fmt.Sprintf("tool_%04d", i+1); tool.Name != want || tool.Digest != aDigest(want) {
+				h.t.Fatalf("tool %d is %q, want %q by name with its digest", i, tool.Name, want)
+			}
 		}
-		if n := len(read.Tools[0].Description); n > coord.MaxMCPToolDescriptionBytes {
-			h.t.Errorf("a description travelled as %d bytes", n)
+		first := read.Tools[0]
+		if n := len(first.Description); n > coord.MaxMCPToolDescriptionBytes || !strings.HasSuffix(first.Description, "…") {
+			h.t.Errorf("a description travelled as %d bytes, %q", n, first.Description)
 		}
-		if n := len(read.Tools[0].Title); n > coord.MaxMCPToolTitleBytes {
+		if n := len(first.Title); n > coord.MaxMCPToolTitleBytes {
 			h.t.Errorf("a title travelled as %d bytes", n)
 		}
 		if n := len(read.Instructions); n > coord.MaxMCPInstructionsBytes {
@@ -170,8 +174,39 @@ var mcpListingCases = []fleetCase{{
 		if err != nil {
 			h.t.Fatal(err)
 		}
-		if len(raw) > 512<<10 {
-			h.t.Errorf("the largest listing a node can write encodes to %d bytes, past half a mebibyte", len(raw))
+		if len(raw) > coord.MaxMCPListingBytes {
+			h.t.Errorf("the listing encodes to %d bytes, past %d", len(raw), coord.MaxMCPListingBytes)
+		}
+
+		// A FEW TOOLS KEEP THEIR WORDS to their own bounds.
+		few := h.listing("small", "node-a", 1)
+		few.Tools = append(few.Tools, l.Tools[:3]...)
+		if kept := h.putListing(h.f, few).Tools[0]; len(kept.Description) != coord.MaxMCPToolDescriptionBytes {
+			h.t.Errorf("three tools' descriptions kept %d bytes, want %d", len(kept.Description),
+				coord.MaxMCPToolDescriptionBytes)
+		}
+	},
+}, {
+	// A LISTING WHOSE TOOLS' IDENTITIES ALONE ARE PAST ITS BYTES IS REFUSED,
+	// saying so, never cut: what it would leave out could never be reviewed.
+	name: "a listing whose identities alone are past its bytes is refused, never cut",
+	fn: func(h *fleetHarness) {
+		l := h.listing("huge", "node-a", 1)
+		for i := range 4000 {
+			name := fmt.Sprintf("%s%04d", strings.Repeat("<", 100), i)
+			l.Tools = append(l.Tools, coord.MCPListedTool{Name: name, Raw: name, Description: "d",
+				Hints: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
+					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
+				Declared: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
+					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
+				Digest: aDigest(name), Instances: 1, Parts: aParts(name)})
+		}
+		_, err := h.f.PutMCPListing(h.ctx, l)
+		if err == nil || !strings.Contains(err.Error(), "refused rather than cut") {
+			h.t.Fatalf("a listing past its bytes was answered %v, want a refusal saying it is not cut", err)
+		}
+		if got := h.listings(); len(got) != 0 {
+			h.t.Errorf("a refused listing left %d records", len(got))
 		}
 	},
 }, {

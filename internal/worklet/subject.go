@@ -287,6 +287,12 @@ const (
 	// deletion rests on there being none of.
 	KindFile ObjectKind = "file"
 
+	// KindRoster is the order of the org chart's seats by their names, on
+	// ONE subject ([RosterSubject]), reconciled from the chart by
+	// [Writer.ApplyChart] and read by `sort=assignee` through
+	// `tracker_seat_places`. Machinery: no audience and no history row.
+	KindRoster ObjectKind = "roster"
+
 	// KindTrimmed is the trim's record that removes the arbitration
 	// anchors below what the log no longer holds — [statelog.TrimmedKind],
 	// ADR-0080 — on one subject per floor, which the subject's id names.
@@ -310,7 +316,7 @@ var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
-	KindFile, KindTrimmed,
+	KindFile, KindTrimmed, KindRoster,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -427,6 +433,9 @@ func PersonSubject(handle string) Subject {
 func RankOrderSubject(key string) Subject {
 	return Subject{Kind: KindRankOrder, ID: key}
 }
+
+// RosterSubject names the org chart's seat order, the one object of its kind.
+func RosterSubject() Subject { return Subject{Kind: KindRoster, ID: "seats"} }
 
 // EvictionSubject names one node's eviction or readmission by its node id.
 // A record here installs an apply gate, which is why it is addressed to the

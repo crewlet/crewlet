@@ -198,9 +198,6 @@ var classified = map[string]struct {
 
 	"estate.ServerSeams.Units": {seamValue, "the unit a tracker read renders"},
 	"estate.ServerSeams.Leads": {seamValue, "the leads a dependency's wakes fall back to"},
-	"estate.ServerSeams.Roster": {seamValue, "the seats' names a task listing's sort=assignee " +
-		"orders by: a page read under names a revision then changed is in an order the reader " +
-		"could have asked for a moment before, and its cursor is refused after the change"},
 	"estate.ServerSeams.Seat": {seamValue, "a searching seat's role and the org-wide scope " +
 		"its knowledge search covers"},
 

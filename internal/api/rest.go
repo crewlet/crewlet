@@ -101,6 +101,9 @@ var namedRoutes = []struct {
 	// THE CHANGE AN ACCESS REQUEST WOULD MAKE, `seat=` and `access=`.
 	{method: "GET", pattern: "/advisor/access", what: "advisor_access"},
 	{method: "GET", pattern: "/advisor/review", what: "go_live_review"},
+	// WHAT DELEGATES DECIDED, the rules and limits they decide under, the
+	// day's digest and the week's spot-checks (ADR-0125).
+	{method: "GET", pattern: "/delegated-decisions", what: "delegated_decisions"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.

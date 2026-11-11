@@ -765,7 +765,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			// included, since its answer can still arrive — and put to
 			// this person: [putTo] asks both, as the board's audience
 			// filter does.
-			if !putTo(run, handle) {
+			if !putTo(run, handle, s.delegating) {
 				continue
 			}
 			at := waitingSince(run)

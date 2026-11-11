@@ -252,6 +252,7 @@ var contract = []Entry{
 	{"McpApprovalOutcome", ReadUnion, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
 	{"McpHeldWhole", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheHeldCallReadSends"},
 	{"McpChangesAnswer", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheRouteSends"},
+	{"McpChangesPartial", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatAPartialWriteSends"},
 
 	// tools.ts
 	{"ToolRow", ReadInterface, "internal/api/queries.TestTheCatalogueIsWhatTheToolScreensRead"},
@@ -823,6 +824,23 @@ var contract = []Entry{
 	{"AccessManaged", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessManagedBy", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessRefusalField", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+
+	// delegated.ts
+	{"DelegatedDecisionsAnswer", ReadInterface,
+		"internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedRule", ReadInterface, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedLimits", ReadInterface, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedVerdictRow", ReadInterface,
+		"internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedAct", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedVerdict", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedConfidence", ReadUnion,
+		"internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedGiver", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedPath", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"HeldDelegation", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},
+	{"HeldDelegateAnswer", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},
+	{"HeldEscalation", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},
 }
 
 // Contract is every declaration the engine's gates read out of the

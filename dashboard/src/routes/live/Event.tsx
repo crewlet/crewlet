@@ -30,6 +30,8 @@ import {
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { DelegatedMark } from "~/components/Delegation.tsx";
+import { delegatedRuleOf } from "~/lib/delegation.ts";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
@@ -114,6 +116,10 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
       path: event.trace_id ? ["live", "traces", event.trace_id] : undefined,
       token: Boolean(event.trace_id),
     },
+    // AN ANSWER A DELEGATE GAVE says so, with its rule (ADR-0125).
+    ...(delegatedRuleOf(event) !== null
+      ? [{ label: "Answered", value: <DelegatedMark rule={delegatedRuleOf(event)!} /> }]
+      : []),
   ];
 }
 

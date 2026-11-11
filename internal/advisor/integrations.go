@@ -32,19 +32,16 @@ func fromIntegration(kind integration.Kind, name string, f integration.Finding) 
 		Class: Class("integration." + string(f.Kind)), Severity: severityOf(phase),
 		Actor: ActorEngine, Source: SourceReconcile, Area: AreaIntegrations,
 		Subject: Subject{Kind: SubjectIntegration, Name: name},
-		Title:   f.Title, Why: f.Detail, Path: "integrations." + string(kind),
+		Title:   f.Label(), Why: f.Detail, Path: "integrations." + string(kind),
 		Evidence: []Fact{},
 		Fix: Fix{Kind: FixNone, Sentence: "The engine is carrying this forward; nothing to do.",
 			Options: []Option{}},
 	}
-	if out.Title == "" {
-		// The reconcile's subject names which one, so two findings of a kind
-		// on one surface (two agents' refusals, say) do not read alike.
-		out.Title = name + ": " + strings.ReplaceAll(string(f.Kind), "_", " ")
-		if f.Subject != "" {
-			out.Title += " (" + f.Subject + ")"
-		}
-		out.Title += "."
+	if strings.TrimSpace(f.Title) == "" {
+		// THE KIND'S OWN WORDS say "this integration", and this list holds
+		// every surface's findings, so it names the surface; the subject in
+		// the label tells two findings of a kind on one surface apart.
+		out.Title = name + ": " + out.Title + "."
 	}
 	if actor == integration.ActorAdmin || actor == integration.ActorOperator {
 		out.Actor = ActorOwner

@@ -339,7 +339,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	if code != http.StatusOK {
 		t.Fatalf("an admin read %d %v", code, body)
 	}
-	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools", "tool_count",
+	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools",
 		"baseline", "unlisted_levels", "server_info", "instructions", "dependants", "instances",
 		"instance_nodes", "last_success", "last_failure", "resolved", "usage", "calls", "last_check", "values",
 		"reaches", "changes")
@@ -404,7 +404,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	if err := json.Unmarshal(w.Body.Bytes(), &member); err != nil {
 		t.Fatal(err)
 	}
-	holdKeys(t, "a member's detail", member, "reading", "server", "nodes", "listed", "tools", "tool_count",
+	holdKeys(t, "a member's detail", member, "reading", "server", "nodes", "listed", "tools",
 		"server_info", "instances", "instance_nodes", "last_success", "last_failure", "resolved", "usage")
 	holdKeys(t, "a member's usage", member["usage"].(map[string]any), "since", "until", "days", "tools",
 		"elided")

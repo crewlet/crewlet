@@ -2,10 +2,7 @@ package mcpapi
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -20,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -210,14 +208,27 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 
 // approverPolicy is who may answer run's held call, decided now that the call
 // is read. An SSH operate command is an administrator's or a person's the
-// company names in integrations.ssh.approvers, at the step-up window; every
-// other call is the seat's lead's or an administrator's, on the seat's own
-// record, as answering its run's question is.
+// company names in integrations.ssh.approvers or its delegated-decisions
+// rule's escalate_to, at the step-up window, whether or not its delegates
+// have answered it yet; a merge or a deploy is the seat's lead's, an
+// administrator's or a person's its rule names in escalate_to, at the step-up
+// window; every other call is the seat's lead's or an administrator's, on the
+// seat's own record, as answering its run's question is.
 func (s *Service) approverPolicy(run sandbox.PendingRun) authz.Policy {
+	if run.HeldCall.Approvers == sandbox.HeldApproversRelease {
+		var named []string
+		if company := s.company(); company != nil {
+			named = company.DelegatedDecisions.EscalateFor(delegated.Kind(run.HeldCall.Act))
+		}
+		return authz.Policy{Action: authz.ActionReleaseApprove,
+			Object: func(*http.Request) authz.Object {
+				return authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Owner: run.AgentHandle, Named: named}
+			}}
+	}
 	if run.HeldCall.Approvers == sandbox.HeldApproversSSH {
 		var named []string
-		if company := s.company(); company != nil && company.Integrations.SSH != nil {
-			named = company.Integrations.SSH.Approvers
+		if company := s.company(); company != nil {
+			named = company.SSHMayApprove()
 		}
 		return authz.Policy{Action: authz.ActionSSHOperateApprove,
 			Object: func(*http.Request) authz.Object {
@@ -285,17 +296,6 @@ func readWhole(held sandbox.HeldCall) bool {
 	return held.Fixed && held.Approvers == sandbox.HeldApproversSSH
 }
 
-// argumentsDigest is the SHA-256, in hex, of a held call's arguments as JSON
-// with sorted keys: what an approver who read them names.
-func argumentsDigest(args map[string]any) (string, error) {
-	data, err := json.Marshal(args)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
-}
-
 // openHeld is the arguments run's held call would send and their digest,
 // answering a refusal itself where they do not open here.
 func (s *Service) openHeld(w http.ResponseWriter, run sandbox.PendingRun) (map[string]any, string, bool) {
@@ -306,7 +306,7 @@ func (s *Service) openHeld(w http.ResponseWriter, run sandbox.PendingRun) (map[s
 	}
 	digest := ""
 	if err == nil {
-		digest, err = argumentsDigest(args)
+		digest, err = sandbox.HeldArgumentsDigest(args)
 	}
 	if err != nil {
 		log.Warn("mcp_approval_arguments_unopened", "approval", run.HeldCall.ID, "error", err.Error())

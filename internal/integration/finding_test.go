@@ -449,3 +449,27 @@ func TestPromoteLeavesAnOrderedListAlone(t *testing.T) {
 		t.Error("Promote invented a finding from nothing")
 	}
 }
+
+// A FINDING'S LABEL IS ITS TITLE, OR ITS KIND'S OWN WORDS ABOUT ITS SUBJECT,
+// so a list that gives each finding one line never shows an empty one, and two
+// findings of a kind about two subjects read apart.
+//
+// Mutation: answer the title alone and an untitled finding's line is empty;
+// leave the subject out and two agents' refusals read alike.
+func TestEveryFindingHasALabel(t *testing.T) {
+	t.Parallel()
+	titled := Finding{Kind: FindingIngressBlocked, Title: "GitHub can't reach this engine"}
+	if got := titled.Label(); got != titled.Title {
+		t.Errorf("a titled finding is labelled %q, want its title", got)
+	}
+	if got, want := (Finding{Kind: FindingIdentityFailed, Subject: "sre"}).Label(),
+		"An agent identity could not be created for sre"; got != want {
+		t.Errorf("an untitled finding is labelled %q, want %q", got, want)
+	}
+	for _, kind := range append(slices.Clone(knownKinds), "a kind a newer build found") {
+		pm, sre := Finding{Kind: kind, Subject: "pm"}.Label(), Finding{Kind: kind, Subject: "sre"}.Label()
+		if pm == "" || pm == sre || pm[:1] != strings.ToUpper(pm[:1]) {
+			t.Errorf("%s is labelled %q and %q", kind, pm, sre)
+		}
+	}
+}

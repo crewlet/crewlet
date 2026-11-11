@@ -273,9 +273,13 @@ func (e *Engine) toldMemory(ctx context.Context, rows []accessdomain.ToldRow) []
 }
 
 // capabilityInput is what a seat's snapshot is read from: the document, the
-// access ledger's observed state for each connected kind, and the seat's tool
-// servers. An unreadable ledger is an error: a snapshot without it would say
-// a seat holds nothing it holds.
+// access ledger's observed state for each connected kind and the vendor's
+// names for the seat's grant its last writing sync recorded, and the seat's
+// tool servers. An unreadable ledger is an error: a snapshot without it would
+// say a seat holds nothing it holds.
+//
+// NO VENDOR IS ASKED: a turn's dispatch waits on no vendor, and its section
+// says what the vendor last called the level rather than its id.
 func (e *Engine) capabilityInput(ctx context.Context, company *Company, handle string) (capability.Input, error) {
 	return e.capabilityInputOf(ctx, company.Config, company.Org, handle)
 }
@@ -287,7 +291,7 @@ func (e *Engine) capabilityInputOf(ctx context.Context, cfg *config.Company, o *
 	handle string) (capability.Input, error) {
 
 	in := capability.Input{Company: cfg, Handle: handle,
-		Observed: map[seataccess.Lane]seataccess.Observed{}}
+		Observed: map[seataccess.Lane]seataccess.Observed{}, Words: map[seataccess.Lane]capability.Words{}}
 	var kinds []integration.Kind
 	for _, kind := range integration.Kinds {
 		if cfg.SeatAccessConnected(string(kind)) {
@@ -311,6 +315,9 @@ func (e *Engine) capabilityInputOf(ctx context.Context, cfg *config.Company, o *
 			}
 			for lane, lr := range rec.Lanes {
 				in.Observed[lane] = lr.Observed
+				if lr.Words != nil {
+					in.Words[lane] = capability.RecordedWords(kind, lane, lr.Words)
+				}
 			}
 		}
 	}

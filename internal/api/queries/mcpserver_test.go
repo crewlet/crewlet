@@ -103,17 +103,17 @@ func TestTwoNodesListingsOfAServerMergeIntoItsDetail(t *testing.T) {
 		{Server: "github", Node: "node-a", Epoch: live["node-a"], At: at, Instances: 2,
 			Info:         &coord.MCPServerInfo{Name: "github-mcp", Version: "1.3.0", Protocol: "2026-07-28"},
 			Instructions: "old words",
-			Tools:        []coord.MCPListedTool{createIssue, getIssue}, ToolCount: 2},
+			Tools:        []coord.MCPListedTool{createIssue, getIssue}},
 		{Server: "github", Node: "node-b", Epoch: live["node-b"], At: at.Add(time.Minute), Instances: 3,
 			Info:         &coord.MCPServerInfo{Name: "github-mcp", Title: "GitHub", Version: "1.4.0", Protocol: "2026-07-28"},
 			Instructions: "Search before you create.",
-			Tools:        []coord.MCPListedTool{createIssueNew}, ToolCount: 1},
+			Tools:        []coord.MCPListedTool{createIssueNew}},
 		// A NODE THAT DRAINED, and node-a's previous incarnation: neither
 		// counts, though each record is still there.
 		{Server: "github", Node: "node-gone", Epoch: 4, At: at, Instances: 1,
-			Tools: []coord.MCPListedTool{listed("gh_delete_repo", "Delete a repository", unannotated, 1)}, ToolCount: 1},
+			Tools: []coord.MCPListedTool{listed("gh_delete_repo", "Delete a repository", unannotated, 1)}},
 		{Server: "docs", Node: "node-a", Epoch: live["node-a"] + 1, At: at, Instances: 1,
-			Tools: []coord.MCPListedTool{listed("gh_search", "Search", readOnly, 1)}, ToolCount: 1},
+			Tools: []coord.MCPListedTool{listed("gh_search", "Search", readOnly, 1)}},
 	}
 	schemas := map[string]coord.MCPToolDefinition{
 		getIssue.Digest: {Digest: getIssue.Digest, Input: json.RawMessage(`{"type":"object","required":["number"]}`),
@@ -146,9 +146,8 @@ func TestTwoNodesListingsOfAServerMergeIntoItsDetail(t *testing.T) {
 	if got.ServerInfo == nil || got.ServerInfo.Version != "1.4.0" || got.Instructions != "Search before you create." {
 		t.Errorf("identity = %+v, %q, want the listing changed last", got.ServerInfo, got.Instructions)
 	}
-	if len(got.Tools) != 2 || got.ToolCount != 2 {
-		t.Fatalf("tools = %+v (count %d), want create_issue and get_issue, the drained node's left out",
-			got.Tools, got.ToolCount)
+	if len(got.Tools) != 2 {
+		t.Fatalf("tools = %+v, want create_issue and get_issue, the drained node's left out", got.Tools)
 	}
 	create, read := got.Tools[0], got.Tools[1]
 	if create.Name != "gh_create_issue" || create.Digest != createIssueNew.Digest ||
@@ -206,7 +205,7 @@ func TestAServersDetailNamesNoCredential(t *testing.T) {
 		if err := json.Unmarshal(raw, &shape); err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{"server", "nodes", "listed", "tools", "tool_count",
+		for _, key := range []string{"server", "nodes", "listed", "tools",
 			"server_info", "instructions", "dependants", "usage", "calls"} {
 			if _, ok := shape[key]; !ok {
 				t.Errorf("%s's detail has no %q", server, key)

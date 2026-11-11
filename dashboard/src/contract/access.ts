@@ -352,6 +352,8 @@ export interface AccessSeatLane {
   /** When a pass last read the vendor for this lane, a dry run included; `sync.at` is the last writing sync. */
   observed_at?: string;
   status: AccessLaneStatus;
+  /** The status in the tab's words, which a status this bundle does not know is drawn by. */
+  status_label: string;
   sync?: AccessSync;
   /** What the next sync does for this lane as the document stands. */
   plan: AccessStep[];

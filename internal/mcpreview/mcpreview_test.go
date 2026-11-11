@@ -42,8 +42,7 @@ var (
 )
 
 func listing(node string, tools ...coord.MCPListedTool) coord.MCPListing {
-	return coord.MCPListing{Server: "wiki", Node: node, Epoch: 1, At: at, Instances: 1, Tools: tools,
-		ToolCount: len(tools)}
+	return coord.MCPListing{Server: "wiki", Node: node, Epoch: 1, At: at, Instances: 1, Tools: tools}
 }
 
 func accepted(tools ...coord.MCPListedTool) map[string]coord.MCPAcceptedTool {
@@ -174,8 +173,8 @@ func TestAChangeSaysWhichPartsOfTheDefinitionMoved(t *testing.T) {
 
 // A REMOVED TOOL KEEPS ITS ROW (the series' named invariant): an accepted tool
 // no live listing names is a removal, until a removal is accepted; judged only
-// where the listings can say, so a node that lists no tool of the server, or a
-// listing cut at its bound, never reads as every tool removed.
+// where the listings can say, so a node that lists no tool of the server never
+// reads as every tool removed.
 func TestARemovedToolKeepsItsRow(t *testing.T) {
 	t.Parallel()
 	search := tool("search", "Search", "Search the wiki", "s1", readOnly)
@@ -188,11 +187,6 @@ func TestARemovedToolKeepsItsRow(t *testing.T) {
 	}
 	if got := mcpreview.Changes(nil, base); len(got) != 0 {
 		t.Errorf("with no live listing the server's tools read as %+v", got)
-	}
-	cut := listing("node-a", search)
-	cut.ToolCount = 300
-	if got := mcpreview.Changes([]coord.MCPListing{cut}, base); len(got) != 0 {
-		t.Errorf("a listing cut at its bound read as %+v", got)
 	}
 	base["purge"] = mcpreview.Removing("wiki", "purge", "ana", at)
 	if got := mcpreview.Changes([]coord.MCPListing{listing("node-a", search)}, base); len(got) != 0 {

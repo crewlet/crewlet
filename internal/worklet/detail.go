@@ -104,7 +104,9 @@ type DetailWants struct {
 	// [DetailHistoryDefault].
 	HistoryLimit int
 
-	// CommentCursor pages the thread. Empty starts at the newest.
+	// CommentCursor pages the thread: a page's own cursor, handed back
+	// unchanged. Empty starts at the newest; anything else is refused
+	// ([ErrBadCursor]).
 	CommentCursor string
 
 	// CommentThread narrows the pages to the conversation around one
@@ -475,6 +477,12 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	if idOrKey == "" {
 		return TaskDetail{}, fmt.Errorf("worklet: name a task by id or by key")
 	}
+	// THE CURSOR BEFORE THE READ, for the reason [feedPositions] gives: one
+	// refused inside the transaction fails as the read does.
+	after, refused := parseCommentCursor(want.CommentCursor)
+	if refused != nil {
+		return TaskDetail{}, refused
+	}
 	var out TaskDetail
 	// A READ THAT REPORTS ITS COVERAGE rather than refusing: a record this
 	// node cannot decode covering the task is served beside the rows with
@@ -523,7 +531,7 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			}
 		case want.Comments:
 			out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
-				want.CommentThread, want.CommentCursor, commentPage(want.CommentLimit))
+				want.CommentThread, after, commentPage(want.CommentLimit))
 			if err != nil {
 				return err
 			}
@@ -900,8 +908,8 @@ const CommentPageBytes = 16 << 10
 // A [CommentThread] with a root narrows the page to that conversation; see
 // the type for why that happens here rather than in the caller.
 func readComments(ctx context.Context, tx *sql.Tx, taskID string, thread CommentThread,
-	cursor string, limit int) ([]Comment, string, error) {
-	return readCommentPage(ctx, tx, taskID, thread, cursor, limit, CommentPageBytes)
+	after commentCursor, limit int) ([]Comment, string, error) {
+	return readCommentPage(ctx, tx, taskID, thread, after, limit, CommentPageBytes)
 }
 
 // readCommentPage is [readComments] with the byte budget a parameter, so the
@@ -912,7 +920,7 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID string, thread Comment
 // last comment this page RETURNED — the same rule the count follows, for the
 // same reason.
 func readCommentPage(ctx context.Context, tx *sql.Tx, taskID string, thread CommentThread,
-	cursor string, limit, maxBytes int) ([]Comment, string, error) {
+	after commentCursor, limit, maxBytes int) ([]Comment, string, error) {
 
 	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
 	// IS a next page without a second count over a table that grows for
@@ -922,7 +930,7 @@ func readCommentPage(ctx context.Context, tx *sql.Tx, taskID string, thread Comm
 		WHERE task_id = ? AND (? = '' OR (created_at, id) < (?, ?))
 		  AND (? = '' OR reply_to = ? OR answers = ? OR (? AND id = ?))
 		ORDER BY created_at DESC, id DESC
-		LIMIT ?`, taskID, cursor, cursorAt(cursor), cursorID(cursor),
+		LIMIT ?`, taskID, after.id, after.at, after.id,
 		thread.Root, thread.Root, thread.Root, thread.WithRoot, thread.Root,
 		limit+1)
 	if err != nil {
@@ -1018,15 +1026,27 @@ func formatCommentCursor(at int64, id string) string {
 	return strconv.FormatInt(at, 10) + ":" + id
 }
 
-func cursorAt(cursor string) int64 {
-	at, _, _ := strings.Cut(cursor, ":")
-	n, _ := strconv.ParseInt(at, 10, 64)
-	return n
+// commentCursor is a thread page's place: the instant and the id of the last
+// comment it returned. Its zero value is the newest page's, which has none.
+type commentCursor struct {
+	at int64
+	id string
 }
 
-func cursorID(cursor string) string {
-	_, id, _ := strings.Cut(cursor, ":")
-	return id
+// parseCommentCursor reads [formatCommentCursor] back, and refuses anything
+// else: read leniently, a cursor that was not one bounded the page below the
+// zero instant and answered an empty thread as its last page.
+func parseCommentCursor(raw string) (commentCursor, error) {
+	if raw == "" {
+		return commentCursor{}, nil
+	}
+	at, id, ok := strings.Cut(raw, ":")
+	n, err := strconv.ParseInt(at, 10, 64)
+	if !ok || err != nil || id == "" {
+		return commentCursor{}, fmt.Errorf("%w: %q is not a comment cursor; pass "+
+			"a page's own cursor back unchanged", ErrBadCursor, raw)
+	}
+	return commentCursor{at: n, id: id}, nil
 }
 
 // taskHistoryStatement is [readHistory]'s one statement, named so the plan

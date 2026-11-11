@@ -1,8 +1,9 @@
 // Package accessdomain is the state log's record of each seat's ACCESS
-// (ADR-0103): what every turn of a seat was told about its own access, and every
+// (ADR-0103): what every turn of a seat was told about its own access, every
 // SSH certificate the engine signed and SSH command it ran or a person denied,
-// on the `CREWLET_ACCESS_LOG` stream and applied into every data node's
-// replicated estate.
+// and every verdict on a request delegated to an agent seat (ADR-0125), on the
+// `CREWLET_ACCESS_LOG` stream and applied into every data node's replicated
+// estate.
 //
 // # Who has to agree on it
 //
@@ -16,12 +17,14 @@
 // # Every record is created once
 //
 // A told record is keyed by its seat and turn, a certificate by its seat and
-// serial, a command by its seat and its own id, each on a subject of its own
-// and published first-writer-wins, so a retried write lands once and a second
-// write for the same turn is [ErrRecorded], not an error of the caller's. No
-// record is updated after it lands, but for two: a seat's newest told record
-// is its BASELINE (`latest`), which the applier moves in log order, and a
-// command's sealed text, which a rekey moves onto the active key (`resealed`).
+// serial, a command by its seat and its own id, a verdict by the requesting
+// seat, the request and its giver, each on a subject of its own and published
+// first-writer-wins, so a retried write lands once and a second write for the
+// same turn is [ErrRecorded], not an error of the caller's. No record is
+// updated after it lands, but for two: a seat's newest told record is its
+// BASELINE (`latest`), which the applier moves in log order, and a command's
+// or a verdict's sealed text, which a rekey moves onto the active key
+// (`resealed`).
 //
 //   - `told` records one turn's snapshot of the seat's access and the changes
 //     since its baseline, or none on a seat's first (`baseline`). The snapshot
@@ -34,17 +37,27 @@
 //     closed failure word where it did not run or finish (never an error's
 //     text), and who approved or denied it. Only an administrator's audit read
 //     opens it.
-//   - `resealed` writes one command's text sealed afresh under the keyring's
-//     active key, on the command's own subject ([Writer.Reseal]).
+//   - `verdict` records one giver's verdict on a delegated request (an
+//     ssh_operate held call, later a merge or a deploy): a delegate's answer
+//     and confidence, the engine's own escalation, or a person's approval
+//     through a decision; what took effect, the engine's closed words for
+//     why it changed or made it, whether it decided the request, the rule
+//     that routed it and the request's digest. What was decided and the
+//     giver's reason and findings are SEALED like a command's text: a
+//     model's words may quote the request. One per request and giver, so a
+//     panel's two delegates record two and a giver answering twice one.
+//   - `resealed` writes one command's text, or one verdict's texts, sealed
+//     afresh under the keyring's active key, on the record's own subject
+//     ([Writer.Reseal]).
 //   - `forget` removes what a seat the company removed was told, and records the
 //     removal: a told record decided before a removal it did not see lands as
 //     nothing, so a turn racing its seat's removal is not told into a seat that
-//     is gone, while the seat's next tenure is. Its certificates and commands
-//     stay to their retention.
+//     is gone, while the seat's next tenure is. Its certificates, commands and
+//     verdicts stay to their retention.
 //   - `expire` removes one hour of records, and everything older, past the
 //     company's `access_history.retention_days`: every told record but each
-//     seat's baseline, every removal, certificate and command. The trash
-//     reaper nominates the hours and publishes one record each.
+//     seat's baseline, every removal, certificate, command and verdict. The
+//     trash reaper nominates the hours and publishes one record each.
 //
 // The eviction, the generation, the barrier and the trimmed record are the
 // framework's.
@@ -62,5 +75,6 @@
 // `linearizable` ([DispatchRead], [Reader.Recent]): the seat's previous turn
 // may have been told on another node, and a copy that has not applied it would
 // tell the same change twice. The dashboard pages a seat's told records, and an
-// administrator's audit pages certificates and commands, at the caller's level.
+// administrator's audit pages certificates, commands and verdicts, at the
+// caller's level.
 package accessdomain
