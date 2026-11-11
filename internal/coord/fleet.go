@@ -1265,7 +1265,11 @@ type SandboxRunUpdate struct {
 // A watch is of ONE run ([SandboxRuns.WatchSandboxRun]), so a node that follows
 // a run's record as it changes — rather than reading it again on every call it
 // serves — is told of that run's writes and of no other run's, however busy
-// the fleet.
+// the fleet. And a PART beside it is watched by its own key
+// ([SandboxRuns.WatchSandboxRunPart]): a node waiting on a run's tool log — the
+// calls still in flight there, which any node of the fleet may be the one to
+// wait on — is told of the log's writes alone, never the record's, and reads
+// the log whole only when it changed, where a poll reads it whole every pass.
 //
 // # A record has its PARTS beside it
 //
@@ -1377,6 +1381,22 @@ type SandboxRuns interface {
 	// last knew and watches again, and the new watch's first update is the
 	// state then, so a change made while nobody listened is not lost.
 	WatchSandboxRun(ctx context.Context, turnID string) (<-chan SandboxRunUpdate, error)
+
+	// WatchSandboxRunPart streams the part kept beside turnID's run:
+	// [SandboxRuns.WatchSandboxRun]'s contract on the part's own key. Its
+	// state when the watch began, certified — [SandboxRunUpdate.Found] false
+	// where the run has no such part — then each state it reaches after that:
+	// a write of the part, and its removal, which the record's delete makes
+	// ([SandboxRuns.MutateSandboxRun]), as Found false. No update is older
+	// than one already delivered and the newest state is always delivered, but
+	// a state a later write replaced before the watch reached it may be passed
+	// over; a write of the record, or of another part, is none of this watch's.
+	// Record.Key is the turn id. The channel is closed when ctx ends or the
+	// watch fails, and A CLOSED CHANNEL IS NOT A REMOVAL: the watcher stopped
+	// hearing, and reads the part again as it watches again, so a change made
+	// while nobody listened is not lost. A part that is not one of [RunParts]
+	// is an error.
+	WatchSandboxRunPart(ctx context.Context, turnID string, part RunPart) (<-chan SandboxRunUpdate, error)
 
 	// SandboxRunPart reads the part kept beside turnID's run, as the store's
 	// newest write left it: a log appended a moment ago is in the answer.

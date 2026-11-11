@@ -120,7 +120,11 @@ func (f *Fleet) applyRunChange(turnID string, read coord.Record, change coord.Sa
 		// them at once, where the KV removes the record and then each part.
 		delete(f.runs, turnID)
 		for _, part := range coord.RunParts() {
-			delete(f.runParts, runPartKey{turnID, part})
+			key := runPartKey{turnID, part}
+			if _, held := f.runParts[key]; held {
+				delete(f.runParts, key)
+				f.notifyPartLocked(key, coord.SandboxRunUpdate{})
+			}
 		}
 		f.notifyRunLocked(turnID, coord.SandboxRunUpdate{})
 		return read, true
@@ -161,6 +165,50 @@ func (f *Fleet) WatchSandboxRun(ctx context.Context, turnID string) (<-chan coor
 			delete(f.runWatchers, turnID)
 		}
 	}), nil
+}
+
+// WatchSandboxRunPart streams the part beside turnID's run, its first state
+// included: [Fleet.WatchSandboxRun]'s watch, on the part's own key — told of
+// every write of the part and of its removal with its record, under the lock
+// that made each, and of nothing else.
+func (f *Fleet) WatchSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
+) (<-chan coord.SandboxRunUpdate, error) {
+	if err := partOf(turnID, part); err != nil {
+		return nil, err
+	}
+	key := runPartKey{turnID, part}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	first := coord.SandboxRunUpdate{}
+	if held, ok := f.runParts[key]; ok {
+		first = coord.SandboxRunUpdate{Found: true, Record: copyRecord(held)}
+	}
+	w := newWatcher(first)
+	if f.partWatchers == nil {
+		f.partWatchers = map[runPartKey]map[*watcher[coord.SandboxRunUpdate]]struct{}{}
+	}
+	if f.partWatchers[key] == nil {
+		f.partWatchers[key] = map[*watcher[coord.SandboxRunUpdate]]struct{}{}
+	}
+	f.partWatchers[key][w] = struct{}{}
+	return w.serve(ctx, func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		delete(f.partWatchers[key], w)
+		if len(f.partWatchers[key]) == 0 {
+			delete(f.partWatchers, key)
+		}
+	}), nil
+}
+
+// notifyPartLocked hands u to every watch of the part key names, each its own
+// copy of the bytes.
+func (f *Fleet) notifyPartLocked(key runPartKey, u coord.SandboxRunUpdate) {
+	for w := range f.partWatchers[key] {
+		copied := u
+		copied.Record = copyRecord(u.Record)
+		w.push(copied)
+	}
 }
 
 // runPartKey names one part beside one run ([coord.RunPart]).
@@ -260,6 +308,7 @@ func (f *Fleet) applyRunPart(key runPartKey, read coord.Record, found bool, put 
 	f.version++
 	stored := coord.Record{Key: key.turnID, Value: slices.Clone(put), Version: f.version}
 	f.runParts[key] = stored
+	f.notifyPartLocked(key, coord.SandboxRunUpdate{Found: true, Record: stored})
 	return copyRecord(stored), true, false
 }
 
