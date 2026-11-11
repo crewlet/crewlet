@@ -4978,7 +4978,7 @@ hands its listener the API surface — before it serves. The seed makes three bo
 
 - the newest 400 persisted events, for the feed;
 - the newest 24 000 spend records — phases and auxiliary records — inside the 24-hour spend window, read in pages of 4 096 records a node, because a busy node's whole day is more than one reply of the scatter carries (8 MiB) — asked whole, its reply was cut, and every node's records were cut with it;
-- the newest three turns of every agent seat, for the seat's `last_turn` and for a turn it left parked.
+- the newest three turns of every agent seat, for the seat's `last_turn` and for a turn it left parked. Each node reads them back from its newest rows, an hour and then a span doubled each time, until the span holds them, so the read costs those turns' rows rather than every row the seat wrote that week; folded over the whole week, it took seconds on a store of a few GiB.
 
 Each read goes to **every live data node**, through the same scatter the
 history queries use (see [Reading the fleet's history](#reading-the-fleets-history-coverage)).
@@ -4995,18 +4995,32 @@ both ways is recognised by its id and is listed and counted once, whichever
 arrives first. The stream can deliver it before the read, and the read can find a row that the
 publishing node wrote inline before the stream delivered it. History is
 ordered behind the live rows it predates, and a seat's turn that the stream has
-already moved is left as the stream left it. A read that fails is logged as
-`live_projection_not_seeded` and costs that history, never the start-up. The
+already moved is left as the stream left it. The
 reads run side by side, so a slow read does not use up the time budget of the others.
 
 **The paused seats are seeded from the coordination record**, beside the
 reads above and before the node serves: a pause taken before this process started is
 in no event it will hear, and a paused seat drawn as working is the one state a
-person pausing it must not be shown. A failed read is logged as
-`seat_pauses_not_seeded`; the pause itself is in force either way.
+person pausing it must not be shown. The pause itself is in force whether or
+not the seed has landed.
 
 **The executors in flight are reconciled against their durable record**. The record is read once before the node serves and then every 30 seconds. The stream is lossy and in memory, so it cannot say which executors are out, and the record can. See [the panel of executors in flight](../concepts/code-sandbox.md)
 for which of the two wins when they disagree. A reconcile that changed the set pushes it as `executors`, and a reconcile that changed nothing pushes nothing.
+
+**Each of these three seeds is read until it lands.** The three run side by
+side, and the node waits for them for at most five seconds before it serves:
+until it serves, every webhook is answered `503 starting`, so a seed must not
+hold the node back. A seed that has not landed by then (`boot_seeds_pending`
+names it) is still being read and lands when it completes. A seed whose
+attempt failed, or whose history a node did not answer, is logged as
+`live_projection_not_seeded`, `seat_pauses_not_seeded` or
+`sandbox_panel_not_seeded` (on its first attempt and every tenth) and read again,
+2 seconds after the first attempt and doubling to once every 30 seconds, until
+it completes; `live_projection_seeded`, `seat_pauses_seeded` or
+`sandbox_panel_seeded` says when it lands after the node began to serve. A seed
+that lands while a dashboard is connected is sent to it: the history as a fresh
+`snapshot`, which the tab applies as it applies its first, and the paused seats
+as an `agents` push.
 
 ### `GET /stream/snapshot`
 
@@ -5160,7 +5174,7 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `identity` | Whether this company has its **first person**: `ready` once a person is enrolled, `unclaimed` while nobody is — a service account alone signs nobody in with a password, so it does not count — a fresh install waiting for [its first person](../concepts/identity-and-access.md#how-the-first-person-exists) to be invited into, or created on, a human seat its company declares, under a Tier A token. A person an administrator creates makes it `ready` the moment the create lands, before they have spent the first password link it handed back: it says somebody exists, not that they have chosen a password yet. It is `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to put a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it); never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
 | `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, and `worst`, the one that has been firing **longest** (absent when `count` is 0); the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each entry a measurement with the logs it was taken on, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from (and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said), which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none, one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
-| `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed and each seat's last turn, which the pushed screens start from, and the live spend window behind the [`tokens` push](#pushes) — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those surfaces a node short, and this is where that stays visible after the log line has scrolled away. |
+| `seeded_from` | Which nodes this node's live projection was seeded from at boot (the activity feed and each seat's last turn, which the pushed screens start from, and the live spend window behind the [`tokens` push](#pushes)), in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until a seed has landed. A seed that failed or missed a node is read again until it completes ([Live-state projection](#live-state-projection-apistream--livestate)), and this is the latest attempt's coverage: `complete` turns `true` once one attempt was answered by every node. Until then those surfaces are short, and this is where that stays visible after the log line has scrolled away. |
 | `objects` | `{direct_upload}`: whether an upload may go straight to the object store's S3 bucket on a presigned put. `available`, or `unavailable (<reason>)`: always so on the default `nats` backend, whose bucket only the fleet reaches, and on an `s3` bucket whose provider the boot probe could not prove refuses a body that does not match its `x-amz-checksum-sha256` and a second put under `If-None-Match: *` (see [The boot probe](../concepts/object-store.md#the-boot-probe-and-direct-uploads)). Unavailable is no fault: every upload then streams through the engine. Absent on a node running no object store. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 

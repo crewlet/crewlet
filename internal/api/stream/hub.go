@@ -1531,6 +1531,18 @@ func (h *Hub) Clients() int {
 	return len(h.clients)
 }
 
+// registered is every client connected now, copied out so a caller replies to
+// each without holding the hub's lock.
+func (h *Hub) registered() []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		out = append(out, c)
+	}
+	return out
+}
+
 // Broadcast encodes an envelope ONCE PER POSTURE AND VARIANT and hands the bytes
 // to every client the kind's route names.
 //
