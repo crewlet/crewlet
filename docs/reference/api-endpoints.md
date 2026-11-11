@@ -7063,7 +7063,8 @@ kind of step (`boundary`) and, for a read by the executor in its box, its
 launch (`launch_id`), with `retold` where a later launch's brief told it again
 after a step that took it never handed it over; `expired` if the turn ended
 first; `missed`, at the step that took it, where that step's reader never had
-it (a take whose answer was lost) and no later launch told it; or
+it (a take whose answer was lost) and no later launch whose job started told
+it; or
 `unconfirmed`, at the job, where the executor's harness was handed it and never
 confirmed reading it. `note_id` is the request's
 own id, so a retry of one request is one note however often it is sent.

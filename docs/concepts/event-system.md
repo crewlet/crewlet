@@ -511,9 +511,10 @@ agent_turn_steered         # what became of a person's note to this running
                            # a later launch's brief told it again after a step
                            # that took it never handed it over; `expired`, the
                            # turn ended first; `missed`, a step took it for a
-                           # reader that never had it and no later launch told
-                           # it, at that step; `unconfirmed`, the executor was
-                           # handed it and never confirmed it, at its job.
+                           # reader that never had it and no later launch whose
+                           # job started told it, at that step; `unconfirmed`,
+                           # the executor was handed it and never confirmed it,
+                           # at its job.
                            # Published by the node whose step read it (the
                            # runner's, for a round or a run's brief; the one
                            # serving the run's tool bridge, for a read inside

@@ -647,9 +647,10 @@ type CoordinatorOptions struct {
 	// told again after a take never handed them over, where that job started;
 	// UNCONFIRMED, the ones a job's harness was handed and never confirmed;
 	// MISSED, the ones a take whose answer was lost recorded read and no
-	// later launch told; EXPIRED, the ones still WAITING on the record
-	// ([RunSteer]), which nothing will read now that the turn is over, and the
-	// ones the brief of a job that never started recorded read. The engine
+	// later launch whose job started told; EXPIRED, the ones still WAITING on
+	// the record ([RunSteer]), which nothing will read now that the turn is
+	// over, and the ones the brief of a job that never started was the first
+	// to read. The engine
 	// implements it, because only the engine opens a note's seal, and this
 	// package never publishes words it cannot verify.
 	//
@@ -4961,8 +4962,9 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //     published as the record knows it: delivered, told again by the brief of
 //     a later job that started; unconfirmed, handed to a job's harness that
 //     never confirmed it; missed, read by a take whose answer was lost and told
-//     by no later launch; expired, still waiting or read by the brief of a job
-//     that never started ([CoordinatorOptions.SteersEnded]);
+//     by no later launch whose job started; expired, still waiting or read
+//     first by the brief of a job that never started
+//     ([CoordinatorOptions.SteersEnded]);
 //  9. the end the row owes — this ending's, or the one the turn's resumed
 //     frame decided — is recorded on the executor log once every capture of
 //     the turn has settled ([Coordinator.awaitCapture],

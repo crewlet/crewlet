@@ -571,19 +571,20 @@ func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandb
 // landed and whose answer never reached its reader is marked unanswered, and
 // the brief of every later launch tells its notes again; so the launch's write
 // records each note its brief names as told again (sandbox.PendingRun
-// .RetoldNotes) read by the job it opens, told again (sandbox.NoteRead.Retold),
-// in the marked take's place and at that take's own place among the reads,
-// never the write's: a note a later take read stays after it, and the write
-// moves the record's count of reads only for the notes it is the first to read.
-// A note it names that the record holds read and unmarked is left as it was
-// read, and one the record does not hold is never added. The job's ending
-// reports the note told again with the rest of its brief where the job never
-// started, and delivered where it did.
+// .RetoldNotes) read by the job it opens, told again, in the marked take's
+// place and at that take's own place among the reads, never the write's — a
+// note a later take read stays after it, and the write moves the record's
+// count of reads only for the notes it is the first to read — and keeps the
+// take's read beside the telling (sandbox.NoteRead.Retold). A note it names
+// that the record holds read and unmarked is left as it was read, and one the
+// record does not hold is never added. The job's ending reports the note told
+// again missed at that take where the job never started, the brief having
+// handed nothing over, and delivered at the brief where it did.
 //
 // Mutation: leave a marked read as it was, record the telling at the write's
-// place, leave the read marked or under its take, record a note the record
-// holds unmarked as told again, or add one it does not hold, and the case goes
-// red.
+// place, leave the read marked or under its take, drop the take's read or keep
+// it unmarked, record a note the record holds unmarked as told again, or add
+// one it does not hold, and the case goes red.
 func testALaunchRecordsTheMarkedNotesItsBriefTellsAgain(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-retold"))
@@ -616,13 +617,17 @@ func testALaunchRecordsTheMarkedNotesItsBriefTellsAgain(t *testing.T, s sandbox.
 	for _, n := range row.Steer.Notes {
 		byID[n.ID] = n
 	}
-	if read := byID["n-1"].Read; read == nil || !read.Retold || read.Unanswered || read.Take != "" ||
+	if read := byID["n-1"].Read; read == nil || read.Retold == nil || read.Unanswered || read.Take != "" ||
 		read.Launch != relaunched.LaunchID || read.Boundary != "brief" || read.Iteration != 2 ||
 		read.Order != lost[0].Read.Order {
 		t.Errorf("the marked note is read %+v, want it told again by job %s's brief, at its take's place %d",
 			read, relaunched.LaunchID, lost[0].Read.Order)
+	} else if kept := read.Retold; !kept.Unanswered || kept.Take != "lost" || kept.Launch != launch ||
+		kept.Boundary != lost[0].Read.Boundary || kept.Order != lost[0].Read.Order {
+		t.Errorf("the telling kept the take's read as %+v, want the lost take's read by job %s, marked", kept,
+			launch)
 	}
-	if read := byID["n-2"].Read; read == nil || read.Retold || read.Take != "answered" || read.Launch != launch {
+	if read := byID["n-2"].Read; read == nil || read.Retold != nil || read.Take != "answered" || read.Launch != launch {
 		t.Errorf("a note an answered take read is read %+v, want it left as that take read it", read)
 	}
 	if n1, n2, n3 := byID["n-1"].Read, byID["n-2"].Read, byID["n-3"].Read; n1 == nil || n2 == nil || n3 == nil ||
@@ -633,17 +638,25 @@ func testALaunchRecordsTheMarkedNotesItsBriefTellsAgain(t *testing.T, s sandbox.
 	if _, added := byID["absent"]; added || len(row.Steer.Notes) != 3 {
 		t.Errorf("the write added a note it was told to tell again: %+v", row.Steer.Notes)
 	}
+	// THE JOB EACH OUTCOME OF THE NOTE TOLD AGAIN IS AT: the lost take's,
+	// missed, and the brief's that told it, delivered.
+	reportedBy := map[types.SteerOutcome]string{types.SteerMissed: launch,
+		types.SteerDelivered: relaunched.LaunchID}
 	ends := func() map[string]types.SteerOutcome {
 		out := map[string]types.SteerOutcome{}
 		for _, n := range mustGet(t, s, "t-retold").EndedNotes() {
 			out[n.Note.ID] = n.Outcome
+			if n.Note.ID == "n-1" && (n.Read == nil || n.Read.Launch != reportedBy[n.Outcome]) {
+				t.Errorf("the note told again is reported %s at %+v, want it at the take it was missed at, or "+
+					"at the brief that told it where its job started", n.Outcome, n.Read)
+			}
 		}
 		return out
 	}
-	if got := ends(); !maps.Equal(got, map[string]types.SteerOutcome{"n-1": types.SteerExpired,
+	if got := ends(); !maps.Equal(got, map[string]types.SteerOutcome{"n-1": types.SteerMissed,
 		"n-3": types.SteerExpired}) {
-		t.Errorf("the ending of the job that never started reports %v, want every note its brief told expired",
-			got)
+		t.Errorf("the ending of the job that never started reports %v, want the note it told again missed and "+
+			"the one it was the first to tell expired", got)
 	}
 	if err = s.AttachSandbox(ctx, "t-retold", sandbox.BoxRef{SandboxID: "box-retold", CommandID: "cmd-1",
 		Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {

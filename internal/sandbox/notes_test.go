@@ -190,18 +190,24 @@ func TestAnEndingWhoseNotesCouldNotBeRecordedKeepsItsRecord(t *testing.T) {
 // job's harness was handed and never confirmed, UNCONFIRMED, ahead of the two
 // below, since its session may hold it; one a take whose answer was lost
 // recorded read and no later launch told, MISSED; and a note still waiting, or
-// one the brief of the record's job recorded read while that job never
-// started, EXPIRED: its record never took its command, and a note that brief
-// told again is no exception. A read by a job that started, a read by an
-// earlier job, a take inside the job, a review's round and a confirmation are
-// reads, and their steps reported them; and a job that started still started
-// once its box, and the row's command with it, is forgotten.
+// one the brief of the record's job was the first to read while that job
+// never started, EXPIRED: its record never took its command. A note that
+// brief told again is MISSED all the same, at the take whose read the brief
+// kept: the brief handed nothing over, and the take's reader never had it.
+// Each is reported at the step the record names, a missed note at its take
+// and a note told again at the brief, and an unconfirmed or expired one at
+// none the record keeps. A read by a job that started, a read by an earlier
+// job, a take inside the job, a review's round and a confirmation are reads,
+// and their steps reported them; and a job that started still started once
+// its box, and the row's command with it, is forgotten.
 //
 // Mutation: count a brief read unread whatever the job's record, read the
 // witness off the row's command, leave the never-started job's out, report a
 // marked read as nothing or as expired, a served note as expired, a note told
-// again as nothing, as missed or as delivered where its job never started, or
-// put the served or the marked ahead of a note told again, and this goes red.
+// again as nothing, as missed or as delivered where its job started, as
+// expired or as delivered where its job never started, report it at the brief
+// rather than the take it kept, or put the served or the marked ahead of a
+// note told again, and this goes red.
 func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	t.Parallel()
 	read := func(launch, boundary string) *NoteRead {
@@ -212,9 +218,9 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 		r.Unanswered = true
 		return r
 	}
-	retold := func(launch string) *NoteRead {
+	retold := func(launch, took string) *NoteRead {
 		r := read(launch, "brief")
-		r.Retold = true
+		r.Retold = marked(took, "tool_batch")
 		return r
 	}
 	notes := []RunNote{
@@ -229,9 +235,9 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 		{ID: "confirmed", Served: "job-1", Read: read("job-1", "step")},
 		{ID: "handed-missed", Served: "job-1", Read: marked("", "round")},
 		{ID: "handed-briefed", Served: "job-1", Read: read("job-2", "brief")},
-		{ID: "retold", Read: retold("job-2")},
-		{ID: "retold-earlier", Read: retold("job-1")},
-		{ID: "handed-retold", Served: "job-1", Read: retold("job-2")},
+		{ID: "retold", Read: retold("job-2", "job-1")},
+		{ID: "retold-earlier", Read: retold("job-1", "job-0")},
+		{ID: "handed-retold", Served: "job-1", Read: retold("job-2", "job-1")},
 	}
 	ends := func(want ...string) []string {
 		out := append([]string{}, want...)
@@ -243,12 +249,32 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	// A NOTE SERVED AND THEN READ INTO THE BRIEF OF A JOB THAT NEVER STARTED is
 	// unconfirmed, the session it was served into maybe holding it, whether
 	// that brief was the first to tell it or told it again; and a note that
-	// brief told again unserved is expired with the rest of it.
+	// brief told again unserved is missed at the take it kept, as it was
+	// before that brief.
 	neverStarted := PendingRun{LaunchID: "job-2", Steer: RunSteer{Notes: notes}}
 	if got, want := endsOf(neverStarted), ends("waiting:expired", "briefed:expired",
-		"handed-briefed:unconfirmed", "retold:expired", "handed-retold:unconfirmed"); !slices.Equal(sorted(got),
+		"handed-briefed:unconfirmed", "retold:missed", "handed-retold:unconfirmed"); !slices.Equal(sorted(got),
 		sorted(want)) {
 		t.Errorf("a record whose job never started ends %v, want %v", got, want)
+	}
+	// EACH AT THE STEP THE RECORD NAMES.
+	at := func(run PendingRun) map[string]string {
+		out := map[string]string{}
+		for _, n := range run.EndedNotes() {
+			out[n.Note.ID] = string(n.Outcome) + "@"
+			if n.Read != nil {
+				out[n.Note.ID] += n.Read.Launch + "/" + n.Read.Boundary
+			}
+		}
+		return out
+	}
+	for id, want := range map[string]string{"retold": "missed@job-1/tool_batch",
+		"missed": "missed@job-1/tool_batch", "review-missed": "missed@/round",
+		"retold-earlier": "delivered@job-1/brief", "handed-retold": "unconfirmed@", "waiting": "expired@",
+		"briefed": "expired@"} {
+		if got := at(neverStarted)[id]; got != want {
+			t.Errorf("a record whose job never started reports note %s %s, want %s", id, got, want)
+		}
 	}
 	// ONE READ INTO THE BRIEF OF A JOB THAT STARTED was delivered there: by
 	// the runner that briefed it where the brief was the first to tell it, and
@@ -260,6 +286,10 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	if got := endsOf(started); !slices.Equal(sorted(got), sorted(wantStarted)) {
 		t.Errorf("a record whose job started ends %v, want %v", got, wantStarted)
 	}
+	if got := at(started)["retold"]; got != "delivered@job-2/brief" {
+		t.Errorf("a record whose job started reports the note it told again %s, want it delivered at its brief",
+			got)
+	}
 	boxForgotten := started
 	boxForgotten.CommandID = ""
 	if got := endsOf(boxForgotten); !slices.Equal(sorted(got), sorted(wantStarted)) {
@@ -268,9 +298,9 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	attachedNoStart := neverStarted
 	attachedNoStart.CommandID = "4242"
 	if got := endsOf(attachedNoStart); !slices.Contains(got, "briefed:expired") ||
-		!slices.Contains(got, "retold:expired") {
+		!slices.Contains(got, "retold:missed") {
 		t.Errorf("a record naming a command its job's record never took ends %v, want its brief's notes "+
-			"expired", got)
+			"expired, the one it told again missed", got)
 	}
 	allRead := PendingRun{LaunchID: "job-2", Launch: LaunchRecord{Started: true},
 		Steer: RunSteer{Notes: []RunNote{notes[3], notes[4], notes[8]}}}
@@ -286,8 +316,9 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	}
 	for _, run := range []PendingRun{neverStarted, started} {
 		for _, n := range run.EndedNotes() {
-			if !n.Outcome.Valid() || (n.Outcome == types.SteerDelivered && !n.Note.Read.Retold) {
-				t.Errorf("note %s ends %q, which an ending never reports of it", n.Note.ID, n.Outcome)
+			if !n.Outcome.Valid() || (n.Outcome == types.SteerDelivered && (n.Read == nil || n.Read.Retold == nil)) ||
+				(n.Outcome == types.SteerMissed && (n.Read == nil || !n.Read.Unanswered)) {
+				t.Errorf("note %s ends %q at %+v, which an ending never reports of it", n.Note.ID, n.Outcome, n.Read)
 			}
 		}
 	}

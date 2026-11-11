@@ -1578,15 +1578,17 @@ func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 // launch's write records it read by the job it opens, told again, at the
 // take's own place among the reads, so the turn carries it as that job's
 // brief's read, unmarked, ahead of a note a later take read. The ending
-// reports it delivered at that brief, told again, where the job started;
-// expired with the rest of the brief where the launch failed after its write;
-// and missed at the take where no launch told it. A note an answered take
-// read is its step's to report, and the ending reports nothing of it.
+// reports it delivered at that brief, told again, where the job started; and
+// missed at the take where no launch whose job started told it — a launch that
+// failed after its write among them, whose brief handed nothing over, the
+// take's read kept beside its telling. A note an answered take read is its
+// step's to report, and the ending reports nothing of it.
 //
 // Mutation: leave the marked read as the launch found it, place the telling at
 // the write's place, report a note told again as nothing, as missed or as a
-// plain read, or one never told again as anything but missed at its take, and
-// a case goes red.
+// plain read where its job started, or as expired or at its brief where its
+// job never started, or one never told again as anything but missed at its
+// take, and a case goes red.
 func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1594,7 +1596,7 @@ func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 		want            types.SteerOutcome
 	}{
 		"told again by a later job that started":             {relaunch: true, start: true, want: types.SteerDelivered},
-		"told again by a launch that failed after its write": {relaunch: true, want: types.SteerExpired},
+		"told again by a launch that failed after its write": {relaunch: true, want: types.SteerMissed},
 		"never told again": {want: types.SteerMissed},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1677,22 +1679,15 @@ func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 			if rec == nil {
 				t.Fatalf("the ending reported nothing of the note, want it %s", tc.want)
 			}
-			switch got := *rec; tc.want {
-			case types.SteerDelivered:
+			if got := *rec; tc.want == types.SteerDelivered {
 				if got.Outcome != tc.want || !got.Retold || got.Phase != types.PhaseExecute || got.Iteration != 2 ||
 					got.Round != 1 || got.Boundary != types.SteerBoundaryBrief || got.LaunchID != relaunched {
 					t.Errorf("the note is reported %+v, want it delivered at job %s's brief, told again", got,
 						relaunched)
 				}
-			case types.SteerMissed:
-				if got.Outcome != tc.want || got.Retold || got.Phase != types.PhaseExecute || got.Iteration != 1 ||
-					got.Boundary != types.SteerBoundaryToolBatch || got.LaunchID != launch {
-					t.Errorf("the note is reported %+v, want it missed at job %s's tool batch", got, launch)
-				}
-			default:
-				if got.Outcome != tc.want || got.Retold || got.Boundary != "" || got.LaunchID != "" {
-					t.Errorf("the note is reported %+v, want it %s at no step", got, tc.want)
-				}
+			} else if got.Outcome != tc.want || got.Retold || got.Phase != types.PhaseExecute || got.Iteration != 1 ||
+				got.Boundary != types.SteerBoundaryToolBatch || got.LaunchID != launch {
+				t.Errorf("the note is reported %+v, want it missed at job %s's tool batch", got, launch)
 			}
 		})
 	}
@@ -1739,7 +1734,7 @@ func TestAMarkedNoteIsToldAgainByTheNextLaunchThroughTheRealTurn(t *testing.T) {
 		t.Fatalf("the review's send-back did not park the turn on a run of its own: %s (first job %s)",
 			row.Status, first)
 	}
-	if read := readOn(ctx, pending, "run-1", "n-1"); read == nil || !read.Retold || read.Unanswered ||
+	if read := readOn(ctx, pending, "run-1", "n-1"); read == nil || read.Retold == nil || read.Unanswered ||
 		read.Take != "" || read.Launch != row.LaunchID || read.Boundary != string(types.SteerBoundaryBrief) ||
 		read.Order != marked.Order {
 		t.Fatalf("the note is read %+v, want it told again by job %s's brief, at its take's place %d", read,

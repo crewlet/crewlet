@@ -973,8 +973,9 @@ sequenceDiagram
   `unconfirmed` where the run's harness was handed it and never confirmed it
   (its session may hold it); `missed` where a take whose answer was lost
   recorded it read and no later launch whose job started told it, at that
-  take's step; and `expired` where it still waits or was read into the brief
-  of a job that never started. A park is never an ending: a question can wait
+  take's step, a launch that told it again and failed before its job started
+  among them; and `expired` where it still waits or was read first into the
+  brief of a job that never started. A park is never an ending: a question can wait
   days, and the segment that resumes reads what waited. A note is not carried
   to a later turn: it is about the work in flight.
 

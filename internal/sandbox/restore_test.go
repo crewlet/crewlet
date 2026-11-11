@@ -971,7 +971,8 @@ func TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad(t *testing.T) {
 			read("c", 3, "job-2", false)}, want: 0},
 		"an earlier job's take marked, told again by the job's brief": {notes: []RunNote{
 			{ID: "a", Read: &NoteRead{Order: 1, Boundary: string(types.SteerBoundaryBrief), Launch: "job-2",
-				Retold: true}},
+				Retold: &NoteRead{Order: 1, Boundary: string(types.SteerBoundaryToolBatch), Launch: "job-1",
+					Unanswered: true}}},
 			read("b", 2, "job-2", false), read("c", 3, "job-2", false)}, want: 3},
 	} {
 		t.Run(name, func(t *testing.T) {

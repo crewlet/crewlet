@@ -117,10 +117,11 @@ import (
 // a read inside the run ([runInbox]), under ids derived from the turn and the
 // note. And the node that finishes the run's ending, for every note no step
 // reported reading when the turn is over, as the run's record knows it
-// ([runSteers.ended]): one still waiting, or read by the brief of a job that
-// never started, expired; one served to a harness that never confirmed it,
-// unconfirmed; one a take marked unanswered recorded, missed; and one a later
-// launch's brief told again, its job started, delivered there. Under ids
+// ([runSteers.ended]): one still waiting, or read first by the brief of a job
+// that never started, expired; one served to a harness that never confirmed
+// it, unconfirmed; one a take marked unanswered recorded, missed, where no
+// later launch whose job started told it again; and one a later launch's brief
+// told again, its job started, delivered there. Under ids
 // derived from the ending, so a repeat of either is the same record. Never at
 // a park: a question can wait days, and the turn that resumes reads what
 // waited.
@@ -131,9 +132,10 @@ import (
 // it, whatever session the launch continues: the runner names each such note
 // in its request ([runner.AgentRunRequest.Retold]), and the launch's write
 // records it read by the job it opens, told again, at the marked take's own
-// place among the reads ([retoldNotes], [sandbox.NoteRead.Retold]). Where that
-// job started, the ending reports the note delivered at its brief; where no
-// later launch told it, missed at the take.
+// place among the reads, keeping the take's read beside the telling
+// ([retoldNotes], [sandbox.NoteRead.Retold]). Where that job started, the
+// ending reports the note delivered at its brief; where no later launch whose
+// job started told it, missed at the take.
 
 // SteerNoteDomain is the key domain a note on a run's record is sealed in: its
 // own, so no frame of another channel or a state log opens as a note, and no
@@ -921,8 +923,9 @@ func (s *runSteers) publish(ctx context.Context, ident runIdentity, note steer.N
 // reported reading, as the record knows it ([sandbox.PendingRun.EndedNotes]):
 // delivered, at the brief of a started job that told it again; unconfirmed, at
 // the job whose harness it was handed to; missed, at the step whose take
-// recorded it read and lost its answer; expired, the ones still waiting and
-// the ones the brief of a job that never started recorded read. The step a
+// recorded it read and lost its answer, where no started job's brief told it
+// again; expired, the ones still waiting and the ones the brief of a job that
+// never started was the first to read. The step a
 // run's ending takes before it deletes the record
 // ([sandbox.CoordinatorOptions.SteersEnded]), under ids derived from the turn,
 // the ending and the note, at the ending's own instant, so a repeat of the
@@ -953,17 +956,18 @@ func (s *runSteers) ended(ctx context.Context, run sandbox.PendingRun) error {
 	return nil
 }
 
-// noteEnd is what an ending reports of n, at the step its record names: the
-// brief that told a delivered note again; the read a missed note's take
-// recorded; or the job an unconfirmed note was handed to, a step of the run's
+// noteEnd is what an ending reports of n, at the step its record names
+// ([sandbox.EndedNote.Read]): the brief that told a delivered note again; the
+// read a missed note's take recorded, kept beside a telling whose job never
+// started; or the job an unconfirmed note was handed to, a step of the run's
 // harness in its execute phase, at the iteration the record keeps for that job
 // where it is the record's own and none where the record has moved on from it.
 func noteEnd(run sandbox.PendingRun, n sandbox.EndedNote) steer.End {
 	switch n.Outcome {
 	case types.SteerDelivered:
-		return steer.Retold(readingOf(*n.Note.Read))
+		return steer.Retold(readingOf(*n.Read))
 	case types.SteerMissed:
-		return steer.Missed(readingOf(*n.Note.Read))
+		return steer.Missed(readingOf(*n.Read))
 	case types.SteerUnconfirmed:
 		at := steer.Reading{Phase: types.PhaseExecute, Round: 1, Boundary: types.SteerBoundaryStep,
 			Launch: n.Note.Served}

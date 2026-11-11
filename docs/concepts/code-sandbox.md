@@ -1250,7 +1250,8 @@ it, in one of two ways:
   continued session from the first marked read on. The launch's write records
   each one it tells again read by the job it opens, told again, at the marked
   take's own place among the turn's reads, so a capture of that job counts it
-  held. The settle asks the coordination store until it answers,
+  held, and keeps the take's read beside the telling. The settle asks the
+  coordination store until it answers,
   however long that takes, and says so at thirty seconds
   ([`steer_take_unsettled`](#failure-modes)); only the node stopping first ends
   it, once it has asked every take it holds once more — a take a segment the
@@ -1295,10 +1296,13 @@ nothing else, in this order:
   step`, its `launch_id`). Its session may hold it, and nothing says it does.
 - **`missed`**, a note a take whose answer was lost recorded read, marked
   unanswered, that no later launch whose job started was told: at the step that
-  took it. The review after it, if one ran, read it carried.
-- **`expired`**, a note no job ran with: still waiting, or read into the brief
-  of a launch that failed after writing the record, whose job never started (a
-  note that brief told again among them), at no step.
+  took it. The review after it, if one ran, read it carried. A note a later
+  launch told again and whose job never started (the launch failed after
+  writing the record) is `missed` too, at that take: the brief handed nothing
+  over, and the record keeps the take's read beside the telling.
+- **`expired`**, a note no job ran with: still waiting, or read first into the
+  brief of a launch that failed after writing the record, whose job never
+  started, at no step.
 
 So a note served and then left to a lost take, or to the brief of a job that
 never started, is `unconfirmed`, since a session may hold it. Each is published

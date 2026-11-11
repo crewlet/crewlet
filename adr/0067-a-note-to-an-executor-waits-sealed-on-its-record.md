@@ -253,14 +253,17 @@ every read it carries marked unanswered as the brief is built
 tells each of them again: the fresh one among every note the turn has read, and
 a continued session, kept or the job's own copy in its box, from the first such
 read on. The launch's write records each one the record still marks read by
-the job it opens, told again (`sandbox.PendingRun.RetoldNotes`,
-`sandbox.NoteRead.Retold`). Who read it changes to that job's brief, unmarked;
-where it sits among the reads stays the marked take's own place
-(`sandbox.NoteRead.Order`), as a lost take's note is recorded (the first
-amendment above), so every later brief tells it where the record first read
-it. That job's session holds it from its brief, so a capture of it counts it
-held, and a continuation of the job cut off is told it with every note the turn
-has read, as a cut-off session always is.
+the job it opens, told again (`sandbox.PendingRun.RetoldNotes`), and keeps the
+marked take's read beside the telling (`sandbox.NoteRead.Retold`). Who read it
+changes to that job's brief, unmarked; where it sits among the reads stays the
+marked take's own place (`sandbox.NoteRead.Order`), as a lost take's note is
+recorded (the first amendment above), so every later brief tells it where the
+record first read it. That job's session holds it from its brief, so a capture
+of it counts it held, and a continuation of the job cut off is told it with
+every note the turn has read, as a cut-off session always is. The take's read
+is kept for the one case where the brief handed nothing over: a launch that
+fails after its write, whose job never starts, ends the record, and its ending
+reports the note where the record knew it was missed before that write.
 
 **The ending reports every note no step reported reading, as the record knows
 it** (`sandbox.PendingRun.EndedNotes`, `sandbox.CoordinatorOptions.SteersEnded`,
@@ -282,9 +285,11 @@ the engine's `runSteers.ended`), in this order of precedence:
   again by no later launch whose job started, at the step that took it (its
   phase, iteration, round, boundary and job). The turn ended with the mark
   standing: its review read the note carried and accepted the work, or the
-  turn ended before any later launch.
+  turn ended before any later launch. Or a later launch told it again and
+  failed after its write, its job never started: the brief handed nothing
+  over, and the ending reports the note at the take's read the telling kept.
 - `expired`, as before: still waiting, or read into the brief of a job that
-  never started, a note that brief told again included, at no step.
+  never started where that brief was the first to tell it, at no step.
 
 A note a step reported reading is none of them: that step published it
 `delivered` as it read it. So every note on a record is reported once, by the
@@ -315,9 +320,7 @@ nothing of a note the record says was read and answered. A mark that lands
 after a launch's brief was built is on no brief as marked: where that brief told
 every note all the same (a fresh run's, or a cut-off session's continuation),
 the note is reported `missed` unless a later launch tells it again, though that
-harness was told it. A note told again by a launch that failed after its write
-is reported `expired` with the rest of that brief, as the record then says, the
-take that missed it no longer on it. A missed note the review reads carried,
+harness was told it. A missed note the review reads carried,
 which records nothing anew, is still `missed`. And a note told again is
 reported when the turn ends, not when its brief was handed over.
 
