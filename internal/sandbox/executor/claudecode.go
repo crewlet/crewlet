@@ -1166,6 +1166,16 @@ func writeClaudeMCP(ctx context.Context, box sandbox.Sandbox, file string,
 // submit_work there too, so a run had to search for the call that ends it.
 // The key exempts the one server ("Exempt a server from deferral"), and is
 // available on every transport.
+//
+// `timeout` ONLY WHERE THE ENGINE SETS A WAIT ([sandbox.MCPServer.CallTimeout]):
+// the bridge's servers. In milliseconds, the server's own tool timeout, at
+// which the harness gives a call up and cancels it, whatever progress flows
+// (measured on 2.1.310: the entry's `"timeout": 360000` cut a call the bridge
+// kept going at 360 seconds with `notifications/cancelled`), and on 2.1.310
+// also its idle check on a call (by reading its bundle) and its HTTP
+// transport's budget for a response's first byte (measured: 360000 in place
+// of 60000). A release whose schema declares no such key, as 2.1.118's does
+// not, drops it and keeps its own (by reading its bundle).
 func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	var out map[string]any
 	if s.Transport == sandbox.TransportHTTP {
@@ -1181,6 +1191,9 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	}
 	if s.AlwaysLoaded {
 		out["alwaysLoad"] = true
+	}
+	if ms := waitMillis(s.CallTimeout); ms > 0 {
+		out["timeout"] = ms
 	}
 	return out
 }

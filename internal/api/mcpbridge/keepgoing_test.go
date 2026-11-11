@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -16,10 +17,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A call's answer, started at once and kept going (the package doc's "A call's
-// answer starts at once and keeps going").
+// A call's answer, started at once and kept going, and how long a box waits
+// for one (the package doc's "A call's answer starts at once and keeps going"
+// and "How long a box waits for a call").
 
 // dialHearing connects an MCP client to url as a harness's own client does,
 // handing on every progress it is sent.
@@ -258,5 +263,71 @@ func TestACallTheBridgeAnswersWithoutRunningGetsNoProgress(t *testing.T) {
 		if n := strings.Count(answer, "notifications/progress"); n != tc.progress {
 			t.Errorf("%s was sent %d progress before its answer, want %d:\n%s", tc.call, n, tc.progress, answer)
 		}
+	}
+}
+
+// boundedTool is a tool that declares the longest one call of it runs, as a
+// seat's MCP server's tools and `delegate` do.
+type boundedTool struct {
+	stubTool
+	bound time.Duration
+}
+
+func (b *boundedTool) CallBound() time.Duration { return b.bound }
+
+// boundedSurface is a seat's surface offering read_page alone, whose universe
+// also holds a tool bound at each of bounds: offered or not, a tool is one a
+// run can activate as it goes, after its box's settings were written.
+func boundedSurface(t *testing.T, bounds ...time.Duration) *tools.Surface {
+	t.Helper()
+	reg := tools.NewRegistry()
+	if err := reg.Register(&stubTool{name: "read_page"}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(read_page): %v", err)
+	}
+	for i, bound := range bounds {
+		name := fmt.Sprintf("bounded_%d", i)
+		if err := reg.Register(&boundedTool{stubTool: stubTool{name: name}, bound: bound},
+			tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register(%s): %v", name, err)
+		}
+	}
+	return tools.NewSurface("execute", reg.Snapshot(), []string{"read_page"}).ForTurn(seatTurn())
+}
+
+// A BOX WAITS AS LONG AS THE BRIDGE CAN TAKE TO ANSWER A CALL. Kept going, a
+// call keeps its harness waiting for as long as it runs, so the box is told
+// how long that can be: the holder's wait where the bridge joined a fleet,
+// the longest bound the surface's tools declare — never under the engine's
+// one-call ceiling, and counting a tool not offered yet — and the bridge's own
+// margin around a call.
+//
+// Mutation: ignore the bounds the tools declare, or leave the holder's wait
+// out, and a box gives up a call the bridge could still answer.
+func TestABoxWaitsAsLongAsTheBridgeCanTakeToAnswer(t *testing.T) {
+	t.Parallel()
+	alone := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
+	floor, margin := crewletmcp.DefaultRequestTimeout, mcpbridge.CallMargin
+	for _, tc := range []struct {
+		name    string
+		surface mcpbridge.Surface
+		want    time.Duration
+	}{
+		{"a seat whose tools declare no bound", boundedSurface(t), floor + margin},
+		{"a seat holding a tool bound past the floor", boundedSurface(t, 10*time.Second, 2*time.Hour),
+			2*time.Hour + margin},
+		{"a seat whose tools are bound under the floor", boundedSurface(t, 10*time.Second), floor + margin},
+		{"a surface that is not a seat's", &probeSurface{}, floor + margin},
+	} {
+		if got := alone.CallTimeout(tc.surface); got != tc.want {
+			t.Errorf("%s: a box waits %s for a call, want %s", tc.name, got, tc.want)
+		}
+	}
+
+	// AND THE HOLDER'S WAIT, on a bridge that joined its fleet: a call may
+	// wait that long before it reaches the node that runs it.
+	const holderWait = 90 * time.Second
+	joined := newFleet(t, 1, holderWait).members[0].bridge
+	if got, want := joined.CallTimeout(boundedSurface(t, 2*time.Hour)), holderWait+2*time.Hour+margin; got != want {
+		t.Errorf("a box of a bridge that joined its fleet waits %s for a call, want %s", got, want)
 	}
 }

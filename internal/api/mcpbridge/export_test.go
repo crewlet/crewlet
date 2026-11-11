@@ -3,6 +3,8 @@ package mcpbridge
 import (
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/subagent"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
@@ -35,3 +37,15 @@ const SteerHold = steerHold
 
 // SteerTakeBudget bounds the inbox's answer to one hook.
 const SteerTakeBudget = steerTakeBudget
+
+// CallMargin is what a call's answer can take beyond its tool's own bound
+// ([Bridge.CallTimeout]).
+const CallMargin = callMargin
+
+// THE TOOLS WHOSE BOUND A BOX'S WAIT IS ADDED UP FROM declare it in the shape
+// the bridge reads ([bounded]): a rename on either side would leave a box's
+// wait at the floor, with nothing to say so.
+var (
+	_ bounded = (*crewletmcp.Tool)(nil)
+	_ bounded = (*subagent.Tool)(nil)
+)

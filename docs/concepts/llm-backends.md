@@ -1430,7 +1430,10 @@ run](code-sandbox.md#notes-to-a-running-run)):
   nothing on a call's response until its first event, and Claude Code gives up
   a call whose response's first byte has not come within a minute where the
   server's entry sets no timeout, cancelling nothing, while the call runs on
-  (measured on 2.1.310).
+  (measured on 2.1.310). And the box's MCP settings tell its harness to wait
+  for a call as long as the bridge can take to answer one, at which the harness
+  cancels it ([The tool
+  bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 - **A panic contained.** A tool that panics is answered as failed and logged
   with its stack, and the run's tools are closed to it.
 - **A run that is over refuses.** A call that reaches a session after its run
@@ -1514,8 +1517,9 @@ its round's log, marked late, where the next run carries the round on — a loss
 relaunch, a person's answer's, a replaced sign-in's — and dropped where the next
 run starts a new round ([A call that ends after its job's
 relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)). One its
-harness cancelled — Claude Code and OpenCode cancel a call at their tool
-timeout, and the model reads the call as timed out — or hung up on, which the next progress the bridge keeps
+harness cancelled — Claude Code and OpenCode cancel a call at its server's
+timeout, which the box is handed as the bridge's own bound, and the model reads
+the call as timed out — or hung up on, which the next progress the bridge keeps
 its answer going with finds, is listed as its run's own and marked as one
 nobody waited for, which every continuation of its round is told whatever its
 save point; one it stopped waiting for while it still read the call's response,

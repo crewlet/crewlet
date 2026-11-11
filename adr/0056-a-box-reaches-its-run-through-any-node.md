@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/mcpbridge`
-- **Enforced-by:** `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`, `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`, `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`, `internal/api/mcpbridge.TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode`, `internal/api/mcpbridge.TestACallersOwnSessionEndsWithItsOpener`, `internal/api/mcpbridge.TestALoopbackSessionIsNeverRelayed`, `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`, `internal/engine.TestTheBridgeFollowsTheSeat`, `internal/api.TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone`, `cmd/crewlet.TestADirectBoxDialsTheListenerItsNodeBound`, `cmd/crewlet.TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback`, `internal/e2e.TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener`, `internal/api/mcpbridge.TestABridgedCallsAnswerStartsBeforeItsToolReturns`, `internal/api/mcpbridge.TestACallTheBridgeAnswersWithoutRunningGetsNoProgress`, `internal/toolsession.TestARunningCallsFirstProgressReachesAnHTTPClientWhileItsToolIsHeld`, `internal/toolsession.TestARunningCallsProgressKeepsComingUntilItsToolReturns`, `internal/toolsession.TestACallAnsweredWithoutRunningGetsNoProgress`, `internal/toolsession.TestARequestWithNoProgressTokenGetsOnlyItsAnswer`, `internal/toolsession.TestAServerThatKeepsNothingGoingSendsNoProgress`
+- **Enforced-by:** `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`, `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`, `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`, `internal/api/mcpbridge.TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode`, `internal/api/mcpbridge.TestACallersOwnSessionEndsWithItsOpener`, `internal/api/mcpbridge.TestALoopbackSessionIsNeverRelayed`, `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`, `internal/engine.TestTheBridgeFollowsTheSeat`, `internal/api.TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone`, `cmd/crewlet.TestADirectBoxDialsTheListenerItsNodeBound`, `cmd/crewlet.TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback`, `internal/e2e.TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener`, `internal/api/mcpbridge.TestABridgedCallsAnswerStartsBeforeItsToolReturns`, `internal/api/mcpbridge.TestACallTheBridgeAnswersWithoutRunningGetsNoProgress`, `internal/api/mcpbridge.TestABoxWaitsAsLongAsTheBridgeCanTakeToAnswer`, `internal/toolsession.TestARunningCallsFirstProgressReachesAnHTTPClientWhileItsToolIsHeld`, `internal/toolsession.TestARunningCallsProgressKeepsComingUntilItsToolReturns`, `internal/toolsession.TestACallAnsweredWithoutRunningGetsNoProgress`, `internal/toolsession.TestARequestWithNoProgressTokenGetsOnlyItsAnswer`, `internal/toolsession.TestAServerThatKeepsNothingGoingSendsNoProgress`, `internal/sandbox/executor.TestABridgedEntryTellsEitherHarnessHowLongToWait`, `internal/engine.TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer`, `internal/mcp.TestAToolIsBoundByItsServersRequestTimeout`, `internal/agent/subagent.TestTheDelegateToolIsBoundByItsCallCap`, `internal/engine.TestADeepRunReachesCrewletOnlyThroughItsSurface`, `internal/engine.TestARelaunchsBoxWaitsAsLongAsItsBridgeCanTakeToAnswerWhicheverSessionItStarts`, `internal/toolsession.TestARunningCallsAnswerWaitsForAProgressAlreadyOnItsWay`, `internal/toolsession.TestACancelledCallIsSentNoMoreProgress`
 - **Cost-when-tried:** the box dialled its launching node's own address. A load balancer in front of several nodes sent calls to peers that never held the session, and they answered 401 to a live run. A run whose seat moved to a peer kept dialling the node that lost it, which answered that the run's tools were closed until the run ended. And a node without the ingress role had to bind a public listener for its seats' bridge alone, so a satellite that accepts no inbound connection could run no seat whose executor ran in a box.
 - **Tag-status:** unreleased
 
@@ -107,7 +107,7 @@ address a seat pool may not have: a satellite on a private host, or a
 Kubernetes seat pool with no route in. Without it, every executor launch on the
 node was refused, with only a warning at apply.
 
-## Amendment: a call's answer starts at once and keeps going
+## Amendment: a call's answer starts at once and keeps going, and a box waits as long as the bridge can take to answer it
 
 The bridge serves a box's harness over streamable HTTP, and the SDK writes
 nothing on a call's response until the response's first event: with nothing
@@ -128,13 +128,44 @@ dial the bridge put a token on every call. A progress that cannot be written
 means the harness hung up on the call's response, and the call is recorded as
 one nobody waited for
 ([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
-amendment on such a call). Twenty seconds answers every check Claude Code
-keeps on a silent call: its first-byte budget at once, its five-minute idle
-check, and its transport-loss check, made every 30 seconds on a transport
-marked lost 90 seconds before, with four beats to spare inside the ninety. The
+amendment on such a call). Twenty seconds is held to the checks Claude Code
+2.1.310 keeps on a call, none of which cancels the call it gives up: its
+budget for a response's first byte and its idle check, a minute and five
+minutes where the server's entry sets no timeout and the entry's timeout where
+it does (below), which the first progress and every one after it meet; and its
+transport-loss check, made every 30 seconds, which gives up a call 90 seconds
+after its transport was marked lost unless a progress has cleared the mark
+since. That mark is routine: Claude Code loses the session's standing GET
+stream 360 seconds after opening it, with the entry's timeout and without
+(measured), and marks every call then in flight (by reading its bundle). Four
+beats fall inside the ninety seconds, any one of which clears it. Measured on
+2.1.310 against this bridge, with the bridge's bound in the server's entry: a
+540-second call that ran through that loss, at 359.2 seconds, was answered
+whole, and the same call with no progress token was given up at 449.9 seconds
+(`transport error 90s ago, response presumed lost`), cancelling nothing. The
 relay's sessions keep nothing going: no harness on stdio times a response's
 first byte, and the tool loop answers a call still running before the
 harness's own tool timeout.
+
+**A box waits for a call as long as the bridge can take to answer it.** Kept
+going, a call answers every silence check, so only a harness's own tool
+timeout bounds the wait: Claude Code's default of 1e8 ms, OpenCode's of twelve
+hours (by reading their bundles), which a call that hangs would hold a seat's
+executor run for. So the engine hands every bridged server the bridge's own
+bound for a call, which each harness's settings carry as the server's timeout,
+Claude Code's `timeout` and OpenCode's `timeout.execution`; past it the
+harness gives the call up and cancels it, whatever progress flows (measured on
+Claude Code 2.1.310 and OpenCode 2.1.4). The bound is the two seat-lease
+lifetimes a call may wait for a holder, plus the longest bound the surface's
+tools declare (a seat MCP server's request timeout, `delegate`'s call cap),
+never under the engine's one-call ceiling, plus a minute for the bridge's own
+work around a call. The bridge cuts nothing at it: a call past every bound the
+engine sets is a defect or a hang, and a tool half-way through a write is the
+run's. A call still running as its opening ends is kept going until its tool
+returns but never answered, so its harness waits for it as long as it runs and
+at most this bound
+([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
+amendment on a call nobody waited for, "What it costs").
 
 **Cost-when-tried:** with nothing written on a call's response until its
 answer, a box's Claude Code gave up every call that ran past a minute and told

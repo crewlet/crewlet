@@ -106,6 +106,19 @@
 // progress that can no longer be written is the call's response gone, and the
 // call is recorded as one nobody waited for.
 //
+// # How long a box waits for a call
+//
+// Kept going, a call keeps its harness waiting for as long as it runs: every
+// silence check a harness keeps on a call is answered, so only the harness's
+// own tool timeout bounds the wait, which neither sets short (Claude Code's
+// 1e8 ms, OpenCode's twelve hours, by reading their bundles). So the box is
+// told the bridge's own bound for a call on every server it is handed
+// ([Bridge.CallTimeout], rendered as each harness's per-server timeout):
+// past it the harness gives the call up and cancels it, whatever progress
+// flows, and the call is recorded as one nobody waited for. The bridge
+// itself cuts nothing: a call past every bound the engine sets is a defect or
+// a hang, and a tool half-way through a write is the run's.
+//
 // # A run outlives the process that opened its session
 //
 // The box goes on calling for as long as its harness runs, and the process that
@@ -1561,23 +1574,38 @@ var _ toolsession.Dispatcher = (*binding)(nil)
 // which are what the beat answers (2.1.310: the first-byte budget measured,
 // the rest by reading its bundle), none of which cancels the call it gives up:
 //   - a response's FIRST BYTE within a minute where the server's entry sets no
-//     timeout: met by the first progress, at once, whatever the cadence;
+//     timeout, and within the entry's timeout where it does: met by the first
+//     progress, at once, whatever the cadence — what keeps a call past that
+//     minute on a release that does not read the entry's timeout
+//     ([Bridge.CallTimeout]) — once the call has reached the node that runs
+//     it: one that first waits for a node that can answer it
+//     ([FleetOptions.HolderWait]) has nothing written on its response while it
+//     waits;
 //   - an IDLE CHECK that gives up a call that "sent no response or progress"
 //     for five minutes on HTTP where the entry sets no timeout, and for the
 //     entry's timeout where it does: every progress starts it again;
 //   - a TRANSPORT-LOSS CHECK, run every 30 seconds, that gives up a call whose
-//     transport was armed as lost more than 90 seconds before, which a
-//     progress disarms: a cadence of twenty leaves four more beats inside the
-//     ninety, so one or two delayed on a loaded node or a relayed frame still
-//     disarm it, and each 30-second check sees a beat no older than twenty.
+//     transport was marked lost more than 90 seconds before, unless a
+//     progress has cleared the mark since. The mark is routine: Claude Code
+//     loses the session's standing GET stream 360 seconds after it opens it,
+//     with the entry's timeout and without (measured), counts that a terminal
+//     connection error, and marks every call then in flight (by reading its
+//     bundle). A cadence of twenty puts four beats inside the ninety, any one
+//     of which clears the mark, so one or two delayed on a loaded node or a
+//     relayed frame still clear it, and each 30-second check sees a beat no
+//     older than twenty.
 //
 // And a proxy between a box and the node that drops a response silent for
 // longer than its own idle bound sees none silent for longer than the cadence.
 // Measured on 2.1.310 against this bridge, at this cadence: a 90-second call
 // answered whole with no timeout on the server's entry, the minute's budget
-// met by the first progress, and a 90-second and a 330-second call with the
-// bridge's own. OpenCode keeps no silence check on a call (2.1.4, measured;
-// its timeout is absolute), and reads a progress harmlessly.
+// met by the first progress; a 90-second, a 330-second and a 540-second call
+// answered whole with the bridge's own, the last through the loss of its
+// session's GET stream at 359.2 seconds; and the same 540-second call with no
+// progress token, on which nothing is kept going, given up at 449.9 seconds,
+// 90 after that loss, with no cancel. OpenCode keeps no silence check on a
+// call (2.1.4, measured; its timeout is absolute), and reads a progress
+// harmlessly.
 //
 // WHAT A BEAT COSTS: one SSE event and a flush per running call (116 bytes on
 // a progress token of one digit, 117 from the tenth beat on, measured), and
