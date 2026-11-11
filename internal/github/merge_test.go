@@ -74,7 +74,7 @@ func TestGitHubsMergeRefusalsAreTyped(t *testing.T) {
 			continue
 		}
 		for _, sentinel := range sentinels {
-			if errors.Is(err, sentinel) != (sentinel == tc.want) {
+			if errors.Is(err, sentinel) != errors.Is(tc.want, sentinel) {
 				t.Errorf("%s: errors.Is(%v, %v) = %v", name, err, sentinel, errors.Is(err, sentinel))
 			}
 		}
