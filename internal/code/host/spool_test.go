@@ -921,10 +921,10 @@ func requireSays(t *testing.T, page string, wants ...string) {
 // shell's own noclobber (`set -C`), which a POSIX shell opens O_CREAT|O_EXCL,
 // so of two upload-packs that start at once the kernel lets one alone create
 // it. Never `mkdir claimed`, whose exclusivity is its tool's: uutils
-// coreutils' mkdir, /usr/bin/mkdir on Ubuntu 26.04 and so on CI's runners,
-// answers success to both of two made at once through 0.10.0 (fixed upstream
-// in 0.11.0; measured on ubuntu:26.04, both succeeded in 2178 rounds of
-// 3000), and both upload-packs would hold.
+// coreutils' mkdir, /usr/bin/mkdir on Ubuntu 26.04, answers success to both
+// of two made at once through 0.10.0 (fixed upstream in 0.11.0; measured on
+// ubuntu:26.04, both succeeded in 2178 rounds of 3000), and both upload-packs
+// would hold.
 func holdFirst(t *testing.T) (fake, hold, started string) {
 	t.Helper()
 	dir := t.TempDir()
