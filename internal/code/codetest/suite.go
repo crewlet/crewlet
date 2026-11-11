@@ -230,7 +230,7 @@ func within(d time.Duration, ok func() bool) bool {
 		if ok() {
 			return true
 		}
-		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails its caller's case
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline; the janitor's promptness is TestAStartedCacheEmptiesTrashWhenKicked's
 			return false
 		}
 		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
@@ -240,8 +240,15 @@ func within(d time.Duration, ok func() bool) bool {
 // cleanupWait is how long a case waits for cleanup the code owes it: the
 // janitor emptying trash/ of what a restart's boot moved there or a release
 // retired, and a request's handler letting its scratch or an incarnation go
-// once its client is done. A minute, the suite's bound on a wait that must end
-// (homeWait, layerSettle) — never a claim: whether the janitor runs at once
-// rather than at its next tick, cache.EvictInterval on, is cache's own,
-// decided there with no tick delivered (TestAStartedCacheEmptiesTrashWhenKicked).
+// once its client is done.
+//
+// A LIVENESS BOUND THAT ONLY A HUNG JANITOR OR HANDLER REACHES, never a
+// claim. The janitor runs at its start and at a kick, in milliseconds, and
+// whether it does so rather than at its next tick (cache.EvictInterval on) is
+// cache's own claim, decided there with no tick ever delivered
+// (TestAStartedCacheEmptiesTrashWhenKicked). So no case here turns on how soon
+// it comes. A MINUTE, the suite's bound on every wait that must end (homeWait,
+// layerSettle): far past what a loaded runner adds to the milliseconds the
+// work takes, and short enough that a janitor that never runs fails its case
+// rather than the whole binary's timeout.
 const cleanupWait = time.Minute
