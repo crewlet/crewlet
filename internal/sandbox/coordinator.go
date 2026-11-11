@@ -466,7 +466,11 @@ type CoordinatorOptions struct {
 	// as it ends (internal/api/mcpbridge's Ledger.End, the session's last
 	// carry of its own, made once any carry [CoordinatorOptions.Settle] asked
 	// for is done), so the reads and the deletes that follow an ending see
-	// it.
+	// it. IT WAITS FOR NO CALL STILL RUNNING: the session answers each that
+	// it is still running and closes behind those answers, and the call runs
+	// on and records itself as its tool returns, which may be after this has
+	// returned (internal/api/mcpbridge, "An opening ends without waiting for
+	// its calls").
 	Ended func(runID string)
 
 	// Settle asks the bridge session serving a run's job to carry into the

@@ -85,15 +85,27 @@ type ledger struct {
 	// for the run's collection ([mcpbridge.Ledger.Settle]), and ended the
 	// times its session's end asked ([mcpbridge.Ledger.End]).
 	settled, ended int
+	// trail is every append and every end, in the order they reached the
+	// ledger: "append <tool>" and "end".
+	trail []string
+
+	// hold, where a case sets it before the session opens, holds every
+	// append until it is closed, each saying so on holding first.
+	hold, holding chan struct{}
 }
 
 func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
+	if l.hold != nil {
+		l.holding <- struct{}{}
+		<-l.hold
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.err != nil {
 		return l.err
 	}
 	l.calls = append(l.calls, c)
+	l.trail = append(l.trail, "append "+c.Name)
 	return nil
 }
 
@@ -108,7 +120,15 @@ func (l *ledger) End(context.Context, string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.ended++
+	l.trail = append(l.trail, "end")
 	return false
+}
+
+// order is every append and end the ledger took, in order ([ledger.trail]).
+func (l *ledger) order() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.trail...)
 }
 
 // settles is how many times the run's collection asked the ledger to carry

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/mcpbridge`
-- **Enforced-by:** `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`, `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`, `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`, `internal/api/mcpbridge.TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode`, `internal/api/mcpbridge.TestACallersOwnSessionEndsWithItsOpener`, `internal/api/mcpbridge.TestALoopbackSessionIsNeverRelayed`, `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`, `internal/engine.TestTheBridgeFollowsTheSeat`, `internal/api.TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone`, `cmd/crewlet.TestADirectBoxDialsTheListenerItsNodeBound`, `cmd/crewlet.TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback`, `internal/e2e.TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener`, `internal/api/mcpbridge.TestABridgedCallsAnswerStartsBeforeItsToolReturns`, `internal/api/mcpbridge.TestACallTheBridgeAnswersWithoutRunningGetsNoProgress`, `internal/api/mcpbridge.TestABoxWaitsAsLongAsTheBridgeCanTakeToAnswer`, `internal/toolsession.TestARunningCallsFirstProgressReachesAnHTTPClientWhileItsToolIsHeld`, `internal/toolsession.TestARunningCallsProgressKeepsComingUntilItsToolReturns`, `internal/toolsession.TestACallAnsweredWithoutRunningGetsNoProgress`, `internal/toolsession.TestARequestWithNoProgressTokenGetsOnlyItsAnswer`, `internal/toolsession.TestAServerThatKeepsNothingGoingSendsNoProgress`, `internal/sandbox/executor.TestABridgedEntryTellsEitherHarnessHowLongToWait`, `internal/engine.TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer`, `internal/mcp.TestAToolIsBoundByItsServersRequestTimeout`, `internal/agent/subagent.TestTheDelegateToolIsBoundByItsCallCap`, `internal/engine.TestADeepRunReachesCrewletOnlyThroughItsSurface`, `internal/engine.TestARelaunchsBoxWaitsAsLongAsItsBridgeCanTakeToAnswerWhicheverSessionItStarts`, `internal/toolsession.TestARunningCallsAnswerWaitsForAProgressAlreadyOnItsWay`, `internal/toolsession.TestACancelledCallIsSentNoMoreProgress`
+- **Enforced-by:** `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`, `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`, `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`, `internal/api/mcpbridge.TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode`, `internal/api/mcpbridge.TestACallersOwnSessionEndsWithItsOpener`, `internal/api/mcpbridge.TestALoopbackSessionIsNeverRelayed`, `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`, `internal/engine.TestTheBridgeFollowsTheSeat`, `internal/api.TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone`, `cmd/crewlet.TestADirectBoxDialsTheListenerItsNodeBound`, `cmd/crewlet.TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback`, `internal/e2e.TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener`, `internal/api/mcpbridge.TestABridgedCallsAnswerStartsBeforeItsToolReturns`, `internal/api/mcpbridge.TestACallTheBridgeAnswersWithoutRunningGetsNoProgress`, `internal/api/mcpbridge.TestABoxWaitsAsLongAsTheBridgeCanTakeToAnswer`, `internal/toolsession.TestARunningCallsFirstProgressReachesAnHTTPClientWhileItsToolIsHeld`, `internal/toolsession.TestARunningCallsProgressKeepsComingUntilItsToolReturns`, `internal/toolsession.TestACallAnsweredWithoutRunningGetsNoProgress`, `internal/toolsession.TestARequestWithNoProgressTokenGetsOnlyItsAnswer`, `internal/toolsession.TestAServerThatKeepsNothingGoingSendsNoProgress`, `internal/sandbox/executor.TestABridgedEntryTellsEitherHarnessHowLongToWait`, `internal/engine.TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer`, `internal/mcp.TestAToolIsBoundByItsServersRequestTimeout`, `internal/agent/subagent.TestTheDelegateToolIsBoundByItsCallCap`, `internal/engine.TestADeepRunReachesCrewletOnlyThroughItsSurface`, `internal/engine.TestARelaunchsBoxWaitsAsLongAsItsBridgeCanTakeToAnswerWhicheverSessionItStarts`, `internal/toolsession.TestARunningCallsAnswerWaitsForAProgressAlreadyOnItsWay`, `internal/toolsession.TestACancelledCallIsSentNoMoreProgress`, `internal/api/mcpbridge.TestEveryEndingOfAnOpeningReturnsWhileACallIsHeld`, `internal/api/mcpbridge.TestAnOpeningsEndAnswersItsRunningCallsBeforeItClosesTheirSessions`, `internal/api/mcpbridge.TestAnOpeningsEndIsHeldNoLongerThanItsBoundByABoxThatDoesNotRead`, `internal/api/mcpbridge.TestACallWhoseToolReturnedBeforeItsOpeningEndedIsAnsweredWithItsOwnResult`, `internal/api/mcpbridge.TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans`, `internal/api/mcpbridge.TestABridgeAwaitsEveryCallItRunsUntilItIsRecorded`, `internal/toolsession.TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten`, `internal/engine.TestASeatHandedOnWhileACallOfItsRunIsHeldIsReleasedAtOnce`
 - **Cost-when-tried:** the box dialled its launching node's own address. A load balancer in front of several nodes sent calls to peers that never held the session, and they answered 401 to a live run. A run whose seat moved to a peer kept dialling the node that lost it, which answered that the run's tools were closed until the run ended. And a node without the ingress role had to bind a public listener for its seats' bridge alone, so a satellite that accepts no inbound connection could run no seat whose executor ran in a box.
 - **Tag-status:** unreleased
 
@@ -26,7 +26,8 @@ holds no session for is over only once it has finished taking the seat, after
 the seat's running jobs are recovered. Until then it is not yet the holder,
 and the call waits for it, up to two seat-lease lifetimes, then answers 503.
 An opening whose fence has closed defers to the lease rather than refusing. A
-node that hands a seat on ends that seat's sessions as it releases it.
+node that hands a seat on ends that seat's sessions as it releases it, waiting
+for no call still running on them (the last amendment).
 
 **A session with a caller of its own is pinned to the process that opened
 it.** The Dashboard Assistant's deep work
@@ -161,13 +162,77 @@ tools declare (a seat MCP server's request timeout, `delegate`'s call cap),
 never under the engine's one-call ceiling, plus a minute for the bridge's own
 work around a call. The bridge cuts nothing at it: a call past every bound the
 engine sets is a defect or a hang, and a tool half-way through a write is the
-run's. A call still running as its opening ends is kept going until its tool
-returns but never answered, so its harness waits for it as long as it runs and
-at most this bound
-([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
-amendment on a call nobody waited for, "What it costs").
+run's. A call still running as its opening ends is answered at once that it is
+still running, before the box's sessions on the opening are closed (the next
+amendment), so no harness waits out this bound for an answer an ending never
+writes.
 
 **Cost-when-tried:** with nothing written on a call's response until its
 answer, a box's Claude Code gave up every call that ran past a minute and told
 its model the call had failed, while the bridge ran it to its end and its
 effect happened, so the model could make it again.
+
+## Amendment: an opening ends without waiting for the calls still running on it
+
+Every way an opening ends closes the MCP sessions its box holds on it: the
+run's close (its settle, a stop, a reclaim, its cap's cut, a launch that failed
+once its job's session had opened), a relaunch's opening of the run's next job,
+a recovery's opening of the same job, and the seat leaving the node. The SDK's
+close of a session (go-sdk v1.8.0) waits for every request in flight on it, and
+once it has begun it writes no answer. So an ending waited out every call still
+running on the opening, and that call's answer was never written. A seat handed
+on with such a call kept its lease until the call returned, since a node gives
+a seat's lease back only once its release of the seat has returned, so no peer
+could take the seat over meanwhile, and the box's next calls waited for a
+holder, up to two seat-lease lifetimes, and past that were answered 503. And
+with the previous amendment's progress, which the SDK still writes on a session
+that is closing while a call is in flight on it, the call's harness waited for
+that answer until the box's own wait for a call ran out: 1050 seconds at the
+defaults on a seat that can `delegate`, 450 on one that cannot.
+
+**An ending answers every call still running, then closes.** Under the
+opening's lock it refuses every later call and answers each call it admitted
+whose tool has not returned, in the words of how it ended. Where the run is over
+for the box (a close, a relaunch's opening) the answer is "This run has ended;
+this call is still running, so do not make it again. End your turn now." Where
+the box goes on (the seat leaving, a recovery) it is "This call is still
+running; do not make it again. Its result reaches the run's log." Neither is
+marked failed, as the tool loop's own answer to a call still running near its
+harness's tool timeout is not: a harness hands its model a failed result as a
+call that failed, and a model makes a failed call again, while this call is
+running and its effect is still to come. The call's handler stops its beat and
+waits for it, as it does before any answer, so no progress follows the answer.
+
+**The ending waits for those answers, five seconds at most, then closes.** The
+tool session tells the dispatcher when a call's request is over on its
+transport (`toolsession.Call.Over`), which the SDK reaches only once the
+answer's write has returned. The ending waits for that on every call it
+answered, and on a call whose tool returned just before it, which its own
+result answers once its record is made, and only then closes the box's
+sessions, which by then hold no request a tool is behind. Five seconds covers
+that record's retries (1.75 seconds of waits between four attempts) and an
+activation's hold for the box's re-list (two seconds) on a coordination store
+that answers. Past the bound the ending waits no longer, since an answer still on
+its way is one a box is not reading: it returns, and the bridge closes the
+sessions once those answers are out, at the latest when the box's connection
+ends.
+
+**The call runs on, and the bridge holds it.** The call's tool runs on a
+goroutine of the bridge's, under the run's context, until the call's own bound
+ends it, and the call is recorded once its tool returns, in one step, as one
+nobody waited for, after the session's ledger has ended
+([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
+amendment on such a call). A call that reaches an opening after its end is
+refused and runs nothing, as before, now in the words of how the opening ended:
+told to end its turn where the run ended, and, where the box goes on, that the
+session it reached was closing and to call again, which reaches the opening
+that serves the box now.
+
+**Cost-when-tried:** measured with the SDK's own client as the box, against the
+bridge on `main` at 28ce95e56c, each opening ended with a call held in its tool:
+a close of the run and a relaunch's opening returned only when the call's tool
+did, released at 247.9 seconds, and the box read `calling "tools/call": request
+terminated without response`; the seat leaving the node and a recovery's
+opening had not returned when the measurement stopped waiting, at 15.6 and 31.1
+seconds; and each time the ledger took the call's record and then the session's
+end, after the release.

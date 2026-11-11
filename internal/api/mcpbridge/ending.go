@@ -1,0 +1,370 @@
+package mcpbridge
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/toolsession"
+)
+
+// ending is how an opening ended, which is what its box is told of a call the
+// end answers, or refuses after it: whether the run is over for the box, or
+// the box goes on calling, served from then on by another opening. See the
+// package doc, "An opening ends without waiting for its calls".
+//
+// A NAMED STRING for the log line that names it ([binding.endKeeping]); it
+// never crosses a wire, so it has no unknown value to read.
+type ending string
+
+const (
+	// runEnded is an end after which the opening's run is over for its box:
+	// the run settled, was stopped, reclaimed or cut, or its launch failed
+	// ([Bridge.Close]); or a relaunch replaced the job the opening served
+	// ([Bridge.Open] of another job of the run), and its own box carries the
+	// run on.
+	runEnded ending = "run_ended"
+
+	// boxGoesOn is an end after which the opening's box goes on running and
+	// calling: the seat left this node ([Bridge.ReleaseSeat]), and its next
+	// holder serves the box; or this node opened the same job again, a
+	// recovery ([Bridge.Open] of the same job), and the new opening serves
+	// it.
+	boxGoesOn ending = "box_goes_on"
+)
+
+// The answers a call is handed as the opening it was made on ends. Each says
+// only what holds as it is written: the call was admitted before the end, so
+// its tool runs to its end and its effect is still to come — which is why it
+// must not be made again — and, where the box goes on, the call's record
+// reaches the run's log, as every call's does.
+const (
+	// endedRunningNote answers a call still running as its opening ends where
+	// the run ended for its box. NOT A FAILURE, as the tool loop's own "still
+	// running" is not: see the package doc.
+	endedRunningNote = "This run has ended; this call is still running, so do not make it again. " +
+		"End your turn now."
+
+	// stillRunningNote answers a call still running as its opening ends where
+	// the box goes on calling. Not a failure either.
+	stillRunningNote = "This call is still running; do not make it again. " +
+		"Its result reaches the run's log."
+
+	// closingNote answers a call that reaches an opening after its end where
+	// the box goes on: the call never ran, and its box's next call reaches the
+	// opening that serves it now. Failed, as [endedNote] is: nothing ran.
+	closingNote = "This call was not run: the session it reached was closing. " +
+		"Call it again if it is still needed."
+)
+
+// stillRunning is the answer of a call whose tool is still running as an
+// opening ends this way.
+func (e ending) stillRunning() string {
+	if e == boxGoesOn {
+		return stillRunningNote
+	}
+	return endedRunningNote
+}
+
+// notRun is the answer of a call that reaches an opening after it ended this
+// way, which never runs it.
+func (e ending) notRun() string {
+	if e == boxGoesOn {
+		return closingNote
+	}
+	return endedNote
+}
+
+// endAnswerWait bounds how long an opening's end waits for the answers of its
+// calls to be written before it closes the box's sessions on it
+// ([binding.endKeeping]): FIVE SECONDS.
+//
+// The end's own answers to the calls still running are written at once: the
+// call's beat is stopped and the SDK writes the answer as any, and a relayed
+// one lands in the relay's buffer, which never blocks below its bound
+// (internal/httprelay). What the bound is sized for is a call whose tool
+// returned just before the end, whose own answer follows its record: the
+// append to the run's log and its retries (internal/engine's appendRetryWaits,
+// 1.75 seconds of waits between four attempts) and, after an activation, the
+// hold for the box's re-list (internal/toolsession's relistWait, two seconds) —
+// under four seconds on a coordination store that answers. FIVE, as the
+// ledger's carry and the record of a job's session start are given
+// (internal/engine's settleBudget and sessionStartRecordBudget), and for their
+// reason: a store that has not answered in five is in an outage this wait would
+// not see the end of. Past it the end waits no longer: an answer still on its
+// way is one a box is not reading, and the box's sessions are closed behind
+// the end once it is out (see the package doc). NOTHING HOLDS THE SUM TO THE
+// BOUND: both waits live in other packages, one of them the engine's, which
+// this one cannot import, so moving either is reading this again.
+//
+// Not a setting: nothing about a deployment moves what it is sized for.
+const endAnswerWait = 5 * time.Second
+
+// bridgedCall is one call an opening admitted, from its admission until its
+// answer is out ([binding.Call]), and in the bridge's registry until it is
+// recorded ([bridgedCalls]).
+type bridgedCall struct {
+	// run is the run the call was made for.
+	run string
+	// opening is the opening that admitted it.
+	opening *binding
+	// over is the call's request's [toolsession.Call.Over]: closed once its
+	// answer is out. Nil for a call no request carries.
+	over <-chan struct{}
+	// recorded is closed once the call's record step has run
+	// ([binding.conclude]): what [Bridge.AwaitCalls] waits on.
+	recorded chan struct{}
+
+	// own, cutByEnd and note are under the opening's mu, and decided once:
+	// own where the call's own result answers it — its tool returned while
+	// the opening was live ([binding.claim]); cutByEnd where the opening's
+	// end answered it with note first, and closed cut.
+	own      bool
+	cutByEnd bool
+	note     string
+	cut      chan struct{}
+}
+
+// answeredLocked reports whether the call's answer is decided: its own, or
+// its opening's end's. Under the opening's mu.
+func (c *bridgedCall) answeredLocked() bool { return c.own || c.cutByEnd }
+
+// endsAnswer is the answer the opening's end handed the call: not a failure
+// (see the package doc). Read only once cut is closed, which the end does after
+// it sets the note.
+func (c *bridgedCall) endsAnswer() toolsession.Result {
+	return toolsession.Result{Output: c.note}
+}
+
+// bridgedCalls is the bridge's registry of the calls it runs: every call an
+// opening of it admitted, from its admission until its record step has run,
+// whatever became of the opening — and every close of an opening's sessions
+// its end left to finish behind it.
+//
+// THE BRIDGE OWNS THOSE: [binding.Call] starts the goroutine that runs a call's
+// tool and records it, under the run's context, which nothing cancels, and the
+// tool's own bound ends it ([binding.conclude]); a close behind an end ends
+// once the answers it waits for are out, at the latest when the box's
+// connection ends. [Bridge.Shutdown] stops neither. [Bridge.AwaitCalls] waits
+// for the calls.
+type bridgedCalls struct {
+	mu  sync.Mutex
+	set map[*bridgedCall]struct{}
+
+	// closing is every close of an opening's sessions its end left running
+	// ([binding.endKeeping]).
+	closing sync.WaitGroup
+}
+
+func newBridgedCalls() *bridgedCalls {
+	return &bridgedCalls{set: map[*bridgedCall]struct{}{}}
+}
+
+// add registers a call its opening just admitted.
+func (r *bridgedCalls) add(c *bridgedCall) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.set[c] = struct{}{}
+}
+
+// done lets go of a call whose record step has run, and says so.
+func (r *bridgedCalls) done(c *bridgedCall) {
+	r.mu.Lock()
+	delete(r.set, c)
+	r.mu.Unlock()
+	close(c.recorded)
+}
+
+// running is every call the bridge runs now.
+func (r *bridgedCalls) running() []*bridgedCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*bridgedCall, 0, len(r.set))
+	for c := range r.set {
+		out = append(out, c)
+	}
+	return out
+}
+
+// AwaitCalls waits until every call this bridge runs whose opening has ended
+// by the time it is asked has been recorded ([binding.conclude]), or until ctx
+// ends: for a caller that must not tear down what such a call writes through
+// before it lands, as a node that has given its seats back and is stopping
+// must not, since a call its seat's openings' ends answered as still running
+// goes on to reach the run's log. A call on an opening still serving is its
+// run's own to wait for, and a call admitted after this is asked is not
+// waited for. No bound of its own: ctx's is the caller's, and a call's own
+// bound ends it (wait.go). Nil-safe.
+func (b *Bridge) AwaitCalls(ctx context.Context) {
+	if b == nil {
+		return
+	}
+	var waiting []*bridgedCall
+	for _, c := range b.calls.running() {
+		if c.opening.over() {
+			waiting = append(waiting, c)
+		}
+	}
+	if len(waiting) == 0 {
+		return
+	}
+	runs := make([]string, 0, len(waiting))
+	seen := map[string]bool{}
+	for _, c := range waiting {
+		if !seen[c.run] {
+			seen[c.run] = true
+			runs = append(runs, c.run)
+		}
+	}
+	log.InfoContext(ctx, "mcp_bridge_calls_draining", "calls", len(waiting), "run_ids", runs,
+		"detail", "tool calls still running as their runs' sessions on the bridge ended; "+
+			"waiting for each to return and be recorded")
+	for n, c := range waiting {
+		select {
+		case <-c.recorded:
+		case <-ctx.Done():
+			log.WarnContext(ctx, "mcp_bridge_calls_drain_cut", "calls", len(waiting)-n,
+				"error", ctx.Err().Error(),
+				"detail", "stopped waiting for tool calls still running; each goes on until "+
+					"its own bound or this process ends, and one the process ends is on no record")
+			return
+		}
+	}
+	log.InfoContext(ctx, "mcp_bridge_calls_drained", "calls", len(waiting))
+}
+
+// answeredWithin waits for every channel of answering to close, for at most
+// [endAnswerWait], and reports whether they all did.
+func answeredWithin(answering []<-chan struct{}) bool {
+	if len(answering) == 0 {
+		return true
+	}
+	timer := time.NewTimer(endAnswerWait)
+	defer timer.Stop()
+	for _, over := range answering {
+		select {
+		case <-over:
+		case <-timer.C:
+			return false
+		}
+	}
+	return true
+}
+
+// end refuses every later call on the opening, answers every call of it still
+// running, and closes every MCP session a box holds on it once those answers
+// are out ([binding.endKeeping]). Nil-safe, and safe to call twice.
+//
+// Closing a server session runs the handler's own removal hook, so the session
+// leaves the SDK's table as well as ending on the wire — which is what makes
+// [Bridge.Close] release the surface rather than merely hide it.
+func (o *binding) end(how ending) { o.endKeeping(nil, how) }
+
+// endKeeping is [binding.end], closing the opening's note inbox unless it is
+// keep — the inbox an opening replacing this one serves too — and telling the
+// box how the opening ended (how).
+//
+// IT WAITS FOR NO CALL. Under the opening's lock it refuses every later call
+// and answers every call it admitted whose tool has not returned, in the words
+// of how it ended ([ending.stillRunning]); each call's handler stops its beat
+// and hands that answer to the SDK as any. It then waits for every answer of
+// the opening still on its way to be out — those, and the answer of a call
+// whose tool returned before the end, which its own result answers once its
+// record is made — for at most [endAnswerWait], and only then closes the box's
+// sessions: the SDK's close of a session waits for every request in flight on
+// it, and writes no answer once it has begun. Past that bound the sessions
+// are closed behind it ([bridgedCalls]), once those answers are out, and the
+// end returns.
+//
+// AND IT ENDS THE SESSION'S LEDGER ([Ledger.End]), which carries what it owes,
+// before it returns, once, by the call that ended it: no call of the opening
+// comes after its end to carry what the ledger owes, and every path that ends
+// one — the run's settle, a stop, a relaunch's opening, the seat leaving this
+// node — goes on to read the run's record, delete it, or hand the run to a node
+// whose ledger owes it nothing. Last, once the opening refuses every new call,
+// so nothing it owes is still to come but what a call still running records
+// itself as its tool returns — which the ledger, told the session ended, says
+// is on no record where it does not land.
+//
+// ONCE: an end that finds the opening ended already returns at once.
+func (o *binding) endKeeping(keep SteerInbox, how ending) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	if o.ended {
+		o.mu.Unlock()
+		return
+	}
+	o.ended, o.endedAs = true, how
+	cut := 0
+	var answering []<-chan struct{}
+	for c := range o.running {
+		if !c.answeredLocked() {
+			c.cutByEnd, c.note = true, how.stillRunning()
+			close(c.cut)
+			cut++
+		}
+		if c.over != nil && !gone(c.over) {
+			answering = append(answering, c.over)
+		}
+	}
+	inbox := o.steer
+	o.steer = nil
+	o.mu.Unlock()
+	if inbox != nil && inbox != keep {
+		inbox.Close()
+	}
+	if cut > 0 {
+		log.InfoContext(o.ctx, "mcp_bridge_answered_at_end", "run_id", o.session.RunID,
+			"launch_id", o.id, "seat", o.session.Handle, "calls", cut, "ending", string(how),
+			"detail", "the box was answered that each call is still running; each runs on to its "+
+				"own end and is recorded as one nobody waited for")
+	}
+	if answeredWithin(answering) {
+		o.closeSessions()
+	} else {
+		o.calls.closing.Go(func() {
+			for _, over := range answering {
+				<-over
+			}
+			o.closeSessions()
+		})
+		log.WarnContext(o.ctx, "mcp_bridge_close_deferred", "run_id", o.session.RunID,
+			"launch_id", o.id, "seat", o.session.Handle, "after", endAnswerWait.String(),
+			"detail", "an answer to the box was still on its way, unread; the box's sessions on "+
+				"this opening are closed once it is out, or once the box's connection ends")
+	}
+	if o.session.Ledger != nil {
+		o.session.Ledger.End(o.ctx, o.session.RunID)
+	}
+}
+
+// closeSessions closes every MCP session a box holds on the opening.
+func (o *binding) closeSessions() {
+	for _, ep := range o.order {
+		for ss := range ep.server.MCP().Sessions() {
+			if err := ss.Close(); err != nil {
+				log.Debug("mcp_bridge_session_close", "error", err)
+			}
+		}
+	}
+}
+
+// holdLocked holds a call the opening just admitted, under mu: with the
+// opening, whose end answers it and waits for its answer, and with the bridge,
+// which runs its tool to its end and records it ([bridgedCalls]). over is the
+// call's request's [toolsession.Call.Over]. And it lets go of every call the
+// opening held whose answer is decided and out.
+func (o *binding) holdLocked(over <-chan struct{}) *bridgedCall {
+	for held := range o.running {
+		if held.answeredLocked() && (held.over == nil || gone(held.over)) {
+			delete(o.running, held)
+		}
+	}
+	c := &bridgedCall{run: o.session.RunID, opening: o, over: over,
+		recorded: make(chan struct{}), cut: make(chan struct{})}
+	o.running[c] = struct{}{}
+	o.calls.add(c)
+	return c
+}
