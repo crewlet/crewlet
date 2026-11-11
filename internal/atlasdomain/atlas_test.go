@@ -109,6 +109,54 @@ func TestAValueShapedLikeACredentialIsRefusedAtTheWriter(t *testing.T) {
 	}
 }
 
+// A KEY SHAPED LIKE A CREDENTIAL IS REFUSED AT THE WRITER, the entry's own and
+// another entry's a claim names, though the key's grammar admits it, and the
+// refusal repeats neither: a key the vocabulary reads is not yet a key a writer
+// may record.
+//
+// Mutation: drop the claim's Recordable check in Writer.Record and the
+// relation to the token-keyed host lands.
+func TestAKeyShapedLikeACredentialIsRefusedAtTheWriter(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAtlasLog(t), "data-1")
+	token := "ghp_" + strings.Repeat("a", 36)
+	host := atlas.Ref{Kind: atlas.KindHost, Key: "addr/" + token}
+	if _, err := atlas.NewRef(host.Kind, host.Key); err != nil {
+		t.Fatalf("the case needs a key the grammar admits: %v", err)
+	}
+	for _, claim := range []atlas.Claim{
+		{Subject: host, Facet: atlas.Facet{Kind: atlas.FacetExists}},
+		{Subject: checkout, Facet: atlas.Facet{Kind: atlas.FacetRelation, Relation: atlas.RelationRunsOn,
+			Target: atlas.Target{Entry: host}}},
+	} {
+		_, err := n.writer.Record(t.Context(), personCall("ada"), claim, atlasdomain.NoIfMatch)
+		if !errors.Is(err, atlasdomain.ErrInvalid) || !errors.Is(err, atlas.ErrCredential) {
+			t.Errorf("a claim naming a token-keyed host: %v, want ErrInvalid and ErrCredential", err)
+		}
+		if err != nil && strings.Contains(err.Error(), token) {
+			t.Errorf("the refusal repeats the key: %v", err)
+		}
+	}
+	if end, _ := n.log.End(t.Context()); end != 0 {
+		t.Errorf("the log holds %d records after a refusal", end)
+	}
+}
+
+// A REFUSAL READS AS ITS SENTENCE, without the package or class words a log
+// reads: what a person's write surface and a tool answer are told.
+func TestAnAtlasRefusalReadsAsItsSentence(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAtlasLog(t), "data-1")
+	claim := atlas.Claim{Subject: checkout, Facet: atlas.Facet{Kind: atlas.FacetFact, Fact: atlas.FactImportance},
+		Value: atlas.Value{Type: atlas.TypeWord, Text: "vital"}}
+	_, err := n.writer.Record(t.Context(), personCall("ada"), claim, atlasdomain.NoIfMatch)
+	said := atlasdomain.Sentence(err)
+	if err == nil || strings.Contains(said, "atlasdomain") || strings.Contains(said, "atlas:") ||
+		!strings.Contains(said, "importance") {
+		t.Errorf("the refusal %v reads %q, want its sentence naming the fact alone", err, said)
+	}
+}
+
 // AN EDIT OVER AN EDIT IT DID NOT SEE IS REFUSED: a person's write names the
 // entry's version they decided from.
 func TestAnEditOverAnEditItDidNotSeeIsRefused(t *testing.T) {

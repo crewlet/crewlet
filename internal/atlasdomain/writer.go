@@ -148,7 +148,7 @@ func publish(ctx context.Context, publisher *statelog.Publisher,
 	case errors.Is(err, statelog.ErrConflict):
 		return res, fmt.Errorf("%w: %s: %w", ErrConflict, req.Subject, err)
 	case errors.Is(err, statelog.ErrExists):
-		return res, fmt.Errorf("%w: %s", ErrExists, req.Subject)
+		return res, fmt.Errorf("%w: %s: %w", ErrExists, req.Subject, err)
 	}
 	return res, err
 }
@@ -184,7 +184,8 @@ func versionOf(ctx context.Context, tx *sql.Tx, entry string) (int64, error) {
 // restore, a fact they set, correct or deny, a relation they draw or remove, an
 // owner they name, or two entries they join or keep apart. The claim's source
 // is the caller, whatever the claim says; its value is judged by the
-// vocabulary's grammar and refused if it is shaped like a credential.
+// vocabulary's grammar, and its value and every key it names are refused if
+// shaped like a credential.
 //
 // ifMatch is the entry's version the person decided from ([EntryRow.Version]),
 // or [NoIfMatch]: an edit over a record they did not see answers
@@ -198,6 +199,11 @@ func (w *Writer) Record(ctx context.Context, c Call, claim atlas.Claim, ifMatch 
 		return statelog.Result{}, err
 	}
 	claim.Source, claim.Position, claim.ObservedAt = atlas.PersonSource(c.By.Name), 0, w.now()
+	// THE KEYS FIRST: a refusal of the claim's grammar names its entry, and a
+	// key shaped like a credential is refused before anything repeats it.
+	if err := claim.Recordable(); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if err := claim.Validate(); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
