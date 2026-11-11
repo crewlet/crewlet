@@ -138,7 +138,7 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Seven more are a
+itself is recorded beside either as the write's `operator_id`. Eight more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
 running turn, decided on the seat its executor's record names once the executor
@@ -152,7 +152,10 @@ holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat; and, where the company hosts its code, `code_repo_readers`, who
 read a `visibility: unit` repository, an administrator's audit, and
 `code_mark_inbox`, a person's marks over their own code notices, served beside
-the code writes (a seat is woken, never shown an inbox). That set
+the code writes (a seat is woken, never shown an inbox); and `atlas_search`,
+the company's [atlas](../concepts/atlas.md) for a holder of `atlas`, with its
+repositories only for a holder of `gitlet` too
+([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)). That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
 dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)

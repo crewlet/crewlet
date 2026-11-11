@@ -91,7 +91,7 @@ func TestEachPairIsItsOwnSlot(t *testing.T) {
 	if s := m(atlas.Same(web, one, ada, now)); s.Slot() == a.Slot() {
 		t.Errorf("the same and not the same share the slot %q", a.Slot())
 	}
-	if d := m(atlas.Denial(a, ada, now)); d.Slot() != a.Slot() || d.Source.Voice() != a.Source.Voice() {
+	if d := m(atlas.Denial(a, ada, now)); d.Slot() != a.Slot() || d.Source != a.Source {
 		t.Error("a denial is not on the slot and the voice of the claim it takes back")
 	}
 }

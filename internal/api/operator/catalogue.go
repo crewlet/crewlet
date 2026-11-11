@@ -201,6 +201,10 @@ type Halves struct {
 	// call.
 	Health builtin.HealthDeps
 
+	// Atlas is the atlas tools' half, or the zero value on a node that runs
+	// no company yet. Its tools read Gitlet through Code, as the caller.
+	Atlas builtin.AtlasDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -417,7 +421,7 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
 		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
-		Readers: halves.Readers, Health: health, Org: s.org,
+		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

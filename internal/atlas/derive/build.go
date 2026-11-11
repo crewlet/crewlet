@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Derived is the claims one source makes, and every value it did not read
@@ -33,6 +34,10 @@ type builder struct {
 	src atlas.Source
 	at  time.Time
 	out Derived
+	// kind is the integration whose settings are being read, and accounts
+	// the account each integration's settings named.
+	kind     integration.Kind
+	accounts map[integration.Kind]atlas.Ref
 }
 
 func newBuilder(src atlas.Source, at time.Time) *builder {

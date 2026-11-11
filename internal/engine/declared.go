@@ -6,7 +6,9 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/testbinary"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -44,13 +46,59 @@ import (
 // list of them.
 var ErrUndeclaredCodeCache = errors.New("engine: a test left the figures of Gitlet's cache to the machine")
 
+// ErrUndeclaredBrokerLimit is the refusal of a TEST's node that dials an
+// external broker whose account states no JetStream limit.
+//
+// A NODE ON AN EXTERNAL BROKER READS THE ACCOUNT'S LIMIT AND NOTHING ELSE
+// ([jetstream.Queue.StreamBudget]): the servers' own caps are not a client's
+// to read. Where the account states none, the node stands three quarters of
+// its own stream volume's free space in for the limit ([unstatedLimit]) and
+// reserves its object bucket and sizes its state logs from that
+// ([objectsReservation], [logsGrantable]). A production node is meant to: it
+// is the one figure the node has. In a test that volume is the runner's,
+// while the server the case started holds every reservation to a cap the case
+// declared (brokertest's TestEveryNATSServerATestBuildsDeclaresItsSize), so
+// the two agreed only while the runner's disk was small enough: the
+// object-window case's broker, its store capped at brokertest.StoreMaxBytes
+// and its account stating nothing, refused the node's bucket on every runner
+// with more than about 92 GB free.
+//
+// So IN A TEST BINARY ([testbinary.Running]) a node whose external broker's
+// account states no limit REFUSES TO OPEN ITS BACKENDS, naming
+// externaltest.Start, whose server's account states
+// brokertest.StoreMaxBytes. It does not ask whether anything would be sized
+// from the stand-in — store.objects.nats_max_bytes set, every log's ceiling
+// declared — because stating the limit costs a case nothing and settles every
+// figure at once. The one case that may leave it unstated is one whose
+// SUBJECT is that derivation, opened under [SizedByTheMachine]. Outside a
+// test binary none of this is read, and nothing is asked of the broker.
+//
+// A MEMBER AND A LEAF ARE NOT ASKED. A member reads its own server's cap,
+// the very one that refuses it, so the two agree on any machine, and a test
+// declares it besides (jetstream.ErrUndeclaredSize). A leaf reads its
+// members' account, which the engine's own broker never limits, so asking it
+// would refuse every leaf, the shape production runs included. What a leaf
+// stands in sizes only the object bucket, since it holds no state log, and
+// only where the leaf makes the bucket, which its members make at their own
+// boot, before a fixture starts a leaf beside them. Nor is a budget the broker
+// did not answer: that is the broker under load rather than the case's
+// declaration, and the sizing that follows asks again and says so if nobody
+// answers then either.
+//
+// AT THE OPENING OF THE BACKENDS ([openNATS]), before anything is reserved on
+// the broker: every route a test takes to a node on an external broker — an
+// engine's boot, a `crewlet run` child (the test binary itself, run again),
+// backends a case opens and lends to [New] — opens them there, so the rule
+// needs no list of the fixtures.
+var ErrUndeclaredBrokerLimit = errors.New("engine: a test left its external broker's limit to the machine's free disk")
+
 // SizedByTheMachine is ctx carrying why a test leaves an engine it boots under
 // ctx to size, from the machine running the suite, what a node is otherwise
 // told: its code cache's budget and transfer lane ([ErrUndeclaredCodeCache]),
-// and its embedded broker's store limit, since ctx carries
-// [jetstream.SizedByTheDisk] for the same reason. It is for the one kind of
-// case whose subject is that derivation. why is the case's own reason; an
-// empty one opts nothing out.
+// its external broker's limit ([ErrUndeclaredBrokerLimit]), and its embedded
+// broker's store limit, since ctx carries [jetstream.SizedByTheDisk] for the
+// same reason. It is for the one kind of case whose subject is that
+// derivation. why is the case's own reason; an empty one opts nothing out.
 func SizedByTheMachine(ctx context.Context, why string) context.Context {
 	return jetstream.SizedByTheDisk(context.WithValue(ctx, sizedByTheMachineKey{}, why), why)
 }
@@ -86,4 +134,39 @@ func (e *Engine) undeclaredCodeCache(boot *config.Bootstrap) error {
 		"brokertest.GitletCacheIn for a node fixture whose broker brokertest.StoreIn sized — or, "+
 		"where the case is about that derivation, boot it under engine.SizedByTheMachine",
 		ErrUndeclaredCodeCache, words.And(unset))
+}
+
+// undeclaredBrokerLimit is [ErrUndeclaredBrokerLimit] for a node configured as
+// b whose stream q opened under ctx, or nil: outside a test binary, for a node
+// that dials no external broker, under [SizedByTheMachine], for an account
+// that states a limit — zero included, which refuses every create the same on
+// any machine — and for a budget the broker did not answer.
+func undeclaredBrokerLimit(ctx context.Context, b *config.Bootstrap, q any) error {
+	if !testbinary.Running() || b.BrokerKind() != placement.BrokerClient || sizedByTheMachine(ctx) != "" {
+		return nil
+	}
+	broker, ok := q.(budgetReader)
+	if !ok {
+		return nil
+	}
+	readCtx, cancel := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	budget, err := broker.StreamBudget(readCtx)
+	cancel()
+	if err != nil {
+		// NOT REFUSED: a budget the broker did not answer is the broker under
+		// load rather than the case's declaration, and the sizing that
+		// follows asks again and says so if nobody answers then either.
+		//
+		//nolint:nilerr // Deliberate: see the paragraph above.
+		return nil
+	}
+	if budget.Limit >= 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: this node dials an external broker whose account states no JetStream "+
+		"limit, so it would stand three quarters of its own volume's free space in for one and "+
+		"size its object bucket and state logs from that, a fact about the machine running the "+
+		"suite rather than about the case. Dial a broker whose account states its limit — "+
+		"externaltest.Start — or, where the case is about that derivation, open the node under "+
+		"engine.SizedByTheMachine", ErrUndeclaredBrokerLimit)
 }

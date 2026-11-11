@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,14 +111,6 @@ func AgentSource(seat, turn string, evidence Evidence) Source {
 
 // IntegrationSource is the source of a claim an integration's read made.
 func IntegrationSource(kind string) Source { return Source{Kind: SourceIntegration, Name: kind} }
-
-// identity is the source as one voice: a later claim of the same voice on the
-// same facet replaces its earlier one.
-func (s Source) identity() string { return string(s.Kind) + "\x00" + s.Name }
-
-// Voice is [Source.identity] for a store that keeps claims: the claims of one
-// voice on one [Claim.Slot] replace each other, newest first.
-func (s Source) Voice() string { return s.identity() }
 
 // Confidence is how far a claim can be trusted, DERIVED from its source and
 // the evidence the engine checked, never chosen by whoever made the claim: a
@@ -326,15 +319,22 @@ func Distinct(a, b Ref, src Source, at time.Time) (Claim, error) {
 }
 
 // Same is a person's claim that a and b are one thing, though no exact key
-// joins them. A "not the same" between the two always wins.
+// joins them. A "not the same" between them always wins.
 func Same(a, b Ref, src Source, at time.Time) (Claim, error) {
 	return checked(Claim{Subject: a, Facet: Facet{Kind: FacetSame, Target: Target{Entry: b}}, Source: src, ObservedAt: at})
 }
 
-// Slot is the one thing a claim fills on its entry: its fact, one value of a
-// fact that holds many, one relation to one target, or the entry itself. The
-// fold keeps each voice's newest claim per slot, and so does a store.
-func (c Claim) Slot() string { return facetKey(c) }
+// Slot is the one thing a claim fills on its entry, spelled for a store that
+// keeps claims: its fact, one value of a fact that holds many, one relation to
+// one target, one other entry it is or is not the same as, or the entry itself.
+// Two claims share a slot exactly when the fold reads them as one facet
+// (facetOf), so a store replaces a voice's claims where the fold does.
+func (c Claim) Slot() string {
+	id := facetOf(&c)
+	f := id.facet
+	return strings.Join([]string{string(f.Kind), string(f.Fact), string(f.Relation), f.Target.Entry.String(),
+		string(f.Target.External), f.Target.Name, id.value}, "\x00")
+}
 
 // Denial is a person's claim that c does not hold: the entry is retired, the
 // value is wrong, the relation is not there.

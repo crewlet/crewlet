@@ -147,6 +147,8 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
 			Writer: full.Code.Writer, Holder: full.Code.Holder, Actor: builtin.PrincipalActor},
 		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
+		// AND THE ATLAS, over the settings acme runs.
+		Atlas: builtin.AtlasDeps{Settings: runsAcme},
 	})
 	// THE CODE TOOLS JOIN THE LIST through codeCandidates, which this
 	// fixture wires: every read and write a seat's registry takes, beside
