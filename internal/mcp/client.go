@@ -33,6 +33,20 @@ var ErrNotRunning = errors.New("mcp: server not running")
 // which reports it as broken.
 var ErrPagination = errors.New("mcp: server pagination is broken")
 
+// ErrTooManyTools is returned for a server that lists more than
+// [MaxServerTools] tools: refused whole, never cut, because a tool the engine
+// took without the fleet's listing naming it could never be reviewed, and
+// every call to it would ask a person for ever.
+var ErrTooManyTools = errors.New("mcp: server lists more tools than the engine takes from one server")
+
+// MaxServerTools is the most tools the engine takes from one server's
+// listing. The largest server seen in use lists 461 (a cloud vendor's), and
+// one generated from a large public API a few thousand; 4,096 is past both,
+// and is what one fleet listing holds the identities of
+// (internal/coord's MaxMCPListingBytes). An agent is offered 100 tools at
+// most, so a server this large is only ever used through per-agent limits.
+const MaxServerTools = 4096
+
 // toolDef is one tool as the server described it, before any prefixing,
 // exclusion or override is applied.
 type toolDef struct {
@@ -382,6 +396,11 @@ func (c *client) listTools(ctx context.Context) ([]toolDef, error) {
 			if t != nil {
 				tools = append(tools, c.defOf(t))
 			}
+		}
+		if len(tools) > MaxServerTools {
+			return nil, fmt.Errorf("%w: server %q lists more than %d tools, the most the engine takes "+
+				"from one server. Narrow what it lists with its own options (a toolset, a product or a "+
+				"read-only switch), or split it into several entries", ErrTooManyTools, c.name, MaxServerTools)
 		}
 
 		cursor := res.NextCursor
