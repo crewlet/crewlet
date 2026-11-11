@@ -283,9 +283,6 @@ func TestADecisionWrittenInPartSaysWhich(t *testing.T) {
 	if len(reviews.written) != 1 || reviews.written[0].Tool != "close_issue" {
 		t.Errorf("wrote %+v, want close_issue alone", reviews.written)
 	}
-	// THE DASHBOARD READS WHAT THE REFUSAL SENDS, the envelope's own keys
-	// beside it.
-	holdDeclared(t, "McpChangesPartial", []map[string]any{got}, true)
 }
 
 // cloudTools is how many tools the large server lists, and changedTool the

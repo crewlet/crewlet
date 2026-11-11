@@ -252,7 +252,7 @@ var contract = []Entry{
 	{"McpApprovalOutcome", ReadUnion, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
 	{"McpHeldWhole", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheHeldCallReadSends"},
 	{"McpChangesAnswer", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheRouteSends"},
-	{"McpChangesPartial", ReadInterface, "internal/api/mcpapi.TestADecisionWrittenInPartSaysWhich"},
+	{"McpChangesPartial", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatAPartialWriteSends"},
 
 	// tools.ts
 	{"ToolRow", ReadInterface, "internal/api/queries.TestTheCatalogueIsWhatTheToolScreensRead"},
