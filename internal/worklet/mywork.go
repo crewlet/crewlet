@@ -186,6 +186,10 @@ type MyWork struct {
 	UnblockedRecent []TaskRow      `json:"unblocked_recent"`
 	HoldingUp       []HoldingRow   `json:"holding_up"`
 
+	// HoldingAgents sums HoldingUp over agent work, across every held item
+	// walked: what a person's Inbox leads with ([HoldingAgents]).
+	HoldingAgents HoldingAgents `json:"holding_agents"`
+
 	// Totals is every block counted in full — see [MyWorkTotals]. A block's
 	// slice is a PAGE of at most [MyWorkRows]; its total is the claim.
 	Totals MyWorkTotals `json:"totals"`
@@ -217,6 +221,10 @@ type MyWorkQuery struct {
 	// from it through this node's own drain rate. Both may be set
 	// and the read refuses past whichever is reached first.
 	MaxLagSeq uint64
+
+	// Agents are the company's agent seats, by handle: `holding_up` counts
+	// the items they hold among what waits on the person. Nil counts none.
+	Agents []string
 }
 
 // MyWork answers everything one person is expected to look at.
@@ -253,7 +261,7 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 		MaxLagSeq: q.MaxLagSeq,
 		Set:       true,
 	}, func(tx *sql.Tx) error {
-		return readMyWork(ctx, tx, q.Handle, now, loc, &out)
+		return readMyWork(ctx, tx, q.Handle, q.Agents, now, loc, &out)
 	})
 	if err != nil {
 		return MyWork{}, err
@@ -267,7 +275,7 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 	return out, nil
 }
 
-func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
+func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string, now time.Time,
 	loc *time.Location, out *MyWork) error {
 
 	// THE DAY BOUNDARY the `overdue` column on every row is computed
@@ -318,8 +326,12 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 		unblockedBlock(handle), dayStart); err != nil {
 		return err
 	}
-	if out.HoldingUp, out.Totals.HoldingUp, err = readHolding(ctx, tx, handle,
-		dayStart); err != nil {
+	agentSet := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		agentSet[a] = true
+	}
+	if out.HoldingUp, out.Totals.HoldingUp, out.HoldingAgents, err = readHolding(ctx, tx, handle,
+		agentSet, dayStart); err != nil {
 		return err
 	}
 	return nil

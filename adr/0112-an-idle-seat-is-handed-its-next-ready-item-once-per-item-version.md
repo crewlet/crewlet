@@ -21,6 +21,8 @@
 
 **Amended by [ADR-0122](0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md), for the answer.** A pickup's turn is delivered only by a typed answer on its item, never by a comment alone, and an item its holder left without one, in words or with nothing, comes back once a day: a comment no longer holds an item until a change lands.
 
+**Amended by [ADR-0124](0124-a-question-and-a-review-say-whom-they-wait-on.md), for reviews.** An agent moving an item it keeps into review names its reviewer, and an item in review its holder submitted itself, with no question of its holder open on it, is ready for that holder again: not as a review of its own work, which it never makes, but because nobody reviews it, so it acts on the review it was given or names a reviewer.
+
 ## Why the obvious alternative is wrong
 
 **The obvious alternative is to wake the assignee again from the change feed**, on a timer per assignment, as [ADR-0012](0012-a-wake-is-derived-not-published.md) derives every other wake from a committed record. It is wrong because the record that should cause the wake does not exist: what went wrong was that the seat's turn did not start the work, and nothing is written when a turn decides to do something else. A timer per item wakes a busy seat as readily as an idle one, and a seat with ten ready items ten times.

@@ -136,7 +136,7 @@ func TestAnAskResolvedWithoutAnAnswerIsListedAsResolved(t *testing.T) {
 	r.at = resolvedAt
 	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	if _, err := bo.ResolveComment(t.Context(), "op-resolve", "a", "ENG", "c-1",
-		nil); err != nil {
+		nil, nil); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	r.drain()
@@ -224,7 +224,7 @@ func TestAResolvedAskIsFollowedUpFromItsResolve(t *testing.T) {
 	resolve := func(opID, id string) {
 		t.Helper()
 		if _, err := bo.ResolveComment(t.Context(), opID, "a", "ENG", id,
-			nil); err != nil {
+			nil, nil); err != nil {
 			t.Fatalf("%s: %v", opID, err)
 		}
 		r.drain()

@@ -101,7 +101,7 @@ func TestAWatchAQuestionAddedEndsWithTheQuestion(t *testing.T) {
 		comment(r, "w", "pm", "ana", nil)
 		asked := "c-" + itoa(n)
 		pm := r.writer.As("pm", worklet.AuthorAgent, aTurnNobodyWoke())
-		if _, err := pm.ResolveComment(t.Context(), "op-resolve", "w", "ENG", asked, nil); err != nil {
+		if _, err := pm.ResolveComment(t.Context(), "op-resolve", "w", "ENG", asked, nil, nil); err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
 		r.drain()

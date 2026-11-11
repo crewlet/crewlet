@@ -2196,8 +2196,11 @@ const (
 	// all script): 5717 KiB. A tool change reviewed whole, a part it cannot
 	// show said rather than drawn as unchanged, and wording changes to
 	// read-only tools listed and accepted together, merged on top of it, took
-	// it to 5718.9 KiB (5,856,204 bytes, +2,960, all script): 5719 KiB.
-	treeBudget = 5<<20 + 599<<10
+	// it to 5718.9 KiB (5,856,204 bytes, +2,960, all script): 5719 KiB. A
+	// withdrawn question read with its asker's reason and what covers it, and
+	// the Inbox leading with the agent work a person holds up, merged on top of
+	// it, took it to 5720.6 KiB (5,857,851 bytes, +1,647, all script): 5721 KiB.
+	treeBudget = 5<<20 + 601<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

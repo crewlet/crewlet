@@ -4,14 +4,14 @@
 -- CREWLET_TRACKER_LOG stream by its one applier, as the rest of tracker_history.
 --
 -- `working_for` is the carrier an agent's record rode (`MutationRecord.WorkingFor`,
--- record version 12, ADR-0109): an item's creation and every move of its
+-- record version 13, ADR-0109): an item's creation and every move of its
 -- assignee, which the work pickup reads to learn whom an item's work is for,
 -- and any other record that may wake an agent. It is held as the carrier's JSON, and NULL on every other
--- row: a record that carries none, every record below version 12, and every
+-- row: a record that carries none, every record below version 13, and every
 -- row applied before this migration ran. It lands in the
 -- build that introduces the carrier, before anything reads it, because a
 -- replicated migration runs on each node when it opens and not at a log
--- position: a column a later build added and filled from version-12 records
+-- position: a column a later build added and filled from version-13 records
 -- would hold NULL for the records a node applied before it upgraded and the
 -- carrier for the same records on a node that applied them after, for good.
 ALTER TABLE tracker_history ADD COLUMN working_for TEXT;

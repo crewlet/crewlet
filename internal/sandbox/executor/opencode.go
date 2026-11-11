@@ -1316,6 +1316,14 @@ func openCodeReferable(path string) error {
 // segment of the endpoint's URL path rather than a header.
 //
 // EVERY SERVER IS ON (`disabled: false`) — see [OpenCode.WriteConfig].
+//
+// `timeout.execution` ONLY WHERE THE ENGINE SETS A WAIT
+// ([sandbox.MCPServer.CallTimeout]): the bridge's servers. In milliseconds,
+// how long OpenCode waits for a call to the server before it gives the call up
+// and cancels it, whatever progress flows (measured on 2.1.4: 120000 cut a
+// 150-second call at 120 seconds with `notifications/cancelled`, with progress
+// and without); unset, it waits twelve hours (2.0.32 and 2.1.4, by reading
+// their bundles).
 func openCodeMCP(servers map[string]sandbox.MCPServer, values *openCodeValueFiles) map[string]any {
 	out := make(map[string]any, len(servers))
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
@@ -1323,6 +1331,9 @@ func openCodeMCP(servers map[string]sandbox.MCPServer, values *openCodeValueFile
 		entry := map[string]any{"disabled": false}
 		if s.AlwaysLoaded {
 			entry["codemode"] = false
+		}
+		if ms := waitMillis(s.CallTimeout); ms > 0 {
+			entry["timeout"] = map[string]any{"execution": ms}
 		}
 		if s.Transport == sandbox.TransportHTTP {
 			entry["type"] = "remote"
