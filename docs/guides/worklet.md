@@ -2179,6 +2179,26 @@ else changed with it: there is no change to tell, and a wake would oblige its
 holder to answer a notice that the assignee changed when it did not. A real
 reassignment wakes the new holder once.
 
+**A change is told by what it moved, not by the one kind its record names.**
+A write that moves several fields at once is recorded as one kind of change:
+`update_work_item` records an assignment written with a status as a status
+change, and a watch written with a priority, a due date or a custom value as a
+change of who watches. Each move still reaches whom it concerns as it would
+written alone. The seat the task was taken from and its reporter hear of the
+hand-off, and the new holder is asked to answer for it and is told the task
+was assigned to it. The seats that answer for the task are woken by a change
+written beside a watch. A dropped watcher, the new team's lead, a parent's
+assignee and the holder of a checklist item each hear their part, and a lead
+is offered unowned work whose status or team the write moved. The wake's
+change line names each move of the assignee, the status, the collaborators,
+the watchers, the tags, the team and the task's relations ("The status
+changed by ana. The assignee changed too."), and its "What changed" block
+lists every field the write moved. What the write moved is what the engine itself stored, read
+when the write lands, so a link, a custom value and a change somebody else
+made a moment before are told as they happened. An assignment to the seat
+that already holds the task hands nothing over, whatever else it was written
+with.
+
 **And nothing wakes you for your own write.** The person who made a change is
 dropped from its own wake: being told what you just did is a turn spent on
 nothing. There is one name to compare against: a person the identity directory
@@ -2291,7 +2311,7 @@ something of the seat that holds it
 | `mention` | always, but for an agent named in another agent's comment that states it asks nothing (`asks: false`): that @-mention is a reference, while a person it names is addressed as ever |
 | `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
-| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task |
+| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task and nothing else |
 | `watcher` | for a person's comment that names nobody |
 | `thread` | for a seat with a stake in the thread (an open ask it made there, or one made of it that it still owes) on any reply by somebody else, whatever it names, except a reply by a co-asker (an agent or a person) whose only stake is awaiting the same seat; and for every participant on a person's comment that names nobody |
 | `unassigned`, `unwatched` | never |
