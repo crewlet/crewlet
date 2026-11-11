@@ -230,15 +230,15 @@ func TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool(t *testing.T) {
 	}
 }
 
-// WHAT WAS ACCEPTED KEEPS ITS SCHEMAS: a change is shown beside the definition
-// its level was decided on, which no listing names once the server changed it,
-// so the sweep keeps every schema an accepted definition names; and an
+// WHAT WAS ACCEPTED KEEPS ITS DEFINITION: a change is shown beside the
+// definition its level was decided on, which no listing names once the server
+// changed it, so the sweep keeps every definition an accepted record names; and an
 // accepted definition of a server nothing declares or lists goes, so a server
 // added later under its name lists for the first time.
 //
 // Mutation: compute the sweep's named digests from the listings alone, or keep
 // every accepted definition, and this is red.
-func TestTheSweepKeepsTheSchemasWhatWasAcceptedNames(t *testing.T) {
+func TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	fleet := coordmemory.NewFleet()
@@ -250,7 +250,7 @@ mcp_servers:
   - {name: tracker, command: tracker-mcp}
 `))
 	old := testDigest("tracker/close_items@1")
-	if _, err := fleet.CreateMCPToolSchema(ctx, coord.MCPToolSchema{Digest: old,
+	if _, err := fleet.CreateMCPToolDefinition(ctx, coord.MCPToolDefinition{Digest: old,
 		Input: []byte(`{"type":"object"}`), At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ mcp_servers:
 			t.Fatalf("sweep %d: %v", pass, err)
 		}
 	}
-	if _, found, err := fleet.MCPToolSchema(ctx, old); err != nil || !found {
+	if _, found, err := fleet.MCPToolDefinition(ctx, old); err != nil || !found {
 		t.Errorf("the schema the accepted definition names was swept (%v)", err)
 	}
 	held, err := fleet.ListMCPAccepted(ctx)
@@ -340,7 +340,7 @@ mcp_servers:
 		}
 	}
 	seen := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
-	if _, err := fleet.CreateMCPToolSchema(ctx, coord.MCPToolSchema{Digest: testDigest("tracker/new_tool"),
+	if _, err := fleet.CreateMCPToolDefinition(ctx, coord.MCPToolDefinition{Digest: testDigest("tracker/new_tool"),
 		Input: []byte(`{"type":"object"}`), At: seen}); err != nil {
 		t.Fatal(err)
 	}

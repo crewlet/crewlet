@@ -16,7 +16,7 @@ import type { BrandEdit } from "./draft.ts";
 
 const DOC: BrandDocument = {
   v: 1,
-  name: "FairSplit",
+  name: "Acme",
   logos: { primary: "logos/primary.svg" },
   colors: { primary: "#0f7b5f" },
   type: { heading: { kit: "geist" }, body: { kit: "geist" } },

@@ -107,8 +107,11 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
 
 3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends
-   └── a claim the record refutes -> loop back with a correction
-         naming the tools that deliver where the asker is waiting
+   ├── a claim the record refutes -> loop back with a correction
+   │     naming the tools that deliver where the asker is waiting
+   └── a work pickup's turn with no typed answer on its item, read
+         off the tracker's rows the turn wrote -> loop back naming
+         the five typed answers; a comment alone is none
 
 4. Reviewer phase
    ├── submit_review emits a decision

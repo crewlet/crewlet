@@ -2009,7 +2009,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// exhaustion.
 			owed = turn.EngineReply()
 
-		case types.TaskAssigned{}.EventType(), types.WorkPickupType:
+		case types.TaskAssigned{}.EventType():
 			// Work was assigned to this seat. The answer lives wherever
 			// the tracker is, and only a tool puts it there.
 			//
@@ -2020,6 +2020,15 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// engine has no basis to pick one. Naming a surface here
 			// would refuse the other two. See [turn.Reply.Surface].
 			owed = turn.ToolReply("")
+
+		case types.WorkPickupType:
+			// A PICKUP IS ANSWERED ON ITS ITEM, TYPED (ADR-0122): the turn
+			// is delivered only by a change on the item it was handed or
+			// an ask, never by a comment saying it still waits.
+			owed = turn.ToolReply("")
+			if p, ok := events.DataAs[*types.WorkPickup](ev); ok && p != nil {
+				owed.Item = p.Item
+			}
 
 		case types.ExternalNotification{}.EventType():
 			// The third-party app's own reading of its routing. See
@@ -2066,7 +2075,10 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// is already closed. Nobody is waiting on what this turn does
 			// with it.
 		}
-		if replyRank[owed.Kind] > replyRank[out.Kind] {
+		// A PICKUP'S ITEM SURVIVES A MERGE with another tool obligation: the
+		// typed answer it owes is the stricter of the two.
+		if replyRank[owed.Kind] > replyRank[out.Kind] ||
+			owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
 			out = owed
 		}
 	}

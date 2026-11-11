@@ -1212,7 +1212,7 @@ test("working seats run oldest first, and one with no readable start sorts after
 });
 
 // THE LINE UNDER A NAME IS A UNIT OR NOTHING. The share dialog's owner row read
-// "Miles / miles": the handle said the name again in lower case.
+// "Morgan / morgan": the handle said the name again in lower case.
 test("a seat's principal is subtitled by its unit, never its handle", () => {
   const at = (handle: string) => principalOfSeat(index.byHandle.get(handle), handle);
   expect(at("dev-a").detail).toBe("Backend");

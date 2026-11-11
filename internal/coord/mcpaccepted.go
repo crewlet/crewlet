@@ -54,10 +54,11 @@ import (
 // # Bounded, and somebody else's words
 //
 // The record keeps the words of the definition it accepts (title,
-// description, the hints the server declared) so a change can be shown beside
-// what it changed, months after the server stopped listing the old one. They
-// are the server's words, bounded as a listing bounds them, and a reader treats
-// them as such.
+// description, the hints the server declared), bounded as a listing bounds
+// them, so a list can name what was accepted. A change is shown beside the
+// definition whole, which the record's digest names in [MCPToolDefinition] and
+// the sweep keeps while the record stands, months after the server stopped
+// listing it. They are the server's words, and a reader treats them as such.
 
 // MCPAcceptedClass is the key class accepted definitions are filed under in the
 // positions register.

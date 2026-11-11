@@ -719,7 +719,7 @@ func TestAContinuedRunWorksOnTheScreenAsTheDecisionLeftIt(t *testing.T) {
 	script := evals.NewDeepScript(
 		evals.DeepRunScript{Calls: []llm.ToolCall{set("p1", "voice.summary", "Plain and warm.")},
 			Report: "Proposed the voice."},
-		evals.DeepRunScript{Calls: []llm.ToolCall{set("p2", "name", "FairSplit")},
+		evals.DeepRunScript{Calls: []llm.ToolCall{set("p2", "name", "Acme")},
 			Report: "Proposed the name."})
 	f := assistanttest.NewRig(t, evals.RigOptions{
 		Company: deepCompany(t), Deep: script,

@@ -49,7 +49,8 @@ func everyPattern() advisor.Evidence {
 			Overtaken: []string{"c-1"},
 			Named: []worklet.NamedWithoutAsk{
 				{Handle: "pm", Told: 6, Woken: 6, WokenComments: []string{"c-2"}},
-				{Handle: "owner", Told: 12, Comments: []string{"c-3"}}},
+				{Handle: "owner", Told: 12, Requested: 12, Comments: []string{"c-3"},
+					RequestedComments: []string{"c-3"}}},
 			IdleReviews: []worklet.IdleReview{{Task: "t-1", Key: "W-1", Holder: "qa"}},
 			Notices:     []worklet.NoticeLoad{{Handle: "owner", Notices: 800, Addressed: 40}}},
 		Ledger: []usage.TurnLedgerRow{

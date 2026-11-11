@@ -63,8 +63,8 @@ func (u *unitRoute) read(_ context.Context, r exec.Request) (exec.Response, erro
 	}
 	return exec.Response{Status: http.StatusOK, Body: []byte(`{"valid":true,` +
 		`"warnings":[{"kind":"advisory","introduced":true,"message":"pm's daily ceiling ` +
-		`sits above the company's"},{"kind":"advisory","introduced":false,"seat":"miles",` +
-		`"message":"miles is a human seat with no chat contact"}]}`)}, nil
+		`sits above the company's"},{"kind":"advisory","introduced":false,"seat":"morgan",` +
+		`"message":"morgan is a human seat with no chat contact"}]}`)}, nil
 }
 
 func (u *unitRoute) checks() []exec.Request {
@@ -153,7 +153,7 @@ func TestAChangeTheRouteWouldRefuseIsNeverACard(t *testing.T) {
 	// ONLY WHAT THIS CHANGE INTRODUCES: a warning the company already
 	// carried is not news about this change.
 	for field, row := range got {
-		if strings.Contains(row.To, "miles") {
+		if strings.Contains(row.To, "morgan") {
 			t.Errorf("row %s carries a warning the change did not introduce: %+v", field, row)
 		}
 	}

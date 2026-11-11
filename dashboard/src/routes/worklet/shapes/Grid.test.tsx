@@ -17,7 +17,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { WorkGrid } from "./Grid.tsx";
+import { WorkGrid, columnChoices } from "./Grid.tsx";
 import { Router } from "~/app/router.tsx";
 import type { RowChrome } from "~/components/work.tsx";
 import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
@@ -347,10 +347,119 @@ test("the heads sort from the order in force, and only where the engine can orde
     expect(head("Title")?.getAttribute("aria-sort")).toBe("descending");
     screen.getByRole("button", { name: "Title" }).click();
     expect(onSort).toHaveBeenLastCalledWith("");
-    // NO ORDER OVER A KEY OR A STATUS WORD: those heads are not buttons.
-    expect(screen.queryByRole("button", { name: "Key" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
+    // THE ENGINE HAS NO ORDER OVER THE PROJECT, so its head is not a button.
+    expect(screen.queryByRole("button", { name: "Project" })).toBeNull();
     cleanup();
+  }
+});
+
+// THE KEY, THE STATUS, THE TYPE AND WHO HOLDS IT ARE ORDERED AT THEIR HEADS, on
+// both sets, each writing the engine's own key: ascending first, then the
+// same key reversed, then back to the view's default.
+test("the key, status, type and assignee heads write their own sort keys", () => {
+  for (const shape of ["list", "table"] as const) {
+    for (const [name, key] of [
+      ["Key", "key"],
+      ["Status", "status"],
+      ["Type", "type"],
+      ["Assignee", "assignee"],
+    ] as const) {
+      const onSort = vi.fn();
+      const draw = (sort: string) => (
+        <Router>
+          <WorkGrid
+            shape={shape}
+            rows={[row({ assignee: "ada" })]}
+            groups={[]}
+            axis=""
+            chrome={chrome}
+            workspace={false}
+            hrefOf={(r) => `#/worklet/${r.key}`}
+            onOpen={() => {}}
+            onOverflow={() => {}}
+            overflowHref={() => "#/worklet"}
+            sort={sort}
+            defaultSort="rank"
+            onSort={onSort}
+          />
+        </Router>
+      );
+      const { rerender } = render(draw(""));
+      screen.getByRole("button", { name }).click();
+      expect(onSort, `${shape} ${name}`).toHaveBeenLastCalledWith(key);
+      rerender(draw(key));
+      const head = screen.getAllByRole("columnheader").find((h) => h.textContent?.startsWith(name));
+      expect(head?.getAttribute("aria-sort"), `${shape} ${name}`).toBe("ascending");
+      screen.getByRole("button", { name }).click();
+      expect(onSort, `${shape} ${name}`).toHaveBeenLastCalledWith(`-${key}`);
+      rerender(draw(`-${key}`));
+      screen.getByRole("button", { name }).click();
+      expect(onSort, `${shape} ${name}`).toHaveBeenLastCalledWith("");
+      cleanup();
+    }
+  }
+});
+
+// THE TYPE AND THE ASSIGNEE ARE COLUMNS A READER CAN NAME: a word over each,
+// with the type's mark still in the cell and the type's name on the mark.
+test("the type and assignee columns are headed in words, the type's mark named", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ type: "bug", assignee: "ada" })]);
+    const words = screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
+    expect(words, shape).toContain("Type");
+    expect(words, shape).toContain("Assignee");
+    const mark = container.querySelector(".work-type");
+    expect(mark?.getAttribute("title"), shape).toBe("Bug");
+    expect(mark?.textContent, shape).toBe("Bug");
+    cleanup();
+  }
+});
+
+// A LIST HELD TO ONE ASSIGNEE (My work's Queue) would draw that one person on
+// every row, so Assignee is off there until the reader turns it on, and the
+// Display menu still offers it. Everywhere else it is on.
+test("a list held to one assignee offers the column rather than drawing it", () => {
+  for (const shape of ["list", "table"] as const) {
+    const draw = (fixed: boolean, cols = "") => {
+      location.hash = cols ? `#/worklet?cols.${shape}=${cols}` : "#/worklet";
+      return render(
+        <Router>
+          <WorkGrid
+            shape={shape}
+            rows={[row({ assignee: "ada" })]}
+            groups={[]}
+            axis=""
+            chrome={chrome}
+            workspace={false}
+            hrefOf={(r) => `#/worklet/${r.key}`}
+            onOpen={() => {}}
+            onOverflow={() => {}}
+            overflowHref={() => "#/worklet"}
+            sort=""
+            defaultSort="rank"
+            onSort={() => {}}
+            assigneeFixed={fixed}
+          />
+        </Router>,
+      );
+    };
+    const heads = () => screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
+    draw(false);
+    expect(heads(), shape).toContain("Assignee");
+    cleanup();
+    draw(true);
+    expect(heads(), shape).not.toContain("Assignee");
+    expect(heads(), shape).toContain("Type");
+    cleanup();
+    draw(true, "key,title,assignee");
+    expect(heads(), shape).toContain("Assignee");
+    cleanup();
+    const offered = columnChoices(shape, false, true).find((c) => c.key === "assignee");
+    expect(offered, shape).toMatchObject({ label: "Assignee", optional: true });
+    expect(
+      columnChoices(shape, false).find((c) => c.key === "assignee")?.optional,
+      shape,
+    ).toBeFalsy();
   }
 });
 

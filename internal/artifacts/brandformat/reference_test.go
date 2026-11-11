@@ -31,7 +31,7 @@ func TestTheReferenceCoversEveryKeyOfTheIndex(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"EXACTLY ONE of kit, stack and family", "geist", "system-serif",
-		"No `<style>` element", "GoPhrase.me", "logos.primary", "160 bytes"} {
+		"No `<style>` element", "Acme.me", "logos.primary", "160 bytes"} {
 		if !strings.Contains(ref, want) {
 			t.Errorf("the reference does not say %q", want)
 		}
@@ -82,7 +82,7 @@ func TestAKitWrittenFromTheReferenceIsReadFirstTime(t *testing.T) {
 // svgMark is a square mark.
 const svgMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="#2450e6"/></svg>`
 
-// EVERY FAULT IN ONE REFUSAL: the GoPhrase turn (GP-38) spent fourteen rounds
+// EVERY FAULT IN ONE REFUSAL: the Acme turn (GP-38) spent fourteen rounds
 // learning one structural fault per publish. A kit with an unknown key, an
 // object where a colour goes, a string where a face goes, a face naming two
 // sources, a voice line past its bound and a file it never names is answered
@@ -96,13 +96,13 @@ func TestSixFaultsComeBackInOneRefusal(t *testing.T) {
 	v := kit(t)
 	v[brandformat.EntryPath] = []byte(`{
   "v": 1,
-  "name": "GoPhrase",
+  "name": "Acme",
   "fonts": {"body": "Inter"},
   "logos": {"primary": "logos/primary.svg", "mark": "logos/mark.webp", "on_dark": "logos/on-dark.png"},
   "colors": {"primary": {"hex": "#2450e6"}, "secondary": "#9584ff"},
   "type": {"heading": {"kit": "geist", "stack": "system-sans"}, "body": "Inter"},
   "voice": {
-    "summary": "Friendly and exact, as GoPhrase.me speaks to learners.",
+    "summary": "Friendly and exact, as Acme.me speaks to learners.",
     "write_like": ["Find the phrase.", "` + strings.Repeat("a", brandformat.MaxVoiceExampleBytes+1) + `"]
   }
 }`)
@@ -129,22 +129,22 @@ func TestSixFaultsComeBackInOneRefusal(t *testing.T) {
 	}
 }
 
-// THE BRAND'S OWN NAME AS A DOMAIN IS NOT AN ADDRESS: "GoPhrase.me" in the
-// voice of the brand GoPhrase was refused as a web address, while any other
+// THE BRAND'S OWN NAME AS A DOMAIN IS NOT AN ADDRESS: "AcmeWorks.me" in the
+// voice of the brand AcmeWorks was refused as a web address, while any other
 // host, and a subdomain of its own, still is.
 //
 // Mutation: drop ownHost and the first case is refused.
 func TestTheBrandsOwnDomainIsItsName(t *testing.T) {
 	t.Parallel()
 	for text, ok := range map[string]bool{
-		"Plain words, as GoPhrase.me says them.":   true,
-		"Plain words, as gophrase.app says them.":  true,
-		"Plain words, as Go-Phrase.io says them.":  true,
-		"Plain words, as promo.gophrase.me says.":  false,
+		"Plain words, as AcmeWorks.me says them.":  true,
+		"Plain words, as acmeworks.app says them.": true,
+		"Plain words, as Acme-Works.io says them.": true,
+		"Plain words, as promo.acmeworks.me says.": false,
 		"Plain words, as phrasebook.me says them.": false,
-		"Plain words, see gophrase.me/promo.":      false,
+		"Plain words, see acmeworks.me/promo.":     false,
 	} {
-		v := with(t, `"name": "Acme"`, `"name": "GoPhrase"`)
+		v := with(t, `"name": "Acme"`, `"name": "AcmeWorks"`)
 		v[brandformat.EntryPath] = []byte(strings.Replace(string(v[brandformat.EntryPath]),
 			`"Plain, warm and exact.\nNever breathless."`, `"`+text+`"`, 1))
 		_, err := brandformat.ReadKit(v)

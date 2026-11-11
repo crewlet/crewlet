@@ -1033,13 +1033,13 @@ describe("the pane", () => {
       evidence: [{ kind: "task", ref: "t-20", label: "GP-20 sitemap fix, blocked on this access" }],
     });
     ask.ask.body =
-      "Assigned to you in gophrase/backend. See https://evil.example.net/c?q=secret and " +
-      "https://github.com/gophrase/backend/pull/11?x=1.";
+      "Assigned to you in acme/backend. See https://evil.example.net/c?q=secret and " +
+      "https://github.com/acme/backend/pull/11?x=1.";
     mount({
       answers: {
         decisions: decisionsOf(ask),
         link_hosts: {
-          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }],
         },
         work_item: {
           task: {
@@ -1058,8 +1058,8 @@ describe("the pane", () => {
     const title = pane.querySelector(".crewlet-reading-pane__title")!;
     expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
     const hrefs = [...pane.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-    expect(hrefs).toContain("https://github.com/gophrase/backend");
-    expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
+    expect(hrefs).toContain("https://github.com/acme/backend");
+    expect(hrefs).toContain("https://github.com/acme/backend/pull/11");
     expect(hrefs.some((h) => h?.includes("evil.example.net"))).toBe(false);
     expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
     expect(
@@ -1088,14 +1088,14 @@ describe("the pane", () => {
               },
               {
                 kind: "url",
-                ref: "https://github.com/gophrase/backend/pull/14?ref=x",
+                ref: "https://github.com/acme/backend/pull/14?ref=x",
                 label: "Approve here",
               },
             ],
           }),
         ),
         link_hosts: {
-          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }],
         },
       },
     });
@@ -1105,10 +1105,10 @@ describe("the pane", () => {
       a.getAttribute("href")?.startsWith("https://"),
     );
     expect(anchors.map((a) => a.getAttribute("href"))).toEqual([
-      "https://github.com/gophrase/backend/pull/14",
+      "https://github.com/acme/backend/pull/14",
     ]);
     // THE DASHBOARD'S LABEL AND THE APP'S MARK, never the asker's words.
-    expect(anchors[0]!.textContent).toContain("gophrase/backend#14");
+    expect(anchors[0]!.textContent).toContain("acme/backend#14");
     expect(anchors[0]!.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
     expect(pane.textContent).not.toContain("Approve here");
     expect(pane.textContent).not.toContain("Sign in to GitHub");
@@ -1130,20 +1130,20 @@ describe("the pane", () => {
           askItem({
             ...DECISION,
             evidence: [
-              { kind: "url", ref: "https://github.com/gophrase/backend/pull/14" },
+              { kind: "url", ref: "https://github.com/acme/backend/pull/14" },
               { kind: "url", ref: "https://github.com/attacker/x" },
             ],
           }),
         ),
         link_hosts: {
-          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }],
         },
       },
     });
     await settle();
     const evidence = document.querySelector(".inbox-evidence")!;
     const live = evidence.querySelector("a")!;
-    expect(live.textContent).toContain("GitHub: gophrase/backend#14");
+    expect(live.textContent).toContain("GitHub: acme/backend#14");
     expect(live.querySelector(".crewlet-inline-ref--code")).not.toBeNull();
     const inert = [...evidence.querySelectorAll(".crewlet-inline-ref")].find((r) =>
       r.textContent?.includes("attacker"),
@@ -1192,7 +1192,7 @@ describe("the pane", () => {
   //
   // Mutation: drop `scoped` at any one of those sites and its case fails.
   describe("an ask's parts read the ask's whole message", () => {
-    const HOSTS = { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] };
+    const HOSTS = { hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }] };
     const marked = (el: Element | null | undefined) =>
       el?.querySelectorAll("[data-vendor]").length ?? 0;
 
@@ -1200,7 +1200,7 @@ describe("the pane", () => {
       location.hash = "#/inbox?row=ask%3Ac-12";
       const ask = askItem({
         ...DECISION,
-        question: "Ship gophrase/backend?",
+        question: "Ship acme/backend?",
         options: [
           { id: "hold", label: "Take #14", detail: "after #15" },
           { id: "ship", label: "Ship anyway" },
@@ -1214,8 +1214,8 @@ describe("the pane", () => {
       const pane = document.querySelector(".crewlet-reading-pane")!;
       const hrefs = [...pane.querySelectorAll("a")].map((a) => a.getAttribute("href"));
       // THE CONTEXT and THE REASONING, whose links are checked and built.
-      expect(hrefs).toContain("https://github.com/gophrase/backend/issues/12");
-      expect(hrefs).toContain("https://github.com/gophrase/backend/issues/13");
+      expect(hrefs).toContain("https://github.com/acme/backend/issues/12");
+      expect(hrefs).toContain("https://github.com/acme/backend/issues/13");
       // THE RECOMMENDATION, named in the reasoning's title.
       expect(marked(pane.querySelector(".crewlet-reading-pane__reasoning strong"))).toBe(1);
       // THE OPTION AND ITS DETAIL, each its own render.
@@ -1226,7 +1226,7 @@ describe("the pane", () => {
     test("the question, in the pane, in its Inbox row and once answered", async () => {
       location.hash = "#/inbox?row=ask%3Ac-12";
       const ask = askItem({ ...DECISION, question: "Apply #11?" });
-      ask.ask.body = "Assigned in gophrase/backend.";
+      ask.ask.body = "Assigned in acme/backend.";
       mount({ answers: { decisions: decisionsOf(ask), link_hosts: HOSTS } });
       await settle();
       expect(marked(document.querySelector(".crewlet-reading-pane__title"))).toBe(1);
@@ -1240,7 +1240,7 @@ describe("the pane", () => {
         ...answered.ask,
         decision: { ...DECISION, question: "Apply #11?" } as never,
       };
-      answered.ask.body = "Assigned in gophrase/backend.";
+      answered.ask.body = "Assigned in acme/backend.";
       location.hash = "#/inbox?row=ask%3Ac-20";
       mount({
         answers: {
@@ -1259,7 +1259,7 @@ describe("the pane", () => {
   test("a reply's bare number is placed by the reply's own words", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     const ask = askItem({ ...DECISION, question: "Apply the #11 PR body?" });
-    ask.ask.body = "Assigned to you in gophrase/backend.";
+    ask.ask.body = "Assigned to you in acme/backend.";
     const reply = (id: string, body: string) => ({
       id,
       task: "t-12",
@@ -1273,16 +1273,13 @@ describe("the pane", () => {
       answers: {
         decisions: decisionsOf(ask),
         link_hosts: {
-          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }],
         },
         work_comments: {
           item: "t-12",
           key: "LEAD-12",
           title: "Q4 release plan",
-          comments: [
-            reply("c-20", "Done with #11."),
-            reply("c-21", "Merged in gophrase/web, see #5."),
-          ],
+          comments: [reply("c-20", "Done with #11."), reply("c-21", "Merged in acme/web, see #5.")],
         },
       },
     });
@@ -1291,10 +1288,7 @@ describe("the pane", () => {
     const hrefs = [...thread.querySelectorAll("a")]
       .map((a) => a.getAttribute("href"))
       .filter((h) => h?.startsWith("https://"));
-    expect(hrefs).toEqual([
-      "https://github.com/gophrase/web",
-      "https://github.com/gophrase/web/issues/5",
-    ]);
+    expect(hrefs).toEqual(["https://github.com/acme/web", "https://github.com/acme/web/issues/5"]);
     // THE ASK'S OWN TITLE IS STILL PLACED BY ITS CONTEXT.
     const title = document.querySelector(".crewlet-reading-pane__title")!;
     expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
@@ -2640,8 +2634,8 @@ describe("the pane", () => {
       const run = parkedRun({
         question: "May I apply the guard patch?",
         question_context:
-          "Assigned in gophrase/backend. See https://evil.example.net/c?q=secret and " +
-          "https://github.com/gophrase/backend/pull/11?x=1.",
+          "Assigned in acme/backend. See https://evil.example.net/c?q=secret and " +
+          "https://github.com/acme/backend/pull/11?x=1.",
         decision: {
           question: "May I apply the guard patch?",
           options: [
@@ -2652,7 +2646,7 @@ describe("the pane", () => {
           rationale: "It is the reviewed fix.",
           evidence: [
             { kind: "url", ref: "https://evil.example.net/p", label: "Sign in to GitHub" },
-            { kind: "url", ref: "https://github.com/gophrase/backend/pull/14", label: "Here" },
+            { kind: "url", ref: "https://github.com/acme/backend/pull/14", label: "Here" },
           ],
           role: "approver",
         },
@@ -2662,14 +2656,14 @@ describe("the pane", () => {
         answers: {
           decisions: decisionsOf(run),
           link_hosts: {
-            hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+            hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }],
           },
         },
       });
       await settle();
       const hrefs = [...pane().querySelectorAll("a")].map((a) => a.getAttribute("href"));
-      expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
-      expect(hrefs).toContain("https://github.com/gophrase/backend/pull/14");
+      expect(hrefs).toContain("https://github.com/acme/backend/pull/11");
+      expect(hrefs).toContain("https://github.com/acme/backend/pull/14");
       expect(hrefs.some((h) => h?.includes("evil.example.net"))).toBe(false);
       expect(lead()?.textContent).toContain("https://evil.example.net/c?q=secret");
       const evidence = document.querySelector(".inbox-evidence") as HTMLElement;
@@ -2901,12 +2895,12 @@ describe("the pane", () => {
     // engine's sentence has them twice; never name them there, and the
     // dashboard's own sentence and a dismissed strip leave them unnamed.
     test("refused as answered already, says whose once and when on the reader's clock", async () => {
-      const said = "This question was already answered by @miles, so your answer was not used.";
+      const said = "This question was already answered by @morgan, so your answer was not used.";
       await answerRun(
         {
           status: "answered",
           answer_ids: ["a0"],
-          answered_by: "miles",
+          answered_by: "morgan",
           answered_at: "2026-09-30T11:35:00Z",
         },
         [],
@@ -2924,15 +2918,15 @@ describe("the pane", () => {
       const when = screen.getByText(/^Answered at /).textContent ?? "";
       expect(when).toMatch(/^Answered at \S+\.$/);
       expect(when).not.toContain("UTC");
-      expect(timesNamed("@miles")).toBe(1);
+      expect(timesNamed("@morgan")).toBe(1);
       // ASKED AGAIN FOR THE RECORD, by the refusal's own look-again.
       expect(asked.filter((a) => a.kind === "executors").length).toBeGreaterThan(runsAskedAtPress);
       // DISMISSED, the sentence that named them is gone, and the line names
       // them instead.
       fireEvent.click(within(strip).getByRole("button", { name: "Dismiss" }));
       expect(document.querySelector(".crewlet-refusal-strip")).toBeNull();
-      expect(screen.getByText(/^Answered by @miles at \S+\.$/)).toBeTruthy();
-      expect(timesNamed("@miles")).toBe(1);
+      expect(screen.getByText(/^Answered by @morgan at \S+\.$/)).toBeTruthy();
+      expect(timesNamed("@morgan")).toBe(1);
     });
 
     test("refused as answered already in the dashboard's words, says whose and when", async () => {
@@ -2943,7 +2937,7 @@ describe("the pane", () => {
         {
           status: "answered",
           answer_ids: ["a0"],
-          answered_by: "miles",
+          answered_by: "morgan",
           answered_at: "2026-09-30T11:35:00Z",
         },
         [],
@@ -2952,8 +2946,8 @@ describe("the pane", () => {
       await settle();
       const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
       expect(strip).toBe(ACT_ERRORS.already_answered);
-      expect(screen.getByText(/^Answered by @miles at \S+\.$/)).toBeTruthy();
-      expect(timesNamed("@miles")).toBe(1);
+      expect(screen.getByText(/^Answered by @morgan at \S+\.$/)).toBeTruthy();
+      expect(timesNamed("@morgan")).toBe(1);
     });
 
     test("is refused, naming whose answer was used, when another was recorded first", async () => {
@@ -3485,12 +3479,12 @@ describe("what was answered", () => {
     test("reads its context's links by the checked rule", async () => {
       const item = answeredRun();
       item.run.question_context =
-        "See https://evil.example.net/c?q=secret and https://github.com/gophrase/backend/pull/11.";
+        "See https://evil.example.net/c?q=secret and https://github.com/acme/backend/pull/11.";
       mount({
         answers: {
           answered_decisions: { handle: "jane", items: [item] },
           link_hosts: {
-            hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+            hosts: [{ kind: "github", url: "https://github.com", owners: ["acme"] }],
           },
         },
       });
@@ -3499,7 +3493,7 @@ describe("what was answered", () => {
       await settle();
       const lead = document.querySelector(".crewlet-reading-pane__lead") as HTMLElement;
       const hrefs = [...lead.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-      expect(hrefs).toEqual(["https://github.com/gophrase/backend/pull/11"]);
+      expect(hrefs).toEqual(["https://github.com/acme/backend/pull/11"]);
       expect(lead.textContent).toContain("https://evil.example.net/c?q=secret");
     });
 

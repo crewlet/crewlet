@@ -45,18 +45,20 @@ import (
 // sweep may remove what was written under the old one, so a new epoch makes
 // this node forget what it believed it had written and write it all again.
 //
-// # The schemas once, and before the listing that names them
+// # Each definition once, and before the listing that names it
 //
-// A tool's schemas are stored under its definition digest, create-only, before
-// the listing naming the digest is written, so a reader never meets a listing
-// whose schemas were never stored, only (for a moment, across a sweep) one
-// whose schemas were removed, which it answers as unknown.
+// A tool's definition, its schemas and its words whole, is stored under its
+// digest, create-only, before the listing naming the digest is written, so a
+// reader never meets a listing whose definitions were never stored, only (for
+// a moment, across a sweep) one whose definition was removed, which it answers
+// as unknown. A definition waiting for a review is kept before any other, so a
+// change is shown whole to whoever reviews it.
 
-// mcpListingSweepPasses is how many consecutive sweeps must find a schema
+// mcpListingSweepPasses is how many consecutive sweeps must find a definition
 // named by no listing before it is removed: TWO, a maintenance interval
-// apart, because a node stores a schema before the listing that names it and
-// a sweep reading the listings between the two would otherwise remove a
-// schema about to be named.
+// apart, because a node stores a definition before the listing that names it
+// and a sweep reading the listings between the two would otherwise remove a
+// definition about to be named.
 const mcpListingSweepPasses = 2
 
 // mcpListings is this node's half of the fleet's MCP listings.
@@ -65,8 +67,8 @@ type mcpListings struct {
 
 	// epoch is the presence epoch the published listings were written
 	// under; published is what this node last wrote per server, and
-	// ensured the digests whose schemas it knows are stored, kept to the
-	// ones its published listings name.
+	// ensured the digests whose definitions it knows are stored, kept to
+	// the ones its published listings name.
 	epoch     int64
 	published map[string]publishedListing
 	ensured   map[string]struct{}
@@ -84,13 +86,13 @@ type mcpListings struct {
 	presenceRead bool
 	notified     string
 
-	// schemas is every schema this node has read, by digest: a digest
-	// names one definition, so an entry is never stale, and one no listing
-	// names any more is dropped.
-	schemas map[string]coord.MCPToolSchema
+	// definitions is every definition this node has read, by digest: a
+	// digest names one definition, so an entry is never stale, and one no
+	// listing names any more is dropped.
+	definitions map[string]coord.MCPToolDefinition
 
 	// unnamed is how many consecutive sweeps this node ran found each
-	// stored schema named by no listing ([mcpListingSweepPasses]).
+	// stored definition named by no listing ([mcpListingSweepPasses]).
 	unnamed map[string]int
 
 	cancel context.CancelFunc
@@ -229,7 +231,7 @@ func (e *Engine) mcpListingsAnswered(ctx context.Context) {
 	e.fleetCatalogueMoved(ctx)
 }
 
-// fleetCatalogueMoved reads the schemas the live listings name that this node
+// fleetCatalogueMoved reads the definitions the live listings name that this node
 // has not read, and tells the surfaces rendering the catalogue when the live
 // listings differ from the ones they were last told of.
 func (e *Engine) fleetCatalogueMoved(ctx context.Context) {
@@ -237,8 +239,8 @@ func (e *Engine) fleetCatalogueMoved(ctx context.Context) {
 	if !ok {
 		return
 	}
-	if _, err := e.MCPToolSchemas(ctx, namedDigests(live)); err != nil {
-		log.WarnContext(ctx, "mcp_tool_schemas_unread", "error", err,
+	if _, err := e.MCPToolDefinitions(ctx, namedDigests(live)); err != nil {
+		log.WarnContext(ctx, "mcp_tool_definitions_unread", "error", err,
 			"detail", "the catalogue lists these tools without their arguments until "+
 				"the next change reads them")
 	}
@@ -290,25 +292,25 @@ func (e *Engine) MCPListings(context.Context) ([]coord.MCPListing, error) {
 var errMCPListingsUnanswered = errors.New("engine: this node has not yet read the fleet's MCP " +
 	"listings; ask again in a moment")
 
-// HeldMCPToolSchemas is every schema this node has read, by digest, from
+// HeldMCPToolDefinitions is every definition this node has read, by digest, from
 // memory alone: for a caller with no context to read the store under.
-func (e *Engine) HeldMCPToolSchemas() map[string]coord.MCPToolSchema {
+func (e *Engine) HeldMCPToolDefinitions() map[string]coord.MCPToolDefinition {
 	e.listings.mu.Lock()
 	defer e.listings.mu.Unlock()
-	return maps.Clone(e.listings.schemas)
+	return maps.Clone(e.listings.definitions)
 }
 
-// MCPToolSchemas reads the schemas stored under digests: the ones this node
-// read before from memory, the rest from the store. A digest the store holds
-// nothing under is left out. An error is a store that could not be read; the
-// schemas read before it are kept for the next call.
-func (e *Engine) MCPToolSchemas(ctx context.Context, digests []string) (map[string]coord.MCPToolSchema, error) {
-	out := make(map[string]coord.MCPToolSchema, len(digests))
+// MCPToolDefinitions reads the definitions stored under digests: the ones this
+// node read before from memory, the rest from the store. A digest the store
+// holds nothing under is left out. An error is a store that could not be read;
+// the definitions read before it are kept for the next call.
+func (e *Engine) MCPToolDefinitions(ctx context.Context, digests []string) (map[string]coord.MCPToolDefinition, error) {
+	out := make(map[string]coord.MCPToolDefinition, len(digests))
 	var missing []string
 	l := &e.listings
 	l.mu.Lock()
 	for _, d := range digests {
-		if s, ok := l.schemas[d]; ok {
+		if s, ok := l.definitions[d]; ok {
 			out[d] = s
 		} else {
 			missing = append(missing, d)
@@ -319,9 +321,9 @@ func (e *Engine) MCPToolSchemas(ctx context.Context, digests []string) (map[stri
 		return out, nil
 	}
 	var err error
-	read := map[string]coord.MCPToolSchema{}
+	read := map[string]coord.MCPToolDefinition{}
 	for _, d := range slices.Compact(slices.Sorted(slices.Values(missing))) {
-		s, found, readErr := e.backends.Fleet.MCPToolSchema(ctx, d)
+		s, found, readErr := e.backends.Fleet.MCPToolDefinition(ctx, d)
 		if readErr != nil {
 			err = readErr
 			break
@@ -332,16 +334,16 @@ func (e *Engine) MCPToolSchemas(ctx context.Context, digests []string) (map[stri
 		}
 	}
 	l.mu.Lock()
-	if l.schemas == nil {
-		l.schemas = map[string]coord.MCPToolSchema{}
+	if l.definitions == nil {
+		l.definitions = map[string]coord.MCPToolDefinition{}
 	}
-	maps.Copy(l.schemas, read)
+	maps.Copy(l.definitions, read)
 	// KEPT TO WHAT SOME LISTING NAMES, so the copy is bounded by the
 	// fleet's catalogue rather than by everything it ever listed.
 	named := digestSet(slices.Collect(maps.Values(l.fleet)))
-	for d := range l.schemas {
+	for d := range l.definitions {
 		if _, ok := named[d]; !ok {
-			delete(l.schemas, d)
+			delete(l.definitions, d)
 		}
 	}
 	l.mu.Unlock()
@@ -388,7 +390,7 @@ func (e *Engine) publishMCPListings(ctx context.Context) {
 
 // writeMCPListings brings the fleet's record of this node's listings to
 // desired, written under epoch: each listing whose content moved since this
-// node last wrote it, its schemas first, and the removal of each for a server
+// node last wrote it, its definitions first, and the removal of each for a server
 // it no longer lists.
 func (e *Engine) writeMCPListings(ctx context.Context, node string, epoch int64,
 	desired map[string]nodeListing) {
@@ -415,7 +417,7 @@ func (e *Engine) writeMCPListings(ctx context.Context, node string, epoch int64,
 		if published[server].fingerprint == fingerprint {
 			continue
 		}
-		if !e.storeToolSchemas(ctx, listing, ensured) {
+		if !e.storeToolDefinitions(ctx, listing, ensured) {
 			continue
 		}
 		stored, err := fleet.PutMCPListing(ctx, listing.listing)
@@ -460,22 +462,22 @@ func (e *Engine) writeMCPListings(ctx context.Context, node string, epoch int64,
 	l.mu.Unlock()
 }
 
-// storeToolSchemas stores, create-only, the schemas of every tool in listing
-// that ensured does not already name, reporting whether all of them are now
-// stored: a listing is written only after the schemas it names.
-func (e *Engine) storeToolSchemas(ctx context.Context, listing nodeListing,
+// storeToolDefinitions stores, create-only, the definition of every tool in
+// listing that ensured does not already name, reporting whether all of them are
+// now stored: a listing is written only after the definitions it names.
+func (e *Engine) storeToolDefinitions(ctx context.Context, listing nodeListing,
 	ensured map[string]struct{}) bool {
 
 	for _, t := range listing.listing.Tools {
-		if !t.SchemaKept {
+		if !t.DefinitionKept {
 			continue
 		}
 		if _, ok := ensured[t.Digest]; ok {
 			continue
 		}
-		schema := listing.schemas[t.Digest]
-		if _, err := e.backends.Fleet.CreateMCPToolSchema(ctx, schema); err != nil {
-			log.WarnContext(ctx, "mcp_tool_schema_not_stored", "server", listing.listing.Server,
+		definition := listing.definitions[t.Digest]
+		if _, err := e.backends.Fleet.CreateMCPToolDefinition(ctx, definition); err != nil {
+			log.WarnContext(ctx, "mcp_tool_definition_not_stored", "server", listing.listing.Server,
 				"tool", t.Name, "error", err,
 				"detail", "the listing naming it waits for the next beat")
 			return false
@@ -486,10 +488,10 @@ func (e *Engine) storeToolSchemas(ctx context.Context, listing nodeListing,
 }
 
 // nodeListing is one server's listing as this node derives it, beside the
-// schemas its tools name.
+// definitions its tools name.
 type nodeListing struct {
-	listing coord.MCPListing
-	schemas map[string]coord.MCPToolSchema
+	listing     coord.MCPListing
+	definitions map[string]coord.MCPToolDefinition
 }
 
 // listedInstance is one instance whose listing a server's is the union of.
@@ -540,7 +542,7 @@ func (e *Engine) nodeMCPListings(node string, epoch int64, now time.Time) map[st
 			entry = nodeListing{
 				listing: coord.MCPListing{Server: in.server, Node: node, Epoch: epoch, At: now,
 					Shared: in.seat == uuid.Nil},
-				schemas: map[string]coord.MCPToolSchema{},
+				definitions: map[string]coord.MCPToolDefinition{},
 			}
 		}
 		entry.listing.Instances++
@@ -566,53 +568,58 @@ func (e *Engine) nodeMCPListings(node string, epoch int64, now time.Time) map[st
 				entry.listing.Tools[at].Instances++
 				continue
 			}
-			row, schema := listedTool(d, i >= len(definitions), now)
+			row, definition := listedTool(d, i >= len(definitions), now)
 			entry.listing.Tools = append(entry.listing.Tools, row)
-			if row.SchemaKept {
-				entry.schemas[row.Digest] = schema
+			if row.DefinitionKept {
+				entry.definitions[row.Digest] = definition
 			}
 		}
 		out[in.server] = entry
 	}
 	for server, entry := range out {
-		out[server] = entry.bounded(coord.MaxMCPListingSchemaBytes)
+		waiting := func(tool, digest string) bool { return e.toolUnreviewed(server, tool, digest) }
+		out[server] = entry.bounded(coord.MaxMCPListingDefinitionBytes, waiting)
 	}
 	return out
 }
 
 // bounded is the listing held to its bounds ([coord.MCPListing.Bounded]), its
-// schemas kept within budget bytes in all: each listed tool's in name order
-// while what remains of the budget holds them, and any tool past it listed
-// with [coord.MCPListedTool.SchemaKept] false and its schemas not stored.
-// Schemas of a tool the bounds cut from the listing go with it.
-func (n nodeListing) bounded(budget int) nodeListing {
+// definitions kept within budget bytes in all: first each tool whose
+// definition waits for a review (waiting, nil for none), so the change a person
+// is asked about is kept whole to show them, then the rest in name order while
+// what remains of the budget holds them. A tool past it is listed with
+// [coord.MCPListedTool.DefinitionKept] false and its definition not stored,
+// and the definition of a tool the bounds cut from the listing goes with it.
+func (n nodeListing) bounded(budget int, waiting func(tool, digest string) bool) nodeListing {
 	n.listing = n.listing.Bounded()
-	kept := make(map[string]coord.MCPToolSchema, len(n.listing.Tools))
+	kept := make(map[string]coord.MCPToolDefinition, len(n.listing.Tools))
 	spent := 0
-	for i := range n.listing.Tools {
-		t := &n.listing.Tools[i]
-		if !t.SchemaKept {
-			continue
+	for _, pass := range []bool{true, false} {
+		for i := range n.listing.Tools {
+			t := &n.listing.Tools[i]
+			if !t.DefinitionKept || (waiting != nil && waiting(t.Raw, t.Digest)) != pass {
+				continue
+			}
+			if _, counted := kept[t.Digest]; counted {
+				continue
+			}
+			definition, ok := n.definitions[t.Digest]
+			if !ok || spent+definition.Size() > budget {
+				t.DefinitionKept = false
+				continue
+			}
+			spent += definition.Size()
+			kept[t.Digest] = definition
 		}
-		schema, ok := n.schemas[t.Digest]
-		if _, counted := kept[t.Digest]; counted {
-			continue
-		}
-		size := len(schema.Input) + len(schema.Output)
-		if !ok || spent+size > budget {
-			t.SchemaKept = false
-			continue
-		}
-		spent += size
-		kept[t.Digest] = schema
 	}
-	n.schemas = kept
+	n.definitions = kept
 	return n
 }
 
 // listedTool is one tool as a listing names it, blocked or filed, and its
-// schemas as they are stored: kept only within [coord.MaxMCPToolSchemaBytes].
-func listedTool(t *mcp.Definition, blocked bool, now time.Time) (coord.MCPListedTool, coord.MCPToolSchema) {
+// definition as it is stored: kept only within its bounds
+// ([coord.MCPToolDefinition.Fits]).
+func listedTool(t *mcp.Definition, blocked bool, now time.Time) (coord.MCPListedTool, coord.MCPToolDefinition) {
 	parts := t.Parts()
 	row := coord.MCPListedTool{
 		Name: t.Name(), Raw: t.RawName(), Title: t.Title(), Description: t.Description(),
@@ -627,11 +634,14 @@ func listedTool(t *mcp.Definition, blocked bool, now time.Time) (coord.MCPListed
 	if t.OutputSchema() != nil {
 		output, outErr = json.Marshal(t.OutputSchema())
 	}
-	if inErr != nil || outErr != nil || !coord.MCPToolSchemaFits(input, output) {
-		return row, coord.MCPToolSchema{}
+	definition := coord.MCPToolDefinition{Digest: row.Digest, Title: t.OwnTitle(),
+		HintsTitle: t.Declared().Title, Description: t.Description(), Input: input, Output: output,
+		At: now.UTC()}
+	if inErr != nil || outErr != nil || !definition.Fits() {
+		return row, coord.MCPToolDefinition{}
 	}
-	row.SchemaKept = true
-	return row, coord.MCPToolSchema{Digest: row.Digest, Input: input, Output: output, At: now.UTC()}
+	row.DefinitionKept = true
+	return row, definition
 }
 
 // hintWords is a tool's four hints as a listing writes them.
@@ -666,17 +676,17 @@ func listingsFingerprint(listings []coord.MCPListing) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// namedDigests is every digest the listings name for a stored schema, sorted.
+// namedDigests is every digest the listings name for a stored definition, sorted.
 func namedDigests(listings []coord.MCPListing) []string {
 	return slices.Sorted(maps.Keys(digestSet(listings)))
 }
 
-// digestSet is every digest the listings name for a stored schema, as a set.
+// digestSet is every digest the listings name for a stored definition, as a set.
 func digestSet(listings []coord.MCPListing) map[string]struct{} {
 	out := map[string]struct{}{}
 	for _, l := range listings {
 		for _, t := range l.Tools {
-			if t.SchemaKept {
+			if t.DefinitionKept {
 				out[t.Digest] = struct{}{}
 			}
 		}
@@ -693,7 +703,7 @@ func (e *Engine) nodeID() string {
 }
 
 // mcpListingJobs is the maintenance sweep of the fleet's MCP listings: every
-// listing no live node's current incarnation wrote, every schema no listing
+// listing no live node's current incarnation wrote, every definition no listing
 // and no accepted definition has named for [mcpListingSweepPasses] sweeps, and
 // every accepted definition of a server nothing declares or lists.
 func (e *Engine) mcpListingJobs() []maintenance.Job {
@@ -747,7 +757,7 @@ func (e *Engine) sweepMCPListings(ctx context.Context) (int64, error) {
 		}
 	}
 
-	// WHAT WAS ACCEPTED KEEPS ITS SCHEMAS: a change is shown beside the
+	// WHAT WAS ACCEPTED KEEPS ITS DEFINITION: a change is shown beside the
 	// definition its level was decided on, which no listing names once the
 	// server changed it (ADR-0078).
 	accepted, err := fleet.ListMCPAccepted(ctx)
@@ -759,7 +769,7 @@ func (e *Engine) sweepMCPListings(ctx context.Context) (int64, error) {
 	if err != nil {
 		return removed, err
 	}
-	schemas, err := fleet.ListMCPToolSchemas(ctx)
+	definitions, err := fleet.ListMCPToolDefinitions(ctx)
 	if err != nil {
 		return removed, err
 	}
@@ -770,7 +780,7 @@ func (e *Engine) sweepMCPListings(ctx context.Context) (int64, error) {
 	before := l.unnamed
 	l.mu.Unlock()
 	unnamed := map[string]int{}
-	for _, s := range schemas {
+	for _, s := range definitions {
 		if _, ok := named[s.Digest]; ok {
 			continue
 		}
@@ -778,7 +788,7 @@ func (e *Engine) sweepMCPListings(ctx context.Context) (int64, error) {
 			unnamed[s.Digest] = passes
 			continue
 		}
-		gone, err := fleet.DeleteMCPToolSchema(ctx, s.Digest, s.Version)
+		gone, err := fleet.DeleteMCPToolDefinition(ctx, s.Digest, s.Version)
 		if err != nil {
 			return removed, err
 		}
