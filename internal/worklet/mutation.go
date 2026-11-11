@@ -278,7 +278,7 @@ const (
 	TermContainer TermKind = "container"
 
 	// TermFamily is a set of objects with no container: "person",
-	// "catalogue".
+	// "catalogue", "roster".
 	TermFamily TermKind = "family"
 
 	// TermDomain is everything on this domain's log. The fallback for an
@@ -537,6 +537,8 @@ func subjectPath(s Subject, container string) string {
 		return keyTerm(key).Path()
 	case KindCatalogue:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path()
+	case KindRoster:
+		return ScopeTerm{Kind: TermFamily, ID: string(KindRoster)}.Path()
 	case KindPerson:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindPerson)}.Path()
 	case KindBarrier, KindTrimmed:

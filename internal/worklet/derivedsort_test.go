@@ -1,19 +1,28 @@
 package worklet_test
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// seatNames is a chart's seats as the serving node attaches them: handle to name.
-type seatNames map[string]string
-
-func (r seatNames) SeatNames() map[string]string { return r }
+// applyNames is a chart apply of the seats' names, handle to name, at the n-th
+// activation, applied before it returns ([worklet.Writer.ApplyRoster]).
+func applyNames(t *testing.T, r *roundTrip, n int, names map[string]string) {
+	t.Helper()
+	if _, err := r.writer.ApplyRoster(t.Context(),
+		wednesday.Add(time.Duration(n)*time.Minute), names); err != nil {
+		t.Fatalf("ApplyRoster: %v", err)
+	}
+	r.drain()
+}
 
 // filed creates one task with the edits a case makes to it, and applies it.
 func filed(t *testing.T, r *roundTrip, id string, edit func(*worklet.Task)) {
@@ -34,20 +43,20 @@ func inStatus(status worklet.Status) func(*worklet.Task) {
 	}
 }
 
-// askAs is [roundTrip.ask] with the chart a serving node would attach.
-func askAs(t *testing.T, r *roundTrip, seats worklet.Roster, kv map[string]any) (worklet.Answer, error) {
+// askAs is [roundTrip.ask], its error returned rather than failed on.
+func askAs(t *testing.T, r *roundTrip, kv map[string]any) (worklet.Answer, error) {
 	t.Helper()
 	q, err := worklet.ParseQuery(worklet.MapParams(kv), wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
-	q.Level, q.Roster = statelog.ReadStale, seats
+	q.Level = statelog.ReadStale
 	return r.reader.Tasks(t.Context(), q, wednesday)
 }
 
 // orderOf is every id an order answers, first page to last, read limit rows
 // at a time through the cursor each page mints.
-func orderOf(t *testing.T, r *roundTrip, seats worklet.Roster, kv map[string]any, limit int) []string {
+func orderOf(t *testing.T, r *roundTrip, kv map[string]any, limit int) []string {
 	t.Helper()
 	params := map[string]any{"limit": fmt.Sprint(limit)}
 	for key, value := range kv {
@@ -55,7 +64,7 @@ func orderOf(t *testing.T, r *roundTrip, seats worklet.Roster, kv map[string]any
 	}
 	var out []string
 	for range 50 {
-		answer, err := askAs(t, r, seats, params)
+		answer, err := askAs(t, r, params)
 		if err != nil {
 			t.Fatalf("Tasks %v: %v", params, err)
 		}
@@ -72,10 +81,10 @@ func orderOf(t *testing.T, r *roundTrip, seats worklet.Roster, kv map[string]any
 // holdsOrder checks an order both whole and paged across every boundary it has:
 // a page of one row puts a boundary between every pair of neighbours, ties
 // included, and a page of two puts them between every other pair.
-func holdsOrder(t *testing.T, r *roundTrip, seats worklet.Roster, kv map[string]any, want []string) {
+func holdsOrder(t *testing.T, r *roundTrip, kv map[string]any, want []string) {
 	t.Helper()
 	for _, limit := range []int{50, 2, 1} {
-		if got := orderOf(t, r, seats, kv, limit); !slices.Equal(got, want) {
+		if got := orderOf(t, r, kv, limit); !slices.Equal(got, want) {
 			t.Errorf("%v in pages of %d answers %v, want %v", kv, limit, got, want)
 		}
 	}
@@ -123,11 +132,11 @@ func TestSortingByKeyReadsItsNumberAsANumber(t *testing.T) {
 		t.Fatalf("sort=key answers %v, want %v", keys, want)
 	}
 
-	holdsOrder(t, r, nil, map[string]any{"container": "workspace", "sort": "key"}, ascending)
+	holdsOrder(t, r, map[string]any{"container": "workspace", "sort": "key"}, ascending)
 	descending := slices.Clone(ascending)
 	slices.Reverse(descending)
-	holdsOrder(t, r, nil, map[string]any{"container": "workspace", "sort": "-key"}, descending)
-	holdsOrder(t, r, nil, map[string]any{"container": "project:ENG", "sort": "key"}, eng)
+	holdsOrder(t, r, map[string]any{"container": "workspace", "sort": "-key"}, descending)
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "key"}, eng)
 }
 
 // A STATUS IS SORTED IN THE ORDER A BOARD DRAWS THE SIX, never by its name:
@@ -152,8 +161,8 @@ func TestSortingByStatusFollowsTheBoard(t *testing.T) {
 		}
 		return out
 	}
-	holdsOrder(t, r, nil, with("status"), []string{"a", "b", "p", "r", "d", "c", "x"})
-	holdsOrder(t, r, nil, with("-status"), []string{"x", "c", "d", "r", "p", "a", "b"})
+	holdsOrder(t, r, with("status"), []string{"a", "b", "p", "r", "d", "c", "x"})
+	holdsOrder(t, r, with("-status"), []string{"x", "c", "d", "r", "p", "a", "b"})
 }
 
 // A TYPE IS SORTED IN THE COMPANY'S OWN CATALOGUE ORDER (the builtins, then
@@ -187,9 +196,9 @@ func TestSortingByTypeFollowsTheCatalogue(t *testing.T) {
 	// AND THE COMPANY DROPS ONE, which leaves the work filed under it.
 	declare("op-retire", "research", "incident")
 
-	holdsOrder(t, r, nil, map[string]any{"container": "project:ENG", "sort": "type"},
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "type"},
 		[]string{"t1", "t2", "bug", "res", "inc", "old"})
-	holdsOrder(t, r, nil, map[string]any{"container": "project:ENG", "sort": "-type"},
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "-type"},
 		[]string{"inc", "res", "bug", "t1", "t2", "old"})
 }
 
@@ -210,46 +219,61 @@ func TestSortingByAssigneeReadsTheChartsNames(t *testing.T) {
 	filed(t, r, "bob", held("bob"))
 	filed(t, r, "zed2", held("zed"))
 	filed(t, r, "n2", held(""))
-	chart := seatNames{"zed": "Ada Lovelace", "bob": "bea Smith", "amy": "Zoe Quinn"}
+	applyNames(t, r, 1, map[string]string{"zed": "Ada Lovelace", "bob": "bea Smith",
+		"amy": "Zoe Quinn"})
 
-	holdsOrder(t, r, chart, map[string]any{"container": "project:ENG", "sort": "assignee"},
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "assignee"},
 		[]string{"zed1", "zed2", "bob", "amy", "gone", "n1", "n2"})
-	holdsOrder(t, r, chart, map[string]any{"container": "project:ENG", "sort": "-assignee"},
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "-assignee"},
 		[]string{"amy", "bob", "zed1", "zed2", "gone", "n1", "n2"})
 
-	// WITHOUT A CHART THE HANDLE IS THE NAME, which is what such a surface
-	// draws, and the unassigned are still last.
-	holdsOrder(t, r, nil, map[string]any{"container": "project:ENG", "sort": "assignee"},
+	// A CHART NAMING NONE OF THEM ORDERS BY THE HANDLE, which is the name
+	// such a surface draws, and the unassigned are still last.
+	applyNames(t, r, 2, map[string]string{"someone": "Someone Else"})
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "assignee"},
 		[]string{"amy", "bob", "gone", "zed1", "zed2", "n1", "n2"})
-	holdsOrder(t, r, nil, map[string]any{"container": "project:ENG", "sort": "-assignee"},
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "-assignee"},
 		[]string{"zed1", "zed2", "gone", "bob", "amy", "n1", "n2"})
 }
 
 // AN ORDER BUILT FROM THE CHART IS ONE ORDER PER EDIT OF IT. A seat renamed
-// between two pages moves its tasks, so the second page cannot be read after
-// the first one's last row: the cursor is refused rather than resumed in the
-// middle of an order it was not minted in.
-func TestARenamedSeatStartsTheListingAgain(t *testing.T) {
+// or added between two pages moves the places after it, so the second page
+// cannot be read after the first one's last row: the cursor is refused as an
+// [worklet.ErrBadCursor], which every surface answers as a request to start
+// again, rather than resumed in the middle of an order it was not minted in.
+func TestAnEditedChartStartsTheListingAgain(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, handle := range []string{"amy", "bob"} {
 		filed(t, r, handle, func(task *worklet.Task) { task.Assignee = handle })
 	}
-	before := seatNames{"amy": "Amy", "bob": "Bob"}
-	first, err := askAs(t, r, before, map[string]any{
+	applyNames(t, r, 1, map[string]string{"amy": "Amy", "bob": "Bob"})
+	first, err := askAs(t, r, map[string]any{
 		"container": "project:ENG", "sort": "assignee", "limit": "1"})
 	if err != nil || first.NextCursor == "" {
 		t.Fatalf("the first page: %v, cursor %q", err, first.NextCursor)
 	}
 	next := map[string]any{"container": "project:ENG", "sort": "assignee",
 		"limit": "1", "cursor": first.NextCursor}
-	if _, err := askAs(t, r, before, next); err != nil {
+	if _, err := askAs(t, r, next); err != nil {
 		t.Fatalf("the same chart refused its own cursor: %v", err)
 	}
-	after := seatNames{"amy": "Zoe", "bob": "Bob"}
-	_, err = askAs(t, r, after, next)
-	if err == nil || !strings.Contains(err.Error(), "starts a new page") {
-		t.Fatalf("a cursor minted before a rename was resumed after it (err %v)", err)
+	// AND THE SAME CHART APPLIED AGAIN, by another node or at a boot, is
+	// still the same order: it writes nothing, so the cursor still resumes.
+	applyNames(t, r, 1, map[string]string{"amy": "Amy", "bob": "Bob"})
+	if _, err := askAs(t, r, next); err != nil {
+		t.Fatalf("a chart applied again refused a cursor of its own order: %v", err)
+	}
+	for i, after := range []map[string]string{
+		{"amy": "Zoe", "bob": "Bob"},
+		{"amy": "Amy", "bob": "Bob", "abe": "Abe"},
+	} {
+		applyNames(t, r, 2+i, after)
+		_, err = askAs(t, r, next)
+		if !errors.Is(err, worklet.ErrBadCursor) {
+			t.Errorf("after %v: a cursor minted before the edit was answered %v, "+
+				"want an ErrBadCursor", after, err)
+		}
 	}
 }
 
@@ -261,11 +285,12 @@ func TestACursorDoesNotCarryTheChart(t *testing.T) {
 	r := newRoundTrip(t)
 	filed(t, r, "a", func(task *worklet.Task) { task.Assignee = "seat-1" })
 	filed(t, r, "b", func(task *worklet.Task) { task.Assignee = "seat-2" })
-	chart := seatNames{}
+	chart := map[string]string{}
 	for i := range 500 {
 		chart[fmt.Sprintf("seat-%d", i)] = fmt.Sprintf("A seat with a long name %d", i)
 	}
-	answer, err := askAs(t, r, chart, map[string]any{
+	applyNames(t, r, 1, chart)
+	answer, err := askAs(t, r, map[string]any{
 		"container": "project:ENG", "sort": "assignee", "limit": "1"})
 	if err != nil {
 		t.Fatalf("Tasks: %v", err)
@@ -273,5 +298,66 @@ func TestACursorDoesNotCarryTheChart(t *testing.T) {
 	if answer.NextCursor == "" || len(answer.NextCursor) > 256 {
 		t.Fatalf("the cursor is %d bytes, want a page's place rather than the "+
 			"order it is in", len(answer.NextCursor))
+	}
+}
+
+// AN OLDER CHART DOES NOT WALK THE SEATS' ORDER BACK. Two nodes applying two
+// activations is ordinary during a rollout, and the one applying the older
+// one second must leave the newer order standing, as a project's chart-owned
+// fields are left ([worklet.Writer.ApplyChart]).
+func TestAnOlderChartLeavesTheSeatsOrderAlone(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, handle := range []string{"amy", "bob"} {
+		filed(t, r, handle, func(task *worklet.Task) { task.Assignee = handle })
+	}
+	applyNames(t, r, 2, map[string]string{"amy": "Zoe", "bob": "Bob"})
+	wrote, err := r.writer.ApplyRoster(t.Context(), wednesday.Add(time.Minute),
+		map[string]string{"amy": "Amy", "bob": "Bob"})
+	if err != nil || wrote {
+		t.Fatalf("an older chart's apply wrote %v (err %v), want nothing", wrote, err)
+	}
+	r.drain()
+	holdsOrder(t, r, map[string]any{"container": "project:ENG", "sort": "assignee"},
+		[]string{"bob", "amy"})
+}
+
+// THE CHART APPLY WRITES EVERY SEAT'S PLACE, in the order of its name, and once:
+// the same chart applied again, at the same activation, writes nothing, which
+// is what makes a reconcile on every apply and every boot free after the
+// first node's.
+func TestTheChartApplyPlacesEverySeatOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	names := map[string]string{"zoe": "Zoe Quinn", "emile": "Émile Zola", "olga": "Olga Berg"}
+	at := wednesday.Add(time.Minute)
+	for i, want := range []bool{true, false} {
+		wrote, err := r.writer.ApplyRoster(t.Context(), at, names)
+		if err != nil || wrote != want {
+			t.Fatalf("apply %d wrote %v (err %v), want %v", i+1, wrote, err, want)
+		}
+		r.drain()
+	}
+	var places []string
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT handle FROM tracker_seat_places ORDER BY place`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var handle string
+			if err := rows.Scan(&handle); err != nil {
+				return err
+			}
+			places = append(places, handle)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read the places: %v", err)
+	}
+	if want := []string{"emile", "olga", "zoe"}; !slices.Equal(places, want) {
+		t.Fatalf("the seats are placed %v, want %v", places, want)
 	}
 }

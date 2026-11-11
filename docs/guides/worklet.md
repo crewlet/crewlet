@@ -709,7 +709,9 @@ A **view** is a saved query with a shape. Five shapes:
   (`ENG-9` before `ENG-10`), a status in the board's order from To do to
   Closed, a type in your catalogue's order (the builtins, then your own types
   as you declared them), and an assignee by the seat's name in the org chart,
-  with unassigned work last in both directions. On **My work → Queue** every
+  with unassigned work last in both directions. Names follow the Unicode
+  root collation, so "Émile" sorts beside "Emma" rather than after "Zoe",
+  and a letter's case or accent orders only names that are otherwise equal. On **My work → Queue** every
   item is held by the person whose day it is, so the Assignee column starts
   off there; **Display → Columns** turns it on.
 
@@ -786,8 +788,14 @@ order no index serves reads its scope for every page, as its first page does.
 A cursor belongs to the order that minted it, and re-sorting starts again from
 the first page. So does an edit to what an order is built from: `sort=type`
 follows the type catalogue and `sort=assignee` the seats' names in the org
-chart, and a cursor minted before either changed is refused rather than
-resumed in the middle of a different order.
+chart, and a cursor minted before either changed is refused as `bad_params`
+rather than resumed in the middle of a different order. On that refusal the
+list's **Load more** starts again from the top and says why, and
+`list_work_items` tells an agent to ask again without `cursor`. The seats'
+order is kept on the data nodes by every configuration apply, as the projects
+the chart names are, so `sort=assignee` reads each task's place with one
+indexed lookup and its pages cost what `sort=title`'s do however many seats the
+chart holds; the type order is bounded by the catalogue's 64 declared types.
 
 ### What a board groups on
 
