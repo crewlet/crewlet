@@ -57,6 +57,14 @@ type DomainLog struct {
 	// open.
 	crossing time.Duration
 
+	// pace is the slowest this node's connection may carry a mebibyte of an
+	// append towards the stream ([Queue.linkPace]): none on a member's own
+	// connection, the object store's floor across a link — what
+	// [DomainLog.Append] is given beyond the request term to cross when its
+	// caller set no deadline. Fixed at open; zero, a log reached across
+	// nothing, where a case builds a log by hand.
+	pace time.Duration
+
 	// info reads the stream's info — its ends, its size, its ceiling, its
 	// identity — through A HANDLE OF ITS OWN EVERY TIME it is asked
 	// ([DomainLog.stateInfo]), and is what [DomainLog.Stats] and
@@ -123,6 +131,7 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
 	l := &DomainLog{js: q.js, stream: s, name: stream, q: q, crossing: q.recordCrossing(s),
+		pace: q.linkPace(),
 		info: func(ctx context.Context) (*jetstream.StreamInfo, error) {
 			// A HANDLE OF THIS REQUEST'S OWN — see [DomainLog.info].
 			fresh, err := q.js.Stream(ctx, stream)
@@ -181,6 +190,19 @@ func (q *Queue) recordCrossing(s jetstream.Stream) time.Duration {
 // the fact the engine hands the object store as natsobj.Config.AcrossLink
 // (every broker but a member's), read here off how the connection was made.
 func (q *Queue) acrossLink() bool { return q.embedded == nil || q.embedded.leaf }
+
+// linkPace is the slowest this queue's connection may carry a mebibyte towards
+// the streams it writes: the object store's floor, [objstore.MiBPace], where it
+// crosses a link ([Queue.acrossLink]), and no pace at all where it reaches the
+// node's own member in its own process, which crosses nothing. It is what an
+// acknowledged write is given beyond the request term to cross
+// ([jsapi.WriteBound]).
+func (q *Queue) linkPace() time.Duration {
+	if q.acrossLink() {
+		return objstore.MiBPace
+	}
+	return 0
+}
 
 // stateInfo is the stream's info, read through a handle of its own
 // ([DomainLog.info]).
@@ -266,13 +288,7 @@ func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.S
 // quorum round trip, so an acknowledgement carrying one would prove nothing
 // about the log's end.
 func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
-	opts := make([]jetstream.PublishOpt, 0, 2)
-	if msgID != "" {
-		opts = append(opts, jetstream.WithMsgID(msgID))
-	}
-	if expect != nil {
-		opts = append(opts, jetstream.WithExpectLastSequencePerSubject(*expect))
-	}
+	opts, headers := appendOptions(msgID, expect)
 	// DECIDED BEFORE IT IS ANSWERED. A conditional append the leader refuses
 	// because another write to the subject is still in flight has not been
 	// compared with anything — the write ahead may be this node's own, already
@@ -283,8 +299,17 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	// attempt, its message id included, so the retry is the same append. One
 	// still in flight at the deadline is [jsinflight.Undecided], which carries
 	// no API error, so the state log reads it as the no-answer it is.
+	//
+	// AND WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set
+	// no deadline: the request term, and across a link the time the record
+	// and the headers it rides with take at the slowest pace allowed
+	// ([jsapi.WriteBound]). A record may be the transport's whole eight
+	// mebibytes, about four minutes at that pace, and held to the request
+	// term alone it failed as no answer every attempt the link was carrying.
+	// The one budget every attempt shares; a caller's own deadline is kept.
 	var ack *jetstream.PubAck
-	err := jsinflight.Decide(ctx, l.js.Options().DefaultTimeout, func(ctx context.Context) error {
+	bound := jsapi.WriteBound(l.js, headers+len(body), l.pace)
+	err := jsinflight.Decide(ctx, bound, func(ctx context.Context) error {
 		var err error
 		ack, err = l.js.Publish(ctx, subject, body, opts...)
 		return err
@@ -302,6 +327,25 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 		return 0, false, err
 	}
 	return ack.Sequence, ack.Duplicate, nil
+}
+
+// appendOptions is the options an append publishes under — its operation's id
+// and its expectation, where it has them — and the bytes of the header block
+// they put beside its record, as the client encodes it. Each option is counted
+// in the branch that sets it, so the count is of the headers this append
+// sends, whichever of them it has.
+func appendOptions(msgID string, expect *uint64) ([]jetstream.PublishOpt, int) {
+	opts := make([]jetstream.PublishOpt, 0, 2)
+	headers := nats.Header{}
+	if msgID != "" {
+		opts = append(opts, jetstream.WithMsgID(msgID))
+		headers.Set(jetstream.MsgIDHeader, msgID)
+	}
+	if expect != nil {
+		opts = append(opts, jetstream.WithExpectLastSequencePerSubject(*expect))
+		headers.Set(jetstream.ExpectedLastSubjSeqHeader, strconv.FormatUint(*expect, 10))
+	}
+	return opts, (&nats.Msg{Header: headers}).Size()
 }
 
 // LastSeq answers the last sequence on a subject, reporting false with a nil

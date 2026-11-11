@@ -1311,7 +1311,16 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// the lane is how this backend keeps one subscription's order and not
 	// a different destination.
 	subject := queue.SubjectFor(topic, ev)
-	if _, err := q.js.Publish(ctx, subject, data); err != nil {
+	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
+	// deadline: the request term, and across a link the time the event takes
+	// at the slowest pace allowed ([jsapi.WriteBound]) — an event may be the
+	// transport's whole eight mebibytes, about four minutes at that pace, and
+	// held to the request term alone it failed as an outage while the link
+	// was carrying it. Classified on the CALLER's context, for the keep's
+	// reason ([Queue.KeepDeadLetter]).
+	sending, stop := jsapi.Writing(ctx, q.js, len(data), q.linkPace())
+	defer stop()
+	if _, err := q.js.Publish(sending, subject, data); err != nil {
 		// TRANSLATED, not passed through. "Too large" is the one publish
 		// failure a producer must not retry, and nats.ErrMaxPayload is
 		// this backend's private word for it — a caller matching on that
@@ -2002,16 +2011,25 @@ func (q *Queue) attachmentsLocked() []*attachment {
 
 // deadLetter publishes a message the delivery budget has exhausted, to a
 // subject outside the crewlet.* space so the dashboard's crewlet.events.>
-// stream cannot resurface poison as live traffic.
-func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) {
+// stream cannot resurface poison as live traffic, and answers why it could
+// not, which its caller logs ([attachment.returnMsg]).
+//
+// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([jsapi.WriteBound]), as
+// every write of this queue's whose caller set no deadline is: the consume
+// loop's context carries none, and the message may be as large as the
+// transport carries. Held to the request term alone, a large one dead-lettered
+// across a slow link was reported as failed while its bytes were still
+// crossing to land: a `dead_letter_failed` line for a message the stream went
+// on to keep.
+func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) error {
 	subject := topics.DeadLetter(topic, group)
 	if _, err := q.streamFor(ctx, subject); err != nil {
-		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
-		return
+		return err
 	}
-	if _, err := q.js.Publish(ctx, subject, data); err != nil {
-		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
-	}
+	sending, stop := jsapi.Writing(ctx, q.js, len(data), q.linkPace())
+	defer stop()
+	_, err := q.js.Publish(sending, subject, data)
+	return err
 }
 
 var _ queue.EventQueue = (*Queue)(nil)

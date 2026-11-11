@@ -324,6 +324,14 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		// AT THE CONTRACT'S CEILING FOR A KEEP the entry is kept, and a
 		// byte past it refused — on every backend at the same byte, so a
 		// twin never keeps what the broker refuses.
+		//
+		// THE KEEP AT THE CEILING WAITS FOR ITS ACKNOWLEDGEMENT for as long
+		// as an entry that size takes to reach the broker — across a leaf's
+		// link, its eight mebibytes at the slowest pace the engine allows a
+		// link (internal/jsapi's WriteBound) — since its context carries no
+		// deadline: so a slow link, or a loaded runner slowing the one a
+		// leaf's suite crosses, reads as slow and never as an outage, which
+		// is what the keep at five seconds read as (crewlet/crewlet#1005).
 		room := queue.MaxPayloadBytes - queue.LetterFraming - len(header)
 		keep(ctx, t, q, subject, letterOf(header, make([]byte, room)))
 		err := q.KeepDeadLetter(ctx, subject, header, make([]byte, room+1))

@@ -117,7 +117,18 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject string, header, body
 	if err != nil {
 		return err
 	}
-	if _, err := q.js.PublishMsg(ctx, letterMsg(subject, stream, header, body)); err != nil {
+	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
+	// deadline: the request term, and across a link the time the entry takes
+	// at the slowest pace allowed ([jsapi.WriteBound]) — counted as the
+	// contract bounds it, its header and body and the framing a keep is held
+	// to beside them ([queue.LetterFraming]). An entry at the ceiling is
+	// about four minutes at that pace, and held to the request term alone it
+	// failed as an outage its keeper retried for ever while the link carried
+	// each copy. Classified on the CALLER's context, so a bound this set and
+	// the broker outlasted reads as the silence it is.
+	sending, stop := jsapi.Writing(ctx, q.js, len(header)+len(body)+queue.LetterFraming, q.linkPace())
+	defer stop()
+	if _, err := q.js.PublishMsg(sending, letterMsg(subject, stream, header, body)); err != nil {
 		// TRANSLATED, for Publish's reason: too large is the one refusal
 		// no retry changes, and nats.ErrMaxPayload is this backend's
 		// private word for it — met here only on a server announcing less

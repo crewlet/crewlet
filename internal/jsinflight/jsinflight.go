@@ -64,10 +64,13 @@ import (
 // on the same instant.
 //
 // The whole wait is held to the publish's own budget — the caller's deadline,
-// or the fallback [Decide] is handed, which every caller sets to its JetStream
-// context's DefaultTimeout — because waiting for the write ahead to settle is
-// waiting for THAT write's acknowledgement, and no publish here is promised
-// more patience than its own.
+// or the fallback [Decide] is handed, which is what the publish alone would
+// have waited for its acknowledgement where its caller set none: a
+// coordination bucket's writes their JetStream context's DefaultTimeout, and a
+// state log's append that and, across a link, the time its record takes to
+// cross it (internal/jsapi's WriteBound) — because waiting for the write ahead
+// to settle is waiting for THAT write's acknowledgement, and no publish here
+// is promised more patience than its own.
 const (
 	FirstWait = time.Millisecond
 	MaxWait   = 64 * time.Millisecond

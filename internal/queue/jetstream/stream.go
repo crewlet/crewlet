@@ -68,6 +68,29 @@
 // refusals, and a second classification beneath it would be a second answer
 // to one question.
 //
+// # A write across a link is given the time its bytes take to cross
+//
+// A write here — a Publish, a dead letter's keep (KeepDeadLetter, or the
+// delivery budget's), a state log's Append — returns once its stream has
+// acknowledged it, and the stream acknowledges a message only once its last
+// byte is in. A member's own connection reaches its broker in its own
+// process, but a leaf's crosses its link to the members and an external
+// cluster's client crosses the network to it, and the engine allows such a
+// link to be as slow as the object store's floor, a mebibyte in thirty
+// seconds (objstore.MiBPace) — the pace a read of a large message across the
+// same link is already given (DomainLog.At, the dead letters' frames). So a
+// write whose caller set no deadline waits the request term
+// (jsapi.RequestTerm, five seconds) and, where its connection crosses a link,
+// its bytes at that pace (jsapi.WriteBound): a write at the transport's
+// eight-mebibyte ceiling waits five seconds and about four minutes before it
+// reads as an outage, which is the price of never mistaking a slow link for a
+// dead broker. Held to the five seconds alone, such a write could not be
+// acknowledged on any link slower than 1.6 MiB/s and failed as
+// queue.ErrUnavailable while the link was still carrying it — and a keeper
+// retries an unavailable broker for ever, each copy of the entry crossing and
+// landing behind the last (crewlet/crewlet#1005). A caller's own deadline is
+// kept, never extended: a caller that cannot wait for a slow link says so.
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library's fetches size their delivery channels by the BATCH a
