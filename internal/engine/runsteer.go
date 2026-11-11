@@ -94,7 +94,9 @@ import (
 // write recorded, its round still waiting on it; where the store answers that
 // settle no more than the take, the take is kept and settled again by the
 // segment's next round or brief, standing meanwhile for a note waiting, and is
-// handed off the path, marked, only when the segment ends ([rowSource]). An
+// marked only when the segment ends, in its path before the run's ending can
+// read the record, and off it where the store answers that no more
+// ([rowSource.Close]). An
 // OpenCode confirmation's take settles on its own path too, in answer mode,
 // never marking: its read is true, the harness having confirmed delivering the
 // note, and only its report rode on the answer, so what it recorded is
@@ -693,12 +695,7 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 				continue
 			}
 			answered = append(answered, take)
-			if len(marked) > 0 {
-				log.WarnContext(base, "steer_take_unanswered", "turn_id", turnID, "notes", len(marked),
-					"detail", "a take of the run's notes was recorded and its answer lost: its reader never "+
-						"had them, the turn carries them as read, and a launch that continues the run's "+
-						"session tells them again")
-			}
+			sayUnanswered(base, turnID, marked)
 		}
 		s.settleMu.Lock()
 		run.takes = slices.DeleteFunc(run.takes, func(t string) bool { return slices.Contains(answered, t) })
@@ -757,6 +754,18 @@ func (s *runSteers) settleOnce(base context.Context, turnID string, settle sandb
 		}
 	}
 	return s.store.SettleTake(ctx, turnID, settle)
+}
+
+// sayUnanswered says a settle marked the notes a take recorded unanswered,
+// where it marked any.
+func sayUnanswered(ctx context.Context, turnID string, marked []sandbox.RunNote) {
+	if len(marked) == 0 {
+		return
+	}
+	log.WarnContext(ctx, "steer_take_unanswered", "turn_id", turnID, "notes", len(marked),
+		"detail", "a take of the run's notes was recorded and its answer lost: its reader never "+
+			"had them, the turn carries them as read, and a launch that continues the run's "+
+			"session tells them again")
 }
 
 // stopping reports whether this node's teardown has begun ([runSteers.stopped]).
@@ -1005,10 +1014,11 @@ func noteEnd(run sandbox.PendingRun, n sandbox.EndedNote) steer.End {
 // does. Until then a lost take stands for a note waiting ([rowSource.Waiting]),
 // so a round of the review asking for tools ends and the next one opens with
 // the note, for as long as [steerSettlePatience] takes a silent store for a
-// blip. A take still lost when the segment ends is handed off its path at
-// [rowSource.Close], marked unanswered where it recorded anything
-// ([runSteers.settleUnanswered]): nothing of the segment reads it any more, and
-// a launch that continues the run's session tells it again.
+// blip. A take still lost when the segment ends is marked unanswered where it
+// recorded anything ([rowSource.Close]), in the segment's path where the store
+// answers there and off it where it does not ([runSteers.settleUnanswered]):
+// nothing of the segment reads it any more, and a launch that continues the
+// run's session tells it again.
 type rowSource struct {
 	steers *runSteers
 	run    sandbox.PendingRun
@@ -1357,11 +1367,21 @@ func (r *rowSource) Waiting() bool {
 	return view.Found && r.live(view.Status, view.LaunchID, view.EndingDecided) && len(opened) > 0
 }
 
-// Close stops the segment's view of the record, and hands every take still
-// lost off the segment's path, to be marked unanswered where it recorded
-// anything ([runSteers.settleUnanswered]): nothing of the segment reads it any
-// more. Under ctx stripped of its ending, which the settle takes, as a teardown
-// does. Safe twice: the takes are handed off once.
+// Close stops the segment's view of the record, and marks every take still
+// lost unanswered where it recorded anything: nothing of the segment reads it
+// any more. Safe twice: the takes are marked or handed off once.
+//
+// MARKED IN THE SEGMENT'S PATH FIRST, one attempt ([runSteers.settleOnce]),
+// before the segment returns: a segment that ends the turn is followed at once
+// by the run's ending, which reads the record and reports what no step
+// reported reading ([runSteers.ended]) — and a note a lost take recorded is
+// read on the record, unmarked, until the mark lands, which the ending reads
+// as a step's report. Handed off the path ([runSteers.settleUnanswered]), the
+// mark could land after that read, or find the record deleted, and no node
+// would report the note at all. The first take the store does not answer is
+// handed off with every take after it, rather than each asked in the path of a
+// segment a silent store would hold for an attempt apiece. Under ctx stripped
+// of its ending, which the settle takes, as a teardown does.
 func (r *rowSource) Close(ctx context.Context) {
 	if r == nil {
 		return
@@ -1371,8 +1391,16 @@ func (r *rowSource) Close(ctx context.Context) {
 	lost := r.lost
 	r.lost, r.briefed = nil, nil
 	r.mu.Unlock()
-	for _, take := range lost {
-		r.steers.settleUnanswered(ctx, r.run.TurnID, take)
+	for k, take := range lost {
+		marked, err := r.steers.settleOnce(context.WithoutCancel(ctx), r.run.TurnID,
+			sandbox.NoteSettle{Take: take, Unanswered: true})
+		if err != nil {
+			for _, left := range lost[k:] {
+				r.steers.settleUnanswered(ctx, r.run.TurnID, left)
+			}
+			return
+		}
+		sayUnanswered(ctx, r.run.TurnID, marked)
 	}
 }
 

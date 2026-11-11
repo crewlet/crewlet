@@ -943,6 +943,50 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 	})
 }
 
+// A REVIEW'S TAKE STILL LOST AT ITS SEGMENT'S END IS MARKED BEFORE THE SEGMENT
+// RETURNS, so the run's ending reports its note missed. The review's round took
+// a note, the take's answer was lost and its settle went unanswered too, and
+// the review concluded without it. A segment that ends the turn is followed at
+// once by the run's ending, which reads the record and reports what no step
+// reported reading, and reads a lost take's note, unmarked, as one its step
+// reported: marked off the segment's path, the mark could land after that read,
+// and no node reported the note. So the segment's end marks it in its own path,
+// where the store answers there. The case's node settles nothing off a path any
+// more, its teardown having waited its settles out, so what is marked when the
+// segment returns is what the segment's own path marked.
+//
+// Mutation: hand every take still lost off the path at the segment's end, and
+// the case goes red.
+func TestAReviewsTakeLostAtItsSegmentsEndIsMarkedBeforeItReturns(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, &lostAnswerStore{PendingStore: store, failSettles: 1})
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	source := claimedSource(t, store, runs, launch)
+	if got := source.Take(ctx, reviewRound(1)); len(got) != 0 {
+		t.Fatalf("a take whose answer and settle were lost handed its round %v", got)
+	}
+	if read := readOn(ctx, store, "run-1", "n-1"); read == nil || read.Unanswered {
+		t.Fatalf("the lost take's note is read %+v, want it read by the take and unmarked", read)
+	}
+	runs.waitSettles()
+	source.Close(ctx)
+	if read := readOn(ctx, store, "run-1", "n-1"); read == nil || !read.Unanswered {
+		t.Fatalf("the note is read %+v as its segment returns, want it marked unanswered", read)
+	}
+	row := mustRow(t, store, "run-1")
+	row.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)}
+	if err := runs.ended(ctx, row); err != nil {
+		t.Fatalf("ended: %v", err)
+	}
+	if got := steered(p); len(got) != 1 || got[0].NoteID != "n-1" || got[0].Outcome != types.SteerMissed ||
+		got[0].Phase != types.PhaseReview || got[0].Round != 1 || got[0].Boundary != types.SteerBoundaryRound {
+		t.Errorf("the ending reported %+v, want the note missed at the review's first round", got)
+	}
+}
+
 // gatedSettles is a run store whose settles the store does not answer while
 // unavailable says so, and which wait at gate while one is set: counting the
 // attempts, and the most it held at once. Nil unavailable answers every settle;

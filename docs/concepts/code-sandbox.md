@@ -1272,7 +1272,10 @@ it, in one of two ways:
   is never told ahead of it; meanwhile, for thirty seconds, it stands for a note
   waiting, so a round asking for tools ends and the next one opens with the
   note. Only a take the store has still not answered when the segment ends is
-  settled off its path, and marked.
+  marked, as the segment ends: in the segment's own path first, so the run's
+  ending, which reads the record next where the segment ended the turn, finds
+  the mark and reports the note `missed`, and off its path where the store
+  answers that attempt no more.
 
 Either way, a settle that finds the take recorded nothing writes the record all
 the same, so that take's write, should it still be on its way to the store,
