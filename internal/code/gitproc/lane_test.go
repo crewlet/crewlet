@@ -76,10 +76,10 @@ func startReceivePack(t *testing.T, p *gitproc.Pool, options []string, indexed <
 			t.Fatalf("%v ended before it ran: %v", args[:1+len(options)], o.err)
 		default:
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			t.Fatalf("a receive-pack had not started after %v", hang)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -272,10 +272,10 @@ func awaitLent(t *testing.T, p *gitproc.Pool, want int64) {
 		if lent == want {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			t.Fatalf("the read lane lends %d cores after %v, want %d", lent, hang, want)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

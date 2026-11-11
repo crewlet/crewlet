@@ -892,7 +892,7 @@ func quietServer(tip string, pack []byte, hold time.Duration) http.HandlerFunc {
 			select {
 			case <-req.Context().Done():
 				return
-			case <-time.After(hold):
+			case <-time.After(hold): //fixedwait:simulated a git server working quietly for hold before it answers
 			}
 			// Side band 1, in packets of at most side-band-64k's 65 520
 			// bytes: the length, the band, the data.

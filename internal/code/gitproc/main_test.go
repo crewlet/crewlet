@@ -39,6 +39,6 @@ func escape(ready string) {
 	if err := os.WriteFile(filepath.Clean(ready), nil, 0o600); err != nil {
 		os.Exit(4)
 	}
-	time.Sleep(10 * time.Minute)
+	time.Sleep(10 * time.Minute) //fixedwait:simulated a descendant that escaped its group, holding its pipes until the case kills it
 	os.Exit(0)
 }

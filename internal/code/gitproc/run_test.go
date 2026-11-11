@@ -65,10 +65,10 @@ func hold(t *testing.T, p *gitproc.Pool, c gitproc.Class) holder {
 			t.Fatalf("a holding %s run ended before it held: %v", c, o.err)
 		default:
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			t.Fatalf("a holding %s run had not started after %v", c, hang)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -458,7 +458,7 @@ func (r *keepalive) Read(p []byte) (int, error) {
 	select {
 	case <-r.until:
 		return 0, io.EOF
-	case <-time.After(r.interval):
+	case <-time.After(r.interval): //fixedwait:simulated a client answering a byte every interval
 		p[0] = 'x'
 		return 1, nil
 	}
@@ -525,7 +525,7 @@ func (r *trickle) Read(p []byte) (int, error) {
 	if r.n == 0 {
 		return 0, io.EOF
 	}
-	time.Sleep(r.interval)
+	time.Sleep(r.interval) //fixedwait:simulated a client trickling its input a byte every interval
 	r.n--
 	p[0] = 'x'
 	return 1, nil
@@ -1067,7 +1067,7 @@ func TestARunReadsItsTraceToTheEnd(t *testing.T) {
 	var exit *gitproc.ExitError
 	if !errors.As(err, &exit) || !errors.Is(exit.Kind, gitproc.ErrCorrupt) || res.Exit != 128 || res.Damage == nil {
 		t.Fatalf("after %v: exit %d, damage %v, %v; want the stand-in's own exit with the damage it reported",
-			time.Since(start), res.Exit, res.Damage, err)
+			time.Since(start), res.Exit, res.Damage, err) //fixedwait:measure the failure message's own reading, which decides nothing
 	}
 	if res.Trace.Events < 8192 {
 		t.Errorf("the run read %d of the stream's lines, want every one", res.Trace.Events)

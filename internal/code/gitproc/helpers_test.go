@@ -137,7 +137,7 @@ func await(t testing.TB, done <-chan outcome, what string) outcome {
 	select {
 	case o := <-done:
 		return o
-	case <-time.After(hang):
+	case <-time.After(hang): //fixedwait:liveness
 		t.Fatalf("%s had not returned after %v", what, hang)
 		return outcome{}
 	}
@@ -165,10 +165,10 @@ func (f pidFile) read(t testing.TB) int {
 			}
 			return pid
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			t.Fatalf("no pid in %s after %v", f.path, hang)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -241,13 +241,13 @@ func awaitGauge(t *testing.T, rec *metrics.Recorder, name, class string, want fl
 		if s.Name == name && s.Value == want {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline
 			if s.Name != name {
 				t.Fatalf("%s is not recorded after %v, want %v", series, hang, want)
 			}
 			t.Fatalf("%s reads %v after %v, want %v", series, s.Value, hang, want)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

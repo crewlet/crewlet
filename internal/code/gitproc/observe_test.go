@@ -122,12 +122,23 @@ func TestAProcessThatNeverStartedIsNotObserved(t *testing.T) {
 // (its prepare's or its admission's error) — the shape's or the busy lane's
 // call is seen; leave Cmd.Repairer off the Ran — the batch run is observed
 // repaired by nobody; unobserve doing nothing — the second observer is
-// refused.
+// refused; end no run at its deadline — the batch reader, whose input ends
+// only in its drain, never answers.
 func TestEveryRunIsObserved(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	p := realPool(t, gitproc.Options{MaxProcesses: 1})
 	gitproc.SetTimings(p, 200*time.Millisecond, time.Second)
+	// The batch reader's input, below, ends only once the drain waits for it:
+	// after its deadline has ended the process, whatever the runner's load.
+	// Ended on a timer instead, a runner slow to start the process let the
+	// input end first, and the batch reader answered before its deadline.
+	blocked := &blockedReader{release: make(chan struct{})}
+	gitproc.OnDrain(p, func(stream string) {
+		if stream == "stdin" {
+			close(blocked.release)
+		}
+	})
 	var (
 		mu   sync.Mutex
 		seen []gitproc.Ran
@@ -160,16 +171,14 @@ func TestEveryRunIsObserved(t *testing.T) {
 	if _, err := p.Run(t.Context(), read(dir, "rev-list", "no-such-revision")); err == nil {
 		t.Fatal("rev-list of a revision that is no object answered")
 	}
-	// Ended at its deadline: a batch reader whose input never comes, run for
-	// a caller that repairs its failure.
+	// Ended at its deadline: a batch reader whose input never comes before
+	// its drain, run for a caller that repairs its failure.
 	batch, _ := f.bare(t)
-	blocked := &blockedReader{release: make(chan struct{})}
 	c := read(batch, "cat-file", "--batch")
 	c.Loads, c.Repairer = gitproc.PartMultiPackIndex, 7
 	c.Stdin, c.Deadline = blocked, 300*time.Millisecond
-	go func() { time.Sleep(2 * time.Second); close(blocked.release) }()
-	if _, err := p.Run(t.Context(), c); !errors.Is(err, gitproc.ErrDeadline) {
-		t.Fatalf("cat-file --batch past its deadline: %v, want ErrDeadline", err)
+	if o := await(t, start(t.Context(), p, c), "cat-file --batch past its deadline"); !errors.Is(o.err, gitproc.ErrDeadline) {
+		t.Fatalf("cat-file --batch past its deadline: %v, want ErrDeadline", o.err)
 	}
 	// In a reservation's slot — and, while it holds the lane's one slot, a
 	// maintenance run refused busy.
