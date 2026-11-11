@@ -9,7 +9,7 @@ import (
 
 // Grant is one permission a principal carries: ADMIN, or ONE APP.
 //
-// A CLOSED SET OF SIX (ADR-0033), and the set is the whole point. Eleven
+// A CLOSED SET OF SEVEN (ADR-0033), and the set is the whole point. Eleven
 // grants carved the engine by surface (a read of the board, a read of the
 // trail, a read of the document, a write of work, a write of pages, the
 // credential store twice, the deployment, the directory, `sandbox:run`) and a
@@ -27,7 +27,9 @@ import (
 //     versions and shapes their data;
 //   - [GrantChatlet] uses Chatlet, read and write;
 //   - [GrantGitlet] uses Gitlet: reaches the company's repositories, through
-//     every door (ADR-0110).
+//     every door (ADR-0110);
+//   - [GrantAtlas] reads the company's atlas: the map of everything it runs
+//     on (ADR-0127).
 //
 // Everything else a person sees (the org chart, the agents' status, spend,
 // schedules) is EVERYBODY's, and asks no permission at all; what a team lead
@@ -140,6 +142,20 @@ const (
 	// given nothing by it, as [GrantChatlet] gives a company on a vendor's
 	// chat nothing.
 	GrantGitlet Grant = "gitlet"
+
+	// GrantAtlas uses Atlas, the map and catalogue of everything the company
+	// runs on: its vendor accounts, domains, servers, data stores,
+	// repositories, monitoring, tool servers and models, and how they depend
+	// on each other (ADR-0127).
+	//
+	// A HOLDER READS ALL OF IT, private addresses included, because a map
+	// with holes cut per reader answers "what depends on this?" wrongly. That
+	// is why it is OPT-IN ([OptInApps]): a full map of servers and addresses
+	// is what an intruder looks for first, so nobody holds it until somebody
+	// ticks it, except an administrator, who holds every app through
+	// [Expand]. A panel Atlas joins from another app's records stays that
+	// app's, so Atlas is never a way round another permission.
+	GrantAtlas Grant = "atlas"
 )
 
 // AllGrants are every permission this build knows, in declaration order.
@@ -147,7 +163,9 @@ const (
 // Named AllGrants rather than Grants because [Principal.Grants] is the field a
 // reader meets first, and one name for the company's whole vocabulary and for
 // one principal's slice of it is a sentence that reads wrong either way.
-var AllGrants = []Grant{GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
+var AllGrants = []Grant{
+	GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet, GrantAtlas,
+}
 
 // Apps are the permissions that open one APP each, and THE ONE PLACE AN APP IS
 // DECLARED.
@@ -165,7 +183,23 @@ var AllGrants = []Grant{GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, G
 // APPENDED, NEVER INSERTED: the order is what [Expand] stores in a row and
 // what every list of an administrator's permissions reads in, so a new app
 // goes last and no stored row moves.
-var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet}
+var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet, GrantAtlas}
+
+// OptInApps are the apps a person holds only once somebody gives them: never
+// by default on an invitation, a create or a picker, and always through admin.
+//
+// An app joins this list when holding it is a decision about the person
+// rather than about the company's tools: [GrantAtlas], because its map is
+// what an intruder looks for first.
+var OptInApps = []Grant{GrantAtlas}
+
+// DefaultApps are what a person's invitation or create carries when nothing
+// names their access: every app but the opt-in ones, in [Apps] order. The
+// CLI's default and the dashboard's picker read it, the dashboard through a
+// copy held to it by a gate.
+var DefaultApps = slices.DeleteFunc(slices.Clone(Apps), func(g Grant) bool {
+	return slices.Contains(OptInApps, g)
+})
 
 // Valid reports whether a permission off the wire is one this build knows.
 //

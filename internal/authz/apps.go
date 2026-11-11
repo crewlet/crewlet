@@ -9,9 +9,9 @@ import (
 
 // AppFor is the app a kind of object belongs to: a task, a project and a saved
 // view are the tracker's, a page and a page container the knowledge base's, a
-// chat room and a message the chat's, a repository and a change Gitlet's, and
-// every other kind (a person, a unit, the company, an artifact) belongs to no
-// app.
+// chat room and a message the chat's, a repository and a change Gitlet's, an
+// atlas entry Atlas's, and every other kind (a person, a unit, the company, an
+// artifact) belongs to no app.
 //
 // AN ARTIFACT BELONGS TO NO APP and is not everybody's either: it is decided
 // per object, by its shares ([ClassShared]), so the `artifacts` app gates
@@ -34,6 +34,8 @@ func AppFor(k ObjectKind) iam.Grant {
 		return iam.GrantChatlet
 	case KindRepository, KindChange:
 		return iam.GrantGitlet
+	case KindAtlasEntry:
+		return iam.GrantAtlas
 	}
 	return ""
 }

@@ -226,6 +226,18 @@ const (
 	// mirror.
 	ActionCodeImportRepo Action = "code_import_repo"
 
+	// --- the company's atlas ----------------------------------------- //
+	//
+	// THE ATLAS APP, AND NOTHING NARROWER behind it (ADR-0127): a holder
+	// reads every entry, private addresses included, because a map with
+	// holes cut per reader answers "what depends on this?" wrongly. A
+	// panel the atlas joins from another app's records is decided by that
+	// app where it is joined, never by this verb.
+	//
+	// ActionAtlasSearch is the tool `atlas_search`: the entries, or those a
+	// query names, each with its facts, sources and relations.
+	ActionAtlasSearch Action = "atlas_search"
+
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
 	ActionMyWork     Action = "my_work"
@@ -1313,6 +1325,14 @@ var rules = map[Action]rule{
 	// (ADR-0110), so no code notice is theirs to list, count or mark.
 	ActionCodeMarkInbox: {class: ClassOwnRecord, app: iam.GrantGitlet, humanOnly: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
+
+	// --- reading the atlas ------------------------------------------- //
+	//
+	// THE APP ALONE: every holder reads every entry (ADR-0127). A seat takes
+	// it as it takes every app's read, held to whoever woke its turn
+	// (ADR-0109), and an assistant read grant may take it.
+	ActionAtlasSearch: {class: ClassApp, app: iam.GrantAtlas, recency: iam.RecencyAny,
+		assist: AssistRead},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label

@@ -597,8 +597,9 @@ crewlet run crewlet.yaml -company company.yaml
    password — or, from a shell, `crewlet iam invite <address> -seat
    jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
-   way, by an administrator, with every app (Worklet, Doclet, Artifacts,
-   Chatlet, Gitlet) ticked by default, and Admin only for the people who run the company. Untick
+   way, by an administrator, with every app but Atlas (Worklet, Doclet, Artifacts,
+   Chatlet, Gitlet) ticked by default, Atlas only for the people who need the
+   company's map of servers and vendors, and Admin only for the people who run the company. Untick
    Gitlet for somebody the company keeps off its code: it is every door to the
    repositories, git included, and an agent works on code in a turn they woke
    only if they hold it. See [How the first person
