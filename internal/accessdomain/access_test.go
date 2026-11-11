@@ -529,12 +529,23 @@ func TestAServersUseIsCountedPerServerAndSeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	audit, err := node.reader().Commands(t.Context(), accessdomain.AuditQuery{}, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest := map[string]time.Time{}
+	for _, c := range audit.Rows {
+		if _, seen := newest[c.Host+"/"+c.Handle]; c.Ran && !seen {
+			newest[c.Host+"/"+c.Handle] = c.At
+		}
+	}
 	got := map[string][2]int64{}
 	for _, u := range use {
-		if u.Last.IsZero() || u.Last.After(now.Add(time.Minute)) {
-			t.Errorf("%s on %s was last used at %s", u.Handle, u.Host, u.Last)
+		key := u.Host + "/" + u.Handle
+		if !u.Last.Equal(newest[key]) {
+			t.Errorf("%s was last used at %s, and its newest command that ran at %s", key, u.Last, newest[key])
 		}
-		got[u.Host+"/"+u.Handle] = [2]int64{u.Week, u.Month}
+		got[key] = [2]int64{u.Week, u.Month}
 	}
 	want := map[string][2]int64{"api-1/ops": {1, 1}, "api-1/sre": {2, 2}, "db-1/sre": {1, 1}}
 	if !maps.Equal(got, want) {
