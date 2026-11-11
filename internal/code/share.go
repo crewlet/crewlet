@@ -99,8 +99,9 @@ func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }
 // push alone, beside the writes and after them meet one pack state): on two
 // cores the share is its floor of one unit, and sixty-four engine writes at
 // once into the person's repository took the push's p99 from 0.24–0.38 s
-// alone to 0.92–1.64 s, past the twice the benchmark holds, and back to
-// 0.25–0.51 s once they stopped (four runs over the three object stores).
+// alone to 0.92–1.64 s, past the twice the benchmark reports it against, and
+// back to 0.25–0.51 s once they stopped (four runs over the three object
+// stores).
 // What the writes added is not a read-lane slot — the person was refused
 // nothing: the copy's syncs a push waits for ran on the two cores the
 // writes' builds and landings used (their p99 0.25–0.39 s beside the writes,

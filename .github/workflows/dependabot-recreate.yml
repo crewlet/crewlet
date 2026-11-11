@@ -41,7 +41,8 @@ concurrency:
 jobs:
   recreate:
     name: comment on the bumps still in conflict
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
     # A fork has no secret and would fail on every push to its own `main`.
     if: ${{ !github.event.repository.fork }}
     environment: dependabot-recreate

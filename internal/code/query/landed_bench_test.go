@@ -201,7 +201,7 @@ func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
 	deadline := time.Now().Add(10 * time.Minute)
 	c.WantHistory(r.repo)
 	for graph, complete := false, false; !graph || !complete; {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the benchmark
 			b.Fatalf("the second node held its commit-graph %v and its whole history %v ten minutes on", graph,
 				complete)
 		}
@@ -215,7 +215,7 @@ func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
 		complete = perr == nil && p.Indexed() && p.Coverage().Complete
 		s.Release()
 		c.WantHistory(r.repo)
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 	r.checks = &checkTimes{Pool: n.Pool()}
 	s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: r.checks,

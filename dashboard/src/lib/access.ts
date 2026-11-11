@@ -5,7 +5,8 @@
  * GRANTS, held to `iam.AllGrants`): `admin`, which runs the company and the
  * engine and INCLUDES EVERY APP, and one permission per app: `worklet` for
  * Worklet, `doclet` for Doclet, `artifacts` for authoring artifacts, `chatlet`
- * for the company's own chat and `gitlet` for its code (APPS, held to
+ * for the company's own chat, `gitlet` for its code and `atlas` for its map
+ * of everything it runs on (APPS, held to
  * `iam.Apps`, the one place an app is declared). Everything a signed-in
  * principal may do beyond its own account and the read-only overview comes
  * from these, so this module is the one place a screen asks "does the reader
@@ -60,6 +61,12 @@ export const CHATLET: App = "chatlet";
  * itself. Without it a reader reaches no repository through any door.
  */
 export const GITLET: App = "gitlet";
+
+/**
+ * Atlas's permission: the company's map of everything it runs on. Opt-in, so
+ * an invitation offers it unticked (`DEFAULT_APPS`).
+ */
+export const ATLAS: App = "atlas";
 
 /** Whether `name` is an app this build knows. */
 export function isApp(name: string): name is App {
@@ -139,6 +146,11 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
     label: "Gitlet",
     description:
       "Read, search and review the company's code, and clone, fetch and push with git. Agents work on code for them only with it.",
+  },
+  atlas: {
+    label: "Atlas",
+    description:
+      "See the map of everything the company runs on: accounts, domains, servers, databases and how they connect, private addresses included.",
   },
 };
 

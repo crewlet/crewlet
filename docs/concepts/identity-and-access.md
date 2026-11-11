@@ -148,9 +148,9 @@ taken.
 
 What a principal may do comes from two things: the **permissions** it carries,
 and its **relations** in the org chart — the seat it holds, the team it leads,
-the work it wrote. There are six permissions, because there are six things
+the work it wrote. There are seven permissions, because there are seven things
 a company actually decides about somebody who joins it: whether they **run**
-it, and which of its five apps they **use**.
+it, and which of its six apps they **use**.
 
 | Permission | On the dashboard | What it is |
 |---|---|---|
@@ -160,16 +160,17 @@ it, and which of its five apps they **use**.
 | `artifacts` | **Artifacts** | **Authors** artifacts: creates them, publishes their versions and shapes their data. It never gates opening one: what somebody may do on an artifact is decided by its [shares](#an-artifact-is-opened-by-its-shares) |
 | `chatlet` | **Chatlet** | Uses the company's own [chat](chatlet.md): reads its rooms and talks in them |
 | `gitlet` | **Gitlet** | Uses [Gitlet](gitlet.md), the engine's own git host: reads, searches and reviews the company's code, and clones, fetches and pushes with git. Without it a principal reaches no repository through any door ([below](#what-each-app-opens)) |
+| `atlas` | **Atlas** | Reads the company's atlas: the map of everything it runs on (vendor accounts, domains, servers, data stores, repositories, monitoring, tool servers and models) and how they depend on each other, private addresses included. **Opt-in**: nobody but an administrator holds it until somebody gives it to them ([below](#atlas-is-given-on-purpose)) |
 
 They are stored in the `grants` field of a person's row, an invitation, a
 machine token and a Tier A token entry — the field keeps its name, and the
 dashboard calls the concept **Access**. `worklet`, `doclet`, `artifacts`,
-`chatlet` and `gitlet` are the **apps**, and `iam.Apps` is the one place an app is declared: an
+`chatlet`, `gitlet` and `atlas` are the **apps**, and `iam.Apps` is the one place an app is declared: an
 agent seat's own set, the dashboard's picker, the live socket's reader and the
 authority table's checks all read it, so a new app is a new member there and a
 new set of rows, and the build fails until both are in place — which is how
-`chatlet` and then `gitlet` arrived, each appended last so the order every list
-is drawn in kept its earlier members.
+`chatlet`, then `gitlet` and then `atlas` arrived, each appended last so the
+order every list is drawn in kept its earlier members.
 
 **Admin includes every app.** One function, `iam.Expand`, reads a set as it is
 compared — its own members, plus every app when it holds `admin` — and every
@@ -186,6 +187,8 @@ a permission adds is an app to use or a company to run. The company's code is
 not part of the overview: reaching a repository takes `gitlet`, as reading a
 work item takes `worklet`
 ([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)).
+Nor is the company's atlas: reading it takes `atlas`
+([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)).
 What a **lead** may do
 in their own team, an **author** to their own work and a **person** to their
 own record are relations the [authority
@@ -269,7 +272,7 @@ permission is needed to take ([Your own account](#your-own-account-is-account)).
 **An answer that crosses apps is filtered row by row**, through one helper
 (`authz.Shows`) that asks which app a row belongs to: a work row needs
 `worklet`, a page row `doclet`, a chat row `chatlet`, a repository or a change
-`gitlet`, and anything else nothing. So the Home
+`gitlet`, an atlas entry `atlas`, and anything else nothing. So the Home
 feed carries only the rows its reader may see — an explicit `kinds=` entry
 they may not see is dropped rather than refused, since a refusal would confirm
 what exists; the decisions list carries a work item's ask only to a `worklet`
@@ -296,6 +299,7 @@ hands an administrator private titles by that override.
 | `artifacts` | Authoring artifacts, beside the role each asks: creating one (`create_artifact`), and on an artifact somebody holds editor on, publishing a version (`publish_artifact`), renaming it (`update_artifact`), adding an asset (`upload_artifact_asset`), changing its datastore's schema (`set_artifact_schema`) and filing it in a folder (`move_artifact`, beside contributor on the folder); creating a folder inside one they may file in (`create_artifact_folder`); trashing and restoring one they own (`artifacts.trash`, `artifacts.restore`). **Nothing else**: opening an artifact, reading and writing its data, being present on it, sharing it and exporting it ask only the role |
 | `chatlet` | Every room a person may read and every word they say in one, where the company runs Chatlet: listing their rooms, reading and searching them (`list_channels`, `read_channel`, `search_messages`); posting, replying, a direct message, a reaction and moving their own membership (`post_message`, `reply_in_thread`, `send_dm`, `react_to_message`, `join_channel`, `leave_channel`); and a person's own gestures: making a room, opening a conversation, a room's settings, adding people to it and its whole membership, editing and taking back their own messages and their read state (`create_channel`, `open_dm`, `update_channel`, `add_channel_members`, `set_channel_members`, `edit_message`, `delete_message`, `mark_chat_read`). WHICH room is the chat's own rule: a private room is its members', and one a person cannot read answers as if it did not exist. Archiving a room is its creator's, its unit's lead's or an administrator's, and taking back somebody else's message is an administrator's, as moderation, which reaches a room the moderator is not in without showing it to them. The `chat_*` questions (`GET /chatlet/…`) and the `chat_*` pushes on the live socket |
 | `gitlet` | Every door to the company's code, where the company runs Gitlet (`code.backend: gitlet`): the Gitlet workspace and every place the dashboard shows code; Gitlet's reads under `/gitlet/` and the `code_*` questions, on REST and the socket alike; cloning, fetching and pushing with git over `/git/`; every code tool a person's assistant calls — reading, searching, committing, a change's lifecycle, its reviews and its merge — and a person's own `code_report_check`, `code_import_repo` and `code_purge_unreachable`; being asked to review a change; the code half of a person's **Inbox** — their code notices, listed, counted and marked (`code_mark_inbox`) — and its `inbox_changed` push; **My work › Reviews**; and which change woke a turn, on the trail. Somebody without it is refused before any repository is read, so no answer, count or line of git tells them what one holds. WHICH repository, and what they may do on it, is the repository's grant ([Who may read and push](gitlet.md#who-may-read-and-push)): a person holding the app maintains every repository, a credential bound to no seat that holds it reads every repository and never pushes, and a seat holds the lower of its `code.access` tier and its relation on the chart. Who read a repository (`code_repo_readers`), the Gitlet nodes' cache report (`code_status`) and Settings › Gitlet stay admin's |
+| `atlas` | The company's atlas, where every holder reads every entry with its facts, sources and relations, private addresses included: the `atlas_search` tool, which a person's own assistant calls over the operator surface. Nothing narrower stands behind the app, because a map with holes cut per reader answers "what depends on this?" wrongly. A panel the atlas joins from another app's records stays that app's, so the atlas is never a way round another permission |
 
 **A relation asks the app beside it.** Leading a project, being the owner of an
 inbox, having written a comment, owning a saved view: each is a relation, and
@@ -334,6 +338,21 @@ Three narrow rules sit beside the apps, each the owner's own decision:
   tool-skills container — for a person and an agent alike, exactly as filing a
   task in a project the company does not declare is. See [Who may write
   where](knowledge-system.md#who-may-write-where).
+
+### Atlas is given on purpose
+
+`atlas` is the one **opt-in** app (`iam.OptInApps`): a full map of a company's
+servers, addresses and vendors is what an intruder looks for first, so holding
+it is a decision about the person rather than about the company's tools. An
+invitation and a person's create carry every other app when nothing names their
+access (`iam.DefaultApps`, which `crewlet iam` and the dashboard's **Invite**
+and **Add person** both start from), and never `atlas`; somebody ticks it on
+purpose. An administrator holds it, as every app, through `iam.Expand`, and a
+Tier A or machine token holds it only when its `grants` name it. An agent seat
+holds it as it holds every app, and a turn a person woke is held to whether they
+use it ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+That is
+[ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md).
 
 ### An artifact is opened by its shares
 
@@ -1492,7 +1511,7 @@ would make it one. Because it is judged when the link is issued, **an edit that 
 person a permission revokes their outstanding link** in the same record: that
 permission was never judged against whoever holds the link, so they ask for
 another, judged against the new set — and storing `[admin]` as `[admin,
-worklet, doclet, artifacts, chatlet, gitlet]` adds nothing, since the
+worklet, doclet, artifacts, chatlet, gitlet, atlas]` adds nothing, since the
 comparison expands both sides.
 Taking a permission away revokes nothing. What
 the issue does not follow is the *issuer*: an administrator demoted after
@@ -2215,7 +2234,8 @@ reads a row's permissions in words: "Admin", "Worklet · Doclet",
 **Admin** is one switch: ticking it ticks every app and locks them, marked
 "Included with Admin", and it stores every app beside `admin`, so unticking
 Admin later leaves the apps ticked. **Invite** and **Add person** open with
-every app ticked and Admin not; a **new service account** opens with nothing
+every app but **Atlas** ticked and Admin not, since Atlas is
+[given on purpose](#atlas-is-given-on-purpose); a **new service account** opens with nothing
 ticked; and **Create token** for a service account opens with the account's own
 permissions that the minter holds too — the account exists to act with them —
 while a person's own **New token** opens with nothing ticked. A note under

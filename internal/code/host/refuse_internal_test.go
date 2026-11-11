@@ -513,7 +513,11 @@ func TestDamageARepairDidNotEndSaysSo(t *testing.T) {
 func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 	const pack = "0123456789abcdef0123456789abcdef01234567"
 	hint := gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: pack}
-	began := time.Now()
+	// THE RUN'S START, STATED years from any clock and to the nanosecond: a
+	// repair that carries it is told apart from one that stamps the run with
+	// its own time.Now(), which a start read from the clock at the case's
+	// beginning equals inside one tick of a coarse clock.
+	began := time.Date(2003, time.April, 5, 6, 7, 8, 9, time.UTC)
 	hinted := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrFailed,
 		Result: gitproc.Result{Exit: 128, Began: began, Trace: gitproc.Trace{Hints: []gitproc.Hint{hint}}}}
 	derived := func(parts gitproc.Part) error {

@@ -849,24 +849,36 @@ sequenceDiagram
   to have ended its own run, is told every note the turn has read before the
   new ones, as notes it may already show: its job's last take was recorded read
   before its harness had it, and the session is not known to hold its job's
-  brief, which told the notes the session it continued lacked.
+  brief, which told the notes the session it continued lacked. One whose
+  harness ended its own run is told, the same way, every note from the first
+  read its record marks unanswered — a take whose answer never reached the
+  harness, below — since it lacks that note and holds the answered ones after
+  it. And a note the run's bridge served its harness — OpenCode's, below, which
+  may have delivered it with its confirmation lost — is told to a continued
+  session the same way, among the new ones as much as among the read.
 - **Between the executor's own steps.** The executor's [tool bridge serves its
   notes](code-sandbox.md#notes-to-a-running-run) to its harness, and a harness
   that takes them there reads a note after its current step; the take is
   recorded on the record by the write that hands it over, so no two takes hand
   a model the same note (a session that may not show the notes it read is
   told them again when it is continued, as notes it may already show: a
-  launch's brief, above). **Claude Code** takes them through hooks the run is
-  started with: once every tool call of a batch the main agent made has its
-  result (`tool_batch`) — the model reads the note after those results, as
-  context the harness adds of its own: a system message after them, or on some
+  launch's brief, above). A take whose write the store recorded while its
+  answer was lost — a hook's take answered past its five seconds — hands the
+  harness nothing and is settled: its notes are marked **unanswered**, read by
+  the record's word, so the review still reads them and no later take hands
+  them over, while no saved session counts them held. **Claude Code** takes
+  them through hooks the run is started with: once every tool call of a batch
+  the main agent made has its result (`tool_batch`) — the model reads the note
+  after those results, as context the harness adds of its own: a system message after them, or on some
   models a reminder at the end of the last one — and as the run is about to
   finish (`finish`), when a note continues the turn and
   the run's result is the answer given after it. A subagent's batch takes
   nothing, because a note handed to a delegated loop binds that piece of work
   alone; the note waits for the main agent's next step. **OpenCode** takes
   them through a plugin its run's server loads, which hands each note to the
-  run's own session while it works; OpenCode puts it before the model at the
+  run's own session while it works, each recorded **served** to the run's job
+  before the plugin is handed it, and read only once the plugin confirms
+  OpenCode delivered it; OpenCode puts it before the model at the
   session's next step (`step`) — after the tool results of the step in flight,
   or after a final step that called no tool, so a note sent while the run
   writes its answer still reaches it, and the run's result is the answer given
@@ -945,6 +957,10 @@ sequenceDiagram
   read it, the kind of step that read it (`boundary`: `round`, `brief`,
   `tool_batch`, `finish` or `step`) and, for a read by the executor in its
   box, its launch (`launch_id`); the phase's `steers[]` and the live call's say the same. A
+  note a take recorded read while its answer was lost (above) has no
+  `delivered` record, and the execute phase's `steers[]` does not list it: its
+  harness was never handed it, and the review reads it carried, as it reads
+  every note the turn has read, which records nothing anew. A
   note a first segment's box held when the segment ended without launching a
   run is recorded `expired` as the box closes; one still waiting on a run's
   record when the turn ends is recorded `expired` by the node that finishes the

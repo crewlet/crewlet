@@ -2,17 +2,15 @@ package engine_test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
-	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
@@ -142,23 +140,15 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 // cluster an operator runs, and answers the URL its clients dial — one a case,
 // because the lease bucket the first node makes on it fixes the lease every
 // later node holds.
+//
+// EXTERNALTEST'S, WHOSE ACCOUNT STATES ITS LIMIT. A node on an external broker
+// reads the account's limit and nothing else; where the account states none,
+// it stands three quarters of its own volume's free space in for the limit and
+// reserves the bucket a quarter of that. A server built here capped its store
+// and left its account unlimited, so the case passed or failed on the runner's
+// disk: past about 92 GB free the bucket asked for more than the cap, and the
+// broker refused it.
 func externalBroker(t *testing.T) string {
 	t.Helper()
-	external, err := server.NewServer(&server.Options{
-		ServerName: "external", JetStream: true, Port: -1, Host: "127.0.0.1",
-		StoreDir: filepath.Join(t.TempDir(), "external"), NoSigs: true,
-		JetStreamMaxStore: brokertest.StoreMaxBytes,
-		MaxPayload:        8 << 20,
-		// An external server authenticates somebody, or the dial refuses it.
-		Authorization: externaltest.Token,
-	})
-	if err != nil {
-		t.Fatalf("start an external broker: %v", err)
-	}
-	go external.Start()
-	t.Cleanup(external.Shutdown)
-	if !external.ReadyForConnections(30 * time.Second) {
-		t.Fatal("the external broker never became ready")
-	}
-	return external.ClientURL()
+	return externaltest.Start(t, queue.MaxPayloadBytes).URL()
 }

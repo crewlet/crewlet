@@ -89,6 +89,9 @@ type Company struct {
 	// access and SSH use. See [AccessHistory].
 	AccessHistory AccessHistory `yaml:"access_history,omitempty" json:"access_history,omitzero"`
 
+	// Atlas is the company's policy over its atlas. See [Atlas].
+	Atlas Atlas `yaml:"atlas,omitempty" json:"atlas,omitzero"`
+
 	// Diagnostics is what this engine may say about its own defects outside
 	// the company. See [Diagnostics].
 	Diagnostics Diagnostics `yaml:"diagnostics,omitempty" json:"diagnostics,omitzero"`
@@ -711,6 +714,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 	p.wrap(c.Inbox.validate(field("inbox")))
 	p.wrap(c.AccessHistory.validate(field("access_history")))
+	p.wrap(c.Atlas.validate(field("atlas")))
 	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying

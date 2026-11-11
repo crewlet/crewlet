@@ -260,10 +260,10 @@ func compactWhileBusy(t testing.TB, c *compact.Compactor, cand code.CompactionCa
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := c.Compact(t.Context(), cand)
-		if out != compact.OutcomeBusy || time.Now().After(deadline) {
+		if out != compact.OutcomeBusy || time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its caller judges the outcome it answers
 			return out, err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -279,10 +279,10 @@ func pollWhileBusy(t testing.TB, c *compact.Compactor, rec *metrics.Recorder) co
 			t.Fatalf("a pass: %v", err)
 		}
 		if counter(rec, metrics.CodeCompactRuns, "outcome", string(compact.OutcomeBusy)) == busy ||
-			time.Now().After(deadline) {
+			time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its caller judges the report it answers
 			return report
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

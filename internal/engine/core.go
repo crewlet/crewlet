@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -157,6 +158,11 @@ type core struct {
 	// accessSealer opens a command's text for the SSH audit: one per node.
 	accessSealer *accessdomain.Sealer
 
+	// atlasReader and atlasWriter are the atlas log's two sides, built on
+	// every data node for the same reason ([core.openAtlas]).
+	atlasReader *atlasdomain.Reader
+	atlasWriter *atlasdomain.Writer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -257,6 +263,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		return err
 	}
 	if err = c.openAccess(e, sl); err != nil {
+		return err
+	}
+	if err = c.openAtlas(sl); err != nil {
 		return err
 	}
 

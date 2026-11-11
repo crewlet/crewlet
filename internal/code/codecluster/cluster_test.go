@@ -943,7 +943,7 @@ func (c *cluster) drained(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("member %s's applier has not drained the code log: %w", m.id, ctx.Err())
-			case <-time.After(20 * time.Millisecond):
+			case <-time.After(20 * time.Millisecond): //fixedwait:liveness
 			}
 		}
 	}

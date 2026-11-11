@@ -229,14 +229,46 @@ func (e *TooLongError) Error() string {
 // accounts for from one made after it (sandbox.SessionCapture.NoteCursor) —
 // and zero for a read this segment made, which the record places after every
 // session its run was saved with before the segment began.
+//
+// Unanswered says the record marks the read as one whose take's answer was
+// lost (sandbox.NoteRead.Unanswered): the executor's harness named by Launch
+// was never handed the note at that step, though the turn carries it as read —
+// so no session of that job holds it from there, and a launch that continues
+// one is told it again.
 type Reading struct {
-	Phase     types.Phase
-	Iteration int
-	Round     int
-	Boundary  types.SteerBoundary
-	Launch    string
-	At        time.Time
-	Order     int
+	Phase      types.Phase
+	Iteration  int
+	Round      int
+	Boundary   types.SteerBoundary
+	Launch     string
+	At         time.Time
+	Order      int
+	Unanswered bool
+}
+
+// Briefing is what a launch's brief takes of a turn's notes: Notes, the ones it
+// is the first to read, which the launch's write records read, and Unanswered,
+// every note the turn has read whose read its record marks unanswered as the
+// brief read them, by id (sandbox.NoteRead.Unanswered).
+//
+// THE MARKS BESIDE THE NOTES, read off the same record: a mark is made off the
+// path of the take it settles, and can land after the segment that launches
+// read the record it resumed from — so a launch counts the record's marks as
+// they stand when it briefs, never only as its segment found them.
+//
+// Orders is the place among the record's reads (Reading.Order) of every note
+// the segment's source handed it from the record, and of every note of Notes
+// read already by the record's word — a lost take's, whose settle handed it to
+// this brief — by id; nil from a source that keeps no record. A brief tells
+// the notes the turn has read in the order the record numbered their reads, and
+// the reads a segment makes reach it before the record has numbered them (Order
+// zero), so the source that recorded them says where they are: a note a lost
+// take recorded is then told at its take's place, never after a note a later
+// take read — a correction of it among them.
+type Briefing struct {
+	Notes      []Note
+	Unanswered []string
+	Orders     map[string]int
 }
 
 // Read is a note the turn has read, and where: what a turn carries into every
@@ -365,8 +397,8 @@ func (b *Box) Take(_ context.Context, _ Reading) []Note { return b.Drain() }
 
 // Brief is [Box.Drain] as an executor's brief reads it: the notes the launch
 // takes, which are the box's no longer — see [Box.Return] for a launch that
-// fails.
-func (b *Box) Brief(context.Context) []Note { return b.Drain() }
+// fails. A box holds no read a take recorded, so it says none is unanswered.
+func (b *Box) Brief(context.Context) Briefing { return Briefing{Notes: b.Drain()} }
 
 // Return puts back notes a step took and could not deliver — a launch that
 // failed before it wrote its run's record — AT THE FRONT, in their order, so

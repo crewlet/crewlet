@@ -44,6 +44,7 @@ describe("expand", () => {
       "artifacts",
       "chatlet",
       "gitlet",
+      "atlas",
     ]);
   });
 

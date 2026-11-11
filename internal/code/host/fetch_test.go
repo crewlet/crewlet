@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -297,31 +299,34 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for !cond() {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("waited five seconds for %s", what)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
-// truncateNewestIndex truncates the newest .idx of RepoName's cache on node 0.
+// truncateNewestIndex truncates the .idx of the newest pack of RepoName's
+// cache on node 0: the live pack its rows added last, by its record's place
+// in the log — never by a file's modification time, which a coarse clock
+// stamps alike for two packs written in one tick.
 func truncateNewestIndex(t *testing.T, c *codetest.Case) {
 	t.Helper()
-	s, err := c.Fleet.Nodes()[0].Cache().Sync(c.Ctx, c.Rows().Repo.ID, codetest.Linearizable)
+	rows := c.Rows()
+	if len(rows.Packs) == 0 {
+		t.Fatalf("%s holds no live pack", codetest.RepoName)
+	}
+	last := slices.MaxFunc(rows.Packs, func(a, b code.PackRow) int {
+		return cmp.Compare(a.Added.Packed(), b.Added.Packed())
+	})
+	s, err := c.Fleet.Nodes()[0].Cache().Sync(c.Ctx, rows.Repo.ID, codetest.Linearizable)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(s.Dir, "objects", "pack")
+	newest := filepath.Join(s.Dir, "objects", "pack", "pack-"+last.GitChecksum+".idx")
 	s.Release()
-	list, _ := filepath.Glob(filepath.Join(dir, "*.idx"))
-	newest, at := "", time.Time{}
-	for _, path := range list {
-		if info, err := os.Stat(path); err == nil && info.ModTime().After(at) {
-			newest, at = path, info.ModTime()
-		}
-	}
-	if newest == "" {
-		t.Fatalf("no pack index in %s", dir)
+	if _, err := os.Stat(newest); err != nil {
+		t.Fatalf("the newest pack's index: %v", err)
 	}
 	// The cache installs its indexes read-only; only root writes past that.
 	if err := os.Chmod(newest, 0o600); err != nil {
@@ -1160,11 +1165,11 @@ func maintainersBitmap(t *testing.T, c *codetest.Case, l *logs) string {
 			l.count("code_cache_maintained", `"graph":true`) > 0 {
 			return dir
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("node 0's maintainer ended no run writing the bitmap and the commit-graph for %s in a "+
 				"minute: %q", codetest.RepoName, l.lines("code_cache_maintained"))
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -1448,8 +1453,8 @@ func assertNoSpool(t *testing.T, c *codetest.Case) {
 		return bytes == 0 && held == 0
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for !settled() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	for !settled() && time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline: what is still held is asserted after it
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	if bytes != 0 || held != 0 {
 		t.Errorf("the spool allowance still holds %d bytes in %d spools", bytes, held)
@@ -1664,8 +1669,9 @@ func TestASpoolIsGoneHoweverItsRequestEnds(t *testing.T) {
 			t.Fatal(err)
 		}
 		deadline := time.Now().Add(5 * time.Second)
+		//fixedwait:measure a poll's own deadline: a request that never spooled fails the case after it
 		for _, held := host.SpoolsInUse(node.Host()); held == 0 && time.Now().Before(deadline); _, held = host.SpoolsInUse(node.Host()) {
-			time.Sleep(5 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 		}
 		if _, held := host.SpoolsInUse(node.Host()); held == 0 {
 			t.Fatal("the request never spooled")

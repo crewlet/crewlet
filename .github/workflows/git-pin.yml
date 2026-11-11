@@ -54,7 +54,8 @@ concurrency:
 jobs:
   check:
     name: the pinned gits against upstream
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
     # The check reads kernel.org's listing and, for each pin that is behind,
     # one tarball of about 8 MB and its signature: measured from a development
     # machine, 0.6 s with every pin current and 2.8 s with one release to

@@ -55,8 +55,15 @@ const storeHold = code.RetireGrace + code.RetentionInterval + collect.CollectInt
 // event log keeps every expunge where the repository's detail keeps only its
 // latest.
 //
+// THE COMPACTOR'S CLOCK IS THE CASE'S, frozen at one instant: every instant
+// the expunge reads is that one, its commit's among them, so the store is
+// held until exactly storeHold past it — read with no wall clock between the
+// commit and the case.
+//
 // Mutation: drop the announcement from the commit's applied path, and both
-// cases hear none; announce from the begin as well, and both hear two.
+// cases hear none; announce from the begin as well, and both hear two; hold
+// the store from the wall clock's instant rather than the compactor's, and
+// the event's end is not the commit's.
 func TestEveryCommittedExpungeIsAnnouncedOnce(t *testing.T) {
 	t.Parallel()
 
@@ -69,12 +76,14 @@ func TestEveryCommittedExpungeIsAnnouncedOnce(t *testing.T) {
 		x.purge()
 		request := x.mustOwe().Request
 		h := &heard{}
-		// The fixture's clock: the wall's, a publication debounce ahead.
-		lo := time.Now().Add(compact.PublishDebounce)
-		c, _, _ := x.compactorOf(func(o *compact.Options) { o.Events = h })
+		// The fixture's clock, frozen: a publication debounce ahead of the
+		// wall's where the case began.
+		at := time.Now().Add(compact.PublishDebounce)
+		c, _, _ := x.compactorOf(func(o *compact.Options) {
+			o.Events, o.Now = h, func() time.Time { return at }
+		})
 		x.served(c)
-		hi := time.Now().Add(compact.PublishDebounce)
-		x.heardOne(h, request, lo, hi)
+		x.heardOne(h, request, at)
 	})
 
 	t.Run("a weekly cycle", func(t *testing.T) {
@@ -83,10 +92,12 @@ func TestEveryCommittedExpungeIsAnnouncedOnce(t *testing.T) {
 		x.push(96 << 10)
 		x.leakBytes("big", 64<<10)
 		h := &heard{}
-		// past's clock, a grace and an hour ahead of the wall's.
+		// past's clock, frozen a grace and an hour ahead of the wall's where
+		// the case began.
 		ahead := code.PruneGrace + time.Hour
+		at := time.Now().Add(ahead)
 		c, _, _ := x.compactorOf(func(o *compact.Options) {
-			o.Now = func() time.Time { return time.Now().Add(ahead) }
+			o.Now = func() time.Time { return at }
 			o.Events = h
 		})
 		compact.ExpungeFrom(c, 1)
@@ -94,21 +105,19 @@ func TestEveryCommittedExpungeIsAnnouncedOnce(t *testing.T) {
 		if !ok {
 			t.Fatalf("the weekly arm names no %s, never expunged", codetest.RepoName)
 		}
-		lo := time.Now().Add(ahead)
 		if out, err := expungeWhileBusy(t, c, cand); out != compact.OutcomeApplied {
 			t.Fatalf("a weekly cycle of a repository past a quarter unreachable answered %s, %v; want applied",
 				out, err)
 		}
-		hi := time.Now().Add(ahead)
-		x.heardOne(h, "", lo, hi)
+		x.heardOne(h, "", at)
 	})
 }
 
 // heardOne fails the case unless h heard exactly one code_expunged, on its
 // type's subject, for codetest.RepoName serving request ("" for the weekly
 // schedule), dropping something, at a position, and holding the store to
-// storeHold after a commit the compactor's clock read between lo and hi.
-func (x *fixture) heardOne(h *heard, request string, lo, hi time.Time) {
+// storeHold after a commit the compactor's clock, frozen at committed, read.
+func (x *fixture) heardOne(h *heard, request string, committed time.Time) {
 	x.t.Helper()
 	got, subjects := h.all()
 	if len(got) != 1 {
@@ -133,8 +142,8 @@ func (x *fixture) heardOne(h *heard, request string, lo, hi time.Time) {
 		x.t.Errorf("the event says the commit dropped %d objects, %d bytes; want what the leak left",
 			ev.DroppedObjects, ev.DroppedBytes)
 	}
-	if ev.StoreUntil.Before(lo.Add(storeHold)) || ev.StoreUntil.After(hi.Add(storeHold)) {
-		x.t.Errorf("the event holds the store until %s, want %s after the commit, between %s and %s",
-			ev.StoreUntil, storeHold, lo.Add(storeHold), hi.Add(storeHold))
+	if want := committed.Add(storeHold); !ev.StoreUntil.Equal(want) {
+		x.t.Errorf("the event holds the store until %s, want %s: %s after the commit at %s", ev.StoreUntil, want,
+			storeHold, committed)
 	}
 }

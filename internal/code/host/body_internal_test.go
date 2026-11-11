@@ -76,7 +76,7 @@ func TestADeclaredLengthIsReadWhateverItsSize(t *testing.T) {
 					t.Errorf("read %d bytes of a request of %d declaring %d", r.b.length(), len(body), declared)
 				}
 				r.b.close()
-			case <-time.After(5 * time.Second):
+			case <-time.After(5 * time.Second): //fixedwait:liveness
 				t.Fatalf("a request of %d bytes declaring %d was not read in 5 s", len(body), declared)
 			}
 			if held := s.heads.inUse(); held != 0 {

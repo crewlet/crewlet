@@ -226,6 +226,12 @@ const (
 	// mirror.
 	ActionCodeImportRepo Action = "code_import_repo"
 
+	// --- the company's atlas ----------------------------------------- //
+	//
+	// ActionAtlasSearch is the tool `atlas_search`: the atlas's entries, or
+	// those a query names. The app and nothing narrower decides it (ADR-0127).
+	ActionAtlasSearch Action = "atlas_search"
+
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
 	ActionMyWork     Action = "my_work"
@@ -1345,6 +1351,13 @@ var rules = map[Action]rule{
 	// (ADR-0110), so no code notice is theirs to list, count or mark.
 	ActionCodeMarkInbox: {class: ClassOwnRecord, app: iam.GrantGitlet, humanOnly: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
+
+	// --- reading the atlas ------------------------------------------- //
+	//
+	// THE APP ALONE: every holder reads every entry (ADR-0127), a seat held to
+	// whoever woke its turn (ADR-0109).
+	ActionAtlasSearch: {class: ClassApp, app: iam.GrantAtlas, recency: iam.RecencyAny,
+		assist: AssistRead},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label

@@ -270,12 +270,13 @@ api:
         # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
         # What this credential may do: `admin`, `worklet`, `doclet`,
-        # `artifacts`, `chatlet`, `gitlet`.
+        # `artifacts`, `chatlet`, `gitlet`, `atlas`.
         # Required and non-empty: a credential's blast radius is stated
         # where it is pinned, never inferred.  This one is the founder's,
         # so it is admin, which includes every app.  A pipeline that only
-        # files work would be `[worklet]`, and a CI runner that only
-        # fetches the company's code `[gitlet]`.
+        # files work would be `[worklet]`, a CI runner that only fetches
+        # the company's code `[gitlet]`, and a script that only reads the
+        # company's map `[atlas]`.
         grants: [admin]
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────

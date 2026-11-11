@@ -186,7 +186,7 @@ func testWaitingNeverWaitsOnTheStore(t *testing.T, s Source) {
 func testABriefHandedBackIsReadAgain(t *testing.T, s Source) {
 	ctx := t.Context()
 	s.File(t, note("n-1"))
-	brief := s.Brief(ctx)
+	brief := s.Brief(ctx).Notes
 	if got := ids(brief); !slices.Equal(got, []string{"n-1"}) {
 		t.Fatalf("the brief carried %v, want the waiting note", got)
 	}
@@ -206,7 +206,7 @@ func testABriefTheFailedLaunchReadIsExpiredOnce(t *testing.T, s Source) {
 	}
 	ctx := t.Context()
 	s.File(t, note("n-1"))
-	brief := s.Brief(ctx)
+	brief := s.Brief(ctx).Notes
 	if got := ids(brief); !slices.Equal(got, []string{"n-1"}) {
 		t.Fatalf("the brief carried %v, want the waiting note", got)
 	}
@@ -228,7 +228,7 @@ func testABriefWhoseRecordAnotherEndingTookIsExpiredOnce(t *testing.T, s Source)
 	}
 	ctx := t.Context()
 	s.File(t, note("n-1"))
-	brief := s.Brief(ctx)
+	brief := s.Brief(ctx).Notes
 	if got := ids(brief); !slices.Equal(got, []string{"n-1"}) {
 		t.Fatalf("the brief carried %v, want the waiting note", got)
 	}

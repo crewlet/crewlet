@@ -64,6 +64,13 @@ type agentLauncher struct {
 	// recorded it.
 	told *toldTurn
 
+	// notes is the resumed segment's notes on its run's record, nil on a
+	// dispatched segment's launcher, whose brief's notes are its box's: a
+	// note a relaunch's brief was handed by the settle of a take whose answer
+	// was lost is sealed naming that take, whose read the launch's write takes
+	// over ([rowSource.lostTakes]).
+	notes *rowSource
+
 	// run is the launch past the turn's fence, nil for [agentLauncher.launch]:
 	// a case's stand-in for the sandbox.
 	run func(context.Context, runner.AgentRunRequest) (runner.Launched, error)
@@ -388,9 +395,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 
 	// THE TURN'S NOTES, sealed for the record the launch opens: the seat a
 	// person's authority is decided on, and what the brief carries, read by
-	// the job the write names — see runsteer.go.
+	// the job the write names — a note a lost take's settle handed the brief
+	// among them, in that take's place — see runsteer.go.
 	ref := l.runTurnRef(ctx)
-	brief, err := e.runSteers.briefNotes(l.turn.RunID, req.Round, req.Notes)
+	brief, err := e.runSteers.briefNotes(l.turn.RunID, req.Round, req.Notes, l.notes)
 	if err != nil {
 		return runner.Launched{}, err
 	}
@@ -1018,8 +1026,10 @@ func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duratio
 // conversation is what the turn's dispatch read of its conversation, which a
 // dispatched segment's one launch — the turn's first — continues and freezes;
 // nil for a resumed segment's, whose relaunches read what that launch froze.
+// notes is a resumed segment's notes on its run's record, which its relaunches'
+// briefs are sealed from ([agentLauncher.notes]); nil for a dispatched one's.
 func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
-	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn,
+	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn, notes *rowSource,
 ) runner.AgentLauncher {
 	if t == nil || company == nil || company.Models == nil {
 		return nil
@@ -1029,7 +1039,7 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
 		return nil
 	}
 	return &agentLauncher{engine: e, turn: t, seat: seat, company: company, ask: ask,
-		conversation: conversation, told: told}
+		conversation: conversation, told: told, notes: notes}
 }
 
 // agentPlacement is the cell an executor entry runs in: its own `run_in`, then

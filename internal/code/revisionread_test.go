@@ -343,7 +343,7 @@ func (m *meeting) meet() bool {
 	select {
 	case <-m.both:
 		return true
-	case <-time.After(meetWait):
+	case <-time.After(meetWait): //fixedwait:liveness
 		return false
 	}
 }

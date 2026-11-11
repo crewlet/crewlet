@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
@@ -560,7 +561,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 var flooredDomains = []statelog.Domain{
 	worklet.Domain{}, doclet.Domain{}, usage.Domain{}, code.Domain{},
 	iamdomain.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
-	chatlet.Domain{}, executordomain.Domain{}, accessdomain.Domain{},
+	chatlet.Domain{}, executordomain.Domain{}, accessdomain.Domain{}, atlasdomain.Domain{},
 }
 
 // crossingDomains is the package of every domain an operation floors on,

@@ -741,7 +741,7 @@ func TestARunsRecordIsASteerSource(t *testing.T) {
 		}
 		fence := sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch}
 		source := runs.source(ctx, claimed, fence)
-		t.Cleanup(source.Close)
+		t.Cleanup(func() { source.Close(t.Context()) })
 		return steersourcetest.Source{
 			SteerSource: source,
 			File: func(t *testing.T, n steer.Note) {
@@ -759,7 +759,7 @@ func TestARunsRecordIsASteerSource(t *testing.T) {
 			},
 			LaunchFailed: func(t *testing.T, notes []steer.Note) {
 				t.Helper()
-				sealed, err := runs.briefNotes("run-1", 2, notes)
+				sealed, err := runs.briefNotes("run-1", 2, notes, source)
 				if err != nil {
 					t.Fatal(err)
 				}

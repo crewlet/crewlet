@@ -210,7 +210,7 @@ func TestReturnedNotesAreReadFirstAndStayOneNote(t *testing.T) {
 	t.Parallel()
 	b := steer.New()
 	b.Offer(note("first"))
-	taken := b.Brief(t.Context())
+	taken := b.Brief(t.Context()).Notes
 	b.Offer(note("later"))
 	b.Return(t.Context(), taken)
 	if got := b.Offer(note("first")); got != steer.StatusAccepted {
@@ -248,7 +248,7 @@ func TestAHandedOverBoxKeepsWhatAFailedLaunchGivesBack(t *testing.T) {
 	b := steer.New()
 	b.Offer(note("briefed"))
 	b.Offer(note("late"))
-	brief := b.Brief(t.Context())
+	brief := b.Brief(t.Context()).Notes
 	b.Offer(note("after-brief"))
 	handed := b.HandOver()
 	if len(handed) != 1 || handed[0].ID != "after-brief" {

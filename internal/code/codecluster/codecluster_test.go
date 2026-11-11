@@ -307,11 +307,11 @@ func TestEveryMemberRoutesAGitReadToOneHome(t *testing.T) {
 				break
 			}
 		}
-		if !served && time.Now().After(deadline) {
+		if !served && time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("no read was served within a minute of the home %s's death", home)
 		}
 		if !served {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 	after := answered()

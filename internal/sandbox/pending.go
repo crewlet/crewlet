@@ -1923,7 +1923,9 @@ type PendingRun struct {
 	// as [PendingRun.Continues] is: the notes the job's brief carries, which
 	// the write that opens the job records read by it — a note the record
 	// holds already, and one it has never held (the turn's first segment's
-	// own), added already read. Never persisted as itself.
+	// own), added already read; and one a lost take's settle handed the
+	// brief, which names that take, read by the job in its place and at its
+	// place among the reads ([RunNote.LostTake]). Never persisted as itself.
 	BriefNotes []RunNote `json:"-"`
 
 	// HandedNotes is TRANSIENT as well: the notes the turn's first segment's
@@ -2470,7 +2472,11 @@ type PendingStore interface {
 	// job's brief carries ([PendingRun.BriefNotes]) are recorded READ BY THE
 	// JOB THIS WRITE OPENS, in the same write — a note the row holds and one
 	// it has never held alike — so the job's own harness can never take them
-	// again. And the notes the turn's box still held
+	// again. A note the row holds read already is left as it was read, but for
+	// one the brief names the take that read it as lost ([RunNote.LostTake]):
+	// that take's reader never had it, and its read is the job's from this
+	// write, at that take's own place among the reads ([NoteRead.Order]). And
+	// the notes the turn's box still held
 	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
 	// them: from the write that creates the record, nothing a person files on
 	// it can land ahead of a note the box took first.
@@ -3440,6 +3446,38 @@ type PendingStore interface {
 	// this has recorded it read, so a note is never delivered twice by two
 	// takers racing for it, nor delivered without a record that says so.
 	TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error)
+
+	// ServeNotes records the notes a serve names SERVED to its job
+	// ([RunNote.Served]) — each still waiting, the record still on that job,
+	// in a status the serve names, its ending undecided ([NoteServe]) — and
+	// answers every one of them that waits served to that job, marked by this
+	// call or an earlier one, in the record's order. A serve that fails its
+	// pin, a note no longer waiting, and a record that is gone or whose ending
+	// is decided are each nothing served, never an error; a serve that names no
+	// job or no status is an error.
+	//
+	// THE MARK BEFORE THE HANDOVER: a caller hands a harness a note to deliver
+	// itself only once this has answered it served, so a note the harness may
+	// have delivered is never one the record says nothing of — a harness gone
+	// before it confirmed the delivery ([PendingStore.TakeNotes]) leaves the
+	// note waiting, and served.
+	ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error)
+
+	// SettleTake settles a take whose TakeNotes answered an error, by the
+	// identity its read named ([NoteRead.Take]): the call's write may have
+	// landed with its answer lost, or may land yet. It answers every note
+	// whose read that take recorded — each marked unanswered first where the
+	// settle says its reader never had them ([NoteSettle.Unanswered]) — and
+	// leaves the take nothing more to record: where the record holds no read
+	// of it, the record is written all the same, so a write of the take's
+	// still in flight, conditioned on a version before this one, never lands
+	// after it. A record that is gone — before the settle, or under it, an
+	// attempt that decided losing its race to the record's removal — answers
+	// nothing, never an error; a settle that names no take is an error.
+	//
+	// NO PIN AND NO FENCE: what a take recorded is a fact about the take,
+	// true whoever holds the record and whatever its status or its ending.
+	SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error)
 
 	// MarkPulled records that the job named has asked for its notes at least
 	// once ([RunSteer.Pulled]), reporting whether this call recorded it.
