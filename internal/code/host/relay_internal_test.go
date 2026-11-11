@@ -100,7 +100,7 @@ func waitDone(t *testing.T, sess *session) {
 	t.Helper()
 	select {
 	case <-sess.done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the session's connection never ended")
 	}
 }

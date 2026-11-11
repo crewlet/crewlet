@@ -37,6 +37,17 @@ func newChainCase(t *testing.T) *chainCase {
 	return &chainCase{writeCase: newWriteCase(t, codetest.SoloOptions{}, map[string]string{"README.md": "one\n"})}
 }
 
+// newChainCaseOn is newChainCase with its Gitlet node's host reading now for
+// its clock (host.SetClock) — what a chain's merges spend their share by,
+// beside the git charged for them — handed to the host before the case's
+// first request, since every request's goroutine reads it.
+func newChainCaseOn(t *testing.T, now func() time.Time) *chainCase {
+	t.Helper()
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	host.SetClock(c.Fleet.Nodes()[0].Host(), now)
+	return &chainCase{writeCase: seedWriteCase(c, map[string]string{"README.md": "one\n"})}
+}
+
 // branch commits files onto main's seed as branch name, pushes it, and
 // answers its head.
 func (c *chainCase) branch(name string, files map[string]string) string {
@@ -135,14 +146,19 @@ func TestAChainSkipsItsConflictingEntry(t *testing.T) {
 }
 
 // A REBUILT CHAIN IS BYTE-IDENTICAL: a chain of a merge and a squash built
-// twice, a while apart, under two ids, is the same commits and the same pack
-// — each commit's author date its ENTRY's instant, the enqueue's own, never
+// twice, under two ids, is the same commits and the same pack — each commit
+// authored AND committed at its ENTRY's instant (U18 c: the later of it and
+// its parents', whose commits gittest dates at the start of 2026), never at
 // the build's; the merge commit authored by its enqueuer and the squash by its
 // change's owner (U43 a), committed by the engine.
 //
-// Mutation: date an entry's commit by the build's clock → the author dates are
-// the build's, and the two builds' commits differ, red; author the squash by
-// its merger, pat, rather than its owner, alice → red.
+// The entries' instants are the case's own, two days before it runs, so a
+// date the build's clock gave a commit is two days off whenever it is built:
+// read off the commits themselves, never off two builds a clock step apart.
+//
+// Mutation: date an entry's commit, author or committer, by the build's clock
+// → its dates are the build's, red; author the squash by its merger, pat,
+// rather than its owner, alice → red.
 func TestARebuiltChainIsByteIdentical(t *testing.T) {
 	t.Parallel()
 	c := newChainCase(t)
@@ -154,7 +170,6 @@ func TestARebuiltChainIsByteIdentical(t *testing.T) {
 	second.Change.Owner, second.Change.Authors = codetest.FixtureAlice, []string{codetest.FixtureAlice,
 		codetest.FixturePat}
 	res, id := c.build(first, second)
-	time.Sleep(1100 * time.Millisecond)
 	again, _ := c.build(first, second)
 	for i := range res.Commits {
 		if res.Commits[i].Commit == "" || again.Commits[i].Commit != res.Commits[i].Commit {
@@ -170,11 +185,12 @@ func TestARebuiltChainIsByteIdentical(t *testing.T) {
 		author string
 		when   time.Time
 	}{{codetest.FixturePat, at}, {codetest.FixtureAlice, at.Add(time.Hour)}} {
-		got := c.inScratch(id, "%an|%at|%cn <%ce>", res.Commits[i].Commit)
-		if w := strings.Join([]string{want.author, strconv.FormatInt(want.when.Unix(), 10),
-			codetest.FixtureCommitterName + " <" + codetest.FixtureCommitterEmail + ">"}, "|"); got != w {
+		got := c.inScratch(id, "%an|%at|%cn <%ce>|%ct", res.Commits[i].Commit)
+		when := strconv.FormatInt(want.when.Unix(), 10)
+		if w := strings.Join([]string{want.author, when,
+			codetest.FixtureCommitterName + " <" + codetest.FixtureCommitterEmail + ">", when}, "|"); got != w {
 			t.Errorf("entry %d's commit is %q, want %q: its entry's author at its entry's instant, committed "+
-				"by the engine", i, got, w)
+				"by the engine at it", i, got, w)
 		}
 	}
 }
@@ -317,6 +333,11 @@ func TestAChainHoldsItsObjectsBytes(t *testing.T) {
 // merges began as much as by the git charged for them: a chain whose first
 // merge-tree waited three seconds, charged nothing for it, stops there too.
 //
+// THE HOST'S CLOCK IS THE CASE'S (manualClock), and moves only when the case
+// moves it: the chain reads the time since its merges began off that clock,
+// so the waited merge-tree's three seconds are a step the case takes while it
+// is held, and no wall clock has to pass for them.
+//
 // Mutation: answer an error where the chain's time runs out → no prefix, red;
 // skip the cut entry too_large → a second entry answered, red; charge the
 // share only its git's run time → the waited chain builds all three, red;
@@ -325,23 +346,26 @@ func TestAChainOutOfTimeAnswersItsBuiltPrefix(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		slow func(t *testing.T, s *host.Server)
+		slow func(t *testing.T, s *host.Server, clock *manualClock)
 	}{
-		{"its git ran", func(_ *testing.T, s *host.Server) { host.SlowGit(s, 20*time.Second, "merge-tree") }},
-		{"its git waited", func(t *testing.T, s *host.Server) {
+		{"its git ran", func(_ *testing.T, s *host.Server, _ *manualClock) {
+			host.SlowGit(s, 20*time.Second, "merge-tree")
+		}},
+		{"its git waited", func(t *testing.T, s *host.Server, clock *manualClock) {
 			host.SetChainMerges(s, 2*time.Second)
 			reached, release := host.HoldGit(s, "merge-tree")
 			t.Cleanup(release)
 			go func() {
 				<-reached
-				time.Sleep(3 * time.Second)
+				clock.advance(3 * time.Second)
 				release()
 			}()
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c := newChainCase(t)
+			clock := &manualClock{t: time.Now()}
+			c := newChainCaseOn(t, clock.now)
 			heads := []string{c.branch("a", map[string]string{"a.md": "a\n"}),
 				c.branch("b", map[string]string{"b.md": "b\n"}), c.branch("c", map[string]string{"c.md": "c\n"})}
 			at := time.Now().Add(-time.Hour)
@@ -351,7 +375,7 @@ func TestAChainOutOfTimeAnswersItsBuiltPrefix(t *testing.T) {
 					at.Add(time.Duration(i)*time.Minute)))
 			}
 			alone, _ := c.build(entries[0])
-			tc.slow(t, c.server())
+			tc.slow(t, c.server(), clock)
 			res, _ := c.build(entries...)
 			if len(res.Commits) != 1 || res.Commits[0].Commit == "" || res.Commits[0].EntryID != entries[0].EntryID {
 				t.Fatalf("the chain answered %+v, want its first entry built and the rest not reached",

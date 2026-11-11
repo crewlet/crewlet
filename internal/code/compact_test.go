@@ -530,7 +530,7 @@ func TestACompactionIsNeverBatchedWithPushes(t *testing.T) {
 	}
 	select {
 	case got = <-compacted:
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("the compaction was not answered in 30 s")
 	}
 	requireApplied(t, got.res, got.err)

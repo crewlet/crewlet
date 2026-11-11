@@ -19,7 +19,7 @@ func OpenAccess(
 
 // SetWait replaces how a client waits out a rate limit, so a test can record
 // the wait rather than spend it.
-func SetWait(c *Client, wait func(context.Context, time.Duration) error) { c.wait = wait }
+func SetWait(c *Client, wait func(context.Context, time.Duration) error) { c.limit.Wait = wait }
 
 // LevelOfPolicies is the level a token's policies hold against a catalogue
 // built from groups, zones and the configured zone names.

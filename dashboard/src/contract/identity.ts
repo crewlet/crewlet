@@ -17,12 +17,20 @@
  * runs the company and includes every app, then one per app. The wire field is
  * still `grants`; the dashboard calls the concept "Access".
  */
-export const GRANTS = ["admin", "worklet", "doclet", "artifacts", "chatlet", "gitlet"] as const;
+export const GRANTS = [
+  "admin",
+  "worklet",
+  "doclet",
+  "artifacts",
+  "chatlet",
+  "gitlet",
+  "atlas",
+] as const;
 
 /**
  * The apps (`iam.Apps`), the one place the engine declares one. Admin
  * includes every one of them, so the access picker ticks and locks these when
- * Admin is ticked, and an invitation or a create offers them all by default.
+ * Admin is ticked, and an invitation or a create offers [DEFAULT_APPS].
  *
  * `artifacts` GATES AUTHORING ONLY: creating, publishing and reshaping an
  * artifact. Somebody without it still opens, comments on and fills in every
@@ -31,8 +39,19 @@ export const GRANTS = ["admin", "worklet", "doclet", "artifacts", "chatlet", "gi
  * `gitlet` IS EVERY DOOR TO THE COMPANY'S CODE: the Gitlet workspace, git
  * itself, the code tools a person's assistant calls and the code half of the
  * inbox. Somebody without it reaches no repository at all (ADR-0110).
+ *
+ * `atlas` IS THE COMPANY'S MAP of everything it runs on, private addresses
+ * included. A holder reads all of it (ADR-0127).
  */
-export const APPS = ["worklet", "doclet", "artifacts", "chatlet", "gitlet"] as const;
+export const APPS = ["worklet", "doclet", "artifacts", "chatlet", "gitlet", "atlas"] as const;
+
+/**
+ * What an invitation or a person's create offers ticked (`iam.DefaultApps`):
+ * every app but the opt-in ones. `atlas` IS OPT-IN: its map of servers and
+ * addresses is a decision about the person, so it starts unticked, and only
+ * Admin includes it without being ticked (ADR-0127).
+ */
+export const DEFAULT_APPS = ["worklet", "doclet", "artifacts", "chatlet", "gitlet"] as const;
 
 /**
  * The two login grammars, as the engine holds them (`iam.ValidLoginFor`):

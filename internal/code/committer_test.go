@@ -145,7 +145,7 @@ func await(t *testing.T, ch <-chan answer) answer {
 	select {
 	case a := <-ch:
 		return a
-	case <-time.After(30 * time.Second):
+	case <-time.After(30 * time.Second): //fixedwait:liveness
 		t.Fatal("no answer in 30 s")
 		return answer{}
 	}
@@ -156,10 +156,10 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !cond() {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("%s did not happen in 10 s", what)
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -287,7 +287,7 @@ func (l lostAcknowledgement) Publish(ctx context.Context, req statelog.Request) 
 	if err != nil {
 		return res, err
 	}
-	l.clock.advance(l.late.Sub(l.clock.now()))
+	l.clock.advance(l.late.Sub(l.clock.now())) //fixedwait:stated the late instant the case states, against its fakeClock, which only it moves
 	if err := l.peer.db.Reader().Read(ctx, func(tx *sql.Tx) error {
 		_, err := req.Decide(tx, statelog.Stamp{Writer: l.n.id})
 		return err
@@ -607,10 +607,10 @@ func fill(t *testing.T, c *code.Committer, repo string, mk func(i int) code.Prop
 				return len(queued), a.res, queued
 			default:
 			}
-			if time.Since(start) > 10*time.Second {
+			if time.Since(start) > 10*time.Second { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 				t.Fatalf("proposal %d was neither queued nor answered in 10 s", i)
 			}
-			time.Sleep(50 * time.Microsecond)
+			time.Sleep(50 * time.Microsecond) //fixedwait:liveness
 		}
 	}
 }
@@ -1057,7 +1057,7 @@ func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
 	var got answer
 	select {
 	case got = <-ch:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the queued push was not answered while the batch ahead of it held the gate")
 	}
 	requireBusyUndecided(t, n, got, waiting.PushID, "stops waiting")

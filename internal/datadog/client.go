@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -24,6 +26,12 @@ import (
 // call here is made inside a reconcile pass that already has a deadline of
 // its own. Ten seconds is slack for a slow region, not a budget to spend.
 const ClientTimeout = 10 * time.Second
+
+// Rate limiting: Datadog answers a spent limit with 429 and says when it
+// resets in `X-RateLimit-Reset` (seconds), beside the limit's name
+// (`X-RateLimit-Name`) and its window (`X-RateLimit-Period`). Every call waits
+// it out by [httpx.VendorRateLimit]: a short wait is taken in the call, and a
+// longer one is handed back as an [APIError] saying when the limit resets.
 
 // Datadog's regions.
 //
@@ -78,10 +86,30 @@ type APIError struct {
 	Path   string
 	Status int
 	Detail string
+
+	// RateLimit is the name of the limit a 429 spent, where Datadog named it.
+	RateLimit string
+	// RetryAfter is how long a 429 asked the call to wait, zero otherwise.
+	RetryAfter time.Duration
+	// Unwaited is why the call handed a 429 back rather than waiting it out.
+	Unwaited string
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("datadog: %s %s: %d: %s", e.Method, e.Path, e.Status, e.Detail)
+	if e.Status != http.StatusTooManyRequests {
+		return fmt.Sprintf("datadog: %s %s: %d: %s", e.Method, e.Path, e.Status, e.Detail)
+	}
+	limit := "the rate limit"
+	if e.RateLimit != "" {
+		limit = fmt.Sprintf("the %q rate limit", e.RateLimit)
+	}
+	because := ""
+	if e.Unwaited != "" {
+		because = " (" + e.Unwaited + ")"
+	}
+	return fmt.Sprintf("datadog: %s %s: %d: %s is spent and resets in %s, which this call "+
+		"did not wait for%s. Try again after the reset: %s",
+		e.Method, e.Path, e.Status, limit, statelog.SpokenWait(e.RetryAfter), because, e.Detail)
 }
 
 // Status reports the HTTP status a call was refused with, or 0 when the
@@ -100,8 +128,9 @@ func Status(err error) int {
 
 // Client talks to one Datadog region.
 type Client struct {
-	site string
-	http *http.Client
+	site  string
+	http  *http.Client
+	limit httpx.RateLimit
 }
 
 // ClientOptions builds a client.
@@ -131,7 +160,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if client == nil {
 		client = httpx.Client(ClientTimeout)
 	}
-	return &Client{site: site, http: client}, nil
+	return &Client{site: site, http: client, limit: httpx.VendorRateLimit()}, nil
 }
 
 // Site is the region this client talks to.
@@ -167,17 +196,41 @@ func (c *Client) endpoint(path string) string {
 	return "https://api." + c.site + path
 }
 
-// do makes one call, and is the only place a Datadog request is built.
+// do makes one call, waiting out a short 429 as Datadog asks. It and [once]
+// are the only place a Datadog request is built, so every call honours the
+// limit.
 func (c *Client) do(
 	ctx context.Context, method, path string, creds Credentials, body, out any,
 ) error {
-	var reader io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
+		var err error
+		if encoded, err = json.Marshal(body); err != nil {
 			return fmt.Errorf("datadog: encode %s %s: %w", method, path, err)
 		}
-		reader = bytes.NewReader(encoded)
+	}
+	for attempt := 0; ; attempt++ {
+		err := c.once(ctx, method, path, creds, encoded, out)
+		api, ok := errors.AsType[*APIError](err)
+		if !ok || api.Status != http.StatusTooManyRequests {
+			return err
+		}
+		unwaited := c.limit.WaitOut(ctx, attempt, api.RetryAfter)
+		if unwaited == nil {
+			continue
+		}
+		api.Unwaited = unwaited.Error()
+		return api
+	}
+}
+
+// once sends one request and decodes its answer into out.
+func (c *Client) once(
+	ctx context.Context, method, path string, creds Credentials, body []byte, out any,
+) error {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path), reader)
 	if err != nil {
@@ -208,10 +261,15 @@ func (c *Client) do(
 		return fmt.Errorf("datadog: read %s %s: %w", method, path, err)
 	}
 	if res.StatusCode >= 300 {
-		return &APIError{
+		api := &APIError{
 			Method: method, Path: path, Status: res.StatusCode,
 			Detail: detailOf(res.Header.Get("Content-Type"), payload),
 		}
+		if res.StatusCode == http.StatusTooManyRequests {
+			api.RateLimit = strings.TrimSpace(res.Header.Get("X-RateLimit-Name"))
+			api.RetryAfter = retryAfter(res.Header)
+		}
+		return api
 	}
 	if out == nil {
 		return nil
@@ -220,6 +278,22 @@ func (c *Client) do(
 		return fmt.Errorf("datadog: decode %s %s: %w", method, path, err)
 	}
 	return nil
+}
+
+// retryAfter reads how long a 429 asks the call to wait: a `Retry-After`
+// where one is sent, else Datadog's own `X-RateLimit-Reset`, else the whole
+// window (`X-RateLimit-Period`, which Datadog's guidance says to wait out),
+// else the default.
+func retryAfter(h http.Header) time.Duration {
+	if wait, ok := httpx.RetryAfter(h, time.Now()); ok {
+		return wait
+	}
+	for _, name := range []string{"X-RateLimit-Reset", "X-RateLimit-Period"} {
+		if seconds, err := strconv.Atoi(strings.TrimSpace(h.Get(name))); err == nil && seconds >= 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	return httpx.DefaultRetryAfter
 }
 
 // maxResponse bounds what one answer may be.

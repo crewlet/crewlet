@@ -75,10 +75,10 @@ func waitAnnouncedOf(t *testing.T, stream *announced, eventType string, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for len(stream.of(eventType)) < n {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the stream holds %d %s announcements, want %d", len(stream.of(eventType)), eventType, n)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -285,7 +285,7 @@ func TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce(t *testing.T) {
 			"repository takes at once (MaxCheckWritesWaiting)"; !strings.Contains(a.res.Detail, want) {
 			t.Fatalf("the third write was refused %q, want it saying %q", a.res.Detail, want)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("a third write of the repository waited rather than being refused at once")
 	}
 	elsewhere := publish(queueing(checkOn(other, 1), code.QueueDispatch))
@@ -297,7 +297,7 @@ func TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce(t *testing.T) {
 		select {
 		case a := <-ch:
 			requireChecked(t, "the "+name+" write", a.res, a.err)
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			t.Fatalf("the %s write was not answered in 30 s", name)
 		}
 	}
@@ -607,10 +607,10 @@ func waitAnnounced(t *testing.T, stream *announced, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for len(stream.all()) < n {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the stream holds %d announcements, want %d", len(stream.all()), n)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

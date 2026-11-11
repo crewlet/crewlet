@@ -85,7 +85,8 @@ concurrency:
 
 jobs:
   notify:
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
     # In this repository only. A fork has neither the secrets nor a site to
     # publish, and without this its every docs push would fail below; here a
     # missing secret fails the run, on purpose.

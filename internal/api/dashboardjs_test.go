@@ -1368,7 +1368,10 @@ const (
 	// in +404 bytes gzipped (the guard, and the words it names an action it
 	// leaves out in), since every page context is built there, with no
 	// screen's module in the entry. Merged on top of delegated decisions it
-	// measured 401.7 KiB, inside 402 KiB.
+	// measured 401.7 KiB, inside 402 KiB. With the atlas's access words merged
+	// on top it measures 401.8 KiB (411,426 bytes), 222 bytes inside 402 KiB:
+	// the next addition to the entry moves this budget only with a reason of
+	// its own.
 	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2241,8 +2244,10 @@ const (
 	// enum's 64, and the org builder's identities and a mention held to the
 	// engine's, +11,156 bytes on the tree they were built on, merged on top of
 	// it, took it to 5753.9 KiB (5,892,019 bytes, +11,158, all script):
-	// 5754 KiB.
-	treeBudget = 5<<20 + 634<<10
+	// 5754 KiB. The atlas named among the access words a refusal uses, merged
+	// on top of it, took it to 5754.2 KiB (5,892,306 bytes, +287, all
+	// script): 5755 KiB.
+	treeBudget = 5<<20 + 635<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

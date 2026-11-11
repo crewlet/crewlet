@@ -295,6 +295,13 @@ type spools struct {
 	// runs is boundsLocked's per-credential working, kept to be cleared
 	// rather than made again on every pass.
 	runs map[string]credentialRun
+
+	// armed, when set, is told the bound of every wait a request begins
+	// ([spools.await]): a case's window onto the wait it was given, which no
+	// answer says — a 503 names how long the wait took, measured. Nil but
+	// where a case arms it (export_test.go's RecordSpoolWaits), and read
+	// without a lock, so a case sets it before the requests it sends.
+	armed func(time.Duration)
 }
 
 // spoolBody is one spool the allowance has granted, from its start until it is
@@ -434,6 +441,9 @@ func (a *spools) more(ctx context.Context, b *spoolBody, need, want int64, wait 
 
 // await waits for w, queued, to be granted.
 func (a *spools) await(ctx context.Context, w *spoolWaiter, wait time.Duration) (int64, spoolWait, error) {
+	if a.armed != nil {
+		a.armed(wait)
+	}
 	start := time.Now()
 	timer := time.NewTimer(wait)
 	defer timer.Stop()

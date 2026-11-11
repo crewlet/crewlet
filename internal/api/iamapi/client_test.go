@@ -26,13 +26,15 @@ import (
 // People, Service accounts and API tokens confer access (an invitation, an
 // edit, a service account, a token) by ticking it off `GRANTS`, and the access picker ticks and locks
 // `APPS` when Admin is ticked, because admin includes every app ([iam.Expand]).
+// An invitation and a person's create start from `DEFAULT_APPS`, so an opt-in
+// app the dashboard ticked by default would be given to every newcomer.
 // A permission the engine grew that the list lacks is one no administrator can
 // confer from the dashboard; one the list kept that the engine dropped is a box
 // every write refuses; and an app the picker does not lock under Admin is one
 // a person reads as withheld from an administrator who holds it.
 //
-// Mutation: drop a name from either list, reorder `GRANTS`, or add admin to
-// `APPS`, and this fails.
+// Mutation: drop a name from any list, reorder `GRANTS`, add admin to `APPS`,
+// or add atlas to `DEFAULT_APPS`, and this fails.
 func TestTheDashboardOffersExactlyTheEnginesGrants(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -42,6 +44,7 @@ func TestTheDashboardOffersExactlyTheEnginesGrants(t *testing.T) {
 	}{
 		{"GRANTS", iam.AllGrants},
 		{"APPS", iam.Apps},
+		{"DEFAULT_APPS", iam.DefaultApps},
 	} {
 		body, err := clientsource.Literal(tree, tc.name)
 		if err != nil {

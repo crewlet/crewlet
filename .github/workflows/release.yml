@@ -66,7 +66,8 @@ jobs:
     name: goreleaser snapshot
     # Everything except a tag. Same pipeline, pushing nothing.
     if: github.event_name != 'push'
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
     steps:
       # Full history and tags: goreleaser derives the version from the most
       # recent tag, and a shallow clone has none — which turns every run into
@@ -178,7 +179,8 @@ jobs:
   publish:
     name: publish the release
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
     permissions:
       # The GitHub Release and its attached archives.
       contents: write

@@ -104,15 +104,17 @@ func TestAnOkIsAnsweredOnlyFromAnAppliedRow(t *testing.T) {
 	}
 }
 
-// A pending push is waited on for at most the grace — read again at a spacing
-// that doubles to its ceiling — and then said to be pending.
+// A pending push is waited on for at most the grace — read again until it is
+// spent — and then said to be pending, on the whole path: the person's git
+// prints the push pending, its outcome having been read. How the reads are
+// spaced, doubling to their ceiling, and that the last comes at the grace's
+// very end, is held exactly in a bubble
+// (TestAPendingPushIsReadAgainUntilItsGraceIsSpent).
 func TestAPendingPushWaitsAtMostTheStallGrace(t *testing.T) {
 	timing := fast
 	timing.PendingGrace = 300 * time.Millisecond
-	var proposed time.Time
 	e := &recording{
 		propose: func(context.Context, host.Estate, code.Proposal) (code.ProposeResult, error) {
-			proposed = time.Now()
 			return pendingAt(1 << 20), nil
 		},
 		outcome: func(context.Context, host.Estate, code.OutcomeQuery) (code.PushOutcome, error) {
@@ -128,27 +130,8 @@ func TestAPendingPushWaitsAtMostTheStallGrace(t *testing.T) {
 	if reason, _ := res.Rejected("refs/heads/main"); !strings.Contains(reason, "(pending: durable at ") {
 		t.Errorf("a push whose outcome never resolved printed %q: %s", reason, res)
 	}
-	reads := e.seen("outcome")
-	if len(reads) < 2 {
-		t.Fatalf("the outcome was read %d times in a grace of %v", len(reads), timing.PendingGrace)
-	}
-	const margin = 300 * time.Millisecond
-	if last := reads[len(reads)-1].at.Sub(proposed); last > timing.PendingGrace+timing.PendingMax+margin {
-		t.Errorf("the last outcome read came %v after the proposal, past the grace %v, a step %v and %v",
-			last, timing.PendingGrace, timing.PendingMax, margin)
-	}
-	// THE LAST STEP IS CUT TO THE GRACE: a read is never put off past it, so
-	// only the steps before it are held to the doubling.
-	wait := timing.PendingFirst
-	for i := 1; i < len(reads)-1; i++ {
-		if gap := reads[i].at.Sub(reads[i-1].at); gap < wait-time.Millisecond {
-			t.Errorf("outcome read %d came %v after the one before, under the step %v", i, gap, wait)
-		}
-		wait = min(2*wait, timing.PendingMax)
-	}
-	if last := reads[len(reads)-1].at.Sub(proposed); last < timing.PendingGrace-10*time.Millisecond {
-		t.Errorf("the last outcome read came %v after the proposal, before the grace %v ran out", last,
-			timing.PendingGrace)
+	if len(e.seen("outcome")) == 0 {
+		t.Errorf("the outcome of a push answered pending was never read in its grace of %v", timing.PendingGrace)
 	}
 }
 
@@ -1007,6 +990,15 @@ func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 // receiver's bug is answered as the committer would answer it, with nobody
 // asked and no bundle stored for a push no row will name. Stood in by the
 // check itself, since no push the commands' own bound admits reaches it.
+//
+// THE CHECK REFUSES ONLY ONCE THE UPLOAD IS HELD — read off the upload's
+// fault point, which a build that starts the upload beside the check reaches
+// at once — so the refusal ends an upload in flight. A check still waiting
+// for it after ten seconds fails the case, rather than refusing a push with
+// nothing in flight to end.
+//
+// Mutation: ask the check before the upload starts (introduceAndStore) — the
+// upload never reaches its hold while the check waits, red.
 func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	l, e := &logs{}, &recording{}
 	c := newCase(t, codetest.SoloOptions{Logger: l.logger(), Shape: codetest.Shape{WrapEstate: e.wrap}},
@@ -1017,9 +1009,11 @@ func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	c.Fleet.Faults().Arm(codefault.HostUpload, codefault.Action{Once: true, Block: held, Reached: reached})
 	checked := make(chan struct{})
 	host.SetProposalCheck(c.Fleet.Nodes()[0].Host(), func(code.Proposal) error {
-		select { // the upload is held when the check refuses
+		select {
 		case <-reached:
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
+			t.Error("the proposal's check waited ten seconds and its push's upload never reached its hold: " +
+				"the refusal had no upload in flight to end")
 		}
 		close(checked)
 		return fmt.Errorf("%w: a receiver's bug", code.ErrInvalidProposal)
@@ -1027,7 +1021,7 @@ func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	go func() { // a check never asked must not hold the push for ever
 		select {
 		case <-checked:
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			release.Do(func() { close(held) })
 		}
 	}()
@@ -1145,24 +1139,39 @@ func TestASynthesizedReportIsWhatGitPrints(t *testing.T) {
 
 // A push waiting on its record keeps the connection alive with a line on the
 // client's stderr naming the step it waits on.
+//
+// The keepalive is paced by ticks the case sends (host.SetKeepaliveTicks)
+// while the push waits at its proposal: a session takes a tick only once it
+// has written the line before it, so once three are taken two lines naming
+// that step are written, however a loaded runner schedules the session.
+//
+// Mutation: stop the keepalive before the proposal — no tick is taken and no
+// line printed, red.
 func TestAKeepaliveFlowsWhileAPushWaits(t *testing.T) {
-	timing := fast
-	timing.Keepalive = 50 * time.Millisecond
+	ticks := make(chan time.Time)
 	e := &recording{propose: func(ctx context.Context, inner host.Estate, p code.Proposal) (code.ProposeResult, error) {
-		time.Sleep(400 * time.Millisecond)
+		for range 3 {
+			select {
+			case ticks <- time.Time{}:
+			case <-time.After(10 * time.Second): //fixedwait:liveness
+				t.Error("the session took no keepalive tick in 10 s while its push waited at its proposal")
+				return inner.Propose(ctx, p)
+			}
+		}
 		return inner.Propose(ctx, p)
 	}}
-	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{Timing: timing, WrapEstate: e.wrap}},
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{Timing: fast, WrapEstate: e.wrap}},
 		codetest.Settings())
+	host.SetKeepaliveTicks(c.Fleet.Nodes()[0].Host(), ticks)
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 	res := p.Push(c.Ctx, work, c.URL(0), "main")
 	if !res.OK("refs/heads/main") {
-		t.Fatalf("a push held 400 ms at its proposal: %s", res)
+		t.Fatalf("a push held at its proposal for three keepalive ticks: %s", res)
 	}
 	if n := strings.Count(res.Stderr, "remote: crewlet: committing the push ("); n < 2 {
-		t.Errorf("a push held 400 ms at a keepalive of 50 ms printed %d keepalives: %s", n, res)
+		t.Errorf("a push held at its proposal for three keepalive ticks printed %d keepalives: %s", n, res)
 	}
 }
 
@@ -1281,8 +1290,9 @@ func TestALoanIsRepaidBeforeThePushsUpload(t *testing.T) {
 	reachedFirst(t, reached, done)
 	slots := node.Pool().Slots(gitproc.ClassRead)
 	free := node.Pool().Free(gitproc.ClassRead)
+	//fixedwait:measure a poll's own deadline: the lane is asserted whole after it
 	for deadline := time.Now().Add(5 * time.Second); free != slots && time.Now().Before(deadline); {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 		free = node.Pool().Free(gitproc.ClassRead)
 	}
 	lent := -1.0
@@ -1518,7 +1528,7 @@ esac`)
 	go func() { pushed <- p.Push(c.Ctx, work, c.URL(0), "main") }()
 	select {
 	case <-reached:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Error("the push's upload did not start while its listing was held: it waited for the listing")
 	}
 	if err := os.WriteFile(release, nil, 0o600); err != nil {

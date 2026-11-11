@@ -577,9 +577,9 @@ Debian's git, 246–248 s with the pin's, so **about a minute more a release** �
 the two git stages compile beside the arm64 runtime stage's emulated
 `apt-get` and slow it from 175 s to 214 s — where a stage built under QEMU
 would add about fourteen minutes. Those are that development machine's
-figures. On the release runner — GitHub's `ubuntu-latest`, in the snapshot
-job of `release.yml`, whose goreleaser step builds the four binaries, their
-archives and both platforms' images — that step took 10 min 31 s with the
+figures. On the release runner (GitHub's `ubuntu-24.04` image, in the
+snapshot job of `release.yml`, whose goreleaser step builds the four binaries,
+their archives and both platforms' images), that step took 10 min 31 s with the
 pin's git ([run 39377818703](https://github.com/crewlet/crewlet/actions/runs/39377818703),
 commit `5ccb7d89a`) against 9 min 46 s with Debian's
 ([run 39258293385](https://github.com/crewlet/crewlet/actions/runs/39258293385),
