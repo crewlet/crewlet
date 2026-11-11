@@ -79,8 +79,9 @@ turns by writer as well as by conversation. The partition function splits a thre
 the writer of each message (internal/notify's `KeyOf`): one person's burst is one turn, and a second
 person's message in the same thread, or a stranger's, is a turn of its own, held to its own writer.
 The stamped key stays the thread's, since a merged event carries it and a parked run's batch is
-matched against it. A turn records as worked through only its own writer's waiting messages
-(internal/agent/prefetch's `waitingMessages`): another writer's message is owed a turn of its own.
+matched against it. A turn records as worked through only its own writer's waiting messages,
+written for the same whom (internal/agent/prefetch's `waitingMessages`): another writer's message,
+or one written for another requester, is owed a turn of its own.
 
 **An intersection was refused**, a turn holding two writers to the apps both of them use: every
 family's ceiling holds one principal, and a requester composed from two would be a principal nobody
