@@ -53,7 +53,7 @@ func typedAnswer(t *testing.T, r *roundTrip, turn, id string) bool {
 // Mutation: drop the comment arm from typedWrite, and the ask reads as words.
 func TestATurnsTypedAnswerIsAChangeOnTheItemOrAnAsk(t *testing.T) {
 	t.Parallel()
-	urgent, started, holder := worklet.PriorityUrgent, worklet.StatusInProgress, "pm"
+	urgent, started, holder, held := worklet.PriorityUrgent, worklet.StatusInProgress, "pm", "ana"
 	until, reason := wednesday.Add(72*time.Hour), "the vendor's window opens then"
 	for _, row := range []struct {
 		name  string
@@ -69,6 +69,15 @@ func TestATurnsTypedAnswerIsAChangeOnTheItemOrAnAsk(t *testing.T) {
 			worklet.ChangeFields), true},
 		{"a watcher added", probeUpdate(worklet.TaskPatch{
 			Watch: &worklet.WatchIntent{Handle: "designer", Watch: true}}, worklet.ChangeWatchers), false},
+		// A WATCH WRITTEN BESIDE A CHANGE IS THAT CHANGE (#953), whatever
+		// kind its row names, and a restatement beside a watch moved nothing
+		// but who watches.
+		{"a watcher added beside a priority", probeUpdate(worklet.TaskPatch{
+			Watch:    &worklet.WatchIntent{Handle: "designer", Watch: true},
+			Priority: &urgent}, worklet.ChangeWatchers), true},
+		{"an assignment restated beside a watcher", probeUpdate(worklet.TaskPatch{
+			Assignee: &held, Watch: &worklet.WatchIntent{Handle: "designer", Watch: true}},
+			worklet.ChangeAssignee), false},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
@@ -93,11 +102,15 @@ func TestATurnsTypedAnswerIsAChangeOnTheItemOrAnAsk(t *testing.T) {
 // (ADR-0122): with nothing from the seat it is quiet since the change that last
 // woke it; a comment that asks nothing moves the instant to the comment's; a
 // typed answer holds it, so it carries none; a change of who watches is no
-// word; and words after a typed answer make it quiet again from their instant.
-// Every instant is the harness's stated authored clock, moved write by write.
+// word; words after a typed answer make it quiet again from their instant; and
+// a priority set beside a watch is a typed answer however its row is filed
+// (#953). Every instant is the harness's stated authored clock, moved write by
+// write.
 //
 // Mutation: read the seat's last write without its typed flag, and a typed
-// answer leaves the item quiet, so the pickup would hand it back a day later.
+// answer leaves the item quiet, so the pickup would hand it back a day later;
+// read a change of who watches by its kind, and the priority set beside a
+// watch leaves the item quiet.
 func TestAnItemGoesQuietOnTheSeatsLastWordUnlessItIsTyped(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -141,5 +154,14 @@ func TestAnItemGoesQuietOnTheSeatsLastWordUnlessItIsTyped(t *testing.T) {
 	probeComment("")(t, r, "turn-4", "w-1")
 	if got := ready().Quiet; !got.Equal(again) {
 		t.Errorf("words after a typed answer leave the item quiet since %s, want them, at %s", got, again)
+	}
+
+	r.at = wednesday.Add(5 * time.Hour)
+	high := worklet.PriorityHigh
+	probeUpdate(worklet.TaskPatch{Priority: &high,
+		Watch: &worklet.WatchIntent{Handle: "qa", Watch: true}}, worklet.ChangeWatchers)(t, r, "turn-5", "w-1")
+	if got := ready().Quiet; !got.IsZero() {
+		t.Errorf("a priority the seat set beside a watch left the item quiet since %s, want it held "+
+			"as a typed answer", got)
 	}
 }

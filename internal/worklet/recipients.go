@@ -507,8 +507,15 @@ func (n *Notify) watchOnly() bool {
 }
 
 // watchFields are the deltas that say who watches a task and who of them is
-// muted: what a change to who watches it moves, and all it moves.
-var watchFields = []string{"watchers", "muted"}
+// muted: what a change to who watches it moves, and all it moves. The reads
+// that decide on a history row ask the same of it in SQL ([movedBeyondWatch]).
+var watchFields = []string{watchersField, mutedField}
+
+// watchersField and mutedField name the two deltas of a change to who watches.
+const (
+	watchersField = "watchers"
+	mutedField    = "muted"
+)
 
 // reassertsHolder reports an assignment to the seat that already holds the
 // task with nothing else changed or named: no change, so it concerns nobody.

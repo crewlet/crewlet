@@ -12,19 +12,29 @@ import (
 // a change to one of the item's fields (its status, its assignee, its content,
 // its relations, a wait until a date), or a comment that puts a question to
 // somebody with `ask`. A comment that asks nothing, its edit, resolution or
-// removal, and a change of who watches are words or nothing: the engine
-// cannot tell when the condition such words describe is met.
+// removal, and a change of who watches and nothing else are words or nothing:
+// the engine cannot tell when the condition such words describe is met. A
+// watch written beside a change of the item is that change, whatever kind its
+// row names ([movedBeyondWatch], #953).
 
 // conversationKinds is [ChangeKind.Conversation]'s set, as SQL.
 const conversationKinds = `('` + string(ChangeComment) + `', '` + string(ChangeCommentEdited) +
 	`', '` + string(ChangeCommentResolved) + `', '` + string(ChangeCommentRemoved) + `')`
 
+// movedBeyondWatch is whether a history row `h`'s deltas name a field beyond
+// who watches the item and who of them is muted: the SQL form of what
+// [Notify.watchOnly] asks of a record's card, for the reads that decide on the
+// row itself. Read off the deltas and never the kind, because
+// `update_work_item` files a watch written beside a priority, a date or a
+// custom value under `watchers` wherever nothing else named a kind.
+const movedBeyondWatch = `json_remove(h.fields_json, '$.` + watchersField + `', '$.` +
+	mutedField + `') <> '{}'`
+
 // typedWrite is whether a history row `h` is a typed answer to its item, an
 // ask found by the record that wrote it (the row's id). ONE EXPRESSION, read
 // by the ready read's recheck ([ReadyItem.Quiet]) and by the check of a
 // pickup's answer ([Reader.TypedAnswer]), so the two cannot disagree.
-const typedWrite = `(h.kind NOT IN ` + conversationKinds + ` AND h.kind <> '` +
-	string(ChangeWatchers) + `' AND h.fields_json <> '{}'
+const typedWrite = `(h.kind NOT IN ` + conversationKinds + ` AND ` + movedBeyondWatch + `
 	OR h.kind = '` + string(ChangeComment) + `' AND EXISTS (SELECT 1 FROM tracker_comments c
 		WHERE c.task_id = h.subject_id AND c.ask <> '' AND c.record_id = h.id))`
 
