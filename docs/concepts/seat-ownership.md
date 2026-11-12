@@ -322,6 +322,26 @@ again once the newest row is deleted: after the diary's expiry or its trim took
 the newest note, the next note took the same rowid, below what had already been
 published, and was never carried while the node held the seat.
 
+**Every seat a node holds is carried in its turn.** One cycle every thirty
+seconds carries every seat the node holds, one after another, under one
+thirty-second bound. A cycle that runs out keeps what it carried of the tables
+with a mark. The mutable tables (counterparty profiles, skills, onboarding
+markers) have none: every cycle sends them whole, and keeps nothing of them when
+it is cut. The cycle stops where its bound ran out, rather than calling the
+seats it did not reach on a bound already spent, and the next cycle starts at
+the seat it ran out at, unless that seat was the cycle's first and so had the
+whole cycle: then the next cycle starts at the seat after it. So a backlog
+longer than a cycle drains over as many cycles as it needs, and the seats it
+would hold back are carried meanwhile. With k seats a cycle runs out at,
+whether a seat needs more than a cycle or was reached with less of one left
+than it needs, no seat waits more than 2k cycles between two that reach it,
+and a seat with a backlog has a whole cycle at least once in every 2k. A cycle
+that runs out says so in one line. A backlog draining is
+`memory_sync_ran_out`, at info. A seat that ran the cycle out with nothing
+acknowledged that stays carried, or that had the whole cycle and was cut
+inside one of the tables sent whole, is a warning, `seat_memory_not_carried`,
+and so is a seat whose publish failed while the cycle had time left.
+
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
 That is skipped rather than returned as an error, and the distinction matters

@@ -77,8 +77,9 @@ import (
 //
 // The memory sync's cycle is the crash window for everything a seat learns,
 // and a provider having a slow minute must not widen it: a fill waits on an
-// embeddings API, a publish on the broker. So the two run apart, and a filled
-// row reaches the changelog on the memory sync's next cycle.
+// embeddings API, a publish on the broker. So the two run apart. A filled row
+// is stamped again, so the memory sync carries it like a new row, in the
+// first of the seat's publishes that reaches it.
 
 const (
 	// memoryFillInterval is how often the holder looks for rows to fill.
@@ -408,8 +409,9 @@ func fillSeat(ctx context.Context, source fillSource, seat, model string,
 	return filled, nil
 }
 
-// fillLine is one line a tick reports.
-type fillLine struct {
+// reportLine is one line a loop over the seats this node holds says: a fill
+// tick's ([fillReport.lines]) or a memory sync cycle's ([syncReport.lines]).
+type reportLine struct {
 	level slog.Level
 	msg   string
 	args  []any
@@ -428,11 +430,11 @@ func (r fillReport) log(ctx context.Context, provider embeddings.BatchEmbedder) 
 //
 // A VALUE, so what a tick says is a fact a test reads rather than a side
 // effect on the process's logger.
-func (r fillReport) lines(provider embeddings.BatchEmbedder) []fillLine {
+func (r fillReport) lines(provider embeddings.BatchEmbedder) []reportLine {
 	model, pass := provider.Model(), r.pass
-	var out []fillLine
+	var out []reportLine
 	add := func(level slog.Level, msg string, args ...any) {
-		out = append(out, fillLine{level: level, msg: msg, args: args})
+		out = append(out, reportLine{level: level, msg: msg, args: args})
 	}
 	for _, refused := range pass.RefusedAlone {
 		add(slog.LevelWarn, "memory_fill_input_refused", "scope", refused.Input.Scope,
