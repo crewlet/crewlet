@@ -1445,6 +1445,9 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // list, a block that is no object or has no string type, a tool_use's id not
 // a string that names a call or its name not a string, a tool_result's
 // tool_use_id not a string that names a call or its is_error not a boolean.
+// Each block is held so as it is read, wherever it falls: a bad block after
+// one accepted is the message's error as much as a bad first block, and the
+// error names the block.
 //
 // Mutation: read calls off every record's message, and the blob's result is a
 // call; decode a block loosely, and a tool_use whose id is a number is a call
@@ -1452,7 +1455,8 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // a call with no id; take either kind of call block in either record, and a
 // result in a model's message, or a call in a user's, is a call; read is_error
 // as false wherever it is present, and a failed call's result reads as a
-// success.
+// success; hold only a message's first block to its type, and a bad block
+// after an accepted one reads as a block of no kind.
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
 	isFalse, isTrue := false, true
@@ -1539,6 +1543,19 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	} {
 		if m, err := ctLine(t, record).Message(); err == nil {
 			t.Errorf("%s reads as the message %+v, want an error", name, m)
+		}
+	}
+
+	for name, record := range map[string]string{
+		"a reply whose call after its text has a numeric id": ctAssistant(ctUUID(3), ctUUID(4),
+			`[{"type":"text","text":"batch 1."},{"type":"tool_use","id":7,"name":"Bash","input":{}}]`),
+		"a result after a result, its is_error a string": user(`"message":{"role":"user","content":[` +
+			`{"tool_use_id":"` + ctCall + `","type":"tool_result","content":"b1"},{"tool_use_id":"` + ctMCPCall +
+			`","type":"tool_result","content":"m1","is_error":"false"}]},`),
+	} {
+		if m, err := ctLine(t, record).Message(); err == nil || !strings.Contains(err.Error(), "content block 2:") {
+			t.Errorf("%s reads as the blocks %q and the calls %+v, %v; want an error naming block 2", name,
+				strings.Join(m.Kinds(), " "), m.Calls(), err)
 		}
 	}
 }
