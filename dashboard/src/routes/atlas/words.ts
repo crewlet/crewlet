@@ -203,6 +203,8 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   issuer: "Issuer",
   validity: "Validity",
   certificate_type: "Type",
+  monitor_state: "State",
+  state_since: "In this state since",
 };
 
 /** The facts of meaning, which only people and the settings decide. */
@@ -239,6 +241,9 @@ export const SIGNALS: Readonly<Record<AtlasSignalKind, string>> = {
   model_failing: "The model's last call failed, with no answer since",
   server_test_failed: "The server's last connection test failed",
   standing_alarm: "A standing alarm is raised",
+  monitor_alerting: "A monitor is alerting",
+  monitor_warning: "A monitor is warning",
+  monitor_no_data: "A monitor is receiving no data",
 };
 
 /** What each kind of use the engine records is called. */

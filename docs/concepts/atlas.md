@@ -109,6 +109,7 @@ Beyond what the settings and the engine's records say, the engine reads each con
 | Integration | What its read adds |
 |---|---|
 | Cloudflare | the account's name; every zone of the account as a domain, served by and belonging to the account; every A, AAAA and CNAME record as a host name in its zone, resolving to a server known by its address (marked internal where no public network routes to it) or to the name its CNAME points at, and fronted by Cloudflare where proxied; and every certificate pack as a certificate in its zone, with the names it covers, its type, validity, issuer and expiry, securing each name of the zone it covers. MX and TXT records name nothing, and a TXT record's content, where verification tokens sit, is never decoded; comments and tags are never read |
+| Datadog | the organisation's name and id on the account; every monitor, belonging to the account, with its name, its state (`ok`, `warn`, `alert`, `no_data` or `unknown`) and, while it is not healthy, since when; every service of the service catalogue, watched by the account and built from the repositories its definition links; every host that reported in the last three hours, by its Datadog name, watched by the account, with its environment suggested from its `env` tag; and what each monitor watches: the service its `service:` tags name and the host its `host:` tags name, by those exact keys, and for a running Synthetic test the address it requests and that address's host name or server. A monitor's query and message, a test's request headers, body and credentials, a definition's contacts, every creator and every other tag are never decoded |
 
 The read is the `atlas-collect` duty, one node of the fleet at a time ([singleton duties](seat-ownership.md#singleton-duties)), on the company's `atlas.refresh_interval_seconds`: an hour unless the company says otherwise, and never under five minutes, since a read shares the credential's rate-limit window with the [integration reconcile loop](integration-reconcile.md). It is a duty of its own rather than part of that loop, whose contract forbids a write on a converged pass and whose cadence is tuned to catching access somebody revoked.
 
@@ -116,9 +117,13 @@ The read is the `atlas-collect` duty, one node of the fleet at a time ([singleto
 
 **Retirement takes two complete reads a day apart.** A read that does not list an entry the integration holds is one miss, never a removal: a vendor's listing can skip a row while it changes, and a vendor's view can lag. The entry is retired only by a later complete read, at least a day after the first miss, that misses it too; it then leaves the map and stays in history, and a read that lists it again restores it. A read that failed or was cut short retires nothing and forgets no miss. An integration never denies a fact or a relation and never outranks a person: a person's claim on the same fact stands, and the entry goes to Review with both values shown.
 
+**An integration says an entry exists only where the entry lives at its vendor.** A Datadog monitor lives at Datadog; the service it watches does not, so the read relates the service to the monitor without claiming the service. A monitor somebody deletes therefore takes its relations with it after the same two reads, and retires nothing: an entry only its relations named leaves the map, and one another source or a person stands behind stays as it was.
+
+**A listing the credential may not read is a finding, never a failed read.** A vendor puts each listing behind a permission of its own, and the company's credential may hold some and not others. The read completes with the listings it may read, and the source's standing names each one it was refused with the permission that restores it. What an earlier read of a refused listing recorded stays exactly as it was: nothing is withdrawn, nothing is missed and nothing is retired, however long the refusal lasts. Any other failure of a listing fails the whole read.
+
 **Nothing a vendor returns reaches the atlas as text.** Every value a read reports goes through the vocabulary's grammars, which refuse a value or a key shaped like a credential; what is refused is counted on the source, never shown. A source maps a vendor's answer into closed fields and reads no field nobody mapped.
 
-Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, and which entries it has stopped seeing since when.
+Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, which listings it was refused, and which entries it has stopped seeing since when.
 
 ## Reading the atlas
 
@@ -126,7 +131,7 @@ People holding the `atlas` permission read the atlas in the dashboard, under Com
 
 An entry only an agent reported, with nothing the engine could check behind it, is **unconfirmed**, and a read leaves it out unless it asks for it: it stays hidden until a person confirms it.
 
-Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
+Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. A monitor's state is one of those signals, read off the monitor's own facts on every read: a monitor in `alert` makes itself and every entry a `monitored_by` relation joins to it `alerting`, and one in `warn` or `no_data` makes them `needs_look`, since the instant the vendor says the state began. A monitor that recovers, is retired or stops watching an entry takes its signal with it, and every holder reads these signals, as they read the monitor. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
 
 ## One thing, one entry
 
@@ -204,6 +209,6 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | Entry states, merges on exact keys, contested and disputed facts, signals, use and "not used recently" | nobody: computed on every read | the read itself |
 | What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |
 | What an integration's read found that the log did not hold: a changed fact, a withdrawn one, a retirement | every data node identically, with history | the same log, one `read` record an entry, in the integration's voice |
-| Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
+| Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, the listings it was refused, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
 | Which node reads the vendors | the fleet, one holder at a time | the `worker:atlas-collect` lease |
 | How often: `atlas.refresh_interval_seconds` | the company | the company document |
