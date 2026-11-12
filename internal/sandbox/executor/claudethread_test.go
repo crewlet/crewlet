@@ -847,8 +847,8 @@ func ctReplace(t *testing.T, record, from, to string) string {
 
 // ctAll is everything a line hands out through every accessor, as text: its
 // head, its hook, its message and its calls, its origin's kind, its own
-// toolUseResult and whether it says tool results were cleared, each beside
-// the error it answered.
+// toolUseResult, whether it says tool results were cleared and why its reply
+// stopped, each beside the error it answered.
 func ctAll(l threadLine) string {
 	var b strings.Builder
 	h := l.Head
@@ -877,6 +877,8 @@ func ctAll(l threadLine) string {
 	fmt.Fprintf(&b, "toolUseResult: %s\n", l.ToolUseResult())
 	cleared, err := l.ToolResultsCleared()
 	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
+	reason, err := l.StopReason()
+	fmt.Fprintf(&b, "stop reason: %q; %v\n", reason, err)
 	return b.String()
 }
 
@@ -886,9 +888,9 @@ func ctAll(l threadLine) string {
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (a
 // message, an attachment, an origin, a firing at the top, a record's own
-// toolUseResult), a hook's attachment, an origin, a message, a message's
-// blocks, its report of the context edits applied, and each edit the report
-// lists. So a line hands out exactly what it hands out without the other key,
+// toolUseResult), a hook's attachment, an origin, a message (its content and
+// its stop_reason), a message's blocks, its report of the context edits
+// applied, and each edit the report lists. So a line hands out exactly what it hands out without the other key,
 // through every accessor. 2.1.322 already spells a call's id `toolUseId` (a
 // subagent's metadata names the call that started it so), a key away from a
 // hook's firing.
@@ -970,6 +972,10 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 		// A message.
 		"a message's content, then Content": {record: result, from: `"role":"user","content":` + ctResultBody,
 			to: `"role":"user","content":` + ctResultBody + `,"Content":"other"`},
+		"a reply's stop_reason, then Stop_Reason": {record: call, from: `"stop_reason":"tool_use"`,
+			to: `"stop_reason":"tool_use","Stop_Reason":"end_turn"`},
+		"a reply's Stop_Reason alone": {record: ctReplace(t, call, `"stop_reason":"tool_use",`, ""),
+			from: `"stop_sequence":null`, to: `"stop_sequence":null,"Stop_Reason":"end_turn"`},
 		// A message's blocks.
 		"a tool_use's type, then Type": {record: call, from: `"type":"tool_use"`, to: `"type":"tool_use","Type":"text"`},
 		"a tool_use's id, then ID": {record: call, from: `"id":"` + ctCall + `"`,
@@ -1472,6 +1478,61 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 			(tc.kinds == nil) != (m.Kinds() == nil) {
 			t.Errorf("%s reads as the text %q (%t) and the blocks %q, want %q and %q", name, text, isText,
 				strings.Join(m.Kinds(), " "), tc.text, strings.Join(tc.kinds, " "))
+		}
+	}
+}
+
+// A REPLY SAYS WHY IT STOPPED: an assistant record's stop_reason as written,
+// "" where the key is absent and for every record that is no assistant's, a
+// result's message carrying one included, and an error where it is no string
+// or the record's message is no object. A reply 2.1.310 wrote as a record a
+// block says "tool_use" on its text's record as on its call's, so a thread cut
+// between the two never reads as a reply that ended its turn, which a reply of
+// text alone and the reply a resume writes each say they did.
+//
+// Mutation: read stop_reason off every record's message, and a result
+// carrying one says why it stopped; read it as any JSON value, and a number
+// reads as "".
+func TestAReplySaysWhyItStopped(t *testing.T) {
+	t.Parallel()
+	text := ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`)
+	ended := ctReplace(t, ctAssistant(ctUUID(11), ctUUID(12), `[{"type":"text","text":"done."}]`),
+		`"stop_reason":"tool_use"`, `"stop_reason":"end_turn"`)
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record string
+		reason string
+	}{
+		"a reply's text, its call in the record after": {record: text, reason: "tool_use"},
+		"that reply's call":                            {record: ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), reason: "tool_use"},
+		"a reply that ended its turn":                  {record: ended, reason: "end_turn"},
+		"the reply a resume writes":                    {record: ctSynthetic(ctUUID(30), ctUUID(31)), reason: "stop_sequence"},
+		"a reply that says nothing of its stop":        {record: ctReplace(t, text, `"stop_reason":"tool_use",`, "")},
+		"a result whose message carries one":           {record: ctReplace(t, result, `"role":"user",`, `"role":"user","stop_reason":"end_turn",`)},
+		"a brief, which is no reply":                   {record: ctBrief(ctUUID(1))},
+	} {
+		if reason, err := ctLine(t, tc.record).StopReason(); reason != tc.reason || err != nil {
+			t.Errorf("%s stopped for %q, %v; want %q", name, reason, err, tc.reason)
+		}
+	}
+	for name, reason := range map[string]string{
+		"a number":  `7`,
+		"an object": `{"reason":"tool_use"}`,
+		"a list":    `["tool_use"]`,
+		"a boolean": `true`,
+	} {
+		if got, err := ctLine(t, ctReplace(t, text, `"stop_reason":"tool_use"`, `"stop_reason":`+reason)).StopReason(); err == nil {
+			t.Errorf("a reply whose stop_reason is %s stopped for %q, want an error", name, got)
+		}
+	}
+	for name, message := range map[string]string{
+		"a reply whose message is null": `"message":null,`,
+		"a reply with no message":       "",
+	} {
+		record := `{"parentUuid":"` + ctUUID(30) + `","isSidechain":false,` + message + `"type":"assistant","uuid":"` +
+			ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
+		if got, err := ctLine(t, record).StopReason(); err == nil {
+			t.Errorf("%s stopped for %q, want an error", name, got)
 		}
 	}
 }

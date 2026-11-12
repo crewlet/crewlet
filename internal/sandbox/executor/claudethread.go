@@ -1028,6 +1028,44 @@ func (m threadMessage) Kinds() []string { return m.kinds }
 // ([threadHook.Firing]).
 func (m threadMessage) Calls() []threadCall { return m.calls }
 
+// StopReason is why the model's reply an assistant record holds stopped, its
+// message's `stop_reason`: "end_turn" where the model ended its turn,
+// "tool_use" where it stopped for the calls it made, "stop_sequence", or
+// whatever else the API names. "" where the key is absent, and for every
+// record that is no assistant's.
+//
+// ITS READER is the one that tells a relaunch which of its calls a kept
+// session holds (exact telling), to know whether a subagent's leg finished.
+// 2.1.310 writes a model's reply as a record a block, so a reply that wrote
+// text and then called a tool is two assistant records of one message id,
+// the text's first: a thread cut between them ends on a record of text alone,
+// which reads as a finished leg. Only the stop_reason tells the two apart:
+// "tool_use" on every such text record measured, as on its call's, and
+// "end_turn" or "stop_sequence" on every other record of text alone.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// string where present. Any other type is this accessor's error, never "",
+// which its reader would take for a reply that did not stop for its calls,
+// and never Message's, so a reshaped stop_reason costs only the reader that
+// asks for it.
+func (l threadLine) StopReason() (string, error) {
+	if l.Head.Type != recordAssistant {
+		return "", nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a reply that says nothing of its stop.
+	if !wireObject(l.message) {
+		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		StopReason json.RawMessage `json:"stop_reason"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return "", fmt.Errorf("an assistant record's message: %w", err)
+	}
+	return wireString("stop_reason", message.StopReason)
+}
+
 // ToolResultsCleared reports whether the record says the server CLEARED THE
 // CONTENT OF OLD TOOL RESULTS from what the model was shown: an assistant
 // record whose `message.context_management.applied_edits` holds an edit of
