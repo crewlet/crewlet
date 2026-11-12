@@ -549,13 +549,17 @@ const (
 	// room or a direct conversation. Not "channel", which is the frame's
 	// word for an A2A channel.
 	ResourceRoom ResourceKind = "room"
+	// ResourceAtlasEntry is one entry of the company's atlas (ADR-0126),
+	// named by the id its kind and key derive: the frame's `atlas` object,
+	// under the name the authority table knows it by.
+	ResourceAtlasEntry ResourceKind = "atlas_entry"
 )
 
-// ResourceKinds are the twelve, in declaration order.
+// ResourceKinds are the thirteen, in declaration order.
 var ResourceKinds = []ResourceKind{
 	ResourceTask, ResourceProject, ResourceSeat, ResourceUnit, ResourcePage,
 	ResourceContainer, ResourceArtifact, ResourceTurn, ResourceRun,
-	ResourceSchedule, ResourceView, ResourceRoom,
+	ResourceSchedule, ResourceView, ResourceRoom, ResourceAtlasEntry,
 }
 
 // Valid reports whether k is a kind this build knows.

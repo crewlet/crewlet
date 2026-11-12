@@ -161,13 +161,17 @@ func dieOnTheWayToTheTurn(t *testing.T, rig, holder *coordRig) {
 }
 
 // A REVIVED RUN WHOSE CLAIM DIES AGAIN IS REVIVED AGAIN, the second lost claim
-// counted on the same answer from the same first instant, and resumed once.
+// counted on the same answer from the same first instant, and resumed once. The
+// rig's clock moves on between the two losses, so a revival that dated the
+// first loss again would date it at the second, where the clock left standing
+// read the two equal.
 func TestARevivedRunWhoseClaimDiesAgainIsRevivedAgain(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	first := reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	since := rig.get("t1").Answer.FirstLostAt
+	rig.now = rig.now.Add(time.Second)
 	dieOnTheWayToTheTurn(t, rig, first)
 
 	next := reaper(t.Context(), t, rig, rig.pending, 3, nil)

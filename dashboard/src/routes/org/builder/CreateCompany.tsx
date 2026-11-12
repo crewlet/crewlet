@@ -42,8 +42,11 @@ import {
   DraftRefusal,
   refuse,
   useAssistantDraft,
+  useDraftState,
+  writeParts,
   type AssistantDraftSpec,
   type DraftValue,
+  type DraftWrite,
 } from "~/app/assistant/draft.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { managerOf } from "~/protocol/configAnswer.ts";
@@ -106,7 +109,7 @@ const textOf = (value: DraftValue) => (typeof value === "string" ? value.trim() 
 /** The create form as the page declares it (`useAssistantDraft`), each value refused in the form's own words. */
 export function createCompanyDraft(
   form: CreateForm,
-  apply: (next: CreateForm) => void,
+  write: DraftWrite<CreateForm>,
 ): AssistantDraftSpec<CreateForm> {
   const one = <T extends string>(
     choices: readonly { value: T; label: string }[],
@@ -218,7 +221,7 @@ export function createCompanyDraft(
         },
       },
     ],
-    apply,
+    write,
   };
 }
 
@@ -232,30 +235,34 @@ export function CreateCompany({
   onApply: (intent: Intent) => void;
   disabled: boolean;
 }) {
-  const [name, setName] = useState("");
-  const [template, setTemplate] = useState<TemplateId>("new_company");
-  const [leads, setLeads] = useState<LeadsAre>("agents");
+  const [name, setName] = useDraftState("");
+  const [template, setTemplate] = useDraftState<TemplateId>("new_company");
+  const [leads, setLeads] = useDraftState<LeadsAre>("agents");
   // ON, AND NAMED: see the file's doc. A name left empty is refused by the
   // template, so a box ticked from the start starts with one.
-  const [ownSeat, setOwnSeat] = useState(true);
-  const [seatName, setSeatName] = useState("Founder");
-  const [identity, setIdentity] = useState<HumanContactKey>(CONTACT_IDENTITIES[0]!.key);
-  const [value, setValue] = useState("");
+  const [ownSeat, setOwnSeat] = useDraftState(true);
+  const [seatName, setSeatName] = useDraftState("Founder");
+  const [identity, setIdentity] = useDraftState<HumanContactKey>(CONTACT_IDENTITIES[0]!.key);
+  const [value, setValue] = useDraftState("");
   const [error, setError] = useState<string | null>(null);
   const chosen = TEMPLATES.find((t) => t.id === template)!;
 
   // WHAT IS OPEN, for the assistant: the form as filled in so far, each
   // value set through the form's own setters; Create stays the person's.
+  const form: CreateForm = { name, template, leads, ownSeat, seatName, identity, value };
   useAssistantDraft(
-    createCompanyDraft({ name, template, leads, ownSeat, seatName, identity, value }, (next) => {
-      setName(next.name);
-      setTemplate(next.template);
-      setLeads(next.leads);
-      setOwnSeat(next.ownSeat);
-      setSeatName(next.seatName);
-      setIdentity(next.identity);
-      setValue(next.value);
-    }),
+    createCompanyDraft(
+      form,
+      writeParts(form, {
+        name: setName,
+        template: setTemplate,
+        leads: setLeads,
+        ownSeat: setOwnSeat,
+        seatName: setSeatName,
+        identity: setIdentity,
+        value: setValue,
+      }),
+    ),
   );
 
   const start = () => {

@@ -9,7 +9,12 @@
  * count and length, and a space the company has.
  */
 
-import { refuse, type AssistantDraftSpec, type DraftValue } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  type AssistantDraftSpec,
+  type DraftValue,
+  type DraftWrite,
+} from "~/app/assistant/draft.ts";
 import {
   PAGE_BODY_MAX_BYTES,
   PAGE_LABELS_MAX,
@@ -37,17 +42,17 @@ const HELP =
 
 const text = (value: DraftValue): string | null => (typeof value === "string" ? value : null);
 
-/** The composer's draft, around the setters the composer already has. */
+/** The composer's draft, written through the branded state the composer holds it in. */
 export function composerDraft(args: {
   value: ComposerValues;
   /** The title of the page it goes under, as the place control names it. */
   parentTitle: string;
   /** The spaces a page may be filed in, by key. */
   spaces: readonly { key: string }[];
-  apply: (next: ComposerValues) => void;
+  write: DraftWrite<ComposerValues>;
   busy: boolean;
 }): AssistantDraftSpec<ComposerValues> {
-  const { value, parentTitle, spaces, apply, busy } = args;
+  const { value, parentTitle, spaces, write, busy } = args;
   return {
     kind: "client",
     step: "write",
@@ -122,7 +127,7 @@ export function composerDraft(args: {
         },
       },
     ],
-    apply,
+    write,
     blocked: () => (busy ? "The page is being saved." : null),
   };
 }

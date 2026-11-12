@@ -41,7 +41,6 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   type ReactNode,
@@ -56,7 +55,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { OrgProjection } from "~/protocol/types.ts";
 import { mayWriteCharter } from "./access.ts";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { useAssistantDraft, useDraftReducer } from "~/app/assistant/draft.ts";
 import { charterDraft } from "./assistantAction.ts";
 import { EDIT_PARAM, editValue, partsIn } from "./address.ts";
 import {
@@ -141,7 +140,7 @@ export function useCharterEditing(org: OrgProjection): {
   readonly editing: Editing;
   readonly dialog: ReactNode;
 } {
-  const [state, dispatch] = useReducer(reducer, INITIAL);
+  const [state, dispatch] = useDraftReducer(reducer, INITIAL);
   const stateRef = useRef(state);
   stateRef.current = state;
   const viewer = useViewer();
@@ -257,13 +256,13 @@ export function useCharterEditing(org: OrgProjection): {
 
   // --- assistant page actions (WP12) ---
   // THE OPEN PARTS, declared once (`useAssistantDraft`): every part's value
-  // reaches the assistant, and a new value for an open part is set through
+  // reaches the assistant, and a new value for an open part is dispatched as
   // the editor's own `change`, as typing writes it; Save stays theirs.
   useAssistantDraft(
     charterDraft({
       state,
       charter,
-      change,
+      dispatch,
       blocked: () =>
         !mayEdit ? "Writing the principles takes Admin." : access.can ? null : access.reason,
     }),

@@ -104,7 +104,7 @@ const WIRE_KIND: Record<ObjectKind, ResourceKind | null> = {
   person: null,
   notice: null,
   change: null,
-  atlas: null,
+  atlas: "atlas_entry",
 };
 
 /** A frame object as a page resource, or null where the wire has no name for its kind. */

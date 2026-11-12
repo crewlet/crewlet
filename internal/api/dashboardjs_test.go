@@ -1396,8 +1396,11 @@ const (
 	// bounds held to the engine's among them, and the pin page folded into the
 	// frame's half), took it to 400.5 KiB (410,133 bytes, -1,515) there.
 	// Merged with main since the required checks it measures 402.5 KiB
-	// (412,160 bytes), 1,536 bytes inside 404 KiB: the next addition to
-	// the entry moves this budget only with a reason of its own.
+	// (412,160 bytes), 1,536 bytes inside 404 KiB. Ask Crewlet reading the
+	// atlas took it to 402.5 KiB (412,164 bytes), and every declared draft
+	// held in branded state, merged on top of it, to 402.5 KiB (412,161
+	// bytes, -3), 1,535 bytes inside it: the next addition to the entry moves
+	// this budget only with a reason of its own.
 	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2297,8 +2300,17 @@ const (
 	// the tree before the required checks), then the artifacts' contract split
 	// in two, the workspace's half a module of its own (+547 there), merged on
 	// top of it, took it to 5840.6 KiB (5,980,762 bytes, +2,261, all script):
-	// 5841 KiB.
-	treeBudget = 5<<20 + 721<<10
+	// 5841 KiB. Ask Crewlet reading the atlas (an entry's chip with the map
+	// glyph, matched by its name and worded as an entry) and the atlas's
+	// certificate kind, the facts and the relation an integration's read
+	// fills, named in the atlas words, merged on top of it, took it to 5841.0
+	// KiB (5,981,148 bytes, +386, all script), 36 bytes inside it.
+	// Every draft a screen declares to Ask Crewlet held in branded state, so
+	// the draft gate reads through the checker which modal a page hands its
+	// draft to (draft.ts's mints, and every declaring screen, box and store
+	// moved onto them), merged on top of it, took it to 5841.8 KiB
+	// (5,982,024 bytes, +876, all script): 5842 KiB.
+	treeBudget = 5<<20 + 722<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

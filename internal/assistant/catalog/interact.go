@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/atlas"
 )
 
 // PageAction is a change a screen applies to itself when the person approves
@@ -183,6 +184,8 @@ func interactionTools() []Tool {
 	}
 	params["handle"] = text("The seat's handle or name, for a seat's screen.", nameBytes)
 	params["unit"] = text("The unit's key or name, for a unit's screen.", nameBytes)
+	params["direction"] = oneOf("For the atlas map lit along a trace, which way it walks.",
+		wordsOf(atlas.Directions)...)
 	open := Tool{
 		Name: "open_in_app", Kind: KindNavigate, Tier: TierRead, Phrase: "open this in the app",
 		Description: "Offer the person a link to a screen or a record, which the engine builds " +
@@ -218,6 +221,10 @@ var probes = map[string]struct {
 	"artifact": {"GET /artifacts/{id}", "id", "id"},
 	"chatlet":  {"GET /chatlet/channels/{channel_id}", "channel_id", "id"},
 	"seat":     {"GET /agents/{id}", "id", "handle"},
+	// AN ATLAS ENTRY'S OWN READ decides its page and the map opened on it.
+	"atlas-entry":        {atlasEntryRoute, "id", "id"},
+	"atlas-entry-on-map": {atlasEntryRoute, "id", "id"},
+	"atlas-trace-on-map": {atlasEntryRoute, "id", "id"},
 }
 
 // ProbeRoutes are every route open_in_app may send.

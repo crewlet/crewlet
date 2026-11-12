@@ -70,8 +70,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import type { PageSummary, PageStatus } from "~/protocol/index.ts";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
-import { composerDraft } from "./composerDraft.ts";
+import { useAssistantDraft, useDraftState, writeParts, writeVia } from "~/app/assistant/draft.ts";
+import { composerDraft, type ComposerValues } from "./composerDraft.ts";
 import { linkPageCommand } from "./page/LinkPicker.tsx";
 import { DocletBar, PageGlyph, pagePath, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
@@ -129,8 +129,8 @@ export function Composer() {
   const { spaces, read } = useSpaces();
   const write = useAct("write_page");
 
-  const [space, setSpace] = useState(spaceParam);
-  const [parent, setParent] = useState(parentParam);
+  const [space, setSpace] = useDraftState(spaceParam);
+  const [parent, setParent] = useDraftState(parentParam);
   // A NEW ADDRESS IS A NEW PLACE: "New sub-page" pressed while the composer is
   // already open files the page where it was pressed.
   useEffect(() => {
@@ -138,9 +138,9 @@ export function Composer() {
     setParent(parentParam);
   }, [spaceParam, parentParam]);
   const [template, setTemplate] = useState<Template>("blank");
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [labels, setLabels] = useState<string[]>([]);
+  const [title, setTitle] = useDraftState("");
+  const [body, setBody] = useDraftState("");
+  const [labels, setLabels] = useDraftState<string[]>([]);
   const [templateNote, setTemplateNote] = useState("");
   // WHERE A HELD MOVE WAS GOING, while Discard is asked about.
   const [leaving, setLeaving] = useState<(() => void) | null>(null);
@@ -224,19 +224,20 @@ export function Composer() {
   // Save as draft and Publish stay the person's.
   const parentTitle =
     filed.find(({ page }) => page.id === parent)?.page.title ?? named.data?.page?.title ?? "";
+  const values: ComposerValues = { space, parent, title, body, labels };
   useAssistantDraft(
     composerDraft({
-      value: { space, parent, title, body, labels },
+      value: values,
       parentTitle,
       spaces,
       busy: write.busy,
-      apply: (next) => {
-        setSpace(next.space);
-        setParent(next.parent);
-        setTitle(next.title);
-        setBody(next.body);
-        setLabels([...next.labels]);
-      },
+      write: writeParts(values, {
+        space: setSpace,
+        parent: setParent,
+        title: setTitle,
+        body: setBody,
+        labels: writeVia(setLabels, (next: readonly string[]) => [...next]),
+      }),
     }),
   );
 

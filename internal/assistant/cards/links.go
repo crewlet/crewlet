@@ -20,7 +20,12 @@ import (
 // all (empty for the overview every person reads).
 type screen struct {
 	address string
-	app     iam.Grant
+	// query is the address's query, each pair's value a placeholder with the
+	// literal around it ("peek=atlas:{id}&trace={direction}"), "" for a
+	// screen its path alone opens. Kept apart from address, which the
+	// printed-address suite resolves as a path.
+	query string
+	app   iam.Grant
 	// label is the link's text when nothing names it.
 	label string
 	// noun is what one record of a record screen is, for the link's text
@@ -79,6 +84,17 @@ var links = map[string]screen{
 	"nodes":            {address: "#/settings/nodes", app: iam.GrantAdmin, label: "Nodes"},
 	"backups":          {address: "#/settings/backups", app: iam.GrantAdmin, label: "Backups"},
 	"config":           {address: "#/settings/config/revisions", app: iam.GrantAdmin, label: "Configuration"},
+	// THE ATLAS, by the keys its screens read on arrival: an entry's page by
+	// its id, and the map with the frame's peek open on an entry (the
+	// frame's `peek=` key, `app/frame/peekAddress.ts`), lit along its trace
+	// where the answer was one (the map's `trace=` key). Both map links read
+	// "Show on the map", which is what they do.
+	"atlas":       {address: "#/company/atlas", app: iam.GrantAtlas, label: "Atlas"},
+	"atlas-entry": {address: "#/company/atlas/{id}", app: iam.GrantAtlas, noun: "entry"},
+	"atlas-entry-on-map": {address: "#/company/atlas", query: "peek=atlas:{id}",
+		app: iam.GrantAtlas, label: "Show on the map"},
+	"atlas-trace-on-map": {address: "#/company/atlas", query: "peek=atlas:{id}&trace={direction}",
+		app: iam.GrantAtlas, label: "Show on the map"},
 }
 
 // placeholder is a link parameter's placeholder and the grammar its value is
@@ -97,6 +113,42 @@ var placeholders = map[string]placeholder{
 	"{id}":        {"id", uuidName},
 	"{turn_id}":   {"id", uuidName},
 	"{handle}":    {"handle", lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
+	// A TRACE'S DIRECTION, as the atlas walks one: up to what depends on an
+	// entry, down to what it depends on.
+	"{direction}": {"direction", lazyGrammar(`^(?:up|down)$`)},
+}
+
+// queryPair is one pair of a screen's query template: its key, and its value
+// as the literal before and after one placeholder.
+type queryPair struct {
+	key, before, after string
+	placeholder        string
+}
+
+// queryPairs are screen's query template, pair by pair, in its order; a
+// template every pair of which holds one placeholder of the table. The
+// table is this package's own literals, so one written wrong is a panic at
+// first use rather than a link that silently drops a key.
+func queryPairs(template string) []queryPair {
+	if template == "" {
+		return nil
+	}
+	var out []queryPair
+	for _, pair := range strings.Split(template, "&") {
+		key, value, _ := strings.Cut(pair, "=")
+		open, close := strings.Index(value, "{"), strings.Index(value, "}")
+		if key == "" || open < 0 || close < open {
+			panic(fmt.Sprintf("cards: the query template %q holds no placeholder in %q", template, pair))
+		}
+		placeholder := value[open : close+1]
+		if _, ok := placeholders[placeholder]; !ok {
+			panic(fmt.Sprintf("cards: the query template %q names %q, which the table does not hold",
+				template, placeholder))
+		}
+		out = append(out, queryPair{key: key, before: value[:open], after: value[close+1:],
+			placeholder: placeholder})
+	}
+	return out
 }
 
 // lazyGrammar is pattern compiled at its first use, not at init: a bounded
@@ -126,13 +178,17 @@ func ScreenApp(name string) (iam.Grant, bool) {
 	return s.app, ok
 }
 
-// ScreenParams are the parameters screen's address takes, in order.
+// ScreenParams are the parameters screen's address takes, in order: its
+// path's, then its query's.
 func ScreenParams(name string) []string {
 	var out []string
 	for _, segment := range strings.Split(links[name].address, "/") {
 		if p, ok := placeholders[segment]; ok {
 			out = append(out, p.param)
 		}
+	}
+	for _, pair := range queryPairs(links[name].query) {
+		out = append(out, placeholders[pair.placeholder].param)
 	}
 	return out
 }
@@ -172,6 +228,17 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 			first = v
 		}
 	}
+	query := url.Values{}
+	for _, pair := range queryPairs(s.query) {
+		p := placeholders[pair.placeholder]
+		v := params[p.param]
+		if !p.value().MatchString(v) {
+			return wire.Link{}, fmt.Errorf("%w: %s takes %s as %s, and %q is not one",
+				ErrNoLink, name, p.param, p.value(), v)
+		}
+		query.Set(pair.key, pair.before+v+pair.after)
+		used[p.param] = true
+	}
 	for param := range params {
 		if !used[param] {
 			return wire.Link{}, fmt.Errorf("%w: %s takes no %s", ErrNoLink, name, param)
@@ -181,13 +248,19 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	case label != "":
 	case s.noun != "":
 		label = "Open " + s.noun
-	case first != "":
+	case s.label != "":
+		// A SCREEN NAMED FOR WHAT IT DOES ("Show on the map") is named so
+		// whatever its query carries: an id names nothing a person knows.
+		label = s.label
+	default:
 		// A KEY A PERSON KNOWS ("FAIR-10", "ENG", "HOME") names its record.
 		label = first
-	default:
-		label = s.label
 	}
-	return wire.Link{Label: label, Screen: name, Href: strings.Join(segments, "/")}, nil
+	href := strings.Join(segments, "/")
+	if len(query) > 0 {
+		href += "?" + query.Encode()
+	}
+	return wire.Link{Label: label, Screen: name, Href: href}, nil
 }
 
 // ScreenOf is the record screen a dashboard address opens and the parameters
@@ -200,14 +273,17 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 // back is one this table would build, and a value outside a placeholder's
 // grammar (a project key where a task's goes) names no screen.
 func ScreenOf(address string) (string, map[string]string, bool) {
-	segments := strings.Split(address, "/")
+	path, rawQuery, _ := strings.Cut(address, "?")
+	segments := strings.Split(path, "/")
 	for _, name := range Screens() {
 		template := strings.Split(links[name].address, "/")
 		if len(template) != len(segments) {
 			continue
 		}
-		params := map[string]string{}
-		matched := true
+		params, matched := queryParams(links[name].query, rawQuery)
+		if !matched {
+			continue
+		}
 		for i, part := range template {
 			p, placeholder := placeholders[part]
 			if !placeholder {
@@ -233,6 +309,40 @@ func ScreenOf(address string) (string, map[string]string, bool) {
 		}
 	}
 	return "", nil, false
+}
+
+// queryParams are the parameters template's pairs read from rawQuery, and
+// whether it is the query the template writes: exactly its keys, each value
+// the literal around a value of the placeholder's grammar, and none at all
+// for a screen the path alone opens, so an address read back is one the
+// table would build again, query included.
+func queryParams(template, rawQuery string) (map[string]string, bool) {
+	params := map[string]string{}
+	pairs := queryPairs(template)
+	if len(pairs) == 0 {
+		return params, rawQuery == ""
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil || len(values) != len(pairs) {
+		return nil, false
+	}
+	for _, pair := range pairs {
+		v, ok := values[pair.key]
+		if !ok || len(v) != 1 {
+			return nil, false
+		}
+		inner, cut := strings.CutPrefix(v[0], pair.before)
+		if !cut {
+			return nil, false
+		}
+		inner, cut = strings.CutSuffix(inner, pair.after)
+		p := placeholders[pair.placeholder]
+		if !cut || !p.value().MatchString(inner) {
+			return nil, false
+		}
+		params[p.param] = inner
+	}
+	return params, true
 }
 
 // checkOpen reports a spec's link naming a screen the table does not hold, or

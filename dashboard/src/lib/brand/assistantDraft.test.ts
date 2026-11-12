@@ -9,6 +9,7 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { eventually } from "~/test/settle.ts";
+import { heldWrite } from "~/test/drafts.ts";
 import { parseDraftChange } from "~/app/assistant/draft.ts";
 import type { BrandDocument } from "~/protocol/index.ts";
 import { applyBrandDraft, brandDraftFields, type BrandDraft } from "./assistantDraft.ts";
@@ -48,7 +49,7 @@ function proposed(): BrandDraft {
     scope: "s",
     value: EDIT as BrandDraft,
     fields: brandDraftFields(new Set(["logos"] as const)),
-    apply: () => {},
+    write: heldWrite(),
   };
   const parsed = parseDraftChange(spec, { values: { "logos.mark": REF } });
   if (!parsed.ok) throw new Error(parsed.reason);
@@ -84,7 +85,7 @@ describe("a proposed logo", () => {
       scope: "s",
       value: EDIT as BrandDraft,
       fields: brandDraftFields(new Set(["colours"] as const)),
-      apply: () => {},
+      write: heldWrite(),
     };
     expect(parseDraftChange(spec, { values: { "logos.mark": REF } }).ok).toBe(false);
   });
@@ -101,7 +102,7 @@ describe("a proposed logo's card row", () => {
       scope: "s",
       value: { document: doc, files: new Map() } as BrandDraft,
       fields: brandDraftFields(new Set(["logos"] as const)),
-      apply: () => {},
+      write: heldWrite(),
     };
     const parsed = parseDraftChange(spec, {
       values: { "logos.on_dark": REF, "logos.primary": REF },

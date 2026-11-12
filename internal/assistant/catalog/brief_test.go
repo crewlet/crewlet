@@ -85,17 +85,20 @@ func TestABriefCallIsReadStrictly(t *testing.T) {
 
 // A BRIEF'S CITABLE RECORDS ARE EXACTLY THOSE THE LINK TABLE OPENS THROUGH A
 // READ OF THE RECORD, held both ways: every row is read again as the person
-// before it is drawn, and every record whose screen is opened through its own
-// read may be a row. Held one way, a chat room's screen gained its read and no
-// brief could cite a room, so a question waiting on the person in one never
-// counted. Mutation: add a kind with no probe and its open builds no request;
-// add a probe with no kind and its screen is cited by none.
+// before it is drawn, and every record whose screens are opened through its
+// own read may be a row (an atlas entry's page and the map opened on it are
+// two screens of one record, decided by one read). Held one way, a chat
+// room's screen gained its read and no brief could cite a room, so a question
+// waiting on the person in one never counted. Mutation: add a kind with no
+// probe and its open builds no request; add a probe on a read no kind cites
+// and its screen is cited by none.
 func TestEveryCitableRecordIsReadAgainBeforeItIsDrawn(t *testing.T) {
 	t.Parallel()
 	ids := map[wire.ResourceKind]string{wire.ResourceTask: "ENG-1", wire.ResourceProject: "ENG",
 		wire.ResourceSeat: "qa", wire.ResourcePage: "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e10",
-		wire.ResourceArtifact: "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e11",
-		wire.ResourceRoom:     "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e12"}
+		wire.ResourceArtifact:   "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e11",
+		wire.ResourceRoom:       "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e12",
+		wire.ResourceAtlasEntry: "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e13"}
 	cited := map[string]bool{}
 	for _, kind := range catalog.BriefRefKinds {
 		args, ok := catalog.BriefOpensWith(wire.ResourceRef{Kind: kind, ID: ids[kind]})
@@ -103,16 +106,16 @@ func TestEveryCitableRecordIsReadAgainBeforeItIsDrawn(t *testing.T) {
 			t.Errorf("%s has no screen", kind)
 			continue
 		}
-		cited[args.String("screen")] = true
+		cited[catalog.ProbeRoute(args.String("screen"))] = true
 		_, probe, err := catalog.Open(args)
 		if err != nil || probe == nil {
 			t.Errorf("%s opens with no read of the record (%v)", kind, err)
 		}
 	}
 	for _, screen := range catalog.ProbeScreens() {
-		if !cited[screen] {
-			t.Errorf("the link table opens %q through a read of the record, and no brief kind "+
-				"cites it", screen)
+		if route := catalog.ProbeRoute(screen); !cited[route] {
+			t.Errorf("the link table opens %q through %s, a read of the record no brief kind "+
+				"cites", screen, route)
 		}
 	}
 }

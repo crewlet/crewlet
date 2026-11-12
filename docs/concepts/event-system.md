@@ -75,8 +75,12 @@ crewlet.rooms.ask
 
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of
-# every write, and a node acquiring a seat replays it in a single pass
+# every write, and a node acquiring a seat reads each row once, a table at a time
 crewlet.memory.{seat-id}.{table}.{key-digest}
+# and beside its rows one subject of the seat's that is no row's: the barrier
+# a node publishes before it replays the seat, which each table's replay reads
+# to, so a replay served by a copy behind the stream's leader is never short
+crewlet.memory.{seat-id}.hydration-barrier
 
 # Dead letters, deliberately OUTSIDE the crewlet.* space so the dashboard's
 # crewlet.events.> stream cannot resurface poison as live traffic

@@ -29,6 +29,7 @@ import { createContext, useContext, useEffect } from "react";
 import type { Route } from "~/app/router.tsx";
 import { resolve, structureTabOf } from "~/app/routes.ts";
 import type { ConfigProblem, ConfigWarning, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
+import type { DraftDispatch } from "~/app/assistant/draft.ts";
 import type { KeySource, NodeKey } from "./model/keys.ts";
 import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 
@@ -130,8 +131,11 @@ export interface BuilderViewHandle {
 export interface BuilderApi {
   /** The model's state: the base, the draft, the log and the last check. */
   state: BuilderState;
-  /** Records an operation, undoes, redoes. Never a transport call. */
-  dispatch(action: BuilderAction): void;
+  /**
+   * Records an operation, undoes, redoes. Never a transport call. The draft's
+   * own branded dispatch, so whatever calls it is part of the builder.
+   */
+  dispatch: DraftDispatch<BuilderAction>;
   /** From the last check of the current draft; `null` until one answers with a derivation. */
   derived: BuilderDerived | null;
   /** The problems the last check of the current draft placed on this node. */

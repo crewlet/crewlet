@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/codesearch"
@@ -1006,6 +1007,11 @@ type Engine struct {
 	// [Engine.rebuildMaintenance].
 	maintenance  atomic.Pointer[maintenance.Worker]
 	integrations *integration.Worker
+
+	// atlasCollect reads each connected integration's vendor whole for the
+	// atlas, a fleet singleton on a data node that publishes
+	// ([Engine.startAtlasCollect]).
+	atlasCollect *collect.Worker
 
 	// mailboxes registers each seat's mailbox with the fleet and retires
 	// the mailbox of a seat that has left the company. Built BEFORE the
@@ -2476,10 +2482,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	//
 	// THE SEAT'S DERIVED ID, never a roster lookup, so a seat a revision
 	// removed still flushes on release ([memoryAgentID]).
-	if e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
-		func(handle string) string { return memoryAgentID(e.Company(), handle) }); err != nil {
-		return nil, fmt.Errorf("engine: seat memory: %w", err)
-	}
+	e.memory = memsync.New(backends.Store, backends.CoordinationJetStream(),
+		func(handle string) string { return memoryAgentID(e.Company(), handle) })
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
 	// the first time no watched duty is live, and the host is not live
 	// until node.Start runs it — so building it here and starting it there
@@ -2642,6 +2646,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.
 	e.startIntegrations(ctx)
+	// AND THE ATLAS'S READ OF THOSE INTEGRATIONS' VENDORS, a singleton on the
+	// same terms, on its own cadence (ADR-0129).
+	e.startAtlasCollect(ctx)
 	e.startMemorySync(ctx)
 	e.startMemoryFill(ctx)
 	e.startScheduler(ctx)
@@ -3395,6 +3402,7 @@ func (e *Engine) teardown(ctx context.Context) {
 				"publisher until it boots again or an operator excludes it")
 	}
 	e.stopIntegrations()
+	e.stopAtlasCollect()
 	// AFTER the integration loop, which is what runs the passes that ask
 	// for a re-activation: disarming first would leave a window in which a
 	// pass could arm one more on a node that is shutting down.

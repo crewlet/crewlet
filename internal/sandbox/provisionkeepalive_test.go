@@ -38,7 +38,7 @@ func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rig := newWaiterRig(t)
-		boxes := &timedBoxes{FakeProvider: rig.provider, step: slowStep}
+		boxes := newTimedBoxes(rig, slowStep)
 		manager := boxes.manager(t, rig)
 		req := launchReq("t1")
 		req.Spec.TimeoutSec = DefaultBoxTimeout.Seconds()
@@ -63,10 +63,20 @@ func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 // moves it, and a box whose timer ran out is gone — a later refresh revives
 // nothing — so a command run on it fails, as one on a reclaimed box does.
 // Every command takes step.
+//
+// ONLY IN A BUBBLE ([newTimedBoxes]): a timer, a refresh and a command are
+// each an instant of the clock the case runs on, compared and slept on as a
+// provider's own clock would be, which only a bubble keeps exact — forty
+// minutes of steps in no time, and every instant the schedule's own.
 type timedBoxes struct {
 	*FakeProvider
 	mu   sync.Mutex
 	step time.Duration
+	// command is [timedBoxes.timedCommand], which [newTimedBoxes] sets.
+	// Create, which the manager calls as a [Provider], is a method with an
+	// exported name, which no bubble declaration can hold to its callers, so
+	// it reaches the timed command through this rather than by its name.
+	command func(box *FakeSandbox) (ExecResult, error)
 	// set is the timers each box's create and reconnects set, by box.
 	set map[string][]FakeTimeout
 	// ran is the instant each command began, in order, across every box.
@@ -75,6 +85,16 @@ type timedBoxes struct {
 
 // errReclaimed is a command run on a box its timer ended.
 var errReclaimed = errors.New("the box is gone: its provider reclaimed it at its timer")
+
+// newTimedBoxes is a provider of timed boxes over rig's, each command step
+// long.
+//
+//fixedwait:bubble
+func newTimedBoxes(rig *waiterRig, step time.Duration) *timedBoxes {
+	p := &timedBoxes{FakeProvider: rig.provider, step: step}
+	p.command = p.timedCommand
+	return p
+}
 
 // manager is a manager over these boxes and the rig's runner.
 func (p *timedBoxes) manager(t *testing.T, rig *waiterRig) *Manager {
@@ -102,7 +122,7 @@ func (p *timedBoxes) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 			// seconds by its own bound: not one of the steps this case times.
 			return ExecResult{}, nil
 		}
-		return p.exec(fake)
+		return p.command(fake)
 	}
 	return box, nil
 }
@@ -126,28 +146,32 @@ func (p *timedBoxes) timer(id string, seconds float64) {
 	p.set[id] = append(p.set[id], FakeTimeout{At: time.Now(), Seconds: seconds})
 }
 
-// exec is a command on box: refused on a box its timer ended, then step long,
-// and failed if the box's timer ended while it ran.
-func (p *timedBoxes) exec(box *FakeSandbox) (ExecResult, error) {
+// timedCommand is a command on box: refused on a box its timer ended, then
+// step long, and failed if the box's timer ended while it ran.
+//
+//fixedwait:bubble
+func (p *timedBoxes) timedCommand(box *FakeSandbox) (ExecResult, error) {
 	p.mu.Lock()
 	p.ran = append(p.ran, time.Now())
 	step := p.step
 	p.mu.Unlock()
-	if !p.alive(box, time.Now()) {
+	if !p.aliveAt(box, time.Now()) {
 		return ExecResult{}, errReclaimed
 	}
 	time.Sleep(step)
-	if !p.alive(box, time.Now()) {
+	if !p.aliveAt(box, time.Now()) {
 		return ExecResult{}, errReclaimed
 	}
 	return ExecResult{}, nil
 }
 
-// alive reports whether box's timer has not run out up to now since its
+// aliveAt reports whether box's timer has not run out up to now since its
 // provider last set it — its create, or the reconnect that woke it: every
 // refresh since came before the timer it replaced ran out, and the last has
 // not.
-func (p *timedBoxes) alive(box *FakeSandbox, now time.Time) bool {
+//
+//fixedwait:bubble
+func (p *timedBoxes) aliveAt(box *FakeSandbox, now time.Time) bool {
 	p.mu.Lock()
 	set := slices.Clone(p.set[box.ID()])
 	p.mu.Unlock()
@@ -178,6 +202,8 @@ func (p *timedBoxes) alive(box *FakeSandbox, now time.Time) bool {
 // refreshed to the box timeout at the instant provisioning began, before its
 // first command, then at most every provisionRefresh while the commands ran;
 // and never again once the launch had returned.
+//
+//fixedwait:bubble
 func (p *timedBoxes) keptAlive(t *testing.T, box *FakeSandbox, began time.Time, commands int) {
 	t.Helper()
 	ended := time.Now()
@@ -185,7 +211,7 @@ func (p *timedBoxes) keptAlive(t *testing.T, box *FakeSandbox, began time.Time, 
 		t.Fatalf("the provisioning took %v, want its %d commands' %v, past the box's %v timer", took, commands,
 			time.Duration(commands)*slowStep, DefaultBoxTimeout)
 	}
-	if !p.alive(box, ended) {
+	if !p.aliveAt(box, ended) {
 		t.Fatal("the box's timer ran out while the launch provisioned it")
 	}
 	var during []FakeTimeout

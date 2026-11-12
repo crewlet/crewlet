@@ -110,6 +110,12 @@ var readBounds = map[string]bound{
 	"list_chat_mentions":     {kind: boundPage},
 	"search_chat": {kind: boundCapped,
 		why: "a ranked search answers its best matches, at most 50, never a page of a list"},
+	"search_atlas":    {kind: boundPage},
+	"get_atlas_entry": {kind: boundRecord, record: "entry"},
+	"trace_atlas_entry/up": {kind: boundCapped,
+		why: "a trace walks at most 6 hops and answers at most 200 entries, the atlas's own bound"},
+	"trace_atlas_entry/down": {kind: boundCapped,
+		why: "a trace walks at most 6 hops and answers at most 200 entries, the atlas's own bound"},
 }
 
 // segments are a request path's segments, each unescaped.

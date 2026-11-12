@@ -138,6 +138,8 @@ Three separate things stop a node running it, and a reader debugging *"why is no
 
 The status itself lives on the **coordination store**, not in the node's own database, because the node that reads it is usually not the node that wrote it: `-roles data,ingress` puts the API and the seats on separate hosts on purpose.
 
+**Reading a vendor's inventory is not this loop's.** A converged pass writes nothing, by contract, and its cadence is tuned to catching revoked access. What the company runs on at each vendor is read by the `atlas-collect` duty on its own, hourly cadence, which records on the [atlas](atlas.md#what-integrations-read) only what changed; where the two read one listing (Cloudflare's zones), the atlas repeats one cheap call an hour rather than reading inside a pass that may not write.
+
 ```mermaid
 flowchart LR
     subgraph workers["the node holding the worker duty"]

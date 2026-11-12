@@ -45,7 +45,7 @@ flowchart LR
     F --> V["The atlas: entries, facts,<br/>relations, sources"]
 ```
 
-What the engine **already keeps** is computed every time the atlas is read and never stored: it cannot drift from where it lives, and it needs nothing written. What only **somebody can tell** the engine (a person's correction, an agent's observation, an integration's read beyond what the engine keeps) is recorded on the atlas's own log.
+What the engine **already keeps** is computed every time the atlas is read and never stored: it cannot drift from where it lives, and it needs nothing written. What only **somebody can tell** the engine (a person's correction, an agent's observation, an integration's read beyond what the engine keeps) is recorded on the atlas's own log ([What integrations read](#what-integrations-read)).
 
 Each claim carries a confidence the engine derives from its source and the evidence it checked. Nobody, and no model, chooses it.
 
@@ -102,6 +102,24 @@ Records are read as closed projections: the fields a map needs and nothing else.
 
 Every read says which of these sources it read in full and why not where it did not. A source that fails leaves the rest of the atlas answering. A company that keeps no code in Gitlet has nothing there to read, so its Gitlet is read in full for every reader, and no repository of its own is judged by pushes Gitlet never saw.
 
+### What integrations read
+
+Beyond what the settings and the engine's records say, the engine reads each connected integration's vendor **whole** for the atlas, under the access the company's own credential already holds, and records what it found on the atlas's own log in that integration's voice. A fact read this way is **confirmed**, and the entry it is about is **discovered** until a person stands behind it.
+
+| Integration | What its read adds |
+|---|---|
+| Cloudflare | the account's name; every zone of the account as a domain, served by and belonging to the account; every A, AAAA and CNAME record as a host name in its zone, resolving to a server known by its address (marked internal where no public network routes to it) or to the name its CNAME points at, and fronted by Cloudflare where proxied; and every certificate pack as a certificate in its zone, with the names it covers, its type, validity, issuer and expiry, securing each name of the zone it covers. MX and TXT records name nothing, and a TXT record's content, where verification tokens sit, is never decoded; comments and tags are never read |
+
+The read is the `atlas-collect` duty, one node of the fleet at a time ([singleton duties](seat-ownership.md#singleton-duties)), on the company's `atlas.refresh_interval_seconds`: an hour unless the company says otherwise, and never under five minutes, since a read shares the credential's rate-limit window with the [integration reconcile loop](integration-reconcile.md). It is a duty of its own rather than part of that loop, whose contract forbids a write on a converged pass and whose cadence is tuned to catching access somebody revoked.
+
+**A read records only what changed.** The duty diffs each read against every claim the log already holds in the integration's voice and records one entry at a time: the facts and relations that are new or changed, and the ones the read no longer holds, which move into the entry's history. An unchanged read writes nothing, so an hourly read of a few thousand DNS records costs nothing an hour. Each recorded fact shows the instant of the read that last changed it; the source's own line says when it was last read whole.
+
+**Retirement takes two complete reads a day apart.** A read that does not list an entry the integration holds is one miss, never a removal: a vendor's listing can skip a row while it changes, and a vendor's view can lag. The entry is retired only by a later complete read, at least a day after the first miss, that misses it too; it then leaves the map and stays in history, and a read that lists it again restores it. A read that failed or was cut short retires nothing and forgets no miss. An integration never denies a fact or a relation and never outranks a person: a person's claim on the same fact stands, and the entry goes to Review with both values shown.
+
+**Nothing a vendor returns reaches the atlas as text.** Every value a read reports goes through the vocabulary's grammars, which refuse a value or a key shaped like a credential; what is refused is counted on the source, never shown. A source maps a vendor's answer into closed fields and reads no field nobody mapped.
+
+Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, and which entries it has stopped seeing since when.
+
 ## Reading the atlas
 
 People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through five questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, and the counts a filter menu offers ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
@@ -153,7 +171,7 @@ A person who holds Atlas changes it with eleven tools of the operator catalogue,
 
 ## The atlas's own log
 
-What people record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG`, applied identically on every data node, so whichever node a person reaches answers the same atlas, and every read of the atlas folds it beside what the engine computes. A node that holds no data, such as one that only runs agents, reads and writes it through a data node. Each entry is one subject on it: an edit names the version of the entry it was decided from, and is refused if somebody else changed the entry since. A claim is never overwritten: a newer claim from the same person on the same fact replaces the older one in the view, and the older one stays as the entry's history.
+What people record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG`, applied identically on every data node, so whichever node a person reaches answers the same atlas, and every read of the atlas folds it beside what the engine computes. A node that holds no data, such as one that only runs agents, reads and writes it through a data node. Each entry is one subject on it: an edit names the version of the entry it was decided from, and is refused if somebody else changed the entry since. A claim is never overwritten: a newer claim from the same person on the same fact replaces the older one in the view, and the older one stays as the entry's history. An integration's read is one record per entry it changed, in the integration's voice, carrying the claims that are new or changed and withdrawing the ones the read no longer holds into the same history ([What integrations read](#what-integrations-read)).
 
 **History** is kept for the company's `atlas.retention_days`, 400 days unless it says otherwise (90 to 3650): a replaced value, and an entry a person retired that nothing has reported since, go once they are older than it. What the atlas holds now never expires.
 
@@ -185,3 +203,7 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | What the engine already keeps: the settings, Gitlet's rows, integration standings, agents' accounts, tool server listings and sign-ins, node beats, connection tests, the access log and the usage history | already agreed where it lives | not stored: computed when the atlas is read |
 | Entry states, merges on exact keys, contested and disputed facts, signals, use and "not used recently" | nobody: computed on every read | the read itself |
 | What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |
+| What an integration's read found that the log did not hold: a changed fact, a withdrawn one, a retirement | every data node identically, with history | the same log, one `read` record an entry, in the integration's voice |
+| Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
+| Which node reads the vendors | the fleet, one holder at a time | the `worker:atlas-collect` lease |
+| How often: `atlas.refresh_interval_seconds` | the company | the company document |

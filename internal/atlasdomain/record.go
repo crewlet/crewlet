@@ -19,7 +19,9 @@ import (
 //   - 1: the base format: a person's claim on an entry, the purge of an entry
 //     or of a value, an hour's expiry, the trim's trimmed record, and the
 //     framework's eviction, generation and barrier.
-const RecordVersion = 1
+//   - 2: an integration's read of one entry (`read`, ADR-0129): the claims it
+//     holds on the entry that changed, and the slots it withdraws.
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -36,7 +38,13 @@ const GateRecordVersion = 1
 // fact, a relation) needs no row: the applier keeps every word as text and
 // judges none, so it lands as the same row on every build, and a reader that
 // does not know it yet skips the claim by name ([atlas.View.Skipped]).
-var versionedFields = statelog.RecordFields{}
+//
+// A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW, for the access log's reason:
+// two builds of a rolling upgrade disagree about it all the same, and a build
+// without the row would fault on the record rather than retain it.
+var versionedFields = statelog.RecordFields{
+	{Name: "Op read", Since: 2, Path: []string{"op"}, Equals: string(OpRead)},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -49,6 +57,13 @@ const (
 	// OpClaim records one claim on an entry: a fact, a relation, the entry
 	// itself, two entries joined or kept apart, or a denial of any of them.
 	OpClaim OpKind = "claim"
+
+	// OpRead records one integration's read of one entry (ADR-0129): the
+	// claims the read holds on it that are new or changed, and the slots of
+	// its own earlier claims it no longer holds, which are withdrawn. A read
+	// that stopped seeing the entry retires it: one denied exists claim, and
+	// every other slot withdrawn.
+	OpRead OpKind = "read"
 
 	// OpPurge erases an entry or a value everywhere, its history included,
 	// and marks it so nothing brings it back.
@@ -74,7 +89,7 @@ const (
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
-	OpClaim, OpPurge, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpClaim, OpRead, OpPurge, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

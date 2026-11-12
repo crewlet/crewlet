@@ -93,6 +93,9 @@ atlas:                                  # optional: the atlas, the map of what t
                                         #   and an entry a person retired that nothing has reported
                                         #   since (default 400, 90..3650). What the atlas holds now
                                         #   never expires.
+  refresh_interval_seconds: 3600        #   how often each connected integration is read whole for
+                                        #   the atlas (default 3600; the floor is 300). An unchanged
+                                        #   read writes nothing; see concepts/atlas.md.
 assistant: {...}                        # optional, Ask Crewlet; off unless enabled
                                         #   (see "Ask Crewlet" below)
 

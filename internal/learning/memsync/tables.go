@@ -128,13 +128,52 @@ type table struct {
 	// episode's of its label, its ask and what it did — all stored on the
 	// row — so the holder can make either again.
 	fillsVector bool
+
+	// parent is the carried table a row of this one belongs to, for a table
+	// whose schema references another: a skill version's skill_id names a
+	// synthesized_skills id. Nil for a table that references none.
+	//
+	// A hydration replays the parent's table first ([tables]), so a row
+	// whose parent is still not in the store is LEFT OUT, never written
+	// ([table.parentHeld]). Written, its foreign key refused the fetch and
+	// the seat with it, on every node whose store lacked the parent, and for
+	// good once the store that held it was gone, over a row nothing reads
+	// without its parent: a version of a skill the seat does not have.
+	//
+	// Such a version's skill is missing for one of two reasons. The
+	// changelog does not hold it at all: the skill was written after a
+	// publish read the seat's skills and refined before that publish read
+	// their versions, and no later publish of the node that wrote it carried
+	// the skill before the node stopped holding the seat — a crash, or a
+	// release whose flush was cut first. Or the changelog holds it and this
+	// store skipped it: the store already held another skill of the seat
+	// under the same name, which synthesized_skills' (agent_handle, name)
+	// index allows once, so the carried skill met the import's trailing skip
+	// ([table.onConflict]) — a skill deleted by hand and synthesized again
+	// under a new id while the old one's subject stays on the changelog, or
+	// two copies crossing in a seat's move (crewlet/crewlet#511). Both are
+	// left out alike and counted alike, as the seat's orphans.
+	// TestEveryReferenceBetweenCarriedTablesNamesAParentReplayedFirst holds
+	// every reference the schema declares between carried tables to an entry
+	// here and to a parent the registry lists first.
+	parent *reference
+}
+
+// reference is a carried table's reference to another, as the schema
+// declares it: the column holding the parent's key, the parent table, and the
+// parent's key column.
+type reference struct {
+	column string
+	table  string
+	key    string
 }
 
 // retiredTables are the memory tables this build no longer carries, which a
 // seat's changelog may still hold rows of: nothing republishes or replaces
-// them, so a hydration that meets one purges the seat's rows of it, once, for
-// every node ([Syncer.Hydrate]). A table a NEWER build carries is not here: its
-// rows are skipped, never purged, since that build still reads them.
+// them, so a hydration that finds the seat's rows of one purges them, once,
+// for every node ([Syncer.settleNotCarried]). A table a NEWER build carries is
+// not here: no hydration of this build reads it, and its rows stay, since that
+// build still reads them.
 var retiredTables = []string{
 	// Moved to the executor log, where a conversation's sessions are kept
 	// beside the turns that ran them (ADR-0073).
@@ -142,16 +181,18 @@ var retiredTables = []string{
 }
 
 // tables is every table a seat's memory lives in, in the order a publish
-// carries them.
+// carries them and a hydration replays them.
 //
-// Parents before children: synthesized_skill_versions references
-// synthesized_skills, and foreign keys are ON in this store. That order holds
-// within one publish only. Every publish sends a seat's skills again, whole,
-// and each version once, so on the changelog a skill's only copy comes after
-// the versions published before it, and a replay, which reads the changelog
-// in its own order, meets those versions first: a store that does not
-// already hold the skill refuses them, and the hydration refuses the seat
-// (crewlet/crewlet#1051).
+// PARENTS BEFORE CHILDREN, and the reader enforces it:
+// synthesized_skill_versions references synthesized_skills, and foreign keys
+// are ON in this store. A hydration replays each table on its own, in this
+// order ([Syncer.Hydrate]), so every skill the changelog holds is in the store
+// before the first of its versions is written. The changelog itself keeps no
+// order across subjects (ADR-0014): every publish sends a seat's skills again,
+// whole, and each version once, so a skill's only copy sits after the
+// versions published before it, and one replay of the seat in the changelog's
+// order met those versions first and refused the seat on a store without the
+// skill (crewlet/crewlet#1051). A child names its parent ([table.parent]).
 var tables = []table{
 	{
 		name:      "agent_diary",
@@ -221,6 +262,7 @@ var tables = []table{
 			"refinement_kind", "refinement_note", "archived_at",
 		},
 		watermark: "change_seq",
+		parent:    &reference{column: "skill_id", table: "synthesized_skills", key: "id"},
 	},
 	{
 		name:      "agent_onboarding_markers",

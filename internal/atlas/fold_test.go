@@ -309,3 +309,25 @@ func TestAnEdgeToAnEntryNothingClaimsIsDropped(t *testing.T) {
 		t.Errorf("an edge to a zone nothing claims: %+v", e.Relations)
 	}
 }
+
+// AN INTEGRATION'S RETIREMENT LEAVES THE ENTRY RETIRED UNLESS SOMEBODY STANDS
+// BEHIND IT: an entry only its read reported goes to retired when the read
+// denies it, and one a person asserted stays confirmed, contested, for a person
+// to settle.
+func TestAnIntegrationsRetirementIsContestedByAPerson(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	host := atlas.MustRef(atlas.KindHostname, "old.acme.example")
+	cloudflare := atlas.IntegrationSource("cloudflare")
+	seen := m(atlas.Exists(host, cloudflare, now.Add(-48*time.Hour)))
+	gone := seen
+	gone.Denied, gone.ObservedAt = true, now
+	v := atlas.Fold([]atlas.Claim{seen, gone}, now)
+	if e := entry(t, v, host); e.State != atlas.StateRetired || e.Review {
+		t.Errorf("an entry only a read reported and then stopped seeing is %s, review %v", e.State, e.Review)
+	}
+	v = atlas.Fold([]atlas.Claim{seen, gone, m(atlas.Exists(host, ada, now.Add(-24*time.Hour)))}, now)
+	if e := entry(t, v, host); e.State != atlas.StateConfirmed || !e.Review {
+		t.Errorf("an entry a person asserted that a read stopped seeing is %s, review %v", e.State, e.Review)
+	}
+}

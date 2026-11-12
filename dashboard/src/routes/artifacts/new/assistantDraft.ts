@@ -6,11 +6,12 @@
  *
  * A title, and the hand-off to an agent beside it: the brief, the agent that
  * builds it and the project its task is filed in (`WhoBuildsIt.tsx`,
- * `AskAgent.tsx`). Each is set through the page's own setter and refused in
- * the sentence the page's own control would say: a title past its bound, an
- * agent or a project the page does not offer. What a kind holds beyond that
- * (a doc's body, a deck's theme, a canvas's boards) is the page's own
- * `extra`, lifted into the same draft so one `draft.set` can change both.
+ * `AskAgent.tsx`). Each is held in the page's branded state and set through
+ * it (`draft.ts`), and refused in the sentence the page's own control would
+ * say: a title past its bound, an agent or a project the page does not offer.
+ * What a kind holds beyond that (a doc's body, a deck's theme, a canvas's
+ * boards) is the page's own `extra`, lifted into the same draft so one
+ * `draft.set` can change both.
  *
  * # Nothing is made by it
  *
@@ -22,8 +23,11 @@
 import {
   DraftRefusal,
   refuse,
+  writeParts,
   type AssistantDraftSpec,
   type DraftFieldSpec,
+  type DraftSetter,
+  type DraftWrite,
 } from "~/app/assistant/draft.ts";
 import { titleProblem } from "./create.ts";
 import type { WhoBuildsItState } from "./WhoBuildsIt.tsx";
@@ -49,15 +53,15 @@ export interface CreateDraftArgs<E> {
   /** The section the person is in, where the page has more than one. */
   step?: string | null;
   title: string;
-  setTitle: (title: string) => void;
+  setTitle: DraftSetter<string> | DraftWrite<string>;
   brief: string;
-  setBrief: (brief: string) => void;
+  setBrief: DraftSetter<string> | DraftWrite<string>;
   who: WhoBuildsItState;
-  /** The kind's own state, its fields, and the page's setter for it. */
-  extra?: {
+  /** The kind's own state, its fields, and how a change is written into the page's branded state. */
+  extra: {
     value: E;
     fields: readonly DraftFieldSpec<E>[];
-    apply: (next: E) => void;
+    write: DraftSetter<E> | DraftWrite<E>;
   };
   /** Why the page takes no change now (a create in flight), or null. */
   blocked?: () => string | null;
@@ -108,7 +112,7 @@ function lifted<E>(field: DraftFieldSpec<E>): DraftFieldSpec<CreateDraftValue<E>
 
 /**
  * The create page's draft: its title and hand-off, settable through the
- * page's setters, and the kind's own fields beside them.
+ * page's branded setters, and the kind's own fields beside them.
  */
 export function createDraft<E>(args: CreateDraftArgs<E>): AssistantDraftSpec<CreateDraftValue<E>> {
   const { who, extra } = args;
@@ -119,7 +123,7 @@ export function createDraft<E>(args: CreateDraftArgs<E>): AssistantDraftSpec<Cre
     brief: args.brief,
     seat: who.seat,
     project: who.project,
-    extra: extra?.value as E,
+    extra: extra.value,
   };
   const fields: DraftFieldSpec<CreateDraftValue<E>>[] = [
     {
@@ -132,7 +136,7 @@ export function createDraft<E>(args: CreateDraftArgs<E>): AssistantDraftSpec<Cre
         return wrong ? refuse(wrong) : { ...d, title: next };
       },
     },
-    ...(extra?.fields ?? []).map(lifted),
+    ...extra.fields.map(lifted),
     {
       path: "ask.brief",
       label: "Brief for an agent",
@@ -173,13 +177,13 @@ export function createDraft<E>(args: CreateDraftArgs<E>): AssistantDraftSpec<Cre
     help: `${args.help} ${SHARED_HELP}`,
     value,
     fields,
-    apply: (next) => {
-      if (next.title !== args.title) args.setTitle(next.title);
-      if (next.brief !== args.brief) args.setBrief(next.brief);
-      if (next.seat !== who.seat) who.setSeat(next.seat);
-      if (next.project !== who.project) who.setProject(next.project);
-      if (extra && next.extra !== extra.value) extra.apply(next.extra);
-    },
+    write: writeParts(value, {
+      title: args.setTitle,
+      brief: args.setBrief,
+      seat: who.setSeat,
+      project: who.setProject,
+      extra: extra.write,
+    }),
     ...(args.blocked ? { blocked: args.blocked } : {}),
   };
 }

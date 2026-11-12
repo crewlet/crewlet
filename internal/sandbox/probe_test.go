@@ -24,37 +24,47 @@ func scriptedRuntime(t *testing.T, name, script string) string {
 
 // THE CONTAINER CELL IS READY WHEN ITS DAEMON ANSWERS, and not otherwise: a
 // runtime on PATH whose daemon is down launches no box, and one that hangs is
-// said within the budget rather than holding the probe. Each refusal names
-// the one thing to do.
+// cut off at the probe's budget rather than holding the probe. Each refusal
+// names the one thing to do.
+//
+// THE HUNG DAEMON SLEEPS TEN MINUTES, so a probe it holds never answers inside
+// the minute the case waits: the probe answers it at all only by ending its
+// read at its own budget, which its detail names, since nothing else ends it.
+// A bound on how long the probe took on the machine's clock failed a runner
+// that lost three seconds after the cut, and the daemon slept thirty, so a
+// probe that waited it out answered inside a span a case waits.
 //
 // Mutation: report ready on a resolved binary alone, or wait on a hung daemon
-// past the budget, and this fails.
+// rather than end its read at the budget, and this fails.
 func TestTheContainerCellIsReadyWhenItsDaemonAnswers(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		script  string
-		ready   bool
-		detail  string
-		budget  time.Duration
-		elapsed time.Duration
+		script string
+		ready  bool
+		detail string
+		budget time.Duration
 	}{
 		"a daemon that answers": {script: `echo 24.0.7`, ready: true, detail: "Docker 24.0.7", budget: 5 * time.Second},
 		"a daemon that is down": {script: `echo "Cannot connect to the Docker daemon" >&2; exit 1`, detail: "Cannot connect to the Docker daemon", budget: 5 * time.Second},
-		"a daemon that never answers": {script: `exec sleep 30`, detail: "did not answer a version read within 200ms",
-			budget: 200 * time.Millisecond, elapsed: 3 * time.Second},
+		"a daemon that never answers": {script: `exec sleep 600`, detail: "did not answer a version read within 200ms",
+			budget: 200 * time.Millisecond},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			began := time.Now()
-			got := probeRuntime(t.Context(), scriptedRuntime(t, "docker", tc.script), tc.budget)
+			path := scriptedRuntime(t, "docker", tc.script)
+			probed := make(chan CellProbe, 1)
+			go func() { probed <- probeRuntime(t.Context(), path, tc.budget) }()
+			var got CellProbe
+			select {
+			case got = <-probed:
+			case <-time.After(time.Minute): //fixedwait:liveness
+				t.Fatal("the probe is still held by a daemon that has not answered; want its read ended at the budget")
+			}
 			if got.Ready != tc.ready || !strings.Contains(got.Detail, tc.detail) {
 				t.Fatalf("probe = %+v, want ready %v saying %q", got, tc.ready, tc.detail)
 			}
 			if !tc.ready && got.Fix == "" {
 				t.Error("a cell that is not ready names nothing to do about it")
-			}
-			if tc.elapsed > 0 && time.Since(began) > tc.elapsed {
-				t.Errorf("the probe took %v on a hung daemon, past its budget", time.Since(began))
 			}
 		})
 	}

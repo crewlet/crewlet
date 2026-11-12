@@ -24,6 +24,7 @@ func TestAParkedRunOnUnreadableStateIsSettledAtBoot(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.coordinator.Stop()
+	rig.offTheHoldersClock()
 
 	next := reaper(t.Context(), t, rig, rig.pending, 2, func(next *coordRig) {
 		next.coordinator.unresumable = func(context.Context, PendingRun) (*Unresumable, error) {
@@ -177,6 +178,7 @@ func TestASettleHeldBackAtRecoveryIsRetriedOnTheNextPass(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusAwaiting {
 		t.Fatalf("status %q at recovery, want the run held back while a reader is live", got.Status)
 	}
+	rig.offTheHoldersClock()
 	readerGone = true
 	if pausing, err := next.coordinator.SettleParked(t.Context(), "swe"); err != nil || pausing {
 		t.Fatalf("SettleParked = %v, %v, want the run ended and the seat free", pausing, err)

@@ -56,7 +56,7 @@ const noteWidth = 1536
 // set, is called with the count acknowledged so far, inside the publish of
 // the row that made it, so a case acts at the row it names.
 //
-// Embedded rather than stubbed, as countFailsJS is: [Syncer.Publish] calls
+// Embedded rather than stubbed, as openFailsJS is: [Syncer.Publish] calls
 // nothing else, and anything else called on it is a nil interface's panic.
 type roundTripJS struct {
 	jetstream.JetStream
@@ -80,10 +80,10 @@ func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 	return &jetstream.PubAck{}, nil
 }
 
-// syncerOver is a syncer of the seat over db whose changelog is js. It has no
-// leader, so it publishes and never hydrates.
+// syncerOver is a syncer of the seat over db whose changelog is js, which
+// answers publishes and nothing else, so it publishes and never hydrates.
 func syncerOver(db *store.DB, js jetstream.JetStream) *Syncer {
-	return newSyncer(db, js, func(string) string { return seat.AgentID }, nil)
+	return New(db, js, func(string) string { return seat.AgentID })
 }
 
 // registered is the registry's entry for the table named, so a case says

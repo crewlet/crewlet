@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -978,7 +979,7 @@ func testAWatchSeesEveryNoteChange(t *testing.T, s sandbox.PendingStore) {
 	}
 	until := func(what string, ok func(sandbox.NotesView) bool) sandbox.NotesView {
 		t.Helper()
-		timer := time.NewTimer(30 * time.Second)
+		timer := time.NewTimer(30 * time.Second) //fixedwait:liveness
 		defer timer.Stop()
 		for {
 			select {
@@ -1308,76 +1309,102 @@ func compact(t *testing.T, text string) string {
 // resumed segment's source — that were handed "no record" would answer every
 // step with nothing until the next write it could read. It keeps what it last
 // knew, and the next state it can read replaces it.
+//
+// IN A BUBBLE, so "never delivered" is read once the watch has taken the
+// unreadable state and every goroutine of it is durably blocked, and read
+// again once the bubble's clock has moved past any timer a late delivery could
+// wait on. The watch replaces a view its reader has not taken with the next
+// state ([sandbox.PendingStore.WatchNotes]), so the states written after the
+// unreadable one cannot show a delivery that came late: a window of half a
+// second on the machine's clock passed one that came after it, to a reader a
+// loaded runner had descheduled.
+//
+// Mutation: deliver a state the view cannot read as an empty view, at once or
+// late, and it is read here.
 func testAStateTheNoteViewCannotReadIsPassedOver(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	const turn = "t-unread-view"
-	mustLaunched(t, s, run(turn))
-	mustFile(t, s, turn, "n-1")
-	views, err := s.WatchNotes(ctx, turn)
-	if err != nil {
-		t.Fatalf("WatchNotes: %v", err)
-	}
-	next := func(within time.Duration) (sandbox.NotesView, bool) {
-		t.Helper()
-		timer := time.NewTimer(within)
-		defer timer.Stop()
-		select {
-		case view, open := <-views:
-			if !open {
-				t.Fatal("the watch closed")
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		const turn = "t-unread-view"
+		mustLaunched(t, s, run(turn))
+		mustFile(t, s, turn, "n-1")
+		views, err := s.WatchNotes(ctx, turn)
+		if err != nil {
+			t.Fatalf("WatchNotes: %v", err)
+		}
+		next := func() (sandbox.NotesView, bool) {
+			t.Helper()
+			timer := time.NewTimer(30 * time.Second)
+			defer timer.Stop()
+			select {
+			case view, open := <-views:
+				if !open {
+					t.Fatal("the watch closed")
+				}
+				return view, true
+			case <-timer.C:
+				return sandbox.NotesView{}, false
 			}
-			return view, true
-		case <-timer.C:
-			return sandbox.NotesView{}, false
 		}
-	}
-	for {
-		view, ok := next(30 * time.Second)
-		if !ok {
-			t.Fatal("the watch never saw the filed note")
-		}
-		if view.Found && len(view.Steer.Notes) == 1 {
-			break
-		}
-	}
-	readable, found, err := runs.SandboxRun(ctx, turn)
-	if err != nil || !found {
-		t.Fatalf("read the raw row: %v %v", found, err)
-	}
-	put := func(value func(row map[string]any)) {
-		t.Helper()
-		if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
-			var row map[string]any
-			if err := json.Unmarshal(readable.Value, &row); err != nil {
-				return coord.SandboxRunChange{}, err
+		for {
+			view, ok := next()
+			if !ok {
+				t.Fatal("the watch never saw the filed note")
 			}
-			value(row)
-			raw, err := json.Marshal(row)
-			return coord.SandboxRunChange{Put: raw}, err
-		}); err != nil || !ok {
-			t.Fatalf("write the raw row: %v %v", ok, err)
+			if view.Found && len(view.Steer.Notes) == 1 {
+				break
+			}
 		}
-	}
-	// A STATE NO VIEW CAN READ: its notes are not a notes section at all.
-	put(func(row map[string]any) { row["steer"] = 5 })
-	if view, ok := next(500 * time.Millisecond); ok {
-		t.Fatalf("a state the view cannot read was delivered as %+v", view)
-	}
-	// THE NEXT READABLE STATE replaces what the view knew.
-	put(func(map[string]any) {})
-	mustFile(t, s, turn, "n-2")
-	for {
-		view, ok := next(30 * time.Second)
-		switch {
-		case !ok:
-			t.Fatal("the watch never saw the state after the unreadable one")
-		case !view.Found || len(view.Steer.Notes) == 0:
-			t.Fatalf("the watch delivered %+v after a state it could not read", view)
-		case len(view.Steer.Notes) == 2:
-			return
+		readable, found, err := runs.SandboxRun(ctx, turn)
+		if err != nil || !found {
+			t.Fatalf("read the raw row: %v %v", found, err)
 		}
-	}
+		put := func(value func(row map[string]any)) {
+			t.Helper()
+			if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
+				var row map[string]any
+				if err := json.Unmarshal(readable.Value, &row); err != nil {
+					return coord.SandboxRunChange{}, err
+				}
+				value(row)
+				raw, err := json.Marshal(row)
+				return coord.SandboxRunChange{Put: raw}, err
+			}); err != nil || !ok {
+				t.Fatalf("write the raw row: %v %v", ok, err)
+			}
+		}
+		passedOver := func(when string) {
+			t.Helper()
+			synctest.Wait()
+			select {
+			case view, open := <-views:
+				if !open {
+					t.Fatal("the watch closed")
+				}
+				t.Fatalf("a state the view cannot read was delivered as %+v, %s", view, when)
+			default:
+			}
+		}
+		// A STATE NO VIEW CAN READ: its notes are not a notes section at all.
+		put(func(row map[string]any) { row["steer"] = 5 })
+		passedOver("once the watch had taken it")
+		time.Sleep(time.Minute)
+		passedOver("once the bubble's clock had moved a minute past it")
+		// THE NEXT READABLE STATE replaces what the view knew.
+		put(func(map[string]any) {})
+		mustFile(t, s, turn, "n-2")
+		for {
+			view, ok := next()
+			switch {
+			case !ok:
+				t.Fatal("the watch never saw the state after the unreadable one")
+			case !view.Found || len(view.Steer.Notes) == 0:
+				t.Fatalf("the watch delivered %+v after a state it could not read", view)
+			case len(view.Steer.Notes) == 2:
+				return
+			}
+		}
+	})
 }
 
 // A TAKE WHOSE ANSWER WAS LOST IS SETTLED BY ITS IDENTITY. A take's write can

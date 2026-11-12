@@ -76,6 +76,9 @@ const NAMED_KINDS: ReadonlySet<EntityKind> = new Set<EntityKind>([
   "container",
   "artifact",
   "schedule",
+  // AN ATLAS ENTRY IS NAMED BY ITS NAME ("orders-db", "Datadog"): what the
+  // map calls it, and what an answer writes.
+  "atlas_entry",
 ]);
 
 /** The shortest name matched in prose: a one-letter name would match a word. */

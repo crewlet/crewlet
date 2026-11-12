@@ -64,7 +64,7 @@ import {
   brandDraftFields,
   type BrandDraft,
 } from "~/lib/brand/assistantDraft.ts";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { useAssistantDraft, useDraftState, writeVia, writeWith } from "~/app/assistant/draft.ts";
 import { useBrandDraftSave } from "~/lib/brand/useBrandSave.ts";
 import { BRAND_PAGE } from "~/components/brand.tsx";
 import { BrandPreview } from "../BrandPreview.tsx";
@@ -144,7 +144,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     () => ({ document: target.document, files: new Map() }),
     [target.document],
   );
-  const [edit, setEdit] = useState<BrandEdit>(initial);
+  const [edit, setEdit] = useDraftState<BrandEdit>(initial);
   // A FRESH SETUP STARTS AT THE START, its name prefilled from the company's;
   // a draft resumes at its first step not done.
   const [step, setStepNow] = useState<SetupStepId>(() =>
@@ -361,11 +361,14 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     scope: "The brand you are setting up (not saved)",
     value: edit,
     fields: SETUP_FIELDS,
-    apply: (next) =>
-      applyBrandDraft(edit, next, setEdit, (sentence) => {
-        setSaid(sentence);
-        announce(sentence);
-      }),
+    write: writeWith(
+      writeVia(setEdit, (change: (was: BrandEdit) => BrandEdit, was) => change(was)),
+      (next: BrandDraft, put) =>
+        applyBrandDraft(edit, next, put, (sentence) => {
+          setSaid(sentence);
+          announce(sentence);
+        }),
+    ),
     blocked: () => (busy ? "The brand is being saved." : null),
   });
   const spec = stepSpec(step);

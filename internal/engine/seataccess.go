@@ -131,6 +131,10 @@ type seatSync struct {
 	asks        map[string]seataccess.Ask
 	handles     []string
 	disconnect  bool
+
+	// reads is what the pass's company half read at the vendor, for its
+	// session to read no second time ([seataccess.OpenInput.Reads]).
+	reads seataccess.PassReads
 }
 
 // syncSeatAccess runs the sync for kind and flushes its sink, so what it
@@ -174,6 +178,7 @@ func (e *Engine) syncSeatAccess(
 			// A DRY RUN HANDS NEITHER, so a session rotates and registers
 			// nothing (vendor.go).
 			Sink: in.sink, WebhookBase: in.webhookBase,
+			Reads: in.reads,
 		},
 		Ledger:     ledger,
 		Sink:       in.sink,
@@ -223,17 +228,32 @@ func (e *Engine) withSeatAccess(
 	ctx context.Context, kind integration.Kind, in setup.PassInput,
 	company func(context.Context, setup.PassInput) ([]integration.Finding, error),
 ) ([]integration.Finding, error) {
+	return e.withSeatAccessReads(ctx, kind, in,
+		func(ctx context.Context, in setup.PassInput) ([]integration.Finding, seataccess.PassReads, error) {
+			findings, err := company(ctx, in)
+			return findings, nil, err
+		})
+}
+
+// withSeatAccessReads is [Engine.withSeatAccess] for a company half that
+// hands its session what it already read at the vendor, so one pass reads a
+// listing once: Cloudflare's zones and permission groups, which its
+// inspection and its session both need.
+func (e *Engine) withSeatAccessReads(
+	ctx context.Context, kind integration.Kind, in setup.PassInput,
+	company func(context.Context, setup.PassInput) ([]integration.Finding, seataccess.PassReads, error),
+) ([]integration.Finding, error) {
 	// ONE WRITER PER SEAT CREDENTIAL: the company half writes through a sink
 	// that refuses every seat's own sealed name, so only the sync below can
 	// seal, rotate or forget one ([seatCredentialGuard]).
 	half := in
 	half.Sink = e.seatCredentialGuard(kind, in.Sink)
-	findings, err := company(ctx, half)
+	findings, reads, err := company(ctx, half)
 	if err != nil {
 		return nil, err
 	}
 	report, err := e.syncSeatAccess(ctx, kind, seatSync{
-		sink: in.Sink, by: in.By, operator: in.Operator, webhookBase: in.WebhookBase,
+		sink: in.Sink, by: in.By, operator: in.Operator, webhookBase: in.WebhookBase, reads: reads,
 	})
 	switch {
 	case errors.Is(err, integration.ErrNotConfigured):

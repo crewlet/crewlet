@@ -54,6 +54,7 @@ type Fleet struct {
 	runParts     map[runPartKey]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
+	atlasSources map[string][]byte
 
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
@@ -192,6 +193,7 @@ func NewFleet() *Fleet {
 		runParts:          map[runPartKey]coord.Record{},
 		secrets:           map[string]coord.SecretRecord{},
 		integrations:      map[string][]byte{},
+		atlasSources:      map[string][]byte{},
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
@@ -1016,6 +1018,40 @@ func (f *Fleet) DeleteIntegrationStatus(_ context.Context, kind string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.integrations, kind)
+	return nil
+}
+
+// ---- the atlas sources' standings --------------------------------------- //
+
+// AtlasSourceStatuses returns every recorded standing, keyed by source, each
+// cloned on the way out as the integration statuses are.
+func (f *Fleet) AtlasSourceStatuses(context.Context) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]byte, len(f.atlasSources))
+	for kind, value := range f.atlasSources {
+		out[kind] = bytes.Clone(value)
+	}
+	return out, nil
+}
+
+// PutAtlasSourceStatus records one source's standing.
+func (f *Fleet) PutAtlasSourceStatus(_ context.Context, kind string, value []byte) error {
+	if kind == "" {
+		return errors.New("coord/memory: an atlas source standing needs a source name")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atlasSources[kind] = bytes.Clone(value)
+	return nil
+}
+
+// DeleteAtlasSourceStatus drops a source's standing; one that is not there is
+// the outcome asked for.
+func (f *Fleet) DeleteAtlasSourceStatus(_ context.Context, kind string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.atlasSources, kind)
 	return nil
 }
 
