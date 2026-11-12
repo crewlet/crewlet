@@ -23,9 +23,11 @@ import (
 // something from what a session recorded (that a hook's note reached the
 // model, that a call's result is held) cannot: one record it misreads is a
 // wrong answer, not a gap on a page. Every such reader (the one that confirms
-// a hook's note reached the model, and the one that tells a relaunch which of
-// its calls a kept session holds) reads a Claude Code thread through this one
-// layer, so the rules it is read by are held once. The take's context meter
+// a hook's note reached the model, the one that tells a relaunch which of its
+// calls a kept session holds, and the one that bounds what a continued
+// session's harness counts before its first request) reads a Claude Code
+// thread through this one layer, so the rules it is read by are held once.
+// The take's context meter
 // (measure.go) is no such reader and reads the main thread outside the layer:
 // it decides nothing of what the session recorded, only reads one figure, the
 // last request's input, for the launch floor, a best-effort figure that counts
@@ -1436,16 +1438,14 @@ type threadUsage struct {
 // harness compacts at its first request would read as one that holds its
 // history.
 //
-// ITS READERS. The resumed count reads it on every main-thread reply, to
-// bound what a continued session's harness counts before its first request,
-// as Claude Code counts it to judge whether to compact there: from the newest
-// reply whose usage counts, its four counts' sum, OUTPUT among them, placed
-// at the first record of that reply's ID, which Claude Code takes off a
-// record that carries no usage too, so ID and Model come with every reply,
-// usage or not. The one that tells a relaunch which of its calls a kept
-// session holds (exact telling) reads ID alone, where it needs to know a
-// reply's records as one. Which reply counts, and what "<synthetic>" or an
-// empty ID means, are each reader's to judge, never this accessor's.
+// ITS READER is the resumed count, which reads it on every main-thread reply,
+// to bound what a continued session's harness counts before its first
+// request, as Claude Code counts it to judge whether to compact there: from
+// the newest reply whose usage counts, its four counts' sum, OUTPUT among
+// them, placed at the first record of that reply's ID, which Claude Code
+// takes off a record that carries no usage too, so ID and Model come with
+// every reply, usage or not. Which reply counts, and what "<synthetic>" or an
+// empty ID means, are its reader's to judge, never this accessor's.
 //
 // Read off the line's one decode, its raw `message`, never a second read of
 // the line.
@@ -1664,11 +1664,12 @@ func wholeIteration(entry []byte) ([4]float64, bool) {
 // receipt fix's M1) reads it for a BATCH's note alone: on claude-sonnet-4-5 a
 // batch's note rides its batch's last tool result into the request
 // (measured), so it is cleared with that result, where a Stop's note is a
-// user turn of its own, which the edit never clears. The one that tells a
-// relaunch which of its calls a kept session holds (exact telling) reads it
-// only to decline a reading, never for a call: in a cleared state Claude Code
-// counts the cleared tokens back into the count it compacts by, which no line
-// of the thread states.
+// user turn of its own, which the edit never clears. The resumed count, which
+// bounds what a continued session's harness counts before its first request,
+// reads it on every main-thread reply, and takes a reply that says so, or
+// that this accessor cannot read, for a session that may compact there: in a
+// cleared state Claude Code counts the cleared tokens back into the count it
+// compacts by, which no line of the thread states.
 //
 // Read off the line's one decode, its raw `message`, never a second read of
 // the line.
