@@ -36,10 +36,11 @@
  * [useDraftReducer], whose setter and dispatch carry a brand nothing else
  * mints, or a store that extends [DraftStore]. A spec takes only a write made
  * from that state ([writeTo], [writeParts], [writeVia], [writeWith],
- * [writeThrough], [storeWrite], [latestWrite]) or, for a draft it reads and
- * never sets, the proof that it is held there ([readOnlyFrom]; a saved draft
- * the page holds in no state of its own says [readOnlySaved]). A draft held
- * in plain React state is therefore a type error, never a declaration.
+ * [writeEach], [writeThrough], [storeWrite], [latestWrite]) or, for a draft
+ * it reads and never sets, the proof that it is held there ([readOnlyFrom];
+ * a saved draft the page holds in no state of its own says
+ * [readOnlySaved]). A draft held in plain React state is therefore a type
+ * error, never a declaration.
  *
  * The brand is what the draft gate (`draftGate.test.ts`) reads through the
  * TypeScript checker. A module listed as a modal passes while it holds only
@@ -268,8 +269,8 @@ export type DraftDispatch<A> = Dispatch<A> & { readonly [HELD]: "dispatch" };
 /**
  * How an approved change reaches a screen's draft: a write made only from
  * the branded state the draft is held in ([writeTo], [writeParts],
- * [writeVia], [writeWith], [writeThrough], [storeWrite], [latestWrite]), so a
- * spec cannot be built from any other.
+ * [writeVia], [writeWith], [writeEach], [writeThrough], [storeWrite],
+ * [latestWrite]), so a spec cannot be built from any other.
  */
 export type DraftWrite<D> = ((next: D) => void) & { readonly [HELD]: "write" };
 
@@ -325,7 +326,12 @@ function minted<D>(write: (next: D) => void): DraftWrite<D> {
   return write as DraftWrite<D>;
 }
 
-/** What a screen does beside writing its draft when a change reaches it from outside. */
+/**
+ * What a screen does beside writing its draft when a change reaches it from
+ * outside (a refusal cleared, an editor told its body was replaced): never a
+ * write of a draft, which goes through a write of its own ([writeEach]). It
+ * is handed the change and nothing that writes.
+ */
 export type DraftAlso<D> = (next: D) => void;
 
 /**
@@ -382,6 +388,17 @@ export function writeVia<V, S>(
   return minted((next: V) => {
     set((current) => to(next, current));
     also?.(next);
+  });
+}
+
+/**
+ * A change written through several branded writes in turn: a draft held in
+ * several states that one change moves together (a sheet's way in, and the
+ * grid its template makes the first time it is chosen).
+ */
+export function writeEach<D>(...writes: readonly DraftWrite<D>[]): DraftWrite<D> {
+  return minted((next: D) => {
+    for (const write of writes) write(next);
   });
 }
 

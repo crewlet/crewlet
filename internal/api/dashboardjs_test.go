@@ -1398,8 +1398,8 @@ const (
 	// Merged with main since the required checks it measures 402.5 KiB
 	// (412,160 bytes), 1,536 bytes inside 404 KiB. Ask Crewlet reading the
 	// atlas took it to 402.5 KiB (412,164 bytes), and every declared draft
-	// held in branded state, merged on top of it, to 402.5 KiB (412,168
-	// bytes, +4), 1,528 bytes inside it: the next addition to the entry moves
+	// held in branded state, merged on top of it, to 402.5 KiB (412,161
+	// bytes, -3), 1,535 bytes inside it: the next addition to the entry moves
 	// this budget only with a reason of its own.
 	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
@@ -2308,8 +2308,8 @@ const (
 	// Every draft a screen declares to Ask Crewlet held in branded state, so
 	// the draft gate reads through the checker which modal a page hands its
 	// draft to (draft.ts's mints, and every declaring screen, box and store
-	// moved onto them), merged on top of it, took it to 5841.7 KiB
-	// (5,981,918 bytes, +770, all script): 5842 KiB.
+	// moved onto them), merged on top of it, took it to 5841.8 KiB
+	// (5,982,024 bytes, +876, all script): 5842 KiB.
 	treeBudget = 5<<20 + 722<<10
 )
 
