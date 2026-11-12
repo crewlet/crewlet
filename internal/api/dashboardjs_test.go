@@ -2297,7 +2297,11 @@ const (
 	// the tree before the required checks), then the artifacts' contract split
 	// in two, the workspace's half a module of its own (+547 there), merged on
 	// top of it, took it to 5840.6 KiB (5,980,762 bytes, +2,261, all script):
-	// 5841 KiB.
+	// 5841 KiB. Ask Crewlet reading the atlas (an entry's chip with the map
+	// glyph, matched by its name and worded as an entry) and the atlas's
+	// certificate kind, the facts and the relation an integration's read
+	// fills, named in the atlas words, merged on top of it, took it to 5841.0
+	// KiB (5,981,148 bytes, +386, all script), 36 bytes inside it.
 	treeBudget = 5<<20 + 721<<10
 )
 
