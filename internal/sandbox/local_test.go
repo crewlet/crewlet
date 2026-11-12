@@ -743,6 +743,21 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 
 // Teardown of a PAUSED box is the case SIGCONT-first exists for: a stopped
 // process never runs again to handle SIGTERM.
+//
+// THE JOB HANDLES SIGTERM, as a harness cleaning up on its way out does, and
+// leaves a witness outside the box when it does. That the group is gone after
+// Close shows nothing about the SIGCONT: a teardown that terminated the
+// stopped group without continuing it would end it all the same, by the
+// SIGKILL that follows the grace, which reaches a stopped process and which
+// Close waits for. Only the witness shows the job ran again to handle the
+// SIGTERM.
+//
+// ITS JOB FORKS NOTHING, running builtins alone ([awaitStopped]), and the case
+// reads its tree stopped before the teardown, so the SIGCONT has a stopped job
+// to continue.
+//
+// Mutation: tear the box down without the SIGCONT, or without the SIGTERM,
+// and the SIGKILL that follows the grace ends the job before its trap runs.
 func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -750,18 +765,24 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := box.StartBackground(t.Context(), "sleep 300", ExecOptions{}); err != nil {
+	witness := filepath.Join(t.TempDir(), "term")
+	if _, err := box.StartBackground(t.Context(),
+		"trap 'echo term > "+witness+"; exit 0' TERM; while true; do :; done", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	pid := recordedLeader(t, box).PID
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
+	awaitStopped(t, pid, "the box was not actually paused: its job's tree never stopped")
 	if err := box.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	waitFor(t, 10*time.Second, func() bool { return !procgroup.Exists(pid) },
-		"a paused box survived teardown — it never saw SIGTERM")
+		"a paused box survived teardown")
+	if got, err := os.ReadFile(witness); err != nil || string(got) != "term\n" {
+		t.Fatalf("the paused job never handled the teardown's SIGTERM (its witness reads %q, %v)", got, err)
+	}
 }
 
 // Connect resumes, so the pause reaper must not use it: that would boot the
