@@ -94,9 +94,12 @@ func (r Ref) Recordable() error {
 	return nil
 }
 
-// OnGitlet reports an entry Gitlet names: a repository keyed gitlet/, or one of
-// its checks.
+// OnGitlet reports an entry Gitlet names: its own account, a repository keyed
+// gitlet/, or one of its checks.
 func (r Ref) OnGitlet() bool {
+	if r.Kind == KindAccount {
+		return r.Key == string(VendorGitlet)
+	}
 	return (r.Kind == KindRepository || r.Kind == KindPipeline) && strings.HasPrefix(r.Key, GitletPrefix+"/")
 }
 

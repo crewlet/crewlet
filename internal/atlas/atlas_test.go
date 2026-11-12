@@ -370,6 +370,7 @@ func TestAnEntryTheEngineNamesIsDeclaredWhereItIsNamed(t *testing.T) {
 		atlas.MustRef(atlas.KindModel, "llm/main"):                 atlas.SourceSettings,
 		atlas.MustRef(atlas.KindRepository, "gitlet/api"):          atlas.SourceRecords,
 		atlas.MustRef(atlas.KindPipeline, "gitlet/api#unit"):       atlas.SourceRecords,
+		atlas.MustRef(atlas.KindAccount, "gitlet"):                 atlas.SourceRecords,
 		atlas.MustRef(atlas.KindHost, "addr/web-2.acme.example"):   "",
 		atlas.MustRef(atlas.KindRepository, "github.com/acme/api"): "",
 		atlas.MustRef(atlas.KindService, "checkout-api"):           "",
