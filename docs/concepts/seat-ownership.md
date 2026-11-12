@@ -607,7 +607,7 @@ from its own record and from what broke, rather than from `err != nil`:
 |---|---|
 | nothing reached outside the engine | **redelivered** where a retry may succeed, exactly as before — a provider that never answered, a runner that could not be built — and **deferred** where a redelivery would only be refused again: a refused budget, whose seat is [parked](agent-runtime.md#the-budget-park) until the window turns over; a chain every model of which is at its usage limit, whose seat is [parked](llm-backends.md#falling-back-between-entries) until the first is tried again; and a failure a retry cannot cure, the second time in a row, which [pauses its seat](agent-runtime.md#pausing-a-seat) until its settings change or a person resumes it. A seat handed to another node mid-call is deferred too, to its new owner. None of them wrote anything, so none is given up. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
-| a resumed turn broke before writing anything new | **retried**, whatever was written before it, unless it panicked or was refused for good (below). The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the executor's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
+| a resumed turn broke before writing anything new | **retried**, whatever was written before it, unless it panicked, was refused for good, or its relaunch failed and ended its run with it (below). The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the executor's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
 | the turn panicked | **recorded and acked**, whatever the record shows. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
 | its executor's round was lost with its host past its [limit](code-sandbox.md#durability-completion-and-observability) | **recorded and acked**, whatever the record shows: a retry carries the same losses and is refused the same way, so the turn ends on the resume that refused to carry the round on, saying how often the round was lost. That refusal used to be handed back unless the round's jobs had written outside, refused again on every announcement of the run's completion, and given up only once the resume had failed for half an hour, the seat held behind it throughout. |
 
@@ -647,10 +647,13 @@ acting, that panicked, or that was refused for a reason every retry meets again
 (`turn.ErrPermanent`: its executor's round lost with its host past its limit)
 therefore keeps its claim, which is what stops a retry winning the flip, and
 its run is settled like one that finished: the box is reclaimed and the seat is
-free for its next turn. Every other resume failure still un-claims and comes
-back, because the run's collected work is the expensive thing there and a
-resume whose record shows no act, and that a retry may get past, has lost
-nothing by trying again.
+free for its next turn. So is a resumed turn a person stopped, and one whose
+relaunch failed and ended its run with it, which leaves a retry nothing to
+collect; and a run no build will resume is settled before its turn begins
+([When a run does not start](code-sandbox.md#when-a-run-does-not-start)).
+Every other resume failure still un-claims and comes back, because the run's
+collected work is the expensive thing there and a resume whose record shows no
+act, and that a retry may get past, has lost nothing by trying again.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the
