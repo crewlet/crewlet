@@ -15,6 +15,12 @@ import (
 // that runs on it too, and the zone belongs to a DNS account.
 func chain(t *testing.T) atlas.View {
 	t.Helper()
+	return atlas.Fold(chainClaims(t), now)
+}
+
+// chainClaims is the claims chain folds.
+func chainClaims(t *testing.T) []atlas.Claim {
+	t.Helper()
 	m := must(t)
 	zone := atlas.MustRef(atlas.KindDomain, "acme.example")
 	host := atlas.MustRef(atlas.KindHostname, "api.acme.example")
@@ -24,7 +30,7 @@ func chain(t *testing.T) atlas.View {
 	cf := atlas.MustRef(atlas.KindAccount, "cloudflare/0123456789abcdef0123456789abcdef")
 	old := atlas.MustRef(atlas.KindService, "legacy-api")
 	retired := m(atlas.Exists(old, ada, now.Add(-time.Hour)))
-	return atlas.Fold([]atlas.Claim{
+	return []atlas.Claim{
 		m(atlas.Exists(zone, settings, now)), m(atlas.Exists(host, settings, now)), m(atlas.Exists(web, settings, now)),
 		m(atlas.Exists(svc, ada, now)), m(atlas.Exists(db, ada, now)), m(atlas.Exists(cf, settings, now)),
 		m(atlas.Says(cf, atlas.FactVendor, "cloudflare", settings, now)),
@@ -36,7 +42,7 @@ func chain(t *testing.T) atlas.View {
 		m(atlas.Relates(zone, atlas.RelationBelongsTo, cf, settings, now)),
 		m(atlas.Relates(old, atlas.RelationRunsOn, web, ada, now.Add(-time.Hour))),
 		retired, m(atlas.Denial(retired, ada, now)),
-	}, now)
+	}
 }
 
 // A TRACE WALKS AGAINST THE ARROWS FOR WHAT DEPENDS ON AN ENTRY, along them
@@ -93,7 +99,7 @@ func TestAListPagesOnItsCursor(t *testing.T) {
 		var seen []string
 		after := ""
 		for range 10 {
-			page, err := atlas.List(entries, v.Vendors(), sort, after, 2)
+			page, err := atlas.List(entries, v.Summaries(false), sort, after, 2)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,8 +120,8 @@ func TestAListPagesOnItsCursor(t *testing.T) {
 			t.Errorf("%s listed a retired entry by default", sort)
 		}
 	}
-	page, _ := atlas.List(entries, v.Vendors(), atlas.SortName, "", 2)
-	if _, err := atlas.List(entries, v.Vendors(), atlas.SortKey, page.Next, 2); !errors.Is(err, atlas.ErrQuery) {
+	page, _ := atlas.List(entries, v.Summaries(false), atlas.SortName, "", 2)
+	if _, err := atlas.List(entries, v.Summaries(false), atlas.SortKey, page.Next, 2); !errors.Is(err, atlas.ErrQuery) {
 		t.Errorf("a cursor of another order: %v", err)
 	}
 }
@@ -168,7 +174,7 @@ func TestAnUnconfirmedEntryStaysOutUntilAskedFor(t *testing.T) {
 	if got := v.Facets(atlas.Query{}).Words[atlas.WordUnconfirmed]; got != 1 {
 		t.Errorf("the word facet counts %d unconfirmed entries, want the hidden one counted", got)
 	}
-	if got := v.Map(atlas.Query{}, nil).Nodes; len(got) != 1 {
+	if got := v.Map(atlas.Query{}, nil, false).Nodes; len(got) != 1 {
 		t.Errorf("the map drew %d entries, want the unconfirmed one left off it", len(got))
 	}
 }
@@ -188,7 +194,7 @@ func TestAMapClosesGroupsPastItsBound(t *testing.T) {
 		claims = append(claims, m(atlas.Exists(r, ada, now)),
 			m(atlas.Relates(r, atlas.RelationRunsOn, atlas.MustRef(atlas.KindHost, "ssh/srv-0000"), ada, now)))
 	}
-	mp := atlas.Fold(claims, now).Map(atlas.Query{}, nil)
+	mp := atlas.Fold(claims, now).Map(atlas.Query{}, nil, false)
 	if len(mp.Lanes) != len(atlas.Lanes) {
 		t.Errorf("%d lanes drawn, want every lane", len(mp.Lanes))
 	}
@@ -199,7 +205,7 @@ func TestAMapClosesGroupsPastItsBound(t *testing.T) {
 	if len(mp.Edges) != 0 {
 		t.Errorf("edges to a closed group were drawn: %v", mp.Edges)
 	}
-	open := chain(t).Map(atlas.Query{}, nil)
+	open := chain(t).Map(atlas.Query{}, nil, false)
 	for _, e := range open.Edges {
 		if !e.Relation.Structural() {
 			t.Errorf("the map drew %s at rest", e.Relation)
@@ -208,7 +214,7 @@ func TestAMapClosesGroupsPastItsBound(t *testing.T) {
 	if len(open.Edges) != 5 || len(open.Collapsed) != 0 {
 		t.Errorf("the small map: %d edges, collapsed %v", len(open.Edges), open.Collapsed)
 	}
-	closed := chain(t).Map(atlas.Query{}, []string{"runtime"})
+	closed := chain(t).Map(atlas.Query{}, []string{"runtime"}, false)
 	if slices.ContainsFunc(closed.Nodes, func(s atlas.Summary) bool { return s.Lane == atlas.LaneRuntime }) {
 		t.Error("a group the reader closed was drawn open")
 	}
