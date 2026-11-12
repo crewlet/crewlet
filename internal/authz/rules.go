@@ -3,6 +3,7 @@ package authz
 import (
 	"maps"
 	"slices"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -2261,7 +2262,7 @@ func AssistOf(a Action) (AssistClass, bool) {
 // assistOf is what the assistant may do with verb a, whose row is r: never
 // for a verb on [assistantNever], and the row's own nature otherwise.
 func assistOf(a Action, r rule) AssistClass {
-	if _, never := assistantNever[a]; never {
+	if _, never := assistantNever()[a]; never {
 		return AssistNever
 	}
 	return r.assist
@@ -2271,7 +2272,7 @@ func assistOf(a Action, r rule) AssistClass {
 // reviewer reads it, and whether the human-only list names the verb at all:
 // for the walk that holds the list to the set it is meant to be.
 func AssistNeverReason(a Action) (string, bool) {
-	entry, never := assistantNever[a]
+	entry, never := assistantNever()[a]
 	return entry.why, never
 }
 
@@ -2282,7 +2283,7 @@ func AssistNeverReason(a Action) (string, bool) {
 // ONE SENTENCE PER FAMILY, so the person reads the same answer for every
 // gesture of one kind (inviting somebody and creating them both hand out a
 // sign-in link) and never a verb's internal name.
-func AssistNeverSentence(a Action) string { return assistantNever[a].tell }
+func AssistNeverSentence(a Action) string { return assistantNever()[a].tell }
 
 // neverEntry is one verb of the human-only list: the reason a reviewer reads,
 // and the sentence the person is told.
@@ -2349,58 +2350,63 @@ const (
 // seat reading back its own executor sessions (`list_sessions`,
 // `read_session`): no person takes them either, so parity alone keeps them
 // from the person's assistant.
-var assistantNever = map[Action]neverEntry{
-	ActionCredentialWrite: {"a machine token's mint answers the token in clear, and revoking " +
-		"one is a session ceremony", tellToken},
-	ActionCredentialProof: {"changes how somebody proves who they are: a second factor, the " +
-		"recovery codes or a password", tellProof},
-	ActionSignInWrite: {"creating a person or an invitation answers a sign-in link, a bearer " +
-		"credential in clear, and a password reset or a second factor reset is a sign-in " +
-		"ceremony", tellSignIn},
-	ActionSessionEnd:        {"a session ceremony: it signs somebody out", tellSessions},
-	ActionSessionInvalidate: {"a session ceremony: it signs everybody out, irreversibly", tellSessions},
-	ActionSecretReveal:      {"answers a credential's value in clear", tellSecret},
-	ActionSecretWrite: {"a secret's value travels in the request body, so a model would author " +
-		"it and a transcript would keep it", tellSecret},
-	ActionSetupConnect: {"an integration's inputs carry vendor credentials in the request body, " +
-		"and provisioning mints vendor secrets", tellSetup},
-	ActionArtifactTicket: {"a view ticket is a bearer credential bound to the session that " +
-		"opened the frame", tellFrame},
-	ActionAssistantConverse:         {"the assistant's own verb: it never acts on its own behalf", tellOwn},
-	ActionAssistantConversationRead: {"the assistant's own verb: it never acts on its own behalf", tellOwn},
-	ActionAssistantApprove:          {"the assistant never approves its own proposal", tellOwn},
-	ActionAssistantDecline:          {"the assistant never decides its own proposal", tellOwn},
-	ActionAssistantAuditRead: {"a compliance read of somebody's conversations is the " +
-		"administrator's own, recorded beside their name", tellOwn},
-	ActionKnowledgeAnswer: {"a model call inside a model turn, spent outside the turn's own " +
-		"budget meter; the assistant reads the same pages itself", tellKnowledge},
-	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
-		"so its report would falsify the service objective", tellReady},
-	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
-	ActionWithdrawAsk: {"an agent seat's own verb: a person resolves their own question from its " +
-		"work item, and withdraws nothing an agent's run waits on", tellSeat},
-	ActionRequestAccess: {"an agent seat's own verb: a person changes an agent's access in the " +
-		"organization, and asks nobody for it", tellSeat},
-	ActionAtlasRecord: {"an agent seat's own verb: a person records in the atlas in their own rank, " +
-		"with the tools that add, correct and confirm", tellSeat},
-	ActionAtlasDispute: {"an agent seat's own verb: a person who finds the atlas wrong corrects or " +
-		"retires what it holds", tellSeat},
-	ActionSessionsList: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
-		"person reads a seat's as its trail", tellSeat},
-	ActionSessionRead: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
-		"person reads a seat's as its trail", tellSeat},
-	ActionCodeReportCheck: {"a check's result is reported by the CI that ran it, and an assistant runs " +
-		"no CI, so its report would be a result nobody ran", tellCheck},
-	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
-		"and the assistant deciding it would be a model approving a model's call", tellApproval},
-	ActionSSHOperateApprove: {"an agent's command on a production server runs only as a person " +
-		"approved it, and the assistant approving it would be a model approving a model's command", tellApproval},
-	ActionReleaseApprove: {"a merge or a deploy an agent asked for goes ahead only as a person or a " +
-		"delegate approved it, and the assistant approving it would be a model approving a model's request",
-		tellApproval},
-	ActionSSHAuditRead: {"the SSH audit answers each command's text in clear, which can carry a " +
-		"credential typed into it", tellSSHAudit},
-}
+//
+// BUILT AT FIRST USE: Gitlet's push hook is this binary and pays every linked
+// package's init on every push, and nothing a hook does asks the assistant.
+var assistantNever = sync.OnceValue(func() map[Action]neverEntry {
+	return map[Action]neverEntry{
+		ActionCredentialWrite: {"a machine token's mint answers the token in clear, and revoking " +
+			"one is a session ceremony", tellToken},
+		ActionCredentialProof: {"changes how somebody proves who they are: a second factor, the " +
+			"recovery codes or a password", tellProof},
+		ActionSignInWrite: {"creating a person or an invitation answers a sign-in link, a bearer " +
+			"credential in clear, and a password reset or a second factor reset is a sign-in " +
+			"ceremony", tellSignIn},
+		ActionSessionEnd:        {"a session ceremony: it signs somebody out", tellSessions},
+		ActionSessionInvalidate: {"a session ceremony: it signs everybody out, irreversibly", tellSessions},
+		ActionSecretReveal:      {"answers a credential's value in clear", tellSecret},
+		ActionSecretWrite: {"a secret's value travels in the request body, so a model would author " +
+			"it and a transcript would keep it", tellSecret},
+		ActionSetupConnect: {"an integration's inputs carry vendor credentials in the request body, " +
+			"and provisioning mints vendor secrets", tellSetup},
+		ActionArtifactTicket: {"a view ticket is a bearer credential bound to the session that " +
+			"opened the frame", tellFrame},
+		ActionAssistantConverse:         {"the assistant's own verb: it never acts on its own behalf", tellOwn},
+		ActionAssistantConversationRead: {"the assistant's own verb: it never acts on its own behalf", tellOwn},
+		ActionAssistantApprove:          {"the assistant never approves its own proposal", tellOwn},
+		ActionAssistantDecline:          {"the assistant never decides its own proposal", tellOwn},
+		ActionAssistantAuditRead: {"a compliance read of somebody's conversations is the " +
+			"administrator's own, recorded beside their name", tellOwn},
+		ActionKnowledgeAnswer: {"a model call inside a model turn, spent outside the turn's own " +
+			"budget meter; the assistant reads the same pages itself", tellKnowledge},
+		ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
+			"so its report would falsify the service objective", tellReady},
+		ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+		ActionWithdrawAsk: {"an agent seat's own verb: a person resolves their own question from its " +
+			"work item, and withdraws nothing an agent's run waits on", tellSeat},
+		ActionRequestAccess: {"an agent seat's own verb: a person changes an agent's access in the " +
+			"organization, and asks nobody for it", tellSeat},
+		ActionAtlasRecord: {"an agent seat's own verb: a person records in the atlas in their own rank, " +
+			"with the tools that add, correct and confirm", tellSeat},
+		ActionAtlasDispute: {"an agent seat's own verb: a person who finds the atlas wrong corrects or " +
+			"retires what it holds", tellSeat},
+		ActionSessionsList: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
+			"person reads a seat's as its trail", tellSeat},
+		ActionSessionRead: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
+			"person reads a seat's as its trail", tellSeat},
+		ActionCodeReportCheck: {"a check's result is reported by the CI that ran it, and an assistant runs " +
+			"no CI, so its report would be a result nobody ran", tellCheck},
+		ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
+			"and the assistant deciding it would be a model approving a model's call", tellApproval},
+		ActionSSHOperateApprove: {"an agent's command on a production server runs only as a person " +
+			"approved it, and the assistant approving it would be a model approving a model's command", tellApproval},
+		ActionReleaseApprove: {"a merge or a deploy an agent asked for goes ahead only as a person or a " +
+			"delegate approved it, and the assistant approving it would be a model approving a model's request",
+			tellApproval},
+		ActionSSHAuditRead: {"the SSH audit answers each command's text in clear, which can carry a " +
+			"credential typed into it", tellSSHAudit},
+	}
+})
 
 // SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and
 // whether the table knows the verb at all.
