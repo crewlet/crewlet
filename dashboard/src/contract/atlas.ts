@@ -102,6 +102,7 @@ export type AtlasFact =
   | "last_result"
   | "runner"
   | "required"
+  | "pipeline_state"
   | "harness"
   | "model"
   | "sign_in"
@@ -175,7 +176,8 @@ export type AtlasSignalKind =
   | "standing_alarm"
   | "monitor_alerting"
   | "monitor_warning"
-  | "monitor_no_data";
+  | "monitor_no_data"
+  | "pipeline_failing";
 
 /** How urgent a signal is (`atlas.Severity`). */
 type AtlasSeverity = "danger" | "warning";

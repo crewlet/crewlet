@@ -186,6 +186,7 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   last_result: "Last result",
   runner: "Runner",
   required: "Required",
+  pipeline_state: "State",
   harness: "Harness",
   model: "Model",
   sign_in: "Sign-in",
@@ -244,6 +245,7 @@ export const SIGNALS: Readonly<Record<AtlasSignalKind, string>> = {
   monitor_alerting: "A monitor is alerting",
   monitor_warning: "A monitor is warning",
   monitor_no_data: "A monitor is receiving no data",
+  pipeline_failing: "A pipeline's last run failed",
 };
 
 /** What each kind of use the engine records is called. */
