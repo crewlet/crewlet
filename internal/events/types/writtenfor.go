@@ -18,7 +18,7 @@ import (
 // it wakes or hands work to works for them too and never for the writing
 // seat, which holds every app. A colleague's ask carries the same carrier ([A2ARequest]); this
 // is the same hop through what a seat writes on the engine's own surfaces:
-// Worklet, Doclet and Chatlet.
+// Worklet, Doclet, Chatlet and Gitlet.
 //
 // # The builder states it, and the type refuses an agent's that did not
 //

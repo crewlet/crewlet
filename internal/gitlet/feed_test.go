@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -245,6 +246,88 @@ func TestARelayedCodeRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
 	if !errors.As(err, &deferral) || deferral.Reason != notify.DeferNewerRecord {
 		t.Fatalf("a relayed code record a newer build wrote answered %v, want it "+
 			"deferred to a peer on that build (%s)", err, notify.DeferNewerRecord)
+	}
+}
+
+// A CODE WAKE IS WRITTEN FOR WHOM ITS AGENT WROTE IT (ADR-0109): the wake a
+// seat's code record starts states the seat as its writer and whom its routing
+// says the seat wrote for, so the turn it starts works for them, held to what
+// they may use — dev's comment naming cto, made for founder, a version-2
+// record, wakes cto written by dev for founder. A person writes for nobody but
+// themselves, and so does the engine: the same routing with its actor
+// founder's, or nobody's, and the carrier forged on it, wakes cto written for
+// nobody. And dev's comment made for nobody, a version-1 record, wakes cto
+// written by dev for nobody: the seat's own work.
+//
+// Mutation: writerOf handing the writer no carrier — dev's comment made for
+// founder wakes cto written for nobody, red.
+func TestACodeWakeIsWrittenForWhomItsAgentWroteIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := discussed(t, n, "web")
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	naming := func(f types.WrittenFor) statelog.Position {
+		said := saying(repo, change, dev, "", "@cto the retry loop")
+		said.Comment.Mentions, said.WrittenFor = []string{"cto"}, f
+		return converse(t, w, said).Position
+	}
+	madeFor, own := naming(types.ForTurn(founder)), naming(types.ForTurn(nil))
+	// forged is the record of dev's comment made for founder, its routing's
+	// actor actor — a person's, persons naming them, or nobody's — and the
+	// carrier left on it, as no deciding node stamps one.
+	forged := func(actor string, persons ...string) changefeed.Record {
+		t.Helper()
+		rec := n.recordAt(madeFor)
+		payload, err := gitlet.DecodeMutation(rec)
+		if err != nil {
+			t.Fatalf("decode dev's comment: %v", err)
+		}
+		comment, ok := payload.(gitlet.Comment)
+		if !ok || comment.Routing == nil || comment.Routing.WorkingFor == nil {
+			t.Fatalf("dev's comment made for founder records %+v, want a comment whose routing carries founder",
+				payload)
+		}
+		comment.Routing.Actor, comment.Routing.Persons = actor, persons
+		if rec.Mutation, err = json.Marshal(comment); err != nil {
+			t.Fatal(err)
+		}
+		rec.V, rec.OpID = 0, "op-forged-"+actor
+		body, err := gitlet.Encode(rec)
+		if err != nil {
+			t.Fatalf("encode the forged record: %v", err)
+		}
+		return changefeed.Record{Key: gitlet.ChangeSubject(change).Wire(), Payload: body, Position: madeFor.Seq,
+			Stream: madeFor.Stream, Gen: uint64(madeFor.Generation)}
+	}
+	for _, tc := range []struct {
+		name   string
+		rec    changefeed.Record
+		writer types.NotificationWriter
+	}{
+		{"dev's comment made for founder", feedRecord(t, n, madeFor),
+			types.NotificationWriter{Kind: iam.ActorAgent, Seat: "dev", WorkingFor: founder}},
+		{"a person's routing with a carrier forged on", forged("founder", "founder"),
+			types.NotificationWriter{Kind: iam.ActorHuman, Seat: "founder"}},
+		{"the engine's routing with a carrier forged on", forged(""),
+			types.NotificationWriter{Kind: iam.ActorSystem}},
+		{"dev's comment made for nobody", feedRecord(t, n, own),
+			types.NotificationWriter{Kind: iam.ActorAgent, Seat: "dev"}},
+	} {
+		_, relayed, routed := wakesOf(t, tc.rec)
+		switch {
+		case !relayed || !slices.Equal(woken(routed), []string{"cto:mention"}):
+			t.Errorf("%s wakes %v (relayed %v), want cto named", tc.name, woken(routed), relayed)
+		case routed[0].Writer == nil || !reflect.DeepEqual(*routed[0].Writer, tc.writer):
+			t.Errorf("%s wakes cto written by %+v, want %+v", tc.name, routed[0].Writer, tc.writer)
+		}
+	}
+	if v := n.recordAt(madeFor).V; v != gitlet.WorkingForVersion {
+		t.Errorf("dev's comment made for founder is stamped version %d, want %d", v, gitlet.WorkingForVersion)
+	}
+	if v := n.recordAt(own).V; v != 1 {
+		t.Errorf("dev's comment made for nobody is stamped version %d, want 1", v)
 	}
 }
 

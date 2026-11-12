@@ -314,7 +314,11 @@
 // names the CHANGE as what starts its turn (types.OriginCodeChange, the change
 // as the Gitlet screens name it, under the seat's own reason), so the turns a
 // change started are found from the change, as a chat message's are from the
-// message.
+// message. A seat's record says whom its write was made for where a turn it
+// starts reads it (ADR-0109): beside the seat on a routing that may wake a
+// seat, so that turn works for them too, held to what they may use, and on an
+// open, a reopen, a push, a merge and an enqueue whatever they wake, kept on
+// their rows for the engine's later records (concerns.go, writtenfor.go).
 //
 // # A repository's checks are rows on their own subject
 //

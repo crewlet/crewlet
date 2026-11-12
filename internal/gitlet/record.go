@@ -58,8 +58,22 @@ import (
 //
 // # What each version added
 //
-//   - 1: every shape this domain has.
-const RecordVersion = 1
+//   - 1: every shape this domain landed on main with.
+//   - 2: whom an agent's write was made for (ADR-0109): beside the actor its
+//     routings name ([ChangeRouting.WorkingFor]), and on an open, a reopen, a
+//     push's entry, a merge and an enqueue whatever they wake
+//     ([WorkingForVersion]).
+const RecordVersion = 2
+
+// WorkingForVersion is the version from which a record carries whom an
+// agent's write was made for — on a routing beside its actor, and on the
+// payloads the engine's later records read it back from (an open, a reopen, a
+// push's entry, a merge and an enqueue) — which the applier keeps on the rows
+// those writes make (code_revisions, code_pushes and code_queue's
+// working_for, the replicated migration
+// a_code_row_keeps_whom_an_agents_write_was_made_for). A record below it keeps
+// none, whatever it holds ([keptCarrier]).
+const WorkingForVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped
@@ -79,10 +93,28 @@ const GateRecordVersion = 1
 
 // versionedFields is every field a code record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
-// EMPTY: every field is in the base format. Adding one is adding a row here,
-// moving [RecordVersion] to its version, and giving the statelogtest candidate
-// a record that carries it ([statelog.VersionedField]).
-var versionedFields = statelog.RecordFields{}
+// Adding one is adding a row here, moving [RecordVersion] to its version, and
+// giving the statelogtest candidate a record that carries it
+// ([statelog.VersionedField]).
+//
+// WHOM A WRITE WAS MADE FOR is version 2, on every op it rides: a routing's
+// beside its actor, which every payload about a change carries at
+// `mutation.routing` (a list of them, a queue's, walked element by element)
+// and a push's entries at `mutation.pushes.routing`; and the payload's own, an
+// open's, a reopen's, a merge's and an enqueue's at `mutation.working_for`
+// and a push entry's at `mutation.pushes.working_for`. The routing's row and
+// the payload's own are on EVERY OP rather than the ones that carry one
+// today, because every payload's working_for means one thing, and a later
+// payload that carries it is stamped by its row too.
+var versionedFields = statelog.RecordFields{
+	{Name: "ChangeRouting.WorkingFor", Since: WorkingForVersion,
+		Path: []string{"mutation", "routing", "working_for"}},
+	{Name: "PushEntry.Routing.WorkingFor", Since: WorkingForVersion, Op: string(OpPush),
+		Path: []string{"mutation", "pushes", "routing", "working_for"}},
+	{Name: "Mutation.WorkingFor", Since: WorkingForVersion, Path: []string{"mutation", "working_for"}},
+	{Name: "PushEntry.WorkingFor", Since: WorkingForVersion, Op: string(OpPush),
+		Path: []string{"mutation", "pushes", "working_for"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }

@@ -182,13 +182,14 @@ func (p ChangeProposal) record() (OpKind, any) {
 }
 
 // stamped is the op and the payload of p's record as the committer forms it:
-// its asker as the change's owner or as who wrote it, and head as an open's or
-// a reopen's head — the fields no asker sends.
+// its asker as the change's owner or as who wrote it, head as an open's or a
+// reopen's head, and whom an open and a reopen were made for, as p states it
+// ([ChangeOpen.WorkingFor]) — the fields no asker sends.
 func (p ChangeProposal) stamped(head string) (OpKind, any) {
 	op, payload := p.record()
 	switch r := payload.(type) {
 	case ChangeOpen:
-		r.Owner, r.Head = p.Asker, head
+		r.Owner, r.Head, r.WorkingFor = p.Asker, head, p.WrittenFor.Carrier()
 		return op, r
 	case ChangeEdit:
 		r.By = p.Asker
@@ -203,7 +204,7 @@ func (p ChangeProposal) stamped(head string) (OpKind, any) {
 		r.By = p.Asker
 		return op, r
 	case ChangeReopen:
-		r.By, r.Head = p.Asker, head
+		r.By, r.Head, r.WorkingFor = p.Asker, head, p.WrittenFor.Carrier()
 		return op, r
 	}
 	return op, payload
@@ -388,9 +389,13 @@ func (p ChangeProposal) validFields() error {
 		}
 		return stampedBy("close", p.Close.By)
 	}
-	if p.Reopen.Head != "" {
+	switch {
+	case p.Reopen.Head != "":
 		return badField("reopen.head", "the committer stamps a reopen's head from its snapshot, and an asker "+
 			"sends none")
+	case p.Reopen.WorkingFor != nil:
+		return badField("reopen.working_for", "the committer stamps whom a reopen was made for from the "+
+			"proposal's written_for, and an asker sends none")
 	}
 	if err := stampedRouting("reopen", p.Reopen.Routing); err != nil {
 		return err
@@ -443,6 +448,9 @@ func (p ChangeProposal) validOpen() error {
 	case o.Owner != (Principal{}):
 		return badField("open.owner", "the committer stamps the change's owner from the proposal's asker, and an "+
 			"asker sends none")
+	case o.WorkingFor != nil:
+		return badField("open.working_for", "the committer stamps whom an open was made for from the proposal's "+
+			"written_for, and an asker sends none")
 	}
 	return stampedRouting("open", o.Routing)
 }
@@ -630,12 +638,16 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	// bringing the head into the target, as its decide read them — that push
 	// merged the change, so its pusher hears nothing of a merge they made,
 	// and a person who made it is named among the routing's persons, as a
-	// push's own merge names its pusher.
+	// push's own merge names its pusher. AND FOR WHOM: the asker's write was
+	// made for whom its request states; the landing carries nobody yet
+	// (concerns.go's head, "Whom the actor acted for").
 	actor, actorKind := p.Asker.party()
+	workingFor := p.WrittenFor.Carrier()
 	if p.Landed != nil {
-		actor, actorKind = d.actor, d.actorKind
+		actor, actorKind, workingFor = d.actor, d.actorKind, nil
 	}
-	c := concerning{repoName: repo.name, change: row, actor: actor, actorKind: actorKind, roster: seats.Roster}
+	c := concerning{repoName: repo.name, change: row, actor: actor, actorKind: actorKind, workingFor: workingFor,
+		roster: seats.Roster}
 	switch {
 	case p.Open != nil:
 		c.mentions = p.Open.Mentions

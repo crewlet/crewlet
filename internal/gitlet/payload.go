@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -972,6 +973,20 @@ type PushEntry struct {
 	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
 	// field, so every build that meets a push record reads it.
 	Day string `json:"day,omitempty"`
+	// WorkingFor is whom a SEAT'S push was made for (ADR-0109), whatever its
+	// entry wakes: the carrier its proposal states ([Proposal.WrittenFor]) —
+	// whoever the turn that asked the engine write worked for — STAMPED BY THE
+	// COMMITTER on an agent's entry, as Day is, and never sent by a proposer.
+	// nil for a push made for nobody, the seat's own work, and on every entry
+	// no seat pushed. The apply keeps it on the push's row
+	// (code_pushes.working_for) and on each revision the entry's moves add
+	// (code_revisions.working_for), which the engine's later records read
+	// back from crewlet#798's piece 4c-ii on; the entry's routings carry it
+	// beside the pusher ([ChangeRouting.WorkingFor]).
+	//
+	// VERSION 2 ([versionedFields]): an entry carrying it stamps its record
+	// there.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// Change is the change this push opens from its options
 	// ([ChangeOption], pushchange.go): STAMPED BY ITS DECIDE, and only where
 	// the decide opens one — its target resolved to the repository's default

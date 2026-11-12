@@ -222,11 +222,14 @@ func (r ChangeRefusal) Valid() bool { return slices.Contains(ChangeRefusals(), r
 // the repository's own subject and decided by its committer alone
 // ([Committer.ProposeChange]). Each carries its repository and its change, and
 // the fields its asker chose; the committer STAMPS what no asker sends — who
-// wrote it, from the proposal's asker, and an open's and a reopen's head, from
-// the snapshot it decided in — so a record says what it did with no lookup.
+// wrote it, from the proposal's asker, an open's and a reopen's head, from
+// the snapshot it decided in, and whom an open and a reopen were made for,
+// from the proposal — so a record says what it did with no lookup.
 //
-// Every field is in the base format, as [OpChangeOpen] is: Mentions and
-// Routing among them, as concerns.go's head says of a routing.
+// Every field is in the base format, as [OpChangeOpen] is — Mentions and
+// Routing among them, as concerns.go's head says of a routing — but whom an
+// open and a reopen were made for ([ChangeOpen.WorkingFor]), which came with
+// version 2, and so did the routing's ([ChangeRouting.WorkingFor]).
 
 // ChangeOpen opens a change: its row, numbered by the apply from the
 // repository's next_change, its owner as its first author, and its first
@@ -251,6 +254,16 @@ type ChangeOpen struct {
 	// Owner is who opened it: the change's owner and first author. STAMPED
 	// BY THE COMMITTER from the proposal's asker; an asker sends none.
 	Owner Principal `json:"owner,omitzero"`
+	// WorkingFor is whom an agent's open was made for (ADR-0109), whatever
+	// the record wakes: the carrier its proposal states
+	// ([ChangeProposal.WrittenFor]), STAMPED BY THE COMMITTER; an asker sends
+	// none. nil for an open made for nobody — the seat's own work — and for
+	// every open no agent made. The apply keeps it on revision 1's row
+	// (code_revisions.working_for), which the record of that revision's facts
+	// reads it back from (crewlet#798's piece 4c-ii).
+	//
+	// VERSION 2, as every payload's working_for is ([versionedFields]).
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// WorkItem is the work item the change carries out, nil for none.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 	// TurnID and RunID are the turn and the executor's launch that opened
@@ -343,6 +356,12 @@ type ChangeReopen struct {
 	// Head is the source branch's head as the deciding snapshot held it.
 	// STAMPED BY THE COMMITTER; an asker sends none.
 	Head string `json:"head,omitempty"`
+	// WorkingFor is whom an agent's reopen was made for, as
+	// [ChangeOpen.WorkingFor] is: the apply keeps it on the revision a reopen
+	// adds where the source moved while the change was closed.
+	//
+	// VERSION 2, as every payload's working_for is ([versionedFields]).
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER from its snapshot and chart; an asker sends none.
 	Routing *ChangeRouting `json:"routing,omitempty"`

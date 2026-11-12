@@ -212,7 +212,11 @@ func TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 // that comes with no carrier — what a seat or a Gitlet node of a build before
 // the carrier sends, its member absent, which arrives stated nobody — is
 // decided by its ceiling as ever: a colleague's grant still bounds it, and
-// nobody's still spares only the seat's own work.
+// nobody's still spares only the seat's own work; and its record carries
+// nobody, at version 1, its routing waking a seat though it does. A carrier
+// on the payload itself — an open's, a reopen's, a merge's or an enqueue's,
+// which the committer stamps from the request — is refused when its asker
+// sets one, naming that payload's working_for, as an asker-set principal is.
 //
 // Mutations: the agreement skipped — the colleague, credential and nobody rows
 // made, red; a stranger's carrier admitted — the push, the merge and the
@@ -222,7 +226,8 @@ func TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 // there, red; a credential with no ceiling admitted — refused only by the
 // chart's half, saying it does not place a seat, red; a seat the chart does
 // not place refused as an agent's — its refusal not saying the chart does not
-// place it, red.
+// place it, red; an open's asker-set carrier admitted — the open is not
+// refused, red.
 func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -306,9 +311,11 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 			version = res.Version
 		}
 
-		// THE CHANGE WRITER, a comment on it.
+		// THE CHANGE WRITER, a comment on it, naming plat-lead, a seat it
+		// wakes.
 		before = n.end()
 		comment := saying(repo, change, tc.asker, "", "by "+tc.name)
+		comment.Comment.Mentions = []string{"plat-lead"}
 		comment.Ceiling, comment.WrittenFor = tc.ceiling, tc.writtenFor
 		comment = arrived(t, comment)
 		said, err := w.Converse(ctx, comment)
@@ -319,6 +326,13 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 			requireConversationRefused(t, n, before, said, err, gitlet.ConversationRefusalNotPermitted, "may not")
 		default:
 			requireConversed(t, said, err)
+			// AN OLDER SENDER'S WRITE IS MADE FOR NOBODY on its record too,
+			// at version 1, its routing waking plat-lead though it does.
+			if v, _, carried := carriedRecord(t, n, said.Position); !tc.writtenFor.Stated() &&
+				(v != 1 || len(carried) != 1 || carried[0] != nil) {
+				t.Errorf("the comment made for %s records %v at version %d, want a routing carrying nobody at "+
+					"version 1", tc.name, carried, v)
+			}
 		}
 
 		// THE COMMITTER again, a dequeue: of no entry, which a dequeue it
@@ -386,6 +400,36 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 					what, tc.name, refusal)
 			}
 		}
+	}
+
+	// A CARRIER ON A PAYLOAD THE ASKER SET: the committer stamps whom an open,
+	// a reopen, a merge and an enqueue were made for from the request, so one
+	// an asker sends is refused naming the payload's own working_for, as an
+	// asker-set principal or routing is, by every node that holds the request
+	// — the committer appending nothing.
+	madeFor := forSeat("founder")
+	open := opening(repo, releaseRef, mainRef, cto)
+	open.WrittenFor, open.Open.WorkingFor = madeFor, madeFor.Carrier()
+	reopen := reopening(repo, change, cto, version)
+	reopen.WrittenFor, reopen.Reopen.WorkingFor = madeFor, madeFor.Carrier()
+	merge := merging(repo, change, cto, gitlet.MergeMethodFastForward, oidOf("A"), oidOf("B"), oidOf("B"))
+	merge.WrittenFor, merge.Merge.WorkingFor = madeFor, madeFor.Carrier()
+	enqueue := enqueueing(repo, change, cto, oidOf("B"))
+	enqueue.WrittenFor, enqueue.Enqueue.WorkingFor = madeFor, madeFor.Carrier()
+	for what, refusal := range map[string]error{
+		"open": open.Validate(), "reopen": reopen.Validate(), "merge": merge.Validate(),
+		"enqueue": enqueue.Validate(),
+	} {
+		if !errors.Is(refusal, gitlet.ErrInvalidProposal) || !strings.Contains(refusal.Error(), what+".working_for") {
+			t.Errorf("the %s whose payload its asker set carrying founder: %v, want it refused naming %s.working_for",
+				what, refusal, what)
+		}
+	}
+	before := n.end()
+	if res, err := c.ProposeChange(ctx, arrived(t, open)); !errors.Is(err, gitlet.ErrInvalidProposal) ||
+		!strings.Contains(err.Error(), "open.working_for") || n.end() != before {
+		t.Errorf("the committer answered the open whose payload its asker set carrying founder %+v %v, appending "+
+			"%d records, want it refused naming open.working_for with none", res, err, n.end()-before)
 	}
 }
 

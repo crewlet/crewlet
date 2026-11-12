@@ -263,7 +263,9 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 // row holds no carrier for its code writes (the box's BoxRun names a
 // colleague's ceiling alone, never whom the run's turn works for), so the
 // box's push is stated made for nobody (types.ForTurn of nil), the seat's own
-// work; a person's push is their own, and states nothing.
+// work; a person's push is their own, and states nothing. ONE ANSWER for the
+// push's landing and for its measure before receive-pack runs
+// (commandsRefusal), so a push is measured carrying what it will carry.
 func boxWrittenFor(p gitlet.Principal) types.WrittenFor {
 	if p.Kind == gitlet.PrincipalAgent {
 		return types.ForTurn(nil)

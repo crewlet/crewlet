@@ -756,10 +756,10 @@ func (c WriteCeiling) invalid(asker Principal) string {
 //     credential's login has (iam.ValidLoginFor) — with the apps its turn was
 //     held to for it, each an app this build knows and none twice, so at most
 //     len(iam.Apps); and nothing beside either. So a carrier is a handle or a
-//     login of at most iam.MaxLogin bytes and those apps, under 200 bytes
-//     encoded, wherever it is carried. A kind or an app this build does NOT
-//     KNOW never reaches this rule off the wire: the request's own decoder
-//     refuses it as a name its build does not declare
+//     login of at most iam.MaxLogin bytes and those apps, at most
+//     [MaxCarrierBytes] encoded, wherever it is kept. A kind or an app this
+//     build does NOT KNOW never reaches this rule off the wire: the request's
+//     own decoder refuses it as a name its build does not declare
 //     ([unknownToThisBuild]), since only a newer build composes one, so the
 //     walk asks a node that knows it rather than calling that build's request
 //     malformed. What this rule refuses is what no build composes: the zero

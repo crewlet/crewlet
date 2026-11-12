@@ -54,7 +54,9 @@ import (
 //
 // The ops, the payloads and every field here are in the base format
 // ([RecordVersion]): the domain landed on main with them, so every build that
-// meets an enqueue or a dequeue reads it. Neither is a gate.
+// meets an enqueue or a dequeue reads it — all but whom an agent's enqueue was
+// made for ([Enqueue.WorkingFor]) and a dequeue's routing's
+// ([ChangeRouting.WorkingFor]), which came with version 2. Neither is a gate.
 
 // MergeMethod is how a change merges into its target: a merge commit, one
 // squashed commit, or a fast-forward of the target to the change's head.
@@ -170,7 +172,7 @@ func QueueEntryID(opID string) string {
 // its asker was shown ([QueueProposal]): the record of op enqueue on the
 // repository's subject.
 //
-// BASE FORMAT, as this file's head says.
+// BASE FORMAT, as this file's head says, but for [Enqueue.WorkingFor].
 type Enqueue struct {
 	RepoID string `json:"repo_id"`
 	// EntryID is [QueueEntryID] of the proposal's operation id.
@@ -189,6 +191,18 @@ type Enqueue struct {
 	// Principal is who enqueued it — the proposal's asker, STAMPED by the
 	// committer: the merger the gate judged, and whom the queue lands it as.
 	Principal Principal `json:"principal"`
+	// WorkingFor is whom an agent's enqueue was made for (ADR-0109), whatever
+	// the record wakes — an enqueue has no routing: the carrier its proposal
+	// states ([QueueProposal.WrittenFor]), STAMPED BY THE COMMITTER beside
+	// Principal; an asker sends none. nil for an enqueue made for nobody — the
+	// seat's own work — and for a person's. The apply keeps it on the entry's
+	// row (code_queue.working_for), which the entry's landing fills its push
+	// row from in its own apply ([Land.pushes]); the queue's landing and its
+	// close of the change's item read it back from crewlet#798's piece 4c-ii
+	// on.
+	//
+	// VERSION 2, as every payload's working_for is ([versionedFields]).
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 }
 
 // Dequeue takes a live entry out of its queue at a principal's ask: the record
@@ -265,9 +279,11 @@ type QueueProposal struct {
 	// that decides it); an enqueue carries no ceiling to hold it to, its
 	// merge's held by the Gitlet node that formed it.
 	//
-	// A proposal is no record, so this field takes no versionedFields row. It
-	// crosses the estate's wire to whichever data node decides it, and a node
-	// of a build without it refuses a proposal carrying somebody, naming
+	// A proposal is no record, so this field takes no versionedFields row; an
+	// enqueue's record carries it ([Enqueue.WorkingFor]) and a dequeue's beside
+	// the asker on its routing ([ChangeRouting.WorkingFor]), which take theirs.
+	// It crosses the estate's wire to whichever data node decides it, and a
+	// node of a build without it refuses a proposal carrying somebody, naming
 	// args.written_for, so the walk asks one that reads it, and a node of a
 	// build that does not know its carrier's kind, or an app a credential's
 	// carrier names, refuses it alike, naming args.written_for.kind or
@@ -664,6 +680,9 @@ func (p QueueProposal) validFields() error {
 	case e.Principal != (Principal{}):
 		return badField("enqueue.principal", "the committer stamps who enqueued it from the asker, and an asker "+
 			"sends none")
+	case e.WorkingFor != nil:
+		return badField("enqueue.working_for", "the committer stamps whom an enqueue was made for from the "+
+			"proposal's written_for, and an asker sends none")
 	}
 	return nil
 }
@@ -692,13 +711,14 @@ func (p QueueProposal) record() (OpKind, any) {
 }
 
 // stamped is the op and the payload of p's record as the committer forms it
-// before its decide: an enqueue's and a dequeue's asker as its principal. A
-// landing's stamps are its decide's, from its snapshot.
+// before its decide: an enqueue's and a dequeue's asker as its principal, and
+// whom an enqueue is made for beside it. A landing's stamps are its decide's,
+// from its snapshot.
 func (p QueueProposal) stamped() (OpKind, any) {
 	op, payload := p.record()
 	switch r := payload.(type) {
 	case Enqueue:
-		r.Principal = p.Asker
+		r.Principal, r.WorkingFor = p.Asker, p.WrittenFor.Carrier()
 		return op, r
 	case Dequeue:
 		r.Principal = p.Asker
@@ -1049,7 +1069,7 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 		}
 	}
 	// WHOM IT CONCERNS: the change's authors and its enqueuer, told it left
-	// the queue — all but who asked.
+	// the queue — all but who asked, beside whom the dequeue was made for.
 	_, payload := p.stamped()
 	row, found, err := changeRowIn(ctx, tx, entry.ChangeID)
 	if err != nil {
@@ -1058,7 +1078,8 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 	if found {
 		out := payload.(Dequeue)
 		if out.Routing, err = routingFor(ctx, tx, concerning{repoName: repo.name, change: row, actor: handle,
-			actorKind: kind, authors: true, dequeued: true, enqueuer: entry.EnqueuedBy.reviewer()}); err != nil {
+			actorKind: kind, workingFor: p.WrittenFor.Carrier(), authors: true, dequeued: true,
+			enqueuer: entry.EnqueuedBy.reviewer()}); err != nil {
 			return queueDecision{}, err
 		}
 		payload = out
@@ -1324,6 +1345,15 @@ type queueEntry struct {
 	EnqueuedAt, EndedAt                  int64
 	EndedPosition                        int64
 	EndReason                            QueueEndReason
+	// WorkingFor is whom the entry's enqueue was made for, as its row keeps
+	// it (code_queue.working_for, [carrierColumn]): read whole and written
+	// back as read. The entry's landing fills its push row from it in its own
+	// apply ([Land.pushes]), so every node lands the same rows — each filled
+	// the column from the same enqueue. NO READ ANSWERS IT: the queue's
+	// listings and the home's work on its queue build their answers field by
+	// field and leave it out, until crewlet#798's piece 4c-ii hands the
+	// home's close of a landed change's item whom it closes for.
+	WorkingFor sql.NullString
 }
 
 // scanEntry reads one row [entryColumns] spells.
@@ -1334,7 +1364,7 @@ func scanEntry(scan func(...any) error) (queueEntry, error) {
 	)
 	err := scan(&e.RepoID, &e.EntryID, &e.TargetRef, &e.ChangeID, &e.Seq, &e.HeadOID, &method, &e.DeleteSource,
 		&e.CloseTask, &e.EnqueuedBy.Handle, &kind, &e.EnqueuedOperator, &state, &e.Train,
-		&e.CandidateID, &e.CommitOID, &e.EnqueuedAt, &e.EndedAt, &e.EndedPosition, &reason)
+		&e.CandidateID, &e.CommitOID, &e.EnqueuedAt, &e.EndedAt, &e.EndedPosition, &reason, &e.WorkingFor)
 	e.Method, e.EnqueuedBy.Kind, e.State, e.EndReason = MergeMethod(method), PartyKind(kind), QueueState(state),
 		QueueEndReason(reason)
 	return e, err
@@ -1495,12 +1525,12 @@ const (
 	// order.
 	entryColumns = `repo_id, entry_id, target_ref, change_id, seq, head_oid, method, delete_source, close_task,
 		enqueued_by, enqueued_kind, enqueued_operator, state, train, candidate_id, commit_oid, enqueued_at,
-		ended_at, ended_position, end_reason`
+		ended_at, ended_position, end_reason, working_for`
 	// qualifiedEntryColumns is entryColumns read beside json_each, which has
 	// columns of its own: the same columns, in the same order.
 	qualifiedEntryColumns = `q.repo_id, q.entry_id, q.target_ref, q.change_id, q.seq, q.head_oid, q.method,
 		q.delete_source, q.close_task, q.enqueued_by, q.enqueued_kind, q.enqueued_operator, q.state, q.train,
-		q.candidate_id, q.commit_oid, q.enqueued_at, q.ended_at, q.ended_position, q.end_reason`
+		q.candidate_id, q.commit_oid, q.enqueued_at, q.ended_at, q.ended_position, q.end_reason, q.working_for`
 	entrySQL = `SELECT ` + entryColumns + ` FROM code_queue INDEXED BY ` + queueKey +
 		` WHERE repo_id = ? AND entry_id = ?`
 	liveEntriesSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?) AS j

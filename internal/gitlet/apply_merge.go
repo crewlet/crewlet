@@ -161,9 +161,11 @@ func settleTipWork(ctx context.Context, tx store.Execer, repoID, target string, 
 //  4. THE PUSH, through the one apply every push takes ([Applier.landPushes]):
 //     the target moved from its base onto the commit, the source deleted
 //     where the merge asks it, the merge's pack, its push row `via merge`
-//     naming the merger and what it introduced, the repository's counters,
-//     and the horizons with what the record's rows leave them.
+//     naming the merger, whom the merge was made for ([keptCarrier]) and what it
+//     introduced, the repository's counters, and the horizons with what the
+//     record's rows leave them.
 func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m Merge) (int, error) {
+	m.WorkingFor = keptCarrier(at, m.WorkingFor)
 	row, found, err := changeRowIn(ctx, tx, m.ChangeID)
 	if err != nil {
 		return 0, err
@@ -267,16 +269,17 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 }
 
 // push is the push m lands, as its push row records it: its push id the
-// merge's, the merger its principal, `via merge`, the Gitlet node that built it;
+// merge's, the merger its principal and whom the merge was made for its
+// carrier, `via merge`, the Gitlet node that built it;
 // the target moved from its base onto the commit — a fast-forward of it,
 // whose old object the commit still reaches, so no drop — and the source
 // deleted where it asks; its pack; and what it introduced: the commit a merge
 // or a squash built, and none for a fast-forward, whose head the change's own
 // pushes brought.
 func (m Merge) push() PushEntry {
-	e := PushEntry{PushID: m.MergeID, Principal: m.Principal, Via: ViaMerge, Node: m.Node, Pack: m.Pack,
-		ReceivedAt: m.ReceivedAt,
-		Commands:   []Command{{Ref: m.TargetRef, Old: m.BaseOID, New: m.CommitOID, Result: ResultOK}}}
+	e := PushEntry{PushID: m.MergeID, Principal: m.Principal, WorkingFor: m.WorkingFor, Via: ViaMerge, Node: m.Node,
+		Pack: m.Pack, ReceivedAt: m.ReceivedAt,
+		Commands: []Command{{Ref: m.TargetRef, Old: m.BaseOID, New: m.CommitOID, Result: ResultOK}}}
 	if m.DeleteSource {
 		e.Commands = append(e.Commands, Command{Ref: m.SourceRef, Old: m.HeadOID, New: ZeroOID, Result: ResultOK})
 	}

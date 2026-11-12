@@ -49,4 +49,6 @@ charged to nothing.
 Which item a change names, and who may set it (the change's lifecycle, its
 open and its edit); what a seat's day counts of the changes it opened and the
 reviews it gave (the usage history's); and who a change's records wake —
-which is its routing's, and a person is never woken from the queue at all.
+which is its routing's, and whom the routing's actor made the change for,
+which the wake carries (ADR-0109), and a person is never woken from the queue
+at all.

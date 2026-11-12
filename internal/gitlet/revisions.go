@@ -93,7 +93,10 @@ import (
 // field of its own ([PushEntry.Change]). The domain landed on main with these
 // rows, so every build that meets a push record derives them. What a later
 // apply comes to derive from the commands needs a versionedFields row
-// ([RecordVersion]).
+// ([RecordVersion]), and so does what a revision keeps beside them: whom the
+// seat's push that made it was made for, the entry's own field
+// ([PushEntry.WorkingFor]), which came with version 2 and which a revision's
+// row keeps as its entry carries it ([revisionRow]).
 
 // SourceDeleted is the close reason (code_changes.close_reason) of a change a
 // push closed by deleting its source branch — the one reason no person wrote.
@@ -229,14 +232,17 @@ type targetWas struct {
 	held   bool
 }
 
-// revisionRow is one code_revisions row a record writes.
+// revisionRow is one code_revisions row a record writes: whom the push that
+// made the revision was made for among it, as its entry carries it
+// ([PushEntry.WorkingFor]).
 type revisionRow struct {
-	change string
-	n      int64
-	head   string
-	pusher string
-	kind   PartyKind
-	pushID string
+	change     string
+	n          int64
+	head       string
+	pusher     string
+	kind       PartyKind
+	pushID     string
+	workingFor *types.WorkingFor
 }
 
 // authorRow is one code_change_authors row a record writes.
@@ -602,7 +608,7 @@ func (b *changeBook) move(e PushEntry) {
 		row = b.touch(row.id)
 		row.head, row.revision = c.New, row.revision+1
 		b.writes.revisions = append(b.writes.revisions, revisionRow{change: row.id, n: row.revision, head: c.New,
-			pusher: pusher, kind: kind, pushID: e.PushID})
+			pusher: pusher, kind: kind, pushID: e.PushID, workingFor: e.WorkingFor})
 		// A PUSH NO SEAT OR PERSON MADE adds no author — no decide admits
 		// one, since a token bound to nobody reads only, and an author row
 		// naming nobody would name what no review could ask after.
@@ -725,7 +731,7 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	w.touched = append(w.touched, id)
 	w.opened[id] = true
 	w.revisions = append(w.revisions, revisionRow{change: id, n: 1, head: source.New, pusher: owner, kind: kind,
-		pushID: e.PushID})
+		pushID: e.PushID, workingFor: e.WorkingFor})
 	b.author([2]string{id, owner})
 	w.authors = append(w.authors, authorRow{change: id, author: owner, kind: kind, first: 1})
 	if e.Change.Body != "" {

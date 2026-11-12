@@ -111,7 +111,20 @@ import (
 // pushes_per_seat_day to — a row a seat and day, two statements a record, and
 // the rows they touch counted in the record's before any horizon takes what
 // is left ([countSeatDays]).
+//
+// # Whom each push was made for is kept on its rows
+//
+// A seat's entry carries whom its push was made for ([PushEntry.WorkingFor]),
+// which the push's row and every revision its moves add keep
+// (code_pushes.working_for, code_revisions.working_for), from a record at
+// [WorkingForVersion] or above alone ([keptCarrier]).
 func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch) (int, error) {
+	entries := make([]PushEntry, len(p.Pushes))
+	for i, e := range p.Pushes {
+		e.WorkingFor = keptCarrier(at, e.WorkingFor)
+		entries[i] = e
+	}
+	p.Pushes = entries
 	return a.landPushes(ctx, tx, at, p, recordPacks{}, 0)
 }
 
@@ -326,28 +339,26 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the packs at %s: %w", at.position, err)
 	}
-	// THE ROW'S WIDTH IS WRITTEN BESIDE IT: the bytes of its wide columns —
-	// the commands, the introduced ids and a seat's run, up to six fields
-	// of MaxProvenanceBytes — which is what deleting it costs and what the
-	// history's horizon and a purge part are bounded by.
-	encoded := make([]string, len(pushRows))
-	introduced := make([]string, len(pushRows))
+	// THE ROW'S WIDTH IS WRITTEN BESIDE IT: the bytes of its wide columns,
+	// which is what deleting it costs and what the history's horizon and a
+	// purge part are bounded by ([pushRowWideOf]).
+	wide := make([]pushRowWide, len(pushRows))
 	for i, e := range pushRows {
-		if encoded[i], err = recordedCommands(e.Commands); err != nil {
+		if wide[i], err = pushRowWideOf(e); err != nil {
 			return 0, err
 		}
-		introduced[i] = strings.Join(e.Introduced, " ")
 	}
 	// WHO PUSHED, AS THE HISTORY NAMES THEM (Principal.Actor): an operator's
 	// credential beside the seat it is bound to, or a seat's own handle as
 	// both — and how the push was built and, for a seat's, the run behind it
-	// (a coding box's naming its run and harness too), each written as
-	// the record carries it.
+	// (a coding box's naming its run and harness too) and whom it was made
+	// for, each written as the record carries it; a landing's whom, as its
+	// entry's row keeps it ([Land.pushes]).
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat,
 			via, turn_id, work_backend, work_key, model, run_id, harness, node, atomic, commands,
-			pack_id, pack_bytes, introduced, introduced_count, received_at, row_bytes) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
+			pack_id, pack_bytes, introduced, introduced_count, received_at, row_bytes, working_for) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
 		len(pushRows), func(i int) []any {
 			e := pushRows[i]
 			packID, size := "", int64(0)
@@ -357,9 +368,9 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 			run := e.Principal.Run
 			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.Actor(),
 				string(e.Principal.Kind), e.Principal.Seat, string(e.Via), run.TurnID, run.WorkBackend,
-				run.WorkKey, run.Model, run.RunID, run.Harness, e.Node, e.Atomic, encoded[i], packID, size,
-				introduced[i], e.IntroducedCount, store.EncodeTime(e.ReceivedAt),
-				pushRowBytes(encoded[i], introduced[i], run)}
+				run.WorkKey, run.Model, run.RunID, run.Harness, e.Node, e.Atomic, wide[i].commands, packID, size,
+				wide[i].introduced, e.IntroducedCount, store.EncodeTime(e.ReceivedAt), wide[i].bytes,
+				wide[i].madeFor}
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the pushes at %s: %w", at.position, err)
 	}
@@ -617,16 +628,52 @@ func recordedCommands(cmds []Command) (string, error) {
 
 // pushRowBytes is what a push row weighs as code_pushes.row_bytes records it:
 // the bytes of the columns that make one row wider than another — its
-// commands as stored, its introduced ids and a seat's run, which is six
-// fields of up to MaxProvenanceBytes — because deleting a wide row frees its
-// overflow pages, and that is what the history's horizon and a purge part are
-// bounded by. Every other column is a few dozen bytes on every row. Each of
-// these is its record's own, carried there with more (quoted, keyed, escaped),
-// so the bytes one record adds to the history are never more than the record
-// (HorizonBytesPerRecord).
-func pushRowBytes(commands, introduced string, run RunProvenance) int {
+// commands as stored, its introduced ids, a seat's run, which is six fields of
+// up to MaxProvenanceBytes, and whom the push was made for, at most
+// [MaxCarrierBytes] — because deleting a wide row frees its overflow pages,
+// and that is what the history's horizon and a purge part are bounded by.
+// Every other column is a few dozen bytes on every row.
+//
+// A push's and a merge's are their record's own, carried there with more
+// (quoted, keyed, escaped), so the bytes such a record adds to the history are
+// never more than the record. A LANDING'S ARE NOT ALL ITS RECORD'S: each push
+// row it lands keeps its entry's carrier from the entry's row
+// (code_queue.working_for, [Land.pushes]), which the land record does not
+// carry, a deleted source's name from the change's row, and the target's name
+// the record holds once. So a landing adds, beside its record's own bytes, at
+// most [MaxLandEntries] rows of two commands, one introduced id and one
+// carrier — under a quarter of [MaxRecordBytes] at the widest refs JSON
+// spells, the carriers at most MaxLandEntries × MaxCarrierBytes, 12 800 bytes,
+// of it — which HorizonBytesPerRecord holds the history's removal to as it
+// does every record's (TestAPushMeasuredForItsRecordCountsWhomItWasMadeFor).
+func pushRowBytes(commands, introduced string, run RunProvenance, workingFor string) int {
 	return len(commands) + len(introduced) + len(run.TurnID) + len(run.WorkBackend) + len(run.WorkKey) +
-		len(run.Model) + len(run.RunID) + len(run.Harness)
+		len(run.Model) + len(run.RunID) + len(run.Harness) + len(workingFor)
+}
+
+// pushRowWide is the wide columns of one push row as the apply writes them —
+// its commands as stored, its introduced ids space-separated, and whom its
+// push was made for — and what the row weighs ([pushRowBytes]).
+type pushRowWide struct {
+	commands, introduced string
+	madeFor              sql.NullString
+	bytes                int
+}
+
+// pushRowWideOf is e's push row's wide columns and weight: the one reading of
+// them every push row is written by, a landing's among them ([Land.pushes]).
+func pushRowWideOf(e PushEntry) (pushRowWide, error) {
+	commands, err := recordedCommands(e.Commands)
+	if err != nil {
+		return pushRowWide{}, err
+	}
+	madeFor, err := carrierColumn(e.WorkingFor)
+	if err != nil {
+		return pushRowWide{}, err
+	}
+	introduced := strings.Join(e.Introduced, " ")
+	return pushRowWide{commands: commands, introduced: introduced, madeFor: madeFor,
+		bytes: pushRowBytes(commands, introduced, e.Principal.Run, madeFor.String)}, nil
 }
 
 // countSeatDays counts each SEAT'S entry of the record that the apply

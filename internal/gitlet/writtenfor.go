@@ -1,6 +1,8 @@
 package gitlet
 
 import (
+	"database/sql"
+	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"fmt"
@@ -184,4 +186,66 @@ func unknownToThisBuild(at jsontext.Pointer, f types.WrittenFor) error {
 		}
 	}
 	return nil
+}
+
+// WHOM A CODE WRITE WAS MADE FOR, AS A ROW KEEPS IT (ADR-0109, the replicated
+// migration a_code_row_keeps_whom_an_agents_write_was_made_for): a revision's
+// row (code_revisions.working_for), a push's
+// (code_pushes.working_for) and a queue entry's (code_queue.working_for) each
+// keep the carrier of the write that made it — an open's or a push's for a
+// revision, a push's, a merge's or a landing's for a push, an enqueue's for an
+// entry — as its JSON, and NULL for nobody, the writing seat's own work. The
+// engine's later records name an earlier actor — a revision's facts its pusher,
+// a failed check of a head its pusher, the home's landing the push that merged
+// the change, a queue's landing each entry's enqueuer — and they read the
+// carrier back from these rows from crewlet#798's piece 4c-ii on. Until then
+// the one reader is a landing's own apply, which fills the push rows it lands
+// from its entries' rows ([Land.pushes]).
+//
+// FILLED FROM THE CARRIER'S FIRST BUILD ON, before most of them are read: a
+// replicated migration runs on each node when it opens, not at a log position,
+// so a column a later build began to fill would hold NULL for the records a
+// node applied before it upgraded and the carrier for the same records on a
+// node that applied them after, as internal/worklet's history row is filled
+// (replicated 0160).
+
+// keptCarrier is whom a record's write was made for as the rows its apply
+// writes keep it: f from a record at [WorkingForVersion] or above, and nobody
+// from one below it, whatever it holds — a build before the carrier applies
+// such a record with no field to read, so a node of this build that kept f
+// would hold a row no older node holds for the same record.
+func keptCarrier(at applyContext, f *types.WorkingFor) *types.WorkingFor {
+	if at.record.V < WorkingForVersion {
+		return nil
+	}
+	return f
+}
+
+// carrierColumn is f as a working_for column holds it: its JSON, and NULL for
+// nobody.
+func carrierColumn(f *types.WorkingFor) (sql.NullString, error) {
+	if f == nil {
+		return sql.NullString{}, nil
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return sql.NullString{}, fmt.Errorf("gitlet: encode whom a write was made for: %w", err)
+	}
+	return sql.NullString{String: string(b), Valid: true}, nil
+}
+
+// storedCarrier is whom a write was made for, as column holds it: nil for
+// NULL, and for a value this build cannot read — one that does not decode,
+// or decodes to nothing — a stranger's, who holds no app, the closed end, as
+// internal/worklet reads its history rows. No apply of this build writes such
+// a value: [carrierColumn] encodes every carrier it keeps.
+func storedCarrier(column sql.NullString) *types.WorkingFor {
+	if !column.Valid {
+		return nil
+	}
+	var f *types.WorkingFor
+	if err := json.Unmarshal([]byte(column.String), &f); err != nil || f == nil {
+		return &types.WorkingFor{Kind: types.WorkingForStranger}
+	}
+	return f
 }

@@ -2032,15 +2032,18 @@ type ChangeProposal struct {
 	// asker and the ceiling by [writtenForUnder]: by Validate, and against its
 	// chart by the committer that decides it.
 	//
-	// A proposal is no record, so this field takes no versionedFields row. It
-	// crosses the estate's wire to whichever data node decides it, and a node
-	// of a build without it refuses a proposal carrying somebody, naming
-	// args.written_for, so the walk asks one that reads it, and a node of a
-	// build that does not know its carrier's kind, or an app a credential's
-	// carrier names, refuses it alike, naming args.written_for.kind or
-	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
-	// no member, as such a build does. What such a build sends arrives stated
-	// nobody ([ChangeProposal.UnmarshalJSONFrom]), decided by its ceiling.
+	// A proposal is no record, so this field takes no versionedFields row; the
+	// record its committer forms carries it, beside the asker on its routing
+	// and, an open's and a reopen's, on its payload ([ChangeRouting.WorkingFor],
+	// [ChangeOpen.WorkingFor]), which take theirs. It crosses the estate's wire
+	// to whichever data node decides it, and a node of a build without it
+	// refuses a proposal carrying somebody, naming args.written_for, so the walk
+	// asks one that reads it, and a node of a build that does not know its
+	// carrier's kind, or an app a credential's carrier names, refuses it alike,
+	// naming args.written_for.kind or args.written_for.apps[]
+	// ([unknownToThisBuild]); one made for nobody sends no member, as such a
+	// build does. What such a build sends arrives stated nobody
+	// ([ChangeProposal.UnmarshalJSONFrom]), decided by its ceiling.
 	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 
 	Open     *ChangeOpen     `json:"open,omitempty"`
@@ -2145,15 +2148,17 @@ type ConversationWrite struct {
 	// [writtenForUnder]: by Validate, and against its chart by the change
 	// writer that decides it.
 	//
-	// A write is no record, so this field takes no versionedFields row. It
-	// crosses the estate's wire to whichever data node decides it, and a node
-	// of a build without it refuses a write carrying somebody, naming
-	// args.written_for, so the walk asks one that reads it, and a node of a
-	// build that does not know its carrier's kind, or an app a credential's
-	// carrier names, refuses it alike, naming args.written_for.kind or
-	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
-	// no member, as such a build does. What such a build sends arrives stated
-	// nobody ([ConversationWrite.UnmarshalJSONFrom]), decided by its ceiling.
+	// A write is no record, so this field takes no versionedFields row; the
+	// record its writer forms carries it beside the asker on its routing
+	// ([ChangeRouting.WorkingFor]), which takes one. It crosses the estate's
+	// wire to whichever data node decides it, and a node of a build without it
+	// refuses a write carrying somebody, naming args.written_for, so the walk
+	// asks one that reads it, and a node of a build that does not know its
+	// carrier's kind, or an app a credential's carrier names, refuses it alike,
+	// naming args.written_for.kind or args.written_for.apps[]
+	// ([unknownToThisBuild]); one made for nobody sends no member, as such a
+	// build does. What such a build sends arrives stated nobody
+	// ([ConversationWrite.UnmarshalJSONFrom]), decided by its ceiling.
 	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 
 	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`

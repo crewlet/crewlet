@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -300,6 +301,37 @@ func EntryOf(p Proposal, day string) PushEntry { return p.entryWith(p.Commands, 
 // LongestDay is a company day's label at its longest, which a seat's entry is
 // measured carrying.
 const LongestDay = longestDay
+
+// LandRowWeights is what each push row the landing l lands weighs as row_bytes
+// records it, and what its carrier weighs among it: each of l's entries
+// enqueued by dev, its row keeping carrier, and its change at sources[i] and
+// heads[i] — through the landing's own pushes ([Land.pushes]) and the one
+// weighing every push row is written by ([pushRowWideOf]).
+func LandRowWeights(l Land, carrier *types.WorkingFor, sources, heads []string) (rows, carriers []int,
+	err error) {
+
+	kept, err := carrierColumn(carrier)
+	if err != nil {
+		return nil, nil, err
+	}
+	entries := make(map[string]queueEntry, len(l.Entries))
+	changes := make([]changeRow, len(l.Entries))
+	for i, e := range l.Entries {
+		entries[e.EntryID] = queueEntry{RepoID: l.RepoID, EntryID: e.EntryID, TargetRef: l.TargetRef,
+			ChangeID: e.ChangeID, HeadOID: heads[i], Method: MergeMethodMerge,
+			EnqueuedBy: Party{Handle: "dev", Kind: PartyAgent}, State: QueueTesting, WorkingFor: kept}
+		changes[i] = changeRow{id: e.ChangeID, repoID: l.RepoID, source: sources[i], target: l.TargetRef,
+			head: heads[i]}
+	}
+	for _, push := range l.pushes(entries, changes) {
+		wide, err := pushRowWideOf(push)
+		if err != nil {
+			return nil, nil, err
+		}
+		rows, carriers = append(rows, wide.bytes), append(carriers, len(wide.madeFor.String))
+	}
+	return rows, carriers, nil
+}
 
 // CostliestRules is n distinct rules of gitref's costliest shape — the worst
 // asking a rule about a ref can be (decide_bench_test.go), for the cases that
