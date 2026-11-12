@@ -782,7 +782,7 @@ func TestNoCredentialShapeReachesTheAtlasFromGitHub(t *testing.T) {
 			repos: map[string]*ghRepo{
 				"acme/planted": {row: map[string]any{"full_name": "acme/" + s, "default_branch": s, "description": s,
 					"visibility": s,
-					"homepage": s, "owner": who, "topics": []string{s}, "clone_url": "https://x:" + s + "@github.com/acme/api.git"}},
+					"homepage":   s, "owner": who, "topics": []string{s}, "clone_url": "https://x:" + s + "@github.com/acme/api.git"}},
 				"acme/api": {
 					row: map[string]any{"full_name": "acme/api", "default_branch": "main", "description": s, "owner": who,
 						"visibility": s},
