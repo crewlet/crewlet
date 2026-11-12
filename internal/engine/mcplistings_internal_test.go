@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -637,12 +638,20 @@ func (h *heldRemovals) DeleteMCPListing(ctx context.Context, server, node string
 // to it. Here a node holding its presence has one listing its last beat wrote
 // to remove, and the store holds the removal until the case releases it: the
 // beat returns with the write in flight on its pass, carrying no deadline of
-// the beat's; the next beat returns too and starts no pass of its own; and once
-// released, the pass removes the listing once.
+// the beat's; the next beat returns too, and the store is asked for the
+// removal once, by the pass in flight; and once released, that pass removes
+// the listing.
+//
+// THE BEATS RUN IN A BUBBLE, the node they read outside it: a pass a beat
+// starts is a goroutine of the bubble, so once every goroutine in it is
+// blocked (synctest.Wait), a pass the next beat started has reached the store
+// with its removal. Outside a bubble such a pass could still be starting when
+// the case released the first, and read the listing as already removed, so a
+// beat that started one could pass.
 //
 // Mutation: hold the pass's writes to the beat's fifteen seconds, and the write
 // carries the beat's deadline; start a pass on every beat, and the next beat's
-// pass removes the listing a second time.
+// pass asks the store for the removal a second time while the first is held.
 func TestASlowListingWriteHoldsNoBeat(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -665,31 +674,36 @@ func TestASlowListingWriteHoldsNoBeat(t *testing.T) {
 	if !held {
 		t.Fatal("a started node holds no presence")
 	}
-	fleet := &heldRemovals{innerFleet: coordmemory.NewFleet(), made: make(chan context.Context, 2),
-		release: make(chan struct{})}
-	stored, err := fleet.PutMCPListing(ctx, fakeListing("gone", "node-a", epoch, "get_issue").listing)
-	if err != nil {
-		t.Fatalf("the listing the last beat wrote: %v", err)
-	}
-	e := &Engine{node: n, backends: &Backends{Fleet: fleet, Coord: backend}}
-	e.listings.epoch, e.listings.ensured = epoch, map[string]struct{}{}
-	e.listings.published = map[string]publishedListing{"gone": {fingerprint: "listed", version: stored.Version}}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		fleet := &heldRemovals{innerFleet: coordmemory.NewFleet(), made: make(chan context.Context, 2),
+			release: make(chan struct{})}
+		stored, err := fleet.PutMCPListing(ctx, fakeListing("gone", "node-a", epoch, "get_issue").listing)
+		if err != nil {
+			t.Fatalf("the listing the last beat wrote: %v", err)
+		}
+		e := &Engine{node: n, backends: &Backends{Fleet: fleet, Coord: backend}}
+		e.listings.epoch, e.listings.ensured = epoch, map[string]struct{}{}
+		e.listings.published = map[string]publishedListing{"gone": {fingerprint: "listed", version: stored.Version}}
 
-	e.publishMCPListings(ctx)
-	if _, set := (<-fleet.made).Deadline(); set {
-		t.Error("the pass's write carries a deadline of the beat's, which a listing at its " +
-			"bound across a link at the floor outlasts")
-	}
-	// THE NEXT BEAT, with the write still held: it returns, its listings
-	// left to the pass in flight.
-	e.publishMCPListings(ctx)
-	close(fleet.release)
-	e.listings.pass.Wait()
-	if got := fleet.removals.Load(); got != 1 {
-		t.Errorf("the listing was removed %d times, want once: a beat started a pass beside "+
-			"the one in flight", got)
-	}
-	if left, err := fleet.ListMCPListings(ctx); err != nil || len(left) != 0 {
-		t.Errorf("after the pass the store holds %+v (%v), want the listing removed", left, err)
-	}
+		e.publishMCPListings(ctx)
+		if _, set := (<-fleet.made).Deadline(); set {
+			t.Error("the pass's write carries a deadline of the beat's, which a listing at its " +
+				"bound across a link at the floor outlasts")
+		}
+		// THE NEXT BEAT, with the write still held: it returns, its
+		// listings left to the pass in flight, and once every goroutine is
+		// blocked the store has been asked for the removal by that pass alone.
+		e.publishMCPListings(ctx)
+		synctest.Wait()
+		if got := fleet.removals.Load(); got != 1 {
+			t.Errorf("with the first removal held, the store was asked for it %d times, want "+
+				"once: a beat started a pass beside the one in flight", got)
+		}
+		close(fleet.release)
+		e.listings.pass.Wait()
+		if left, err := fleet.ListMCPListings(ctx); err != nil || len(left) != 0 {
+			t.Errorf("after the pass the store holds %+v (%v), want the listing removed", left, err)
+		}
+	})
 }
