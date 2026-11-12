@@ -269,7 +269,7 @@ test("a card too narrow for its labels names the rest in a +N and keeps the coun
 test("a blocked row names the pull request nobody is reviewing", () => {
   const pull = "https://github.com/acme/web/pull/42";
   expect(blockedBy(row({ waiting_on: [{ id: pull, open: true, dead: true }] }))).toBe(
-    "Blocked · nobody is reviewing PR #42",
+    "Nobody is reviewing PR #42",
   );
   expect(
     blockedBy(
@@ -281,6 +281,6 @@ test("a blocked row names the pull request nobody is reviewing", () => {
       }),
       (id) => (id === "t-7" ? "ENG-7" : undefined),
     ),
-  ).toBe("Blocked · nobody is reviewing PR #42 +1");
+  ).toBe("Nobody is reviewing PR #42 +1");
   expect(blockedBy(row({ waiting_on: [{ id: pull, open: true }] }))).toBe("Blocked");
 });

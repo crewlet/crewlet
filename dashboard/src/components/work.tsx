@@ -693,7 +693,7 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
   // A WAIT NOTHING MOVES IS NAMED FIRST: it is the one that never ends by itself.
   const dead = held.find((edge) => edge.dead);
   if (dead) {
-    const nobody = `Blocked · nobody is reviewing ${pullName(dead.id)}`;
+    const nobody = `Nobody is reviewing ${pullName(dead.id)}`;
     return held.length > 1 ? `${nobody} +${held.length - 1}` : nobody;
   }
   const named = held.map((edge) => keyOf?.(edge.id)).find(Boolean);

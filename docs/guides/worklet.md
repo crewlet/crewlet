@@ -2002,7 +2002,7 @@ kept among the task's `dead_waits`. The record notifies nobody. It ends with a
 `dead_wait_ended` record once something moves the pull request again, and goes
 with the wait when the pull request settles or the task stops waiting on it. A
 row's `waiting_on` edge carries `dead: true` for it, and the board reads
-**Blocked · nobody is reviewing PR #12**. An item whose every open wait is dead
+**Nobody is reviewing PR #12**. An item whose every open wait is dead
 is ready work for whoever holds it, and the
 [work pickup](../concepts/scheduling.md#the-work-pickup) hands it back, once
 per head. A pull request the engine cannot read (GitHub refuses it or its
