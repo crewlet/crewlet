@@ -98,7 +98,9 @@
 //
 // WHAT THAT GIVES, AND WHAT IT DOES NOT. A write is given its own bytes at the
 // floor, so a link that carries it alone at the floor or faster never fails
-// it. A link slower than the floor still fails it, and so can a link busy
+// it — an external dial's socket write deadline included, which is the
+// largest write its client makes at the floor (externalWriteDeadline). A link
+// slower than the floor still fails it, and so can a link busy
 // with something ahead of it — another large write, an object store put's
 // window — whose bytes no budget here counts. And the worst case is long, and
 // not only for the write: one at the ceiling across a link at the floor waits

@@ -35,9 +35,11 @@ import (
 // # What it covers, and what it does not
 //
 // A WRITE IS GIVEN ITS OWN BYTES AT THE FLOOR, and nothing more, so a link
-// that carries it alone at the floor or faster never fails it. Two things it
-// does not count still can: a link slower than the floor, which is the
-// slowest link the engine is sized for, fails it as it fails an object
+// that carries it alone at the floor or faster never fails it — a client's
+// own socket write deadline included, which internal/queue/jetstream sizes on
+// an external dial to the largest write its client makes at the floor. Two
+// things it does not count still can: a link slower than the floor, which is
+// the slowest link the engine is sized for, fails it as it fails an object
 // store's transfer; and a link carrying something AHEAD of it — another large
 // write, an object store put's window — delivers its bytes only after that
 // traffic's, which no bound here counts, so a write waiting its turn on a busy

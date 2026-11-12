@@ -1087,6 +1087,19 @@ large message reaches it, until the limit is raised again, or leaves them
 running and refusing every large write. Neither is a broker that carries what
 they send, which is the reason not to lower it.
 
+**A large write across a slow link is given its time by the client too.** The
+NATS client writes a message whole, in one socket write, and gives the
+connection up when that write does not finish inside its write deadline. Left
+at the client's default of a minute, that cut a write of more than about
+2 MiB across a link at the engine's floor (a mebibyte in thirty seconds), and
+broke the connection under every other request riding it, the node's leases
+among them. So the engine sets the deadline to the largest write the client
+makes — a message at 8 MiB behind as much as the client buffers, the 8 MiB it
+holds while reconnecting included — at that floor: about eight minutes. What
+that costs is on a connection that dies in the middle of a large write: the
+client gives it up only when the deadline passes, and nothing else moves on
+the connection meanwhile. A small write never waits on it.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it
