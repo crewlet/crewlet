@@ -79,6 +79,7 @@ func TestTheLogReadsNewestFirstAndPagesHoldEveryLineOnce(t *testing.T) {
 		if l.Withdrawn {
 			withdrawn++
 		}
+		//fixedwait:stated both are records' instants, which the case stores each record at
 		if i > 0 && l.At.After(whole.Lines[i-1].At) {
 			t.Errorf("line %d at %s follows one at %s: not newest first", i, l.At, whole.Lines[i-1].At)
 		}

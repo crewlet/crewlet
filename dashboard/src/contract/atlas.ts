@@ -197,7 +197,7 @@ type AtlasDirection = "up" | "down";
 /** What one line of the atlas's log did (`atlas.Change`). `withdrawn` is a
  *  claim its source stopped making: what an integration's read no longer
  *  holds, or a "the same" a person took back. */
-export type AtlasChange =
+type AtlasChange =
   | "recorded"
   | "retired"
   | "fact_set"
@@ -240,14 +240,14 @@ export interface AtlasRead {
 
 /** Who answers for an entry (`atlas.Owner`): a seat by its handle or a unit
  *  by its key, never a page and never free text. */
-export interface AtlasOwner {
+interface AtlasOwner {
   kind: AtlasExternal;
   name: string;
 }
 
 /** How many current entries an entry relies on and how many rely on it,
  *  through the relations the map draws at rest (`atlas.RelationCount`). */
-export interface AtlasRelationCount {
+interface AtlasRelationCount {
   depends_on: number;
   used_by: number;
 }
@@ -486,7 +486,7 @@ export interface AtlasFacetsAnswer extends AtlasRead {
 /** What a log line's relation, or its "the same", names (`atlas.LineTarget`):
  *  another entry by `id`, or a seat, a unit or a page by `external`. `name`
  *  is the entry's name or the identity's own. */
-export interface AtlasLineTarget {
+interface AtlasLineTarget {
   id?: string;
   external?: AtlasExternal;
   name: string;
@@ -495,7 +495,7 @@ export interface AtlasLineTarget {
 /** One line of the atlas's log (`atlas.Line`): what changed on which entry,
  *  when, and in whose voice. `text` is one sentence of the engine's own
  *  words; `value`, `name` and `target` are somebody's, drawn as plain text. */
-export interface AtlasLine {
+interface AtlasLine {
   id: string;
   at: string;
   /** The entry the line is about, with its name and kind. */
@@ -521,7 +521,7 @@ export interface AtlasLogAnswer extends AtlasRead {
 
 /** One entry's part of the log: its lines a day over the window, oldest
  *  first (absent where it took none), and its newest line however old. */
-export interface AtlasEntryActivity {
+interface AtlasEntryActivity {
   id: string;
   days?: number[];
   last?: AtlasLine;

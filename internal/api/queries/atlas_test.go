@@ -72,6 +72,7 @@ func newestFirst(a, b atlasdomain.LogLine) int {
 		}
 		return 0
 	}
+	//fixedwait:stated both are lines' instants, which the fixture states
 	return cmp.Or(b.At.Compare(a.At), cmp.Compare(w(b), w(a)), cmp.Compare(b.ID, a.ID))
 }
 
@@ -105,10 +106,10 @@ func (l *atlasLog) Activity(_ context.Context, since time.Time, _ statelog.Fresh
 	out := atlasdomain.Activity{Complete: true}
 	newest := map[string]time.Time{}
 	for _, line := range l.lines {
-		if line.At.After(newest[line.Entry]) {
+		if line.At.After(newest[line.Entry]) { //fixedwait:stated both are lines' instants, which the fixture states
 			newest[line.Entry] = line.At
 		}
-		if line.At.Before(since) {
+		if line.At.Before(since) { //fixedwait:stated a line's instant the fixture states, against the window the question derives from its own clock
 			continue
 		}
 		target := ""

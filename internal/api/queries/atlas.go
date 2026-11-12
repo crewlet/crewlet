@@ -344,7 +344,7 @@ func atlasLogRead(err error) error {
 	if errors.Is(err, atlasdomain.ErrInvalid) {
 		return fmt.Errorf("%w: `cursor` is the `next_cursor` a page of the log answered", ErrBadParams)
 	}
-	return fmt.Errorf("%w: the atlas's log could not be read on this node right now: %v", ErrUnavailable, err)
+	return fmt.Errorf("%w: the atlas's log could not be read on this node right now: %s", ErrUnavailable, err.Error())
 }
 
 // atlasLog is the atlas's log, newest first: the company's, or with `id` one
