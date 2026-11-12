@@ -255,8 +255,8 @@ On a fleet the changelog is replicated, and the replay is a consumer the server
 places on any member of the stream, delivering out of that member's copy — and
 a follower applies a row a moment after the leader acknowledged it. A replay
 hosted on a follower that was behind counted what its copy held, delivered it
-and reported success, short of the rows the seat's previous owner wrote last:
-exactly the ones a graceful handoff flushes on release. So the node first asks
+and reported success, short of the rows the seat's previous owner published
+last, among them what its release flushed. So the node first asks
 the leader for the sequence of the seat's newest row, and the hydration is not
 done until the replay has delivered a row at or past it. A copy that is behind
 hands over the rest as it applies them; one that has not within the
@@ -305,9 +305,10 @@ stored one of no model, another model or another width — never the reverse, so
 a stale copy replayed later cannot erase a filled vector. A small mutable row —
 a counterparty profile, a skill's state and use count, an onboarding marker — is
 one whose *update is the content*, so the carried copy wins. That is safe
-rather than merely convenient: a seat is held by one node at a time, so the
-changelog's latest value for a subject is by construction the value its current
-owner wrote.
+rather than merely convenient while one node at a time publishes the seat,
+which is what holding it means: the changelog's latest value for a subject is
+then the value its current owner wrote. A seat's move is where that does not
+hold, and an older copy can win there (below).
 
 What is new is found by that **change sequence**: one counter per node, which
 every inserted diary note, episode and skill version — and every vector set on
@@ -335,8 +336,11 @@ longer than a cycle drains over as many cycles as it needs, and the seats it
 would hold back are carried meanwhile. With k seats a cycle runs out at,
 whether a seat needs more than a cycle or was reached with less of one left
 than it needs, no seat waits more than 2k cycles between two that reach it,
-and a seat with a backlog has a whole cycle at least once in every 2k. A cycle
-that runs out says so in one line. A backlog draining is
+and a seat with a backlog has a whole cycle at least once in every 2k. A
+holding starts with every row this node holds for the seat still to carry
+back: a release and a restart alike leave its marks at zero, so the seat's
+first cycles carry them all, oldest first, ahead of anything it writes next
+(below). A cycle that runs out says so in one line. A backlog draining is
 `memory_sync_ran_out`, at info. A seat that ran the cycle out with nothing
 acknowledged that stays carried, or that had the whole cycle and was cut
 inside one of the tables sent whole, is a warning, `seat_memory_not_carried`,
@@ -373,8 +377,47 @@ while its seats say so rather than reading as empty. See
 constantly, and carrying a tombstone for each would double the protocol to
 keep a table converged that already converges itself: a hydrated node may
 resurrect rows its predecessor had swept, and the next lifecycle pass drops
-them again by the same rules. A crash loses at most one cycle of memory (30
-seconds); a graceful handoff flushes on release and loses none.
+them again by the same rules.
+
+**What a crash and a handoff lose.** A crash loses what of a seat's memory the
+changelog has not acknowledged. A graceful handoff flushes on release what the
+cycles have not carried, from the marks they left, for up to five seconds at
+one broker round trip a row (about fifty rows across a slow link, thousands on
+a local broker), and what that flush does not reach is lost as a crash loses
+it. Until the cycles after an acquisition or a restart have carried back every
+row this node holds for the seat (seconds on a local broker, minutes or more
+for a large memory or a slow link), everything the seat writes waits behind
+those rows, and a release or a crash in that window loses it
+([#1039](https://github.com/crewlet/crewlet/issues/1039)). A burst the seat
+writes holds back what it writes next the same way, such as a vector fill that
+stamps hundreds of notes again after a change of embedding model: a crash
+before the cycles have carried the burst loses what the seat wrote after it,
+and so does a release once the burst is larger than five seconds of round
+trips carry ([#1041](https://github.com/crewlet/crewlet/issues/1041)). Outside
+such a backlog, a crash loses what the seat wrote since its last publish that
+got through: about the last cycle's writes, or up to 2k + 1 cycles' while
+cycles run out at k of the node's seats, since a seat can wait 2k cycles
+between two that reach it (above). Every publish sends a seat's counterparty
+profiles and skills whole: when they alone outlast the five seconds, the flush
+is cut inside them and reaches neither the rest of them nor the skill versions
+and the onboarding marker after them, and when they outlast a whole
+thirty-second cycle, the skill versions and the marker are never carried at
+all ([#1040](https://github.com/crewlet/crewlet/issues/1040)). A row larger
+than the broker takes, eight mebibytes on the embedded one, is refused every
+time it is published, so every cycle and the flush stop at it, and nothing the
+seat wrote after it in its table, or in the tables after that one, is carried
+while this node holds the seat
+([#349](https://github.com/crewlet/crewlet/issues/349)). And while a seat
+moves, an older copy of its profiles, skills or onboarding marker can land
+after the newer one and replace it: published by the releasing node's own
+sync, from a cycle it began before the release, or by the next holder while it
+is still taking the seat ([#511](https://github.com/crewlet/crewlet/issues/511)). A
+release whose flush runs out or fails says so, `seat_memory_not_flushed`, at
+warning. A row lost so stays in its node's store alone, which a node without
+`data` deletes at its next boot: a diary note, an episode or a skill version
+reaches the changelog only if that node holds the seat again, and a change to
+a profile, a skill or the onboarding marker is overwritten with the
+changelog's older copy when it does.
 
 **What the seat learns is learned where it is held.** Post-turn
 [reflection](agent-learning.md#7-reflector-the-orchestrator) is the largest
@@ -388,8 +431,8 @@ lets it go before the last flush, so nothing new writes the seat's memory
 there after it. A wake published while the seat is between holders waits on
 the subject for the next one. A pass still running when the release lets the
 subject go is not waited for — the release is fenced and an auxiliary model
-call is not — so what it writes after the flush is the same bounded loss as a
-crash.
+call is not — so what it writes after the flush is lost as whatever the flush
+does not reach is.
 
 **The index is the node's**, like the table it is on, and that is the honest scope of the guarantee. `episodes` is a seat's memory and lives in [the node's own database](coordination.md#what-stays-node-local) — read by the node running that seat, never by a peer. So a duplicate written on two *different* nodes is two rows in two databases, each under its own id — and memory replication carries both onto the changelog rather than collapsing them there. What collapses them is this index, on the node that next replays the seat: it imports the first and skips the second. The guarantee is therefore eventual and reader-scoped rather than fleet-wide at write time, which is the honest shape of it. What the index collapses is the case that actually recurs against one reader: **one node writing twice** — a redelivery it worked again, or a legitimate re-run after the [completion ledger](#the-completion-ledger) failed open.
 

@@ -456,7 +456,19 @@ the dependency surface before choosing a host for it:
   own turns is handed to a data node's event log (the audit trail cannot live
   in a store deleted at its next boot), so `GET /events` on that data node
   shows it; its seats' memory rides the compacted changelog every seat's
-  memory does and is rehydrated after a restart.
+  memory does and is rehydrated after a restart, except, until
+  [#1051](https://github.com/crewlet/crewlet/issues/1051) is fixed, a seat
+  whose skills have been refined: the fresh store does not hold the seat's
+  skills, so its hydration fails and the seat is refused. A restart costs that
+  memory whatever the changelog had not acknowledged when the node stopped,
+  since the deleted store takes it along: a graceful stop flushes each seat
+  for five seconds, about fifty rows across a leaf link to another region,
+  and a crash flushes nothing. And after every boot, the first cycles of each seat it
+  takes carry back everything the seat's hydration brought in, about three
+  hundred rows a cycle across such a link, shared by its seats, while what the
+  seat writes meanwhile waits behind those rows
+  ([#1039](https://github.com/crewlet/crewlet/issues/1039); see
+  [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
   is a harness the node runs, and it calls its own vendor over outbound HTTPS. A

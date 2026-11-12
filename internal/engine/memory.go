@@ -15,17 +15,28 @@ import (
 // memorySyncInterval is how often a node carries what its seats have just
 // learned onto the memory changelog.
 //
-// IT IS THE CRASH WINDOW, and that is the only thing sizing it. A graceful
-// handoff flushes on release, so a drain, a rolling upgrade or a rebalance
-// loses nothing whatever this value is. What it bounds is the other case: a
-// node that dies without releasing loses the memory written since its last
-// cycle.
+// IT IS THE CRASH WINDOW WHILE THE CYCLES KEEP UP, and that is the only thing
+// sizing it. A node that dies without releasing loses what of its seats'
+// memory the changelog has not acknowledged: while every cycle gets through
+// every seat's publish, what each wrote since its last one. Otherwise the
+// window is longer whatever this value is. A seat's new rows wait behind any
+// backlog ahead of them: the rows an acquisition or a restart leaves this
+// node to carry back (crewlet/crewlet#1039), or a burst the seat wrote, such
+// as a vector fill after a change of embedding model (crewlet/crewlet#1041).
+// A seat whose counterparty profiles and skills outlast a cycle never has its
+// skill versions and onboarding marker carried (crewlet/crewlet#1040). A row
+// larger than the broker takes fails every publish of its seat at that row,
+// so nothing after it, in its table or in the tables after that one, is
+// carried (crewlet/crewlet#349). And cycles that run out at k seats leave a
+// seat waiting up to 2k cycles between two publishes ([memorySync.resume]). A
+// graceful handoff's flush starts where the cycles left off, and what it
+// cannot reach in its own bound is lost too ([memoryFlushTimeout]).
 //
-// Thirty seconds against a turn that takes minutes, so the worst case is
-// roughly one turn's worth of diary entries and one episode — and a seat that
-// re-runs a lost turn writes them again. Shorter buys a smaller window on a
-// failure that is already rare; longer starts losing whole turns of learning
-// to a single crash.
+// Thirty seconds against a turn that takes minutes, so while the cycles keep
+// up the worst case is roughly one turn's worth of diary entries and one
+// episode — and a seat that re-runs a lost turn writes them again. Shorter
+// buys a smaller window on a failure that is already rare; longer starts
+// losing whole turns of learning to a single crash.
 //
 // It is also comfortably inside the 45-second lease TTL, so a node that stops
 // publishing has usually published once more before a peer can take its seats
@@ -34,12 +45,40 @@ const memorySyncInterval = 30 * time.Second
 
 // memoryFlushTimeout bounds the last publish a released seat gets.
 //
-// Five seconds, against a path that already holds the seat's teardown: it is
-// long enough for a broker under load to take a cycle's worth of rows, and
-// short enough that a drain of a dozen seats against a broker that has
-// stopped answering finishes in under a minute rather than waiting on each
-// one. What is lost when it expires is the same bounded thing a crash loses —
-// whatever this node learned since its last cycle.
+// FIVE SECONDS, held there by what runs beside it rather than by a count of
+// rows. The seat's last lifecycle event is published beside the teardown this
+// runs in, under the same five seconds ([lifecyclePublishBudget]), so a stream
+// that has stopped acknowledging costs a release one bound rather than two. A
+// drain releases every seat at once (seat.Host.ReleaseAll), so the flushes
+// cost it five seconds together, which is what docs/concepts/agent-runtime.md
+// counts for them in how long a stop takes. No test pins the value, so these
+// are what a change to it answers to.
+//
+// WHAT FIVE SECONDS CARRIES, at one broker round trip a row from the marks the
+// seat's cycles left, is about fifty rows at 100 ms (a leaf link to another
+// region), a thousand at 5 ms and five thousand at 1 ms: a sixth of what a
+// thirty-second cycle carries between all the node's seats. What it has not
+// reached when it expires is lost, as a crash loses it, and that is more than
+// the last cycle's writes:
+//
+//   - while the cycles after an acquisition or a restart are still carrying
+//     back every row this node holds for the seat, which everything the seat
+//     wrote meanwhile waits behind (crewlet/crewlet#1039);
+//   - when the seat's counterparty profiles and skills, which every publish
+//     sends whole, alone outlast the five seconds: the flush is cut inside
+//     them, short of the skill versions and the onboarding marker after them
+//     (crewlet/crewlet#1040);
+//   - behind a burst the seat wrote, such as a vector fill after a change of
+//     embedding model, larger than five seconds of round trips carry
+//     (crewlet/crewlet#1041).
+//
+// A flush that fails loses the same. One that meets a row larger than the
+// broker takes fails at it, as every cycle of the seat has, so nothing after
+// that row, in its table or in the tables after that one, is carried
+// (crewlet/crewlet#349). And what a flush does carry of the profiles, skills
+// and marker can be replaced by an older copy published after it: by this
+// node's own sync, from a cycle it began before the release, or by the next
+// holder while it is still taking the seat (crewlet/crewlet#511).
 const memoryFlushTimeout = 5 * time.Second
 
 // memoryAgentID is the id a seat's memory changelog is addressed by: the
@@ -50,7 +89,7 @@ const memoryFlushTimeout = 5 * time.Second
 // revision that removes a seat is already installed when the node lets the
 // seat go, so a lookup found nobody and the flush published to a subject with
 // an empty seat token, which the broker refuses — every removed seat logged
-// `seat_memory_not_flushed` and its last cycle's rows never reached the
+// `seat_memory_not_flushed` and what its flush was to carry never reached the
 // changelog that a seat re-added under the same handle hydrates from.
 //
 // Empty only with no company to derive it in, which the memory syncer reads as
@@ -124,7 +163,9 @@ type memorySync struct {
 // costs is split by table: one with a watermark keeps every row the changelog
 // acknowledged, and the seat's next publish resumes at the first it did not,
 // while a whole-each-cycle table keeps nothing of it and is sent whole again.
-// A release flushes outright.
+// A release's flush carries on from the same marks, for [memoryFlushTimeout],
+// and what it does not reach is lost to the seat's next holder, which that
+// constant says can be more than the last cycle's writes.
 func (e *Engine) startMemorySync(ctx context.Context) {
 	if e.memory == nil {
 		return
@@ -133,7 +174,7 @@ func (e *Engine) startMemorySync(ctx context.Context) {
 	// beside it: a loop bound to it stops at SIGTERM, before the drain has
 	// released the seats whose memory it is carrying. Its own stop channel
 	// is what ends it, and stopMemorySync is what closes that — after the
-	// drain, so the last cycle a seat gets is the flush on its release.
+	// drain, so the loop carries every seat until its release's flush.
 	ctx = context.WithoutCancel(ctx)
 	loop := &memorySync{stop: make(chan struct{})}
 	e.memorySync = loop
@@ -156,8 +197,13 @@ func (e *Engine) startMemorySync(ctx context.Context) {
 // Waiting rather than signalling and walking away: a cycle mid-publish holds
 // a store read and a broker write, and letting the process close either one
 // underneath it turns an orderly shutdown into a logged failure on the way
-// out. Called AFTER the drain, which has already flushed every seat this
-// node held — so what this ends is a loop with nothing left to carry.
+// out. Called AFTER the drain, which has released every seat this node held,
+// each with its flush. A cycle that began before a release can still be
+// running, though: it walks the seats it found held then, so it can still be
+// publishing a released seat, or start on one after the release forgot its
+// marks and publish everything this node holds for it, over what the next
+// holder has written since (crewlet/crewlet#511). This waits for that too, for
+// up to the cycle's bound.
 func (e *Engine) stopMemorySync() {
 	if e.memorySync == nil {
 		return

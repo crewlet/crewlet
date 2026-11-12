@@ -75,11 +75,11 @@ import (
 //
 // # Its own loop, beside the memory sync rather than inside it
 //
-// The memory sync's cycle is the crash window for everything a seat learns,
-// and a provider having a slow minute must not widen it: a fill waits on an
-// embeddings API, a publish on the broker. So the two run apart. A filled row
-// is stamped again, so the memory sync carries it like a new row, in the
-// first of the seat's publishes that reaches it.
+// The memory sync's cycle sets the crash window for what a seat learns
+// ([memorySyncInterval]), and a provider having a slow minute must not widen
+// it: a fill waits on an embeddings API, a publish on the broker. So the two
+// run apart. A filled row is stamped again, so the memory sync carries it like
+// a new row, in the first of the seat's publishes that reaches it.
 
 const (
 	// memoryFillInterval is how often the holder looks for rows to fill.
