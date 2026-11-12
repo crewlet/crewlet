@@ -22,6 +22,7 @@ import {
 } from "~/contract/assistant.ts";
 import { bytesOf } from "~/lib/clip.ts";
 import { orList } from "~/lib/words.ts";
+import { heldWrite } from "~/test/drafts.ts";
 import { pageContextFits, wireBytes } from "~/protocol/assistantWire.ts";
 import {
   applyPageAction,
@@ -84,7 +85,7 @@ function spec(value: Form = FORM, apply = vi.fn()): AssistantDraftSpec<Form> {
       { path: "password", label: "Password", secret: true, read: (f) => f.password },
       { path: "api_key", label: "Key", read: (f) => f.apiKey, write: (f) => f },
     ],
-    apply,
+    write: heldWrite(apply),
   };
 }
 
@@ -344,7 +345,7 @@ describe("draft.set", () => {
           write: (a, v) => (a.on ? { ...a, level: String(v) } : refuse("Turn it on first.")),
         },
       ],
-      apply: vi.fn(),
+      write: heldWrite(vi.fn()),
     };
     expect(parseDraftChange(access, { values: { access: "Admin", switch: "On" } })).toEqual({
       ok: true,
@@ -443,7 +444,7 @@ describe("a file field", () => {
         },
       },
     ],
-    apply: vi.fn(),
+    write: heldWrite(vi.fn()),
   };
 
   test("is sent as a file field, by its name, that the assistant may set", () => {

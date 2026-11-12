@@ -74,7 +74,13 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useLeaveGuard, useNavigator } from "~/app/router.tsx";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import {
+  readOnlySaved,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  writeWith,
+} from "~/app/assistant/draft.ts";
 import {
   BRAND_ASSISTANT_HELP,
   applyBrandDraft,
@@ -184,7 +190,7 @@ export function BrandPage() {
   // stands unadopted: what the notice under the header offers.
   const draft = company?.draft ? company : null;
 
-  const [editing, setEditing] = useState<Editing | null>(null);
+  const [editing, setEditing] = useDraftState<Editing | null>(null);
   const [confirming, setConfirming] = useState<"save" | "clear" | "discard" | null>(null);
   const [reviewing, setReviewing] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -220,13 +226,12 @@ export function BrandPage() {
           scope: `${BRAND_CARDS[editing.card].title} you are editing (not saved)`,
           value: editing.edit,
           fields: brandDraftFields(new Set([editing.card])),
-          apply: (next) =>
-            applyBrandDraft(
-              editing.edit,
-              next,
-              (change) => setEditing((was) => (was ? { ...was, edit: change(was.edit) } : was)),
-              setNotice,
+          write: writeWith(
+            writeVia(setEditing, (change: (was: BrandEdit) => BrandEdit, was) =>
+              was ? { ...was, edit: change(was.edit) } : was,
             ),
+            (next: BrandDraft, put) => applyBrandDraft(editing.edit, next, put, setNotice),
+          ),
           blocked: () => (confirming ? "The change is being saved." : null),
         }
       : draft && standing && adoption !== undefined && mayContinueDraft(canAdopt, adoption)
@@ -238,6 +243,7 @@ export function BrandPage() {
             scope: "The brand draft in progress (saved, not published)",
             value: { document: standing, files: new Map() },
             fields: brandDraftFields(new Set()),
+            write: readOnlySaved(),
           }
         : null,
   );

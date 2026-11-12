@@ -66,7 +66,14 @@ import {
 } from "react";
 import { ConfirmModal, isComposing } from "@crewlethq/ui";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import {
+  latestWrite,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  type DraftSetter,
+  type DraftWrite,
+} from "~/app/assistant/draft.ts";
 import { RefusalNote } from "~/components/WriteButton.tsx";
 import { WorkConflictNote } from "../shapes/cells.tsx";
 import { useAct, type Act } from "~/lib/useAct.ts";
@@ -195,12 +202,20 @@ interface OpenEdit {
 
 const isChanged = (edit: OpenEdit) => JSON.stringify(edit.draft) !== JSON.stringify(edit.initial);
 
+/** Every editor open on the task, by the place it opens in. */
+type OpenEdits = Readonly<Record<string, OpenEdit>>;
+
 interface InlineEditStore {
-  open: Readonly<Record<string, OpenEdit>>;
+  open: OpenEdits;
+  /**
+   * What every open editor holds, in branded state: the title and the
+   * description are fields of the page's one draft, and a modal handed what
+   * writes them is part of the page (`draftGate.test.ts`).
+   */
+  held: DraftSetter<OpenEdits>;
   /** The editor whose pencil takes focus back, once it has closed. */
   returning: string | null;
   start: (slot: string, edit: OpenEdit) => void;
-  set: (slot: string, id: string, draft: unknown) => void;
   close: (slot: string, id: string) => void;
   dismiss: (slot: string) => void;
   returned: () => void;
@@ -210,7 +225,7 @@ const InlineEditsContext = createContext<InlineEditStore | null>(null);
 
 /** Which editors are open on the task, and the one question about discarding. */
 function InlineEdits({ item, children }: { item: string; children: ReactNode }) {
-  const [open, setOpen] = useState<Readonly<Record<string, OpenEdit>>>({});
+  const [open, setOpen] = useDraftState<OpenEdits>({});
   const [returning, setReturning] = useState<string | null>(null);
   const [asking, setAsking] = useState<{ slot: string; next?: OpenEdit } | null>(null);
   // A DRAFT BELONGS TO THE TASK IT WAS TYPED ON: stepping a peek keeps this
@@ -231,6 +246,7 @@ function InlineEdits({ item, children }: { item: string; children: ReactNode }) 
     };
     return {
       open,
+      held: setOpen,
       returning,
       start: (slot, edit) => {
         const current = latest.current[slot];
@@ -239,10 +255,6 @@ function InlineEdits({ item, children }: { item: string; children: ReactNode }) 
         } else {
           setOpen({ ...latest.current, [slot]: edit });
         }
-      },
-      set: (slot, id, draft) => {
-        const current = latest.current[slot];
-        if (current?.id === id) setOpen({ ...latest.current, [slot]: { ...current, draft } });
       },
       // ONLY THE EDITOR STILL OPEN THERE: a save can land after the reader has
       // moved on to another field, and focus must not jump back from it.
@@ -263,7 +275,7 @@ function InlineEdits({ item, children }: { item: string; children: ReactNode }) 
       },
       returned: () => setReturning(null),
     };
-  }, [open, returning]);
+  }, [open, setOpen, returning]);
   const words = asking ? open[asking.slot]?.words : undefined;
   return (
     <InlineEditsContext.Provider value={store}>
@@ -293,7 +305,8 @@ export interface InlineEdit<T> {
   draft: T | null;
   /** The pencil's press, with the value it opens on. */
   start: (initial: T) => void;
-  set: (next: T) => void;
+  /** What is typed, written into the page's branded state while this editor is the one open in its place. */
+  set: DraftWrite<T>;
   /** Shut it, as a Cancel or a finished save does. */
   close: () => void;
   /** Send a change and shut the editor only once it has landed; a refusal leaves it open. */
@@ -313,8 +326,8 @@ export interface InlineEdit<T> {
  */
 export function useInlineEdit<T>(id: string, words: string, slot: string = id): InlineEdit<T> {
   const store = useContext(InlineEditsContext);
-  const held = store?.open[slot];
-  const mine = held?.id === id ? held : undefined;
+  const placed = store?.open[slot];
+  const mine = placed?.id === id ? placed : undefined;
   const pencil = useRef<HTMLButtonElement>(null);
   const returning = store?.returning === id && !mine;
   // A PASSIVE EFFECT, AFTER THE COMMIT: a Discard closes the kit's dialog in the
@@ -324,7 +337,18 @@ export function useInlineEdit<T>(id: string, words: string, slot: string = id): 
     store?.returned();
     pencil.current?.focus();
   }, [returning, store]);
-  const set = useCallback((next: T) => store?.set(slot, id, next), [store, slot, id]);
+  const held = store?.held;
+  const set = useMemo(
+    () =>
+      held
+        ? writeVia(held, (next: T, open: OpenEdits) => {
+            const edit = open[slot];
+            return edit?.id === id ? { ...open, [slot]: { ...edit, draft: next } } : open;
+          })
+        : // OUTSIDE A PROVIDER nothing is open, so nothing is written.
+          latestWrite<T>(() => undefined),
+    [held, slot, id],
+  );
   const close = useCallback(() => store?.close(slot, id), [store, slot, id]);
   return {
     draft: mine ? (mine.draft as T) : null,

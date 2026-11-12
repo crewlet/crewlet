@@ -98,7 +98,13 @@ import {
   withText,
   type SlideRenderContext,
 } from "~/lib/slides.tsx";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import {
   ARTIFACT_LABEL_MAX_BYTES,
   DECK_NOTES_MAX_RUNES,
@@ -183,7 +189,7 @@ function Deck({
   const publish = useArtifactAccess({ app: true, role: "editor", held: detail.role });
 
   const base = useMemo(() => draftOf(deck, version), [deck, version]);
-  const [draft, setDraft] = useState<DeckDraft | null>(null);
+  const [draft, setDraft] = useDraftState<DeckDraft | null>(null);
   const [merge, setMerge] = useState<DeckMerge | null>(null);
   // ONLY THE HEAD IS EDITED, since a save is a version based on the head and
   // an older version is history to read or restore. A draft already open
@@ -214,7 +220,7 @@ function Deck({
           scope: `Your edit of “${detail.title}” (not saved)`,
           value: shown,
           fields: deckEditFields(shown.order),
-          apply: setDraft,
+          write: writeVia(setDraft, (next: DeckDraft) => next),
           blocked: () =>
             merge && merge.conflicts.length > 0 ? "Settle where both edits differ first." : null,
         }

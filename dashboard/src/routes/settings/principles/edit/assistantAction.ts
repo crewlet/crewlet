@@ -12,7 +12,13 @@
  * is one being saved or holding a conflict.
  */
 
-import { refuse, type AssistantDraftSpec, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  writeThrough,
+  type AssistantDraftSpec,
+  type DraftDispatch,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import {
   CHARTER_PARTS,
   PART_TITLES,
@@ -22,7 +28,7 @@ import {
   type CharterPart,
   type PartValue,
 } from "./charter.ts";
-import { reducer, type EditingState } from "./state.ts";
+import { reducer, type Action, type EditingState } from "./state.ts";
 
 /** The most text one part carries: well past every part's own limit, which the editor states. */
 const MAX_TEXT = 16 * 1024;
@@ -89,10 +95,11 @@ function writePart(state: EditingState, part: CharterPart, value: PartValue) {
 export function charterDraft(args: {
   state: EditingState;
   charter: Charter;
-  change: (part: CharterPart, value: PartValue) => void;
+  /** The branded dispatch the page holds every part in, which each part's editor changes through. */
+  dispatch: DraftDispatch<Action>;
   blocked: () => string | null;
 }): AssistantDraftSpec<EditingState> {
-  const { state, charter, change, blocked } = args;
+  const { state, charter, dispatch, blocked } = args;
   const open = CHARTER_PARTS.find((part) => state.sessions[part] !== undefined);
   return {
     kind: "client",
@@ -101,12 +108,15 @@ export function charterDraft(args: {
     help: HELP,
     value: state,
     fields: charterFields(state, charter),
-    apply: (next) => {
-      for (const part of CHARTER_PARTS) {
+    // EACH PART IT MOVED as its own editor changes it: the reducer's `change`.
+    write: writeThrough(dispatch, (next: EditingState) =>
+      CHARTER_PARTS.flatMap((part): Action[] => {
         const draft = next.sessions[part]?.draft;
-        if (draft !== undefined && draft !== state.sessions[part]?.draft) change(part, draft);
-      }
-    },
+        return draft !== undefined && draft !== state.sessions[part]?.draft
+          ? [{ type: "change", part, draft }]
+          : [];
+      }),
+    ),
     blocked,
   };
 }

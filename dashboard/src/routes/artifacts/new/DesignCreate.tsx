@@ -121,7 +121,15 @@ import {
 } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft, linesOf } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  writeTo,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { AskAgentPanel, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
 
 /** Briefs to start from, one press each. */
@@ -255,11 +263,11 @@ export function DesignCreate() {
   // again on its own, so a second press never makes a second design.
   const [made, setMade] = useState<string | null>(null);
 
-  const [title, setTitle] = useState("");
-  const [brief, setBrief] = useState("");
-  const [links, setLinks] = useState<string[]>([]);
+  const [title, setTitle] = useDraftState("");
+  const [brief, setBrief] = useDraftState("");
+  const [links, setLinks] = useDraftState<string[]>([]);
   const [linkError, setLinkError] = useState<string | undefined>();
-  const [draft, setDraft] = useState<DesignDraft | null>(null);
+  const [draft, setDraft] = useDraftState<DesignDraft | null>(null);
   const [picking, setPicking] = useState(true);
   const [selected, setSelected] = useState<CanvasBoardSelection | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -345,16 +353,21 @@ export function DesignCreate() {
       extra: {
         value: { draft, links },
         fields: designFields(draft),
-        apply: (next) => {
-          if (next.draft !== draft) {
-            setDraft(next.draft);
-            if (draft === null) {
-              setSelected(null);
-              setPicking(false);
-            }
-          }
-          if (next.links !== links) setLinks([...next.links]);
-        },
+        write: writeParts<DesignState>(
+          { draft, links },
+          {
+            // A LAYOUT PICKED for an empty canvas closes the picker, as its own press does.
+            draft: writeTo(setDraft, {
+              also: () => {
+                if (draft === null) {
+                  setSelected(null);
+                  setPicking(false);
+                }
+              },
+            }),
+            links: writeVia(setLinks, (next: readonly string[]) => [...next]),
+          },
+        ),
       },
       blocked: () => (busy ? "The design is being made." : null),
     }),

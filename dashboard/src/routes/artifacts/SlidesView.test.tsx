@@ -22,6 +22,7 @@ import { titleOf } from "~/lib/slides.tsx";
 import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactDeck, ArtifactDetail } from "~/protocol/index.ts";
+import { heldWrite } from "~/test/drafts.ts";
 
 // A READER WHO MAY NOT PUBLISH: the deck shows its slides rather than the editor.
 vi.mock("~/lib/artifacts/access.ts", () => ({ useArtifactAccess: () => ({ can: false }) }));
@@ -197,7 +198,7 @@ test("a deck's edit reads and sets the deck's title and each slide's title and n
     scope: "Your edit (not saved)",
     value: draft,
     fields: deckEditFields(draft.order),
-    apply: () => {},
+    write: heldWrite(),
   };
   const first = draft.slides[draft.order[0]!]!;
   expect(draftSnapshot(spec).fields[1]).toMatchObject({
@@ -226,7 +227,7 @@ test("a deck's edit holds its title to the engine's bytes and its notes to its c
     scope: "Your edit (not saved)",
     value: draft,
     fields: deckEditFields(draft.order),
-    apply: () => {},
+    write: heldWrite(),
   };
   const set = (values: Record<string, string>) => parseDraftChange(spec, { values });
   expect(set({ title: "語".repeat(DECK_TITLE_MAX_BYTES / 3) }).ok).toBe(true);

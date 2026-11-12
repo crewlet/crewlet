@@ -15,9 +15,9 @@
  * over every page loaded, so a reply on a later page joins its root.
  */
 
-import { useState } from "react";
 import { Button, Stack, Tag, Textarea, useSendOnEnter } from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
+import { useDraftState } from "~/app/assistant/draft.ts";
 import { PageFailed } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { changeLive, shortOID, verdictWord } from "~/lib/code.ts";
@@ -224,7 +224,7 @@ export function ReplyComposer({
   target: { thread: string } | { finding: string };
 }) {
   const write = useAct("code_comment_on_change");
-  const [body, setBody] = useState("");
+  const [body, setBody] = useDraftState("");
   // EACH REPLY BOX IS A FIELD of the change page's one draft
   // (`ChangePage.tsx`), keyed by what it answers: a draft's path is
   // lowercase letters, digits, dots and underscores, so the id is spelled
@@ -274,7 +274,7 @@ export function ReplyComposer({
 /** A comment of its own on the change, which starts a thread. */
 function CommentComposer({ change }: { change: CodeChangeDetail }) {
   const write = useAct("code_comment_on_change");
-  const [body, setBody] = useState("");
+  const [body, setBody] = useDraftState("");
   useDraftBox({
     path: "comment",
     label: `Comment on ${change.ref}`,

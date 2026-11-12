@@ -37,6 +37,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Button, Disclosure, Input, Select, Skeleton, Stack, Tag, Textarea } from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
+import { useDraftState } from "~/app/assistant/draft.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -643,10 +644,10 @@ function FindingComposer({
 }) {
   const [severity, setSeverity] = useState("major");
   const [category, setCategory] = useState("correctness");
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
+  const [title, setTitle] = useDraftState("");
+  const [body, setBody] = useDraftState("");
   const [suggesting, setSuggesting] = useState(false);
-  const [suggestion, setSuggestion] = useState("");
+  const [suggestion, setSuggestion] = useDraftState("");
   const lines = pick.start === pick.end ? `line ${pick.start}` : `lines ${pick.start}–${pick.end}`;
   // THE FINDING'S BOXES AS FIELDS of the change page's one draft
   // (`ChangePage.tsx`), so the person's assistant reads and can fill what is

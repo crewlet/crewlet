@@ -50,6 +50,7 @@ import { builderReducer, INITIAL_BUILDER } from "~/routes/org/builder/model/redu
 import { countingKeys, fixtureCompany } from "~/routes/org/builder/model/testkit.ts";
 import { draftSetArgs, parseDraftChange, refuse, type AssistantDraftSpec } from "./draft.ts";
 import { choiceKey, parseUrlPatch, urlArgs, type UrlActionKey } from "./urlAction.ts";
+import { heldWrite } from "~/test/drafts.ts";
 
 const NOW = Date.parse("2026-10-26T12:00:00Z");
 
@@ -232,7 +233,7 @@ const SPEC: AssistantDraftSpec<string> = {
       write: (_, next) => (typeof next === "string" && next !== "lots" ? next : refuse("No.")),
     },
   ],
-  apply: () => {},
+  write: heldWrite(),
 };
 
 const DRAFT: AssistantPageDraft = {

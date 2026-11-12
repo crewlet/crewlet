@@ -49,7 +49,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   type ComponentType,
@@ -60,7 +59,7 @@ import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/a
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import type { PageActionSpec } from "~/app/assistant/context.ts";
 import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { guardedDispatch, useAssistantDraft, useDraftReducer } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_QUERY } from "~/app/layout.ts";
 import { holdNewSeats } from "~/lib/newSeats.ts";
@@ -766,7 +765,10 @@ function BuilderScreen({
   const [projectParam] = useParam("project", "", "filter");
   const [editorParam] = useParam("editor", "", "filter");
 
-  const [state, dispatchRaw] = useReducer(builderReducer, INITIAL_BUILDER);
+  // THE DRAFT IS HELD IN A BRANDED REDUCER, so a modal that records through
+  // its dispatch (the editor's side sheet, each dialog) is part of this page
+  // to the draft gate (`draftGate.test.ts`), as its change outlives it.
+  const [state, dispatchRaw] = useDraftReducer(builderReducer, INITIAL_BUILDER);
   const stateRef = useRef(state);
   stateRef.current = state;
   const [loaded, setLoaded] = useState(false);
@@ -1111,20 +1113,21 @@ function BuilderScreen({
   // A READER WHO MAY NOT CHANGE THE ORG finds every edit drawn and held, saying why.
   const editsHeld = projected || !write.can ? readOnlyReason : null;
 
-  const dispatch = useCallback(
-    (action: BuilderAction) => {
-      const mutates =
-        action.type === "record" ||
-        action.type === "undo" ||
-        action.type === "redo" ||
-        action.type === "discard";
-      if (mutates && readOnlyReason !== null) {
-        announce(`Editing is paused. ${readOnlyReason}`);
-        return;
-      }
-      dispatchRaw(action);
-    },
-    [readOnlyReason, announce],
+  const dispatch = useMemo(
+    () =>
+      guardedDispatch(dispatchRaw, (action: BuilderAction, pass) => {
+        const mutates =
+          action.type === "record" ||
+          action.type === "undo" ||
+          action.type === "redo" ||
+          action.type === "discard";
+        if (mutates && readOnlyReason !== null) {
+          announce(`Editing is paused. ${readOnlyReason}`);
+          return;
+        }
+        pass(action);
+      }),
+    [dispatchRaw, readOnlyReason, announce],
   );
 
   // --- assistant page actions (WP12) ---
@@ -1630,6 +1633,7 @@ function BuilderScreen({
     loaded && !(creating && !templateApplied)
       ? orgDraftSpec({
           state,
+          held: dispatch,
           view,
           selected:
             selection === null

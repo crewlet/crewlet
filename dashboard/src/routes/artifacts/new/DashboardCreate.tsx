@@ -93,7 +93,13 @@ import {
 } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -218,8 +224,8 @@ export function DashboardCreate() {
   const workItem = useWorkItem();
   const saveIn = useSaveIn();
   const { folder } = saveIn;
-  const [title, setTitle] = useState("");
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [title, setTitle] = useDraftState("");
+  const [draft, setDraft] = useDraftState<Draft>(EMPTY_DRAFT);
   const [open, setOpen] = useState<string | null>(null);
   const [fresh, setFresh] = useState<string | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -235,7 +241,7 @@ export function DashboardCreate() {
   const narrow = useNarrowerThan(root, NARROW_BELOW);
   const [pane, setPane] = useState<"board" | "data">("board");
   const panel = useAskPanel();
-  const [brief, setBrief] = useState("");
+  const [brief, setBrief] = useDraftState("");
   const who = useWhoBuildsIt("dashboard");
   const filer = useFileArtifactTask();
   const agentName = chosenAgent(who)?.seat.name ?? "";
@@ -306,9 +312,11 @@ export function DashboardCreate() {
     toast.ok(`Added “${r.title}” to the board`);
   };
 
+  /** What a starter's card opens the Data pane on: its first source. */
+  const openedOn = (s: Starter) => starterSources(s)[0] ?? null;
   const start = (s: Starter) => {
     setDraft(fromStarter(s, sources));
-    setOpen(starterSources(s)[0] ?? null);
+    setOpen(openedOn(s));
   };
 
   /** Make the board as composed, or answer null with the refusal said on the page. */
@@ -412,10 +420,19 @@ export function DashboardCreate() {
           figures: resolved.map((r) => `${r.recipe.title} (${r.source.name})`),
         },
         fields: boardFields(draft.placed.length === 0),
-        apply: (next) => {
-          const chosen = STARTERS.find((st) => st.key === next.starter);
-          if (chosen) start(chosen);
-        },
+        // AS A PRESS OF THE STARTER'S CARD: the board started from it, and
+        // the Data pane opened on its first source.
+        write: writeVia(
+          setDraft,
+          (next: BoardState, now) => {
+            const chosen = STARTERS.find((st) => st.key === next.starter);
+            return chosen ? fromStarter(chosen, sources) : now;
+          },
+          (next) => {
+            const chosen = STARTERS.find((st) => st.key === next.starter);
+            if (chosen) setOpen(openedOn(chosen));
+          },
+        ),
       },
       blocked: () => (busy ? "The dashboard is being made." : null),
     }),

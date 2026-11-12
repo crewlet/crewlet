@@ -82,7 +82,14 @@ import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import { bytesOverWords, utf8Bytes } from "~/lib/format.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { AskAgentPanel, askTitleHold, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
 
 /** Briefs to start from, one press each. */
@@ -306,10 +313,10 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
     starters.themes[0]?.id ??
     "";
 
-  const [title, setTitle] = useState("");
-  const [brief, setBrief] = useState("");
-  const [themeId, setThemeId] = useState(firstTheme);
-  const [rows, setRows] = useState<PlanRow[]>(opening);
+  const [title, setTitle] = useDraftState("");
+  const [brief, setBrief] = useDraftState("");
+  const [themeId, setThemeId] = useDraftState(firstTheme);
+  const [rows, setRows] = useDraftState<PlanRow[]>(opening);
   const [selected, setSelected] = useState(opening[0]?.key ?? "");
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
   const creating = useRef(false);
@@ -403,10 +410,13 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       extra: {
         value: { theme: themeId, rows },
         fields: deckFields(themes, layouts, rows),
-        apply: (next) => {
-          setThemeId(next.theme);
-          setRows([...next.rows]);
-        },
+        write: writeParts<DeckDraft>(
+          { theme: themeId, rows },
+          {
+            theme: setThemeId,
+            rows: writeVia(setRows, (next: readonly PlanRow[]) => [...next]),
+          },
+        ),
       },
       blocked: () => (busy ? "The deck is being made." : null),
     }),
