@@ -281,11 +281,6 @@ type Claim struct {
 	Source     Source    `json:"source"`
 	ObservedAt time.Time `json:"observed_at"`
 	Position   uint64    `json:"position,omitempty"`
-
-	// member is the entry the claim was made about, kept by the fold where
-	// it moves the claim onto the entry that one merged into: a fact of each
-	// host stays its own host's.
-	member Ref
 }
 
 // Confidence is the claim's, derived from its source.

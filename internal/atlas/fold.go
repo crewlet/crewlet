@@ -51,13 +51,17 @@ func Fold(claims []Claim, now time.Time) View {
 	})
 	canonical := merge(live)
 	byEntry := map[Ref][]*Claim{}
+	// hosts is the member each claim on a fact of each host was made about,
+	// kept here because the claim itself moves onto the entry that member
+	// merged into: such a fact stays its own host's ([Spec.PerHost]).
+	hosts := map[*Claim]Ref{}
 	for i := range live {
 		c := &live[i]
 		if c.Facet.Kind == FacetDistinct || c.Facet.Kind == FacetSame {
 			continue
 		}
 		if c.Facet.Kind == FacetFact && specs()[c.Facet.Fact].PerHost {
-			c.member = c.Subject
+			hosts[c] = c.Subject
 		}
 		c.Subject = canonical.of(c.Subject)
 		if c.Facet.Kind == FacetRelation && c.Facet.Target.External == "" {
@@ -70,7 +74,7 @@ func Fold(claims []Claim, now time.Time) View {
 	}
 	view.Entries = make([]Entry, 0, len(byEntry))
 	for ref, cs := range byEntry {
-		if e, ok := entryOf(ref, cs, canonical.members[ref], now); ok {
+		if e, ok := entryOf(ref, cs, hosts, canonical.members[ref], now); ok {
 			view.Entries = append(view.Entries, e)
 		}
 	}
@@ -120,7 +124,6 @@ func facetOf(c *Claim) facetID {
 	if c.Facet.Kind == FacetFact && specs()[c.Facet.Fact].Many {
 		id.value = c.Value.Text
 	}
-	id.member = c.member
 	return id
 }
 
@@ -232,10 +235,11 @@ func resolve(claims []*Claim) resolution {
 func agrees(a, b *Claim) bool { return a.Denied == b.Denied && a.Value.Equal(b.Value) }
 
 // entryOf folds one entry's claims. An entry nothing live asserts is no entry.
-func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, bool) {
+func entryOf(ref Ref, claims []*Claim, hosts map[*Claim]Ref, members []Ref, now time.Time) (Entry, bool) {
 	facets := map[facetID][]*Claim{}
 	for _, c := range claims {
 		k := facetOf(c)
+		k.member = hosts[c]
 		facets[k] = append(facets[k], c)
 	}
 	e := Entry{ID: ref.ID(), Ref: ref, Lane: ref.Kind.Lane(), Name: ref.Key, Members: members,
@@ -269,7 +273,7 @@ func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, boo
 		}
 		switch r.winner.Facet.Kind {
 		case FacetFact:
-			e.Facts = append(e.Facts, factView(r))
+			e.Facts = append(e.Facts, factView(r, k.member))
 		case FacetRelation:
 			e.Relations = append(e.Relations, edge(r))
 		}
@@ -340,11 +344,11 @@ func claimed(cs []*Claim) []Claimed {
 	return out
 }
 
-func factView(r resolution) FactView {
+func factView(r resolution, of Ref) FactView {
 	w := r.winner
 	return FactView{Fact: w.Facet.Fact, Value: w.Value, Source: w.Source, Confidence: w.Confidence(),
 		Word: w.Confidence().Display(), ObservedAt: w.ObservedAt, Standing: r.standing,
-		Suggested: r.suggested, Others: claimed(r.others), Of: w.member}
+		Suggested: r.suggested, Others: claimed(r.others), Of: of}
 }
 
 func edge(r resolution) Edge {
