@@ -516,6 +516,13 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
+	// THE ATLAS'S OWN LOG, as lines and as daily counts: read over REST on the
+	// paths the reference prints until a screen draws its activity and its
+	// timeline from them, which deletes these two lines.
+	"atlas_log": "a script holding the atlas permission: GET /atlas/log and GET /atlas/{id}/log, as " +
+		"docs/reference/api-endpoints.md prints them",
+	"atlas_activity": "a script holding the atlas permission: GET /atlas/activity, as " +
+		"docs/reference/api-endpoints.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.

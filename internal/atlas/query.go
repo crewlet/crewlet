@@ -181,6 +181,10 @@ const (
 	facetHealth
 )
 
+// ShowsUnconfirmed reports whether q takes in the entries whose word is
+// unconfirmed.
+func (q Query) ShowsUnconfirmed() bool { return q.Unconfirmed || q.Word == WordUnconfirmed }
+
 // matches reports whether e answers q, every dimension but skip.
 func (q Query) matches(e *Entry, vendor Vendor, skip facet) bool {
 	switch q.Show {
@@ -196,7 +200,7 @@ func (q Query) matches(e *Entry, vendor Vendor, skip facet) bool {
 	}
 	// An unconfirmed entry is left out on the word's own dimension, so the
 	// word's facet still counts what showing them would add.
-	hidden := !q.Unconfirmed && q.Word != WordUnconfirmed && e.Word == WordUnconfirmed
+	hidden := !q.ShowsUnconfirmed() && e.Word == WordUnconfirmed
 	switch {
 	case skip != facetKind && q.Kind != "" && e.Ref.Kind != q.Kind,
 		skip != facetLane && q.Lane != "" && e.Lane != q.Lane,
@@ -262,29 +266,101 @@ func (v View) Select(q Query) []Entry {
 	return out
 }
 
+// Owner is who answers for an entry: a seat by its handle or a unit by its
+// key, the chart's own identities and never free text.
+type Owner struct {
+	Kind External `json:"kind"`
+	Name string   `json:"name"`
+}
+
+// RelationCount is how many current entries an entry relies on and how many
+// rely on it, through the relations the map draws at rest.
+type RelationCount struct {
+	DependsOn int `json:"depends_on"`
+	UsedBy    int `json:"used_by"`
+}
+
 // Summary is one entry as a list row or a map card shows it: no facts, no
-// relations, what it is and how it stands.
+// relations, what it is, who answers for it and how it stands.
 type Summary struct {
-	ID              uuid.UUID `json:"id"`
-	Kind            Kind      `json:"kind"`
-	Lane            Lane      `json:"lane"`
-	Name            string    `json:"name" untrusted:"name"`
-	Key             string    `json:"key"`
-	Vendor          Vendor    `json:"vendor,omitempty"`
-	State           State     `json:"state"`
-	Word            Word      `json:"word"`
-	Health          Health    `json:"health"`
+	ID     uuid.UUID `json:"id"`
+	Kind   Kind      `json:"kind"`
+	Lane   Lane      `json:"lane"`
+	Name   string    `json:"name" untrusted:"name"`
+	Key    string    `json:"key"`
+	Vendor Vendor    `json:"vendor,omitempty"`
+	// Owner is the seat or the unit a person or the engine's records name,
+	// never one only suggested; Purpose the one line a person gave it.
+	Owner     *Owner        `json:"owner,omitempty"`
+	Purpose   string        `json:"purpose,omitempty" untrusted:"name"`
+	Relations RelationCount `json:"relations"`
+	State     State         `json:"state"`
+	Word      Word          `json:"word"`
+	Health    Health        `json:"health"`
+	// Reason is why the entry is not quiet, in one sentence of the engine's
+	// own words ([Entry.Reason]); empty for a quiet one.
+	Reason          string    `json:"reason,omitempty"`
 	Signals         int       `json:"signals"`
 	Review          bool      `json:"review"`
 	NotUsedRecently bool      `json:"not_used_recently"`
 	LastSeen        time.Time `json:"last_seen"`
 }
 
-// Summarize is e as a row shows it.
-func Summarize(e Entry, vendor Vendor) Summary {
-	return Summary{ID: e.ID, Kind: e.Ref.Kind, Lane: e.Lane, Name: e.Name, Key: e.Ref.Key, Vendor: vendor,
-		State: e.State, Word: e.Word, Health: e.Health(), Signals: len(e.Signals), Review: e.Review,
-		NotUsedRecently: e.NotUsedRecently, LastSeen: e.LastSeen}
+// Summaries is what summarising the entries of one view shares: each entry's
+// vendor, and how many entries rely on it.
+type Summaries struct {
+	vendors map[uuid.UUID]Vendor
+	usedBy  map[uuid.UUID]int
+	counted map[uuid.UUID]bool
+}
+
+// Summaries prepares the summaries of v's entries. Relations are counted
+// between current entries, an unconfirmed one only where unconfirmed says the
+// read shows them, so a count never names an entry the read leaves out.
+func (v View) Summaries(unconfirmed bool) Summaries {
+	s := Summaries{vendors: v.Vendors(), usedBy: map[uuid.UUID]int{}, counted: make(map[uuid.UUID]bool, len(v.Entries))}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		s.counted[e.ID] = e.State != StateRetired && (unconfirmed || e.Word != WordUnconfirmed)
+	}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		if !s.counted[e.ID] {
+			continue
+		}
+		for _, ed := range e.Relations {
+			if ed.Relation.Structural() && s.counted[ed.To] {
+				s.usedBy[ed.To]++
+			}
+		}
+	}
+	return s
+}
+
+// Vendor is the vendor of the entry id, "" where none is known.
+func (s Summaries) Vendor(id uuid.UUID) Vendor { return s.vendors[id] }
+
+// Of is e as a row shows it.
+func (s Summaries) Of(e Entry) Summary {
+	out := Summary{ID: e.ID, Kind: e.Ref.Kind, Lane: e.Lane, Name: e.Name, Key: e.Ref.Key, Vendor: s.vendors[e.ID],
+		State: e.State, Word: e.Word, Health: e.Health(), Reason: e.Reason(), Signals: len(e.Signals),
+		Review: e.Review, NotUsedRecently: e.NotUsedRecently, LastSeen: e.LastSeen}
+	out.Relations.UsedBy = s.usedBy[e.ID]
+	for _, ed := range e.Relations {
+		switch {
+		case ed.Relation.Structural() && s.counted[ed.To]:
+			out.Relations.DependsOn++
+		case ed.Relation == RelationOwnedBy && out.Owner == nil && !ed.Suggested && ed.External != "":
+			out.Owner = &Owner{Kind: ed.External, Name: ed.Name}
+		}
+	}
+	for _, f := range e.Facts {
+		if f.Fact == FactPurpose && !f.Suggested {
+			out.Purpose = f.Value.Text
+			break
+		}
+	}
+	return out
 }
 
 // Page is one page of a list.
@@ -323,7 +399,7 @@ func rowOrder(sort Sort) func(a, b Summary) int {
 
 // List is entries in sort's order, one page of at most limit rows after
 // the cursor a previous page answered ("" for the first).
-func List(entries []Entry, vendors map[uuid.UUID]Vendor, sort Sort, after string, limit int) (Page, error) {
+func List(entries []Entry, summaries Summaries, sort Sort, after string, limit int) (Page, error) {
 	if sort == "" {
 		sort = SortKey
 	}
@@ -335,7 +411,7 @@ func List(entries []Entry, vendors map[uuid.UUID]Vendor, sort Sort, after string
 	}
 	rows := make([]Summary, len(entries))
 	for i, e := range entries {
-		rows[i] = Summarize(e, vendors[e.ID])
+		rows[i] = summaries.Of(e)
 	}
 	compare := rowOrder(sort)
 	slices.SortFunc(rows, compare)
@@ -432,15 +508,22 @@ type MapGroup struct {
 	Closed bool   `json:"closed"`
 }
 
-// MapEdge is one relation between two entries the map draws open.
+// MapEdge is one relation between two entries a map or a trace draws, and
+// the family it is drawn in.
 type MapEdge struct {
 	From     uuid.UUID `json:"from"`
 	To       uuid.UUID `json:"to"`
 	Relation Relation  `json:"relation"`
+	Family   Family    `json:"family"`
+}
+
+// edgeOf is the relation r from one entry to another as a map draws it.
+func edgeOf(from, to uuid.UUID, r Relation) MapEdge {
+	return MapEdge{From: from, To: to, Relation: r, Family: r.Family()}
 }
 
 // Map is the atlas drawn as its lanes: every lane, its groups, the entries
-// of the open groups and the structural relations between them.
+// of the open groups and the relations between them.
 type Map struct {
 	Lanes  []MapLane  `json:"lanes"`
 	Groups []MapGroup `json:"groups"`
@@ -461,8 +544,11 @@ func GroupKey(lane Lane, vendor Vendor) string {
 
 // Map draws the entries of v that answer q, leaving the groups closed names
 // closed, and closing more, largest first, until at most [MapMax] are open.
-func (v View) Map(q Query, closed []string) Map {
-	vendors := v.Vendors()
+// Its edges are the relations the map draws at rest or, with all, every
+// relation between two drawn entries.
+func (v View) Map(q Query, closed []string, all bool) Map {
+	summaries := v.Summaries(q.ShowsUnconfirmed())
+	vendors := summaries.vendors
 	entries := v.Select(q)
 	out := Map{Lanes: make([]MapLane, len(Lanes)), Groups: []MapGroup{}, Nodes: []Summary{}, Edges: []MapEdge{},
 		Collapsed: []string{}}
@@ -507,15 +593,15 @@ func (v View) Map(q Query, closed []string) Map {
 			continue
 		}
 		drawn[e.ID] = true
-		out.Nodes = append(out.Nodes, Summarize(e, vendors[e.ID]))
+		out.Nodes = append(out.Nodes, summaries.Of(e))
 	}
 	for _, e := range entries {
 		if !drawn[e.ID] {
 			continue
 		}
 		for _, ed := range e.Relations {
-			if ed.Relation.Structural() && drawn[ed.To] {
-				out.Edges = append(out.Edges, MapEdge{From: e.ID, To: ed.To, Relation: ed.Relation})
+			if (all || ed.Relation.Structural()) && ed.External == "" && drawn[ed.To] {
+				out.Edges = append(out.Edges, edgeOf(e.ID, ed.To, ed.Relation))
 			}
 		}
 	}
@@ -538,7 +624,7 @@ type Link struct {
 // UsedBy is every current entry of v with a relation to the entry id, the
 // relation named: what relies on it.
 func (v View) UsedBy(id uuid.UUID) []Link {
-	vendors := v.Vendors()
+	summaries := v.Summaries(true)
 	out := []Link{}
 	for _, e := range v.Entries {
 		if e.State == StateRetired {
@@ -546,7 +632,7 @@ func (v View) UsedBy(id uuid.UUID) []Link {
 		}
 		for _, ed := range e.Relations {
 			if ed.To == id {
-				out = append(out, Link{Relation: ed.Relation, Entry: Summarize(e, vendors[e.ID])})
+				out = append(out, Link{Relation: ed.Relation, Entry: summaries.Of(e)})
 			}
 		}
 	}
@@ -599,7 +685,7 @@ func (v View) Trace(id uuid.UUID, dir Direction, depth int, all bool, limit int)
 	if !ok {
 		return Trace{}, false, nil
 	}
-	vendors := v.Vendors()
+	summaries := v.Summaries(true)
 	from := v.Entries[at]
 	next := map[uuid.UUID][]MapEdge{}
 	for _, e := range v.Entries {
@@ -610,7 +696,7 @@ func (v View) Trace(id uuid.UUID, dir Direction, depth int, all bool, limit int)
 			if ed.External != "" || (!all && !ed.Relation.Structural()) {
 				continue
 			}
-			edge := MapEdge{From: e.ID, To: ed.To, Relation: ed.Relation}
+			edge := edgeOf(e.ID, ed.To, ed.Relation)
 			if dir == DirectionDown {
 				next[e.ID] = append(next[e.ID], edge)
 			} else {
@@ -618,7 +704,7 @@ func (v View) Trace(id uuid.UUID, dir Direction, depth int, all bool, limit int)
 			}
 		}
 	}
-	out := Trace{From: Summarize(from, vendors[from.ID]), Direction: dir, Hops: []TraceHop{}, Edges: []MapEdge{}}
+	out := Trace{From: summaries.Of(from), Direction: dir, Hops: []TraceHop{}, Edges: []MapEdge{}}
 	seen := map[uuid.UUID]bool{from.ID: true}
 	frontier, reached := []uuid.UUID{from.ID}, 0
 	for distance := 1; distance <= depth && len(frontier) > 0 && !out.Truncated; distance++ {
@@ -641,7 +727,7 @@ func (v View) Trace(id uuid.UUID, dir Direction, depth int, all bool, limit int)
 					}
 					seen[other], reached = true, reached+1
 					following = append(following, other)
-					hop.Entries = append(hop.Entries, Summarize(v.Entries[i], vendors[other]))
+					hop.Entries = append(hop.Entries, summaries.Of(v.Entries[i]))
 				}
 				out.Edges = append(out.Edges, edge)
 			}

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // SourceKind is where a claim came from. A closed set, and the claim's
@@ -489,6 +490,9 @@ func (c Claim) validateFact() error {
 	}
 	if v != c.Value {
 		return fmt.Errorf("%s: the value is not in its canonical form", f)
+	}
+	if set := f.WordsOn(c.Subject); f.Spec().PerHost && !slices.Contains(set, v.Text) {
+		return fmt.Errorf("%s: %w: on this host it is %s", f, ErrInvalid, words.Or(set))
 	}
 	return nil
 }

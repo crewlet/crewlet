@@ -124,10 +124,14 @@ func (c *AppClient) InstallationRepositories(ctx context.Context, installationID
 	if err != nil {
 		return nil, err
 	}
-	repos, listErr := c.listRepositories(ctx, token.Token)
-	revokeErr := c.send(ctx, token.Token, http.MethodDelete, "/installation/token", nil, nil)
+	listed, listErr := c.listRepositories(ctx, token.Token)
+	revokeErr := c.revoke(ctx, token.Token)
 	if listErr != nil {
 		return nil, errors.Join(listErr, revokeErr)
+	}
+	repos := make([]string, 0, len(listed))
+	for _, repo := range listed {
+		repos = append(repos, repo.FullName)
 	}
 	if revokeErr != nil {
 		return repos, fmt.Errorf("github: the listing token could not be revoked: %w", revokeErr)
@@ -135,15 +139,19 @@ func (c *AppClient) InstallationRepositories(ctx context.Context, installationID
 	return repos, nil
 }
 
-// listRepositories walks GET /installation/repositories to exhaustion.
-func (c *AppClient) listRepositories(ctx context.Context, token string) ([]string, error) {
-	var out []string
+// revoke withdraws an installation token this engine minted for one read.
+func (c *AppClient) revoke(ctx context.Context, token string) error {
+	return c.send(ctx, token, http.MethodDelete, "/installation/token", nil, nil)
+}
+
+// listRepositories walks GET /installation/repositories to exhaustion, each
+// repository's name trimmed and one without a name left out.
+func (c *AppClient) listRepositories(ctx context.Context, token string) ([]InventoryRepo, error) {
+	var out []InventoryRepo
 	for page := 1; ; page++ {
 		var body struct {
-			TotalCount   int `json:"total_count"`
-			Repositories []struct {
-				FullName string `json:"full_name"`
-			} `json:"repositories"`
+			TotalCount   int             `json:"total_count"`
+			Repositories []InventoryRepo `json:"repositories"`
 		}
 		path := "/installation/repositories?per_page=" + strconv.Itoa(repoPageSize) +
 			"&page=" + strconv.Itoa(page)
@@ -151,8 +159,8 @@ func (c *AppClient) listRepositories(ctx context.Context, token string) ([]strin
 			return nil, err
 		}
 		for _, repo := range body.Repositories {
-			if name := strings.TrimSpace(repo.FullName); name != "" {
-				out = append(out, name)
+			if repo.FullName = strings.TrimSpace(repo.FullName); repo.FullName != "" {
+				out = append(out, repo)
 			}
 		}
 		if len(body.Repositories) < repoPageSize || len(out) >= body.TotalCount {

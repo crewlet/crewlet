@@ -14,6 +14,7 @@ import type {
   AtlasEntriesAnswer,
   AtlasFacetsAnswer,
   AtlasFactView,
+  AtlasFamily,
   AtlasHealth,
   AtlasKind,
   AtlasLane,
@@ -89,6 +90,7 @@ export function summary(
     key: name,
     state: "confirmed",
     word: "confirmed",
+    relations: { depends_on: 0, used_by: 0 },
     health: "quiet",
     signals: 0,
     review: false,
@@ -271,8 +273,26 @@ export function traceAnswer(
   return { ...read(), from, direction, hops, edges, truncated: false };
 }
 
+/** The family each relation is drawn in, as the engine's `Relation.Family`. */
+const FAMILY_OF: Record<AtlasRelation, AtlasFamily> = {
+  depends_on: "calls",
+  exposes: "calls",
+  served_by: "calls",
+  fronted_by: "calls",
+  runs_on: "runs_on",
+  resolves_to: "runs_on",
+  in_zone: "around",
+  built_from: "around",
+  deployed_by: "around",
+  monitored_by: "around",
+  secured_by: "around",
+  belongs_to: "around",
+  documented_in: "around",
+  owned_by: "around",
+};
+
 function edge(from: AtlasSummary, relation: AtlasRelation, to: AtlasSummary): AtlasMapEdge {
-  return { from: from.id, to: to.id, relation };
+  return { from: from.id, to: to.id, relation, family: FAMILY_OF[relation] };
 }
 
 /**

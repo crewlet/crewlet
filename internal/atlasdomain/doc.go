@@ -77,6 +77,9 @@
 // [Reader.Live] reads every live claim for the fold, at the caller's level,
 // `session` by default ([DefaultRead]); [Reader.LiveOf] one voice's, which an
 // integration's read is diffed against; [Reader.Entry] an entry's version for
-// a person's next edit; [Reader.History] an entry's claims, replaced ones
-// included; and [Reader.Purges] what was purged, by whom and when, never what.
+// a person's next edit; [Reader.Log] the log as lines, newest first, a claim
+// recorded and a claim a read withdrew each one line, for the whole company or
+// for named entries; [Reader.Activity] how many lines each entry took a day,
+// and each entry's newest record; and [Reader.Purges] what was purged, by whom
+// and when, never what.
 package atlasdomain

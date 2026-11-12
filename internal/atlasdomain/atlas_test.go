@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The instants the apply cases store records at.
@@ -226,8 +227,12 @@ func TestAVoicesNewerClaimReplacesItsOlderOne(t *testing.T) {
 	if len(history) != 3 {
 		t.Fatalf("%d claims in the history, want 3", len(history))
 	}
-	if oldest := history[2]; !oldest.Replaced || oldest.ReplacedBy != position(2) || !oldest.ReplacedAt.Equal(t1) {
-		t.Errorf("ada's first purpose is %+v, want replaced by her second at %s", oldest, t1)
+	if oldest := history[2]; oldest.Withdrawn || oldest.Claim.Value.Text != "Takes payments" || !oldest.At.Equal(t0) {
+		t.Errorf("the oldest line is %+v, want ada's first purpose as she recorded it", oldest)
+	}
+	if got := e.count(`SELECT COUNT(*) FROM atlas_claims WHERE replaced = 1 AND superseded_position = ?
+		AND superseded_at = ?`, position(2).Packed(), store.EncodeTime(t1)); got != 1 {
+		t.Errorf("%d claims replaced by ada's second at %s, want her first", got, t1)
 	}
 	if v := atlas.Fold(live, t3); len(v.Entries) != 1 || v.Entries[0].Facts[0].Value.Text != "Bills customers" {
 		t.Errorf("the fold reads %+v, want the newest person's purpose", v.Entries)
@@ -601,20 +606,20 @@ func TestAReadRecordsWhatChangedAndWithdrawsTheRestOnEveryNode(t *testing.T) {
 			t.Errorf("the live origin is %s, want the newer read's", c.Facet.Target.Entry)
 		}
 	}
-	history, err := a.reader().History(t.Context(), apiHost.ID().String(), "", atlasdomain.MaxPageSize,
-		statelog.Freshness{Level: statelog.ReadStale})
+	history, err := a.reader().Log(t.Context(), atlasdomain.LogQuery{Entries: []string{apiHost.ID().String()},
+		Limit: atlasdomain.MaxPageSize, Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	replaced := 0
-	for _, row := range history.Claims {
-		if row.Replaced {
-			replaced++
+	var withdrawn []atlasdomain.LogLine
+	for _, line := range history.Lines {
+		if line.Withdrawn {
+			withdrawn = append(withdrawn, line)
 		}
 	}
-	if len(history.Claims) != 4 || replaced != 1 {
-		t.Errorf("the history holds %d claims, %d replaced; want 4 with the old origin replaced",
-			len(history.Claims), replaced)
+	if len(history.Lines) != 5 || len(withdrawn) != 1 || withdrawn[0].Claim.Facet.Target.Entry != originA {
+		t.Errorf("the log holds %d lines, %d withdrawn; want the 4 claims and the old origin's withdrawal",
+			len(history.Lines), len(withdrawn))
 	}
 	before := a.dump()
 	a.redeliver()

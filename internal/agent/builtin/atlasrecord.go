@@ -449,10 +449,9 @@ func (o *observing) planRecord(a map[string]any) (atlas.Ref, *tools.Result) {
 	if refusal != nil {
 		return atlas.Ref{}, refusal
 	}
+	// THE MEMBER THE CALL NAMED, as a person's write records on it: a fact of
+	// one host of a merged entry is that host's.
 	ref := m.ref
-	if m.found {
-		ref = m.entry.Ref
-	}
 	src := o.source(atlas.EvidenceNone)
 	if !m.found || m.entry.State == atlas.StateRetired {
 		if declarer, named := m.ref.EngineNamed(); named && !m.found {
@@ -621,7 +620,7 @@ func (o *observing) holds(m member, c atlas.Claim) bool {
 		if c.Facet.Fact.Spec().Many {
 			lookup = c.Value.Text
 		}
-		fv, ok := factOn(m.entry, c.Facet.Fact, lookup)
+		fv, ok := factOn(m.entry, c.Subject, c.Facet.Fact, lookup)
 		return ok && fv.Value.Equal(c.Value) && trusted(fv.Source, fv.Confidence, fv.Suggested)
 	case atlas.FacetRelation:
 		ed, ok := edgeOn(m.entry, c.Facet.Relation, c.Facet.Target.Entry.ID())
@@ -635,7 +634,7 @@ func (o *observing) planDispute(a map[string]any) (atlas.Ref, *tools.Result) {
 	if refusal != nil {
 		return atlas.Ref{}, refusal
 	}
-	ref := m.entry.Ref
+	ref := m.ref
 	if m.entry.State == atlas.StateRetired {
 		r := refused(tools.RefusalConflict, fmt.Sprintf("%s recorded nothing: %s is retired already.", o.tool, ref))
 		return atlas.Ref{}, &r
@@ -655,7 +654,7 @@ func (o *observing) planDispute(a map[string]any) (atlas.Ref, *tools.Result) {
 		if f.Spec().Many {
 			lookup = strings.TrimSpace(argString(a, "value"))
 		}
-		fv, ok := factOn(m.entry, f, lookup)
+		fv, ok := factOn(m.entry, ref, f, lookup)
 		if !ok {
 			r := refused(tools.RefusalConflict, fmt.Sprintf("%s recorded nothing: the atlas shows no such %s "+
 				"on %s to dispute. Read it with %s.", o.tool, f, ref, AtlasGetTool))

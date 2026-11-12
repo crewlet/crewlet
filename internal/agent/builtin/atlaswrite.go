@@ -658,11 +658,13 @@ func (n *atlasNow) claim(c atlas.Claim, err error) (*atlas.Claim, *tools.Result)
 	return &c, nil
 }
 
-// factOn is the fact f as the entry shows it: its one value, or for a fact
-// that holds many the value named.
-func factOn(e atlas.Entry, f atlas.Fact, value string) (atlas.FactView, bool) {
+// factOn is the fact f as the entry shows it: its one value, for a fact that
+// holds many the value named, and for a fact of each host the one of on, the
+// member the caller named.
+func factOn(e atlas.Entry, on atlas.Ref, f atlas.Fact, value string) (atlas.FactView, bool) {
+	spec := f.Spec()
 	for _, fv := range e.Facts {
-		if fv.Fact == f && (!f.Spec().Many || fv.Value.Text == value) {
+		if fv.Fact == f && (!spec.Many || fv.Value.Text == value) && (!spec.PerHost || fv.Of == on) {
 			return fv, true
 		}
 	}
@@ -920,6 +922,11 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, refusal
 	}
 	ref, raw, wrong := m.entry.Ref, argString(a, "value"), argBool(a, "wrong")
+	// A FACT OF EACH HOST IS WRITTEN ON THE MEMBER THE CALLER NAMED, whichever
+	// member the entry is known by: a mirror's visibility is not its source's.
+	if f.Spec().PerHost {
+		ref = m.ref
+	}
 	many := f.Spec().Many
 	plan := atlasPlan{entry: ref, said: said("corrected", ref)}
 	plan.said["fact"] = string(f)
@@ -934,7 +941,7 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			return atlasPlan{}, bad
 		}
 		plan.said["value"] = says.Value.Text
-		now, held := factOn(m.entry, f, says.Value.Text)
+		now, held := factOn(m.entry, ref, f, says.Value.Text)
 		if held {
 			if src, ok := declared(now.Source, now.Others); ok {
 				return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("%s's %s", ref, f), src)
@@ -958,7 +965,7 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		r := failed(fmt.Sprintf("%s: %s holds many values: `value` names the one that is wrong.", n.tool, f))
 		return atlasPlan{}, &r
 	}
-	now, held := factOn(m.entry, f, lookup)
+	now, held := factOn(m.entry, ref, f, lookup)
 	if !held {
 		r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: the atlas shows no %s on %s "+
 			"that value could be.", n.tool, f, ref))
@@ -1005,12 +1012,16 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		if bad != nil {
 			return atlasPlan{}, bad
 		}
+		if f.Spec().PerHost {
+			ref = m.ref
+			plan = atlasPlan{entry: ref, said: said("confirmed", ref)}
+		}
 		value := argString(a, "value")
 		lookup := value
 		if !f.Spec().Many {
 			lookup = ""
 		}
-		now, ok := factOn(m.entry, f, lookup)
+		now, ok := factOn(m.entry, ref, f, lookup)
 		if !ok {
 			r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: the atlas shows no %s on %s "+
 				"to confirm; set it with %s.", n.tool, f, ref, AtlasCorrectTool))
