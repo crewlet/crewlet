@@ -25,6 +25,10 @@ type InventoryRepo struct {
 	FullName      string `json:"full_name"`
 	Archived      bool   `json:"archived"`
 	DefaultBranch string `json:"default_branch"`
+	// Visibility is GitHub's own word: public, private or internal. Private
+	// is what an Enterprise Server too old to send the word still sends.
+	Visibility string `json:"visibility"`
+	Private    bool   `json:"private"`
 }
 
 // Workflow is one Actions workflow of a repository.

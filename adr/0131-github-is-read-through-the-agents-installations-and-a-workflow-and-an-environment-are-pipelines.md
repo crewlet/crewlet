@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/github`
-- **Enforced-by:** `internal/github.TestTheAtlasReadsRepositoriesWorkflowsAndEnvironments`, `internal/github.TestAFailingDeploymentIsTheHealthOfWhatItDeploys`, `internal/github.TestARepositoryGitletMirrorsIsOneEntry`, `internal/github.TestAPartNoInstallationMayReadIsAFindingAndRetiresNothing`, `internal/github.TestAnInstallationThatCannotBeReadCarriesWhatOnlyItCovered`, `internal/github.TestAnEnvironmentThatIsGoneRetiresNothingItDeployed`, `internal/github.TestNoCredentialShapeReachesTheAtlasFromGitHub`, `internal/github.TestAListingThatFailsOrIsRateLimitedFailsTheRead`, `internal/atlas.TestAFailingPipelineIsASignalOnWhatItDeploys`
+- **Enforced-by:** `internal/github.TestTheAtlasReadsRepositoriesWorkflowsAndEnvironments`, `internal/github.TestAFailingDeploymentIsTheHealthOfWhatItDeploys`, `internal/github.TestARepositoryGitletMirrorsIsOneEntry`, `internal/github.TestAPartNoInstallationMayReadIsAFindingAndRetiresNothing`, `internal/github.TestAnInstallationThatCannotBeReadCarriesWhatOnlyItCovered`, `internal/github.TestAnEnvironmentThatIsGoneRetiresNothingItDeployed`, `internal/github.TestNoCredentialShapeReachesTheAtlasFromGitHub`, `internal/github.TestAListingThatFailsOrIsRateLimitedFailsTheRead`, `internal/atlas.TestAFailingPipelineIsASignalOnWhatItDeploys`, `internal/atlas.TestAVisibilityIsAFactOfEachHost`
 - **Cost-when-tried:** not tried. The two sources before this one each read under one company credential, so "whose access" had one answer; GitHub is the first vendor where the engine holds no company credential that can read, only an app per agent.
 - **Tag-status:** unreleased
 
@@ -16,6 +16,8 @@
 
 **A workflow and a deployment environment are pipelines, keyed after their repository.** A repository is `<host>/<owner>/<name>`, the key a Gitlet mirror's address reduces to, so the fold's exact-key merge makes a mirrored repository one entry. A workflow is the repository's key, `#workflow:` and its file's name; an environment is the repository's key, `#environment:` and its own name. A name is one key segment, exact both ways: a byte outside letters, digits and `. _ + -` is written as `~` and its two hexadecimal digits. Both carry `last_result`: a workflow's is its newest completed run on the default branch, an environment's the state of its newest deployment.
 
+**A repository's visibility is a fact of each host it lives on.** A repository GitHub holds privately and Gitlet mirrors for the whole company has two visibilities, and both are true: they answer the question of two hosts, never one question twice. The vocabulary marks such a fact (`Spec.PerHost`), and the fold keeps one value for each member of a merged entry, shown with the member it is of (`FactView.Of`), so only the voices on one host are held against each other: a person and GitHub disagreeing about GitHub's visibility still send the entry to Review, and a mirror's two hosts never do. Each host takes its own closed words and no other's (GitHub's `public`, `private` and `internal`; Gitlet's `company` and `unit`), a claim in another host's word is refused, and a person's correction is written on the member they named. Gitlet's visibility follows the same rule as GitHub's, which this read now reports.
+
 **What a deployment put its code behind is named, never claimed.** The newest deployment's environment address names an endpoint and its host name by their exact keys, each `deployed_by` the environment, which is why `deployed_by` runs from an endpoint and a host name as well as a service. Neither lives at GitHub, so by ADR-0130 an environment that is gone releases them and retires nothing.
 
 **A failing pipeline is a signal on it and on what it deploys.** A pipeline whose `last_result` is `failed` or `errored` raises `pipeline_failing`, a warning, on itself and on every entry a `deployed_by` relation joins to it, computed at every read as a monitor's is. It holds for every pipeline, Gitlet's checks included, whose `last_result` is likewise the default branch's.
@@ -28,6 +30,12 @@
 
 **Skipping an installation that cannot be read** treats it as covering nothing. The repositories only it covers are then missed, and retired a day after somebody suspends an app.
 
+**One visibility for the entry** makes every mirrored repository a standing disagreement: the two hosts' words are disjoint, so the fold would dispute each mirror for good, and a Review that is always raised is one nobody reads.
+
+**Not reading GitHub's visibility** keeps the mirror quiet by hiding the one fact that says a repository is public.
+
+**A second fact, one per host** (`forge_visibility` beside `visibility`) settles two hosts and no third: a repository mirrored to two forges has the same question again, and each fact needs its own words on screen and in every tool.
+
 **A kind for a deployment environment** adds an entry kind, a lane and a key grammar for something the vocabulary already names: a pipeline is what builds or deploys code, and `deployed_by` already ends at one.
 
 **Relating a deployed name to the repository** puts a failed staging deployment on the production name: only the environment knows which of a repository's deployments reached which address.
@@ -36,4 +44,4 @@
 
 ## What this does not decide
 
-Whether a repository's visibility is a fact per host: GitHub's is not read, because a mirrored repository has one on Gitlet too, in Gitlet's own words, and the fold would hold the two against each other on every mirror. Whether a delivery brings a repository's read forward, which the event-driven sources decide. Whether GitHub is read under an identity made for the atlas. How a refused part is shown, which the dashboard decides.
+Whether any other fact is one of each host: a default branch and an archived status are still facts of the entry, and two hosts that disagree on one are shown as disagreeing. Whether a delivery brings a repository's read forward, which the event-driven sources decide. Whether GitHub is read under an identity made for the atlas. How a refused part is shown, which the dashboard decides.

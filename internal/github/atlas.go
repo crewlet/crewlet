@@ -404,6 +404,12 @@ func (r *atlasRead) repository(ctx context.Context, account atlas.Ref, name stri
 		status = "archived"
 	}
 	b.Says(where+".archived", repo, atlas.FactStatus, status)
+	// GITHUB'S OWN WORD, of this host alone: a mirror on Gitlet has Gitlet's.
+	visibility := row.Visibility
+	if visibility == "" && row.Private {
+		visibility = "private"
+	}
+	b.Says(where+".visibility", repo, atlas.FactVisibility, visibility)
 	// AN ARCHIVED REPOSITORY RUNS AND DEPLOYS NOTHING, so its pipelines are
 	// not read, and leave the atlas as any pipeline that stopped being listed.
 	if row.Archived {

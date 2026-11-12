@@ -236,7 +236,7 @@ func acme() *forge {
 		repos: map[string]*ghRepo{
 			"Acme/API": {
 				row: map[string]any{"full_name": "Acme/API", "default_branch": "main", "private": true,
-					"description": canaryText, "owner": person()},
+					"visibility": "private", "description": canaryText, "owner": person()},
 				workflows: []map[string]any{
 					{"id": 2, "name": "[deploy] Production", "path": ".github/workflows/deploy.yml", "state": "active"},
 					{"id": 1, "name": "CI", "path": ".github/workflows/ci.yml", "state": "active"},
@@ -265,8 +265,10 @@ func acme() *forge {
 					27: {{"state": "success", "environment_url": "https://203.0.113.9:8443/"}},
 				},
 			},
-			"acme/web": {row: map[string]any{"full_name": "acme/web", "default_branch": "main"}},
-			"acme/old": {row: map[string]any{"full_name": "acme/old", "default_branch": "master", "archived": true}},
+			"acme/web": {row: map[string]any{"full_name": "acme/web", "default_branch": "main", "visibility": "public"}},
+			// An older Enterprise Server sends no word, only the flag.
+			"acme/old": {row: map[string]any{"full_name": "acme/old", "default_branch": "master", "archived": true,
+				"private": true}},
 		},
 		refuse: map[string]int{},
 		minted: map[string]map[string]string{},
@@ -434,8 +436,13 @@ func TestTheAtlasReadsRepositoriesWorkflowsAndEnvironments(t *testing.T) {
 	if got := related(v, api, atlas.RelationBelongsTo); !slices.Equal(got, []string{account.Ref.Key}) {
 		t.Errorf("the repository belongs to %v", got)
 	}
-	if old := atlasEntry(t, v, atlas.KindRepository, "github.com/acme/old"); atlasFact(old, atlas.FactStatus) != "archived" {
+	if old := atlasEntry(t, v, atlas.KindRepository, "github.com/acme/old"); atlasFact(old, atlas.FactStatus) != "archived" ||
+		atlasFact(old, atlas.FactVisibility) != "private" {
 		t.Errorf("the archived repository: %+v", old.Facts)
+	}
+	if web := atlasEntry(t, v, atlas.KindRepository, "github.com/acme/web"); atlasFact(api, atlas.FactVisibility) != "private" ||
+		atlasFact(web, atlas.FactVisibility) != "public" {
+		t.Errorf("the repositories' visibilities: %+v and %+v", api.Facts, web.Facts)
 	}
 	for key, want := range map[string]struct{ name, state, result string }{
 		ciKey:      {"CI", atlas.PipelineActive, atlas.ResultPassed},
@@ -485,8 +492,8 @@ func TestTheAtlasReadsRepositoriesWorkflowsAndEnvironments(t *testing.T) {
 	// The account, three repositories, three workflows, two environments,
 	// two addresses and one name, in exactly the claims counted here: a
 	// field mapped by a later change shows as one more.
-	if len(v.Entries) != 12 || len(read.Claims) != 44 {
-		t.Errorf("the read folds %d claims to %d entries, want 44 and 12", len(read.Claims), len(v.Entries))
+	if len(v.Entries) != 12 || len(read.Claims) != 47 {
+		t.Errorf("the read folds %d claims to %d entries, want 47 and 12", len(read.Claims), len(v.Entries))
 	}
 }
 
@@ -542,7 +549,8 @@ func TestAFailingDeploymentIsTheHealthOfWhatItDeploys(t *testing.T) {
 // exact key, so the map shows one repository with both hosts' facts.
 //
 // Mutation: key the repository by anything but its host and its path, and
-// the atlas shows the mirror and its source as two.
+// the atlas shows the mirror and its source as two. Fold visibility as one
+// fact of the entry, and every mirror waits in Review.
 func TestARepositoryGitletMirrorsIsOneEntry(t *testing.T) {
 	t.Parallel()
 	read := acme().read(t)
@@ -556,14 +564,29 @@ func TestARepositoryGitletMirrorsIsOneEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := atlasView(append(slices.Clone(read.Claims), exists, from))
+	company, err := atlas.Says(mirror, atlas.FactVisibility, "company", gitlet, atlasNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := atlasView(append(slices.Clone(read.Claims), exists, from, company))
 	here, ok := v.Find(mirror.ID())
 	there, found := v.Find(atlas.MustRef(atlas.KindRepository, apiKey).ID())
 	if !ok || !found || here.ID != there.ID || len(here.Members) != 2 {
 		t.Fatalf("the mirror and its source are %+v and %+v", here.Members, there.Members)
 	}
-	if here.Review || atlasFact(here, atlas.FactDefaultBranch) != "main" {
-		t.Errorf("the merged repository: review %v, %+v", here.Review, here.Facts)
+	if atlasFact(here, atlas.FactDefaultBranch) != "main" {
+		t.Errorf("the merged repository: %+v", here.Facts)
+	}
+	// PRIVATE ON GITHUB AND THE WHOLE COMPANY'S ON GITLET, both true: each
+	// host's visibility is its own fact, and the mirror waits in no Review.
+	seen := map[string]string{}
+	for _, f := range here.Facts {
+		if f.Fact == atlas.FactVisibility {
+			seen[f.Of.Key] = f.Value.Text
+		}
+	}
+	if here.Review || len(seen) != 2 || seen[apiKey] != "private" || seen["gitlet/api"] != "company" {
+		t.Errorf("the mirror's visibilities: review %v, %v", here.Review, seen)
 	}
 	repositories := 0
 	for _, e := range v.Entries {
@@ -758,9 +781,11 @@ func TestNoCredentialShapeReachesTheAtlasFromGitHub(t *testing.T) {
 				perms: map[string]string{"metadata": "read", "actions": "read", "deployments": "read"}}},
 			repos: map[string]*ghRepo{
 				"acme/planted": {row: map[string]any{"full_name": "acme/" + s, "default_branch": s, "description": s,
+					"visibility": s,
 					"homepage": s, "owner": who, "topics": []string{s}, "clone_url": "https://x:" + s + "@github.com/acme/api.git"}},
 				"acme/api": {
-					row: map[string]any{"full_name": "acme/api", "default_branch": "main", "description": s, "owner": who},
+					row: map[string]any{"full_name": "acme/api", "default_branch": "main", "description": s, "owner": who,
+						"visibility": s},
 					workflows: []map[string]any{
 						{"id": 1, "name": s, "path": ".github/workflows/" + s, "state": s, "badge_url": s},
 						{"id": 2, "name": long, "path": ".github/workflows/ci.yml", "state": "active"},
