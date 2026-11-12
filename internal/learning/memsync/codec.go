@@ -65,6 +65,26 @@
 // held up to 256 rows of up to 8 MiB each (crewlet/crewlet#1052). A row larger
 // than this node's pull is refused by name, never read as a copy that stalled.
 //
+// WHAT A HOLDING WRITES GOES FIRST. A seat's marks live in memory, so every
+// acquisition and every restart leaves this node a backlog: everything its
+// store holds for the seat, the rows the hydration inserted and those it found
+// already present, which keep their stamps. Everything the seat writes next is
+// stamped above all of it, so in stamp order it waited behind that backlog,
+// and a handoff or a crash before the backlog had drained lost it
+// (crewlet/crewlet#1039). So a hydration records the seat's BOUNDARY as it
+// completes, where this node's change sequence stood ([Syncer.Hydrate]), and
+// each table with a watermark has two marks per seat: one over the rows
+// stamped above the boundary, what the holding writes, its OWN, and one over
+// those at or below it, its BACKLOG. A publish is two calls: [Syncer.PublishOwn]
+// carries the seat's own rows and then the tables sent whole, and
+// [Syncer.PublishBacklog] the backlog, which every caller makes after it, while
+// its bound has time. The backlog is the republish node migration 0041 keeps:
+// it puts this node's rows back on a changelog restored or recreated while the
+// node ran, and carries what an earlier holding's flush did not reach. A seat
+// with no boundary, one whose hydration here has not completed or that a
+// release has forgotten, has every row as its own, which is how a publish
+// carried a seat before boundaries.
+//
 // # What is deliberately not replicated
 //
 // DELETES. The lifecycle drops rows constantly — mid-state turns, tool-free
@@ -131,19 +151,40 @@ type exported struct {
 // hold exportPageBytes, and always at least one. It says whether the budget
 // stopped the page; a page the budget did not stop is the table's last.
 //
-// A PAGE, NOT THE BACKLOG. [Syncer.Publish] sends a page a row at a time,
-// moving the mark with each row the changelog acknowledges, and reads the next
-// page above the last, so what it holds is one page whatever lies behind it.
-// The read ends where the page does: the driver steps a statement only as its
-// rows are asked for, and the plan hands them over in the index's order as it
-// finds them, with no sort to read the rest first
-// (TestTheIncrementalExportIsARangeSeekNotASort), so closing the statement
-// leaves the rest unread.
+// A PAGE, NOT THE BACKLOG. [Syncer.PublishOwn] and [Syncer.PublishBacklog]
+// send a page a row at a time, moving the mark with each row the changelog
+// acknowledges, and read the next page above the last, so what a publish
+// holds is one page whatever lies behind it. The read ends where the page
+// does: the driver steps a statement only as its rows are asked for, and the
+// plan hands them over in the index's order as it finds them, with no sort to
+// read the rest first (TestTheIncrementalExportIsARangeSeekNotASort), so
+// closing the statement leaves the rest unread.
 //
-// One of TWO READERS, rather than one taking a mark it ignores for half the
-// registry: [exportWhole] reads the tables that have no watermark.
+// One of THREE READERS, rather than one taking a mark it ignores for half the
+// registry and an end half the rest ignore: [exportBacklogPage] reads a page
+// of a seat's backlog, which ends at its boundary, and [exportWhole] reads the
+// tables that have no watermark.
 func exportPage(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64) ([]exported, bool, error) {
-	sqlRows, err := db.QueryContext(ctx, pageStatement(t), seat.value(t), after)
+	return readPage(ctx, db, t, pageStatement(t), seat.value(t), after)
+}
+
+// exportBacklogPage reads one page of a seat's backlog of a watermark table:
+// the rows strictly above after and at or below through, the seat's boundary,
+// in the watermark's order, a page as [exportPage] reads one.
+func exportBacklogPage(ctx context.Context, db *sql.DB, t table, seat seatRef,
+	after, through int64) ([]exported, bool, error) {
+
+	return readPage(ctx, db, t, backlogStatement(t), seat.value(t), after, through)
+}
+
+// readPage is the one read a page is, whichever of a seat's ranges it is of:
+// statement's rows, asked with args, in the watermark's order, until their
+// carried values hold exportPageBytes, and always at least one. It says
+// whether the budget stopped the page.
+func readPage(ctx context.Context, db *sql.DB, t table, statement string,
+	args ...any) ([]exported, bool, error) {
+
+	sqlRows, err := db.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("memsync: read %s: %w", t.name, err)
 	}
@@ -202,6 +243,18 @@ func pageStatement(t table) string {
 	return "SELECT " + t.watermark + ", " + strings.Join(t.columns, ", ") +
 		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + t.watermark + " > ?" +
 		" ORDER BY " + t.watermark
+}
+
+// backlogStatement is what a page of a seat's backlog of a watermark table is
+// read with: the seat's rows strictly above a mark and at or below its
+// boundary, in the watermark's order, the watermark first. A function of its
+// own, so the plan gate plans the text that runs: the second bound is on the
+// last column of the same (seat, change_seq) index, so it narrows the seek and
+// changes nothing else about it.
+func backlogStatement(t table) string {
+	return "SELECT " + t.watermark + ", " + strings.Join(t.columns, ", ") +
+		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + t.watermark + " > ? AND " +
+		t.watermark + " <= ? ORDER BY " + t.watermark
 }
 
 // wholeStatement is what a wholeEachCycle table is read with: every one of
@@ -338,8 +391,9 @@ func tableFilter(seat, name string) string {
 // FOUR TOKENS where a row's subject has five, and a last token no table can be
 // named (topics.MemoryBarrierToken), so no [tableFilter] matches it and a
 // replay's two filters never overlap, as nats-server requires of a consumer's
-// filter subjects. No row is ever published here: [Syncer.Publish] carries the
-// registry's tables, and the barrier is none of them.
+// filter subjects. No row is ever published here: a publish carries the
+// registry's tables ([Syncer.PublishOwn], [Syncer.PublishBacklog]), and the
+// barrier is none of them.
 func barrierSubject(seat string) string {
 	return topics.MemoryPrefix + seat + "." + topics.MemoryBarrierToken
 }

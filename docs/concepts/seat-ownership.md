@@ -265,10 +265,11 @@ changelog holds is in the store before the first version is written. A version
 whose skill is still not in the store is left out rather than refusing the
 seat: nothing reads a version without its skill, and refused, the seat could be
 placed on no node whose store lacked the skill. Its skill is missing for one of
-two reasons. The changelog does not hold it at all: the skill was written after
-a publish read the seat's skills and refined before that publish read their
-versions, and its node stopped holding the seat, through a crash or a cut
-flush, before another publish carried the skill. Or the store skipped it,
+two reasons. The changelog does not hold it at all: a publish carries what the
+seat wrote before the skills it sends whole (below), so a skill its holder
+wrote and refined has its old body's version sent before the skill itself, and
+the publish was cut between the two, by a crash or a flush that ran out, before
+another publish of that node carried the skill. Or the store skipped it,
 because it already held another skill of the seat's under the same name: a
 skill deleted by hand and synthesized again under a new id leaves both on the
 changelog.
@@ -420,12 +421,19 @@ hold, and an older copy can win there (below).
 
 What is new is found by that **change sequence**: one counter per node, which
 every inserted diary note, episode and skill version — and every vector set on
-a note or an episode — is stamped from, and which only ever increases. A seat's
-mark in each of these tables is the stamp of the last row the changelog
-acknowledged, and it moves with each one: the rows above it are read a mebibyte
-at a time and published one by one, so a cycle that runs out keeps what it
-carried of these tables, and the seat's next cycle, or its release's flush,
-resumes at the first row the changelog did not acknowledge. The mark is not the
+a note or an episode — is stamped from, and which only ever increases. A
+hydration records where the counter stood as it completed: the seat's
+**boundary** on this node. Rows stamped above it are what the seat has written
+while held here, its own; rows at or below it are what the node held for it
+when it took it, the rows the hydration wrote and those it found already
+present, its backlog. A seat whose hydration here has not completed has no
+boundary, and every row of it counts as its own. A seat has a mark over each
+range in each of these tables: the stamp of the last row of the range the
+changelog acknowledged, which moves with each one. The rows of a range above
+its mark are read a mebibyte at a time and published one by one, so a cycle
+that runs out keeps what it carried of these tables, and the seat's next
+cycle, or its release's flush, resumes each range at the first row the
+changelog did not acknowledge. The mark is not the
 row's rowid, because these tables are keyed on text and a rowid is handed out
 again once the newest row is deleted: after the diary's expiry or its trim took
 the newest note, the next note took the same rowid, below what had already been
@@ -446,13 +454,21 @@ whether a seat needs more than a cycle or was reached with less of one left
 than it needs, no seat waits more than 2k cycles between two that reach it,
 and a seat with a backlog has a whole cycle at least once in every 2k. A
 holding starts with every row this node holds for the seat still to carry
-back: a release and a restart alike leave its marks at zero, so the seat's
-first cycles carry them all, oldest first, ahead of anything it writes next
-(below). A cycle that runs out says so in one line. A backlog draining is
-`memory_sync_ran_out`, at info. A seat that ran the cycle out with nothing
-acknowledged that stays carried, or that had the whole cycle and was cut
-inside one of the tables sent whole, is a warning, `seat_memory_not_carried`,
-and so is a seat whose publish failed while the cycle had time left.
+back: a release and a restart alike leave its marks at zero. A seat's turn in
+a cycle carries what it has written while held here first, then its profiles,
+skills and onboarding marker, and then, while the cycle has time, that
+backlog, oldest first, so what the seat writes waits for no backlog of its
+own, though it still waits for the turns of the seats a cycle reaches before
+it (below). A cycle that runs out says so in one line, naming the call it ran
+out in, `pass=own` or `pass=backlog`. A backlog draining, or a seat's own rows
+that ran the cycle out after moving marks, is `memory_sync_ran_out`, at info,
+and so is a cycle that ran out just as a seat's own pass returned, before its
+backlog. A seat that ran the cycle out with nothing acknowledged that stays
+carried, or that had the whole cycle and was cut inside one of the tables sent
+whole, is a warning, `seat_memory_not_carried`. Each of a turn's two calls is
+said on its own: a seat whose own pass failed while the cycle had time left
+warns, with `pass=own`, whatever its backlog then did, and so does a backlog
+that failed with time left, with `pass=backlog`.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
@@ -489,14 +505,15 @@ them again by the same rules.
 
 **What a crash and a handoff lose.** A crash loses what of a seat's memory the
 changelog has not acknowledged. A graceful handoff flushes on release what the
-cycles have not carried, from the marks they left, for up to five seconds at
-one broker round trip a row (about fifty rows across a slow link, thousands on
-a local broker), and what that flush does not reach is lost as a crash loses
-it. Until the cycles after an acquisition or a restart have carried back every
-row this node holds for the seat (seconds on a local broker, minutes or more
-for a large memory or a slow link), everything the seat writes waits behind
-those rows, and a release or a crash in that window loses it
-([#1039](https://github.com/crewlet/crewlet/issues/1039)). A burst the seat
+cycles have not carried, from the marks they left, the seat's own rows first,
+then its tables sent whole, then its backlog, for up to five seconds at one
+broker round trip a row (about fifty rows across a slow link, thousands on a
+local broker), and what that flush does not reach is lost as a crash loses it.
+Until the cycles after an acquisition or a restart have carried back what this
+node holds for the seats a cycle reaches before this one, what the seat writes
+waits for its turn behind those rows, and a crash in that window loses it
+([#1039](https://github.com/crewlet/crewlet/issues/1039)); a seat's own turn,
+and its release's flush, carry what it wrote before its own backlog. A burst the seat
 writes holds back what it writes next the same way, such as a vector fill that
 stamps hundreds of notes again after a change of embedding model: a crash
 before the cycles have carried the burst loses what the seat wrote after it,
@@ -506,20 +523,23 @@ such a backlog, a crash loses what the seat wrote since its last publish that
 got through: about the last cycle's writes, or up to 2k + 1 cycles' while
 cycles run out at k of the node's seats, since a seat can wait 2k cycles
 between two that reach it (above). Every publish sends a seat's counterparty
-profiles and skills whole: when they alone outlast the five seconds, the flush
-is cut inside them and reaches neither the rest of them nor the skill versions
-and the onboarding marker after them, and when they outlast a whole
-thirty-second cycle, the skill versions and the marker are never carried at
-all ([#1040](https://github.com/crewlet/crewlet/issues/1040)). A row larger
-than the broker takes, eight mebibytes on the embedded one, is refused every
-time it is published, so every cycle and the flush stop at it, and nothing the
-seat wrote after it in its table, or in the tables after that one, is carried
+profiles and skills whole, after what the seat wrote: when they alone outlast
+the five seconds, the flush is cut inside them and reaches neither the rest of
+them nor the onboarding marker and the seat's backlog after them, and when they
+outlast a whole thirty-second cycle, neither the marker nor the rows this node
+held for the seat when it took it are ever carried, since its turn reaches its
+backlog only after them
+([#1040](https://github.com/crewlet/crewlet/issues/1040)). A row larger than
+the broker takes, eight mebibytes on the embedded one, is refused every time it
+is published, so every pass that meets it stops at it, and nothing after it in
+that pass, in its table or in the tables the pass carries after it, is carried
 while this node holds the seat
 ([#349](https://github.com/crewlet/crewlet/issues/349)). And while a seat
 moves, an older copy of its profiles, skills or onboarding marker can land
 after the newer one and replace it: published by the releasing node's own
-sync, from a cycle it began before the release, or by the next holder while it
-is still taking the seat ([#511](https://github.com/crewlet/crewlet/issues/511)).
+sync, from a cycle it began before the release, by the next holder while it
+is still taking the seat, or by a node whose taking of the seat failed, in the
+flush that gives it back ([#511](https://github.com/crewlet/crewlet/issues/511)).
 A publish of the seat landing in that window while the next holder hydrates it
 can also move a row the hydration has not read yet past its barrier, and slip
 by the count its replay ends on, which the broker moves for the replaced row
@@ -527,8 +547,11 @@ at once and for its replacement a moment later: the hydration then carries
 neither copy of the row, which stays on the changelog for the seat's next
 hydration. The same race can leave that count one row high, and the
 hydration then waits out its fifteen seconds and refuses the seat until the
-next sweep. A release whose flush runs out or fails says so,
-`seat_memory_not_flushed`, at warning. A row lost so stays in its node's store alone, which a node without
+next sweep. A release whose flush could not carry the seat's own rows and its
+tables sent whole says so, `seat_memory_not_flushed`, at warning, with
+`pass=own`, and so does one whose backlog failed with time left, with
+`pass=backlog`; one that carried them and ran out in its backlog says
+`memory_flush_ran_out`, at info. A row lost so stays in its node's store alone, which a node without
 `data` deletes at its next boot: a diary note, an episode or a skill version
 reaches the changelog only if that node holds the seat again, and a change to
 a profile, a skill or the onboarding marker is overwritten with the

@@ -170,7 +170,7 @@ func TestAReplayLargerThanAPullTakesSeveralAndDeliversEveryRow(t *testing.T) {
 			conn := brokerCarrying(t, tc.limit)
 			holder := openStore(t)
 			writeNotesOfSize(t, holder, tc.notes, tc.size)
-			if published, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil ||
+			if published, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil ||
 				published.Rows != tc.notes {
 				t.Fatalf("the publish carried %d rows (%v), want the %d notes", published.Rows, err, tc.notes)
 			}

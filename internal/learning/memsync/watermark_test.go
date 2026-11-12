@@ -152,7 +152,7 @@ func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) 
 		Content: "an old fact nobody recalled", CreatedAt: now.Add(-3 * time.Hour)})
 
 	syncer := syncerOn(t, holder, conn)
-	if _, err := syncer.Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncer.PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) 
 
 	// The seat has no rows in the whole-each-cycle tables, so a second
 	// publish is exactly what changed since the first.
-	again, err := syncer.Publish(ctx, seat.Handle)
+	again, err := syncer.PublishOwn(ctx, seat.Handle)
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
@@ -219,9 +219,10 @@ var changeIndexes = map[string]string{
 // of every page waits on reading, and sorting, every row above the mark, and
 // the page bounds nothing. Planned as a deployment plans it, over a store
 // nothing has ANALYZEd, where episodes has four other indexes that lead on
-// the seat.
+// the seat, for both of a seat's ranges: a page of its own rows, above a mark,
+// and a page of its backlog, between a mark and the seat's boundary.
 //
-// Mutation: read the page in key order, and this goes red.
+// Mutation: read either range's page in key order, and this goes red.
 func TestTheIncrementalExportIsARangeSeekNotASort(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -236,11 +237,20 @@ func TestTheIncrementalExportIsARangeSeekNotASort(t *testing.T) {
 				"read through", spec.name)
 			continue
 		}
-		plan := storetest.Plan(t, db, pageStatement(spec), []any{seat.value(spec), int64(0)})
-		if storetest.Sorts(plan) || storetest.ScansHeap(plan, spec.name) || !storetest.Seeks(plan, index) {
-			t.Errorf("a page of %s is planned as %s, want a seek on %s with no sort: a page "+
-				"that sorts reads, and sorts, every row above the mark before it returns "+
-				"its first", spec.name, strings.Join(plan, "; "), index)
+		for _, page := range []struct {
+			of        string
+			statement string
+			args      []any
+		}{
+			{"its own rows", pageStatement(spec), []any{seat.value(spec), int64(0)}},
+			{"its backlog", backlogStatement(spec), []any{seat.value(spec), int64(0), int64(1) << 40}},
+		} {
+			plan := storetest.Plan(t, db, page.statement, page.args)
+			if storetest.Sorts(plan) || storetest.ScansHeap(plan, spec.name) || !storetest.Seeks(plan, index) {
+				t.Errorf("a page of %s of %s is planned as %s, want a seek on %s with no sort: a "+
+					"page that sorts reads, and sorts, every row of its range above the mark "+
+					"before it returns its first", page.of, spec.name, strings.Join(plan, "; "), index)
+			}
 		}
 	}
 }

@@ -56,27 +56,38 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 	}
 }
 
-// scriptedMemory is the memory syncer as a cycle calls it: each seat's publish
-// is played by a script, and it records the seats the running cycle called,
-// those it called on a bound already spent, and those whose publish returned
-// with nothing wrong.
+// scriptedMemory is the memory syncer as a seat's turn calls it: each seat's
+// own pass is played by a script, and so is its backlog, and it records the
+// seats the running cycle or flush called, those it called on a bound already
+// spent, and those whose call returned with nothing wrong, for each call, and
+// every call in the order it was made.
 type scriptedMemory struct {
-	// play is seat's publish, handed the cycle's bound and runOut, which
-	// spends it as a backlog the cycle cannot carry does before its publish
-	// returns; first says the cycle called no seat before it.
+	// play is seat's own pass, handed the bound and runOut, which spends it
+	// as a seat the cycle cannot carry does before its call returns; first
+	// says the cycle called no seat before it.
 	play func(ctx context.Context, seat string, first bool, runOut func()) (memsync.Carried, error)
 
-	runOut    context.CancelFunc
-	calls     []string
-	late      []string
-	completed []string
+	// playBacklog is seat's backlog, handed the same; nil is a backlog that
+	// carries what it holds and returns with nothing wrong.
+	playBacklog func(ctx context.Context, seat string, runOut func()) (memsync.Carried, error)
+
+	runOut context.CancelFunc
+
+	// calls, late and completed are the own passes; backlog, backlogLate and
+	// backlogDone the backlogs.
+	calls, late, completed            []string
+	backlog, backlogLate, backlogDone []string
+
+	// order is every call as it was made: "own:a", "backlog:a".
+	order []string
 }
 
-// Publish plays the seat's script, after failing at once on a bound already
-// spent, as the syncer's first read of a seat's rows does.
-func (m *scriptedMemory) Publish(ctx context.Context, seat string) (memsync.Carried, error) {
+// PublishOwn plays the seat's script, after failing at once on a bound
+// already spent, as the syncer's first read of a seat's rows does.
+func (m *scriptedMemory) PublishOwn(ctx context.Context, seat string) (memsync.Carried, error) {
 	first := len(m.calls) == 0
 	m.calls = append(m.calls, seat)
+	m.order = append(m.order, "own:"+seat)
 	if err := ctx.Err(); err != nil {
 		m.late = append(m.late, seat)
 		return memsync.Carried{StoppedIn: "agent_diary"},
@@ -89,15 +100,52 @@ func (m *scriptedMemory) Publish(ctx context.Context, seat string) (memsync.Carr
 	return carried, err
 }
 
+// PublishBacklog plays the seat's backlog script, failing at once on a bound
+// already spent as PublishOwn does.
+func (m *scriptedMemory) PublishBacklog(ctx context.Context, seat string) (memsync.Carried, error) {
+	m.backlog = append(m.backlog, seat)
+	m.order = append(m.order, "backlog:"+seat)
+	if err := ctx.Err(); err != nil {
+		m.backlogLate = append(m.backlogLate, seat)
+		return memsync.Carried{StoppedIn: "agent_diary"},
+			fmt.Errorf("memsync: read agent_diary: %w", err)
+	}
+	var carried memsync.Carried
+	var err error
+	if m.playBacklog != nil {
+		carried, err = m.playBacklog(ctx, seat, m.runOut)
+	}
+	if err == nil {
+		m.backlogDone = append(m.backlogDone, seat)
+	}
+	return carried, err
+}
+
+// begin starts a cycle or a flush under the bound runOut spends: everything
+// recorded is then that one's.
+func (m *scriptedMemory) begin(runOut context.CancelFunc) {
+	m.runOut, m.calls, m.late, m.completed = runOut, nil, nil, nil
+	m.backlog, m.backlogLate, m.backlogDone, m.order = nil, nil, nil, nil
+}
+
 // cycle runs one cycle of loop over the held seats, as syncSeatMemory does,
-// under a bound the script can spend; calls, late and completed are then that
-// cycle's.
+// under a bound the script can spend.
 func (m *scriptedMemory) cycle(t *testing.T, loop *memorySync, held ...string) syncReport {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	m.runOut, m.calls, m.late, m.completed = cancel, nil, nil, nil
+	m.begin(cancel)
 	return loop.cycle(ctx, seatsHeld{held: held}, m)
+}
+
+// flush runs a released seat's last turn, as releaseSeat does, under a bound
+// the script can spend, and answers what it says.
+func (m *scriptedMemory) flush(t *testing.T, seat string) []reportLine {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m.begin(cancel)
+	return flushSeatMemory(ctx, m, seat)
 }
 
 // carriedWhole is what the publish of a seat that reached the end of every
@@ -426,17 +474,20 @@ func TestASeatWhosePublishFailsWithTimeLeftKeepsTheOrder(t *testing.T) {
 // A CYCLE THAT RAN OUT WITH NOTHING MARKED IS A WARNING.
 //
 // A cycle whose bound runs out says so in one line, at a level progress
-// decides ([syncReport.lines]). A seat whose rows moved a mark before the cut
-// is a backlog draining, which every seat's first cycles after an acquisition
-// are, and is said at INFO. A seat that moved no mark warns, and so does a
-// seat that had the whole cycle and was cut inside a whole-each-cycle table,
+// decides ([syncReport.lines]), naming the pass of the call it ran out in. A
+// seat whose rows moved a mark before the cut is a backlog draining, which
+// every seat's first cycles after an acquisition are, or a burst of its own,
+// and is said at INFO. A seat that moved no mark warns, and so does a seat
+// that had the whole cycle and was cut inside a whole-each-cycle table,
 // whatever it marked; a seat that had only part of a cycle is given a whole
-// one next. A seat refused with time left warns of its own, and the seats a
+// one next. A seat whose own pass returned just as the bound ran out, before
+// its backlog, is said at INFO, as a cycle that ran out between two seats'
+// turns is. A seat refused with time left warns of its own, and the seats a
 // cycle did not reach say nothing: its one line names them.
 //
 // Mutation: say every run-out at INFO, or every one as a warning, or warn for
-// any cut inside a whole-each-cycle table whatever the seat's place, and this
-// goes red.
+// any cut inside a whole-each-cycle table whatever the seat's place, or leave
+// the pass out of a line, and this goes red.
 func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 	t.Parallel()
 	refused := errors.New("the broker refused the row")
@@ -448,51 +499,60 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 	whole := memsync.Carried{Rows: 40, Marked: 12, StoppedIn: "synthesized_skills", Whole: true}
 	for _, tc := range []struct {
 		name string
-		// seat is the seat the case scripts, and play its publish; every
-		// other seat of a, b and c reaches the end of its tables.
-		seat string
-		play func(ctx context.Context, runOut func()) (memsync.Carried, error)
-		want []string
+		// seat is the seat the case scripts, play its own pass and backlog
+		// its backlog, where it scripts one; every other call of a, b and c
+		// reaches the end of its tables.
+		seat          string
+		play, backlog func(ctx context.Context, runOut func()) (memsync.Carried, error)
+		want          []string
 	}{{
 		name: "the first seat cut with nothing acknowledged",
 		seat: "a", play: cutAt(memsync.Carried{StoppedIn: "agent_diary"}),
-		want: []string{"WARN seat_memory_not_carried seat=a next=b not_reached=b,c"},
+		want: []string{"WARN seat_memory_not_carried seat=a pass=own next=b not_reached=b,c"},
 	}, {
 		name: "a later seat cut with only its whole tables acknowledged",
 		seat: "b",
 		play: cutAt(memsync.Carried{Rows: 4, StoppedIn: "counterparty_profiles", Whole: true}),
-		want: []string{"WARN seat_memory_not_carried seat=b next=b not_reached=c"},
+		want: []string{"WARN seat_memory_not_carried seat=b pass=own next=b not_reached=c"},
 	}, {
 		name: "the first seat cut after moving marks",
 		seat: "a", play: cutAt(draining),
-		want: []string{"INFO memory_sync_ran_out seat=a next=b not_reached=b,c"},
+		want: []string{"INFO memory_sync_ran_out seat=a pass=own next=b not_reached=b,c"},
 	}, {
 		name: "a later seat cut after moving marks",
 		seat: "b", play: cutAt(draining),
-		want: []string{"INFO memory_sync_ran_out seat=b next=b not_reached=c"},
+		want: []string{"INFO memory_sync_ran_out seat=b pass=own next=b not_reached=c"},
 	}, {
 		name: "the first seat cut inside a whole-each-cycle table after moving marks",
 		seat: "a", play: cutAt(whole),
-		want: []string{"WARN seat_memory_not_carried seat=a next=b not_reached=b,c"},
+		want: []string{"WARN seat_memory_not_carried seat=a pass=own next=b not_reached=b,c"},
 	}, {
 		name: "a later seat cut inside a whole-each-cycle table after moving marks",
 		seat: "b", play: cutAt(whole),
-		want: []string{"INFO memory_sync_ran_out seat=b next=b not_reached=c"},
+		want: []string{"INFO memory_sync_ran_out seat=b pass=own next=b not_reached=c"},
 	}, {
-		name: "the bound run out between two seats",
+		name: "the bound run out between a seat's own pass and its backlog",
 		seat: "a",
 		play: func(_ context.Context, runOut func()) (memsync.Carried, error) {
 			runOut()
 			return carriedWhole, nil
 		},
-		want: []string{"INFO memory_sync_ran_out next=b not_reached=b,c"},
+		want: []string{"INFO memory_sync_ran_out seat=a pass=backlog next=b not_reached=b,c"},
+	}, {
+		name: "the bound run out between two seats' turns",
+		seat: "a",
+		backlog: func(_ context.Context, runOut func()) (memsync.Carried, error) {
+			runOut()
+			return memsync.Carried{}, nil
+		},
+		want: []string{"INFO memory_sync_ran_out pass=own next=b not_reached=b,c"},
 	}, {
 		name: "a seat refused with time left",
 		seat: "b",
 		play: func(context.Context, func()) (memsync.Carried, error) {
 			return memsync.Carried{StoppedIn: "agent_diary"}, refused
 		},
-		want: []string{"WARN seat_memory_not_carried seat=b"},
+		want: []string{"WARN seat_memory_not_carried seat=b pass=own"},
 	}, {
 		name: "every seat carried",
 	}} {
@@ -501,10 +561,15 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 			m := &scriptedMemory{play: func(ctx context.Context, seat string, _ bool,
 				runOut func(),
 			) (memsync.Carried, error) {
-				if seat == tc.seat {
+				if seat == tc.seat && tc.play != nil {
 					return tc.play(ctx, runOut)
 				}
 				return carriedWhole, nil
+			}, playBacklog: func(ctx context.Context, seat string, runOut func()) (memsync.Carried, error) {
+				if seat == tc.seat && tc.backlog != nil {
+					return tc.backlog(ctx, runOut)
+				}
+				return memsync.Carried{}, nil
 			}}
 			report := m.cycle(t, &memorySync{}, "a", "b", "c")
 			if got := said(report.lines()); !slices.Equal(got, tc.want) {
@@ -515,12 +580,13 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 	}
 }
 
-// said is each line as its level, its message and the seats it names.
+// said is each line as its level, its message, the seats it names and the
+// pass it is about.
 func said(lines []reportLine) []string {
 	var out []string
 	for _, line := range lines {
 		s := line.level.String() + " " + line.msg
-		for _, key := range []string{"seat", "next", "not_reached"} {
+		for _, key := range []string{"seat", "pass", "next", "not_reached"} {
 			for i := 0; i+1 < len(line.args); i += 2 {
 				if line.args[i] == key {
 					s += fmt.Sprintf(" %s=%v", key, line.args[i+1])
@@ -569,6 +635,207 @@ func TestTheNextCycleStartsWhereTheLastRanOutWhateverTheHostHolds(t *testing.T) 
 			if !slices.Equal(held, tc.held) {
 				t.Errorf("the order rewrote the host's list to %s, want it read as %s",
 					words.And(held), words.And(tc.held))
+			}
+		})
+	}
+}
+
+// refusedRow is a call the broker refused while the bound still had time.
+func refusedRow(context.Context, func()) (memsync.Carried, error) {
+	return memsync.Carried{StoppedIn: "agent_diary"},
+		errors.New("memsync: publish a agent_diary row for a: the broker refused the row")
+}
+
+// endsAsItReturns is a call that carried all it had just as the bound ran out.
+func endsAsItReturns(_ context.Context, runOut func()) (memsync.Carried, error) {
+	runOut()
+	return carriedWhole, nil
+}
+
+// cutAfterMarks is a call the bound cut after its rows moved marks.
+func cutAfterMarks(ctx context.Context, runOut func()) (memsync.Carried, error) {
+	return runsOut(ctx, runOut, draining)
+}
+
+// A RELEASE'S FLUSH CARRIES THE SEAT'S OWN PASS BEFORE ITS BACKLOG.
+//
+// A release flushes what the cycles have not carried, as a cycle's turn does:
+// what the seat wrote while held here and its tables sent whole, then, while
+// the bound has time, the rows this node held for it when it took it. The
+// flush used to be one publish, the backlog and the seat's own rows in one
+// stamp order, so a release soon after an acquisition or a restart flushed old
+// rows and lost the new (#1039). Each call is said on its own, at the level of
+// what it lost: an own pass that returned an error warns, and so does a
+// backlog that failed with time left; a backlog the bound cut, or that the
+// bound left no time to begin, is said at INFO, the seat's own rows having
+// gone.
+//
+// Mutation: carry the backlog first, skip it after an own pass refused with
+// time left, call it on a bound already spent, warn for every backlog the
+// bound cut, say an own pass the bound cut at INFO, or say one line for the
+// whole flush, and this goes red.
+func TestAReleaseFlushCarriesTheSeatsOwnPassBeforeItsBacklog(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		own, backlog  func(ctx context.Context, runOut func()) (memsync.Carried, error)
+		order, saying []string
+	}{{
+		name:  "both calls complete",
+		order: []string{"own:a", "backlog:a"},
+	}, {
+		name: "the own pass cut by the bound", own: cutAfterMarks,
+		order:  []string{"own:a"},
+		saying: []string{"WARN seat_memory_not_flushed seat=a pass=own"},
+	}, {
+		name: "the own pass complete as the bound runs out", own: endsAsItReturns,
+		order:  []string{"own:a"},
+		saying: []string{"INFO memory_flush_ran_out seat=a pass=backlog"},
+	}, {
+		name: "the own pass refused with time left, the backlog complete", own: refusedRow,
+		order:  []string{"own:a", "backlog:a"},
+		saying: []string{"WARN seat_memory_not_flushed seat=a pass=own"},
+	}, {
+		name: "the own pass refused with time left, the backlog cut by the bound",
+		own:  refusedRow, backlog: cutAfterMarks,
+		order: []string{"own:a", "backlog:a"},
+		saying: []string{"WARN seat_memory_not_flushed seat=a pass=own",
+			"INFO memory_flush_ran_out seat=a pass=backlog"},
+	}, {
+		name: "both calls refused with time left", own: refusedRow, backlog: refusedRow,
+		order: []string{"own:a", "backlog:a"},
+		saying: []string{"WARN seat_memory_not_flushed seat=a pass=own",
+			"WARN seat_memory_not_flushed seat=a pass=backlog"},
+	}, {
+		name: "the backlog cut after moving marks", backlog: cutAfterMarks,
+		order:  []string{"own:a", "backlog:a"},
+		saying: []string{"INFO memory_flush_ran_out seat=a pass=backlog"},
+	}, {
+		name: "the backlog refused with time left", backlog: refusedRow,
+		order:  []string{"own:a", "backlog:a"},
+		saying: []string{"WARN seat_memory_not_flushed seat=a pass=backlog"},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := &scriptedMemory{play: func(ctx context.Context, _ string, _ bool,
+				runOut func(),
+			) (memsync.Carried, error) {
+				if tc.own != nil {
+					return tc.own(ctx, runOut)
+				}
+				return carriedWhole, nil
+			}, playBacklog: func(ctx context.Context, _ string, runOut func()) (memsync.Carried, error) {
+				if tc.backlog != nil {
+					return tc.backlog(ctx, runOut)
+				}
+				return memsync.Carried{}, nil
+			}}
+			lines := m.flush(t, "a")
+			if !slices.Equal(m.order, tc.order) {
+				t.Errorf("the flush called %s, want %s: the seat's own pass, then its backlog "+
+					"while the bound has time", words.And(m.order), words.And(tc.order))
+			}
+			if late := slices.Concat(m.late, m.backlogLate); len(late) > 0 {
+				t.Errorf("the flush called %s on a bound already spent, want no call there",
+					words.And(late))
+			}
+			if got := said(lines); !slices.Equal(got, tc.saying) {
+				t.Errorf("the flush said %q, want %q", strings.Join(got, "; "),
+					strings.Join(tc.saying, "; "))
+			}
+		})
+	}
+}
+
+// A SEAT'S TURN REPORTS EACH OF ITS CALLS.
+//
+// A cycle gives each held seat a turn: its own pass, then, while the bound has
+// time, its backlog. Each call is classified on its own, by the bound as it
+// returned: one that failed with time left warns, whatever the other did, and
+// the run-out is said of the call the bound ran out in, on what that call
+// carried, at the level its progress decides. Merged into one, a turn whose
+// own pass was refused with time left and whose backlog the bound then cut
+// read as a backlog draining, at INFO, and said nothing of the refusal, for as
+// long as the backlog lasted. An own pass that returns whole just as the bound
+// runs out calls no backlog, and says so at INFO.
+//
+// Mutation: carry the backlog first, merge the turn's two calls into one
+// report, drop an own pass's failure when its backlog fails too, call the
+// backlog on a bound already spent, or warn of a turn cut between its calls,
+// and this goes red.
+func TestASeatsTurnReportsEachOfItsCalls(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// own and backlog are seat a's calls; seat b's complete.
+		own, backlog  func(ctx context.Context, runOut func()) (memsync.Carried, error)
+		order, saying []string
+		next          string
+	}{{
+		name:  "both of each seat's calls complete",
+		order: []string{"own:a", "backlog:a", "own:b", "backlog:b"},
+	}, {
+		name: "a's own pass refused with time left, its backlog complete", own: refusedRow,
+		order:  []string{"own:a", "backlog:a", "own:b", "backlog:b"},
+		saying: []string{"WARN seat_memory_not_carried seat=a pass=own"},
+	}, {
+		name: "a's own pass refused with time left, its backlog cut after moving marks",
+		own:  refusedRow, backlog: cutAfterMarks,
+		order: []string{"own:a", "backlog:a"},
+		saying: []string{"WARN seat_memory_not_carried seat=a pass=own",
+			"INFO memory_sync_ran_out seat=a pass=backlog next=b not_reached=b"},
+		next: "b",
+	}, {
+		name: "a's own pass complete, its backlog refused with time left", backlog: refusedRow,
+		order:  []string{"own:a", "backlog:a", "own:b", "backlog:b"},
+		saying: []string{"WARN seat_memory_not_carried seat=a pass=backlog"},
+	}, {
+		name: "both of a's calls refused with time left", own: refusedRow, backlog: refusedRow,
+		order: []string{"own:a", "backlog:a", "own:b", "backlog:b"},
+		saying: []string{"WARN seat_memory_not_carried seat=a pass=own",
+			"WARN seat_memory_not_carried seat=a pass=backlog"},
+	}, {
+		name: "a's own pass complete as the bound runs out", own: endsAsItReturns,
+		order:  []string{"own:a"},
+		saying: []string{"INFO memory_sync_ran_out seat=a pass=backlog next=b not_reached=b"},
+		next:   "b",
+	}, {
+		name: "a's own pass cut", own: cutAfterMarks,
+		order:  []string{"own:a"},
+		saying: []string{"INFO memory_sync_ran_out seat=a pass=own next=b not_reached=b"},
+		next:   "b",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := &scriptedMemory{play: func(ctx context.Context, seat string, _ bool,
+				runOut func(),
+			) (memsync.Carried, error) {
+				if seat == "a" && tc.own != nil {
+					return tc.own(ctx, runOut)
+				}
+				return carriedWhole, nil
+			}, playBacklog: func(ctx context.Context, seat string, runOut func()) (memsync.Carried, error) {
+				if seat == "a" && tc.backlog != nil {
+					return tc.backlog(ctx, runOut)
+				}
+				return memsync.Carried{}, nil
+			}}
+			loop := &memorySync{}
+			report := m.cycle(t, loop, "a", "b")
+			if !slices.Equal(m.order, tc.order) {
+				t.Errorf("the cycle called %s, want %s: each seat's own pass, then its backlog "+
+					"while the bound has time", words.And(m.order), words.And(tc.order))
+			}
+			if late := slices.Concat(m.late, m.backlogLate); len(late) > 0 {
+				t.Errorf("the cycle called %s on a bound already spent, want no call there",
+					words.And(late))
+			}
+			if got := said(report.lines()); !slices.Equal(got, tc.saying) {
+				t.Errorf("the cycle said %q, want %q", strings.Join(got, "; "),
+					strings.Join(tc.saying, "; "))
+			}
+			if loop.resume != tc.next {
+				t.Errorf("the next cycle starts at %q, want %q", loop.resume, tc.next)
 			}
 		})
 	}

@@ -69,11 +69,42 @@ const hydrateWait = 15 * time.Second
 // consumer on its own, which is why the deletion is hygiene rather than a
 // step whose failure means anything.
 //
-// A HYDRATION OUTLIVES ITS BUDGET BY THIS AT MOST, though it deletes a consumer
-// per table: each is deleted as the step that made it ends, inside the
-// budget's time, and the step after a delete runs on the hydration's context,
-// so only a delete under way as [hydrateWait] runs out runs past it.
+// A HYDRATION OUTLIVES ITS BUDGET BY ONE SUCH STEP AT MOST, a consumer's
+// deletion or the read of where the seat's own writes begin
+// ([boundaryReadTimeout]), never both, though it deletes a consumer per table.
+// Each consumer is deleted as the step that made it ends, inside the budget's
+// time, and the step after a delete runs on the hydration's context, so only a
+// delete under way as [hydrateWait] runs out runs past it, and every step
+// after that one fails at once: the boundary's read is reached only once the
+// last identity read has answered inside the budget. A boundary read under way
+// as the budget runs out is the other way past it, and every step after it
+// fails at once too, before it has made a consumer to delete.
 const consumerCleanupTimeout = 5 * time.Second
+
+// boundaryReadTimeout bounds the read of where a seat's own writes begin on
+// this node: the boundary a hydration records as it completes
+// ([Syncer.Hydrate], "Where this holding's writes begin").
+//
+// THE READ IS OF THIS NODE'S OWN STORE, and crosses no link: one row of its
+// change sequence (node migration 0041), which answers in well under a
+// millisecond, waiting only for one of the pool's connections or for the
+// store's lock, which the store's own busy wait bounds (five seconds unless
+// store.Options.BusyTimeout says otherwise). A flat bound is right for such a
+// read alone. One that crossed a link to the broker would be held to the
+// crossing rule crewlet/crewlet#1005 gives every such read (jsapi.Budget), as
+// crewlet/crewlet#1065 and crewlet/crewlet#1075 hold theirs, rather than to a
+// flat figure, so a change that moves this read across a link replaces this
+// bound.
+//
+// BOUNDED, because it runs inside seat acquisition, possibly just past the
+// hydration's budget, on a context that budget does not cut, and an unbounded
+// wait there would hang the acquisition on a wedged store, as an unbounded
+// cleanup would on a wedged broker ([Syncer.dropConsumer]). FIVE SECONDS is
+// the store's default lock wait and the bound a consumer's deletion has
+// ([consumerCleanupTimeout]): a read still waiting then is a store in trouble,
+// and the seat is refused until the next sweep, as on any failure of its
+// store. So a hydration still outlives [hydrateWait] by one such step at most.
+const boundaryReadTimeout = 5 * time.Second
 
 // fetchBatch is the most messages one replay pull asks for: a table's rows,
 // and once the barrier that ends its replay ([Syncer.replay]). It sets the
@@ -142,10 +173,11 @@ const exportPageBytes = 1 << 20
 
 // AgentIDFor derives a seat's stable id from its handle (ADR-0013), or ""
 // where there is nothing to derive it in. An empty id is no address on the
-// changelog, so neither half touches it: [Syncer.Publish] carries nothing for
-// it rather than publish to a subject with an empty seat token, which the
-// broker refuses, and [Syncer.Hydrate] reads nothing for it rather than open a
-// replay over such a token, which the broker refuses too.
+// changelog, so neither half touches it: [Syncer.PublishOwn] and
+// [Syncer.PublishBacklog] carry nothing for it rather than publish to a
+// subject with an empty seat token, which the broker refuses, and
+// [Syncer.Hydrate] reads nothing for it rather than open a replay over such a
+// token, which the broker refuses too, and records no boundary for it.
 //
 // Injected rather than imported, because the derivation belongs to the
 // organization model and this package needs exactly one function from it —
@@ -158,30 +190,53 @@ type Syncer struct {
 	js      jetstream.JetStream
 	agentID AgentIDFor
 
-	// marks is the per-seat, per-table watermark: the value of the table's
-	// watermark column (table.watermark, a change sequence never handed out
-	// twice, so a row written after the mark is always above it) of the
-	// last row the changelog acknowledged. A publish moves it past each row
-	// as that row is acknowledged, so a publish its bound cuts keeps what it
-	// carried, and the seat's next one resumes at the first row the
-	// changelog did not acknowledge.
+	// marks is the per-seat, per-table, per-range watermark: the value of the
+	// table's watermark column (table.watermark, a change sequence never
+	// handed out twice, so a row written after the mark is always above it)
+	// of the last row of the range the changelog acknowledged. A seat's rows
+	// of a table fall in two ranges about its boundary (boundaries, below):
+	// its OWN, stamped above it, which [Syncer.PublishOwn] carries, and its
+	// BACKLOG, stamped at or below it, which [Syncer.PublishBacklog] carries.
+	// Each range has a mark of its own, so neither call's progress is read as
+	// the other's. A publish moves its range's mark past each row as that row
+	// is acknowledged, so a publish its bound cuts keeps what it carried, and
+	// the seat's next one resumes at the first row of the range the changelog
+	// did not acknowledge.
 	//
 	// In memory only, and deliberately: the benefit is a subsystem with no
 	// state of its own to keep correct, and the cost is a republish. A
 	// restart zeroes every mark and a release ([Syncer.Forget]) the seat's,
 	// so the seat's next holding here carries again everything this node
 	// holds for it, which the stream collapses onto the same subjects: a page
-	// at a time, across as many cycles as the link needs.
+	// at a time, across as many cycles as the link needs, as its backlog,
+	// after what it writes.
 	mu    sync.Mutex
-	marks map[string]int64
+	marks map[markKey]int64
 
-	// beforePage, when set, is called with a watermark table's name before
-	// each of its pages' start is read: between one page's last mark and
-	// the next page's read, a window no publish of a row reaches, where a
-	// release's Forget meets a publish whose cursor is ahead of the zeroed
-	// mark. A test's seam, unset in production, through which a case acts
-	// in that window or watches what each page took.
-	beforePage func(table string)
+	// boundaries is where each seat's own writes begin on this node: the
+	// value of the node's change sequence as the seat's hydration here
+	// completed ([Syncer.Hydrate], "Where this holding's writes begin"). A
+	// seat with none reads as 0, which puts every row of it above the
+	// boundary and so all of it in its own range: a seat whose hydration has
+	// not completed, or one a release has forgotten. Under mu beside the
+	// marks, in memory for the same reason, and dropped with them by a
+	// restart and a release.
+	boundaries map[string]int64
+
+	// beforePage, when set, is called with a range and a watermark table's
+	// name before each of the table's pages of that range has its start
+	// read: between one page's last mark and the next page's read, a window
+	// no publish of a row reaches, where a release's Forget meets a publish
+	// whose cursor is ahead of the zeroed mark. A test's seam, unset in
+	// production, through which a case acts in that window or watches what
+	// each page took.
+	beforePage func(of markRange, table string)
+
+	// beforeBoundary, when set, is called just before a hydration reads where
+	// the seat's own writes begin ([Syncer.recordBoundary]): a test's seam,
+	// unset in production, through which a case ends the hydration's budget
+	// there.
+	beforeBoundary func()
 
 	// leftOut, when set, is called with what a hydration did not carry each
 	// time its memory_rows_not_carried line says so ([Syncer.settleNotCarried]):
@@ -217,7 +272,35 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
 	if db == nil || js == nil || agentID == nil {
 		return nil
 	}
-	return &Syncer{db: db, js: js, agentID: agentID, marks: map[string]int64{}}
+	return &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
+		boundaries: map[string]int64{}}
+}
+
+// markRange is one of the two ranges a seat's rows of a watermark table fall
+// in about its boundary: each is carried by a call of its own and marked
+// apart.
+type markRange string
+
+const (
+	// ownRange is the rows stamped above the seat's boundary: what its
+	// holding here has written, [Syncer.PublishOwn]'s.
+	ownRange markRange = "own"
+
+	// backlogRange is the rows stamped at or below it: what this node held
+	// for the seat when its hydration here completed,
+	// [Syncer.PublishBacklog]'s.
+	backlogRange markRange = "backlog"
+)
+
+// markKey names one mark: a seat's, of one table, over one range.
+//
+// A STRUCT, rather than the handle and the table joined into one string, so a
+// seat's marks are found by comparing its handle, and no key is taken apart or
+// matched by a prefix to find them.
+type markKey struct {
+	handle string
+	table  string
+	of     markRange
 }
 
 // seat resolves a handle into both spellings the schema uses.
@@ -225,47 +308,109 @@ func (s *Syncer) seat(handle string) seatRef {
 	return seatRef{Handle: handle, AgentID: s.agentID(handle)}
 }
 
-// Carried is what one Publish got the changelog to acknowledge for a seat.
+// Carried is what one publish of a seat got the changelog to acknowledge: its
+// own pass's ([Syncer.PublishOwn]) or its backlog's ([Syncer.PublishBacklog]),
+// which the caller tells apart by the call it made.
 type Carried struct {
-	// Rows is every row acknowledged, the whole-each-cycle tables' included.
+	// Rows is every row acknowledged: of an own pass, the whole-each-cycle
+	// tables' included.
 	Rows int
 
-	// Marked is the rows among them that moved a mark: the rows no later
-	// publish of the seat sends again, until a restart or a release zeroes
-	// the marks.
+	// Marked is the rows among them that moved a mark of the call's range:
+	// the rows no later publish of that range sends again, until a restart
+	// or a release zeroes the marks. Of a backlog, every row it carried.
 	Marked int
 
 	// StoppedIn is the table a publish that did not reach its end stopped
 	// in, and Whole says it is a whole-each-cycle table, which keeps nothing
-	// of a cut publish.
+	// of a cut publish: only an own pass carries one.
 	StoppedIn string
 	Whole     bool
 }
 
-// Publish carries what is new in a seat's memory onto the changelog, and says
-// what the changelog acknowledged.
+// PublishOwn carries onto the changelog what this node's holding of a seat has
+// written, and then the tables sent whole, and says what the changelog
+// acknowledged: the seat's OWN PASS.
 //
 // Called for the seats this node HOLDS, on a cadence (see the worker), and
-// once more as a seat is released. A table with a watermark is carried above
-// its mark a page at a time ([exportPage]: at most exportPageBytes and one
-// row in memory), and the mark moves past each row the changelog
-// acknowledges, so the steady-state cost is what the seat just learned, and a
-// publish its context cuts keeps what it carried: the seat's next one resumes
-// at the first row the changelog did not acknowledge. A wholeEachCycle table
-// is carried whole by every publish, and keeps nothing of a cut one.
+// once more as a seat is released, each time ahead of [Syncer.PublishBacklog].
+// A table with a watermark is carried above the larger of its own mark and the
+// seat's boundary ([Syncer.Hydrate], "Where this holding's writes begin"), a
+// page at a time ([exportPage]: at most exportPageBytes and one row in
+// memory), and the own mark moves past each row the changelog acknowledges, so
+// the steady-state cost is what the seat just learned, and a publish its
+// context cuts keeps what it carried: the seat's next one resumes at the first
+// row the changelog did not acknowledge. A wholeEachCycle table is carried
+// whole by every own pass, and keeps nothing of a cut one.
 //
-// EACH PAGE STARTS ABOVE THE LARGER of the seat's mark and the last row this
-// call had acknowledged itself, its cursor. The two differ when another call
-// has moved the mark further, whose rows this one then skips, and when a
-// release's [Syncer.Forget] has zeroed the marks under a call in flight. That
-// call goes on, as it always has, and its cursor keeps it from sending the
-// table it is in again from the first row: it continues that table, starts
-// each later one from the mark it finds there, and re-creates the seat's
-// marks as its rows are acknowledged.
+// IN [ownPassOrder], the tables with a watermark before the tables sent whole,
+// so what the holding wrote goes ahead of the seat's profiles, skills and
+// onboarding marker, where a cut is likeliest to fall.
+//
+// THE BOUNDARY IS READ ONCE, as the call begins, so one boundary divides the
+// call's rows from its first page to its last. A call begun before the seat's
+// hydration here completed, or after a release forgot the seat, has none: every
+// row is above it, its own, and the call carries the seat's store as a publish
+// did before boundaries, to its end.
+//
+// EACH PAGE STARTS ABOVE THE LARGEST of the seat's own mark, the last row this
+// call had acknowledged itself, its cursor, and the boundary. The first two
+// differ when another call has moved the mark further, whose rows this one
+// then skips, and when a release's [Syncer.Forget] has zeroed the marks under
+// a call in flight. That call goes on, as it always has, and its cursor keeps
+// it from sending the table it is in again from the first row: it continues
+// that table under the boundary it began with, starts each later one from the
+// mark it finds there, and re-creates the seat's own marks as its rows are
+// acknowledged.
 //
 // It returns at the first error, keeping in the marks what was acknowledged
 // before it and saying so in what it returns.
-func (s *Syncer) Publish(ctx context.Context, handle string) (Carried, error) {
+func (s *Syncer) PublishOwn(ctx context.Context, handle string) (Carried, error) {
+	return s.publish(ctx, handle, ownRange, ownPassOrder)
+}
+
+// PublishBacklog carries onto the changelog the seat's rows at or below its
+// boundary, and says what the changelog acknowledged: the seat's BACKLOG,
+// what this node held for it when its hydration here completed, which the
+// hydration wrote from the changelog or found already present.
+//
+// Called after [Syncer.PublishOwn], by a memory sync cycle and by a release's
+// flush, while their bound has time, so a cut drops this first of a turn, and
+// it is what the changelog mostly holds already. It is the republish node
+// migration 0041 keeps: it puts this node's rows back on a changelog an
+// operator accepted after a recreation, or one restored while the node ran,
+// and carries what an earlier holding's flush did not reach.
+//
+// Each table with a watermark, in the registry's order ([backlogPassOrder]), is
+// carried above its backlog mark and up to the boundary, a page at a time
+// ([exportBacklogPage]), the backlog mark moving past each row the changelog
+// acknowledges. A table READ TO THE BOUNDARY, with nothing past its last page
+// and every row of the page acknowledged, has its backlog mark set to the
+// boundary and is not read again: every row stamped at or below the boundary
+// had committed when the boundary was read, so none can join the range after,
+// and a drained seat costs no read a cycle. That move counts no row in
+// [Carried.Marked]. The tables sent whole are not in it: the own pass sends
+// them.
+//
+// The boundary is read once, as the call begins, as [Syncer.PublishOwn] reads
+// it: a seat with none has no backlog, and the call carries nothing and reads
+// nothing. Each page starts above the larger of the backlog mark and the
+// call's cursor, for the reasons [Syncer.PublishOwn] gives, so a call that a
+// release's [Syncer.Forget] overtakes continues the range under the boundary
+// it began with.
+//
+// It returns at the first error, keeping in the marks what was acknowledged
+// before it and saying so in what it returns.
+func (s *Syncer) PublishBacklog(ctx context.Context, handle string) (Carried, error) {
+	return s.publish(ctx, handle, backlogRange, backlogPassOrder)
+}
+
+// publish carries one range of a seat's memory, the tables in order, and says
+// what the changelog acknowledged of it: the body of [Syncer.PublishOwn] and of
+// [Syncer.PublishBacklog].
+func (s *Syncer) publish(ctx context.Context, handle string, of markRange,
+	order []table) (Carried, error) {
+
 	var carried Carried
 	if s == nil {
 		return carried, nil
@@ -274,12 +419,16 @@ func (s *Syncer) Publish(ctx context.Context, handle string) (Carried, error) {
 	if ref.AgentID == "" {
 		return carried, nil
 	}
-	for _, spec := range tables {
+	// ONCE, AS THE CALL BEGINS, never per page: one boundary divides the
+	// call's rows from its first page to its last, whatever a hydration
+	// completing or a release forgetting the seat does to it meanwhile.
+	boundary := s.boundary(handle)
+	for _, spec := range order {
 		var err error
 		if spec.wholeEachCycle {
 			err = s.publishWhole(ctx, handle, ref, spec, &carried)
 		} else {
-			err = s.publishPages(ctx, handle, ref, spec, &carried)
+			err = s.publishPages(ctx, handle, ref, spec, of, boundary, &carried)
 		}
 		if err != nil {
 			carried.StoppedIn, carried.Whole = spec.name, spec.wholeEachCycle
@@ -287,8 +436,8 @@ func (s *Syncer) Publish(ctx context.Context, handle string) (Carried, error) {
 		}
 	}
 	if carried.Rows > 0 {
-		log.DebugContext(ctx, "memory_published", "seat", handle, "rows", carried.Rows,
-			"marked", carried.Marked)
+		log.DebugContext(ctx, "memory_published", "seat", handle, "range", of,
+			"rows", carried.Rows, "marked", carried.Marked)
 	}
 	return carried, nil
 }
@@ -310,18 +459,34 @@ func (s *Syncer) publishWhole(ctx context.Context, handle string, ref seatRef, s
 	return nil
 }
 
-// publishPages carries the seat's rows of a watermark table above its mark, a
-// page at a time, moving the mark past each row the changelog acknowledges.
+// publishPages carries the seat's rows of a watermark table in one range about
+// boundary, a page at a time, moving that range's mark past each row the
+// changelog acknowledges: the own range above the larger of its mark and the
+// boundary, and the backlog above its mark and up to the boundary, where a
+// read that reaches it ends the range for good.
 func (s *Syncer) publishPages(ctx context.Context, handle string, ref seatRef, spec table,
-	carried *Carried) error {
+	of markRange, boundary int64, carried *Carried) error {
 
-	cursor := s.mark(handle, spec.name)
+	cursor := s.mark(handle, spec.name, of)
+	if of == backlogRange && cursor >= boundary {
+		// THE BACKLOG IS CARRIED TO THE BOUNDARY ALREADY, or the seat has
+		// none: nothing at or below it is left above the mark, and nothing
+		// is read.
+		return nil
+	}
 	for {
 		if s.beforePage != nil {
-			s.beforePage(spec.name)
+			s.beforePage(of, spec.name)
 		}
-		page, more, err := exportPage(ctx, s.db.SQL(), spec, ref,
-			max(cursor, s.mark(handle, spec.name)))
+		after := max(cursor, s.mark(handle, spec.name, of))
+		var page []exported
+		var more bool
+		var err error
+		if of == ownRange {
+			page, more, err = exportPage(ctx, s.db.SQL(), spec, ref, max(after, boundary))
+		} else {
+			page, more, err = exportBacklogPage(ctx, s.db.SQL(), spec, ref, after, boundary)
+		}
 		if err != nil {
 			return err
 		}
@@ -332,12 +497,19 @@ func (s *Syncer) publishPages(ctx context.Context, handle string, ref seatRef, s
 			// MOVED AFTER EACH ACKNOWLEDGED ROW, never before it. A
 			// watermark moved first would skip, for the life of the
 			// process, exactly the rows whose publish failed.
-			s.setMark(handle, spec.name, row.mark)
+			s.setMark(handle, spec.name, of, row.mark)
 			cursor = row.mark
 			carried.Rows++
 			carried.Marked++
 		}
 		if !more {
+			if of == backlogRange {
+				// READ TO THE BOUNDARY, every row of it acknowledged: every
+				// row stamped at or below it had committed when it was
+				// read, so the range holds nothing more, and the next
+				// backlog of the seat reads none of it.
+				s.setMark(handle, spec.name, of, boundary)
+			}
 			return nil
 		}
 	}
@@ -413,6 +585,45 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 // changelog makes room for a message but the stream's one message per subject
 // (topics.MemoryBarrierToken).
 //
+// # Where this holding's writes begin
+//
+// As it completes, a hydration records the seat's BOUNDARY: where this node's
+// change sequence stands (node migration 0041's counter), read once the
+// changelog's identity has been read again after the last table, the last step
+// that can fail the hydration. Every row the replays wrote has committed by
+// then, each insert stamped by the store as it was written and each vector it
+// took over a stored one stamped again, and the identity's reading writes no
+// memory row, so every row of the seat in this store when the hydration
+// completes, the ones it found already present included, is stamped at or
+// below the boundary, and every row written after it is stamped above: the
+// store is single-writer, so the value read is at least every committed stamp,
+// and a transaction still open commits its stamps above it. Rows above the
+// boundary are the seat's OWN, what its holding here writes, which
+// [Syncer.PublishOwn] carries first; rows at or below it are its BACKLOG,
+// [Syncer.PublishBacklog]'s, which is what an acquisition or a restart leaves
+// this node to carry back. Read as the hydration began instead, the boundary
+// would count every row the hydration inserted as the seat's own and send them
+// ahead of what it writes, which is what a seat's new memory waited behind
+// (crewlet/crewlet#1039).
+//
+// ON A CONTEXT THE HYDRATION'S BUDGET DOES NOT CUT, bounded by
+// [boundaryReadTimeout] instead. A statement on a context whose budget has run
+// out is refused before it reaches the store, so a hydration whose last
+// identity read answered within a round trip of its budget's end would be
+// refused for the budget alone, a seat it had carried whole, and at every
+// sweep on a link slow enough to end the budget there. Read BEFORE the count
+// and purge of the retired tables, which fail no hydration, so their round
+// trips neither delay the read nor spend its time. A read the store fails
+// refuses the seat: a store that cannot answer one row of its own just after
+// it committed the replays is failing, and the seat waits for the next sweep,
+// as on every other failure here. A hydration that fails records no boundary,
+// and neither does one of a seat with no address on the changelog.
+//
+// THE BOUNDARY IS NO STREAM SEQUENCE, and nothing compares it with the
+// barrier's: the barrier's sequence is where the CHANGELOG stood, as its
+// leader acknowledged the barrier, and the boundary is where this NODE's own
+// change sequence stood.
+//
 // # What it reports
 //
 // The rows its fetches' transactions committed, a failed hydration's
@@ -476,6 +687,12 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// 1 refuses, said by nothing. A recreation after this reading took
 	// nothing from the replays, which were all done before it.
 	if err := s.checkIdentity(ctx); err != nil {
+		return carried, err
+	}
+	// WHERE THIS HOLDING'S OWN WRITES BEGIN, once the last step that can fail
+	// the hydration has answered, and before the steps that fail nothing
+	// ("Where this holding's writes begin").
+	if err := s.recordBoundary(ctx, handle); err != nil {
 		return carried, err
 	}
 	s.settleNotCarried(ctx, handle, ref.AgentID, orphaned)
@@ -958,35 +1175,73 @@ func (s *Syncer) purge(ctx context.Context, filter string) error {
 	return nil
 }
 
+// markOf names the mark of a seat's table over one range.
+func markOf(handle, table string, of markRange) markKey {
+	return markKey{handle: handle, table: table, of: of}
+}
+
 // mark reads a watermark.
-func (s *Syncer) mark(handle, table string) int64 {
+func (s *Syncer) mark(handle, table string, of markRange) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.marks[handle+"\x00"+table]
+	return s.marks[markOf(handle, table, of)]
 }
 
 // setMark advances a watermark, never backwards.
-func (s *Syncer) setMark(handle, table string, high int64) {
+func (s *Syncer) setMark(handle, table string, of markRange, high int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := handle + "\x00" + table
+	key := markOf(handle, table, of)
 	if high > s.marks[key] {
 		s.marks[key] = high
 	}
 }
 
-// Forget drops a released seat's watermarks.
+// boundary is where the seat's own writes begin on this node, and 0 for a
+// seat that has none ([Syncer.boundaries]).
+func (s *Syncer) boundary(handle string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.boundaries[handle]
+}
+
+// recordBoundary reads where this node's change sequence stands and keeps it
+// as the seat's boundary ([Syncer.Hydrate], "Where this holding's writes
+// begin"): on a context the hydration's budget does not cut, and bounded by
+// [boundaryReadTimeout] instead.
+func (s *Syncer) recordBoundary(ctx context.Context, handle string) error {
+	if s.beforeBoundary != nil {
+		s.beforeBoundary()
+	}
+	readCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), boundaryReadTimeout)
+	defer stop()
+	var last int64
+	if err := s.db.SQL().QueryRowContext(readCtx,
+		"SELECT last FROM memory_change_sequence WHERE singleton = 1").Scan(&last); err != nil {
+		return fmt.Errorf("memsync: read where %s's own writes begin on this node: %w", handle, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.boundaries[handle] = last
+	return nil
+}
+
+// Forget drops a released seat's marks, of both its ranges, and its boundary.
 //
-// It zeroes the seat's marks, so the seat's next holding here carries again
-// everything this node holds for it, as a restart does: that republish is what
-// puts this node's rows back on a changelog an operator accepted after a
-// recreation, or one restored while the node ran. (Old marks would not skip
-// what another node wrote meanwhile: a hydration stamps every row it inserts
-// above any of them, node migration 0041.)
+// The seat's next holding here takes a new boundary as its hydration
+// completes, and both of its ranges start from 0: its backlog is then
+// everything this node holds for the seat, which it carries back after what
+// it writes, as after a restart. That republish is what puts this node's rows
+// back on a changelog an operator accepted after a recreation, or one
+// restored while the node ran. (Old marks would not skip what another node
+// wrote meanwhile: a hydration stamps every row it inserts above any of them,
+// node migration 0041.) Until that hydration completes the seat has no
+// boundary, and a publish of it carries every row as its own.
 //
-// A [Syncer.Publish] of the seat already in flight goes on: it continues the
-// table it is in from its own cursor, starts each later table from the zeroed
-// mark, and re-creates the seat's marks as its rows are acknowledged.
+// A publish of the seat already in flight goes on: it continues the range it
+// is in from its own cursor, under the boundary it began with, starts each
+// later table of that range from the zeroed mark, and re-creates that range's
+// marks as its rows are acknowledged.
 func (s *Syncer) Forget(handle string) {
 	if s == nil {
 		return
@@ -994,13 +1249,11 @@ func (s *Syncer) Forget(handle string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key := range s.marks {
-		// HasPrefix, not a slice: the map holds every seat this node
-		// has published, and slicing a key shorter than this handle
-		// panics rather than simply not matching.
-		if strings.HasPrefix(key, handle+"\x00") {
+		if key.handle == handle {
 			delete(s.marks, key)
 		}
 	}
+	delete(s.boundaries, handle)
 }
 
 // THE TWO CONTRACTS THIS PACKAGE DECLARES, and what each buys.

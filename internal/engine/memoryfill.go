@@ -79,7 +79,9 @@ import (
 // ([memorySyncInterval]), and a provider having a slow minute must not widen
 // it: a fill waits on an embeddings API, a publish on the broker. So the two
 // run apart. A filled row is stamped again, so the memory sync carries it like
-// a new row, in the first of the seat's publishes that reaches it.
+// a new row the seat wrote: in its next own pass, ahead of the seat's backlog,
+// whether the row was the seat's own or one this node held for it when it
+// took it.
 
 const (
 	// memoryFillInterval is how often the holder looks for rows to fill.
@@ -410,7 +412,8 @@ func fillSeat(ctx context.Context, source fillSource, seat, model string,
 }
 
 // reportLine is one line a loop over the seats this node holds says: a fill
-// tick's ([fillReport.lines]) or a memory sync cycle's ([syncReport.lines]).
+// tick's ([fillReport.lines]) or a memory sync cycle's ([syncReport.lines]),
+// or a released seat's last memory turn ([flushSeatMemory]).
 type reportLine struct {
 	level slog.Level
 	msg   string
