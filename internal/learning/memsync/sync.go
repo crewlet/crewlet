@@ -38,12 +38,44 @@ const hydrateWait = 15 * time.Second
 // step whose failure means anything.
 const consumerCleanupTimeout = 5 * time.Second
 
-// fetchBatch is how many rows one replay pull takes.
+// fetchBatch is how many rows one replay pull asks for.
 //
-// The rows are small and the transfer is local, so this is about round trips
-// rather than memory: 256 clears a seat with a few hundred episodes in a
-// couple of pulls.
+// It sets the replay's round trips: 256 clears a seat with a few hundred
+// episodes in a couple of pulls. It is no bound on memory: a pull holds up to
+// this many rows whole, and a row is bounded only by the transport
+// ([exportPageBytes]), so where a publish holds a page, a pull can hold up to
+// 2 GiB on the embedded broker (crewlet/crewlet#1052).
 const fetchBatch = 256
+
+// exportPageBytes is how much of a seat's memory one read of a table holds
+// before it is published: rows are read in watermark order until their
+// carried values hold this many bytes, and always at least one row
+// ([exportPage]).
+//
+// A BOUND ON MEMORY, IN BYTES, because a row has none short of the
+// transport's: an episode keeps its ask whole, bounded only by the event that
+// carried it, so one row can be megabytes (up to 8 MiB on the embedded
+// broker; past that it cannot be published at all, crewlet/crewlet#349), and
+// a page counted in rows bounds nothing. A drain releases every held seat at
+// once (seat.Host.ReleaseAll), each flushing beside the cycle, so a node holds
+// a page per released seat and the cycle's: about 51 MiB at fifty seats,
+// where reading a backlog whole held all of it, which after a hydration is
+// everything the changelog keeps of the seat (crewlet/crewlet#348): some
+// 140 MiB of vectors for a year of episodes. That is the tables with a
+// watermark: a whole-each-cycle table is still read whole by every publish
+// ([exportWhole]), as large as the seat's profiles and skills have grown,
+// until crewlet/crewlet#1040 carries those by change sequence too.
+//
+// NOT A BOUND ON ROUND TRIPS: each row is published with a broker round trip
+// of its own whatever the page is, and the mark moves with each acknowledged
+// row, so a cut loses the row in flight and nothing of the page. What a page
+// costs is one seek on node migration 0041's (seat, change_seq) index, and a
+// mebibyte is about a hundred rows at the vector a row carries (8 KiB as
+// carried at 1 536 dimensions), so even at a millisecond a publish the seek is
+// under a percent of what the page feeds. Much less pays a seek every handful
+// of rows on a fast link; more buys nothing and multiplies the drain's peak.
+// A judgement between those, not a measurement.
+const exportPageBytes = 1 << 20
 
 // AgentIDFor derives a seat's stable id from its handle (ADR-0013), or ""
 // where there is nothing to derive it in. An empty id is no address on the
@@ -65,15 +97,30 @@ type Syncer struct {
 	// ([Syncer.leaderEnd]).
 	leader *jsapi.Leader
 
-	// marks is the per-seat, per-table watermark: the highest value of
-	// the table's watermark column already published (table.watermark —
-	// a change sequence that is never reused, so a row written after the
-	// mark is always above it). In memory only, and deliberately: a restart
-	// republishes what it has, which the stream collapses onto the same
-	// subjects, so the cost is one extra pass and the benefit is a
-	// subsystem with no state of its own to keep correct.
+	// marks is the per-seat, per-table watermark: the value of the table's
+	// watermark column (table.watermark, a change sequence never handed out
+	// twice, so a row written after the mark is always above it) of the
+	// last row the changelog acknowledged. A publish moves it past each row
+	// as that row is acknowledged, so a publish its bound cuts keeps what it
+	// carried, and the seat's next one resumes at the first row the
+	// changelog did not acknowledge.
+	//
+	// In memory only, and deliberately: the benefit is a subsystem with no
+	// state of its own to keep correct, and the cost is a republish. A
+	// restart zeroes every mark and a release ([Syncer.Forget]) the seat's,
+	// so the seat's next holding here carries again everything this node
+	// holds for it, which the stream collapses onto the same subjects: a page
+	// at a time, across as many cycles as the link needs.
 	mu    sync.Mutex
 	marks map[string]int64
+
+	// beforePage, when set, is called with a watermark table's name before
+	// each of its pages' start is read: between one page's last mark and
+	// the next page's read, a window no publish of a row reaches, where a
+	// release's Forget meets a publish whose cursor is ahead of the zeroed
+	// mark. A test's seam, unset in production, through which a case acts
+	// in that window or watches what each page took.
+	beforePage func(table string)
 }
 
 // New builds a syncer, or returns nil when this node cannot carry memory.
@@ -101,7 +148,18 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) (*Syncer, err
 	if err != nil {
 		return nil, fmt.Errorf("memsync: address the memory changelog's leader: %w", err)
 	}
-	return &Syncer{db: db, js: js, agentID: agentID, leader: leader, marks: map[string]int64{}}, nil
+	return newSyncer(db, js, agentID, leader), nil
+}
+
+// newSyncer is [New] past its checks: a syncer over js, whose changelog's
+// end [Syncer.Hydrate] reads through leader.
+//
+// A NIL LEADER IS A SYNCER THAT ONLY PUBLISHES, which is how this package's
+// cases build one over a changelog of their own: [jsapi.NewLeader] reads the
+// client's connection and options, and a stand-in client has neither. Such a
+// syncer must never hydrate.
+func newSyncer(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, leader *jsapi.Leader) *Syncer {
+	return &Syncer{db: db, js: js, agentID: agentID, leader: leader, marks: map[string]int64{}}
 }
 
 // seat resolves a handle into both spellings the schema uses.
@@ -109,48 +167,135 @@ func (s *Syncer) seat(handle string) seatRef {
 	return seatRef{Handle: handle, AgentID: s.agentID(handle)}
 }
 
-// Publish carries whatever is new in a seat's memory onto the changelog.
+// Carried is what one Publish got the changelog to acknowledge for a seat.
+type Carried struct {
+	// Rows is every row acknowledged, the whole-each-cycle tables' included.
+	Rows int
+
+	// Marked is the rows among them that moved a mark: the rows no later
+	// publish of the seat sends again, until a restart or a release zeroes
+	// the marks.
+	Marked int
+
+	// StoppedIn is the table a publish that did not reach its end stopped
+	// in, and Whole says it is a whole-each-cycle table, which keeps nothing
+	// of a cut publish.
+	StoppedIn string
+	Whole     bool
+}
+
+// Publish carries what is new in a seat's memory onto the changelog, and says
+// what the changelog acknowledged.
 //
-// Called for the seats this node HOLDS, on a cadence — see the worker. It is
-// incremental for the append-only tables and whole for the small mutable
-// ones (see table.wholeEachCycle), so the steady-state cost is proportional
-// to what the seat just learned rather than to everything it knows.
-func (s *Syncer) Publish(ctx context.Context, handle string) (int, error) {
+// Called for the seats this node HOLDS, on a cadence (see the worker), and
+// once more as a seat is released. A table with a watermark is carried above
+// its mark a page at a time ([exportPage]: at most exportPageBytes and one
+// row in memory), and the mark moves past each row the changelog
+// acknowledges, so the steady-state cost is what the seat just learned, and a
+// publish its context cuts keeps what it carried: the seat's next one resumes
+// at the first row the changelog did not acknowledge. A wholeEachCycle table
+// is carried whole by every publish, and keeps nothing of a cut one.
+//
+// EACH PAGE STARTS ABOVE THE LARGER of the seat's mark and the last row this
+// call had acknowledged itself, its cursor. The two differ when another call
+// has moved the mark further, whose rows this one then skips, and when a
+// release's [Syncer.Forget] has zeroed the marks under a call in flight. That
+// call goes on, as it always has, and its cursor keeps it from sending the
+// table it is in again from the first row: it continues that table, starts
+// each later one from the mark it finds there, and re-creates the seat's
+// marks as its rows are acknowledged.
+//
+// It returns at the first error, keeping in the marks what was acknowledged
+// before it and saying so in what it returns.
+func (s *Syncer) Publish(ctx context.Context, handle string) (Carried, error) {
+	var carried Carried
 	if s == nil {
-		return 0, nil
+		return carried, nil
 	}
 	ref := s.seat(handle)
 	if ref.AgentID == "" {
-		return 0, nil
+		return carried, nil
 	}
-	published := 0
 	for _, spec := range tables {
-		mark := s.mark(handle, spec.name)
-		rows, high, err := export(ctx, s.db.SQL(), spec, ref, mark)
+		var err error
+		if spec.wholeEachCycle {
+			err = s.publishWhole(ctx, handle, ref, spec, &carried)
+		} else {
+			err = s.publishPages(ctx, handle, ref, spec, &carried)
+		}
 		if err != nil {
-			return published, err
+			carried.StoppedIn, carried.Whole = spec.name, spec.wholeEachCycle
+			return carried, err
 		}
-		for _, row := range rows {
-			body, err := encode(row)
-			if err != nil {
-				return published, err
-			}
-			subject := spec.subject(ref.AgentID, row.Values)
-			if _, err := s.js.Publish(ctx, subject, body); err != nil {
-				return published, fmt.Errorf("memsync: publish a %s row for %s: %w",
-					spec.name, handle, err)
-			}
-			published++
+	}
+	if carried.Rows > 0 {
+		log.DebugContext(ctx, "memory_published", "seat", handle, "rows", carried.Rows,
+			"marked", carried.Marked)
+	}
+	return carried, nil
+}
+
+// publishWhole carries every one of the seat's rows of a wholeEachCycle table.
+func (s *Syncer) publishWhole(ctx context.Context, handle string, ref seatRef, spec table,
+	carried *Carried) error {
+
+	rows, err := exportWhole(ctx, s.db.SQL(), spec, ref)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := s.publishRow(ctx, handle, ref, spec, row); err != nil {
+			return err
 		}
-		// ADVANCED ONLY AFTER THE PUBLISHES SUCCEEDED. A watermark moved
-		// first would skip, for the life of the process, exactly the rows
-		// whose publish failed.
-		s.setMark(handle, spec.name, high)
+		carried.Rows++
 	}
-	if published > 0 {
-		log.DebugContext(ctx, "memory_published", "seat", handle, "rows", published)
+	return nil
+}
+
+// publishPages carries the seat's rows of a watermark table above its mark, a
+// page at a time, moving the mark past each row the changelog acknowledges.
+func (s *Syncer) publishPages(ctx context.Context, handle string, ref seatRef, spec table,
+	carried *Carried) error {
+
+	cursor := s.mark(handle, spec.name)
+	for {
+		if s.beforePage != nil {
+			s.beforePage(spec.name)
+		}
+		page, more, err := exportPage(ctx, s.db.SQL(), spec, ref,
+			max(cursor, s.mark(handle, spec.name)))
+		if err != nil {
+			return err
+		}
+		for _, row := range page {
+			if err := s.publishRow(ctx, handle, ref, spec, row.row); err != nil {
+				return err
+			}
+			// MOVED AFTER EACH ACKNOWLEDGED ROW, never before it. A
+			// watermark moved first would skip, for the life of the
+			// process, exactly the rows whose publish failed.
+			s.setMark(handle, spec.name, row.mark)
+			cursor = row.mark
+			carried.Rows++
+			carried.Marked++
+		}
+		if !more {
+			return nil
+		}
 	}
-	return published, nil
+}
+
+// publishRow puts one row on its subject and waits for the changelog to
+// acknowledge it.
+func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spec table, row Row) error {
+	body, err := encode(row)
+	if err != nil {
+		return err
+	}
+	if _, err := s.js.Publish(ctx, spec.subject(ref.AgentID, row.Values), body); err != nil {
+		return fmt.Errorf("memsync: publish a %s row for %s: %w", spec.name, handle, err)
+	}
+	return nil
 }
 
 // Hydrate brings a seat's memory into this node's store.
@@ -373,9 +518,16 @@ func (s *Syncer) setMark(handle, table string, high int64) {
 
 // Forget drops a released seat's watermarks.
 //
-// Without this a node that released a seat and later took it back would
-// resume from its old marks and never republish what it wrote in between —
-// and what it wrote in between is exactly the memory the other node made.
+// It zeroes the seat's marks, so the seat's next holding here carries again
+// everything this node holds for it, as a restart does: that republish is what
+// puts this node's rows back on a changelog an operator accepted after a
+// recreation, or one restored while the node ran. (Old marks would not skip
+// what another node wrote meanwhile: a hydration stamps every row it inserts
+// above any of them, node migration 0041.)
+//
+// A [Syncer.Publish] of the seat already in flight goes on: it continues the
+// table it is in from its own cursor, starts each later table from the zeroed
+// mark, and re-creates the seat's marks as its rows are acknowledged.
 func (s *Syncer) Forget(handle string) {
 	if s == nil {
 		return
