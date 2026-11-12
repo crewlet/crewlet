@@ -248,7 +248,10 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 	// its build does not know as a node of another build, which the walk
 	// moves on from. Where every node the walk asks answers so — during a
 	// roll, committers of an older build, which do not declare whom a write
-	// is made for — the open ran nowhere ([unreadByItsBuild]).
+	// is made for — the open ran nowhere ([ranNowhere]), and so it did where
+	// the committer refused it as no proposal it can decide, as one whose
+	// chart has moved since the checkout may refuse whom the open is made
+	// for.
 	res, err := reader.Change(ctx, gitlet.ChangeProposal{OpID: op,
 		Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: run.AgentHandle}, Seen: at,
 		Ceiling: openCeiling(run), WrittenFor: types.ForTurn(run.CodeWorkingFor),
@@ -259,11 +262,11 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 	// reviewer as well as the seat, and a step it names ("read it with ...")
 	// would be the engine telling a phase that holds no such tool what to do.
 	// The one act a line here names is the open made again, and it says whose
-	// that is ([unopenedUnreadable]): the seat's, which the reviewer reads as
-	// a fact about the seat and the seat as its own.
-	switch {
-	case unreadByItsBuild(err):
-		out.Unopened = unopenedUnreadable
+	// that is ([ranNowhere]): the seat's, which the reviewer reads as a fact
+	// about the seat and the seat as its own.
+	switch line, nothingRan := ranNowhere(err); {
+	case nothingRan:
+		out.Unopened = line
 	case err != nil:
 		out.Unopened = fmt.Sprintf("asking Gitlet to open it failed (%v), so whether it opened is unknown", err)
 	case res.Refusal != "":
@@ -284,10 +287,12 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 			"detail", out.Unopened}
 		if err != nil {
 			// THE FAILURE IN ITS OWN WORDS, whatever the line says of it: the
-			// line of an open no node could read leaves them out, and the keys
-			// refused and the nodes that refused them are the operator's to
-			// read, beside the estate's instruction to finish the upgrade,
-			// which neither of the report's readers can follow.
+			// line of an open that ran nowhere leaves them out, a refusal's
+			// own sentence aside, and who was asked and what each said — the
+			// keys a build refused and the nodes that refused them, beside
+			// the estate's instruction to finish the upgrade — are the
+			// operator's to read, which neither of the report's readers can
+			// act on.
 			attrs = append(attrs, "error", err.Error())
 		}
 		log.WarnContext(ctx, "sandbox_change_unopened", attrs...)
@@ -295,45 +300,93 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 	return out
 }
 
-// unopenedUnreadable is what became of an ask whose open no node the
-// estate's walk asked could read ([unreadByItsBuild]). DEFINITE, where an
-// open that may have run says whether it opened is unknown: nothing of the
-// open ran, so no change is open, and the commits the run pushed stay on its
-// branch for the seat to open again — its code_open_change, from the turn the
-// collection resumes, asks the same open of the repository's committer, which
-// a node of this build decides.
+// ranNowhere is the line of an open the estate's answer says RAN NOWHERE,
+// naming why, and whether it says so: the walk asked the repository's
+// committer and each runner-up after it and found none to run it
+// ([estate.ErrUnserved]), none gone silent — the estate's own claim that
+// nothing ran, on which a caller may write again. Either no node could read
+// it, one at least refusing it for a key its build does not declare
+// ([estate.ErrUnknownKeys], which wraps that walk; [unopenedUnreadable]):
+// during a roll, committers of an older build, which do not declare whom a
+// write is made for (args.written_for), and for a carrier a newer build wrote
+// on the run's row, nodes of this build, which do not know a value it names.
+// Or no committer could take it for any other reason, every one answering
+// that its copy was out of service, could not run it or was behind, which
+// names no build ([unopenedUnserved]). AND A REFUSAL OF THE OPEN AS NO
+// PROPOSAL A COMMITTER CAN DECIDE ([gitlet.ErrInvalidProposal]), which the
+// committer — or this node's own copy of the request, before it asked one —
+// gives before anything of the open is appended, so nothing of it ran either
+// ([unopenedRefused]).
+//
+// AND NO OTHER ANSWER, each of which keeps the failure's own words and says
+// whether it opened is unknown: a walk in which a committer went silent, and
+// an open sent to one never heard from ([estate.ErrOutcomeUnknown]), whatever
+// else stopped the walk, a refusal included — that committer may have opened
+// it; a refusal of keys that wraps no walk, an answer this node's build could
+// not read — the node that gave it ran the open; and a failure of the caller's
+// own. The reading a code tool gives the same answers (internal/agent/builtin's
+// failedWrite), so the seat sent to its code_open_change is told of the run's
+// open what that tool would tell it of its own.
+func ranNowhere(err error) (string, bool) {
+	var unserved *estate.ErrUnserved
+	walked := errors.As(err, &unserved)
+	switch {
+	case errors.Is(err, estate.ErrOutcomeUnknown) || walked && unserved.Silent():
+		return "", false
+	case errors.Is(err, gitlet.ErrInvalidProposal):
+		return unopenedRefused(err), true
+	case !walked:
+		return "", false
+	case errors.As(err, new(*estate.ErrUnknownKeys)):
+		return unopenedUnreadable, true
+	}
+	return unopenedUnserved, true
+}
+
+// unopenedRefused is the line of an ask whose open was refused as no proposal
+// a committer can decide ([ranNowhere]), in the refusal's own words past its
+// sentinel. DEFINITE: the rule is held before anything of the open is
+// appended, so no change is open, and the commits the run pushed stay on its
+// branch. Reachable without any sender's bug once the open carries whom the
+// launching turn works for: the committer judges that against its own chart,
+// which may have moved since the run's checkout — a person's seat it no longer
+// places, a seat it now holds as an agent's — so the line names the refusal and
+// no act, since whether the seat's own open would be refused the same way is
+// that chart's to say.
+func unopenedRefused(err error) string {
+	said, ok := builtin.RefusalSentence(err, gitlet.ErrInvalidProposal)
+	if !ok {
+		said = err.Error()
+	}
+	return "Gitlet refused it as no proposal it can decide (" + said + "), so nothing of the open ran; the " +
+		"commits the run pushed are kept"
+}
+
+// unopenedUnreadable is what became of an ask whose open no node the estate's
+// walk asked could read, and [unopenedUnserved] of one no committer could take
+// for any other reason ([ranNowhere]). DEFINITE, where an open that may have
+// run says whether it opened is unknown: nothing of the open ran, so no change
+// is open, and the commits the run pushed stay on its branch for the seat to
+// open again — its code_open_change, from the turn the collection resumes,
+// asks the same open of the repository's committer, which for an open no node
+// could read a node of this build decides.
 //
 // NOT ASKED AGAIN within the collection, which holds the run's seat and its
-// box until the turn resumes: asked until a node of this build answered, the
-// open would hold them for as long as the roll lasts, which the collection
-// refuses a push record Gitlet cannot read for the same reason (the sandbox's
-// readPushes). Resumed at once, the run's reviewer reads that its work was
-// not proposed, and the seat opens it once a node of this build serves.
+// box until the turn resumes: asked until a committer took it, the open would
+// hold them for as long as the roll, or the outage, lasts, which the
+// collection refuses a push record Gitlet cannot read for the same reason (the
+// sandbox's readPushes). Resumed at once, the run's reviewer reads that its
+// work was not proposed, and the seat opens it once a committer serves.
 const unopenedUnreadable = "the node that answered runs a build that cannot read the request, so nothing " +
 	"of the open ran; the commits the run pushed are kept, and the change is the seat's to open again with " +
 	builtin.CodeOpenChangeTool + ", which a node of this build answers"
 
-// unreadByItsBuild reports whether err is an open that RAN NOWHERE because no
-// node could read it: the estate's walk asked the repository's committer and
-// each runner-up after it, and found none to run it ([estate.ErrUnserved]),
-// one of them at least refusing it for a key its build does not declare
-// ([estate.ErrUnknownKeys], which wraps that walk) and none gone silent,
-// since a node never heard from may have run it. During a roll the nodes
-// refusing it are committers of an older build, which do not declare whom a
-// write is made for (args.written_for); for a carrier a newer build wrote on
-// the run's row, they are nodes of this build, which do not know a value it
-// names.
-//
-// AND NO OTHER FAILURE. A refusal of keys that wraps no walk speaks for one
-// node: an answer this node's build could not read is one, and the node that
-// gave it ran the open. A walk refused for anything but a build — every node
-// out of service or behind — names no build. And a node asked and never heard
-// from leaves the outcome unknown ([estate.ErrOutcomeUnknown]). Each keeps
-// the failure's own words.
-func unreadByItsBuild(err error) bool {
-	var unknown *estate.ErrUnknownKeys
-	return errors.As(err, &unknown) && unknown.Unserved != nil && !unknown.Unserved.Silent()
-}
+// unopenedUnserved is what became of an ask whose open no committer the
+// estate's walk asked could take, each answering that its copy was out of
+// service, could not run it or was behind: it names no build, since none
+// refused the open — the rest as [unopenedUnreadable].
+const unopenedUnserved = "no Gitlet node could take it, so nothing of the open ran; the commits the run " +
+	"pushed are kept, and the change is the seat's to open again with " + builtin.CodeOpenChangeTool
 
 // openCeiling is whom the open a run asked for is made for (gitlet.WriteCeiling):
 // the colleague SEAT whose ask woke the launching turn, as the run's row names

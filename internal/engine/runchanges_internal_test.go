@@ -344,11 +344,38 @@ func refusedUnread() error {
 				"build does not declare args.written_for, so it ran nothing"}}
 }
 
+// refusedUnserved is the open as every committer of the repository answered
+// that it could not take it — its copy of the code log out of service, or
+// behind — so each ran nothing, and the walk found no node to run it, for a
+// reason that names no build.
+func refusedUnserved() error {
+	return &estate.ErrUnserved{Detail: "node-b: its copy of code is out of service; node-c: its copy of code " +
+		"is behind"}
+}
+
+// refusedInvalid is the open as the repository's committer refused it as no
+// proposal it can decide, on its own chart, which has moved since the run's
+// checkout: the person's seat the open is made for is one it no longer places.
+func refusedInvalid() error {
+	return fmt.Errorf("%w: written_for: this node's chart does not place seat pat, so a write made for it is "+
+		"held as a colleague's, which carries that seat's ceiling, and this one carries none",
+		gitlet.ErrInvalidProposal)
+}
+
 // unreadReport is what a run's report says of an open no node could read,
-// after the repository and the branch it names.
-const unreadReport = "the node that answered runs a build that cannot read the request, so nothing of the " +
-	"open ran; the commits the run pushed are kept, and the change is the seat's to open again with " +
-	"code_open_change, which a node of this build answers"
+// after the repository and the branch it names; unservedReport of one no
+// committer could take for any other reason; and invalidReport of one the
+// committer refused as no proposal it can decide (refusedInvalid).
+const (
+	unreadReport = "the node that answered runs a build that cannot read the request, so nothing of the " +
+		"open ran; the commits the run pushed are kept, and the change is the seat's to open again with " +
+		"code_open_change, which a node of this build answers"
+	unservedReport = "no Gitlet node could take it, so nothing of the open ran; the commits the run pushed are " +
+		"kept, and the change is the seat's to open again with code_open_change"
+	invalidReport = "Gitlet refused it as no proposal it can decide (written_for: this node's chart does not " +
+		"place seat pat, so a write made for it is held as a colleague's, which carries that seat's ceiling, " +
+		"and this one carries none), so nothing of the open ran; the commits the run pushed are kept"
+)
 
 // reportSpy resumes a collected run as a turn would, keeping the report each
 // resume handed it.
@@ -420,89 +447,119 @@ func collectFinished(t *testing.T, host pushReader, run sandbox.PendingRun) []st
 	return spy.resumed()
 }
 
-// A RUN'S OPEN NO NODE COULD READ COMES BACK NOT OPENED, ASKED ONCE (ADR-0109's
-// roll windows). Mid-roll, a repository's committers of an older build refuse
-// an open that states whom it is made for, as nodes of this build refuse one
-// whose carrier names what they do not know, and the walk finds no node to
-// run it: nothing of the open ran. The collection, which holds the run's seat
-// until its turn resumes, does not wait for a node of this build to ask it
-// again: the turn resumes at once, and its report says exactly what became of
-// the open — the change was not opened, the node that answered runs a build
-// that cannot read the request, nothing of the open ran, the commits the run
-// pushed are kept, and the change is the seat's to open again with
-// code_open_change — never that whether it opened is unknown, which sends the
-// seat to look for a change no node made.
+// A RUN'S OPEN THAT RAN NOWHERE COMES BACK NOT OPENED, ASKED ONCE, its report
+// naming why (ADR-0109's roll windows). The estate's walk finds no committer
+// to run the open, none gone silent, so nothing of it ran: mid-roll, a
+// repository's committers of an older build refuse an open that states whom
+// it is made for, as nodes of this build refuse one whose carrier names what
+// they do not know; and at any time, every committer may answer that it
+// cannot take it, its copy out of service or behind. The collection, which
+// holds the run's seat until its turn resumes, does not wait for a committer
+// to take it: the turn resumes at once, and its report says exactly what
+// became of the open — the change was not opened, why (the node that answered
+// runs a build that cannot read the request, or no Gitlet node could take it),
+// nothing of the open ran, the commits the run pushed are kept, and the change
+// is the seat's to open again with code_open_change — never that whether it
+// opened is unknown, which sends the seat to look for a change no node made.
 //
-// Mutations: give such a walk the unknown outcome's words (unreadByItsBuild
-// never true) — the report says whether it opened is unknown, red; ask the
-// open again where no node could read it — two opens, red.
-func TestARunsOpenNoNodeCouldReadComesBackNotOpenedAskedOnce(t *testing.T) {
+// Mutations: give either walk the unknown outcome's words (ranNowhere false
+// for it) — its row's report says whether it opened is unknown, red; ask the
+// open again where either walk ran nowhere — its row's two opens, red.
+func TestARunsOpenThatRanNowhereComesBackNotOpenedAskedOnce(t *testing.T) {
 	t.Parallel()
-	run := openingRun()
-	run.Harness, run.AgentID, run.Role, run.CodeFloor = "claude-code", chargeAgent, "SWE", runLaunchAt.String()
-	run.CodeWorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
-	host := newChangeHost()
-	host.pushes = []gitlet.PushRow{
-		pushRow("p1", runWebID, cmdOK("refs/heads/seats/swe/ENG-42", gitlet.ZeroOID, oidOf("1")))}
-	host.refused = refusedUnread()
+	for _, tc := range []struct {
+		name    string
+		refused error
+		report  string
+	}{
+		{"no committer's build could read it", refusedUnread(), unreadReport},
+		{"no committer could take it", refusedUnserved(), unservedReport},
+	} {
+		run := openingRun()
+		run.Harness, run.AgentID, run.Role, run.CodeFloor = "claude-code", chargeAgent, "SWE", runLaunchAt.String()
+		run.CodeWorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+		host := newChangeHost()
+		host.pushes = []gitlet.PushRow{
+			pushRow("p1", runWebID, cmdOK("refs/heads/seats/swe/ENG-42", gitlet.ZeroOID, oidOf("1")))}
+		host.refused = tc.refused
 
-	reports := collectFinished(t, host, run)
-	if len(reports) != 1 {
-		t.Fatalf("the run's turn was resumed %d times, want once, at its collection", len(reports))
-	}
-	want := "Changes on Gitlet (opened at the run's collection):\n" +
-		"- web: no change opened from seats/swe/ENG-42 — " + unreadReport
-	if !strings.Contains(reports[0], want) || strings.Contains(reports[0], "whether it opened is unknown") {
-		t.Errorf("the resumed turn's report reads:\n%s\nwant it to say of its open:\n%s", reports[0], want)
-	}
-	_, writes, _ := host.asked()
-	if len(writes) != 1 {
-		t.Fatalf("the collection asked %d opens, want the one no node could read, asked once", len(writes))
-	}
-	if got := writes[0].WrittenFor; !got.Stated() || !reflect.DeepEqual(got.Carrier(), run.CodeWorkingFor) {
-		t.Errorf("the open was made for %+v, want whom its turn works for, which an older build cannot read",
-			got.Carrier())
+		reports := collectFinished(t, host, run)
+		if len(reports) != 1 {
+			t.Fatalf("%s: the run's turn was resumed %d times, want once, at its collection", tc.name, len(reports))
+		}
+		want := "Changes on Gitlet (opened at the run's collection):\n" +
+			"- web: no change opened from seats/swe/ENG-42 — " + tc.report
+		if !strings.Contains(reports[0], want) || strings.Contains(reports[0], "whether it opened is unknown") {
+			t.Errorf("%s: the resumed turn's report reads:\n%s\nwant it to say of its open:\n%s", tc.name, reports[0],
+				want)
+		}
+		_, writes, _ := host.asked()
+		if len(writes) != 1 {
+			t.Fatalf("%s: the collection asked %d opens, want the one that ran nowhere, asked once", tc.name,
+				len(writes))
+		}
+		if got := writes[0].WrittenFor; !got.Stated() || !reflect.DeepEqual(got.Carrier(), run.CodeWorkingFor) {
+			t.Errorf("%s: the open was made for %+v, want whom its turn works for", tc.name, got.Carrier())
+		}
 	}
 }
 
-// ONLY AN OPEN THAT RAN NOWHERE SAYS SO: a run's report says nothing of its
-// open ran for the walk in which every committer the estate asked refused it
-// unread or served nothing, none gone silent — the refusal of keys that wraps
-// the walk nobody served — however that refusal was wrapped. Every failure
-// that may have run keeps saying whether it opened is unknown, so the seat
-// looks for the change before it opens one: a committer never heard from,
-// which may have landed it; a walk in which one went silent; an answer this
-// node's build could not read, which the node that gave it ran; a walk no node
-// served for any reason but a build, which names none; and a failure of the
-// caller's own. Each open asked once.
+// ONLY AN OPEN THAT RAN NOWHERE SAYS SO, AND WHY: a run's report says nothing
+// of its open ran for the answer the estate gives as its claim that nothing
+// ran — the walk in which every committer it asked refused the open unread or
+// could not take it, none gone silent — however that answer was wrapped; it
+// names the build that could not read the open where a committer refused it
+// so, and otherwise says that no Gitlet node could take it. A committer's
+// refusal of the open as no proposal it can decide — whom it is made for, on a
+// chart that has moved since the run's checkout — is as definite, however
+// wrapped, in the refusal's own words. Every failure that may have run keeps
+// saying whether it opened is unknown, so the seat looks for the change before
+// it opens one: a committer never heard from, which may have landed it,
+// whatever else stopped the walk, a refusal included; a walk in which one went
+// silent, whether another refused the open unread or could not take it; an
+// answer this node's build could not read, which the node that gave it ran;
+// and a failure of the caller's own. Each open asked once.
 //
-// Mutations: the definite words for every failure — every row but the first
-// two, red; a refusal of keys that wraps no walk read as one — the answer's
-// row, red; a silent walk read as one that ran nothing — the silent row, red;
-// any walk nobody served read as one — the row served for another reason,
-// red.
-func TestARunsOpenSaysItRanNowhereOnlyWhereNoNodeCouldReadIt(t *testing.T) {
+// Mutations: the definite words for every failure — every row that may have
+// run, red; a refusal of keys that wraps no walk read as an open no node could
+// read — the answer's row, red; a silent walk read as one that ran nowhere —
+// both silent rows, red; an unknown outcome read as one that ran nowhere where
+// it wraps a walk — that row, red; the walk no committer could take given the
+// unknown outcome's words, or the build's — its two rows, red; the walk no
+// build could read given the other walk's words — its two rows, red; a
+// committer's refusal given the unknown outcome's words — its two rows, red;
+// that refusal read as definite behind a committer never heard from — that
+// row, red.
+func TestARunsOpenSaysItRanNowhereOnlyWhereTheEstateSaysSo(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
 	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: gitlet.ZeroOID, New: oidOf("1"), Pushes: 1}}
 	for _, tc := range []struct {
-		name       string
-		err        error
-		nothingRan bool
+		name   string
+		err    error
+		report string // what the report says of the open, or "" for the failure's own words
 	}{
-		{"every committer's build refused it unread", refusedUnread(), true},
-		{"that refusal, wrapped", fmt.Errorf("estate: ask the committer: %w", refusedUnread()), true},
+		{"every committer's build refused it unread", refusedUnread(), unreadReport},
+		{"that refusal, wrapped", fmt.Errorf("estate: ask the committer: %w", refusedUnread()), unreadReport},
+		{"no committer could take it", refusedUnserved(), unservedReport},
+		{"that walk, wrapped", fmt.Errorf("estate: ask the committer: %w", refusedUnserved()), unservedReport},
+		{"the committer refused it as no proposal it can decide", refusedInvalid(), invalidReport},
+		{"the committer's refusal, wrapped", fmt.Errorf("estate: code.change: %w", refusedInvalid()), invalidReport},
+		{"a committer never heard from, whatever refused the open after it", fmt.Errorf(
+			"%w (code.change, asked of node-b): %w", estate.ErrOutcomeUnknown, refusedInvalid()), ""},
 		{"a committer never heard from", fmt.Errorf("%w (code.change, asked of node-b)", estate.ErrOutcomeUnknown),
-			false},
+			""},
+		{"a committer never heard from, whatever else stopped the walk", fmt.Errorf(
+			"%w (code.change, asked of node-b): %w", estate.ErrOutcomeUnknown, refusedUnserved()), ""},
 		{"a walk in which a committer went silent", &estate.ErrUnknownKeys{Op: "code.change",
 			Keys: []string{"args.written_for"}, Nodes: []string{"node-b"}, Unserved: &estate.ErrUnserved{
 				NodeSilent: true, Detail: "node-b: its build does not declare args.written_for, so it ran " +
-					"nothing; node-c: no answer"}}, false},
+					"nothing; node-c: no answer"}}, ""},
+		{"a walk in which a committer went silent and none refused it unread", &estate.ErrUnserved{
+			NodeSilent: true, Detail: "node-b: its copy of code is out of service; node-c: no answer"}, ""},
 		{"an answer this node's build could not read", &estate.ErrUnknownKeys{Op: "code.change",
-			Keys: []string{"result.landed_as"}, Nodes: []string{"node-b"}, Answer: true}, false},
-		{"a walk no node served for another reason", &estate.ErrUnserved{
-			Detail: "node-b: its copy of code is out of service; node-c: its copy of code is behind"}, false},
-		{"the caller's own deadline", fmt.Errorf("estate: code.change: %w", context.DeadlineExceeded), false},
+			Keys: []string{"result.landed_as"}, Nodes: []string{"node-b"}, Answer: true}, ""},
+		{"the caller's own deadline", fmt.Errorf("estate: code.change: %w", context.DeadlineExceeded), ""},
 	} {
 		host := newChangeHost()
 		host.refused = tc.err
@@ -510,9 +567,9 @@ func TestARunsOpenSaysItRanNowhereOnlyWhereNoNodeCouldReadIt(t *testing.T) {
 		if err != nil || len(opened) != 1 {
 			t.Fatalf("%s: Changes = %+v, %v; want the ask answered", tc.name, opened, err)
 		}
-		want := fmt.Sprintf("asking Gitlet to open it failed (%v), so whether it opened is unknown", tc.err)
-		if tc.nothingRan {
-			want = unreadReport
+		want := tc.report
+		if want == "" {
+			want = fmt.Sprintf("asking Gitlet to open it failed (%v), so whether it opened is unknown", tc.err)
 		}
 		if got := opened[0]; got.Opened || got.Change != "" || got.Unopened != want {
 			t.Errorf("%s: what became of the ask is %+v, want it unopened saying:\n%s", tc.name, got, want)
