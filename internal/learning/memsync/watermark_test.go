@@ -3,16 +3,18 @@ package memsync
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE WATERMARK IS NEVER REUSED. An append-only table is carried past the
-// highest value of its watermark column the last cycle published, so a row
-// written after that cycle has to come out ABOVE it. The rowid did not: these
+// THE WATERMARK IS NEVER REUSED. An append-only table is carried past its
+// watermark value of the last row the changelog acknowledged, so a row written
+// after that has to come out ABOVE it. The rowid did not: these
 // tables are keyed on text, so a new row took max(rowid) + 1 — and once the
 // newest row was deleted (the diary's trim and expiry, the lifecycle's sweeps,
 // a skill's pruned history) the next insert took that rowid again, below the
@@ -66,10 +68,7 @@ func exec(t *testing.T, db *store.DB, statement string, args ...any) {
 // by key, and the mark it would leave.
 func exportedIDs(t *testing.T, db *store.DB, spec table, after int64) ([]string, int64) {
 	t.Helper()
-	rows, high, err := export(context.Background(), db.SQL(), spec, seat, after)
-	if err != nil {
-		t.Fatalf("export %s: %v", spec.name, err)
-	}
+	rows, high := exportAll(t, db, spec, after)
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		ids = append(ids, row.Values[spec.key[0]].(string))
@@ -178,9 +177,9 @@ func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) 
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
-	if again != 2 {
+	if again.Rows != 2 {
 		t.Fatalf("the second publish carried %d rows, want the new note and the "+
-			"filled one", again)
+			"filled one", again.Rows)
 	}
 
 	next := openStore(t)
@@ -198,5 +197,155 @@ func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) 
 	if blob, model := diaryVector(t, next, "keep"); len(blob) == 0 || model != "model-a" {
 		t.Fatalf("the vector filled after the sweep never reached the changelog: "+
 			"%d bytes in %q", len(blob), model)
+	}
+}
+
+// changeIndexes names each watermark table's index on (seat, change_seq),
+// node migration 0041's, which a page of the table is read through. One per
+// table, so a table added to the registry without one fails below rather
+// than going unchecked.
+var changeIndexes = map[string]string{
+	"agent_diary":                "agent_diary_agent_change_idx",
+	"episodes":                   "episodes_agent_change_idx",
+	"synthesized_skill_versions": "synthesized_skill_versions_agent_change_idx",
+}
+
+// THE INCREMENTAL EXPORT IS A RANGE SEEK, NOT A SORT.
+//
+// A page is read in watermark order until it holds its budget, and the read
+// stops there, which saves the rest only when the plan returns rows in that
+// order as it finds them: a seek on node migration 0041's (seat, change_seq)
+// index, with no sort and no pass over the table. With a sort, the first row
+// of every page waits on reading, and sorting, every row above the mark, and
+// the page bounds nothing. Planned as a deployment plans it, over a store
+// nothing has ANALYZEd, where episodes has four other indexes that lead on
+// the seat.
+//
+// Mutation: read the page in key order, and this goes red.
+func TestTheIncrementalExportIsARangeSeekNotASort(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	for _, spec := range tables {
+		if spec.wholeEachCycle {
+			continue
+		}
+		index, ok := changeIndexes[spec.name]
+		if !ok {
+			t.Errorf("%s is carried a page at a time and changeIndexes names no index for "+
+				"it, so nothing here holds its page to a seek: add the one its rows are "+
+				"read through", spec.name)
+			continue
+		}
+		plan := storetest.Plan(t, db, pageStatement(spec), []any{seat.value(spec), int64(0)})
+		if storetest.Sorts(plan) || storetest.ScansHeap(plan, spec.name) || !storetest.Seeks(plan, index) {
+			t.Errorf("a page of %s is planned as %s, want a seek on %s with no sort: a page "+
+				"that sorts reads, and sorts, every row above the mark before it returns "+
+				"its first", spec.name, strings.Join(plan, "; "), index)
+		}
+	}
+}
+
+// writtenTogether writes two rows of a watermark table for the seat, under the
+// ids a and b, in ONE multi-row INSERT: one statement, so the two stamps are
+// taken inside it, one trigger run per row. One per table, so a table added to
+// the registry without one fails below rather than going unchecked.
+var writtenTogether = map[string]func(t *testing.T, db *store.DB){
+	"agent_diary": func(t *testing.T, db *store.DB) {
+		t.Helper()
+		// AT ONE INSTANT, as a turn's notes are: a watermark over the
+		// creation time would hand both the same value.
+		exec(t, db, `INSERT INTO agent_diary (id, agent_id, kind, content, source, created_at)
+			VALUES ('a', ?, 'diary_long', 'a', 'reflect', 7),
+			       ('b', ?, 'diary_long', 'b', 'reflect', 7)`, seat.AgentID, seat.AgentID)
+	},
+	"episodes": func(t *testing.T, db *store.DB) {
+		t.Helper()
+		exec(t, db, `INSERT INTO episodes (id, agent_handle, agent_role, turn_id,
+			started_at, ended_at, plan_summary, task_summary, tool_sequence,
+			review_outcome, duration_ms, kind)
+			VALUES ('a', ?, 'Engineer', 't1', 7, 7, 'p', 't', '[]', 'done', 1, 'raw'),
+			       ('b', ?, 'Engineer', 't2', 7, 7, 'p', 't', '[]', 'done', 1, 'raw')`,
+			seat.Handle, seat.Handle)
+	},
+	"synthesized_skill_versions": func(t *testing.T, db *store.DB) {
+		t.Helper()
+		exec(t, db, `INSERT INTO synthesized_skills (id, agent_handle, name,
+			description, content, frontmatter, tool_sequence, source_episode_ids,
+			version, created_at, updated_at, state)
+			VALUES ('s-wm', ?, 'ship-it', 'how', 'body', '{}', '[]', '[]', 1, 0, 0, 'active')
+			ON CONFLICT DO NOTHING`, seat.Handle)
+		exec(t, db, `INSERT INTO synthesized_skill_versions (id, skill_id,
+			agent_handle, name, description, content, version, refinement_kind,
+			archived_at)
+			VALUES ('a', 's-wm', ?, 'ship-it', 'how', 'body', 1, 'seed', 0),
+			       ('b', 's-wm', ?, 'ship-it', 'how', 'body', 2, 'seed', 0)`,
+			seat.Handle, seat.Handle)
+	},
+}
+
+// ROWS WRITTEN TOGETHER CARRY DISTINCT WATERMARKS.
+//
+// A mark per acknowledged row is sound only while no two rows of a table share
+// a watermark value above 0: a page boundary or a cut between two that did
+// would leave the mark at their value, and the next read, strictly above it,
+// would never publish the second while this node holds the seat. A mark per
+// table could not split such a pair inside one export; pages and a mark per
+// row can. So every way a row is stamped is held here: two rows of one
+// statement, a vector filled in place, and a row a hydration imports.
+//
+// Mutation: point the diary's watermark at created_at, and this goes red.
+func TestRowsWrittenTogetherCarryDistinctWatermarks(t *testing.T) {
+	t.Parallel()
+	for _, spec := range tables {
+		if spec.wholeEachCycle {
+			continue
+		}
+		t.Run(spec.name, func(t *testing.T) {
+			t.Parallel()
+			write, ok := writtenTogether[spec.name]
+			if !ok {
+				t.Fatalf("%s is carried a page at a time and writtenTogether has no writer "+
+					"for it, so nothing here checks that its rows never share a watermark "+
+					"value: add one", spec.name)
+			}
+			db := openStore(t)
+			write(t, db)
+			if spec.fillsVector {
+				exec(t, db, "UPDATE "+spec.name+" SET embedding = ?, embedding_model = 'model-a' "+
+					"WHERE id = 'a'", []byte{1, 2, 3, 4})
+			}
+			peer := openStore(t)
+			appendOnlyRow[spec.name](t, peer, "c")
+			carry(t, peer, db)
+
+			rows, err := db.SQL().QueryContext(t.Context(),
+				"SELECT id, "+spec.watermark+" FROM "+spec.name+" WHERE "+spec.seatCol+" = ?",
+				seat.value(spec))
+			if err != nil {
+				t.Fatalf("read %s's watermarks: %v", spec.name, err)
+			}
+			defer func() { _ = rows.Close() }()
+			holder := map[int64]string{}
+			read := 0
+			for rows.Next() {
+				var id string
+				var value int64
+				if err := rows.Scan(&id, &value); err != nil {
+					t.Fatalf("scan %s's watermarks: %v", spec.name, err)
+				}
+				read++
+				if other, shared := holder[value]; shared && value > 0 {
+					t.Errorf("%s's rows %s and %s share the %s value %d", spec.name, other, id,
+						spec.watermark, value)
+				}
+				holder[value] = id
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("read %s's watermarks: %v", spec.name, err)
+			}
+			if read != 3 {
+				t.Fatalf("%s holds %d of the seat's rows, want the 3 written here", spec.name, read)
+			}
+		})
 	}
 }
