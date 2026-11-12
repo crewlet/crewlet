@@ -1025,57 +1025,66 @@ func TestManyViewersCostOneReadOfTheBox(t *testing.T) {
 // always enough for the reply to land, so the asker reported a silent owner
 // and the case failed on a bound the owner had kept.
 //
+// IN A BUBBLE, the owner's bound is its answer's own timer: the box's read
+// waits on the gate, so the clock moves to that timer and the answer comes at
+// exactly the share. A bound of seconds on the machine's clock passed an owner
+// that waited past its share, and failed one a loaded runner kept from
+// answering for as long.
+//
 // Mutation: answer under the registration's own context, and the answer waits
 // as long as the box does.
 func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 	t.Parallel()
-	rig := newTailRig(t)
-	rig.runner.Say(SourceTranscript, "slow\n")
-	gate := make(chan struct{})
-	rig.runner.LiveGate = gate
-	owner := &capturingServer{TailServer: rig.client(t)}
-	rig.serveWith(t, boxOwner, owner, rig.feeds(t))
+	inBubble(t, func(t *testing.T) {
+		rig := newTailRig(t)
+		rig.runner.Say(SourceTranscript, "slow\n")
+		gate := make(chan struct{})
+		rig.runner.LiveGate = gate
+		owner := &capturingServer{TailServer: rig.client(t)}
+		rig.serveWith(t, boxOwner, owner, rig.feeds(t))
 
-	req, err := json.Marshal(tailRequest{
-		Version: tailWireVersion, TurnID: "t1", LaunchID: rig.launch, Owner: boxOwner,
-		Cursor: TailCursor{}, BudgetMS: 400,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	answered := make(chan []byte, 1)
-	began := time.Now()
-	go func() {
-		raw, err := owner.handler(t.Context(), req)
-		if err != nil {
-			t.Errorf("the owner's handler: %v", err)
+		ask := tailRequest{
+			Version: tailWireVersion, TurnID: "t1", LaunchID: rig.launch, Owner: boxOwner,
+			Cursor: TailCursor{}, BudgetMS: 400,
 		}
-		answered <- raw
-	}()
-	var raw []byte
-	select {
-	case raw = <-answered:
-	case <-time.After(5 * time.Second):
+		req, err := json.Marshal(ask)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered := make(chan []byte, 1)
+		began := time.Now()
+		go func() {
+			raw, err := owner.handler(t.Context(), req)
+			if err != nil {
+				t.Errorf("the owner's handler: %v", err)
+			}
+			answered <- raw
+		}()
+		var raw []byte
+		select {
+		case raw = <-answered:
+		case <-time.After(5 * time.Second):
+			close(gate)
+			t.Fatal("the owner's answer waited on a box that never answered; want its share of the budget")
+		}
+		if waited := time.Since(began); waited != ask.answerBudget() {
+			t.Errorf("the owner answered after %v on a 400 ms budget; want its share, %v", waited, ask.answerBudget())
+		}
+		var rep tailReply
+		if err := json.Unmarshal(raw, &rep); err != nil {
+			t.Fatal(err)
+		}
+		if rep.Failed != TailFailure(WhyProviderUnavailable) {
+			t.Fatalf("the owner's answer on a slow box = %+v; want the box not answering yet", rep)
+		}
 		close(gate)
-		t.Fatal("the owner's answer waited on a box that never answered; want its share of the budget")
-	}
-	if waited := time.Since(began); waited > 2*time.Second {
-		t.Errorf("the owner answered after %v on a 400 ms budget; want about three quarters of it", waited)
-	}
-	var rep tailReply
-	if err := json.Unmarshal(raw, &rep); err != nil {
-		t.Fatal(err)
-	}
-	if rep.Failed != TailFailure(WhyProviderUnavailable) {
-		t.Fatalf("the owner's answer on a slow box = %+v; want the box not answering yet", rep)
-	}
-	close(gate)
-	eventually(t, func() bool { return rig.runner.Reads() == 1 }, "the read did not go on")
-	got := rig.tail(t, rig.reader(t), TailCursor{})
-	if got.Output == nil || got.Output.Text != "slow\n" || rig.runner.Reads() != 1 {
-		t.Errorf("the next request = %+v after %d reads; want what the read found, read once",
-			got.Output, rig.runner.Reads())
-	}
+		eventually(t, func() bool { return rig.runner.Reads() == 1 }, "the read did not go on")
+		got := rig.tail(t, rig.reader(t), TailCursor{})
+		if got.Output == nil || got.Output.Text != "slow\n" || rig.runner.Reads() != 1 {
+			t.Errorf("the next request = %+v after %d reads; want what the read found, read once",
+				got.Output, rig.runner.Reads())
+		}
+	})
 }
 
 // THE OWNER ANSWERS INSIDE THE BUDGET ITS ASKER SENT, and inside the fleet read

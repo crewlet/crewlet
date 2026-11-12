@@ -30,6 +30,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -3653,42 +3654,55 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 	// carries whether its record went out, and a later release that says
 	// nothing never takes that back. A second launch is a second job with a
 	// record of its own.
-	before := time.Now().UTC()
-	r := run("t1")
-	r.Launch = sandbox.LaunchRecord{Model: "claude-sonnet-5",
-		// Not the caller's to choose: the store dates the job.
-		StartedAt: base, Published: true, Iteration: 9}
-	mustLaunched(t, s, r)
-	got := mustGet(t, s, "t1")
-	facts := got.Launch
-	if facts.StartedAt.Before(before) || facts.StartedAt.After(time.Now().UTC()) {
-		t.Errorf("the job is dated %s, not the instant it launched", facts.StartedAt)
-	}
-	if facts.Model != "claude-sonnet-5" || facts.Iteration != suspension().Iteration || facts.Published {
-		t.Errorf("the launch record = %+v, want the model, iteration %d and nothing published",
-			facts, suspension().Iteration)
-	}
+	//
+	// IN A BUBBLE, so the store's clock is the case's: it stands still while
+	// the case writes and reads, and moves only by the case's own wait. Each
+	// job is dated exactly the instant it launched, the second a second after
+	// the first, where two readings of the machine's clock held a date only
+	// to an order a coarse clock stamps equal and a stepped one reverses, and
+	// a second job dated the first one's instant passed.
+	synctest.Test(t, func(t *testing.T) {
+		launched := time.Now().UTC()
+		r := run("t1")
+		r.Launch = sandbox.LaunchRecord{Model: "claude-sonnet-5",
+			// Not the caller's to choose: the store dates the job.
+			StartedAt: base, Published: true, Iteration: 9}
+		mustLaunched(t, s, r)
+		got := mustGet(t, s, "t1")
+		facts := got.Launch
+		if !facts.StartedAt.Equal(launched) {
+			t.Errorf("the job is dated %s, not the instant it launched, %s", facts.StartedAt, launched)
+		}
+		if facts.Model != "claude-sonnet-5" || facts.Iteration != suspension().Iteration || facts.Published {
+			t.Errorf("the launch record = %+v, want the model, iteration %d and nothing published",
+				facts, suspension().Iteration)
+		}
 
-	claimed := mustClaim(t, s, "t1")
-	release := releaseOf(claimed)
-	release.Published = true
-	if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
-		t.Fatalf("release: released=%v err=%v", released, err)
-	}
-	retry := mustClaim(t, s, "t1")
-	if !retry.Launch.Published {
-		t.Fatal("the retry's claim came back without the publish the first attempt made")
-	}
-	mustRelease(t, s, retry)
-	if !mustGet(t, s, "t1").Launch.Published {
-		t.Error("a release that carried no publish erased the record of one")
-	}
+		claimed := mustClaim(t, s, "t1")
+		release := releaseOf(claimed)
+		release.Published = true
+		if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
+			t.Fatalf("release: released=%v err=%v", released, err)
+		}
+		retry := mustClaim(t, s, "t1")
+		if !retry.Launch.Published {
+			t.Fatal("the retry's claim came back without the publish the first attempt made")
+		}
+		mustRelease(t, s, retry)
+		if !mustGet(t, s, "t1").Launch.Published {
+			t.Error("a release that carried no publish erased the record of one")
+		}
 
-	mustBeginLaunch(t, s, run("t1"))
-	next := mustGet(t, s, "t1")
-	if f := next.Launch; f.Published || f.Iteration != 0 || f.StartedAt.Before(facts.StartedAt) {
-		t.Errorf("the second job inherited the first one's record: %+v", f)
-	}
+		// THE SECOND JOB A SECOND LATER, on the bubble's clock.
+		time.Sleep(time.Second)
+		relaunched := launched.Add(time.Second)
+		mustBeginLaunch(t, s, run("t1"))
+		next := mustGet(t, s, "t1")
+		if f := next.Launch; f.Published || f.Iteration != 0 || !f.StartedAt.Equal(relaunched) {
+			t.Errorf("the second job, launched %s, carries %+v: want a record of its own, dated then",
+				relaunched, f)
+		}
+	})
 }
 
 // answerOf is a recorded answer made of one delivery, carrying text's stand-in
