@@ -1010,27 +1010,28 @@ func knownKind(kind string) string {
 // the line (measured): a kind's header and a call's fields for each, at most
 // a quarter over for append's growth.
 func (l threadLine) Message() (threadMessage, error) {
-	var call string
+	// record is what an error of the message calls the record.
+	var call, record string
 	switch l.Head.Type {
 	case recordAssistant:
-		call = blockToolUse
+		call, record = blockToolUse, "an assistant record"
 	case recordUser:
-		call = blockToolResult
+		call, record = blockToolResult, "a user record"
 	default:
 		return threadMessage{}, nil
 	}
 	if !wireObject(l.message) {
-		return threadMessage{}, fmt.Errorf("a %s record's message is %s, not an object", l.Head.Type, wireKind(l.message))
+		return threadMessage{}, fmt.Errorf("%s's message is %s, not an object", record, wireKind(l.message))
 	}
 	var wire struct {
 		Content json.RawMessage `json:"content"`
 	}
 	if err := wireDecode(l.message, &wire); err != nil {
-		return threadMessage{}, fmt.Errorf("a %s record's message: %w", l.Head.Type, err)
+		return threadMessage{}, fmt.Errorf("%s's message: %w", record, err)
 	}
 	m, err := messageContent(wire.Content, call)
 	if err != nil {
-		return threadMessage{}, fmt.Errorf("a %s record's message: %w", l.Head.Type, err)
+		return threadMessage{}, fmt.Errorf("%s's message: %w", record, err)
 	}
 	return m, nil
 }

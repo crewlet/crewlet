@@ -1447,7 +1447,7 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // tool_use_id not a string that names a call or its is_error not a boolean.
 // Each block is held so as it is read, wherever it falls: a bad block after
 // one accepted is the message's error as much as a bad first block, and the
-// error names the block.
+// error names the block, and the record: an assistant's or a user's.
 //
 // Mutation: read calls off every record's message, and the blob's result is a
 // call; decode a block loosely, and a tool_use whose id is a number is a call
@@ -1456,7 +1456,8 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // result in a model's message, or a call in a user's, is a call; read is_error
 // as false wherever it is present, and a failed call's result reads as a
 // success; hold only a message's first block to its type, and a bad block
-// after an accepted one reads as a block of no kind.
+// after an accepted one reads as a block of no kind; name every record with
+// its type after an "a", and a model's reply is "a assistant record".
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
 	isFalse, isTrue := false, true
@@ -1556,6 +1557,16 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 		if m, err := ctLine(t, record).Message(); err == nil || !strings.Contains(err.Error(), "content block 2:") {
 			t.Errorf("%s reads as the blocks %q and the calls %+v, %v; want an error naming block 2", name,
 				strings.Join(m.Kinds(), " "), m.Calls(), err)
+		}
+	}
+
+	for record, want := range map[string]string{
+		ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":7,"name":"Bash","input":{}}]`): "an assistant " +
+			"record's message: content block 1: id is a number, not a string",
+		user(`"message":"b1",`): "a user record's message is a string, not an object",
+	} {
+		if _, err := ctLine(t, record).Message(); err == nil || err.Error() != want {
+			t.Errorf("%.60s reads no message for %v; want %q", record, err, want)
 		}
 	}
 }
