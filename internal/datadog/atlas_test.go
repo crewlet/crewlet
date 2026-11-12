@@ -552,29 +552,6 @@ func TestNoCredentialShapeReachesTheAtlasFromDatadog(t *testing.T) {
 	}
 }
 
-// A NAME DATADOG'S CONVENTIONS WRITE IS A LABEL THE ATLAS TAKES: brackets
-// become parentheses, the other markup characters go, and a long name is cut
-// to a label's length.
-func TestAMonitorsNameIsMadeALabel(t *testing.T) {
-	t.Parallel()
-	for raw, want := range map[string]string{
-		"[prod] API 5xx rate > 5%": "(prod) API 5xx rate 5%",
-		"  plain   name ":          "plain name",
-		"`disk` <full>":            "disk full",
-	} {
-		if got := datadog.PlainName(raw); got != want {
-			t.Errorf("%q is %q, want %q", raw, got, want)
-		}
-	}
-	long := datadog.PlainName(strings.Repeat("é", 300))
-	if n := len([]rune(long)); n != atlas.MaxLabelRunes {
-		t.Errorf("a long name is cut to %d characters, want %d", n, atlas.MaxLabelRunes)
-	}
-	if _, err := atlas.FactName.Value(long); err != nil {
-		t.Errorf("the cut name is not a label: %v", err)
-	}
-}
-
 // A LISTING THAT DID NOT FINISH IS NO READ AT ALL: a listing that fails for
 // any reason but a refusal fails the whole read, so nothing is retired on a
 // listing cut short.

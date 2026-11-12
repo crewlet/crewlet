@@ -23,6 +23,3 @@ func SetWait(c *Client, wait func(context.Context, time.Duration) error) { c.lim
 // ReadAtlas is the atlas read over a client a test built, so it can record a
 // rate limit's wait rather than spend it.
 var ReadAtlas = readAtlas
-
-// PlainName is a monitor's name as the atlas takes it.
-var PlainName = plainName

@@ -5,7 +5,8 @@
 // Cloudflare: the account's name, every zone, every A, AAAA and CNAME record
 // and every certificate pack. Its second reads Datadog: the organization,
 // its monitors and their states, its service catalogue, its hosts and its
-// Synthetic tests.
+// Synthetic tests. Its third reads GitHub (ADR-0131): every repository the
+// agents' installations cover, its workflows and its deployment environments.
 //
 // # Its own duty, never the reconcile loop
 //

@@ -110,6 +110,9 @@ const (
 	SignalMonitorWarning SignalKind = "monitor_warning"
 	// SignalMonitorNoData is a monitor whose data stopped arriving, likewise.
 	SignalMonitorNoData SignalKind = "monitor_no_data"
+	// SignalPipelineFailing is a pipeline whose last result is a failure, on
+	// the pipeline and on every entry it deploys.
+	SignalPipelineFailing SignalKind = "pipeline_failing"
 )
 
 // SignalKinds is every signal.
@@ -118,6 +121,7 @@ var SignalKinds = []SignalKind{
 	SignalSignInExpired, SignalSignInExpiring, SignalSignInFailed, SignalModelSittingOut, SignalModelFailing,
 	SignalServerTestFailed, SignalStandingAlarm,
 	SignalMonitorAlerting, SignalMonitorWarning, SignalMonitorNoData,
+	SignalPipelineFailing,
 }
 
 // Valid reports whether k is a member of the closed set.
@@ -178,7 +182,8 @@ type Joined struct {
 
 // Join attaches what the records say to the entries of v, each through the
 // entry its ref merged into, reads each monitor's state as a signal on it and
-// on what it watches ([watch]), and marks every entry of a counted channel
+// on what it watches ([watch]) and each pipeline's failure as one on it and on
+// what it deploys ([deliver]), and marks every entry of a counted channel
 // with no use in [NotUsedFor] as not used recently. It is pure, like the fold:
 // v's own entries are left as they were.
 func Join(v View, j Joined, now time.Time) View {
@@ -210,6 +215,7 @@ func Join(v View, j Joined, now time.Time) View {
 		}
 	}
 	watch(v)
+	deliver(v)
 	for i := range v.Entries {
 		e := &v.Entries[i]
 		e.Use = mergeUse(e.Use)
@@ -285,6 +291,46 @@ func watch(v View) {
 		}
 		for _, ed := range e.Relations {
 			if sig, ok := raised[ed.To]; ok && ed.Relation == RelationMonitoredBy {
+				e.Signals = append(e.Signals, sig)
+			}
+		}
+	}
+}
+
+// deliver raises each live pipeline whose last result is a failure as a
+// signal on the pipeline and on every live entry a deployed_by relation joins
+// to it. READ OFF THE CLAIMS ON EVERY READ, as [watch] reads a monitor's: a
+// pipeline that passes again, is retired or stops deploying an entry takes its
+// signal with it. A WARNING, never danger: a failed run or deployment leaves
+// what was running before it in place, so it needs a person and breaks nothing.
+func deliver(v View) {
+	raised := map[uuid.UUID]Signal{}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		if e.Ref.Kind != KindPipeline || e.State == StateRetired {
+			continue
+		}
+		for _, f := range e.Facts {
+			if f.Fact != FactLastResult || (f.Value.Text != ResultFailed && f.Value.Text != ResultErrored) {
+				continue
+			}
+			sig := Signal{Kind: SignalPipelineFailing, Severity: SeverityWarning, Audience: AudienceHolders,
+				Since: f.ObservedAt}
+			raised[e.ID] = sig
+			e.Signals = append(e.Signals, sig)
+			break
+		}
+	}
+	if len(raised) == 0 {
+		return
+	}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		if e.State == StateRetired {
+			continue
+		}
+		for _, ed := range e.Relations {
+			if sig, ok := raised[ed.To]; ok && ed.Relation == RelationDeployedBy {
 				e.Signals = append(e.Signals, sig)
 			}
 		}

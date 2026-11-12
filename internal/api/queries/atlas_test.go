@@ -401,6 +401,8 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		"cloudflare/0123456789abcdef0123456789abcdef")})
 	model := askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": entryID(atlas.KindModel, "llm/main")})
 	host := askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": entryID(atlas.KindHostname, "crewlet.acme.example")})
+	// A repository, whose visibility is a fact of its host and says which.
+	repo := askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": entryID(atlas.KindRepository, "gitlet/api")})
 	trace := askAtlas(ctx, t, s, "atlas_trace", map[string]any{"id": entryID(atlas.KindDomain, "acme.example")})
 	facets := askAtlas(ctx, t, s, "atlas_facets", nil)
 	answers := []map[string]any{entries, mp, cf, trace, facets, log, activity}
@@ -408,7 +410,7 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 
 	richEntries := listOf(t, asMap(t, rich(t))["entries"])
 	full := append([]map[string]any{cf["entry"].(map[string]any), model["entry"].(map[string]any),
-		host["entry"].(map[string]any)}, richEntries...)
+		host["entry"].(map[string]any), repo["entry"].(map[string]any)}, richEntries...)
 	pluck := func(rows []map[string]any, member string) []map[string]any {
 		var out []map[string]any
 		for _, r := range rows {

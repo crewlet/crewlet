@@ -45,6 +45,8 @@ const (
 	FactLastResult Fact = "last_result"
 	FactRunner     Fact = "runner"
 	FactRequired   Fact = "required"
+	// FactPipelineState is whether a pipeline's vendor still runs it.
+	FactPipelineState Fact = "pipeline_state"
 
 	FactHarness       Fact = "harness"
 	FactModel         Fact = "model"
@@ -82,6 +84,12 @@ type Spec struct {
 	// Meaning is a fact only a person sets (owner, environment, importance,
 	// purpose): an integration or an agent can only suggest it.
 	Meaning bool
+	// PerHost is a fact of each host a merged entry lives on, never of the
+	// entry: a repository GitHub holds and Gitlet mirrors has a visibility on
+	// each, and both are true. Every member of an entry keeps its own value,
+	// shown with the member it is of ([FactView.Of]), and only the voices on
+	// ONE member are held against each other.
+	PerHost bool
 }
 
 // The closed word sets the facts take.
@@ -92,18 +100,44 @@ var (
 	onOff        = []string{"on", "off"}
 	engines      = []string{"postgres", "mysql", "mariadb", "sqlite", "redis", "valkey", "mongodb",
 		"elasticsearch", "opensearch", "clickhouse", "nats", "kafka", "rabbitmq", "other"}
-	visibilities = []string{"company", "unit", "public", "private", "internal"}
-	statuses     = []string{"importing", "active", "archived"}
-	results      = []string{"queued", "running", "passed", "failed", "errored", "cancelled", "skipped"}
-	runners      = []string{"engine", "external"}
-	signIns      = []string{"subscription", "api_key", "inherit_env", "env"}
-	transports   = []string{"stdio", "http"}
+	// A repository's visibility is its host's own word for it: Gitlet's two,
+	// and the three a forge gives. The fact takes either set, and a claim is
+	// held to the set of the host it is about ([Fact.WordsOn]).
+	gitletVisibilities = []string{"company", "unit"}
+	forgeVisibilities  = []string{"public", "private", "internal"}
+	visibilities       = slices.Concat(gitletVisibilities, forgeVisibilities)
+	statuses           = []string{"importing", "active", "archived"}
+	results            = []string{ResultQueued, ResultRunning, ResultPassed, ResultFailed, ResultErrored, ResultCancelled, ResultSkipped}
+	runners            = []string{"engine", "external"}
+	// A pipeline its vendor has switched off, by hand or for inactivity, is
+	// disabled: it still exists, and runs nothing until somebody enables it.
+	pipelineStates = []string{PipelineActive, PipelineDisabled}
+	signIns        = []string{"subscription", "api_key", "inherit_env", "env"}
+	transports     = []string{"stdio", "http"}
 	// A certificate's validity, as the vendor reports it folded into five
 	// words: pending covers every state on the way to active, failed every
 	// step that timed out, and inactive one deactivated, deleted or on its
 	// way out.
 	validities       = []string{"active", "pending", "failed", "expired", "inactive"}
 	certificateTypes = []string{"universal", "advanced", "custom"}
+)
+
+// A pipeline's last result: the state of its latest run or deployment. Failed
+// is one that ran and did not pass, errored one that could not run to an end.
+const (
+	ResultQueued    = "queued"
+	ResultRunning   = "running"
+	ResultPassed    = "passed"
+	ResultFailed    = "failed"
+	ResultErrored   = "errored"
+	ResultCancelled = "cancelled"
+	ResultSkipped   = "skipped"
+)
+
+// The two states of a pipeline at its vendor.
+const (
+	PipelineActive   = "active"
+	PipelineDisabled = "disabled"
 )
 
 // A monitor's state, as its vendor reports it folded into five words: unknown
@@ -155,15 +189,16 @@ var specs = sync.OnceValue(func() map[Fact]Spec {
 		FactEngineVersion: {Type: TypeVersion, Kinds: dataKinds},
 
 		FactDefaultBranch: {Type: TypeBranch, Kinds: []Kind{KindRepository}},
-		FactVisibility:    {Type: TypeWord, Words: visibilities, Kinds: []Kind{KindRepository}},
+		FactVisibility:    {Type: TypeWord, Words: visibilities, Kinds: []Kind{KindRepository}, PerHost: true},
 		FactStatus:        {Type: TypeWord, Words: statuses, Kinds: []Kind{KindRepository}},
 		FactPullMirrorOf:  {Type: TypeURL, Kinds: []Kind{KindRepository}},
 		FactPushMirrorTo:  {Type: TypeURL, Kinds: []Kind{KindRepository}},
 		FactImportedFrom:  {Type: TypeURL, Kinds: []Kind{KindRepository}},
 
-		FactLastResult: {Type: TypeWord, Words: results, Kinds: []Kind{KindPipeline}},
-		FactRunner:     {Type: TypeWord, Words: runners, Kinds: []Kind{KindPipeline}},
-		FactRequired:   {Type: TypeWord, Words: yesNo, Kinds: []Kind{KindPipeline}},
+		FactLastResult:    {Type: TypeWord, Words: results, Kinds: []Kind{KindPipeline}},
+		FactRunner:        {Type: TypeWord, Words: runners, Kinds: []Kind{KindPipeline}},
+		FactRequired:      {Type: TypeWord, Words: yesNo, Kinds: []Kind{KindPipeline}},
+		FactPipelineState: {Type: TypeWord, Words: pipelineStates, Kinds: []Kind{KindPipeline}},
 
 		FactHarness:       {Type: TypeLabel, Kinds: []Kind{KindModel}},
 		FactModel:         {Type: TypeLabel, Kinds: []Kind{KindModel}},
@@ -197,7 +232,7 @@ var Facts = []Fact{
 	FactURL, FactAddress, FactPort, FactContainers,
 	FactEngine, FactEngineVersion,
 	FactDefaultBranch, FactVisibility, FactStatus, FactPullMirrorOf, FactPushMirrorTo, FactImportedFrom,
-	FactLastResult, FactRunner, FactRequired,
+	FactLastResult, FactRunner, FactRequired, FactPipelineState,
 	FactHarness, FactModel, FactSignIn, FactChainPosition,
 	FactTransport, FactCommand, FactShared, FactServerName, FactServerVersion, FactToolCount,
 	FactOAuthIssuer, FactSignInExpires,
@@ -219,6 +254,18 @@ func (f Fact) Spec() Spec {
 func (f Fact) AppliesTo(k Kind) bool {
 	s, ok := specs()[f]
 	return ok && (s.Kinds == nil || slices.Contains(s.Kinds, k))
+}
+
+// WordsOn is the closed set a word fact takes on the entry r: its host's own
+// words for a fact of each host, and the fact's whole set for every other.
+func (f Fact) WordsOn(r Ref) []string {
+	if f == FactVisibility {
+		if r.OnGitlet() {
+			return slices.Clone(gitletVisibilities)
+		}
+		return slices.Clone(forgeVisibilities)
+	}
+	return slices.Clone(specs()[f].Words)
 }
 
 // Value reads raw as a value of f, refusing it as f's grammar would, with the
