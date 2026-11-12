@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,6 +48,25 @@ func callWithMeta(t *testing.T, sess *mcp.ClientSession, name string, args any,
 	return res
 }
 
+// callFromBoxWithMeta makes a call to name from box, meta its request's `_meta`,
+// and hands back its answer once the call returns — or its failure, as a failed
+// answer that names it: [callFromBox], for a call that carries its harness's
+// id.
+func callFromBoxWithMeta(ctx context.Context, box *mcp.ClientSession, name string, args map[string]any,
+	meta mcp.Meta) <-chan *mcp.CallToolResult {
+
+	answered := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		res, err := box.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args, Meta: meta})
+		if err != nil {
+			res = &mcp.CallToolResult{IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: "the call failed: " + err.Error()}}}
+		}
+		answered <- res
+	}()
+	return answered
+}
+
 // carriesID fails t unless l holds one record of a call, under id, and — where
 // entry is set — the one entry written ahead of it, under id too, or no entry
 // where it is not; and answers the records.
@@ -72,16 +93,19 @@ func carriesID(t *testing.T, l *ledger, id string, entry bool) []mcpbridge.Call 
 // the run's log names each call as its harness's session does — ON EVERY PATH
 // THAT RECORDS A CALL: one that ran, one the surface refused before its tool
 // ran, one the surface could not run, one held for a person, one whose
-// arguments did not parse and one made once the run's tools had closed (the
-// last two answered without being admitted, so with no entry). A held call
-// keeps its id beside neither its arguments nor their digest: the id says
-// nothing of what the seal hides. And a skill load its harness's hook reports,
-// the bridge's own call of the loader, carries none, whatever id the hook's
-// request sent.
+// arguments did not parse, one made once the run's tools had closed (those two
+// answered without being admitted, so with no entry), and one whose run's
+// tools closed while its entry was being written, refused, its entry updated
+// to that refusal. A held call keeps its id beside neither its arguments nor
+// their digest: the id says nothing of what the seal hides. And a skill load
+// its harness's hook reports, the bridge's own call of the loader, carries
+// none, whatever id the hook's request sent.
 //
 // Mutation: record a finished call without the id it arrived with
 // (bridge-record-carries-no-id), and the update of a call that ran, of one the
-// surface refused and of a held one carries none.
+// surface refused and of a held one carries none; record the refusal of a call
+// whose run's tools closed while its entry was written without its entry's id
+// (bridge-stopped-update-carries-no-id), and that call's update carries none.
 func TestEveryRecordOfABoxsCallCarriesTheIDItsHarnessGaveIt(t *testing.T) {
 	t.Parallel()
 	const id = "toolu_01carriesitsid"
@@ -139,6 +163,69 @@ func TestEveryRecordOfABoxsCallCarriesTheIDItsHarnessGaveIt(t *testing.T) {
 			t.Errorf("the held call is recorded as held %v with arguments %v and identity %q, want it held "+
 				"with neither, beside its id", rows[0].Held, rows[0].Args, rows[0].Digest)
 		}
+	})
+	t.Run("a call whose run's tools closed while its entry was being written", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			l := &ledger{beginHold: make(chan struct{}), beginHolding: make(chan struct{}, 1)}
+			b := openBubbled(t, l, &stubTool{name: "write"})
+			b.session.CallIDMeta = toolUseKey
+			var fenced atomic.Bool
+			b.session.Fence = func() error {
+				if fenced.Load() {
+					return errors.New("this node no longer holds the seat")
+				}
+				return nil
+			}
+			box := b.connect(t, nil)
+			ctx := context.WithoutCancel(t.Context())
+
+			answered := callFromBoxWithMeta(ctx, box, "write", map[string]any{"text": "a"}, mcp.Meta{toolUseKey: id})
+			<-l.beginHolding
+			// THE RUN'S TOOLS CLOSE WHILE ITS ENTRY IS WRITTEN: a call the box
+			// makes on the seat's closed fence closes them, and the fence then
+			// opens again, so the held call meets closed tools and no fence.
+			fenced.Store(true)
+			const closer = "toolu_01closesthetools"
+			if res := <-callFromBoxWithMeta(ctx, box, "write", map[string]any{"text": "b"},
+				mcp.Meta{toolUseKey: closer}); !res.IsError || text(res) != mcpbridge.StoppedNote {
+				t.Fatalf("the call on the closed fence was answered %v %q, want %q, failed", res.IsError,
+					text(res), mcpbridge.StoppedNote)
+			}
+			fenced.Store(false)
+			close(l.beginHold)
+			if res := <-answered; !res.IsError || text(res) != mcpbridge.StoppedNote {
+				t.Fatalf("the call whose tools closed while its entry was written was answered %v %q, want %q, "+
+					"failed", res.IsError, text(res), mcpbridge.StoppedNote)
+			}
+			synctest.Wait()
+
+			entries := l.entries()
+			if len(entries) != 1 || entries[0].CallID != id {
+				t.Fatalf("the entries written are %+v, want the held call's own, under the id its harness gave it, %q",
+					entries, id)
+			}
+			if w := l.withdrawals(); len(w) != 0 {
+				t.Errorf("the entry was withdrawn (%+v), want it updated to the call's refusal", w)
+			}
+			var update, closing []mcpbridge.Call
+			for _, row := range l.rows() {
+				switch {
+				case row.Seq == entries[0].Seq && row.StartedAt.Equal(entries[0].StartedAt) && row.Name == entries[0].Name:
+					update = append(update, row)
+				case row.CallID == closer:
+					closing = append(closing, row)
+				}
+			}
+			if len(update) != 1 || update[0].CallID != id || update[0].Output != mcpbridge.StoppedNote {
+				t.Errorf("the update at the entry's identity is %+v, want one refusal, under the id its harness gave "+
+					"it, %q", update, id)
+			}
+			if len(closing) != 1 {
+				t.Errorf("the call that closed the tools is recorded %d times under its own id, want once",
+					len(closing))
+			}
+		})
 	})
 	t.Run("a skill load its harness's hook reported", func(t *testing.T) {
 		t.Parallel()
