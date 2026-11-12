@@ -22,10 +22,11 @@ var ErrNoFleetStoreHere = errors.New("engine: the fleet's store cannot be reache
 // FleetStore is the fleet's coordination store, reached by a process that is
 // not this node's engine — a `crewlet` command, while the engine is stopped.
 type FleetStore struct {
-	// Fleet is the store. Its buckets are the engine's own, opened through
-	// the engine's own constructor ([openFleet]) with the engine's own
-	// settings, so a bucket this creates on a node that has never booted is
-	// the one the engine's first boot would have created, and adopts.
+	// Fleet is the store. Its buckets are the engine's own, opened with the
+	// configuration the engine's boot opens them with ([coordinationStoresOf],
+	// through kv.OpenFleet), so a bucket this creates on a node that has never
+	// booted is the one the engine's first boot would have created, and
+	// adopts.
 	Fleet coord.Fleet
 	// Where names the broker it was reached through, for the reader of a
 	// command's output: "this node's broker on <stream.store_dir>", or
