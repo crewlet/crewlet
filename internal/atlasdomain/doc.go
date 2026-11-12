@@ -28,6 +28,13 @@
 //     before it was published. A claim is kept, never updated, but for being
 //     REPLACED: a voice's newer claim on the same slot ([atlas.Claim.Slot])
 //     marks its older one, which stays as the entry's history.
+//   - `read` records one integration's read of the entry (ADR-0129): the
+//     claims the read holds on it that are new or changed, in the
+//     integration's voice, and the slots of its earlier claims it no longer
+//     holds, which are withdrawn into the entry's history. A read that stopped
+//     seeing the entry retires it with one denied exists claim. A read that
+//     holds what the log already holds is never recorded, so an unchanged
+//     hourly read of thousands of names writes nothing.
 //   - `purge` erases what it names everywhere, history included, and leaves a
 //     permanent MARKER: an entry (every claim on it, every claim naming it),
 //     or a value by its digest (every claim carrying it, every entry it is the
@@ -63,7 +70,8 @@
 // # Reads
 //
 // [Reader.Live] reads every live claim for the fold, at the caller's level,
-// `session` by default ([DefaultRead]); [Reader.Entry] an entry's version for
+// `session` by default ([DefaultRead]); [Reader.LiveOf] one voice's, which an
+// integration's read is diffed against; [Reader.Entry] an entry's version for
 // a person's next edit; [Reader.History] an entry's claims, replaced ones
 // included; and [Reader.Purges] what was purged, by whom and when, never what.
 package atlasdomain

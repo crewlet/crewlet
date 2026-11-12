@@ -2,6 +2,7 @@ package atlasdomain_test
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"maps"
 	"strings"
@@ -541,5 +542,194 @@ func TestEveryClaimLandsOnItsOwnEntrysSubject(t *testing.T) {
 	}
 	if !claim.ObservedAt.IsZero() {
 		t.Error("a person's claim carries the writer's clock: the log's own instant orders people's words")
+	}
+}
+
+// The entries an integration's read talks about.
+var (
+	apiHost    = atlas.MustRef(atlas.KindHostname, "api.acme.example")
+	acmeZone   = atlas.MustRef(atlas.KindDomain, "acme.example")
+	originA    = atlas.MustRef(atlas.KindHost, "addr/9.9.9.9")
+	originB    = atlas.MustRef(atlas.KindHost, "addr/149.112.112.112")
+	cloudflare = atlas.IntegrationSource("cloudflare")
+)
+
+// readAs writes one integration's read of entry on n as the engine, and stops
+// the test on a refusal.
+func (n *writeNode) readAs(src atlas.Source, entry atlas.Ref, at time.Time, withdrawn []string,
+	claims ...atlas.Claim) statelog.Result {
+	n.t.Helper()
+	res, err := n.writer.Read(n.t.Context(), engineCall(), atlasdomain.ReadInput{
+		Source: src, Entry: entry, Claims: claims, Withdrawn: withdrawn, ObservedAt: at,
+	})
+	if err != nil {
+		n.t.Fatalf("record %s's read of %s: %v", src.Name, entry, err)
+	}
+	return res
+}
+
+// AN INTEGRATION'S READ RECORDS WHAT CHANGED AND WITHDRAWS WHAT IT NO LONGER
+// HOLDS, ONCE ON EVERY NODE: a read that moves a name's origin writes the new
+// relation and replaces the old, two nodes hold identical rows, and a
+// redelivery changes nothing.
+func TestAReadRecordsWhatChangedAndWithdrawsTheRestOnEveryNode(t *testing.T) {
+	t.Parallel()
+	log := openAtlasLog(t)
+	a, b := newWriteNode(t, log, "data-1"), newWriteNode(t, log, "data-2")
+	m := must(t)
+	exists := m(atlas.Exists(apiHost, cloudflare, writerClock))
+	inZone := m(atlas.Relates(apiHost, atlas.RelationInZone, acmeZone, cloudflare, writerClock))
+	toA := m(atlas.Relates(apiHost, atlas.RelationResolvesTo, originA, cloudflare, writerClock))
+	a.readAs(cloudflare, apiHost, writerClock, nil, exists, inZone, toA)
+	later := writerClock.Add(time.Hour)
+	toB := m(atlas.Relates(apiHost, atlas.RelationResolvesTo, originB, cloudflare, later))
+	b.readAs(cloudflare, apiHost, later, []string{toA.Slot()}, toB)
+	a.drain()
+	b.drain()
+	if got, want := a.dump(), b.dump(); !maps.EqualFunc(got, want, func(x, y []string) bool {
+		return strings.Join(x, "\n") == strings.Join(y, "\n")
+	}) {
+		t.Fatalf("two nodes on one log hold different rows:\n%v\n%v", got, want)
+	}
+	live := a.live()
+	if len(live) != 3 {
+		t.Fatalf("%d live claims, want the entry, its zone and its new origin", len(live))
+	}
+	for _, c := range live {
+		if c.Facet.Kind == atlas.FacetRelation && c.Facet.Relation == atlas.RelationResolvesTo &&
+			c.Facet.Target.Entry != originB {
+			t.Errorf("the live origin is %s, want the newer read's", c.Facet.Target.Entry)
+		}
+		if c.ObservedAt.After(later) {
+			t.Errorf("a read's claim is seen at %s, after the read itself", c.ObservedAt)
+		}
+	}
+	history, err := a.reader().History(t.Context(), apiHost.ID().String(), "", atlasdomain.MaxPageSize,
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced := 0
+	for _, row := range history.Claims {
+		if row.Replaced {
+			replaced++
+		}
+	}
+	if len(history.Claims) != 4 || replaced != 1 {
+		t.Errorf("the history holds %d claims, %d replaced; want 4 with the old origin replaced",
+			len(history.Claims), replaced)
+	}
+	before := a.dump()
+	a.redeliver()
+	if after := a.dump(); strings.Join(after["atlas_claims"], "\n") != strings.Join(before["atlas_claims"], "\n") {
+		t.Errorf("a redelivery changed the claims:\n%v\n%v", before["atlas_claims"], after["atlas_claims"])
+	}
+}
+
+// A READ WITHDRAWS ONLY ITS OWN VOICE: a person's claim on the slot an
+// integration withdraws stays live, and a read of one voice never touches
+// another integration's claims.
+func TestAReadWithdrawsOnlyItsOwnVoice(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAtlasLog(t), "data-1")
+	m := must(t)
+	toA := m(atlas.Relates(apiHost, atlas.RelationResolvesTo, originA, cloudflare, writerClock))
+	n.readAs(cloudflare, apiHost, writerClock, nil, m(atlas.Exists(apiHost, cloudflare, writerClock)), toA)
+	n.record("ada", m(atlas.Relates(apiHost, atlas.RelationResolvesTo, originA, asPerson, writerClock)))
+	datadog := atlas.IntegrationSource("datadog")
+	n.readAs(datadog, apiHost, writerClock, nil, m(atlas.Relates(apiHost, atlas.RelationResolvesTo, originA,
+		datadog, writerClock)))
+	n.readAs(cloudflare, apiHost, writerClock.Add(time.Hour), []string{toA.Slot()})
+	n.drain()
+	voices := map[atlas.Source]int{}
+	for _, c := range n.live() {
+		voices[c.Source]++
+	}
+	if voices[atlas.PersonSource("ada")] != 1 || voices[datadog] != 1 || voices[cloudflare] != 1 {
+		t.Errorf("the live voices are %v: want ada's and datadog's claims kept, and cloudflare's exists alone",
+			voices)
+	}
+	mine, err := n.reader().LiveOf(t.Context(), cloudflare, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mine.Claims) != 1 || mine.Claims[0].Facet.Kind != atlas.FacetExists {
+		t.Errorf("LiveOf(cloudflare) = %+v, want its exists claim alone", mine.Claims)
+	}
+}
+
+// ONLY THE ENGINE RECORDS A READ, in an integration's voice, on the entry the
+// read is about, with every value and key judged, and never on anything purged.
+func TestOnlyTheEngineRecordsAnIntegrationsRead(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAtlasLog(t), "data-1")
+	m := must(t)
+	exists := m(atlas.Exists(apiHost, cloudflare, writerClock))
+	in := atlasdomain.ReadInput{Source: cloudflare, Entry: apiHost, Claims: []atlas.Claim{exists}, ObservedAt: writerClock}
+	if _, err := n.writer.Read(t.Context(), personCall("ada"), in); !errors.Is(err, atlasdomain.ErrInvalid) {
+		t.Errorf("a person's read: %v, want ErrInvalid", err)
+	}
+	for name, bad := range map[string]atlasdomain.ReadInput{
+		"a person's voice":      {Source: asPerson, Entry: apiHost, Claims: []atlas.Claim{exists}},
+		"another entry's claim": {Source: cloudflare, Entry: acmeZone, Claims: []atlas.Claim{exists}},
+		"a credential as a key": {Source: cloudflare, Entry: apiHost, Claims: []atlas.Claim{
+			m(atlas.Relates(apiHost, atlas.RelationResolvesTo, atlas.Ref{Kind: atlas.KindHostname, Key: tokenHost()},
+				cloudflare, writerClock))}},
+		"a slot claimed and withdrawn": {Source: cloudflare, Entry: apiHost, Claims: []atlas.Claim{exists},
+			Withdrawn: []string{exists.Slot()}},
+		"nothing": {Source: cloudflare, Entry: apiHost},
+	} {
+		if _, err := n.writer.Read(t.Context(), engineCall(), bad); !errors.Is(err, atlasdomain.ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := n.writer.PurgeEntry(t.Context(), adminCall(), apiHost); err != nil {
+		t.Fatal(err)
+	}
+	n.drain()
+	if _, err := n.writer.Read(t.Context(), engineCall(), in); !errors.Is(err, atlasdomain.ErrPurged) {
+		t.Errorf("a read of a purged entry: %v, want ErrPurged", err)
+	}
+}
+
+// tokenHost is a host name shaped like a credential, assembled at run time so
+// the source holds no string a secret scanner reads as a live one.
+func tokenHost() string {
+	body := strings.Repeat("ab3de6gh9j", 3)
+	return "sk-" + body + ".acme.example"
+}
+
+// A READ'S RETIREMENT IS THE ENTRY'S DENIAL, AND A LATER READ RESTORES IT: an
+// entry only an integration reported reads as retired once its read denies
+// it, and as discovered again once a read sees it; the retention never takes
+// it, since nobody retired it.
+func TestAReadsRetirementIsTheEntrysDenialAndALaterReadRestoresIt(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAtlasLog(t), "data-1")
+	m := must(t)
+	exists := m(atlas.Exists(apiHost, cloudflare, writerClock))
+	inZone := m(atlas.Relates(apiHost, atlas.RelationInZone, acmeZone, cloudflare, writerClock))
+	n.readAs(cloudflare, apiHost, writerClock, nil, exists, inZone)
+	gone := exists
+	gone.Denied = true
+	n.readAs(cloudflare, apiHost, writerClock.Add(48*time.Hour), []string{inZone.Slot()}, gone)
+	n.drain()
+	if e, ok := n.view().Find(apiHost.ID()); !ok || e.State != atlas.StateRetired || len(e.Relations) != 0 {
+		t.Fatalf("a name the read stopped seeing reads as %+v, want retired with nothing left on it", e)
+	}
+	var retired int
+	if err := n.db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM atlas_entries WHERE retired = 1`).Scan(&retired)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if retired != 0 {
+		t.Error("an integration's retirement marked the entry for the retention, which takes only what a person retired")
+	}
+	n.readAs(cloudflare, apiHost, writerClock.Add(72*time.Hour), nil,
+		m(atlas.Exists(apiHost, cloudflare, writerClock.Add(72*time.Hour))))
+	n.drain()
+	if e, ok := n.view().Find(apiHost.ID()); !ok || e.State != atlas.StateDiscovered {
+		t.Errorf("a name a later read saw again reads as %+v, want discovered", e)
 	}
 }

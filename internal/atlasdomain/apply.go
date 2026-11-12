@@ -3,6 +3,7 @@ package atlasdomain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -101,8 +102,11 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindGeneration:
 		return applyGeneration(ctx, tx, c, payload)
 	case KindEntry:
-		if record.Op == OpPurge {
+		switch record.Op {
+		case OpPurge:
 			return applyPurge(ctx, tx, c, markerEntry)
+		case OpRead:
+			return applyRead(ctx, tx, c, payload)
 		}
 		return applyClaim(ctx, tx, c, payload)
 	case KindValue:
@@ -121,15 +125,106 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 // its source saw it, then by its place on the log, and the other is history.
 func applyClaim(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
 	cl, ok := payload.(Claim)
-	switch {
-	case !ok:
+	if !ok {
 		return 0, fmt.Errorf("atlasdomain: the claim record at %s carries a %T", c.position, payload)
-	case cl.ID == "" || cl.Slot == "" || cl.Entry.Kind == "" || cl.Entry.Key == "" || cl.Source.Kind == "",
-		cl.Target != nil && (cl.Target.ID == "" || cl.Target.Kind == "" || cl.Target.Key == ""):
-		return 0, fmt.Errorf("atlasdomain: the claim record at %s does not name its claim, slot, "+
-			"entry, target and source", c.position)
+	}
+	if err := cl.wellFormed(c.position); err != nil {
+		return 0, err
 	}
 	entry := c.record.Subject.ID
+	written, err := writeClaim(ctx, tx, c, entry, cl)
+	if err != nil || written == 0 {
+		return 0, err
+	}
+	if cl.Facet == atlas.FacetExists && cl.Source.Kind == atlas.SourcePerson {
+		// A PERSON'S NEWEST WORD ON THE ENTRY ITSELF decides whether it is
+		// retired, in log order, which is what the expiry reads.
+		retiredAt := int64(0)
+		if cl.Denied {
+			retiredAt = c.at()
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE atlas_entries SET exists_position = ?, retired = ?, retired_at = ?
+			WHERE entry_id = ? AND exists_position < ?`, c.packed, boolInt(cl.Denied), retiredAt,
+			entry, c.packed)
+		if err != nil {
+			return 0, fmt.Errorf("atlasdomain: record whether %s is retired at %s: %w",
+				entry, c.position, err)
+		}
+		written += affected(res)
+	}
+	return written, nil
+}
+
+// applyRead writes one integration's read of one entry: each claim it carries
+// as a claim of that voice, and each slot it withdraws as that voice's claim
+// there replaced, so the voice holds exactly what the read holds. The entry
+// is never retired here: an integration's retirement is its denied exists
+// claim, which the fold reads, and the retention takes only what a person
+// retired.
+func applyRead(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
+	rd, ok := payload.(Read)
+	switch {
+	case !ok:
+		return 0, fmt.Errorf("atlasdomain: the read record at %s carries a %T", c.position, payload)
+	case rd.Source.Kind == "" || (len(rd.Claims) == 0 && len(rd.Withdrawn) == 0):
+		return 0, fmt.Errorf("atlasdomain: the read record at %s names no source, or holds nothing "+
+			"and withdraws nothing", c.position)
+	}
+	entry := c.record.Subject.ID
+	written := 0
+	for _, cl := range rd.Claims {
+		if err := cl.wellFormed(c.position); err != nil {
+			return 0, err
+		}
+		if cl.Source != rd.Source {
+			return 0, fmt.Errorf("atlasdomain: the read record at %s carries a claim of %s/%s and "+
+				"speaks as %s/%s", c.position, cl.Source.Kind, cl.Source.Name, rd.Source.Kind, rd.Source.Name)
+		}
+		n, err := writeClaim(ctx, tx, c, entry, cl)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	for _, slot := range rd.Withdrawn {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE atlas_claims SET replaced = 1, superseded_at = ?, superseded_position = ?
+			WHERE entry_id = ? AND slot = ? AND source_kind = ? AND source_name = ?
+				AND replaced = 0 AND position < ?`,
+			c.at(), c.packed, entry, slot, string(rd.Source.Kind), rd.Source.Name, c.packed)
+		if err != nil {
+			return 0, fmt.Errorf("atlasdomain: withdraw %s/%s's claim on %s at %s: %w",
+				rd.Source.Kind, rd.Source.Name, entry, c.position, err)
+		}
+		written += affected(res)
+	}
+	// THE ENTRY MOVES on a withdrawal too, so a person's edit decided before
+	// the read is refused as stale, as it would be after a claim.
+	moved, err := tx.ExecContext(ctx, `
+		UPDATE atlas_entries SET version = ?, last_at = MAX(last_at, ?)
+		WHERE entry_id = ? AND version < ?`, c.packed, c.at(), entry, c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("atlasdomain: move entry %s at %s: %w", entry, c.position, err)
+	}
+	return written + affected(moved), nil
+}
+
+// wellFormed refuses a claim the rows cannot key: one naming no claim, slot,
+// entry, target or source.
+func (cl Claim) wellFormed(at statelog.Position) error {
+	if cl.ID == "" || cl.Slot == "" || cl.Entry.Kind == "" || cl.Entry.Key == "" || cl.Source.Kind == "" ||
+		cl.Target != nil && (cl.Target.ID == "" || cl.Target.Kind == "" || cl.Target.Key == "") {
+		return fmt.Errorf("atlasdomain: the claim record at %s does not name its claim, slot, "+
+			"entry, target and source", at)
+	}
+	return nil
+}
+
+// writeClaim writes one claim on entry: its row, the entry's row created or
+// moved to this record, and the voice's older claim on the slot replaced. A
+// claim already written (a redelivery) writes nothing.
+func writeClaim(ctx context.Context, tx *sql.Tx, c applyContext, entry string, cl Claim) (int, error) {
 	observed := c.brokerAt
 	if !cl.ObservedAt.IsZero() && cl.ObservedAt.Before(observed) {
 		observed = cl.ObservedAt.UTC()
@@ -156,7 +251,7 @@ func applyClaim(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (i
 		targetKind, targetKey, targetDigest, string(cl.External), cl.Name, string(value.Type),
 		value.Text, boolInt(value.Private), valueDigest, boolInt(cl.Denied), string(cl.Source.Kind),
 		cl.Source.Name, actor.Name, string(actor.Kind), store.EncodeTime(observed), c.at(), c.packed,
-		string(c.record.Mutation))
+		claimJSON(c.record, cl))
 	if err != nil {
 		return 0, fmt.Errorf("atlasdomain: record claim %s at %s: %w", cl.ID, c.position, err)
 	}
@@ -181,25 +276,22 @@ func applyClaim(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (i
 	if err != nil {
 		return 0, err
 	}
-	written += replaced
-	if cl.Facet == atlas.FacetExists && cl.Source.Kind == atlas.SourcePerson {
-		// A PERSON'S NEWEST WORD ON THE ENTRY ITSELF decides whether it is
-		// retired, in log order, which is what the expiry reads.
-		retiredAt := int64(0)
-		if cl.Denied {
-			retiredAt = c.at()
-		}
-		res, err := tx.ExecContext(ctx, `
-			UPDATE atlas_entries SET exists_position = ?, retired = ?, retired_at = ?
-			WHERE entry_id = ? AND exists_position < ?`, c.packed, boolInt(cl.Denied), retiredAt,
-			entry, c.packed)
-		if err != nil {
-			return 0, fmt.Errorf("atlasdomain: record whether %s is retired at %s: %w",
-				entry, c.position, err)
-		}
-		written += affected(res)
+	return written + replaced, nil
+}
+
+// claimJSON is the claim as its row keeps it, which the read of every live
+// claim decodes in one column: a claim record's own payload, and for a read's
+// claim the claim alone, encoded as the claim record would carry it.
+func claimJSON(rec MutationRecord, cl Claim) string {
+	if rec.Op == OpClaim {
+		return string(rec.Mutation)
 	}
-	return written, nil
+	body, err := json.Marshal(cl)
+	if err != nil {
+		// A claim decoded from a record encodes: it is the same struct.
+		panic(fmt.Sprintf("atlasdomain: encode claim %s: %v", cl.ID, err))
+	}
+	return string(body)
 }
 
 // supersede keeps one current claim for the voice on the slot: of the claim

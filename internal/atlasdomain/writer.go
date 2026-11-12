@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -377,4 +378,98 @@ func expirableBefore(ctx context.Context, tx *sql.Tx, before int64) (bool, error
 		return true, nil
 	}
 	return false, nil
+}
+
+// ---- an integration's read ---------------------------------------------- //
+
+// ReadInput is one integration's read of one entry, as the collect duty hands
+// it to the log (ADR-0129): the voice it speaks in, the entry, the claims the
+// read holds on it that are new or changed, the slots of the voice's earlier
+// claims it no longer holds, and when the read saw it.
+type ReadInput struct {
+	Source     atlas.Source
+	Entry      atlas.Ref
+	Claims     []atlas.Claim
+	Withdrawn  []string
+	ObservedAt time.Time
+}
+
+// Read writes one integration's read of one entry. The caller is the engine's
+// own duty, never a person or an agent; the source is an integration's; every
+// claim is on the entry, in the read's voice, judged by the vocabulary's
+// grammar with credentials refused in its value and in every key it names;
+// and a slot is withdrawn or claimed, never both. A read on, naming or
+// carrying anything purged answers [ErrPurged], and is recorded nowhere.
+func (w *Writer) Read(ctx context.Context, c Call, in ReadInput) (statelog.Result, error) {
+	if err := c.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	if c.By.Kind != iam.ActorSystem {
+		return statelog.Result{}, invalid("an integration's read is the engine's own record: a %s records a claim",
+			c.By.Kind)
+	}
+	if in.Source.Kind != atlas.SourceIntegration {
+		return statelog.Result{}, invalid("a read speaks as an integration, not as a %s", in.Source.Kind)
+	}
+	if _, err := atlas.Exists(in.Entry, in.Source, w.now()); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if len(in.Claims) == 0 && len(in.Withdrawn) == 0 {
+		return statelog.Result{}, invalid("a read of %s holds nothing and withdraws nothing", in.Entry)
+	}
+	at := in.ObservedAt.UTC()
+	if at.IsZero() {
+		at = w.now()
+	}
+	subject, scope := EntrySubject(in.Entry), ScopeSet{Subject: true}
+	payload := Read{V: baseRecordVersion, Source: Source{Kind: in.Source.Kind, Name: in.Source.Name},
+		ObservedAt: at}
+	markers := []marker{{markerEntry, subject.ID}}
+	slots := map[string]bool{}
+	for _, claim := range in.Claims {
+		claim.Source, claim.Position, claim.ObservedAt = in.Source, 0, at
+		if claim.Subject != in.Entry {
+			return statelog.Result{}, invalid("a read of %s carries a claim on %s", in.Entry, claim.Subject)
+		}
+		if err := claim.Recordable(); err != nil {
+			return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if err := claim.Validate(); err != nil {
+			return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		slot := claim.Slot()
+		if slots[slot] {
+			return statelog.Result{}, invalid("a read of %s claims one slot twice", in.Entry)
+		}
+		slots[slot] = true
+		p := claimOf(ReadClaimID(c.OpID, slot), claim)
+		p.ObservedAt = at
+		payload.Claims = append(payload.Claims, p)
+		for _, m := range claimMarkers(subject.ID, p) {
+			if !slices.Contains(markers, m) {
+				markers = append(markers, m)
+			}
+		}
+	}
+	for _, slot := range in.Withdrawn {
+		switch {
+		case slot == "":
+			return statelog.Result{}, invalid("a read of %s withdraws a slot it does not name", in.Entry)
+		case slots[slot]:
+			return statelog.Result{}, invalid("a read of %s claims a slot it also withdraws", in.Entry)
+		}
+		slots[slot] = true
+		payload.Withdrawn = append(payload.Withdrawn, slot)
+	}
+	return publish(ctx, w.publisher, request(subject, scope, c.OpID,
+		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			if _, held, err := heldBy(ctx, tx, markers, c.OpID); err != nil || held {
+				return statelog.Decision{}, purgedOr(err, "%s, or something the read names, was purged", in.Entry)
+			}
+			version, err := versionOf(ctx, tx, subject.ID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			return decision(stamp, c.By, subject, OpRead, scope, c.OpID, payload, w.now(), version)
+		}))
 }
