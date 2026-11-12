@@ -280,7 +280,9 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	// mebibytes, about four minutes at the slowest pace allowed; held to the
 	// request term alone it failed as no answer while the link was carrying
 	// it, and held to one crossing, so did the attempt after an in-flight
-	// answer. A caller's own deadline is kept.
+	// answer. For those minutes everything the node sends behind it on the
+	// link waits too, its lease renewals among them (crewlet/crewlet#1035,
+	// which this does not fix). A caller's own deadline is kept.
 	var ack *jetstream.PubAck
 	sends := l.q.writing(msg)
 	err := jsinflight.Decide(ctx, sends, func(ctx context.Context) error {

@@ -122,9 +122,11 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject string, header, body
 	// counted off the message as it is sent, its header block and its body
 	// ([letterMsg]). An entry at the ceiling is about four minutes at the
 	// slowest pace allowed, and held to the request term alone it failed as an
-	// outage its keeper retried for ever while the link carried each copy.
-	// Classified on the CALLER's context, so a budget this set and the broker
-	// outlasted reads as the silence it is.
+	// outage its keeper retried for ever while the link carried each copy. For
+	// those minutes everything the node sends behind it on the link waits too,
+	// its lease renewals among them (crewlet/crewlet#1035, which this does not
+	// fix). Classified on the CALLER's context, so a budget this set and the
+	// broker outlasted reads as the silence it is.
 	if err := q.write(ctx, letterMsg(subject, stream, header, body)); err != nil {
 		// TRANSLATED, for Publish's reason: too large is the one refusal
 		// no retry changes, and nats.ErrMaxPayload is this backend's

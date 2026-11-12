@@ -1324,8 +1324,11 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// at the connection's pace, each time it is sent ([Queue.write]) — an
 	// event may be the transport's whole eight mebibytes, about four minutes
 	// at the slowest pace allowed, and held to the request term alone it
-	// failed as an outage while the link was carrying it. Classified on the
-	// CALLER's context, for the keep's reason ([Queue.KeepDeadLetter]).
+	// failed as an outage while the link was carrying it. For those minutes
+	// everything the node sends behind it on the link waits too, its lease
+	// renewals among them (crewlet/crewlet#1035, which this does not fix).
+	// Classified on the CALLER's context, for the keep's reason
+	// ([Queue.KeepDeadLetter]).
 	if err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {
 		// TRANSLATED, not passed through. "Too large" is the one publish
 		// failure a producer must not retry, and nats.ErrMaxPayload is
