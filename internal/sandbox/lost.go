@@ -140,7 +140,10 @@ type LostRun struct {
 // retry, so the job's spend is not lost to one transport blip. One that is gone
 // by now, or has not answered for the give-up window, is no reason to hold the
 // round any longer: it is carried on without the read, and the line says the
-// job's spend went with its box.
+// job's spend went with its box. A coordination store that did not answer one
+// of the read's steps is no box that did not answer: the claim is handed back
+// for as long as the store is silent, and the round never carried on without
+// the read for it ([Coordinator.collectGivenUp]).
 //
 // IT RESUMES NOTHING ITSELF: it returns the carry for its caller, the frame
 // that claimed the completion under the node's admission
@@ -257,8 +260,17 @@ func cutOff(result Result, cause LossCause) Result {
 // [MinConnectFailures] attempts spanning [ConnectGiveUp] since the last
 // collection that read the box — the waiter's own bound on an unreachable box.
 // See [Coordinator.collectFailed].
+//
+// NEVER A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]),
+// whatever the window counted before it: the bound is on a box that does not
+// answer, and this box answered. Given up, a lost job's round was carried on
+// without its read ([Coordinator.carryOnLost]), uncharged for what its box
+// still held.
 func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) bool {
-	if errors.Is(cause, ErrBoxGone) {
+	switch {
+	case errors.Is(cause, ErrStoreSilent):
+		return false
+	case errors.Is(cause, ErrBoxGone):
 		return true
 	}
 	since := run.Launch.CollectFailingSince

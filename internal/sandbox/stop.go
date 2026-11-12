@@ -59,7 +59,9 @@ import (
 // A silent host is no verdict about the box, and its spend is not written off
 // for it: only a box found gone, or a host silent for as long as the fleet
 // waits before it takes a launch node for gone, is ended with nothing read
-// ([Coordinator.readStopped]).
+// ([Coordinator.readStopped]). Nor is a host whose coordination store did not
+// answer its read of the run's row ([ErrStoreSilent]), which is asked again for
+// as long as the store is silent.
 //
 // # Not the seat fence
 //
@@ -293,6 +295,14 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 // stop's decision. Past it, the host is taken for gone and the run's spend is
 // unknowable, which the log says.
 //
+// NOT YET, TOO, where the coordination store did not answer a step the read
+// cannot go on without ([ErrStoreSilent]): the host's read of the run's row,
+// which licenses the read. The box and its host are up, so the ending is kept
+// and asked again on the same spacing, with no bound of the host's: that bound
+// is on a host that is away, and a store that does not answer holds the
+// ending's own writes too. Ended uncharged for it, the stop wrote off a spend
+// the box still held.
+//
 // The result is the run's own, as a collection reads it — floored, held to the
 // record's bound — and marked as a run that did not finish: never a success,
 // never a question, whatever it had written ([stoppedResult]).
@@ -307,9 +317,17 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun) (Result, 
 	switch {
 	case err == nil:
 		return stoppedResult(c.fitText(ctx, run, result)), true, nil
+	case errors.Is(err, ErrStoreSilent):
+		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
+			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "store", "error", err.Error(),
+			"detail", "the coordination store did not answer a step the stopped run's read cannot go on "+
+				"without; the stop is kept, with its session closed, and its box asked again until the "+
+				"store answers")
+		return Result{}, false, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+			run.TurnID, err)
 	case silent && !c.hostGivenUp(run):
 		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
-			"sandbox_id", run.SandboxID, "node", run.LaunchNode,
+			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "host",
 			"detail", "the node whose host the stopped run's box is on did not answer; the stop "+
 				"is kept, with its session closed, and its box asked again until that node is "+
 				"back or the box timeout since the stop has passed")

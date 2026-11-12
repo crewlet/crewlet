@@ -71,10 +71,13 @@ func (r BoxRead) Valid() bool { return slices.Contains(BoxReads, r) }
 // and refs bounded ([boundBox]), and whether its turn's cap ended it; the
 // asker fits the rest ([Coordinator.fitText]).
 //
-// THREE KINDS OF FAILURE, each told apart because each is handled apart: the
+// FOUR KINDS OF FAILURE, each told apart because each is handled apart: the
 // host said the box is gone (wrapping [ErrBoxGone]); the host did not answer
-// ([ErrBoxHostSilent]); and anything else the host said, which is the box's
-// own failure to be read, counted like one read here.
+// ([ErrBoxHostSilent]); the host's coordination store did not answer its read
+// of the run's row, which licenses the read ([ErrStoreSilent]), carried apart
+// from the host's own words ([BoxReadReply.Unsettled]); and anything else the
+// host said, which is the box's own failure to be read, counted like one read
+// here.
 type BoxReader interface {
 	ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error)
 }
@@ -90,6 +93,41 @@ type BoxReader interface {
 // Counted, a host that restarted for a minute would have its runs given up as
 // unreadable.
 var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on did not answer")
+
+// ErrStoreSilent is a step a collection cannot go on without that the
+// coordination store did not answer: the host's read of the run's row, which
+// licenses a read of its box ([Coordinator.ReadHostedBox]); the watch of the
+// run's log a collection waits on its calls in flight by
+// ([Coordinator.awaitCalls]); and the record of the sessions its job ran out of
+// context in ([PendingStore.RetireSessions]). Each wraps the store's error in
+// it ([storeSilent]).
+//
+// NOT A FAILURE OF THE BOX, which answered every read, nor of its host, which
+// is up: a collection handed it gives its claim back UNCOUNTED and has its
+// completion retried ([Coordinator.collectFailed]), a lost job's round is
+// never carried on without its read for it ([Coordinator.collectGivenUp]), and
+// a stop's read of it is asked again ([Coordinator.readStopped]). Counted, a
+// store silent for the give-up window settled a run whose box held its result
+// as one whose result was lost, and carried a lost job's round on uncharged
+// while its box held what the job had spent.
+var ErrStoreSilent = errors.New("sandbox: the coordination store did not answer a step a collection " +
+	"cannot go on without")
+
+// storeSilent is err, the store's error at a step a collection cannot go on
+// without, wrapped in [ErrStoreSilent]: the store did not answer it.
+//
+// UNLESS ctx HAS ENDED, which is then the cause and is returned as it is, for
+// the collection to judge as it judges every read its context ended
+// ([Coordinator.collectFailed]): a cancellation of this node's own is handed
+// back uncounted whatever it cut, and a deadline the delivery ran out of is
+// counted, or a collection that always outlasts its delivery would be asked
+// again for ever, its last step the store's.
+func storeSilent(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrStoreSilent, err)
+}
 
 // ErrBoxNotHosted is a box read refused by the node asked: the run is not one
 // whose box is on its host, or the run is not in the state the read is made
@@ -221,19 +259,27 @@ type BoxReadReply struct {
 	Refused string `json:"refused,omitempty"`
 	// Error is a read that failed, in the host's own words.
 	Error string `json:"error,omitempty"`
+	// Unsettled is a read that failed because the host's coordination store
+	// did not answer a step it cannot go on without ([ErrStoreSilent]), Error
+	// saying which: a flag of its own, since Error is only words, and an asker
+	// that could not tell the store's silence from the box's failure would
+	// count it against a box that is up. Added within [BoxReadWireVersion] 1.
+	Unsettled bool `json:"unsettled,omitempty"`
 }
 
 // Answers is the id of the request this reply answers.
 func (r BoxReadReply) Answers() string { return r.Request }
 
-// Err is the reply as the asker acts on it — see [BoxReader] for the three
-// kinds of failure — or nil for a reply carrying the run's account.
+// Err is the reply as the asker acts on it (see [BoxReader] for the four kinds
+// of failure), or nil for a reply carrying the run's account.
 func (r BoxReadReply) Err() error {
 	switch {
 	case r.Gone:
 		return fmt.Errorf("sandbox: node %s found the box gone: %s: %w", r.Node, r.Error, ErrBoxGone)
 	case r.Refused != "":
 		return fmt.Errorf("%w: node %s: %s", ErrBoxNotHosted, r.Node, r.Refused)
+	case r.Unsettled:
+		return fmt.Errorf("sandbox: node %s could not read the box: %s: %w", r.Node, r.Error, ErrStoreSilent)
 	case r.Error != "":
 		return fmt.Errorf("sandbox: node %s could not read the box: %s", r.Node, r.Error)
 	case r.Result == nil:
@@ -252,6 +298,8 @@ func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) B
 		reply.Refused = err.Error()
 	case errors.Is(err, ErrBoxGone):
 		reply.Gone, reply.Error = true, err.Error()
+	case errors.Is(err, ErrStoreSilent):
+		reply.Unsettled, reply.Error = true, err.Error()
 	case err != nil:
 		reply.Error = err.Error()
 	default:
@@ -315,7 +363,12 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
 	if err != nil {
-		return Result{}, false, fmt.Errorf("sandbox: reading run %s to read its box: %w", turnID, err)
+		// THE STORE'S SILENCE, NEVER THE BOX'S ([ErrStoreSilent]): the row is
+		// the license, and a read it did not license was never made, so the
+		// asker hears that the store did not answer rather than that the box
+		// could not be read.
+		return Result{}, false, storeSilent(ctx, fmt.Errorf("sandbox: reading run %s to read its box: %w",
+			turnID, err))
 	}
 	switch {
 	case !found:

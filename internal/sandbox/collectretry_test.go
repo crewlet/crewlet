@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -315,4 +318,293 @@ func (l *ledgerSpy) callCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.calls
+}
+
+// errStoreUnanswered is what a call the coordination store did not answer
+// returns: the words a request to the broker that timed out carries.
+var errStoreUnanswered = errors.New("nats: timeout")
+
+// silentStore is a run store whose coordination store does not answer the
+// calls named in silent, for as long as they are named there, and answers
+// every other call as the store beneath it does. "WatchLog" is every watch of
+// a log; "WatchLog again" is a watch that stops hearing at once, delivering
+// nothing, and the watch made again after it, which is not answered.
+type silentStore struct {
+	PendingStore
+	mu      sync.Mutex
+	silent  []string
+	watches int
+}
+
+// silence names the calls the store stops answering.
+func (s *silentStore) silence(calls ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.silent = append(s.silent, calls...)
+}
+
+// answer has the store answer every call again.
+func (s *silentStore) answer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.silent = nil
+}
+
+func (s *silentStore) isSilent(call string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Contains(s.silent, call)
+}
+
+func (s *silentStore) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	if s.isSilent("Get") {
+		return PendingRun{}, false, fmt.Errorf("sandbox: read run %s: %w", turnID, errStoreUnanswered)
+	}
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s *silentStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+	if s.isSilent("RetireSessions") {
+		return fmt.Errorf("sandbox: recording the sessions run %s ran out of context in: %w", turnID,
+			errStoreUnanswered)
+	}
+	return s.PendingStore.RetireSessions(ctx, turnID, sessions)
+}
+
+func (s *silentStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	s.mu.Lock()
+	s.watches++
+	n := s.watches
+	s.mu.Unlock()
+	switch again := s.isSilent("WatchLog again"); {
+	case again && n%2 == 1:
+		closed := make(chan LogView)
+		close(closed)
+		return closed, nil
+	case again, s.isSilent("WatchLog"):
+		return nil, fmt.Errorf("sandbox: watch the log of run %s: %w", turnID, errStoreUnanswered)
+	}
+	return s.PendingStore.WatchLog(ctx, turnID)
+}
+
+// collectAgain hands t1's completion to the rig's coordinator, as the queue
+// redelivers it or the poll announces it again.
+func collectAgain(t *testing.T, rig *coordRig) error {
+	t.Helper()
+	payload, ev := rig.completion("t1")
+	return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+}
+
+// heldThroughSilence collects t1 once per give-up window, for longer than the
+// window gives a box that does not answer, with the store silent throughout,
+// and holds every attempt to a claim handed back UNCOUNTED: the completion
+// handed back for a retry, the run claimable, its run of failed collections as
+// it stood before the silence, and nothing ended, announced or resumed.
+func heldThroughSilence(t *testing.T, rig *coordRig) {
+	t.Helper()
+	before := rig.get("t1").Launch
+	for attempt := 1; attempt <= MinConnectFailures+1; attempt++ {
+		if err := collectAgain(t, rig); !errors.Is(err, ErrStoreSilent) {
+			t.Fatalf("attempt %d = %v; want the store's silence handed back for a retry", attempt, err)
+		}
+		row := rig.get("t1")
+		if got := row.Launch; row.Status != StatusRunning || got.CollectFailures != before.CollectFailures ||
+			!got.CollectFailingSince.Equal(before.CollectFailingSince) {
+			t.Fatalf("attempt %d left the run %s with %d failed collections since %v; want it claimable, its "+
+				"%d since %v as they stood, the store's silence counted against nothing", attempt, row.Status,
+				got.CollectFailures, got.CollectFailingSince, before.CollectFailures, before.CollectFailingSince)
+		}
+		if failed, resumed := rig.failures(), rig.resumer.calls(); len(failed) != 0 || len(resumed) != 0 {
+			t.Fatalf("attempt %d ended or resumed the run: announced %+v, resumed %d times", attempt, failed,
+				len(resumed))
+		}
+		rig.now = rig.now.Add(ConnectGiveUp)
+	}
+}
+
+// A STORE THAT DOES NOT ANSWER A COLLECTION NEVER COUNTS AGAINST ITS BOX. A
+// collection makes steps the coordination store must answer and that it cannot
+// go on without: the read of the run's row that licenses a read of its box on
+// its host, the drain's watch of the run's log (and the watch made again after
+// one that stopped hearing), and the record of the sessions a job ran out of
+// context in. None of them is the box's, which answered every read. So a store
+// silent for longer than the give-up window hands the claim back uncounted,
+// the completion retried, and leaves the run claimable with its result in its
+// box: the collection made once the store answers resumes the turn on it,
+// through a remote host's reply as on this node. Counted, the window's last
+// silence settled the run as unreachable, "its result is lost", while its box
+// held the result throughout.
+//
+// AND A LOST JOB'S CARRY is handed back for it too, never carried on without
+// its read: a box that failed one read before the store went silent has a run
+// of failures the window counts, and given up there, the round went on
+// uncharged for what its box still held.
+//
+// Mutation: count the silence in collectFailed; leave any one step unwrapped
+// (the host's row read, either watch, the retirement); drop the reply's flag,
+// or Err's wrap of it; or have collectGivenUp give up on it: each turns a case
+// red.
+func TestAStoreThatDoesNotAnswerACollectionNeverCountsAgainstItsBox(t *testing.T) {
+	t.Parallel()
+	account := Result{Success: true, Text: "the box's account", InputTokens: 900, OutputTokens: 100}
+	ranOut := Result{Error: "Prompt is too long", ContextExhausted: true, SessionID: "s-1"}
+	for _, tc := range []struct {
+		name string
+		// box is what t1's job left in its box, and arrange launches it
+		// and silences the store, returning the store to answer again.
+		box     Result
+		arrange func(t *testing.T, rig *coordRig) *silentStore
+	}{
+		{"the host's read of the run's row", account, func(t *testing.T, rig *coordRig) *silentStore {
+			store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
+			rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, nil)
+			rig.launchedBy("t1", "node-a")
+			return store
+		}},
+		{"the drain's watch of the run's log", account, func(_ *testing.T, rig *coordRig) *silentStore {
+			rig.launch("t1")
+			store := &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"WatchLog"}}
+			rig.coordinator.pending = store
+			return store
+		}},
+		{"the drain's watch made again", account, func(_ *testing.T, rig *coordRig) *silentStore {
+			rig.launch("t1")
+			store := &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"WatchLog again"}}
+			rig.coordinator.pending = store
+			return store
+		}},
+		{"the record of the session it ran out of context in", ranOut,
+			func(_ *testing.T, rig *coordRig) *silentStore {
+				rig.launch("t1")
+				store := &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"RetireSessions"}}
+				rig.coordinator.pending = store
+				return store
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			store := tc.arrange(t, rig)
+			rig.runner.Finish(tc.box)
+
+			heldThroughSilence(t, rig)
+
+			store.answer()
+			if err := collectAgain(t, rig); err != nil {
+				t.Fatalf("the collection once the store answered: %v", err)
+			}
+			resumed := rig.resumer.calls()
+			if len(resumed) != 1 || resumed[0].Ended.Text != tc.box.Text || resumed[0].Ended.Error != tc.box.Error {
+				t.Fatalf("the turn resumed on %+v; want it resumed once on its box's account, intact", resumed)
+			}
+			if failed := rig.failures(); len(failed) != 0 {
+				t.Fatalf("announced %+v for a run whose box answered every read", failed)
+			}
+		})
+	}
+
+	partial := Result{Text: "half way through", InputTokens: 900, OutputTokens: 100}
+	for _, tc := range []struct {
+		name    string
+		arrange func(t *testing.T, rig *coordRig) *silentStore
+	}{
+		{"a lost job's read on its host", func(t *testing.T, rig *coordRig) *silentStore {
+			store := &silentStore{PendingStore: rig.pending}
+			rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, nil)
+			run := rig.launchedBy("t1", "node-a")
+			if marked, err := rig.pending.MarkLost(t.Context(), "t1", run.LaunchID,
+				JobLoss{Cause: LossEngineRestarted, Node: "node-a", At: rig.now}); err != nil || !marked {
+				t.Fatalf("MarkLost = %v, %v", marked, err)
+			}
+			rig.runner.Lose(partial)
+			// THE BOX FAILED A READ FIRST, which the window counts, and the
+			// window has passed since when the store goes silent.
+			rig.runner.CollectErr = errBoxBlip
+			if err := collectAgain(t, rig); err == nil || errors.Is(err, ErrStoreSilent) {
+				t.Fatalf("the box's failed read = %v; want it handed back as the box's", err)
+			}
+			rig.runner.CollectErr = nil
+			if got := rig.get("t1").Launch; got.CollectFailures != 1 {
+				t.Fatalf("the premise: the box's failed read counted %d failures, want 1", got.CollectFailures)
+			}
+			rig.now = rig.now.Add(ConnectGiveUp)
+			store.silence("Get")
+			return store
+		}},
+		{"a lost job's drain", func(t *testing.T, rig *coordRig) *silentStore {
+			store := &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"WatchLog"}}
+			rig.coordinator.pending = store
+			rig.launch("t1")
+			rig.runner.Lose(partial)
+			if fired := rig.tick(); fired != 1 {
+				t.Fatalf("announced %d completions for a lost job, want 1", fired)
+			}
+			return store
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			store := tc.arrange(t, rig)
+
+			heldThroughSilence(t, rig)
+			if charged := rig.accountant.total(); charged != 0 {
+				t.Fatalf("charged %d tokens while the store was silent", charged)
+			}
+
+			store.answer()
+			if err := collectAgain(t, rig); err != nil {
+				t.Fatalf("the carry once the store answered: %v", err)
+			}
+			resumed := rig.resumer.calls()
+			if len(resumed) != 1 || resumed[0].Lost == nil || !strings.Contains(resumed[0].Answer, partial.Text) {
+				t.Fatalf("the turn resumed on %+v; want the round carried on once, on what its box read", resumed)
+			}
+			if charged := rig.accountant.total(); charged != 1000 {
+				t.Fatalf("charged %d tokens; want the 1000 the lost job's box read once the store answered", charged)
+			}
+		})
+	}
+}
+
+// outlastedStore is a run store whose record of a job's running out of context
+// is answered only once its asker's context has ended, as the store answers a
+// request its caller's deadline cut.
+type outlastedStore struct{ PendingStore }
+
+func (*outlastedStore) RetireSessions(ctx context.Context, turnID string, _ []string) error {
+	<-ctx.Done()
+	return fmt.Errorf("sandbox: recording the sessions run %s ran out of context in: %w", turnID, ctx.Err())
+}
+
+// A COLLECTION THAT RAN OUT OF ITS DELIVERY'S TIME IS COUNTED, WHICHEVER STEP
+// THE TIME RAN OUT IN. A step of the store's that the delivery's own deadline
+// cut is the deadline's, not the store's silence: taken for the store's, a
+// collection whose read takes the delivery's time up to its last store step
+// would be handed back uncounted and asked again for ever, as one whose read
+// always outlasts the delivery would be if that were not counted.
+//
+// Mutation: wrap a store step's error in ErrStoreSilent whatever its context
+// says (storeSilent), and the attempt the deadline cut is handed back
+// uncounted.
+func TestACollectionThatRanOutOfTimeIsCountedWhicheverStepItWasIn(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Error: "Prompt is too long", ContextExhausted: true, SessionID: "s-1"})
+	rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending}
+
+	// A SECOND, so every step before the retirement has its time: the box read
+	// and the drain over the rig's own store take milliseconds.
+	short, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(short, payload, ev); err == nil || errors.Is(err, ErrStoreSilent) {
+		t.Fatalf("OnCompleted = %v; want the deadline's failure handed back, never the store's silence", err)
+	}
+	row := rig.get("t1")
+	if row.Status != StatusRunning || row.Launch.CollectFailures != 1 {
+		t.Errorf("the run is %s with %d failed collections after one its deadline cut at the store's step; "+
+			"want it handed back and counted", row.Status, row.Launch.CollectFailures)
+	}
 }

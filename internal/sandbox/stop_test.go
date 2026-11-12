@@ -570,6 +570,58 @@ func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
 	}
 }
 
+// A STOP WHOSE HOST'S STORE IS SILENT IS KEPT AND ASKED AGAIN, past the bound a
+// silent host is waited for. The host is up, and so is the box: only the
+// coordination store did not answer the host's read of the run's row, which
+// licenses the read. That is no verdict about the box, and its spend is not
+// written off for it: the stop is kept, its session closed, nothing charged,
+// announced or closed, and asked again for as long as the store is silent, the
+// box timeout since the stop included, which ends the wait for a host that is
+// away. Once the store answers, the host reads the box and the stop charges
+// what it read.
+//
+// Mutation: read the store's silence as the box's failure in readStopped, and
+// the stop finishes on its first retry with its spend lost; bound it by the
+// host's wait, and it finishes past the box timeout with nothing read.
+func TestAStopWhoseHostsStoreIsSilentIsKeptAndAskedAgain(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
+	rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, &nudges{})
+	rig.launchedBy("t1", "node-a")
+	rig.runner.Finish(Result{Text: "halfway", InputTokens: 4000})
+
+	rig.stop(t)
+	for _, when := range []string{"at once", "past the box timeout since the stop"} {
+		rig.fireRetries()
+		kept := rig.get("t1")
+		if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
+			t.Fatalf("%s, the stop on a silent store reads ending %+v stop %+v; want it kept, unread", when,
+				kept.Ending, kept.Stop)
+		}
+		if rig.accountant.asked() != 0 || len(rig.stopAnnouncements()) != 0 || len(spies.closedTurns()) != 0 {
+			t.Fatalf("%s, the stop charged, announced or closed its turn while the store was silent", when)
+		}
+		if !slices.Contains(spies.endedRuns(), "t1") {
+			t.Fatalf("%s, the kept stop left the run's session open", when)
+		}
+		rig.now = rig.now.Add(DefaultBoxTimeout)
+	}
+
+	store.answer()
+	rig.fireRetries()
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stop was not finished once the store answered")
+	}
+	if got := rig.accountant.total(); got != 4000 {
+		t.Fatalf("charged %d tokens, want the 4000 the host read once the store answered", got)
+	}
+	if len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
+		t.Fatal("the finished stop was not announced once with its turn closed once")
+	}
+}
+
 // A STOP OF A RELAUNCH BEFORE IT ATTACHES ITS BOX READS NO JOB AND LEAVES THE
 // BOX TO ITS HOST. The resumed turn's relaunch has reset the row on another node
 // — a new job, its charge not yet made — and the row still names the previous

@@ -1816,11 +1816,13 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 
 	// WRITTEN BEFORE THE TURN RESUMES, since its reviewer's send-back relaunches
 	// on that frame and reads the row: a store that does not take it is a
-	// collection to ask again, which changes nothing else and asks the same.
+	// collection to ask again, which changes nothing else and asks the same,
+	// uncounted, since the store's silence is no failure of the box's
+	// ([ErrStoreSilent]).
 	if ranOutOfContext(run, result) {
 		sessions := sessionsRanOutOfContext(run, result)
 		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
-			return run, Result{}, false, c.collectFailed(ctx, run, err)
+			return run, Result{}, false, c.collectFailed(ctx, run, storeSilent(ctx, err))
 		}
 		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, sessions)
 	}
@@ -1878,14 +1880,19 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // within a bound, and then the run is given up.
 //
 // IT IS SAFE TO ASK AGAIN, which the claim protocol is what proves. Nothing
-// the tail writes happens before a collection succeeds — the charge, the
-// launch's record, the park and the resume all follow it — so a failed
-// collection has changed nothing but the claim, and handing that back
-// ([Coordinator.unclaim]) leaves the run exactly as the completion found it:
-// running, its box kept alive by the poll, its turn suspended. The completion
-// is then NAK'd and comes back on the queue's backoff, here or on the seat's
-// next owner, and the poll fires a fresh one on its next tick; whichever
-// claims first collects.
+// the tail writes happens before a collection succeeds (the charge, the
+// launch's record, the park and the resume all follow it), so a failed
+// collection has written nothing a retry does not find as it left it: the
+// claim, handed back ([Coordinator.unclaim]); the facts its read records as it
+// reads (the cap's sighting, the session it takes, how the job's harness
+// ended, the box's pause), each of which the collection made again finds as it
+// was left or makes again to the same effect; and, where its drain began or
+// its turn's cap had passed, the job's session on the bridge ended
+// ([CoordinatorOptions.Ended]), which a retry ends again to no effect. So the
+// run is left as the completion found it: running, its box kept alive by the
+// poll, its turn suspended. The completion is then NAK'd and comes back on the
+// queue's backoff, here or on the seat's next owner, and the poll fires a fresh
+// one on its next tick; whichever claims first collects.
 // Settling on the first failure used to destroy the turn — and its charge and
 // its record — over one transport blip, or over the drain whose cancellation
 // was the failure.
@@ -1914,6 +1921,24 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // a reachable run up after one attempt. Only a cancellation is spared — a
 // deadline the delivery ran out of is counted, because a box whose collection
 // always outlasts it would otherwise be retried for ever.
+//
+// A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]) is handed
+// back WITHOUT being counted as well: the host's read of the run's row, the
+// drain's watch of its log and the record of the sessions its job ran out of
+// context in are the store's, and the box answered every read, so counted, a
+// store silent for the window settled a run whose box still held its result as
+// one whose result was lost. Its completion is NAK'd for the queue's backoff,
+// as a counted retry's is, and not acknowledged as a silent host's is: that
+// host announces it again once it is back, and here the host and the box are
+// up. It has NO GIVE-UP OF ITS OWN: it is retried as a claim the store does not
+// take is ([Coordinator.completeAdmitted]), each announcement bounded by the
+// broker's deliveries of it and the poll announcing the job again, and a store
+// silent that long holds every run where it is, the claim first, while its own
+// alarms name it. Going on without the step would read the run without what
+// the step stands for (a call still in flight, a session that ran out), and
+// giving the run up would throw away a result its box holds. A step its
+// delivery's deadline cut is the deadline's, and counted as above
+// ([storeSilent]).
 func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
@@ -1940,6 +1965,22 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		// ([Coordinator.unclaim]), so either way nothing is retried here.
 		_ = c.unclaim(ctx, run, collectUnrevertedDetail)
 		return nil
+	}
+	if errors.Is(cause, ErrStoreSilent) {
+		// THE COORDINATION STORE DID NOT ANSWER a step the collection cannot
+		// go on without ([ErrStoreSilent]), which says nothing about the box:
+		// handed back uncounted, and the completion NAK'd for the queue's
+		// backoff, while the poll announces the job again on its next tick.
+		log.WarnContext(ctx, "sandbox_collect_unsettled", "turn_id", run.TurnID,
+			"error", cause.Error(),
+			"detail", "the coordination store did not answer a step the collection cannot go on "+
+				"without; the claim is handed back uncounted and the collection is asked again "+
+				"until the store answers")
+		if err := c.unclaim(ctx, run, collectUnrevertedDetail); err != nil {
+			//nolint:nilerr // As below: the run has been ended and announced.
+			return nil
+		}
+		return fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)
 	}
 	now := c.now()
 	facts := run.Launch

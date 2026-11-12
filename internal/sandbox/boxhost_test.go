@@ -2,12 +2,14 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 )
@@ -89,6 +91,57 @@ func (r *coordRig) launchedBy(turnID, node string) PendingRun {
 	return r.get(turnID)
 }
 
+// hostAnswers asks a box's host as the fleet's channel does: the host's own
+// answer to the read ([AnswerBoxRead]), written as the reply crosses the broker
+// and read back ([crossed]), so the asker acts on what a reply carries and on
+// nothing else.
+type hostAnswers struct{ host *Coordinator }
+
+func (h hostAnswers) ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
+	reply, err := crossed(AnswerBoxRead(ctx, h.host, BoxReadRequest{
+		Version: BoxReadWireVersion, ID: "read-1", Deadline: time.Now().Add(time.Minute), Node: run.LaunchNode,
+		TurnID: run.TurnID, LaunchID: run.LaunchID, SandboxID: run.SandboxID, Read: read,
+	}))
+	if err != nil {
+		return Result{}, false, err
+	}
+	if err := reply.Err(); err != nil {
+		return Result{}, false, err
+	}
+	return *reply.Result, reply.Ended, nil
+}
+
+// crossed is reply as its asker reads it off the broker: written as JSON, as
+// the signed channel writes a reply (internal/signedask), and read back.
+func crossed(reply BoxReadReply) (BoxReadReply, error) {
+	raw, err := json.Marshal(reply)
+	if err != nil {
+		return BoxReadReply{}, err
+	}
+	var read BoxReadReply
+	if err := json.Unmarshal(raw, &read); err != nil {
+		return BoxReadReply{}, err
+	}
+	return read, nil
+}
+
+// hostOn is node's coordinator, the host of the boxes the rig's runs launched
+// there name: the rig's own manager, over store, the run store as node reaches
+// it. What a box read asked of node reads with.
+func (r *coordRig) hostOn(t *testing.T, node string, store PendingStore) *Coordinator {
+	t.Helper()
+	host, err := NewCoordinator(CoordinatorOptions{
+		Answers: rigAnswers(), Queue: r.queue, Pending: store, Manager: r.manager, Pushes: r.pushes,
+		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Node: node,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(host.Stop)
+	host.endWait, host.endPoll = time.Second, 10*time.Millisecond
+	return host
+}
+
 // readHere records whether this node's own runner read a box back.
 func readHere(rig *coordRig) *int {
 	var n int
@@ -160,6 +213,63 @@ func TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted(t *testing.T) {
 	}
 	if len(rig.failures()) != 0 || len(rig.resumer.requests) != 0 {
 		t.Errorf("a silent host ended or resumed the run: %v, %v", rig.failures(), rig.resumer.requests)
+	}
+}
+
+// A HOST'S SILENT STORE CROSSES THE WIRE AS ONE. A host's reply carries a
+// failure in the host's own words (BoxReadReply.Error), which no asker can read
+// a sentinel out of, so the coordination store's silence at the host's read of
+// the run's row rides a flag of its own (`unsettled`) and reads back as
+// ErrStoreSilent: the asker hands its claim back uncounted rather than counting
+// it against a box that is up. A reply without the flag reads as it always did,
+// the box's own failure to be read, which is counted.
+//
+// Mutation: drop the wrap of the host's row read, the flag AnswerBoxRead sets
+// or its key on the wire, or Err's wrap of it, and the store's silence reads as
+// the box's failure.
+func TestAHostsSilentStoreCrossesTheWireAsOne(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
+	host := rig.hostOn(t, "node-a", store)
+	run := rig.launchedBy("t1", "node-a")
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID),
+		rigLease); err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	read := BoxReadRequest{Version: BoxReadWireVersion, ID: "read-1", Node: "node-a", TurnID: "t1",
+		LaunchID: run.LaunchID, SandboxID: run.SandboxID, Read: BoxReadCollect}
+
+	reply := AnswerBoxRead(t.Context(), host, read)
+	raw, err := json.Marshal(reply)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"unsettled":true`) || !strings.Contains(reply.Error, errStoreUnanswered.Error()) ||
+		reply.Result != nil {
+		t.Fatalf("the host answered %s; want it flagged unsettled, in the store's own words, with no account", raw)
+	}
+	got, err := crossed(reply)
+	if err != nil {
+		t.Fatalf("the reply did not cross: %v", err)
+	}
+	err = got.Err()
+	if !errors.Is(err, ErrStoreSilent) || errors.Is(err, ErrBoxGone) || errors.Is(err, ErrBoxNotHosted) ||
+		errors.Is(err, ErrBoxHostSilent) {
+		t.Fatalf("the asker reads the reply as %v; want the store's silence, and nothing else", err)
+	}
+
+	// THE BOX'S OWN FAILURE, once the store answers, reads as it always did.
+	store.answer()
+	rig.runner.CollectErr = errBoxBlip
+	got, err = crossed(AnswerBoxRead(t.Context(), host, read))
+	if err != nil {
+		t.Fatalf("the reply did not cross: %v", err)
+	}
+	if err := got.Err(); err == nil || got.Unsettled || errors.Is(err, ErrStoreSilent) ||
+		!strings.Contains(err.Error(), errBoxBlip.Error()) {
+		t.Fatalf("the asker reads the box's own failure as %v (unsettled %v); want the box's, counted",
+			err, got.Unsettled)
 	}
 }
 
