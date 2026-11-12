@@ -530,7 +530,9 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // A SEAT'S READ FOR WORDS holds one more text at its worst: the whole
 // redaction of an entry whose words could hold every term, which is at most a
 // line's, so about a third more, in the one slot seats take between them
-// ([SeatTranscriptReadsAtOnce]).
+// ([SeatTranscriptReadsAtOnce]). A relaunch's reading of which of its round's
+// calls a kept session holds ([Runner.ReadHoldings]) takes that slot too, and
+// holds less than one read at its worst, about 75 MiB.
 //
 // A READ PAST THEM WAITS for a slot for as long as its caller waits, holding
 // no decoder while it does — and no opened object, whose store connection it
@@ -555,6 +557,13 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // seat reads. A node that runs seats alone serves no person a transcript, and
 // its seats' reads take turns in one slot: each is bounded, and a seat's page
 // is a fraction of a person's.
+//
+// A RELAUNCH'S READING TAKES IT TOO ([Runner.ReadHoldings]): which of its
+// round's calls the cut-off session it continues holds, read off the kept
+// archive before its brief is written, whose worst, about 75 MiB, is within
+// one read's. It waits for the slot inside its own wait, and a reading that
+// waits past it tells its session every call after its save point, which is
+// never wrong.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

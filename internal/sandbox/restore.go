@@ -1611,7 +1611,7 @@ type fetchedSession struct {
 }
 
 // fetchSession spools row's session sealed and checks it can be read whole,
-// before any of it reaches a box ([executorkeep.TurnRowStore.Fetch]) — in the
+// before any of it reaches a box (executordomain.SessionStore.Fetch) — in the
 // coordinator's spool directory ([Coordinator.spoolDirectory]), where its
 // sweep looks.
 func (c *Coordinator) fetchSession(ctx context.Context, row executorkeep.TurnRow) (*fetchedSession, error) {

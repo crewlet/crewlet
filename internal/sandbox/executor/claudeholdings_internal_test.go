@@ -1,0 +1,949 @@
+package executor
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"io"
+	"io/fs"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
+
+// THE CASES BELOW READ ARCHIVES TWO WAYS. Most build a main thread of the
+// layer's own records (claudethread_test.go), shaped as Claude Code writes them,
+// and tar it as the take's scrub writes an archive. The rest read threads the
+// probes measured, cut into testdata/claude/<release>/holdings/<name> as the
+// members their archive held ([hsFixtures]).
+
+// hsFixtures are the measured threads the cases read, each a member tree as its
+// session's archive held it, by release and name, with where it was cut from.
+// Each was cut as data, every line in its order with its keys in their order
+// and of their types: the probes' call ids are their own scripted ones
+// (`toolu_T1_a`), every other id is synthetic (the session in ctSession's
+// family, the file named by it, a subagent's `a` and sixteen hex digits, every
+// other uuid in ctUUID's form, so each parent still names its record), and a
+// path under a home directory is /tmp/box/ and its last element. A line over
+// 2 KiB that is no user record is ABRIDGED: each string in it over 256 bytes is
+// "(abridged)", and in the harness's own bookkeeping (no assistant or system
+// record) each list that long is empty, so its keys and their types stay. That
+// is the harness's own bulky text, a request's shape, a prompt snapshot, a
+// skill listing, and T4's three 2 MB padding blocks: what the reading reads of
+// such a line is its head alone. A user record is never abridged.
+var hsFixtures = map[string]string{
+	"2.1.310/T1":  "probe T, T1 (a tree, clean end): its archive",
+	"2.1.322/T1":  "probe T, T1 (a tree, clean end): its archive",
+	"2.1.310/T2":  "probe T, T2 (a tree, killed once both results were on disk): its archive",
+	"2.1.322/T2":  "probe T, T2 (a tree, killed once both results were on disk): its archive",
+	"2.1.310/T3":  "probe T, T3 (a tree with one call open at the kill): its archive",
+	"2.1.322/T3":  "probe T, T3 (a tree with one call open at the kill): its archive",
+	"2.1.310/T4":  "probe T, T4 (a tree past the 5 MiB load path, 6,232,051 bytes before abridging): its archive",
+	"2.1.322/T4":  "probe T, T4 (a tree past the 5 MiB load path, 6,232,304 bytes before abridging): its archive",
+	"2.1.310/T5":  "probe T, T5 (an Agent answer in a tree): its archive, its subagent's thread and metadata",
+	"2.1.322/T5":  "probe T, T5 (an Agent answer in a tree): its archive, its subagent's thread and metadata",
+	"2.1.310/s1":  "probe S, s1: the main thread just after /compact, untrimmed, its boundary at line 60",
+	"2.1.322/s1":  "probe S, s1: the main thread just after /compact, untrimmed",
+	"2.1.310/s2":  "probe S, s2: the main thread just after /compact and its trim, the preserved head first",
+	"2.1.322/s2":  "probe S, s2: the main thread just after /compact and its trim, the preserved head first",
+	"2.1.310/EK":  "probe P2(e), EK: the main thread after a resume wrote its interrupted call's result",
+	"2.1.310/ET0": "probe P2(e), ET0: the main thread of a harness stopped by SIGTERM in a shell call",
+	"2.1.310/pBa": "probe pB, (a): a call the harness gave up on at 60 s, which the bridge logged a success " +
+		"(`slow a finished its work`)",
+	"2.1.310/pBc": "probe pB, (c): a call the bridge answered in time and logged a success " +
+		"(`slow c finished its work`)",
+}
+
+// hsFixture is the fixture of release and name ([hsFixtures]) as its archive
+// held it, tarred and gzipped in name order, and the session it holds; edits
+// are pairs of a text and its replacement, each found in its main thread.
+func hsFixture(t *testing.T, release, name string, edits ...[2]string) (archive []byte, session string) {
+	t.Helper()
+	if _, cut := hsFixtures[release+"/"+name]; !cut {
+		t.Fatalf("no fixture %s/%s is described in hsFixtures", release, name)
+	}
+	root := filepath.Join("testdata", "claude", release, "holdings", name)
+	files := map[string]string{}
+	err := filepath.WalkDir(root, func(file string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, file)
+		if err != nil {
+			return err
+		}
+		member := filepath.ToSlash(rel)
+		files[member] = string(raw)
+		if s, ok := strings.CutPrefix(member, claudeProjectPrefix); ok && !strings.Contains(s, "/") {
+			session = strings.TrimSuffix(s, ".jsonl")
+		}
+		return nil
+	})
+	if err != nil || session == "" {
+		t.Fatalf("fixture %s/%s: %v, its session %q", release, name, err, session)
+	}
+	main, _ := claudeMainThread(session)
+	for _, edit := range edits {
+		if !strings.Contains(files[main], edit[0]) {
+			t.Fatalf("fixture %s/%s holds no %q", release, name, edit[0])
+		}
+		files[main] = strings.ReplaceAll(files[main], edit[0], edit[1])
+	}
+	return tarOf(t, files), session
+}
+
+// hsMain is ctSession's main thread, as its archive names it.
+var hsMain = claudeProjectPrefix + ctSession + ".jsonl"
+
+// hsBounds is what a reading of a kept session is held to.
+func hsBounds() scrubBounds { return boundsFor(executorkeep.SessionMaxBytes) }
+
+// hsLogged is a call the log kept as a success that answered output.
+func hsLogged(id, output string) sandbox.LoggedCall {
+	return sandbox.LoggedCall{ID: id, Asked: true, Output: output}
+}
+
+// hsAsk asks about calls.
+func hsAsk(calls ...sandbox.LoggedCall) sandbox.HoldingsAsk { return sandbox.HoldingsAsk{Calls: calls} }
+
+// hsRead is a reading of archive, session's, for ask.
+func hsRead(t *testing.T, archive []byte, session string, ask sandbox.HoldingsAsk) (sandbox.SessionHoldings, error) {
+	t.Helper()
+	return hsReadFrom(t.Context(), bytes.NewReader(archive), session, ask, hsBounds())
+}
+
+// hsReadFrom is a reading of what body streams, session's archive, for ask,
+// within bounds.
+func hsReadFrom(ctx context.Context, body io.Reader, session string, ask sandbox.HoldingsAsk,
+	bounds scrubBounds) (sandbox.SessionHoldings, error) {
+	return ClaudeCode{}.readHoldings(ctx, body, sandbox.SessionArchive{Harness: ClaudeCodeName, SessionID: session,
+		Format: claudeArchiveFormat, Version: holdingsWriterFloor}, ask, bounds)
+}
+
+// hsUse is a model's call of id, an assistant record's content.
+func hsUse(id string) string {
+	return `[{"type":"tool_use","id":"` + id + `","name":"mcp__crewlet__slow","input":{"tag":"` + id + `"}}]`
+}
+
+// hsBlock is text as one text block, as an MCP tool's result holds it.
+func hsBlock(t *testing.T, text string) string {
+	t.Helper()
+	return `[{"type":"text","text":` + jsonString(t, text) + `}]`
+}
+
+// hsAnswer is the content of a user record answering id with content, a JSON
+// value.
+func hsAnswer(id, content string) string {
+	return `[{"tool_use_id":"` + id + `","type":"tool_result","content":` + content + `}]`
+}
+
+// hsCall is a call of id chained to parent, uuid n, and its result, uuid n+1,
+// whose content is the JSON value content.
+func hsCall(parent string, n int, id, content string) []string {
+	return []string{
+		ctAssistant(parent, ctUUID(n), hsUse(id)),
+		ctResult(ctUUID(n), ctUUID(n+1), hsAnswer(id, content), content),
+	}
+}
+
+// hsThread is a main thread of its brief, uuid 1, and lines after it.
+func hsThread(lines ...string) string {
+	return ctThread(append([]string{ctBrief(ctUUID(1))}, lines...)...)
+}
+
+// hsArchive is ctSession's archive holding thread as its main thread.
+func hsArchive(t *testing.T, thread string) []byte {
+	t.Helper()
+	return tarOf(t, map[string]string{hsMain: thread})
+}
+
+// hsNoReading fails t unless got and err are no reading, err the reading's own
+// words.
+func hsNoReading(t *testing.T, got sandbox.SessionHoldings, err error) {
+	t.Helper()
+	var own *holdingsError
+	if got.Read || got.Kind != "" || got.Calls != nil || !errors.As(err, &own) {
+		t.Fatalf("a reading = %+v, %v; want no reading, in the reading's own words", got, err)
+	}
+}
+
+// hsReadWhole fails t unless got and err are a reading.
+func hsReadWhole(t *testing.T, got sandbox.SessionHoldings, err error) {
+	t.Helper()
+	if err != nil || !got.Read || got.Kind != sandbox.HoldingsByID {
+		t.Fatalf("a reading = %+v, %v; want a reading of the records filed by id", got, err)
+	}
+}
+
+// A CALL IS HELD ONLY THROUGH A WHOLE RESULT LINE: a result written as a last
+// piece with no break, or in the NULs GNU tar fills a member out with once it
+// shrank as it was packed, is no line, so its call holds a use and no result,
+// and is told. The same result ended by its break holds it.
+//
+// Mutation: hand the walk a member's last piece as a line, and the torn result
+// holds its call.
+func TestACallIsHeldOnlyThroughAWholeResultLine(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_whole", "whole done"
+	call := hsLogged(id, out)
+	pair := hsCall(ctUUID(1), 2, id, hsBlock(t, out))
+	use := hsThread(pair[0])
+	for name, tc := range map[string]struct {
+		thread string
+		held   bool
+	}{
+		"its line whole":          {hsThread(pair...), true},
+		"its line torn":           {use + pair[1], false},
+		"its line in NUL padding": {use + pair[1] + strings.Repeat("\x00", 512), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, tc.thread), ctSession, hsAsk(call))
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(call); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[id], tc.held)
+			}
+		})
+	}
+}
+
+// A MAIN-THREAD LINE THAT IS NO RECORD LEAVES THE SESSION UNREAD: a whole line
+// that is not one JSON object, one whose head key is of another type, and a
+// counted record whose message does not decode each end the reading with no
+// reading, since a reading that passed one by would count a thread with a hole
+// in it as whole, and a record that held a call as one that held none. The
+// same thread without the line is read, and holds its call.
+//
+// Mutation: pass a line that is no record by, or read a counted record whose
+// message does not decode as one with no calls, and the reading stands.
+func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_record", "record done"
+	call := hsLogged(id, out)
+	pair := hsCall(ctUUID(1), 2, id, hsBlock(t, out))
+	for name, tc := range map[string]struct {
+		line string
+		read bool
+	}{
+		"no line between them": {"", true},
+		"a line of half a record": {`{"parentUuid":"` + ctUUID(3) + `","isSidechain":false,"type":"user",` +
+			`"message":{"role":"user","content":`, false},
+		"a line that is a list":          {`[1,2,3]`, false},
+		"a head key of another type":     {`{"parentUuid":"` + ctUUID(3) + `","isSidechain":"no","type":"user"}`, false},
+		"a counted record's bad content": {ctResult(ctUUID(3), ctUUID(9), `42`, `42`), false},
+		"a counted call naming no call": {ctAssistant(ctUUID(3), ctUUID(9),
+			`[{"type":"tool_use","id":"","name":"Bash","input":{}}]`), false},
+		"a message no reader reads, on an attachment": {`{"parentUuid":"` + ctUUID(3) + `","isSidechain":false,` +
+			`"type":"attachment","message":42,"uuid":"` + ctUUID(9) + `"}`, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lines := append([]string{}, pair...)
+			if tc.line != "" {
+				lines = append(lines, tc.line)
+			}
+			got, err := hsRead(t, hsArchive(t, hsThread(lines...)), ctSession, hsAsk(call))
+			if !tc.read {
+				hsNoReading(t, got, err)
+				return
+			}
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(call); !held {
+				t.Errorf("Holds = false, its records %+v; want its call held", got.Calls[id])
+			}
+		})
+	}
+}
+
+// ONLY A CHAINED RECORD OF ITS OWN THREAD HOLDS A CALL, in the main thread: a
+// user or assistant record with a parentUuid, `isSidechain` false and no
+// `agentId`. A request's blob repeating the result, a queue operation, a
+// sidechain record and an agent's record in the main file, and a user record
+// out of the chain each hold nothing, so the call they repeat holds its use
+// alone and is told; a counted record's result holds it.
+//
+// Mutation: count a record that is not chained, or not the main thread's, and
+// the case's result holds its call.
+func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_own", "own done"
+	call := hsLogged(id, out)
+	content := hsAnswer(id, hsBlock(t, out))
+	result := ctResult(ctUUID(2), ctUUID(3), content, hsBlock(t, out))
+	for name, tc := range map[string]struct {
+		record string
+		held   bool
+	}{
+		"a counted result": {result, true},
+		"a request's blob": {`{"type":"api-request-blob","sessionId":"` + ctSession + `","hash":"b1",` +
+			`"message":{"role":"user","content":` + content + `}}`, false},
+		"a queue operation": {`{"type":"queue-operation","operation":"enqueue","sessionId":"` + ctSession +
+			`","message":{"role":"user","content":` + content + `}}`, false},
+		"a sidechain record": {ctReplace(t, result, `"isSidechain":false`, `"isSidechain":true`), false},
+		"an agent's record": {ctReplace(t, result, `"isSidechain":false`,
+			`"isSidechain":false,"agentId":"`+ctAgent+`"`), false},
+		"a record out of the chain": {ctReplace(t, result, `"parentUuid":"`+ctUUID(2)+`",`, ``), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			thread := hsThread(ctAssistant(ctUUID(1), ctUUID(2), hsUse(id)), tc.record)
+			got, err := hsRead(t, hsArchive(t, thread), ctSession, hsAsk(call))
+			hsReadWhole(t, got, err)
+			records := got.Calls[id]
+			if held, _ := got.Holds(call); held != tc.held || records.Uses != 1 || (records.Results == 1) != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want held %t, with one use", held, records, tc.held)
+			}
+		})
+	}
+}
+
+// A RESULT BEFORE THE LAST RESTART IS NOT LIVE: what a resumed session is
+// handed starts over at a restart, so a result before the main thread's last
+// one is told. Measured: s1's compaction, whose boundary follows its call's
+// result, and s2's trim, which kept none of the job's records, so its call is
+// not in the file at all; and, as both releases' readers read them, a
+// microcompaction's boundary, a span replaced and a root after the first. A
+// result between two restarts is before the last. A result after the last
+// restart is live, and held.
+//
+// Mutation: compare a result's line with the thread's FIRST restart, and the
+// result between two restarts is live.
+func TestAResultBeforeTheLastRestartIsNotLive(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_restart", "restart done"
+	call := hsLogged(id, out)
+	pair := hsCall(ctUUID(1), 2, id, hsBlock(t, out))
+	restart := map[string]string{
+		"a compaction's boundary":      ctBoundary(ctUUID(4), ctUUID(5), ctUUID(3)),
+		"a microcompaction's boundary": ctMicrocompactBoundary(ctUUID(3), ctUUID(4)),
+		"a span replaced":              ctSpan(ctUUID(3), ctUUID(4), "true"),
+		"a later root":                 ctBrief(ctUUID(4)),
+	}
+	for name, line := range restart {
+		t.Run("after it, "+name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, hsThread(append(pair[:2:2], line)...)), ctSession, hsAsk(call))
+			hsReadWhole(t, got, err)
+			if records := got.Calls[id]; records.Results != 1 || records.Live {
+				t.Errorf("its records %+v; want its one result, not live", records)
+			}
+		})
+	}
+	t.Run("between two restarts", func(t *testing.T) {
+		t.Parallel()
+		thread := hsThread(ctMicrocompactBoundary(ctUUID(1), ctUUID(10)), pair[0], pair[1],
+			ctMicrocompactBoundary(ctUUID(3), ctUUID(11)))
+		got, err := hsRead(t, hsArchive(t, thread), ctSession, hsAsk(call))
+		hsReadWhole(t, got, err)
+		if records := got.Calls[id]; records.Results != 1 || records.Live {
+			t.Errorf("its records %+v; want its one result, not live", records)
+		}
+	})
+	t.Run("after the last restart", func(t *testing.T) {
+		t.Parallel()
+		thread := hsThread(ctMicrocompactBoundary(ctUUID(1), ctUUID(10)), ctSpan(ctUUID(10), ctUUID(11), "true"),
+			ctAssistant(ctUUID(11), ctUUID(2), hsUse(id)), pair[1])
+		got, err := hsRead(t, hsArchive(t, thread), ctSession, hsAsk(call))
+		hsReadWhole(t, got, err)
+		if held, _ := got.Holds(call); !held {
+			t.Errorf("Holds = false, its records %+v; want a result after the last restart held", got.Calls[id])
+		}
+	})
+	for _, release := range []string{"2.1.310", "2.1.322"} {
+		t.Run(release+", s1's compaction", func(t *testing.T) {
+			t.Parallel()
+			s1 := hsLogged("toolu_s1_b1", "s1-b1")
+			archive, session := hsFixture(t, release, "s1")
+			got, err := hsRead(t, archive, session, hsAsk(s1))
+			hsReadWhole(t, got, err)
+			records := got.Calls[s1.ID]
+			if held, _ := got.Holds(s1); held || records.Uses != 1 || records.Results != 1 || records.Live {
+				t.Errorf("Holds = %t, its records %+v; want its use and result, not live, and told", held, records)
+			}
+		})
+		t.Run(release+", s2's trim", func(t *testing.T) {
+			t.Parallel()
+			s2 := hsLogged("toolu_s2_b1", "s2-b1")
+			archive, session := hsFixture(t, release, "s2")
+			got, err := hsRead(t, archive, session, hsAsk(s2))
+			hsReadWhole(t, got, err)
+			if records, named := got.Calls[s2.ID]; named {
+				t.Errorf("its records %+v; want none, the trim having kept none of the job's records", records)
+			}
+		})
+	}
+}
+
+// PARALLEL RESULTS AFTER THE LAST RESTART ARE LIVE, off the chain or on it.
+// Measured (probe T, 2.1.310 and 2.1.322): parallel calls leave a tree, the
+// thread's last record descending from the last result, so the first result
+// lies off the chain, and a continuation hands its model every whole-line
+// result after the last restart all the same, with its call: T1's, T2's and
+// T4's siblings, T5's Agent answer beside its sibling, and T4's linear calls
+// past the 5 MiB load path. Each is live, and each call the bridge answered is
+// held; T3's answered call is held, and its open call, whose result the file
+// never held, holds its use alone and is told.
+//
+// Mutation: hold a result only on the chain its thread's last record
+// descends from, and every off-chain sibling is told.
+func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
+	t.Parallel()
+	done := func(tag string) sandbox.LoggedCall { return hsLogged("toolu_"+tag, "crewlet "+tag+" done") }
+	for _, release := range []string{"2.1.310", "2.1.322"} {
+		for name, calls := range map[string][]sandbox.LoggedCall{
+			"T1": {done("T1_a"), done("T1_b")},
+			"T2": {done("T2_a"), done("T2_b")},
+			"T4": {done("T4_a"), done("T4_b"), done("T4_f1"), done("T4_f2"), done("T4_f3")},
+			"T5": {done("T5_m")},
+		} {
+			t.Run(release+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				archive, session := hsFixture(t, release, name)
+				ask := append([]sandbox.LoggedCall{}, calls...)
+				if name == "T5" {
+					ask = append(ask, sandbox.LoggedCall{ID: "toolu_T5_agent", Asked: true})
+				}
+				got, err := hsRead(t, archive, session, hsAsk(ask...))
+				hsReadWhole(t, got, err)
+				for _, call := range calls {
+					if held, _ := got.Holds(call); !held {
+						t.Errorf("%s: Holds = false, its records %+v; want it held", call.ID, got.Calls[call.ID])
+					}
+				}
+				if name == "T5" {
+					// The Agent answer is no call the bridge logs: what is held
+					// to the rule is that its result, off the chain, is live.
+					if records := got.Calls["toolu_T5_agent"]; records.Uses != 1 || records.Results != 1 ||
+						!records.Live || records.TextBytes <= 0 {
+						t.Errorf("the Agent answer's records %+v; want its use and one live text result", records)
+					}
+				}
+			})
+		}
+		t.Run(release+"/T3", func(t *testing.T) {
+			t.Parallel()
+			answered, open := done("T3_a"), done("T3_b")
+			archive, session := hsFixture(t, release, "T3")
+			got, err := hsRead(t, archive, session, hsAsk(answered, open))
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(answered); !held {
+				t.Errorf("the answered call: Holds = false, its records %+v; want it held", got.Calls[answered.ID])
+			}
+			records := got.Calls[open.ID]
+			if held, _ := got.Holds(open); held || records.Uses != 1 || records.Results != 0 {
+				t.Errorf("the open call: Holds = %t, its records %+v; want its use alone, told", held, records)
+			}
+		})
+	}
+}
+
+// A RESULT'S TEXT IS A STRING OR ONE TEXT BLOCK: what a model is handed of a
+// call's output, as its harness recorded it, is the content's string, or the
+// text of a list of exactly one object of `type` "text" whose `text` is a
+// string, its other keys passed over, every key matched exactly and a key
+// written twice read by its last value. Every other content, a ToolSearch's
+// list of tool references, two text blocks, an empty list, an image, a key
+// spelt in another case, absent or null, has no text, -1, which no log's
+// output matches. And a list a line long is read no further than its second
+// element: it costs no more than a list of two.
+//
+// Not parallel: the allocations are the process's, and a parallel case's
+// would be counted with this one's.
+//
+// Mutation: decode a result's content whole, its list before its first
+// element is held to a type, and the long list costs an allocation an element;
+// or take any list's first text block for its text, and two blocks match.
+func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
+	const id = "toolu_text"
+	for name, tc := range map[string]struct {
+		content string
+		text    string
+		bytes   int
+	}{
+		"a string":                     {`"a string"`, "a string", 8},
+		"one text block":               {`[{"type":"text","text":"one block"}]`, "one block", 9},
+		"one text block, keys beside":  {`[{"type":"text","text":"one block","cache_control":null}]`, "one block", 9},
+		"one text block, text twice":   {`[{"type":"text","text":"first","text":"last"}]`, "last", 4},
+		"ToolSearch's tool references": {`[{"type":"tool_reference","tool_name":"mcp__seat__echo"}]`, "", -1},
+		"two text blocks":              {`[{"type":"text","text":"a"},{"type":"text","text":"b"}]`, "", -1},
+		"an empty list":                {`[]`, "", -1},
+		"an image":                     {`[{"type":"image","source":{"type":"base64","data":"AA=="}}]`, "", -1},
+		"a type spelt in another case": {`[{"Type":"text","text":"x"}]`, "", -1},
+		"a text spelt in another case": {`[{"type":"text","Text":"x"}]`, "", -1},
+		"a text that is no string":     {`[{"type":"text","text":1}]`, "", -1},
+		"a block that is no object":    {`["x"]`, "", -1},
+		"null":                         {`null`, "", -1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			thread := hsThread(ctAssistant(ctUUID(1), ctUUID(2), hsUse(id)),
+				ctResult(ctUUID(2), ctUUID(3), hsAnswer(id, tc.content), tc.content))
+			got, err := hsRead(t, hsArchive(t, thread), ctSession, hsAsk(sandbox.LoggedCall{ID: id, Asked: true}))
+			hsReadWhole(t, got, err)
+			records := got.Calls[id]
+			want := [32]byte{}
+			if tc.bytes >= 0 {
+				want = sha256.Sum256([]byte(tc.text))
+			}
+			if records.TextBytes != tc.bytes || records.Opening != want {
+				t.Errorf("its text is %d bytes opening %x; want %d bytes opening %x", records.TextBytes,
+					records.Opening, tc.bytes, want)
+			}
+		})
+	}
+	t.Run("absent", func(t *testing.T) {
+		content := `[{"tool_use_id":"` + id + `","type":"tool_result"}]`
+		thread := hsThread(ctAssistant(ctUUID(1), ctUUID(2), hsUse(id)),
+			ctResult(ctUUID(2), ctUUID(3), content, `""`))
+		got, err := hsRead(t, hsArchive(t, thread), ctSession, hsAsk(sandbox.LoggedCall{ID: id, Asked: true}))
+		hsReadWhole(t, got, err)
+		if records := got.Calls[id]; records.Results != 1 || records.TextBytes != -1 {
+			t.Errorf("its records %+v; want one result with no text", records)
+		}
+	})
+	t.Run("a list a line long", func(t *testing.T) {
+		head := `[{"type":"text","text":"x"},`
+		short := []byte(head + `1]`)
+		long := []byte(head + strings.Repeat(`1,`, (listBytes-len(head))/2) + `1]`)
+		for _, list := range [][]byte{short, long} {
+			if text, ok := resultText(list); ok {
+				t.Fatalf("a list of a text block and more reads as the text %q; want none", text)
+			}
+		}
+		shortObjects, _ := allocationsOf(func() { _, _ = resultText(short) })
+		longObjects, longBytes := allocationsOf(func() { _, _ = resultText(long) })
+		if longObjects > shortObjects+listSlack || longBytes >= uint64(len(long)) {
+			t.Errorf("a list of %d bytes costs %d allocations and %d bytes, where a list of two costs %d: "+
+				"it is read past its second element", len(long), longObjects, longBytes, shortObjects)
+		}
+	})
+}
+
+// THE RESUME'S MARK DECIDES NOTHING (rule 3, met by rule 4). Measured (EK): a
+// resume that finds a call with no result writes one of its own, a failure in
+// its own words, marked `toolDenialKind: interrupted`; read against the
+// success the log took, its call is told. And it is told for its failure and
+// its text, never its mark: told with the mark stripped, and told with its text
+// reworded to the log's very output while it still says it failed; held only
+// where the result is the log's, a success of the log's text, whatever mark it
+// carries.
+//
+// Mutation: read a result's is_error as absent, and the reworded result holds
+// its call.
+func TestTheResumesMarkDecidesNothing(t *testing.T) {
+	t.Parallel()
+	const output = "e1-done\n"
+	call := hsLogged("toolu_e1", output)
+	const own = "[Tool call interrupted: the session ended before this call's result was recorded, so its " +
+		"outcome is unknown. Check whether it took effect before relying on it or running it again.]"
+	reworded := [2]string{own, "e1-done\\n"}
+	succeeded := [2]string{`"is_error":true,"tool_use_id":"toolu_e1"`, `"is_error":false,"tool_use_id":"toolu_e1"`}
+	for name, tc := range map[string]struct {
+		edits [][2]string
+		held  bool
+	}{
+		"as the resume wrote it":         {nil, false},
+		"its mark stripped":              {[][2]string{{`"toolDenialKind":"interrupted",`, ``}}, false},
+		"its text the log's, a failure":  {[][2]string{reworded}, false},
+		"the log's result, mark and all": {[][2]string{reworded, succeeded}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive, session := hsFixture(t, "2.1.310", "EK", tc.edits...)
+			got, err := hsRead(t, archive, session, hsAsk(call))
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(call); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[call.ID], tc.held)
+			}
+		})
+	}
+}
+
+// A STOPPED OR GIVEN-UP HARNESS'S OWN RESULT DOES NOT HOLD ITS CALL. Measured: a
+// harness stopped in a shell call records its exit code as the call's failed
+// result (ET0), and one that gave up on a slow call records its own timeout
+// text as a failure (pB, a) while the bridge logged the call's success and its
+// output; each is told. The timeout text is as long as that output, so it is
+// told for its text as well as its failure: told still as a success. A call
+// the bridge answered in time (pB, c) is held: its result is the log's,
+// beside a request's blob that repeats it with a reminder appended, which is
+// no record of the thread.
+//
+// Mutation: compare a result's text with the log's output by its length
+// alone, and the timeout text read as a success holds its call.
+func TestAStoppedOrGivenUpHarnesssOwnResultDoesNotHoldItsCall(t *testing.T) {
+	t.Parallel()
+	gaveUp := hsLogged("toolu_pb_a", "slow a finished its work")
+	for name, tc := range map[string]struct {
+		fixture string
+		edits   [][2]string
+		call    sandbox.LoggedCall
+		held    bool
+	}{
+		"a harness stopped in its call": {"ET0", nil, hsLogged("toolu_et1", "et1-done\n"), false},
+		"a call its harness gave up on": {"pBa", nil, gaveUp, false},
+		"its timeout text, as a success": {"pBa", [][2]string{{`"is_error":true,"tool_use_id":"toolu_pb_a"`,
+			`"is_error":false,"tool_use_id":"toolu_pb_a"`}}, gaveUp, false},
+		"a call answered in time": {"pBc", nil, hsLogged("toolu_pb_c", "slow c finished its work"), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive, session := hsFixture(t, "2.1.310", tc.fixture, tc.edits...)
+			got, err := hsRead(t, archive, session, hsAsk(tc.call))
+			hsReadWhole(t, got, err)
+			records := got.Calls[tc.call.ID]
+			if held, _ := got.Holds(tc.call); held != tc.held || records.Uses != 1 || records.Results != 1 ||
+				!records.Live {
+				t.Errorf("Holds = %t, its records %+v; want %t, from its one live result", held, records, tc.held)
+			}
+		})
+	}
+}
+
+// AN ARCHIVE NAMING A MEMBER OUTSIDE IT IS NOT READ, whichever member it is: a
+// name that is absolute, or holds a `..` element, can be restored over the
+// file a resumed session reads, so the member read need not be that file. The
+// rule is held on the RAW name: `projects/crewlet/x/../y` is clean of `..`
+// once cleaned. A member under its own name beside the main thread leaves the
+// reading.
+//
+// Mutation: hold the name to the rule only once it is cleaned, and the
+// interior `..` reads.
+func TestHoldingsReadNoArchiveNamingAMemberOutsideIt(t *testing.T) {
+	t.Parallel()
+	thread := hsThread(hsCall(ctUUID(1), 2, "toolu_outside", hsBlock(t, "outside done"))...)
+	for name, tc := range map[string]struct {
+		member string
+		read   bool
+	}{
+		"an absolute name":  {"/" + hsMain, false},
+		"an interior ..":    {claudeProjectPrefix + "x/../y", false},
+		"a leading ..":      {"../y", false},
+		"a name of its own": {claudeProjectPrefix + "x/y", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive := tarOfMembers(t, []tarMember{
+				{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg}, body: thread},
+				{h: tar.Header{Name: tc.member, Mode: 0o600, Typeflag: tar.TypeReg}, body: "a file\n"},
+			})
+			got, err := hsRead(t, archive, ctSession, hsAsk(hsLogged("toolu_outside", "outside done")))
+			if tc.read {
+				hsReadWhole(t, got, err)
+				return
+			}
+			hsNoReading(t, got, err)
+		})
+	}
+}
+
+// A READ PATH HELD TWICE LEAVES THE SESSION UNREAD: tar restores the last of
+// two members that clean to one name, so a reading of either could be of the
+// file the resumed session does not hold, whichever comes first.
+//
+// Mutation: drop the check, and the archive is read as its first copy.
+func TestAReadPathHeldTwiceLeavesTheSessionUnread(t *testing.T) {
+	t.Parallel()
+	thread := hsThread(hsCall(ctUUID(1), 2, "toolu_twice", hsBlock(t, "twice done"))...)
+	main := tarMember{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg}, body: thread}
+	// Each copy is a thread of its own, so the case turns on the copy alone.
+	copyAs := func(name string) tarMember {
+		return tarMember{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: hsThread()}
+	}
+	for name, members := range map[string][]tarMember{
+		"its copy after it":  {main, copyAs("./" + hsMain)},
+		"its copy before it": {copyAs("./" + hsMain), main},
+		"two slashes":        {main, copyAs(strings.Replace(hsMain, "/", "//", 1))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, tarOfMembers(t, members), ctSession, hsAsk(hsLogged("toolu_twice", "twice done")))
+			hsNoReading(t, got, err)
+		})
+	}
+	t.Run("once", func(t *testing.T) {
+		t.Parallel()
+		got, err := hsRead(t, tarOfMembers(t, []tarMember{main}), ctSession, hsAsk(hsLogged("toolu_twice", "twice done")))
+		hsReadWhole(t, got, err)
+	})
+}
+
+// AN UNREAD MEMBER IS HELD TO THE STREAM'S BOUND: tar passes over a member no
+// read path names by reading it through the archive's meter, so one that
+// inflates past the plaintext a reading reads ends the reading, the scrub's
+// own bound named, and one inside it is passed over.
+//
+// Mutation: hand eachMember no plaintext bound, and the member past it passes.
+func TestAnUnreadMemberIsHeldToTheStreamsBound(t *testing.T) {
+	t.Parallel()
+	bounds := scrubBounds{plain: 1 << 20, piece: scrubPieceMaxBytes}
+	other := claudeProjectPrefix + ctOther + ".jsonl"
+	for name, tc := range map[string]struct {
+		size int
+		read bool
+	}{
+		"inside the bound": {256 << 10, true},
+		"past the bound":   {2 << 20, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive := tarOf(t, map[string]string{hsMain: hsThread(), other: strings.Repeat("x", tc.size)})
+			got, err := hsReadFrom(t.Context(), bytes.NewReader(archive), ctSession,
+				hsAsk(hsLogged("toolu_bound", "bound done")), bounds)
+			if tc.read {
+				hsReadWhole(t, got, err)
+				return
+			}
+			hsNoReading(t, got, err)
+			if !errors.Is(err, errScrubBound) {
+				t.Errorf("the reading ended with %v; want the scrub's bound", err)
+			}
+		})
+	}
+}
+
+// hsLatched is a session's stream as the store hands one out: its bytes, and
+// then fault for every read past them, latched as the store's stream latches
+// its error; io.EOF where fault is nil.
+type hsLatched struct {
+	r     io.Reader
+	fault error
+}
+
+func (b *hsLatched) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if errors.Is(err, io.EOF) && b.fault != nil {
+		return n, b.fault
+	}
+	return n, err
+}
+
+// A READING DECIDES ONLY ONCE ITS STREAM ENDED: what the store streams is
+// provisional until io.EOF, and tar stops at its end of archive, before the
+// stream does. A stream that fails after the archive's last byte, and one cut
+// short of its gzip trailer, past tar's end, each fail at the read past what
+// they handed out, and each is no reading; the same stream ending at io.EOF is
+// read.
+//
+// Mutation: decide at tar's end, without draining the stream, and both
+// readings stand.
+func TestAReadingDecidesOnlyOnceItsStreamEnded(t *testing.T) {
+	t.Parallel()
+	call := hsLogged("toolu_stream", "stream done")
+	archive := hsArchive(t, hsThread(hsCall(ctUUID(1), 2, call.ID, hsBlock(t, call.Output))...))
+	fault := errors.New("the stream's last chunk does not authenticate")
+	for name, tc := range map[string]struct {
+		bytes []byte
+		fault error
+	}{
+		"its whole stream":                         {archive, nil},
+		"a fault after its last byte":              {archive, fault},
+		"cut short of its trailer, past tar's end": {archive[:len(archive)-8], fault},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsReadFrom(t.Context(), &hsLatched{r: bytes.NewReader(tc.bytes), fault: tc.fault},
+				ctSession, hsAsk(call), hsBounds())
+			if tc.fault == nil {
+				hsReadWhole(t, got, err)
+				return
+			}
+			hsNoReading(t, got, err)
+			if !errors.Is(err, fault) {
+				t.Errorf("the reading ended with %v; want the stream's own fault", err)
+			}
+		})
+	}
+}
+
+// hsCancelling is a stream that ends ctx's reading once it has handed out more
+// than after bytes, and counts what it hands out.
+type hsCancelling struct {
+	r      io.Reader
+	after  int
+	cancel context.CancelFunc
+	handed int
+}
+
+func (c *hsCancelling) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.handed += n
+	if c.handed > c.after {
+		c.cancel()
+	}
+	return n, err
+}
+
+// A READING STOPS BETWEEN LINES WHEN ITS CONTEXT ENDS, since a line's read
+// takes none: a caller that left while the main thread was read, many
+// mebibytes that gzip barely shrinks, ends the reading within a line, with the
+// caller's own error and the rest of the stream never read. A walk that asked
+// only between members would read the thread whole and drain the stream.
+//
+// Mutation: ask the context between members alone, and the reading reads the
+// whole thread and stands.
+func TestAReadingStopsBetweenLinesWhenItsContextEnds(t *testing.T) {
+	t.Parallel()
+	random := rand.NewChaCha8([32]byte{'h', 'o', 'l', 'd'})
+	noise := make([]byte, 48<<10)
+	lines := make([]string, 0, 128)
+	for range cap(lines) {
+		_, _ = random.Read(noise)
+		lines = append(lines, `{"type":"queue-operation","operation":"enqueue","sessionId":"`+ctSession+
+			`","content":"`+base64.StdEncoding.EncodeToString(noise)+`"}`)
+	}
+	archive := hsArchive(t, hsThread(lines...))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream := &hsCancelling{r: bytes.NewReader(archive), after: 1 << 20, cancel: cancel}
+	got, err := hsReadFrom(ctx, stream, ctSession, hsAsk(hsLogged("toolu_ctx", "ctx done")), hsBounds())
+	if got.Read || !errors.Is(err, context.Canceled) {
+		t.Fatalf("a reading whose caller left = %+v, %v; want no reading, with its caller's error", got, err)
+	}
+	if stream.handed >= len(archive) {
+		t.Errorf("the reading read all %d bytes of a stream whose caller left after %d", len(archive), stream.after)
+	}
+}
+
+// HOLDINGS ARE HELD TO THEIR BOUNDS, in the main thread: a line one byte past
+// the longest a thread is read with ends the reading, the layer's bound
+// named, where one at it is read; a main thread that is no regular file, a
+// link or a directory, is not read, as the box restores none; and an archive
+// holding no main thread is no reading, never one of a session that holds
+// nothing.
+//
+// Mutation: read a main thread that is no regular file as one with no lines,
+// or an archive with no main thread as a session holding none of its calls,
+// and the reading stands.
+func TestHoldingsAreHeldToTheirBounds(t *testing.T) {
+	t.Parallel()
+	call := hsLogged("toolu_bounds", "bounds done")
+	pad := func(n int) string { // a line of n bytes, its break included
+		head, tail := `{"type":"queue-operation","content":"`, `"}`
+		return head + strings.Repeat("x", n-1-len(head)-len(tail)) + tail
+	}
+	for name, tc := range map[string]struct {
+		members []tarMember
+		read    bool
+		bound   bool
+	}{
+		"a line at its bound": {[]tarMember{{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg},
+			body: hsThread(pad(threadLineMax))}}, true, false},
+		"a line past its bound": {[]tarMember{{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg},
+			body: hsThread(pad(threadLineMax + 1))}}, false, true},
+		"a link named as the main thread": {[]tarMember{{h: tar.Header{Name: hsMain, Typeflag: tar.TypeSymlink,
+			Linkname: "elsewhere.jsonl"}}}, false, false},
+		"a directory named as the main thread": {[]tarMember{{h: tar.Header{Name: hsMain + "/", Mode: 0o700,
+			Typeflag: tar.TypeDir}}}, false, false},
+		"no main thread": {[]tarMember{{h: tar.Header{Name: claudeProjectPrefix + ctOther + ".jsonl", Mode: 0o600,
+			Typeflag: tar.TypeReg}, body: hsThread()}}, false, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, tarOfMembers(t, tc.members), ctSession, hsAsk(call))
+			if tc.read {
+				hsReadWhole(t, got, err)
+				return
+			}
+			hsNoReading(t, got, err)
+			if tc.bound && !errors.Is(err, errThreadBound) {
+				t.Errorf("the reading ended with %v; want a line past its bound", err)
+			}
+		})
+	}
+}
+
+// HOLDINGS READ ONLY THE CONTINUED SESSION'S MEMBERS, as the layer names them:
+// another session's main thread, a thread deeper than the session's
+// subagents (a Workflow's), `agent-.jsonl`, and the session's saved compaction
+// under either of its names are passed over, so a call only they record is
+// absent, and the reading of the session's own main thread stands.
+//
+// Mutation: take any `projects/crewlet/<x>.jsonl` for the main thread, as a
+// person's transcript does, and another session's call is counted.
+func TestHoldingsReadOnlyTheContinuedSessionsMembers(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_member", "member done"
+	call := hsLogged(id, out)
+	elsewhere := hsThread(hsCall(ctUUID(1), 2, id, hsBlock(t, out))...)
+	session := claudeProjectPrefix + ctSession
+	for name, member := range map[string]string{
+		"another session's main thread":          claudeProjectPrefix + ctOther + ".jsonl",
+		"a Workflow's thread":                    session + "/subagents/workflows/w-1/agent-" + ctAgent + ".jsonl",
+		"agent-.jsonl":                           session + "/subagents/agent-.jsonl",
+		"the saved compaction":                   session + "/" + claudePrecompactFile,
+		"the saved compaction beside the thread": session + "." + claudePrecompactFile,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, tarOf(t, map[string]string{hsMain: hsThread(), member: elsewhere}), ctSession,
+				hsAsk(call))
+			hsReadWhole(t, got, err)
+			if records, named := got.Calls[id]; named {
+				t.Errorf("its records %+v; want none, %s being no member the reading reads", records, member)
+			}
+		})
+	}
+}
+
+// A SESSION HOLDING AN UNPAIRED SURROGATE IS STILL READ: Claude Code writes a
+// surrogate that has no pair as a `\udXXX` escape, which a text it cut inside a
+// pair holds, and a box can write a byte that is no UTF-8. Each is read as the
+// harness's own JSON.parse reads it, U+FFFD in its place, so the reading
+// stands: those results are not the log's output, and are told, and the
+// calls beside them are held.
+//
+// Mutation: read a result whose text does not decode strictly as no record,
+// and the session is unread, every call in it told.
+func TestASessionHoldingAnUnpairedSurrogateIsStillRead(t *testing.T) {
+	t.Parallel()
+	cut, raw, plain := hsLogged("toolu_cut", "\U0001F600 tail"), hsLogged("toolu_raw", "a\xffb"),
+		hsLogged("toolu_plain", "plain done")
+	var lines []string
+	lines = append(lines, hsCall(ctUUID(1), 2, cut.ID, `[{"type":"text","text":"\ud83d tail"}]`)...)
+	lines = append(lines, hsCall(ctUUID(3), 4, raw.ID, "[{\"type\":\"text\",\"text\":\"a\xffb\"}]")...)
+	lines = append(lines, hsCall(ctUUID(5), 6, plain.ID, hsBlock(t, plain.Output))...)
+	got, err := hsRead(t, hsArchive(t, hsThread(lines...)), ctSession, hsAsk(cut, raw, plain))
+	hsReadWhole(t, got, err)
+	for _, tc := range []struct {
+		call sandbox.LoggedCall
+		held bool
+	}{{cut, false}, {raw, false}, {plain, true}} {
+		if held, _ := got.Holds(tc.call); held != tc.held {
+			t.Errorf("%s: Holds = %t, its records %+v; want %t", tc.call.ID, held, got.Calls[tc.call.ID], tc.held)
+		}
+	}
+}
+
+// AN ERROR QUOTES A BOX-WRITTEN NAME ONLY CUT: an archive can name a member in
+// most of a mebibyte, and the reading's error is a log line's detail, so a
+// name it quotes is its first line, redacted and held to what a transcript
+// line quotes of a path ([memberNamed]), and the whole error stays well under
+// a kibibyte.
+//
+// Mutation: quote the member's name whole, and the error runs to a mebibyte.
+func TestAnErrorQuotesABoxWrittenNameOnlyCut(t *testing.T) {
+	t.Parallel()
+	name := "/" + strings.Repeat("n", 1<<20-100)
+	archive := tarOfMembers(t, []tarMember{
+		{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg}, body: hsThread()},
+		{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg, Format: tar.FormatPAX}, body: "a file\n"},
+	})
+	got, err := hsRead(t, archive, ctSession, hsAsk(hsLogged("toolu_name", "name done")))
+	hsNoReading(t, got, err)
+	if words := err.Error(); len(words) >= 1<<10 || strings.Contains(words, strings.Repeat("n", transcriptDetailLimit+1)) {
+		t.Errorf("the error runs to %d bytes, %.200q…; want the name cut to %d, the whole under a kibibyte",
+			len(words), words, transcriptDetailLimit)
+	}
+}
