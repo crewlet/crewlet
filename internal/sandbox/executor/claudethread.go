@@ -47,7 +47,9 @@ import (
 //     no keyword prefilter ([threadHead]).
 //   - A LIST IS READ AN ELEMENT AT A TIME ([eachElement]), each element held
 //     to its type as it is read and never the whole list first, so a list a
-//     box wrote costs its reader one element at a time.
+//     box wrote costs its reader one element at a time; and AN OBJECT WHOSE
+//     KEYS ARE OPEN, as a map's are, A KEY AT A TIME ([eachKey]), never
+//     decoded into a map of every key first.
 //   - EVERY VALUE IS DECODED AS CLAUDE CODE'S OWN JSON.parse READS IT, under
 //     one set of options ([threadDecoding]): a key exactly as written, never
 //     matched by case as encoding/json matches a struct's fields; a key
@@ -624,9 +626,9 @@ func (h threadHead) Root() bool { return bytes.Equal(h.Parent, jsonNull) }
 func (h threadHead) Main() bool { return h.Sidechain != nil && !*h.Sidechain && h.AgentID == "" }
 
 // threadDecoding is the ONE set of options every decode this layer makes goes
-// through ([wireDecode], [eachElement]), so a value reads as Claude Code's own
-// JSON.parse reads it, whichever decode reads it. Each option is set for its
-// own reason:
+// through ([wireDecode], [eachElement], [eachKey]), so a value reads as Claude
+// Code's own JSON.parse reads it, whichever decode reads it. Each option is
+// set for its own reason:
 //
 //   - EXACT KEY NAMES (encoding/json/v2's MatchCaseInsensitiveNames, off): a
 //     key fills the field it names exactly, as JSON.parse holds `toolUseID`
@@ -710,6 +712,73 @@ func eachElement(list json.RawMessage, each func(element json.RawMessage) error)
 	}
 	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
 		return errors.New("a list is followed by more than whitespace")
+	}
+	return nil
+}
+
+// eachKey hands each key of object, raw JSON holding one object, to each, in
+// order, as it reads it, beside that key's value: the key's name unquoted as
+// [threadDecoding] reads a name (an escape resolved, and invalid UTF-8 or a
+// lone surrogate as U+FFFD), and the value's raw bytes, as written but for
+// the whitespace around them. Each is valid only while each runs, so each
+// copies what it keeps. It NEVER COLLECTS THEM, and never folds two keys of
+// one name into one: a key written twice is handed both times, in its place,
+// and which of the two counts is each's to say (JSON.parse reads the last).
+// It stops at the first error each returns, reads no key after it, and
+// returns that error unchanged; an object that is no object, or that does not
+// decode, is an error of its own.
+//
+// THE ONE WALK of an object whose keys a box chose, as [eachElement] is of a
+// list, under the same options. An object whose keys a reader names is
+// decoded into a struct that holds those keys, every other key passed over
+// and never kept; one whose keys are open, as a map's are, is walked, so what
+// it costs its reader is what each makes of one key at a time, never a map of
+// every key first. Decoded whole into a map, a result line of one mebibyte
+// naming a model in each of its 95,315 keys cost the run's event stream
+// 286,787 allocations and 45 MB, 42.6 times the line, and a line of four
+// mebibytes four times that (measured): about 1.4 GB at the 32 MiB a line of
+// the stream may hold. Its reader: a run's result's spend model by model
+// ([claudeResult.sinceLastResult]).
+//
+// THE NAME IS HANDED AS BYTES, in a buffer the walk reuses, never as a
+// string: a string would be an allocation for every key, which a reader that
+// keeps none would pay for each key of an object of millions. A reader
+// compares it as string(name), which costs nothing, and makes a string of a
+// name it keeps.
+func eachKey(object json.RawMessage, each func(name []byte, value json.RawMessage) error) error {
+	if trimmed := bytes.TrimLeft(object, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
+		return fmt.Errorf("is %s, not an object", wireKind(trimmed))
+	}
+	dec := jsontext.NewDecoder(bytes.NewBuffer(object), threadDecoding)
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	var name []byte
+	for dec.PeekKind() != '}' {
+		quoted, err := dec.ReadValue()
+		if err != nil {
+			return err
+		}
+		// UNQUOTED BEFORE ITS VALUE IS READ, into the walk's own buffer: what
+		// the decoder hands out is valid only until its next read. The name
+		// was read whole, so the only errors unquoting it meets are a lone
+		// surrogate's and invalid UTF-8's, each of which it writes as U+FFFD
+		// in its place, as the options' own decode of a name does and drops
+		// the error.
+		name, _ = jsontext.AppendUnquote(name[:0], quoted)
+		value, err := dec.ReadValue()
+		if err != nil {
+			return err
+		}
+		if err = each(name, value); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return errors.New("an object is followed by more than whitespace")
 	}
 	return nil
 }

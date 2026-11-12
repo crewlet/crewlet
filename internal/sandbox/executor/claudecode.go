@@ -1738,7 +1738,8 @@ type claudeResult struct {
 	// ([ClaudeCode.TotalsRestored]).
 	//
 	// RAW, and read where it is asked for ([claudeResult.sinceLastResult]): on
-	// a result line of the stream, by the reader that sums it, and never by
+	// a result line of the stream, by the reader that sums it, a model at a
+	// time and for at most [claudeResultModelsMax] models, and never by
 	// [ClaudeCode.Parse], which reads none of it, nor on a line of another
 	// type that carries the key.
 	SinceLastResult json.RawMessage
@@ -1779,25 +1780,81 @@ func (w claudeResultWire) result() claudeResult {
 	return r
 }
 
+// claudeResultModelsMax is the most models a result's spend model by model is
+// read for ([claudeResult.sinceLastResult]); a result naming more is read for
+// none of them.
+//
+// SIXTY-FOUR. A result names the models its process called, and every result
+// measured that states its spend names one model or none (117, of 2.1.310 and
+// 2.1.322, each naming claude-sonnet-4-5 where it names any): a process calls
+// a handful at most, its own model, the one it falls back to, the small one
+// its helpers run on and the one a subagent runs on (each a setting 2.1.322's
+// shipped code reads). Sixty-four leaves a later release and a repository's
+// own agents room many times over, and holds what a result costs its reader
+// to that many models' spends, however many the line names.
+const claudeResultModelsMax = 64
+
+// errResultModels is a result whose spend model by model names more models
+// than [claudeResultModelsMax]: read for none of them.
+var errResultModels = fmt.Errorf("executor: a result states its spend for more than %d models",
+	claudeResultModelsMax)
+
 // sinceLastResult is the result's per-run spend, model by model
 // ([claudeResult.SinceLastResult]), and whether the result states it:
 // PRESENT, EVEN EMPTY, IS STATED, and a value that is absent, null or no
 // object states nothing. Each model's spend is read by its keys exactly as
 // written and loosely by type ([looseModelUsage]), and a model the result
 // names twice by its last, as JSON.parse reads it.
-func (r claudeResult) sinceLastResult() (map[string]claudeModelUsage, bool) {
+//
+// A MODEL AT A TIME ([eachKey]), never the whole object first, and AT MOST
+// [claudeResultModelsMax] OF THEM. The walk keeps each model it meets and a
+// copy of the last spend written for it, made into the room the one before
+// left, and reads each kept spend once the walk is over: so a model named
+// over and over costs one spend's copy and one read, never one for each time
+// it is named, and a line naming any number of models costs no more than one
+// naming that many.
+//
+// A RESULT NAMING MORE IS UNREAD, errResultModels: the walk stops at the
+// first model past the bound, and no spend of the result is read, never the
+// sum of the models before it, which would charge the run for some of its
+// calls and not the rest. So is an object the walk cannot read to its end,
+// its own error, which no line the stream decoded whole holds. Its one
+// reader, the run's event stream, then reads the run's own spend as stated by
+// none of its results ([claudeEvents.runSpend]).
+func (r claudeResult) sinceLastResult() (map[string]claudeModelUsage, bool, error) {
 	if !wireObject(r.SinceLastResult) {
-		return nil, false
+		return nil, false, nil
 	}
-	var models map[string]json.RawMessage
-	if wireDecode(r.SinceLastResult, &models) != nil {
-		return nil, false
+	var (
+		// place is each model met, by its name, its place in names and last.
+		place = map[string]int{}
+		names []string
+		// last is the last spend written for each model met, its own copy:
+		// the walk's bytes are valid only while it hands them over.
+		last [][]byte
+	)
+	err := eachKey(r.SinceLastResult, func(name []byte, spend json.RawMessage) error {
+		if i, met := place[string(name)]; met {
+			last[i] = append(last[i][:0], spend...)
+			return nil
+		}
+		if len(names) == claudeResultModelsMax {
+			return errResultModels
+		}
+		model := string(name)
+		place[model] = len(names)
+		names = append(names, model)
+		last = append(last, append([]byte(nil), spend...))
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
 	}
-	spent := make(map[string]claudeModelUsage, len(models))
-	for name, raw := range models {
-		spent[name] = looseModelUsage(raw)
+	spent := make(map[string]claudeModelUsage, len(names))
+	for i, model := range names {
+		spent[model] = looseModelUsage(last[i])
 	}
-	return spent, true
+	return spent, true, nil
 }
 
 // claudeModelUsage is one model's spend as Claude Code's result states it per

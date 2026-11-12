@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -306,6 +307,188 @@ func TestAKeyOfAnotherKindCostsItsReaderThatKeyAlone(t *testing.T) {
 		if got, want := readOpenCodeMessage(t, ctReplace(t, recordsOpenCodeBrief, created, reshaped)),
 			readOpenCodeMessage(t, absent); got != want {
 			t.Errorf("%s reads as\n%s\nwant it read as without the key\n%s", name, got, want)
+		}
+	}
+}
+
+// recordsModels is a result's spend model by model naming n models, each
+// spending one input token, two output tokens, three cache reads, four cache
+// writes and half a dollar; where twice says so, the first model is also
+// written once before them all, with another spend.
+func recordsModels(n int, twice bool) string {
+	const spend = `{"inputTokens":1,"outputTokens":2,"cacheReadInputTokens":3,"cacheCreationInputTokens":4,` +
+		`"costUSD":0.5}`
+	models := make([]string, 0, n+1)
+	if twice {
+		models = append(models, `"claude-test-0":{"inputTokens":90,"costUSD":9}`)
+	}
+	for i := range n {
+		models = append(models, fmt.Sprintf(`"claude-test-%d":%s`, i, spend))
+	}
+	return "{" + strings.Join(models, ",") + "}"
+}
+
+// A RUN'S SPEND IS UNREAD WHERE ONE RESULT NAMES MORE MODELS THAN A RESULT IS
+// READ FOR: a result's spend model by model is read for at most
+// claudeResultModelsMax models, and one naming more is read for none of them,
+// so the run's own spend reads as stated by no result, whatever the results
+// before or after it stated: never the sum of the ones it could read, nor of
+// the models before the bound, either of which would charge the run for some
+// of its calls and not the rest. A result naming exactly that many reads as it
+// always did, every model's spend summed, and one of them named twice counts
+// once toward the bound, by its last spend. The line costs its reader nothing
+// else: the result's failure still reaches the run's transcript.
+//
+// Mutation: drop the bound, and the result naming one model more is summed;
+// sum the models before the bound, and the run is charged for part of that
+// result's calls; read the result past it as one that states nothing, or let
+// a later result's spend read again, and the run is charged the other
+// result's sum.
+func TestARunsSpendIsUnreadWhereAResultNamesMoreModelsThanAResultIsReadFor(t *testing.T) {
+	t.Parallel()
+	ending := func(models string) string { return ctReplace(t, recordsEnding, "{"+recordsSpent+"}", models) }
+	atBound := ending(recordsModels(claudeResultModelsMax, false))
+	twice := ending(recordsModels(claudeResultModelsMax, true))
+	past := ending(recordsModels(claudeResultModelsMax+1, false))
+	const (
+		failed = "[error] the run ended: error_during_execution: it ran out"
+		read   = "own {input:64 cacheRead:192 cacheWrite:256 output:128 costUSD:32} (stated true)"
+		unread = "own {input:0 cacheRead:0 cacheWrite:0 output:0 costUSD:0} (stated false)"
+	)
+	for name, tc := range map[string]struct {
+		lines []string
+		want  string
+	}{
+		"a result naming the most models a result is read for": {lines: []string{atBound},
+			want: fmt.Sprintf("%q, %s", failed, read)},
+		"the same, its first model named twice": {lines: []string{twice},
+			want: fmt.Sprintf("%q, %s", failed, read)},
+		"a result naming one model more": {lines: []string{past},
+			want: fmt.Sprintf("%q, %s", failed, unread)},
+		"a result that states its spend, then one naming one model more": {lines: []string{recordsEnding, past},
+			want: fmt.Sprintf("%q, %s", failed+"\n"+failed, unread)},
+		"a result naming one model more, then one that states its spend": {lines: []string{past, recordsEnding},
+			want: fmt.Sprintf("%q, %s", failed+"\n"+failed, unread)},
+	} {
+		d := &claudeEvents{tools: map[string]string{}}
+		for _, line := range tc.lines {
+			d.Line([]byte(line))
+		}
+		own, stated := d.runSpend()
+		if got := fmt.Sprintf("%q, own %+v (stated %t)", d.Result().Transcript, own, stated); got != tc.want {
+			t.Errorf("%s reads as\n%s\nwant\n%s", name, got, tc.want)
+		}
+	}
+}
+
+// A RESULT'S SPEND MODEL BY MODEL READS AS ITS WHOLE DECODE READ IT, up to the
+// bound on the models it is read for: read a model at a time, every result
+// reads as the decode of the whole object into a map read it, so a model
+// whose name is escaped is the one written plainly, a name holding a lone
+// surrogate or a byte that is no UTF-8 is the one holding U+FFFD in its place,
+// a model named twice reads by its last spend, names that differ only in case
+// are two models, a spend that is no object reads as none and a figure of
+// another kind as absent; an empty object states a spend of nothing, and a
+// result naming the most models it is read for reads every one of them.
+//
+// Mutation: compare names as written, and a model escaped and written plainly
+// reads as two; keep a model's first spend, and the model named twice reads
+// by its first.
+func TestAResultsSpendModelByModelReadsAsItsWholeDecodeReadIt(t *testing.T) {
+	t.Parallel()
+	whole := func(object string) map[string]claudeModelUsage {
+		var models map[string]json.RawMessage
+		if err := wireDecode([]byte(object), &models); err != nil {
+			t.Fatalf("the whole decode reads %.80s as no object: %v", object, err)
+		}
+		spent := make(map[string]claudeModelUsage, len(models))
+		for name, raw := range models {
+			spent[name] = looseModelUsage(raw)
+		}
+		return spent
+	}
+	for name, object := range map[string]string{
+		"a model escaped and written plainly": `{"claude-\u0061":{"inputTokens":1},"claude-a":{"inputTokens":2}}`,
+		"a name holding a lone surrogate, and one holding U+FFFD": `{"cut \ud83d":{"inputTokens":1},` +
+			`"cut \ufffd":{"outputTokens":2}}`,
+		"a name holding a byte that is no UTF-8, and one holding U+FFFD": `{"bad ` + "\xff" + `":{"inputTokens":1},` +
+			`"bad \ufffd":{"inputTokens":3}}`,
+		"a model named twice": `{"m":{"inputTokens":90,"costUSD":9},"n":{"inputTokens":1},` +
+			`"m":{"inputTokens":1,"costUSD":0.25}}`,
+		"names that differ only in case": `{"Claude":{"inputTokens":1},"claude":{"inputTokens":2}}`,
+		"spends and figures of other kinds": `{"a":1,"b":"x","c":null,"d":[{"inputTokens":1}],` +
+			`"e":{"inputTokens":"1","outputTokens":1.5,"costUSD":[0.5],"cacheReadInputTokens":2}}`,
+		"an empty object":                      `{}`,
+		"the most models a result is read for": recordsModels(claudeResultModelsMax, true),
+	} {
+		r, ok := decodeClaudeResult(`{"type":"result","subtype":"success","model_usage_since_last_result":` +
+			object + `}`)
+		if !ok {
+			t.Fatalf("%s: the result is no result", name)
+		}
+		got, stated, err := r.sinceLastResult()
+		if want := whole(object); err != nil || !stated || !maps.Equal(got, want) {
+			t.Errorf("%s reads as %+v (stated %t, %v), want %+v as its whole decode read it", name, got, stated, err,
+				want)
+		}
+	}
+}
+
+// A RESULT'S SPEND MODEL BY MODEL COSTS ITS READER A MODEL AT A TIME: the
+// run's event stream reads a result's per-run spend a model at a time, for at
+// most claudeResultModelsMax models, each model's spend once, so a result line
+// of listBytes naming a model in every key it holds costs its reader no more
+// allocations than a line naming that many models, and a line naming one
+// model over and over no more than a line naming it once, each beside no more
+// bytes than a few copies of itself. Decoded whole into a map, a line naming
+// a model in every key cost an allocation or more for each of its tens of
+// thousands of models.
+//
+// Not parallel: the counts are the process's, and a parallel test's
+// allocations would be counted with this one's.
+//
+// Mutation: decode the spend whole into a map, or drop the bound on the models
+// it is read for, and the line naming a model in every key costs an
+// allocation or more for every model; read a model's spend each time the walk
+// meets it, or copy it anew each time, and the line naming one model over and
+// over costs one for every time.
+func TestAResultsSpendModelByModelCostsItsReaderAModelAtATime(t *testing.T) {
+	// Each read is handed bytes made once, outside what is measured, as a
+	// reader is handed a line it did not copy.
+	stream := func(line string) func() {
+		raw := []byte(line)
+		return func() { (&claudeEvents{tools: map[string]string{}}).Line(raw) }
+	}
+	const (
+		head = `{"type":"result","subtype":"success","is_error":false,"result":"done",` +
+			`"model_usage_since_last_result":{`
+		tail = `}}`
+	)
+	model := func(i int) string { return fmt.Sprintf(`"m%06x":{"inputTokens":1}`, i) }
+	every, models := ctKeysRecord(t, head, model, tail, listBytes)
+	over, times := ctKeysRecord(t, head, func(int) string { return model(0) }, tail, listBytes)
+	if models <= claudeResultModelsMax {
+		t.Fatalf("a line of %d bytes names %d models, no more than the %d a result is read for", listBytes, models,
+			claudeResultModelsMax)
+	}
+	atBound := make([]string, claudeResultModelsMax)
+	for i := range atBound {
+		atBound[i] = model(i)
+	}
+	for name, tc := range map[string]struct{ line, reference, says string }{
+		"a model in every key": {line: every, reference: head + strings.Join(atBound, ",") + tail,
+			says: fmt.Sprintf("%d models, and a line naming %d", models, claudeResultModelsMax)},
+		"one model over and over": {line: over, reference: head + model(0) + tail,
+			says: fmt.Sprintf("one model %d times, and a line naming it once", times)},
+	} {
+		fewObjects, fewBytes := allocationsOf(stream(tc.reference))
+		manyObjects, manyBytes := allocationsOf(stream(tc.line))
+		if manyObjects > fewObjects+listSlack {
+			t.Errorf("%s: a line naming %s cost %d allocations and %d", name, tc.says, manyObjects, fewObjects)
+		}
+		if manyBytes > fewBytes+listCopies*uint64(len(tc.line)) {
+			t.Errorf("%s: a line of %d bytes naming %s cost %d bytes and %d: more than %d copies of the line",
+				name, len(tc.line), tc.says, manyBytes, fewBytes, listCopies)
 		}
 	}
 }

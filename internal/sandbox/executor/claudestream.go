@@ -293,10 +293,11 @@ type claudeEvents struct {
 
 	// own is the run's own spend as its results stated it, each result's
 	// per-model figures for the calls since the one before
-	// ([claudeResult.SinceLastResult]) added up, and stated whether any
-	// result carried them ([claudeEvents.runSpend]).
-	own    runSpend
-	stated bool
+	// ([claudeResult.SinceLastResult]) added up; stated whether any result
+	// carried them, and unread whether one carried them for more models than
+	// a result is read for ([claudeEvents.runSpend]).
+	own            runSpend
+	stated, unread bool
 }
 
 // runSpend is the run's own spend, summed over every result its stream
@@ -304,7 +305,19 @@ type claudeEvents struct {
 // A run can print several results — a person's note handed to it as it
 // finished carries its loop on to another — and each states only the calls
 // since the one before, so the sum is the whole run's.
-func (d *claudeEvents) runSpend() (runSpend, bool) { return d.own, d.stated }
+//
+// NONE ONCE ONE RESULT'S FIGURES ARE UNREAD: a result naming more models than
+// a result is read for ([claudeResultModelsMax]) is read for none of them,
+// so the sum of the others is no run's spend, and would charge the run for
+// some of its calls and not the rest. Stated by none, the run is charged by
+// its result's figures for its session, as a run on a release that states
+// none is ([Runner.ownSpend]).
+func (d *claudeEvents) runSpend() (runSpend, bool) {
+	if d.unread {
+		return runSpend{}, false
+	}
+	return d.own, d.stated
+}
 
 // state adds one result's per-run figures, model by model in name order, so
 // the price is summed in one order on every read.
@@ -405,8 +418,14 @@ func (d *claudeEvents) Line(line []byte) {
 			d.transcript.add("[error] the run ended: " + firstLine(result.failure(), transcriptDetailLimit))
 		}
 		// PRESENT, EVEN EMPTY, IS STATED: a result with no calls since the
-		// one before says the run spent nothing more, which is an answer.
-		if models, stated := result.sinceLastResult(); stated {
+		// one before says the run spent nothing more, which is an answer. One
+		// whose spend is unread, as one naming more models than a result is
+		// read for is ([claudeResult.sinceLastResult]), leaves the run's own
+		// spend unread, and costs the line nothing else.
+		switch models, stated, err := result.sinceLastResult(); {
+		case err != nil:
+			d.unread = true
+		case stated:
 			d.state(models)
 		}
 	}

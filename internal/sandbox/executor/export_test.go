@@ -49,6 +49,10 @@ func UnreadNote(unread int64) string { return unreadNote(unread, false) }
 // MaxLineBytes is the line bound every runner New builds reads to.
 const MaxLineBytes = maxLineBytes
 
+// ClaudeResultModelsMax is the most models a Claude Code result's spend model
+// by model is read for.
+const ClaudeResultModelsMax = claudeResultModelsMax
+
 // LiveWindow and LiveBacklog are the live reading's: how much of a stream's
 // end it begins from, and the most one read catches up before beginning again.
 const (

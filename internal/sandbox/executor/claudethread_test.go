@@ -2011,6 +2011,99 @@ func ctListRecord(t *testing.T, head, element, tail string, size int) string {
 	return head + element + strings.Repeat(","+element, more) + strings.Repeat(" ", pad) + tail
 }
 
+// AN OBJECT IS WALKED A KEY AT A TIME: each key is handed out as it is read,
+// in order, its name unquoted as the layer's options read a name (an escape
+// resolved, a lone surrogate and a byte that is no UTF-8 each as U+FFFD, and
+// its case as written) and its value as written but for the whitespace around
+// it; a key written twice is handed out both times, each in its place; the
+// walk stops at the first error its callback returns, returns that error
+// itself, never wrapped, and reads no key after it, so an object whose third
+// key's value is no JSON still ends with the callback's error; and a value
+// that is no object, an object cut short, one whose key is no string, one
+// whose value is no JSON and one followed by more are each an error of the
+// walk's own, never io.EOF. An empty object hands out nothing.
+//
+// Mutation: read the object whole before handing out its first key, and the
+// object whose third key is no JSON ends with the decode's error, its first
+// two never handed out; hand a name out as written, and an escaped name keeps
+// its escape; fold a key written twice into one, and its second value is
+// never handed out; wrap the callback's error, and it no longer comes back as
+// itself; walk on past it, and the walk ends with the decode's error; take any
+// value for an object, and a string or nothing ends the walk with io.EOF;
+// take what follows an object, and an object followed by another reads as
+// one.
+func TestAnObjectIsWalkedAKeyAtATime(t *testing.T) {
+	t.Parallel()
+	type key struct{ name, value string }
+	walk := func(object string, stopAt int, stop error) ([]key, error) {
+		var handed []key
+		err := eachKey(json.RawMessage(object), func(name []byte, value json.RawMessage) error {
+			handed = append(handed, key{string(name), string(value)})
+			if len(handed) == stopAt {
+				return stop
+			}
+			return nil
+		})
+		return handed, err
+	}
+	handed, err := walk(` { "a" : 1 , "b\u0061" : "two" , "c" : {"three": [3, 3]} , "a" : [ ] , "A" : null , `+
+		`"cut \ud83d" : false , "bad `+"\xff"+`" : 5 } `, 0, nil)
+	want := []key{{"a", `1`}, {"ba", `"two"`}, {"c", `{"three": [3, 3]}`}, {"a", `[ ]`}, {"A", `null`},
+		{"cut \ufffd", `false`}, {"bad \ufffd", `5`}}
+	if err != nil || !slices.Equal(handed, want) {
+		t.Errorf("an object's keys are handed out as %q, %v; want %q", handed, err, want)
+	}
+	handed, err = walk(`{}`, 0, nil)
+	if err != nil || handed != nil {
+		t.Errorf("an empty object hands out %q, %v; want nothing", handed, err)
+	}
+	stop := errors.New("the reader has read enough")
+	handed, err = walk(`{"a":1,"b":"two","c":}`, 2, stop)
+	if !errors.Is(err, stop) || errors.Unwrap(err) != nil || !slices.Equal(handed, []key{{"a", `1`}, {"b", `"two"`}}) {
+		t.Errorf("a walk its callback stops at the second key hands out %q and ends with %v; want the two keys, "+
+			"and the callback's own error as it returned it", handed, err)
+	}
+	for name, object := range map[string]string{
+		"a list":                           `[{"a":1}]`,
+		"a string":                         `"{}"`,
+		"nothing":                          ``,
+		"an object cut short":              `{"a":1`,
+		"an object whose key is no string": `{1:2}`,
+		"an object whose value is no JSON": `{"a":}`,
+		"an object followed by more":       `{"a":1} {"b":2}`,
+	} {
+		if handed, err := walk(object, 0, nil); err == nil || errors.Is(err, io.EOF) {
+			t.Errorf("%s walks as %q, %v; want an error of the walk's own, never io.EOF, which a reader could "+
+				"take for the object's end", name, handed, err)
+		}
+	}
+}
+
+// ctKeysRecord is a record that opens with head, ends with tail, and holds
+// between them the keys of an object, key(0), key(1) and on, each a whole
+// `"name":value`, as many as a line of exactly size bytes holds, its break
+// included, spaces making up the rest; and how many keys it holds.
+func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string, size int) (string, int) {
+	t.Helper()
+	room := size - 1 - len(head) - len(tail)
+	var keys strings.Builder
+	n := 0
+	for ; ; n++ {
+		next := key(n)
+		if n > 0 {
+			next = "," + next
+		}
+		if keys.Len()+len(next) > room {
+			break
+		}
+		keys.WriteString(next)
+	}
+	if n == 0 {
+		t.Fatalf("a line of %d bytes cannot hold %s%s%s", size, head, key(0), tail)
+	}
+	return head + keys.String() + strings.Repeat(" ", room-keys.Len()) + tail, n
+}
+
 // A CONTENT LIST COSTS ONE BLOCK AT A TIME: a message's content and a reply's
 // applied context edits are read a block at a time, each held to its type as
 // it is read. So a list refused at its first block costs what a list of that
@@ -2149,6 +2242,45 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		if held, limit := heldBy(read), (kinds+fields)*5/4+heldSlack; held > limit {
 			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d kinds and %d calls "+
 				"take: %d", name, len(line.Raw)+1, held, blocks, calls, limit)
+		}
+	}
+}
+
+// AN OBJECT'S WALK COSTS WHAT ONE KEY COSTS: the walk itself, with nobody
+// keeping what it hands out, costs an object of tens of thousands of keys the
+// allocations an object of one key costs, and no byte more than the object's
+// own size, whether its names are written plainly or escaped: it never
+// collects the keys, and hands each name out in a buffer it reuses, never as a
+// string or a copy of its own, either of which is an allocation for every key.
+//
+// Not parallel: the counts are the process's, and a parallel test's
+// allocations would be counted with this one's.
+//
+// Mutation: have the walk collect the keys before it hands out the first, or
+// hand out a copy of each name, and an object of listBytes costs an
+// allocation or more for every key it holds.
+func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
+	keepNone := func([]byte, json.RawMessage) error { return nil }
+	for name, key := range map[string]func(int) string{
+		"names written plainly": func(i int) string { return fmt.Sprintf(`"m%06x":{}`, i) },
+		"names escaped":         func(i int) string { return fmt.Sprintf(`"\u006d%06x":{}`, i) },
+	} {
+		one := json.RawMessage(`{` + key(0) + `}`)
+		long, n := ctKeysRecord(t, `{`, key, `}`, listBytes)
+		object := json.RawMessage(long)
+		keys := 0
+		if err := eachKey(object, func([]byte, json.RawMessage) error {
+			keys++
+			return nil
+		}); err != nil || keys != n {
+			t.Fatalf("%s: an object of %d keys walks as %d keys, %v", name, n, keys, err)
+		}
+		fewObjects, fewBytes := allocationsOf(func() { _ = eachKey(one, keepNone) })
+		manyObjects, manyBytes := allocationsOf(func() { _ = eachKey(object, keepNone) })
+		if manyObjects > fewObjects+listSlack || manyBytes > fewBytes+uint64(len(object)) {
+			t.Errorf("%s: a walk of an object of %d keys costs %d allocations and %d bytes, and of an object of "+
+				"one %d and %d: more than the object's own size more", name, n, manyObjects, manyBytes, fewObjects,
+				fewBytes)
 		}
 	}
 }

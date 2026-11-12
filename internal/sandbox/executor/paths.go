@@ -51,9 +51,11 @@
 // surrogate as the replacement character, never refused), and `parentUuid`
 // handed over as written, since the harness's bookkeeping carries none and only
 // a root carries null; a list a box wrote read an element at a time
-// ([eachElement]), never decoded whole before its first element is checked; a
-// key only one reader reads held to its type in that reader's accessor; and a
-// hook's firing handed out by [threadLine.Hook] alone, a call's id by
+// ([eachElement]), never decoded whole before its first element is checked,
+// and an object whose keys are open, as a map's are, a key at a time
+// ([eachKey]), never decoded into a map of every key first; a key only one
+// reader reads held to its type in that reader's accessor; and a hook's
+// firing handed out by [threadLine.Hook] alone, a call's id by
 // [threadMessage.Calls] alone, since a PostToolUse hook's firing carries the id
 // of the call it followed. The take's context meter (measure.go) decides
 // nothing of what a session recorded and reads the main thread outside the
