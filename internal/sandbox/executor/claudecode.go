@@ -313,6 +313,12 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		}
 		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem(), plain))
 	}
+	// THE COMPACTION POINT PINNED IN THE SETTINGS AS WELL, on a release whose
+	// settings take the pin ([claudeCompactionPinFloor]): the pinned copy of
+	// whichever file the gates above chose ([claudePinGate]), so a repository's
+	// own settings cannot move the point the wrapper pinned. After every gate
+	// that chooses cs.
+	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
 	line(`set -- "$@" --settings "$cs"`)
 	b.WriteString(claudeSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	// THE RECORD, before the harness starts, so a run killed before it reported
@@ -413,6 +419,42 @@ const claudeCarryFloor = "2.1.310"
 // version on", its changelog) — a session compacted by an older release comes
 // back without its summary, or with the history before it.
 const claudeCarriedWriterFloor = "2.1.300"
+
+// claudeCompactionPinFloor is the oldest Claude Code release a run is started
+// with its compaction point pinned in its settings as well as in its
+// environment ([claudeCompactionPin], [claudePinGate]): 2.1.310, the oldest
+// release read whose settings schema declares `env` ("Environment variables to
+// set for Claude Code sessions", 2.1.310 and 2.1.322 alike). A settings file a
+// release cannot validate is ignored whole in print mode, the retention with it
+// ([claudeSettings]), so the pinned copy is handed only where the key was read.
+// It is also the oldest release a box continues a session carried from another
+// box on ([claudeCarryFloor]), so every carried session's run has the pin.
+const claudeCompactionPinFloor = "2.1.310"
+
+// claudePinGate is the part of a Claude Code run's script that hands its
+// harness, on a release at or after [claudeCompactionPinFloor], the pinned copy
+// of the settings file the gates before it chose ([Paths.ClaudeSettingsPinned],
+// [Paths.ClaudeSkillsSettingsPinned], [Paths.ClaudeNotesSettingsPinned]), and on
+// an older release the file as chosen. Each file the run's gates can choose has
+// its arm: every run's, the skills' for a run handed skills, and the notes' for
+// a run wired to its notes. Those are the files [ClaudeCode.WriteConfig] writes
+// with their pinned copies, and no other file is named.
+func claudePinGate(paths Paths, skills, notes bool) string {
+	files := [][2]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned()}}
+	if skills {
+		files = append(files, [2]string{paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned()})
+	}
+	if notes {
+		files = append(files, [2]string{paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned()})
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "if at %s; then case $cs in\n", floorArgs(claudeCompactionPinFloor))
+	for _, file := range files {
+		fmt.Fprintf(&b, "  %s) cs=%s ;;\n", sandbox.ShellQuote(file[0]), sandbox.ShellQuote(file[1]))
+	}
+	b.WriteString("esac; fi\n")
+	return b.String()
+}
 
 // claudeNotesGate is the part of a run's script wired to its notes that
 // decides, by the harness's release ([claudeRelease]), its settings (cs) and
@@ -1067,6 +1109,11 @@ func floorArgs(version string) string {
 // and its settings a third time, with hooks switched on so that hook runs
 // whatever the repository says ([Paths.ClaudeSkillsSettings]).
 //
+// EVERY SETTINGS FILE IS WRITTEN WITH ITS PINNED COPY BESIDE IT: the same
+// settings with the compaction point pinned ([claudeCompactionPin]) under the
+// window the wrapper pins ([ClaudeCode.Pins]), which a release that takes the
+// pin is handed in the file's place ([claudePinGate]).
+//
 // The settings files are written afresh, at the mode a box writes every file
 // with (0600 on a local box): a box write replaces a file whole
 // ([sandbox.Sandbox.WriteFile]), and the run's artefacts are cleared before it
@@ -1078,19 +1125,23 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	if err := writeClaudeSettings(ctx, box, paths.ClaudeSettings(), newClaudeSettings()); err != nil {
+	pin := claudeCompactionPin(sandbox.ClaudeCodeWindow(req.Model))
+	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
+		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
 		return "", err
 	}
 	if len(req.Skills) > 0 {
 		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
-		if err := writeClaudeSettings(ctx, box, paths.ClaudeSkillsSettings(), newClaudeHooksOnSettings()); err != nil {
+		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
+			newClaudeHooksOnSettings(nil), newClaudeHooksOnSettings(pin)); err != nil {
 			return "", err
 		}
 	}
 	if req.Steer.Set() {
-		if err := writeClaudeSettings(ctx, box, paths.ClaudeNotesSettings(), claudeSteerSettings(req.Steer)); err != nil {
+		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
+			claudeSteerSettings(req.Steer, nil), claudeSteerSettings(req.Steer, pin)); err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
@@ -1116,6 +1167,18 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeSettingsPair writes one of a run's settings files twice: settings
+// to file, which a release before [claudeCompactionPinFloor] is handed, and
+// pinned, the same settings with the compaction point pinned
+// ([claudeCompactionPin]), to pinnedFile, which a release at or after it is
+// handed in file's place ([claudePinGate]).
+func writeClaudeSettingsPair(ctx context.Context, box sandbox.Sandbox, file, pinnedFile string, settings, pinned any) error {
+	if err := writeClaudeSettings(ctx, box, file, settings); err != nil {
+		return err
+	}
+	return writeClaudeSettings(ctx, box, pinnedFile, pinned)
 }
 
 // writeClaudeSettings renders settings into file: every run's settings
@@ -1262,10 +1325,21 @@ const claudeProjectDir = "crewlet"
 //     session carried between boxes would carry too;
 //   - CLAUDE_CODE_AUTO_COMPACT_WINDOW, window ([sandbox.ClaudeCodeWindow]): the
 //     window of the model the run works under, which the harness compacts at
-//     less its own headroom. The variable takes precedence over a window an
-//     image or a repository sets, and the variables that would switch
-//     compaction off altogether or move the point it compacts at are unset
-//     beside it ([claudeCompactionOff]).
+//     less its own headroom. The variables that would switch compaction off
+//     altogether or move the point it compacts at are unset beside it
+//     ([claudeCompactionOff]), and on a release that takes it the run's
+//     settings pin the same window and blank the same two overrides
+//     ([claudeCompactionPin]), over what a repository's own settings set. No
+//     agent definition caps the main thread's window, whatever a repository,
+//     an image or a managed directory ships. A subagent's or an in-process
+//     teammate's can be lower: from 2.1.312 an agent definition's own
+//     `autoCompactWindow` (a repository's `.claude/agents/<name>.md`, for one)
+//     lowers the pinned window for the conversation that definition runs,
+//     where 2.1.310 drops it wherever the variable is set ("Changed a
+//     subagent's `autoCompactWindow` to lower the window set by
+//     `CLAUDE_CODE_AUTO_COMPACT_WINDOW`", the 2.1.312 changelog; read in
+//     2.1.310 and 2.1.322). Lower only, so no request carries more than the
+//     window.
 //
 // The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
 // set, by release ([claudeLocalGCFloor]); and the harness's own retention sweep
@@ -1316,7 +1390,8 @@ const claudeRetentionDays = 36500
 
 // claudeSettings is the settings file every Claude Code run is started with
 // (`--settings`, [Paths.ClaudeSettings]): the harness's own retention sweep held
-// off ([claudeRetentionDays]), and nothing else. A run that starts a hook of
+// off ([claudeRetentionDays]), and nothing else but, in its pinned copy, the
+// compaction point's pin ([claudeCompactionPin]). A run that starts a hook of
 // the engine's is started with these settings and hooks switched on in this
 // file's place ([claudeHooksOnSettings]), and the notes' hooks beside them where
 // those are among its hooks ([claudeNotesSettings]), so every file a run is
@@ -1330,14 +1405,55 @@ const claudeRetentionDays = 36500
 // 1.0.60, 1.0.61 and 2.1.112, whose commands refuse an option they do not
 // know, and which take the value as a whole number at least 0 (1.0.x) or 1
 // (2.1.112, as 2.1.310 does). A settings file the harness cannot validate is
-// ignored without a word in print mode, so it holds no other field.
+// ignored without a word in print mode, so it holds no other field, and its
+// pinned copy, which adds the compaction point's pin, is handed only to a
+// release that takes it ([claudeCompactionPinFloor]).
 type claudeSettings struct {
 	CleanupPeriodDays int `json:"cleanupPeriodDays"`
+
+	// Env is the compaction point's pin ([claudeCompactionPin]) in a file's
+	// pinned copy, and nil, so left out, in the file itself.
+	Env map[string]string `json:"env,omitempty"`
 }
 
-// newClaudeSettings is every Claude Code run's settings.
-func newClaudeSettings() claudeSettings {
-	return claudeSettings{CleanupPeriodDays: claudeRetentionDays}
+// newClaudeSettings is every Claude Code run's settings, with env as its `env`
+// block: the pin in a pinned copy, nil otherwise.
+func newClaudeSettings(env map[string]string) claudeSettings {
+	return claudeSettings{CleanupPeriodDays: claudeRetentionDays, Env: env}
+}
+
+// claudeCompactionPin is the `env` block of every pinned settings file
+// ([claudeCompactionPinFloor]): CLAUDE_CODE_AUTO_COMPACT_WINDOW at the window
+// [claudeSessionLayout] pins, and CLAUDE_AUTOCOMPACT_PCT_OVERRIDE and
+// CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE blank.
+//
+// THE WRAPPER'S PIN AGAIN, BECAUSE A REPOSITORY'S SETTINGS CAN UNDO IT. The
+// harness assigns every settings source's `env` block to its own environment
+// once it has started, in the order user, project, local, `--settings`,
+// managed, a later source's value winning (read in 2.1.310 and 2.1.322). So a
+// checkout's own `.claude/settings.json` or `.claude/settings.local.json` that
+// sets any of the three sets it again after the wrapper unset or pinned it
+// ([claudeCompactionOff], [claudeSessionLayout]): the two overrides lower the
+// point the run compacts at or set the count it refuses a request past, and the
+// window replaces the pin. The run's `--settings` is assigned after the
+// repository's, so the same three there win over it.
+//
+// BLANK, NOT LEFT OUT: a key the run's settings leave out leaves the
+// repository's value standing, and the harness reads either override as none
+// where it is empty (`h?parseFloat(h):void 0`, 2.1.310 and 2.1.322 alike).
+//
+// What is NOT pinned, and why: a managed settings file, which the harness
+// ranks last, still wins over the run's, as an image's or a host's policy is
+// its operator's own. DISABLE_AUTO_COMPACT and DISABLE_COMPACT are left to the
+// repository, as its `autoCompactEnabled: false` is: either only switches
+// compaction off, which leaves nothing summarized, and the run's requests then
+// grow to its model's own window, as docs/concepts/code-sandbox.md states.
+func claudeCompactionPin(window sandbox.ExecutorWindow) map[string]string {
+	return map[string]string{
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(window.Tokens),
+		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
+		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
+	}
 }
 
 // claudeHooksOnSettings is the settings of a Claude Code run that starts a hook
@@ -1369,9 +1485,9 @@ type claudeHooksOnSettings struct {
 }
 
 // newClaudeHooksOnSettings is the settings of a run that starts a hook of the
-// engine's.
-func newClaudeHooksOnSettings() claudeHooksOnSettings {
-	return claudeHooksOnSettings{claudeSettings: newClaudeSettings(), DisableAllHooks: false}
+// engine's, with env as their `env` block ([newClaudeSettings]).
+func newClaudeHooksOnSettings(env map[string]string) claudeHooksOnSettings {
+	return claudeHooksOnSettings{claudeSettings: newClaudeSettings(env), DisableAllHooks: false}
 }
 
 // claudeArchiveFormat is the layout a Claude Code run packs its session in
@@ -1480,7 +1596,11 @@ var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 //
 // Set by a seat's role.sandbox.env or by an image, any of them is unset rather
 // than refused, as [claudeSwitchesOff] is: the run's compaction is the
-// engine's to decide. CLAUDE_CODE_MAX_CONTEXT_TOKENS is not among them: it is
+// engine's to decide. A repository's own settings can set them again once the
+// harness has started, by its `env` block; on a release that takes the pin, the
+// run's settings blank the two that move the point over it
+// ([claudeCompactionPin]), and leave the two that switch compaction off to the
+// repository, as its `autoCompactEnabled: false` is. CLAUDE_CODE_MAX_CONTEXT_TOKENS is not among them: it is
 // the real window of a model the harness does not know, which it reads for
 // such a model alone.
 var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",

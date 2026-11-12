@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -589,9 +590,13 @@ func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
 // compacted at a point the engine does not reckon with; and a resumed run is
 // started without CLAUDE_CODE_RESUME_INTERRUPTED_TURN, which would have it run
 // the turn its last process was cut off in again before it reads its brief.
+// The settings file its harness is handed pins the same window and blanks the
+// two overrides too, which a repository's own settings would otherwise set
+// again once the harness has started.
 //
-// Mutation: drop the window from the pins or a variable from the unsets, or
-// leave the variable set on a resume, and the harness's environment shows it.
+// Mutation: drop the window from the pins or a variable from the unsets, leave
+// the variable set on a resume, or hand 2.1.310 the settings without the pin,
+// and the harness's environment or its settings show it.
 func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 	t.Parallel()
 	runner, box := sessionBox(t, "2.1.310")
@@ -619,6 +624,22 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 		if slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, off) }) {
 			t.Errorf("the harness's environment keeps %s, which switches its compaction off or moves its point", off)
 		}
+	}
+	named := after(strings.Split(strings.TrimSpace(boxFile(t, box, box.Home()+"/argv")), "\n"), "--settings")
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal([]byte(boxFile(t, box, named)), &settings); err != nil {
+		t.Fatalf("the settings the harness was handed, %q, do not read: %v", named, err)
+	}
+	if want := map[string]string{
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens),
+		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
+		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
+	}; !maps.Equal(settings.Env, want) {
+		got, _ := json.Marshal(settings.Env)
+		t.Errorf("the settings the harness was handed, %q, hold env %s, want the window pinned and both "+
+			"overrides blank, over a repository's own", named, got)
 	}
 }
 
