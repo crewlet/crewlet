@@ -412,6 +412,8 @@ func openLabel(ref wire.ResourceRef) string {
 		return "Open the artifact"
 	case wire.ResourceRoom:
 		return "Open the room"
+	case wire.ResourceAtlasEntry:
+		return "Show on the map"
 	}
 	return "Open"
 }
@@ -440,6 +442,8 @@ func briefNames(kind wire.ResourceKind) catalog.Tool {
 		names["key"] = catalog.DirProject
 	case wire.ResourceRoom:
 		names["id"] = catalog.DirRoom
+	case wire.ResourceAtlasEntry:
+		names["id"] = catalog.DirAtlasEntry
 	}
 	return catalog.Tool{Kind: catalog.KindNavigate, Names: names}
 }

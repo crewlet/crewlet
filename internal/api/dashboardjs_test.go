@@ -2243,8 +2243,11 @@ const (
 	// unconfirmed, told again after a step that never handed it over, and an
 	// end this bundle does not know said as that, never as expired), merged on
 	// top of it, took it to 5826.0 KiB (5,965,816 bytes, +1,345, all script):
-	// 5826 KiB.
-	treeBudget = 5<<20 + 706<<10
+	// 5826 KiB. Ask Crewlet reading the atlas (an entry's chip with the map
+	// glyph, matched by its name and worded as an entry, and the link suite
+	// reading a map link's query) took it to 5826.1 KiB (5,965,946 bytes,
+	// +130, all script): 5827 KiB.
+	treeBudget = 5<<20 + 707<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

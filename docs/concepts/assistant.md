@@ -126,6 +126,7 @@ is a table ("Agents"), and one record is its values and the lists it holds
 | Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
 | Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
 | Chatlet (needs `chatlet`) | Your rooms and what is unread in them (your most recently active rooms, or only those with something unread), a room and who is in it, what was said in a room or a thread lately, where you were named, and a search of every room you may read, by what was said and who said it. A room is asked for by its name ("#launch"); the answer's "#launch" is the room's chip, and a direct conversation is named by the people in it. Older messages are found by a search; the room's chip opens the room, which holds all of it |
+| Atlas (needs `atlas`) | The company's [atlas](atlas.md): search its entries (domains and host names, services, servers, databases, repositories, monitors, vendor accounts, tool servers and models) by words of a name, by kind, by the map's lane, by vendor, by confidence or by health; read one entry with every fact the atlas holds on it and where each came from; and trace what depends on an entry, or what it depends on, hop by hop, along the relations the map draws. "What do we use for monitoring?", "Where does our code live?" and "What depends on the database?" are answered this way. An entry the answer names is its chip, and **Show on the map** opens Company › Atlas with that entry's panel open, lit along the trace where the answer was one. A person without the permission is told so, as the screen tells them, and never handed an entry |
 | Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), executors, token spend and budgets, the company feed, artifacts shared with you |
 | Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
 
@@ -136,10 +137,12 @@ title says what its read was narrowed to ("Spend by agent, last 14 days",
 "Tasks, urgent, due in the next 7 days"), and a record read twice in one
 answer is one chip.
 
-**Use the names you use.** Ask about "the QA Engineer", "the Company space" or
-"the Marketing project": Ask Crewlet resolves a seat, unit, project or space
-by its name or its key, through your own reads of the chart, the projects and
-the spaces, and cards name seats by their names. A change that names something
+**Use the names you use.** Ask about "the QA Engineer", "the Company space",
+"the Marketing project" or "the orders database": Ask Crewlet resolves a seat,
+unit, project or space by its name or its key, through your own reads of the
+chart, the projects and the spaces, and an atlas entry by its exact name or
+key through your own search of the atlas, and cards name seats by their
+names. A change that names something
 that is not there, or a name two records share, is refused before any card,
 listing the choices, rather than after you approve it; every name the call got
 wrong is named at once, beside anything else wrong with it, so Ask Crewlet

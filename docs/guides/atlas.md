@@ -126,6 +126,29 @@ check).
 these, since they are the company's own map, and says so rather than hiding
 them.
 
+## Asking about it
+
+[Ask Crewlet](../concepts/assistant.md) reads the atlas as you, through the
+same questions these screens read, so it answers exactly what you could open
+here and nothing more. It can search the entries, read one entry in full and
+trace what depends on an entry or what it depends on, along the relations the
+map draws:
+
+- "What do we use for monitoring?" finds the vendor accounts and reads the one
+  whose capabilities say so.
+- "Where does our code live?" lists the repositories.
+- "What depends on the database?" finds the database and traces up from it,
+  hop by hop. Where two entries could be meant, it asks which, naming both.
+
+Name an entry as you would here, by its name or its key ("orders-db", "the
+web-1 server"); it is looked up through your own search of the atlas. An
+entry the answer names is a chip: open it for the entry's facts, and **Show
+on the map** opens this map with that entry's panel open, lit along the trace
+where the answer was one. A person without the Atlas permission is told so,
+as the sidebar tells them, and is never handed an entry. Every link comes
+from the engine's own route table, never from a fact's value: an address in
+the atlas is a fact to read, not a place Ask Crewlet sends you.
+
 ## What the screens never do
 
 Nothing leaves the screen: there is no export, print or share. The screens ask

@@ -170,7 +170,8 @@ type AssistantResourceKind =
   | "run"
   | "schedule"
   | "view"
-  | "room";
+  | "room"
+  | "atlas_entry";
 
 /**
  * What the person calls the record a screen has open, as the drawer names it
