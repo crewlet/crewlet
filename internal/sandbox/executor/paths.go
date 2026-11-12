@@ -43,7 +43,9 @@
 // a whole line at a time through the scrub's own [readLine] at the scrub's own
 // bounds, a last piece with no break never a line, and a line or a member past
 // its bound the end of the reading, never a skip; every whole line decoded into
-// its head before anything reads it, with no keyword prefilter, and
+// its head before anything reads it, with no keyword prefilter, every key
+// exactly as written ([wireDecode]: as the harness's own JSON.parse reads it,
+// never matched by case as encoding/json matches a struct's fields), and
 // `parentUuid` handed over as written, since the harness's bookkeeping carries
 // none and only a root carries null; a key only one reader reads held to its
 // type in that reader's accessor; and a hook's firing handed out by

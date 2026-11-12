@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +39,9 @@ import (
 //     decide from a thread with a hole in it.
 //   - EVERY WHOLE LINE IS DECODED into its head before anything reads it, with
 //     no keyword prefilter ([threadHead]).
+//   - EVERY KEY IS READ EXACTLY AS WRITTEN, as Claude Code's own JSON.parse
+//     reads it, never matched by case as encoding/json matches a struct's
+//     fields ([wireDecode]).
 //   - ABSENT IS NOT NULL: `parentUuid` is handed over as written
 //     ([threadHead.Parent]).
 //   - A KEY ONLY ONE READER READS IS HELD IN THAT READER'S ACCESSOR, so a
@@ -315,10 +320,11 @@ type threadLine struct {
 	message, attachment, origin, toolUseID, toolUseResult json.RawMessage
 }
 
-// threadWire is a whole line as its one decode leaves it: every key this layer
-// reads, raw, so a key that is absent is nil and one that is null holds the
-// bytes `null`. Each is held to its type where it is read: the head's by
-// [threadWire.head], every other by its accessor.
+// threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
+// key this layer reads, by its exact name and raw, so a key that is absent is
+// nil and one that is null holds the bytes `null`. Each is held to its type
+// where it is read: the head's by [threadWire.head], every other by its
+// accessor.
 type threadWire struct {
 	Type          json.RawMessage `json:"type"`
 	Subtype       json.RawMessage `json:"subtype"`
@@ -333,12 +339,12 @@ type threadWire struct {
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
-// head: ONE json.Unmarshal of the whole line, which holds every byte of it to
-// JSON, then the head's keys held to their types. Nothing reads a line before
-// this has: no keyword decides which lines are decoded, since a line no
-// keyword marks can still be no record (a write that tore into another), and a
-// reader that passed it unread would decide from the thread around it as
-// though it were whole.
+// head: ONE decode of the whole line ([wireDecode]), which holds every byte
+// of it to JSON, then the head's keys held to their types. Nothing reads a
+// line before this has: no keyword decides which lines are decoded, since a
+// line no keyword marks can still be no record (a write that tore into
+// another), and a reader that passed it unread would decide from the thread
+// around it as though it were whole.
 func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	// HELD TO AN OBJECT BEFORE IT IS DECODED: a JSON null decodes into a struct
 	// as nothing at all, with no error, and would pass for a record of no keys.
@@ -346,7 +352,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord}
 	}
 	var w threadWire
-	if err := json.Unmarshal(raw, &w); err != nil {
+	if err := wireDecode(raw, &w); err != nil {
 		return threadLine{}, &threadLineError{N: n, Err: err}
 	}
 	head, err := w.head()
@@ -431,6 +437,29 @@ func (h threadHead) Root() bool { return bytes.Equal(h.Parent, jsonNull) }
 // thread's, whatever file holds it.
 func (h threadHead) Main() bool { return h.Sidechain != nil && !*h.Sidechain && h.AgentID == "" }
 
+// wireDecode decodes raw, one JSON value, into v: the one decode every value
+// this layer reads goes through, encoding/json/v2's. An object's key fills
+// the field it names EXACTLY; a key written twice holds the last value
+// written; and invalid UTF-8 is an error.
+//
+// EXACTLY, never by encoding/json's own decode, which takes a key that differs
+// from a field's name only in case for that field, the last of the two written
+// winning, where Claude Code reads its own records with JSON.parse, which holds
+// the two apart. Decoded so, a line carrying `parentUuid` and then
+// `ParentUuid` would read as the second, and a hook's record carrying its
+// firing's `toolUseID` and then a `toolUseId` would hand the second out as its
+// firing: a spelling 2.1.322 already writes, where a subagent's metadata names
+// the call that started it.
+//
+// A KEY WRITTEN TWICE IS ALLOWED, as JSON.parse allows it, and read by its
+// last value, as JSON.parse reads it; refusing it, the decoder would keep
+// every name of every object it reads, a cost a key. INVALID UTF-8 IS
+// REFUSED: Claude Code writes none (JSON.stringify's text, as UTF-8), so a
+// line holding it is no record the harness wrote whole, and reads as none.
+func wireDecode(raw []byte, v any) error {
+	return jsonv2.Unmarshal(raw, v, jsontext.AllowDuplicateNames(true))
+}
+
 // wireString is raw, a key named key, held to a string: "" where the key is
 // absent.
 func wireString(key string, raw json.RawMessage) (string, error) {
@@ -442,13 +471,13 @@ func wireString(key string, raw json.RawMessage) (string, error) {
 
 // wireRequiredString is raw, a key named key, held to a string that is there.
 func wireRequiredString(key string, raw json.RawMessage) (string, error) {
-	// Checked by its first byte, never left to json.Unmarshal: a null decodes
-	// into a string as nothing at all, with no error.
+	// Checked by its first byte, never left to the decode: a null decodes into
+	// a string as nothing at all, with no error.
 	if len(raw) == 0 || raw[0] != '"' {
 		return "", fmt.Errorf("%s is %s, not a string", key, wireKind(raw))
 	}
 	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
+	if err := wireDecode(raw, &s); err != nil {
 		return "", fmt.Errorf("%s: %w", key, err)
 	}
 	return s, nil
@@ -461,7 +490,7 @@ func wireBool(key string, raw json.RawMessage) (bool, error) {
 		return false, fmt.Errorf("%s is %s, not a boolean", key, wireKind(raw))
 	}
 	var b bool
-	if err := json.Unmarshal(raw, &b); err != nil {
+	if err := wireDecode(raw, &b); err != nil {
 		return false, fmt.Errorf("%s: %w", key, err)
 	}
 	return b, nil
@@ -503,7 +532,7 @@ func (l threadLine) OriginKind() (string, error) {
 	var origin struct {
 		Kind json.RawMessage `json:"kind"`
 	}
-	if err := json.Unmarshal(l.origin, &origin); err != nil {
+	if err := wireDecode(l.origin, &origin); err != nil {
 		return "", fmt.Errorf("origin: %w", err)
 	}
 	return wireString("origin.kind", origin.Kind)
@@ -618,7 +647,7 @@ func attachmentHook(raw json.RawMessage) (threadHook, bool, error) {
 		Content   json.RawMessage `json:"content"`
 		Stdout    json.RawMessage `json:"stdout"`
 	}
-	if err := json.Unmarshal(raw, &a); err != nil {
+	if err := wireDecode(raw, &a); err != nil {
 		return threadHook{}, false, fmt.Errorf("an attachment: %w", err)
 	}
 	record, err := wireRequiredString("attachment.type", a.Type)
@@ -745,7 +774,7 @@ func (l threadLine) Message() (threadMessage, error) {
 	var wire struct {
 		Content json.RawMessage `json:"content"`
 	}
-	if err := json.Unmarshal(l.message, &wire); err != nil {
+	if err := wireDecode(l.message, &wire); err != nil {
 		return threadMessage{}, fmt.Errorf("a %s record's message: %w", l.Head.Type, err)
 	}
 	m, err := messageContent(wire.Content, call)
@@ -763,13 +792,13 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		return threadMessage{}, fmt.Errorf("content is %s, neither a string nor a list", wireKind(content))
 	case content[0] == '"':
 		var text string
-		if err := json.Unmarshal(content, &text); err != nil {
+		if err := wireDecode(content, &text); err != nil {
 			return threadMessage{}, fmt.Errorf("content: %w", err)
 		}
 		return threadMessage{text: text, isText: true}, nil
 	}
 	var blocks []json.RawMessage
-	if err := json.Unmarshal(content, &blocks); err != nil {
+	if err := wireDecode(content, &blocks); err != nil {
 		return threadMessage{}, fmt.Errorf("content: %w", err)
 	}
 	m := threadMessage{kinds: make([]string, 0, len(blocks))}
@@ -801,7 +830,7 @@ func contentBlock(raw json.RawMessage) (threadCall, error) {
 		IsError   json.RawMessage `json:"is_error"`
 		Content   json.RawMessage `json:"content"`
 	}
-	if err := json.Unmarshal(raw, &b); err != nil {
+	if err := wireDecode(raw, &b); err != nil {
 		return threadCall{}, err
 	}
 	kind, err := wireRequiredString("type", b.Type)

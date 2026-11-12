@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -495,14 +496,17 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 
 // EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
 // that is not one record (two values, one cut short, a value that is no
-// object) or one whose head key is of the wrong type (`type`, `subtype` and
+// object, a string of bytes that are no UTF-8, which Claude Code never
+// writes) or one whose head key is of the wrong type (`type`, `subtype` and
 // `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean)
 // is a *threadLineError naming its line, whatever keywords it holds, and the
 // reader reads on to the next line; and a whole record's head is what it
 // says. None of these lines holds a key a reader of hooks or calls looks for.
 //
 // Mutation: decode only the lines that name a hook or a call, and every
-// broken line here reads as a record, and the records' heads as nothing.
+// broken line here reads as a record, and the records' heads as nothing;
+// take bytes that are no UTF-8 as encoding/json does, for the replacement
+// character, and the line holding them reads as a record.
 func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -526,6 +530,8 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		"nothing at all":                         "",
 		"NULs before a break":                    "\x00\x00\x00",
 		"a record behind a byte that is no JSON": "\x00" + ctDequeue,
+		"a string of bytes that are no UTF-8": strings.Replace(ctDequeue, `"operation":"dequeue"`,
+			"\"operation\":\"deq\xffueue\"", 1),
 	}
 	names := slices.Sorted(maps.Keys(broken))
 	lines := make([]string, 0, 2*len(names)+3)
@@ -717,6 +723,157 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	} {
 		if got := ctLine(t, record).ToolUseResult(); got != nil {
 			t.Errorf("%s toolUseResult reads as %s, want none: only a user record's is one", name, got)
+		}
+	}
+}
+
+// ctReplace is record with from, which it holds exactly once, written as to.
+func ctReplace(t *testing.T, record, from, to string) string {
+	t.Helper()
+	if n := strings.Count(record, from); n != 1 {
+		t.Fatalf("%.80s holds %q %d times, want once", record, from, n)
+	}
+	return strings.Replace(record, from, to, 1)
+}
+
+// ctAll is everything a line hands out through every accessor, as text: its
+// head, its hook, its message and its calls, its origin's kind and its own
+// toolUseResult, each beside the error it answered.
+func ctAll(l threadLine) string {
+	var b strings.Builder
+	h := l.Head
+	side := "absent"
+	if h.Sidechain != nil {
+		side = strconv.FormatBool(*h.Sidechain)
+	}
+	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q\n", h.Type, h.Subtype, h.Parent, side,
+		h.AgentID)
+	hook, isHook, err := l.Hook()
+	fmt.Fprintf(&b, "hook %t: record %q, event %q, firing %q, command %q, content %s, stdout %s; %v\n", isHook,
+		hook.Record, hook.Event, hook.Firing, hook.Command, hook.Content, hook.Stdout, err)
+	m, err := l.Message()
+	text, isText := m.Text()
+	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
+	for _, c := range m.Calls() {
+		failed := "absent"
+		if c.IsError != nil {
+			failed = strconv.FormatBool(*c.IsError)
+		}
+		fmt.Fprintf(&b, "call %q: id %q, name %q, input %s, is_error %s, content %s\n", c.Kind, c.ID, c.Name, c.Input,
+			failed, c.Content)
+	}
+	kind, err := l.OriginKind()
+	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
+	fmt.Fprintf(&b, "toolUseResult: %s\n", l.ToolUseResult())
+	return b.String()
+}
+
+// A KEY IS READ EXACTLY AS WRITTEN, as Claude Code reads its own records with
+// JSON.parse: a key that differs from one the layer reads only in case is
+// another key, after that one or before it, and alone it leaves that one
+// absent; and a key written twice holds its last value. Every object the layer
+// reads is held so: a line's head and the keys only one reader reads (a
+// message, an attachment, an origin, a firing at the top, a record's own
+// toolUseResult), a hook's attachment, an origin, a message, and a message's
+// blocks. So a line hands out exactly what it hands out without the other key,
+// through every accessor. 2.1.322 already spells a call's id `toolUseId` (a
+// subagent's metadata names the call that started it so), a key away from a
+// hook's firing.
+//
+// Mutation: take a key that differs only in case for the layer's own, as
+// encoding/json's decode into a struct does (the last written winning), and
+// each record here reads as the other key says; refuse a key written twice, and
+// a record that writes one twice is no record.
+func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
+	t.Parallel()
+	brief, prompt := ctBrief(ctUUID(1)), ctSubagentPrompt(ctUUID(3))
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	summary := ctSummary(ctUUID(15), ctUUID(16))
+	notification := ctNotification(ctUUID(1), ctUUID(3))
+	hook := ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, "")
+	firing := `"toolUseID":"` + ctBatchFire + `"`
+	unfired := ctReplace(t, hook, firing+",", "")
+	other := "toolu_test_other"
+	retyped := ctReplace(t, brief, `"type":"user"`, `"type":"attachment"`)
+	for name, tc := range map[string]struct {
+		record, from, to string
+	}{
+		// A line's head.
+		"a parentUuid, then ParentUuid null": {record: result, from: `"parentUuid":"` + ctUUID(4) + `"`,
+			to: `"parentUuid":"` + ctUUID(4) + `","ParentUuid":null`},
+		"a null parentUuid, then PARENTUUID": {record: brief, from: `"parentUuid":null`,
+			to: `"parentUuid":null,"PARENTUUID":"` + ctUUID(9) + `"`},
+		"parentuuid alone": {record: ctDequeue, from: `"type":"queue-operation"`,
+			to: `"type":"queue-operation","parentuuid":"` + ctUUID(9) + `"`},
+		"a type, then Type": {record: brief, from: `"type":"user"`, to: `"type":"user","Type":"attachment"`},
+		"a Type, then type": {record: brief, from: `"type":"user"`, to: `"Type":"attachment","type":"user"`},
+		"Type alone": {record: ctReplace(t, ctDequeue, `"type":"queue-operation",`, ""), from: `"operation"`,
+			to: `"Type":"user","operation"`},
+		"a subtype, then Subtype": {record: summary, from: `"subtype":"stop_hook_summary"`,
+			to: `"subtype":"stop_hook_summary","Subtype":"compact_boundary"`},
+		"an isSidechain, then isSideChain": {record: brief, from: `"isSidechain":false`,
+			to: `"isSidechain":false,"isSideChain":true`},
+		"agentID alone": {record: brief, from: `"isSidechain":false`, to: `"isSidechain":false,"agentID":"` + ctAgent + `"`},
+		"an agentId, then AgentId": {record: prompt, from: `"agentId":"` + ctAgent + `"`,
+			to: `"agentId":"` + ctAgent + `","AgentId":"a0000000000000000"`},
+		// The keys only one reader reads.
+		"a message, then Message": {record: result, from: `"uuid":"` + ctUUID(5) + `"`,
+			to: `"Message":{"role":"user","content":[{"tool_use_id":"` + other + `","type":"tool_result",` +
+				`"content":"other"}]},"uuid":"` + ctUUID(5) + `"`},
+		"an attachment, then Attachment": {record: hook, from: `,"type":"attachment"`,
+			to: `,"Attachment":` + strings.Replace(ctBatchSuccess, ctBatchFire, other, 1) + `,"type":"attachment"`},
+		"an origin, then Origin": {record: notification, from: ctNotificationOrigin,
+			to: ctNotificationOrigin + `,"Origin":{"kind":"coordinator"}`},
+		"a summary's firing, then a call's toolUseId": {record: summary, from: `"toolUseID":"` + ctStopFire + `"`,
+			to: `"toolUseID":"` + ctStopFire + `","toolUseId":"` + other + `"`},
+		"a summary's firing spelled ToolUseID alone": {record: ctReplace(t, summary, `"toolUseID":"`+ctStopFire+`",`, ""),
+			from: `"hookCount":1`, to: `"hookCount":1,"ToolUseID":"` + ctStopFire + `"`},
+		"a toolUseResult, then ToolUseResult": {record: result, from: `"toolUseResult":` + ctResultOwn,
+			to: `"toolUseResult":` + ctResultOwn + `,"ToolUseResult":{"stdout":"other"}`},
+		// A hook's attachment.
+		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
+			to: firing + `,"toolUseId":"` + other + `"`},
+		"a call's toolUseId, then an attachment's firing": {record: hook, from: firing,
+			to: `"toolUseId":"` + other + `",` + firing},
+		"an attachment's firing spelled TOOLUSEID alone": {record: unfired, from: `"hookName":"PostToolBatch"`,
+			to: `"hookName":"PostToolBatch","TOOLUSEID":"` + ctBatchFire + `"`},
+		"an attachment's type, then Type": {record: hook, from: `"type":"hook_success"`,
+			to: `"type":"hook_success","Type":"hook_cancelled"`},
+		"an attachment's hookEvent, then HookEvent": {record: hook, from: `"hookEvent":"PostToolBatch"`,
+			to: `"hookEvent":"PostToolBatch","HookEvent":"Stop"`},
+		"an attachment's command, then Command": {record: hook, from: `"command":"crewlet/steer_take"`,
+			to: `"command":"crewlet/steer_take","Command":"crewlet/other"`},
+		"an attachment's content, then Content": {record: hook, from: `"content":""`, to: `"content":"","Content":"other"`},
+		"an attachment's stdout, then Stdout": {record: hook, from: `"stdout":` + ctAnswer,
+			to: `"stdout":` + ctAnswer + `,"Stdout":"other"`},
+		// An origin.
+		"an origin's kind, then Kind": {record: notification, from: `"kind":"task-notification"`,
+			to: `"kind":"task-notification","Kind":"coordinator"`},
+		// A message.
+		"a message's content, then Content": {record: result, from: `"role":"user","content":` + ctResultBody,
+			to: `"role":"user","content":` + ctResultBody + `,"Content":"other"`},
+		// A message's blocks.
+		"a tool_use's type, then Type": {record: call, from: `"type":"tool_use"`, to: `"type":"tool_use","Type":"text"`},
+		"a tool_use's id, then ID": {record: call, from: `"id":"` + ctCall + `"`,
+			to: `"id":"` + ctCall + `","ID":"` + other + `"`},
+		"a tool_use's name, then Name": {record: call, from: `"name":"Bash"`, to: `"name":"Bash","Name":"Read"`},
+		"a tool_use's input, then Input": {record: call, from: `"input":` + ctUseInput,
+			to: `"input":` + ctUseInput + `,"Input":{"command":"echo other"}`},
+		"a tool_result's tool_use_id, then Tool_Use_Id": {record: result, from: `"tool_use_id":"` + ctCall + `"`,
+			to: `"tool_use_id":"` + ctCall + `","Tool_Use_Id":"` + other + `"`},
+		"a tool_result's is_error, then Is_Error": {record: result, from: `"is_error":false`,
+			to: `"is_error":false,"Is_Error":true`},
+		"a tool_result's content, then Content": {record: result, from: `"content":"b1"`,
+			to: `"content":"b1","Content":"other"`},
+		// A key written twice.
+		"a type written twice": {record: retyped, from: `"type":"attachment"`, to: `"type":"user","type":"attachment"`},
+		"an attachment's firing written twice": {record: hook, from: firing,
+			to: `"toolUseID":"` + other + `",` + firing},
+	} {
+		variant := ctReplace(t, tc.record, tc.from, tc.to)
+		if got, want := ctAll(ctLine(t, variant)), ctAll(ctLine(t, tc.record)); got != want {
+			t.Errorf("%s reads as\n%swant\n%s", name, got, want)
 		}
 	}
 }
