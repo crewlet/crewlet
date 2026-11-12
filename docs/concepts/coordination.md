@@ -409,11 +409,13 @@ A write **across a link waits as long as its bytes take to cross it.** A node
 without the `data` role reaches the coordination store across its leaf link,
 and every node on an external broker across the network, and the engine
 allows such a link to be as slow as thirty seconds a mebibyte, the
-[object store's floor](object-store.md). Held to the client's five seconds, a
-write whose value took longer than that to cross failed as the store being
-unavailable while its bytes were still on the link: an MCP listing of up to
-896 KiB, which every node with seats writes, takes about 26 seconds at the
-floor. So a write whose caller set no deadline waits five seconds and, across
+[object store's floor](object-store.md). Held to the client's five seconds, as
+a write whose caller set no deadline was, a write whose value took longer than
+that to cross failed as the store being unavailable while its bytes were still
+on the link; and an MCP listing of up to 896 KiB, which every node with seats
+writes and which takes about 26 seconds at the floor, failed the same way
+under the fifteen seconds of the beat that wrote it, on any link below about
+60 KiB a second. So a write whose caller set no deadline waits five seconds and, across
 a link, the time its key, value and headers take at the floor for every send
 the client may make of it — the client sends a write nobody heard again,
 twice at most, inside the one wait it was given — and an attempt after an

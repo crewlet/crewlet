@@ -314,10 +314,12 @@
 // A node without the `data` role reaches these buckets across its leaf link,
 // and every node on an external broker across the network, at a pace the
 // engine allows to be as slow as the object store's floor, thirty seconds a
-// mebibyte; held to the client's five seconds, a write whose value took longer
-// to cross — an MCP listing of up to 896 KiB, which every node with seats
-// writes — failed as the store being unavailable while its bytes were still
-// on the link. So every write of a settled bucket whose caller set no deadline
+// mebibyte. A write whose caller set no deadline was held to the client's five
+// seconds, and one whose value took longer to cross failed as the store being
+// unavailable while its bytes were still on the link; an MCP listing of up to
+// 896 KiB, which every node with seats writes, failed the same way under the
+// fifteen seconds of the beat that wrote it, on any link below about 60 KiB a
+// second at its bound. So every write of a settled bucket whose caller set no deadline
 // waits the request term and, across a link, the crossing of what it carries
 // for every send the client may make of it (settle.go), and each store is told
 // how its connection reaches its buckets where it is opened ([Reach]: the

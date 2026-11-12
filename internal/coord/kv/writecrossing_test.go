@@ -36,13 +36,16 @@ const slowLinkRate = 96 << 10
 // A node without the `data` role reaches the coordination buckets across its
 // leaf link, and every node with seats writes its MCP listings there: a record
 // of up to coord.MaxMCPListingBytes, which a link at the slowest pace the
-// engine allows carries in about 26 seconds. Held to the client's five
-// seconds, a listing that took longer than that to cross failed as the store
-// being unavailable while its bytes were still on the link, and the next beat
-// sent it whole again behind them — the queue's defect of crewlet/crewlet#1005
-// in the coordination store. Here the leaf's link carries 96 KiB a second
-// towards its member, so a listing near the bound takes about nine seconds,
-// and its caller sets no deadline: it is written, and read back whole.
+// engine allows carries in about 26 seconds. Written under the fifteen seconds
+// of the beat that wrote it, a listing at its bound failed on any link below
+// about 60 KiB a second as the store being unavailable while its bytes were
+// still on the link, and the next beat sent it whole again behind them — the
+// queue's defect of crewlet/crewlet#1005 in the coordination store. A listing
+// is now written with no deadline of its caller's, and a write with none was
+// given the client's five seconds alone, whatever it carried. Here the leaf's
+// link carries 96 KiB a second towards its member, so a listing near the
+// bound takes about nine seconds, and its caller sets no deadline: it is
+// written, and read back whole.
 //
 // Mutation: drop the crossing from a settled bucket's budget, or open the
 // store as though its connection crossed no link, and the listing fails at
