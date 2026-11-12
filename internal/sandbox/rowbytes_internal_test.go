@@ -402,12 +402,19 @@ func worstRow(t *testing.T) PendingRun {
 	// TEN NOTES (internal/agent/steer's MaxTurnNotes), each sealed at the
 	// bound the store holds a note's seal to, each served to a job before it
 	// was read, and read by a take that named itself — the engine's takes name
-	// themselves by a fresh UUID — and was settled unanswered.
+	// themselves by a fresh UUID — and was settled unanswered, and then by a
+	// launch's brief that told it again, keeping that take's read beside its
+	// own: every field of both reads at its widest.
+	read := func() *NoteRead {
+		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
+			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true}
+	}
 	notes := make([]RunNote, 10)
 	for i := range notes {
+		told := read()
+		told.Retold = read()
 		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
-			Served: uuid.NewString(), Read: &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
-				Boundary: "brief", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true}}
+			Served: uuid.NewString(), Read: told}
 	}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), BridgeSeq: math.MaxInt,

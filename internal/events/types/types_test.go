@@ -442,7 +442,7 @@ var wireTags = map[string][]string{
 	"seat_access_drift_restored":    {"after", "agent_handle", "before", "integration", "lane", "restored_at"},
 	"agent_capability_told":         {"agent_handle", "baseline", "changes", "digest", "lines", "revision_from", "revision_to", "told_at"},
 	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
-	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
+	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "retold", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
 	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "launch_id", "operator_id", "turn_id"},
 	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "delegated_rule", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},

@@ -463,8 +463,8 @@ type CoordinatorOptions struct {
 	// as the new job's.
 	//
 	// THE SESSION'S NOTE INBOX GOES WITH IT, and no note with it: the notes
-	// still waiting are on the run's record, which the ending publishes as
-	// expired before it deletes it ([CoordinatorOptions.SteersExpired]).
+	// still waiting are on the run's record, whose ending reports what became
+	// of each before it deletes it ([CoordinatorOptions.SteersEnded]).
 	//
 	// IT WAITS FOR NO CALL STILL RUNNING: the session answers each that it is
 	// still running and closes behind those answers, and the call runs on and
@@ -641,13 +641,18 @@ type CoordinatorOptions struct {
 	// an engine (a test's).
 	TurnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
 
-	// SteersExpired publishes, as expired, every note a person sent the run's
-	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
-	// WAITING on the run's record ([RunSteer]), which nothing will read now
-	// that the turn is over, and the ones the brief of a job that never
-	// started recorded read. The engine implements it, because only the
-	// engine opens a note's seal, and this package never publishes words it
-	// cannot verify.
+	// SteersEnded publishes what became of every note a person sent the
+	// run's turn that no step reported reading ([PendingRun.EndedNotes]), as
+	// the run's record knows it: DELIVERED, the ones a later launch's brief
+	// told again after a take never handed them over, where that job started;
+	// UNCONFIRMED, the ones a job's harness was handed and never confirmed;
+	// MISSED, the ones a take whose answer was lost recorded read and no
+	// later launch whose job started told; EXPIRED, the ones still WAITING on
+	// the record ([RunSteer]), which nothing will read now that the turn is
+	// over, and the ones the brief of a job that never started was the first
+	// to read. The engine
+	// implements it, because only the engine opens a note's seal, and this
+	// package never publishes words it cannot verify.
 	//
 	// A STEP OF THE ENDING, as CloseStopped is: made before the record is
 	// deleted, once per attempt, and made again by any attempt that finishes
@@ -659,7 +664,7 @@ type CoordinatorOptions struct {
 	// the delete: a note filed once the ending is decided is refused
 	// ([PendingStore.FileNote]). Nil publishes nothing — a coordinator built
 	// without an engine (a test's).
-	SteersExpired func(ctx context.Context, run PendingRun) error
+	SteersEnded func(ctx context.Context, run PendingRun) error
 
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes is waiting on its resume — see [SeatHold]. Nil holds
@@ -976,8 +981,8 @@ type Coordinator struct {
 	closeStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
 	turnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
-	// steersExpired is [CoordinatorOptions.SteersExpired].
-	steersExpired func(ctx context.Context, run PendingRun) error
+	// steersEnded is [CoordinatorOptions.SteersEnded].
+	steersEnded func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -1183,53 +1188,53 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
-		answers:       opts.Answers,
-		condense:      opts.Condense,
-		ended:         opts.Ended,
-		recovered:     opts.Recovered,
-		unresumable:   opts.Unresumable,
-		stopped:       opts.Stopped,
-		parked:        opts.Parked,
-		closeStopped:  opts.CloseStopped,
-		turnLost:      opts.TurnLost,
-		steersExpired: opts.SteersExpired,
-		node:          opts.Node,
-		boxes:         opts.Boxes,
-		nudge:         opts.Nudge,
-		refresh:       opts.Refresh,
-		sessions:      opts.Sessions,
-		keep:          opts.Keep,
-		restore:       opts.Restore,
-		relaunchWait:  relaunchCaptureWait,
-		endWait:       JobEndWait,
-		endPoll:       jobEndPoll,
-		spoolDir:      opts.SpoolDir,
-		sessionRetry:  sessionRetryBase,
-		recordBudget:  sessionRecordBudget,
-		beginBudget:   beginRecordBudget,
-		captureTick:   captureWaitTick,
-		now:           opts.Now,
-		runs:          map[string]seatRuns{},
-		moves:         map[string]uint64{},
-		attempts:      map[answerKey]map[string]answerBudget{},
-		retries:       map[string]*answerRetry{},
-		refused:       map[string]refusedCompletion{},
-		owed:          map[string]map[string]struct{}{},
-		held:          map[string]bool{},
-		holdBusy:      map[string]bool{},
-		holdDirty:     map[string]bool{},
-		holdGen:       map[string]uint64{},
-		signals:       map[signal]uint64{},
-		launchStops:   map[string]launchStop{},
-		finishing:     map[string]bool{},
-		frames:        map[string]int{},
-		hold:          opts.Hold,
-		admit:         opts.Admit,
-		gate:          opts.Gate,
-		after:         opts.After,
-		spent:         opts.Spent,
-		wasSpent:      opts.WasSpent,
-		lease:         opts.Lease,
+		answers:      opts.Answers,
+		condense:     opts.Condense,
+		ended:        opts.Ended,
+		recovered:    opts.Recovered,
+		unresumable:  opts.Unresumable,
+		stopped:      opts.Stopped,
+		parked:       opts.Parked,
+		closeStopped: opts.CloseStopped,
+		turnLost:     opts.TurnLost,
+		steersEnded:  opts.SteersEnded,
+		node:         opts.Node,
+		boxes:        opts.Boxes,
+		nudge:        opts.Nudge,
+		refresh:      opts.Refresh,
+		sessions:     opts.Sessions,
+		keep:         opts.Keep,
+		restore:      opts.Restore,
+		relaunchWait: relaunchCaptureWait,
+		endWait:      JobEndWait,
+		endPoll:      jobEndPoll,
+		spoolDir:     opts.SpoolDir,
+		sessionRetry: sessionRetryBase,
+		recordBudget: sessionRecordBudget,
+		beginBudget:  beginRecordBudget,
+		captureTick:  captureWaitTick,
+		now:          opts.Now,
+		runs:         map[string]seatRuns{},
+		moves:        map[string]uint64{},
+		attempts:     map[answerKey]map[string]answerBudget{},
+		retries:      map[string]*answerRetry{},
+		refused:      map[string]refusedCompletion{},
+		owed:         map[string]map[string]struct{}{},
+		held:         map[string]bool{},
+		holdBusy:     map[string]bool{},
+		holdDirty:    map[string]bool{},
+		holdGen:      map[string]uint64{},
+		signals:      map[signal]uint64{},
+		launchStops:  map[string]launchStop{},
+		finishing:    map[string]bool{},
+		frames:       map[string]int{},
+		hold:         opts.Hold,
+		admit:        opts.Admit,
+		gate:         opts.Gate,
+		after:        opts.After,
+		spent:        opts.Spent,
+		wasSpent:     opts.WasSpent,
+		lease:        opts.Lease,
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -4953,9 +4958,13 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //  7. for a stop, the turn is closed on the record as stopped where it was
 //     parked on the run, its colleague answered and its end owed the same
 //     way ([CoordinatorOptions.CloseStopped]);
-//  8. every note a person sent the turn that no job ran with — still waiting on
-//     the record, or read by the brief of a job that never started — is
-//     published expired ([CoordinatorOptions.SteersExpired]);
+//  8. every note a person sent the turn that no step reported reading is
+//     published as the record knows it: delivered, told again by the brief of
+//     a later job that started; unconfirmed, handed to a job's harness that
+//     never confirmed it; missed, read by a take whose answer was lost and told
+//     by no later launch whose job started; expired, still waiting or read
+//     first by the brief of a job that never started
+//     ([CoordinatorOptions.SteersEnded]);
 //  9. the end the row owes — this ending's, or the one the turn's resumed
 //     frame decided — is recorded on the executor log once every capture of
 //     the turn has settled ([Coordinator.awaitCapture],
@@ -5016,7 +5025,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 		run = current
 	}
 	var handed []string
-	reclaimed, announced, expired, named := false, false, false, false
+	reclaimed, announced, ended, named := false, false, false, false
 	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
@@ -5120,12 +5129,12 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 				run = owing
 			}
 		}
-		if !expired && c.steersExpired != nil && run.unreadNotes() {
-			if err := c.steersExpired(ctx, run); err != nil {
-				return fmt.Errorf("sandbox: ending run %s, whose unread notes could not be "+
-					"recorded expired: %w", run.TurnID, err)
+		if !ended && c.steersEnded != nil && run.endsNotes() {
+			if err := c.steersEnded(ctx, run); err != nil {
+				return fmt.Errorf("sandbox: ending run %s, whose notes' ends could not be "+
+					"recorded: %w", run.TurnID, err)
 			}
-			expired = true
+			ended = true
 		}
 		if len(run.OwedEnd) > 0 {
 			if !mayAsk && c.keepsSessions() {

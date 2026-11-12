@@ -503,9 +503,12 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// alone freezes on the record it creates and records on the executor
 		// log, whatever this launch then takes up: a relaunch of a turn that
 		// keeps nothing of its own continues it.
-		Base:        l.conversation.frozen(),
-		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
-		BriefNotes:  brief,
+		Base:       l.conversation.frozen(),
+		SteerSeat:  e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
+		BriefNotes: brief,
+		// AND THE NOTES ITS BRIEF TELLS AGAIN, whose reads the record marked
+		// unanswered: recorded read by the job, at their takes' own places.
+		RetoldNotes: retoldNotes(req.Round, req.Retold),
 		HandedNotes: handed,
 		CodeHolds:   holds.ids,
 		CodeFloor:   grants.CodeFloor,

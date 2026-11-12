@@ -1384,20 +1384,20 @@ const (
 	// each delegated rule's required checks it measured 401.8 KiB (411,449
 	// bytes), 199 bytes inside 402 KiB, and on top of the atlas and dead-wait
 	// train it measured 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB.
-	// Merged on top of Company › Atlas on kit 0.122.0 it measured 403.8 KiB
-	// (413,471 bytes), 225 bytes inside 404 KiB. A new project's key, a deck's
-	// title and the copied engine bounds held to the engine's (+181), then the
-	// sidebar's pin page in a contract module of its own and the projects'
-	// page beside the work bounds the entry already reads (+15), took it to
-	// 402.0 KiB (411,648 bytes), the budget itself, on the tree before the
-	// required checks. The artifacts' contract split in two, the frame's half
-	// in the entry and every declaration only the workspace reads out of it
-	// (the formats' bounds held to the engine's among them, and the pin page
-	// folded into the frame's half), took it to 400.5 KiB (410,133 bytes,
-	// -1,515) there. Merged with the required checks, the atlas and dead-wait
-	// train and Company › Atlas it measures 402.5 KiB (412,149 bytes),
-	// 1,547 bytes inside 404 KiB: the next addition to the entry moves
-	// this budget only with a reason of its own.
+	// Merged on top of Company › Atlas on kit 0.122.0 and every end of a
+	// person's note said in the trace it measured 403.8 KiB (413,481 bytes),
+	// 215 bytes inside 404 KiB. A new project's key, a deck's title and the
+	// copied engine bounds held to the engine's (+181), then the sidebar's pin
+	// page in a contract module of its own and the projects' page beside the
+	// work bounds the entry already reads (+15), took it to 402.0 KiB (411,648
+	// bytes), the budget itself, on the tree before the required checks. The
+	// artifacts' contract split in two, the frame's half in the entry and
+	// every declaration only the workspace reads out of it (the formats'
+	// bounds held to the engine's among them, and the pin page folded into the
+	// frame's half), took it to 400.5 KiB (410,133 bytes, -1,515) there.
+	// Merged with main since the required checks it measures 402.5 KiB
+	// (412,160 bytes), 1,536 bytes inside 404 KiB: the next addition to
+	// the entry moves this budget only with a reason of its own.
 	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2267,7 +2267,12 @@ const (
 	// 0.122.0 took it to 5824.7 KiB (5,964,471 bytes, +81,642: script +73,130,
 	// of which the atlas chunk, its screens and the map code, is 68,179; the
 	// sheets +8,512, the kit's GraphCanvas rules in the one sheet and the
-	// atlas screens' own 1,083): 5825 KiB.
+	// atlas screens' own 1,083): 5825 KiB. Every end of a person's note to a
+	// running turn said in its trace as the run's record knows it (missed,
+	// unconfirmed, told again after a step that never handed it over, and an
+	// end this bundle does not know said as that, never as expired), merged on
+	// top of it, took it to 5826.0 KiB (5,965,816 bytes, +1,345, all script):
+	// 5826 KiB.
 	// An open draft held to what the engine takes (draft.set's arguments
 	// declared only while one schema holds them, and sizes counted as the
 	// engine encodes them), Ask Crewlet reading and proposing to the agents'
@@ -2280,8 +2285,8 @@ const (
 	// action's report held to the engine's line (a refusal written within it,
 	// the report cut at a whole character) and a seat or a space declared by
 	// its grammar past an enum's 64, +1,462 on the tree they were built on,
-	// merged on top of it, took it to 5837.1 KiB (5,977,152 bytes, +12,681,
-	// all script): 5838 KiB.
+	// merged on top of it, took it to 5838.4 KiB (5,978,501 bytes, +12,685,
+	// all script): 5839 KiB.
 	// A new project's key checked by the engine's grammar, a deck's title held
 	// to its bytes with Save held past it or past a slide's notes, a model's
 	// secret named by the secret store's grammar and every other copied engine
@@ -2291,9 +2296,9 @@ const (
 	// change part bounds held to the engine's (+1,713 when they were merged on
 	// the tree before the required checks), then the artifacts' contract split
 	// in two, the workspace's half a module of its own (+547 there), merged on
-	// top of it, took it to 5839.3 KiB (5,979,414 bytes, +2,262, all script):
-	// 5840 KiB.
-	treeBudget = 5<<20 + 720<<10
+	// top of it, took it to 5840.6 KiB (5,980,762 bytes, +2,261, all script):
+	// 5841 KiB.
+	treeBudget = 5<<20 + 721<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

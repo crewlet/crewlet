@@ -729,7 +729,7 @@ func TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding(t *testin
 		t.Fatalf("the record is %+v, want the job the launch opened, never started", run)
 	}
 	run.Ending = &sandbox.RecordedEnding{ID: "abandoned", At: time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)}
-	if err := d.runs.expired(t.Context(), run); err != nil {
+	if err := d.runs.ended(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
 	var got []string

@@ -125,6 +125,19 @@ type AgentRunRequest struct {
 	// never takes them again.
 	Notes []steer.Note
 
+	// Retold is every note the turn has read whose read the run's record
+	// marked unanswered as the brief was built (steer.Reading.Unanswered: a
+	// take recorded it read and its answer never reached its harness), by id
+	// ([Runner.retold]). EVERY BRIEF THE LAUNCH MAY HAND ITS RUN TELLS EACH OF
+	// THEM AGAIN: the fresh one among every note the turn has read, and a
+	// continued session's, its job's own copy's included, from the first such
+	// read on ([Runner.notesHeldBy], [Runner.inPlaceNotes]). So the launch
+	// records each read by the job it opens, told again, at its take's own
+	// place among the reads (sandbox.NoteRead.Retold), and the turn's ending
+	// says it was delivered there where the job started. None of them is
+	// among Notes.
+	Retold []string
+
 	// Surface is what the run may call, bridged; see the package rule
 	// above.
 	Surface *tools.Surface
@@ -526,6 +539,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		System:     system.Text,
 		Brief:      user.Text,
 		Notes:      fresh,
+		Retold:     r.retold(),
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
 		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
@@ -777,6 +791,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		System: system.Text,
 		Brief:  reseed.Text,
 		Notes:  fresh,
+		Retold: r.retold(),
 		Continue: &Continuation{
 			SessionID: inPlace, Brief: continued,
 			SignInReplaced: isRotated(carry),
