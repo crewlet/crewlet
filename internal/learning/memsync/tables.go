@@ -53,42 +53,60 @@ type table struct {
 
 	// wholeEachCycle republishes every row rather than only what is new.
 	//
-	// THE SPLIT IS BY SIZE AND BY MUTABILITY. A watermark ([table.watermark])
-	// catches inserts and misses in-place updates, which is right for the
-	// big append-only tables — a diary entry's retrieval counter moving is
+	// THE SPLIT IS BY MUTABILITY. A watermark ([table.watermark]) catches
+	// inserts and misses in-place updates, which is right for the
+	// append-only tables — a diary entry's retrieval counter moving is
 	// bookkeeping, and a compaction flag that fails to travel self-heals
-	// because the lifecycle re-derives it. It is wrong for the small ones,
-	// where an update IS the content: a counterparty profile is rewritten
-	// as the seat learns, a skill's state and use count move, an
-	// onboarding marker flips. Those hold a handful of rows per seat, so
-	// carrying all of them every cycle costs nothing and misses nothing.
+	// because the lifecycle re-derives it. It is wrong for these, where an
+	// update IS the content: a counterparty profile is rewritten as the seat
+	// learns, a skill's state and use count move, an onboarding marker
+	// flips.
 	//
-	// "A handful" is a claim about each table's BOUND, so each has one.
-	// synthesized_skills is capped per agent by the curator's archive
-	// horizon; agent_onboarding_markers is one row per seat by
-	// construction; counterparty_profiles is one row per person a seat has
-	// messaged and is swept at maintenance.CounterpartyRetention — it had
-	// no bound at all, which made it the one table here whose cost grew
-	// with the deployment's age rather than with its size.
+	// WHAT IT COSTS IS EACH TABLE WHOLE, EVERY PUBLISH, and only one of them
+	// is small by construction. agent_onboarding_markers is one row per seat.
+	// counterparty_profiles is one row per person a seat has messaged within
+	// maintenance.CounterpartyRetention, and every hydration brings back the
+	// rows a sweep took, since deletes do not travel (crewlet/crewlet#348).
+	// synthesized_skills keeps every skill the seat ever archived: the
+	// synthesizer's cap (learning.DefaultMaxSkillsPerAgent) counts only the
+	// skills not archived, and a skill is archived, never deleted. A publish
+	// cut inside one of these tables keeps nothing of it, and the seat's next
+	// one starts it again: a seat whose profiles and skills alone outlast a
+	// cycle's publish has the rows before the cut sent again every cycle and
+	// never the rest of them, nor the skill versions and the onboarding
+	// marker the registry lists after them (crewlet/crewlet#1040).
 	wholeEachCycle bool
 
 	// watermark is the column an append-only table's incremental export
-	// is over: a seat's rows past the highest value it published last
-	// cycle, in that column's order. Empty for a wholeEachCycle table,
-	// which has none.
+	// is over: a seat's rows past the last one the stream acknowledged, in
+	// that column's order, a page at a time. Empty for a wholeEachCycle
+	// table, which has none.
 	//
-	// IT MUST NEVER BE REUSED, which is the whole of the requirement and
-	// what the rowid failed. A TEXT-keyed table with no AUTOINCREMENT
-	// hands out max(rowid) + 1, so after the newest row is deleted — the
-	// diary's expiry or its trim, a lifecycle sweep, a skill's pruned
-	// history — the next insert takes that rowid again, at or below a
-	// mark that has already passed it, and is never published while this
-	// node holds the seat. So those tables carry `change_seq`, stamped by
-	// a trigger from a counter that only ever increments, on every insert
-	// and on every vector set in place (node migration 0041).
-	// TestNoAppendOnlyTableReusesItsWatermark holds every append-only entry
-	// to that, so an entry added later cannot bring the reusable rowid
-	// back.
+	// IT MUST NEVER BE REUSED, which is what the rowid failed. A TEXT-keyed
+	// table with no AUTOINCREMENT hands out max(rowid) + 1, so after the
+	// newest row is deleted — the diary's expiry or its trim, a lifecycle
+	// sweep, a skill's pruned history — the next insert takes that rowid
+	// again, at or below a mark that has already passed it, and is never
+	// published while this node holds the seat. So those tables carry
+	// `change_seq`, stamped by a trigger from a counter that only ever
+	// increments, on every insert and on every vector set in place (node
+	// migration 0041). TestNoAppendOnlyTableReusesItsWatermark holds every
+	// append-only entry to that, so an entry added later cannot bring the
+	// reusable rowid back.
+	//
+	// AND NO TWO ROWS OF A TABLE SHARE ONE ABOVE 0, because the mark moves
+	// per acknowledged row: a page boundary or a cut between two rows of one
+	// value would leave the mark at that value, and the next read, strictly
+	// above it, would never publish the second while this node holds the
+	// seat. A mark per table could not split such a pair inside one export; a
+	// mark per row can. The change sequence holds it: every stamp is a fresh
+	// increment of the node's counter, a re-stamp leaves its row's old value
+	// to nobody, and the rows node migration 0041 found kept their rowids,
+	// unique within a table. (0 is the column's default, which no read
+	// returns, since every read is strictly above a mark that is never below
+	// 0; and values can coincide across tables, harmlessly, since a mark is
+	// per seat and table.) TestRowsWrittenTogetherCarryDistinctWatermarks
+	// holds every entry to it.
 	watermark string
 
 	// fillsVector says the holder FILLS this append-only table's vector
@@ -123,11 +141,17 @@ var retiredTables = []string{
 	"conversation_sessions",
 }
 
-// tables is every table a seat's memory lives in.
+// tables is every table a seat's memory lives in, in the order a publish
+// carries them.
 //
-// Ordered so a hydrating node writes parents before children:
-// synthesized_skill_versions references synthesized_skills, and foreign keys
-// are ON in this store.
+// Parents before children: synthesized_skill_versions references
+// synthesized_skills, and foreign keys are ON in this store. That order holds
+// within one publish only. Every publish sends a seat's skills again, whole,
+// and each version once, so on the changelog a skill's only copy comes after
+// the versions published before it, and a replay, which reads the changelog
+// in its own order, meets those versions first: a store that does not
+// already hold the skill refuses them, and the hydration refuses the seat
+// (crewlet/crewlet#1051).
 var tables = []table{
 	{
 		name:      "agent_diary",

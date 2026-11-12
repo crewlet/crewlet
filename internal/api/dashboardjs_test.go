@@ -1362,6 +1362,13 @@ const (
 	// and one storage key, +207 over the entry and its shared chunks, and the
 	// one sheet the escalation note's rules, +44; every screen's module of it
 	// is lazy. So it moved to 402 KiB, 2.20 seconds.
+	// Kit 0.122.0 and Company › Atlas took it to 403.1 KiB, past that by
+	// bytes (about +1,470 gzipped): the one sheet +937 (the kit's GraphCanvas
+	// rules, which ride it by rule while the map's code is the atlas chunk's),
+	// the kit's shared chunks +430 (the by-line verbs and the six glyphs'
+	// registry names) and the entry +79 (the Atlas row, its routes, crumb and
+	// peek kind). Every screen's module of it is lazy. So it moved to 404 KiB,
+	// 2.21 seconds.
 	// Every page action's arguments held to the engine's bounds for a schema
 	// before a page context is sent took it from 400.8 KiB to 401.3 KiB on the
 	// tree it was built on: the chunk the assistant's page registry is built
@@ -1376,10 +1383,11 @@ const (
 	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB. Merged on top of
 	// each delegated rule's required checks it measured 401.8 KiB (411,449
 	// bytes), 199 bytes inside 402 KiB, and on top of the atlas and dead-wait
-	// train it measures 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB:
-	// the next addition to the entry moves this budget only with a reason of
-	// its own.
-	initialBudget = 402 << 10
+	// train it measured 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB.
+	// Merged on top of Company › Atlas on kit 0.122.0 it measures 403.8 KiB
+	// (413,471 bytes), 225 bytes inside 404 KiB: the next addition
+	// to the entry moves this budget only with a reason of its own.
+	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2243,7 +2251,12 @@ const (
 	// script): 5744 KiB. Atlas named among the apps People grants, and each
 	// delegated rule's required checks with Settings › Delegated decisions
 	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
-	// all script): 5745 KiB.
+	// all script): 5745 KiB. The atlas and dead-wait train took it to 5745.0
+	// KiB (5,882,829 bytes, +815), still inside it. Company › Atlas on kit
+	// 0.122.0 took it to 5824.7 KiB (5,964,471 bytes, +81,642: script +73,130,
+	// of which the atlas chunk, its screens and the map code, is 68,179; the
+	// sheets +8,512, the kit's GraphCanvas rules in the one sheet and the
+	// atlas screens' own 1,083): 5825 KiB.
 	// An open draft held to what the engine takes (draft.set's arguments
 	// declared only while one schema holds them, and sizes counted as the
 	// engine encodes them), Ask Crewlet reading and proposing to the agents'
@@ -2256,10 +2269,9 @@ const (
 	// action's report held to the engine's line (a refusal written within it,
 	// the report cut at a whole character) and a seat or a space declared by
 	// its grammar past an enum's 64, +1,462 on the tree they were built on,
-	// merged on top of it, took it to 5757.3 KiB (5,895,500 bytes, +12,671
-	// over main's 5,882,829 with the atlas and dead-wait train, all script):
-	// 5758 KiB.
-	treeBudget = 5<<20 + 638<<10
+	// merged on top of it, took it to 5837.1 KiB (5,977,152 bytes, +12,681,
+	// all script): 5838 KiB.
+	treeBudget = 5<<20 + 718<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

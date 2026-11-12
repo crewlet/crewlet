@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,12 +25,12 @@ import (
 )
 
 // AtlasReads is the atlas as this node reads it for one asker: the settings
-// it runs, the engine's records, and Gitlet as asker where reads is set;
-// false where it runs no company yet. builtin.AtlasDeps serves it, as it
-// serves the atlas tools.
+// it runs, the engine's records, and Gitlet as asker where reads is set or
+// why it is not read for them (unread); false where it runs no company yet.
+// builtin.AtlasDeps serves it, as it serves the atlas tools.
 type AtlasReads interface {
-	AtlasRead(ctx context.Context, reads gather.GitletReads, asker gitlet.Principal, fresh statelog.Freshness,
-		now time.Time) (gather.Answer, bool)
+	AtlasRead(ctx context.Context, reads gather.GitletReads, unread string, asker gitlet.Principal,
+		fresh statelog.Freshness, now time.Time) (gather.Answer, bool)
 }
 
 // atlasFresh is the read level every atlas question reads at: the
@@ -60,10 +61,12 @@ type AtlasMapAnswer struct {
 	atlas.Map
 }
 
-// AtlasEntryAnswer is one entry in full, and what relies on it.
+// AtlasEntryAnswer is one entry in full, what its open signals add up to as
+// the reader may read them, and what relies on it.
 type AtlasEntryAnswer struct {
 	AtlasRead
 	Entry  atlas.Entry  `json:"entry"`
+	Health atlas.Health `json:"health"`
 	Vendor atlas.Vendor `json:"vendor,omitempty"`
 	UsedBy []atlas.Link `json:"used_by"`
 }
@@ -99,13 +102,10 @@ func (s Sources) atlasView(ctx context.Context, what string) (atlas.View, AtlasR
 		return atlas.View{}, AtlasRead{}, err
 	}
 	reads, why := s.atlasGitlet(principal)
-	answer, running := s.Atlas.AtlasRead(ctx, reads, codeAsker(principal), atlasFresh, s.clock())
+	answer, running := s.Atlas.AtlasRead(ctx, reads, why, codeAsker(principal), atlasFresh, s.clock())
 	if !running {
 		return atlas.View{}, AtlasRead{}, fmt.Errorf("%w: this node runs no company yet, so there is no "+
 			"atlas to read", ErrUnavailable)
-	}
-	if why != "" {
-		answer = answer.Unread(gather.SourceGitlet, why)
 	}
 	read := AtlasRead{Revision: answer.Revision, Coverage: answer.Coverage, Withheld: len(answer.Withheld)}
 	return atlas.For(answer.View, atlas.Reader{Admin: principal.Can(iam.GrantAdmin)}), read, nil
@@ -134,15 +134,34 @@ func (s Sources) atlasGitlet(p iam.Principal) (gather.GitletReads, string) {
 
 // atlasQuery is the filters a question names.
 func atlasQuery(p Params) (atlas.Query, error) {
+	unconfirmed, err := atlasFlag(p, "unconfirmed")
+	if err != nil {
+		return atlas.Query{}, err
+	}
 	q := atlas.Query{
 		Text: p.String("q"), Kind: atlas.Kind(p.String("kind")), Lane: atlas.Lane(p.String("lane")),
 		Vendor: atlas.Vendor(p.String("vendor")), Word: atlas.Word(p.String("confidence")),
 		Health: atlas.Health(p.String("health")), Show: atlas.Show(p.String("show")),
+		Unconfirmed: unconfirmed,
 	}
 	if err := q.Validate(); err != nil {
 		return atlas.Query{}, badAtlas(err)
 	}
 	return q, nil
+}
+
+// atlasFlag is a yes or no parameter, false where it is absent. Anything but
+// true or false is refused rather than read as no, so a misspelt flag never
+// hides what it asked to show.
+func atlasFlag(p Params, key string) (bool, error) {
+	if !p.Has(key) {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(p.String(key)))
+	if err != nil {
+		return false, fmt.Errorf("%w: `%s` is true or false", ErrBadParams, key)
+	}
+	return b, nil
 }
 
 // badAtlas is an atlas read's refusal of its parameters, in this surface's
@@ -214,7 +233,8 @@ func (s Sources) atlasEntry(ctx context.Context, p Params) (any, error) {
 	if !found {
 		return nil, noAtlasEntry()
 	}
-	return AtlasEntryAnswer{AtlasRead: read, Entry: e, Vendor: view.Vendors()[e.ID], UsedBy: view.UsedBy(e.ID)}, nil
+	return AtlasEntryAnswer{AtlasRead: read, Entry: e, Health: e.Health(), Vendor: view.Vendors()[e.ID],
+		UsedBy: view.UsedBy(e.ID)}, nil
 }
 
 func (s Sources) atlasTrace(ctx context.Context, p Params) (any, error) {

@@ -178,7 +178,7 @@ func (s atlasSystems) Systems(ctx context.Context, r prefetch.Request) (atlas.Vi
 	if !running {
 		return atlas.View{}, false, nil
 	}
-	answer, _ := deps.AtlasRead(ctx, nil, gitlet.Principal{},
+	answer, _ := deps.AtlasRead(ctx, nil, "", gitlet.Principal{},
 		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}, time.Now().UTC())
 	view, _ := builtin.AtlasForSeat(answer.View, settings.Company, r.Seat)
 	return view, true, nil

@@ -201,10 +201,13 @@ export class InertWebSocket {
 /** Every read a layout case's screen asks, answered from `answers`, around `children`. */
 export function LayoutClient({
   answers,
+  ask,
   org,
   children,
 }: {
   answers: Record<string, unknown>;
+  /** An answer that depends on the question's parameters, asked before `answers`. */
+  ask?: (what: string, params: Record<string, unknown>) => unknown;
   org: Record<string, unknown>;
   children: ReactNode;
 }) {
@@ -213,7 +216,13 @@ export function LayoutClient({
   store.applyOrg(withDerived(org) as never);
   store.applySeats([] as never);
   const socket = new LiveSocket(store);
-  socket.query = ((what: string) => Promise.resolve(answers[what] ?? {})) as typeof socket.query;
+  socket.query = ((what: string, raw?: unknown) => {
+    const params = (typeof raw === "string" ? JSON.parse(raw) : (raw ?? {})) as Record<
+      string,
+      unknown
+    >;
+    return Promise.resolve(ask?.(what, params) ?? answers[what] ?? {});
+  }) as typeof socket.query;
   return (
     <ToastProvider>
       <Announcer label="Announcements" />

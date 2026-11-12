@@ -112,8 +112,8 @@ func TestASeatCarriesItsMemoryToANewNode(t *testing.T) {
 	seedMemory(t, oldOwner)
 	if published, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
-	} else if published != len(tables) {
-		t.Fatalf("published %d rows, want one per table (%d)", published, len(tables))
+	} else if published.Rows != len(tables) {
+		t.Fatalf("published %d rows, want one per table (%d)", published.Rows, len(tables))
 	}
 
 	// A different node: its own store, which has never run this seat.
@@ -302,9 +302,9 @@ func TestASecondPublishCarriesOnlyWhatIsNew(t *testing.T) {
 			whole++
 		}
 	}
-	if again != whole {
+	if again.Rows != whole {
 		t.Fatalf("a second publish carried %d rows, want only the %d "+
-			"whole-each-cycle tables", again, whole)
+			"whole-each-cycle tables", again.Rows, whole)
 	}
 }
 
@@ -708,9 +708,9 @@ func TestASeatWithNoIDCarriesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if published, err := nobody.Publish(ctx, seat.Handle); err != nil || published != 0 {
+	if published, err := nobody.Publish(ctx, seat.Handle); err != nil || published.Rows != 0 {
 		t.Fatalf("a seat with no id published %d rows (%v), want none and no error",
-			published, err)
+			published.Rows, err)
 	}
 	if carried, err := nobody.Hydrate(ctx, seat.Handle); err != nil || carried != 0 {
 		t.Fatalf("a seat with no id hydrated %d rows (%v), want none and no error",
@@ -718,8 +718,8 @@ func TestASeatWithNoIDCarriesNothing(t *testing.T) {
 	}
 
 	if published, err := syncerOn(t, db, conn).Publish(ctx, seat.Handle); err != nil ||
-		published != len(tables) {
+		published.Rows != len(tables) {
 		t.Fatalf("the control published %d rows (%v), want one per table (%d)",
-			published, err, len(tables))
+			published.Rows, err, len(tables))
 	}
 }

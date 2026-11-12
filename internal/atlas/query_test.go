@@ -140,6 +140,39 @@ func TestAFacetCountsOverEveryOtherFilter(t *testing.T) {
 	}
 }
 
+// AN UNCONFIRMED ENTRY STAYS OUT OF A READ UNTIL IT IS ASKED FOR: an agent's
+// report nothing backs is hidden until a person confirms it, while the word's
+// own facet still counts it, so a screen can say what showing it would add.
+func TestAnUnconfirmedEntryStaysOutUntilAskedFor(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	zone := atlas.MustRef(atlas.KindDomain, "acme.example")
+	guess := atlas.MustRef(atlas.KindService, "billing-api")
+	unbacked := atlas.AgentSource("sre", "turn-2", atlas.EvidenceNone)
+	v := atlas.Fold([]atlas.Claim{m(atlas.Exists(zone, settings, now)), m(atlas.Exists(guess, unbacked, now))}, now)
+	names := func(q atlas.Query) []string {
+		var out []string
+		for _, e := range v.Select(q) {
+			out = append(out, e.Name)
+		}
+		return out
+	}
+	if got := names(atlas.Query{}); !slices.Equal(got, []string{"acme.example"}) {
+		t.Errorf("a read asking for nothing showed %v, want the unconfirmed entry left out", got)
+	}
+	for _, q := range []atlas.Query{{Unconfirmed: true}, {Word: atlas.WordUnconfirmed}} {
+		if got := names(q); !slices.Contains(got, "billing-api") {
+			t.Errorf("%+v showed %v, want the unconfirmed entry", q, got)
+		}
+	}
+	if got := v.Facets(atlas.Query{}).Words[atlas.WordUnconfirmed]; got != 1 {
+		t.Errorf("the word facet counts %d unconfirmed entries, want the hidden one counted", got)
+	}
+	if got := v.Map(atlas.Query{}, nil).Nodes; len(got) != 1 {
+		t.Errorf("the map drew %d entries, want the unconfirmed one left off it", len(got))
+	}
+}
+
 // A MAP DRAWS EVERY LANE AND CLOSES GROUPS PAST ITS BOUND, largest first, so
 // the answer stays bounded and says which it closed; edges are structural.
 func TestAMapClosesGroupsPastItsBound(t *testing.T) {

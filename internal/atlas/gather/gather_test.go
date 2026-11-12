@@ -161,6 +161,40 @@ func TestASourceThatFailsIsReportedNotHidden(t *testing.T) {
 	}
 }
 
+// A COMPANY THAT HOSTS NO CODE IN GITLET MISSES NOTHING THERE: its Gitlet is
+// read in full with nothing in it, whatever the node serves and whoever reads,
+// and no push use is counted, so its other repositories are never judged
+// unused by pushes Gitlet could not have seen. Where it does host code, a
+// reader's own reason for not reading Gitlet is said.
+func TestACompanyThatHostsNoCodeInGitletMissesNothingThere(t *testing.T) {
+	t.Parallel()
+	gitletOf := func(a gather.Answer) gather.Coverage {
+		return a.Coverage[slices.IndexFunc(a.Coverage, func(c gather.Coverage) bool { return c.Source == gather.SourceGitlet })]
+	}
+	elsewhere := &config.Company{Name: "acme"}
+	elsewhere.Integrations.GitHub = &config.GitHub{Enabled: true,
+		Provisioning: &config.GitHubProvisioning{Org: "acme", Repos: []string{"acme/web"}}}
+	for _, req := range []gather.Request{
+		{Company: elsewhere, Revision: "r1", Now: now},
+		{Company: elsewhere, Revision: "r1", Now: now, GitletUnread: "you do not use Gitlet"},
+	} {
+		a := gather.Read(context.Background(), gather.Sources{}, req)
+		if got := gitletOf(a); !got.Complete || got.Reason != "" {
+			t.Errorf("a company hosting no code, read with %q: %+v", req.GitletUnread, got)
+		}
+		for _, e := range a.View.Entries {
+			if e.Ref.Kind == atlas.KindRepository && e.NotUsedRecently {
+				t.Errorf("%s is judged unused by pushes a company hosting no code could not record", e.Ref.Key)
+			}
+		}
+	}
+	held := gather.Read(context.Background(), gather.Sources{}, gather.Request{Company: acme(), Revision: "r1",
+		Now: now, GitletUnread: "you do not use Gitlet"})
+	if got := gitletOf(held); got.Complete || got.Reason != "you do not use Gitlet" {
+		t.Errorf("a reader who may not read the company's Gitlet: %+v", got)
+	}
+}
+
 // A CREDENTIAL BESIDE A REPOSITORY'S OTHER HOST IS NEVER READ: the domain keeps
 // a reference there, and the atlas takes the address alone.
 func TestACredentialBesideAnotherHostIsNeverRead(t *testing.T) {
