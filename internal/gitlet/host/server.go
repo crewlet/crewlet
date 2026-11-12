@@ -108,11 +108,17 @@ type BoxRun struct {
 	// run's checkout composed it for the turn's own code writes
 	// (internal/sandbox's PendingRun.CodeWorkingFor): the box's pushes are
 	// the turn's writes made late, so each carries it to its committer
-	// (gitlet.Proposal.WrittenFor), as the turn's own code tools' writes do.
-	// Nil for a run that works for its own seat, and for one launched by a
-	// build before the field. A value this build does not know — a kind, an
-	// app — is a newer build's, carried as it stands: its committer answers
-	// such a push as a node of another build (gitlet's unknownToThisBuild).
+	// (gitlet.Proposal.WrittenFor), as the turn's own code tools' writes do;
+	// and a CREDENTIAL acting as no seat bounds the box as a colleague does,
+	// by its own grant, which reads every repository and pushes none, so the
+	// box pushes the seat's own work alone (boxadmit.go's runCeiling). Nil for
+	// a run that works for its own seat, and for one launched by a build
+	// before the field. A value this build does not know — a kind, an app —
+	// is a newer build's, carried as it stands: its committer answers such a
+	// push as a node of another build (gitlet's unknownToThisBuild), and a
+	// kind its admission cannot bound by is answered 503 carrier_unknown. One
+	// no checkout writes — a stranger, the zero kind, a credential naming no
+	// app — has the box refused every request (gitlet.RunCarrierInvalid).
 	WorkingFor *types.WorkingFor
 	// Repos are the repositories the run was given.
 	Repos []BoxGrant

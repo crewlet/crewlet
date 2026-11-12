@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/costlimit"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -94,7 +95,21 @@ import (
 //     (M3-decisions U40 (a)): a fetch the colleague could not make, and a
 //     command outside the seat's own work the colleague could not make, are
 //     refused, and its own work — the branches under its own namespace, and
-//     every branch of a repository it owns — stays its own. A node with
+//     every branch of a repository it owns — stays its own. In a run whose
+//     turn a credential acting as no seat woke (BoxRun.WorkingFor), held to
+//     that credential's own grant the same way, which reads every repository
+//     and pushes none: the box fetches what its run was given and pushes its
+//     seat's own work alone, as the turn's own code writes for the credential
+//     do (ADR-0110). Whom the row names is held first to the rule every
+//     carrier is held to (gitlet.KindUnknownToThisBuild,
+//     gitlet.RunCarrierInvalid): a run whose row names a stranger, or names
+//     whom its turn works for as no checkout writes it — the zero kind, a
+//     handle or a login out of its grammar, a credential naming no app — is
+//     refused every request, the closed end; and one naming it by a kind
+//     this build does not know, a newer build's, is answered 503
+//     carrier_unknown, judged by no bound this node could only guess at
+//     (runCeiling): a node of a newer build judges it, and the harness's
+//     push or fetch again reaches one. A node with
 //     no chart, or one confirmed behind the company's configuration
 //     (Options.Current), judges no box's grant and answers 503: the
 //     configuration it failed to apply may be the one that revoked the seat,
@@ -303,16 +318,91 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 			"seat's grant")
 		return admission{}, false
 	}
+	// WHOEVER THE RUN'S TURN WORKS FOR, which this node judges the box for too
+	// (runCeiling), held first to the one rule every carrier is held to, never
+	// to a reading of this package's own: a kind this build knows
+	// (gitlet.KindUnknownToThisBuild), and somebody a checkout writes on a row
+	// (gitlet.RunCarrierInvalid) — the rule the committer holds every push of
+	// the box to, which states the same carrier.
+	switch carrier, invalid := run.WorkingFor, gitlet.RunCarrierInvalid(run.Seat, run.WorkingFor); {
+	case gitlet.KindUnknownToThisBuild(carrier):
+		// A NEWER BUILD'S RUN, in the words this package gives every value
+		// only a newer build reads (write.go's protection): retryable, since
+		// the harness's next request may reach a node of that build.
+		asked := "fetch"
+		if op == auth.GitPush {
+			asked = "push"
+		}
+		b.unavailable("carrier_unknown", fmt.Sprintf("this node's build does not know whom run %s's turn works "+
+			"for, so it cannot judge this %s: a node of a newer build judges it, and the harness's %s again "+
+			"reaches one", run.Ref.TurnID, asked, asked))
+		return admission{}, false
+	case invalid != nil && !gitlet.IsUnknownToThisBuild(invalid):
+		// WHAT NO CHECKOUT WRITES is the closed end, never a newer build's
+		// run to wait for: a stranger, for whom no checkout is made and
+		// nothing is read or pushed (ADR-0110), and what no build composes
+		// — the zero kind, a handle or a login out of its grammar, a
+		// credential naming no app, which every reader of a carrier takes
+		// for a stranger. An app this build does not know is a newer
+		// build's, and passes: the box's bound is the credential's own
+		// grant, which no app moves, and its push's committer answers the
+		// app as a node of another build.
+		b.refuse("not_permitted", fmt.Sprintf("run %s's row names whom its turn works for as no checkout writes "+
+			"it, so its box reads and pushes nothing: %s", run.Ref.TurnID, sentence(invalid.Error())))
+		return admission{}, false
+	}
 	adm.grant = gitlet.GrantOf(adm.principal(), repo, roster).Within(g.Access)
-	if run.Ceiling != "" {
-		adm.grant = adm.grant.Under(gitlet.GrantOf(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: run.Ceiling},
-			repo, roster))
+	if ceiling := runCeiling(run, repo, roster); ceiling != nil {
+		adm.grant = adm.grant.Under(*ceiling)
 	}
 	if op == auth.GitFetch && !adm.grant.MayRead() {
 		b.refuse("not_permitted", adm.grant.ReadRefusal())
 		return admission{}, false
 	}
 	return adm, true
+}
+
+// runCeiling is the grant a run's box is held under beside its seat's own
+// (gitlet.Grant.Under) — WHOEVER ITS TURN WORKS FOR, as the run's row names
+// them — and nil for a run its seat alone bounds:
+//
+//   - A COLLEAGUE SEAT whose ask woke the turn (BoxRun.Ceiling): that seat's
+//     own grant, from this node's chart, so the box fetches nothing the
+//     colleague could not read and pushes nothing outside the seat's own work
+//     the colleague could not push.
+//   - A CREDENTIAL acting as no seat (BoxRun.WorkingFor): the credential's own
+//     grant (gitlet.CredentialPrincipal), which reads every repository and
+//     pushes to none, so the box fetches every repository its run was given,
+//     as the credential itself reads, and pushes the seat's own work alone —
+//     its own namespace and the repositories it owns — as the turn's own code
+//     writes for that credential do (ADR-0110). Bounded by its seat alone, the
+//     box pushed every branch the seat may, for a token that pushes to no
+//     repository itself.
+//   - A PERSON'S SEAT, and NOBODY — a turn nobody woke, the seat's own, and a
+//     row a build before the carrier wrote: none, a person bounding nothing.
+//
+// The rows the admission answers before asking it (admitRun's step 7), by the
+// rule every carrier is held to: a row naming whom its turn works for by a
+// kind this build does not know, which only a newer build writes and whose
+// bound is that build's to judge (503 carrier_unknown, saying a node of a
+// newer build judges the request and the harness's next push or fetch reaches
+// one — never held to a bound this build guessed, nor refused as a run no
+// build launched); and a row naming a stranger, for whom no checkout is made
+// and no repository is read or written, the seat's own work included
+// (ADR-0110), or naming whom its turn works for as no checkout writes it —
+// the zero kind among them, which this function would read as nobody's — whose
+// box is refused every request.
+func runCeiling(run BoxRun, repo gitlet.RepoRef, roster gitlet.Roster) *gitlet.Grant {
+	var g gitlet.Grant
+	switch w := run.WorkingFor; {
+	case run.Ceiling != "":
+		g = gitlet.GrantOf(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: run.Ceiling}, repo, roster)
+	case w != nil && w.Kind == types.WorkingForCredential:
+		g = gitlet.GrantOf(gitlet.CredentialPrincipal(w.Login), repo, roster)
+	default:
+		return nil
+	}
+	return &g
 }
 
 // runSession is what a box's reads of its refs sync at: SESSION at its run's

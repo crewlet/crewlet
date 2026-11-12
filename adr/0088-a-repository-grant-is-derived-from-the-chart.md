@@ -114,5 +114,8 @@ person who may not act, and a person or a credential without the app use no app,
 for them, the seat's own work included. The ceiling of nobody stays for the one requester left that
 uses the app and pushes to no repository itself, a credential bound to no seat
 ([ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)): its turn steers the seat's
-own work alone. Everything else this record decides is unchanged: the derivation for seats,
+own work alone — the writes of its code tools, and of its executor: the box's pushes, held under the
+credential's own grant, and the change its run opens
+([ADR-0093](0093-a-box-reaches-git-with-its-runs-credential.md)'s amendment). Everything else this record
+decides is unchanged: the derivation for seats,
 `visibility`, the reserved namespace, protections and a colleague seat's ceiling.

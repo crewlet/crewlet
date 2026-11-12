@@ -61,7 +61,9 @@ type launchRepos struct {
 // that colleague, a person, a credential acting as no seat, or nobody — goes on
 // the row beside it ([sandbox.RepoGrant.WorkingFor]), as the resolution
 // composed it for the turn's own code writes, never derived again from the
-// row: what the box pushes and the change the run's collection opens carry it.
+// row: what the box pushes and the change the run's collection opens carry it,
+// and a credential's holds the box to the credential's own grant, which pushes
+// nothing, so the box changes the seat's own work alone (ADR-0110).
 //
 // deps are the code tools' seams on this node — [CodeToolDeps] in a running
 // engine, read by the caller at the checkout rather than held, so a checkout

@@ -297,10 +297,14 @@ func TestARunsOpenIsHeldToWhoeverWokeItsTurn(t *testing.T) {
 // its row carries it (sandbox.PendingRun.CodeWorkingFor) — a colleague's seat,
 // a person's, a credential acting as no seat with its apps — and for nobody,
 // stated, the seat's own work, where the run works for its seat or its row
-// was written by a build before the field.
+// was written by a build before the field. A credential's is asked under the
+// ceiling of nobody, as the turn's own code writes for it are: it pushes to
+// no repository itself, so its run opens a change of the seat's own work
+// alone, which the committer judges.
 //
-// Mutation: the open stating nobody whatever the row carries — every row but
-// nobody's, red.
+// Mutations: the open stating nobody whatever the row carries — every row but
+// nobody's, red; a credential's open asked under no ceiling — the
+// credential's row, red.
 func TestARunsOpenIsMadeForWhomItsTurnWorksFor(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
@@ -309,12 +313,14 @@ func TestARunsOpenIsMadeForWhomItsTurnWorksFor(t *testing.T) {
 		name    string
 		ceiling string
 		carrier *types.WorkingFor
+		asked   *gitlet.WriteCeiling
 	}{
-		{"a colleague's ask", "designer", &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "designer"}},
-		{"a person's ask", "", &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}},
+		{"a colleague's ask", "designer", &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "designer"},
+			&gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: "designer"}},
+		{"a person's ask", "", &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}, nil},
 		{"a credential's write", "", &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
-			Apps: []iam.Grant{iam.GrantWorklet, iam.GrantGitlet}}},
-		{"nobody's ask, or a row from before the carrier", "", nil},
+			Apps: []iam.Grant{iam.GrantWorklet, iam.GrantGitlet}}, &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}},
+		{"nobody's ask, or a row from before the carrier", "", nil, nil},
 	} {
 		run := openingRun()
 		run.CodeCeiling, run.CodeWorkingFor = tc.ceiling, tc.carrier
@@ -330,6 +336,9 @@ func TestARunsOpenIsMadeForWhomItsTurnWorksFor(t *testing.T) {
 		if got := writes[0].WrittenFor; !got.Stated() || !reflect.DeepEqual(got.Carrier(), tc.carrier) {
 			t.Errorf("%s: the open was made for %+v (stated %v), want %+v", tc.name, got.Carrier(), got.Stated(),
 				tc.carrier)
+		}
+		if got := writes[0].Ceiling; !reflect.DeepEqual(got, tc.asked) {
+			t.Errorf("%s: the open was asked under %+v, want %+v", tc.name, got, tc.asked)
 		}
 	}
 }

@@ -272,11 +272,14 @@ func (a admission) principal() gitlet.Principal {
 // carries it (BoxRun.WorkingFor, which the run's checkout composed for the
 // turn's own code writes), and for nobody, the seat's own work, where the run
 // works for its seat; whatever the row holds is carried as it stands, a value a
-// newer build wrote that this one does not know included, since only the
-// committer that decides the push holds a carrier to its rule. A PERSON'S push
-// is their own and states nothing, and a check's box pushes nothing. ONE
-// ANSWER for the push's landing and for its measure before receive-pack runs
-// (commandsRefusal), so a push is measured carrying what it will carry.
+// newer build wrote that this one does not know included, since the committer
+// that decides the push holds it to its rule — the admission refused before
+// anything of the push only a row naming what no checkout writes, and answered
+// a kind this build does not know as a newer build's run (boxadmit.go's step
+// 7). A PERSON'S push is their own and states nothing, and a check's box
+// pushes nothing. ONE ANSWER for the push's landing and for its measure before
+// receive-pack runs (commandsRefusal), so a push is measured carrying what it
+// will carry.
 func (a admission) writtenFor() types.WrittenFor {
 	if a.box == nil {
 		return types.WrittenFor{}

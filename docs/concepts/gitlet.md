@@ -4464,6 +4464,20 @@ or a person without the Gitlet permission woke is given no repository at all:
 a launch naming one is refused, saying why, before any box exists ([Reads made
 for somebody else](#reads-made-for-somebody-else)).
 
+**A box working for a credential does only its seat's own work.** A run
+launched in a turn a credential acting as no seat woke — a pipeline's token
+holding the Gitlet permission — names that credential on its row, and the box
+is held to the credential's own grant as well as its seat's. Such a credential
+reads every repository and pushes to none itself, so the box fetches what its
+run was given, and pushes nothing outside its seat's own work — its own
+namespace and the repositories it owns — as the seat's own code tools write
+for the credential ([Writes made for somebody else](#writes-made-for-somebody-else)).
+Whoever the turn works for, the box's pushes and the change its run opens carry
+them, as every write of that turn does. A box whose run names whom it works for
+by a kind this node's build does not know — a run a newer build launched — is
+told that a node of a newer build judges its request, and that the harness's
+push, or fetch, again reaches one.
+
 **The admission**, in this order, each refusal in the one line git prints:
 
 | Step | Refused | Answer |
@@ -4478,7 +4492,8 @@ for somebody else](#reads-made-for-somebody-else)).
 | The repository | not found, deleted or purging, or archived for a push, as a person's request is — decided through the code log's barrier, never on the box's own read, while the run's [re-syncs](#a-boxs-re-syncs-and-requests-in-flight) last; past them, on its run's floor, a not-found saying so. A name a rename left redirecting is not refused: the box is served the repository under its new name, a push included, since the box's remote is the name its launch gave it | as a person's |
 | | a name renamed away from the repository the run was given and since taken by another | `403 not_granted` — a new launch resolves the name again |
 | The seat's grant | this node holds no chart yet, or is confirmed behind the company's configuration | `503` (`no_chart`, `behind_config`): the configuration it failed to apply may be the one that revoked the seat; the box retries, and `/ready` already drains this node |
-| | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit — or, for a run working for a colleague, one that colleague reads nothing of | `403 not_permitted`, naming whose grant reads nothing |
+| | the run works for somebody of a kind this node's build does not know — a run a newer build launched | `503 carrier_unknown`, saying a node of a newer build judges it and the harness's push (or fetch) again reaches one: this node judges the box by no bound it could only guess at |
+| | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit — or, for a run working for a colleague, one that colleague reads nothing of; and any request of a run whose row names a stranger, for whom nothing is read or pushed (no checkout is made for one), or names whom its turn works for in a shape no checkout writes — no kind at all, or a credential naming no app | `403 not_permitted`, naming whose grant reads nothing, the stranger, or what the row's carrier breaks |
 | The run's hold, for a push (below) | the run store could not be written | `503 holds_unwritten` with `Retry-After` — the push is never received unheld |
 | | the run already holds the most repositories and branches one run may (1 024) | `403 holds_full` |
 | A push's commands, each | a command the seat's grant refuses, or — for a run working for a colleague — one outside the seat's own work (its own namespace and the repositories it owns) the colleague's grant refuses | `not_permitted` on that ref, saying what the seat or the colleague holds and what the command needs |
@@ -5001,7 +5016,11 @@ colleague's is given none that colleague could not read; the run's
 row names the colleague, and its box is held to the colleague's grant on every
 request it makes — every fetch, and every push outside the seat's own work —
 its own namespace and the repositories it owns. A launch asking to `write` a
-branch the colleague could not push is refused before any box exists.
+branch the colleague could not push is refused before any box exists. A
+credential's run's row names the credential, and its box pushes the seat's own
+work alone, which the credential's own grant — every repository read, none
+pushed — holds it to; a launch asking to `write` a branch outside it is refused
+the same way.
 
 The colleague's grant is judged where the seat's own is: by the node that
 answers each read, from its own chart and the repository's row, and never
@@ -5068,7 +5087,7 @@ or its protections — exactly as they would be decided asking it themselves.
 | nobody, or the outcome of its own act | what its own grant allows |
 | a person of the company holding the Gitlet permission | what its own grant allows: such a person maintains every repository |
 | a colleague seat | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
-| a credential acting as no seat that holds the Gitlet permission, such as a pipeline's token (which pushes to no repository itself) | its own work, and nothing else |
+| a credential acting as no seat that holds the Gitlet permission, such as a pipeline's token (which pushes to no repository itself) | its own work, and nothing else — what its executor pushes, and the change its run opens, included |
 | a person without the Gitlet permission or on a human seat no person in the directory holds, a person who may not act in the company now, a credential without the Gitlet permission, or somebody the company does not know | **nothing**, its own work included |
 
 **No write is made for somebody who uses no Gitlet.** A stranger, a person who
@@ -8407,7 +8426,7 @@ revised is one click from the terminal that pushed it.
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none) — for a [coding box](#coding-boxes)'s, no credential, the seat whose run it is, and the run's `turn_id` and `launch_id` — the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
 | `code_box_challenged` | `DEBUG` | A [coding box](#coding-boxes)'s request presented no credential this fleet signed — none (`reason`: `none`), a user name other than `run` (`user`), or a token that does not verify (`token`) — and was challenged `401`, with its `path`: by Gitlet's admission, or, under the component `api`, by a node serving none of Gitlet now, which tells a box why only past this challenge. Debug, because the route is public and anybody who reaches it can produce one. |
-| `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`, `holds_full`), or answered `503` because this node could not judge it or hold what its push names (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `floor_unraised`, `holds_unwritten`) or its run had sixteen requests in flight here (`run_busy`, before the run's row is read, so with no `seat`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
+| `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`, `holds_full`), or answered `503` because this node could not judge it or hold what its push names (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `carrier_unknown`, `floor_unraised`, `holds_unwritten`) or its run had sixteen requests in flight here (`run_busy`, before the run's row is read, so with no `seat`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
 | `code_box_resyncs_spent` | `INFO` | A coding box's fetch wanted an object its run's floor does not hold, and its run's — or its seat's — re-syncs at the log's head on this node were spent, so it was answered at its floor with no barrier: the `repo`, the bucket's `scope` (the seat, or `check:<repository id>` for a check's box) and `principal` (`run <launch id>`, or the check's attempt: its commit, target, name and number), the `oid` and the bucket's `retry_after` ([a box's re-syncs](#a-boxs-re-syncs-and-requests-in-flight)). |
 | `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. Or a box's fetch took a barrier for a want its floor lacked, and its floor could not be raised to it: the fetch was served all the same, and the box's next fetch of those objects on another node may take a barrier again. |
 | `code_box_floor_unreadable` | `WARN` | Under the component `engine`: an executor's row names a code-log floor this build cannot read, or one on another log, so its box reads through the barrier until its next answer raises the row to a readable one. |

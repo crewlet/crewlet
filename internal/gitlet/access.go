@@ -340,6 +340,19 @@ func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
 	return g
 }
 
+// CredentialPrincipal is a credential acting as no seat, by its login, as a
+// repository's grant judges it ([GrantOf]: it reads every repository and
+// pushes to none itself) — the grant a coding box, and its checkout's
+// precheck, are held under ([Grant.Under]) where the run's turn works for such
+// a credential, so the box changes the seat's own work alone, as the turn's
+// own code writes do for it ([WriteCeilingNobody], ADR-0110), and fetches what
+// its run was given, as the credential reads every repository itself. The ONE
+// SPELLING of that principal for both, so the precheck and the admission
+// cannot judge a credential's run by two grants.
+func CredentialPrincipal(login string) Principal {
+	return Principal{Kind: PrincipalOperator, OperatorID: login}
+}
+
 // AccessOf is GrantOf(p, repo, r).Access.
 func AccessOf(p Principal, repo RepoRef, r Roster) Access { return GrantOf(p, repo, r).Access }
 

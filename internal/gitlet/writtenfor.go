@@ -194,7 +194,7 @@ func unknownToThisBuild(at jsontext.Pointer, f types.WrittenFor) error {
 	switch {
 	case carrier == nil:
 		return nil
-	case carrier.Kind != "" && !carrier.Kind.Valid():
+	case KindUnknownToThisBuild(carrier):
 		return &jsonv2.SemanticError{Err: jsonv2.ErrUnknownName, JSONPointer: at.AppendToken("kind")}
 	case carrier.Kind != types.WorkingForCredential:
 		return nil
@@ -206,6 +206,36 @@ func unknownToThisBuild(at jsontext.Pointer, f types.WrittenFor) error {
 		}
 	}
 	return nil
+}
+
+// KindUnknownToThisBuild reports whether f names whom a write is made for by a
+// kind this build does not know — a newer build's, since no sender composes a
+// kind its own build does not know: the kind half of [unknownToThisBuild],
+// which asks it, so the one place this build decides it is that function's.
+// Never the zero kind, which names none and which no build composes: the rule
+// every holder holds a carrier to refuses it as malformed
+// ([writtenForInvalid]). Exported for the Gitlet node's box admission, which
+// bounds a run's box by the kind of whom its row says the turn works for
+// (internal/gitlet/host's runCeiling) and so tells a newer build's run from one
+// no build launched by this rule, never by a reading of its own.
+func KindUnknownToThisBuild(f *types.WorkingFor) bool {
+	return f != nil && f.Kind != "" && !f.Kind.Valid()
+}
+
+// RunCarrierInvalid is why a write a run of seat makes may not state f as whom
+// it is made for — f as the run's row keeps whom its turn works for
+// (internal/sandbox's PendingRun.CodeWorkingFor), and so as every push of its
+// box states it — or nil: [writtenForInvalid] of an agent of handle seat, the
+// rule every holder of a carrier holds it to. A value this build does not know
+// is answered as there, by [unknownToThisBuild]'s refusal, which
+// [IsUnknownToThisBuild] reports; anything else it refuses — the zero kind, a
+// handle or a login out of its grammar, a credential naming no app, a stranger
+// — is a carrier no checkout writes, refused naming written_for. Exported for
+// the Gitlet node's box admission, which judges a run's box for whom its row
+// names before any bound (internal/gitlet/host's admitRun): one rule for the
+// row's carrier and for the pushes its box makes from it.
+func RunCarrierInvalid(seat string, f *types.WorkingFor) error {
+	return writtenForInvalid(Principal{Kind: PrincipalAgent, Seat: seat}, types.ForTurn(f))
 }
 
 // writtenForAt is where every request a code write forms holds whom it is

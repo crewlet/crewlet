@@ -1720,7 +1720,11 @@ type PendingRun struct {
 	// nil for a job that works for its own seat: a turn nobody woke, and one
 	// the seat itself woke. What the job's box pushes, and the change its
 	// collection opens, are the turn's writes made late, so each carries it
-	// (Gitlet's box admission, internal/engine's collection).
+	// (Gitlet's box admission, internal/engine's collection); and a
+	// credential's holds both to the seat's own work, as the turn's own code
+	// writes for it are: Gitlet's box admission holds the box to the
+	// credential's own grant, which pushes nothing, and the open is asked
+	// under the ceiling of nobody (ADR-0110).
 	//
 	// CARRIED, NEVER READ HERE, as CodeCeiling is, and job-scoped like it:
 	// written by [PendingStore.BeginLaunch] or the job's first checkout with

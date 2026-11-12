@@ -604,7 +604,12 @@ than another, never acts wider than the narrower answer. A `token:` login is
 placed by that node's own `api.auth.tokens` and nothing else, and any other
 login by the identity directory alone. Nobody is asked anything for a
 credential: a question its turn's executor addresses to the requester goes to
-the seat's lead chain instead, as one in a turn nobody woke does. And what no
+the seat's lead chain instead, as one in a turn nobody woke does. A token
+pushes to no repository itself, so what its turn changes of the company's code
+is the seat's own work and nothing else — the seat's own namespace and the
+repositories it owns — whatever the seat may change for anybody else: its code
+tools' writes, what its executor's box pushes, and the change its run opens
+alike. And what no
 app gates stays out of its reach: a token's turn reads no fleet health and
 reaches no server (`fleet_health`, `code_status`, `ssh_read`, `ssh_operate`),
 an `admin` token's included.

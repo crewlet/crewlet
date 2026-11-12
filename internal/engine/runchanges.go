@@ -388,12 +388,16 @@ const unopenedUnreadable = "the node that answered runs a build that cannot read
 const unopenedUnserved = "no Gitlet node could take it, so nothing of the open ran; the commits the run " +
 	"pushed are kept, and the change is the seat's to open again with " + builtin.CodeOpenChangeTool
 
-// openCeiling is whom the open a run asked for is made for (gitlet.WriteCeiling):
-// the colleague SEAT whose ask woke the launching turn, as the run's row names
-// it (sandbox.PendingRun.CodeCeiling) — the seat the box's admission already
-// holds every push of the run to (gitlet.Grant.Under) — and nil for a run no
-// colleague seat bounds: a turn nobody woke, one the seat itself woke, and one
-// a person woke, who bounds nothing.
+// openCeiling is the ceiling the open a run asked for is held to
+// (gitlet.WriteCeiling): the colleague SEAT whose ask woke the launching turn,
+// as the run's row names it (sandbox.PendingRun.CodeCeiling) — the seat the
+// box's admission already holds every push of the run to (gitlet.Grant.Under);
+// NOBODY for a turn a credential acting as no seat woke, as the row's carrier
+// says (sandbox.PendingRun.CodeWorkingFor), which pushes to no repository
+// itself, so its open is the seat's own work or nothing, as the box's pushes
+// are and as the turn's own writes for it are (ADR-0110); and nil for a run
+// nobody bounds: a turn nobody woke, one the seat itself woke, and one a
+// person woke, who bounds nothing.
 //
 // THE OPEN IS THE TURN'S OWN WRITE, made late: a code_open_change of the same
 // turn carries the same ceiling (internal/agent/builtin's codeCaller), and the
@@ -405,10 +409,13 @@ const unopenedUnserved = "no Gitlet node could take it, so nothing of the open r
 // activation shut out of the repository between the launch and the collection
 // would have a change opened for them that their own ask could no longer make.
 func openCeiling(run sandbox.PendingRun) *gitlet.WriteCeiling {
-	if run.CodeCeiling == "" {
-		return nil
+	switch w := run.CodeWorkingFor; {
+	case run.CodeCeiling != "":
+		return &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: run.CodeCeiling}
+	case w != nil && w.Kind == types.WorkingForCredential:
+		return &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
 	}
-	return &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: run.CodeCeiling}
+	return nil
 }
 
 // deliveredTitle is the title of the change a run's ask opens without naming

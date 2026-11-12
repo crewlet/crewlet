@@ -170,6 +170,50 @@ func TestARunsPushesAreDecidedForWhoeverWokeItsTurn(t *testing.T) {
 	}
 }
 
+// A CHECKOUT FOR A CREDENTIAL WRITES ONLY ITS SEAT'S OWN WORK (ADR-0110): a
+// credential acting as no seat pushes to no repository itself, so a run its
+// turn launched may push the seat's own work alone, as Gitlet's box admission
+// holds its box to — and the checkout prechecks the same rule: `access: write`
+// on a branch outside the seat's own namespace, which the seat itself may
+// push, is refused in the credential's words, an access left out there is
+// read, and the seat's own branch stays write.
+//
+// Mutation: the precheck ignoring a credential — main is given to write, red.
+func TestACheckoutForACredentialWritesOnlyItsSeatsOwnWork(t *testing.T) {
+	t.Parallel()
+	resolve := func(t *testing.T, req builtin.RepoRequest) (builtin.RunRepos, error) {
+		t.Helper()
+		turn := launchTurn(t)
+		turn.RequesterLogin, turn.RequesterApps = "token:ci", []iam.Grant{iam.GrantGitlet}
+		return codeDeps(newGitletHost()).ResolveRunRepos(t.Context(), turn, []builtin.RepoRequest{req}, charted)
+	}
+	_, err := resolve(t, builtin.RepoRequest{Repo: "site", Branch: "main", Access: "write"})
+	var refused *builtin.RefusedCheckout
+	if !errors.As(err, &refused) || tools.RefusalOf(refused.Result) != tools.RefusalForbidden ||
+		!strings.Contains(refused.Result.Output, "who may change nothing of this company's code") {
+		t.Fatalf("a write of main for token:ci answered %v, want a forbidden refusal saying the credential "+
+			"changes nothing itself", err)
+	}
+	for _, c := range []struct {
+		name   string
+		req    builtin.RepoRequest
+		access sandbox.RepoAccess
+	}{
+		{"main left to the default", builtin.RepoRequest{Repo: "site", Branch: "main"}, sandbox.RepoRead},
+		{"the seat's own branch", builtin.RepoRequest{Repo: "site", Access: "write"}, sandbox.RepoWrite},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolve(t, c.req)
+			if err != nil {
+				t.Fatalf("ResolveRunRepos: %v", err)
+			}
+			if len(got.Repos) != 1 || got.Repos[0].Access != c.access {
+				t.Errorf("the run for token:ci is given %+v, want %s", got.Repos, c.access)
+			}
+		})
+	}
+}
+
 // A RUN'S CHECKOUT CARRIES WHOM ITS TURN WORKS FOR (ADR-0109): what the box
 // pushes, and the change the run's collection opens, are the turn's writes
 // made late, so the run's grants carry whom the turn works for as every code
