@@ -926,7 +926,11 @@ stream:
                                     #   states one; nats-server's default is
                                     #   1 MiB): an event, or a node's answer
                                     #   to another, may be that large, so the
-                                    #   node refuses to start naming it — see
+                                    #   node refuses to start naming it — and
+                                    #   set no `jetstream { limits {
+                                    #   duplicate_window } }` below 15 minutes,
+                                    #   the dead letters' window, which fails
+                                    #   the boot naming it too — see
                                     #   Deployment. A file's bytes cross in
                                     #   messages of 128 KiB, which a server's
                                     #   default already carries

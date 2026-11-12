@@ -884,7 +884,7 @@ func (q *Queue) createOrObserveStream(
 		// subject whose derived stream overlapped the engine's own paid
 		// that on every call, because a stream is remembered only once
 		// it exists.
-		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
+		return fmt.Errorf("ensure stream %s: %w%s", spec.name, createErr, q.windowCause(spec, createErr))
 	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
@@ -929,6 +929,34 @@ func (q *Queue) createOrObserveStream(
 			"exists, which is a peer having won the race; its configuration "+
 			"is compared here exactly as one found on the first look would be")
 	return q.observeStream(spec, config, info)
+}
+
+// windowCause is what a create the broker refused as an invalid configuration
+// most likely means, for a stream that declares a duplicate window on a broker
+// the operator runs — and nothing for any other refusal, or on a broker the
+// engine embeds.
+//
+// AN OPERATOR'S SERVER MAY CAP THE WINDOW: nats-server refuses a stream whose
+// duplicate window is above its own `jetstream { limits { duplicate_window } }`
+// (v2.15.2, server/stream.go's checkStreamCfg), where it clamps the default
+// window of a stream that declares none, and on `stream.type: nats` the
+// setting is the operator's. The dead letters declare fifteen minutes
+// ([queue.DeadLetterWindow]), and refused on the broker's words alone the boot
+// named neither that window nor where the limit is set. A LIKELY CAUSE, NEVER A
+// CERTAINTY: the broker answers every invalid configuration with one code
+// ([jsprovision.InvalidConfig]), its words are no contract to match, and no
+// client can read the server's limit to compare, so the sentence names the
+// cause as likely and the broker's own error stays beside it. An embedded
+// broker sets no such limit, so a refusal there is the engine's own.
+func (q *Queue) windowCause(spec streamSpec, err error) string {
+	if q.cfg.URL == "" || spec.duplicates <= 0 || !jsprovision.InvalidConfig(err) {
+		return ""
+	}
+	return fmt.Sprintf("; %s declares a duplicate window of %v, and a server whose JetStream limits "+
+		"cap the window below that refuses the stream as an invalid configuration, so the likely "+
+		"cause is jetstream { limits { duplicate_window } } set below %v: raise it to %v or more, "+
+		"or remove it, in the configuration of every server stream.url reaches",
+		spec.name, spec.duplicates, spec.duplicates, spec.duplicates)
 }
 
 // observeStream compares a running stream against this node's spec and decides
