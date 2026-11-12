@@ -209,11 +209,11 @@ func built(t Tool, args map[string]any) (exec.Request, error) { return t.Request
 
 func createTaskPreview(t Tool) proposal.Previewer {
 	return func(ctx context.Context, read proposal.Read, now time.Time, args map[string]any) (proposal.Preview, error) {
-		company, err := companyOf(ctx, read)
+		chart, err := companyOf(ctx, read)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		args, due, err := company.resolveDue(args, now)
+		args, due, err := chart.resolveDue(args, now)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
@@ -229,8 +229,8 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		var c changes
 		c.fact("project", "Project", a.String("project"))
 		c.add("title", "Title", a.String("title"))
-		c.add("assignee", "Assignee", company.seatName(a.String("assignee")))
-		c.add("ask", "Asks", company.seatName(a.String("ask")))
+		c.add("assignee", "Assignee", chart.seatName(a.String("assignee")))
+		c.add("ask", "Asks", chart.seatName(a.String("ask")))
 		for _, f := range []struct{ arg, label string }{{"parent", "Parent"}, {"type", "Type"},
 			{"status", "Status"}, {"priority", "Priority"}} {
 			c.add(f.arg, f.label, a.String(f.arg))
@@ -241,9 +241,9 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		note := ""
 		switch {
 		case a.String("ask") != "":
-			note = company.seatName(a.String("ask")) + " is asked the question and owes an answer."
+			note = chart.seatName(a.String("ask")) + " is asked the question and owes an answer."
 		case a.String("assignee") != "":
-			note = company.handover(ctx, read, a.String("assignee"), "the new task")
+			note = chart.handover(ctx, read, a.String("assignee"), "the new task")
 		}
 		return proposal.Preview{Title: "Create task", Target: a.String("title"), Note: note,
 			ApproveLabel: "Approve and create", Changes: c.rows(), Request: req}, nil
@@ -252,11 +252,11 @@ func createTaskPreview(t Tool) proposal.Previewer {
 
 func updateTaskPreview(t Tool) proposal.Previewer {
 	return func(ctx context.Context, read proposal.Read, now time.Time, args map[string]any) (proposal.Preview, error) {
-		company, err := companyOf(ctx, read)
+		chart, err := companyOf(ctx, read)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		args, due, err := company.resolveDue(args, now)
+		args, due, err := chart.resolveDue(args, now)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
@@ -285,11 +285,11 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 			}
 		}
 		if _, given := args["assignee"]; given {
-			c.move("assignee", "Assignee", company.seatName(value(doc, "task.assignee")),
-				company.seatName(a.String("assignee")))
+			c.move("assignee", "Assignee", chart.seatName(value(doc, "task.assignee")),
+				chart.seatName(a.String("assignee")))
 		}
 		if _, given := args["due"]; given {
-			c.move("due", "Due", company.dueOf(value(doc, "task.due_at"),
+			c.move("due", "Due", chart.dueOf(value(doc, "task.due_at"),
 				value(doc, "task.due_all_day") == "true"), due)
 		}
 		if _, given := args["labels"]; given {
@@ -304,7 +304,7 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 		if to, given := args["assignee"]; given && to != value(doc, "task.assignee") {
 			note = "Nobody is assigned to it any more."
 			if a.String("assignee") != "" {
-				note = company.handover(ctx, read, a.String("assignee"), "the work")
+				note = chart.handover(ctx, read, a.String("assignee"), "the work")
 			}
 		}
 		return proposal.Preview{Title: "Update task", Target: key, Note: note,

@@ -450,7 +450,7 @@ func ownerAtlasPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		company, err := companyOf(ctx, read)
+		chart, err := companyOf(ctx, read)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
@@ -459,12 +459,12 @@ func ownerAtlasPreview(t Tool) proposal.Previewer {
 			if where := declaredBy(v); where != "" {
 				return proposal.Preview{}, refusedDeclared("who owns "+s.label, where)
 			}
-			owners = append(owners, ownerName(company, value(v, "external"), value(v, "name")))
+			owners = append(owners, ownerName(chart, value(v, "external"), value(v, "name")))
 		}
 		to := ""
 		switch {
 		case a.String("seat") != "":
-			to = ownerName(company, string(atlas.ExternalSeat), a.String("seat"))
+			to = ownerName(chart, string(atlas.ExternalSeat), a.String("seat"))
 		case a.String("unit") != "":
 			to = "unit " + a.String("unit")
 		}
