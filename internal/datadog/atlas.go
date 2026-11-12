@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // Datadog's half of the atlas (ADR-0129, ADR-0130): the organization, its
@@ -173,7 +171,7 @@ func readMonitors(b *collect.Builder, account atlas.Ref, monitors []Monitor) {
 			continue
 		}
 		b.Relates(where, monitor, atlas.RelationBelongsTo, account)
-		b.Says(where+".name", monitor, atlas.FactName, plainName(m.Name))
+		b.Says(where+".name", monitor, atlas.FactName, collect.PlainLabel(m.Name))
 		state := monitorState(m.State)
 		b.Says(where+".overall_state", monitor, atlas.FactMonitorState, state)
 		// SINCE WHEN, ONLY FOR A STATE THAT RAISES A SIGNAL: Datadog moves
@@ -224,34 +222,6 @@ func monitorState(vendor string) string {
 	return atlas.MonitorUnknown
 }
 
-// plainName is a monitor's name as a label takes it. Datadog's convention
-// puts a scope in square brackets and a threshold after an angle bracket,
-// both of which a label refuses as markup: brackets become parentheses, the
-// other markup characters are dropped, and a name past a label's length is
-// cut. What is still refused (a link, a credential's shape) is withheld.
-func plainName(raw string) string {
-	// A NAME SHAPED LIKE A CREDENTIAL IS HANDED ON AS IT IS, for the builder
-	// to refuse: reshaping or cutting one could leave a piece no rule knows.
-	if redact.Contains(raw) {
-		return raw
-	}
-	name := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		switch r {
-		case '[':
-			return '('
-		case ']':
-			return ')'
-		case '<', '>', '`':
-			return -1
-		}
-		return r
-	}, raw)), " ")
-	if runes := []rune(name); len(runes) > atlas.MaxLabelRunes {
-		name = strings.TrimSpace(string(runes[:atlas.MaxLabelRunes-1])) + "…"
-	}
-	return name
-}
-
 // readServices claims each service of the catalogue, watched by Datadog and
 // built from the repositories its definition links. A repository is named by
 // its forge address and never claimed: the link shows once a source that
@@ -267,7 +237,7 @@ func readServices(b *collect.Builder, account atlas.Ref, services []ServiceDefin
 		b.Relates(where, service, atlas.RelationMonitoredBy, account)
 		for i, link := range s.Repos {
 			at := where + ".links[" + strconv.Itoa(i) + "].url"
-			address, _, err := addressOf(link)
+			address, _, err := collect.Address(link)
 			if err != nil {
 				b.Withhold(at, err)
 				continue
@@ -282,15 +252,6 @@ func readServices(b *collect.Builder, account atlas.Ref, services []ServiceDefin
 			}
 		}
 	}
-}
-
-// environments is the atlas's word for each value of Datadog's `env` tag the
-// read takes; any other value suggests nothing.
-var environments = map[string]string{
-	"prod": "production", "production": "production",
-	"staging": "staging",
-	"dev":     "development", "development": "development",
-	"test": "test",
 }
 
 // readHosts claims each host that reports to Datadog, by its Datadog name,
@@ -308,8 +269,8 @@ func readHosts(b *collect.Builder, account atlas.Ref, hosts []Host) {
 		b.Relates(where, host, atlas.RelationMonitoredBy, account)
 		var envs []string
 		for _, tag := range h.Tags {
-			if value, ok := strings.CutPrefix(tag, "env:"); ok && environments[value] != "" {
-				envs = append(envs, environments[value])
+			if value, ok := strings.CutPrefix(tag, "env:"); ok && collect.EnvironmentWord(value) != "" {
+				envs = append(envs, collect.EnvironmentWord(value))
 			}
 		}
 		slices.Sort(envs)
@@ -336,7 +297,7 @@ func readSynthetics(b *collect.Builder, tests []SyntheticTest) {
 		}
 		host := t.Host
 		if t.URL != "" {
-			address, name, err := addressOf(t.URL)
+			address, name, err := collect.Address(t.URL)
 			if err != nil {
 				b.Withhold(where+".url", err)
 				continue
@@ -365,20 +326,4 @@ func readSynthetics(b *collect.Builder, tests []SyntheticTest) {
 			b.Relates(at, watched, atlas.RelationMonitoredBy, monitor)
 		}
 	}
-}
-
-// errNoAddress is a value that is not an address with a host: a templated
-// one above all, which names a variable rather than a place.
-var errNoAddress = errors.New("not an address with a scheme and a host")
-
-// addressOf is raw as the atlas keeps an address: its scheme, host, port and
-// path, WITHOUT its user information, query and fragment, which is where a
-// vendor's copy of an address carries a credential; and the address's host.
-func addressOf(raw string) (address, host string, err error) {
-	u, perr := url.Parse(strings.TrimSpace(raw))
-	if perr != nil || u.Scheme == "" || u.Hostname() == "" || u.Opaque != "" || strings.Contains(raw, "{{") {
-		return "", "", errNoAddress
-	}
-	clean := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}
-	return clean.String(), u.Hostname(), nil
 }
