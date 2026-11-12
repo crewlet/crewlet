@@ -498,7 +498,10 @@ type threadHead struct {
 	// Sidechain is `isSidechain`; nil where absent.
 	Sidechain *bool
 	// AgentID is `agentId`, the subagent whose thread holds the record; ""
-	// where absent.
+	// where absent and where it is the empty string, which the layer does not
+	// tell apart: [threadHead.Main] reads both as naming no subagent, and a
+	// reader that matches a subagent compares it with that subagent's id,
+	// which [validClaudeAgent] never lets be empty.
 	AgentID string
 	// ReplacesSpan is `replacesSpan`: true where the record says so with a
 	// JSON true, false where it is absent or false. A user record that says
@@ -1089,9 +1092,12 @@ func callID(key string, raw json.RawMessage) (string, error) {
 // Text is the message's content where it is one string.
 func (m threadMessage) Text() (string, bool) { return m.text, m.isText }
 
-// Kinds is each content block's type, in order; nil for a content that is one
-// string. A reader tells a turn's own message from the results of its calls by
-// it: a user record whose blocks are tool_result alone, or not.
+// Kinds is each content block's type, in order. It is nil exactly where the
+// message holds no list: a content that is one string ([threadMessage.Text]
+// says so), and the zero message every record but a user's or an assistant's
+// reads as; an empty list is an empty Kinds, never nil. A reader tells a
+// turn's own message from the results of its calls by it: a user record whose
+// blocks are tool_result alone, or not.
 func (m threadMessage) Kinds() []string { return m.kinds }
 
 // Calls is the message's call blocks: an assistant's tool_use blocks, a user's
