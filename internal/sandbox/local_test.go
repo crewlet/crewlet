@@ -756,6 +756,12 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 // reads its tree stopped before the teardown, so the SIGCONT has a stopped job
 // to continue.
 //
+// THE BOX IS PAUSED ONLY ONCE ITS JOB SAYS ITS TRAP IS SET, by a ready file
+// it writes after the trap, outside the box like the witness and with a
+// builtin, so it still forks nothing. A pause that lands before the shell runs
+// `trap` leaves SIGTERM at its default, and the teardown's SIGTERM then ends
+// the shell before any trap exists to write the witness.
+//
 // Mutation: tear the box down without the SIGCONT, or without the SIGTERM,
 // and the SIGKILL that follows the grace ends the job before its trap runs.
 func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
@@ -765,12 +771,17 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	witness := filepath.Join(t.TempDir(), "term")
+	dir := t.TempDir()
+	witness, ready := filepath.Join(dir, "term"), filepath.Join(dir, "ready")
 	if _, err := box.StartBackground(t.Context(),
-		"trap 'echo term > "+witness+"; exit 0' TERM; while true; do :; done", ExecOptions{}); err != nil {
+		"trap 'echo term > "+witness+"; exit 0' TERM; : > "+ready+"; while true; do :; done", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	pid := recordedLeader(t, box).PID
+	waitFor(t, 5*time.Second, func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	}, "the job never set its SIGTERM trap")
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
