@@ -212,9 +212,9 @@ func applyRead(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (in
 
 // wellFormed refuses a claim the rows cannot key: one naming no claim, slot,
 // entry, target or source.
-func (cl Claim) wellFormed(at statelog.Position) error {
-	if cl.ID == "" || cl.Slot == "" || cl.Entry.Kind == "" || cl.Entry.Key == "" || cl.Source.Kind == "" ||
-		cl.Target != nil && (cl.Target.ID == "" || cl.Target.Kind == "" || cl.Target.Key == "") {
+func (c Claim) wellFormed(at statelog.Position) error {
+	if c.ID == "" || c.Slot == "" || c.Entry.Kind == "" || c.Entry.Key == "" || c.Source.Kind == "" ||
+		c.Target != nil && (c.Target.ID == "" || c.Target.Kind == "" || c.Target.Key == "") {
 		return fmt.Errorf("atlasdomain: the claim record at %s does not name its claim, slot, "+
 			"entry, target and source", at)
 	}

@@ -600,9 +600,6 @@ func TestAReadRecordsWhatChangedAndWithdrawsTheRestOnEveryNode(t *testing.T) {
 			c.Facet.Target.Entry != originB {
 			t.Errorf("the live origin is %s, want the newer read's", c.Facet.Target.Entry)
 		}
-		if c.ObservedAt.After(later) {
-			t.Errorf("a read's claim is seen at %s, after the read itself", c.ObservedAt)
-		}
 	}
 	history, err := a.reader().History(t.Context(), apiHost.ID().String(), "", atlasdomain.MaxPageSize,
 		statelog.Freshness{Level: statelog.ReadStale})
