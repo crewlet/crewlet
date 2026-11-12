@@ -13,10 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -405,7 +405,7 @@ type Backend struct {
 	ChatSearch ChatSearcher
 
 	// Code is this node's code half — its committer and its reader
-	// ([code.Served]) — or nil where the company hosts no code: every code
+	// ([gitlet.Served]) — or nil where the company hosts no code: every code
 	// operation is then answered "no backend here".
 	Code CodeServer
 
@@ -608,7 +608,7 @@ var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
 	usageDomain        = usage.Domain{}.Name()
-	codeDomain         = code.Domain{}.Name()
+	codeDomain         = gitlet.Domain{}.Name()
 	identityDomain     = iamdomain.Domain{}.Name()
 	artifactsDomain    = artifactsdomain.Domain{}.Name()
 	artifactDataDomain = artifactdata.Domain{}.Name()
@@ -621,7 +621,7 @@ var (
 		trackerDomain:      worklet.Domain{}.Stream().Name,
 		pagesDomain:        doclet.Domain{}.Stream().Name,
 		usageDomain:        usage.Domain{}.Stream().Name,
-		codeDomain:         code.Domain{}.Stream().Name,
+		codeDomain:         gitlet.Domain{}.Stream().Name,
 		identityDomain:     iamdomain.Domain{}.Stream().Name,
 		artifactsDomain:    artifactsdomain.Domain{}.Stream().Name,
 		artifactDataDomain: artifactdata.Domain{}.Stream().Name,

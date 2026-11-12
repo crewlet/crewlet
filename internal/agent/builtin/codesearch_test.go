@@ -11,9 +11,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -55,11 +55,11 @@ func withSearch(deps builtin.CodeDeps, s *codeSearches) builtin.CodeDeps {
 }
 
 // searchHit is one line of repository repo's file path, its path named as a
-// Gitlet node names it (code.WirePath): its text, and its bytes where they are
+// Gitlet node names it (gitlet.WirePath): its text, and its bytes where they are
 // not UTF-8.
 func searchHit(repo, path string, line int, text string) codesearch.Hit {
-	name, b64 := code.WirePath(path)
-	return codesearch.Hit{Repo: repo, SearchHit: code.SearchHit{Path: name, PathB64: b64, Line: line, Text: text,
+	name, b64 := gitlet.WirePath(path)
+	return codesearch.Hit{Repo: repo, SearchHit: gitlet.SearchHit{Path: name, PathB64: b64, Line: line, Text: text,
 		Blob: blobOID}}
 }
 
@@ -119,7 +119,7 @@ func TestCodeSearchIsAskedAsItsCaller(t *testing.T) {
 		t.Fatalf("one call asked %d searches, want 1", len(asks))
 	}
 	q := asks[0]
-	if q.Asker != (code.Principal{Kind: code.PrincipalAgent, Seat: "agent-cto"}) || q.Turn != turn.RunID ||
+	if q.Asker != (gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "agent-cto"}) || q.Turn != turn.RunID ||
 		q.Rows.Level != statelog.ReadLinearizable {
 		t.Errorf("the search was asked as %+v in turn %q at %q, want agent-cto in %q, linearizable", q.Asker,
 			q.Turn, q.Rows.Level, turn.RunID)
@@ -202,7 +202,7 @@ func tipOf(repo string) string {
 // repository was searched at with it — and for no more lines than a page
 // asks, so the search answers that page's lines and never an earlier one's,
 // whatever it answers ahead of the key when asked again. Walked to its end,
-// the pages are every line once, in order, more than code.MaxSearchHits of
+// the pages are every line once, in order, more than gitlet.MaxSearchHits of
 // them — every path here a file's name that is not UTF-8, which the search
 // orders by its BYTES (codesearch.CompareHits), so a cursor keeps the last
 // path sent as its bytes, not as the text its U+FFFD stands in. A cursor of
@@ -216,11 +216,11 @@ func tipOf(repo string) string {
 func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 	t.Parallel()
 	var every []codesearch.Hit
-	total := code.MaxSearchHits + 100
+	total := gitlet.MaxSearchHits + 100
 	for i := range total {
 		repo := []string{"api", "web"}[i*2/total]
 		every = append(every, searchHit(repo, fmt.Sprintf("src/f%03d\xff.go", i), i+1,
-			strings.Repeat("x", code.MaxSearchLineBytes-8)+fmt.Sprintf("%08d", i)))
+			strings.Repeat("x", gitlet.MaxSearchLineBytes-8)+fmt.Sprintf("%08d", i)))
 	}
 	search := &codeSearches{answer: func(n int, q codesearch.Query) (codesearch.Answer, error) {
 		hits := every
@@ -231,7 +231,7 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 		}
 		if q.After != nil {
 			// As the search answers a key: the lines after it alone.
-			key := codesearch.Hit{Repo: q.After.Repo, SearchHit: code.SearchHit{Path: q.After.Path,
+			key := codesearch.Hit{Repo: q.After.Repo, SearchHit: gitlet.SearchHit{Path: q.After.Path,
 				PathB64: q.After.PathB64, Line: q.After.Line}}
 			hits = slices.DeleteFunc(slices.Clone(hits), func(h codesearch.Hit) bool {
 				return codesearch.CompareHits(key, h) >= 0
@@ -282,7 +282,7 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 	}
 	if pages < 2 {
 		t.Errorf("%d lines of %d bytes came in %d page, want more than one", len(every),
-			code.MaxSearchLineBytes, pages)
+			gitlet.MaxSearchLineBytes, pages)
 	}
 	var want []string
 	for _, h := range every {
@@ -295,9 +295,9 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 	// EACH PAGE'S SEARCH IS ASKED AFTER THE LINE THE PAGE BEFORE SENT LAST,
 	// at the commit it was read at, for no more than a page asks.
 	for i, q := range search.asked() {
-		if q.Limit < 1 || q.Limit >= code.MaxSearchHits {
+		if q.Limit < 1 || q.Limit >= gitlet.MaxSearchHits {
 			t.Errorf("page %d asked the search for %d lines, want a page's: more than none, fewer than %d",
-				i+1, q.Limit, code.MaxSearchHits)
+				i+1, q.Limit, gitlet.MaxSearchHits)
 		}
 		if i == 0 {
 			if q.After != nil {
@@ -437,7 +437,7 @@ func TestCodeSearchRefusalsNameTheirRepository(t *testing.T) {
 	t.Parallel()
 	search := &codeSearches{answer: func(int, codesearch.Query) (codesearch.Answer, error) {
 		return codesearch.Answer{}, &codesearch.RepoRefusal{Repo: "vault",
-			Err: fmt.Errorf("%w: only the security unit reads vault", code.ErrNotPermitted)}
+			Err: fmt.Errorf("%w: only the security unit reads vault", gitlet.ErrNotPermitted)}
 	}}
 	tool := codeTool(t, func() builtin.CodeDeps {
 		d := withSearch(codeDeps(newGitletHost()), search)

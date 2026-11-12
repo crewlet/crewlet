@@ -146,6 +146,53 @@ func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 	}
 }
 
+// worstEntry is one call's entry in flight at its widest as the log keeps it
+// ([keptEntry]): a name past its bound in the bytes that escape the most, a
+// digest, both places and every instant at their widest, and a runner past the
+// most an incarnation may be in markup.
+func worstEntry(seq int) BridgeCall {
+	return keptEntry(BridgeCall{
+		Name: strings.Repeat("<", 4<<10), Digest: strings.Repeat("f", 64), At: worstAt,
+		Seq: math.MaxInt - seq, StartedAt: worstAt, Runner: strings.Repeat("<", 4<<10), Until: worstAt,
+	})
+}
+
+// A CALL IN FLIGHT IS HELD TO ITS SHARE. An entry written ahead of a call keeps
+// its identity alone ([keptEntry]): at its widest — its name and its runner past
+// their bounds in markup the encoder escapes six-fold, every instant at its
+// longest — it weighs no more than [MaxCallInFlightBytes], whatever the caller
+// handed it, arguments and output included. And the log's split closes as its
+// table states it: its calls, its calls in flight and the rest of it
+// ([BridgeLogBytes], [InFlightBytes], [LogRestBytes]) are [RowBytes] together,
+// so a share moved without the table fails here.
+//
+// Mutation: keep a caller's runner, or its arguments, as handed
+// (entry-keeps-its-runner-whole), and an entry overruns its share; hold more
+// calls in flight than the table states (more-calls-in-flight-than-the-table-says),
+// and the log's split no longer closes.
+func TestACallInFlightIsHeldToItsShare(t *testing.T) {
+	t.Parallel()
+	entry := worstEntry(0)
+	handed := entry
+	handed.Args, handed.Output = strings.Repeat("<", 64<<10), strings.Repeat("<", 64<<10)
+	handed.Runner = strings.Repeat("<", 64<<10)
+	for name, call := range map[string]BridgeCall{"at its widest": entry, "as a caller handed it": keptEntry(handed)} {
+		raw, err := json.Marshal(call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("an entry in flight %s weighs %d of its %d", name, len(raw), MaxCallInFlightBytes)
+		if len(raw) > MaxCallInFlightBytes {
+			t.Errorf("an entry in flight %s weighs %d, past its share %d", name, len(raw), MaxCallInFlightBytes)
+		}
+	}
+	if sum := BridgeLogBytes + InFlightBytes + LogRestBytes; sum != RowBytes {
+		t.Errorf("the log's calls (%d), its %d calls in flight (%d) and the rest of it (%d) are %d together, "+
+			"want the %d a value may: a share moved without the table that states it", BridgeLogBytes,
+			MaxCallsInFlight, InFlightBytes, LogRestBytes, sum, RowBytes)
+	}
+}
+
 // KEEPING A CALL AGAIN CHANGES NOTHING. Every append keeps every call in the
 // log again ([BridgeLog.appendCall]), so a call kept once must come back as it
 // was — its sizes still the whole's, never the size of what was kept.
@@ -453,7 +500,7 @@ func worstRow(t *testing.T) PendingRun {
 		}
 	}
 	// THE TURN'S HOLDS, the most a turn may take ([MaxCodeHolds]), each a
-	// seat branch's key at Gitlet's fixed width (internal/code's
+	// seat branch's key at Gitlet's fixed width (internal/gitlet's
 	// RefHoldKey, 69 bytes, the wider of the two kinds); and its floors, a
 	// statelog position's token each — a stream's name, under 64 bytes, and
 	// two 64-bit numbers at their widest — which the engine mints and this
@@ -631,26 +678,41 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 // earlier rounds fold to and its identifiers at their widest, no more than
 // [RowBytes] — what is left above it being the room a later build adds keys to
 // the log in. Its calls carry every kind of change a call can commit, and its
-// union of them holds every kind.
+// union of them holds every kind. AND [MaxCallsInFlight] ENTRIES IN FLIGHT, each
+// at its widest, weigh no more than their line [InFlightBytes], inside the
+// whole: the bound a call's write ahead of it is held to measured where it
+// counts, beside every other field of the log at its worst.
 //
 // Mutation: keep a call's output whole, or raise MaxBridgeCalls, and the calls
 // overrun their share; raise MaxPriorCalls far enough, and the log overruns
 // its value; stop the append folding a call's kinds into the log's union, and
-// the log is not measured at its worst.
+// the log is not measured at its worst; keep an entry's runner whole
+// (entry-keeps-its-runner-whole), and the entries overrun their line.
 func TestTheWholeLogFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	bridged := worstLog(t)
+	for i := range MaxCallsInFlight {
+		bridged.InFlight = append(bridged.InFlight, worstEntry(i))
+	}
 	whole := logEncoded(t, bridged)
 	withoutCalls := bridged
 	withoutCalls.Calls, withoutCalls.Elided, withoutCalls.ElidedCalls, withoutCalls.AbsorbedCalls = nil, 0, nil, nil
-	others := logEncoded(t, withoutCalls)
-	calls := whole - others
-	t.Logf("the log weighs %d of the %d a value may: its calls and their tallies %d of %d, and every other "+
-		"field %d — the turn's earlier rounds' tool names among them — with %d left for a later build",
-		whole, RowBytes, calls, BridgeLogBytes, others, RowBytes-whole)
+	withoutInFlight := withoutCalls
+	withoutInFlight.InFlight = nil
+	others := logEncoded(t, withoutInFlight)
+	inFlight := logEncoded(t, withoutCalls) - others
+	calls := whole - others - inFlight
+	t.Logf("the log weighs %d of the %d a value may: its calls and their tallies %d of %d, its %d calls in "+
+		"flight %d of %d, and every other field %d — the turn's earlier rounds' tool names among them — with "+
+		"%d left for a later build", whole, RowBytes, calls, BridgeLogBytes, MaxCallsInFlight, inFlight,
+		InFlightBytes, others, RowBytes-whole)
 
 	if calls > BridgeLogBytes {
 		t.Errorf("the log's calls weigh %d, past their share %d", calls, BridgeLogBytes)
+	}
+	if inFlight > InFlightBytes {
+		t.Errorf("the log's %d calls in flight weigh %d, past their line %d", MaxCallsInFlight, inFlight,
+			InFlightBytes)
 	}
 	if whole > RowBytes {
 		t.Errorf("the log weighs %d, past the %d a value may", whole, RowBytes)

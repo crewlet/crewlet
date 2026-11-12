@@ -254,33 +254,35 @@ func openedSet(t *testing.T, rig *coordRig, keep *sessionKeep, turnID string) Ha
 // renewal in a set the capture does not read, and a check below goes red.
 func TestAnIssuedDocumentIsScrubbedByEveryStringItHolds(t *testing.T) {
 	t.Parallel()
-	launched := awsSessionDocument("ASIALAUNCHEDKEY00001", "the-launched-secret-key",
-		"the-launched-session-token", "2026-08-23T12:15:00Z")
-	handed := handedSecrets(LaunchRequest{Secrets: []string{launched}}, nil)
-	for _, want := range []string{launched, "ASIALAUNCHEDKEY00001", "the-launched-secret-key",
-		"the-launched-session-token", "2026-08-23T12:15:00Z"} {
-		if !slices.Contains(handed.Values, want) {
-			t.Errorf("the session the launch handed is kept without %q: %q", want, handed.Values)
+	inBubble(t, func(t *testing.T) {
+		launched := awsSessionDocument("ASIALAUNCHEDKEY00001", "the-launched-secret-key",
+			"the-launched-session-token", "2026-08-23T12:15:00Z")
+		handed := handedSecrets(LaunchRequest{Secrets: []string{launched}}, nil)
+		for _, want := range []string{launched, "ASIALAUNCHEDKEY00001", "the-launched-secret-key",
+			"the-launched-session-token", "2026-08-23T12:15:00Z"} {
+			if !slices.Contains(handed.Values, want) {
+				t.Errorf("the session the launch handed is kept without %q: %q", want, handed.Values)
+			}
 		}
-	}
 
-	rig, _, _ := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	renewed := awsSessionDocument("ASIARENEWEDKEY000001", "the-renewed-secret-key",
-		"the-renewed-session-token", "2026-08-23T12:25:00Z")
-	if err := rig.coordinator.RecordHanded(t.Context(), run, renewed, rig.now.Add(25*time.Minute)); err != nil {
-		t.Fatalf("recording the renewed session: %v", err)
-	}
-	scrub, err := rig.coordinator.scrubValues(t.Context(), rig.get("t1"), rig.provider.Box(run.SandboxID))
-	if err != nil {
-		t.Fatalf("the capture's values: %v", err)
-	}
-	for _, want := range []string{handedToken, renewed, "ASIARENEWEDKEY000001", "the-renewed-secret-key",
-		"the-renewed-session-token"} {
-		if !slices.Contains(scrub, want) {
-			t.Errorf("a capture after the renewal is not scrubbed of %q: %q", want, scrub)
+		rig, _, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		renewed := awsSessionDocument("ASIARENEWEDKEY000001", "the-renewed-secret-key",
+			"the-renewed-session-token", "2026-08-23T12:25:00Z")
+		if err := rig.coordinator.RecordHanded(t.Context(), run, renewed, rig.now.Add(25*time.Minute)); err != nil {
+			t.Fatalf("recording the renewed session: %v", err)
 		}
-	}
+		scrub, err := rig.coordinator.scrubValues(t.Context(), rig.get("t1"), rig.provider.Box(run.SandboxID))
+		if err != nil {
+			t.Fatalf("the capture's values: %v", err)
+		}
+		for _, want := range []string{handedToken, renewed, "ASIARENEWEDKEY000001", "the-renewed-secret-key",
+			"the-renewed-session-token"} {
+			if !slices.Contains(scrub, want) {
+				t.Errorf("a capture after the renewal is not scrubbed of %q: %q", want, scrub)
+			}
+		}
+	})
 }
 
 // A RENEWED VALUE IS DROPPED AN HOUR PAST ITS EXPIRY, and nothing a launch
@@ -300,103 +302,105 @@ func TestAnIssuedDocumentIsScrubbedByEveryStringItHolds(t *testing.T) {
 // without dropping, and a check below goes red.
 func TestARenewedValueIsDroppedAnHourPastItsExpiry(t *testing.T) {
 	t.Parallel()
-	at := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	set := HandedSecrets{Values: []string{"the-launchs-own-token"}}
-	set.record("the-first-renewed-token", at)
-	set.record("the-second-renewed-token", at)
-	set.record("the-second-renewed-token", at.Add(30*time.Minute))
-	set.record("the-launchs-own-token", at)
-	holds := func(when string, want ...string) {
-		t.Helper()
-		if !slices.Equal(set.Values, want) {
-			t.Errorf("%s the set holds %q, want %q", when, set.Values, want)
+	inBubble(t, func(t *testing.T) {
+		at := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+		set := HandedSecrets{Values: []string{"the-launchs-own-token"}}
+		set.record("the-first-renewed-token", at)
+		set.record("the-second-renewed-token", at)
+		set.record("the-second-renewed-token", at.Add(30*time.Minute))
+		set.record("the-launchs-own-token", at)
+		holds := func(when string, want ...string) {
+			t.Helper()
+			if !slices.Equal(set.Values, want) {
+				t.Errorf("%s the set holds %q, want %q", when, set.Values, want)
+			}
 		}
-	}
-	set.drop(at.Add(handedLapse))
-	holds("an hour past the first expiry,", "the-launchs-own-token", "the-first-renewed-token",
-		"the-second-renewed-token")
-	set.drop(at.Add(handedLapse + time.Second))
-	holds("a second later,", "the-launchs-own-token", "the-second-renewed-token")
-	set.drop(at.Add(30*time.Minute + handedLapse + time.Second))
-	holds("an hour past the later expiry,", "the-launchs-own-token")
-	if len(set.Expires) != 0 {
-		t.Errorf("the set keeps %d expiries of values it no longer holds", len(set.Expires))
-	}
+		set.drop(at.Add(handedLapse))
+		holds("an hour past the first expiry,", "the-launchs-own-token", "the-first-renewed-token",
+			"the-second-renewed-token")
+		set.drop(at.Add(handedLapse + time.Second))
+		holds("a second later,", "the-launchs-own-token", "the-second-renewed-token")
+		set.drop(at.Add(30*time.Minute + handedLapse + time.Second))
+		holds("an hour past the later expiry,", "the-launchs-own-token")
+		if len(set.Expires) != 0 {
+			t.Errorf("the set keeps %d expiries of values it no longer holds", len(set.Expires))
+		}
 
-	// AND AS TWO SETS ARE JOINED, either one carrying the other.
-	var sooner, later, forGood HandedSecrets
-	sooner.record("a-renewal-both-hold", at)
-	later.record("a-renewal-both-hold", at.Add(30*time.Minute))
-	forGood.Values = []string{"a-renewal-both-hold"}
-	for name, joined := range map[string]HandedSecrets{
-		"carrying the later": sooner.union(later), "carried by the later": later.union(sooner),
-	} {
-		if got := joined.Expires[expiryKey("a-renewal-both-hold")]; !got.Equal(at.Add(30 * time.Minute)) {
-			t.Errorf("a value both sets hold, %s, lapses at %v, want the later expiry", name, got)
+		// AND AS TWO SETS ARE JOINED, either one carrying the other.
+		var sooner, later, forGood HandedSecrets
+		sooner.record("a-renewal-both-hold", at)
+		later.record("a-renewal-both-hold", at.Add(30*time.Minute))
+		forGood.Values = []string{"a-renewal-both-hold"}
+		for name, joined := range map[string]HandedSecrets{
+			"carrying the later": sooner.union(later), "carried by the later": later.union(sooner),
+		} {
+			if got := joined.Expires[expiryKey("a-renewal-both-hold")]; !got.Equal(at.Add(30 * time.Minute)) {
+				t.Errorf("a value both sets hold, %s, lapses at %v, want the later expiry", name, got)
+			}
 		}
-	}
-	for name, joined := range map[string]HandedSecrets{
-		"carrying it": sooner.union(forGood), "carried by it": forGood.union(sooner),
-	} {
-		if when, lapses := joined.Expires[expiryKey("a-renewal-both-hold")]; lapses {
-			t.Errorf("a value a set holds for good, %s, lapses at %v", name, when)
+		for name, joined := range map[string]HandedSecrets{
+			"carrying it": sooner.union(forGood), "carried by it": forGood.union(sooner),
+		} {
+			if when, lapses := joined.Expires[expiryKey("a-renewal-both-hold")]; lapses {
+				t.Errorf("a value a set holds for good, %s, lapses at %v", name, when)
+			}
 		}
-	}
 
-	// AND BESIDE THE ROW, as the poll records the next renewal.
-	rig, _, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	if err := rig.coordinator.RecordHanded(t.Context(), run, "the-first-renewed-token",
-		rig.now.Add(15*time.Minute)); err != nil {
-		t.Fatalf("the first renewal: %v", err)
-	}
-	rig.now = rig.now.Add(15*time.Minute + handedLapse + time.Second)
-	if err := rig.coordinator.RecordHanded(t.Context(), run, "the-next-renewed-token",
-		rig.now.Add(15*time.Minute)); err != nil {
-		t.Fatalf("the next renewal: %v", err)
-	}
-	stored := openedSet(t, rig, keep, "t1")
-	if slices.Contains(stored.Values, "the-first-renewed-token") ||
-		!slices.Contains(stored.Values, "the-next-renewed-token") || !slices.Contains(stored.Values, handedToken) {
-		t.Errorf("the set beside the row holds %q, want the launch's token and the next renewal, "+
-			"the first renewal an hour past its expiry dropped", stored.Values)
-	}
-
-	// AND AS A KEPT BOX'S NEXT JOB IS SEALED, with what the job before it
-	// handed the box carried forward.
-	relaunchRig, _, relaunchKeep := keepingRig(t)
-	firstJob := relaunchRig.launch("t1")
-	carried := HandedSecrets{Values: []string{"the-first-jobs-token"}}
-	carried.record("a-renewal-long-lapsed", relaunchRig.now.Add(-handedLapse-time.Minute))
-	carried.record("a-renewal-still-good", relaunchRig.now.Add(10*time.Minute))
-	relaunchRig.handOver(t, "t1", carried)
-	var relaunch LaunchResult
-	relaunchRig.resumer.during = func(ctx context.Context, r PendingRun) {
-		res, err := relaunchRig.coordinator.Launch(ctx, relaunchRig.manager, launchReq(r.TurnID))
-		if err != nil {
-			t.Errorf("relaunch: %v", err)
+		// AND BESIDE THE ROW, as the poll records the next renewal.
+		rig, _, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		if err := rig.coordinator.RecordHanded(t.Context(), run, "the-first-renewed-token",
+			rig.now.Add(15*time.Minute)); err != nil {
+			t.Fatalf("the first renewal: %v", err)
 		}
-		relaunch = res
-	}
-	relaunchRig.runner.Finish(Result{Success: true, Text: "first pass"})
-	payload, ev := relaunchRig.completion("t1")
-	if err := relaunchRig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	relaunchRig.awaitKeeps()
-	if !relaunch.Reused || relaunch.SandboxID != firstJob.SandboxID {
-		t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, firstJob.SandboxID)
-	}
-	sealed := openedSet(t, relaunchRig, relaunchKeep, "t1")
-	if slices.Contains(sealed.Values, "a-renewal-long-lapsed") ||
-		!slices.Contains(sealed.Values, "a-renewal-still-good") || !slices.Contains(sealed.Values, "the-first-jobs-token") {
-		t.Errorf("the relaunch's set holds %q, want what the job before it handed and its renewal still good, "+
-			"the one an hour past its expiry dropped", sealed.Values)
-	}
-	if when, lapses := sealed.Expires[expiryKey("a-renewal-still-good")]; !lapses ||
-		!when.Equal(relaunchRig.now.Add(10*time.Minute)) {
-		t.Errorf("the renewal carried into the relaunch's set lapses at %v (%v), want its own expiry", when, lapses)
-	}
+		rig.now = rig.now.Add(15*time.Minute + handedLapse + time.Second)
+		if err := rig.coordinator.RecordHanded(t.Context(), run, "the-next-renewed-token",
+			rig.now.Add(15*time.Minute)); err != nil {
+			t.Fatalf("the next renewal: %v", err)
+		}
+		stored := openedSet(t, rig, keep, "t1")
+		if slices.Contains(stored.Values, "the-first-renewed-token") ||
+			!slices.Contains(stored.Values, "the-next-renewed-token") || !slices.Contains(stored.Values, handedToken) {
+			t.Errorf("the set beside the row holds %q, want the launch's token and the next renewal, "+
+				"the first renewal an hour past its expiry dropped", stored.Values)
+		}
+
+		// AND AS A KEPT BOX'S NEXT JOB IS SEALED, with what the job before it
+		// handed the box carried forward.
+		relaunchRig, _, relaunchKeep := keepingRig(t)
+		firstJob := relaunchRig.launch("t1")
+		carried := HandedSecrets{Values: []string{"the-first-jobs-token"}}
+		carried.record("a-renewal-long-lapsed", relaunchRig.now.Add(-handedLapse-time.Minute))
+		carried.record("a-renewal-still-good", relaunchRig.now.Add(10*time.Minute))
+		relaunchRig.handOver(t, "t1", carried)
+		var relaunch LaunchResult
+		relaunchRig.resumer.during = func(ctx context.Context, r PendingRun) {
+			res, err := relaunchRig.coordinator.Launch(ctx, relaunchRig.manager, launchReq(r.TurnID))
+			if err != nil {
+				t.Errorf("relaunch: %v", err)
+			}
+			relaunch = res
+		}
+		relaunchRig.runner.Finish(Result{Success: true, Text: "first pass"})
+		payload, ev := relaunchRig.completion("t1")
+		if err := relaunchRig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		relaunchRig.awaitKeeps()
+		if !relaunch.Reused || relaunch.SandboxID != firstJob.SandboxID {
+			t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, firstJob.SandboxID)
+		}
+		sealed := openedSet(t, relaunchRig, relaunchKeep, "t1")
+		if slices.Contains(sealed.Values, "a-renewal-long-lapsed") ||
+			!slices.Contains(sealed.Values, "a-renewal-still-good") || !slices.Contains(sealed.Values, "the-first-jobs-token") {
+			t.Errorf("the relaunch's set holds %q, want what the job before it handed and its renewal still good, "+
+				"the one an hour past its expiry dropped", sealed.Values)
+		}
+		if when, lapses := sealed.Expires[expiryKey("a-renewal-still-good")]; !lapses ||
+			!when.Equal(relaunchRig.now.Add(10*time.Minute)) {
+			t.Errorf("the renewal carried into the relaunch's set lapses at %v (%v), want its own expiry", when, lapses)
+		}
+	})
 }
 
 // AN OLDER BUILD'S SCRUB TAKES THE RENEWED VALUES, which live in the one list
@@ -412,62 +416,64 @@ func TestARenewedValueIsDroppedAnHourPastItsExpiry(t *testing.T) {
 // beside the seal it still holds, and a check below goes red.
 func TestAnOlderBuildsScrubTakesTheRenewedValues(t *testing.T) {
 	t.Parallel()
-	// THE OLDER BUILD'S SHAPES, as it decodes the set and the part it sits in.
-	type olderSet struct {
-		Values []string          `json:"values"`
-		Logins map[string]string `json:"logins,omitempty"`
-	}
-	type olderPart struct {
-		Launch    string `json:"launch"`
-		LaunchSeq int64  `json:"launch_seq"`
-		Sealed    string `json:"sealed"`
-	}
-	rig, _, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	partOf := func() olderPart {
-		t.Helper()
-		record, found, err := rig.pending.runs.SandboxRunPart(t.Context(), "t1", coord.RunHanded)
-		if err != nil || !found {
-			t.Fatalf("the part beside the row reads (%v, %v)", found, err)
+	inBubble(t, func(t *testing.T) {
+		// THE OLDER BUILD'S SHAPES, as it decodes the set and the part it sits in.
+		type olderSet struct {
+			Values []string          `json:"values"`
+			Logins map[string]string `json:"logins,omitempty"`
 		}
-		var part olderPart
-		if err := json.Unmarshal(record.Value, &part); err != nil {
-			t.Fatalf("the older build cannot decode the part: %v", err)
+		type olderPart struct {
+			Launch    string `json:"launch"`
+			LaunchSeq int64  `json:"launch_seq"`
+			Sealed    string `json:"sealed"`
 		}
-		return part
-	}
-	renewed := awsSessionDocument("ASIARENEWEDKEY000001", "the-renewed-secret-key",
-		"the-renewed-session-token", "2026-08-23T12:15:00Z")
-	if err := rig.coordinator.RecordHanded(t.Context(), run, renewed, rig.now.Add(15*time.Minute)); err != nil {
-		t.Fatalf("recording the renewal: %v", err)
-	}
-	part := partOf()
-	if part.Launch != run.LaunchID || part.Sealed == "" {
-		t.Fatalf("the older build reads the part as %+v, want the job's seal", part)
-	}
-	raw, err := keep.OpenHanded("t1", part.Sealed)
-	if err != nil {
-		t.Fatalf("opening the set: %v", err)
-	}
-	var older olderSet
-	if err := json.Unmarshal(raw, &older); err != nil {
-		t.Fatalf("the older build cannot decode the set: %v", err)
-	}
-	for _, want := range []string{handedToken, renewed, "the-renewed-session-token"} {
-		if !slices.Contains(older.Values, want) {
-			t.Errorf("the older build's scrub takes %q, want %q among them", older.Values, want)
+		rig, _, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		partOf := func() olderPart {
+			t.Helper()
+			record, found, err := rig.pending.runs.SandboxRunPart(t.Context(), "t1", coord.RunHanded)
+			if err != nil || !found {
+				t.Fatalf("the part beside the row reads (%v, %v)", found, err)
+			}
+			var part olderPart
+			if err := json.Unmarshal(record.Value, &part); err != nil {
+				t.Fatalf("the older build cannot decode the part: %v", err)
+			}
+			return part
 		}
-	}
+		renewed := awsSessionDocument("ASIARENEWEDKEY000001", "the-renewed-secret-key",
+			"the-renewed-session-token", "2026-08-23T12:15:00Z")
+		if err := rig.coordinator.RecordHanded(t.Context(), run, renewed, rig.now.Add(15*time.Minute)); err != nil {
+			t.Fatalf("recording the renewal: %v", err)
+		}
+		part := partOf()
+		if part.Launch != run.LaunchID || part.Sealed == "" {
+			t.Fatalf("the older build reads the part as %+v, want the job's seal", part)
+		}
+		raw, err := keep.OpenHanded("t1", part.Sealed)
+		if err != nil {
+			t.Fatalf("opening the set: %v", err)
+		}
+		var older olderSet
+		if err := json.Unmarshal(raw, &older); err != nil {
+			t.Fatalf("the older build cannot decode the set: %v", err)
+		}
+		for _, want := range []string{handedToken, renewed, "the-renewed-session-token"} {
+			if !slices.Contains(older.Values, want) {
+				t.Errorf("the older build's scrub takes %q, want %q among them", older.Values, want)
+			}
+		}
 
-	// A SET MARKED AS HOLDING LESS THAN ITS BOX: the renewal past its bound.
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{strings.Repeat("k", MaxHandedBytes-64)}})
-	if err := rig.coordinator.RecordHanded(t.Context(), run, renewed, rig.now.Add(15*time.Minute)); err != nil {
-		t.Fatalf("recording the renewal past the bound: %v", err)
-	}
-	if part := partOf(); part.Launch != run.LaunchID || part.Sealed != "" {
-		t.Errorf("the older build reads the marked set as %+v, want the job's with no seal, "+
-			"which it refuses every capture of", part)
-	}
+		// A SET MARKED AS HOLDING LESS THAN ITS BOX: the renewal past its bound.
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{strings.Repeat("k", MaxHandedBytes-64)}})
+		if err := rig.coordinator.RecordHanded(t.Context(), run, renewed, rig.now.Add(15*time.Minute)); err != nil {
+			t.Fatalf("recording the renewal past the bound: %v", err)
+		}
+		if part := partOf(); part.Launch != run.LaunchID || part.Sealed != "" {
+			t.Errorf("the older build reads the marked set as %+v, want the job's with no seal, "+
+				"which it refuses every capture of", part)
+		}
+	})
 }
 
 // A CAPTURE TAKEN AFTER A RENEWAL HOLDS NO RENEWED VALUE. The poll rewrites a
@@ -483,48 +489,50 @@ func TestAnOlderBuildsScrubTakesTheRenewedValues(t *testing.T) {
 // check below goes red.
 func TestACaptureTakenAfterARenewalHoldsNoRenewedValue(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	const file = ".aws/crewlet-credentials.json"
-	renewed := awsSessionDocument("ASIARENEWEDKEY000001", "the-renewed-secret-key",
-		"the-renewed-session-token", "2026-08-23T12:15:00Z")
-	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
-		Now: func() time.Time { return rig.now },
-		Refresh: func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
-			if err := record(ctx, renewed, rig.now.Add(15*time.Minute)); err != nil {
-				t.Errorf("the poll's record of the renewal: %v", err)
-				return
-			}
-			if err := box.WriteFile(ctx, file, []byte(renewed)); err != nil {
-				t.Errorf("writing the renewal: %v", err)
-			}
-		},
-		Record: rig.coordinator.RecordHanded,
-	})
-	if err != nil {
-		t.Fatalf("NewWaiter: %v", err)
-	}
-	if got := waiter.pollOne(t.Context(), rig.manager, run); got != pollRunning {
-		t.Fatalf("the poll of the running job = %v, want it running", got)
-	}
-	if held, _ := rig.provider.Box(run.SandboxID).ReadFile(t.Context(), file); string(held) != renewed {
-		t.Fatalf("the poll left %q in the token file, want the renewal", held)
-	}
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-	takes := rig.runner.Takes()
-	if len(takes) == 0 {
-		t.Fatal("the collection took no session")
-	}
-	scrub := takes[len(takes)-1].Scrub
-	for _, want := range []string{handedToken, renewed, "ASIARENEWEDKEY000001", "the-renewed-secret-key",
-		"the-renewed-session-token"} {
-		if !slices.Contains(scrub, want) {
-			t.Errorf("the capture taken after the renewal is not scrubbed of %q: %q", want, scrub)
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		const file = ".aws/crewlet-credentials.json"
+		renewed := awsSessionDocument("ASIARENEWEDKEY000001", "the-renewed-secret-key",
+			"the-renewed-session-token", "2026-08-23T12:15:00Z")
+		waiter, err := NewWaiter(WaiterOptions{
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+			Now: func() time.Time { return rig.now },
+			Refresh: func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
+				if err := record(ctx, renewed, rig.now.Add(15*time.Minute)); err != nil {
+					t.Errorf("the poll's record of the renewal: %v", err)
+					return
+				}
+				if err := box.WriteFile(ctx, file, []byte(renewed)); err != nil {
+					t.Errorf("writing the renewal: %v", err)
+				}
+			},
+			Record: rig.coordinator.RecordHanded,
+		})
+		if err != nil {
+			t.Fatalf("NewWaiter: %v", err)
 		}
-	}
+		if got := waiter.pollOne(t.Context(), rig.manager, run); got != pollRunning {
+			t.Fatalf("the poll of the running job = %v, want it running", got)
+		}
+		if held, _ := rig.provider.Box(run.SandboxID).ReadFile(t.Context(), file); string(held) != renewed {
+			t.Fatalf("the poll left %q in the token file, want the renewal", held)
+		}
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		takes := rig.runner.Takes()
+		if len(takes) == 0 {
+			t.Fatal("the collection took no session")
+		}
+		scrub := takes[len(takes)-1].Scrub
+		for _, want := range []string{handedToken, renewed, "ASIARENEWEDKEY000001", "the-renewed-secret-key",
+			"the-renewed-session-token"} {
+			if !slices.Contains(scrub, want) {
+				t.Errorf("the capture taken after the renewal is not scrubbed of %q: %q", want, scrub)
+			}
+		}
+	})
 }
 
 // A RENEWAL THE STORE DID NOT ANSWER IS KEPT OUT OF THE BOX until a poll's
@@ -539,56 +547,58 @@ func TestACaptureTakenAfterARenewalHoldsNoRenewedValue(t *testing.T) {
 // as a job no longer running, and a check below goes red.
 func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	rig, _, keep := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	const file, renewed = ".config/crewlet/github-token", "the-token-the-poll-renewed"
-	box := rig.provider.Box(run.SandboxID)
-	box.Put(file, "the-token-the-launch-wrote")
-	var refused []error
-	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
-		Now: func() time.Time { return rig.now },
-		Refresh: func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
-			if err := record(ctx, renewed, rig.now.Add(15*time.Minute)); err != nil {
-				refused = append(refused, err)
-				return
-			}
-			if err := box.WriteFile(ctx, file, []byte(renewed)); err != nil {
-				t.Errorf("writing the renewal: %v", err)
-			}
-		},
-		Record: rig.coordinator.RecordHanded,
+	inBubble(t, func(t *testing.T) {
+		ctx := t.Context()
+		rig, _, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		const file, renewed = ".config/crewlet/github-token", "the-token-the-poll-renewed"
+		box := rig.provider.Box(run.SandboxID)
+		box.Put(file, "the-token-the-launch-wrote")
+		var refused []error
+		waiter, err := NewWaiter(WaiterOptions{
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+			Now: func() time.Time { return rig.now },
+			Refresh: func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
+				if err := record(ctx, renewed, rig.now.Add(15*time.Minute)); err != nil {
+					refused = append(refused, err)
+					return
+				}
+				if err := box.WriteFile(ctx, file, []byte(renewed)); err != nil {
+					t.Errorf("writing the renewal: %v", err)
+				}
+			},
+			Record: rig.coordinator.RecordHanded,
+		})
+		if err != nil {
+			t.Fatalf("NewWaiter: %v", err)
+		}
+
+		store := &refusingStore{inner: rig.coordinator.pending, refuse: refusals("AddHanded")}
+		rig.coordinator.pending = store
+		if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
+			t.Fatalf("the poll of the running job = %v, want it running", got)
+		}
+		if len(refused) != 1 || errors.Is(refused[0], ErrJobNotRunning) {
+			t.Fatalf("the record the store did not answer was answered %v, want the store's error", refused)
+		}
+		if held, _ := box.ReadFile(ctx, file); string(held) != "the-token-the-launch-wrote" {
+			t.Fatalf("a renewal the store did not record was written: the file holds %q", held)
+		}
+		if slices.Contains(openedSet(t, rig, keep, "t1").Values, renewed) {
+			t.Fatal("the set holds a renewal the store refused to record")
+		}
+
+		rig.coordinator.pending = store.inner
+		if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
+			t.Fatalf("the next poll of the running job = %v, want it running", got)
+		}
+		if held, _ := box.ReadFile(ctx, file); string(held) != renewed {
+			t.Errorf("the poll whose record landed left %q in the file, want the renewal", held)
+		}
+		if !slices.Contains(openedSet(t, rig, keep, "t1").Values, renewed) {
+			t.Error("the poll wrote a renewal its job's set does not hold")
+		}
 	})
-	if err != nil {
-		t.Fatalf("NewWaiter: %v", err)
-	}
-
-	store := &refusingStore{inner: rig.coordinator.pending, refuse: refusals("AddHanded")}
-	rig.coordinator.pending = store
-	if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
-		t.Fatalf("the poll of the running job = %v, want it running", got)
-	}
-	if len(refused) != 1 || errors.Is(refused[0], ErrJobNotRunning) {
-		t.Fatalf("the record the store did not answer was answered %v, want the store's error", refused)
-	}
-	if held, _ := box.ReadFile(ctx, file); string(held) != "the-token-the-launch-wrote" {
-		t.Fatalf("a renewal the store did not record was written: the file holds %q", held)
-	}
-	if slices.Contains(openedSet(t, rig, keep, "t1").Values, renewed) {
-		t.Fatal("the set holds a renewal the store refused to record")
-	}
-
-	rig.coordinator.pending = store.inner
-	if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
-		t.Fatalf("the next poll of the running job = %v, want it running", got)
-	}
-	if held, _ := box.ReadFile(ctx, file); string(held) != renewed {
-		t.Errorf("the poll whose record landed left %q in the file, want the renewal", held)
-	}
-	if !slices.Contains(openedSet(t, rig, keep, "t1").Values, renewed) {
-		t.Error("the poll wrote a renewal its job's set does not hold")
-	}
 }
 
 // A LATER BUILD'S KEYS IN THE HANDED SET SURVIVE THIS BUILD'S RENEWALS, in the
@@ -603,57 +613,59 @@ func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 // the carried set's out of the union, and a check below goes red.
 func TestALaterBuildsKeysInTheHandedSetSurviveARenewal(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	future := json.RawMessage(`{"a":"later build"}`)
-	rig, _, keep := keepingRig(t)
-	run := rig.launch("t1")
-	// THE SET AND ITS PART AS A LATER BUILD WROTE THEM, a key of its own in each.
-	set, err := json.Marshal(map[string]any{"values": []string{handedToken}, "set_later": future})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sealed, err := keep.SealHanded("t1", set)
-	if err != nil {
-		t.Fatal(err)
-	}
-	part, err := json.Marshal(map[string]any{"launch": run.LaunchID, "launch_seq": run.LaunchSeq,
-		"sealed": sealed, "part_later": future})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := rig.pending.runs.MutateSandboxRunPart(ctx, "t1", coord.RunHanded,
-		func(coord.Record, bool) ([]byte, error) { return part, nil }); err != nil {
-		t.Fatalf("writing the later build's part: %v", err)
-	}
+	inBubble(t, func(t *testing.T) {
+		ctx := t.Context()
+		future := json.RawMessage(`{"a":"later build"}`)
+		rig, _, keep := keepingRig(t)
+		run := rig.launch("t1")
+		// THE SET AND ITS PART AS A LATER BUILD WROTE THEM, a key of its own in each.
+		set, err := json.Marshal(map[string]any{"values": []string{handedToken}, "set_later": future})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealed, err := keep.SealHanded("t1", set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		part, err := json.Marshal(map[string]any{"launch": run.LaunchID, "launch_seq": run.LaunchSeq,
+			"sealed": sealed, "part_later": future})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := rig.pending.runs.MutateSandboxRunPart(ctx, "t1", coord.RunHanded,
+			func(coord.Record, bool) ([]byte, error) { return part, nil }); err != nil {
+			t.Fatalf("writing the later build's part: %v", err)
+		}
 
-	if err := rig.coordinator.RecordHanded(ctx, run, "a-token-the-poll-renewed",
-		rig.now.Add(15*time.Minute)); err != nil {
-		t.Fatalf("recording the renewal: %v", err)
-	}
-	record, found, err := rig.pending.runs.SandboxRunPart(ctx, "t1", coord.RunHanded)
-	if err != nil || !found {
-		t.Fatalf("the part beside the row reads (%v, %v)", found, err)
-	}
-	var written map[string]json.RawMessage
-	if err := json.Unmarshal(record.Value, &written); err != nil {
-		t.Fatalf("the part does not decode: %v", err)
-	}
-	if string(written["part_later"]) != string(future) {
-		t.Errorf("a later build's key in the part did not survive the renewal: %s", record.Value)
-	}
-	grown := openedSet(t, rig, keep, "t1")
-	if !slices.Contains(grown.Values, "a-token-the-poll-renewed") {
-		t.Fatalf("the renewal was not recorded, so nothing was written back: %q", grown.Values)
-	}
-	if string(grown.Extra["set_later"]) != string(future) {
-		t.Errorf("a later build's key in the set did not survive the renewal: %v", grown.Extra)
-	}
+		if err := rig.coordinator.RecordHanded(ctx, run, "a-token-the-poll-renewed",
+			rig.now.Add(15*time.Minute)); err != nil {
+			t.Fatalf("recording the renewal: %v", err)
+		}
+		record, found, err := rig.pending.runs.SandboxRunPart(ctx, "t1", coord.RunHanded)
+		if err != nil || !found {
+			t.Fatalf("the part beside the row reads (%v, %v)", found, err)
+		}
+		var written map[string]json.RawMessage
+		if err := json.Unmarshal(record.Value, &written); err != nil {
+			t.Fatalf("the part does not decode: %v", err)
+		}
+		if string(written["part_later"]) != string(future) {
+			t.Errorf("a later build's key in the part did not survive the renewal: %s", record.Value)
+		}
+		grown := openedSet(t, rig, keep, "t1")
+		if !slices.Contains(grown.Values, "a-token-the-poll-renewed") {
+			t.Fatalf("the renewal was not recorded, so nothing was written back: %q", grown.Values)
+		}
+		if string(grown.Extra["set_later"]) != string(future) {
+			t.Errorf("a later build's key in the set did not survive the renewal: %v", grown.Extra)
+		}
 
-	// AND AS A LAUNCH CARRIES THE SET INTO THE BOX'S NEXT JOB.
-	joined := HandedSecrets{Values: []string{"the-next-jobs-token"}}.union(grown)
-	if string(joined.Extra["set_later"]) != string(future) {
-		t.Errorf("a later build's key in the carried set did not survive the carry: %v", joined.Extra)
-	}
+		// AND AS A LAUNCH CARRIES THE SET INTO THE BOX'S NEXT JOB.
+		joined := HandedSecrets{Values: []string{"the-next-jobs-token"}}.union(grown)
+		if string(joined.Extra["set_later"]) != string(future) {
+			t.Errorf("a later build's key in the carried set did not survive the carry: %v", joined.Extra)
+		}
+	})
 }
 
 // A RENEWAL PAST THE SET'S BOUND IS WRITTEN, AND REFUSES EVERY LATER CAPTURE.
@@ -671,39 +683,41 @@ func TestALaterBuildsKeysInTheHandedSetSurviveARenewal(t *testing.T) {
 // marked set again, or say the mark under another name or not at all, and a
 // check below goes red.
 func TestARenewalPastTheSetsBoundIsWrittenAndRefusesEveryLaterCapture(t *testing.T) {
-	logs := captureLogs(t)
-	rig, writes, _ := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken, strings.Repeat("k", MaxHandedBytes-128)}})
-	if err := rig.coordinator.RecordHanded(t.Context(), run, strings.Repeat("r", 256),
-		rig.now.Add(15*time.Minute)); err != nil {
-		t.Fatalf("a renewal past the bound was refused, so the run is left without a good token: %v", err)
-	}
-	if _, err := rig.pending.Handed(t.Context(), rig.get("t1")); !errors.Is(err, ErrHandedIncomplete) {
-		t.Fatalf("the set past its bound reads (%v), want it marked as holding less than its box", err)
-	}
-	if err := rig.coordinator.RecordHanded(t.Context(), run, "the-next-renewed-token",
-		rig.now.Add(25*time.Minute)); err != nil {
-		t.Errorf("a renewal of a marked set was refused: %v", err)
-	}
-	said := logs.String()
-	if n := strings.Count(said, "executor_session_scrub_incomplete"); n != 1 || !strings.Contains(said, handedOverflowed) {
-		t.Errorf("the mark was said %d times, want once, naming the bound it passed: %q", n, said)
-	}
+	inBubble(t, func(t *testing.T) {
+		logs := captureLogs(t)
+		rig, writes, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken, strings.Repeat("k", MaxHandedBytes-128)}})
+		if err := rig.coordinator.RecordHanded(t.Context(), run, strings.Repeat("r", 256),
+			rig.now.Add(15*time.Minute)); err != nil {
+			t.Fatalf("a renewal past the bound was refused, so the run is left without a good token: %v", err)
+		}
+		if _, err := rig.pending.Handed(t.Context(), rig.get("t1")); !errors.Is(err, ErrHandedIncomplete) {
+			t.Fatalf("the set past its bound reads (%v), want it marked as holding less than its box", err)
+		}
+		if err := rig.coordinator.RecordHanded(t.Context(), run, "the-next-renewed-token",
+			rig.now.Add(25*time.Minute)); err != nil {
+			t.Errorf("a renewal of a marked set was refused: %v", err)
+		}
+		said := logs.String()
+		if n := strings.Count(said, "executor_session_scrub_incomplete"); n != 1 || !strings.Contains(said, handedOverflowed) {
+			t.Errorf("the mark was said %d times, want once, naming the bound it passed: %q", n, said)
+		}
 
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-	if takes := rig.runner.Takes(); len(takes) != 0 {
-		t.Fatalf("took %d sessions scrubbed by a set that holds less than its box", len(takes))
-	}
-	if len(writes.captured()) != 0 {
-		t.Fatal("recorded a capture scrubbed by a set that holds less than its box")
-	}
-	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused ||
-		!strings.Contains(c.Reason, handedOverflowed) {
-		t.Fatalf("the record holds %+v, want the capture refused for the renewals past the bound", c)
-	}
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		if takes := rig.runner.Takes(); len(takes) != 0 {
+			t.Fatalf("took %d sessions scrubbed by a set that holds less than its box", len(takes))
+		}
+		if len(writes.captured()) != 0 {
+			t.Fatal("recorded a capture scrubbed by a set that holds less than its box")
+		}
+		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused ||
+			!strings.Contains(c.Reason, handedOverflowed) {
+			t.Fatalf("the record holds %+v, want the capture refused for the renewals past the bound", c)
+		}
+	})
 }
 
 // A TOKEN THE LAUNCH WRITES IN A KEPT BOX IS SEALED WITH ITS JOB. A job that
@@ -718,50 +732,52 @@ func TestARenewalPastTheSetsBoundIsWrittenAndRefusesEveryLaterCapture(t *testing
 // the job without what it kept, and a check below goes red.
 func TestATokenTheLaunchWritesInAKeptBoxIsSealedWithItsJob(t *testing.T) {
 	t.Parallel()
-	const renewed = "the-token-renewed-at-the-launch"
-	expires := time.Date(2026, 8, 23, 12, 15, 0, 0, time.UTC)
-	rig, _, keep := keepingRigWith(t, func(o *CoordinatorOptions) {
-		o.Refresh = func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
-			if err := record(ctx, renewed, expires); err != nil {
-				t.Errorf("the launch's record of the renewal: %v", err)
-				return
+	inBubble(t, func(t *testing.T) {
+		const renewed = "the-token-renewed-at-the-launch"
+		expires := time.Date(2026, 8, 23, 12, 15, 0, 0, time.UTC)
+		rig, _, keep := keepingRigWith(t, func(o *CoordinatorOptions) {
+			o.Refresh = func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
+				if err := record(ctx, renewed, expires); err != nil {
+					t.Errorf("the launch's record of the renewal: %v", err)
+					return
+				}
+				if err := box.WriteFile(ctx, ".config/crewlet/github-token", []byte(renewed)); err != nil {
+					t.Errorf("writing the renewal: %v", err)
+				}
 			}
-			if err := box.WriteFile(ctx, ".config/crewlet/github-token", []byte(renewed)); err != nil {
-				t.Errorf("writing the renewal: %v", err)
+		})
+		run := rig.launch("t1")
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{"the-first-jobs-token"}})
+		var relaunch LaunchResult
+		rig.resumer.during = func(ctx context.Context, r PendingRun) {
+			req := launchReq(r.TurnID)
+			req.Secrets = []string{"the-relaunchs-own-token"}
+			res, err := rig.coordinator.Launch(ctx, rig.manager, req)
+			if err != nil {
+				t.Errorf("relaunch: %v", err)
 			}
+			relaunch = res
+		}
+		rig.runner.Finish(Result{Success: true, Text: "first pass"})
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		rig.awaitKeeps()
+		if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
+			t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, run.SandboxID)
+		}
+		set := openedSet(t, rig, keep, "t1")
+		for _, want := range []string{renewed, "the-first-jobs-token", "the-relaunchs-own-token"} {
+			if !slices.Contains(set.Values, want) {
+				t.Errorf("the relaunch's set holds %q, want %q among them", set.Values, want)
+			}
+		}
+		if at, lapses := set.Expires[expiryKey(renewed)]; !lapses || !at.Equal(expires) {
+			t.Errorf("the token the launch wrote lapses at %v (%v), want at its issuer's %v", at, lapses, expires)
+		}
+		if _, lapses := set.Expires[expiryKey("the-relaunchs-own-token")]; lapses {
+			t.Error("a secret the launch handed was given a lapse")
 		}
 	})
-	run := rig.launch("t1")
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{"the-first-jobs-token"}})
-	var relaunch LaunchResult
-	rig.resumer.during = func(ctx context.Context, r PendingRun) {
-		req := launchReq(r.TurnID)
-		req.Secrets = []string{"the-relaunchs-own-token"}
-		res, err := rig.coordinator.Launch(ctx, rig.manager, req)
-		if err != nil {
-			t.Errorf("relaunch: %v", err)
-		}
-		relaunch = res
-	}
-	rig.runner.Finish(Result{Success: true, Text: "first pass"})
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	rig.awaitKeeps()
-	if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
-		t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, run.SandboxID)
-	}
-	set := openedSet(t, rig, keep, "t1")
-	for _, want := range []string{renewed, "the-first-jobs-token", "the-relaunchs-own-token"} {
-		if !slices.Contains(set.Values, want) {
-			t.Errorf("the relaunch's set holds %q, want %q among them", set.Values, want)
-		}
-	}
-	if at, lapses := set.Expires[expiryKey(renewed)]; !lapses || !at.Equal(expires) {
-		t.Errorf("the token the launch wrote lapses at %v (%v), want at its issuer's %v", at, lapses, expires)
-	}
-	if _, lapses := set.Expires[expiryKey("the-relaunchs-own-token")]; lapses {
-		t.Error("a secret the launch handed was given a lapse")
-	}
 }

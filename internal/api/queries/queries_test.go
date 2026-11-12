@@ -365,7 +365,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"atlas_facets":  string(iam.GrantAtlas),
 		// GITLET'S ROWS, each asked behind the gitlet app (ADR-0110) and
 		// decided per repository by the grant the serving node derives from
-		// its chart (code.GrantOf, ADR-0088): a listing leaves out what the
+		// its chart (gitlet.GrantOf, ADR-0088): a listing leaves out what the
 		// caller may not read, and a read of one such repository is refused.
 		"code_repos":  string(iam.GrantGitlet),
 		"code_repo":   string(iam.GrantGitlet),

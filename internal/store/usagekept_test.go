@@ -84,7 +84,7 @@ func personRecord(t *testing.T, id string, at time.Time, seat string, total int)
 }
 
 // fetchRecord is a record of reads of a unit repository, as the node's reads
-// ledger publishes it ([types.CodeFetched], internal/code/readaudit).
+// ledger publishes it ([types.CodeFetched], internal/gitlet/readaudit).
 func fetchRecord(t *testing.T, id string, at time.Time, read types.CodeFetched) store.EventRecord {
 	t.Helper()
 	payload, err := json.Marshal(read)

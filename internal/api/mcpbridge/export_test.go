@@ -19,17 +19,6 @@ func Dispatcher(s *Session) toolsession.Dispatcher {
 	return s.live
 }
 
-// EndOpening ends a session's live opening again, as its own end does, for a
-// case that ends one opening twice: no path of the bridge does — each takes
-// the opening out of the bridge's tables before it ends it — and the opening's
-// end has to survive one that would ([binding.end]).
-func EndOpening(s *Session) {
-	s.mu.Lock()
-	opened := s.live
-	s.mu.Unlock()
-	opened.end(runEnded)
-}
-
 // OpeningServers is every MCP server a session's live opening serves, the
 // engine's own first, for a case that connects a box to one over a transport
 // of its own: an in-process pipe a bubble's goroutines wait on durably, as none
@@ -55,7 +44,12 @@ const (
 	EndedRunningNote = endedRunningNote
 	StillRunningNote = stillRunningNote
 	ClosingNote      = closingNote
+	UnrecordedNote   = unrecordedNote
+	StoppedNote      = stoppedNote
 )
+
+// CallFloor is the bound of a tool that declares none.
+const CallFloor = callFloor
 
 // EndAnswerWait bounds how long an opening's end waits for its calls'
 // answers to be written before it closes the box's sessions.

@@ -21,11 +21,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/stream"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -122,7 +122,7 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 	// goroutine may do, never a member's ([startMeshOnce]). So is the git
 	// Gitlet runs on every member, held here to the node floor: the
 	// fleet's company hosts code ([fleetCompanyDoc]).
-	hook := codetest.HookCommand(t)
+	hook := gitlettest.HookCommand(t)
 	gittest.RequireNode(t)
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
 		// THE MESH IS BUILT INSIDE THE ATTEMPT, because reserving its

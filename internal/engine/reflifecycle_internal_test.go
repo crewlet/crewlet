@@ -10,8 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -39,7 +39,7 @@ import (
 //
 // THE CLOCK IS THE PASS'S, and where a case needs it the tools': a branch's
 // broker instant cannot be moved, so a fortnight passes on the clocks that
-// judge it (code.Retention.Now, builtin.CodeDeps.Now).
+// judge it (gitlet.Retention.Now, builtin.CodeDeps.Now).
 
 // refLifecycleDoc is a company hosting web and api, both owned by the
 // Engineering unit, whose two seats write code at full_access and run it in
@@ -79,7 +79,7 @@ code:
 type refLifecycle struct {
 	node     *Engine
 	rig      *reposRig
-	web, api *code.RepoDetail
+	web, api *gitlet.RepoDetail
 	// turns is the node's registry of running turns, as its dispatch keeps
 	// it: a turn's frame registers its holds while it runs.
 	turns *runningTurns
@@ -139,15 +139,15 @@ func (lc *refLifecycle) launch(t *testing.T, turn *turnctx.Turn, repos ...builti
 
 // seatPush records seat's earlier turn's write of ref on repo: an engine-built
 // push of the seat's, creating ref at its broker instant.
-func (lc *refLifecycle) seatPush(t *testing.T, seat string, repo *code.RepoDetail, ref, oid string) {
+func (lc *refLifecycle) seatPush(t *testing.T, seat string, repo *gitlet.RepoDetail, ref, oid string) {
 	t.Helper()
-	push := code.Proposal{PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo.ID,
-		Principal: code.Principal{Kind: code.PrincipalAgent, Seat: seat,
-			Run: code.RunProvenance{TurnID: statelog.NewOpID(time.Now(), "")}},
-		Via: code.ViaEngine, Node: lc.node.id, ReceivedAt: time.Now().UTC(),
-		Commands: []code.Command{{Ref: ref, Old: code.ZeroOID, New: oid}}}
+	push := gitlet.Proposal{PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo.ID,
+		Principal: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: seat,
+			Run: gitlet.RunProvenance{TurnID: statelog.NewOpID(time.Now(), "")}},
+		Via: gitlet.ViaEngine, Node: lc.node.id, ReceivedAt: time.Now().UTC(),
+		Commands: []gitlet.Command{{Ref: ref, Old: gitlet.ZeroOID, New: oid}}}
 	res, err := lc.node.router.Code().Propose(t.Context(), push)
-	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Answer.Commands[0].Result != code.ResultOK {
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Answer.Commands[0].Result != gitlet.ResultOK {
 		t.Fatalf("%s's earlier write of %s = %+v, %v", seat, ref, res, err)
 	}
 }
@@ -156,7 +156,7 @@ func (lc *refLifecycle) seatPush(t *testing.T, seat string, repo *code.RepoDetai
 // read as the node reads them, over the rig's run store and the node's
 // running turns — or by holds, where a case wraps that reader.
 func (lc *refLifecycle) pass(t *testing.T, at time.Time,
-	holds func(context.Context, []string) (map[string]bool, error)) code.RetentionReport {
+	holds func(context.Context, []string) (map[string]bool, error)) gitlet.RetentionReport {
 	t.Helper()
 	d := lc.node.newCodeRetentionDuty(lc.node.writeSide().code, lc.node.native.Load().codeReader,
 		lc.node.core.Load().nodeID)
@@ -180,11 +180,11 @@ func (lc *refLifecycle) liveHolds(ctx context.Context, keys []string) (map[strin
 }
 
 // exists reports whether repo still holds ref, read linearizably.
-func (lc *refLifecycle) exists(t *testing.T, repo *code.RepoDetail, ref string) bool {
+func (lc *refLifecycle) exists(t *testing.T, repo *gitlet.RepoDetail, ref string) bool {
 	t.Helper()
-	answer, err := lc.node.router.Code().ResolveRef(t.Context(), code.RefQuery{Repo: repo.Name,
+	answer, err := lc.node.router.Code().ResolveRef(t.Context(), gitlet.RefQuery{Repo: repo.Name,
 		Refs: []string{ref}, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "swe"}})
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "swe"}})
 	if err != nil || len(answer.Refs) != 1 {
 		t.Fatalf("resolve %s of %s: %+v, %v", ref, repo.Name, answer, err)
 	}
@@ -233,7 +233,7 @@ func TestABranchAnEarlierJobCheckedOutIsHeld(t *testing.T) {
 	t.Parallel()
 	lc := newRefLifecycle(t)
 	lc.parkRelaunched(t)
-	report := lc.pass(t, time.Now().Add(code.RefExpiry+time.Hour), nil)
+	report := lc.pass(t, time.Now().Add(gitlet.RefExpiry+time.Hour), nil)
 	if report.RefsExpired != 0 || report.RefsHeld != 1 {
 		t.Errorf("the pass under the second park = %+v, want %s held and nothing expired", report, eng42)
 	}
@@ -263,11 +263,11 @@ func TestABranchIsExpiredOnTimeOnceItsRunEnds(t *testing.T) {
 	if _, finished, err := lc.rig.pending.Finish(t.Context(), turnID, ending.Ending.ID); err != nil || !finished {
 		t.Fatalf("finish the run: %v, %v", finished, err)
 	}
-	if report := lc.pass(t, time.Now().Add(code.RefExpiry-time.Hour), nil); report.RefsExpired != 0 ||
+	if report := lc.pass(t, time.Now().Add(gitlet.RefExpiry-time.Hour), nil); report.RefsExpired != 0 ||
 		!lc.exists(t, lc.web, eng42) {
 		t.Fatalf("a pass an hour short of the window = %+v; want %s kept, not yet due", report, eng42)
 	}
-	report := lc.pass(t, time.Now().Add(code.RefExpiry+time.Hour), nil)
+	report := lc.pass(t, time.Now().Add(gitlet.RefExpiry+time.Hour), nil)
 	if report.RefsExpired != 1 || report.RefsHeld != 0 {
 		t.Errorf("the first pass past the window after the run ended = %+v, want %s expired", report, eng42)
 	}
@@ -278,7 +278,7 @@ func TestABranchIsExpiredOnTimeOnceItsRunEnds(t *testing.T) {
 
 // A BRANCH A PARKED RUN ONLY READ IS HELD: qa's seats/qa/fixtures on web was
 // last pushed 337 hours ago by the pass's clock — due, and older than
-// code.RefHoldRecordAfter. The pass reads its page and then the live holds,
+// gitlet.RefHoldRecordAfter. The pass reads its page and then the live holds,
 // and only once that read has answered (nothing held) does a Worklet executor
 // of another seat, swe, resolve the branch with code_resolve — the one hold
 // the pass cannot have seen, which the read records on the code log because
@@ -388,7 +388,7 @@ func TestABridgedRunHoldsTheBranchItWrote(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("the bridged run's row: found %v, %v", found, err)
 	}
-	if key := code.RefHoldKey(lc.web.ID, notes); !slices.Contains(row.CodeHolds, key) {
+	if key := gitlet.RefHoldKey(lc.web.ID, notes); !slices.Contains(row.CodeHolds, key) {
 		t.Errorf("the bridged run's row holds %v, want %s's key %s", row.CodeHolds, notes, key)
 	}
 
@@ -397,7 +397,7 @@ func TestABridgedRunHoldsTheBranchItWrote(t *testing.T) {
 		return holdsReader{runs: run.pending, leases: listedLeases{}, self: &runningTurns{},
 			budget: holdsAskBudget}.holds(ctx, keys)
 	}
-	report := lc.pass(t, time.Now().Add(code.RefExpiry+time.Hour), restarted)
+	report := lc.pass(t, time.Now().Add(gitlet.RefExpiry+time.Hour), restarted)
 	if report.RefsExpired != 0 || report.RefsHeld != 1 {
 		t.Errorf("the pass after the restart = %+v, want %s held from the parked run's row", report, notes)
 	}

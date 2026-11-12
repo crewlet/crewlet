@@ -26,20 +26,30 @@ import (
 // where two of a fleet's three members stand for any one bucket:
 //
 //   - read: the read of the box's run every /box/git/ request makes before
-//     anything else (internal/code/host's admission, through the engine's
+//     anything else (internal/gitlet/host's admission, through the engine's
 //     host.Runs over sandbox.PendingStore.Get);
 //   - raise: the raise of the run's code floor every ref answer past it and
 //     every applied push makes before it answers (host.Runs.RaiseFloor, through
 //     sandbox.PendingStore.RaiseCodeFloor), each operation a higher floor, so
 //     every one writes;
-//   - append: one bridged call the box makes, appended to the run's log
+//   - append: one bridged call the box makes, appended to the run's log with
+//     no entry of it there, as a call answered without running is
 //     (sandbox.PendingStore.AppendBridgeCall) — where the log's size is paid
 //     now that the record does not carry it — that cost the engine nothing
 //     (a call answered by a builtin), so the record is not written;
 //   - append-paid: the same call where it moved what the job's bridged calls
 //     cost (a delegated worker's model call, say), so the append also reads
 //     and writes the run's record with the new total — the path every call
-//     that costs the engine anything takes.
+//     that costs the engine anything takes;
+//   - begin: the write of a call's entry on the run's log AHEAD OF IT, before
+//     its tool runs (sandbox.AppendBegin: the write every bridged call waits
+//     on before it runs, internal/api/mcpbridge's "A call is on its run's
+//     record before it runs"), each one withdrawn after it is timed so the log
+//     stands as it did;
+//   - record: the update that completes a call's entry as it finishes
+//     (sandbox.AppendRecord): its entry taken out and the call listed in its
+//     place, in one write — the append, on a log holding the entry, each
+//     entry written before it is timed.
 //
 // THE RUN IS A REALISTIC ONE, mid-job: launched with one repository, its turn
 // parked (its bookkeeping and a 32 KiB frozen context), and the bridge's log
@@ -59,7 +69,9 @@ import (
 // machine), the record was 516 173 bytes, nearly all of it the log, a read
 // took 5.8 ms at the median (7.9 at the 99th percentile) and a raise 11.1 ms
 // (26.0): every request of a box moved the run's whole tool log, not the
-// request.
+// request. The begin and record arms, and append beside them, were measured on
+// 2026-11-11, a thousand writes an arm and one count, on two E-cores of the
+// same machine: see the same section for their figures.
 func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 	ctx := context.Background()
 	fleet := boxRunFleet(b)
@@ -81,15 +93,27 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 		return len(record.Value)
 	}
 
-	measure := func(b *testing.B, op func(i int) error) {
+	// measure times op, with before and after — either nil — run around each
+	// operation and kept out of its time.
+	measured := func(b *testing.B, before, op, after func(i int) error) {
 		took := make([]time.Duration, 0, b.N)
 		b.ResetTimer()
 		for i := range b.N {
+			if before != nil {
+				if err := before(i); err != nil {
+					b.Fatal(err)
+				}
+			}
 			start := time.Now()
 			if err := op(i); err != nil {
 				b.Fatal(err)
 			}
 			took = append(took, time.Since(start))
+			if after != nil {
+				if err := after(i); err != nil {
+					b.Fatal(err)
+				}
+			}
 		}
 		b.StopTimer()
 		slices.Sort(took)
@@ -99,6 +123,7 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 		b.ReportMetric(float64(row()), "row-bytes")
 		b.ReportMetric(float64(logBytes()), "log-bytes")
 	}
+	measure := func(b *testing.B, op func(i int) error) { measured(b, nil, op, nil) }
 
 	b.Run("read", func(b *testing.B) {
 		measure(b, func(int) error {
@@ -153,6 +178,38 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 			return appendCall(i, sandbox.EngineSpend{Workers: paid, WorkerInput: 1000 * paid,
 				WorkerOutput: 200 * paid})
 		})
+	})
+	// A CALL'S STEPS, each at a place and an instant no earlier arm's call
+	// took, so every one is a call of its own.
+	started := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	step := func(name string, at sandbox.AppendStep, i int) error {
+		call := sandbox.BridgeCall{Name: "read_page", Seq: sandbox.MaxBridgeCalls + 1 + i,
+			StartedAt: started.Add(time.Duration(i) * time.Millisecond)}
+		if at == sandbox.AppendRecord {
+			call.Args, call.Output = fmt.Sprintf(`{"id":%d,"q":"%s"}`, i, strings.Repeat("q", 240)), output
+		}
+		recorded, err := store.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Step: at, Launch: launch, Call: call})
+		switch {
+		case err != nil:
+			return fmt.Errorf("%s call %d: %w", name, i, err)
+		case !recorded:
+			return fmt.Errorf("the %s of call %d took nothing", name, i)
+		}
+		return nil
+	}
+	// EVERY STEP'S CALL IS A NEW ONE, across every run the framework makes of
+	// an arm and across both arms.
+	calls, at := 0, 0
+	next := func(int) error { calls++; at = calls; return nil }
+	b.Run("begin", func(b *testing.B) {
+		measured(b, next, func(int) error { return step("begin", sandbox.AppendBegin, at) },
+			func(int) error { return step("withdraw", sandbox.AppendWithdraw, at) })
+	})
+	b.Run("record", func(b *testing.B) {
+		measured(b, func(i int) error {
+			_ = next(i)
+			return step("begin", sandbox.AppendBegin, at)
+		}, func(int) error { return step("record", sandbox.AppendRecord, at) }, nil)
 	})
 }
 

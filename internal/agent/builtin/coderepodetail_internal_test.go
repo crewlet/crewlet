@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // CODE_GET_REPO CARRIES EVERY FIELD OF A REPOSITORY'S DETAIL, OR SAYS WHY NOT.
-// Its detail is a copy of code.RepoDetail made field by field, and nothing
+// Its detail is a copy of gitlet.RepoDetail made field by field, and nothing
 // failed when the detail grew a field the copy did not take: the purge a
 // person asked for (expunge) and an import's end (remotes) were read with the
 // rest of the row and dropped, so the purge's own answer sent its asker to
@@ -48,7 +48,7 @@ func TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy(t *testing.T) {
 		}
 	}
 	collect(reflect.TypeFor[codeRepoDetail]())
-	detail := reflect.TypeFor[code.RepoDetail]()
+	detail := reflect.TypeFor[gitlet.RepoDetail]()
 	declared := map[string]bool{}
 	for i := range detail.NumField() {
 		f := detail.Field(i)
@@ -60,16 +60,16 @@ func TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy(t *testing.T) {
 		_, out := leftOut[name]
 		switch {
 		case carried[name] && out:
-			t.Errorf("code.RepoDetail.%s (%q) is carried and named left out too: take it off the list", f.Name,
+			t.Errorf("gitlet.RepoDetail.%s (%q) is carried and named left out too: take it off the list", f.Name,
 				name)
 		case !carried[name] && !out:
-			t.Errorf("code.RepoDetail.%s (%q) is neither carried by code_get_repo's detail nor named left "+
+			t.Errorf("gitlet.RepoDetail.%s (%q) is neither carried by code_get_repo's detail nor named left "+
 				"out with why: carry it, or say why a reader has no use for it", f.Name, name)
 		}
 	}
 	for name, why := range leftOut {
 		if !declared[name] {
-			t.Errorf("%q (%s) is named left out, and code.RepoDetail has no such field: take it off the list",
+			t.Errorf("%q (%s) is named left out, and gitlet.RepoDetail has no such field: take it off the list",
 				name, why)
 		}
 	}

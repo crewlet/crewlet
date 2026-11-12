@@ -6,9 +6,9 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -408,7 +408,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		case slices.Contains(CodeWrites(), c.tool.Name()):
 			// AND A CODE WRITE REACHES GITLET: a branch moved or a
 			// repository changed is the answer to work that came from it.
-			opts = append(opts, tools.DeliversTo(code.Source))
+			opts = append(opts, tools.DeliversTo(gitlet.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own

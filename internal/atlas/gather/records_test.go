@@ -14,10 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/ssh"
@@ -392,14 +392,14 @@ func realistic(tb testing.TB) (*config.Company, gather.Sources) {
 				Tokens: usage.Tokens{ProviderKey: fmt.Sprintf("model-%d", day%10), Calls: 40}})
 		}
 	}
-	repos := make([]code.RepoSummary, 0, 300)
+	repos := make([]gitlet.RepoSummary, 0, 300)
 	for i := range 300 {
 		r := repo(fmt.Sprintf("repo-%03d", i))
 		r.LastPushAt = now.Add(-time.Duration(i) * time.Hour)
 		repos = append(repos, r)
 	}
-	gitlet := &fakeGitlet{repos: repos, page: 500, checksPerRepo: 4}
-	return c, gather.Sources{Gitlet: gitlet, Integrations: fakeIntegrations{}, SeatAccess: ledger, ToolServers: tools,
+	source := &fakeGitlet{repos: repos, page: 500, checksPerRepo: 4}
+	return c, gather.Sources{Gitlet: source, Integrations: fakeIntegrations{}, SeatAccess: ledger, ToolServers: tools,
 		Nodes: fakeNodes{{MCP: health}}, ServerTests: fakeTests{}, AccessLog: fakeAccess{use: hostUse},
 		Usage: fakeUsage{spend: spend, calls: calls}}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
@@ -26,18 +27,20 @@ import (
 // the log to the seat host's retry, and the record is left and no end recorded.
 func TestARetiredSeatsRunIsFinishedWithItsTurnsEnd(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	rig.launchKept(t, "t1")
-	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", rigLease.Owner, rigLease.Epoch); err != nil {
-		t.Fatalf("RetireSeat: %v", err)
-	}
-	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
-		t.Fatalf("the retired seat's run is still recorded (found %v, %v)", found, err)
-	}
-	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeLost {
-		t.Fatalf("recorded %+v, want the retired run's turn ended as lost", ends)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		rig.launchKept(t, "t1")
+		if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("RetireSeat: %v", err)
+		}
+		if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+			t.Fatalf("the retired seat's run is still recorded (found %v, %v)", found, err)
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeLost {
+			t.Fatalf("recorded %+v, want the retired run's turn ended as lost", ends)
+		}
+	})
 }
 
 // A RELAUNCH ABANDONED UNDER ITS RESUMED FRAME LEAVES ITS TURN'S END TO THAT
@@ -53,44 +56,46 @@ func TestARetiredSeatsRunIsFinishedWithItsTurnsEnd(t *testing.T) {
 // no record to owe its end on, or the end names no unkept capture.
 func TestARelaunchAbandonedUnderItsFrameLeavesTheTurnsEndToIt(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.putErr = objstore.ErrFull
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	var kept, owed bool
-	rig.resumer.during = func(ctx context.Context, r PendingRun) {
-		rig.runner.StartErr = errors.New("the harness would not start")
-		if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq(r.TurnID)); err == nil {
-			t.Error("the relaunch started though its harness would not")
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.putErr = objstore.ErrFull
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		var kept, owed bool
+		rig.resumer.during = func(ctx context.Context, r PendingRun) {
+			rig.runner.StartErr = errors.New("the harness would not start")
+			if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq(r.TurnID)); err == nil {
+				t.Error("the relaunch started though its harness would not")
+			}
+			current, found, err := rig.pending.Get(ctx, r.TurnID)
+			kept = err == nil && found && current.Ending != nil
+			owed, _ = rig.coordinator.OweEnd(ctx, r.TurnID, executorkeep.Ending{
+				Outcome: executorkeep.OutcomeFailed, Failure: "the resumed turn's relaunch failed"})
 		}
-		current, found, err := rig.pending.Get(ctx, r.TurnID)
-		kept = err == nil && found && current.Ending != nil
-		owed, _ = rig.coordinator.OweEnd(ctx, r.TurnID, executorkeep.Ending{
-			Outcome: executorkeep.OutcomeFailed, Failure: "the resumed turn's relaunch failed"})
-	}
-	rig.resumer.failWith(fmt.Errorf("%w (its relaunch failed): the harness would not start", ErrResumeAbandoned))
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Logf("OnCompleted: %v", err)
-	}
-	rig.awaitKeeps()
-	rig.fireRetries()
-	rig.fireRetries()
+		rig.resumer.failWith(fmt.Errorf("%w (its relaunch failed): the harness would not start", ErrResumeAbandoned))
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Logf("OnCompleted: %v", err)
+		}
+		rig.awaitKeeps()
+		rig.fireRetries()
+		rig.fireRetries()
 
-	if !kept || !owed {
-		t.Fatalf("the frame found its run's record kept: %v, and owed its end on it: %v; want both", kept, owed)
-	}
-	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeFailed {
-		t.Fatalf("recorded %+v, want the frame's account of the turn", ends)
-	}
-	if u := ends[0].Ending.Unkept; u == nil || u.LaunchSeq != 1 || !strings.Contains(u.Reason, "reservation is spent") {
-		t.Fatalf("the end names %+v unkept, want the launch whose capture the store refused", u)
-	}
-	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
-		t.Fatal("the run's record was left behind the turn's end")
-	}
+		if !kept || !owed {
+			t.Fatalf("the frame found its run's record kept: %v, and owed its end on it: %v; want both", kept, owed)
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeFailed {
+			t.Fatalf("recorded %+v, want the frame's account of the turn", ends)
+		}
+		if u := ends[0].Ending.Unkept; u == nil || u.LaunchSeq != 1 || !strings.Contains(u.Reason, "reservation is spent") {
+			t.Fatalf("the end names %+v unkept, want the launch whose capture the store refused", u)
+		}
+		if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+			t.Fatal("the run's record was left behind the turn's end")
+		}
+	})
 }
 
 // A TURN'S END IS DECIDED ONCE, EVEN AFTER IT IS RECORDED. An attempt at the
@@ -103,36 +108,144 @@ func TestARelaunchAbandonedUnderItsFrameLeavesTheTurnsEndToIt(t *testing.T) {
 // on every attempt that finds none owed, and the stop is closed twice.
 func TestATurnsEndIsDecidedOnceEvenAfterItIsRecorded(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	var closes atomic.Int32
-	closeStopped := rig.coordinator.closeStopped
-	rig.coordinator.closeStopped = func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error) {
-		closes.Add(1)
-		return closeStopped(ctx, run, calls)
-	}
-	rig.launchKept(t, "t1")
-	rig.runner.Finish(Result{Text: "halfway through"})
-	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	// THE DELETE REFUSED once the end is recorded and cleared, as a crash
-	// between the two leaves the record.
-	store := rig.coordinator.pending
-	rig.coordinator.pending = &refusingStore{inner: store, refuse: []string{"Finish"}}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.coordinator.pending = store
-	rig.fireRetries()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		var closes atomic.Int32
+		closeStopped := rig.coordinator.closeStopped
+		rig.coordinator.closeStopped = func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error) {
+			closes.Add(1)
+			return closeStopped(ctx, run, calls)
+		}
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(Result{Text: "halfway through"})
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		// THE DELETE REFUSED once the end is recorded and cleared, as a crash
+		// between the two leaves the record.
+		store := rig.coordinator.pending
+		rig.coordinator.pending = &refusingStore{inner: store, refuse: []string{"Finish"}}
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.coordinator.pending = store
+		rig.fireRetries()
 
-	if n := closes.Load(); n != 1 {
-		t.Fatalf("the stopped turn was closed %d times, want once", n)
+		if n := closes.Load(); n != 1 {
+			t.Fatalf("the stopped turn was closed %d times, want once", n)
+		}
+		if ends := writes.endedRecords(); len(ends) != 1 {
+			t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+		}
+		if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+			t.Fatal("the stopped run's record was left behind its end")
+		}
+	})
+}
+
+// keepsOutcomeLost is a run store that loses a keep's account of its capture
+// (#1022): the first stamp of a capture past begun is held until the stamp's
+// own context ends, and answered then as the coordination store answers a
+// write it could not make in that time ([coord.ErrUnavailable]) — what a runner
+// starved through the stamp's whole budget saw, a write race lost and the
+// budget spent. Every other call passes through, and the reads of the run's
+// row while its capture stands begun under the end it owes are counted: the
+// reads of the end's wait for it.
+type keepsOutcomeLost struct {
+	PendingStore
+
+	mu    sync.Mutex
+	lost  bool
+	waits int
+}
+
+func (s *keepsOutcomeLost) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	s.mu.Lock()
+	lose := !s.lost && stamp.State != CaptureBegun
+	s.lost = s.lost || lose
+	s.mu.Unlock()
+	if !lose {
+		return s.PendingStore.StampCapture(ctx, turnID, stamp)
 	}
-	if ends := writes.endedRecords(); len(ends) != 1 {
-		t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+	<-ctx.Done()
+	return false, fmt.Errorf("%w: change the sandbox run %s: %w", coord.ErrUnavailable, turnID, ctx.Err())
+}
+
+func (s *keepsOutcomeLost) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	run, found, err := s.PendingStore.Get(ctx, turnID)
+	if err == nil && found && len(run.OwedEnd) > 0 && run.Capture != nil && run.Capture.State == CaptureBegun {
+		s.mu.Lock()
+		s.waits++
+		s.mu.Unlock()
 	}
-	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
-		t.Fatal("the stopped run's record was left behind its end")
-	}
+	return run, found, err
+}
+
+// seen is whether the keep's outcome stamp was lost, and how many times the
+// end's wait read the run's row.
+func (s *keepsOutcomeLost) seen() (bool, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lost, s.waits
+}
+
+// AN END WAITS OUT A KEEP WHOSE OUTCOME THE STORE NEVER TOOK, and names its
+// capture begun and never finished. The keep stamps what came of the capture
+// within one record's budget, and a store that never answers it in that time
+// leaves the capture begun on the run's row with nothing to settle it: the
+// turn's end waits on it for as long as the turn's last capture could still
+// land ([endCaptureWait]), reading the row once a [captureWaitTick], and then
+// records the end naming it.
+//
+// IN THE BUBBLE, as every case of the rig runs ([inBubble]). On the machine's
+// clock a runner starved through the rig's 200 ms record budget inside that
+// stamp left an end waiting 38 minutes, past the package's timeout (#1022).
+// Here the budget is spent by the stamp's own wait alone, and the end's wait
+// runs out in virtual time, in as many reads as production's would make.
+//
+// Mutation: run the case off the bubble, and the rig refuses it; read the row
+// on any tick shorter than production's, and the wait reads it more often than
+// once a tick; hold the end's wait to a capture's own budget, and the end is
+// recorded before its wait ran out.
+func TestAnEndWaitsOutAKeepWhoseOutcomeTheStoreNeverTook(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		store := &keepsOutcomeLost{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending = store
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(Result{Text: "halfway through"})
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		began := time.Now()
+		rig.fireRetries()
+		waited := time.Since(began)
+		rig.awaitKeeps()
+
+		lost, waits := store.seen()
+		if !lost {
+			t.Fatal("the premise: the keep never stamped what came of its capture")
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 {
+			t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+		}
+		if u := ends[0].Ending.Unkept; u == nil || !strings.Contains(u.Reason, "begun and never finished") {
+			t.Fatalf("the end names %+v unkept, want the capture whose outcome the store never took, begun "+
+				"and never finished", u)
+		}
+		if waited < endCaptureWait {
+			t.Errorf("the end was recorded %s into the stop's retry, before its wait of %s for the capture "+
+				"ran out", waited, endCaptureWait)
+		}
+		if most := int(endCaptureWait / captureWaitTick); waits == 0 || waits > most {
+			t.Errorf("the end's wait read the row %d times, want it read once a %s for %s: at most %d",
+				waits, captureWaitTick, endCaptureWait, most)
+		}
+		if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+			t.Fatal("the stopped run's record was left behind its end")
+		}
+	})
 }
 
 // TWO ATTEMPTS AT ONE ENDING ON A NODE FINISH IT ONCE. A stop decided on the
@@ -202,21 +315,23 @@ func TestAnEndANewerBuildOwedIsLeftForANodeThatReadsIt(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, writes, _ := keepingRig(t)
-			rig.launchKept(t, "t1")
-			if _, wrote, err := rig.pending.OweEnd(t.Context(), "t1", []byte(owed)); err != nil || !wrote {
-				t.Fatalf("OweEnd = %v, %v", wrote, err)
-			}
-			if _, err := rig.coordinator.publishEnd(t.Context(), rig.get("t1")); err == nil {
-				t.Fatal("published an end this build cannot read")
-			}
-			if ends := writes.endedRecords(); len(ends) != 0 {
-				t.Fatalf("recorded %+v, want nothing until a node that reads the end", ends)
-			}
-			if run := rig.get("t1"); string(run.OwedEnd) != owed || run.EndRecorded {
-				t.Fatalf("the record owes %s (recorded %v), want the newer build's end still owed",
-					run.OwedEnd, run.EndRecorded)
-			}
+			inBubble(t, func(t *testing.T) {
+				rig, writes, _ := keepingRig(t)
+				rig.launchKept(t, "t1")
+				if _, wrote, err := rig.pending.OweEnd(t.Context(), "t1", []byte(owed)); err != nil || !wrote {
+					t.Fatalf("OweEnd = %v, %v", wrote, err)
+				}
+				if _, err := rig.coordinator.publishEnd(t.Context(), rig.get("t1")); err == nil {
+					t.Fatal("published an end this build cannot read")
+				}
+				if ends := writes.endedRecords(); len(ends) != 0 {
+					t.Fatalf("recorded %+v, want nothing until a node that reads the end", ends)
+				}
+				if run := rig.get("t1"); string(run.OwedEnd) != owed || run.EndRecorded {
+					t.Fatalf("the record owes %s (recorded %v), want the newer build's end still owed",
+						run.OwedEnd, run.EndRecorded)
+				}
+			})
 		})
 	}
 }
@@ -225,13 +340,19 @@ func TestAnEndANewerBuildOwedIsLeftForANodeThatReadsIt(t *testing.T) {
 // log, as every engine's coordinator does, and keeps no session (the company's
 // switch off): an ending whose record owes its turn's end is finished by this
 // node's retry, off the frame that decided it ([errAskAway]).
+//
+// ONLY IN A BUBBLE ([inBubble]), which it checks ([mustBeBubbled]), for the
+// budgets it cuts as [keepingRig] does.
+//
+//fixedwait:bubble
 func loggingRig(t *testing.T) (*coordRig, *sessionWrites) {
 	t.Helper()
+	mustBeBubbled(t)
 	rig := newCoordRig(t)
 	writes := &sessionWrites{}
 	rig.coordinator.sessions, rig.coordinator.keep = writes, &sessionKeep{now: func() time.Time { return rig.now }}
 	rig.coordinator.sessionRetry, rig.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
-	rig.coordinator.captureTick = time.Millisecond
+	rig.coordinator.captureTick = captureWaitTick
 	rig.coordinator.spoolDir = t.TempDir()
 	// THE ENGINE'S ACCOUNT OF A LOSS, as production wires TurnLost.
 	rig.coordinator.turnLost = func(context.Context, PendingRun, RunCalls) executorkeep.Ending {
@@ -308,30 +429,32 @@ func (h *holdSpy) detach(handle string) {
 // seat counted held and its inbox held for a run that is gone.
 func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
 	t.Parallel()
-	rig, writes := loggingRig(t)
-	holds := rig.withHold()
-	stale := &listsThen{PendingStore: rig.coordinator.pending}
-	rig.coordinator.pending = stale
-	launchWithNoConversation(t, rig, "t1")
-	if !holds.holding("swe") {
-		t.Fatal("the premise: the running job holds the seat's inbox")
-	}
-	// THE FRAME'S RECOUNT IS THE SEAT'S NEXT LISTING, and its goroutine is not
-	// scheduled again until the ending's retry has run to its settle.
-	owesItsEnd(t, rig, func() { stale.arm(func() { rig.fireRetries() }) })
-	rig.runner.Finish(Result{Success: true})
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	rig.finished("t1")
-	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Decision != "done" {
-		t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
-	}
-	if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
-		t.Fatalf("the seat is counted held (%v) and its inbox held (%v) for a run whose record is gone",
-			held, holds.holding("swe"))
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, writes := loggingRig(t)
+		holds := rig.withHold()
+		stale := &listsThen{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending = stale
+		launchWithNoConversation(t, rig, "t1")
+		if !holds.holding("swe") {
+			t.Fatal("the premise: the running job holds the seat's inbox")
+		}
+		// THE FRAME'S RECOUNT IS THE SEAT'S NEXT LISTING, and its goroutine is not
+		// scheduled again until the ending's retry has run to its settle.
+		owesItsEnd(t, rig, func() { stale.arm(func() { rig.fireRetries() }) })
+		rig.runner.Finish(Result{Success: true})
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		rig.finished("t1")
+		if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Decision != "done" {
+			t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
+		}
+		if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
+			t.Fatalf("the seat is counted held (%v) and its inbox held (%v) for a run whose record is gone",
+				held, holds.holding("swe"))
+		}
+	})
 }
 
 // A RECOUNT READ BEFORE A DELETE OF THIS NODE'S READS AGAIN, though nothing
@@ -431,67 +554,69 @@ func TestARecountOlderThanOneWrittenBeforeItReadsAgain(t *testing.T) {
 // record is gone.
 func TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	holds := rig.withHold()
-	keep.gate = make(chan struct{})
-	rig.launchKept(t, "t1")
-	owesItsEnd(t, rig, nil)
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	// THE ENDING'S RETRY, in its slot and waiting for the capture to land.
-	busy := make(chan struct{})
-	go func() {
-		defer close(busy)
-		rig.fireRetries()
-	}()
-	// THE KEEP LANDS ONCE THE CASE HAS LOOKED, on every way out of it, so the
-	// retry waiting behind it is never left waiting.
-	landed := sync.OnceFunc(func() {
-		close(keep.gate)
-		<-busy
-		rig.awaitKeeps()
-	})
-	defer landed()
-	eventually(t, func() bool {
-		rig.coordinator.mu.Lock()
-		defer rig.coordinator.mu.Unlock()
-		return rig.coordinator.finishing["t1"]
-	}, "the ending's retry never began finishing it")
-	// THE SEAT IS LOST AND TAKEN AGAIN BY THIS NODE: the release detaches the
-	// inbox, which drops every hold it carried.
-	rig.coordinator.ReleaseSeat("swe")
-	holds.detach("swe")
-	if err := rig.recoverSeat(t.Context(), "node-a:2", 2); err != nil {
-		t.Fatalf("recoverSeat: %v", err)
-	}
-	if run := rig.get("t1"); run.Ending == nil || len(run.OwedEnd) == 0 {
-		t.Fatalf("the premise: the record holds its ending (%v) and owes its turn's end (%s)",
-			run.Ending != nil, run.OwedEnd)
-	}
-	if !holds.holding("swe") {
-		t.Fatal("the seat taken back takes its mail while its run's record still owes the turn's end")
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		holds := rig.withHold()
+		keep.gate = make(chan struct{})
+		rig.launchKept(t, "t1")
+		owesItsEnd(t, rig, nil)
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		// THE ENDING'S RETRY, in its slot and waiting for the capture to land.
+		busy := make(chan struct{})
+		go func() {
+			defer close(busy)
+			rig.fireRetries()
+		}()
+		// THE KEEP LANDS ONCE THE CASE HAS LOOKED, on every way out of it, so the
+		// retry waiting behind it is never left waiting.
+		landed := sync.OnceFunc(func() {
+			close(keep.gate)
+			<-busy
+			rig.awaitKeeps()
+		})
+		defer landed()
+		eventually(t, func() bool {
+			rig.coordinator.mu.Lock()
+			defer rig.coordinator.mu.Unlock()
+			return rig.coordinator.finishing["t1"]
+		}, "the ending's retry never began finishing it")
+		// THE SEAT IS LOST AND TAKEN AGAIN BY THIS NODE: the release detaches the
+		// inbox, which drops every hold it carried.
+		rig.coordinator.ReleaseSeat("swe")
+		holds.detach("swe")
+		if err := rig.recoverSeat(t.Context(), "node-a:2", 2); err != nil {
+			t.Fatalf("recoverSeat: %v", err)
+		}
+		if run := rig.get("t1"); run.Ending == nil || len(run.OwedEnd) == 0 {
+			t.Fatalf("the premise: the record holds its ending (%v) and owes its turn's end (%s)",
+				run.Ending != nil, run.OwedEnd)
+		}
+		if !holds.holding("swe") {
+			t.Fatal("the seat taken back takes its mail while its run's record still owes the turn's end")
+		}
 
-	landed()
-	// ASKED AGAIN THE MOMENT THE ATTEMPT IT WAITED BEHIND RETURNED, which
-	// finished it: the hold behind a record that is gone lifts then, not a
-	// hand-back's spacing later.
-	if due := rig.retries.delays(); !slices.Equal(due, []time.Duration{0}) {
-		t.Fatalf("the ending kept behind the attempt is asked again in %v, want at once", due)
-	}
-	for range 3 {
-		rig.fireRetries()
-	}
-	rig.finished("t1")
-	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Decision != "done" {
-		t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
-	}
-	if holds.holding("swe") || rig.coordinator.owes("t1") {
-		t.Fatalf("the seat's inbox is held (%v), or the ending still owed (%v), once its record is gone",
-			holds.holding("swe"), rig.coordinator.owes("t1"))
-	}
+		landed()
+		// ASKED AGAIN THE MOMENT THE ATTEMPT IT WAITED BEHIND RETURNED, which
+		// finished it: the hold behind a record that is gone lifts then, not a
+		// hand-back's spacing later.
+		if due := rig.retries.delays(); !slices.Equal(due, []time.Duration{0}) {
+			t.Fatalf("the ending kept behind the attempt is asked again in %v, want at once", due)
+		}
+		for range 3 {
+			rig.fireRetries()
+		}
+		rig.finished("t1")
+		if ends := writes.endedRecords(); len(ends) != 1 || ends[0].Ending.Decision != "done" {
+			t.Fatalf("recorded %+v, want the resumed turn's one end", ends)
+		}
+		if holds.holding("swe") || rig.coordinator.owes("t1") {
+			t.Fatalf("the seat's inbox is held (%v), or the ending still owed (%v), once its record is gone",
+				holds.holding("swe"), rig.coordinator.owes("t1"))
+		}
+	})
 }

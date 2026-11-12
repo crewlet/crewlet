@@ -1,6 +1,7 @@
 package coordtest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -61,7 +62,68 @@ func appendMark(mark int) func(coord.Record, bool) ([]byte, error) {
 	}
 }
 
+// watchRunPart opens a watch of one part beside a run, ended with the case.
+func (h *fleetHarness) watchRunPart(ctx context.Context, turnID string,
+	part coord.RunPart) <-chan coord.SandboxRunUpdate {
+
+	h.t.Helper()
+	updates, err := h.f.WatchSandboxRunPart(ctx, turnID, part)
+	if err != nil {
+		h.t.Fatalf("WatchSandboxRunPart(%s, %s): %v", turnID, part, err)
+	}
+	return updates
+}
+
 var runPartCases = []fleetCase{{
+	// WHAT A NODE WAITING ON A RUN'S CALLS IN FLIGHT FOLLOWS. A part's watch
+	// says where the part stands when it begins — none, for a run nobody
+	// logged a call of yet — then delivers each state it reaches, and its
+	// removal with the run's record: a watch that missed the removal would
+	// wait on calls of a run that is gone. A write of the record, or of the
+	// other part, is none of its: a node waiting on a log must not be woken by
+	// every lease stamped on the run.
+	name: "a part's watch hears its state, each change and its removal, and no other key",
+	fn: func(h *fleetHarness) {
+		ctx, cancel := context.WithCancel(h.ctx)
+		defer cancel()
+		h.createRun("turn-1", `{"status":"running"}`)
+		updates := h.watchRunPart(ctx, "turn-1", coord.RunLog)
+		if u := h.nextRunUpdate(updates); u.Found {
+			h.t.Fatalf("the first update of a log nobody wrote = %+v, want none", u)
+		}
+		written, _ := h.putRunLog("turn-1", `{"calls":["first"]}`)
+		if u := h.nextRunUpdate(updates); !u.Found || string(u.Record.Value) != `{"calls":["first"]}` ||
+			u.Record.Version != written.Version || u.Record.Key != "turn-1" {
+			h.t.Fatalf("the update after the log's first write = %+v, want the log as written (%+v)", u, written)
+		}
+		h.putRunPart("turn-1", coord.RunHanded, `{"sealed":"x"}`)
+		h.putRun("turn-1", `{"status":"resumed"}`)
+		next, _ := h.putRunLog("turn-1", `{"calls":["first","second"]}`)
+		if u := h.nextRunUpdate(updates); !u.Found || u.Record.Version != next.Version {
+			h.t.Fatalf("the next update = %+v, want the log's own next write (%+v) and nothing of the "+
+				"record's or the other part's", u, next)
+		}
+		// A part watched while it exists starts from it.
+		second := h.watchRunPart(ctx, "turn-1", coord.RunLog)
+		if u := h.nextRunUpdate(second); !u.Found || u.Record.Version != next.Version {
+			h.t.Fatalf("the first update of a watch of a written log = %+v, want it (%+v)", u, next)
+		}
+		if !h.removeRun("turn-1") {
+			h.t.Fatal("the run could not be removed")
+		}
+		for _, w := range []<-chan coord.SandboxRunUpdate{updates, second} {
+			if u := h.nextRunUpdate(w); u.Found {
+				h.t.Fatalf("the update after the run's removal = %+v, want its log gone with it", u)
+			}
+		}
+		if _, err := h.f.WatchSandboxRunPart(h.ctx, "turn-1", "notes"); err == nil {
+			h.t.Error("WatchSandboxRunPart watched a part no run has")
+		}
+		cancel()
+		h.awaitClosed(updates)
+		h.awaitClosed(second)
+	},
+}, {
 	// What the log is kept apart FOR. A box's git request reads its run's
 	// record and a floor raise writes it, and every listing reads every
 	// record: a log that rode any of them — or moved the record's version,

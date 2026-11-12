@@ -12,9 +12,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // The engine's own code read is a Gitlet source as it stands.
@@ -26,52 +26,52 @@ var now = time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
 // and its checks, and records every query it was asked.
 type fakeGitlet struct {
 	mu      sync.Mutex
-	asked   []code.ReadQuery
-	repos   []code.RepoSummary
+	asked   []gitlet.ReadQuery
+	repos   []gitlet.RepoSummary
 	page    int
-	fail    map[code.ReadKind]error
-	remotes map[string]code.RemoteState
+	fail    map[gitlet.ReadKind]error
+	remotes map[string]gitlet.RemoteState
 	// checksPerRepo is how many checks each default branch runs; 0 is one.
 	checksPerRepo int
 }
 
-func (f *fakeGitlet) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (f *fakeGitlet) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, q)
 	if err := f.fail[q.Kind]; err != nil {
-		return code.ReadAnswer{}, err
+		return gitlet.ReadAnswer{}, err
 	}
 	switch q.Kind {
-	case code.ReadRepos:
+	case gitlet.ReadRepos:
 		start := 0
 		if q.Cursor != "" {
-			start = slices.IndexFunc(f.repos, func(r code.RepoSummary) bool { return r.Name == q.Cursor })
+			start = slices.IndexFunc(f.repos, func(r gitlet.RepoSummary) bool { return r.Name == q.Cursor })
 		}
 		end := min(len(f.repos), start+f.page)
-		a := code.ReadAnswer{Repos: f.repos[start:end]}
+		a := gitlet.ReadAnswer{Repos: f.repos[start:end]}
 		if end < len(f.repos) {
 			a.Next = f.repos[end].Name
 		}
 		return a, nil
-	case code.ReadRepo:
-		return code.ReadAnswer{Repo: &code.RepoDetail{Remotes: f.remotes[q.Repo]}}, nil
-	case code.ReadChecks:
-		a := code.ReadAnswer{Checks: []code.CheckRow{
-			{CheckKey: code.CheckKey{Name: "test"}, Repo: q.Repo, State: code.CheckStatePassed, Required: true},
+	case gitlet.ReadRepo:
+		return gitlet.ReadAnswer{Repo: &gitlet.RepoDetail{Remotes: f.remotes[q.Repo]}}, nil
+	case gitlet.ReadChecks:
+		a := gitlet.ReadAnswer{Checks: []gitlet.CheckRow{
+			{CheckKey: gitlet.CheckKey{Name: "test"}, Repo: q.Repo, State: gitlet.CheckStatePassed, Required: true},
 		}}
 		for i := 1; i < f.checksPerRepo; i++ {
-			a.Checks = append(a.Checks, code.CheckRow{CheckKey: code.CheckKey{Name: fmt.Sprintf("check-%d", i)},
-				Repo: q.Repo, State: code.CheckStateFailed})
+			a.Checks = append(a.Checks, gitlet.CheckRow{CheckKey: gitlet.CheckKey{Name: fmt.Sprintf("check-%d", i)},
+				Repo: q.Repo, State: gitlet.CheckStateFailed})
 		}
 		return a, nil
 	}
-	return code.ReadAnswer{}, errors.New("not asked of the atlas")
+	return gitlet.ReadAnswer{}, errors.New("not asked of the atlas")
 }
 
-func repo(name string) code.RepoSummary {
-	return code.RepoSummary{RepoRef: code.RepoRef{Name: name, Status: code.RepoStatusActive, DefaultBranch: "main",
-		Visibility: code.VisibilityCompany, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "platform"}},
+func repo(name string) gitlet.RepoSummary {
+	return gitlet.RepoSummary{RepoRef: gitlet.RepoRef{Name: name, Status: gitlet.RepoStatusActive, DefaultBranch: "main",
+		Visibility: gitlet.VisibilityCompany, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "platform"}},
 		Head: strings.Repeat("a", 40)}
 }
 
@@ -82,7 +82,7 @@ func acme() *config.Company {
 	return c
 }
 
-var asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1"}
+var asker = gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1"}
 
 // THE ATLAS READS GITLET AS THE READER: every question carries who reads, so
 // Gitlet lists only what they may read; every page of the listing is read; and
@@ -90,9 +90,9 @@ var asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1"}
 // other hosts.
 func TestTheAtlasReadsGitletAsTheReader(t *testing.T) {
 	t.Parallel()
-	f := &fakeGitlet{repos: []code.RepoSummary{repo("api"), repo("tools"), repo("web")}, page: 2,
-		remotes: map[string]code.RemoteState{
-			"tools": {Import: &code.ImportState{Source: code.ImportSource{URL: "https://gitlab.acme.example/p/tools.git",
+	f := &fakeGitlet{repos: []gitlet.RepoSummary{repo("api"), repo("tools"), repo("web")}, page: 2,
+		remotes: map[string]gitlet.RemoteState{
+			"tools": {Import: &gitlet.ImportState{Source: gitlet.ImportSource{URL: "https://gitlab.acme.example/p/tools.git",
 				Credential: "${TOOLS_TOKEN}"}}},
 		}}
 	a := gather.Read(context.Background(), gather.Sources{Gitlet: f}, gather.Request{Company: acme(), Revision: "r1",
@@ -104,7 +104,7 @@ func TestTheAtlasReadsGitletAsTheReader(t *testing.T) {
 	}
 	var details []string
 	for _, q := range f.asked {
-		if q.Kind == code.ReadRepo {
+		if q.Kind == gitlet.ReadRepo {
 			details = append(details, q.Repo)
 		}
 	}
@@ -130,8 +130,8 @@ func TestTheAtlasReadsGitletAsTheReader(t *testing.T) {
 // repository and says the read is partial.
 func TestASourceThatFailsIsReportedNotHidden(t *testing.T) {
 	t.Parallel()
-	f := &fakeGitlet{repos: []code.RepoSummary{repo("api")}, page: 10,
-		fail: map[code.ReadKind]error{code.ReadRepos: errors.New("estate unavailable")}}
+	f := &fakeGitlet{repos: []gitlet.RepoSummary{repo("api")}, page: 10,
+		fail: map[gitlet.ReadKind]error{gitlet.ReadRepos: errors.New("estate unavailable")}}
 	a := gather.Read(context.Background(), gather.Sources{Gitlet: f}, gather.Request{Company: acme(), Revision: "r1",
 		Asker: asker, Now: now})
 	if _, ok := a.View.Find(atlas.MustRef(atlas.KindAccount, "gitlet").ID()); !ok {
@@ -142,8 +142,8 @@ func TestASourceThatFailsIsReportedNotHidden(t *testing.T) {
 		t.Errorf("a failed Gitlet read: %+v", got)
 	}
 
-	f = &fakeGitlet{repos: []code.RepoSummary{repo("tools")}, page: 10,
-		fail: map[code.ReadKind]error{code.ReadRepo: errors.New("node draining")}}
+	f = &fakeGitlet{repos: []gitlet.RepoSummary{repo("tools")}, page: 10,
+		fail: map[gitlet.ReadKind]error{gitlet.ReadRepo: errors.New("node draining")}}
 	a = gather.Read(context.Background(), gather.Sources{Gitlet: f}, gather.Request{Company: acme(), Revision: "r1",
 		Asker: asker, Now: now})
 	if _, ok := a.View.Find(atlas.MustRef(atlas.KindRepository, "gitlet/tools").ID()); !ok {
@@ -165,8 +165,8 @@ func TestASourceThatFailsIsReportedNotHidden(t *testing.T) {
 // a reference there, and the atlas takes the address alone.
 func TestACredentialBesideAnotherHostIsNeverRead(t *testing.T) {
 	t.Parallel()
-	f := &fakeGitlet{repos: []code.RepoSummary{repo("tools")}, page: 10, remotes: map[string]code.RemoteState{
-		"tools": {MirrorFrom: &code.MirrorSource{URL: "https://github.com/acme/tools", Credential: "${MIRROR_TOKEN}"}},
+	f := &fakeGitlet{repos: []gitlet.RepoSummary{repo("tools")}, page: 10, remotes: map[string]gitlet.RemoteState{
+		"tools": {MirrorFrom: &gitlet.MirrorSource{URL: "https://github.com/acme/tools", Credential: "${MIRROR_TOKEN}"}},
 	}}
 	a := gather.Read(context.Background(), gather.Sources{Gitlet: f}, gather.Request{Company: acme(), Revision: "r1",
 		Asker: asker, Now: now})

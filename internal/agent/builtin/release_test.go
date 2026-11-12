@@ -12,9 +12,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -502,12 +502,12 @@ func TestAGitletMergeIsHeldToItsTargetsGate(t *testing.T) {
 	}
 
 	ready := siteChange()
-	ready.detail.Readiness = &code.Readiness{Met: 2, Total: 2, Preconditions: []code.Precondition{
-		{Kind: code.PreconditionCheck, State: code.PreconditionMet, Detail: "unit passed"},
-		{Kind: code.PreconditionMergeable, State: code.PreconditionMet, Detail: "merges cleanly"}}}
-	ready.reviews = []code.ReviewRow{
-		{ID: "r-own", Revision: 3, Reviewer: "agent-ceo", ReviewerKind: code.PartyAgent, Verdict: code.VerdictApprove},
-		{ID: "r-qa", Revision: 3, Reviewer: "agent-qa", ReviewerKind: code.PartyAgent, Verdict: code.VerdictApprove}}
+	ready.detail.Readiness = &gitlet.Readiness{Met: 2, Total: 2, Preconditions: []gitlet.Precondition{
+		{Kind: gitlet.PreconditionCheck, State: gitlet.PreconditionMet, Detail: "unit passed"},
+		{Kind: gitlet.PreconditionMergeable, State: gitlet.PreconditionMet, Detail: "merges cleanly"}}}
+	ready.reviews = []gitlet.ReviewRow{
+		{ID: "r-own", Revision: 3, Reviewer: "agent-ceo", ReviewerKind: gitlet.PartyAgent, Verdict: gitlet.VerdictApprove},
+		{ID: "r-qa", Revision: 3, Reviewer: "agent-qa", ReviewerKind: gitlet.PartyAgent, Verdict: gitlet.VerdictApprove}}
 	host = newChangeHost(ready)
 	host.git = diffOf(siteChangeFiles()...)
 	desk = releaseDesk(t, builtin.AskToMergeTool, delegated.KindPRMerge, args, turn.Handle())

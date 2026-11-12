@@ -14,8 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -56,9 +56,9 @@ type AtlasDeps struct {
 }
 
 // AtlasRead is one read of the atlas for one caller: Gitlet read as asker
-// where gitlet is set, every record this node reaches, and the settings it
+// where reads is set, every record this node reaches, and the settings it
 // runs. False where it runs no company yet.
-func (d AtlasDeps) AtlasRead(ctx context.Context, gitlet gather.GitletReads, asker code.Principal,
+func (d AtlasDeps) AtlasRead(ctx context.Context, reads gather.GitletReads, asker gitlet.Principal,
 	fresh statelog.Freshness, now time.Time) (gather.Answer, bool) {
 	if d.Settings == nil {
 		return gather.Answer{}, false
@@ -71,7 +71,7 @@ func (d AtlasDeps) AtlasRead(ctx context.Context, gitlet gather.GitletReads, ask
 	if d.Records != nil {
 		sources = d.Records(ctx)
 	}
-	sources.Gitlet = gitlet
+	sources.Gitlet = reads
 	return gather.Read(ctx, sources, gather.Request{
 		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
 		Asker: asker, Fresh: fresh, Now: now,
@@ -188,21 +188,21 @@ func (t *atlasSearch) atlas(ctx context.Context, turn *turnctx.Turn, fresh state
 // this surface serves no code or the caller (or whoever a seat's turn works
 // for) may not read it, and then why says which, for the answer's coverage.
 func (t *atlasSearch) gitlet(ctx context.Context, turn *turnctx.Turn) (
-	src gather.Sources, asker code.Principal, why string) {
+	src gather.Sources, asker gitlet.Principal, why string) {
 
 	if !t.code.serves() || t.authorize == nil {
-		return gather.Sources{}, code.Principal{}, ""
+		return gather.Sources{}, gitlet.Principal{}, ""
 	}
 	switch err := t.authorize(ctx, authz.ActionCodeRead, authz.Object{}); {
 	case errors.Is(err, ErrUndecidable):
-		return gather.Sources{}, code.Principal{}, "whether you may read the company's code could not be " +
+		return gather.Sources{}, gitlet.Principal{}, "whether you may read the company's code could not be " +
 			"decided right now, so no repository was read; ask again shortly"
 	case err != nil:
-		return gather.Sources{}, code.Principal{}, "you do not use Gitlet, so no repository was read"
+		return gather.Sources{}, gitlet.Principal{}, "you do not use Gitlet, so no repository was read"
 	}
 	caller, refusal := t.code.callerOn(ctx, turn, t.Name(), authz.ActionCodeRead)
 	if refusal != nil {
-		return gather.Sources{}, code.Principal{}, "whoever this turn works for may not read the company's " +
+		return gather.Sources{}, gitlet.Principal{}, "whoever this turn works for may not read the company's " +
 			"code now, so no repository was read"
 	}
 	return gather.Sources{Gitlet: atlasGitlet{code: t.code, caller: caller}}, caller.asker, ""
@@ -230,7 +230,7 @@ type atlasGitlet struct {
 	caller codeCaller
 }
 
-func (g atlasGitlet) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (g atlasGitlet) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	return g.code.read(ctx, g.caller, q)
 }
 

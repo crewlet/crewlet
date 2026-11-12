@@ -1,7 +1,7 @@
 -- A revision's facts name the human paths holding it.
 --
 -- Which of a merge gate's human paths hold a change's head revision to a
--- person is a GLOB MATCH: up to code.MaxTargetHumanPaths globs — every rule
+-- person is a GLOB MATCH: up to gitlet.MaxTargetHumanPaths globs — every rule
 -- matching the target, 32 each, and the checks' own directory — against the
 -- up to 1 000 paths a revision's facts list. The gate matched them on every
 -- judgment: every read of a change, every row of a listing and every round of
@@ -10,10 +10,10 @@
 -- each. It is the cost the path owners' match is kept off every decide for,
 -- and it is now kept off the same way: the repository's HOME matches them
 -- once a revision, beside the owners, and the `revise` record carries the
--- answer (code.Revise.HumanPaths, code/humanpaths.go).
+-- answer (gitlet.Revise.HumanPaths, gitlet/humanpaths.go).
 --
 -- code_repos gains human_paths_digest: the digest of the repository's rules'
--- human paths (code.HumanPathsDigest — every gated rule's pattern and the
+-- human paths (gitlet.HumanPathsDigest — every gated rule's pattern and the
 -- human paths it holds a target to, the checks' directory among them where it
 -- requires checks and does not set agents_edit_checks), written by the
 -- applier beside the code_protections rows by every record that writes them,
@@ -26,7 +26,7 @@
 --     repository's — COMPUTING otherwise — and the home's due listing names a
 --     change whose head revision's match is of another digest due its facts
 --     again, as it names one whose owners' match is: the rules changed since.
---   - human_paths is the match, as JSON (code.HumanPathMatch): each human path
+--   - human_paths is the match, as JSON (gitlet.HumanPathMatch): each human path
 --     holding the revision and each its unless waived, by its PLACE in the
 --     target's human paths in their one order, which the digest pins. '' is
 --     no entry matched.
@@ -40,7 +40,7 @@
 -- revision on every home pass, which past `touched` would read each row's
 -- overflow chain, so it sits among the narrow columns, and human_paths — a
 -- few bytes a place — among the wide ones, before `touched`. No release
--- carries the code domain (its stated condition, code.RecordVersion), so no
+-- carries the code domain (its stated condition, gitlet.RecordVersion), so no
 -- store outside a development branch holds a row of it, and a live change
 -- whose facts are gone is due them again at its home's next pass. 0108 IS
 -- NOT EDITED: `schema_migrations` keys on the filename.

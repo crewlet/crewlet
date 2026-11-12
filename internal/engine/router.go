@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -673,12 +673,12 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	// THE CODE HALF, where the runtime was built for it: the reader always,
 	// the committer, the change writer, the checks writer, the marks writer
 	// and the lifecycle store only where this node publishes — each nil in a
-	// maintenance mode, and code.Served then refuses a proposal, a
+	// maintenance mode, and gitlet.Served then refuses a proposal, a
 	// conversation's or a check's write and a lifecycle request as a node that
 	// ran nothing, so the router asks the next data node with the same push id
 	// or operation rather than this node appending it.
 	if n.built.runsCode() {
-		b.Code = code.Served{Committer: w.committer, ChangeWriter: w.changes, ChecksWriter: w.checks,
+		b.Code = gitlet.Served{Committer: w.committer, ChangeWriter: w.changes, ChecksWriter: w.checks,
 			Reader: n.codeReader, Store: w.code, Marks: w.marks}
 	}
 	return b

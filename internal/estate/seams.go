@@ -9,9 +9,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -1296,7 +1296,7 @@ func (r *Router) Code() CodeSeam { return CodeSeam{r: r} }
 // Propose asks the repository's committer to decide a push, and raises this
 // node's floors past the record it landed in — this node's own write, which
 // its next read of the repository must see on whichever node answers.
-func (c CodeSeam) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+func (c CodeSeam) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error) {
 	out, err := call(ctx, c.r, opCodePropose, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.RepoID, out.Position)
@@ -1308,7 +1308,7 @@ func (c CodeSeam) Propose(ctx context.Context, p code.Proposal) (code.ProposeRes
 // this node's floors past the record it landed in — this node's own write,
 // which the compactor's next listing and the cache's sync after it must see on
 // whichever data node answers them.
-func (c CodeSeam) Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+func (c CodeSeam) Compact(ctx context.Context, p gitlet.CompactionProposal) (gitlet.CompactResult, error) {
 	out, err := call(ctx, c.r, opCodeCompact, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.Compaction.RepoID, out.Position)
@@ -1320,7 +1320,7 @@ func (c CodeSeam) Compact(ctx context.Context, p code.CompactionProposal) (code.
 // person's purge request, or a maintainer's begin or commit — and raises this
 // node's floors past the record it landed in — this node's own write, which
 // its next read of the repository must see on whichever node answers it.
-func (c CodeSeam) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+func (c CodeSeam) Expunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 	out, err := call(ctx, c.r, opCodeExpunge, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.RepoID(), out.Position)
@@ -1332,7 +1332,7 @@ func (c CodeSeam) Expunge(ctx context.Context, p code.ExpungeProposal) (code.Exp
 // chunk or the import's end — and raises this node's floors past the record it
 // landed in: this node's own write, which its home's next read of the
 // repository must see on whichever node answers it.
-func (c CodeSeam) Import(ctx context.Context, p code.ImportProposal) (code.SyncResult, error) {
+func (c CodeSeam) Import(ctx context.Context, p gitlet.ImportProposal) (gitlet.SyncResult, error) {
 	out, err := call(ctx, c.r, opCodeImport, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.RepoID(), out.Position)
@@ -1342,7 +1342,7 @@ func (c CodeSeam) Import(ctx context.Context, p code.ImportProposal) (code.SyncR
 
 // MirrorSync asks the repository's committer to decide one sync of a pull
 // mirror, and raises this node's floors past the record it landed in.
-func (c CodeSeam) MirrorSync(ctx context.Context, p code.MirrorSyncProposal) (code.SyncResult, error) {
+func (c CodeSeam) MirrorSync(ctx context.Context, p gitlet.MirrorSyncProposal) (gitlet.SyncResult, error) {
 	out, err := call(ctx, c.r, opCodeMirrorSync, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.RepoID(), out.Position)
@@ -1356,7 +1356,7 @@ func (c CodeSeam) MirrorSync(ctx context.Context, p code.MirrorSyncProposal) (co
 // node answers it. A write answered UNCHANGED landed no record, and raises
 // nothing: the position it names is the change's last record, somebody else's
 // write.
-func (c CodeSeam) Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+func (c CodeSeam) Change(ctx context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
 	out, err := call(ctx, c.r, opCodeChange, nil, p)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
 		c.wrote(p.RepoID(), out.Position)
@@ -1368,7 +1368,7 @@ func (c CodeSeam) Change(ctx context.Context, p code.ChangeProposal) (code.Chang
 // queue, and raises this node's floors past the record it landed in — this
 // node's own write, which its next read of the change and the queue must see
 // on whichever node answers it.
-func (c CodeSeam) Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error) {
+func (c CodeSeam) Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error) {
 	out, err := call(ctx, c.r, opCodeQueue, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.RepoID(), out.Position)
@@ -1380,7 +1380,7 @@ func (c CodeSeam) Queue(ctx context.Context, p code.QueueProposal) (code.QueueRe
 // this node's floors past the record it landed in — this node's own write,
 // which its next read of the change, its branches and its history must see on
 // whichever node answers it.
-func (c CodeSeam) Merge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error) {
+func (c CodeSeam) Merge(ctx context.Context, p gitlet.MergeProposal) (gitlet.MergeResult, error) {
 	out, err := call(ctx, c.r, opCodeMerge, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.RepoID(), out.Position)
@@ -1396,7 +1396,7 @@ func (c CodeSeam) Merge(ctx context.Context, p code.MergeProposal) (code.MergeRe
 // level: a conversation moves no ref and no pack, and raising it would make
 // that node sync for nothing on the repository's next read. A write answered
 // UNCHANGED landed no record, and raises nothing.
-func (c CodeSeam) Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+func (c CodeSeam) Converse(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
 	out, err := call(ctx, c.r, opCodeConversation, nil, w)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
 		c.r.Observe(out.Position)
@@ -1409,7 +1409,7 @@ func (c CodeSeam) Converse(ctx context.Context, w code.ConversationWrite) (code.
 // the person's own write, which their next read of their inbox must see on
 // whichever node answers it. A mark answered UNCHANGED landed no record, and
 // raises nothing.
-func (c CodeSeam) Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error) {
+func (c CodeSeam) Mark(ctx context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 	out, err := call(ctx, c.r, opCodeMark, nil, w)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
 		c.r.Observe(out.Position)
@@ -1423,7 +1423,7 @@ func (c CodeSeam) Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, 
 // see on whichever node answers it. NEVER THE REPOSITORY'S OWN FLOOR, for a
 // conversation's reason: a check moves no ref and no pack. A write answered
 // UNCHANGED landed no record, and raises nothing.
-func (c CodeSeam) Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+func (c CodeSeam) Checks(ctx context.Context, r gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
 	out, err := call(ctx, c.r, opCodeChecks, nil, r)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
 		c.r.Observe(out.Position)
@@ -1439,18 +1439,18 @@ func (c CodeSeam) wrote(repoID string, at statelog.Position) {
 }
 
 // Resolve answers a repository by its name.
-func (c CodeSeam) Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error) {
+func (c CodeSeam) Resolve(ctx context.Context, q gitlet.ResolveQuery) (gitlet.RepoRef, error) {
 	return call(ctx, c.r, opCodeResolve, nil, q)
 }
 
 // RepoState answers one page of a repository's snapshot.
-func (c CodeSeam) RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+func (c CodeSeam) RepoState(ctx context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error) {
 	return call(ctx, c.r, opCodeRepoState, nil, q)
 }
 
 // PushOutcome answers whether a push this node proposed landed — and, where it
 // did, raises this node's floors past it, for [CodeSeam.Propose]'s reason.
-func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
+func (c CodeSeam) PushOutcome(ctx context.Context, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error) {
 	out, err := call(ctx, c.r, opCodePushOutcome, nil, q)
 	if out.Found {
 		c.wrote(q.RepoID, out.Push.Position)
@@ -1461,13 +1461,13 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 // Read answers a read of Gitlet: a person's or a surface's, and the
 // engine's own that no principal makes — a cache's `introduced` backfill, a
 // compactor's `compaction_due` listing, a collected executor run's `run_pushes`.
-func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (c CodeSeam) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
 }
 
 // TurnsMovedCode answers which of a set of turns pushed, opened a change or
 // gave a review.
-func (c CodeSeam) TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error) {
+func (c CodeSeam) TurnsMovedCode(ctx context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error) {
 	return call(ctx, c.r, opCodeTurnsMoved, nil, q)
 }
 
@@ -1478,7 +1478,7 @@ func (c CodeSeam) TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (m
 // which its next read of the repository must see on whichever node answers.
 // Never for a refusal, nor for an answer that needed no record, whose
 // position is the rows somebody else wrote.
-func (c CodeSeam) Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+func (c CodeSeam) Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	out, err := call(ctx, c.r, opCodeLifecycle, nil, r)
 	wrote := out.Refusal == "" && !out.Position.IsZero() && out.Repo.ID != "" &&
 		(out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending)
@@ -1491,15 +1491,15 @@ func (c CodeSeam) Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.
 // ResolveRef answers one ref of one repository at the level the query names.
 // It never raises this node's floor: a read's position is somebody else's
 // writes.
-func (c CodeSeam) ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (c CodeSeam) ResolveRef(ctx context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	return call(ctx, c.r, opCodeResolveRef, nil, q)
 }
 
 // GitRead asks the repository's home Gitlet node for one read of its content by
 // object id, and its runner-up when the home cannot answer (ADR-0089). Its
-// floor is the query's own (code.GitQuery.Fresh), which [CodeSeam.FloorOf]
+// floor is the query's own (gitlet.GitQuery.Fresh), which [CodeSeam.FloorOf]
 // supplies where the reader's own writes must be in the copy it reads.
-func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (c CodeSeam) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	return call(ctx, c.r, opCodeGitRead, nil, q)
 }
 
@@ -1507,20 +1507,20 @@ func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer,
 // q.Base would do — by the merge the home records a change's mergeability by
 // — and its runner-up when the home cannot answer (ADR-0089), as a read by
 // object id is asked. Its floor is the query's own
-// (code.MergePreviewQuery.Fresh), which [CodeSeam.FloorOf] supplies where the
+// (gitlet.MergePreviewQuery.Fresh), which [CodeSeam.FloorOf] supplies where the
 // asker's own pushes must be in the copy it merges. It never raises this
 // node's floor: a preview writes nothing.
-func (c CodeSeam) MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+func (c CodeSeam) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
 	return call(ctx, c.r, opCodeMergePreview, nil, q)
 }
 
 // GitWrite asks the repository's home Gitlet node to build one engine write and
 // land it as a push (ADR-0092), and its runner-up with the same write — the
 // same push — where the home ran nothing or went silent (ADR-0089). Its floor
-// is the write's own (code.EngineWrite.Fresh), as a read's is.
+// is the write's own (gitlet.EngineWrite.Fresh), as a read's is.
 //
 // THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it
-// does (code.EngineWrite.Validate): one it refuses is code.ErrInvalid, naming
+// does (gitlet.EngineWrite.Validate): one it refuses is gitlet.ErrInvalid, naming
 // the field, before any Gitlet node is asked — never a round trip, a sync and a
 // slot of a Gitlet node's lane for an answer every node would give alike.
 //
@@ -1531,9 +1531,9 @@ func (c CodeSeam) MergePreview(ctx context.Context, q code.MergePreviewQuery) (c
 // that push is this one. Never for a refusal, of the change or of the push,
 // which landed nothing, nor for an outcome UNKNOWN, whose record may not
 // exist.
-func (c CodeSeam) GitWrite(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+func (c CodeSeam) GitWrite(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	if err := w.Validate(); err != nil {
-		return code.EngineWriteResult{}, err
+		return gitlet.EngineWriteResult{}, err
 	}
 	out, err := call(ctx, c.r, opCodeGitWrite, nil, w)
 	if out.Refusal == "" && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {

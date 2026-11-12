@@ -16,7 +16,7 @@ import (
 // listing included, and maintains, the repositories it maintains. It is what
 // each repository this node does NOT maintain costs a pass, since only a
 // repository's maintainer ever remembers a plan of it found not due
-// (internal/code/compact's poll arms price the rest of the pass).
+// (internal/gitlet/compact's poll arms price the rest of the pass).
 func BenchmarkMaintainerOf(b *testing.B) {
 	const charge = int64(1) << 30
 	for _, n := range []int{8, 16} {

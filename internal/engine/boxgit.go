@@ -3,8 +3,8 @@ package engine
 import (
 	"fmt"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -54,7 +54,7 @@ func (e *Engine) launchBoxGit(seat *org.Role, turnID string,
 func (e *Engine) boxGitEnv(seat *org.Role, base string, ref host.BoxRunRef,
 	run map[string]string) (map[string]string, error) {
 
-	sig, err := codeSigner{e: e}.Sign(code.Principal{Kind: code.PrincipalAgent, Seat: seat.Handle()})
+	sig, err := codeSigner{e: e}.Sign(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: seat.Handle()})
 	if err != nil {
 		return nil, fmt.Errorf("engine: the commit identity of seat %s's executor: %w", seat.Handle(), err)
 	}

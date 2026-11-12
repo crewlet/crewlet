@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -68,7 +68,7 @@ func (m movesPages) TurnsMovedPages(_ context.Context, q doclet.TurnsMovedQuery)
 
 func (h codeHost) CodeReads() (CodeReads, error) { return h.reads, nil }
 
-func (m movesCode) TurnsMovedCode(_ context.Context, q code.TurnsMovedQuery) (map[string]bool, error) {
+func (m movesCode) TurnsMovedCode(_ context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error) {
 	*m.asked = q.Turns
 	return m.moved, nil
 }

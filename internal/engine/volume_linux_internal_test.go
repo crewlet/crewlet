@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
 // ANOTHER FILESYSTEM IS ANOTHER VOLUME, read off the machine rather than off a

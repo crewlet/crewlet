@@ -100,7 +100,7 @@ const (
 
 	// RoleGitlet serves Gitlet: the company's git repositories, over smart
 	// HTTP at /git/ on the API listener, with a disposable cache of them on
-	// this node's disk (internal/code/cache). It needs RoleIngress, whose
+	// this node's disk (internal/gitlet/cache). It needs RoleIngress, whose
 	// listener it is served on (and so RoleData, which ingress needs). It does
 	// nothing for a company that does not set code.backend: gitlet, which is
 	// why the fleet's unmanned-role check asks whether it is NEEDED before it

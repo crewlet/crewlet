@@ -16,7 +16,7 @@
 --
 -- code_tips_due is one row a protected branch holding a landing above its
 -- green row that no bisect found broken: the tip work its repository's home
--- owes it (internal/code's tipwork.go). A landing no record proved inserts
+-- owes it (internal/gitlet's tipwork.go). A landing no record proved inserts
 -- it; a green row moved, or a broken landing named, removes it once nothing
 -- unbroken lies above the green. The home's listings walk it — the
 -- repositories owing tip work and one repository's targets — a row a target,

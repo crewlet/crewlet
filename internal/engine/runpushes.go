@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -23,7 +23,7 @@ import (
 // of its own, nor does the read of the changes the run's branches head
 // ([runPushes.Changes]). The barrier is the seats' to pay for — the code log census's
 // seats' term counts it beside their other reads of the log, while
-// code.GitReadsPerDay, the term for persons and their CI, does not (its doc
+// gitlet.GitReadsPerDay, the term for persons and their CI, does not (its doc
 // says so) — and the read is only asked for a run given a repository to push
 // to.
 //
@@ -52,9 +52,9 @@ var _ sandbox.RunPushes = runPushes{}
 // change a run asked for; and a read by object id, which titles one its ask
 // named no title for.
 type pushReader interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
-	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
-	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	Change(ctx context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error)
+	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 }
 
 // codeRunPushes is the engine's reader of what its executors pushed: over the
@@ -98,8 +98,8 @@ func (p runPushes) Pushed(ctx context.Context, run sandbox.PendingRun) (sandbox.
 	for i, r := range repos {
 		ids[i], names[r.RepoID] = r.RepoID, r.Repo
 	}
-	q := code.ReadQuery{Kind: code.ReadRunPushes,
-		RunPushes: &code.RunPushesQuery{Run: run.LaunchID, Repos: ids, After: launch},
+	q := gitlet.ReadQuery{Kind: gitlet.ReadRunPushes,
+		RunPushes: &gitlet.RunPushesQuery{Run: run.LaunchID, Repos: ids, After: launch},
 		Fresh:     statelog.Freshness{Level: statelog.ReadLinearizable}}
 	var pushed pushCollapse
 	var at statelog.Position
@@ -153,7 +153,7 @@ type pushKey struct{ repo, ref string }
 // repositories by id. A row of a repository the run was not given to push to
 // is refused: the read names only those, so such a row is Gitlet
 // answering another read.
-func (c *pushCollapse) add(rows []code.PushRow, names map[string]string) error {
+func (c *pushCollapse) add(rows []gitlet.PushRow, names map[string]string) error {
 	for _, row := range rows {
 		name, given := names[row.RepoID]
 		if !given {
@@ -161,7 +161,7 @@ func (c *pushCollapse) add(rows []code.PushRow, names map[string]string) error {
 				"not given that repository to push to", row.PushID, row.RepoID)
 		}
 		for _, cmd := range row.Commands {
-			if cmd.Result != code.ResultOK {
+			if cmd.Result != gitlet.ResultOK {
 				continue
 			}
 			key := pushKey{repo: row.RepoID, ref: cmd.Ref}

@@ -104,7 +104,7 @@ func TestNoGuardCountsALoadTheLogTookLate(t *testing.T) {
 		}, []runner.BridgedCall{
 			{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
 				Result: "Always thread your reply."}, Seq: 1, Appended: 1, Late: true},
-		}, nil, nil, runner.Bridged{}, false)
+		}, nil, nil, nil, runner.Bridged{}, false)
 		if err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
 		}

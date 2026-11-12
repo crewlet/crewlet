@@ -27,7 +27,7 @@
  *
  * # A push is drawn in brief, and read whole on demand
  *
- * A push carries up to a thousand ref updates (`code.MaxCommandsPerPush`, what
+ * A push carries up to a thousand ref updates (`gitlet.MaxCommandsPerPush`, what
  * `crewlet gitlet import` sends at a time), each a line, and the commits it
  * introduced, which this screen never draws. So the history is asked IN BRIEF
  * (`brief`): five updates of a push at most — its refused ones first, each
@@ -105,7 +105,7 @@ const pushesOf = (a: CodePushesAnswer) => a.pushes ?? [];
 const pushIdOf = (p: CodePushRow) => p.push_id;
 const pushesAfter = (a: CodePushesAnswer) => a.next ?? "";
 
-/** Every way a push's commit and pack came to be, in words (`code.PushVias`). */
+/** Every way a push's commit and pack came to be, in words (`gitlet.PushVias`). */
 const VIA_WORDS: Readonly<Record<string, string>> = {
   git: "git push",
   engine: "built by the engine",

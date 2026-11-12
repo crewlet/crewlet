@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
 // codeSigner names an engine-built commit (host.Signer, ADR-0092) from the
@@ -16,7 +16,7 @@ import (
 //
 //   - the AUTHOR is the acting principal's seat — an agent's, or the human
 //     seat a person's credential is bound to, since a person writes only
-//     through a credential bound to one (code.EngineWrite.Validate) and one
+//     through a credential bound to one (gitlet.EngineWrite.Validate) and one
 //     person holds many credentials (iam.ActorFor) — named by its role's name
 //     and its role's email address AS WRITTEN in the company document. A
 //     name or an address git would not write as given (gitproc's
@@ -37,7 +37,7 @@ import (
 //     spelled once: engineCommitter).
 //
 // A node with no epoch, or whose chart holds no such seat, signs nothing:
-// code.ErrNotServing, about this node, so the write runs nothing here and the
+// gitlet.ErrNotServing, about this node, so the write runs nothing here and the
 // walk asks a Gitlet node serving a chart that holds it.
 type codeSigner struct{ e *Engine }
 
@@ -56,17 +56,17 @@ const maxIdentityEmailBytes = 254
 // every box push Committer holds carry alike.
 func engineCommitter(domain string) string { return codeCommitterLocal + "@" + domain }
 
-func (s codeSigner) Sign(p code.Principal) (host.Signature, error) {
+func (s codeSigner) Sign(p gitlet.Principal) (host.Signature, error) {
 	c := s.e.Company()
 	if c == nil || c.Org == nil || c.Config == nil {
 		return host.Signature{}, fmt.Errorf("%w: this node holds no configuration to sign a commit with",
-			code.ErrNotServing)
+			gitlet.ErrNotServing)
 	}
 	domain := codeInForceAt(c).IdentityDomainResolved()
 	role := c.Org.SeatByHandle(p.Seat)
 	if p.Seat == "" || role == nil {
 		return host.Signature{}, fmt.Errorf("%w: the chart this node serves holds no seat %q to sign the "+
-			"commit as", code.ErrNotServing, p.Seat)
+			"commit as", gitlet.ErrNotServing, p.Seat)
 	}
 	name, email := authorOf(p.Seat, role.Name, role.Email, domain)
 	return host.Signature{AuthorName: name, AuthorEmail: email, CommitterName: codeCommitterName,
@@ -79,12 +79,12 @@ func (s codeSigner) Sign(p code.Principal) (host.Signature, error) {
 // that chart no longer holds, by its handle at the identity domain — a seat
 // that left still wrote what it wrote, and refusing its name would leave a
 // change it opened unmergeable by squash. A node with no epoch names nobody:
-// code.ErrNotServing.
+// gitlet.ErrNotServing.
 func (s codeSigner) Author(handle string) (string, string, error) {
 	c := s.e.Company()
 	if c == nil || c.Org == nil || c.Config == nil {
 		return "", "", fmt.Errorf("%w: this node holds no configuration to name a commit's author by",
-			code.ErrNotServing)
+			gitlet.ErrNotServing)
 	}
 	domain := codeInForceAt(c).IdentityDomainResolved()
 	if role := c.Org.SeatByHandle(handle); role != nil {
@@ -115,12 +115,12 @@ func authorOf(handle, roleName, roleEmail, domain string) (string, string) {
 // domain holds a box's push to the new address from its activation on, and a
 // commit the engine built under the old one, which a box brings back, is no
 // longer matched (the repository holds it in any case). A node with no epoch
-// names none: code.ErrNotServing.
+// names none: gitlet.ErrNotServing.
 func (s codeSigner) Committer() (string, error) {
 	c := s.e.Company()
 	if c == nil || c.Config == nil {
 		return "", fmt.Errorf("%w: this node holds no configuration to name the engine's committer by",
-			code.ErrNotServing)
+			gitlet.ErrNotServing)
 	}
 	return engineCommitter(codeInForceAt(c).IdentityDomainResolved()), nil
 }

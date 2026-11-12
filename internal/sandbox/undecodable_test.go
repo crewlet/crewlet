@@ -107,7 +107,7 @@ func TestARetirementLeavesARecordItCannotDecode(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	writeGarbled(t, rig.pending)
-	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
+	if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("RetireSeat beside an unreadable record: %v", err)
 	}
 	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {

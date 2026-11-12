@@ -17,13 +17,13 @@ import (
 // Go string ending in U+FFFE goes into history ending in the six bytes of
 // "ï¿¾", while git prints a warning and exits 0. The rule is the WHOLE
 // commit's, since ensure_utf8 reads every byte commit-tree writes: what a
-// commit's identity holds (internal/code/gitproc's Identity) and the message
+// commit's identity holds (internal/gitlet/gitproc's Identity) and the message
 // it reads from its standard input alike.
 //
 // One rule here, below both of its readers: the pool that runs commit-tree
-// (internal/code/gitproc) holds an identity to it before any process starts,
+// (internal/gitlet/gitproc) holds an identity to it before any process starts,
 // and the code domain holds an engine write's message to it as it validates
-// the write (internal/code's EngineWrite) — the tool that asks a write, the
+// the write (internal/gitlet's EngineWrite) — the tool that asks a write, the
 // wire it crosses and the Gitlet node that builds it, by one reading. Two copies
 // of it would refuse one text in one place and rewrite it in the other.
 //

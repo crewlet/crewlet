@@ -54,9 +54,27 @@ func (b *syncBuffer) since(mark int) (string, int) {
 	return all[mark:], len(all)
 }
 
+// suiteLevel and suiteFormat are how loud, and in what shape, the suite's log
+// sink is: warnings, which most cases that read a line read.
+const (
+	suiteLevel  = slog.LevelWarn
+	suiteFormat = logging.FormatText
+)
+
 func TestMain(m *testing.M) {
-	logging.Configure(slog.LevelWarn, logging.FormatText, logs)
+	logging.Configure(suiteLevel, suiteFormat, logs)
 	os.Exit(m.Run())
+}
+
+// atInfo has the sink take info lines too for the rest of t, and puts it back
+// at [suiteLevel] after: for a case whose behaviour IS a line said at info,
+// where what matters is that it is not a warning. Only the level moves, never
+// the sink, which stays the TestMain's. NOT FOR A PARALLEL CASE: every case
+// running beside it would log at info too.
+func atInfo(t *testing.T) {
+	t.Helper()
+	logging.SetVerbosity(slog.LevelInfo, suiteFormat)
+	t.Cleanup(func() { logging.SetVerbosity(suiteLevel, suiteFormat) })
 }
 
 // recorder is a job that remembers the cutoff it was handed.

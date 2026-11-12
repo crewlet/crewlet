@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -47,12 +47,12 @@ func TestTheRefsAlarmIsMeasuredOnTheTrimTick(t *testing.T) {
 	)
 	r := &retention{
 		logger: slog.New(slog.NewJSONHandler(&logs, nil)),
-		refs: func(context.Context, time.Time) (code.RefsNear, bool, error) {
+		refs: func(context.Context, time.Time) (gitlet.RefsNear, bool, error) {
 			reads++
 			if fail != nil {
-				return code.RefsNear{}, false, fail
+				return gitlet.RefsNear{}, false, fail
 			}
-			return code.RefsNear{Repos: 1, Worst: "web", Live: 60_000, Recent: 45_000}, true, nil
+			return gitlet.RefsNear{Repos: 1, Worst: "web", Live: 60_000, Recent: 45_000}, true, nil
 		},
 	}
 	now := time.Now().UTC()
@@ -75,7 +75,7 @@ func TestTheRefsAlarmIsMeasuredOnTheTrimTick(t *testing.T) {
 	}
 	want := fmt.Sprintf("1 repository(ies) set refs so fast that they reach the %d-ref bound within 14 days "+
 		"unless refs are deleted (the most: web, 60000 live and 45000 set in the last 14 days)",
-		code.MaxRefsPerRepo)
+		gitlet.MaxRefsPerRepo)
 	if !strings.HasPrefix(alarm.Detail, want) {
 		t.Errorf("the alarm says %q, want it to begin %q: the bound and the window it was judged at", alarm.Detail,
 			want)
@@ -114,7 +114,7 @@ func TestTheRefsNearLimitAlarmFiresOnARunningNode(t *testing.T) {
 	web := mustRepo(t, e, "web").ID
 	r := quietRetention(t, e)
 
-	past := code.MaxRefsPerRepo/2 + 1
+	past := gitlet.MaxRefsPerRepo/2 + 1
 	if err := e.backends.Store.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k
 			WHERE i + 1 < ?) INSERT INTO code_refs (repo_id, ref, target, position, at)
@@ -135,7 +135,7 @@ func TestTheRefsNearLimitAlarmFiresOnARunningNode(t *testing.T) {
 	alarm, firing := refsAlarm(r.Report(ctx).Alarms)
 	if !firing {
 		t.Fatalf("after the trim's tick the node's report carries no %s for web, %d live refs every one "+
-			"set within %s", statelog.KindCodeRefsNearLimit, past, code.RefExpiry)
+			"set within %s", statelog.KindCodeRefsNearLimit, past, gitlet.RefExpiry)
 	}
 	if want := fmt.Sprintf("(the most: web, %d live and %d set", past, past); !strings.Contains(alarm.Detail,
 		want) {

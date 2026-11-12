@@ -9,8 +9,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -18,7 +18,7 @@ import (
 )
 
 // THE REVERT: code_revert_change undoes a MERGED change by a change of its own
-// (M5-D25) — ONE ENGINE WRITE (code.WriteRevertChange) the repository's Gitlet
+// (M5-D25) — ONE ENGINE WRITE (gitlet.WriteRevertChange) the repository's Gitlet
 // node builds: what the change's merge brought into its target undone onto
 // the target's tip, as one commit on a new branch — the seat's own
 // (refs/heads/seats/<handle>/revert-<n>) or, for a person, revert-<n> —
@@ -88,7 +88,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	repo := cv.g.repo
 	op := opIDFor(cv.g.c.actor, tool, revertVerb, repo.ID, args)
-	w := code.EngineWrite{Kind: code.WriteRevertChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := gitlet.EngineWrite{Kind: gitlet.WriteRevertChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
 		OpID: op, Fresh: revertFresh(t.deps.writeFresh(turn, cv.g.c, repo), cv.at),
 		Ref: revertBranch(cv.g.c.asker, cv.change.Number), Change: cv.change.Number, Ceiling: cv.g.c.write}
 	if err := w.Validate(); err != nil {
@@ -108,10 +108,10 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	out := codeRevertAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Reverts: cv.g.ref(), Branch: branch, OpID: cv.g.c.actor.Operation}
 	switch {
-	case res.Refusal == code.WriteConflict:
+	case res.Refusal == gitlet.WriteConflict:
 		return conflictedWrite(ctx, turn, cv.g.c, tool, codeBranchAnswer{Repo: repo.Name, RenamedTo: repo.Redirect,
 			RedirectUntil: repo.RedirectUntil, Branch: branch, OpID: out.OpID}, res)
-	case res.Refusal == code.WriteNotMerged:
+	case res.Refusal == gitlet.WriteNotMerged:
 		return refusedBy(tools.RefusalConflict, writeRefusalError(string(res.Refusal), res.Detail),
 			fmt.Sprintf("%s reverted nothing: %s (%s).", tool, res.Detail, res.Refusal)), nil
 	case res.Refusal != "":
@@ -124,13 +124,13 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return unknownWrite(cv.g.c.actor, tool, fmt.Sprintf("the revert of %s landed", cv.g.ref()), op, false,
 			unknownNext(false, sameCall(cv.g.c.actor, tool), fmt.Sprintf("List %s's changes with %s",
 				repo.Name, CodeListChangesTool), "the same revert would be pushed twice")), nil
-	case res.Command.Result == code.ResultNG && res.Command.Reason == code.RefusalStale:
+	case res.Command.Result == gitlet.ResultNG && res.Command.Reason == gitlet.RefusalStale:
 		// A NEW BRANCH THAT IS THERE: this change's revert, begun already.
 		return refusedBy(tools.RefusalExists, writeRefusalError(string(res.Command.Reason), res.Command.Detail),
 			fmt.Sprintf("%s: branch %s exists already, so a revert of %s is under way; find its change with "+
 				"%s, or delete the branch with %s to revert again.", tool, branch, cv.g.ref(), CodeListChangesTool,
 				CodeDeleteBranchTool)), nil
-	case res.Command.Result == code.ResultNG:
+	case res.Command.Result == gitlet.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, branch, res.Command, cv.g.c.actor), nil
 	default:
 		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered a revert with no outcome and no "+
@@ -152,7 +152,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // refusal's class rides beside it as a value (ChangeRefusal), and the
 // repository's changes, which list the change once its record says it, are
 // named as a person finds them.
-func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *code.ChangeAnswer) int64 {
+func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *gitlet.ChangeAnswer) int64 {
 	switch {
 	case ch == nil:
 		out.ChangeNotOpened = "The push's record has not named its change yet, and the repository's changes " +
@@ -168,7 +168,7 @@ func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *code.C
 			"repository's changes list it then."
 		return 0
 	}
-	out.Opened = code.ChangeRef(repo, ch.Number)
+	out.Opened = gitlet.ChangeRef(repo, ch.Number)
 	return ch.Number
 }
 
@@ -179,7 +179,7 @@ func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *code.C
 // ([deleteSource]); what became of it said on out, a merge that did not
 // happen as a residue beside the opened change, never as a refusal.
 func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv conversing, op string,
-	res code.EngineWriteResult, number int64, out *codeRevertAnswer) {
+	res gitlet.EngineWriteResult, number int64, out *codeRevertAnswer) {
 
 	notMerged := func(why string) {
 		label := out.Opened
@@ -198,14 +198,14 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 		return
 	}
 	// ITS BRANCH'S DELETION IS THE DEFAULT, the Gitlet node's to decide as it
-	// judges the merge (code.EngineWrite.DeleteSource): a seat's revert
+	// judges the merge (gitlet.EngineWrite.DeleteSource): a seat's revert
 	// branch is deleted unless a gate over the target keeps it, a person's
 	// kept.
 	g := cv.g
-	w := code.EngineWrite{Kind: code.WriteMergeChange, RepoID: g.repo.ID, Principal: writer(ctx, turn, g.c),
+	w := gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: g.repo.ID, Principal: writer(ctx, turn, g.c),
 		OpID: statelog.StepOpID(op, stepTwo), Fresh: revertFresh(t.deps.writeFresh(turn, g.c, g.repo),
 			res.Position), Ref: cv.change.TargetRef, ExpectedHead: res.Commit, Change: number,
-		Method: code.MergeMethodMerge, Ceiling: g.c.write}
+		Method: gitlet.MergeMethodMerge, Ceiling: g.c.write}
 	if err := w.Validate(); err != nil {
 		notMerged(err.Error())
 		return
@@ -218,7 +218,7 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 	switch {
 	case err != nil:
 		notMerged(fmt.Sprintf("its merge failed (%v)", err))
-	case m != nil && m.Refusal == code.MergeRefusalGateUnmet:
+	case m != nil && m.Refusal == gitlet.MergeRefusalGateUnmet:
 		notMerged(fmt.Sprintf("it does not yet meet %s's merge gate, %d precondition(s) unmet; a "+
 			"ready_to_merge wake follows", strings.TrimPrefix(cv.change.TargetRef, branchRoot), len(m.Unmet)))
 	case m != nil && m.Refusal != "":
@@ -238,9 +238,9 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 
 // revertBranch is the branch a principal's revert of change number is made
 // on: a seat's own namespace's, or revert-<n> for a person.
-func revertBranch(asker code.Principal, number int64) string {
+func revertBranch(asker gitlet.Principal, number int64) string {
 	leaf := "revert-" + strconv.FormatInt(number, 10)
-	if asker.Kind == code.PrincipalAgent {
+	if asker.Kind == gitlet.PrincipalAgent {
 		return gitref.SeatsRoot + asker.Seat + "/" + leaf
 	}
 	return branchRoot + leaf

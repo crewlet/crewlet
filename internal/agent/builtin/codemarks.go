@@ -8,8 +8,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -29,14 +29,14 @@ import (
 //
 // ONE GESTURE, NEVER THE LISTS — the arguments mark_inbox takes, read by the
 // one parser ([gestureOf]) over Gitlet's reasons — decided by Gitlet
-// on the person's own record (code.Marks).
+// on the person's own record (gitlet.Marks).
 //
 // THE CALLER'S FLOOR TRAVELS WITH THE GESTURE (`seen`): a mark is decided by
 // whichever data node the router reaches, which may be behind the one the
 // inbox page was read from, and a decide below a notice's record finds no row
 // for it — a refusal of a notice the person was just shown. So the caller says
 // how far it has read the code log, the decide waits for that position, and a
-// node that cannot reach it hands the mark to the next one (code.MarkWrite's
+// node that cannot reach it hands the mark to the next one (gitlet.MarkWrite's
 // Seen) rather than refusing what is merely late.
 //
 // THE OPERATOR CATALOGUE'S ALONE, and a PERSON'S: a seat has no inbox to mark
@@ -114,8 +114,8 @@ func (t *codeMarkInbox) Parameters() map[string]any {
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 				"description": "Which code reasons land in the PRIMARY half of your code notices, the rest " +
-					"being context. One of: " + words.Or(code.Reasons()) + ". An empty list takes the " +
-					"shipped default (" + words.And(code.DefaultPrimaryReasons) + ") rather than making " +
+					"being context. One of: " + words.Or(gitlet.Reasons()) + ". An empty list takes the " +
+					"shipped default (" + words.And(gitlet.DefaultPrimaryReasons) + ") rather than making " +
 					"nothing primary; omit it to leave your choice as it is.",
 			},
 		},
@@ -135,15 +135,15 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// A PERSON'S OWN, by the human seat they hold — the table admits nobody
 	// else, and a seat that reached this call anyway marks nothing.
-	if c.asker.Kind != code.PrincipalOperator || c.asker.Seat == "" {
-		return refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, fmt.Sprintf("%s marked nothing: a code "+
+	if c.asker.Kind != gitlet.PrincipalOperator || c.asker.Seat == "" {
+		return refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, fmt.Sprintf("%s marked nothing: a code "+
 			"inbox is a person's, marked by the person who holds it.", t.Name())), nil
 	}
 	actor, bad := t.deps.bindOperation(c.actor, t.Name(), args)
 	if bad != "" {
 		return failed(bad), nil
 	}
-	gesture, bad := gestureOf(args, code.Reasons(), words.And(code.Reasons()))
+	gesture, bad := gestureOf(args, gitlet.Reasons(), words.And(gitlet.Reasons()))
 	if bad != "" {
 		return failed(bad), nil
 	}
@@ -153,8 +153,8 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	handle := c.asker.Seat
 	opID := opIDFor(actor, t.Name(), codeMarkVerb, handle, args)
-	res, err := t.deps.Writer.Mark(ctx, code.MarkWrite{OpID: opID, Asker: c.asker, Handle: handle,
-		Gesture: code.MarkGestureOf(gesture), Seen: seen})
+	res, err := t.deps.Writer.Mark(ctx, gitlet.MarkWrite{OpID: opID, Asker: c.asker, Handle: handle,
+		Gesture: gitlet.MarkGestureOf(gesture), Seen: seen})
 	if err != nil {
 		var unserved *estate.ErrUnserved
 		if errors.Is(err, estate.ErrOutcomeUnknown) || errors.As(err, &unserved) && unserved.Silent() {
@@ -186,7 +186,7 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // since the floor is the same claim over either log. A position on another
 // log is refused here rather than waited for: a coordinate on one domain's log
 // says nothing of how far another's was read, and each writer would refuse it
-// anyway (code.MarkWrite.Validate, worklet.Writer.MarkInbox).
+// anyway (gitlet.MarkWrite.Validate, worklet.Writer.MarkInbox).
 func markFloor(args map[string]any, stream, logName, kind string) (statelog.Position, string) {
 	raw := strings.TrimSpace(argString(args, "seen"))
 	if raw == "" {
@@ -208,19 +208,19 @@ func markFloor(args map[string]any, stream, logName, kind string) (statelog.Posi
 // gesture the rules refuse INVALID, and a record that kept moving or a log
 // that refused it UNAVAILABLE — nothing was written, and the same call is the
 // same write.
-func markRefused(tool string, res code.MarkResult) tools.Result {
+func markRefused(tool string, res gitlet.MarkResult) tools.Result {
 	cause := writeRefusalError(string(res.Refusal), res.Detail)
 	said := fmt.Sprintf("%s marked nothing: %s (%s).", tool, res.Detail, res.Refusal)
 	switch res.Refusal {
-	case code.MarkNotPermitted:
+	case gitlet.MarkNotPermitted:
 		return refusedBy(tools.RefusalForbidden, cause, said+" That is a decision about who is asking, so the "+
 			"same call is refused again.")
-	case code.MarkFull:
+	case gitlet.MarkFull:
 		return refusedBy(tools.RefusalInboxFull, cause, said)
-	case code.MarkInvalid:
+	case gitlet.MarkInvalid:
 		return refusedBy(tools.RefusalInvalid, cause, said+" Change the arguments — the same ones are refused "+
 			"again.")
-	case code.MarkBusy, code.MarkUnavailable:
+	case gitlet.MarkBusy, gitlet.MarkUnavailable:
 		return refusedBy(tools.RefusalUnavailable, cause, said+" Nothing was written; make the same call again "+
 			"— it is the same write.")
 	}

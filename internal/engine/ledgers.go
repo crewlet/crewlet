@@ -20,7 +20,7 @@ const ledgerStopBudget = 5 * time.Second
 
 // stopLedgers flushes the node's two coalescing ledgers one last time, at once,
 // under one budget: the auxiliary spend (internal/auxspend) and the reads of
-// `visibility: unit` repositories (internal/code/readaudit). ORDERED BY THE
+// `visibility: unit` repositories (internal/gitlet/readaudit). ORDERED BY THE
 // TEARDOWN after every producer of their records has stopped — the turns and
 // reflections with the seats, the sandbox's condensations, the learning
 // passes, a person's question with the HTTP surface, and Gitlet, whose

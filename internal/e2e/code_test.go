@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -23,7 +23,7 @@ import (
 // real engines, each serving git on its API as `crewlet run` serves it.
 //
 // Gitlet's own suites certify it against one data node and three
-// (internal/code/codetest, internal/code/codecluster), with the production
+// (internal/gitlet/gitlettest, internal/gitlet/gitletcluster), with the production
 // router between members built in the suite. What only an ENGINE can show is
 // the composition `crewlet run` produces: the router, the committer, the
 // cache, the host and the guard built by the engine from a company's
@@ -135,13 +135,13 @@ func gitURL(n *node, repo string) string {
 // peer where n's lags or is out of service — and nothing here needs it to:
 // every read that judges a push against the status is one of its own at that
 // level (see the archived loop in [claimPersonsPushAndFetchAcrossTheFleet]).
-func resolveRepo(t *testing.T, n *node, repo string) (code.RepoRef, error) {
+func resolveRepo(t *testing.T, n *node, repo string) (gitlet.RepoRef, error) {
 	t.Helper()
 	seam, ok := engine.OperatorCode(n.engine)
 	if !ok {
-		return code.RepoRef{}, errors.New("the node serves no code operations")
+		return gitlet.RepoRef{}, errors.New("the node serves no code operations")
 	}
-	return seam.Resolve(t.Context(), code.ResolveQuery{Name: repo,
+	return seam.Resolve(t.Context(), gitlet.ResolveQuery{Name: repo,
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
 }
 
@@ -153,9 +153,9 @@ func resolveRepo(t *testing.T, n *node, repo string) (code.RepoRef, error) {
 // it (internal/engine's codeReconciler), so a node reporting an epoch applied
 // may not have published its records yet — and a push judged before the
 // archive's record is on the log is judged against the repository it was.
-func awaitRepo(t *testing.T, repo string, want code.RepoStatus, nodes ...*node) code.RepoRef {
+func awaitRepo(t *testing.T, repo string, want gitlet.RepoStatus, nodes ...*node) gitlet.RepoRef {
 	t.Helper()
-	var got code.RepoRef
+	var got gitlet.RepoRef
 	for _, n := range nodes {
 		var last error
 		waitFor(t, fmt.Sprintf("%s to answer %s %s", n.id, repo, want), func() bool {
@@ -282,7 +282,7 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 	// THE BOOT DECLARED IT, beside the boot rather than inside it: the
 	// declaration is decided by each member's code reconciler, so it is
 	// waited for rather than assumed.
-	web := awaitRepo(t, fleetRepo, code.RepoStatusActive, c.nodes...)
+	web := awaitRepo(t, fleetRepo, gitlet.RepoStatusActive, c.nodes...)
 
 	// ITS COMMITTER is the first of the repository's rendezvous order over
 	// the data nodes every member's router asks — every member, once each
@@ -298,7 +298,7 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 	}
 
 	bindDev(t, c.nodes[0], c.nodes[1:]...)
-	dev := codetest.PersonWithToken(t, e2eDevToken)
+	dev := gitlettest.PersonWithToken(t, e2eDevToken)
 	work := dev.Init()
 	first := dev.Commit(work, map[string]string{"README.md": "# fleet-web\n"}, "first")
 	pushed := dev.Push(t.Context(), work, gitURL(c.nodes[1], fleetRepo), "main")
@@ -343,7 +343,7 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 	c.awaitEpoch(t, putCompany(t, member,
 		codeCompany(fleetRepo, true)(goldenCompany(member.model)),
 		"archive fleet-web"))
-	awaitRepo(t, fleetRepo, code.RepoStatusArchived, c.nodes...)
+	awaitRepo(t, fleetRepo, gitlet.RepoStatusArchived, c.nodes...)
 	third := dev.Commit(work, map[string]string{"README.md": "# fleet-web\n\nthird\n"}, "third")
 	for _, n := range c.nodes {
 		// REFUSED AT THE ADVERTISEMENT, in the domain's own sentence: the
@@ -354,9 +354,9 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 		// before git sends a byte, and git prints the refusal as the
 		// remote's error.
 		refused := dev.Push(t.Context(), work, gitURL(n, fleetRepo), "main")
-		if refused.Err == nil || !strings.Contains(refused.Stderr, code.ArchivedDetail(fleetRepo, code.ManagedConfig)) {
+		if refused.Err == nil || !strings.Contains(refused.Stderr, gitlet.ArchivedDetail(fleetRepo, gitlet.ManagedConfig)) {
 			t.Errorf("a push to the archived repository through %s was not refused in the "+
-				"domain's words (%q): %s", n.id, code.ArchivedDetail(fleetRepo, code.ManagedConfig), refused)
+				"domain's words (%q): %s", n.id, gitlet.ArchivedDetail(fleetRepo, gitlet.ManagedConfig), refused)
 		}
 		// AND A FETCH IS SERVED: archived is read-only, never unreachable.
 		dev.Git().Run(t, clone, "fetch", "--quiet", gitURL(n, fleetRepo), "main")
@@ -369,7 +369,7 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 	// UNARCHIVED THE SAME WAY, and a push lands again — through the third
 	// member, so every member has received one.
 	c.awaitEpoch(t, putCompany(t, member, fleetCompanyDoc(member.model), "unarchive fleet-web"))
-	awaitRepo(t, fleetRepo, code.RepoStatusActive, c.nodes...)
+	awaitRepo(t, fleetRepo, gitlet.RepoStatusActive, c.nodes...)
 	pushed = dev.Push(t.Context(), work, gitURL(c.nodes[2], fleetRepo), "main")
 	if pushed.Err != nil || !pushed.OK("refs/heads/main") {
 		t.Fatalf("a push through %s after the repository was unarchived: %s", c.nodes[2].id, pushed)

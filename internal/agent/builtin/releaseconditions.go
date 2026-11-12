@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -246,23 +246,23 @@ func (d ReleaseDeps) gitletMergeUnmet(ctx context.Context, turn *turnctx.Turn, r
 // checks on its head, whether it merges cleanly, and every other precondition
 // of its gate, but the merger's authority and its queue, which the merge
 // itself is judged on as the requesting seat.
-func gateUnmet(ref string, r *code.Readiness) []delegated.Unmet {
+func gateUnmet(ref string, r *gitlet.Readiness) []delegated.Unmet {
 	if r == nil {
 		return []delegated.Unmet{unread(ref + "'s readiness")}
 	}
 	var out []delegated.Unmet
 	checked := false
 	for _, p := range r.Preconditions {
-		met := p.State == code.PreconditionMet
+		met := p.State == gitlet.PreconditionMet
 		switch p.Kind {
-		case code.PreconditionMergeAuthority, code.PreconditionQueue:
-		case code.PreconditionCheck:
+		case gitlet.PreconditionMergeAuthority, gitlet.PreconditionQueue:
+		case gitlet.PreconditionCheck:
 			checked = true
 			if !met {
 				out = append(out, delegated.Unmet{Word: delegated.UnmetChecks, Says: "Not every required " +
 					"check passed on " + ref + "'s head: " + p.Detail + "."})
 			}
-		case code.PreconditionMergeable:
+		case gitlet.PreconditionMergeable:
 			if !met {
 				out = append(out, delegated.Unmet{Word: delegated.UnmetMergeable, Says: ref + " does not " +
 					"merge cleanly: " + p.Detail + "."})
@@ -283,7 +283,7 @@ func gateUnmet(ref string, r *code.Readiness) []delegated.Unmet {
 
 // headApproved reports whether somebody other than ch's authors and requester
 // approved its head revision, among its newest reviews.
-func (g *changeRead) headApproved(ctx context.Context, ch *code.ChangeDetail, at statelog.Position,
+func (g *changeRead) headApproved(ctx context.Context, ch *gitlet.ChangeDetail, at statelog.Position,
 	requester string) (bool, error) {
 
 	authors := []string{ch.Owner, requester}
@@ -292,13 +292,13 @@ func (g *changeRead) headApproved(ctx context.Context, ch *code.ChangeDetail, at
 	}
 	cursor := ""
 	for range releaseReviewPages {
-		page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartReviews, Cursor: cursor,
+		page, refusal := g.read(ctx, gitlet.ReadQuery{Part: gitlet.PartReviews, Cursor: cursor,
 			Limit: changeReviewsPage}, at)
 		if refusal != nil {
 			return false, fmt.Errorf("builtin: %s", refusal.Output)
 		}
 		for _, r := range page.Reviews {
-			if r.Revision == ch.Revision && r.Verdict == code.VerdictApprove &&
+			if r.Revision == ch.Revision && r.Verdict == gitlet.VerdictApprove &&
 				!slices.Contains(authors, r.Reviewer) {
 				return true, nil
 			}
@@ -313,13 +313,13 @@ func (g *changeRead) headApproved(ctx context.Context, ch *code.ChangeDetail, at
 // revisionPaths are the paths revision rev of ch touches, from its base, and
 // whether the list is whole: a revision whose files are not recorded, or that
 // touches more than [releaseFilePages] pages of them, is not.
-func (g *changeRead) revisionPaths(ctx context.Context, ch *code.ChangeSummary, rev code.RevisionRow) ([]string,
+func (g *changeRead) revisionPaths(ctx context.Context, ch *gitlet.ChangeSummary, rev gitlet.RevisionRow) ([]string,
 	bool, error) {
 
 	if rev.FilesGap(ch.State, true) != "" {
 		return nil, false, nil
 	}
-	q, err := code.RevisionDiff(g.repo.ID, rev, nil, "", "")
+	q, err := gitlet.RevisionDiff(g.repo.ID, rev, nil, "", "")
 	if err != nil {
 		return nil, false, err
 	}
@@ -389,7 +389,7 @@ func (d ReleaseDeps) gitletDeployUnmet(ctx context.Context, turn *turnctx.Turn, 
 	target := ""
 	var g *changeRead
 	for _, n := range a.changes {
-		ref := code.ChangeRef(a.repo, n)
+		ref := gitlet.ChangeRef(a.repo, n)
 		read, refusal := d.changeRead(ctx, turn, ReviewDelegatedTool, mergeAsk{repo: a.repo, number: n})
 		if refusal != nil {
 			return append(out, unread(ref+": "+refusal.Output))
@@ -400,7 +400,7 @@ func (d ReleaseDeps) gitletDeployUnmet(ctx context.Context, turn *turnctx.Turn, 
 			return append(out, unread(ref+": "+refusal.Output))
 		}
 		switch {
-		case ch.State != code.ChangeStateMerged || ch.MergeOID == "":
+		case ch.State != gitlet.ChangeStateMerged || ch.MergeOID == "":
 			add(delegated.UnmetNotMerged, fmt.Sprintf("%s has not merged (it is %s).", ref, ch.State))
 			continue
 		case target != "" && ch.TargetRef != target:
@@ -435,9 +435,9 @@ func (g *changeRead) holds(ctx context.Context, commit, ancestor string) (bool, 
 	if commit == ancestor {
 		return true, nil
 	}
-	page, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, code.GitQuery{Kind: code.GitCompare,
+	page, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, gitlet.GitQuery{Kind: gitlet.GitCompare,
 		RepoID: g.repo.ID, Fresh: g.deps.gitFresh(g.repo),
-		Compare: &code.CompareQuery{Base: ancestor, Head: commit}})
+		Compare: &gitlet.CompareQuery{Base: ancestor, Head: commit}})
 	if refusal != nil {
 		return false, fmt.Errorf("builtin: %s", refusal.Output)
 	}
@@ -451,13 +451,13 @@ func (g *changeRead) holds(ctx context.Context, commit, ancestor string) (bool, 
 // branch has no green commit (it requires no check), or commit is not at or
 // behind it.
 func (g *changeRead) greenUnmet(ctx context.Context, commit, target string) []delegated.Unmet {
-	answer, err := g.deps.read(ctx, g.c, code.ReadQuery{Kind: code.ReadGreen, Repo: g.repo.Name, Target: target,
+	answer, err := g.deps.read(ctx, g.c, gitlet.ReadQuery{Kind: gitlet.ReadGreen, Repo: g.repo.Name, Target: target,
 		Fresh: seatRead})
 	if err != nil {
 		return []delegated.Unmet{unread(strings.TrimPrefix(target, branchRoot) + "'s green commit")}
 	}
 	branch := strings.TrimPrefix(target, branchRoot)
-	i := slices.IndexFunc(answer.Green, func(r code.GreenRow) bool { return r.TargetRef == target })
+	i := slices.IndexFunc(answer.Green, func(r gitlet.GreenRow) bool { return r.TargetRef == target })
 	if i < 0 {
 		return []delegated.Unmet{{Word: delegated.UnmetNoChecks, Says: branch + " has no green commit: it " +
 			"requires no check, so nothing shows CI passed on " + abbrevOID(commit) + "."}}

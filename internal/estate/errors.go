@@ -18,10 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -136,35 +136,35 @@ var sentinels = []sentinel{
 	// placing another set than its anchors is refused on the node that asked
 	// for it, as that node's own fault) — for the reason the list is complete
 	// at all.
-	{"code.ErrAboveCeiling", code.ErrAboveCeiling},
-	{"code.ErrAnswerDue", code.ErrAnswerDue},
-	{"code.ErrBadBundle", code.ErrBadBundle},
-	{"code.ErrBadCursor", code.ErrBadCursor},
-	{"code.ErrBadLayer", code.ErrBadLayer},
-	{"code.ErrBadLevel", code.ErrBadLevel},
-	{"code.ErrChangeNotFound", code.ErrChangeNotFound},
-	{"code.ErrCheckNotFound", code.ErrCheckNotFound},
-	{"code.ErrConfigManaged", code.ErrConfigManaged},
-	{"code.ErrInvalid", code.ErrInvalid},
-	{"code.ErrInvalidLayer", code.ErrInvalidLayer},
-	{"code.ErrInvalidProposal", code.ErrInvalidProposal},
-	{"code.ErrMisplaced", code.ErrMisplaced},
-	{"code.ErrNoActivation", code.ErrNoActivation},
-	{"code.ErrNotABlob", code.ErrNotABlob},
-	{"code.ErrNotATree", code.ErrNotATree},
-	{"code.ErrNotConfigManaged", code.ErrNotConfigManaged},
-	{"code.ErrNotDeleted", code.ErrNotDeleted},
-	{"code.ErrNotPermitted", code.ErrNotPermitted},
-	{"code.ErrNotServing", code.ErrNotServing},
-	{"code.ErrNotYet", code.ErrNotYet},
-	{"code.ErrObjectNotFound", code.ErrObjectNotFound},
-	{"code.ErrPurging", code.ErrPurging},
-	{"code.ErrRecordCap", code.ErrRecordCap},
-	{"code.ErrRefNotFound", code.ErrRefNotFound},
-	{"code.ErrRepoNotFound", code.ErrRepoNotFound},
-	{"code.ErrSliceTooLarge", code.ErrSliceTooLarge},
-	{"code.ErrSnapshotMoved", code.ErrSnapshotMoved},
-	{"code.ErrSuperseded", code.ErrSuperseded},
+	{"gitlet.ErrAboveCeiling", gitlet.ErrAboveCeiling},
+	{"gitlet.ErrAnswerDue", gitlet.ErrAnswerDue},
+	{"gitlet.ErrBadBundle", gitlet.ErrBadBundle},
+	{"gitlet.ErrBadCursor", gitlet.ErrBadCursor},
+	{"gitlet.ErrBadLayer", gitlet.ErrBadLayer},
+	{"gitlet.ErrBadLevel", gitlet.ErrBadLevel},
+	{"gitlet.ErrChangeNotFound", gitlet.ErrChangeNotFound},
+	{"gitlet.ErrCheckNotFound", gitlet.ErrCheckNotFound},
+	{"gitlet.ErrConfigManaged", gitlet.ErrConfigManaged},
+	{"gitlet.ErrInvalid", gitlet.ErrInvalid},
+	{"gitlet.ErrInvalidLayer", gitlet.ErrInvalidLayer},
+	{"gitlet.ErrInvalidProposal", gitlet.ErrInvalidProposal},
+	{"gitlet.ErrMisplaced", gitlet.ErrMisplaced},
+	{"gitlet.ErrNoActivation", gitlet.ErrNoActivation},
+	{"gitlet.ErrNotABlob", gitlet.ErrNotABlob},
+	{"gitlet.ErrNotATree", gitlet.ErrNotATree},
+	{"gitlet.ErrNotConfigManaged", gitlet.ErrNotConfigManaged},
+	{"gitlet.ErrNotDeleted", gitlet.ErrNotDeleted},
+	{"gitlet.ErrNotPermitted", gitlet.ErrNotPermitted},
+	{"gitlet.ErrNotServing", gitlet.ErrNotServing},
+	{"gitlet.ErrNotYet", gitlet.ErrNotYet},
+	{"gitlet.ErrObjectNotFound", gitlet.ErrObjectNotFound},
+	{"gitlet.ErrPurging", gitlet.ErrPurging},
+	{"gitlet.ErrRecordCap", gitlet.ErrRecordCap},
+	{"gitlet.ErrRefNotFound", gitlet.ErrRefNotFound},
+	{"gitlet.ErrRepoNotFound", gitlet.ErrRepoNotFound},
+	{"gitlet.ErrSliceTooLarge", gitlet.ErrSliceTooLarge},
+	{"gitlet.ErrSnapshotMoved", gitlet.ErrSnapshotMoved},
+	{"gitlet.ErrSuperseded", gitlet.ErrSuperseded},
 
 	{"chatlet.ErrArchived", chatlet.ErrArchived},
 	{"chatlet.ErrConflict", chatlet.ErrConflict},
@@ -375,10 +375,10 @@ var typedKinds = []typedKind{
 	// never answered across the wire today (a bundle its seal refused is
 	// answered by the landing on the node that stored it) — for the reason
 	// the list is complete at all.
-	{"code.BadBundle", reflect.TypeFor[*code.BadBundle]()},
-	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
-	{"code.ErrGitUnready", reflect.TypeFor[*code.ErrGitUnready]()},
-	{"code.TooWideError", reflect.TypeFor[*code.TooWideError]()},
+	{"gitlet.BadBundle", reflect.TypeFor[*gitlet.BadBundle]()},
+	{"gitlet.ErrFutureVersion", reflect.TypeFor[*gitlet.ErrFutureVersion]()},
+	{"gitlet.ErrGitUnready", reflect.TypeFor[*gitlet.ErrGitUnready]()},
+	{"gitlet.TooWideError", reflect.TypeFor[*gitlet.TooWideError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},

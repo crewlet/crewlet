@@ -13,9 +13,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -30,24 +30,24 @@ import (
 // repository. Where unserved is set, the node serves none of them, and says
 // that.
 type stubCode struct {
-	answer   func(code.ReadQuery) (code.ReadAnswer, error)
-	asked    []code.ReadQuery
+	answer   func(gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	asked    []gitlet.ReadQuery
 	unserved error
 	// git answers a read by object id, each recorded in read; an empty
 	// answer of the kind asked where git is nil. floor is this node's own
 	// floor on every repository.
-	git     func(code.GitQuery) (code.GitAnswer, error)
-	read    []code.GitQuery
+	git     func(gitlet.GitQuery) (gitlet.GitAnswer, error)
+	read    []gitlet.GitQuery
 	floor   statelog.Position
 	readers stubReaders
 	// refs answers a resolve of refs by name, each recorded in resolved —
 	// every name a ref of its own at stubOID where refs is nil — and
 	// preview a merge preview, each recorded in previewed: clean where it is
 	// nil.
-	refs      func(code.RefQuery) (code.RefAnswer, error)
-	resolved  []code.RefQuery
-	preview   func(code.MergePreviewQuery) (code.MergePreviewAnswer, error)
-	previewed []code.MergePreviewQuery
+	refs      func(gitlet.RefQuery) (gitlet.RefAnswer, error)
+	resolved  []gitlet.RefQuery
+	preview   func(gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error)
+	previewed []gitlet.MergePreviewQuery
 	// logs is the object store a check's log is read from: its bytes stand
 	// for every object, each page asked recorded in paged; stubLog where it
 	// is nil.
@@ -61,7 +61,7 @@ type stubCode struct {
 	// CheckLogs and CodeSearcher.
 	sourced int
 	// mu guards asked and read, which a question's reads asked at once
-	// append to from goroutines of their own (code.AtOnce).
+	// append to from goroutines of their own (gitlet.AtOnce).
 	mu sync.Mutex
 }
 
@@ -117,11 +117,11 @@ func (s *stubCode) ReadAt(_ context.Context, o objstore.Object, off, n int64) ([
 
 // stubCheck is the attempt the stub answers a check read with: a failed run
 // of the attempt q names, keeping a log of size bytes as stubLogKey.
-func stubCheck(q code.ReadQuery, size int64) *code.CheckDetail {
+func stubCheck(q gitlet.ReadQuery, size int64) *gitlet.CheckDetail {
 	c := q.Checks
-	return &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: stubRepoID, OID: c.OID,
-		Target: c.Target, Name: c.Name, Attempt: c.Attempt}, State: code.CheckStateFailed},
-		Log: &code.CheckLog{Object: stubLogKey, Hash: objstore.Hash("sha256:stub"), Size: size}}
+	return &gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{RepoID: stubRepoID, OID: c.OID,
+		Target: c.Target, Name: c.Name, Attempt: c.Attempt}, State: gitlet.CheckStateFailed},
+		Log: &gitlet.CheckLog{Object: stubLogKey, Hash: objstore.Hash("sha256:stub"), Size: size}}
 }
 
 // stubReaders is the usage domain's readers of a repository: an empty page,
@@ -162,27 +162,27 @@ const stubOID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 // stubRepo is the repository the stub answers a read of name with: its
 // default branch main.
-func stubRepo(name string) *code.RepoDetail {
-	return &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: code.RepoRef{ID: stubRepoID, Name: name,
-		DefaultBranch: "main", Visibility: code.VisibilityCompany}}}
+func stubRepo(name string) *gitlet.RepoDetail {
+	return &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{RepoRef: gitlet.RepoRef{ID: stubRepoID, Name: name,
+		DefaultBranch: "main", Visibility: gitlet.VisibilityCompany}}}
 }
 
-func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (s *stubCode) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	s.mu.Lock()
 	s.asked = append(s.asked, q)
 	s.mu.Unlock()
 	if s.answer != nil {
 		return s.answer(q)
 	}
-	a := code.ReadAnswer{Level: q.Fresh.Level}
+	a := gitlet.ReadAnswer{Level: q.Fresh.Level}
 	switch q.Kind {
-	case code.ReadRepo, code.ReadRefs:
+	case gitlet.ReadRepo, gitlet.ReadRefs:
 		a.Repo = stubRepo(q.Repo)
-	case code.ReadCommit:
-		a.Repo, a.Commit = stubRepo(q.Repo), &code.CommitChanges{Commit: q.Commit}
-	case code.ReadInbox:
-		a.Inbox = &code.InboxPage{Handle: q.Inbox.Handle}
-	case code.ReadCheck:
+	case gitlet.ReadCommit:
+		a.Repo, a.Commit = stubRepo(q.Repo), &gitlet.CommitChanges{Commit: q.Commit}
+	case gitlet.ReadInbox:
+		a.Inbox = &gitlet.InboxPage{Handle: q.Inbox.Handle}
+	case gitlet.ReadCheck:
 		size := int64(len(stubLog))
 		if s.logs != nil {
 			size = int64(len(s.logs))
@@ -192,41 +192,41 @@ func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 	return a, nil
 }
 
-func (s *stubCode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (s *stubCode) ResolveRef(_ context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	s.resolved = append(s.resolved, q)
 	if s.refs != nil {
 		return s.refs(q)
 	}
-	a := code.RefAnswer{Repo: stubRepo(q.Repo).RepoRef}
+	a := gitlet.RefAnswer{Repo: stubRepo(q.Repo).RepoRef}
 	for _, name := range q.Refs {
-		a.Refs = append(a.Refs, code.ResolvedRef{Name: name, Ref: "refs/heads/" + name, OID: stubOID})
+		a.Refs = append(a.Refs, gitlet.ResolvedRef{Name: name, Ref: "refs/heads/" + name, OID: stubOID})
 	}
 	return a, nil
 }
 
-func (s *stubCode) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (s *stubCode) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	s.mu.Lock()
 	s.read = append(s.read, q)
 	s.mu.Unlock()
 	if s.git != nil {
 		return s.git(q)
 	}
-	a := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
+	a := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
 	switch q.Kind {
-	case code.GitCompare:
-		a.Compare = &code.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head}
-	case code.GitLog:
-		a.Log = &code.LogAnswer{Commits: []code.LogCommit{{OID: q.Log.Rev}}}
+	case gitlet.GitCompare:
+		a.Compare = &gitlet.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head}
+	case gitlet.GitLog:
+		a.Log = &gitlet.LogAnswer{Commits: []gitlet.LogCommit{{OID: q.Log.Rev}}}
 	}
 	return a, nil
 }
 
-func (s *stubCode) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+func (s *stubCode) MergePreview(_ context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
 	s.previewed = append(s.previewed, q)
 	if s.preview != nil {
 		return s.preview(q)
 	}
-	return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeClean}, nil
+	return gitlet.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: gitlet.MergeClean}, nil
 }
 
 func (s *stubCode) FloorOf(string) statelog.Position { return s.floor }
@@ -234,27 +234,27 @@ func (s *stubCode) FloorOf(string) statelog.Position { return s.floor }
 // first is the first query asked — a question's read at the caller's own
 // freshness, before any read it floors at that one's position — the zero
 // query where none was.
-func (s *stubCode) first() code.ReadQuery {
+func (s *stubCode) first() gitlet.ReadQuery {
 	if len(s.asked) == 0 {
-		return code.ReadQuery{}
+		return gitlet.ReadQuery{}
 	}
 	return s.asked[0]
 }
 
 // last is the newest query asked, the zero query where none was.
-func (s *stubCode) last() code.ReadQuery {
+func (s *stubCode) last() gitlet.ReadQuery {
 	if len(s.asked) == 0 {
-		return code.ReadQuery{}
+		return gitlet.ReadQuery{}
 	}
 	return s.asked[len(s.asked)-1]
 }
 
 // firstResolve is the first resolve of refs asked — a content question's one
 // read of the rows where a revision names a ref, `HEAD` among them
-// (code.HeadRef) — the zero query where none was.
-func (s *stubCode) firstResolve() code.RefQuery {
+// (gitlet.HeadRef) — the zero query where none was.
+func (s *stubCode) firstResolve() gitlet.RefQuery {
 	if len(s.resolved) == 0 {
-		return code.RefQuery{}
+		return gitlet.RefQuery{}
 	}
 	return s.resolved[0]
 }
@@ -263,22 +263,22 @@ func (s *stubCode) firstResolve() code.RefQuery {
 // asks, and the arguments each needs to answer at all.
 var codeQuestions = []struct {
 	what string
-	kind code.ReadKind
+	kind gitlet.ReadKind
 	args map[string]any
 }{
-	{"code_repos", code.ReadRepos, map[string]any{}},
-	{"code_repo", code.ReadRepo, map[string]any{"name": "web"}},
-	{"code_pushes", code.ReadPushes, map[string]any{"name": "web"}},
-	{"code_changes", code.ReadChanges, map[string]any{"repo": "web"}},
-	{"code_change", code.ReadChange, map[string]any{"name": "web", "change": "1"}},
-	{"code_change_routing", code.ReadChangeRouting, map[string]any{"name": "web", "change": "1"}},
-	{"code_reviews", code.ReadReviews, map[string]any{"reviewer": "dev"}},
-	{"code_refs", code.ReadRefs, map[string]any{"name": "web"}},
-	{"code_queue", code.ReadQueue, map[string]any{"repo": "web", "target": "refs/heads/main"}},
-	{"code_checks", code.ReadChecks, map[string]any{"name": "unit", "state": "failed"}},
-	{"code_check", code.ReadCheck, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+	{"code_repos", gitlet.ReadRepos, map[string]any{}},
+	{"code_repo", gitlet.ReadRepo, map[string]any{"name": "web"}},
+	{"code_pushes", gitlet.ReadPushes, map[string]any{"name": "web"}},
+	{"code_changes", gitlet.ReadChanges, map[string]any{"repo": "web"}},
+	{"code_change", gitlet.ReadChange, map[string]any{"name": "web", "change": "1"}},
+	{"code_change_routing", gitlet.ReadChangeRouting, map[string]any{"name": "web", "change": "1"}},
+	{"code_reviews", gitlet.ReadReviews, map[string]any{"reviewer": "dev"}},
+	{"code_refs", gitlet.ReadRefs, map[string]any{"name": "web"}},
+	{"code_queue", gitlet.ReadQueue, map[string]any{"repo": "web", "target": "refs/heads/main"}},
+	{"code_checks", gitlet.ReadChecks, map[string]any{"name": "unit", "state": "failed"}},
+	{"code_check", gitlet.ReadCheck, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
 		"attempt": "1", "target": "refs/heads/main"}},
-	{"code_check_log", code.ReadCheck, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+	{"code_check_log", gitlet.ReadCheck, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
 		"attempt": "1", "target": "refs/heads/main"}},
 }
 
@@ -362,7 +362,7 @@ func TestACodeQuestionHandsTheReaderTheCallersWholeFreshness(t *testing.T) {
 // and the repository's question is mostly asked for its row, by a header a
 // screen polls every minute. A spelling that is neither `true` nor `false`
 // is refused before the reader is asked, never read as "not asked"
-// (code.ReadQuery.PathOwners, code.ReadQuery.Gates).
+// (gitlet.ReadQuery.PathOwners, gitlet.ReadQuery.Gates).
 //
 // Mutations: ask the repository's question for path owners and gates
 // whatever its caller named — the bare question asks for both, red; read
@@ -415,7 +415,7 @@ func TestAQuestionAsksForPathOwnersAndGatesOnlyWhereItsCallerNamesThem(t *testin
 // NAMES THEM — `protected=true` — and otherwise for every repository, so
 // Settings › Gitlet pages through the repositories a rule protects without the
 // Gitlet workspace's listing losing any; a spelling that is neither `true` nor
-// `false` is refused before the reader is asked (code.ReadQuery.Protected).
+// `false` is refused before the reader is asked (gitlet.ReadQuery.Protected).
 //
 // Mutations: read `protected` as nothing — the listing naming it asks for
 // every repository, red; read it whatever the caller named — the bare listing
@@ -451,7 +451,7 @@ func TestAListingAsksForTheProtectedRepositoriesOnlyWhereItsCallerNamesThem(t *t
 
 // A REPOSITORIES LISTING ASKS UNDER THE PREFIX ITS CALLER TYPED — a picker's
 // text, trimmed as a refs listing's is — and under none where it names none,
-// so the reader seeks the names the prefix begins (code.ReadQuery.Prefix) and
+// so the reader seeks the names the prefix begins (gitlet.ReadQuery.Prefix) and
 // a picker finds a repository however many sort before it.
 //
 // Mutation: read `prefix` for a refs listing alone — the listing naming one
@@ -515,7 +515,7 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 		// refused with err.
 		check func(t *testing.T, repo string, err error)
 	}{
-		{"not declared", code.ErrRepoNotFound, func(t *testing.T, repo string, err error) {
+		{"not declared", gitlet.ErrRepoNotFound, func(t *testing.T, repo string, err error) {
 			t.Helper()
 			var missing *queries.NotFound
 			if !errors.As(err, &missing) || missing.Reason != queries.ReasonNotDeclared ||
@@ -527,7 +527,7 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 		// `no_check`, carrying the reader's sentence: the reason a screen
 		// tells "never queued, or past its thirty days" from a repository
 		// that is not declared.
-		{"no such attempt", fmt.Errorf("%w: unit's attempt 3 of %s for refs/heads/main", code.ErrCheckNotFound,
+		{"no such attempt", fmt.Errorf("%w: unit's attempt 3 of %s for refs/heads/main", gitlet.ErrCheckNotFound,
 			stubOID), func(t *testing.T, _ string, err error) {
 			t.Helper()
 			var missing *queries.NotFound
@@ -536,15 +536,15 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 				t.Errorf("answered %v, want not_found (no_check) carrying the reader's sentence", err)
 			}
 		}},
-		{"not permitted here", fmt.Errorf("%w: %s", code.ErrNotPermitted, shutOut), notPermitted},
+		{"not permitted here", fmt.Errorf("%w: %s", gitlet.ErrNotPermitted, shutOut), notPermitted},
 		{"not permitted on another data node", fmt.Errorf("estate: data node n2 answered: %w",
-			fmt.Errorf("%w: %s", code.ErrNotPermitted, shutOut)), notPermitted},
-		{"a level", fmt.Errorf("%w: a session read names the position it must include", code.ErrBadLevel),
+			fmt.Errorf("%w: %s", gitlet.ErrNotPermitted, shutOut)), notPermitted},
+		{"a level", fmt.Errorf("%w: a session read names the position it must include", gitlet.ErrBadLevel),
 			is(queries.ErrBadParams)},
-		{"a cursor", fmt.Errorf("%w: phase %q", code.ErrBadCursor, "x"), is(queries.ErrBadParams)},
-		{"a parameter", fmt.Errorf("%w: limit: 9000 is past the 200 one page of pushes carries", code.ErrInvalid),
+		{"a cursor", fmt.Errorf("%w: phase %q", gitlet.ErrBadCursor, "x"), is(queries.ErrBadParams)},
+		{"a parameter", fmt.Errorf("%w: limit: 9000 is past the 200 one page of pushes carries", gitlet.ErrInvalid),
 			is(queries.ErrBadParams)},
-		{"a floor on another log", fmt.Errorf("code: this read's floor: %w", statelog.ErrForeignPosition),
+		{"a floor on another log", fmt.Errorf("gitlet: this read's floor: %w", statelog.ErrForeignPosition),
 			is(queries.ErrBadParams)},
 		{"behind", &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
 			RetryAfter: 7 * time.Second}, is(queries.ErrUnavailable)},
@@ -552,8 +552,8 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			for _, q := range codeQuestions {
-				stub := &stubCode{answer: func(code.ReadQuery) (code.ReadAnswer, error) {
-					return code.ReadAnswer{}, tc.err
+				stub := &stubCode{answer: func(gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+					return gitlet.ReadAnswer{}, tc.err
 				}}
 				_, err := askNative(t, queries.Sources{Code: stub}, q.what, q.args)
 				tc.check(t, stub.last().Repo, err)
@@ -575,9 +575,9 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 // the source is asked, red.
 func TestWhoReadARepositoryIsDecidedBeforeAnythingIsRead(t *testing.T) {
 	t.Parallel()
-	company := func(q code.ReadQuery) (code.ReadAnswer, error) {
-		return code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
-			RepoRef: code.RepoRef{Name: q.Repo, Visibility: code.VisibilityCompany}}}}, nil
+	company := func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		return gitlet.ReadAnswer{Level: q.Fresh.Level, Repo: &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{
+			RepoRef: gitlet.RepoRef{Name: q.Repo, Visibility: gitlet.VisibilityCompany}}}}, nil
 	}
 	hostsNone := &queries.NotFound{Reason: queries.ReasonNotHosted, Detail: "this company does not host code"}
 	ask := func(t *testing.T, stub *stubCode, grants ...iam.Grant) (any, error) {

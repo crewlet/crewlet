@@ -559,7 +559,7 @@ func (g *RoleGitHub) validate(path Path) error {
 
 // RoleCode is a seat's code access on Gitlet
 // (`code.backend: gitlet`): the tier Gitlet caps what the chart grants the
-// seat by (internal/code's Tier).
+// seat by (internal/gitlet's Tier).
 //
 // A SEAT'S GITHUB APP IS NOT CAPPED HERE. Its access is the App's own
 // permissions in GitHub's terms ([RoleGitHub.Permissions]), which the seat
@@ -622,7 +622,7 @@ func (c *RoleCode) validate(path Path) error {
 // The access tiers a seat's role.code.access can be set to.
 //
 // OWNED HERE, by the field a person writes them in. Gitlet
-// (internal/code) spells its Tier as these constants and maps each to what
+// (internal/gitlet) spells its Tier as these constants and maps each to what
 // the chart may grant, and a test holds the two lists to each other: config
 // is the leaf every package depends on, so the vocabulary lives where it is
 // validated and the host that enforces it imports it, never the other way.

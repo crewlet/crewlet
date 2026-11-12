@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -16,13 +16,13 @@ import (
 // a row, or a row left behind by one removed, fails here rather than serving
 // whoever messaged a seat at an access nobody named. And a READ's row is
 // read: the node that answers a read judges the colleague it is made for at
-// read and nothing else (code.JudgeRead, through the ceiling every question of
+// read and nothing else (gitlet.JudgeRead, through the ceiling every question of
 // it carries), so a read naming more would be a need no read holds anybody to.
 // A WRITE's row is the access the deciding node holds the colleague its turn
-// works for to (code.ChangeProposal.CeilingNeeds,
-// code.ConversationWrite.CeilingNeeds), the two one rule — but for a write
+// works for to (gitlet.ChangeProposal.CeilingNeeds,
+// gitlet.ConversationWrite.CeilingNeeds), the two one rule — but for a write
 // that is a branch move alone, a rebase, which the Gitlet node holds the
-// colleague to as every branch write (code.EngineWrite.Ceiling, Grant.Under on
+// colleague to as every branch write (gitlet.EngineWrite.Ceiling, Grant.Under on
 // the one ref it moves, the seat's own work spared): a rule of the push and
 // no access its decide reads, so its row is read, the least that admits it.
 //
@@ -46,7 +46,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		case !ok:
 			t.Errorf("%s names no access in changeToolNeeds", name)
 			continue
-		case !need.Valid() || need == code.AccessNone:
+		case !need.Valid() || need == gitlet.AccessNone:
 			t.Errorf("%s needs %s, which grants nothing a call could be held to", name, need)
 		}
 		annotations, known := codeAnnotations(name)
@@ -54,7 +54,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 			t.Errorf("%s is not classified as a code tool", name)
 			continue
 		}
-		if annotations.ReadOnly == mcp.Yes && need != code.AccessRead {
+		if annotations.ReadOnly == mcp.Yes && need != gitlet.AccessRead {
 			t.Errorf("%s is a read and needs %s: a read is judged for whoever it is made for at read, so a "+
 				"read's row is read", name, need)
 		}
@@ -65,17 +65,17 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		}
 	}
 	// A WRITE'S ROW IS THE ACCESS ITS DECIDE HOLDS A COLLEAGUE TO in a turn
-	// that colleague woke (code.WriteCeiling): the committer reads it from the
+	// that colleague woke (gitlet.WriteCeiling): the committer reads it from the
 	// write the tool sends, so the two cannot be allowed to disagree.
-	sends := map[string]interface{ CeilingNeeds() code.Access }{
-		CodeOpenChangeTool:       code.ChangeProposal{Open: &code.ChangeOpen{}},
-		CodeUpdateChangeTool:     code.ChangeProposal{Edit: &code.ChangeEdit{}},
-		CodeCloseChangeTool:      code.ChangeProposal{Close: &code.ChangeClose{}},
-		CodeRequestReviewTool:    code.ConversationWrite{Reviewers: &code.ReviewerRequest{}},
-		CodeReviewChangeTool:     code.ConversationWrite{Review: &code.Review{}},
-		CodeCommentOnChangeTool:  code.ConversationWrite{Comment: &code.Comment{}},
-		CodeResolveFindingTool:   code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
-		CodeApplySuggestionsTool: code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
+	sends := map[string]interface{ CeilingNeeds() gitlet.Access }{
+		CodeOpenChangeTool:       gitlet.ChangeProposal{Open: &gitlet.ChangeOpen{}},
+		CodeUpdateChangeTool:     gitlet.ChangeProposal{Edit: &gitlet.ChangeEdit{}},
+		CodeCloseChangeTool:      gitlet.ChangeProposal{Close: &gitlet.ChangeClose{}},
+		CodeRequestReviewTool:    gitlet.ConversationWrite{Reviewers: &gitlet.ReviewerRequest{}},
+		CodeReviewChangeTool:     gitlet.ConversationWrite{Review: &gitlet.Review{}},
+		CodeCommentOnChangeTool:  gitlet.ConversationWrite{Comment: &gitlet.Comment{}},
+		CodeResolveFindingTool:   gitlet.ConversationWrite{FindingResolve: &gitlet.FindingResolve{}},
+		CodeApplySuggestionsTool: gitlet.ConversationWrite{FindingResolve: &gitlet.FindingResolve{}},
 	}
 	// The change writes a Gitlet node decides as a branch move, and nothing else.
 	pushes := []string{CodeRebaseChangeTool, CodeRevertChangeTool}
@@ -87,12 +87,12 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		write, ok := sends[name]
 		switch {
 		case slices.Contains(merging, name):
-			if ok || changeToolNeeds[name] != code.AccessRead {
+			if ok || changeToolNeeds[name] != gitlet.AccessRead {
 				t.Errorf("%s is judged by its deciding node's merge authority, so its row is read and no "+
 					"ceiling's access names it: row %s", name, changeToolNeeds[name])
 			}
 		case slices.Contains(pushes, name):
-			if ok || changeToolNeeds[name] != code.AccessRead {
+			if ok || changeToolNeeds[name] != gitlet.AccessRead {
 				t.Errorf("%s is a branch move the Gitlet node holds a colleague to by the push's rule, so its row is "+
 					"read and no decide's access names it: row %s", name, changeToolNeeds[name])
 			}
@@ -115,7 +115,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		case need < changeToolNeeds[name]:
 			t.Errorf("a seat below write is offered %s at %s, below the %s changeToolNeeds holds a colleague to",
 				name, need, changeToolNeeds[name])
-		case need >= code.AccessWrite:
+		case need >= gitlet.AccessWrite:
 			t.Errorf("belowWriteNeeds names %s at %s, which no tier below write reaches", name, need)
 		}
 	}
