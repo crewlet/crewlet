@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,12 +50,25 @@ import (
 // the row sealed, and are opened only for a person who may approve the call
 // (internal/api/queries) and for the resume that makes it.
 type CallHold struct {
-	desk   RunAskDesk
+	desk   HeldDesk
 	seal   *sandbox.CallSeal
 	acting ActedDecisions
 	rules  DelegatedRules
 	now    func() time.Time
 }
+
+// HeldDesk is where a held call is recorded and where a seat's other runs are
+// read, so a repeat of a request still open joins it ([CallHold.joined]).
+type HeldDesk interface {
+	RunAskDesk
+	// ListActiveForSeat is every unfinished run of the seat.
+	ListActiveForSeat(ctx context.Context, handle string) ([]sandbox.PendingRun, error)
+}
+
+// holding serialises the read of a seat's open requests with the write of a
+// new one. In-process is fleet-wide here: a seat's calls are served only by
+// the node that holds it, and held calls are as rare as approvals.
+var holding sync.Mutex
 
 // DelegatedRules is the live delegated-decisions rule for an act: its
 // delegates and 1-based number, false where none delegates it (ADR-0125).
@@ -76,7 +90,7 @@ var _ tools.Holder = (*CallHold)(nil)
 // which is the safe reading of a node that cannot record one.
 // A nil acting names no decision on any held call, and nil rules delegate
 // nothing.
-func NewCallHold(desk RunAskDesk, seal *sandbox.CallSeal, acting ActedDecisions, rules DelegatedRules) *CallHold {
+func NewCallHold(desk HeldDesk, seal *sandbox.CallSeal, acting ActedDecisions, rules DelegatedRules) *CallHold {
 	if desk == nil || seal == nil {
 		return nil
 	}
@@ -229,8 +243,16 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
 		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: tool.Binding(turn, call.Args),
 		Acting: acting, Act: string(tool.Act()), Delegation: h.delegation(tool.Act(), call.Args),
+		Subject: tool.Subject(turn, call.Args),
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
+		return res, false
+	}
+	// ONE OPEN REQUEST PER SUBJECT: read and written under one lock, so two
+	// turns of a seat asking at once come to one request.
+	holding.Lock()
+	defer holding.Unlock()
+	if res, joined := h.joined(ctx, turn.Handle(), runID, held); joined {
 		return res, false
 	}
 	question, context := tool.HeldWords(turn, call.Args)
@@ -240,6 +262,46 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 		To:       sandbox.AskToManager,
 		Held:     &held,
 	})
+}
+
+// joined answers a call whose seat already holds an open request of the same
+// act and subject on another run (ADR-0125): nothing is held, so the request
+// stays one for its delegates and for people. A read that fails refuses the
+// call, since holding it unread is how a second request is made.
+func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.HeldCall) (tools.Result, bool) {
+	if held.Subject == "" {
+		return tools.Result{}, false
+	}
+	runs, err := h.desk.ListActiveForSeat(ctx, seat)
+	if err != nil {
+		return nodeFailure(ctx, held.Tool, err, held.Tool+" was not called, and nothing was asked: your "+
+			"requests still waiting could not be read", "Call it again."), true
+	}
+	for _, run := range runs {
+		open := run.HeldCall
+		if run.TurnID == runID || !run.HeldOpen() || open.Act != held.Act || open.Subject != held.Subject {
+			continue
+		}
+		who := "a person who may approve it"
+		if open.Delegated() {
+			who = "the company's delegate for it (" + words.And(open.Delegation.Delegates) + ")"
+		}
+		on := ""
+		if item := workItemOf(run); item != "" {
+			on = " on " + item
+		}
+		log.InfoContext(ctx, "held_call_joined", "seat", seat, "tool", held.Tool, "request", open.ID,
+			"run", runID, "asked_by_run", run.TurnID)
+		// A CONFLICT, not a fault: the surface records every call it did not
+		// make as refused, and this one for what already waits.
+		return refused(tools.RefusalConflict, fmt.Sprintf("%s did not ask again: you already asked exactly "+
+			"this in another turn%s, and that request (%s, asked %s) still waits on %s. Nothing new was put "+
+			"to anybody, and this run is not parked. One answer decides it, and the turn that asked carries "+
+			"the work on when it comes: do not call %s for it again, and leave that step to that turn. "+
+			"Finish what else this turn has, or end it.", held.Tool, on, open.ID,
+			open.HeldAt.UTC().Format("15:04 UTC"), who, held.Tool)), true
+	}
+	return tools.Result{}, false
 }
 
 // sealArgs seals call's arguments onto held, refusing a call whose sealed
@@ -323,6 +385,9 @@ type fixedTool interface {
 	Approvers() string
 	// Act is what the call is for (ADR-0125).
 	Act() delegated.Kind
+	// Subject is the call's identity as a request ([delegated.Subject]): a
+	// repeat by its seat joins the one still open. "" joins nothing.
+	Subject(turn *turnctx.Turn, args map[string]any) string
 }
 
 // decidedTool is a fixed tool whose call a person may approve before it is
