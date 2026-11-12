@@ -2243,8 +2243,10 @@ const (
 	// unconfirmed, told again after a step that never handed it over, and an
 	// end this bundle does not know said as that, never as expired), merged on
 	// top of it, took it to 5826.0 KiB (5,965,816 bytes, +1,345, all script):
-	// 5826 KiB.
-	treeBudget = 5<<20 + 706<<10
+	// 5826 KiB. The atlas's certificate kind, the facts and the relation an
+	// integration's read fills, named in the atlas words, took it to 5826.2
+	// KiB (5,966,076 bytes, +260, all script): 5827 KiB.
+	treeBudget = 5<<20 + 707<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
