@@ -49,9 +49,12 @@ const (
 	// EvidenceCall is a server or vendor tool call of the same turn whose
 	// answer showed the value.
 	EvidenceCall Evidence = "call"
-	// EvidenceFile is a repository file, a page or a work item the agent read.
+	// EvidenceFile is a repository file the agent read in the same turn,
+	// which showed the value: declared in code, not seen running.
 	EvidenceFile Evidence = "file"
-	// EvidenceNone is nothing the engine can check.
+	// EvidenceNone is nothing the engine can check: a call that showed the
+	// value and was text anybody could have written (a message, a page, a
+	// work item, a colleague's answer). Never evidence for a fact.
 	EvidenceNone Evidence = "none"
 )
 
@@ -341,7 +344,23 @@ func (c Claim) Slot() string {
 // Denial is a person's claim that c does not hold: the entry is retired, the
 // value is wrong, the relation is not there.
 func Denial(c Claim, person Source, at time.Time) (Claim, error) {
+	if person.Kind != SourcePerson {
+		return Claim{}, fmt.Errorf("atlas: claim on %s: only a person denies a claim; an agent disputes one",
+			c.Subject)
+	}
 	c.Denied, c.Source, c.ObservedAt, c.Position = true, person, at, 0
+	return checked(c)
+}
+
+// Dispute is an agent's claim that c does not hold as the atlas says it. It
+// is the same shape as a person's denial and never its equal: the fold never
+// lets it win a facet, so it removes nothing and retires nothing, and where
+// the engine checked evidence behind it, it sends the entry to review.
+func Dispute(c Claim, agent Source, at time.Time) (Claim, error) {
+	if agent.Kind != SourceAgent {
+		return Claim{}, fmt.Errorf("atlas: claim on %s: only an agent disputes; a person denies", c.Subject)
+	}
+	c.Denied, c.Source, c.ObservedAt, c.Position = true, agent, at, 0
 	return checked(c)
 }
 
@@ -355,9 +374,10 @@ func checked(c Claim) (Claim, error) {
 // Validate refuses a claim no writer may make: an entry or a target outside
 // its kind's grammar, a fact or a relation its kind does not take, a value its
 // fact's grammar does not read back to itself, a source that names itself
-// wrongly, a denial from anybody but a person (an integration's read may deny
-// the entry itself alone), a "not the same" from anybody but a person, and a
-// fact of meaning or an owner from an agent.
+// wrongly, a denial from an integration of anything but the entry itself (a
+// person denies any claim, and an agent's denial is a dispute the fold never
+// lets win), a "not the same" from anybody but a person, and a fact of meaning
+// or an owner from an agent.
 func (c Claim) Validate() error {
 	if err := c.validate(); err != nil {
 		return fmt.Errorf("atlas: claim on %s: %w", c.Subject, err)
@@ -401,12 +421,13 @@ func (c Claim) validate() error {
 	if c.ObservedAt.IsZero() {
 		return errors.New("a claim says when it was seen")
 	}
-	if c.Denied && c.Source.Kind != SourcePerson &&
-		(c.Source.Kind != SourceIntegration || c.Facet.Kind != FacetExists) {
+	if c.Denied && !c.deniable() {
 		// A PERSON DENIES ANY CLAIM. An integration's read denies only the
 		// entry itself: its retirement, once two complete reads missed it.
 		// It never denies a fact or a relation, which it withdraws instead.
-		return errors.New("only a person denies a claim, and an integration only the entry itself")
+		// AN AGENT'S DENIAL IS A DISPUTE ([Dispute]), which never wins.
+		return errors.New("only a person denies a claim, an integration only the entry itself, " +
+			"and an agent only disputes one")
 	}
 	if c.Facet.Kind != FacetFact && !c.Value.Equal(Value{}) {
 		return errors.New("only a fact carries a value")
@@ -436,6 +457,21 @@ func (c Claim) validate() error {
 	return nil
 }
 
+// deniable reports whether c's source may say c does not hold.
+func (c Claim) deniable() bool {
+	switch c.Source.Kind {
+	case SourcePerson, SourceAgent:
+		return true
+	case SourceIntegration:
+		return c.Facet.Kind == FacetExists
+	}
+	return false
+}
+
+// Disputes reports an agent's denial: a dispute, which the fold shows beside
+// the value and never lets win.
+func (c Claim) Disputes() bool { return c.Denied && c.Source.Kind == SourceAgent }
+
 func (c Claim) validateFact() error {
 	f := c.Facet.Fact
 	if c.Facet.Relation != "" || c.Facet.Target != (Target{}) {
@@ -462,8 +498,15 @@ func (c Claim) validateRelation() error {
 	if c.Facet.Fact != "" {
 		return errors.New("a relation names no fact")
 	}
-	if r == RelationOwnedBy && c.Source.Kind == SourceAgent {
-		return errors.New("an agent never sets an owner: a person decides it")
+	if c.Source.Kind == SourceAgent && !c.Denied {
+		// WHAT ONLY A PERSON DECIDES: who owns a thing, and what depends on
+		// what, which is a judgement and never something a call shows.
+		switch r {
+		case RelationOwnedBy:
+			return errors.New("an agent never sets an owner: a person decides it")
+		case RelationDependsOn:
+			return errors.New("an agent never sets what depends on what: a person decides it")
+		}
 	}
 	if t.External != "" {
 		if t.Entry != (Ref{}) || !r.Names(c.Subject.Kind, t.External) {

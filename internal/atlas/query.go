@@ -245,9 +245,14 @@ func (v View) Vendors() map[uuid.UUID]Vendor {
 	return out
 }
 
-// Select is the entries of v that answer q, in the view's order.
+// Select is the entries of v that answer q, in the view's order. Unless q
+// asks for the unconfirmed, each is as [Vouched] leaves it: an agent's
+// unbacked fact or relation on an entry others stand behind stays out too.
 func (v View) Select(q Query) []Entry {
 	vendors := v.Vendors()
+	if !q.Unconfirmed && q.Word != WordUnconfirmed {
+		v = Vouched(v)
+	}
 	out := make([]Entry, 0, len(v.Entries))
 	for i := range v.Entries {
 		if e := &v.Entries[i]; q.matches(e, vendors[e.ID], facetNone) {

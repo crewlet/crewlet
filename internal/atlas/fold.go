@@ -182,7 +182,9 @@ func decides(c *Claim) bool { return c.Source.Kind == SourcePerson || c.Source.K
 // resolve folds the live claims on one facet. Each source's newest claim
 // stands for it; the most trusted then newest wins; a fact of meaning is won
 // only by a person, the settings or the engine's records, and is otherwise a
-// suggestion.
+// suggestion. AN AGENT'S DISPUTE NEVER WINS: an agent removes nothing, so its
+// denial only stands beside the value, and a facet nothing but disputes speak
+// on has no winner and is no fact at all (ADR-0132).
 func resolve(claims []*Claim) resolution {
 	voices := make([]*Claim, 0, len(claims))
 	for _, c := range claims {
@@ -195,8 +197,12 @@ func resolve(claims []*Claim) resolution {
 		}
 	}
 	slices.SortFunc(voices, order)
-	r := resolution{winner: voices[0], standing: StandingSettled, voices: voices}
-	if meaningful(voices[0]) {
+	first := slices.IndexFunc(voices, func(c *Claim) bool { return !c.Disputes() })
+	if first < 0 {
+		return resolution{standing: StandingSettled, voices: voices}
+	}
+	r := resolution{winner: voices[first], standing: StandingSettled, voices: voices}
+	if meaningful(r.winner) {
 		if i := slices.IndexFunc(voices, decides); i >= 0 {
 			r.winner = voices[i]
 		} else {
@@ -238,6 +244,9 @@ func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, boo
 	var support, winners []*Claim
 	for k, cs := range facets {
 		r := resolve(cs)
+		if r.winner == nil {
+			continue
+		}
 		for _, c := range r.voices {
 			if !c.Denied {
 				sources[voiceOf(c)] = c.Source
@@ -456,7 +465,7 @@ func merge(claims []Claim) merges {
 	}
 	for _, cs := range joinFacets {
 		w := resolve(cs).winner
-		if w.Confidence().Rank() > ConfidenceVerified.Rank() {
+		if w == nil || w.Confidence().Rank() > ConfidenceVerified.Rank() {
 			continue
 		}
 		for _, key := range joinKeysOf(w) {

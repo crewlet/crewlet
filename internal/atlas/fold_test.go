@@ -331,3 +331,141 @@ func TestAnIntegrationsRetirementIsContestedByAPerson(t *testing.T) {
 		t.Errorf("an entry a person asserted that a read stopped seeing is %s, review %v", e.State, e.Review)
 	}
 }
+
+// AN AGENT'S DISPUTE NEVER WINS: an agent removes nothing and retires nothing
+// (ADR-0132). Its dispute of an entry, a fact or a relation stands beside what
+// the atlas holds, whoever holds it, an agent included, and where the engine
+// checked evidence behind it the entry goes to review. A facet only disputes
+// speak on is no fact at all.
+//
+// Mutation: let resolve take voices[0] as the winner whatever it is, and an
+// agent's dispute retires an entry only agents reported and removes its facts.
+func TestAnAgentsDisputeNeverWins(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	db := atlas.MustRef(atlas.KindDatastore, "web-1/orders-db")
+	later := now.Add(time.Hour)
+	dev := atlas.AgentSource("dev", "turn-2", atlas.EvidenceCall)
+	exists := m(atlas.Exists(db, sre, now))
+	engine := m(atlas.Says(db, atlas.FactEngine, "postgres", sre, now))
+	v := atlas.Fold([]atlas.Claim{exists, engine,
+		m(atlas.Dispute(exists, dev, later)), m(atlas.Dispute(engine, dev, later))}, later)
+	e := entry(t, v, db)
+	if e.State == atlas.StateRetired {
+		t.Fatal("an agent's dispute retired an entry")
+	}
+	f, ok := fact(e, atlas.FactEngine)
+	if !ok || f.Value.Text != "postgres" || f.Source.Name != "sre" {
+		t.Fatalf("after a dispute the engine fact reads %+v (found %v), want sre's postgres", f, ok)
+	}
+	if f.Standing != atlas.StandingDisputed || !e.Review || len(f.Others) != 1 || !f.Others[0].Denied {
+		t.Errorf("a dispute backed by a call reads standing %s, review %v, others %+v; want it disputed, in review, "+
+			"shown beside the value", f.Standing, e.Review, f.Others)
+	}
+
+	// A PERSON'S ENTRY, DISPUTED: contested, never retired.
+	svc := atlas.MustRef(atlas.KindService, "checkout-api")
+	said := m(atlas.Exists(svc, ada, now))
+	v = atlas.Fold([]atlas.Claim{said, m(atlas.Dispute(said, dev, later))}, later)
+	if e := entry(t, v, svc); e.State != atlas.StateConfirmed || !e.Review {
+		t.Errorf("a person's entry an agent disputes reads state %s, review %v; want confirmed and in review",
+			e.State, e.Review)
+	}
+
+	// A DISPUTE NOTHING CHECKED sends nothing to review.
+	unbacked := atlas.AgentSource("dev", "turn-2", atlas.EvidenceNone)
+	v = atlas.Fold([]atlas.Claim{said, m(atlas.Dispute(said, unbacked, later))}, later)
+	if e := entry(t, v, svc); e.Review {
+		t.Error("a dispute with nothing the engine checked behind it sent an entry to review")
+	}
+
+	// ONLY DISPUTES ON A FACET: no fact, and nothing folds to an entry.
+	v = atlas.Fold([]atlas.Claim{m(atlas.Dispute(engine, dev, later))}, later)
+	if _, found := v.Find(db.ID()); found {
+		t.Error("a dispute alone made an entry")
+	}
+}
+
+// AN UNBACKED RECORD STAYS HIDDEN UNTIL A PERSON CONFIRMS IT: an entry, a fact
+// or a relation only an agent reported, with nothing the engine could check
+// behind it, is left out of what anybody is shown by default and of everything
+// an agent reads, and a person's claim of the same thing shows it.
+//
+// Mutation: make Vouched return its view unchanged, and the unbacked fact on a
+// confirmed entry, and the relation to an unbacked entry, are shown.
+func TestAnUnbackedRecordStaysHiddenUntilAPersonConfirmsIt(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	heard := atlas.AgentSource("dev", "turn-3", atlas.EvidenceNone)
+	svc := atlas.MustRef(atlas.KindService, "checkout-api")
+	host := atlas.MustRef(atlas.KindHost, "aws/123456789012/eu-west-1/i-0abc")
+	rumoured := atlas.MustRef(atlas.KindHost, "rumour/web-9")
+	claims := []atlas.Claim{
+		m(atlas.Exists(svc, ada, now)),
+		m(atlas.Exists(host, aws, now)),
+		m(atlas.Says(svc, atlas.FactName, "Checkout", heard, now)),
+		m(atlas.Relates(svc, atlas.RelationRunsOn, host, heard, now)),
+		m(atlas.Exists(rumoured, heard, now)),
+		m(atlas.Relates(svc, atlas.RelationRunsOn, rumoured, sre, now)),
+	}
+	full := atlas.Fold(claims, now)
+	if e := entry(t, full, rumoured); e.Word != atlas.WordUnconfirmed {
+		t.Fatalf("an entry only an unbacked report names reads %s, want unconfirmed", e.Word)
+	}
+	for name, shown := range map[string]atlas.View{
+		"vouched":        atlas.Vouched(full),
+		"a default read": {Entries: full.Select(atlas.Query{})},
+	} {
+		if _, found := shown.Find(rumoured.ID()); found {
+			t.Errorf("%s shows an entry nothing backs", name)
+		}
+		e := entry(t, shown, svc)
+		if e.Name != "checkout-api" || len(e.Facts) != 0 {
+			t.Errorf("%s shows an unbacked name: %q, facts %+v", name, e.Name, e.Facts)
+		}
+		if len(e.Relations) != 0 {
+			t.Errorf("%s shows relations %+v, want none: one is unbacked, one points at an unbacked entry",
+				name, e.Relations)
+		}
+		for _, src := range e.Sources {
+			if src.Kind == atlas.SourceAgent && src.Evidence == atlas.EvidenceNone {
+				t.Errorf("%s names the unbacked voice among the entry's sources", name)
+			}
+		}
+	}
+	asked := full.Select(atlas.Query{Unconfirmed: true})
+	if got := entry(t, atlas.View{Entries: asked}, svc); got.Name != "Checkout" {
+		t.Errorf("a read that asks for the unconfirmed shows the name as %q", got.Name)
+	}
+	confirmed := atlas.Fold(append(claims, m(atlas.Says(svc, atlas.FactName, "Checkout", ada, now.Add(time.Minute)))),
+		now.Add(time.Minute))
+	if got := entry(t, atlas.Vouched(confirmed), svc); got.Name != "Checkout" {
+		t.Errorf("after a person confirmed it the name reads %q, want it shown", got.Name)
+	}
+}
+
+// AN ENTRY IS MET BY ITS IDENTIFIERS, AND A VALUE IS SHOWN ONLY AS A WHOLE
+// WORD: the two rules an agent's record is held to the cited answer by.
+func TestAValueIsShownOnlyAsAWholeWord(t *testing.T) {
+	t.Parallel()
+	answer := "CONTAINER orders-db  image postgres:16.2  0.0.0.0:5432->5432/tcp  host WEB-10"
+	for value, want := range map[string]bool{
+		"orders-db": true, "postgres": true, "16.2": true, "5432": true, "web-10": true,
+		"web-1": false, "543": false, "orders": false, "16.20": false, "": false, "mysql": false,
+	} {
+		if got := atlas.Mentions(answer, value); got != want {
+			t.Errorf("the answer shows %q = %v, want %v", value, got, want)
+		}
+	}
+	for ref, want := range map[atlas.Ref][]string{
+		atlas.MustRef(atlas.KindService, "checkout-api"):                 {"checkout-api"},
+		atlas.MustRef(atlas.KindDatastore, "web-1/orders-db"):            {"web-1/orders-db", "orders-db"},
+		atlas.MustRef(atlas.KindRepository, "github.com/acme/api"):       {"github.com/acme/api", "acme/api"},
+		atlas.MustRef(atlas.KindEndpoint, "https://api.acme.example/v1"): {"https://api.acme.example/v1", "api.acme.example/v1"},
+		atlas.MustRef(atlas.KindHost, "ssh/web-1"):                       {"ssh/web-1", "web-1"},
+	} {
+		if got := ref.Identifiers(); strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("%s is met by %v, want %v", ref, got, want)
+		}
+	}
+}

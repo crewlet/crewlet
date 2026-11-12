@@ -292,8 +292,8 @@ func TestNoConfidenceIsChosenByTheCaller(t *testing.T) {
 }
 
 // AN AGENT NEVER DECIDES WHAT A THING MEANS: it sets no purpose, environment
-// or importance and names no owner, and only a person says two entries are
-// not the same or denies anything.
+// or importance, names no owner and no dependency, and only a person says two
+// entries are not the same or denies anything.
 func TestAnAgentNeverSetsMeaning(t *testing.T) {
 	t.Parallel()
 	agent := atlas.AgentSource("sre", "t1", atlas.EvidenceCall)
@@ -309,6 +309,9 @@ func TestAnAgentNeverSetsMeaning(t *testing.T) {
 		t.Error("an agent set an owner")
 	}
 	other := atlas.MustRef(atlas.KindService, "billing-api")
+	if _, err := atlas.Relates(svc, atlas.RelationDependsOn, other, agent, now); err == nil {
+		t.Error("an agent set what depends on what")
+	}
 	if _, err := atlas.Distinct(svc, other, agent, now); err == nil {
 		t.Error("an agent said two entries are not the same")
 	}
@@ -444,9 +447,13 @@ func TestAnIntegrationDeniesOnlyTheEntryItself(t *testing.T) {
 	if err := zone.Validate(); err == nil {
 		t.Error("an integration denied a relation, which it withdraws instead")
 	}
-	agent := m(atlas.Exists(host, atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall), now))
-	agent.Denied = true
-	if err := agent.Validate(); err == nil {
-		t.Error("an agent denied an entry")
+	// AN AGENT'S DENIAL IS A DISPUTE: a claim it may make, which the fold
+	// never lets win (TestAnAgentsDisputeNeverWins).
+	agent := atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall)
+	if _, err := atlas.Dispute(exists, agent, now); err != nil {
+		t.Errorf("an agent's dispute of an entry: %v", err)
+	}
+	if _, err := atlas.Dispute(exists, cloudflare, now); err == nil {
+		t.Error("an integration disputed an entry")
 	}
 }
