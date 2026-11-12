@@ -23,15 +23,32 @@
  *
  * The screen's own gate (a host's lock that is what the page IS) comes in as
  * `blocked`; the screen decides it, never the model.
+ *
+ * A key of the company's own things (a seat, a space) lists them for the
+ * assistant while an enum may hold every one, and past that is declared by
+ * the grammar their keys are written in ([UrlKeyGrammar]): the engine refuses
+ * an enum of more than [ASSISTANT_ACTION_ARGS_MAX_ENUM] values, and the frame
+ * leaves an action it would refuse out of the page context whole.
  */
 
-import type { AssistantActionArgs } from "~/contract/assistant.ts";
+import { ASSISTANT_ACTION_ARGS_MAX_ENUM, type AssistantActionArgs } from "~/contract/assistant.ts";
+import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
 import { parseHash, type Navigator } from "../router.tsx";
 import { parseWindow, TODAY, windowLabel, windowParam, type Offer } from "~/lib/range.ts";
 import type { PageActionId, PageActionParse, PageActionSpec } from "./context.ts";
 
 /** How a screen writes a key: a filter replaces the history entry, a section pushes one. */
 export type UrlKeyHistory = "filter" | "section";
+
+/** The grammar a key's values are written in, said where they are more than an enum may list. */
+export interface UrlKeyGrammar {
+  /** The values' pattern, anchored, as the engine compiles it: `SEAT_HANDLE`. */
+  pattern: string;
+  /** The longest value, in characters. */
+  maxLength: number;
+  /** What a value is, in words: "A seat's handle". */
+  words: string;
+}
 
 /** One address key a page action may write, and how a person reads it. */
 export interface UrlActionKey {
@@ -49,6 +66,13 @@ export interface UrlActionKey {
   values?: readonly string[];
   /** How a value is written, said to the assistant where `values` cannot list them. */
   hint?: string;
+  /**
+   * The grammar `values` are written in, where they are the company's own (a
+   * seat, a space) and so may be more than an enum may list: past
+   * [ASSISTANT_ACTION_ARGS_MAX_ENUM] the key is declared by it in their place,
+   * and `check` stays the rule.
+   */
+  grammar?: UrlKeyGrammar;
   /** The value, in the screen's own words. Unset: the value as written. */
   words?: (value: string) => string;
   /**
@@ -185,16 +209,26 @@ function familyPattern(family: string): string {
   return `^${family.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${MEMBER_SOURCE}$`;
 }
 
-/** What one key takes, as the action's arguments state it. */
+/**
+ * What one key takes, as the action's arguments state it: the values it lists,
+ * or, past what an enum may list, the grammar they are written in. A key of
+ * the company's seats listed every seat whatever their number, so a company of
+ * more than 64 agents had Live's and Turns' whole filter action left out, and
+ * a company of more spaces Doclet's search.
+ */
 function keyArgs(key: UrlActionKey): AssistantActionArgs {
+  const values = key.values ?? [];
+  const grammar =
+    key.grammar && values.length > ASSISTANT_ACTION_ARGS_MAX_ENUM ? key.grammar : undefined;
   const words = [key.label];
   if (key.hint) words.push(key.hint);
+  if (grammar) words.push(grammar.words);
   words.push("null clears it");
   return {
     type: ["string", "null"],
     description: words.join(". ") + ".",
-    maxLength: MAX_VALUE,
-    ...(key.values && key.values.length > 0 ? { enum: [...key.values] } : {}),
+    maxLength: grammar ? Math.min(grammar.maxLength, MAX_VALUE) : MAX_VALUE,
+    ...(grammar ? { pattern: grammar.pattern } : values.length > 0 ? { enum: [...values] } : {}),
   };
 }
 
@@ -332,16 +366,45 @@ export function choiceKey(
   options: readonly { value: string; label: string }[],
   history: UrlKeyHistory,
   fallback?: string,
+  grammar?: UrlKeyGrammar,
 ): UrlActionKey {
   return {
     label,
     history,
     values: options.map((o) => o.value),
     ...(fallback === undefined ? {} : { fallback }),
+    ...(grammar === undefined ? {} : { grammar }),
     check: (value) =>
       options.some((o) => o.value === value) ? null : `${label} has no "${value}" option.`,
     words: (value) => options.find((o) => o.value === value)?.label ?? value,
   };
+}
+
+/** A seat's handle, as a key past what an enum may list declares one ([seatKey]). */
+export const SEAT_GRAMMAR: UrlKeyGrammar = {
+  pattern: SEAT_HANDLE,
+  maxLength: MAX_LOGIN,
+  words: "A seat's handle",
+};
+
+/**
+ * A key that takes one of the seats a screen's menu draws, by handle, worded
+ * by the seat's name: listed while an enum may list every one, and past that
+ * declared by a handle's grammar ([SEAT_GRAMMAR]). A seat the menu does not
+ * draw is refused by its `check` either way.
+ */
+export function seatKey(
+  label: string,
+  seats: readonly { handle: string; name: string }[],
+  history: UrlKeyHistory,
+): UrlActionKey {
+  return choiceKey(
+    label,
+    seats.map((s) => ({ value: s.handle, label: s.name })),
+    history,
+    undefined,
+    SEAT_GRAMMAR,
+  );
 }
 
 /**

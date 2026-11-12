@@ -18,9 +18,11 @@ import {
   DEFAULT_HARNESS,
   DEFAULT_HARNESS_AUTH_MODE,
   EXECUTOR_HARNESSES,
+  MODEL_KEY_PATTERN,
   type HarnessAuthMode,
   type RunnerCellName,
 } from "~/contract/models.ts";
+import { isReferenceName } from "~/lib/references.ts";
 import {
   applyUses,
   noUses,
@@ -187,10 +189,8 @@ const MANAGED_FIELDS = new Set([
  * it to one line wherever it is printed beside a model id.
  */
 export const KEY_MAX = 40;
-/** The engine's grammar for a model's name (`config.ProviderKeyPattern`). */
-const KEY_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
-/** The secret store's grammar for a name (`secrets.CheckName`). */
-const VARIABLE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+/** The engine's grammar for a model's name (`config.ProviderKeyPattern`, held as `MODEL_KEY_PATTERN`). */
+const KEY_PATTERN = new RegExp(MODEL_KEY_PATTERN);
 
 /** The steps a draft walks; Where it runs only for a harness that runs coding. */
 export function stepsFor(d: Pick<Draft, "harness">): WizardStep[] {
@@ -681,6 +681,8 @@ export function draftProblems(
     problem(["providers", "llm", d.key, ...field.split(".")], message, kind);
   if (!d.key) {
     out.push(problem(["key"], "Name the model. Seats and Ask Crewlet name it.", "missing"));
+  } else if (d.key.length > KEY_MAX) {
+    out.push(problem(["key"], `Keep the name to ${KEY_MAX} characters or fewer.`, "out_of_range"));
   } else if (!KEY_PATTERN.test(d.key)) {
     out.push(
       problem(
@@ -688,8 +690,6 @@ export function draftProblems(
         "Use lowercase letters, digits, dots, hyphens and underscores, starting with a letter or a digit, such as sonnet-key.",
       ),
     );
-  } else if (d.key.length > KEY_MAX) {
-    out.push(problem(["key"], `Keep the name to ${KEY_MAX} characters or fewer.`, "out_of_range"));
   } else if (existing.includes(d.key)) {
     out.push(problem(["key"], `There is already a model called ${d.key}.`, "conflict"));
   }
@@ -703,11 +703,14 @@ export function draftProblems(
         ),
       );
     }
-    if (!kept.credential && !VARIABLE_PATTERN.test(d.variable)) {
+    // THE SECRET STORE'S OWN GRAMMAR (`secrets.CheckName`, which is the
+    // `${VAR}` grammar), and no narrower: a name the store takes is one a
+    // person may already keep their key under.
+    if (!kept.credential && !isReferenceName(d.variable)) {
       out.push(
         problem(
           ["variable"],
-          "Name the secret in capital letters, digits and underscores, starting with a letter.",
+          "Name the secret with letters, digits and underscores, starting with a letter or an underscore.",
         ),
       );
     }

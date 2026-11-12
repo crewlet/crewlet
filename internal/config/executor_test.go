@@ -527,3 +527,27 @@ func TestTheToolServerNameIsReserved(t *testing.T) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }
+
+// THE NAME CLAUDE CODE TAKES FOR ITS CONTAINER'S TOOLS IS RESERVED. Claude
+// Code has a call to `mcp__container__` and a built-in tool's name cleared from
+// a long session as the built-in's own, and a box names a seat server by its
+// configured name, so a server called that would have its calls' results
+// cleared from a session that continues, while the engine counts them held.
+// A name it only starts, ends or contains is anybody's.
+//
+// Mutation: drop the check, or hold the name as a prefix, and a row goes red.
+func TestTheNameClaudeCodeTakesForItsContainerIsReserved(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nmcp_servers:\n  - name: "+claudeContainerServer+"\n    command: npx\n",
+		"mcp_servers[0].name")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+	for _, name := range []string{claudeContainerServer + "-tools", "my-" + claudeContainerServer} {
+		doc := "name: Acme\nmcp_servers:\n  - name: " + name + "\n    command: npx\n"
+		if _, err := ParseCompany([]byte(doc)); err != nil {
+			t.Errorf("a server named %q is refused, though only %q is Claude Code's: %v", name,
+				claudeContainerServer, err)
+		}
+	}
+}

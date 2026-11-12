@@ -6,10 +6,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { DECK_NOTES_MAX_RUNES, DECK_TITLE_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDeck } from "~/protocol/index.ts";
 import { slideSource, withText } from "../slides.tsx";
 import {
   changesOf,
+  deckTextProblem,
   draftOf,
   indexSource,
   mergeDeck,
@@ -233,5 +235,26 @@ describe("merging onto a newer version", () => {
     const m = mergeDeck(base, personsEdit(base), live);
     expect(m.conflicts).toContainEqual({ kind: "order" });
     expect(resolve(m, { kind: "order" }, "theirs").draft.order).toEqual(live.order);
+  });
+});
+
+describe("what a save would be refused for", () => {
+  // THE ENGINE REFUSES A WHOLE SAVE past its deck title's bytes or past one
+  // slide's notes in characters, so the editor holds Save naming which.
+  test("a title past the engine's bytes, or a slide's notes past its characters", () => {
+    expect(deckTextProblem(base)).toBeNull();
+    expect(deckTextProblem({ ...base, title: "語".repeat(DECK_TITLE_MAX_BYTES / 3) })).toBeNull();
+    expect(deckTextProblem({ ...base, title: "語".repeat(DECK_TITLE_MAX_BYTES / 3 + 1) })).toBe(
+      "The deck's title is about 1 character too long.",
+    );
+    const second = base.order[1]!;
+    const notes = (n: number, text: string): DeckDraft => ({
+      ...base,
+      slides: { ...base.slides, [second]: { ...base.slides[second]!, notes: text.repeat(n) } },
+    });
+    expect(deckTextProblem(notes(DECK_NOTES_MAX_RUNES, "🙂"))).toBeNull();
+    expect(deckTextProblem(notes(DECK_NOTES_MAX_RUNES + 1, "x"))).toBe(
+      `Slide 2's speaker notes are past ${DECK_NOTES_MAX_RUNES} characters.`,
+    );
   });
 });

@@ -20,6 +20,7 @@ import {
   REPO_NAME_MAX_BYTES,
   REPO_STATUSES,
 } from "~/contract/code.ts";
+import { OBJECT_ID_HEX_DIGITS, OBJECT_ID_MIN_ABBREV_DIGITS } from "~/contract/objectids.ts";
 import type {
   CodeChangeState,
   CodePrecondition,
@@ -61,7 +62,7 @@ export function isRepoPrefix(prefix: string): boolean {
  * takes back may have (`gitlet.MinAbbrevDigits`), so what is printed is what a
  * person copies into git or into a tool. The whole id is the title beside it.
  */
-export const SHORT_OID_DIGITS = 7;
+export const SHORT_OID_DIGITS = OBJECT_ID_MIN_ABBREV_DIGITS;
 
 /** An object id as a row prints it: see [SHORT_OID_DIGITS]. */
 export function shortOID(oid: string): string {
@@ -73,7 +74,7 @@ export function shortOID(oid: string): string {
  * deletion. Forty digits, the engine's `gitref.ZeroOID`: its repositories are
  * object-format sha1 (`gitref.OIDHexLen`).
  */
-const ZERO_OID = "0".repeat(40);
+const ZERO_OID = "0".repeat(OBJECT_ID_HEX_DIGITS);
 
 /** A ref as a reader names it: a branch by its name, a tag as a tag, anything else whole. */
 export function refName(ref: string): { name: string; kind: "branch" | "tag" | "ref" } {

@@ -16,10 +16,11 @@
 import type { ArtifactDeck, DeckLayout, DeckPlan, DeckSlide, DeckTheme } from "~/protocol/index.ts";
 import { titlePath, withText } from "../slides.tsx";
 import { overWords, utf8Bytes } from "../format.ts";
-import { DECK_PLAN_MAX_SLIDES, DECK_SLIDE_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-
-/** The layout whose title is the deck's own (`slideformat.LayoutCover`). */
-export const COVER_LAYOUT = "cover";
+import {
+  DECK_COVER_LAYOUT,
+  DECK_PLAN_MAX_SLIDES,
+  DECK_SLIDE_TITLE_MAX_BYTES,
+} from "~/contract/artifactsworkspace.ts";
 
 /** One slide of the plan being laid out: a key of its own, its layout and its title. */
 export interface PlanRow {
@@ -119,7 +120,7 @@ export function shownTitle(
 ): string {
   const own = row.title.trim();
   if (own) return own;
-  if (row.layout === COVER_LAYOUT) return deckTitle.trim() || "Untitled deck";
+  if (row.layout === DECK_COVER_LAYOUT) return deckTitle.trim() || "Untitled deck";
   return layout?.heading ?? "";
 }
 

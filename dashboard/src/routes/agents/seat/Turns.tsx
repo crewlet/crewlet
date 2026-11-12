@@ -63,7 +63,8 @@ import {
 import { useSettled } from "~/lib/settled.ts";
 import { phaseColor, spentOnly } from "~/lib/spend.ts";
 import { useClient, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
-import { MAX_TURN_DAYS, openState, runningNow, UNSETTLED } from "~/lib/turns.ts";
+import { TURNS_MAX_DAYS } from "~/contract/wire.ts";
+import { openState, runningNow, UNSETTLED } from "~/lib/turns.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
@@ -110,7 +111,7 @@ export function Turns({
   const { socket } = useClient();
   // EVERY DAY THE STORE KEEPS: named, because the read's default is a week,
   // and a seat's record is the whole of what can still be read.
-  const asked = { seat: handle, days: MAX_TURN_DAYS, limit: TURN_PAGE };
+  const asked = { seat: handle, days: TURNS_MAX_DAYS, limit: TURN_PAGE };
   const list = usePaged(
     useQuery(
       "turns",
@@ -294,7 +295,7 @@ export function Turns({
           count={
             list.answers.length > 0 ? `${list.items.length}${list.more ? "+" : ""}` : undefined
           }
-          subtitle={`Newest first, last ${MAX_TURN_DAYS} days`}
+          subtitle={`Newest first, last ${TURNS_MAX_DAYS} days`}
         >
           <Card.Title as="h3">Turns</Card.Title>
         </Card.Header>
@@ -314,7 +315,7 @@ export function Turns({
             rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
             empty={{
               title: "No turns in the record for this seat",
-              hint: `Turns from the last ${MAX_TURN_DAYS} days appear here.`,
+              hint: `Turns from the last ${TURNS_MAX_DAYS} days appear here.`,
             }}
             columns={[
               {

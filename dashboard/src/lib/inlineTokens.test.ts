@@ -9,6 +9,8 @@
  */
 
 import { describe, expect, test } from "vitest";
+import { CHANNEL_NAME_PATTERN } from "~/contract/chat.ts";
+import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
 import type { LinkHost } from "~/contract/integrations.ts";
 import { LINEAR_BOUND, growth } from "../test/growth.ts";
 import {
@@ -144,7 +146,33 @@ describe("keys and mentions", () => {
       "mention:@backend-engineer",
     ]);
   });
+
+  // A MENTION IS EXACTLY A SEAT'S HANDLE, as the engine holds one
+  // (`SEAT_HANDLE` and `MAX_LOGIN`, held to `iam.ValidSeatHandle`): a handle
+  // the engine takes is never left as words, and nothing it refuses is drawn
+  // as a seat.
+  test("a mention is a handle by the engine's grammar and width", () => {
+    const handle = new RegExp(SEAT_HANDLE);
+    for (const name of HANDLES) {
+      const engine = handle.test(name) && name.length <= MAX_LOGIN;
+      expect(said(`ask @${name} now`), name).toEqual(engine ? [`mention:@${name}`] : []);
+    }
+  });
 });
+
+/** Names on both sides of the handle's and the room name's grammars and widths. */
+const HANDLES = [
+  "qa",
+  "3d-artist",
+  "a",
+  "0",
+  "vp-eng-",
+  "sre_bot",
+  "launch_v2",
+  "x".repeat(MAX_LOGIN - 1),
+  "x".repeat(MAX_LOGIN),
+  "x".repeat(MAX_LOGIN + 1),
+];
 
 describe("what an address is", () => {
   test("a code host's pull request, issue, commit and repository read as their references", () => {
@@ -531,6 +559,20 @@ describe("rooms", () => {
     expect(read("#e2e-tests and #e2e-nightly")).toEqual(["room:#e2e-tests"]);
     expect(read("#launchpad, x#launch, &#launch, /#launch, ##launch")).toEqual([]);
     expect(read("in https://x.test/#launch")).toEqual(["address:https://x.test/#launch"]);
+  });
+
+  // A ROOM IS EXACTLY A ROOM'S NAME, as the engine holds one
+  // (`CHANNEL_NAME_PATTERN`, held to `chatlet.ValidName`), in prose and in a
+  // code span alike.
+  test("a room is a name by the engine's grammar and width", () => {
+    const room = new RegExp(CHANNEL_NAME_PATTERN);
+    for (const name of HANDLES) {
+      const engine = room.test(name);
+      expect(read(`in #${name} now`, new Set([name])), name).toEqual(
+        engine ? [`room:#${name}`] : [],
+      );
+      expect(codeRoom(`#${name}`, new Set([name])), name).toBe(engine);
+    }
   });
 
   test("a code span holding just a room's name is code, and anything else is not a room", () => {

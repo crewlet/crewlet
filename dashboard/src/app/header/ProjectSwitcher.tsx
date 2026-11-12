@@ -72,7 +72,8 @@ import { useRecents, type Recent } from "~/lib/recents.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { PROJECT_PAGE, unfinished } from "~/lib/work.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
+import { unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import type { WorkProjectRow, WorkProjectsAnswer } from "~/protocol/index.ts";
 

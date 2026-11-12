@@ -45,7 +45,7 @@ func TestTheDashboardSpeaksTheDatastoreVocabulary(t *testing.T) {
 		}
 		if !slices.Equal(client, engine) {
 			t.Errorf("the dashboard's %s is %q and the engine's is %q, in that order: "+
-				"change contract/artifacts.ts to the engine's", name, client, engine)
+				"change contract/artifactsworkspace.ts to the engine's", name, client, engine)
 		}
 	}
 	state, err := clientsource.Scalar(tree, "STATE_COLLECTION")
@@ -63,14 +63,19 @@ func TestTheDashboardSpeaksTheDatastoreVocabulary(t *testing.T) {
 //
 // A paste that spans more cells than one write carries is split by the
 // native sheet at this bound, and the schema editor stops adding collections
-// and columns at these, so a person is told in place rather than refused
-// whole after Save.
+// and columns at these, and the sheet's create page a column's or an option's
+// name, so a person is told in place rather than refused whole after Save. A
+// collection is read a page of the engine's most rows at a time: a larger ask
+// is refused, and a smaller one reads a big store in more round trips than it
+// needs.
 func TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
 		"DATA_BATCH_MAX_OPS":   artifacts.MaxBatchOps,
 		"DATA_COLLECTIONS_MAX": artifacts.MaxCollections,
 		"DATA_COLUMNS_MAX":     artifacts.MaxColumns,
+		"DATA_LABEL_MAX_BYTES": artifactdata.MaxLabelBytes,
+		"DATA_QUERY_MAX_ROWS":  artifacts.MaxQueryLimit,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -82,7 +87,35 @@ func TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps(t *testing.T) {
 		}
 		if client != engine {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
-				"contract/artifacts.ts to the engine's figure", name, client, engine)
+				"contract/artifactsworkspace.ts to the engine's figure", name, client, engine)
+		}
+	}
+}
+
+// THE DASHBOARD MINTS AN OPTION'S ID BY THE ENGINE'S GRAMMAR.
+//
+// The schema editor makes a select's option id from its label, writing every
+// character outside `DATA_OPTION_ID_CHARS` as `_` and stopping short of
+// `DATA_OPTION_ID_MAX` (`contract/artifactsworkspace.ts`) with room for the suffix that
+// makes it unique, so the class it writes in is the engine's and the width it
+// stops at is the engine's. A class wider than the engine's mints ids every
+// schema save refuses; a narrower one turns letters the engine takes into `_`.
+//
+// Mutation: change either side's class or bound, and this fails.
+func TestTheDashboardMintsAnOptionIDByTheEnginesGrammar(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for name, engine := range map[string]string{
+		"DATA_OPTION_ID_CHARS": artifactdata.OptionIDChars,
+		"DATA_OPTION_ID_MAX":   strconv.Itoa(artifactdata.MaxOptionIDBytes),
+	} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != engine {
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change it in "+
+				"contract/artifactsworkspace.ts", name, got, engine)
 		}
 	}
 }

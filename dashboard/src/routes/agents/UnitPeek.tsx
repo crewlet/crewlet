@@ -25,7 +25,7 @@ import type { AgentRow } from "~/protocol/types.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { projectsByUnit } from "~/lib/orgchart.ts";
-import { PROJECT_PAGE } from "~/lib/work.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
 import {
   activityOf,
   handleLabel,

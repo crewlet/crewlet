@@ -87,6 +87,13 @@ export const MAX_DIRECT_PARTICIPANTS = 8;
 export const MAX_MESSAGE_LINKS = 8;
 
 /**
+ * The most messages one read of a room answers (`chatlet.MaxLimit`): a larger
+ * ask is clamped to it. A jump further back than what a room holds reads this
+ * much at a time. Held by the same gate.
+ */
+export const MAX_READ_PAGE = 500;
+
+/**
  * How often a tab re-asserts that somebody is typing, in ms.
  *
  * THREE SECONDS, AT MOST HALF the engine's `presence.TypingLapse` (six): the

@@ -341,6 +341,58 @@ func TestEveryDecisionRefusesInTheEnvelope(t *testing.T) {
 	}
 }
 
+// A PAGE'S REPORT IS HELD TO THE LINE THE DASHBOARD IS HELD TO: a reason, a
+// receipt or a revision of wire.ActionReportLineMaxBytes is taken, and one a
+// byte longer is refused `invalid_body` without settling the action, so the
+// page may report it again within the bound. The dashboard cuts what it
+// reports to that same constant (`contract/assistant.ts`, held equal by the
+// client gate), so a route holding the report to any other bound refuses
+// reports the page sends whole, which nobody then hears. Mutation: refuse a
+// line one byte shorter, and the report at the bound is refused.
+func TestAPagesReportIsHeldToTheLineTheDashboardIsHeldTo(t *testing.T) {
+	t.Parallel()
+	for _, field := range []string{"reason", "receipt", "revision"} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+			p := s.fleet.Propose(t, ada, pageAction)
+			s.send(t, ada, http.MethodPost, approvePath(p), decide(p.Digest), nil)
+			at := "/assistant/actions/" + p.ID.String()
+			claim := wire.ActionReport{ProtocolVersion: wire.ProtocolVersion,
+				State: wire.ActionApplying, Revision: "r1"}
+			if status, body := s.send(t, ada, http.MethodPut, at, claim, nil); status != http.StatusOK {
+				t.Fatalf("the claim answered %d %v", status, body)
+			}
+			report := func(n int) wire.ActionReport {
+				r := wire.ActionReport{ProtocolVersion: wire.ProtocolVersion,
+					State: wire.ActionInvalid, Revision: "r1", Reason: "The page refused it."}
+				line := strings.Repeat("x", n)
+				switch field {
+				case "reason":
+					r.Reason = line
+				case "receipt":
+					r.Receipt = line
+				case "revision":
+					r.Revision = line
+				}
+				return r
+			}
+			status, body := s.send(t, ada, http.MethodPut, at,
+				report(wire.ActionReportLineMaxBytes+1), nil)
+			if status != http.StatusBadRequest || body["error"] != "invalid_body" {
+				t.Errorf("a %s a byte past the line answered %d %v, want 400 invalid_body",
+					field, status, body)
+			}
+			if status, body := s.send(t, ada, http.MethodPut, at,
+				report(wire.ActionReportLineMaxBytes), nil); status != http.StatusOK {
+				t.Errorf("a %s of %d bytes answered %d %v, want it taken", field,
+					wire.ActionReportLineMaxBytes, status, body)
+			}
+		})
+	}
+}
+
 // pageAction makes a draft a page action.
 func pageAction(d *proposal.Draft) {
 	d.Tool, d.Act, d.Scope = "propose_page_change", "", wire.ScopePage

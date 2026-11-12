@@ -37,6 +37,7 @@ import type {
 import { sameValue } from "~/protocol/equal.ts";
 import { comparePositions } from "~/protocol/session.ts";
 import type { PagesReached } from "~/lib/usePaged.ts";
+import { MAX_READ_PAGE } from "~/contract/chat.ts";
 
 /** One room's transcript, as a tab holds it. */
 export interface Tail {
@@ -363,7 +364,7 @@ export function threadPagesTouched(
  * somewhere further back, and reading there fifty rows at a time would be ten
  * round trips for every five hundred messages crossed.
  */
-export const JUMP_PAGE = 500;
+export const JUMP_PAGE = MAX_READ_PAGE;
 
 /** Which rows a scroller is actually over, and what stands in for the rest. */
 export interface RowWindow {

@@ -48,7 +48,7 @@ import {
   type RuntimeCapability,
 } from "./bridge.ts";
 // RELATIVE, as in the bridge: the runtime is built alone, where the `~` alias does not exist.
-import { RUNTIME_CONTRACT } from "../contract/artifacts.ts";
+import { RUNTIME_CONTRACT } from "../contract/artifactsworkspace.ts";
 import { pathSegment } from "../lib/segment.ts";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };

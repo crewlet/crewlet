@@ -11,10 +11,12 @@
  * under it registered too much.
  */
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  ASSISTANT_ACTION_ARGS_MAX_ENUM,
   ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS,
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
+  type AssistantActionArgs,
 } from "~/contract/assistant.ts";
 import { pageContextFits } from "~/protocol/assistantWire.ts";
 import { crumbsFor } from "../crumbs.ts";
@@ -33,6 +35,18 @@ import {
 } from "./context.ts";
 
 afterEach(resetPageContextForTest);
+
+/** An action that takes `args` and does nothing with what it is given. */
+function declaring(args: AssistantActionArgs = { type: "object" }): PageActionSpec<never> {
+  return {
+    scope: "x",
+    args,
+    parse: () => ({ ok: false, reason: "Not here." }),
+    preview: () => [],
+    blocked: () => null,
+    apply: () => {},
+  };
+}
 
 const PAGE: FramePage = {
   screen: "worklet-tasks",
@@ -71,10 +85,10 @@ describe("the context a turn sends", () => {
         // ONLY THE CONTRACT'S IDS are offered: the engine's reserved one, an
         // id nobody declared and one that is no id at all are each left out.
         actions: {
-          "work.filter.apply": {} as PageActionSpec<never>,
-          "context.invalidate": {} as PageActionSpec<never>,
-          "made.up": {} as PageActionSpec<never>,
-          notdotted: {} as PageActionSpec<never>,
+          "work.filter.apply": declaring(),
+          "context.invalidate": declaring(),
+          "made.up": declaring(),
+          notdotted: declaring(),
         } as AssistantPageRegistration["actions"],
       },
     );
@@ -90,7 +104,7 @@ describe("the context a turn sends", () => {
       id: `T-${"9".repeat(150)}-${i}`,
     }));
     const actions = Object.fromEntries(
-      Array.from({ length: 40 }, (_, i) => [`page.a${i}`, {} as PageActionSpec<never>]),
+      Array.from({ length: 40 }, (_, i) => [`page.a${i}`, declaring()]),
     );
     const context = buildPageContext(
       { ...PAGE, query: { q: "x".repeat(500) } },
@@ -99,6 +113,56 @@ describe("the context a turn sends", () => {
     expect(context.resources.length).toBeLessThanOrEqual(ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES);
     expect(context.accepts.length).toBeLessThanOrEqual(ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS);
     expect(pageContextFits(context)).toBe(true);
+  });
+
+  // AN ACTION WHOSE ARGUMENTS THE ENGINE WOULD REFUSE NEVER TAKES THE PAGE
+  // DOWN WITH IT: it is left out, said once to the console, and every other
+  // action, the draft and the rest of the context go as they are. draft.set
+  // past the bounds stays offered without its arguments, which the engine
+  // takes for it alone. Mutation: send every action as declared, and this
+  // context is one the engine refuses; leave draft.set out too, and the open
+  // draft cannot be changed at all; say it at every build, and it is said twice.
+  test("leaves out an action whose arguments the engine would refuse, and sends the rest", () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seats = Array.from({ length: ASSISTANT_ACTION_ARGS_MAX_ENUM + 1 }, (_, i) => `seat-${i}`);
+    const actions = {
+      "budgets.ceiling.prefill": declaring({
+        type: "object",
+        properties: { seat: { type: "string", enum: seats } },
+      }),
+      "work.filter.apply": declaring(),
+      "draft.set": declaring({
+        type: "object",
+        properties: {
+          values: {
+            type: "object",
+            properties: Object.fromEntries(seats.map((s) => [s.replace("-", "_"), {}])),
+          },
+        },
+      }),
+    };
+    try {
+      const context = buildPageContext(PAGE, {
+        actions,
+        resources: [{ kind: "task", id: "ENG-2" }],
+      });
+      expect(context.accepts).toEqual(["work.filter.apply", "draft.set"]);
+      expect(Object.keys(context.action_args ?? {})).toEqual(["work.filter.apply"]);
+      expect(Object.keys(context.action_revisions ?? {})).toEqual([
+        "work.filter.apply",
+        "draft.set",
+      ]);
+      expect(context.resources).toEqual([{ kind: "task", id: "ENG-2" }]);
+      expect(pageContextFits(context)).toBe(true);
+      buildPageContext(PAGE, { actions });
+      expect(warned.mock.calls).toEqual([
+        [
+          "Ask Crewlet is not offered budgets.ceiling.prefill on worklet-tasks: args.seat lists 65 values, over 64, which the engine refuses.",
+        ],
+      ]);
+    } finally {
+      warned.mockRestore();
+    }
   });
 
   test("a revision is the page's: the same page is the same revision, any change another", () => {

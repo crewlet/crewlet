@@ -13,7 +13,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import type { AssistantActionEvent, AssistantActionReport } from "~/contract/assistant.ts";
+import {
+  ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES,
+  type AssistantActionEvent,
+  type AssistantActionReport,
+} from "~/contract/assistant.ts";
+import { bytesOf } from "~/lib/clip.ts";
 import { RestError } from "~/protocol/rest.ts";
 import {
   pageSnapshot,
@@ -242,6 +247,39 @@ describe("a page action", () => {
     await takeAction(action({ payload: 7 }), true, deps, noWait);
     expect(reports[1]).toMatchObject({ state: "invalid", reason: "Not a set of filters." });
     expect(settled[0]).toMatchObject({ state: "invalid", words: "Not a set of filters." });
+  });
+
+  // THE REPORT IS ONE SHORT LINE, as the engine takes it: a screen's sentence
+  // or a page title past it is cut at a whole character and marked, never
+  // sent whole for the engine to refuse, which would leave the turn waiting on
+  // an outcome nobody heard. The tab still draws the screen's whole sentence.
+  // Mutation: report the reason or the receipt as the screen wrote it, and its
+  // report is past the line.
+  test("reports a long reason or receipt within the engine's line, and draws it whole", async () => {
+    const sentence = `Datadog offers SRE no level called “${"設".repeat(120)}”.`;
+    registerPage({
+      actions: {
+        "work.filter.apply": { ...spec, parse: () => ({ ok: false, reason: sentence }) },
+      },
+    });
+    const refused = harness();
+    await takeAction(action(), true, refused.deps, noWait);
+    const reason = refused.reports[1]?.reason ?? "";
+    expect(bytesOf(sentence)).toBeGreaterThan(ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES);
+    expect(bytesOf(reason)).toBeLessThanOrEqual(ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES);
+    expect(reason).toMatch(/^Datadog offers SRE no level called “設+…$/);
+    expect(refused.settled[0]).toMatchObject({ state: "invalid", words: sentence });
+
+    resetPageActionsForTest();
+    resetPageContextForTest();
+    const title = `Knowledge › ${"設計".repeat(54)}`;
+    setFramePage({ ...PAGE, title });
+    registerPage({ actions: { "work.filter.apply": spec } });
+    const applied = harness();
+    await takeAction(action(), true, applied.deps, noWait);
+    const receipt = applied.reports[1]?.receipt ?? "";
+    expect(bytesOf(receipt)).toBeLessThanOrEqual(ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES);
+    expect(receipt).toMatch(/^Applied to Knowledge › (設計)+設?…$/);
   });
 
   test("an outcome report nobody answered is sent again, and one the engine refused is not", async () => {

@@ -31,7 +31,7 @@ import {
   Skeleton,
   type SurfaceTone,
 } from "@crewlethq/ui";
-import { DASHBOARD_COLUMNS } from "~/contract/artifacts.ts";
+import { DASHBOARD_COLUMNS } from "~/contract/artifactsworkspace.ts";
 import type {
   ArtifactDetail,
   DashboardBoardDataset,

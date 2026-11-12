@@ -157,7 +157,7 @@ import {
   useDirectoryMoved,
   useHumanSeats,
 } from "~/components/people.tsx";
-import { FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
+import { DIRECTORY_PAGE_MAX, FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
@@ -566,8 +566,8 @@ function settled(read: RestResult<unknown>): boolean {
 // Reads
 // ---------------------------------------------------------------------------
 
-/** A page as large as the directory serves (`iamdomain.MaxPageSize`). */
-const PAGE = 200;
+/** A page as large as the directory serves. */
+const PAGE = DIRECTORY_PAGE_MAX;
 
 /** The access the company document — and so every contact identity — is read under. */
 const CONFIG_READ = ADMIN;

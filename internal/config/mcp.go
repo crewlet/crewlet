@@ -47,6 +47,22 @@ var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 // `mcp__crewlet__reply` reads as the agent's own.
 const ToolServerName = "crewlet"
 
+// claudeContainerServer is the MCP server name Claude Code takes for its own
+// container's tools. The clearing of old tool results it has the API make to a
+// long session's requests (the server-side clear_tool_uses edit) clears a call
+// to `mcp__container__` followed by one of its built-in tools' names (`Read`,
+// `Bash`, `Grep` and the rest) as that built-in's own: the only use either
+// measured release, 2.1.310 or 2.1.322, makes of the prefix.
+//
+// RESERVED as [ToolServerName] is: an `mcp_servers` entry may not take it. A
+// box names each seat server by its configured name, so a company server called
+// `container` serving a tool named like a built-in would have its calls'
+// results cleared from what a session that continues is sent, while the engine
+// counts the session as holding them and tells them to no run again. Refused
+// at the name rather than handled at the session, since no reading of a kept
+// session can see a clearing the API makes at the continuation's own request.
+const claudeContainerServer = "container"
+
 // MCPServer is one tool server.
 //
 // ALL tool servers are declared here — including the ones an integration

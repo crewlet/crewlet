@@ -4,7 +4,7 @@
  * kind's name and a kind the engine grows is one every screen answers for.
  */
 
-import { ARTIFACT_KIND_SPECS } from "~/contract/artifacts.ts";
+import { ARTIFACT_KIND_SPECS } from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDetail, ArtifactKind } from "~/protocol/index.ts";
 
 /** Whether a kind runs author code in a sandboxed frame on the artifact origin. */

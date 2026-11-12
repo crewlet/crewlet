@@ -78,6 +78,24 @@ export const MACHINE_LOGIN = "^[a-z0-9]+(?:-[a-z0-9]+)*(?::[a-z0-9]+(?:-[a-z0-9]
 export const MAX_LOGIN = 64;
 
 /**
+ * A seat's handle, as the engine holds one (`iam.ValidSeatHandle`): a
+ * lowercase letter or a digit, then lowercase letters, digits and hyphens, at
+ * most [MAX_LOGIN] characters. HELD BY BEHAVIOUR, as the login grammars are:
+ * `internal/api/iamapi.TestTheDashboardChecksASeatHandleByTheEnginesGrammar`
+ * runs a corpus through it and through the engine's own check.
+ */
+export const SEAT_HANDLE = "^[a-z0-9][a-z0-9-]*$";
+
+/**
+ * The runs of a name a handle's slug replaces with one hyphen, once the name
+ * is trimmed and lowercased (`org.NonSlugPattern`, which `org.Slugify`
+ * applies): the org builder offers a new seat the handle its name slugs to,
+ * which reads as the one the engine would derive only while the two agree.
+ * Held by `internal/org.TestTheOrgBuilderSlugsANameAsTheEngineDoes`.
+ */
+export const NON_SLUG_PATTERN = "[^a-z0-9]+";
+
+/**
  * The prefixes that name a CREDENTIAL in the operator column (`pat:` a
  * machine token, `session:` a browser session), which no machine's login may
  * begin with.
@@ -106,6 +124,13 @@ export const TOKEN_DEFAULT_DAYS = 90;
 
 /** See [TOKEN_DEFAULT_DAYS]. */
 export const TOKEN_MAX_DAYS = 365;
+
+/**
+ * The most rows one page of the directory answers (`iamdomain.MaxPageSize`):
+ * a larger ask is clamped to it, so Access reads in pages this large. Held by
+ * `internal/api/iamapi.TestTheDashboardPagesTheDirectoryAtTheEnginesSize`.
+ */
+export const DIRECTORY_PAGE_MAX = 200;
 
 /**
  * The kinds of finding `GET /iam/check` reports, in the engine's order

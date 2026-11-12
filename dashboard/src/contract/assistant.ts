@@ -30,24 +30,63 @@ export const ASSISTANT_PAGE_CONTEXT_MAX_BYTES = 16384;
 export const ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES = 50;
 /** The most page actions a page context offers. */
 export const ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS = 32;
+/** A screen's name, as the page context names it: `worklet-tasks`. */
+export const ASSISTANT_PAGE_SCREEN_PATTERN = "^[a-z][a-z0-9-]{0,63}$";
+/**
+ * A name the page context keys a value by: a route parameter, a query key, a
+ * draft's step, a draft field's path (`colors.primary`).
+ */
+export const ASSISTANT_PAGE_KEY_PATTERN = "^[a-z][a-z0-9_.]{0,63}$";
+/** The longest page title, in characters. */
+export const ASSISTANT_PAGE_TITLE_MAX_RUNES = 120;
+/** The longest route parameter or query value, in bytes, and an action's enumerated or constant value. */
+export const ASSISTANT_PAGE_VALUE_MAX_BYTES = 512;
+/** The longest id the page context names (a resource, its version, a revision, a draft's id), in bytes. */
+export const ASSISTANT_PAGE_ID_MAX_BYTES = 200;
+/** The most keys the route parameters, or the query, carry. */
+export const ASSISTANT_PAGE_MAP_MAX_KEYS = 32;
 /** The most fields an open draft's snapshot lists; the rest are counted in its `more`. */
 export const ASSISTANT_PAGE_DRAFT_MAX_FIELDS = 40;
 /** The longest value a draft field carries, in characters; a longer one is cut and marked `truncated`. */
 export const ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES = 1000;
 /** The longest help a screen gives with its draft, in characters. */
 export const ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES = 600;
+/** The longest label a draft field carries, in characters: a page title's bound. */
+export const ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES = 120;
+/** The longest hint a draft field carries, in characters. */
+export const ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES = 200;
+/** The longest name a proposed file of a draft's file field carries, in bytes. */
+export const ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES = 200;
 /**
  * A draft field path that names a credential, read by segment: such a field is
  * sent redacted whatever the screen said (`wire.PageDraftSecretPath`).
  */
 export const ASSISTANT_PAGE_DRAFT_SECRET_PATH =
   "(^|[._])(password|passphrase|secret|secrets|token|tokens|credential|credentials|(api|private|signing|access|secret)[._]?key)([._]|$)";
+/**
+ * The most one page action's arguments (its `action_args` schema) encode to,
+ * in bytes, as the engine encodes them: a page context declaring more is
+ * refused, and every question with it.
+ */
+export const ASSISTANT_ACTION_ARGS_MAX_BYTES = 6144;
+/** The most members one object of a page action's arguments declares, by name and by pattern together. */
+export const ASSISTANT_ACTION_ARGS_MAX_MEMBERS = 32;
+/** The most values one enum of a page action's arguments lists. */
+export const ASSISTANT_ACTION_ARGS_MAX_ENUM = 64;
+/** The longest description one part of a page action's arguments carries, in characters. */
+export const ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES = 300;
 /** The longest reason an administrator gives for a compliance read. */
 export const ASSISTANT_AUDIT_REASON_MAX_RUNES = 500;
 /** How often a quiet stream writes a keepalive comment, in seconds. */
 export const ASSISTANT_KEEPALIVE_SECONDS = 15;
 /** The reserved action the server sends after a write lands. */
 export const ASSISTANT_ACTION_CONTEXT_INVALIDATE = "context.invalidate";
+/**
+ * The longest revision, reason or receipt a page's report of a page action
+ * carries, in bytes: each one short line. The engine refuses a report past it,
+ * and a refused report is one the turn never hears.
+ */
+export const ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES = 256;
 /** What opens a proposal's digest on the wire. */
 export const ASSISTANT_DIGEST_PREFIX = "sha256:";
 
@@ -623,6 +662,8 @@ export interface AssistantActionArgs {
   const?: string;
   minLength?: number;
   maxLength?: number;
+  /** An RE2 expression a string matches as written, anchored where it says `^...$`. */
+  pattern?: string;
   minItems?: number;
   maxItems?: number;
   items?: AssistantActionArgs;

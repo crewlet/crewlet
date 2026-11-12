@@ -13,10 +13,10 @@
  * THE SAME ALLOWLISTS AGAIN. The tree is the engine's, but a renderer that
  * trusted its input would draw whatever a future bug put there. Every element,
  * style property, drawing element and drawing attribute is checked against the
- * subset (`contract/artifacts.ts`, gated equal to the engine's), and anything
- * else is drawn as nothing (an attribute, a declaration) or as its text alone
- * (an element). A style value that names a URL, a variable or an expression is
- * dropped whatever its property.
+ * subset (`contract/artifactsworkspace.ts`, gated equal to the engine's), and
+ * anything else is drawn as nothing (an attribute, a declaration) or as its
+ * text alone (an element). A style value that names a URL, a variable or an
+ * expression is dropped whatever its property.
  *
  * ONE DRAWING, ONE ID SPACE. An inline SVG's ids are global in a document, and
  * one slide is drawn several times at once (the stage, its thumbnail, the
@@ -65,7 +65,7 @@ import {
   SLIDE_STYLE_PROPERTIES,
   SLIDE_SVG_ATTRIBUTES,
   SLIDE_SVG_ELEMENTS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import type { DeckSlide, SlideDecl, SlideNode } from "~/protocol/index.ts";
 
 type SlideIcon = (typeof SLIDE_ICONS)[number];

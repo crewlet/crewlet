@@ -84,7 +84,7 @@ import type {
   DashboardDatasetAnswer,
   DashboardWidget as Widget,
 } from "~/protocol/index.ts";
-import { DASHBOARD_COLUMNS } from "~/contract/artifacts.ts";
+import { DASHBOARD_COLUMNS } from "~/contract/artifactsworkspace.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { useDensity, usePalette, useTheme } from "~/lib/prefs.ts";

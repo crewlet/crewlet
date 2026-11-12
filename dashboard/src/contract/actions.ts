@@ -623,3 +623,11 @@ export const ACTIONS = {
     scope: "person",
   },
 } as const;
+
+/**
+ * The longest `reason` a `pause_seat` carries, in characters (Unicode code
+ * points): the engine's `builtin.MaxPauseReasonRunes`, which refuses a longer
+ * one. The pause dialog says so before the press. Held by
+ * `internal/agent/builtin.TestTheDashboardBoundsAPauseReasonAtTheEnginesCap`.
+ */
+export const PAUSE_REASON_MAX_RUNES = 500;

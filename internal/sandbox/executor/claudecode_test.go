@@ -198,7 +198,8 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 			t.Parallel()
 			runner := executor.NewClaudeCode()
 			script := startAndScript(t, runner, box(t, runner), req)
-			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT; ")
+			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT "+
+				"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
 			launch := strings.Index(script, "claude -p")
 			if unset < 0 || launch < 0 || unset > launch {
 				t.Fatalf("the variables are not unset before the harness starts (unset at %d, harness at %d):\n%s",

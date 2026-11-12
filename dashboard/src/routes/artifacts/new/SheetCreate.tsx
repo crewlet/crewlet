@@ -46,7 +46,7 @@ import {
 } from "@crewlethq/ui";
 import { Columns3Glyph, FileTextGlyph, PlusGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
-import { COLLECTION_PRESETS } from "~/contract/artifacts.ts";
+import { COLLECTION_PRESETS } from "~/contract/artifactsworkspace.ts";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import { bytesOverWords, fmtBytes, plural, utf8Bytes } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
@@ -85,8 +85,8 @@ import {
 import { COLUMN_TYPE_WORDS } from "~/lib/artifacts/words.ts";
 import type { CollectionPreset } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
-import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } from "./create.ts";
+import { filedTaskText, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
 import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
@@ -200,6 +200,8 @@ export function SheetCreate() {
   const nav = useNavigator();
   const who = useWhoBuildsIt("sheet");
   const task = useFileArtifactTask();
+  // THE FOLDER THE TASK NAMES, as the task's own text is written from it.
+  const saveIn = useSaveIn();
   const panel = useAskPanel();
   const agentName = chosenAgent(who)?.seat.name ?? "";
   const body = useRef<HTMLDivElement>(null);
@@ -305,7 +307,7 @@ export function SheetCreate() {
   // the brief does not.
   const shaped = draft !== undefined && (start !== "blank" || touched);
   const handed = shaped ? `${brief.trim()}\n\n${draftBrief(draft, COLUMN_TYPE_WORDS)}` : brief;
-  const taskText = artifactTaskBody("sheet", handed);
+  const taskText = filedTaskText({ kind: "sheet", brief: handed }, saveIn);
   const taskBytes = utf8Bytes(taskText);
   const askHold =
     task.held ??

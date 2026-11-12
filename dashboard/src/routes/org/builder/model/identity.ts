@@ -29,30 +29,47 @@
  * company a lead's draft of one unit does not hold.
  */
 
-/** The longest handle or key: a seat handle's width (`iam.MaxLogin`) and the key grammar's own bound. */
-export const MAX_IDENTITY = 64;
+import { MAX_UNIT_ID, UNIT_ID_PATTERN } from "~/contract/config.ts";
+import { MAX_LOGIN, NON_SLUG_PATTERN, SEAT_HANDLE } from "~/contract/identity.ts";
 
-/** A seat handle: one segment of lowercase letters, digits and hyphens (`org.ValidHandle`). */
-export const HANDLE_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/**
+ * A seat handle: one segment of lowercase letters, digits and hyphens, at most
+ * [MAX_LOGIN] characters (`org.ValidHandle`, held as `SEAT_HANDLE`).
+ */
+export const HANDLE_PATTERN = new RegExp(SEAT_HANDLE);
 
-/** A unit key: a lowercase letter, then letters, digits, `-` and `_` (`config.entityID`). */
-export const UNIT_KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+/**
+ * A unit key: a lowercase letter, then letters, digits, `-` and `_`, at most
+ * [MAX_UNIT_ID] characters (`config.UnitIDPattern`, held as `UNIT_ID_PATTERN`).
+ */
+export const UNIT_KEY_PATTERN = new RegExp(UNIT_ID_PATTERN);
+
+/** The runs of a name a slug replaces with one hyphen (`org.NonSlugPattern`, held as `NON_SLUG_PATTERN`). */
+const NON_SLUG = new RegExp(NON_SLUG_PATTERN, "g");
 
 /** A name reduced to the slug a handle is minted from (`org.Slugify`). */
 export function slugify(name: string): string {
   return name
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(NON_SLUG, "-")
     .replace(/^-+|-+$/g, "");
 }
 
-/** The identity `base` with the first suffix that is free: `base`, `base-2`, `base-3`. */
-function free(base: string, taken: ReadonlySet<string>, fits: (value: string) => string): string {
+/**
+ * The identity `base` with the first suffix that is free: `base`, `base-2`,
+ * `base-3`, cut so the numbered one stays within `width`.
+ */
+function free(
+  base: string,
+  taken: ReadonlySet<string>,
+  fits: (value: string) => string,
+  width: number,
+): string {
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) {
     const suffix = `-${n}`;
-    const candidate = fits(base.slice(0, MAX_IDENTITY - suffix.length)) + suffix;
+    const candidate = fits(base.slice(0, width - suffix.length)) + suffix;
     if (!taken.has(candidate)) return candidate;
   }
 }
@@ -62,8 +79,8 @@ const trimEnd = (value: string): string => value.replace(/[-_]+$/, "");
 
 /** The handle a new seat called `name` is offered: its slug, made free of `taken`. */
 export function mintHandle(name: string, taken: ReadonlySet<string>): string {
-  const slug = trimEnd(slugify(name).slice(0, MAX_IDENTITY)) || "seat";
-  return free(slug, taken, trimEnd);
+  const slug = trimEnd(slugify(name).slice(0, MAX_LOGIN)) || "seat";
+  return free(slug, taken, trimEnd, MAX_LOGIN);
 }
 
 /**
@@ -75,8 +92,8 @@ export function mintUnitKey(name: string, taken: ReadonlySet<string>): string {
   let slug = slugify(name);
   if (slug === "") slug = "unit";
   else if (!/^[a-z]/.test(slug)) slug = `unit-${slug}`;
-  slug = trimEnd(slug.slice(0, MAX_IDENTITY));
-  return free(slug, taken, trimEnd);
+  slug = trimEnd(slug.slice(0, MAX_UNIT_ID));
+  return free(slug, taken, trimEnd, MAX_UNIT_ID);
 }
 
 /**
@@ -85,7 +102,7 @@ export function mintUnitKey(name: string, taken: ReadonlySet<string>): string {
  */
 export function handleProblem(value: string, taken: ReadonlySet<string>): string | null {
   if (value === "") return "A seat needs a handle.";
-  if (value.length > MAX_IDENTITY) return `A handle is at most ${MAX_IDENTITY} characters.`;
+  if (value.length > MAX_LOGIN) return `A handle is at most ${MAX_LOGIN} characters.`;
   if (!HANDLE_PATTERN.test(value)) {
     return "A handle is lowercase letters, digits and hyphens, starting with a letter or a digit.";
   }
@@ -97,7 +114,7 @@ export function handleProblem(value: string, taken: ReadonlySet<string>): string
 export function unitKeyProblem(value: string, taken: ReadonlySet<string>): string | null {
   if (value === "") return "A unit needs a key.";
   if (!UNIT_KEY_PATTERN.test(value)) {
-    return `A key is lowercase letters, digits, hyphens and underscores, starting with a letter, at most ${MAX_IDENTITY} characters.`;
+    return `A key is lowercase letters, digits, hyphens and underscores, starting with a letter, at most ${MAX_UNIT_ID} characters.`;
   }
   if (taken.has(value)) return `${value} already names a seat or a unit.`;
   return null;

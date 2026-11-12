@@ -359,7 +359,10 @@ A slide's id is its layout's, numbered from two when a layout is used again
   slide files it changes.
 - **Edit.** A person with `editor` edits text in place, speaker notes, the
   order and the deck's title, and deletes slides; Save publishes a version
-  against the one they opened. The editor writes each changed slide back in
+  against the one they opened. A title past 120 bytes, a slide's notes past
+  4,000 characters or a version label past its bound is said at its field and
+  holds Save, since the engine refuses the whole publish; nothing typed or
+  pasted is cut to fit. The editor writes each changed slide back in
   this format's canonical form, every value as the engine stores it, so a
   slide a person saved reads back to the same tree. A save refused because
   somebody published since is merged onto their version slide by slide, and

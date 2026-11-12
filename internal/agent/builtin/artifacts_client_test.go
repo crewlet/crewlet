@@ -15,7 +15,7 @@ import (
 // A turn's transcript draws a link to the artifact beside every call that
 // landed a version: it matches the call by the tool's NAME and reads the
 // artifact's id and the version's number out of the answer by two FIELDS, all
-// three declared once in `contract/artifacts.ts`. A rename of a tool or of
+// three declared once in `contract/artifactsworkspace.ts`. A rename of a tool or of
 // either field would leave every publish in every transcript as a bare tool
 // call, with nothing on any screen to say the link had gone, so this runs the
 // tools and reads their answers the way the dashboard does.
@@ -30,7 +30,7 @@ func TestATranscriptLinksTheArtifactAPublishWrote(t *testing.T) {
 	engine := []string{builtin.CreateArtifactTool, builtin.PublishArtifactTool}
 	if !slices.Equal(client, engine) {
 		t.Errorf("the dashboard links the artifact off calls named %q and the tools that "+
-			"land a version are %q: change ARTIFACT_PUBLISH_TOOLS in contract/artifacts.ts",
+			"land a version are %q: change ARTIFACT_PUBLISH_TOOLS in contract/artifactsworkspace.ts",
 			client, engine)
 	}
 	idField, err := clientsource.Scalar(tree, "ARTIFACT_ANSWER_ID")

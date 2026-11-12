@@ -1,6 +1,6 @@
 # Cloudflare
 
-Cloudflare gives each agent its **own account API token**, scoped to the zones the company chooses and to the permissions its level allows, and the **Cloudflare API MCP server** to use it through. An agent reads zone analytics, cache status, DNS records, rules and settings as itself and, where you allow it, purges the cache, edits cache rules, changes the zones' caching and CDN settings, and changes their WAF rules and the account's IP lists.
+Cloudflare gives each agent its **own account API token**, scoped to the zones the company chooses and to the permissions its level allows, and the **Cloudflare API MCP server** to use it through. An agent reads zone analytics, cache status, DNS records, rules and settings as itself and, where you allow it, purges the cache, edits cache rules, changes the zones' caching and CDN settings and their transform rules, and changes their WAF rules and the account's IP lists.
 
 The engine mints, narrows, rolls and deletes those tokens itself, through one token you create for it. Nothing here receives events from Cloudflare yet; see [What is not supported yet](#what-is-not-supported-yet).
 
@@ -8,12 +8,12 @@ The engine mints, narrows, rolls and deletes those tokens itself, through one to
 
 | An agent on | Can | Cannot |
 |---|---|---|
-| `read` (the default) | Read zone analytics, account analytics, cache rules and status, DNS records, firewall rules, WAF rules (custom rules included), SSL and certificate settings and every zone setting, in the company's zones, and the account's IP lists | Change anything |
-| `operate` | Everything `read` can, plus purge the cache and create, edit and delete cache rules | Edit DNS records, WAF rules or any zone setting |
-| `configure` | Everything `operate` can, plus change every zone setting (cache level, browser cache TTL, development mode, Always Online, Brotli, HTTP/2 and HTTP/3, early hints, tiered cache and cache reserve among them) and create, edit and delete compression rules | Edit DNS records, WAF rules, IP lists or certificates |
+| `read` (the default) | Read zone analytics, account analytics, cache rules and status, transform rules, DNS records, firewall rules, WAF rules (custom rules included), SSL and certificate settings and every zone setting, in the company's zones, and the account's IP lists | Change anything |
+| `operate` | Everything `read` can, plus purge the cache and create, edit and delete cache rules | Edit DNS records, WAF rules, transform rules or any zone setting |
+| `configure` | Everything `operate` can, plus change every zone setting (cache level, browser cache TTL, development mode, Always Online, Brotli, HTTP/2 and HTTP/3, early hints, tiered cache and cache reserve among them) and create, edit and delete compression rules and transform rules (URL rewrites, and request and response header changes such as adding a `Permissions-Policy` response header) | Edit DNS records, WAF rules, IP lists or certificates |
 | `secure` | Everything `configure` can, plus create, edit and delete the zones' WAF rules (custom rules and rate limiting rules) and the account's IP lists and the addresses on them | Edit DNS records or certificates |
 
-Cloudflare grants every zone setting as one permission group, so an agent on `configure` can also change a zone's SSL/TLS encryption mode, minimum TLS version and security level. Give it to an agent you trust with those.
+Cloudflare grants every zone setting as one permission group, so an agent on `configure` can also change a zone's SSL/TLS encryption mode, minimum TLS version and security level. It grants every transform rule as one group as well, so the agent that can add a response header can also rewrite the URL and the request headers your origin receives. Give it to an agent you trust with those.
 
 `secure` decides who reaches your zones: an allow or skip rule, or an address an agent adds to an IP list, keeps working after the agent's token is gone. Raising an agent to it asks for a fresh sign-in (step-up), and `secure` is never the default. Review the zones' WAF rules and the account's IP lists when you take it away. IP lists belong to the account rather than to a zone, so `provisioning.zones` does not narrow them: an agent on any level reads every list in the account, and one on `secure` can change any of them.
 
@@ -52,6 +52,7 @@ Then add **every permission a level can grant**, so the provisioner holds everyt
 | Analytics Read | Zone, Analytics, Read | `read`, `operate`, `configure` and `secure` |
 | DNS Read | Zone, DNS, Read | `read`, `operate`, `configure` and `secure` |
 | Cache Settings Read | Zone, Cache Rules, Read | `read`, `operate`, `configure` and `secure` |
+| Zone Transform Rules Read | Zone, Transform Rules, Read | `read`, `operate`, `configure` and `secure` |
 | Firewall Services Read | Zone, Firewall Services, Read | `read`, `operate`, `configure` and `secure` |
 | Zone WAF Read | Zone, Zone WAF, Read | `read`, `operate`, `configure` and `secure` |
 | SSL and Certificates Read | Zone, SSL and Certificates, Read | `read`, `operate`, `configure` and `secure` |
@@ -61,10 +62,11 @@ Then add **every permission a level can grant**, so the provisioner holds everyt
 | Cache Settings Write | Zone, Cache Rules, Edit | `operate`, `configure` and `secure` |
 | Zone Settings Write | Zone, Zone Settings, Edit | `configure` and `secure` |
 | Response Compression Write | Zone, Response Compression, Edit | `configure` and `secure` |
+| Zone Transform Rules Write | Zone, Transform Rules, Edit | `configure` and `secure` |
 | Zone WAF Write | Zone, Zone WAF, Edit | `secure` |
 | Account Rule Lists Write | Account, Account Filter Lists, Edit | `secure` |
 
-Zone Read and Account Settings Read are granted to every level as well, which the first table already covers. The dashboard names some groups differently from the API (Cache Settings is Cache Rules there, and Account Rule Lists is Account Filter Lists), as the Dashboard and API tabs of Cloudflare's [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) reference show.
+Zone Read and Account Settings Read are granted to every level as well, which the first table already covers. The dashboard names some groups differently from the API (Cache Settings is Cache Rules there, Zone Transform Rules is Transform Rules, and Account Rule Lists is Account Filter Lists), as the Dashboard and API tabs of Cloudflare's [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) reference show.
 
 Under **Zone resources**, include all zones from the account, or the same zones `provisioning.zones` lists. Leave **Client IP address filtering** empty: the Cloudflare API MCP server refuses a token with IP filtering, and Crewlet never sets it on an agent's token either. An expiry date is your choice; see [The provisioner token's own expiry](#the-provisioner-tokens-own-expiry).
 
@@ -110,16 +112,16 @@ A level is a fixed set of Cloudflare permission groups, the same in every compan
 
 | Level | Permission groups (API names) |
 |---|---|
-| `read` | Zone Read, Zone Settings Read, Analytics Read, DNS Read, Cache Settings Read, Firewall Services Read, Zone WAF Read, SSL and Certificates Read, Account Analytics Read, Account Rule Lists Read and Account Settings Read |
+| `read` | Zone Read, Zone Settings Read, Analytics Read, DNS Read, Cache Settings Read, Zone Transform Rules Read, Firewall Services Read, Zone WAF Read, SSL and Certificates Read, Account Analytics Read, Account Rule Lists Read and Account Settings Read |
 | `operate` | Everything in `read`, plus Cache Purge and Cache Settings Write |
-| `configure` | Everything in `operate`, plus Zone Settings Write and Response Compression Write |
+| `configure` | Everything in `operate`, plus Zone Settings Write, Response Compression Write and Zone Transform Rules Write |
 | `secure` | Everything in `configure`, plus Zone WAF Write and Account Rule Lists Write |
 
 Account Settings Read is in every level because the Cloudflare API MCP server needs to find the account the token belongs to before it answers anything.
 
 Crewlet looks each group up by its exact name in the account's own list (`GET /accounts/{account_id}/tokens/permission_groups`) on every pass and uses the ID Cloudflare returns, so nothing depends on IDs that could differ between accounts. A name the account does not offer is **a finding, never a fallback**: the token is not minted rather than minted with less, or more, than its level says.
 
-`configure` adds what Cloudflare's API reference asks for to change caching and CDN settings: every zone setting, and the tiered cache, cache reserve, cache variants and Argo settings, take Zone Settings Write, and compression rules take Response Compression Write. Page Rules are left out because Cloudflare does not let an account API token use them.
+`configure` adds what Cloudflare's API reference asks for to change caching and CDN settings: every zone setting, and the tiered cache, cache reserve, cache variants and Argo settings, take Zone Settings Write, and compression rules take Response Compression Write. It adds Zone Transform Rules Write too, which Cloudflare asks for to change a zone's transform rules (its URL rewrite, request header and response header rules, in the `http_request_transform`, `http_request_late_transform` and `http_response_headers_transform` phases of `/zones/{zone_id}/rulesets`); `read` holds Zone Transform Rules Read, so every level reads them. Page Rules are left out because Cloudflare does not let an account API token use them.
 
 `read` reaches WAF custom rules through Zone WAF Read. Firewall Services Read covers only Cloudflare's older firewall resources, such as IP access rules, and Cloudflare refuses a zone's custom rules (`GET /zones/{zone_id}/rulesets/phases/http_request_firewall_custom/entrypoint`) to a token without Zone WAF. Account Rule Lists Read reads the IP lists a rule matches on, such as `ip.src in $office` (`GET /accounts/{account_id}/rules/lists`).
 
@@ -249,3 +251,5 @@ An agent's own failures are also reported on that agent's row on the **Agents** 
 If an agent says its tool refuses every call, check the token has no IP address filter (the MCP server refuses one) and that Account Settings Read is on the provisioner, so every level can grant it.
 
 If an agent is refused reading a WAF custom rule (`403`, "request is not authorized"), its token was minted without Zone WAF Read. Add Zone WAF: Read and Account Filter Lists: Read to the provisioner token at Cloudflare (its value does not change), and the next pass brings every agent's token up to its level. An agent that has to change the rule needs `secure`.
+
+If an agent is refused reading or changing a transform rule, such as a response header rule, its token predates the Crewlet version that added Zone Transform Rules to the levels, or the provisioner token does not hold them yet. Add Transform Rules: Read and Transform Rules: Edit (under Zone) to the provisioner token at Cloudflare, and the next pass brings every agent's token up to its level, keeping its value. Changing a transform rule needs `configure` or `secure`.

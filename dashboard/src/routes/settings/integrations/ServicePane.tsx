@@ -46,6 +46,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { PROJECT_PAGE } from "~/contract/work.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { documentUnits, handleLabel, indexOrg, seatPath, type Seat } from "~/lib/seats.ts";
@@ -383,7 +384,7 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
   const now = useNow();
   const org = useOrg();
   const agents = useMemo(() => indexOrg(org).seats.filter((s) => s.kind === "agent"), [org]);
-  const projects = useQuery("work_projects", { limit: 200 }, { enabled, pollMs: 120_000 });
+  const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { enabled, pollMs: 120_000 });
   const workload = useQuery("work_workload", undefined, { enabled, pollMs: 60_000 });
   const feed = useQuery(
     "work_activity",
