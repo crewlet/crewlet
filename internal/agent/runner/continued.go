@@ -468,12 +468,14 @@ func (r *Runner) checkoutName() string {
 //
 // ONE READ CAP FOR BOTH LISTS ([ledger.FormatCallGroups]), never one each: they
 // are one round's calls, told in one brief, and capped apart they would be
-// told twice the reads the cap allows a round. It is spent in the order the brief tells
-// them, the calls after the save first: those are the calls the session cannot
-// otherwise know were made, while a late call is one it may already show, and
-// a read's line never carries what the read returned, so a read told and a
-// read counted are alike one the session may run again. The fit is over the
-// two lists together, which names exactly what the one cap shows.
+// told twice the reads the cap allows a round. It is spent in the order the
+// brief tells them, the calls after the save first: where the session's harness
+// ended its own run they are calls it lacks outright, and where it was or may
+// have been cut off they include calls it may lack, an earlier job's among
+// them, while a late call is one the session may already show. On every path a
+// read's line carries nothing the read returned, so a read listed and a read
+// counted are alike one the session may run again. The fit is over the two
+// lists together, which names exactly what the one cap shows.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, leadHeld string,
 	surface *tools.Surface, b provenance.Boundary) prompts.AfterSave {
 

@@ -97,11 +97,12 @@ type FormatOptions struct {
 }
 
 // Format is the budgeted form the cross-round ledger uses, and the lists of
-// the calls a relaunch that continues a kept session is told its run made
-// (internal/agent/runner's calledAfter): those after the session's save, which
-// [FormatElided] follows there as it does a round here, and those that finished
-// only after their run stopped waiting for them, rendered together under one
-// read cap ([FormatCallGroups]).
+// the calls a run that continues a session, kept or in its job's own box, is
+// told its round made (internal/agent/runner's calledAfter): those after the
+// session's save, which [FormatElided] follows there as it does a round here,
+// and the late ones (those that finished only after their run stopped waiting
+// for them, those nobody waited for, and those still in flight), rendered
+// together under one read cap ([FormatCallGroups]).
 // The caller fits the pieces it names and sets [FormatOptions.Fitted].
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
@@ -161,7 +162,7 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 
 // FormatCallGroups renders the lists of calls one brief tells under headings
 // of its own (internal/agent/runner's calledAfter: the calls after a session's
-// save, and those that finished only after their run stopped waiting for them),
+// save, and the late ones, those still in flight among them),
 // one string per group in the order given, each as [FormatCalls] renders a
 // list, "(none)" and its omitted line included, UNDER ONE READ CAP:
 // [FormatOptions.MaxReadCalls] counts the read lines of every group together,

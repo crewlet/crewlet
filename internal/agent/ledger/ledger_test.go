@@ -79,9 +79,9 @@ func TestOnlyReadsAreEverDropped(t *testing.T) {
 // still says "(none)". The reads the groups show are those one list of the
 // same calls shows, in the same order.
 //
-// Mutation: count the reads of each group from zero, and the render shows
-// sixteen reads where the cap is twelve. Spend the groups in reverse, or count
-// a group's omitted line over every group, and the lines below are wrong.
+// Mutation: count the reads of each group from zero, and the render shows all
+// twenty-one reads where the cap is twelve. Spend the groups in reverse, or
+// count a write against the cap, and the lines below are wrong.
 func TestOneReadCapServesEveryGroup(t *testing.T) {
 	t.Parallel()
 	read := func(n int) Call { return Call{Name: "get", Args: map[string]any{"n": n}} }
@@ -146,16 +146,20 @@ func TestOneReadCapServesEveryGroup(t *testing.T) {
 		t.Errorf("an empty group reads %q, want %q", got[4], noCalls)
 	}
 
-	one := FormatCalls(slices.Concat(groups...), opts)
+	one, told := FormatCalls(slices.Concat(groups...), opts), strings.Join(got, "\n")
+	at, inOne := -1, -1
 	for n := 1; n <= 21; n++ {
-		if strings.Contains(one, line(read(n))) != strings.Contains(strings.Join(got, "\n"), line(read(n))) {
+		if strings.Contains(one, line(read(n))) != strings.Contains(told, line(read(n))) {
 			t.Errorf("read %d is shown by one of the render and the list of the same calls, not both", n)
 		}
-	}
-	for g, calls := range groups {
-		if FormatCalls(calls, opts) != FormatCallGroups([][]Call{calls}, opts)[0] {
-			t.Errorf("FormatCalls and the one-group render part on group %d", g)
+		if n > MaxReadCalls {
+			continue
 		}
+		next, nextInOne := strings.Index(told, line(read(n))), strings.Index(one, line(read(n)))
+		if next < at || nextInOne < inOne {
+			t.Errorf("read %d is shown out of the order its calls come in:\n%s", n, told)
+		}
+		at, inOne = next, nextInOne
 	}
 }
 

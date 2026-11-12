@@ -318,9 +318,10 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 	if n := strings.Count(after, "- slack_history("); n != 9 || strings.Contains(after, "omitted") {
 		t.Errorf("the calls after the save list %d reads, want all nine and none omitted:\n%s", n, after)
 	}
-	if n := strings.Count(late, "- slack_history("); n != 3 || !strings.Contains(late, "(+6 further read call(s) omitted)") {
-		t.Errorf("the late calls list %d reads, want the three the cap leaves and the six past it counted:\n%s", n,
-			late)
+	lateReads := strings.Count(late, "- slack_history(")
+	if lateReads != 3 || !strings.Contains(late, "(+6 further read call(s) omitted)") {
+		t.Errorf("the late calls list %d reads, want the three the cap leaves and the six past it counted:\n%s",
+			lateReads, late)
 	}
 	if !strings.Contains(late, "a late write") || strings.Contains(late, strings.Repeat("b", 300)) {
 		t.Errorf("the late write is not told within its budget:\n%s", late)
