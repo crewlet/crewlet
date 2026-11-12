@@ -50,16 +50,25 @@ func (r *coordRig) announcements() []announcement {
 // announcedOnce asserts every announcement published is ONE event — one
 // (event_time, event_id), which is what the event store and the fleet's reads
 // collapse repeats on — for the reason given, and that at least one went out.
+//
+// ITS INSTANT IS THE ONE THE ENDING RECORDED: the store dates a decided ending
+// on the rig's clock, which every case that asks this leaves where the decision
+// found it, so every copy is held to that clock's reading, not only to the
+// other copies. Held only to each other, copies stamped from each holder's own
+// clock passed, since every holder's clock read the same frozen instant; a
+// case whose ending a holder [reaper] builds announces moves the rig's clock
+// off that holder's own before the decision ([coordRig.offTheHoldersClock]).
 func announcedOnce(t *testing.T, rig *coordRig, reason string) []announcement {
 	t.Helper()
 	got := rig.announcements()
 	if len(got) == 0 {
 		t.Fatalf("the run was never announced lost, want it announced once as %q", reason)
 	}
+	decided := rig.now
 	for _, a := range got {
-		if a.id != got[0].id || !a.at.Equal(got[0].at) {
-			t.Fatalf("announced as %d different events %+v, want one — every attempt publishes "+
-				"the identity its ending recorded", len(got), got)
+		if a.id != got[0].id || !a.at.Equal(decided) {
+			t.Fatalf("announced as %d events %+v, want one, at %s, the instant its ending was decided — "+
+				"every attempt publishes the identity its ending recorded", len(got), got, decided)
 		}
 		if a.failed.Reason != reason {
 			t.Fatalf("announced %q, want %q: the reason the ending was decided for", a.failed.Reason, reason)
@@ -67,6 +76,13 @@ func announcedOnce(t *testing.T, rig *coordRig, reason string) []announcement {
 	}
 	return got
 }
+
+// offTheHoldersClock moves the rig's clock — the store's, which dates the
+// ending a case is about to decide — a second past the instant on which every
+// holder [reaper] builds keeps a clock of its own, so an announcement a holder
+// stamped from its own clock carries another instant than its ending recorded
+// ([announcedOnce]).
+func (r *coordRig) offTheHoldersClock() { r.now = r.now.Add(time.Second) }
 
 // deleteLandsThenFails deletes a run's record and then reports that it could
 // not: the write landed and the store's answer was lost.
@@ -88,6 +104,7 @@ func TestAnEndingWhoseDeleteLandedAndFailedIsAnnouncedOnce(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launching("t1")
+	rig.offTheHoldersClock()
 	next := reaper(t.Context(), t, rig, deleteLandsThenFails{rig.pending}, 2, nil)
 	rig.finished("t1")
 	next.fireRetries()
@@ -115,6 +132,7 @@ func TestAnEndingIsAnnouncedForItsOwnReasonByTheNodeThatFinishesIt(t *testing.T)
 	// retried ([Coordinator.collectFailed]).
 	rig.runner.CollectErr = errBoxGoneMidRead
 	rig.failPublishes(errors.New("the broker is unreachable"))
+	rig.offTheHoldersClock()
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -140,6 +158,7 @@ func TestAnEndingFinishedByTwoNodesIsOneEvent(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launching("t1")
+	rig.offTheHoldersClock()
 	first := reaper(t.Context(), t, rig, &finishUntil{refusingStore: &refusingStore{inner: rig.pending}}, 2, nil)
 	if got := rig.get("t1"); got.Ending == nil {
 		t.Fatal("the reap's ending is not on the row its delete could not take")
@@ -165,6 +184,7 @@ func TestAnAnnouncementTheBrokerRefusedIsMadeByTheRetry(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launching("t1")
 	rig.failPublishes(errors.New("the broker is unreachable"))
+	rig.offTheHoldersClock()
 	next := reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	if got := rig.get("t1"); got.Ending == nil {
 		t.Fatal("the run's record was deleted before its loss was announced")
@@ -191,6 +211,7 @@ func TestAnEndingIsAnnouncedBeforeItsRecordIsDeleted(t *testing.T) {
 		recordAtAnnouncement = append(recordAtAnnouncement, err == nil && found)
 	}
 	rig.queue.mu.Unlock()
+	rig.offTheHoldersClock()
 	reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	rig.finished("t1")
 	announcedOnce(t, rig, types.ExecutorFailureAbandoned)
@@ -212,6 +233,7 @@ func TestAnEndingDecidedOnAParkedRunIsFinishedByTheNextHolder(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.failPublishes(errors.New("the broker is unreachable"))
+	rig.offTheHoldersClock()
 	if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 9); err == nil {
 		t.Fatal("a retirement whose announcement was refused reported its runs ended")
 	}
