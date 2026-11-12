@@ -21,8 +21,14 @@ import (
 // and a line it cannot read is an entry saying so. A reader that DECIDES
 // something from what a session recorded (that a hook's note reached the
 // model, that a call's result is held) cannot: one record it misreads is a
-// wrong answer, not a gap on a page. Every such reader reads a Claude Code
-// thread through this one layer, so the rules it is read by are held once:
+// wrong answer, not a gap on a page. Every such reader (the one that confirms
+// a hook's note reached the model, and the one that tells a relaunch which of
+// its calls a kept session holds) reads a Claude Code thread through this one
+// layer, so the rules it is read by are held once. The take's context meter
+// (measure.go) is no such reader and reads the main thread outside the layer:
+// it decides nothing of what the session recorded, only reads one figure, the
+// last request's input, for the launch floor, a best-effort figure that counts
+// nothing from a line it cannot read. The rules:
 //
 //   - A MEMBER IS NAMED EXACTLY ([claudeMainThread], [claudeSubagentThread],
 //     [claudeSubagentMeta], and [claudeMemberOf] the other way), never by

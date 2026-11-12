@@ -54,7 +54,10 @@
 // before its first element is checked; a key only one reader reads held to its
 // type in that reader's accessor; and a hook's firing handed out by
 // [threadLine.Hook] alone, a call's id by [threadMessage.Calls] alone, since a
-// PostToolUse hook's firing carries the id of the call it followed.
+// PostToolUse hook's firing carries the id of the call it followed. The take's
+// context meter (measure.go) decides nothing of what a session recorded and
+// reads the main thread outside the layer: one figure for the launch floor,
+// best effort, which counts nothing from a line it cannot read.
 //
 // # A run's harness session, carried between boxes
 //
