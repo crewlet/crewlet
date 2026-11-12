@@ -30,7 +30,7 @@ import {
   DASHBOARD_MAX_DATASETS,
   DASHBOARD_MAX_TABLE_COLUMNS,
   DASHBOARD_MAX_WIDGETS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import { wordsOf } from "~/lib/artifacts/dashboard.ts";
 
 // ---- the sources, in a person's words ------------------------------------ //

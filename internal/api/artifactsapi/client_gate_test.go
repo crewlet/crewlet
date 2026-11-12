@@ -27,20 +27,39 @@ import (
 // share may name, the viewer embeds a frame by the origin mode the engine
 // minted it in, and the history and the company trail word every op a history
 // row is filed under. Every one of those is a closed set the engine owns, so
-// `contract/artifacts.ts` (and `contract/brand.ts`, for a brand kit's) declares each once and this
-// holds it: a value the engine grew that the
+// the contract declares each once (`contract/artifacts.ts`,
+// `contract/artifactsworkspace.ts`, and `contract/brand.ts` for a brand kit's)
+// and this holds it: a value the engine grew that the
 // dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
 // dashboard keeps that the engine dropped is a choice every write refuses.
 // The ORDER is held too, because the role ladder is an order (each includes
 // the ones before it) and the dashboard draws the others in the engine's.
 // contractFile is the dashboard module a gated name is declared in: a brand
-// kit's rows in `contract/brand.ts`, which only the brand's lazy screens read,
-// every other artifacts row in `contract/artifacts.ts`.
+// kit's rows in `contract/brand.ts`, which only the brand's lazy screens read;
+// what the frame reads ([frameRows]) in `contract/artifacts.ts`, which is in
+// the entry; and every other artifacts row in `contract/artifactsworkspace.ts`,
+// which only the artifacts workspace reads.
 func contractFile(name string) string {
-	if strings.HasPrefix(name, "BRAND_") {
+	switch {
+	case strings.HasPrefix(name, "BRAND_"):
 		return "contract/brand.ts"
+	case frameRows[name]:
+		return "contract/artifacts.ts"
 	}
-	return "contract/artifacts.ts"
+	return "contract/artifactsworkspace.ts"
+}
+
+// frameRows are the artifacts rows `contract/artifacts.ts` declares: the ones
+// the frame reads. `app/lazy.test.tsx` holds that module to exactly what the
+// entry's static graph reads, so a row moved out of it is moved here too.
+var frameRows = map[string]bool{
+	"ARTIFACT_KINDS":                true,
+	"ARTIFACT_CAPABILITIES":         true,
+	"ARTIFACT_ROLES":                true,
+	"SHAREABLE_ROLES":               true,
+	"ARTIFACT_HISTORY_OPS":          true,
+	"ARTIFACT_TRASH_RETENTION_DAYS": true,
+	"ARTIFACT_LIST_MAX":             true,
 }
 
 func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
@@ -363,8 +382,8 @@ func TestTheRendererDrawsTheSlideSubset(t *testing.T) {
 			t.Fatal(err)
 		}
 		if client := clientsource.Strings(body); !slices.Equal(client, engine) {
-			t.Errorf("the dashboard's %s is %q and the engine's is %q: change contract/artifacts.ts "+
-				"to the engine's", name, client, engine)
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change "+
+				"contract/artifactsworkspace.ts to the engine's", name, client, engine)
 		}
 	}
 	for name, want := range map[string]int{"SLIDE_STAGE_WIDTH": slideformat.StageWidth,
@@ -403,8 +422,8 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 			t.Fatal(err)
 		}
 		if client := clientsource.Strings(body); !slices.Equal(client, engine) {
-			t.Errorf("the dashboard's %s is %q and the engine's is %q: change contract/artifacts.ts "+
-				"to the engine's", name, client, engine)
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change "+
+				"contract/artifactsworkspace.ts to the engine's", name, client, engine)
 		}
 	}
 	for name, want := range map[string]int{"DASHBOARD_COLUMNS": artifacts.DashboardColumns,

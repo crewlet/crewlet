@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { DECK_NOTES_MAX_RUNES, DECK_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
+import { DECK_NOTES_MAX_RUNES, DECK_TITLE_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDeck } from "~/protocol/index.ts";
 import { slideSource, withText } from "../slides.tsx";
 import {

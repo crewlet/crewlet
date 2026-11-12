@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { BOARD_BRIEF_MAX_BYTES, DESIGN_MAX_BOARDS } from "~/contract/artifacts.ts";
+import { BOARD_BRIEF_MAX_BYTES, DESIGN_MAX_BOARDS } from "~/contract/artifactsworkspace.ts";
 import {
   BOARD_GAP,
   FRAME_PRESETS,

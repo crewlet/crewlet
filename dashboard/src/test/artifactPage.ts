@@ -21,7 +21,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInThisContext } from "node:vm";
 import { FRAME_BRIDGE, FRAME_MESSAGE } from "@crewlethq/ui/FrameProtocol";
-import { RUNTIME_CONTRACT } from "~/contract/artifacts.ts";
+import { RUNTIME_CONTRACT } from "~/contract/artifactsworkspace.ts";
 import {
   QueryError,
   RestError,

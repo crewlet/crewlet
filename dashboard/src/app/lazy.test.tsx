@@ -821,6 +821,12 @@ describe("the split", () => {
   // reducer, its cards and its stream client stay out of the first paint,
   // where the entry keeps only the Ask button, the page context registry,
   // the bus and the one-word status the button reads.
+  // AND THE ARTIFACTS WORKSPACE'S HALF OF THE ARTIFACTS' CONTRACT
+  // (`contract/artifactsworkspace.ts`): each format's files and bounds, the
+  // datastore's vocabulary, the slide subset and a board's closed sets, which
+  // only the workspace's screens, the editors and the page runtime read. The
+  // frame's half is `contract/artifacts.ts`, held below to what the entry
+  // reads.
   const SCREEN_ONLY = [
     "lib/artifacts/api.ts",
     "app/palette/Palette.tsx",
@@ -828,10 +834,15 @@ describe("the split", () => {
     "app/assistant/chunk/Drawer.tsx",
     "app/assistant/chunk/session.ts",
     "protocol/assistant.ts",
+    "contract/artifactsworkspace.ts",
   ];
 
-  test("the entry's static graph reaches no module only a screen needs", () => {
-    const byPath = new Map(modules().map((m) => [m.path, m]));
+  /**
+   * The entry's static graph, walked from `main.tsx`: every module the first
+   * paint carries, each with the module that first imports it (none for the
+   * entry itself), which is the chain a failure prints.
+   */
+  function entryGraph(byPath: Map<string, Module>): Map<string, string> {
     const from = new Map<string, string>([["main.tsx", ""]]);
     const queue = ["main.tsx"];
     for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
@@ -843,6 +854,12 @@ describe("the split", () => {
         queue.push(to);
       }
     }
+    return from;
+  }
+
+  test("the entry's static graph reaches no module only a screen needs", () => {
+    const byPath = new Map(modules().map((m) => [m.path, m]));
+    const from = entryGraph(byPath);
     const chain = (path: string): string =>
       from.get(path) ? `${chain(from.get(path)!)} > ${path}` : path;
     expect(
@@ -852,6 +869,62 @@ describe("the split", () => {
     expect(
       SCREEN_ONLY.filter((path) => !byPath.has(path)),
       "a module named here that no longer exists",
+    ).toEqual([]);
+  });
+
+  // `contract/artifacts.ts` IS THE FRAME'S HALF OF THE ARTIFACTS' CONTRACT, AND
+  // HOLDS NOTHING ELSE. The frame words an artifact through
+  // `lib/artifacts/words.ts` and the sidebar asks for its pins there, so the
+  // module is in the entry, and a bundler places a module whole: a declaration
+  // only the workspace reads, put there beside the kinds and the roles, rides
+  // every reader's first paint unread: the formats' bounds, once held to the
+  // engine's there, used up all the first paint's budget had left. What only
+  // the workspace reads belongs in `contract/artifactsworkspace.ts`, which the
+  // case above keeps out of the entry. A TYPE-ONLY import is erased and reads
+  // nothing at run time, so it does not count as the frame reading a name.
+  test("contract/artifacts.ts declares only what the entry's static graph reads", () => {
+    const FRAME_CONTRACT = "contract/artifacts.ts";
+    const byPath = new Map(modules().map((m) => [m.path, m]));
+    const entry = entryGraph(byPath);
+    const contract = byPath.get(FRAME_CONTRACT);
+    expect(contract, `${FRAME_CONTRACT} no longer exists`).toBeDefined();
+    expect(entry.has(FRAME_CONTRACT), `the entry no longer reaches ${FRAME_CONTRACT}`).toBe(true);
+    const read = new Set<string>();
+    for (const path of entry.keys()) {
+      const m = byPath.get(path);
+      if (!m) continue;
+      walk(parse(m.text, m.lang), (node) => {
+        if (node.type !== "ImportDeclaration") return;
+        const decl = node as unknown as { source: Node; importKind?: string; specifiers: Node[] };
+        const source = stringValue(decl.source);
+        if (decl.importKind === "type" || !source) return;
+        if (!(source.startsWith("~/") || source.startsWith("."))) return;
+        if (target(m.path, source) !== FRAME_CONTRACT) return;
+        for (const spec of decl.specifiers) {
+          if (spec.type !== "ImportSpecifier" || spec.importKind === "type") continue;
+          const imported = spec.imported as Node;
+          read.add(
+            imported.type === "Identifier" ? String(imported.name) : String(stringValue(imported)),
+          );
+        }
+      });
+    }
+    const declared: string[] = [];
+    walk(parse(contract!.text, contract!.lang), (node) => {
+      if (node.type !== "ExportNamedDeclaration") return;
+      const declaration = (node as unknown as { declaration?: Node | null }).declaration;
+      if (declaration?.type !== "VariableDeclaration") return;
+      for (const each of declaration.declarations as Node[]) {
+        declared.push(String((each.id as Node).name));
+      }
+    });
+    expect(
+      declared.length,
+      `${FRAME_CONTRACT} declares nothing, so this holds nothing`,
+    ).toBeGreaterThan(0);
+    expect(
+      declared.filter((name) => !read.has(name)),
+      "move a declaration only the workspace reads to contract/artifactsworkspace.ts",
     ).toEqual([]);
   });
 });

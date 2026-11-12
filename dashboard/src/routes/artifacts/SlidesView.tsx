@@ -104,7 +104,7 @@ import {
   DECK_NOTES_MAX_RUNES,
   DECK_TITLE_MAX_BYTES,
   SLIDE_TRANSITIONS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import { overWords, textBudget, utf8Bytes } from "~/lib/format.ts";
 import {
   EyeOffGlyph,

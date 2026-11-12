@@ -46,7 +46,7 @@ import {
 } from "@crewlethq/ui";
 import { Columns3Glyph, FileTextGlyph, PlusGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
-import { COLLECTION_PRESETS } from "~/contract/artifacts.ts";
+import { COLLECTION_PRESETS } from "~/contract/artifactsworkspace.ts";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import { bytesOverWords, fmtBytes, plural, utf8Bytes } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";

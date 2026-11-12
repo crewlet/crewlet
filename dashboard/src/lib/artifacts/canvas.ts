@@ -21,7 +21,7 @@
  */
 
 import type { CanvasBoardItem, CanvasBoardNote, CanvasNoteColor } from "@crewlethq/ui";
-import { CANVAS_MAX_NOTES, CANVAS_PATH, CANVAS_VERSION } from "~/contract/artifacts.ts";
+import { CANVAS_MAX_NOTES, CANVAS_PATH, CANVAS_VERSION } from "~/contract/artifactsworkspace.ts";
 
 /** A board of the canvas, keyed by its page's path. */
 export interface CanvasBoardFrame {

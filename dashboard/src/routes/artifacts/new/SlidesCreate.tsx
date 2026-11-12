@@ -48,7 +48,7 @@ import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
 import { createFromStarter, readSlidesStarters } from "~/lib/artifacts/api.ts";
-import { DECK_COVER_LAYOUT } from "~/contract/artifacts.ts";
+import { DECK_COVER_LAYOUT } from "~/contract/artifactsworkspace.ts";
 import {
   addAfter,
   duplicate,

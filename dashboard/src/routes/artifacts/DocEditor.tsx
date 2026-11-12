@@ -44,7 +44,7 @@ import {
 import { CheckGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
-import { ARTIFACT_LABEL_MAX_BYTES, DOC_INDEX_PATH } from "~/contract/artifacts.ts";
+import { ARTIFACT_LABEL_MAX_BYTES, DOC_INDEX_PATH } from "~/contract/artifactsworkspace.ts";
 import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { clashesOf } from "~/lib/merge.ts";

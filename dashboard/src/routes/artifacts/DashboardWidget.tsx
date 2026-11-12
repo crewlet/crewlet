@@ -58,7 +58,7 @@ import {
   type SeatNames,
 } from "~/lib/artifacts/dashboard.ts";
 import { useSeatNames } from "~/lib/artifacts/people.ts";
-import { DASHBOARD_MAX_SHARE_PARTS } from "~/contract/artifacts.ts";
+import { DASHBOARD_MAX_SHARE_PARTS } from "~/contract/artifactsworkspace.ts";
 
 /**
  * How many rows a bars widget and a table widget that name no `limit` draw:

@@ -2,7 +2,7 @@
 /** The schema editor's checks and the templates a new sheet starts from. */
 
 import { describe, expect, test } from "vitest";
-import { DATA_OPTION_ID_CHARS, DATA_OPTION_ID_MAX } from "~/contract/artifacts.ts";
+import { DATA_OPTION_ID_CHARS, DATA_OPTION_ID_MAX } from "~/contract/artifactsworkspace.ts";
 import {
   collectionNameProblem,
   fieldNameProblem,

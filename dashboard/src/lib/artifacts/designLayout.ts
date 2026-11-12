@@ -17,7 +17,7 @@ import {
   CANVAS_MIN_SIDE,
   CANVAS_VERSION,
   DESIGN_MAX_BOARDS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import { overWords, textBudget, utf8Bytes } from "~/lib/format.ts";
 import { addNote, changeNote, removeNote, type CanvasNote, type DesignCanvas } from "./canvas.ts";
 import type { CanvasBoardNote } from "@crewlethq/ui";

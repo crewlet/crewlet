@@ -24,7 +24,7 @@ import { ID_SHAPE, ITEM_KEY_SHAPE, artifactPath } from "~/app/routes.ts";
 import { useFolderTree } from "~/lib/artifacts/folders.ts";
 import { noPagesWords } from "~/lib/artifacts/words.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
+import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import { overWords, plural, utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { configureSchema, createFromStarter, createSheet, writeData } from "~/lib/artifacts/api.ts";

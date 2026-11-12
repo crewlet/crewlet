@@ -14,7 +14,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { LayerHost } from "@crewlethq/ui";
 import { SlidesView, deckEditFields } from "./SlidesView.tsx";
-import { DECK_NOTES_MAX_RUNES, DECK_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
+import { DECK_NOTES_MAX_RUNES, DECK_TITLE_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import { context, openFrame } from "./draftTesting.ts";
 import { draftSnapshot, parseDraftChange } from "~/app/assistant/draft.ts";
 import { draftOf } from "~/lib/artifacts/deck.ts";

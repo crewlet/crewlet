@@ -86,7 +86,7 @@ import {
   CANVAS_MAX_SIDE,
   CANVAS_MIN_SIDE,
   DESIGN_MAX_BOARDS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import {
   FRAME_PRESETS,
   STARTER_LAYOUTS,

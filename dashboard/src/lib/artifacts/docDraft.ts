@@ -22,7 +22,11 @@
 
 import { merge3, mergedText, type Merge, type Resolution } from "../merge.ts";
 import { overWords, utf8Bytes } from "../format.ts";
-import { DOC_INDEX_PATH, DOC_MAX_TABS, DOC_TAB_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
+import {
+  DOC_INDEX_PATH,
+  DOC_MAX_TABS,
+  DOC_TAB_TITLE_MAX_BYTES,
+} from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDoc } from "~/protocol/index.ts";
 import { editOf, type DocEdit } from "./doc.ts";
 import { mergeOrder, placeAfter } from "./orderMerge.ts";

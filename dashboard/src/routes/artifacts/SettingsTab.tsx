@@ -34,7 +34,7 @@ import {
   ARTIFACT_DESCRIPTION_MAX_BYTES,
   ARTIFACT_ICON_MAX_BYTES,
   ARTIFACT_TITLE_MAX_BYTES,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import {
   patchArtifact,

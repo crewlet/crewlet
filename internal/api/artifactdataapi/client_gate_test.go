@@ -45,7 +45,7 @@ func TestTheDashboardSpeaksTheDatastoreVocabulary(t *testing.T) {
 		}
 		if !slices.Equal(client, engine) {
 			t.Errorf("the dashboard's %s is %q and the engine's is %q, in that order: "+
-				"change contract/artifacts.ts to the engine's", name, client, engine)
+				"change contract/artifactsworkspace.ts to the engine's", name, client, engine)
 		}
 	}
 	state, err := clientsource.Scalar(tree, "STATE_COLLECTION")
@@ -87,7 +87,7 @@ func TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps(t *testing.T) {
 		}
 		if client != engine {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
-				"contract/artifacts.ts to the engine's figure", name, client, engine)
+				"contract/artifactsworkspace.ts to the engine's figure", name, client, engine)
 		}
 	}
 }
@@ -96,7 +96,7 @@ func TestTheDashboardBoundsTheDatastoreAtTheEnginesCaps(t *testing.T) {
 //
 // The schema editor makes a select's option id from its label, writing every
 // character outside `DATA_OPTION_ID_CHARS` as `_` and stopping short of
-// `DATA_OPTION_ID_MAX` (`contract/artifacts.ts`) with room for the suffix that
+// `DATA_OPTION_ID_MAX` (`contract/artifactsworkspace.ts`) with room for the suffix that
 // makes it unique, so the class it writes in is the engine's and the width it
 // stops at is the engine's. A class wider than the engine's mints ids every
 // schema save refuses; a narrower one turns letters the engine takes into `_`.
@@ -115,7 +115,7 @@ func TestTheDashboardMintsAnOptionIDByTheEnginesGrammar(t *testing.T) {
 		}
 		if got != engine {
 			t.Errorf("the dashboard's %s is %q and the engine's is %q: change it in "+
-				"contract/artifacts.ts", name, got, engine)
+				"contract/artifactsworkspace.ts", name, got, engine)
 		}
 	}
 }

@@ -12,7 +12,7 @@
  */
 
 import { QueryError, type DataDoc, type LiveSocket } from "~/protocol/index.ts";
-import { STATE_COLLECTION } from "~/contract/artifacts.ts";
+import { STATE_COLLECTION } from "~/contract/artifactsworkspace.ts";
 import type { BridgeDoc, BridgeErrorCode } from "~/runtime/bridge.ts";
 
 /** A refusal a call is answered with. */

@@ -31,7 +31,7 @@ import {
   DATA_BATCH_MAX_OPS,
   DATA_COLUMNS_MAX,
   DATA_LABEL_MAX_BYTES,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import type {
   CollectionPreset,
   ColumnType,

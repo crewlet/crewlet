@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { ARTIFACT_LIST_MAX } from "~/contract/pins.ts";
+import { ARTIFACT_LIST_MAX } from "~/contract/artifacts.ts";
 import { useQuery } from "../useQuery.ts";
 
 /**

@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { SheetPerson } from "@crewlethq/ui";
-import { DATA_BATCH_MAX_OPS } from "~/contract/artifacts.ts";
+import { DATA_BATCH_MAX_OPS } from "~/contract/artifactsworkspace.ts";
 import { SHEET_TEMPLATES, schemaProblem, trackerSheetSchema, reviewSheetSchema } from "./schema.ts";
 import type { DataCollection } from "~/protocol/index.ts";
 import { COLUMN_TYPE_WORDS } from "./words.ts";

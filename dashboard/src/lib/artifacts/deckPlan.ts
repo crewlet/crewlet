@@ -20,7 +20,7 @@ import {
   DECK_COVER_LAYOUT,
   DECK_PLAN_MAX_SLIDES,
   DECK_SLIDE_TITLE_MAX_BYTES,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 
 /** One slide of the plan being laid out: a key of its own, its layout and its title. */
 export interface PlanRow {

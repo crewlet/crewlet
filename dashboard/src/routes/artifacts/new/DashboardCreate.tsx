@@ -68,7 +68,7 @@ import {
 import { useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
-import { DASHBOARD_COLUMNS, DASHBOARD_SPEC_PATH } from "~/contract/artifacts.ts";
+import { DASHBOARD_COLUMNS, DASHBOARD_SPEC_PATH } from "~/contract/artifactsworkspace.ts";
 import { createFromUpload, readCatalogue, uploadTexts } from "~/lib/artifacts/api.ts";
 import { refreshWords } from "~/lib/artifacts/dashboard.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";

@@ -51,7 +51,7 @@ import type {
   LogPosition,
 } from "~/protocol/index.ts";
 import { QueryError, RestError } from "~/protocol/index.ts";
-import { DATA_BATCH_MAX_OPS, DATA_QUERY_MAX_ROWS } from "~/contract/artifacts.ts";
+import { DATA_BATCH_MAX_OPS, DATA_QUERY_MAX_ROWS } from "~/contract/artifactsworkspace.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "../keyedWrite.ts";
 import { undoData, writeData, type DataVia } from "./api.ts";
 import { requiredColumns } from "./sheet.ts";

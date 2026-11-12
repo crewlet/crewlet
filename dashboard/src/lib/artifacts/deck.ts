@@ -22,7 +22,7 @@ import {
   DECK_NOTES_MAX_RUNES,
   DECK_SLIDES_DIR,
   DECK_TITLE_MAX_BYTES,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import { overWords, utf8Bytes } from "~/lib/format.ts";
 import type { ArtifactDeck, DeckSlide, SlideNode } from "~/protocol/index.ts";
 import { slideSource, titleOf } from "../slides.tsx";

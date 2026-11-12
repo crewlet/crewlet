@@ -14,7 +14,7 @@ import {
   ARTIFACT_ANSWER_ID,
   ARTIFACT_ANSWER_VERSION,
   ARTIFACT_PUBLISH_TOOLS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
 import { isArtifactKind } from "./words.ts";
 

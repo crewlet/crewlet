@@ -1377,8 +1377,12 @@ const (
 	// key, a deck's title and the copied engine bounds held to the engine's
 	// (+181), then the sidebar's pin page in a contract module of its own and
 	// the projects' page beside the work bounds the entry already reads (+15),
-	// take it to 402.0 KiB (411,648 bytes), the budget itself: nothing
-	// remains, so the next addition to the entry moves this budget only with a
+	// took it to 402.0 KiB (411,648 bytes), the budget itself. The artifacts'
+	// contract split in two, the frame's half in the entry and every
+	// declaration only the workspace reads out of it (the formats' bounds held
+	// to the engine's among them, and the pin page folded into the frame's
+	// half), took it to 400.5 KiB (410,133 bytes, -1,515), 1,515 bytes inside
+	// 402 KiB: the next addition to the entry moves this budget only with a
 	// reason of its own.
 	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
@@ -2265,7 +2269,10 @@ const (
 	// tree before these two fixes), then every create page's task text held to
 	// what a task holds and the artifact listing, datastore, board, project and
 	// change part bounds held to the engine's, merged on top of it, took it to
-	// 5757.3 KiB (5,895,481 bytes, +1,713, all script): 5758 KiB.
+	// 5757.3 KiB (5,895,481 bytes, +1,713, all script): 5758 KiB. The
+	// artifacts' contract split in two, the workspace's half a module of its
+	// own, took it to 5757.8 KiB (5,896,028 bytes, +547, all script): still
+	// 5758 KiB.
 	treeBudget = 5<<20 + 638<<10
 )
 

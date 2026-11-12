@@ -9,7 +9,7 @@
  * over the same rows the engine's own suite folds.
  */
 
-import { DASHBOARD_MIN_REFRESH_SECONDS } from "~/contract/artifacts.ts";
+import { DASHBOARD_MIN_REFRESH_SECONDS } from "~/contract/artifactsworkspace.ts";
 import type {
   DashboardAgg,
   DashboardArg,

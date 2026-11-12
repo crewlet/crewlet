@@ -83,12 +83,15 @@ import type {
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type {
   ARTIFACT_CAPABILITIES,
-  ARTIFACT_FOLDER_VISIBILITIES,
   ARTIFACT_HISTORY_OPS,
   ARTIFACT_KINDS,
+  ARTIFACT_ROLES,
+  SHAREABLE_ROLES,
+} from "../contract/artifacts.ts";
+import type {
+  ARTIFACT_FOLDER_VISIBILITIES,
   ARTIFACT_LIST_SCOPES,
   ARTIFACT_LIST_SORTS,
-  ARTIFACT_ROLES,
   AUDIENCE_KINDS,
   COLLECTION_PRESETS,
   COLUMN_TYPES,
@@ -105,8 +108,7 @@ import type {
   FIELD_CONDITIONS,
   ORIGIN_MODES,
   READ_RULES,
-  SHAREABLE_ROLES,
-} from "../contract/artifacts.ts";
+} from "../contract/artifactsworkspace.ts";
 import { PRESENCE_ACTIVITIES, PRESENCE_ROOMS } from "../contract/presence.ts";
 import type { InformSurface, WorkViewShape } from "../contract/work.ts";
 import type {
@@ -6538,8 +6540,10 @@ export interface SeatActivityAnswer {
 // The artifacts' answers and pushes, as `internal/artifactsdomain`,
 // `internal/artifactdata`, `internal/api/artifactsapi`,
 // `internal/api/artifactdataapi` and `internal/api/stream` send them. The
-// closed sets they are made of are the contract's (`contract/artifacts.ts`),
-// held there against the engine; these are composed from them.
+// closed sets they are made of are the contract's (`contract/artifacts.ts`,
+// what the frame reads, and `contract/artifactsworkspace.ts`, what only the
+// artifacts workspace reads), held there against the engine; these are
+// composed from them.
 
 /** What an artifact is (`artifacts.Kind`). */
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];

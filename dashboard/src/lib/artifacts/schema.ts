@@ -16,7 +16,7 @@ import {
   DATA_OPTION_ID_MAX,
   FIELD_NAME_PATTERN,
   RESERVED_COLLECTIONS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import type {
   CollectionPreset,
   ColumnType,
