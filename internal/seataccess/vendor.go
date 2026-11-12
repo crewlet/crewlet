@@ -75,6 +75,21 @@ type OpenInput struct {
 	// for a fingerprint the ledger may record in place of a value. Nil where
 	// the caller holds no keyring, as a migration's read does.
 	Derive func(info string) []byte
+
+	// Reads is what the company half of the same pass already read at the
+	// vendor, handed on so the session reads it no second time: Cloudflare's
+	// inspection of the token and the account (its permission groups and
+	// zones) is one read a pass, not two. Nil where the session opens on its
+	// own (a preview, a migration), or the pass read nothing it can use. A
+	// session takes only its own vendor's reads and never another's.
+	Reads PassReads
+}
+
+// PassReads is what one vendor's company half read in a pass, as that vendor
+// hands it to its own session. The vendor's own type carries it; the one
+// method names the vendor, so a session never takes another's.
+type PassReads interface {
+	ReadFor() integration.Kind
 }
 
 // Session is one pass's connection to the vendor.
