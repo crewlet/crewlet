@@ -642,6 +642,13 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	if !admitted {
 		turn.CallLog().Record(name, args)
 	}
+	if !res.Failed {
+		// WHAT THE CALL SHOWED THE MODEL, kept for the turn: a tool that
+		// cites this call reads the value out of this text and nowhere else
+		// ([turnctx.Seen]). A failed call showed nothing to cite.
+		turn.Answers().Note(turnctx.Answer{Tool: name, Origin: e.Origin, Args: args.Map(),
+			Output: recorded.Output})
+	}
 	if s.guard != nil && !res.Failed {
 		// SUCCESS ONLY. A load that named a key nobody has comes back
 		// failed, and treating it as an unlock would let a typo open
