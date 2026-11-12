@@ -758,6 +758,12 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 // continuing one that asked a person after the asking job's, so the round's
 // calls keep the one order its collection reads them in.
 //
+// AND READS EACH CALL'S ID UNDER THE KEY THE JOB NAMES
+// ([sandbox.OpenedJob.CallIDMeta]): the one the runner starting the job's box
+// declares its harness sends it under, for the launch, and this node's runner
+// of the job's harness, for a run taken over while it works — each set here,
+// on the session the bridge opens, never on the launch's own literal.
+//
 // The inbox is bound once the session is open, never before: a session that
 // does not open serves no notes, and the caller closes the inbox.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
@@ -768,7 +774,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
-	s.Launch, s.LastSeq = job.LaunchID, job.LastSeq
+	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which

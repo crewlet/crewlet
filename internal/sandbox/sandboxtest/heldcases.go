@@ -231,11 +231,16 @@ func testAHeldCallIsMarkedOnlyByTheClaimOfItsAnswer(t *testing.T, s sandbox.Pend
 // the turn replied reads it. It was made on the engine host and recorded
 // nowhere a reader looked: a reply that went out read as one that did not. And
 // ONCE, though answered twice: the retry that finds the result recorded
-// appends only a call the log lacks.
+// appends only a call the log lacks. AND WITH NO ID OF A HARNESS'S
+// ([sandbox.BridgeCall.CallID]), whatever its resume handed: the resume made
+// the call on the engine host, where no harness named it, and the box's
+// session holds the held call's answer under the held call's own id.
 //
 // Mutation: record the result alone in RecordHeldResult, and the round's log
 // holds nothing the approved call came to; append without the held call's id,
-// and the second answer puts it in the log twice.
+// and the second answer puts it in the log twice; keep the id the resume
+// handed (approved-call-keeps-its-id), and the approved call carries an id no
+// harness gave it.
 func testTheCallAPersonApprovedIsACallOfItsRound(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := heldParked(t, s, "t1")
@@ -252,6 +257,7 @@ func testTheCallAPersonApprovedIsACallOfItsRound(t *testing.T, s sandbox.Pending
 	// WHAT THE CALL'S SURFACE SAID, which a write must never put in the
 	// clear: the arguments and output ride the row sealed.
 	made.Call.Name, made.Call.Args, made.Call.Output = "another_tool", `{"id":"7"}`, "closed #7"
+	made.Call.CallID = "toolu_01nosuchharness"
 	if ok, err := s.RecordHeldResult(ctx, "t1", launch, made, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordHeldResult = %v, %v", ok, err)
 	}
@@ -271,9 +277,10 @@ func testTheCallAPersonApprovedIsACallOfItsRound(t *testing.T, s sandbox.Pending
 	got := approved(row)
 	if len(got) != 1 || !got[0].Approved || got[0].Args != "" || got[0].Output != "" ||
 		got[0].Origin != "mcp:tracker" || got[0].Server != "tracker" || got[0].At.IsZero() ||
-		got[0].Seq != row.Log.LastSeq() || got[0].HeldID != row.HeldCall.ID {
+		got[0].Seq != row.Log.LastSeq() || got[0].HeldID != row.HeldCall.ID || got[0].CallID != "" {
 		t.Fatalf("the round's log holds %+v of the approved call, want it once, approved, last, named "+
-			"the held call's tool and id, answered by its server, and its arguments and output left sealed", got)
+			"the held call's tool and id, answered by its server, its arguments and output left sealed, and "+
+			"with no id of a harness's", got)
 	}
 	carried := run("t1")
 	carried.Continues = true

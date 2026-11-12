@@ -170,7 +170,11 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	// them ([sandbox.BridgeLog.LastSeq]), and a resume reads them by it. And
 	// IN ITS OWN ROUND, as the row names the job: a call still running when a
 	// relaunch carries the round on is listed in the round's log, marked late.
-	job := run.NamedJob(calls.LastSeq())
+	// AND EACH CALL'S ID READ UNDER THE KEY THIS NODE'S RUNNER OF THE JOB'S
+	// HARNESS DECLARES ([sandbox.OpenedJob.CallIDMeta]): the bridge reading
+	// the box's calls from here on is this build's, whatever the launch's
+	// was, and the row records no key.
+	job := run.NamedJob(calls.LastSeq(), rt.coordinator.Manager().CallIDMeta(run.Harness))
 	session := &mcpbridge.Session{
 		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: reopened.Surface, Ledger: ledger,

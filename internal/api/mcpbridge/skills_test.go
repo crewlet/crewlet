@@ -28,8 +28,10 @@ type skillsFixture struct {
 }
 
 // newSkillsFixture opens the session, its harness handed skills, by the name it
-// lists each under to the key it stands for — nil for one handed none.
-func newSkillsFixture(t *testing.T, skills map[string]string) *skillsFixture {
+// lists each under to the key it stands for — nil for one handed none — each of
+// configure readying the session before it opens.
+func newSkillsFixture(t *testing.T, skills map[string]string,
+	configure ...func(*mcpbridge.Session)) *skillsFixture {
 	t.Helper()
 	reg := tools.NewRegistry()
 	f := &skillsFixture{ledger: &ledger{},
@@ -50,10 +52,14 @@ func newSkillsFixture(t *testing.T, skills map[string]string) *skillsFixture {
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	mux.Handle(mcpbridge.SkillPattern, bridge.SkillHandler())
 	f.server.Config.Handler = mux
-	f.endpoint = bridge.Open(t.Context(), &mcpbridge.Session{
+	session := &mcpbridge.Session{
 		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
 		Surface: surface, Ledger: f.ledger, Skills: skills,
-	})
+	}
+	for _, ready := range configure {
+		ready(session)
+	}
+	f.endpoint = bridge.Open(t.Context(), session)
 	if f.endpoint == "" {
 		t.Fatal("the bridge opened no session")
 	}

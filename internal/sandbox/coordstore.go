@@ -1427,11 +1427,14 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // takes it ([BridgeLog.withApproved]), and a call the store appends for its
 // own round is never late ([BridgeCall.Late]) — nor one nobody waited for
 // ([BridgeCall.Abandoned]), which the bridge alone marks: the resume made this
-// one on the engine host, and no harness gave it up.
+// one on the engine host, and no harness gave it up. NOR DOES IT CARRY AN ID
+// OF A HARNESS'S ([BridgeCall.CallID]), which the bridge gives the calls a box
+// makes: no harness named this one, and what the box's session holds is the
+// HELD call's, under the held call's own id.
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
 	made.Args, made.Output, made.Held, made.Seq, made.Appended, made.Digest = "", "", false, 0, 0, ""
-	made.Late, made.Abandoned = false, false
+	made.Late, made.Abandoned, made.CallID = false, false, ""
 	return keptCall(made, MaxBridgeArgsBytes)
 }
 

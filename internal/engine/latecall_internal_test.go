@@ -41,7 +41,7 @@ func TestALateCallReachesItsRoundsLogThroughItsSessionsLedger(t *testing.T) {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	l := &bridgeLedger{store: store, spend: &steppingMeter{}}
-	l.bind(first.NamedJob(first.OpenedAfter))
+	l.bind(first.NamedJob(first.OpenedAfter, ""))
 
 	next, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Continues: true},
 		sandbox.Fence{})
