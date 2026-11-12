@@ -184,6 +184,7 @@ type AtlasDirection = "up" | "down";
 /** A place an atlas read reads (`gather.SourceName`). */
 type AtlasCoverageSource =
   | "settings"
+  | "log"
   | "gitlet"
   | "integrations"
   | "seat_access"

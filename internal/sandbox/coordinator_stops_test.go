@@ -283,7 +283,7 @@ var coordinatorEntries = map[string][]entryDrive{
 	"RetireSeat": {{
 		name: "the runs of a seat that left the company",
 		call: func(t *testing.T, rig *coordRig) {
-			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
+			if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
 				t.Logf("RetireSeat: %v", err)
 			}
 		},
@@ -1005,6 +1005,13 @@ func (s *refusingStore) AddHanded(ctx context.Context, run PendingRun,
 		return false, errRefusedCall
 	}
 	return s.inner.AddHanded(ctx, run, add)
+}
+
+func (s *refusingStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	if s.called("WatchLog") {
+		return nil, errRefusedCall
+	}
+	return s.inner.WatchLog(ctx, turnID)
 }
 
 func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {

@@ -30,7 +30,7 @@ func TestARetiredSeatsRunIsFinishedWithItsTurnsEnd(t *testing.T) {
 	inBubble(t, func(t *testing.T) {
 		rig, writes, _ := keepingRig(t)
 		rig.launchKept(t, "t1")
-		if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", rigLease.Owner, rigLease.Epoch); err != nil {
+		if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", rigLease.Owner, rigLease.Epoch); err != nil {
 			t.Fatalf("RetireSeat: %v", err)
 		}
 		if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {

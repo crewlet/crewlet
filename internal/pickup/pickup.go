@@ -33,6 +33,12 @@
 // before its date ([worklet.PersonsNamed]). Its key is marked ([Key.OnPerson]),
 // so the pickup that hands it when its date comes is a new one.
 //
+// # A dead wait
+//
+// An item whose every open blocker is a pull request nothing moves is ready
+// for its holder (ADR-0128). Its key is the heads nothing moves and nothing
+// else ([Key.Dead]), so it is handed once per head, whatever else changes.
+//
 // # When a seat is idle
 //
 // Decided by the node holding the seat ([Conditions], [Idle]): nothing of the
@@ -47,6 +53,7 @@ package pickup
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -94,10 +101,21 @@ type Key struct {
 	// latest recheck: whole [RecheckAfter]s after it went quiet
 	// ([worklet.ReadyItem.Quiet]). Zero before the first.
 	Recheck int64
+
+	// Dead is a dead wait's changes and the heads nothing moves them at, as
+	// `ref@head` in reference order; empty on every other pickup.
+	Dead string
 }
 
 // KeyOf is the pickup an item would be for seat at now.
 func KeyOf(seat uuid.UUID, item worklet.ReadyItem, now time.Time) Key {
+	if item.Why == types.PickupDeadWait {
+		heads := make([]string, 0, len(item.DeadWaits))
+		for _, d := range item.DeadWaits {
+			heads = append(heads, d.Ref+"@"+d.Head)
+		}
+		return Key{Seat: seat, Item: item.ID, Dead: strings.Join(heads, " ")}
+	}
 	key := Key{Seat: seat, Item: item.ID, Moved: item.Moved, Status: string(item.Status),
 		Progressed: item.Progressed, OnPerson: item.Why == types.PickupWaitsOnPerson}
 	// The instant it waited until: passed, or a wait on a person ahead.
@@ -176,6 +194,9 @@ func (k Key) text() string {
 	if k.Recheck != 0 {
 		text += "\x00r" + strconv.FormatInt(k.Recheck, 10)
 	}
+	if k.Dead != "" {
+		text += "\x00d" + k.Dead
+	}
 	return text
 }
 
@@ -214,6 +235,10 @@ func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready i
 		Status: string(item.Status), Moved: item.Moved, Progressed: item.Progressed,
 		Why: item.Why, Ready: ready, ReadyCapped: capped, WorkingFor: item.For,
 		SubmittedBy: item.SubmittedBy, WaitsOn: item.WaitsOn,
+	}
+	for _, d := range item.DeadWaits {
+		payload.DeadWaits = append(payload.DeadWaits, types.DeadChange{Ref: d.Ref, Head: d.Head,
+			Author: d.Author, Draft: d.Draft})
 	}
 	if key.Recheck != 0 {
 		// A RECHECK SAYS SO, and since when the item has been quiet.

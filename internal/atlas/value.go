@@ -80,7 +80,7 @@ var ErrCredential = errors.New("atlas: a value shaped like a credential is never
 // internet does not route.
 type Value struct {
 	Type    ValueType `json:"type"`
-	Text    string    `json:"text"`
+	Text    string    `json:"text" untrusted:"name"`
 	Private bool      `json:"private,omitempty"`
 }
 

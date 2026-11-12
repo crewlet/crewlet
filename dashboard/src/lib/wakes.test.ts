@@ -10,6 +10,11 @@ test("a wake reason is said with who can act on it", () => {
     path: ["company", "schedules", "role", "ceo", "standup"],
   });
   expect(wakeWords("work_item:pickup", "swe").label).toBe("Work handed to it while idle");
+  expect(wakeWords("work_item:dead_wait", "swe")).toEqual({
+    label: "Work handed back: a pull request nobody is moving",
+    who: "Whoever reviews or merges its pull requests",
+    path: ["worklet"],
+  });
   expect(wakeWords("work_item:ask_answered", "swe").label).toBe("Work items (ask answered)");
   expect(wakeWords("chat_message:mention", "swe").path).toEqual(["chatlet"]);
   expect(wakeWords("colleague_ask", "swe").path).toEqual(["company", "org", "seats", "swe"]);

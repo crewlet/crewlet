@@ -147,11 +147,13 @@ func (q *gatedQueue) failDeletes(err error) {
 }
 
 // runRetirements records every call a retirement makes to end a seat's executors,
-// what it could see at that moment, and can be made to fail.
+// what it could see at that moment, and can be made to fail, or to leave runs
+// waiting on calls still running.
 type runRetirements struct {
 	mu      sync.Mutex
 	calls   []runRetirement
 	failure error
+	waiting maintenance.SeatRunsWaiting
 	// observe, when set, runs inside each call, so a test can read the
 	// state of the world the retirement is in the middle of. Handed the
 	// SEAT, which is what the retirement ends runs by.
@@ -172,9 +174,10 @@ type runRetirement struct {
 	claimable bool
 }
 
-func (r *runRetirements) retire(_ context.Context, seat uuid.UUID, handle, owner string, epoch int64) error {
+func (r *runRetirements) retire(_ context.Context, seat uuid.UUID, handle, owner string, epoch int64,
+) (maintenance.SeatRunsWaiting, error) {
 	r.mu.Lock()
-	observe, failure := r.observe, r.failure
+	observe, failure, waiting := r.observe, r.failure, r.waiting
 	r.mu.Unlock()
 	call := runRetirement{seat: seat, handle: handle, owner: owner, epoch: epoch}
 	if observe != nil {
@@ -184,7 +187,15 @@ func (r *runRetirements) retire(_ context.Context, seat uuid.UUID, handle, owner
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, call)
-	return failure
+	return waiting, failure
+}
+
+// wait has every later call leave runs waiting on the calls w names, or none
+// for the zero value.
+func (r *runRetirements) wait(w maintenance.SeatRunsWaiting) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.waiting = w
 }
 
 func (r *runRetirements) recorded() []runRetirement {
@@ -1174,6 +1185,108 @@ func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
 	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
 		t.Fatalf("the retry retired %d mailboxes, want 1", n)
 	}
+}
+
+// A RETIREMENT WAITING ON A CALL STILL RUNNING KEEPS THE MAILBOX WITHOUT FAILING
+// THE TICK. A run whose tool call is still running is no run that cannot be
+// ended: the call is doing its work, and the retirer ends the run once it is
+// recorded or its bound passes. So the retirement is undone, every
+// subscription kept, as for a failure — but the tick answers no error and logs
+// no warning, which sent an operator looking for a fault nobody had; the wait is
+// said at info, naming each call and the latest instant any is waited for, on
+// every tick it lasts. Once the retirer leaves nothing waiting, the tick
+// retires the mailbox.
+//
+// NOT PARALLEL, because it reads the process-wide log sink, at info.
+//
+// Mutations: read a wait as a failure (wait-read-as-failure), and the tick
+// fails; read it as the runs ended (wait-read-as-ended), and the subscriptions
+// go while a run of the seat still lives.
+func TestARetirementWaitingOnACallKeepsTheMailboxWithoutFailingTheTick(t *testing.T) {
+	atInfo(t)
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	const call = "delegate at place 1, digest 01234567, in turn t1"
+	until := base.Add(grace + 90*time.Minute)
+	h.runs.wait(maintenance.SeatRunsWaiting{Calls: []string{call}, Until: until})
+
+	_, mark := logs.since(0)
+	if n, err := h.tick(h.m, base.Add(grace+time.Minute)); err != nil || n != 0 {
+		t.Fatalf("a tick whose retirement waits on a call = %d retired, %v; want none retired, and no failure",
+			n, err)
+	}
+	if got := h.queue.deletes.Load(); got != 0 {
+		t.Fatalf("%d subscriptions were deleted although a run of the seat still waits on its call", got)
+	}
+	if !h.inboxExists("swe") || !h.controlExists("swe") || !h.reflectExists("swe") {
+		t.Fatal("the seat's subscriptions are gone although a run of the seat still waits on its call")
+	}
+	if rec, _ := h.record("swe"); rec.Retiring() || !rec.AbsentSince.Equal(base) {
+		t.Fatalf("the record is %+v, want it absent since %s and unmarked", rec, base)
+	}
+	written, mark := logs.since(mark)
+	line := logLine(written, "seat_mailbox_retirement_waiting")
+	if !strings.Contains(line, "level=INFO") || !strings.Contains(line, call) ||
+		!strings.Contains(line, until.Format("2006-01-02T15:04:05")) {
+		t.Errorf("the tick said %q of the wait, want it at info naming %q and %s", line, call, until)
+	}
+	if strings.Contains(written, "level=WARN") {
+		t.Errorf("a wait on a call still running was warned of: %q", written)
+	}
+
+	// EVERY TICK IT LASTS, each line naming the whole wait.
+	if _, err := h.tick(h.m, base.Add(grace+16*time.Minute)); err != nil {
+		t.Fatalf("the next tick of the wait = %v, want no failure", err)
+	}
+	if written, _ := logs.since(mark); !strings.Contains(logLine(written, "seat_mailbox_retirement_waiting"), call) {
+		t.Errorf("the next tick of the wait said %q, want the wait said again", written)
+	}
+
+	h.runs.wait(maintenance.SeatRunsWaiting{})
+	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
+		t.Fatalf("the tick after the wait retired %d mailboxes, want 1", n)
+	}
+}
+
+// A FAILURE BESIDE A WAIT STILL FAILS THE TICK. The wait covers the run whose
+// call is still running and nothing else: a retirer that left one run waiting
+// and could not end another answers both, and the tick fails on the failure
+// while the wait is still said beside it.
+//
+// NOT PARALLEL, for [TestARetirementWaitingOnACallKeepsTheMailboxWithoutFailingTheTick]'s
+// reason.
+func TestARetirementFailingBesideAWaitFailsTheTick(t *testing.T) {
+	atInfo(t)
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	const call = "read_page at place 2, no digest kept, in turn t2"
+	stuck := errors.New("a box could not be reached")
+	h.runs.fail(stuck)
+	h.runs.wait(maintenance.SeatRunsWaiting{Calls: []string{call}, Until: base.Add(grace + time.Hour)})
+
+	_, mark := logs.since(0)
+	if _, err := h.tick(h.m, base.Add(grace+time.Minute)); !errors.Is(err, stuck) {
+		t.Fatalf("tick = %v, want the runs' failure", err)
+	}
+	if written, _ := logs.since(mark); !strings.Contains(logLine(written, "seat_mailbox_retirement_waiting"), call) {
+		t.Errorf("the failing tick said %q, want the wait said beside its failure", written)
+	}
+	if got := h.queue.deletes.Load(); got != 0 {
+		t.Fatalf("%d subscriptions were deleted although the seat's runs were not ended", got)
+	}
+	if rec, _ := h.record("swe"); rec.Retiring() || !rec.AbsentSince.Equal(base) {
+		t.Fatalf("the record is %+v, want it absent since %s and unmarked", rec, base)
+	}
+}
+
+// logLine is the first line of written that says msg, or none.
+func logLine(written, msg string) string {
+	for line := range strings.Lines(written) {
+		if strings.Contains(line, "msg="+msg) {
+			return line
+		}
+	}
+	return ""
 }
 
 // A RETIREMENT REMOVES THE SEAT'S EXECUTOR SESSIONS ONCE ITS RUNS ARE ENDED, by

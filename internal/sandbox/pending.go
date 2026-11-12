@@ -658,8 +658,8 @@ type BridgeCall struct {
 	// calls, from 1 — the order the harness made them in, which is the order a
 	// resume replays them in. One order for the round: a job opened again
 	// after a recovery, and a job continuing one that asked a person, number
-	// their calls after the ones the log already records
-	// ([BridgeLog.LastSeq]).
+	// their calls after the ones the log already records, a call still in
+	// flight among them ([BridgeLog.LastSeq]).
 	Seq int `json:"seq,omitempty"`
 
 	// Appended is the call's place in the order its ROUND'S LOG TOOK its
@@ -668,9 +668,11 @@ type BridgeCall struct {
 	// ([BridgeLog.appendCall]), which is the one writer of both what the log
 	// lists and what it counts without listing, so the count rises by exactly
 	// one an append — through every middle the log's bound drops
-	// ([MaxBridgeCalls]), every owed call a later append carries
-	// ([BridgeAppend.Owed]) and the call a person approved, which the opening
-	// of the next job appends first ([BridgeLog.opened]).
+	// ([MaxBridgeCalls]) and the call a person approved, which the opening of
+	// the next job appends first ([BridgeLog.opened]). A call is numbered as
+	// it FINISHES, by the update that takes its entry in flight out
+	// ([BridgeLog.InFlight]), never as it begins: a save point counts the
+	// calls a session holds the outcome of, and a call in flight is not one.
 	//
 	// WHAT A SAVE POINT IS READ AGAINST. A capture states the count one read
 	// of the log saw ([SessionCapture.Through]) — its own read, or, where its
@@ -725,10 +727,8 @@ type BridgeCall struct {
 	// round's collection never takes it for the round's submission, which is
 	// the job carrying the round on to make, nor keeps it whole as one
 	// ([MaxSubmissionArgsBytes]; internal/agent/runner's heldAt and
-	// sinceAnswer). One carried late after its own append failed is told
-	// again although its job's session holds its answer: the safe direction. A
-	// late call the log drops from its middle keeps no mark, and is counted
-	// instead ([BridgeLog.LateElided]).
+	// sinceAnswer). A late call the log drops from its middle keeps no mark,
+	// and is counted instead ([BridgeLog.LateElided]).
 	//
 	// ADDITIVE ON THE WIRE: a build that does not know it carries it in Extra
 	// through every write it makes of the log (wirekeys.go), and reads the
@@ -768,10 +768,14 @@ type BridgeCall struct {
 	// fleet mid-upgrade.
 	Abandoned bool `json:"abandoned,omitempty"`
 
-	// StartedAt is when the bridge handed the call to the seat's surface,
-	// UTC, and DurationMS how long the surface took to answer — the
-	// bridge's own measurement (mcpbridge.Call), which is what the
-	// executor's record places the call on its timeline by.
+	// StartedAt is when the bridge took the call, UTC — before it wrote the
+	// call's entry ahead of its run ([BridgeLog.InFlight]), so the call's span
+	// includes that write — and DurationMS how long it took from then to its
+	// answer: the bridge's own measurement (mcpbridge.Call), which is what the
+	// executor's record places the call on its timeline by. With Seq and Name
+	// it is the IDENTITY a call's one update finds its entry by
+	// ([AppendRecord]): two openings of a job can reuse a place, never at one
+	// instant.
 	//
 	// BESIDE At RATHER THAN INSTEAD OF IT, because At is the store's and is
 	// always there, while a measurement is only there when somebody made
@@ -833,16 +837,37 @@ type BridgeCall struct {
 	// holds room for ([MaxBridgeCallBytes]). Additive on the wire.
 	Committed []string `json:"committed,omitempty"`
 
+	// Runner is the process running a call whose entry is IN FLIGHT
+	// ([BridgeLog.InFlight]): the incarnation its node holds its taker lease
+	// under (coord.TakerResource), by which a collection on ANY node reads
+	// whether that process still runs the call — a call whose process stopped
+	// will never be recorded, and is not waited for. Empty on a finished call,
+	// and on an entry whose process holds no taker lease, which is waited for
+	// by its bound alone ([BridgeCall.Until]). Additive on the wire.
+	Runner string `json:"runner,omitempty"`
+
+	// Until is the instant past which no collection waits for a call whose
+	// entry is in flight: when the bridge took it, its tool's own bound and the
+	// bridge's margin after it (internal/api/mcpbridge's wait.go), stamped by
+	// the bridge, which alone knows the tool's bound, so a node that does not
+	// hold the call reads it. Zero on a finished call. Additive on the wire.
+	Until time.Time `json:"until,omitzero"`
+
 	// Extra is every key of the call this build does not know, kept verbatim
 	// and written back by every write of the record (wirekeys.go). Filled by
 	// the decode, never by a caller.
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// BridgeAppend is one finished bridged call as the bridge hands it to the
-// run's log — see [PendingStore.AppendBridgeCall] — with the earlier appends
-// of its session that never landed.
+// BridgeAppend is one step of a bridged call as the bridge hands it to the
+// run's log — see [PendingStore.AppendBridgeCall]: the call's entry written
+// ahead of its run, its one update as it finishes, or the withdrawal of an
+// entry whose call never ran ([AppendStep]).
 type BridgeAppend struct {
+	// Step is which of the three this append is; its zero value is the
+	// record of a finished call ([AppendRecord]).
+	Step AppendStep
+
 	// Launch is the job the session serves, as [PendingStore.BeginLaunch]
 	// named it — handed to the session through [LaunchRequest.Opened] before
 	// the job's box existed, so no call the box makes can name any other.
@@ -857,10 +882,10 @@ type BridgeAppend struct {
 	// replaced, as every append of a replaced job once was.
 	Round string
 
-	// Call is the call this append records. ZERO (no name) for an append that
-	// only carries what its session owes ([BridgeAppend.Owed]) — the one a
-	// session makes once its job is over, or as it ends — which names no call
-	// of its own.
+	// Call is the call this append is a step of: for a begin and a withdrawal
+	// its identity alone ([BridgeLog.InFlight]), and for a record the whole
+	// finished call. An append naming no call ([BridgeCall.Name] empty)
+	// writes nothing.
 	Call BridgeCall
 
 	// Absorbed are the calls the run's call log took in from Call's own work
@@ -869,21 +894,55 @@ type BridgeAppend struct {
 	// a resumed call log must count all the same.
 	Absorbed []ElidedCall
 
-	// Owed are the session's EARLIER appends of the job that did not land as
-	// far as it knows — every attempt failed, though one may have landed and
-	// lost its answer — each WHOLE, as it was asked: its call and what that
-	// call's own work absorbed ([OwedAppend]). Each one the log does not
-	// already list is listed now, as any call is, with what it absorbed; one
-	// it lists landed after all, and is skipped with what it absorbed, which
-	// landed in the same write. So a call that ran is in the log once,
-	// however many of its session's appends carried it, and a resumed call
-	// log seeds it as the call it was.
-	Owed []OwedAppend
-
 	// Spent is the session's running total: what every bridged call it has
-	// served so far cost the engine.
+	// served so far cost the engine. A record's alone: a begin and a
+	// withdrawal carry none.
 	Spent EngineSpend
 }
+
+// AppendStep is which step of a bridged call one append is
+// ([BridgeAppend.Step]). A named string that never crosses a wire, whose ZERO
+// VALUE IS THE RECORD OF A FINISHED CALL, what every append was before a call's
+// entry was written ahead of it.
+type AppendStep string
+
+const (
+	// AppendRecord is a call's ONE UPDATE as it finishes: its entry in flight,
+	// found by its identity (its place, the instant the bridge took it and its
+	// tool, [BridgeLog.InFlight]), taken out and the finished call listed in
+	// its place, in one write — so the log never holds two records of one
+	// call. A call that wrote no entry — one answered without running, whose
+	// arguments did not parse or which reached the run's tools once they had
+	// closed — is listed as it is.
+	AppendRecord AppendStep = ""
+	// AppendBegin writes a call's entry IN FLIGHT before its tool runs: the
+	// call runs only once the log has taken it.
+	AppendBegin AppendStep = "begin"
+	// AppendWithdraw takes back the entry of a call that, its entry written,
+	// was then not run: refused, or answered by its opening's end before it
+	// began. Its one update, as a record is a finished call's.
+	AppendWithdraw AppendStep = "withdraw"
+)
+
+// Valid reports whether s is one of the three steps.
+func (s AppendStep) Valid() bool {
+	return s == AppendRecord || s == AppendBegin || s == AppendWithdraw
+}
+
+// LogView is one state of a run's bridged tool log as a watch delivers it
+// ([PendingStore.WatchLog]): the log, its version in the store, and whether
+// there is one.
+type LogView struct {
+	Log     BridgeLog
+	Version uint64
+	Found   bool
+}
+
+// ErrCallsInFlight is what [PendingStore.AppendBridgeCall] answers for a begin
+// the run's log has no room for: [MaxCallsInFlight] calls of its round are in
+// flight already. Nothing is written, so the call is not run, and is answered
+// as one that could not be recorded.
+var ErrCallsInFlight = errors.New("sandbox: the run's log holds as many calls in flight as it keeps")
 
 // ErrJobReplaced is what [PendingStore.AppendBridgeCall] answers BESIDE TRUE
 // for an append of a job a relaunch replaced while carrying its round on: its
@@ -898,33 +957,6 @@ type BridgeAppend struct {
 // bridgeLedger.appendRetrying).
 var ErrJobReplaced = errors.New("sandbox: the append's job was replaced, its round carried on: its calls " +
 	"are in the round's log, and what they cost is on no record")
-
-// OwedAppend is one append of a bridged session that did not land as far as
-// the session knows, as a later append carries it ([BridgeAppend.Owed]): the
-// call, kept as the log would keep it ([CarriedCall]), and the identities its
-// own work added to the run's call log.
-type OwedAppend struct {
-	Call     BridgeCall
-	Absorbed []ElidedCall
-}
-
-// CarriedCall is call as a session holds it while the log is owed it, for a
-// later append of the session to carry: kept within the most the log could
-// ever keep of it ([keptCall]) — the submission's share for a successful
-// submission, which the log keeps whole while it is the newest, and the
-// ordinary share for every other call. A session owes calls for as long as an
-// outage lasts, and one holding each as the bridge handed it — a commit's
-// megabyte of arguments, an MCP tool's unbounded output — would hold all of
-// them in memory; held this way it holds no more of a call than the log
-// would. Keeping a call is idempotent, so the log keeps the call carried
-// exactly as it would have kept the call appended.
-func CarriedCall(call BridgeCall) BridgeCall {
-	budget := MaxBridgeArgsBytes
-	if submitted(call) {
-		budget = MaxSubmissionArgsBytes
-	}
-	return keptCall(call, budget)
-}
 
 // MaxBridgeCalls bounds the durable log of a bridged run ([BridgeLog]) in
 // COUNT, and the share each call has of the log ([MaxBridgeCallBytes]) bounds
@@ -2011,9 +2043,8 @@ type BridgeLog struct {
 	// ones the count bound dropped from its middle — so a reader can tell a
 	// short run from a long one whose middle was cut. Reported rather than
 	// hidden, because a log that silently skips is a log that lies about
-	// what the run did. A call whose own append did not land is not one of
-	// them: a later append of its session carries it whole and it is listed
-	// ([BridgeAppend.Owed]).
+	// what the run did. A call still in flight is not one of them: it is
+	// [BridgeLog.InFlight]'s, until its update lists it here.
 	Elided int `json:"elided,omitempty"`
 
 	// LateElided is how many of those dropped calls were LATE
@@ -2121,6 +2152,33 @@ type BridgeLog struct {
 	// starts without it, the collection between the two having folded it into
 	// the turn. Additive on the wire.
 	Committed []string `json:"committed,omitempty"`
+
+	// InFlight are the round's calls that have BEGUN AND NOT FINISHED: each
+	// one's entry, written by the bridge before its tool runs ([AppendBegin]),
+	// carrying its identity alone — its tool, its place ([BridgeCall.Seq]),
+	// the instant the bridge took it, the digest it was admitted under where
+	// its tool can never ask a person first, who runs it ([BridgeCall.Runner])
+	// and until when it may be waited for ([BridgeCall.Until]) — and taken out
+	// by the call's one update as it finishes, which lists the finished call
+	// in [BridgeLog.Calls] in the same write ([AppendRecord]), or by its
+	// withdrawal where it was then not run ([AppendWithdraw]). ONE ENTRY A
+	// CALL, never two records of it.
+	//
+	// SO NO CALL RUNS OFF THE RECORD: a call whose entry the log did not take
+	// is not run, and one whose update the store refuses keeps its entry — its
+	// identity on the record, its outcome unknown. Counted by every reader that
+	// numbers or seeds the round's calls ([BridgeLog.LastSeq],
+	// internal/agent/runner's seedCalls, as a call whose outcome is unknown),
+	// and read by nothing that reads finished calls. Held to
+	// [MaxCallsInFlight] entries, each within [MaxCallInFlightBytes].
+	//
+	// THE ROUND'S, AS THE LOG IS: kept by every opening that carries the round
+	// on, and a new round's log starts without them, an entry still there
+	// making the fold of the round's calls incomplete ([foldPriorCalls]): its
+	// outcome is not known. ADDITIVE ON THE
+	// WIRE: a build that does not know it carries it in Extra (wirekeys.go),
+	// and numbers, seeds and collects as it did before.
+	InFlight []BridgeCall `json:"in_flight,omitempty"`
 
 	// Extra is every key of the log this build does not know, kept verbatim
 	// and written back by every write of it (wirekeys.go). Filled by the
@@ -2234,9 +2292,18 @@ func (l BridgeLog) withApproved(round string, call BridgeCall) (BridgeLog, bool)
 // from the middle ([MaxBridgeCalls]) is not counted, and need not be: the next
 // calls are numbered after every call the log still holds, which is all a
 // reader of the log orders.
+//
+// AND A CALL STILL IN FLIGHT ([BridgeLog.InFlight]) IS COUNTED, wherever it
+// runs: a node that takes the seat over while a call of the old holder's
+// opening still runs numbers its next call after it, and so do an answered
+// round's cut and the call a person approved — never at the place of a call
+// whose update has not landed yet.
 func (l BridgeLog) LastSeq() int {
 	last := 0
 	for _, call := range l.Calls {
+		last = max(last, call.Seq)
+	}
+	for _, call := range l.InFlight {
 		last = max(last, call.Seq)
 	}
 	return last
@@ -2797,50 +2864,67 @@ type PendingStore interface {
 	// be refused by the broker on this write and every write after it.
 	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
-	// AppendBridgeCall records one tool call a bridged run made through the
-	// MCP bridge onto the run's log ([BridgeLog]), so the reviewer of a run
-	// that outlived its process still has the tool log. See [BridgeCall].
+	// AppendBridgeCall makes one step of a tool call a bridged run made
+	// through the MCP bridge onto the run's log ([BridgeLog]), so the reviewer
+	// of a run that outlived its process still has the tool log, and a resumed
+	// segment counts every call the run made. See [BridgeCall].
+	//
+	// THREE STEPS, ONE RECORD A CALL ([BridgeAppend.Step]): the call's entry is
+	// written IN FLIGHT before its tool runs ([AppendBegin],
+	// [BridgeLog.InFlight]) — the bridge runs the call only once this answered
+	// true — and its ONE UPDATE as it finishes takes the entry out and lists
+	// the finished call in its place, in the same write ([AppendRecord]); a
+	// call whose entry was written and that was then not run is withdrawn
+	// ([AppendWithdraw]). The update finds the entry by the call's identity —
+	// its place ([BridgeCall.Seq]), the instant the bridge took it and its tool
+	// — and a call that wrote none, one answered without running, is listed
+	// as it is. A begin the log has no room for is refused with
+	// [ErrCallsInFlight], writing nothing.
 	//
 	// THE LOG ALONE IS READ AND WRITTEN for the call: the run's record is
-	// written only where the call moved the job's spend (below), and is never
+	// written only where a record moved the job's spend (below), and is never
 	// read for the call's own sake.
 	//
 	// NO FENCE, unlike every other mutation here: this is a log append
 	// rather than an ownership decision, and refusing to record a call that
 	// already ran because the seat's lease moved would lose evidence of
-	// something that is true either way.
+	// something that is true either way; a begin is the record of a call its
+	// opening admitted, which the opening fenced.
 	//
-	// THE SESSION'S SPEND RIDES THE SAME APPEND: what its bridged calls have
-	// cost the engine so far ([BridgeAppend.Spent]), merged onto the job's
-	// record by [EngineSpend.Newest], so the segment that resumes from the
-	// job can pay it ([LaunchRecord.Bridged]) — a second write, made only
-	// where the total moved and only while the row holds the job, after the
-	// log has taken the append: after the call is in the log, or found there
-	// already by an append asked again, whose first attempt's spend may be the
-	// write that never landed.
+	// THE SESSION'S SPEND RIDES A RECORD: what its bridged calls have cost the
+	// engine so far ([BridgeAppend.Spent]), merged onto the job's record by
+	// [EngineSpend.Newest], so the segment that resumes from the job can pay it
+	// ([LaunchRecord.Bridged]) — a second write, made only where the total
+	// moved and only while the row holds the job, after the log has taken the
+	// record: after the call is in the log, or found there already by a
+	// record asked again, whose first attempt's spend may be the write that
+	// never landed. A begin and a withdrawal carry none.
 	//
 	// PINNED TO ITS JOB, AND LISTED BY ITS ROUND. Every append names the job
 	// its session serves and the round that job works in
 	// ([BridgeAppend.Launch], [BridgeAppend.Round]). While the run's log is
-	// open for that job ([BridgeLog.Launch]) its calls are listed and its
+	// open for that job ([BridgeLog.Launch]) its steps are taken and a record's
 	// spend written, as above. Once the launch that replaces the job has
 	// moved the log on — in the same write that decides what the new job
-	// keeps of the round — a call still in flight then (a worker that outlived
-	// a killed harness, a call the harness gave up on) is one of two things,
-	// decided once, on the log it lands on ([BridgeLog.take]):
+	// keeps of the round, its entries in flight among it — a call still in
+	// flight then (a worker that outlived a killed harness, a call the harness
+	// gave up on) is one of two things, decided once, on the log it lands on
+	// ([BridgeLog.take]):
 	//
 	//   - A LATE CALL OF THE ROUND, where the log is still on that round — a
 	//     relaunch that carried it on after a loss, a person's answer or a
-	//     replaced sign-in: listed as every call of the round is, numbered,
-	//     with the calls its session owed, and MARKED ([BridgeCall.Late]),
-	//     since no brief of the round told it and the session of the job that
-	//     made it may not hold it. Its spend is written nowhere: on the next
-	//     job's record that job's resume would pay it as its own, and the job
-	//     it was made in is over. Answered recorded beside [ErrJobReplaced].
+	//     replaced sign-in: its entry updated, the call listed as every call of
+	//     the round is, numbered, and MARKED ([BridgeCall.Late]), since no
+	//     brief of the round told it and the session of the job that made it
+	//     may not hold it. Its spend is written nowhere: on the next job's
+	//     record that job's resume would pay it as its own, and the job it was
+	//     made in is over. Answered recorded beside [ErrJobReplaced].
 	//   - A CALL OF ANOTHER ROUND — a relaunch that started a new round, as a
 	//     send-back does, or an append that names no round — is NOT RECORDED:
 	//     the new round numbers its own calls, and the old round's are folded
-	//     into the turn's earlier ones by the opening that replaced them.
+	//     into the turn's earlier ones by the opening that replaced them, a
+	//     call still in flight there making the fold incomplete
+	//     ([foldPriorCalls]). A begin so answered is not run.
 	//
 	// One that finishes after its job's resume CLAIMED it, and before any
 	// relaunch, is recorded on its own job and is NOT PAID: the log is
@@ -2859,45 +2943,52 @@ type PendingStore interface {
 	// ([BridgeLog.ElidedCalls]). The caller hands the call whole,
 	// its digest taken first ([BridgeCall.Digest]); a call whose arguments
 	// are withheld is kept with neither ([BridgeCall.Withheld]), whatever the
-	// caller handed.
+	// caller handed. An entry in flight is held to its own share
+	// ([MaxCallInFlightBytes]): its identity, never its arguments or output.
 	//
-	// AND WITH WHAT THE APPEND CARRIES, in the same write: the calls the
-	// run's call log took in from the call's own work
-	// ([BridgeAppend.Absorbed]), and the session's earlier appends of the
-	// job that did not land, each whole, listed as the calls they are
-	// ([BridgeAppend.Owed]). An append may carry those alone, naming no call
-	// of its own.
+	// AND WITH WHAT A RECORD CARRIES, in the same write: the calls the run's
+	// call log took in from the call's own work ([BridgeAppend.Absorbed]).
 	//
-	// ONCE, HOWEVER OFTEN IT IS ASKED, AND HOWEVER MANY APPENDS CARRY IT: a
-	// call the log already lists, as its job's own or late — its place
-	// ([BridgeCall.Seq]), the instant the bridge handed it over, its name and
-	// its identity, all four — is not listed again, and what it absorbed is
-	// not counted again, since both landed in the write that listed it. So a
-	// session that asks an append again after its answer was lost, or carries
-	// it on a later append as owed, never records the call, or what it
-	// carried, twice. A call the count bound has dropped from the middle
-	// since it landed is no longer listed, so a carry of it lists it again
+	// ONCE, HOWEVER OFTEN IT IS ASKED: a begin whose entry the log holds
+	// already, or whose call it lists, writes nothing and is answered taken; a
+	// record of a call the log already lists, as its job's own or late — its
+	// place, the instant the bridge took it, its name and its identity, all
+	// four — is not listed again, and what it absorbed is not counted again,
+	// since both landed in the write that listed it. So a session that asks a
+	// step again after its answer was lost never records the call, or what it
+	// carried, twice. A call the count bound has dropped from the middle since
+	// it landed is no longer listed, so a record asked again lists it again
 	// and counts what it absorbed again: an over-count of a resumed call log,
 	// the safe direction, and one that takes some hundred of the job's calls
-	// landing after it before its carry ([appendBounded] drops the oldest of
-	// the tail first) — where a session carries what it owes on its very next
-	// append.
+	// landing between the two asks ([appendBounded] drops the oldest of the
+	// tail first).
 	//
-	// Reports whether every call the append names is recorded: false where
-	// the log is open neither for the job nor for its round. FALSE IS NOT AN
-	// ERROR: it is a run whose row is gone, or a round that is over — the
-	// ordinary shape of a late call from a box that is shutting down — and the
-	// caller must not fail the box's call over it. TRUE BESIDE AN ERROR IS THE
-	// SPEND'S: the calls are in the log, and only what they cost did not reach
-	// the job's record — [ErrJobReplaced] where the job was replaced in its
-	// round, whose spend no ask can write any more, and the store's own error
-	// where the write of it failed. Nothing a later ask answers takes them out
-	// of the log — asked again, the append lists none of them twice and
-	// writes the spend once more, where its job still holds the row — so a
-	// caller that asks again for the spend owes none of them, and names none
-	// of them as on no record, whatever that ask meets (internal/engine's
-	// bridgeLedger.appendRetrying).
+	// Reports whether the step is taken: false where the log is open neither
+	// for the job nor for its round. FALSE IS NOT AN ERROR: it is a run whose
+	// row is gone, or a round that is over — the ordinary shape of a late call
+	// from a box that is shutting down — and the caller must not fail the
+	// box's call over a record, nor run a call whose begin was so answered.
+	// TRUE BESIDE AN ERROR IS THE SPEND'S: the calls are in the log, and only
+	// what they cost did not reach the job's record — [ErrJobReplaced] where
+	// the job was replaced in its round, whose spend no ask can write any
+	// more, and the store's own error where the write of it failed. Nothing a
+	// later ask answers takes them out of the log — asked again, the record
+	// lists none of them twice and writes the spend once more, where its job
+	// still holds the row (internal/engine's bridgeLedger.appendRetrying).
 	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
+
+	// WatchLog follows the bridged tool log beside run turnID's record,
+	// whatever job it is on ([BridgeLog]): its state as the watch begins —
+	// READ FROM THE STORE'S NEWEST WRITE, so a watch begun again after one that
+	// broke misses nothing written between the two — then each state it
+	// reaches after that, a state a later write replaced before the reader
+	// took it passed over and the newest always delivered, and none
+	// ([LogView.Found] false) once the run's record, and the log with it, is
+	// gone. A state this build cannot read is passed over. The channel is
+	// closed when ctx ends or the watch fails, which says nothing of the log:
+	// its reader watches again. What a collection waits on its run's calls in
+	// flight by ([Coordinator.drainCalls]).
+	WatchLog(ctx context.Context, turnID string) (<-chan LogView, error)
 
 	// BridgeLog reads the bridged tool log of run's job: the calls of the
 	// round the job belongs to, as the log beside its record now holds them

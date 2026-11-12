@@ -230,6 +230,10 @@ type ExecutorInput struct {
 	// the turn, each with the call that withdraws it.
 	OpenAsks string
 
+	// Systems is the entries of the company's atlas the turn's ask names,
+	// fenced as text somebody else wrote.
+	Systems string
+
 	// SynthesizedSkills is the block of skills this agent has learned for
 	// itself (distinct from the operator-authored tool skills, which are its
 	// harness's own and listed by it — internal/agent/runner,
@@ -350,6 +354,11 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	if in.OpenAsks != "" {
 		b.Heading(KeyOpenAsks, "\n## Your open questions to them", in.OpenAsks)
 	}
+	// AFTER THE PEOPLE, BEFORE WHAT IT REMEMBERS: what the company runs on
+	// that the work names, which the seat checks before it probes anything.
+	if in.Systems != "" {
+		b.Heading(KeySystems, "\n## Systems in this work", in.Systems)
+	}
 	if in.PersonalMemory != "" {
 		b.Heading(KeyPersonalMemory, "\n## Personal memory", in.PersonalMemory)
 	}
@@ -457,4 +466,5 @@ const (
 	KeyEpisodeRecall     = "episode_recall"
 	KeyCounterparty      = "counterparty"
 	KeyOpenAsks          = "open_asks"
+	KeySystems           = "systems"
 )

@@ -405,6 +405,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// publishes, which a worker of a granted seat may be handed.
 		builtin.FleetHealthTool: false,
 		builtin.CodeStatusTool:  false,
+		// THE ATLAS: reads, narrowed to the seat's own reach, which its
+		// worker reads within as the seat's delegate.
+		builtin.AtlasSearchTool: false,
+		builtin.AtlasGetTool:    false,
+		builtin.AtlasTraceTool:  false,
 		// A server's read changes nothing; an operate command can change
 		// anything on a server, so a worker is never handed it.
 		builtin.SSHReadTool:    false,
@@ -1202,6 +1207,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND A DELEGATE'S VERDICT, over a desk holding no request: left
 		// out, its row reads as a rule no registered tool answers.
 		Delegated: builtin.DelegatedDeps{Desk: &fakeDesk{}},
+		// AND THE ATLAS, over the settings acme runs: left out, its three
+		// rows read as rules no registered tool answers.
+		Atlas: builtin.AtlasDeps{Settings: runsAcme},
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),

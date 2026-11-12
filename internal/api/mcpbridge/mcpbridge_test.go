@@ -81,20 +81,38 @@ type ledger struct {
 	mu    sync.Mutex
 	calls []mcpbridge.Call
 	err   error
-	// settled counts the times the ledger was asked to carry what it owes
-	// for the run's collection ([mcpbridge.Ledger.Settle]), and ended the
-	// times its session's end asked ([mcpbridge.Ledger.End]).
-	settled, ended int
-	// trail is every append and every end, in the order they reached the
-	// ledger: "append <tool>" and "end".
+	// begun is every entry written ahead of a call, and withdrawn every one
+	// taken back; beginErr, where set, is what every begin answers, writing
+	// nothing.
+	begun, withdrawn []mcpbridge.Begun
+	beginErr         error
+	// trail is every begin, record and withdrawal, in the order they reached
+	// the ledger: "begin <tool>", "record <tool>" and "withdraw <tool>".
 	trail []string
 
 	// hold, where a case sets it before the session opens, holds every
-	// append until it is closed, each saying so on holding first.
-	hold, holding chan struct{}
+	// record until it is closed, each saying so on holding first; beginHold
+	// and beginHolding do the same for every begin.
+	hold, holding           chan struct{}
+	beginHold, beginHolding chan struct{}
 }
 
-func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
+func (l *ledger) Begin(_ context.Context, _ string, b mcpbridge.Begun) error {
+	if l.beginHold != nil {
+		l.beginHolding <- struct{}{}
+		<-l.beginHold
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.beginErr != nil {
+		return l.beginErr
+	}
+	l.begun = append(l.begun, b)
+	l.trail = append(l.trail, "begin "+b.Name)
+	return nil
+}
+
+func (l *ledger) Record(_ context.Context, _ string, c mcpbridge.Call) error {
 	if l.hold != nil {
 		l.holding <- struct{}{}
 		<-l.hold
@@ -105,44 +123,38 @@ func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
 		return l.err
 	}
 	l.calls = append(l.calls, c)
-	l.trail = append(l.trail, "append "+c.Name)
+	l.trail = append(l.trail, "record "+c.Name)
 	return nil
 }
 
-func (l *ledger) Settle(context.Context, string) bool {
+func (l *ledger) Withdraw(_ context.Context, _ string, b mcpbridge.Begun) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.settled++
-	return false
+	l.withdrawn = append(l.withdrawn, b)
+	l.trail = append(l.trail, "withdraw "+b.Name)
+	return nil
 }
 
-func (l *ledger) End(context.Context, string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.ended++
-	l.trail = append(l.trail, "end")
-	return false
-}
-
-// order is every append and end the ledger took, in order ([ledger.trail]).
+// order is every begin, record and withdrawal the ledger took, in order
+// ([ledger.trail]).
 func (l *ledger) order() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]string(nil), l.trail...)
 }
 
-// settles is how many times the run's collection asked the ledger to carry
-// what it owes, and ends how many times its session's end did.
-func (l *ledger) settles() int {
+// entries is every entry written ahead of a call, and withdrawals every one
+// taken back.
+func (l *ledger) entries() []mcpbridge.Begun {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.settled
+	return append([]mcpbridge.Begun(nil), l.begun...)
 }
 
-func (l *ledger) ends() int {
+func (l *ledger) withdrawals() []mcpbridge.Begun {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.ended
+	return append([]mcpbridge.Begun(nil), l.withdrawn...)
 }
 
 func (l *ledger) rows() []mcpbridge.Call {
@@ -996,67 +1008,6 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
 		t.Errorf("the relaunched run cannot dispatch: %s", text(res))
 	}
-}
-
-// EVERY WAY A SESSION ENDS CARRIES WHAT ITS LEDGER OWES, ONCE. A call whose
-// record did not land is carried by a later call of its session, and no call
-// comes after the session's end: so the run's close, the relaunch's opening that
-// replaces it and the seat leaving this node each end the session's ledger,
-// which carries what it still owes before they return; and an end that finds
-// the opening ended already — a close of a run closed before, or the same
-// opening ended once more — asks again for nothing. The run's collection asks
-// the job's own session to carry too, without ending it; a job the run's
-// opening does not serve is asked for nothing.
-//
-// Mutation: end an opening without ending its ledger, and a session that ends
-// owing calls leaves them off the run's record; end it as the collection's ask
-// does, and a call whose record fails after the end is promised a carry that
-// never comes; end the ledger on every end of its opening, and an opening
-// ended twice makes its last carry twice.
-func TestEveryWayASessionEndsCarriesWhatItsLedgerOwesOnce(t *testing.T) {
-	t.Parallel()
-	for name, end := range map[string]func(*fixture){
-		"closed": func(f *fixture) {
-			f.bridge.Close("run-1")
-			f.bridge.Close("run-1")
-		},
-		"replaced by its relaunch": func(f *fixture) {
-			f.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-2", Handle: "dev",
-				Role: "Engineer", Surface: f.surface, Ledger: &ledger{}})
-		},
-		"released with its seat": func(f *fixture) {
-			f.bridge.ReleaseSeat(seat())
-			f.bridge.Close("run-1")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			f := newFixture(t)
-			f.open(t)
-			end(f)
-			// THE SAME OPENING ENDED ONCE MORE, which no path of the bridge
-			// does, and which its end has to survive.
-			mcpbridge.EndOpening(f.session)
-			if n, asked := f.ledger.ends(), f.ledger.settles(); n != 1 || asked != 0 {
-				t.Errorf("the ended session's ledger was ended %d times and asked as a collection %d times, "+
-					"want ended once", n, asked)
-			}
-		})
-	}
-	t.Run("asked by its collection", func(t *testing.T) {
-		t.Parallel()
-		f := newFixture(t)
-		f.open(t)
-		f.bridge.Settle(t.Context(), "run-1", "job-2")
-		if n := f.ledger.settles(); n != 0 {
-			t.Errorf("an ask for a job the opening does not serve reached its ledger %d times", n)
-		}
-		f.bridge.Settle(t.Context(), "run-1", "job-1")
-		if n := f.ledger.settles(); n != 1 || f.ledger.ends() != 0 || f.bridge.Live() != 1 {
-			t.Errorf("the job's own ask reached its ledger %d times, ended it %d times and left %d sessions "+
-				"live, want once, never, and the session open", n, f.ledger.ends(), f.bridge.Live())
-		}
-	})
 }
 
 // AND ITS TOKEN STOPS WORKING. Closing the transport only ends a connection

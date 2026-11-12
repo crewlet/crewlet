@@ -1990,6 +1990,27 @@ made to wait on a task. When the poll keeps settling what no delivery did, the
 advisor says so to the owner as `integration.inbound_silent`
 ([ADR-0121](../../adr/0121-a-pull-request-a-task-waits-on-reaches-it-as-the-engines-record.md)).
 
+**A wait nothing moves is a dead wait, and it comes back.** The same poll reads
+whether anybody or anything is moving each open pull request a task waits on: a
+reviewer or a team asked for, a review submitted on its current head by anybody
+but its author, a merge armed on GitHub, or an `ask_to_merge` call held for it
+and still waiting on its answer. Where none holds, and the task has waited on it
+for at least 15 minutes (so a turn that waits on its pull request and then asks
+for its review is never caught), the engine records a `dead_wait` on the task:
+the pull request, the head it read, who opened it and whether it is a draft,
+kept among the task's `dead_waits`. The record notifies nobody. It ends with a
+`dead_wait_ended` record once something moves the pull request again, and goes
+with the wait when the pull request settles or the task stops waiting on it. A
+row's `waiting_on` edge carries `dead: true` for it, and the board reads
+**Nobody is reviewing PR #12**. An item whose every open wait is dead
+is ready work for whoever holds it, and the
+[work pickup](../concepts/scheduling.md#the-work-pickup) hands it back, once
+per head. A pull request the engine cannot read (GitHub refuses it or its
+reviews, or the held merge asks cannot be read) records nothing either way, so a
+fact the engine cannot see never hands anybody anything; the wait stays as it
+was until a pass can read it
+([ADR-0128](../../adr/0128-a-wait-nothing-moves-is-handed-back-once-per-head.md)).
+
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying
 *which* task, whether that blocker is still `open`, and whether the edge is

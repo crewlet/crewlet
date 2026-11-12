@@ -370,6 +370,12 @@ type PrefetchSummary struct {
 	// the people who triggered it, and OpenAsksBytes how large that block was.
 	OpenAsksHit   bool `json:"open_asks_hit"`
 	OpenAsksBytes int  `json:"open_asks_bytes"`
+	// SystemsHit says the turn was handed the entries of the company's atlas
+	// its ask names, SystemsNamed how many and SystemsBytes how large that
+	// block was: bounded, and measured on every turn.
+	SystemsHit   bool `json:"systems_hit"`
+	SystemsNamed int  `json:"systems_named"`
+	SystemsBytes int  `json:"systems_bytes"`
 	// TriggerRequiresRecon says the trigger was a bare pointer, so the
 	// personal-memory, relevant-knowledge and episode-recall prefetches skipped
 	// their aux-LLM call entirely: their hit and byte counts reflect the GATE,
@@ -408,7 +414,7 @@ func (e PrefetchSummary) AgentID() string { return e.Agent }
 func (e PrefetchSummary) SummaryFor(actor string) string {
 	blocks := []bool{
 		e.CounterpartyHit, e.SynthesizedSkillsHit, e.EpisodeRecallHit,
-		e.PersonalMemoryHit, e.RelevantKnowledgeHit, e.ThreadContextHit, e.OpenAsksHit,
+		e.PersonalMemoryHit, e.RelevantKnowledgeHit, e.ThreadContextHit, e.OpenAsksHit, e.SystemsHit,
 	}
 	hits := 0
 	for _, hit := range blocks {

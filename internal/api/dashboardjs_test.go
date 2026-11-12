@@ -1374,9 +1374,11 @@ const (
 	// declared by its grammar past an enum's 64 add 26 bytes to it (the
 	// report's bound beside the page registry's other bounds), so it measured
 	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB. Merged on top of
-	// each delegated rule's required checks it measures 401.8 KiB (411,449
-	// bytes), 199 bytes inside 402 KiB: the next addition to the entry moves
-	// this budget only with a reason of its own.
+	// each delegated rule's required checks it measured 401.8 KiB (411,449
+	// bytes), 199 bytes inside 402 KiB, and on top of the atlas and dead-wait
+	// train it measures 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB:
+	// the next addition to the entry moves this budget only with a reason of
+	// its own.
 	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2254,9 +2256,10 @@ const (
 	// action's report held to the engine's line (a refusal written within it,
 	// the report cut at a whole character) and a seat or a space declared by
 	// its grammar past an enum's 64, +1,462 on the tree they were built on,
-	// merged on top of it, took it to 5756.5 KiB (5,894,685 bytes, +12,671,
-	// all script): 5757 KiB.
-	treeBudget = 5<<20 + 637<<10
+	// merged on top of it, took it to 5757.3 KiB (5,895,500 bytes, +12,671
+	// over main's 5,882,829 with the atlas and dead-wait train, all script):
+	// 5758 KiB.
+	treeBudget = 5<<20 + 638<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

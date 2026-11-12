@@ -51,10 +51,10 @@ func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 
 			// THE CALL ITS HARNESS GAVE UP ON LANDS DURING THE PARK, recorded as
 			// the bridge records a call nobody waited for.
-			if err := l.Append(ctx, turnID, mcpbridge.Call{Call: tools.Call{Name: "delegate",
+			if err := l.Record(ctx, turnID, mcpbridge.Call{Call: tools.Call{Name: "delegate",
 				Output: "the workers are done"}, Seq: 2, StartedAt: time.Now().UTC(),
 				Abandoned: true}); err != nil {
-				t.Fatalf("Append: %v", err)
+				t.Fatalf("Record: %v", err)
 			}
 			if _, ok, err := asking.pending.ClaimForResume(ctx, turnID,
 				sandbox.RecordedAnswerTail(row.LaunchID), sandbox.Fence{}); err != nil || !ok {

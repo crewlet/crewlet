@@ -603,7 +603,7 @@ func (k ChangeKind) TaskCommit() bool {
 		ChangeRouted, ChangeMoved, ChangeReparented,
 		ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 		ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
-		ChangeRestored, ChangePurged, ChangeLinkSettled:
+		ChangeRestored, ChangePurged, ChangeLinkSettled, ChangeDeadWait, ChangeDeadWaitEnded:
 		return true
 	}
 	return false

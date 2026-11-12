@@ -37,7 +37,7 @@ func outlineCorpus() []outlined {
 				"identity", "company_context", "background", "responsibilities",
 				"behavioral_guidelines", "unit", "policies", KeyAccess, "team", "human_colleagues",
 				"your_turn", "escalation", KeyUntrustedText,
-				KeyThreadContext, KeyOpenAsks, KeyPersonalMemory, KeySynthesizedSkills,
+				KeyThreadContext, KeyOpenAsks, KeySystems, KeyPersonalMemory, KeySynthesizedSkills,
 				KeyRelevantKnowledge, KeyEpisodeRecall, KeyCounterparty,
 				"workers", KeyCodeHistory, KeyCodeSearch, KeyCodeWrites, KeyCodeMerging,
 			},
@@ -271,7 +271,7 @@ func TestThePrefetchKeysAreThePrefetchSummarysOwn(t *testing.T) {
 		}
 	}
 	got := []string{
-		KeyThreadContext, KeyOpenAsks, KeyPersonalMemory, KeySynthesizedSkills,
+		KeyThreadContext, KeyOpenAsks, KeySystems, KeyPersonalMemory, KeySynthesizedSkills,
 		KeyRelevantKnowledge, KeyEpisodeRecall, KeyCounterparty,
 	}
 	slices.Sort(want)
