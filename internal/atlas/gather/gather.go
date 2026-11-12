@@ -66,6 +66,9 @@ type Request struct {
 	Deployment derive.Deployment
 	// Asker is who reads. Gitlet lists only the repositories they may read.
 	Asker gitlet.Principal
+	// GitletUnread is why Gitlet is not read for this asker ("" where it is):
+	// said on its coverage only where the company hosts code there.
+	GitletUnread string
 	// Fresh is how fresh the replicated reads must be.
 	Fresh statelog.Freshness
 	// Now is the instant the atlas is read at.
@@ -126,16 +129,10 @@ func (a Answer) Complete(name SourceName) bool {
 	return i >= 0 && a.Coverage[i].Complete
 }
 
-// Unread is a with the source name marked as not read in full, for why: a
-// reason the caller has for not reading it, rather than the read's.
-func (a Answer) Unread(name SourceName, why string) Answer {
-	a.Coverage = slices.Clone(a.Coverage)
-	for i := range a.Coverage {
-		if a.Coverage[i].Source == name {
-			a.Coverage[i].Complete, a.Coverage[i].Reason = false, why
-		}
-	}
-	return a
+// hostsCode reports whether the company keeps its repositories in Gitlet. One
+// that does not has nothing there to read, so no reader misses anything of it.
+func hostsCode(c *config.Company) bool {
+	return c != nil && c.CodeBackendFor() == config.CodeGitlet
 }
 
 // maxRepoPage is the page a repository listing is read in: Gitlet's own
@@ -165,7 +162,9 @@ func Read(ctx context.Context, src Sources, req Request) Answer {
 	for _, r := range repos {
 		pushes = append(pushes, derive.RepoPush{Repo: r.Name, Last: r.LastPush})
 	}
-	records, covered := readRecords(ctx, src, settings, req, pushes, gitletCovered.Complete)
+	// PUSHES ARE KNOWN ONLY FROM A LISTING READ IN FULL: a company hosting no
+	// code in Gitlet has a complete read with nothing in it, and no push use.
+	records, covered := readRecords(ctx, src, settings, req, pushes, gitletCovered.Complete && hostsCode(req.Company))
 	answer.Coverage = append(answer.Coverage, covered...)
 	recorded, joined := settings.Records(records, req.Now)
 	take(recorded)
@@ -217,7 +216,14 @@ func readLog(ctx context.Context, log Log, req Request) (atlasdomain.Live, Cover
 func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req Request) (
 	[]derive.GitletRepo, []derive.GitletCheck, Coverage) {
 	cov := Coverage{Source: SourceGitlet}
-	if reads == nil {
+	switch {
+	case !hostsCode(req.Company):
+		cov.Complete = true
+		return nil, nil, cov
+	case req.GitletUnread != "":
+		cov.Reason = req.GitletUnread
+		return nil, nil, cov
+	case reads == nil:
 		cov.Reason = ErrNoSource.Error()
 		return nil, nil, cov
 	}
