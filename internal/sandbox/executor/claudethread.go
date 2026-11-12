@@ -778,11 +778,13 @@ type threadHook struct {
 //
 // An error for an attachment record whose `attachment` is no object or whose
 // type is no string (it may be a hook's, and cannot be read as one), and for a
-// hook's record whose fields are not of their type: its event and its firing,
-// strings that are there; its command a string where present; a success's
-// stdout a string, and its content a string where present; a system message's
-// content a string, and an additional context's a list. A firing whose record
-// was reshaped is never read as one that recorded nothing.
+// hook's record whose fields are not of their type: an attachment's event and
+// firing, and a summary's firing, strings that name something, an empty one
+// refused (a summary names no event, and none is asked of it); an
+// attachment's command a string where present; a success's stdout a string,
+// and its content a string where present; a system message's content a
+// string, and an additional context's a list. A firing whose record was
+// reshaped is never read as one that recorded nothing.
 //
 // A TOP-LEVEL `toolUseID` IS READ ON A SUMMARY ALONE, the one record measured
 // to carry its firing there: on any other, a later release could carry a
