@@ -39,9 +39,12 @@
  * closure or a local function that reaches one. A name could not say it:
  * the setter of a form's errors is spelled like the setter of its values,
  * and a dispatch taken from context is spelled `dispatch` whatever it
- * writes.
+ * writes. The same reading holds the brand itself: it is cast nowhere but
+ * where it is minted ([forgedBrands]), and what a write does beside writing
+ * (its `also`) reaches none of a draft ([writingAlso]).
  */
 
+import { posix } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   SymbolFlags,
@@ -57,14 +60,22 @@ import {
   isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
+  isImportDeclaration,
   isInterfaceDeclaration,
   isJsxExpression,
   isJsxNamespacedName,
   isJsxOpeningLikeElement,
   isJsxSpreadAttribute,
+  isMethodDeclaration,
+  isNamedImports,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isStringLiteral,
   isTypeAssertion,
   isVariableDeclaration,
+  type CallExpression,
   type InterfaceDeclaration,
   type JsxAttributeLike,
   type JsxOpeningLikeElement,
@@ -555,6 +566,86 @@ function forgedBrands(b: Branded, paths: readonly string[]): string[] {
 }
 
 /**
+ * Where each of draft.ts's mints that takes an `also` takes it: in the
+ * options of `writeTo`, and after the write of `writeParts` and `writeVia`.
+ */
+const ALSO_AT: Readonly<Record<string, (call: CallExpression) => TsNode | undefined>> = {
+  writeTo: (call) => memberOf(call.arguments[1], "also"),
+  writeParts: (call) => call.arguments[2],
+  writeVia: (call) => call.arguments[2],
+};
+
+/** An object literal's member, by its name: a property's value, a shorthand's name, or a method. */
+function memberOf(node: TsNode | undefined, name: string): TsNode | undefined {
+  if (!node || !isObjectLiteralExpression(node)) return undefined;
+  for (const member of node.properties) {
+    if (
+      !isPropertyAssignment(member) &&
+      !isShorthandPropertyAssignment(member) &&
+      !isMethodDeclaration(member)
+    ) {
+      continue;
+    }
+    const key = member.name;
+    if (!(isIdentifier(key) || isStringLiteral(key)) || key.text !== name) continue;
+    return isPropertyAssignment(member)
+      ? member.initializer
+      : isShorthandPropertyAssignment(member)
+        ? key
+        : member;
+  }
+  return undefined;
+}
+
+/**
+ * The names a module calls draft.ts's mints by, to the mint each names: its
+ * own, or the one it imports a mint under. A module reaches a mint only by
+ * importing it from draft.ts, which re-exports nothing of it.
+ */
+function mintsIn(path: string, file: SourceFile): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const statement of file.statements) {
+    if (!isImportDeclaration(statement) || !isStringLiteral(statement.moduleSpecifier)) continue;
+    const spec = statement.moduleSpecifier.text;
+    const target = spec.startsWith("~/")
+      ? spec.slice(2)
+      : posix.normalize(posix.join(posix.dirname(path), spec));
+    const bindings = statement.importClause?.namedBindings;
+    if (target !== DRAFT_MODULE || !bindings || !isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      const imported = (element.propertyName ?? element.name).text;
+      if (imported in ALSO_AT) names.set(element.name.text, imported);
+    }
+  }
+  return names;
+}
+
+/**
+ * Every `also` handed to a write's mint that reaches a draft's branded
+ * state, read as a modal's hand-off is: what a screen does beside writing
+ * its draft is never a write of a draft, which goes through a write of its
+ * own (`writeEach`). Its type cannot say so, as a closure reaches whatever
+ * its scope holds.
+ */
+function writingAlso(b: Branded, paths: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const path of paths) {
+    if (path === DRAFT_MODULE) continue;
+    const file = sourceOf(b.typed, path);
+    const mints = mintsIn(path, file);
+    if (mints.size === 0) continue;
+    for (const call of nodesOf(file).filter(isCallExpression)) {
+      const callee = call.expression;
+      const mint = isIdentifier(callee) ? mints.get(callee.text) : undefined;
+      const also = mint === undefined ? undefined : ALSO_AT[mint]!(call);
+      const via = also && reaches(b, file, also, new Set());
+      if (via) out.push(`${placeOf(b.typed, file, call)} ${mint}'s also reaches ${via}`);
+    }
+  }
+  return out;
+}
+
+/**
  * Every name in a module typed by a draft's branded state: what it holds of
  * a page's draft, whether it took it from context, from a prop, or minted it.
  */
@@ -742,7 +833,7 @@ function refusedModals(
 const said = (refusals: readonly Refusal[]) =>
   refusals.map((r) => `${r.module} <- ${r.at.replace(/:\d+$/, "")} ${r.says}`);
 
-describe("a module listed modal", () => {
+describe("read through the checker", () => {
   let tree: Typed | undefined;
   let brand: Branded;
   let paths: string[];
@@ -757,7 +848,7 @@ describe("a module listed modal", () => {
   const listed = (path: string) =>
     said(refusedModals(brand, { ...NOT_A_DRAFT, [path]: "modal: listed by this case" }, paths));
 
-  test("holds none of a page's draft, and no page hands it any", () => {
+  test("a module listed modal holds none of a page's draft, and no page hands it any", () => {
     expect(
       said(refusedModals(brand, NOT_A_DRAFT, paths)),
       "a module listed modal that holds a page's draft, or is handed it: list it in PART_OF as " +
@@ -768,7 +859,7 @@ describe("a module listed modal", () => {
   // THE AGENTS TAB'S DIALOGS write every change into the tab's draft, which
   // outlives them until the tab's Review: listed modal, the hand-off at each
   // render site is read through the tab's own closures to its setter.
-  test("is refused once a page hands it its draft: the Agents tab's dialogs", () => {
+  test("a modal is refused once a page hands it its draft: the Agents tab's dialogs", () => {
     const dialogs = "routes/settings/integrations/access/Dialogs.tsx";
     const from = `${dialogs} <- routes/settings/integrations/access/AgentsAccess.tsx`;
     const refused = listed(dialogs);
@@ -786,7 +877,7 @@ describe("a module listed modal", () => {
 
   // HOME'S WIDGET SHEET writes each setting into the board being arranged as
   // it is made: its Cancel takes back what the sheet wrote, through Home's own.
-  test("is refused once a page hands it its draft: Home's widget sheet", () => {
+  test("a modal is refused once a page hands it its draft: Home's widget sheet", () => {
     const sheet = "routes/home/board/settings.tsx";
     const from = `${sheet} <- routes/home/Home.tsx`;
     const refused = listed(sheet);
@@ -798,18 +889,26 @@ describe("a module listed modal", () => {
     }
   });
 
-  // THE BUILDER'S SIDE SHEET is handed nothing: it records through the
-  // builder's dispatch, which it takes from context.
-  test("is refused once it writes the draft it takes from context: the org builder's side sheet", () => {
+  // THE BUILDER'S SIDE SHEET is handed nothing: its Apply records through
+  // the builder's dispatch, which it takes from context.
+  test("a modal is refused once it holds the draft it takes from context: the org builder's side sheet", () => {
     const editor = "routes/org/builder/NodeEditor.tsx";
     expect(listed(editor)).toContain(`${editor} <- ${editor} holds dispatch`);
   });
 
-  test("is never a module a cast hands a draft's brand", () => {
+  test("a draft's branded state is cast nowhere but where it is minted", () => {
     expect(
       forgedBrands(brand, paths),
       `a cast to a draft's branded state outside ${DRAFT_MODULE}: hold the draft in ` +
         "useDraftState, useDraftReducer or a DraftStore and make its write from that",
+    ).toEqual([]);
+  });
+
+  test("a write's also reaches none of a draft", () => {
+    expect(
+      writingAlso(brand, paths),
+      "an also that writes a draft: write that state through a write of its own " +
+        "(writeEach), and keep in also only what the screen does beside writing",
     ).toEqual([]);
   });
 });
@@ -819,7 +918,7 @@ describe("a module listed modal", () => {
  * case that fails without it: a page with a draft and a non-draft state of
  * the draft's own type, a modal that keeps its own, a field that writes a
  * draft taken from context, an object handed whole, a component nothing
- * names, and a forged brand.
+ * names, a forged brand, and writes whose `also` writes a draft or does not.
  */
 const FIXTURE: Readonly<Record<string, string>> = {
   "routes/probe/Page.tsx": `
@@ -896,6 +995,23 @@ export function Panel({ api }: { api: { count: number } }) {
   return <output>{api.count}</output>;
 }
 `,
+  "routes/probe/Also.tsx": `
+import { useState } from "react";
+import { useDraftState, writeTo, writeVia as reshaped } from "~/app/assistant/draft.ts";
+
+export function Also() {
+  const [value, setValue] = useDraftState("");
+  const [other, setOther] = useDraftState("");
+  const [said, setSaid] = useState("");
+  const clear = () => setOther("");
+  const writes = [
+    writeTo(setValue, { also: () => setSaid("") }),
+    writeTo(setValue, { also: clear }),
+    reshaped(setValue, (next: string) => next.trim(), () => setOther("")),
+  ];
+  return <output>{value}{other}{said}{writes.length}</output>;
+}
+`,
   "routes/probe/Forged.tsx": `
 import type { DraftWrite } from "~/app/assistant/draft.ts";
 
@@ -940,6 +1056,18 @@ describe("the checker's reading of a draft", () => {
   test("refuses a draft handed to a component it cannot place, whatever is listed", () => {
     expect(said(refusedModals(brand, {}, ["routes/probe/Picked.tsx"]))).toEqual([
       `${UNPLACED} <- routes/probe/Picked.tsx <Shown> onDone via setValue`,
+    ]);
+  });
+
+  // A WRITE'S ALSO IS THE SCREEN'S, never a write: one that clears a message
+  // passes, and one that writes another draft, directly or through a local
+  // function, under the mint's own name or the one it is imported as, is not.
+  test("refuses a write's also that writes a draft, and passes one that does not", () => {
+    expect(
+      writingAlso(brand, ["routes/probe/Also.tsx"]).map((r) => r.replace(/:\d+ /, " ")),
+    ).toEqual([
+      "routes/probe/Also.tsx writeTo's also reaches clear > setOther",
+      "routes/probe/Also.tsx writeVia's also reaches setOther",
     ]);
   });
 

@@ -47,7 +47,8 @@
  * its own transient state, and is refused once it holds any of a page's
  * draft (a branded value it takes from context or a prop) or a page hands it
  * one, or a closure that reaches one: a modal whose change outlives it is
- * part of its page.
+ * part of its page. What a write does beside writing ([DraftAlso]) is held
+ * to reach none of it.
  */
 
 import {
@@ -330,7 +331,9 @@ function minted<D>(write: (next: D) => void): DraftWrite<D> {
  * What a screen does beside writing its draft when a change reaches it from
  * outside (a refusal cleared, an editor told its body was replaced): never a
  * write of a draft, which goes through a write of its own ([writeEach]). It
- * is handed the change and nothing that writes.
+ * is handed the change and nothing that writes, and since a closure can
+ * still reach a write in its scope, which no type can stop, the draft gate
+ * holds every `also` to reach none of a draft's branded state.
  */
 export type DraftAlso<D> = (next: D) => void;
 
