@@ -89,7 +89,13 @@ import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } fr
 import { filedTaskText, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -184,9 +190,9 @@ export function SheetCreate() {
   const people = useArtifactPeople().sheetPeople;
   const context = useMemo(() => valueContext(people), [people]);
 
-  const [title, setTitle] = useState("");
-  const [start, setStart] = useState<Start>("blank");
-  const [drafts, setDrafts] = useState<Partial<Record<Start, SheetDraft>>>(() => ({
+  const [title, setTitle] = useDraftState("");
+  const [start, setStart] = useDraftState<Start>("blank");
+  const [drafts, setDrafts] = useDraftState<Partial<Record<Start, SheetDraft>>>(() => ({
     blank: templateDraft("blank", false),
   }));
   const [examples, setExamples] = useState<Partial<Record<SheetTemplate, boolean>>>({});
@@ -196,7 +202,7 @@ export function SheetCreate() {
   const [settingsColumn, setSettingsColumn] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [brief, setBrief] = useState("");
+  const [brief, setBrief] = useDraftState("");
   const nav = useNavigator();
   const who = useWhoBuildsIt("sheet");
   const task = useFileArtifactTask();
@@ -223,8 +229,13 @@ export function SheetCreate() {
   );
 
   const choose = (next: Start) => {
-    setSettingsColumn(null);
     setStart(next);
+    chosen(next);
+  };
+
+  /** What choosing a way in does beside setting it, a card's press or the assistant's change. */
+  const chosen = (next: Start) => {
+    setSettingsColumn(null);
     if (next !== "import" && !drafts[next]) {
       setDrafts((all) => ({ ...all, [next]: templateDraft(next, examples[next] ?? true) }));
     }
@@ -366,9 +377,13 @@ export function SheetCreate() {
           rows: filledRows,
         },
         fields: SHEET_FIELDS,
-        apply: (next) => {
-          if (next.start !== start) choose(next.start);
-        },
+        write: writeVia(
+          setStart,
+          (next: SheetSummary) => next.start,
+          (next) => {
+            if (next.start !== start) chosen(next.start);
+          },
+        ),
       },
       blocked: () => (create.busy ? "The sheet is being created." : null),
     }),

@@ -29,9 +29,36 @@
  * screen's setter applies it once the person approves; and saving stays the
  * person's own gesture. A draft the person changed since is a stale proposal
  * (its snapshot is the registration's data version).
+ *
+ * # Held in branded state
+ *
+ * A screen holds what it declares in branded state: [useDraftState] or
+ * [useDraftReducer], whose setter and dispatch carry a brand nothing else
+ * mints, or a store that extends [DraftStore]. A spec takes only a write made
+ * from that state ([writeTo], [writeParts], [writeVia], [writeWith],
+ * [writeThrough], [storeWrite], [latestWrite]) or, for a draft it reads and
+ * never sets, the proof that it is held there ([readOnlyFrom]; a saved draft
+ * the page holds in no state of its own says [readOnlySaved]). A draft held
+ * in plain React state is therefore a type error, never a declaration.
+ *
+ * The brand is what the draft gate (`draftGate.test.ts`) reads through the
+ * TypeScript checker. A module listed as a modal passes while it holds only
+ * its own transient state, and is refused once it holds any of a page's
+ * draft (a branded value it takes from context or a prop) or a page hands it
+ * one, or a closure that reaches one: a modal whose change outlives it is
+ * part of its page.
  */
 
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
   ASSISTANT_ACTION_ARGS_MAX_BYTES,
@@ -214,6 +241,219 @@ export interface DraftFieldSpec<D> {
   summary?(value: DraftValue): string;
 }
 
+/**
+ * The brand of a draft's own state: a type-only key, so nothing outside this
+ * module mints a value that carries it but by a cast, which the draft gate
+ * refuses, and the gate tells a draft's setter from every other setter by
+ * its type alone.
+ */
+declare const HELD: unique symbol;
+
+/**
+ * What every branded value of a draft's state carries: [DraftSetter],
+ * [DraftDispatch], [DraftWrite], [DraftReadOnly] and a [DraftStore]. The
+ * draft gate reads a value as the draft's own when its type is assignable to
+ * this.
+ */
+export interface DraftHeld {
+  readonly [HELD]: "setter" | "dispatch" | "write" | "read" | "store";
+}
+
+/** The setter of a draft held in [useDraftState]: React's own, branded. */
+export type DraftSetter<D> = Dispatch<SetStateAction<D>> & { readonly [HELD]: "setter" };
+
+/** The dispatch of a draft held in [useDraftReducer]: React's own, branded. */
+export type DraftDispatch<A> = Dispatch<A> & { readonly [HELD]: "dispatch" };
+
+/**
+ * How an approved change reaches a screen's draft: a write made only from
+ * the branded state the draft is held in ([writeTo], [writeParts],
+ * [writeVia], [writeWith], [writeThrough], [storeWrite], [latestWrite]), so a
+ * spec cannot be built from any other.
+ */
+export type DraftWrite<D> = ((next: D) => void) & { readonly [HELD]: "write" };
+
+/**
+ * A draft the assistant reads and never sets, held in branded state all the
+ * same ([readOnlyFrom]): changed through its own controls or a page action,
+ * so a modal handed it is still part of its page.
+ */
+export interface DraftReadOnly {
+  readonly [HELD]: "read";
+}
+
+/**
+ * A store that keeps a page's drafts outside React state (the chat's unsent
+ * messages, kept across its rooms), branded by extending this as React state
+ * is by [useDraftState]: a write into it ([storeWrite]) is a draft's own, and
+ * the draft gate reads a module that holds the store as holding the draft.
+ * Nothing is added at run time.
+ */
+export abstract class DraftStore {
+  declare readonly [HELD]: "store";
+}
+
+/** A screen's draft, or one part of it, held in React state whose setter is branded. */
+export function useDraftState<D>(initial: D | (() => D)): [D, DraftSetter<D>] {
+  const [draft, set] = useState(initial);
+  return [draft, set as DraftSetter<D>];
+}
+
+/** A screen's draft held in a reducer whose dispatch is branded. */
+export function useDraftReducer<S, A>(
+  reducer: (state: S, action: A) => S,
+  initial: S,
+): [S, DraftDispatch<A>] {
+  const [state, dispatch] = useReducer(reducer, initial);
+  return [state, dispatch as DraftDispatch<A>];
+}
+
+/**
+ * A branded dispatch that runs `around` first, which may hold an action back
+ * (an edit refused while the page is read-only) or pass it on: still the
+ * draft's own dispatch for whoever is handed it.
+ */
+export function guardedDispatch<A>(
+  dispatch: DraftDispatch<A>,
+  around: (action: A, pass: (action: A) => void) => void,
+): DraftDispatch<A> {
+  return ((action: A) => around(action, dispatch)) as DraftDispatch<A>;
+}
+
+/** The one place a [DraftWrite] is minted, from a write the functions below build. */
+function minted<D>(write: (next: D) => void): DraftWrite<D> {
+  return write as DraftWrite<D>;
+}
+
+/** What a screen does beside writing its draft when a change reaches it from outside. */
+export type DraftAlso<D> = (next: D) => void;
+
+/**
+ * A draft held whole in one branded state: a change is set as it is, or as a
+ * pure `transform` makes it of the change and the draft now. `also` is what
+ * the screen's own control does beside setting the draft (a refusal cleared,
+ * an editor told its body was replaced), and never a write of the draft.
+ */
+export function writeTo<D>(
+  set: DraftSetter<D>,
+  how: { transform?: (next: D, current: D) => D; also?: DraftAlso<D> } = {},
+): DraftWrite<D> {
+  const { transform, also } = how;
+  return minted((next: D) => {
+    if (transform) set((current) => transform(next, current));
+    else set(next);
+    also?.(next);
+  });
+}
+
+/**
+ * A draft whose value is several branded states, one per part, each written
+ * where the change moved it, through its own setter or a write made from it:
+ * a create page holds its title, its brief and its picker each in its own
+ * state, and a page's boxes each hold their own text so a keystroke renders
+ * the box alone (`boxes.ts`). A part is data, never a function, so a setter
+ * is handed its value as it is.
+ */
+export function writeParts<D extends object>(
+  current: D,
+  parts: { readonly [K in keyof D]-?: DraftSetter<D[K]> | DraftWrite<D[K]> },
+  also?: DraftAlso<D>,
+): DraftWrite<D> {
+  return minted((next: D) => {
+    for (const key of Object.keys(parts) as (keyof D)[]) {
+      if (Object.is(next[key], current[key])) continue;
+      (parts[key] as (value: D[typeof key]) => void)(next[key]);
+    }
+    also?.(next);
+  });
+}
+
+/**
+ * A draft, or a part of one, held in another shape than it is declared in:
+ * written through its branded setter as the pure `to` makes it of the change
+ * and the state now (the template a declared key names; one editor's text in
+ * the map of every editor open on a page; a draft held as null while shut).
+ */
+export function writeVia<V, S>(
+  set: DraftSetter<S>,
+  to: (next: V, current: S) => S,
+  also?: DraftAlso<V>,
+): DraftWrite<V> {
+  return minted((next: V) => {
+    set((current) => to(next, current));
+    also?.(next);
+  });
+}
+
+/**
+ * A draft written in steps through a branded write: `write` is handed `put`
+ * and writes the draft through it alone, now and once what the change names
+ * has arrived (a logo's bytes, fetched after the change is approved).
+ */
+export function writeWith<D, P>(
+  put: DraftWrite<P>,
+  write: (next: D, put: DraftWrite<P>) => void,
+): DraftWrite<D> {
+  return minted((next: D) => write(next, put));
+}
+
+/**
+ * A write that runs the latest render's: a part a page gathers from its
+ * children (a box, a tab) is written through the child as it is now, never
+ * as it was when the page last declared, so the child's own setter and what
+ * it does beside it see the render the change lands in.
+ */
+export function latestWrite<D>(
+  latest: () => DraftSetter<D> | DraftWrite<D> | undefined,
+): DraftWrite<D> {
+  return minted((next: D) => latest()?.(next));
+}
+
+/**
+ * A draft held in a branded reducer: a change is dispatched as the actions
+ * it maps to, in order (one per part it moved, as each part's own control
+ * dispatches it).
+ */
+export function writeThrough<D, A>(
+  dispatch: DraftDispatch<A>,
+  actions: (next: D) => readonly A[],
+): DraftWrite<D> {
+  return minted((next: D) => {
+    for (const action of actions(next)) dispatch(action);
+  });
+}
+
+/**
+ * A draft held in a branded store: a change is written there as `write`
+ * writes it (under the box's room and thread). The store is what places the
+ * draft where the gate can follow it, so it is asked for though only `write`
+ * runs.
+ */
+export function storeWrite<D>(store: DraftStore, write: (next: D) => void): DraftWrite<D> {
+  return minted(write);
+}
+
+/**
+ * The proof that a draft the assistant reads and never sets is held in
+ * branded state: `held` is never written here, and is asked for so that a
+ * read-only spec cannot be built from plain React state either.
+ */
+export function readOnlyFrom<S>(
+  held: DraftSetter<S> | DraftDispatch<S> | DraftStore,
+): DraftReadOnly {
+  return {} as DraftReadOnly;
+}
+
+/**
+ * A saved draft (`kind: "server"`) the page reads and holds in no state of
+ * its own, changed on the screen that edits it, which its help names. The
+ * draft gate holds every spec that says this to `kind: "server"`, so a draft
+ * the page holds is never declared as one it does not.
+ */
+export function readOnlySaved(): DraftReadOnly {
+  return {} as DraftReadOnly;
+}
+
 /** An open draft, as the screen declares it. */
 export interface AssistantDraftSpec<D> {
   /**
@@ -238,12 +478,13 @@ export interface AssistantDraftSpec<D> {
   value: D;
   fields: readonly DraftFieldSpec<D>[];
   /**
-   * Set the screen's draft, through its own setter. Absent for a draft the
-   * screen shows and does not edit (a saved draft whose editor is another
-   * screen), which declares no `draft.set` and so is read and never changed
-   * here; its help says where it is changed.
+   * How a change reaches the screen's draft, made from the branded state it
+   * is held in ([DraftWrite]); [DraftReadOnly] for a draft the screen shows
+   * and does not edit (a saved draft whose editor is another screen), which
+   * declares no `draft.set` and so is read and never changed here, its help
+   * saying where it is changed.
    */
-  apply?(next: D): void;
+  write: DraftWrite<D> | DraftReadOnly;
   /** Why the draft may not be changed now (a save in flight), or null. */
   blocked?(): string | null;
 }
@@ -642,15 +883,18 @@ export function draftSetAction<D>(
       const spec = latest();
       return spec ? (spec.blocked?.() ?? null) : CLOSED;
     },
-    apply: (change) => latest()?.apply?.(change.next),
+    apply: (change) => {
+      const write = latest()?.write;
+      if (typeof write === "function") write(change.next);
+    },
     undo: (change) => {
       const before = latest()?.value;
       return () => {
         const spec = latest();
         if (!spec || before === undefined) return false;
         if (fingerprint(spec, spec.value) !== fingerprint(spec, change.next)) return false;
-        if (!spec.apply) return false;
-        spec.apply(before);
+        if (typeof spec.write !== "function") return false;
+        spec.write(before);
         return true;
       };
     },
@@ -660,9 +904,10 @@ export function draftSetAction<D>(
 /**
  * Declare the draft a screen has open, while it is mounted: its snapshot
  * reaches every question the person asks here, and `draft.set` changes it
- * through `apply` once they approve. Null where the screen has nothing open
- * now (a card not in edit), which declares no draft and no action. A draft
- * with no `apply`, or no field the assistant may set, is declared without
+ * through its `write` once they approve. Null where the screen has nothing
+ * open now (a card not in edit), which declares no draft and no action. A
+ * draft that is read only, or with no field the assistant may set, is
+ * declared without
  * `draft.set`: the page does not accept a change it could only refuse. See
  * the module doc.
  */
@@ -675,7 +920,9 @@ export function useAssistantDraft<D>(spec: AssistantDraftSpec<D> | null): void {
   const read = useCallback(() => latest.current, []);
   const action = useMemo(() => draftSetAction(read), [read]);
   const changeable =
-    spec?.apply !== undefined && draft !== null && draft.fields.some((f) => f.editable === true);
+    typeof spec?.write === "function" &&
+    draft !== null &&
+    draft.fields.some((f) => f.editable === true);
   useAssistantContext(
     draft
       ? {

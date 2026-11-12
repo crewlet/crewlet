@@ -9,7 +9,7 @@
  * board holds and that arranging it is the person's to do.
  */
 
-import type { AssistantDraftSpec } from "~/app/assistant/draft.ts";
+import { readOnlyFrom, type AssistantDraftSpec, type DraftSetter } from "~/app/assistant/draft.ts";
 import type { Board } from "./model.ts";
 import { widgetName } from "./settings.tsx";
 
@@ -31,11 +31,13 @@ export function boardLines(board: Board): string[] {
 /** The board being arranged, as the page declares it. */
 export function homeBoardDraft(args: {
   board: Board;
+  /** The branded setter Home holds the board in, which a widget's sheet writes through. */
+  held: DraftSetter<Board | null>;
   /** The widget whose settings sheet is open, by name, or null. */
   settings: string | null;
   changed: boolean;
 }): AssistantDraftSpec<Board> {
-  const { board, settings, changed } = args;
+  const { board, held, settings, changed } = args;
   return {
     kind: "client",
     step: settings === null ? "arrange" : "widget_settings",
@@ -47,7 +49,8 @@ export function homeBoardDraft(args: {
       { path: "settings", label: "Settings open for", read: () => settings ?? "None" },
       { path: "unsaved", label: "Unsaved changes", read: () => (changed ? "Yes" : "No") },
     ],
-    // NOTHING HERE IS SET (see the file's doc): no apply, so the page takes
+    // NOTHING HERE IS SET (see the file's doc): read only, so the page takes
     // no draft.set at all.
+    write: readOnlyFrom(held),
   };
 }

@@ -28,7 +28,13 @@ import { QueryState, Section } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { overWords, relTime, utf8Bytes } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   ARTIFACT_DESCRIPTION_MAX_BYTES,
@@ -150,9 +156,9 @@ function Details({
   }, [focus]);
   const gesture = useKeyedGesture();
   const toast = useToast();
-  const [title, setTitle] = useState(detail.title);
-  const [description, setDescription] = useState(detail.description ?? "");
-  const [icon, setIcon] = useState(detail.icon ?? "");
+  const [title, setTitle] = useDraftState(detail.title);
+  const [description, setDescription] = useDraftState(detail.description ?? "");
+  const [icon, setIcon] = useDraftState(detail.icon ?? "");
   useEffect(() => {
     setTitle(detail.title);
     setDescription(detail.description ?? "");
@@ -196,11 +202,10 @@ function Details({
           scope: `The details of “${detail.title}” (not saved)`,
           value: { title, description, icon },
           fields: DETAIL_FIELDS,
-          apply: (next) => {
-            setTitle(next.title);
-            setDescription(next.description);
-            setIcon(next.icon);
-          },
+          write: writeParts(
+            { title, description, icon },
+            { title: setTitle, description: setDescription, icon: setIcon },
+          ),
           blocked: () => (gesture.busy ? "The details are being saved." : null),
         }
       : null,

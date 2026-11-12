@@ -61,7 +61,14 @@ import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } fr
 import { filedTaskText, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -159,12 +166,12 @@ export function DocCreate() {
   const leaveCreate = useLeaveCreate();
   const panel = useAskPanel();
   const [templateParam] = useParam("template", "");
-  const [template, setTemplate] = useState<DocTemplate | undefined>(() =>
+  const [template, setTemplate] = useDraftState<DocTemplate | undefined>(() =>
     docTemplate(templateParam),
   );
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState(template?.body ?? "");
-  const [brief, setBrief] = useState("");
+  const [title, setTitle] = useDraftState("");
+  const [body, setBody] = useDraftState(template?.body ?? "");
+  const [brief, setBrief] = useDraftState("");
   // A NEW KEY LOADS THE EDITOR AGAIN: a template replaces the whole body,
   // which the editor takes only as a fresh document.
   const [loaded, setLoaded] = useState(0);
@@ -232,12 +239,12 @@ export function DocCreate() {
       extra: {
         value: { body, template: template?.key ?? "" },
         fields: docFields(untouched),
-        apply: (next) => {
-          if (next.template !== (template?.key ?? "")) setTemplate(docTemplate(next.template));
-          setBody(next.body);
+        write: writeParts<DocDraft>(
+          { body, template: template?.key ?? "" },
+          { body: setBody, template: writeVia(setTemplate, (key: string) => docTemplate(key)) },
           // THE EDITOR TAKES A WHOLE NEW BODY only as a fresh document.
-          setLoaded((n) => n + 1);
-        },
+          () => setLoaded((n) => n + 1),
+        ),
       },
       blocked: () => (busy ? "The doc is being created." : null),
     }),

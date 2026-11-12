@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Button, ConfirmModal, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
 import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
@@ -273,7 +273,7 @@ export function ModelWizard({
   const [original] = useState(() => (editing ? draftOf(editing) : null));
   const [base] = useState(() => (editing ? baseOf(editing) : undefined));
   const [initial] = useState(() => openingDraft(data, editing, target));
-  const [draft, setDraft] = useState<Draft>(initial);
+  const [draft, setDraft] = useDraftState<Draft>(initial);
   const steps = stepsFor(draft);
   const [step, setStep] = useState<WizardStep>(() =>
     target && stepsFor(initial).includes(target.step) ? target.step : "harness",
@@ -293,6 +293,7 @@ export function ModelWizard({
       : "The model you are adding (not saved)",
     value: draft,
     fields: draftFields,
+    write: readOnlyFrom(setDraft),
   });
   const [reached, setReached] = useState<WizardStep>(editing ? "review" : step);
   const [attempted, setAttempted] = useState<ReadonlySet<WizardStep>>(new Set());

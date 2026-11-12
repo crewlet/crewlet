@@ -50,7 +50,14 @@ import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { clashesOf } from "~/lib/merge.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKindControls } from "~/lib/artifacts/kindControls.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  writeTo,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { publishVersion, readDoc, uploadTexts, versionText } from "~/lib/artifacts/api.ts";
 import {
   addTab,
@@ -160,9 +167,9 @@ export function DocEditor({
   const toast = useToast();
   const save = useKeyedGesture();
   const base = useMemo(() => docDraftOf(doc, version), [doc, version]);
-  const [draft, setDraft] = useState<DocDraft>(base);
+  const [draft, setDraft] = useDraftState<DocDraft>(base);
   const [merge, setMerge] = useState<DocMerge | null>(null);
-  const [label, setLabel] = useState("");
+  const [label, setLabel] = useDraftState("");
   const [saving, setSaving] = useState(false);
   const [discard, setDiscard] = useState(false);
   // WHAT THE SAVE IS AGAINST: the version opened, or the newer one a refused
@@ -286,13 +293,13 @@ export function DocEditor({
     scope: `Your edit of “${detail.title}” (not saved)`,
     value: { draft, label },
     fields: docEditFields(draft.order),
-    apply: (next) => {
-      if (next.draft !== draft) {
-        setDraft(next.draft);
-        setLoaded((n) => n + 1);
-      }
-      if (next.label !== label) setLabel(next.label);
-    },
+    write: writeParts(
+      { draft, label },
+      {
+        draft: writeTo(setDraft, { also: () => setLoaded((n) => n + 1) }),
+        label: setLabel,
+      },
+    ),
     blocked: () =>
       busy
         ? "Saving the doc."

@@ -29,6 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Kbd, SendKeysHint } from "@crewlethq/ui";
 
 import { useDraftBox } from "~/app/assistant/boxes.ts";
+import { useDraftState } from "~/app/assistant/draft.ts";
 import { pressable } from "~/components/WriteButton.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
 import type { ChatMessageView } from "~/protocol/index.ts";
@@ -71,7 +72,7 @@ export function InlineEditor({ view }: { view: ChatMessageView }) {
   const { message } = view;
   const scope = useRoomScope();
   const nav = useChatNav();
-  const [value, setValue] = useState(message.body ?? "");
+  const [value, setValue] = useDraftState(message.body ?? "");
   const [saving, setSaving] = useState(false);
   const box = useRef<HTMLTextAreaElement | null>(null);
   const [origin] = useState(() => {

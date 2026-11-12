@@ -75,14 +75,17 @@ import {
 import type { AccessSeat, GitHubAccess } from "~/contract/access.ts";
 import {
   DraftRefusal,
+  latestWrite,
   listedWithin,
   listing,
   refuse,
   said,
   useAssistantDraft,
+  writeParts,
   type AssistantDraftSpec,
   type DraftFieldSpec,
   type DraftValue,
+  type DraftWrite,
 } from "~/app/assistant/draft.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { andList, orList } from "~/lib/words.ts";
@@ -140,8 +143,8 @@ export interface AccessDraftPart {
   rows: readonly Row[];
   /** The tab's draft now. */
   value: AccessDraft;
-  /** The tab's own setter. */
-  apply(next: AccessDraft): void;
+  /** How a change is written into the tab's draft, through the branded state the tab holds it in. */
+  write: DraftWrite<AccessDraft>;
   /** Why nothing on the tab may change now, or null. */
   blocked(): string | null;
 }
@@ -461,7 +464,7 @@ function rowFields(seat: AccessSeat, at: number, lane: Lane): Field[] {
 export function accessDraftPart(
   view: AccessDraftView,
   draft: AccessDraft,
-  apply: (next: AccessDraft) => void,
+  write: DraftWrite<AccessDraft>,
 ): AccessDraftPart {
   const rows = view.seats.flatMap((seat, i) =>
     // AN AGENT THAT LEFT has no control, so no field; its place is still its.
@@ -483,7 +486,7 @@ export function accessDraftPart(
     name: view.name,
     rows,
     value: draft,
-    apply,
+    write,
     blocked: () =>
       view.syncing
         ? `A sync with ${view.name} is running. Access can be changed here once it ends.`
@@ -523,7 +526,7 @@ export function accessDraft(
     scope: `Agents' access on ${part.name} (not saved)`,
     value: part.value,
     fields: ordered(part.rows),
-    apply: (next) => part.apply(next),
+    write: part.write,
     blocked: () => part.blocked(),
   };
 }
@@ -572,18 +575,15 @@ export function accessDraftsOf(
       fields: row.fields.map((field) => lifted(part.kind, field)),
     })),
   );
+  const value: AccessDrafts = Object.fromEntries(parts.map((part) => [part.kind, part.value]));
   return {
     kind: "client",
     help: helpWords(`${agent}'s`, andList(parts.map((part) => part.name))),
     scope: `${agent}'s access (not saved)`,
-    value: Object.fromEntries(parts.map((part) => [part.kind, part.value])),
+    value,
     fields: ordered(rows),
-    apply: (next) => {
-      for (const part of parts) {
-        const drafted = next[part.kind];
-        if (drafted !== undefined && drafted !== part.value) part.apply(drafted);
-      }
-    },
+    // EACH TAB THROUGH ITS OWN WRITE, where the change moved its draft.
+    write: writeParts(value, Object.fromEntries(parts.map((part) => [part.kind, part.write]))),
     blocked: () => parts.map((part) => part.blocked()).find((why) => why !== null) ?? null,
   };
 }
@@ -637,12 +637,12 @@ export class AccessDraftParts {
     for (const listener of [...this.listeners]) listener();
   }
 
-  /** A part whose setter and gate are the latest render's. */
+  /** A part whose write and gate are the latest render's. */
   private live(kind: string): AccessDraftPart {
     const part = this.open.get(kind)!.part;
     return {
       ...part,
-      apply: (next) => this.open.get(kind)?.part.apply(next),
+      write: latestWrite(() => this.open.get(kind)?.part.write),
       blocked: () => this.open.get(kind)?.part.blocked() ?? null,
     };
   }

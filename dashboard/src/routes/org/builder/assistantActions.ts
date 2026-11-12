@@ -24,7 +24,11 @@
 import type { AssistantActionArgs } from "~/contract/assistant.ts";
 import type { ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import type { PageActionParse } from "~/app/assistant/context.ts";
-import type { AssistantDraftSpec } from "~/app/assistant/draft.ts";
+import {
+  readOnlyFrom,
+  type AssistantDraftSpec,
+  type DraftDispatch,
+} from "~/app/assistant/draft.ts";
 import {
   allSeats,
   allUnits,
@@ -37,7 +41,12 @@ import {
 } from "./model/draft.ts";
 import { COMPANY_KEY, mintKey, type KeySource, type NodeKey } from "./model/keys.ts";
 import { apply as applyOperation, describeOperation, type Intent } from "./model/operations.ts";
-import { builderReducer, recordIntent, type BuilderState } from "./model/reducer.ts";
+import {
+  builderReducer,
+  recordIntent,
+  type BuilderAction,
+  type BuilderState,
+} from "./model/reducer.ts";
 
 /** The most changes one proposal makes: a team's worth, read on one card. */
 export const ORG_DRAFT_MAX_OPS = 20;
@@ -422,12 +431,14 @@ export function draftChanges(state: BuilderState): string[] {
  */
 export function orgDraftSpec(args: {
   state: BuilderState;
+  /** The branded dispatch the builder holds its draft in, which every edit records through. */
+  held: DraftDispatch<BuilderAction>;
   /** The open view (`visualization`, `table`). */
   view: string;
   /** The selected node's name, or null. */
   selected: string | null;
 }): AssistantDraftSpec<BuilderState> {
-  const { state, view, selected } = args;
+  const { state, held, view, selected } = args;
   const count = <T>(items: Iterable<T>) => String([...items].length);
   return {
     kind: "client",
@@ -452,7 +463,8 @@ export function orgDraftSpec(args: {
       { path: "seats", label: "Seats", read: (s) => count(allSeats(s.draft)) },
       { path: "selected", label: "Selected", read: () => selected ?? "Nothing" },
     ],
-    // NOTHING HERE IS SET (see above): no apply, so the page takes no
+    // NOTHING HERE IS SET (see above): read only, so the page takes no
     // draft.set at all.
+    write: readOnlyFrom(held),
   };
 }
