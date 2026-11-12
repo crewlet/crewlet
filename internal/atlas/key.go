@@ -94,6 +94,27 @@ func (r Ref) Recordable() error {
 	return nil
 }
 
+// OnGitlet reports an entry Gitlet names: a repository keyed gitlet/, or one of
+// its checks.
+func (r Ref) OnGitlet() bool {
+	return (r.Kind == KindRepository || r.Kind == KindPipeline) && strings.HasPrefix(r.Key, GitletPrefix+"/")
+}
+
+// EngineNamed is where an entry the engine itself names is declared, and false
+// for one a person may add by hand: a model and a tool server are declared in
+// the settings, a server keyed ssh/ in the SSH settings, and a repository or a
+// check keyed gitlet/ in Gitlet. Such an entry enters the atlas from there.
+func (r Ref) EngineNamed() (Source, bool) {
+	switch {
+	case r.Kind == KindModel, r.Kind == KindToolServer,
+		r.Kind == KindHost && strings.HasPrefix(r.Key, HostSSHPrefix+"/"):
+		return Source{Kind: SourceSettings}, true
+	case r.OnGitlet():
+		return RecordSource(RecordGitlet), true
+	}
+	return Source{}, false
+}
+
 // MustRef is [NewRef] for a key the caller built from values already parsed.
 func MustRef(k Kind, key string) Ref {
 	r, err := NewRef(k, key)

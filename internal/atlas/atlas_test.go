@@ -357,3 +357,26 @@ func TestTheAtlasImportsNoWritePath(t *testing.T) {
 	}
 }
 
+// AN ENTRY THE ENGINE NAMES IS DECLARED WHERE IT IS NAMED: a model and a tool
+// server in the settings, a server keyed ssh/ in the SSH settings, a repository
+// or a check keyed gitlet/ in Gitlet; any other key is one a person may add.
+//
+// Mutation: drop the ssh/ case from Ref.EngineNamed and web-1 is a person's.
+func TestAnEntryTheEngineNamesIsDeclaredWhereItIsNamed(t *testing.T) {
+	t.Parallel()
+	for ref, want := range map[atlas.Ref]atlas.SourceKind{
+		atlas.MustRef(atlas.KindHost, "ssh/web-1"):                 atlas.SourceSettings,
+		atlas.MustRef(atlas.KindToolServer, "mcp/tracker"):         atlas.SourceSettings,
+		atlas.MustRef(atlas.KindModel, "llm/main"):                 atlas.SourceSettings,
+		atlas.MustRef(atlas.KindRepository, "gitlet/api"):          atlas.SourceRecords,
+		atlas.MustRef(atlas.KindPipeline, "gitlet/api#unit"):       atlas.SourceRecords,
+		atlas.MustRef(atlas.KindHost, "addr/web-2.acme.example"):   "",
+		atlas.MustRef(atlas.KindRepository, "github.com/acme/api"): "",
+		atlas.MustRef(atlas.KindService, "checkout-api"):           "",
+	} {
+		src, named := ref.EngineNamed()
+		if named != (want != "") || named && src.Kind != want {
+			t.Errorf("%s is named by the engine %v, from %s; want %q", ref, named, src.Kind, want)
+		}
+	}
+}
