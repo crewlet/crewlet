@@ -1867,7 +1867,16 @@ func (s *Store) validateTTL(l *lane, resource, owner string, ttl time.Duration) 
 }
 
 // unavailable turns a transport failure into the contract's third answer.
+//
+// A REFUSAL MADE BEFORE ANYTHING WAS SENT is not one, and passes through
+// unmarked: a value past what a key holds ([coord.ErrValueTooLarge]) is a
+// definite answer no retry changes, and marked unavailable it read to its
+// caller as an outage — a config write answered with a store outage, a sandbox
+// row's every write retried for good.
 func unavailable(what string, err error) error {
+	if errors.Is(err, coord.ErrValueTooLarge) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	return fmt.Errorf("%w: %s: %w", coord.ErrUnavailable, what, err)
 }
 
@@ -1876,8 +1885,13 @@ func unavailable(what string, err error) error {
 //
 // For the methods that read before they write, whose caller cannot otherwise
 // tell this failure from the read's — after which nothing was written — and
-// would tell a person a change that may have happened did not.
+// would tell a person a change that may have happened did not. A refusal made
+// before anything was sent passes through as [unavailable] says: it was never
+// sent, so it cannot have landed.
 func writeUnknown(what string, err error) error {
+	if errors.Is(err, coord.ErrValueTooLarge) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	return fmt.Errorf("%w: %w: %s: %w", coord.ErrUnavailable, coord.ErrWriteUnknown, what, err)
 }
 

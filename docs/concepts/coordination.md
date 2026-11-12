@@ -381,6 +381,20 @@ call to a vendor comes before the status it records. A reconcile that read a
 former leader's status there may repeat a provisioning step the fleet has
 already taken, once, inside that window.
 
+### What one key holds
+
+**A value is at most 6,290,542 bytes** (`coord.MaxValueBytes`), on every
+backend, and a write past it is refused before anything is sent: refused as
+too large (`coord.ErrValueTooLarge`), a definite answer that no retry changes,
+never as the store being unavailable. The reason is the leader read above: its
+reply carries the value base64-encoded in JSON, a third larger than the value,
+and a node without `data` reads the store across its leaf link, whose server
+closes the whole link to the fleet on any message past the transport's 8 MiB —
+every lease and mailbox the node holds going with it. So a value is held to the
+largest whose read crosses that link, less the most header a write of a key
+carries. The in-memory twin refuses exactly the same values, so a test passing
+on it passes on the store.
+
 ### A compare-and-set waits for the leader to decide
 
 A conditional write — a create, an update at a revision, a removal at a
