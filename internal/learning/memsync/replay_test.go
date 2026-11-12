@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -11,9 +12,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/jsapi"
-	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -78,9 +76,8 @@ func storeHolds(t *testing.T, db *store.DB) int {
 // the version and its skill a few rows apart, in one fetch of the single
 // replay, and with three hundred notes between them, in two.
 //
-// Mutation: replay the seat in one pass in the changelog's order, replay the
-// tables out of the registry's order, or hold each table's replay to where
-// the seat's rows end rather than the table's, and this goes red.
+// Mutation: replay the seat in one pass in the changelog's order, or replay
+// the tables out of the registry's order, and this goes red.
 func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -489,115 +486,133 @@ func TestAHydrationHoldsNoWriteWhileAFetchIsOnTheWire(t *testing.T) {
 }
 
 // remakingJS deletes the changelog and provisions it again from its own
-// configuration, stamped anew as the queue stamps every create, the first time
-// a replay deletes its consumer: between the first table's replay and the
-// second's.
+// configuration, stamped anew as the queue stamps every create, once: as the
+// hydration publishes its barrier, so the barrier lands on the new changelog,
+// where atBarrier says so, and otherwise the first time a replay deletes its
+// consumer, between the first table's replay and the second's. Made again
+// there, the new changelog is given what one in use since would hold: rows of
+// another seat's, until its sequences have run past the last the lost one gave,
+// the barrier's among them, and a barrier of the seat's past them, another
+// hydration's.
 type remakingJS struct {
 	jetstream.JetStream
-	once sync.Once
-	err  error
+	atBarrier bool
+	once      sync.Once
+	err       error
+}
+
+func (j *remakingJS) Publish(ctx context.Context, subject string, data []byte,
+	opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+
+	if j.atBarrier && subject == barrierSubject(seat.AgentID) {
+		j.once.Do(func() { _, j.err = remake(ctx, j.JetStream) })
+	}
+	return j.JetStream.Publish(ctx, subject, data, opts...)
 }
 
 func (j *remakingJS) DeleteConsumer(ctx context.Context, stream, consumer string) error {
 	err := j.JetStream.DeleteConsumer(ctx, stream, consumer)
-	j.once.Do(func() { j.err = remake(ctx, j.JetStream) })
+	if !j.atBarrier {
+		j.once.Do(func() { j.err = j.remakePastTheBarrier(ctx) })
+	}
+	return err
+}
+
+// remakePastTheBarrier makes the changelog again, publishes another seat's rows
+// to it until its sequences reach the last the lost changelog gave, and then a
+// barrier of the seat's, past every sequence the lost one gave.
+func (j *remakingJS) remakePastTheBarrier(ctx context.Context) error {
+	last, err := remake(ctx, j.JetStream)
+	if err != nil {
+		return err
+	}
+	for i := range last {
+		subject := fmt.Sprintf("%s%s.agent_diary.%032x", topics.MemoryPrefix, otherSeat, i)
+		if _, err := j.JetStream.Publish(ctx, subject, []byte(`{}`)); err != nil {
+			return err
+		}
+	}
+	_, err = j.JetStream.Publish(ctx, barrierSubject(seat.AgentID), nil)
 	return err
 }
 
 // remake deletes the changelog and creates it again, empty, stamped by the
 // create that makes it ([statelog.StampCreatedAt]): the recreation a node's
-// identity check exists for. Two stamps are compared at a microsecond, and
-// this one is minted after the publish and the hydration that the first one's
-// create preceded, so the two differ with no wait for the clock to move.
-func remake(ctx context.Context, client jetstream.JetStream) error {
+// identity check exists for. It answers the last sequence the lost changelog
+// had given. Two stamps are compared at a microsecond, and this one is minted
+// after the publish and the hydration that the first one's create preceded, so
+// the two differ with no wait for the clock to move.
+func remake(ctx context.Context, client jetstream.JetStream) (uint64, error) {
 	lost, err := client.Stream(ctx, topics.MemoryStream)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	again := lost.CachedInfo().Config
 	again.Metadata = statelog.StampCreatedAt(again.Metadata, time.Now())
 	if err := client.DeleteStream(ctx, topics.MemoryStream); err != nil {
-		return err
+		return 0, err
 	}
 	_, err = client.CreateStream(ctx, again)
-	return err
+	return lost.CachedInfo().State.LastSeq, err
 }
 
-// A CHANGELOG MADE AGAIN BETWEEN TWO TABLES REFUSES THE SEAT.
+// A CHANGELOG MADE AGAIN UNDER A HYDRATION REFUSES THE SEAT, WHERE ITS BARRIER
+// CANNOT SEE IT.
 //
-// A hydration reads the changelog's identity before its first table, and then
-// reads the tables one after another across its whole budget. A changelog
-// deleted and provisioned again between two of them is EMPTY from there on:
-// every later table's replay delivers no row and the leader holds none past
-// it, so the hydration reported success with the rows of the tables read
-// before alone — a seat silently missing the rest of its memory, which is what
-// reading the identity first exists to refuse. It is read again after the last
-// table, and the seat is refused, the rows already written reported as what it
-// left in the store.
+// A hydration reads the changelog's identity, publishes its barrier, and then
+// reads the tables one after another across its whole budget. A changelog made
+// again after the barrier is EMPTY and has lost it, so a table's replay on it
+// waits for a barrier that never comes, and the seat is refused. Two
+// recreations the barrier cannot see: one between the identity's reading and
+// the barrier, which takes the barrier itself, so every table's replay
+// delivers it and no row; and one between two tables whose sequences have run
+// past the barrier's and which holds a barrier of the seat's past it, another
+// hydration's, so every later table's replay delivers that and no row. Either
+// way the hydration reported success with the rows read before the changelog
+// was made again, or none — a seat silently missing its memory, which reading
+// the identity first exists to refuse. It is read again after the last table,
+// and the seat is refused, the rows already written reported as what it left
+// in the store.
 //
-// Mutation: read the identity only before the first table, and this goes red.
-func TestAChangelogMadeAgainBetweenTwoTablesRefusesTheSeat(t *testing.T) {
+// Mutation: read the identity only before the barrier, and this goes red.
+func TestAChangelogMadeAgainUnderAHydrationRefusesTheSeat(t *testing.T) {
 	t.Parallel()
-	conn := broker(t)
-	holder := openStore(t)
-	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-
-	fresh := openStore(t)
-	syncer := syncerOn(t, fresh, conn)
-	remade := &remakingJS{JetStream: syncer.js}
-	syncer.js = remade
-	carried, err := syncer.Hydrate(t.Context(), seat.Handle)
-	if remade.err != nil {
-		t.Fatalf("make the changelog again between two tables: %v", remade.err)
-	}
-	if !errors.Is(err, statelog.ErrStreamRecreated) {
-		t.Fatalf("a hydration whose changelog was made again after its first table answered "+
-			"(%d, %v), want the seat refused as hydrating from a recreated changelog", carried, err)
-	}
-	if held := storeHolds(t, fresh); carried != held || held != 1 {
-		t.Errorf("the refused hydration reported %d rows and left %d in the store, want the "+
-			"first table's 1 reported as written", carried, held)
-	}
-}
-
-// A LEADER READ ACROSS A LINK IS GIVEN THE TIME ITS LARGEST ANSWER TAKES TO
-// CROSS.
-//
-// Where a table's replay ran on a copy behind the leader, the leader's word on
-// what lies past it is a row whole, a third larger, which across a slow link
-// takes longer than the read term to arrive: asked again at the term, the read
-// put another copy of a row of up to the transport's limit on the link the
-// node's lease renewals cross, each time. So a syncer whose connection crosses
-// a link presumes a read lost only once a reply carrying the largest row its
-// connection carries has had time to cross at the object store's floor, and
-// one on a member's own connection, whose replies cross a cluster route, at
-// the read term. What the term does to the asking is the leader's own suite's
-// (internal/jsapi, TestAReadOfAWholePieceIsGivenItsCrossing); this holds the
-// term a hydration's reads are given.
-//
-// Mutation: build the leader across a link without the crossing, or with it
-// on a member's own connection, and this goes red.
-func TestALeaderReadAcrossALinkIsGivenItsLargestAnswersCrossing(t *testing.T) {
-	t.Parallel()
-	conn := broker(t)
-	largest := jsapi.Crossing(int(conn.MaxPayload()), objstore.MiBPace)
 	for _, tc := range []struct {
-		name       string
-		acrossLink bool
-		want       time.Duration
+		name      string
+		atBarrier bool
+		// wrote is the rows the hydration wrote from the lost changelog:
+		// none where it was made again before the first table, and the first
+		// table's one where it was made again after it.
+		wrote int
 	}{
-		{"across a link", true, jsprovision.ReadTerm + largest},
-		{"on a member's own connection", false, jsprovision.ReadTerm},
+		{"between the identity and the barrier", true, 0},
+		{"between two tables, past the barrier", false, 1},
 	} {
-		s, err := New(openStore(t), jsOn(t, conn), func(string) string { return seat.AgentID }, tc.acrossLink)
-		if err != nil || s == nil {
-			t.Fatalf("New %s: %v", tc.name, err)
-		}
-		if got := s.leader.Term(); got != tc.want {
-			t.Errorf("a hydration's leader read %s is presumed lost after %v, want %v", tc.name, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			conn := broker(t)
+			holder := openStore(t)
+			seedMemory(t, holder)
+			if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+				t.Fatalf("publish: %v", err)
+			}
+
+			fresh := openStore(t)
+			syncer := syncerOn(t, fresh, conn)
+			remade := &remakingJS{JetStream: syncer.js, atBarrier: tc.atBarrier}
+			syncer.js = remade
+			carried, err := syncer.Hydrate(t.Context(), seat.Handle)
+			if remade.err != nil {
+				t.Fatalf("make the changelog again: %v", remade.err)
+			}
+			if !errors.Is(err, statelog.ErrStreamRecreated) {
+				t.Fatalf("a hydration whose changelog was made again under it answered (%d, %v), "+
+					"want the seat refused as hydrating from a recreated changelog", carried, err)
+			}
+			if held := storeHolds(t, fresh); carried != held || held != tc.wrote {
+				t.Errorf("the refused hydration reported %d rows and left %d in the store, want "+
+					"the %d it wrote before the changelog was made again", carried, held, tc.wrote)
+			}
+		})
 	}
 }

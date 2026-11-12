@@ -508,6 +508,14 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// still remember belongs. An age bound on this stream
 			// would silently delete memory the seat still holds
 			// locally, and the two would disagree about the past.
+			//
+			// Nor a byte or a message-count limit, for the same
+			// reason and one more: the discard policy is old, so
+			// either would drop the oldest row to make room for any
+			// message, a hydration's barrier among them, where the
+			// limit of one per subject drops only the message a newer
+			// one on its own subject replaces
+			// (topics.MemoryBarrierToken).
 			name:          streamMemory,
 			subjects:      []string{topics.MemoryPrefix + ">"},
 			retention:     jetstream.LimitsPolicy,

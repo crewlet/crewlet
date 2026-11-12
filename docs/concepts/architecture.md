@@ -780,8 +780,9 @@ and placement moves seats — so every memory row also rides
 retains exactly one message per subject. By the seat's **id**, as its lease
 and its mailbox are named. A node acquiring a seat replays that seat's rows a
 table at a time, in a fixed order that writes a skill before its versions, each
-table read until the changelog's leader holds none of its rows past the
-replay, and hydrates them **before** the mailbox is attached (see
+table read until it has delivered a barrier at or past the one the node
+published on the seat's own subject first and the copy serving it holds
+nothing more, and hydrates them **before** the mailbox is attached (see
 [A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it)).
 Deletes deliberately do not travel: the lifecycle re-converges, and a tombstone
 protocol would be a second thing to keep correct forever.

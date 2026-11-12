@@ -33,12 +33,12 @@ import (
 
 // leafFleet starts a member carrying memberPayload bytes a message, holding
 // every stream the queue provisions in the embedded fleet's domain, and a leaf
-// joined to it carrying leafPayload, and returns a connection to each once the
-// leaf's clients reach the member's JetStream.
-func leafFleet(t *testing.T, memberPayload, leafPayload int32) (member, leaf *nats.Conn) {
+// joined to it carrying leafPayload, and returns the member and a connection to
+// each once the leaf's clients reach the member's JetStream.
+func leafFleet(t *testing.T, memberPayload, leafPayload int32) (hub *server.Server, member, leaf *nats.Conn) {
 	t.Helper()
 	dir := t.TempDir()
-	hub := startServer(t, &server.Options{
+	hub = startServer(t, &server.Options{
 		ServerName: "memsync-member", JetStream: true, JetStreamDomain: jsapi.Domain,
 		Port: -1, DontListen: true, StoreDir: dir, MaxPayload: memberPayload,
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
@@ -68,7 +68,22 @@ func leafFleet(t *testing.T, memberPayload, leafPayload int32) (member, leaf *na
 	})
 	leaf = connectTo(t, edge)
 	reachable(t, embeddedOn(t, leaf))
-	return member, leaf
+	return hub, member, leaf
+}
+
+// leafLink is the member's connection to its one leaf, by the id the member
+// gave it, or 0 while it holds none: a leaf that closed its link and dialled
+// again is a connection of another id.
+func leafLink(t *testing.T, hub *server.Server) uint64 {
+	t.Helper()
+	leafz, err := hub.Leafz(nil)
+	if err != nil {
+		t.Fatalf("read the member's leaf connections: %v", err)
+	}
+	if len(leafz.Leafs) != 1 {
+		return 0
+	}
+	return leafz.Leafs[0].ID
 }
 
 // startServer starts an in-process broker with opts, stopped when the case
@@ -154,21 +169,17 @@ func noteOfSize(t *testing.T, id string, size int) Row {
 
 // A ROW AT THE TRANSPORT'S LIMIT HYDRATES ACROSS A LEAF LINK.
 //
-// A row crosses a satellite's link as its replay delivers it, whole and no
-// larger, so a row at the link's limit fits. The leader's answer to a read of
-// the row is a third larger, base64-encoded in JSON: a hydration that asked
-// the leader for each table's newest row before its replay never received
-// that answer for a row past three quarters of the limit, because the leaf
-// closed its link to the member on it, and the read asked again closed it
-// again, until the budget ran out and the seat was refused — at every sweep,
-// for as long as the row was its table's newest, the satellite's leases riding
-// a link that kept closing. The leader is asked once the replay has delivered
-// what its copy holds, and answers that it holds nothing past it. The row here
-// is a note whose message is exactly the limit, on a fleet carrying a small
-// one and on one carrying the embedded fleet's 8 MiB.
+// A row crosses a satellite's link as its replay's pull delivers it, whole and
+// no larger, and nothing else a hydration asks is answered with a row: the
+// barrier it reads to is a message of no bytes, and every count arrives with
+// a consumer's creation. So a row at the link's limit fits, where any answer
+// carrying it base64-encoded in JSON, a third larger, would close the leaf's
+// link to the member. The row here is a note whose message is exactly the
+// limit, on a fleet carrying a small one and on one carrying the embedded
+// fleet's 8 MiB.
 //
-// Mutation: ask the leader for each table's newest row before its replay, and
-// this goes red.
+// Mutation: bound a pull by the max_payload alone, without the room the
+// broker counts beside a message, and this goes red.
 func TestARowAtTheTransportsLimitHydratesAcrossALeafLink(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -180,15 +191,12 @@ func TestARowAtTheTransportsLimitHydratesAcrossALeafLink(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			member, leaf := leafFleet(t, tc.limit, tc.limit)
+			_, member, leaf := leafFleet(t, tc.limit, tc.limit)
 			note := noteOfSize(t, "at-the-limit", int(tc.limit))
 			publishOn(t, member, registered(t, "agent_diary").subject(seat.AgentID, note.Values), note)
 
 			fresh := openStore(t)
-			satellite, err := New(fresh, embeddedOn(t, leaf), func(string) string { return seat.AgentID }, true)
-			if err != nil || satellite == nil {
-				t.Fatalf("New: %v", err)
-			}
+			satellite := New(fresh, embeddedOn(t, leaf), func(string) string { return seat.AgentID })
 			carried, err := satellite.Hydrate(t.Context(), seat.Handle)
 			if err != nil {
 				t.Fatalf("a row at the transport's limit refused the seat across a leaf link: %v", err)
@@ -227,14 +235,11 @@ func TestARowAtTheTransportsLimitHydratesAcrossALeafLink(t *testing.T) {
 // copy that stalled, and this goes red.
 func TestARowLargerThanThisNodesConnectionCarriesIsRefusedAsThat(t *testing.T) {
 	t.Parallel()
-	member, leaf := leafFleet(t, 128<<10, 64<<10)
+	_, member, leaf := leafFleet(t, 128<<10, 64<<10)
 	note := noteOfSize(t, "past-the-leaf", 96<<10)
 	publishOn(t, member, registered(t, "agent_diary").subject(seat.AgentID, note.Values), note)
 
-	satellite, err := New(openStore(t), embeddedOn(t, leaf), func(string) string { return seat.AgentID }, true)
-	if err != nil || satellite == nil {
-		t.Fatalf("New: %v", err)
-	}
+	satellite := New(openStore(t), embeddedOn(t, leaf), func(string) string { return seat.AgentID })
 	carried, err := satellite.Hydrate(t.Context(), seat.Handle)
 	if !errors.Is(err, errRowPastPull) {
 		t.Fatalf("a row larger than the satellite's connection carries answered (%d, %v), want "+
@@ -242,5 +247,63 @@ func TestARowLargerThanThisNodesConnectionCarriesIsRefusedAsThat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "max_payload of 65536 bytes") {
 		t.Errorf("the refusal does not name the satellite's limit: %v", err)
+	}
+}
+
+// A COPY BEHIND ACROSS A LEAF HANDS THE SATELLITE THE ROW IT LACKED IN A PULL,
+// AND THE LINK STAYS UP.
+//
+// Where a table's replay ran on a copy behind the changelog's leader, the
+// leader's word on what lay past the replay was the first row the copy lacked,
+// whole and base64-encoded in JSON, a third larger than the row. A row of 6 to
+// 8 MiB therefore crossed a satellite's leaf link as a reply over the 8 MiB
+// the leaf carries, and the leaf closed its whole link to the fleet, the
+// satellite's lease renewals with it (crewlet/crewlet#1031's defect, reached
+// through that read). A replay ends at a barrier it reads through its own
+// consumer instead, so a row crosses the link only in a pull, raw. Here the
+// fleet is a member and a leaf each carrying the embedded fleet's 8 MiB, and
+// the replay's copy of the diary lacks its newest note, of 7 MiB, and the
+// hydration's barrier until it has handed over what it holds. The hydration
+// carries both notes, the large one whole, and the member's connection to the
+// leaf is the one it had before.
+//
+// Red on the end check this replaced: the leader's answer closed the link
+// (the member's connection to the leaf went from one id to another) and the
+// read, asked once across a link, waited out the hydration's budget.
+//
+// Mutation: take the copy's word for the end, and this goes red: the
+// hydration carries the note the copy held alone.
+func TestACopyBehindAcrossALeafHandsOverARowPastWhatALeaderReadCarries(t *testing.T) {
+	t.Parallel()
+	hub, member, leaf := leafFleet(t, queue.MaxPayloadBytes, queue.MaxPayloadBytes)
+	diary := registered(t, "agent_diary")
+	kept := noteOfSize(t, "kept", 4<<10)
+	publishOn(t, member, diary.subject(seat.AgentID, kept.Values), kept)
+	lacked := noteOfSize(t, "lacked", 7<<20)
+	publishOn(t, member, diary.subject(seat.AgentID, lacked.Values), lacked)
+	link := leafLink(t, hub)
+	if link == 0 {
+		t.Fatal("the member holds no leaf connection before the hydration")
+	}
+
+	fresh := openStore(t)
+	satellite := New(fresh, embeddedOn(t, leaf), func(string) string { return seat.AgentID })
+	satellite.js = laggingJS{JetStream: satellite.js, behind: 2, catchesUp: true}
+	carried, err := satellite.Hydrate(t.Context(), seat.Handle)
+	if now := leafLink(t, hub); now != link {
+		t.Errorf("the member's connection to the leaf was %d before the hydration and is %d after "+
+			"it: the leaf closed its link to the fleet while the hydration ran", link, now)
+	}
+	if err != nil || carried != 2 {
+		t.Fatalf("Hydrate = (%d, %v), want both notes: the copy caught up, so the note it lacked "+
+			"is there to be pulled", carried, err)
+	}
+	var length int
+	if err := fresh.SQL().QueryRowContext(t.Context(),
+		"SELECT length(content) FROM agent_diary WHERE id = 'lacked'").Scan(&length); err != nil {
+		t.Fatalf("the note the copy lacked did not arrive: %v", err)
+	}
+	if want := len(lacked.Values["content"].(string)); length != want {
+		t.Errorf("the note the copy lacked arrived with %d bytes of content, want its %d", length, want)
 	}
 }

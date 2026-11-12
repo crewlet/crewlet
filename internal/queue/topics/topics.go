@@ -73,7 +73,9 @@ const (
 	EventsPrefix = "crewlet.events."
 
 	// MemoryPrefix carries a seat's memory rows, one subject per row:
-	// crewlet.memory.<seat-id>.<table>.<key-digest>.
+	// crewlet.memory.<seat-id>.<table>.<key-digest>; and beside them one
+	// subject per seat that is no row's, its barrier:
+	// crewlet.memory.<seat-id>.<MemoryBarrierToken>.
 	//
 	// A SUBJECT PER ROW is the whole design. The stream retains one message
 	// per subject, so it holds the current value of every row rather than a
@@ -81,6 +83,51 @@ const (
 	// each of that seat's rows once, a table at a time, instead of folding a
 	// history. See internal/learning/memsync.
 	MemoryPrefix = "crewlet.memory."
+
+	// MemoryBarrierToken names a seat's barrier on the memory changelog, the
+	// token after the seat's id: crewlet.memory.<seat-id>.hydration-barrier.
+	//
+	// A hydration publishes one message of no bytes there before it replays
+	// the seat, and the sequence the changelog acknowledges it at lies past
+	// every row the changelog had acknowledged before. Each table's replay
+	// reads the table's subjects and this one through one consumer, which
+	// delivers in the stream's order, and ends once it has delivered a
+	// barrier at or past that one and its copy holds nothing more
+	// (internal/learning/memsync, Syncer.replay): a copy behind the stream's
+	// leader cannot end a replay short, and no answer of the leader's has to
+	// cross a link with a row in it.
+	//
+	// FOUR TOKENS, where a row's subject has five, so no table's filter,
+	// crewlet.memory.<seat-id>.<table>.>, matches it, and a replay's two
+	// filters never overlap, which nats-server requires of a consumer's
+	// filter subjects.
+	//
+	// A TOKEN NO TABLE CAN EVER BE NAMED. A memory table's name is a SQL
+	// identifier, written unquoted into every statement that reads or writes
+	// it, and a hyphen is no part of one; memsync's
+	// TestTheBarrierTokenIsNoTablesName holds every table it carries and every
+	// one it has retired apart from this token.
+	//
+	// ONE PER SEAT: the stream keeps one message per subject, so a seat holds
+	// one barrier at most, the newest hydration's, and a barrier published
+	// again replaces the one before. Two hydrations of a seat racing each
+	// other therefore both end: the earlier's barrier is replaced by the
+	// later's, which lies past it and which its replays accept, since each
+	// ends at a barrier at or past its own. Only a hydration writes it; a
+	// publish of the seat's memory never does. memsync's
+	// TestEveryHydrationOfASeatLeavesItOneBarrier and
+	// TestTwoHydrationsOfASeatRacingEachOtherBothEnd hold both.
+	//
+	// AND IT PUSHES NO ROW OUT. The changelog is provisioned with no age, byte,
+	// message-count or message-size limit (internal/queue/jetstream's memory
+	// spec: no max_age, max_bytes and max_msg_size -1, max_msgs left 0, which
+	// nats-server reads as unlimited), so its discard policy, old, acts on the
+	// one limit it has: one message per subject, which drops a subject's older
+	// message as a newer one lands on that subject. A barrier, on a subject of
+	// its own, replaces the seat's previous barrier and never a row. memsync's
+	// TestABarrierPushesNoRowOut reads those limits off the changelog as the
+	// queue provisions it.
+	MemoryBarrierToken = "hydration-barrier"
 
 	// MemoryStream is the stream those subjects live on.
 	//

@@ -23,9 +23,10 @@ import (
 // broker, inside seat acquisition. The cases below watch every pull a
 // hydration makes (pullsJS), on a broker carrying the max_payload each names.
 
-// pulled is what one replay pull delivered: for each row, in the order the
-// pull delivered them, the bytes the broker counts it at against the pull's
-// byte bound.
+// pulled is what one replay pull delivered of the table's rows: for each, in
+// the order the pull delivered them, the bytes the broker counts it at against
+// the pull's byte bound. The barrier a pull may deliver beside them is no row,
+// and is not counted.
 type pulled struct {
 	sizes []int
 	// headed says a row carried headers, which the broker counts too and
@@ -43,8 +44,8 @@ func (p pulled) bytes() int {
 }
 
 // pullsJS is a JetStream whose replay consumers record what each of their
-// pulls delivered, by the filter the replay reads, so a case sees the size of
-// every pull a hydration makes.
+// pulls delivered, by the table's filter the replay reads beside the seat's
+// barrier, so a case sees the size of every pull a hydration makes.
 type pullsJS struct {
 	jetstream.JetStream
 	mu    sync.Mutex
@@ -58,7 +59,13 @@ func (j *pullsJS) CreateConsumer(ctx context.Context, stream string,
 	if err != nil {
 		return nil, err
 	}
-	return pullsConsumer{Consumer: consumer, js: j, filter: cfg.FilterSubject}, nil
+	filter := cfg.FilterSubject
+	for _, subject := range cfg.FilterSubjects {
+		if subject != barrierSubject(seat.AgentID) {
+			filter = subject
+		}
+	}
+	return pullsConsumer{Consumer: consumer, js: j, filter: filter}, nil
 }
 
 // of is the pulls of the replay over filter, in the order they were made.
@@ -85,12 +92,15 @@ func (c pullsConsumer) Fetch(batch int, opts ...jetstream.FetchOpt) (jetstream.M
 	var got pulled
 	msgs := make(chan jetstream.Msg, batch)
 	for msg := range fetched.Messages() {
+		msgs <- msg
+		if msg.Subject() == barrierSubject(seat.AgentID) {
+			continue
+		}
 		// WHAT THE BROKER COUNTS against a pull's bytes: the row's subject,
 		// the acknowledgement subject it is delivered with, its headers and
 		// its payload.
 		got.sizes = append(got.sizes, len(msg.Subject())+len(msg.Reply())+len(msg.Data()))
 		got.headed = got.headed || len(msg.Headers()) > 0
-		msgs <- msg
 	}
 	close(msgs)
 	c.js.mu.Lock()

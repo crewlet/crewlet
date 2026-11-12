@@ -458,8 +458,9 @@ the dependency surface before choosing a host for it:
   shows it; its seats' memory rides the compacted changelog every seat's
   memory does and is rehydrated after a restart into the fresh store, a table
   at a time, so a refined skill's versions arrive after the skill they belong
-  to. A seat's hydration has fifteen seconds, and about three and a half of
-  them go to round trips across a 100 ms leaf link before its rows' own bytes:
+  to. A seat's hydration has fifteen seconds, and its 23 round trips take
+  about 2.3 of them across a 100 ms leaf link before its rows' own bytes
+  (115 ms at 5 ms a round trip, 23 ms at 1 ms):
   a seat whose memory takes longer than the rest to cross the link is refused
   at every placement sweep, and so can run on no such satellite (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).

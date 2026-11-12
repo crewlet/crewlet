@@ -34,28 +34,36 @@
 // else on the stream, and a node that acquires a seat replays that seat's
 // subjects into its own database before the seat is allowed to take work.
 //
-// A TABLE AT A TIME, in the registry's order, each table read until the
-// changelog's leader holds none of its rows past the last the replay
-// delivered. A compacted stream keeps no order across subjects, and a skill's
-// versions reference the skill: every publish sends a seat's skills again and
-// each version once, so the changelog holds a skill's only copy after the
-// versions published before it, and one replay in the changelog's order wrote
-// those versions first and refused the seat on any store without the skill
-// (crewlet/crewlet#1051). Replayed table by table, parents are written before
-// children whatever order the changelog keeps. The leader is asked once a
-// table's replay has delivered what its copy holds, never before, because its
-// answer is a row whole wherever it holds one past the replay, and only a copy
-// behind it leaves one there.
+// A TABLE AT A TIME, in the registry's order. A compacted stream keeps no
+// order across subjects, and a skill's versions reference the skill: every
+// publish sends a seat's skills again and each version once, so the changelog
+// holds a skill's only copy after the versions published before it, and one
+// replay in the changelog's order wrote those versions first and refused the
+// seat on any store without the skill (crewlet/crewlet#1051). Replayed table
+// by table, parents are written before children whatever order the changelog
+// keeps.
 //
-// A PULL AT A TIME, bounded in rows and in bytes, each written in one
-// transaction: at most fetchBatch rows, which sets a table's round trips, and
-// at most one message at the transport's limit and the room the broker counts
-// beside it ([Syncer.pullBytes]), which is what a hydration holds of the
-// changelog's rows at once — beside, where a table's replay ran on a copy
-// behind the leader, the one row the leader answers with. Bounded by its rows
-// alone, one pull held up to 256 rows of up to 8 MiB each
-// (crewlet/crewlet#1052). A row larger than this node's pull is refused by
-// name, never read as a copy that stalled.
+// EACH TABLE READ TO A BARRIER. A replay is a consumer the server places on
+// any member of the stream, which delivers out of that member's copy, and a
+// copy can be behind the leader. So before the first table a hydration
+// publishes a barrier on the seat's own subject (topics.MemoryBarrierToken),
+// which the changelog acknowledges at a sequence past every row it had
+// acknowledged before, and each table's consumer reads the table's subjects
+// and the barrier's: it delivers in the stream's order, so its copy hands over
+// the table's rows below the barrier and then the barrier, once it has applied
+// it, and the replay ends at a barrier at or past the hydration's, a racing
+// hydration's included, once its copy holds nothing more. Nothing a hydration
+// asks is answered with a row but its pulls, and the barrier is the one thing
+// it writes, so a broker that refuses this node's writes refuses its
+// hydrations ([Syncer.Hydrate]).
+//
+// A PULL AT A TIME, bounded in messages and in bytes, each pull's rows written
+// in one transaction: at most fetchBatch messages, which sets a table's round
+// trips, and at most one message at the transport's limit and the room the
+// broker counts beside it ([Syncer.pullBytes]), which is what a hydration
+// holds of the changelog's rows at once. Bounded by its count alone, one pull
+// held up to 256 rows of up to 8 MiB each (crewlet/crewlet#1052). A row larger
+// than this node's pull is refused by name, never read as a copy that stalled.
 //
 // # What is deliberately not replicated
 //
@@ -317,10 +325,23 @@ func (t table) subject(seat string, values map[string]any) string {
 }
 
 // tableFilter matches every subject [table.subject] builds for one seat's rows
-// of the table named: the filter a table's replay reads, a retired table's
-// purge takes, and the changelog's leader is asked the end of.
+// of the table named: the filter a table's replay reads beside the seat's
+// barrier, and the one a retired table's count and purge take.
 func tableFilter(seat, name string) string {
 	return topics.MemoryPrefix + seat + "." + name + ".>"
+}
+
+// barrierSubject is the seat's barrier on the changelog: the one subject of the
+// seat's that is no table's, which a hydration publishes to before it replays
+// the seat and each table's replay reads to ([Syncer.replay]).
+//
+// FOUR TOKENS where a row's subject has five, and a last token no table can be
+// named (topics.MemoryBarrierToken), so no [tableFilter] matches it and a
+// replay's two filters never overlap, as nats-server requires of a consumer's
+// filter subjects. No row is ever published here: [Syncer.Publish] carries the
+// registry's tables, and the barrier is none of them.
+func barrierSubject(seat string) string {
+	return topics.MemoryPrefix + seat + "." + topics.MemoryBarrierToken
 }
 
 // upsert writes one carried row into this node's store.

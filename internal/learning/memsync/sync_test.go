@@ -3,6 +3,9 @@ package memsync
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,12 +53,25 @@ func brokerCarrying(t *testing.T, maxPayload int32) *nats.Conn {
 // and at nats-server's own default, a mebibyte, where it is 0.
 func brokerServerCarrying(t *testing.T, maxPayload int32) (*server.Server, *nats.Conn) {
 	t.Helper()
+	return brokerServerWith(t, func(opts *server.Options) { opts.MaxPayload = maxPayload })
+}
+
+// brokerServerWith is [brokerServer] with configure's changes to its options,
+// provisioned through, and answering with, a connection made with connect's
+// options as well: a case about what a server's settings refuse a connection
+// configures the server here and connects as it needs.
+func brokerServerWith(t *testing.T, configure func(*server.Options),
+	connect ...nats.Option) (*server.Server, *nats.Conn) {
+
+	t.Helper()
 	dir := t.TempDir()
-	ns, err := server.NewServer(&server.Options{
+	opts := &server.Options{
 		ServerName: "memsync-test", JetStream: true, Port: -1,
-		DontListen: true, StoreDir: dir, MaxPayload: maxPayload,
+		DontListen: true, StoreDir: dir,
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
-	})
+	}
+	configure(opts)
+	ns, err := server.NewServer(opts)
 	if err != nil {
 		t.Fatalf("configure the broker: %v", err)
 	}
@@ -66,7 +82,7 @@ func brokerServerCarrying(t *testing.T, maxPayload int32) (*server.Server, *nats
 	}
 	t.Cleanup(func() { ns.Shutdown(); ns.WaitForShutdown() })
 
-	conn, err := nats.Connect("", nats.InProcessServer(ns))
+	conn, err := nats.Connect("", append([]nats.Option{nats.InProcessServer(ns)}, connect...)...)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -107,10 +123,7 @@ func jsOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
 
 func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
 	t.Helper()
-	s, err := New(db, jsOn(t, conn), func(string) string { return seat.AgentID }, false)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	s := New(db, jsOn(t, conn), func(string) string { return seat.AgentID })
 	if s == nil {
 		t.Fatal("New returned nil with a store and a connection")
 	}
@@ -194,64 +207,210 @@ func TestAHydrationWhoseIdentityReadAMemberDropsAsksAgain(t *testing.T) {
 	}
 }
 
-// A HYDRATION WHOSE READ OF THE LEADER'S END A MEMBER DROPS ASKS AGAIN — and
-// that read is the leader's whatever the changelog's allow_direct says.
+// A HYDRATION WHOSE BARRIER A MEMBER DROPS ASKS AGAIN RATHER THAN REFUSING THE
+// SEAT.
 //
-// Once a table's replay has delivered what its copy holds, the changelog's
-// leader is asked whether it holds any of the table's rows past them, so a
-// replay served by a replica that is behind is not taken for the table's
-// whole. Only the leader answers that read, so a member that still believes
-// in a leader its group has just lost drops it without a word. Sent once, it
-// waited out the hydration's whole fifteen-second bound and refused the seat
-// over a reply nobody would send.
+// Before its first table a hydration publishes the seat's barrier, which every
+// table's replay reads to. Only the stream's leader takes a publish, and a
+// member that still believes it leads after its group has moved on drops one
+// without a reply, which the client's own retry, on `no responders` alone,
+// never asks again: sent once, the barrier waited out the hydration's whole
+// fifteen-second bound and refused the seat over a reply nobody would send.
+// It is asked again at the read term, as a metadata read is, and the second
+// request reaches the leader. The broker here drops the first publish to the
+// seat's barrier subject without a word, as such a member does.
 //
-// It is internal/jsapi's leader read, a STREAM.MSG.GET whatever the stream's
-// flag says. The client's own message reads pick their API from that flag
-// alone — any replica's DIRECT.GET the moment it is on, which proves nothing
-// — and so a changelog that allowed direct gets refused every hydration
-// outright; read through the leader it hydrates like any other, the dropped
-// MSG.GET counted here the proof that the leader was asked.
-func TestAHydrationWhoseLeaderEndReadAMemberDropsAsksAgain(t *testing.T) {
+// Mutation: publish the barrier once, with no re-ask, and this goes red.
+func TestAHydrationWhoseBarrierAMemberDropsAsksAgain(t *testing.T) {
 	t.Parallel()
-	for name, direct := range map[string]bool{
-		"from a changelog with direct gets off": false,
-		"from one that allows them":             true,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			ns, conn := brokerServer(t)
-			ctx := context.Background()
-			if direct {
-				client := jsOn(t, conn)
-				stream, err := client.Stream(ctx, topics.MemoryStream)
-				if err != nil {
-					t.Fatal(err)
-				}
-				cfg := stream.CachedInfo().Config
-				cfg.AllowDirect = true
-				if _, err := client.UpdateStream(ctx, cfg); err != nil {
-					t.Fatalf("allow direct gets on the changelog: %v", err)
-				}
-			}
-			oldOwner := openStore(t)
-			seedMemory(t, oldOwner)
-			if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
-				t.Fatalf("publish: %v", err)
-			}
-			held := jsapitest.DropFirst(t, ns, jsapitest.MsgGet(topics.MemoryStream), 1)
+	ns, conn := brokerServer(t)
+	ctx := context.Background()
+	oldOwner := openStore(t)
+	seedMemory(t, oldOwner)
+	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	held := jsapitest.DropFirst(t, ns, barrierSubject(seat.AgentID), 1)
 
-			carried, err := syncerOn(t, openStore(t), conn).Hydrate(ctx, seat.Handle)
-			if err != nil {
-				t.Fatalf("a hydration whose read of the leader's end the broker dropped "+
-					"once refused the seat rather than asking again: %v", err)
-			}
-			if carried != len(tables) {
-				t.Errorf("hydrated %d rows, want %d", carried, len(tables))
-			}
-			if n := held.Count(); n != 1 {
-				t.Errorf("the broker held %d leader message reads, want the 1 it dropped", n)
-			}
-		})
+	carried, err := syncerOn(t, openStore(t), conn).Hydrate(ctx, seat.Handle)
+	if err != nil {
+		t.Fatalf("a hydration whose barrier the broker dropped once refused the seat "+
+			"rather than asking again: %v", err)
+	}
+	if carried != len(tables) {
+		t.Errorf("hydrated %d rows, want %d", carried, len(tables))
+	}
+	if n := held.Count(); n != 1 {
+		t.Errorf("the broker held %d publishes of the barrier, want the 1 it dropped", n)
+	}
+}
+
+// noLeaderOnceJS is a JetStream whose first publish to the seat's barrier
+// subject found no stream leader: the client's own retries, on `no
+// responders`, all met none, and it answered [jetstream.ErrNoStreamResponse].
+type noLeaderOnceJS struct {
+	jetstream.JetStream
+	once    sync.Once
+	refused atomic.Int32
+}
+
+func (j *noLeaderOnceJS) Publish(ctx context.Context, subject string, data []byte,
+	opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+
+	first := false
+	if subject == barrierSubject(seat.AgentID) {
+		j.once.Do(func() { first = true })
+	}
+	if first {
+		j.refused.Add(1)
+		return nil, jetstream.ErrNoStreamResponse
+	}
+	return j.JetStream.Publish(ctx, subject, data, opts...)
+}
+
+// A BARRIER NO STREAM LEADER TOOK IS PUBLISHED AGAIN.
+//
+// While the changelog has no leader, no member subscribes to its subjects, and
+// a publish meets `no responders`: the client asks again twice, a quarter of a
+// second apart, and then gives up with jetstream.ErrNoStreamResponse, so an
+// election longer than half a second outlasts its retries. That is the silence
+// of a stream with nobody to answer, not an answer, and the barrier is asked
+// again after the read's pause, by when the group has a leader again. Here the
+// first publish of the barrier finds none.
+//
+// Mutation: take the client's no-stream-response for an answer, and this goes
+// red.
+func TestABarrierNoStreamLeaderTookIsPublishedAgain(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	oldOwner := openStore(t)
+	seedMemory(t, oldOwner)
+	if _, err := syncerOn(t, oldOwner, conn).Publish(t.Context(), seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	syncer := syncerOn(t, openStore(t), conn)
+	missed := &noLeaderOnceJS{JetStream: syncer.js}
+	syncer.js = missed
+	carried, err := syncer.Hydrate(t.Context(), seat.Handle)
+	if err != nil {
+		t.Fatalf("a hydration whose barrier found no stream leader once refused the seat "+
+			"rather than publishing it again: %v", err)
+	}
+	if carried != len(tables) {
+		t.Errorf("hydrated %d rows, want %d", carried, len(tables))
+	}
+	if n := missed.refused.Load(); n != 1 {
+		t.Errorf("%d publishes of the barrier found no leader, want the 1 this case refused", n)
+	}
+}
+
+// refusingJS is a JetStream whose broker answers every publish of the seat's
+// barrier with refusal, as a broker answers a publish it will not store.
+type refusingJS struct {
+	jetstream.JetStream
+	refusal error
+}
+
+func (j refusingJS) Publish(ctx context.Context, subject string, data []byte,
+	opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+
+	if subject == barrierSubject(seat.AgentID) {
+		return nil, j.refusal
+	}
+	return j.JetStream.Publish(ctx, subject, data, opts...)
+}
+
+// A BROKER AT ITS STORAGE LIMIT REFUSES THE SEAT WITH ITS OWN ANSWER.
+//
+// A hydration writes before it reads a row: the seat's barrier. An account at
+// its storage limit answers that publish with its refusal, as it refuses the
+// seat's mailbox and its memory's publishes, and the seat is refused with the
+// broker's answer whole, which says what to raise. Here the broker answers the
+// barrier as an account at its limit does (nats-server's
+// JSAccountResourcesExceededErr).
+//
+// Mutation: word the refusal without wrapping the broker's answer, and this
+// goes red.
+func TestABrokerAtItsStorageLimitRefusesTheSeatWithItsOwnAnswer(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	holder := openStore(t)
+	seedMemory(t, holder)
+	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	fresh := openStore(t)
+	syncer := syncerOn(t, fresh, conn)
+	full := &jetstream.APIError{Code: 400, ErrorCode: 10002, Description: "resource limits exceeded for account"}
+	syncer.js = refusingJS{JetStream: syncer.js, refusal: full}
+	carried, err := syncer.Hydrate(t.Context(), seat.Handle)
+	var answer *jetstream.APIError
+	if !errors.As(err, &answer) || answer.ErrorCode != full.ErrorCode {
+		t.Fatalf("a hydration whose barrier the broker refused answered (%d, %v), want the seat "+
+			"refused with the broker's own refusal", carried, err)
+	}
+	if held := storeHolds(t, fresh); carried != 0 || held != 0 {
+		t.Errorf("the refused hydration reported %d rows and left %d in the store, want none: it "+
+			"reads no row before its barrier", carried, held)
+	}
+}
+
+// A BARRIER THE BROKER WILL NOT LET THIS NODE PUBLISH IS REFUSED BY NAME.
+//
+// A hydration writes before it reads a row: the seat's barrier. A broker that
+// refuses a connection publish permission on the memory subjects answers that
+// publish with nothing at all: it sends the connection a permissions error
+// instead, which the client keeps as the connection's last error, so the
+// barrier waits for an acknowledgement that never comes and the seat is
+// refused as the hydration's budget runs out, naming nothing an operator could
+// act on. It names the broker's refusal. Here a user may publish anywhere but
+// on crewlet.memory.>, the seat's rows were published by another, and the
+// hydration is held to three seconds of the fifteen it has, which its first
+// two requests fit in.
+//
+// Mutation: refuse an unanswered barrier without reading the connection's last
+// error, and this goes red.
+func TestABarrierTheBrokerWillNotLetThisNodePublishIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	users := func(opts *server.Options) {
+		opts.Users = []*server.User{
+			{Username: "fleet", Password: "fleet"},
+			{Username: "satellite", Password: "satellite", Permissions: &server.Permissions{
+				Publish: &server.SubjectPermission{Deny: []string{topics.MemoryPrefix + ">"}},
+			}},
+		}
+	}
+	ns, conn := brokerServerWith(t, users, nats.UserInfo("fleet", "fleet"))
+	holder := openStore(t)
+	seedMemory(t, holder)
+	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// AN ERROR HANDLER OF ITS OWN, as every engine connection has one: left to
+	// the client's default, the permissions error is written to stderr.
+	satellite, err := nats.Connect("", nats.InProcessServer(ns), nats.UserInfo("satellite", "satellite"),
+		nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
+	if err != nil {
+		t.Fatalf("connect as the satellite: %v", err)
+	}
+	t.Cleanup(satellite.Close)
+	fresh := openStore(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	carried, err := syncerOn(t, fresh, satellite).Hydrate(ctx, seat.Handle)
+	if !errors.Is(err, nats.ErrPermissionViolation) {
+		t.Fatalf("a hydration whose barrier the broker would not let it publish answered (%d, %v), "+
+			"want the seat refused naming the broker's permissions violation", carried, err)
+	}
+	if !strings.Contains(err.Error(), barrierSubject(seat.AgentID)) {
+		t.Errorf("the refusal does not name the barrier's subject: %v", err)
+	}
+	if held := storeHolds(t, fresh); carried != 0 || held != 0 {
+		t.Errorf("the refused hydration reported %d rows and left %d in the store, want none: it "+
+			"reads no row before its barrier", carried, held)
 	}
 }
 
@@ -343,10 +502,7 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 	}
 	// Publish both seats. The peer's syncer resolves its own agent id.
 	syncerOn(t, db, conn).Publish(ctx, seat.Handle)
-	peer, err := New(db, jsOn(t, conn), func(string) string { return "other-agent-id" }, false)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	peer := New(db, jsOn(t, conn), func(string) string { return "other-agent-id" })
 	if _, err := peer.Publish(ctx, "ceo"); err != nil {
 		t.Fatalf("publish the peer: %v", err)
 	}
@@ -393,9 +549,9 @@ func TestHydratingASeatWithNoMemoryIsAQuietNoOp(t *testing.T) {
 // the seat, so a swallowed error is the single way a seat is admitted with an
 // empty memory AND a success reported to the caller that gates on it.
 //
-// This one covers the OPENING of the replay. The counting call after it has
-// its own case below, because it is a second place the same mistake fits and
-// a closed connection never reaches it.
+// This one covers a broker gone before the hydration asks anything. A replay
+// that cannot open has its own case below, because it is a second place the
+// same mistake fits and a closed connection never reaches it.
 func TestAnUnreachableBrokerFailsTheHydrationRatherThanReportingNoMemory(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -424,41 +580,33 @@ func TestAnUnreachableBrokerFailsTheHydrationRatherThanReportingNoMemory(t *test
 	}
 }
 
-// countFailsJS is a JetStream whose consumers cannot say how much is pending.
+// openFailsJS is a JetStream whose consumers the broker will not make.
 //
 // Embedded rather than stubbed: the real thing satisfies everything except
-// the one call under test, so this is two methods instead of the whole
+// the one call under test, so this is one method instead of the whole
 // interface — and it stays correct when the interface grows.
-type countFailsJS struct {
+type openFailsJS struct {
 	jetstream.JetStream
 }
 
-func (j countFailsJS) CreateConsumer(ctx context.Context, stream string,
-	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-	consumer, err := j.JetStream.CreateConsumer(ctx, stream, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return countFailsConsumer{consumer}, nil
-}
-
-type countFailsConsumer struct {
-	jetstream.Consumer
-}
-
-func (c countFailsConsumer) Info(context.Context) (*jetstream.ConsumerInfo, error) {
+func (openFailsJS) CreateConsumer(context.Context, string, jetstream.ConsumerConfig) (jetstream.Consumer, error) {
 	return nil, errors.New("the broker did not answer")
 }
 
-// The replay opens, and then the broker stops answering before it can say how
-// much there is to carry.
+// The hydration has read the changelog's identity and published its barrier,
+// and then the broker stops answering before a table's replay can open — the
+// request whose reply says how much there is to carry, since that count
+// arrives with the consumer's creation.
 //
-// The narrow window the case above cannot reach: a connection that is up when
-// the consumer is created and gone a round trip later. Read as "nothing
-// pending" it returns SUCCESS with an empty memory, which is the one shape
-// that gets a seat admitted having forgotten everything — the seat host gates
-// on this error and on nothing else.
-func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
+// The narrow window the case above cannot reach: a connection that is up for
+// the hydration's first round trips and gone at the next. Read as a table with
+// nothing to carry it returns SUCCESS with an empty memory, which is the one
+// shape that gets a seat admitted having forgotten everything — the seat host
+// gates on this error and on nothing else.
+//
+// Mutation: read a replay that could not open as an empty table, and this
+// goes red.
+func TestABrokerThatCannotOpenAReplayFailsTheHydration(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
 	ctx := context.Background()
@@ -469,17 +617,14 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 		t.Fatalf("publish: %v", err)
 	}
 
-	// A new node, with a JetStream whose Info call fails.
+	// A new node, with a JetStream that makes no consumer.
 	newOwner := openStore(t)
-	syncer, err := New(newOwner, jsOn(t, conn), func(string) string { return seat.AgentID }, false)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	syncer.js = countFailsJS{syncer.js}
+	syncer := syncerOn(t, newOwner, conn)
+	syncer.js = openFailsJS{syncer.js}
 
 	carried, err := syncer.Hydrate(ctx, seat.Handle)
 	if err == nil {
-		t.Fatalf("a broker that could not count reported success with %d rows", carried)
+		t.Fatalf("a broker that could not open a replay reported success with %d rows", carried)
 	}
 	if carried != 0 {
 		t.Errorf("a failed hydration reports %d rows carried", carried)
@@ -496,8 +641,9 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 //
 // A stream that is deleted and remade restarts at sequence 1 and holds
 // nothing. Every check in Hydrate then reads it as a seat with nothing to
-// carry: every table's replay delivers no row and the leader holds none past
-// it, and the seat is admitted as one that never wrote any, with no line.
+// carry: the hydration's barrier lands on the new stream, every table's replay
+// delivers it and no row, and the seat is admitted as one that never wrote
+// any, with no line.
 // Nothing is wrong anywhere — and every seat on the node has silently lost
 // its diary and its episodes, which it reports to a colleague as never having
 // spoken to them.
@@ -692,12 +838,9 @@ func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
 	}
 
 	newOwner := openStore(t)
-	moved, err := New(newOwner, jsOn(t, conn), func(string) string {
+	moved := New(newOwner, jsOn(t, conn), func(string) string {
 		return "11111111-2222-4333-8444-555555555555"
-	}, false)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	})
 	carried, err := moved.Hydrate(ctx, seat.Handle)
 	if err != nil {
 		t.Fatalf("hydrate: %v", err)
@@ -722,10 +865,7 @@ func TestASeatWithNoIDCarriesNothing(t *testing.T) {
 	db := openStore(t)
 	seedMemory(t, db)
 
-	nobody, err := New(db, jsOn(t, conn), func(string) string { return "" }, false)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	nobody := New(db, jsOn(t, conn), func(string) string { return "" })
 	if published, err := nobody.Publish(ctx, seat.Handle); err != nil || published.Rows != 0 {
 		t.Fatalf("a seat with no id published %d rows (%v), want none and no error",
 			published.Rows, err)
