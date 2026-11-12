@@ -1362,7 +1362,14 @@ const (
 	// and one storage key, +207 over the entry and its shared chunks, and the
 	// one sheet the escalation note's rules, +44; every screen's module of it
 	// is lazy. So it moved to 402 KiB, 2.20 seconds.
-	initialBudget = 402 << 10
+	// Kit 0.122.0 and Company › Atlas took it to 403.1 KiB, past that by
+	// bytes (about +1,470 gzipped): the one sheet +937 (the kit's GraphCanvas
+	// rules, which ride it by rule while the map's code is the atlas chunk's),
+	// the kit's shared chunks +430 (the by-line verbs and the six glyphs'
+	// registry names) and the entry +79 (the Atlas row, its routes, crumb and
+	// peek kind). Every screen's module of it is lazy. So it moved to 404 KiB,
+	// 2.21 seconds.
+	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2226,18 +2233,18 @@ const (
 	// script): 5744 KiB. Atlas named among the apps People grants, and each
 	// delegated rule's required checks with Settings › Delegated decisions
 	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
-	// all script): 5745 KiB. Every end of a person's note to a running turn
-	// said in its trace as the run's record knows it (missed, unconfirmed,
-	// told again after a step that never handed it over, and an end this
-	// bundle does not know said as that, never as expired), merged on top of
-	// it, took it to 5745.5 KiB (5,883,359 bytes, +1,345, all script): 5746 KiB.
-	// The atlas and dead-wait train (agents read the atlas, people correct it,
-	// and dead pull request waits are handed back) took main's to 5744.9 KiB
-	// (5,882,829 bytes, +815: script +711, the sheets +104), inside its 5745
-	// KiB. Merged again with it, main's +815 bytes came to 815 bytes on the
-	// merged tree, taking it from 5745.5 KiB (5,883,359 bytes) to 5746.3 KiB
-	// (5,884,174 bytes), 270 bytes past 5746 KiB: 5747 KiB.
-	treeBudget = 5<<20 + 627<<10
+	// all script): 5745 KiB. The atlas and dead-wait train took it to 5745.0
+	// KiB (5,882,829 bytes, +815), still inside it. Company › Atlas on kit
+	// 0.122.0 took it to 5824.7 KiB (5,964,471 bytes, +81,642: script +73,130,
+	// of which the atlas chunk, its screens and the map code, is 68,179; the
+	// sheets +8,512, the kit's GraphCanvas rules in the one sheet and the
+	// atlas screens' own 1,083): 5825 KiB. Every end of a person's note to a
+	// running turn said in its trace as the run's record knows it (missed,
+	// unconfirmed, told again after a step that never handed it over, and an
+	// end this bundle does not know said as that, never as expired), merged on
+	// top of it, took it to 5826.0 KiB (5,965,816 bytes, +1,345, all script):
+	// 5826 KiB.
+	treeBudget = 5<<20 + 706<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

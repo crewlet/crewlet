@@ -31,6 +31,7 @@ import {
   SetByLine as KitSetByLine,
   type ObjectFact,
   type SetBy as KitSetBy,
+  type SetByVerb,
 } from "@crewlethq/ui";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { href } from "../router.tsx";
@@ -40,6 +41,12 @@ import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 export interface SetBy {
   actor: string;
   actorKind?: "agent" | "human" | "operator" | "system";
+  /** How the actor came by the value; unset reads "set by". See uilet's `SetByVerb`. */
+  verb?: SetByVerb;
+  /** A short word after the actor, such as a confidence: "observed by sre · likely". */
+  qualifier?: string;
+  /** A mark beside the actor's name, such as a vendor's. Decorative. */
+  mark?: ReactNode;
   turnId?: string;
   at?: string;
   /** Rendered as the relative time; the caller formats it. */
@@ -57,6 +64,9 @@ export interface SetBy {
 export function kitSetBy(setBy: SetBy): KitSetBy {
   return {
     actor: setBy.actor,
+    verb: setBy.verb,
+    qualifier: setBy.qualifier,
+    mark: setBy.mark,
     ago: setBy.ago,
     cleared: setBy.cleared,
     turnHref: setBy.turnId ? href(["live", "turns", setBy.turnId]) : undefined,
