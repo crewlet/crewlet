@@ -56,6 +56,9 @@ func Fold(claims []Claim, now time.Time) View {
 		if c.Facet.Kind == FacetDistinct || c.Facet.Kind == FacetSame {
 			continue
 		}
+		if c.Facet.Kind == FacetFact && specs()[c.Facet.Fact].PerHost {
+			c.member = c.Subject
+		}
 		c.Subject = canonical.of(c.Subject)
 		if c.Facet.Kind == FacetRelation && c.Facet.Target.External == "" {
 			c.Facet.Target.Entry = canonical.of(c.Facet.Target.Entry)
@@ -107,6 +110,9 @@ func compareRef(a, b Ref) int {
 type facetID struct {
 	facet Facet
 	value string
+	// member is the member a fact of each host is of, so two hosts' values
+	// are two facets and never two voices on one.
+	member Ref
 }
 
 func facetOf(c *Claim) facetID {
@@ -114,6 +120,7 @@ func facetOf(c *Claim) facetID {
 	if c.Facet.Kind == FacetFact && specs()[c.Facet.Fact].Many {
 		id.value = c.Value.Text
 	}
+	id.member = c.member
 	return id
 }
 
@@ -285,7 +292,7 @@ func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, boo
 	}
 	slices.SortFunc(e.Facts, func(a, b FactView) int {
 		return cmp.Or(cmp.Compare(slices.Index(Facts, a.Fact), slices.Index(Facts, b.Fact)),
-			cmp.Compare(a.Value.Text, b.Value.Text))
+			compareRef(a.Of, b.Of), cmp.Compare(a.Value.Text, b.Value.Text))
 	})
 	slices.SortFunc(e.Relations, func(a, b Edge) int {
 		return cmp.Or(cmp.Compare(slices.Index(Relations, a.Relation), slices.Index(Relations, b.Relation)),
@@ -337,7 +344,7 @@ func factView(r resolution) FactView {
 	w := r.winner
 	return FactView{Fact: w.Facet.Fact, Value: w.Value, Source: w.Source, Confidence: w.Confidence(),
 		Word: w.Confidence().Display(), ObservedAt: w.ObservedAt, Standing: r.standing,
-		Suggested: r.suggested, Others: claimed(r.others)}
+		Suggested: r.suggested, Others: claimed(r.others), Of: w.member}
 }
 
 func edge(r resolution) Edge {

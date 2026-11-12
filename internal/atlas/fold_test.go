@@ -2,7 +2,9 @@ package atlas_test
 
 import (
 	"encoding/json"
+	"errors"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -329,5 +331,70 @@ func TestAnIntegrationsRetirementIsContestedByAPerson(t *testing.T) {
 	v = atlas.Fold([]atlas.Claim{seen, gone, m(atlas.Exists(host, ada, now.Add(-24*time.Hour)))}, now)
 	if e := entry(t, v, host); e.State != atlas.StateConfirmed || !e.Review {
 		t.Errorf("an entry a person asserted that a read stopped seeing is %s, review %v", e.State, e.Review)
+	}
+}
+
+// A REPOSITORY'S VISIBILITY IS A FACT OF EACH HOST IT LIVES ON: a repository
+// GitHub holds privately and Gitlet mirrors for the whole company is one
+// entry with two visibilities, each of its own member, and it never waits in
+// Review for them, since both are true. Two voices on ONE host that disagree
+// are still a disagreement, and each host takes only its own words.
+//
+// Mutation: drop the member from a facet's identity, and every mirrored
+// repository is disputed between two hosts that were never asked the same
+// question.
+func TestAVisibilityIsAFactOfEachHost(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	github := atlas.IntegrationSource("github")
+	forge := atlas.MustRef(atlas.KindRepository, "github.com/acme/api")
+	mirror := atlas.MustRef(atlas.KindRepository, "gitlet/api")
+	base := []atlas.Claim{
+		m(atlas.Exists(forge, github, now)),
+		m(atlas.Exists(mirror, gitlet, now)),
+		m(atlas.Says(mirror, atlas.FactPullMirrorOf, "https://github.com/acme/api.git", gitlet, now)),
+		m(atlas.Says(forge, atlas.FactVisibility, "private", github, now)),
+		m(atlas.Says(mirror, atlas.FactVisibility, "company", gitlet, now)),
+	}
+	visibilities := func(e atlas.Entry) map[atlas.Ref]atlas.FactView {
+		out := map[atlas.Ref]atlas.FactView{}
+		for _, f := range e.Facts {
+			if f.Fact == atlas.FactVisibility {
+				out[f.Of] = f
+			}
+		}
+		return out
+	}
+	e := entry(t, atlas.Fold(base, now), forge)
+	got := visibilities(e)
+	if len(e.Members) != 2 || len(got) != 2 || got[forge].Value.Text != "private" || got[mirror].Value.Text != "company" {
+		t.Fatalf("the mirrored repository's visibilities: %+v", got)
+	}
+	if e.Review || got[forge].Standing != atlas.StandingSettled || got[mirror].Standing != atlas.StandingSettled ||
+		len(got[forge].Others) != 0 || len(got[mirror].Others) != 0 {
+		t.Errorf("two hosts' visibilities are held against each other: review %v, %+v", e.Review, got)
+	}
+	// A fact of the entry itself carries no member.
+	for _, f := range e.Facts {
+		if f.Fact != atlas.FactVisibility && f.Of != (atlas.Ref{}) {
+			t.Errorf("%s, a fact of the entry, is said to be of %s", f.Fact, f.Of)
+		}
+	}
+	// One host, two voices: a person said public, and GitHub has since read
+	// private. That is a disagreement, on that host alone.
+	disputed := append(slices.Clone(base[:3]),
+		m(atlas.Says(forge, atlas.FactVisibility, "public", ada, now)),
+		m(atlas.Says(forge, atlas.FactVisibility, "private", github, now.Add(time.Minute))),
+		m(atlas.Says(mirror, atlas.FactVisibility, "company", gitlet, now)))
+	e = entry(t, atlas.Fold(disputed, now.Add(time.Minute)), forge)
+	got = visibilities(e)
+	if !e.Review || got[forge].Standing == atlas.StandingSettled || got[mirror].Standing != atlas.StandingSettled {
+		t.Errorf("one host's voices disagree: review %v, %+v", e.Review, got)
+	}
+	// Each host takes its own words and no other host's.
+	for ref, word := range map[atlas.Ref]string{forge: "company", mirror: "private"} {
+		if _, err := atlas.Says(ref, atlas.FactVisibility, word, ada, now); !errors.Is(err, atlas.ErrInvalid) {
+			t.Errorf("%s took %q, another host's word: %v", ref, word, err)
+		}
 	}
 }

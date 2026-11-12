@@ -281,6 +281,11 @@ type Claim struct {
 	Source     Source    `json:"source"`
 	ObservedAt time.Time `json:"observed_at"`
 	Position   uint64    `json:"position,omitempty"`
+
+	// member is the entry the claim was made about, kept by the fold where
+	// it moves the claim onto the entry that one merged into: a fact of each
+	// host stays its own host's.
+	member Ref
 }
 
 // Confidence is the claim's, derived from its source.
@@ -453,6 +458,9 @@ func (c Claim) validateFact() error {
 	}
 	if v != c.Value {
 		return fmt.Errorf("%s: the value is not in its canonical form", f)
+	}
+	if words := f.WordsOn(c.Subject); f.Spec().PerHost && !slices.Contains(words, v.Text) {
+		return fmt.Errorf("%s: %w: on this host it is one of %s", f, ErrInvalid, strings.Join(words, ", "))
 	}
 	return nil
 }
