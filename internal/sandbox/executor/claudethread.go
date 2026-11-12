@@ -61,9 +61,13 @@ import (
 //     a thread's messages asks [threadLine.Message] of every user and
 //     assistant record of that thread, and takes its error as that line's, no
 //     record, as it takes a *threadLineError, never as a line with no calls.
-//   - A HOOK'S FIRING IS NEVER A CALL'S ID: a firing leaves this layer only
-//     through [threadLine.Hook], a call's id only through
-//     [threadMessage.Calls] ([threadHook.Firing]).
+//   - A HOOK'S FIRING IS NEVER A CALL'S ID: no id leaves this layer AS an id
+//     but a firing through [threadLine.Hook] and a call's through
+//     [threadMessage.Calls] ([threadHook.Firing]). An id written inside a
+//     record's text (a task notification's `<tool-use-id>`, a tool's output,
+//     a call's input) is bytes the layer hands out raw, in a line's Raw, a
+//     message's Text, a call's Input and Content and a record's
+//     ToolUseResult: its reader's to parse, and to hold to a rule of its own.
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 for a hook that follows
