@@ -58,8 +58,9 @@ import (
 //
 // A listing is up to coord.MaxMCPListingBytes and its definitions up to
 // coord.MaxMCPListingDefinitionBytes, and on a node whose connection crosses a
-// link — every leaf with seats — they cross it at the link's pace, which the
-// engine allows to be as slow as a mebibyte in thirty seconds: a listing at
+// link — a node without `data`, and every node on an external broker, data
+// nodes included — they cross it at the link's pace, which the engine allows
+// to be as slow as a mebibyte in thirty seconds: a listing at
 // its bound alone takes about 26 seconds. The beat once held every step to one
 // deadline of [coord.ReconcileInterval], fifteen seconds, so on any link below
 // about 60 KiB a second a large listing was never acknowledged, and each beat
