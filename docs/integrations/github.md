@@ -838,6 +838,36 @@ and ready.
 
 ---
 
+## What the atlas reads
+
+The engine reads the organization for the company's [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It reads through the installations of the agents' own apps, which are the only access to GitHub the engine holds: there is no second credential to create, and the organization token of `integrations.github.token` is never used for it. Every read call is a `GET`, and nothing at GitHub is changed.
+
+For each agent whose GitHub access is switched on, the engine mints one token for the read, carrying Read-only of what that agent's installation holds among the three permissions below and nothing else, and revokes it when the read ends. An agent's own tokens are not involved, and the read's token never writes, whatever the agent may.
+
+| Part | Calls | Permission | What the atlas gains |
+|---|---|---|---|
+| Repositories | `GET /installation/repositories`, 100 a page | Metadata, which every app holds | each repository the installation covers, belonging to the organization's account, with its default branch and whether it is archived |
+| Workflows | `GET /repos/{owner}/{repo}/actions/workflows`, then one page of `GET /repos/{owner}/{repo}/actions/runs` for the default branch | Actions (Read-only) | each workflow under `.github/workflows` as a pipeline built from the repository, with its name, whether GitHub still runs it, and the result of its newest completed run on the default branch |
+| Deployments | `GET /repos/{owner}/{repo}/deployments`, newest first for at most three pages, then `GET .../deployments/{id}/statuses` for the newest deployment of each environment | Deployments (Read-only) | each lasting environment as a pipeline built from the repository, with its name, the state of its newest deployment, and what that deployment says it put the code behind: the address and its host name are deployed by the environment |
+
+**A repository several agents' installations cover is read once**, as the first agent, in the order of their handles, whose installation holds the part's permission. A repository Gitlet mirrors is the same entry as the repository GitHub lists: the two meet on the exact address the mirror pulls from, so the map never shows it twice.
+
+**Keys are exact.** A repository is `github.com/<owner>/<name>` (the Enterprise Server's host where `integrations.github.url` names one). A workflow is its repository, `#workflow:` and its file's name; an environment is its repository, `#environment:` and its own name, where a character outside letters, digits and `. _ + -` is written as `~` and its two hexadecimal digits, so `eu west` is `eu~20west`. An environment named `production` or `prod`, `staging`, `development` or `dev`, or `test`, in any case, suggests that environment for the entry; a person confirms it.
+
+**A failing pipeline is the health of what it deploys.** A workflow whose newest completed run on the default branch failed, and an environment whose newest deployment failed, each show as Needs a look on the atlas, and so does every address and name the environment deployed. The result is read with the listing, so the atlas follows a change within one refresh interval.
+
+**Each part takes its own permission, and a missing one never fails the read.** Where no agent's installation covering a repository holds Actions or Deployments, or GitHub refuses that listing, the part is left out for that repository, the source's standing on the atlas names the part with the permission to grant, and what an earlier read of it recorded stays as it was. Grant the permission to an agent that works in the repository ([access in GitHub's own terms](#access-in-githubs-own-terms)) and the next read includes it.
+
+**An installation the engine cannot read through is a finding too.** An agent whose app is not installed on the organization yet, whose installation somebody suspended, or whose key does not resolve is counted on the source's standing, and everything of a repository the other installations did not list stays as an earlier read left it, since what that installation covers cannot be known. An agent switched off is not read through and is no finding: its installation is suspended on purpose. With no agent's app switched on, GitHub is not read for the atlas at all.
+
+**What is never read.** Who did anything: a run's actor, a deployment's or a status's creator, a commit's author, every login, name and email address. A deployment's payload, description and task, a status's description and log address, a run's title and commit message, a repository's description, topics and homepage. Secrets, variables, and environments' protection rules and their reviewers, which no seat's app is granted ([what no seat is granted](#what-no-seat-is-granted)). An address is kept without its user information, query and fragment. A value shaped like a credential is refused and counted on the source's standing, never stored.
+
+**What is left out on purpose.** An archived repository's workflows and environments: it runs and deploys nothing. A transient environment, which GitHub marks on a preview deployment. A workflow GitHub runs for a feature of its own (Pages, Dependabot, code scanning), which has no file under `.github/workflows`. An environment nothing was deployed to within the repository's 300 newest deployments, and one past the 20 most recently deployed of its repository. A repository's visibility: a repository mirrored on Gitlet has one there too, in Gitlet's own words, and the two would disagree on every mirror.
+
+A read costs one call per installation for the installation, one for its token and one to revoke it, one per hundred repositories, and for each repository that is not archived two to three calls plus one per environment. It spends the installation's own hourly allowance (5,000 requests, more for a larger organization), which the agent's work shares. When GitHub answers with its rate limit the read stops and records nothing, and the engine reads again five minutes later; a read that fails part way never retires anything. A repository, a workflow or an environment that two complete reads at least a day apart both miss is retired from the atlas.
+
+---
+
 ## Webhooks
 
 `POST /webhooks/github` verifies HMAC-SHA256 over the raw body against
