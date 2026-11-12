@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -581,8 +582,7 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 
 // EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
 // that is not one record (two values, one cut short, a value that is no
-// object, a string of bytes that are no UTF-8, which Claude Code never
-// writes) or one whose head key is of the wrong type (`type`, `subtype` and
+// object) or one whose head key is of the wrong type (`type`, `subtype` and
 // `agentId` strings, `parentUuid` null or a string, `isSidechain` and
 // `replacesSpan` booleans) is a *threadLineError naming its line, whatever
 // keywords it holds, and the reader reads on to the next line; and a whole
@@ -590,10 +590,9 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 // hooks or calls looks for.
 //
 // Mutation: decode only the lines that name a hook or a call, and every
-// broken line here reads as a record, and the records' heads as nothing;
-// take bytes that are no UTF-8 as encoding/json does, for the replacement
-// character, and the line holding them reads as a record; read replacesSpan
-// by its text alone, and one that is a string or null reads as a record.
+// broken line here reads as a record, and the records' heads as nothing; read
+// replacesSpan by its text alone, and one that is a string or null reads as a
+// record.
 func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -619,8 +618,6 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		"nothing at all":                         "",
 		"NULs before a break":                    "\x00\x00\x00",
 		"a record behind a byte that is no JSON": "\x00" + ctDequeue,
-		"a string of bytes that are no UTF-8": strings.Replace(ctDequeue, `"operation":"dequeue"`,
-			"\"operation\":\"deq\xffueue\"", 1),
 	}
 	names := slices.Sorted(maps.Keys(broken))
 	lines := make([]string, 0, 2*len(names)+3)
@@ -981,6 +978,87 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 		variant := ctReplace(t, tc.record, tc.from, tc.to)
 		if got, want := ctAll(ctLine(t, variant)), ctAll(ctLine(t, tc.record)); got != want {
 			t.Errorf("%s reads as\n%swant\n%s", name, got, want)
+		}
+	}
+}
+
+// A STRING CLAUDE CODE WROTE BROKEN READS AS THE REPLACEMENT CHARACTER, never
+// as no record: a surrogate with no pair, which JSON.stringify writes as a
+// `\udXXX` escape where a text was cut inside a pair (an emoji at a truncation
+// point), and a byte that is no UTF-8 each read as U+FFFD, as encoding/json's
+// own decode reads them, wherever a line holds one: in a text the layer reads
+// (a brief's), in a value it hands out raw (a result's content, as written,
+// which its own decode then reads the same way), in a hook's record, and in a
+// key no reader reads. Each line reads whole. Refused, one such line would
+// cost a reader its whole reading of a thread its harness reads whole.
+//
+// Mutation: drop the option that reads them, and every line here is no
+// record.
+func TestAStringClaudeCodeWroteBrokenReadsAsTheReplacementCharacter(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		written string // the string as its line holds it
+		text    string // what it reads as
+	}{
+		"a high surrogate a cut left alone": {written: `"an emoji cut at \ud83d"`, text: "an emoji cut at �"},
+		"a low surrogate alone":             {written: `"\ude00 is half an emoji"`, text: "� is half an emoji"},
+		"a byte that is no UTF-8":           {written: "\"a byte \xff here\"", text: "a byte � here"},
+	} {
+		var v1 string
+		if err := json.Unmarshal([]byte(tc.written), &v1); err != nil || v1 != tc.text {
+			t.Fatalf("%s: encoding/json reads %q as %q, %v; this case wants it read as %q", name, tc.written, v1,
+				err, tc.text)
+		}
+		read := func(record string) (threadLine, bool) {
+			t.Helper()
+			got := ctRead(ctThread(record), threadPlainMax)
+			if len(got.lines) != 1 || len(got.broken) != 0 || !errors.Is(got.end, io.EOF) {
+				var broken error
+				if len(got.broken) > 0 {
+					broken = got.broken[0]
+				}
+				t.Errorf("%s: a line holding %q reads as %d records, broken by %v; want one record", name,
+					tc.written, len(got.lines), broken)
+				return threadLine{}, false
+			}
+			return got.lines[0], true
+		}
+
+		if brief, ok := read(ctReplace(t, ctBrief(ctUUID(1)), `"content":"the brief\n"`, `"content":`+tc.written)); ok {
+			if m, err := brief.Message(); err != nil {
+				t.Errorf("%s: a brief holding it reads no message: %v", name, err)
+			} else if text, isText := m.Text(); !isText || text != tc.text {
+				t.Errorf("%s: a brief holding it reads as %q (%t), want %q", name, text, isText, tc.text)
+			}
+		}
+		if result, ok := read(ctResult(ctUUID(4), ctUUID(5), ctReplace(t, ctResultBody, `"content":"b1"`,
+			`"content":`+tc.written), ctResultOwn)); ok {
+			m, err := result.Message()
+			var text string
+			switch {
+			case err != nil || len(m.Calls()) != 1:
+				t.Errorf("%s: a result holding it hands out the calls %+v, %v", name, m.Calls(), err)
+			case string(m.Calls()[0].Content) != tc.written:
+				t.Errorf("%s: a result holding it hands its content out as %q, want it as written", name,
+					m.Calls()[0].Content)
+			case wireDecode(m.Calls()[0].Content, &text) != nil || text != tc.text:
+				t.Errorf("%s: a result's content holding it reads as %q, want %q", name, text, tc.text)
+			}
+		}
+		if note, ok := read(ctAttachment(ctUUID(6), ctUUID(7), ctReplace(t, ctBatchSystem,
+			`"content":"crewlet: a note reached the run"`, `"content":`+tc.written), "")); ok {
+			if hook, isHook, err := note.Hook(); !isHook || err != nil || hook.Firing != ctBatchFire ||
+				string(hook.Content) != tc.written {
+				t.Errorf("%s: a hook's record holding it reads as the hook %+v (%t, %v)", name, hook, isHook, err)
+			}
+		}
+		if output, ok := read(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctReplace(t, ctResultOwn, `"stdout":"b1"`,
+			`"stdout":`+tc.written))); ok {
+			if m, err := output.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall ||
+				!bytes.Contains(output.ToolUseResult(), []byte(tc.written)) {
+				t.Errorf("%s: a result whose own output holds it hands out the calls %+v, %v, and the output %q", name,
+					m.Calls(), err, output.ToolUseResult())
+			}
 		}
 	}
 }

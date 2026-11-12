@@ -39,9 +39,11 @@ import (
 //     decide from a thread with a hole in it.
 //   - EVERY WHOLE LINE IS DECODED into its head before anything reads it, with
 //     no keyword prefilter ([threadHead]).
-//   - EVERY KEY IS READ EXACTLY AS WRITTEN, as Claude Code's own JSON.parse
-//     reads it, never matched by case as encoding/json matches a struct's
-//     fields ([wireDecode]).
+//   - EVERY VALUE IS DECODED AS CLAUDE CODE'S OWN JSON.parse READS IT, under
+//     one set of options ([threadDecoding]): a key exactly as written, never
+//     matched by case as encoding/json matches a struct's fields; a key
+//     written twice by its last value; and a string's invalid UTF-8 or lone
+//     surrogate as the replacement character, never as no record.
 //   - ABSENT IS NOT NULL: `parentUuid` is handed over as written
 //     ([threadHead.Parent]).
 //   - A KEY ONLY ONE READER READS IS HELD IN THAT READER'S ACCESSOR, so a
@@ -449,27 +451,44 @@ func (h threadHead) Root() bool { return bytes.Equal(h.Parent, jsonNull) }
 // thread's, whatever file holds it.
 func (h threadHead) Main() bool { return h.Sidechain != nil && !*h.Sidechain && h.AgentID == "" }
 
-// wireDecode decodes raw, one JSON value, into v: the one decode every value
-// this layer reads goes through, encoding/json/v2's. An object's key fills
-// the field it names EXACTLY; a key written twice holds the last value
-// written; and invalid UTF-8 is an error.
+// threadDecoding is the ONE set of options every decode this layer makes goes
+// through ([wireDecode]), so a value reads as Claude Code's own JSON.parse
+// reads it, whichever decode reads it. Each option is set for its own reason:
 //
-// EXACTLY, never by encoding/json's own decode, which takes a key that differs
-// from a field's name only in case for that field, the last of the two written
-// winning, where Claude Code reads its own records with JSON.parse, which holds
-// the two apart. Decoded so, a line carrying `parentUuid` and then
-// `ParentUuid` would read as the second, and a hook's record carrying its
-// firing's `toolUseID` and then a `toolUseId` would hand the second out as its
-// firing: a spelling 2.1.322 already writes, where a subagent's metadata names
-// the call that started it.
-//
-// A KEY WRITTEN TWICE IS ALLOWED, as JSON.parse allows it, and read by its
-// last value, as JSON.parse reads it; refusing it, the decoder would keep
-// every name of every object it reads, a cost a key. INVALID UTF-8 IS
-// REFUSED: Claude Code writes none (JSON.stringify's text, as UTF-8), so a
-// line holding it is no record the harness wrote whole, and reads as none.
+//   - EXACT KEY NAMES (encoding/json/v2's MatchCaseInsensitiveNames, off): a
+//     key fills the field it names exactly, as JSON.parse holds `toolUseID`
+//     and `toolUseId` apart. encoding/json's own decode takes a key that
+//     differs from a field's name only in case for that field, the last of the
+//     two written winning: decoded so, a line carrying `parentUuid` and then
+//     `ParentUuid` would read as the second, and a hook's record carrying its
+//     firing's `toolUseID` and then a `toolUseId` would hand the second out as
+//     its firing, a spelling 2.1.322 already writes, where a subagent's
+//     metadata names the call that started it.
+//   - A KEY WRITTEN TWICE ALLOWED, AND READ BY ITS LAST VALUE (jsontext's
+//     AllowDuplicateNames, on), as JSON.parse allows and reads it. Refusing
+//     it, a decoder keeps every name of every object it reads, a cost a key,
+//     and refuses a line the harness reads.
+//   - INVALID UTF-8 AND A LONE SURROGATE READ AS THE REPLACEMENT CHARACTER,
+//     U+FFFD (jsontext's AllowInvalidUTF8, on), as encoding/json's own decode
+//     reads them, never refused. Claude Code writes a line with
+//     JSON.stringify, which writes a surrogate that has no pair as a `\udXXX`
+//     escape, and a text it cut inside a pair (an emoji at a truncation
+//     point) holds one, which its JSON.parse reads back. Refused, one such
+//     line would be no record, and would cost a reader its whole reading of a
+//     thread the harness reads whole.
+var threadDecoding = jsonv2.JoinOptions(
+	jsonv2.MatchCaseInsensitiveNames(false),
+	jsontext.AllowDuplicateNames(true),
+	jsontext.AllowInvalidUTF8(true),
+)
+
+// wireDecode decodes raw, one JSON value, into v under [threadDecoding]: the
+// one decode every value this layer reads goes through, encoding/json/v2's.
+// An object's key fills the field it names exactly, a key written twice holds
+// the last value written, and a string's invalid UTF-8 or lone surrogate
+// reads as U+FFFD.
 func wireDecode(raw []byte, v any) error {
-	return jsonv2.Unmarshal(raw, v, jsontext.AllowDuplicateNames(true))
+	return jsonv2.Unmarshal(raw, v, threadDecoding)
 }
 
 // wireString is raw, a key named key, held to a string: "" where the key is
