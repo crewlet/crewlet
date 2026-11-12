@@ -195,16 +195,12 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/home/Home.tsx"],
     why: "a widget's settings, written into the board being arranged as they are made, which Home declares",
   },
-  // A SIDE SHEET, AND STILL THE BUILDER'S: every change made in it is an
-  // operation recorded into the builder's draft through the builder's own
-  // dispatch, kept after the sheet closes until Review and save.
+  // A SIDE SHEET, AND STILL THE BUILDER'S: its Apply records what changed
+  // in it into the builder's draft through the builder's own dispatch, kept
+  // after the sheet closes until Review and save.
   "routes/org/builder/NodeEditor.tsx": {
     screen: ["routes/org/builder/Builder.tsx"],
-    why: "a unit or seat edited in the side sheet, each change recorded into the builder's draft, which the builder declares",
-  },
-  "routes/org/builder/dialogParts.tsx": {
-    screen: ["routes/org/builder/Builder.tsx"],
-    why: "the fields of the builder's side sheet and dialogs, whose changes are recorded into the builder's draft",
+    why: "a unit or seat edited in the side sheet, its Apply recording the change into the builder's draft, which the builder declares",
   },
 };
 
@@ -229,6 +225,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/chatlet/Dialogs.tsx":
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
+  "routes/org/builder/dialogParts.tsx":
+    "modal: the fields of the builder's side sheet and dialogs, the sheet's or the dialog's own until its Apply, Add, Move or Delete records them",
   "routes/settings/AccessDialogs.tsx":
     "modal: a service account, or a person's login, seat and access, saved by its dialog's own write",
   "routes/settings/integrations/access/HandoffSheet.tsx":
@@ -894,6 +892,16 @@ describe("read through the checker", () => {
   test("a modal is refused once it holds the draft it takes from context: the org builder's side sheet", () => {
     const editor = "routes/org/builder/NodeEditor.tsx";
     expect(listed(editor)).toContain(`${editor} <- ${editor} holds dispatch`);
+  });
+
+  // THE FIELDS OF THE BUILDER'S SHEET AND DIALOGS are drawn where the draft
+  // is recorded, and hold only what is typed in them until the sheet's or
+  // the dialog's own press records it: a modal's transient state, which is
+  // why it stays listed as one.
+  test("a modal keeping its dialog's own state passes: the builder's dialog fields", () => {
+    const fields = "routes/org/builder/dialogParts.tsx";
+    expect(NOT_A_DRAFT[fields]).toMatch(/^modal: /);
+    expect(listed(fields).filter((r) => r.startsWith(`${fields} <- `))).toEqual([]);
   });
 
   test("a draft's branded state is cast nowhere but where it is minted", () => {
