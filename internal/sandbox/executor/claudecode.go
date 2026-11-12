@@ -1263,8 +1263,9 @@ const claudeProjectDir = "crewlet"
 //   - CLAUDE_CODE_AUTO_COMPACT_WINDOW, window ([sandbox.ClaudeCodeWindow]): the
 //     window of the model the run works under, which the harness compacts at
 //     less its own headroom. The variable takes precedence over a window an
-//     image or a repository sets, and the two variables that would switch
-//     compaction off altogether are unset beside it ([claudeCompactionOff]).
+//     image or a repository sets, and the variables that would switch
+//     compaction off altogether or move the point it compacts at are unset
+//     beside it ([claudeCompactionOff]).
 //
 // The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
 // set, by release ([claudeLocalGCFloor]); and the harness's own retention sweep
@@ -1462,13 +1463,28 @@ func (ClaudeCode) Continues(box, writer string) (bool, string) {
 var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 
 // claudeCompactionOff is every variable that, set in a run's environment,
-// switches its harness's compaction off: DISABLE_AUTO_COMPACT, automatic and
-// idle compaction, and DISABLE_COMPACT, every compaction (the vendor's
-// environment reference). Set by a seat's role.sandbox.env or by an image, either
-// would let a run's context grow past its model's window rather than compact
-// ([claudeSessionLayout]). Unset rather than refused, as [claudeSwitchesOff] is:
-// the run's compaction is the engine's to decide.
-var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT"}
+// switches its harness's compaction off or moves the point it compacts at:
+//   - DISABLE_AUTO_COMPACT, automatic and idle compaction, and
+//     DISABLE_COMPACT, every compaction (the vendor's environment reference),
+//     either of which would let a run's context grow past its model's window
+//     rather than compact;
+//   - CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, which lowers the point the harness
+//     compacts at to that share of its window, and
+//     CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE, which sets the count past which it
+//     refuses a request until the conversation is compacted (both read in the
+//     harness's own threshold code, 2.1.310 and 2.1.322 alike), either of which
+//     would have it compact a session at a point the engine does not reckon
+//     with: the window [claudeSessionLayout] pins, less the harness's own
+//     headroom, which docs/concepts/code-sandbox.md states and every floor the
+//     engine continues a session by is held to.
+//
+// Set by a seat's role.sandbox.env or by an image, any of them is unset rather
+// than refused, as [claudeSwitchesOff] is: the run's compaction is the
+// engine's to decide. CLAUDE_CODE_MAX_CONTEXT_TOKENS is not among them: it is
+// the real window of a model the harness does not know, which it reads for
+// such a model alone.
+var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+	"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
