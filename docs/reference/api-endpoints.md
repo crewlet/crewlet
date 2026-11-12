@@ -6732,7 +6732,19 @@ token without it
 it serves the deployment's health — `fleet_health`, and `code_status` where the
 code reads are — an administrator's reads, refused to anybody else, which an
 agent seat holds only by its role's grant (see
-[The health tools](../guides/fleet.md#the-health-tools)). A schema, a default, a trimmed field
+[The health tools](../guides/fleet.md#the-health-tools)). And it serves the
+company's [atlas](../concepts/atlas.md) to a holder of `atlas`, with the three
+tools every agent seat holds: `atlas_search`, a `query` (part of a name or key,
+or an id), a `kind` and a `limit` (default 50, at most 500), answered with
+`entries` and the `total` that matched; `atlas_get`, one entry in full by its
+`id` or its exact `name` or key, with `used_by`, what relies on it; and
+`atlas_trace`, from one entry `up` to what depends on it (the default) or
+`down` to what it depends on, at most six hops (`depth`) and fifty entries,
+every relation with `all`. Each answers each source's `coverage` and how many
+values were `withheld` for being shaped like a credential, and lists
+repositories only for a caller who holds `gitlet` too
+([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)).
+A schema, a default, a trimmed field
 and the wording of a refusal are each written once — two copies of "file an
 item" drift on exactly the parts nobody looks at, and only one of the two is
 ever tested.
@@ -6824,7 +6836,7 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-seven no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-six no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
@@ -6838,13 +6850,7 @@ and, beside the code reads and on their terms,
 [`code_repo_readers`](#get-gitletreposnamereaders), who read a `visibility: unit`
 repository, and beside the code writes `code_mark_inbox`, a person's marks
 over their own code notices: a seat is woken, never shown an inbox, so it has
-none to mark. And `atlas_search`, the company's
-[atlas](../concepts/atlas.md) for a holder of `atlas`, every entry with its
-facts, sources and relations, and its repositories only for a caller who holds
-`gitlet` too: a `query` (part of a name or key, or an id), a `kind` and a
-`limit` (default 50, at most 500), answered with `entries`, the `total` that
-matched, each source's `coverage` and how many values were `withheld` for being
-shaped like a credential. A view is furniture (a name, a shape
+none to mark. A view is furniture (a name, a shape
 and a filter, arranged so a person finds the same question tomorrow), and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own

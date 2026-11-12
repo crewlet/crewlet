@@ -548,6 +548,8 @@ func sweepArgs(artifact string) map[string]map[string]any {
 		builtin.AnswerKnowledgeTool:      {"q": "how do we deploy"},
 		builtin.AnswerExecutorTool:       {"turn_id": "turn-1", "launch_id": "launch-turn-1", "answer": "yes"},
 		builtin.ArtifactFormatTool:       {"kind": "doc"},
+		builtin.AtlasGetTool:             {"name": "crewlet.acme.example"},
+		builtin.AtlasTraceTool:           {"name": "crewlet.acme.example", "direction": "down"},
 		builtin.CreateArtifactTool:       {"kind": "html", "title": "Plain title", "content": "<p>plain</p>"},
 		builtin.CreateArtifactFolderTool: {"parent": "Marketing", "name": "Plain folder"},
 		worklet.DescribeProjectTool:      {"project": "ENG"},

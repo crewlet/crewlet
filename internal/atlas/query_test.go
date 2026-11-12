@@ -46,7 +46,7 @@ func TestATraceWalksWhatDependsOnAnEntry(t *testing.T) {
 	t.Parallel()
 	v := chain(t)
 	web := atlas.MustRef(atlas.KindHost, "ssh/web-1").ID()
-	up, found, err := v.Trace(web, atlas.DirectionUp, atlas.TraceDepthMax, false)
+	up, found, err := v.Trace(web, atlas.DirectionUp, atlas.TraceDepthMax, false, atlas.TraceMax)
 	if err != nil || !found {
 		t.Fatal(found, err)
 	}
@@ -66,19 +66,19 @@ func TestATraceWalksWhatDependsOnAnEntry(t *testing.T) {
 		t.Errorf("what depends on web-1: %v, want %v", got, want)
 	}
 	zone := atlas.MustRef(atlas.KindDomain, "acme.example").ID()
-	z, _, _ := v.Trace(zone, atlas.DirectionUp, 2, false)
+	z, _, _ := v.Trace(zone, atlas.DirectionUp, 2, false, atlas.TraceMax)
 	if got := keys(z); fmt.Sprint(got) != "[[api.acme.example]]" {
 		t.Errorf("what depends on the zone: %v", got)
 	}
-	down, _, _ := v.Trace(zone, atlas.DirectionDown, 1, false)
+	down, _, _ := v.Trace(zone, atlas.DirectionDown, 1, false, atlas.TraceMax)
 	if len(down.Hops) != 0 {
 		t.Errorf("belongs_to is drawn on selection, and a structural trace walked it: %v", keys(down))
 	}
-	down, _, _ = v.Trace(zone, atlas.DirectionDown, 1, true)
+	down, _, _ = v.Trace(zone, atlas.DirectionDown, 1, true, atlas.TraceMax)
 	if got := keys(down); fmt.Sprint(got) != "[[cloudflare/0123456789abcdef0123456789abcdef]]" {
 		t.Errorf("every relation down from the zone: %v", got)
 	}
-	if _, _, err := v.Trace(web, atlas.DirectionUp, atlas.TraceDepthMax+1, false); !errors.Is(err, atlas.ErrQuery) {
+	if _, _, err := v.Trace(web, atlas.DirectionUp, atlas.TraceDepthMax+1, false, atlas.TraceMax); !errors.Is(err, atlas.ErrQuery) {
 		t.Errorf("a trace past its depth bound: %v", err)
 	}
 }

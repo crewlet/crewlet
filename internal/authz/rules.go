@@ -231,6 +231,12 @@ const (
 	// ActionAtlasSearch is the tool `atlas_search`: the atlas's entries, or
 	// those a query names. The app and nothing narrower decides it (ADR-0127).
 	ActionAtlasSearch Action = "atlas_search"
+	// ActionAtlasGet is the tool `atlas_get`: one entry in full, and what
+	// relies on it.
+	ActionAtlasGet Action = "atlas_get"
+	// ActionAtlasTrace is the tool `atlas_trace`: what depends on one entry,
+	// or what it depends on.
+	ActionAtlasTrace Action = "atlas_trace"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -1357,6 +1363,10 @@ var rules = map[Action]rule{
 	// THE APP ALONE: every holder reads every entry (ADR-0127), a seat held to
 	// whoever woke its turn (ADR-0109).
 	ActionAtlasSearch: {class: ClassApp, app: iam.GrantAtlas, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionAtlasGet: {class: ClassApp, app: iam.GrantAtlas, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionAtlasTrace: {class: ClassApp, app: iam.GrantAtlas, recency: iam.RecencyAny,
 		assist: AssistRead},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is

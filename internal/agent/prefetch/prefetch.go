@@ -115,6 +115,13 @@ type Blocks struct {
 	// the turn, with the call that withdraws each ([Fetcher.openAsks]).
 	OpenAsks string
 
+	// Systems is the entries of the company's atlas the turn's ask names
+	// exactly ([Fetcher.systems]), and SystemsNamed how many it lists,
+	// carried out for the turn's summary: the block is bounded and measured
+	// on every turn rather than a fixed section of every prompt.
+	Systems      string
+	SystemsNamed int
+
 	// SkillIDs are the ids behind that block, carried out because a skill
 	// OFFERED to a turn is a skill used: the curator ages a skill on when
 	// it was last used, so a menu that never reports back would archive
@@ -212,7 +219,7 @@ type Answered struct {
 func (b Blocks) Empty() bool {
 	return b.PersonalMemory == "" && b.RelevantKnowledge == "" &&
 		b.EpisodeRecall == "" && b.CounterpartyProfile == "" &&
-		b.SynthesizedSkills == "" && b.ThreadContext == "" && b.OpenAsks == ""
+		b.SynthesizedSkills == "" && b.ThreadContext == "" && b.OpenAsks == "" && b.Systems == ""
 }
 
 // Request is one turn's worth of context to prefetch against.
@@ -302,6 +309,11 @@ type Request struct {
 	// a carrier ([notify.WorkingForKey]): a waiting message written for
 	// somebody else is owed a turn of its own, held to their apps.
 	WorkingFor *types.WorkingFor
+
+	// ReadsAtlas is whether the turn may read the company's atlas within
+	// whom it works for (ADR-0109), decided by the caller with the turn's own
+	// ceiling, the one a tool call is held to; false omits the systems block.
+	ReadsAtlas bool
 
 	// Told is the changes to the seat's access it was told of recently, for
 	// marking the selected notes each may contradict ([ToldChange]). Nil marks
@@ -596,6 +608,10 @@ type Sources struct {
 	// Nil on a company whose tracker is not Worklet's, which renders none.
 	Asks Asks
 
+	// Systems is the company's atlas as a turn may read it, for the
+	// entries its ask names; nil omits the block.
+	Systems Systems
+
 	// Threads reads the chat thread a turn was woken in. Nil renders the
 	// UNREADABLE hint rather than an empty block for a trigger that names
 	// a thread, because a node with no chat transport — one in maintenance
@@ -691,8 +707,13 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r, vector) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
 	run(&blocks.OpenAsks, func() string { return f.openAsks(ctx, r) })
-	// Its own goroutine rather than a run(), because it is the one block that
-	// reports something back besides its prose.
+	// The systems and the skills each run in their own goroutine rather than
+	// a run(), because each reports something back besides its prose.
+	wg.Go(func() {
+		defer recoverInto(&blocks.Systems)
+		block := f.systems(ctx, r)
+		blocks.Systems, blocks.SystemsNamed = block.text, block.named
+	})
 	wg.Go(func() {
 		defer recoverSkills(&blocks.SynthesizedSkills, &blocks.SkillIDs)
 		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
