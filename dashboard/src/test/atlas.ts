@@ -34,6 +34,7 @@ const LANE_OF: Readonly<Record<AtlasKind, AtlasLane>> = {
   domain: "entry",
   hostname: "entry",
   endpoint: "entry",
+  certificate: "entry",
   service: "services",
   host: "runtime",
   datastore: "data",

@@ -1,0 +1,1 @@
+var e=new TextEncoder;function t(t){return e.encode(t).length}function n(e,n){if(t(e)<=n)return e;let r=n-t(`…`);if(r<0)return``;let i=``,a=0;for(let n of e){let e=t(n);if(a+e>r)break;i+=n,a+=e}return`${i}…`}export{n,t};

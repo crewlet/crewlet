@@ -381,3 +381,72 @@ func TestAnEntryTheEngineNamesIsDeclaredWhereItIsNamed(t *testing.T) {
 		}
 	}
 }
+
+// A CERTIFICATE IS KEYED BY ITS VENDOR'S OWN IDENTIFIER, so two sources that
+// meet the same certificate at one vendor name one entry, and a key that
+// names no vendor, or a vendor the engine does not know, is refused.
+func TestACertificateIsKeyedByItsVendorsIdentifier(t *testing.T) {
+	t.Parallel()
+	r, err := atlas.NewRef(atlas.KindCertificate, "cloudflare/3822ff90-ea29-44df-9e55-21300bb9419b")
+	if err != nil || r.Key != "cloudflare/3822ff90-ea29-44df-9e55-21300bb9419b" {
+		t.Fatalf("a certificate under its vendor: %v, %v", r, err)
+	}
+	for _, key := range []string{"3822ff90-ea29-44df-9e55-21300bb9419b", "nobody/3822ff90", "cloudflare/", "cloudflare"} {
+		if _, err := atlas.NewRef(atlas.KindCertificate, key); !errors.Is(err, atlas.ErrInvalid) {
+			t.Errorf("certificate key %q: %v, want ErrInvalid", key, err)
+		}
+	}
+}
+
+// A SERVER KNOWN BY ITS ADDRESS ALONE IS KEYED BY THAT ADDRESS IN ITS CANONICAL
+// FORM, so two spellings of one address name one server, and a private one
+// is marked as its key.
+func TestAServerKnownByItsAddressIsKeyedCanonically(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]string{
+		"203.0.113.10": "addr/203.0.113.10", "2001:DB8::1": "addr/2001:db8::1", "::ffff:9.9.9.9": "addr/9.9.9.9",
+	} {
+		got, err := atlas.AddressHostKey(raw)
+		if err != nil || got != want {
+			t.Errorf("AddressHostKey(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	if _, err := atlas.AddressHostKey("web-1.acme.example"); !errors.Is(err, atlas.ErrInvalid) {
+		t.Errorf("a name is not an address: %v", err)
+	}
+	private := atlas.MustRef(atlas.KindHost, "addr/10.0.0.5")
+	if !private.Private() || atlas.MustRef(atlas.KindHost, "addr/9.9.9.9").Private() {
+		t.Error("a server's address key is private exactly where the address is")
+	}
+}
+
+// AN INTEGRATION DENIES ONLY THE ENTRY ITSELF: its read retires an entry it
+// stopped seeing, and withdraws rather than denies a fact or a relation. An
+// agent denies nothing.
+func TestAnIntegrationDeniesOnlyTheEntryItself(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	host := atlas.MustRef(atlas.KindHostname, "api.acme.example")
+	cloudflare := atlas.IntegrationSource("cloudflare")
+	exists := m(atlas.Exists(host, cloudflare, now))
+	retired := exists
+	retired.Denied = true
+	if err := retired.Validate(); err != nil {
+		t.Errorf("an integration's retirement of an entry: %v", err)
+	}
+	url := m(atlas.Says(host, atlas.FactURL, "https://api.acme.example", cloudflare, now))
+	url.Denied = true
+	if err := url.Validate(); err == nil {
+		t.Error("an integration denied a fact, which it withdraws instead")
+	}
+	zone := m(atlas.Relates(host, atlas.RelationInZone, atlas.MustRef(atlas.KindDomain, "acme.example"), cloudflare, now))
+	zone.Denied = true
+	if err := zone.Validate(); err == nil {
+		t.Error("an integration denied a relation, which it withdraws instead")
+	}
+	agent := m(atlas.Exists(host, atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall), now))
+	agent.Denied = true
+	if err := agent.Validate(); err == nil {
+		t.Error("an agent denied an entry")
+	}
+}

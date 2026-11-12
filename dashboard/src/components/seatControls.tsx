@@ -41,6 +41,7 @@ import {
   RotateCwGlyph,
 } from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
+import { PAUSE_REASON_MAX_RUNES } from "~/contract/actions.ts";
 import { useToastClearOf } from "~/app/toastInset.tsx";
 import { waitedOn } from "~/lib/budget.ts";
 import { plural, possessive } from "~/lib/format.ts";
@@ -53,9 +54,6 @@ import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { AnswerRunButton, SteerTurnDialog } from "./writes.tsx";
 
 export type SeatControl = "pause" | "stop" | "resume";
-
-/** The longest reason a pause carries, the engine's own `MaxPauseReasonRunes`. */
-export const PAUSE_REASON_MAX = 500;
 
 /** Whether a seat is on a turn, or its executor is: what Pause and stop ends. */
 export function isRunning(s: SeatLive): boolean {
@@ -162,8 +160,10 @@ export function SeatControlDialog({
   const running = seats.some(isRunning);
   const one = seats.length === 1;
   const label = nameOfSet(seats);
-  const long = [...reason.trim()].length > PAUSE_REASON_MAX;
-  const tooLong = long ? `Keep the reason under ${PAUSE_REASON_MAX} characters.` : undefined;
+  const long = [...reason.trim()].length > PAUSE_REASON_MAX_RUNES;
+  const tooLong = long
+    ? `Keep the reason to ${PAUSE_REASON_MAX_RUNES} characters or fewer.`
+    : undefined;
 
   const submit = async () => {
     if (!pressable(write, tooLong) || busy || seats.length === 0) return;
@@ -274,7 +274,9 @@ export function SeatControlDialog({
             optional
             htmlFor="seat-control-reason"
             helper="One line, shown on the seat and in the feed."
-            {...(long ? { error: `Keep the reason under ${PAUSE_REASON_MAX} characters.` } : {})}
+            {...(long
+              ? { error: `Keep the reason to ${PAUSE_REASON_MAX_RUNES} characters or fewer.` }
+              : {})}
           >
             <Input
               id="seat-control-reason"

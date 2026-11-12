@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -112,6 +113,10 @@ type Client struct {
 	token   string
 	http    *http.Client
 	limit   httpx.RateLimit
+
+	// calls counts every request sent, retries included: what a read of
+	// the account for the atlas cost at the vendor.
+	calls atomic.Int64
 }
 
 // ClientOptions builds a client.
@@ -144,6 +149,10 @@ func NewClient(opts ClientOptions) (*Client, error) {
 
 // AccountID is the account this client addresses.
 func (c *Client) AccountID() string { return c.account }
+
+// Calls is how many requests the client has sent, retries after a rate limit
+// included: what a read of the account for the atlas cost at the vendor.
+func (c *Client) Calls() int { return int(c.calls.Load()) }
 
 // TokensURL is the dashboard page listing this account's API tokens, where a
 // person settles what only Cloudflare can.
@@ -219,6 +228,7 @@ func (c *Client) once(
 	if err != nil {
 		return envelope{}, fmt.Errorf("cloudflare: build %s %s: %w", method, path, err)
 	}
+	c.calls.Add(1)
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -301,17 +311,25 @@ const (
 func (c *Client) list(
 	ctx context.Context, path string, query url.Values, add func(json.RawMessage) (int, error),
 ) error {
+	return c.listPages(ctx, path, query, listPageSize, add)
+}
+
+// listPages is [Client.list] at a page size of the route's own: the DNS
+// records of a zone serve far more rows a page than the zone listing does.
+func (c *Client) listPages(
+	ctx context.Context, path string, query url.Values, perPage int, add func(json.RawMessage) (int, error),
+) error {
 	collected := 0
 	for page := 1; ; page++ {
 		if page > listCeiling {
-			return fmt.Errorf("cloudflare: %s did not finish after %d pages of %d", path, listCeiling, listPageSize)
+			return fmt.Errorf("cloudflare: %s did not finish after %d pages of %d", path, listCeiling, perPage)
 		}
 		q := url.Values{}
 		for k, v := range query {
 			q[k] = v
 		}
 		q.Set("page", strconv.Itoa(page))
-		q.Set("per_page", strconv.Itoa(listPageSize))
+		q.Set("per_page", strconv.Itoa(perPage))
 		var rows json.RawMessage
 		info, err := c.do(ctx, http.MethodGet, path, q, nil, &rows)
 		if err != nil {
@@ -322,7 +340,7 @@ func (c *Client) list(
 			return fmt.Errorf("cloudflare: decode %s: %w", path, err)
 		}
 		collected += n
-		if lastPage(info, page, n, collected) {
+		if lastPage(info, page, n, collected, perPage) {
 			return nil
 		}
 	}
@@ -330,7 +348,7 @@ func (c *Client) list(
 
 // lastPage reports a listing that is complete: no paging at all, the last
 // page Cloudflare counts, every row it counts, or a short or empty page.
-func lastPage(info *resultInfo, page, got, collected int) bool {
+func lastPage(info *resultInfo, page, got, collected, perPage int) bool {
 	switch {
 	case info == nil || got == 0:
 		return true
@@ -339,7 +357,7 @@ func lastPage(info *resultInfo, page, got, collected int) bool {
 	case info.TotalCount > 0:
 		return collected >= info.TotalCount
 	default:
-		return got < listPageSize
+		return got < perPage
 	}
 }
 

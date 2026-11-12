@@ -42,7 +42,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { artifactFolderPath, artifactFoldersPath, artifactPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
-import { ARTIFACT_FOLDER_MAX_DEPTH } from "~/contract/artifacts.ts";
+import { ARTIFACT_FOLDER_MAX_DEPTH } from "~/contract/artifactsworkspace.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { useViewer } from "~/lib/viewer.ts";

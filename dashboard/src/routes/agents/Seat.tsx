@@ -600,7 +600,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               )}
               {!human && (
                 <SeatSectionBlock section="access" title="Access">
-                  <Access handle={seat.handle} />
+                  <Access handle={seat.handle} name={seat.name} />
                 </SeatSectionBlock>
               )}
             </div>

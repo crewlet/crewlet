@@ -28,6 +28,14 @@
 // delegate answered in [Deadline], and every request once delegated decisions
 // are turned off, goes to people.
 //
+// # One open request per subject
+//
+// A request is identified by who asks, its act and what it decides
+// ([Subject]), never by its wording. A seat's repeat of a request still
+// waiting on a delegate or a person joins that request: nothing new is held,
+// put to a delegate or shown to people. A request already answered is no
+// longer open, so the same ask after it is a new request.
+//
 // # What a person still sees
 //
 // Escalations, with the delegate's findings first; a daily digest of what was
@@ -38,6 +46,7 @@ package delegated
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"slices"
 	"strings"
 	"time"
@@ -171,6 +180,27 @@ func Combine(delegates []string, given []Given) Outcome {
 		}
 	}
 	return Outcome{Decided: true, Verdict: first}
+}
+
+// Subject is the identity of what a request of kind decides, over the fields
+// its tool names in a fixed order: a merge's change, head and method, a
+// deploy's repository, commit, environment and changes, a command's server as
+// shown, its text and its stdin. The requester's reason is never a field, so
+// the same ask in other words is the same subject.
+func Subject(kind Kind, fields ...string) string {
+	h := sha256.New()
+	// LENGTH-PREFIXED, so no field's text can pass for the next field's start.
+	write := func(field string) {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(field)))
+		h.Write(n[:])
+		h.Write([]byte(field))
+	}
+	write("crewlet.delegated.subject/" + string(kind))
+	for _, f := range fields {
+		write(f)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // The categories every kind escalates, whatever its delegate answers; each

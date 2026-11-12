@@ -47,6 +47,11 @@ type ActionArgs struct {
 	MaxLength *int `json:"maxLength,omitempty"`
 	MinItems  *int `json:"minItems,omitempty"`
 	MaxItems  *int `json:"maxItems,omitempty"`
+	// Pattern holds a string to an RE2 expression it matches as written, so
+	// one that anchors itself (`^...$`) holds the whole value, as JSON
+	// Schema reads it: a seat's handle where the seats are past what an
+	// enum lists. Bounded and compiled as a member pattern is.
+	Pattern string `json:"pattern,omitempty"`
 	// Items is every member of an array.
 	Items *ActionArgs `json:"items,omitempty"`
 	// Properties are an object's named members, Required the ones it must
@@ -119,15 +124,29 @@ func (t *ArgTypes) UnmarshalJSON(raw []byte) error {
 // declares (the org builder's operations, the widest, use a depth of five and
 // about sixty nodes) and small enough that checking a value against one is
 // cheap and the schema reads in a few lines of the prompt.
+//
+// THE EXPORTED ONES ARE THE DASHBOARD'S TOO: they are the bounds a screen's
+// data can push a declaration past (a member per field of an open draft, a
+// value per seat a screen draws, words a person wrote), so the frame holds
+// every action's arguments to them before a page context is sent, and leaves
+// out what does not fit rather than send it to be refused with the question.
+// `contract/assistant.ts` copies them, held here by the client gate. The rest
+// are the shape a screen's code writes, held for every declaration by
+// TestTheEngineReadsEverySchemaTheDashboardDeclares.
 const (
 	actionArgsMaxDepth    = 8
 	actionArgsMaxNodes    = 160
-	actionArgsMaxEnum     = 64
-	actionArgsMaxMembers  = 32
 	actionArgsMaxVariants = 16
 	actionArgsMaxExamples = 4
 	actionArgsMaxPattern  = 128
-	actionArgsMaxDescribe = 300
+	// ActionArgsMaxEnum is the most values one enum lists.
+	ActionArgsMaxEnum = 64
+	// ActionArgsMaxMembers is the most members one object of a schema
+	// declares, by name and by pattern together.
+	ActionArgsMaxMembers = 32
+	// ActionArgsDescriptionMaxRunes is the longest description one part of a
+	// schema carries, in characters.
+	ActionArgsDescriptionMaxRunes = 300
 	// ActionArgsMaxBytes is the most one action's schema encodes to.
 	ActionArgsMaxBytes = 6 << 10
 )
@@ -202,20 +221,20 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 	case *nodes > actionArgsMaxNodes:
 		return fmt.Errorf("%w: an action's arguments have more than %d parts", ErrInvalid,
 			actionArgsMaxNodes)
-	case len(s.Enum) > actionArgsMaxEnum:
+	case len(s.Enum) > ActionArgsMaxEnum:
 		return fmt.Errorf("%w: %s lists %d values, over %d", ErrInvalid, path, len(s.Enum),
-			actionArgsMaxEnum)
-	case len(s.Properties)+len(s.PatternProperties) > actionArgsMaxMembers:
+			ActionArgsMaxEnum)
+	case len(s.Properties)+len(s.PatternProperties) > ActionArgsMaxMembers:
 		return fmt.Errorf("%w: %s declares more than %d members", ErrInvalid, path,
-			actionArgsMaxMembers)
+			ActionArgsMaxMembers)
 	case len(s.OneOf) > actionArgsMaxVariants:
 		return fmt.Errorf("%w: %s declares more than %d shapes", ErrInvalid, path,
 			actionArgsMaxVariants)
 	case depth > 0 && len(s.Examples) > 0:
 		return fmt.Errorf("%w: %s declares examples below the top", ErrInvalid, path)
-	case !text(s.Description, actionArgsMaxDescribe):
+	case !text(s.Description, ActionArgsDescriptionMaxRunes):
 		return fmt.Errorf("%w: %s description is not text of at most %d characters",
-			ErrInvalid, path, actionArgsMaxDescribe)
+			ErrInvalid, path, ActionArgsDescriptionMaxRunes)
 	}
 	for _, t := range s.Type {
 		if !t.Valid() {
@@ -224,16 +243,25 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 		}
 	}
 	for _, v := range s.Enum {
-		if !plain(v, pageValueMaxBytes) {
+		if !plain(v, PageValueMaxBytes) {
 			return fmt.Errorf("%w: %s lists a value that is not plain text", ErrInvalid, path)
 		}
 	}
-	if s.Const != nil && !plain(*s.Const, pageValueMaxBytes) {
+	if s.Const != nil && !plain(*s.Const, PageValueMaxBytes) {
 		return fmt.Errorf("%w: %s const is not plain text", ErrInvalid, path)
 	}
 	for _, bound := range []*int{s.MinLength, s.MaxLength, s.MinItems, s.MaxItems} {
 		if bound != nil && *bound < 0 {
 			return fmt.Errorf("%w: %s states a negative bound", ErrInvalid, path)
+		}
+	}
+	if s.Pattern != "" {
+		if len(s.Pattern) > actionArgsMaxPattern {
+			return fmt.Errorf("%w: %s states a pattern over %d bytes", ErrInvalid, path,
+				actionArgsMaxPattern)
+		}
+		if _, err := regexp.Compile(s.Pattern); err != nil {
+			return fmt.Errorf("%w: %s pattern %q does not compile", ErrInvalid, path, s.Pattern)
 		}
 	}
 	for _, name := range s.Required {
@@ -319,6 +347,11 @@ func (s *ActionArgs) problems(path string, v any) []error {
 		}
 		if s.MaxLength != nil && n > *s.MaxLength {
 			add("%s is at most %d characters", path, *s.MaxLength)
+		}
+		if s.Pattern != "" {
+			if re, err := regexp.Compile(s.Pattern); err == nil && !re.MatchString(value) {
+				add("%s is text matching %s, not %q", path, s.Pattern, value)
+			}
 		}
 	case []any:
 		if s.MinItems != nil && len(value) < *s.MinItems {

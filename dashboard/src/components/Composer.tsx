@@ -59,7 +59,12 @@ import { useTaskKeyHint } from "~/lib/projectKeys.ts";
 import { DOCLET, needsWords } from "~/lib/access.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
-import { DECISION_OPTION_MAX_BYTES, DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
+import {
+  DECISION_MAX_OPTIONS,
+  DECISION_MIN_OPTIONS,
+  DECISION_OPTION_MAX_BYTES,
+  DECISION_QUESTION_MAX_BYTES,
+} from "~/contract/work.ts";
 import { itemAddress } from "~/lib/work.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
@@ -303,11 +308,6 @@ export const Composer = forwardRef<
   );
 });
 
-/** The fewest and most options an ask may offer: `decision.MinOptions`
- *  and `MaxOptions`, which refuse anything outside them. */
-const MIN_OPTIONS = 2;
-const MAX_OPTIONS = 4;
-
 /**
  * An option's id, from its words: what an answer names in `choice`, 1 to 32 of
  * a-z, 0-9, `_` and `-` — the engine's own rule — made unique among the ask's
@@ -390,8 +390,8 @@ function AskDialog({
         ? `Shorten the question: it is ${questionBudget.overBy}.`
         : choose && longOption >= 0
           ? `Shorten option ${longOption + 1}: it is ${optionBudgets[longOption]!.overBy}.`
-          : choose && filled.length < MIN_OPTIONS
-            ? `Offer at least ${MIN_OPTIONS} options.`
+          : choose && filled.length < DECISION_MIN_OPTIONS
+            ? `Offer at least ${DECISION_MIN_OPTIONS} options.`
             : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, for the dialog's submit: an ask is a comment,
@@ -499,7 +499,7 @@ function AskDialog({
                         setLabels((all) => all.map((l, j) => (j === i ? event.target.value : l)))
                       }
                     />
-                    {labels.length > MIN_OPTIONS && (
+                    {labels.length > DECISION_MIN_OPTIONS && (
                       <IconButton
                         size="sm"
                         variant="ghost"
@@ -519,7 +519,7 @@ function AskDialog({
                   )}
                 </div>
               ))}
-              {labels.length < MAX_OPTIONS && (
+              {labels.length < DECISION_MAX_OPTIONS && (
                 <Button
                   size="small"
                   variant="ghost"

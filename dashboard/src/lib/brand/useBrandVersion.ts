@@ -13,7 +13,7 @@ import type { ArtifactActor, BrandDocument, RestError } from "~/protocol/index.t
 import { useQuery } from "../useQuery.ts";
 import { useRest } from "../useRest.ts";
 import { versionText } from "../artifacts/api.ts";
-import { BRAND_ENTRY } from "./api.ts";
+import { BRAND_ENTRY_PATH } from "~/contract/brand.ts";
 import { parseBrandDocument } from "./brand.ts";
 import { versionSource, type BrandSource } from "./useBrand.ts";
 
@@ -39,7 +39,7 @@ export function useBrandVersion(kit: string | null, version: number): BrandVersi
   const on = kit !== null && version > 0;
   const manifest = useQuery("artifact_version", { id: kit ?? "", n: version }, { enabled: on });
   const read = useRest(on ? `brand-version:${kit}:${version}` : null, async (signal) => {
-    const doc = parseBrandDocument(await versionText(kit!, version, BRAND_ENTRY, signal));
+    const doc = parseBrandDocument(await versionText(kit!, version, BRAND_ENTRY_PATH, signal));
     if (!doc) throw new Error(`Version ${version} holds no brand this page can read.`);
     return doc;
   });

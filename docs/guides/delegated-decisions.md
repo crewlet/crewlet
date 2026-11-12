@@ -135,6 +135,29 @@ server is held:
   environment, once. Crewlet has no deploy path of its own: the agent deploys
   with its own tools, and the approval names what it may deploy.
 
+### One request per ask
+
+An agent can be woken about the same work more than once (a mention and an
+assignment a minute apart), and each turn may ask for the same thing while the
+first request still waits. Crewlet keeps that one request. A request is
+identified by the agent that asks, its kind and what it decides, never by its
+wording:
+
+| Kind | What makes two asks the same request |
+|---|---|
+| `pr_merge` | The change, its head and the merge method. |
+| `deploy` | The repository, the commit, the environment and the set of changes. |
+| `ssh_operate` | The server as the approver is shown it, the command and its stdin. |
+
+The `reason`, and a deploy's `rollback`, are the agent's words and are not part
+of it. While a request waits on a delegate or on a person, the same agent's
+repeat of it holds nothing new: no second delegate turn, no second Inbox
+entry. The repeating turn is told the request already waits, under its id, and
+is not parked; the turn that asked first carries the work on when the answer
+comes. A new head, another method, environment or command, or the same ask by
+another agent, is a request of its own. So is the same ask once the first was
+answered, allowed or denied: nothing is open to join, and it is asked afresh.
+
 Without a rule for the kind, the request goes to people. A person who may
 approve one is an administrator, a lead of the agent, or a person the kind's
 rule names in `escalate_to`, signed in again within the step-up window

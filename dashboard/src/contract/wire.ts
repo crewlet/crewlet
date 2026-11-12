@@ -183,6 +183,15 @@ export const SEARCH_QUERY_MAX = 400;
 export const SEARCH_TERM_MIN = 2;
 
 /**
+ * How far back the turns list reads, in days (`store.MaxTurnDays`): the read
+ * clamps a longer window to it, and it is the event store's own retention, so
+ * it is as far back as any turn can be read at all. A seat's Turns tab asks
+ * for all of it and says so. Held by
+ * `internal/api/queries.TestTheTurnsTabSaysTheWindowTheEngineReads`.
+ */
+export const TURNS_MAX_DAYS = 30;
+
+/**
  * How many artifact rooms one socket is in at once.
  *
  * EXACTLY THE ENGINE'S OWN (`stream.MaxRoomsPerSocket`), held there by

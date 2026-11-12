@@ -1646,6 +1646,54 @@ type Integrations interface {
 	DeleteIntegrationStatus(ctx context.Context, kind string) error
 }
 
+// AtlasSources is where the atlas collect duty keeps each source's standing
+// (internal/atlas/collect): when its vendor was last read whole, what that
+// read hashed to, how many calls and withheld values it cost, and which
+// entries it has stopped seeing since when.
+//
+// # Why the fleet holds it, beside the integration statuses
+//
+// The duty moves between nodes, and the node that reads a source's standing
+// (the dashboard's Sources section, on whichever node serves the API) is
+// rarely the one that ran the read. The whole company needs the current value
+// and only the current value: an unchanged read writes nothing to the atlas
+// log, so the last complete read and its digest live here and nowhere else.
+//
+// # A bucket of its own
+//
+// Not the integration statuses' bucket: its reader lists every key as a
+// surface's status and forgets one the document no longer declares, and a
+// source's key beside them would be read as a surface nothing reconciles.
+//
+// # The value is OPAQUE, and no retention, for the integration statuses'
+// reasons
+//
+// A standing is the duty's own vocabulary (internal/atlas/collect encodes it)
+// and standing state rather than a short-horizon question: one that expired
+// would read as a source never read, and the duty would retire nothing and
+// read everything at once. There is one key per source the engine knows, so
+// nothing grows.
+type AtlasSources interface {
+	// AtlasSourceStatuses returns every recorded standing, keyed by the
+	// source it describes. RAISES rather than answering empty on an
+	// unreachable store, for the integration statuses' reason: "no source
+	// was ever read" and "the store cannot be read" send the duty down
+	// opposite paths.
+	AtlasSourceStatuses(ctx context.Context) (map[string][]byte, error)
+
+	// PutAtlasSourceStatus records one source's standing, replacing any
+	// prior one. LAST WRITE WINS: the collect duty is the one writer, a
+	// fleet singleton that re-claims its lease before every source it
+	// visits, so no two writers hold one key.
+	PutAtlasSourceStatus(ctx context.Context, kind string, value []byte) error
+
+	// DeleteAtlasSourceStatus drops a source's standing once the company no
+	// longer connects it. It removes the record and nothing on the atlas
+	// log: what the source recorded stays until a read retires it or a
+	// person does.
+	DeleteAtlasSourceStatus(ctx context.Context, kind string) error
+}
+
 // MailboxRecord is the fleet's record of one agent seat's durable mailbox.
 //
 // # Why the fleet has to remember a mailbox at all
@@ -1826,6 +1874,7 @@ type Fleet interface {
 	SandboxRuns
 	Secrets
 	Integrations
+	AtlasSources
 	SeatAccess
 	AccessReviews
 	ConversationHolds

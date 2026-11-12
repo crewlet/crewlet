@@ -133,9 +133,19 @@ func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, now func() ti
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &accessSession{
+	s := &accessSession{
 		client: client, company: in.Config.Name, zones: cfg.Provisioning.Zones, now: now,
-	}, nil
+	}
+	// THE PASS'S OWN INSPECTION, where the company half of this pass made
+	// one over the same account: the catalogue and the levels it cannot
+	// grant are what the session would read again, call for call, from the
+	// same token and the same configured zones.
+	if read, ok := in.Reads.(*Inspection); ok && read != nil && read.account == account {
+		cat := read.in.cat
+		gaps := levelGaps(read.in.unresolved, read.in.unheld, client.TokensURL())
+		s.cat, s.gaps = &cat, &gaps
+	}
+	return s, nil
 }
 
 // accessSession is one pass's connection to Cloudflare.

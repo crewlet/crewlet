@@ -178,6 +178,61 @@ func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
 	}
 }
 
+// A PAGE TITLE THE WIRE TAKES IS ONE A TURN AND ITS MESSAGE STORE.
+//
+// The page chip is the page context's title, which the wire takes at
+// wire.PageTitleMaxRunes characters: three bytes each for a Japanese title,
+// four for a row of emoji. Held to a conversation title's 256 bytes, the turn
+// refused the chip of every question asked on a page whose title ran past 85
+// Japanese characters, after the wire had validated that page. Each title here
+// validates, opens its turn, records its message and reads back whole, and one
+// byte past the wire's bound is refused. Mutation: hold the chip's title to
+// TitleMaxBytes, and the Japanese title's turn is refused.
+func TestAPageTitleTheWireTakesIsOneATurnStores(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	c := person(uuid.New(), "ada")
+	for _, title := range []string{
+		"Knowledge › " + strings.Repeat("設", wire.PageTitleMaxRunes-len([]rune("Knowledge › "))),
+		strings.Repeat("😀", wire.PageTitleMaxRunes),
+	} {
+		page := wire.PageContext{Screen: "knowledge-page", Title: title}
+		if err := page.Validate(); err != nil {
+			t.Fatalf("the wire refuses a title of %d bytes: %v", len(title), err)
+		}
+		if len(title) <= assistantdomain.TitleMaxBytes {
+			t.Fatalf("a title of %d bytes is within a conversation title's bound, so it "+
+				"proves nothing", len(title))
+		}
+		chip := &wire.PageChip{Title: title, Screen: page.Screen}
+		conversation := n.conversation(c, "")
+		turn := uuid.New()
+		if _, _, err := n.writer.OpenTurn(t.Context(), fresh(c), assistantdomain.NewTurn{
+			Conversation: conversation, Turn: turn, Node: n.id, Model: "claude", Page: chip,
+		}); err != nil {
+			t.Errorf("a question asked on a page titled in %d bytes opens no turn: %v",
+				len(title), err)
+			continue
+		}
+		if _, err := n.writer.RecordMessage(t.Context(), fresh(c), turn, assistantdomain.NewMessage{
+			ID: assistantdomain.MessageID(turn, 0), Role: wire.RoleUser, Text: "What is this?",
+			Page: chip,
+		}); err != nil {
+			t.Errorf("its question is not recorded with its page chip: %v", err)
+		}
+		if row, err := n.reader.Turn(t.Context(), c.Owner, turn); err != nil || row.Page == nil ||
+			row.Page.Title != title {
+			t.Errorf("the turn reads back %+v, %v; want its whole title", row.Page, err)
+		}
+	}
+	over := &wire.PageChip{Title: strings.Repeat("x", wire.PageTitleMaxBytes+1), Screen: "x"}
+	if _, _, err := n.writer.OpenTurn(t.Context(), fresh(c), assistantdomain.NewTurn{
+		Conversation: n.conversation(c, ""), Turn: uuid.New(), Page: over,
+	}); !errors.Is(err, assistantdomain.ErrInvalid) {
+		t.Errorf("a chip title past the wire's bound opens a turn: %v", err)
+	}
+}
+
 // ONE TURN AT A TIME IN A CONVERSATION, decided by the broker: a second turn
 // opened while one is running or parked is refused, and closing the first
 // frees the conversation for the next. A turn closes once.

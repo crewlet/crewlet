@@ -29,12 +29,12 @@ func carryRows(t *testing.T, to *store.DB, spec table, rows []Row) {
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
-		decoded, decodedSpec, known, err := decode(body)
-		if err != nil || !known {
-			t.Fatalf("decode: known=%v err=%v", known, err)
+		decoded, err := decode(body)
+		if err != nil || decoded.Table != spec.name {
+			t.Fatalf("decode %s: a %q row (%v)", spec.name, decoded.Table, err)
 		}
 		if err := to.Tx(ctx, func(tx *sql.Tx) error {
-			return upsert(ctx, tx, decodedSpec, decoded)
+			return upsert(ctx, tx, spec, decoded)
 		}); err != nil {
 			t.Fatalf("upsert: %v", err)
 		}

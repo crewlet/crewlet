@@ -37,11 +37,9 @@ import {
   type PublishFile,
   type UploadFile,
 } from "../artifacts/api.ts";
+import { BRAND_ENTRY_PATH } from "~/contract/brand.ts";
 import { serializeBrandDocument } from "./brand.ts";
 import type { BrandDocument } from "~/protocol/index.ts";
-
-/** The kit's index: its entry, and the one file every version holds. */
-export const BRAND_ENTRY = "brand.json";
 
 /** Adopt one version of a kit as the company's brand (`POST /brand/adoptions`). */
 export function adoptBrand(kit: string, version: number): Omit<KeyedRequest, "key"> {
@@ -166,7 +164,7 @@ async function writeVersion(
   keys: { upload: string; write: string },
 ): Promise<KeyedAnswer> {
   const files: UploadFile[] = [
-    { path: BRAND_ENTRY, body: serializeBrandDocument(save.document) },
+    { path: BRAND_ENTRY_PATH, body: serializeBrandDocument(save.document) },
     ...save.files.flatMap((f) => ("body" in f ? [{ path: f.path, body: f.body }] : [])),
   ];
   const carried: PublishFile[] = save.files.flatMap((f) =>
@@ -189,7 +187,7 @@ async function writeVersion(
             title: save.title,
             upload: up.upload,
             files: [...up.files, ...carried],
-            entry: BRAND_ENTRY,
+            entry: BRAND_ENTRY_PATH,
             // THE COMPANY'S KIT IS EVERY READER'S TO OPEN, as its adopted
             // brand is everyone's to read: its versions and history are
             // where the Brand page's version and History lead.
@@ -202,7 +200,7 @@ async function writeVersion(
             mode: "whole",
             files: [...up.files, ...carried],
             upload: up.upload,
-            entry: BRAND_ENTRY,
+            entry: BRAND_ENTRY_PATH,
             capabilities: [],
           }),
           key: keys.write,

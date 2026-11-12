@@ -733,17 +733,3 @@ func (w Widget) EffectiveAgg() Agg {
 	}
 	return w.Agg
 }
-
-// EffectiveLimit is the rows a bars, share or table widget draws: its own, else the
-// type's default.
-func (w Widget) EffectiveLimit() int {
-	switch {
-	case w.Limit > 0:
-		return w.Limit
-	case w.Type == WidgetShare:
-		return artifacts.MaxShareParts
-	case w.Type == WidgetTable:
-		return artifacts.DefaultTableRows
-	}
-	return artifacts.DefaultBarRows
-}

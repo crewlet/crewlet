@@ -48,7 +48,7 @@ import { useNow } from "~/lib/clock.ts";
 import { openSentence } from "~/lib/format.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { STATE_COLLECTION } from "~/contract/artifacts.ts";
+import { STATE_COLLECTION } from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDetail, DataCollection } from "~/protocol/index.ts";
 import { stepRefusal, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";

@@ -56,7 +56,7 @@ not a request handler you can route, it is a place where things run:
 | Moves to the satellite | Stays on the core |
 |---|---|
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
-| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) (the scheduler tick, the sandbox waiter, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the object store's collector, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep), on whichever core node holds `workers` |
+| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) (the scheduler tick, the sandbox waiter, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the atlas collect duty, the object store's collector, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep), on whichever core node holds `workers` |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
 | Its executor runs' launches, and a `direct` or `container` box itself, on the satellite's own host | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
@@ -456,10 +456,15 @@ the dependency surface before choosing a host for it:
   own turns is handed to a data node's event log (the audit trail cannot live
   in a store deleted at its next boot), so `GET /events` on that data node
   shows it; its seats' memory rides the compacted changelog every seat's
-  memory does and is rehydrated after a restart, except, until
-  [#1051](https://github.com/crewlet/crewlet/issues/1051) is fixed, a seat
-  whose skills have been refined: the fresh store does not hold the seat's
-  skills, so its hydration fails and the seat is refused. A restart costs that
+  memory does and is rehydrated after a restart into the fresh store, a table
+  at a time, so a refined skill's versions arrive after the skill they belong
+  to. A seat's hydration has fifteen seconds, and its 23 round trips take
+  about 2.3 of them across a 100 ms leaf link before its rows' own bytes
+  (115 ms at 5 ms a round trip, 23 ms at 1 ms):
+  a seat whose memory takes longer than the rest to cross the link is refused
+  at every placement sweep, and so can run on no such satellite (see
+  [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+  A restart costs that
   memory whatever the changelog had not acknowledged when the node stopped,
   since the deleted store takes it along: a graceful stop flushes each seat
   for five seconds, about fifty rows across a leaf link to another region,

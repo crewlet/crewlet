@@ -366,3 +366,25 @@ test("the deck being composed is the assistant's to read, and a draft.set sets i
   expect(sent.deck.theme).toBe("grove");
   expect(sent.deck.slides[1]).toMatchObject({ title: "Where we stand" });
 });
+
+// THE WHOLE TASK TEXT IS HELD TO WHAT A TASK'S DESCRIPTION HOLDS before the
+// press: the brief and the plan's slides together. Past it, the engine refused
+// the task after the deck was made. A brief in a script of three bytes a
+// character takes it past the bound, and a short one leaves it inside.
+// Mutation: drop the task text's hold, and Create and ask makes the deck.
+test("a task text past what a task holds is held before the deck is made", async () => {
+  mount();
+  fireEvent.change(await title(), { target: { value: "Board review" } });
+  fireEvent.click(screen.getAllByRole("button", { name: "Ask an agent" })[0]!);
+  const panel = screen.getByRole("complementary", { name: "Ask an agent" });
+  const brief = within(panel).getByRole("textbox", { name: "What is the deck for?" });
+  const ask = within(panel).getByRole("button", { name: "Create and ask" });
+  fireEvent.change(brief, { target: { value: "A ten-minute update for the board." } });
+  await waitFor(() => expect(ask.getAttribute("aria-disabled")).toBeNull());
+  fireEvent.change(brief, { target: { value: "設".repeat(11_000) } });
+  await waitFor(() => expect(ask.getAttribute("aria-disabled")).toBe("true"));
+  await act(async () => {
+    fireEvent.click(ask);
+  });
+  expect(request.mock.calls.some(([, path]) => path === "/artifacts")).toBe(false);
+});

@@ -28,7 +28,7 @@ import { linkWorkItem } from "~/lib/artifacts/api.ts";
 import { KIND_ARTICLES, KIND_WORDS } from "~/lib/artifacts/words.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
-import { briefFolder, useSaveIn } from "./create.ts";
+import { briefFolder, useSaveIn, type SaveIn } from "./create.ts";
 
 /** What a create page asks an agent for. */
 export interface ArtifactTaskRequest {
@@ -87,6 +87,30 @@ export function artifactTaskBody(
 }
 
 /**
+ * The id an artifact the press makes first is named by in its task's
+ * description, to measure that description before the artifact exists: an
+ * artifact's id is a uuid, 36 characters whichever one it gets
+ * (`artifacts.ParseID`).
+ */
+export const UNMADE_ARTIFACT = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * The description `request` files, EXACTLY as [useFileArtifactTask] writes it
+ * from the same `saveIn`, the folder's clause included: what a page measures
+ * against `TASK_BODY_MAX_BYTES` before the press and shows as the task, so the
+ * hold, the preview and the task are one text. Measured without the folder's
+ * clause, a sheet or a page filed into a folder was held about a hundred bytes
+ * short of the bound and refused by the engine after the press; and a page
+ * whose artifact the press makes first measures it with [UNMADE_ARTIFACT].
+ */
+export function filedTaskText(
+  request: Pick<ArtifactTaskRequest, "kind" | "brief" | "artifact">,
+  saveIn: SaveIn,
+): string {
+  return artifactTaskBody(request.kind, request.brief, request.artifact, briefFolder(saveIn));
+}
+
+/**
  * What a page says when the task was filed and the artifact was not linked to
  * it: in a person's words, never the request's own detail (a route, a status),
  * with what to do about it. The task stands either way, so it is never said as
@@ -125,12 +149,7 @@ export function useFileArtifactTask(): FileArtifactTask {
           title,
           project,
           assignee: request.seat,
-          body: artifactTaskBody(
-            request.kind,
-            request.brief,
-            request.artifact,
-            briefFolder(saveIn),
-          ),
+          body: filedTaskText(request, saveIn),
         },
         { done: `Asked ${index.byHandle.get(request.seat)?.name ?? request.seat} for “${title}”` },
       );
@@ -154,7 +173,9 @@ export function useFileArtifactTask(): FileArtifactTask {
         setLinking(false);
       }
     },
-    [create, viewer.project, index, saveIn.folder, saveIn.path],
+    // WHAT THE TEXT IS WRITTEN FROM, as [filedTaskText] reads it: the folder
+    // and whether the tree that confirms it is still being read.
+    [create, viewer.project, index, saveIn.folder, saveIn.reading],
   );
 
   return {

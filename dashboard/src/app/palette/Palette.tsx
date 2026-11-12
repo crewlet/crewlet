@@ -124,7 +124,8 @@ import {
   type Seat,
 } from "~/lib/seats.ts";
 import { turnIdOf, watchLink } from "~/lib/turns.ts";
-import { itemPath, PROJECT_PAGE, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
+import { itemPath, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import { useOpenProjectSwitcher } from "../header/ProjectSwitcher.tsx";
 import { fmtCount } from "~/lib/format.ts";

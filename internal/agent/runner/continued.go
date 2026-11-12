@@ -465,6 +465,21 @@ func (r *Runner) checkoutName() string {
 // each up to the 16 KiB a call's record keeps. And defused under b: its
 // arguments are a model's, and a failed call's error is whatever the tool
 // said.
+//
+// ONE READ CAP FOR BOTH LISTS ([ledger.FormatCallGroups]), never one each: they
+// are one round's calls, told in one brief, and capped apart they would be
+// told twice the reads the cap allows a round. It is SPENT ON THE LATE CALLS
+// FIRST, though the brief tells them second. The session never shows a late
+// call's outcome as told here: it shows the call with none, as still running,
+// as interrupted or as failed, or not at all, so a late read left out leaves an
+// outcome the session surely lacks, where a call after the save may be one it
+// shows. And the late calls are few, only those that outlived their run or were
+// in flight at the read, so told first they leave the calls after the save
+// most of the cap, where a long round's calls after the save, told first, could
+// leave out every late read. A read's line carries nothing the read returned,
+// so a read listed and a read counted are alike one the session may run again.
+// The fit is over the two lists together, which names exactly what the one cap
+// shows.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, leadHeld string,
 	surface *tools.Surface, b provenance.Boundary) prompts.AfterSave {
 
@@ -502,18 +517,13 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	}
 	if len(after)+len(late) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
-		pieces := ledger.CallPieces(after, opts)
-		for _, p := range ledger.CallPieces(late, opts) {
-			if !slices.Contains(pieces, p) {
-				pieces = append(pieces, p)
-			}
-		}
-		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, pieces)
-		if len(after) > 0 {
-			out.Calls = provenance.Neutralise(b, ledger.FormatCalls(after, opts))
-		}
+		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, ledger.CallPieces(slices.Concat(late, after), opts))
+		told := ledger.FormatCallGroups([][]ledger.Call{late, after}, opts)
 		if len(late) > 0 {
-			out.Late = provenance.Neutralise(b, ledger.FormatCalls(late, opts))
+			out.Late = provenance.Neutralise(b, told[0])
+		}
+		if len(after) > 0 {
+			out.Calls = provenance.Neutralise(b, told[1])
 		}
 	}
 	if out.Dropped > 0 || out.LateDropped > 0 {

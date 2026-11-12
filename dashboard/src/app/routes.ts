@@ -40,6 +40,7 @@
  * party's string and `servers` is a legal one.
  */
 
+import { OBJECT_ID_HEX_DIGITS } from "~/contract/objectids.ts";
 import { isMakeKind, type MakeKind } from "~/lib/artifacts/words.ts";
 import {
   framelessOf,
@@ -49,7 +50,13 @@ import {
   type Workspace,
 } from "./nav.ts";
 
-/** A project or container key: uppercase, as the engine mints it. */
+/**
+ * A project or container key IN AN ADDRESS: uppercase. Looser than the grammar
+ * a key is written in (`CONTAINER_KEY_PATTERN`) on purpose, because a route
+ * only has to tell a key from a lowercase segment, and an address naming no
+ * project is answered as none; a key a person types is held to the grammar
+ * itself.
+ */
 export const KEY_SHAPE = /^[A-Z][A-Z0-9_]*$/;
 /** An item key: a project key, a dash, a number. */
 export const ITEM_KEY_SHAPE = /^[A-Z][A-Z0-9_]*-\d+$/;
@@ -115,7 +122,7 @@ export const CHANGE_NUMBER_SHAPE = /^[1-9][0-9]{0,15}$/;
  * the object an abbreviation finds can change as objects arrive, and a page
  * is an address that says the same thing tomorrow.
  */
-export const COMMIT_ID_SHAPE = /^[0-9a-f]{40}$/;
+export const COMMIT_ID_SHAPE = new RegExp(`^[0-9a-f]{${OBJECT_ID_HEX_DIGITS}}$`);
 
 /** My work's sections below its queue. */
 export type MeSection =

@@ -39,6 +39,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CHANGE_PART_PAGE } from "~/contract/code.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged, type Paged } from "~/lib/usePaged.ts";
 import {
@@ -61,9 +62,6 @@ import {
  * which asks again at once. Every part follows the detail (the file's doc).
  */
 export const CHANGE_POLL_MS = 60_000;
-/** The most rows a part's page reads: the engine's own bound for the conversation's parts. */
-export const PART_PAGE = 200;
-
 /** A part of a change, as the page asks for it. */
 export type ChangePartName =
   "reviewers" | "comments" | "reviews" | "findings" | "standing" | "files" | "diff";
@@ -79,7 +77,7 @@ export function changePartParams(
     name: change.repo,
     change: change.number,
     part,
-    ...(listed ? { limit: PART_PAGE } : {}),
+    ...(listed ? { limit: CHANGE_PART_PAGE } : {}),
     ...extra,
   };
 }
@@ -229,8 +227,8 @@ export interface StandingRead {
  * findings part pages the change's whole history oldest first, so a
  * reviewer's NEWEST standing findings were past its first page. The engine
  * keeps at most 1 024 of them a reviewer (`gitlet.MaxStandingFindings`), six
- * pages of {@link PART_PAGE}. None for a reader bound to no seat, who raised
- * none.
+ * pages of {@link CHANGE_PART_PAGE}. None for a reader bound to no seat, who
+ * raised none.
  */
 export function useStandingFindings(change: CodeChangeDetail, handle: string): StandingRead {
   const [attempt, setAttempt] = useState(0);
@@ -258,7 +256,7 @@ export function useStandingFindings(change: CodeChangeDetail, handle: string): S
               name: repo,
               change: number,
               part: "standing",
-              limit: PART_PAGE,
+              limit: CHANGE_PART_PAGE,
               ...(cursor ? { cursor } : {}),
             },
             abort.signal,

@@ -90,11 +90,17 @@ type NewMessage struct {
 
 // sealPage seals a page chip's title for one record, or answers empties for
 // none.
+//
+// THE TITLE IS HELD TO THE WIRE'S OWN BOUND ([wire.PageTitleMaxBytes]), never
+// to a conversation title's: the chip is the page context's title, which the
+// wire took at its own bound before the turn opened, so a tighter bound here
+// refused the turn of every question asked on a page with a long title in a
+// script of three bytes a character.
 func (w *Writer) sealPage(page *wire.PageChip, aad string) (title, screen string, err error) {
 	if page == nil {
 		return "", "", nil
 	}
-	if err = checkText("the page chip's title", page.Title, TitleMaxBytes); err != nil {
+	if err = checkText("the page chip's title", page.Title, wire.PageTitleMaxBytes); err != nil {
 		return "", "", err
 	}
 	if err = checkText("the page chip's screen", page.Screen, TitleMaxBytes); err != nil {

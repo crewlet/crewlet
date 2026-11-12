@@ -43,6 +43,7 @@ const KIND_WORDS: Record<AssistantResourceRef["kind"], string> = {
   schedule: "schedule",
   view: "view",
   room: "room",
+  atlas_entry: "entry",
 };
 
 /** What a selected record is called: the screen's noun, or its kind's. */

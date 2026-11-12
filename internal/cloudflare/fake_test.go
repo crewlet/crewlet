@@ -66,6 +66,13 @@ type fakeCloudflare struct {
 	tokens map[string]*fakeToken
 	seq    int
 
+	// accountName is what the account is called, records each zone's DNS
+	// records and packs each zone's certificate packs, by zone id: what the
+	// atlas reads.
+	accountName string
+	records     map[string][]map[string]any
+	packs       map[string][]map[string]any
+
 	provisionerStatus  string
 	provisionerExpires string
 	provisionerOwn     []cloudflare.Policy
@@ -97,6 +104,7 @@ var (
 		"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read", "Cache Settings Read",
 		"Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read", "Cache Purge",
 		"Cache Settings Write", "Zone Settings Write", "Response Compression Write", "Zone WAF Write",
+		"Zone Transform Rules Read", "Zone Transform Rules Write",
 	}
 	accountGroups = []string{
 		"Account Analytics Read", "Account Settings Read", "Account API Tokens Write", "Account API Tokens Read",
@@ -201,6 +209,24 @@ func (f *fakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch route {
+	case "account":
+		f.ok(w, map[string]any{"id": testAccount, "name": f.accountName, "type": "standard"}, nil)
+	case "dns":
+		rows := make([]any, 0, len(f.records[id]))
+		for _, r := range f.records[id] {
+			rows = append(rows, r)
+		}
+		f.page(w, r, rows)
+	case "packs":
+		if r.URL.Query().Get("status") != "all" {
+			f.fail(w, http.StatusBadRequest, 1001, "status=all is what lists every pack")
+			return
+		}
+		rows := make([]any, 0, len(f.packs[id]))
+		for _, p := range f.packs[id] {
+			rows = append(rows, p)
+		}
+		f.page(w, r, rows)
 	case "verify":
 		f.ok(w, map[string]any{"id": provisionerID, "status": f.provisionerStatus,
 			"expires_on": f.provisionerExpires}, nil)
@@ -302,6 +328,18 @@ func (f *fakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
 func (f *fakeCloudflare) route(method, path string) (string, string) {
 	if path == "/zones" && method == http.MethodGet {
 		return "zones", ""
+	}
+	if path == "/accounts/"+testAccount && method == http.MethodGet {
+		return "account", ""
+	}
+	if zone, rest, ok := strings.Cut(strings.TrimPrefix(path, "/zones/"), "/"); ok && method == http.MethodGet &&
+		strings.HasPrefix(path, "/zones/") {
+		switch rest {
+		case "dns_records":
+			return "dns", zone
+		case "ssl/certificate_packs":
+			return "packs", zone
+		}
 	}
 	rest, ok := strings.CutPrefix(path, "/accounts/"+testAccount+"/tokens")
 	if !ok {

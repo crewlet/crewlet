@@ -23,9 +23,14 @@ import (
 // said — [nats.ErrNoResponders] or [nats.ErrTimeout] where any request heard
 // one, since each names why nobody replied — and otherwise ctx's own error.
 //
-// A WRITE IS NEVER ASKED THIS WAY: its reply is HELD until the object it made
-// has a leader ([AskTerm]), and a second create sent while the first is held
-// is a second write, so it asks through [Timing.Ask].
+// A WRITE IS NEVER ASKED THIS WAY when its reply is HELD or its repeat is a
+// second fact: a create's reply is held until the object it made has a leader
+// ([AskTerm]), and a second create sent while the first is held is a second
+// write, so it asks through [Timing.Ask]. A write with neither is asked as a
+// read is, and there is one: internal/learning/memsync's hydration barrier, a
+// publish the stream answers once it has stored it, or never, to a subject the
+// stream keeps one message of, so a second copy replaces the first rather than
+// adding a fact.
 //
 // # And never past t.Lookup, whatever its caller set
 //
@@ -112,8 +117,9 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 	return ReadBoundedWith(ctx, Clustered(false).Timing(), bound, one, again)
 }
 
-// hedge asks one metadata read until something answers it, keeping every
-// request it has sent OUTSTANDING while it sends the next.
+// hedge asks one metadata read, or the one write asked as a read is
+// ([ReadWith]), until something answers it, keeping every request it has sent
+// OUTSTANDING while it sends the next.
 //
 // # Why a request is never abandoned
 //
@@ -145,7 +151,8 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 // processed all the same, and what the hedge keeps beside each is a reply
 // this side still listens for. For a read that was ONE request until it was
 // hedged ([ReadBoundedWith]: coordination's, the object store's, a listing's
-// pages, the backup's) it is more: three requests inside a deadline-less
+// pages, the backup's, and memsync's barrier, a write, each request a publish
+// the stream stores) it is more: three requests inside a deadline-less
 // read's five seconds where it sent one, and up to fifteen under the ceiling
 // for a caller that waits that long. So while a leader's API queue answers
 // slower than t.ReadTerm + t.ReAsk — an election's aftermath, a stall — every

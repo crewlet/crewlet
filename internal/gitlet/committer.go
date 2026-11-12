@@ -315,6 +315,13 @@ type Committer struct {
 	// wall clock's monotonic reading, never Now (the decide's clock, which a
 	// caller may pin), and a test's own (export_test.go).
 	clock func() time.Time
+	// withdrawAfter, when set, arms a queued push's withdrawal in place of a
+	// timer ([Committer.withdrawal]) — a field so the suite reads what the
+	// withdrawal is armed with and fires it itself (export_test.go): the
+	// moment it fires is the claim, and on the machine's clock a case could
+	// only wait it out, which tells no timer armed a second late from one
+	// armed on time. Nil, as in production, is a timer.
+	withdrawAfter func(d time.Duration) (fire <-chan time.Time, stop func())
 	// nodeBytes is CommitterNodeBytes, and nodeProposals
 	// CommitterNodeProposals; each a test's smaller value (export_test.go).
 	nodeBytes     int
@@ -716,6 +723,18 @@ func (c *Committer) queue(ctx context.Context, q *queued) answered {
 	return c.await(ctx, q)
 }
 
+// withdrawal arms a queued push's withdrawal to fire after d: the suite's
+// withdrawAfter where a case set it, and otherwise a timer, stopped by its
+// stop. A NIL HOOK IS PRODUCTION'S TIMER, so no way of building a Committer
+// leaves a queued push nothing to withdraw it by.
+func (c *Committer) withdrawal(d time.Duration) (<-chan time.Time, func()) {
+	if c.withdrawAfter != nil {
+		return c.withdrawAfter(d)
+	}
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
+}
+
 // await is a queued push's wait for its answer, on its caller's goroutine.
 //
 // THE DEADLINE IS WATCHED WHILE THE PUSH WAITS, here: the repository's
@@ -737,9 +756,9 @@ func (c *Committer) queue(ctx context.Context, q *queued) answered {
 func (c *Committer) await(ctx context.Context, q *queued) answered {
 	var expire <-chan time.Time
 	if !q.deadline.IsZero() {
-		timer := time.NewTimer(q.deadline.Sub(q.arrived) - CommitBudget - ReplyMargin)
-		defer timer.Stop()
-		expire = timer.C
+		fire, stop := c.withdrawal(q.deadline.Sub(q.arrived) - CommitBudget - ReplyMargin)
+		defer stop()
+		expire = fire
 	}
 	for {
 		select {

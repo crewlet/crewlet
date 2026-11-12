@@ -415,6 +415,45 @@ func TestUnitChannelPatternIsOneRule(t *testing.T) {
 	}
 }
 
+// A UNIT'S ID IS ONE RULE, wherever it is spelled: [UnitIDPattern], which the
+// validator compiles; the js tag on Unit.id, a second spelling of it because a
+// struct tag cannot name a constant; [MaxUnitID], the pattern's bound and
+// where [MintUnitID] cuts a long name; and the sentence a refused reference is
+// told ([unitKeyRule]). Drift the tag and an editor passes an id every node
+// refuses, or underlines one the engine runs; drift the bound and the engine
+// mints a key its own validator refuses, or says a width it does not hold.
+//
+// Mutation: change the tag, the pattern's `{0,63}`, MaxUnitID or the rule's
+// figure on its own, and this fails.
+func TestUnitIDPatternIsOneRule(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	def, ok := defs["Unit"].(map[string]any)
+	if !ok {
+		t.Fatal("the company schema's $defs has no Unit")
+	}
+	props, _ := def["properties"].(map[string]any)
+	field, ok := props["id"].(map[string]any)
+	if !ok {
+		t.Fatal("Unit has no id")
+	}
+	if got := ownPattern(t, field); got != UnitIDPattern {
+		t.Fatalf("Unit.id pattern = %v, and UnitIDPattern is %q", got, UnitIDPattern)
+	}
+	if !entityID().MatchString(strings.Repeat("a", MaxUnitID)) ||
+		entityID().MatchString(strings.Repeat("a", MaxUnitID+1)) {
+		t.Errorf("UnitIDPattern %q does not stop at MaxUnitID, %d characters",
+			UnitIDPattern, MaxUnitID)
+	}
+	long := strings.Repeat("platform ", 2*MaxUnitID)
+	if got := MintUnitID(long); len(got) > MaxUnitID || !entityID().MatchString(got) {
+		t.Errorf("MintUnitID of a long name is %q, which the validator refuses", got)
+	}
+	if want := fmt.Sprintf("up to %d characters", MaxUnitID); !strings.Contains(unitKeyRule, want) {
+		t.Errorf("unitKeyRule says %q, and a unit's key is %s", unitKeyRule, want)
+	}
+}
+
 // closedSet reads a text field's closed set back out of its fragment: the
 // STRING members of its enum, wherever the fragment puts it, less the empty
 // string that spells "unset".

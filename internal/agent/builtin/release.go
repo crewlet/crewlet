@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -307,6 +308,21 @@ func (t *askToMerge) Act() delegated.Kind { return delegated.KindPRMerge }
 // which the digest binds already.
 func (t *askToMerge) Binding(*turnctx.Turn, map[string]any) string { return "" }
 
+// Subject is the change on its code host, the head and the method: the same
+// merge asked again with another reason is the same request.
+func (t *askToMerge) Subject(_ *turnctx.Turn, args map[string]any) string {
+	a, refusal := t.deps.mergeAskOf(t.Name(), args)
+	if refusal != nil {
+		return ""
+	}
+	host, ref := "gitlet", a.ref
+	if a.github {
+		// GitHub's owner and repository names are case-insensitive.
+		host, ref = "github", strings.ToLower(a.ref)
+	}
+	return delegated.Subject(delegated.KindPRMerge, host, ref, a.head, a.method)
+}
+
 // mergeAsk is one ask_to_merge call, read and held to its bounds: a Gitlet
 // change by its repository's name and number, or a GitHub pull request.
 type mergeAsk struct {
@@ -567,6 +583,26 @@ func (t *askToDeploy) Act() delegated.Kind { return delegated.KindDeploy }
 
 // Binding is empty: everything a deploy is approved for is its arguments.
 func (t *askToDeploy) Binding(*turnctx.Turn, map[string]any) string { return "" }
+
+// Subject is the repository on its code host, the commit, the environment and
+// the set of changes: the rollback and the reason are the requester's words.
+func (t *askToDeploy) Subject(_ *turnctx.Turn, args map[string]any) string {
+	a, refusal := t.deps.deployAskOf(t.Name(), args)
+	if refusal != nil {
+		return ""
+	}
+	host, repo := "gitlet", a.repo
+	if a.github {
+		host, repo = "github", strings.ToLower(a.pulls.String())
+	}
+	changes := slices.Clone(a.changes)
+	slices.Sort(changes)
+	fields := []string{host, repo, a.commit, a.environment}
+	for _, n := range changes {
+		fields = append(fields, strconv.FormatInt(n, 10))
+	}
+	return delegated.Subject(delegated.KindDeploy, fields...)
+}
 
 // deployAsk is one ask_to_deploy call, read and held to its bounds.
 type deployAsk struct {

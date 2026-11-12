@@ -23,7 +23,7 @@ import {
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import type { ArtifactListItem } from "~/protocol/index.ts";
-import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
+import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import { overWords, utf8Bytes } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";

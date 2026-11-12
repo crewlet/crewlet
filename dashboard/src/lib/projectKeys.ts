@@ -28,7 +28,7 @@ import { createContext, createElement, useContext, useMemo, type ReactNode } fro
 import { useServicesAsk } from "./services.ts";
 import { useQuery } from "./useQuery.ts";
 import { useViewer } from "./viewer.ts";
-import { PROJECT_PAGE } from "./work.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
 
 const NONE: ReadonlySet<string> = new Set();
 

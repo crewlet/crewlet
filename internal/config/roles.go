@@ -941,7 +941,8 @@ type Unit struct {
 	// THE PATTERN IS ON THE FIELD as well as in the validator, because the
 	// generator emits it into the published schema — and a schema that
 	// accepts ids the engine refuses is exactly the drift the schema-diff
-	// test cannot see.
+	// test cannot see. A tag cannot name [UnitIDPattern], so
+	// TestUnitIDPatternIsOneRule holds the two to one spelling.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[a-z][a-z0-9_-]{0,63}$" desc:"Stable identity for this unit, and how lead, manages and unit references key it. Minted from the name at import when unset. Lowercase, starts with a letter."`
 
 	// Type is an informational label — department, team, squad, pod, or
@@ -1049,8 +1050,8 @@ func (u *Unit) validate(path Path) error {
 	if id := strings.TrimSpace(u.ID); id != "" && !entityID().MatchString(id) {
 		p.add(at(path, "id"), ErrShape,
 			"%q is not a unit id: lowercase letters, digits, `-` and `_`, "+
-				"starting with a letter, up to 64 characters. It is chosen once "+
-				"and read by nobody, so it can be short and dull", id)
+				"starting with a letter, up to %d characters. It is chosen once "+
+				"and read by nobody, so it can be short and dull", id, MaxUnitID)
 	}
 	// THE RAW VALUE, deliberately unlike the id above: that one is trimmed
 	// here and trimmed again by [Unit.Unit], so a padded id normalises
@@ -1089,8 +1090,24 @@ func (u *Unit) validate(path Path) error {
 // Compiled at first use, not at init: Gitlet's push hook is this
 // binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 var entityID = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+	return regexp.MustCompile(UnitIDPattern)
 })
+
+// UnitIDPattern is [entityID]'s grammar as text, bounded at [MaxUnitID]
+// characters.
+//
+// EXPORTED FOR THE OTHER SPELLINGS, each held to it by a test: the js tag on
+// [Unit.ID], which a struct tag cannot write as a constant
+// (TestUnitIDPatternIsOneRule), and the org builder's, which mints a new
+// unit's key in it and refuses one typed outside it before the add is
+// recorded (`UNIT_ID_PATTERN`, TestTheOrgBuilderKeysAUnitByTheEnginesGrammar).
+// Written with no flag and no escape, so the dashboard compiles the same text.
+const UnitIDPattern = `^[a-z][a-z0-9_-]{0,63}$`
+
+// MaxUnitID is the longest a unit's id may be: [UnitIDPattern]'s bound, and
+// where [MintUnitID] cuts a long name's slug, as the org builder cuts the key
+// it offers (`MAX_UNIT_ID`).
+const MaxUnitID = 64
 
 // unitChannel is what a unit's channel may look like.
 //
@@ -1155,8 +1172,8 @@ func MintUnitID(name string) string {
 	case slug[0] < 'a' || slug[0] > 'z':
 		slug = "unit-" + slug
 	}
-	if len(slug) > 64 {
-		slug = strings.TrimRight(slug[:64], "-_")
+	if len(slug) > MaxUnitID {
+		slug = strings.TrimRight(slug[:MaxUnitID], "-_")
 	}
 	return slug
 }

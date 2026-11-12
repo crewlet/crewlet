@@ -315,7 +315,7 @@ func TestTwoReadsOfOneToolAreToldApart(t *testing.T) {
 	// record are the arguments that name the record an entity read is of,
 	// told apart by its own kind and id.
 	record := map[string]bool{"item": true, "page": true, "artifact": true, "key": true,
-		"handle": true, "channel": true, "message_id": true}
+		"handle": true, "channel": true, "message_id": true, "entry": true}
 	said := cards.Options{Room: func(ref string) (cards.Room, bool) {
 		return cards.Room{With: "the people of " + ref}, true
 	}}

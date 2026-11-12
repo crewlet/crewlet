@@ -14,6 +14,7 @@ export type AtlasKind =
   | "domain"
   | "hostname"
   | "endpoint"
+  | "certificate"
   | "service"
   | "host"
   | "datastore"
@@ -44,6 +45,7 @@ export type AtlasRelation =
   | "built_from"
   | "deployed_by"
   | "monitored_by"
+  | "secured_by"
   | "belongs_to"
   | "documented_in"
   | "owned_by";
@@ -80,6 +82,7 @@ export type AtlasFact =
   | "vendor"
   | "capability"
   | "account_ref"
+  | "account_name"
   | "site"
   | "region"
   | "integration"
@@ -110,7 +113,12 @@ export type AtlasFact =
   | "server_version"
   | "tool_count"
   | "oauth_issuer"
-  | "sign_in_expires";
+  | "sign_in_expires"
+  | "covers"
+  | "expires"
+  | "issuer"
+  | "validity"
+  | "certificate_type";
 
 /** The grammar a fact's value is written in (`atlas.ValueType`). */
 type AtlasValueType =

@@ -107,7 +107,11 @@ func valuePiece(value any, limit int) (Piece, bool) {
 }
 
 // CallPieces is every payload [FormatCalls] would need fitted for these calls
-// under these options, each once.
+// under these options, each once. Of a [FormatCallGroups] render it is the
+// pieces of the groups' concatenation (slices.Concat), which shows exactly the
+// calls the groups show, since one read cap runs across the groups in order as
+// it runs down one list. Named group by group, a read the cap leaves out of a
+// later group would still be fitted, its rewrite spent and never shown.
 func CallPieces(calls []Call, opts FormatOptions) []Piece {
 	var out []Piece
 	seen := map[Piece]bool{}

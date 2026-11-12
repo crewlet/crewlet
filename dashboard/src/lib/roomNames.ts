@@ -4,12 +4,13 @@
  * room it is (`components/InlineToken.tsx`) and the room finder can offer one
  * nobody has spoken in (`routes/chatlet/Browse.tsx`).
  *
- * WHY A ROOM NEEDS ITS NAME. A room's name is any `[a-z0-9][a-z0-9_-]{0,63}`,
- * so `#e2e`, `#b2b` and `#2fa` are spelled exactly as a colour and `#2026` and
- * `#911` as an issue's number. Prose names rooms that way, a seat's and a
- * model's alike, and only the company's own rooms can say which a sentence
- * means: a name this holds is a room, and every other `#word` is read by its
- * shape, as it would be in a company with no chat of its own.
+ * WHY A ROOM NEEDS ITS NAME. A room's name is anything the engine's grammar
+ * admits (`CHANNEL_NAME_PATTERN`: a lowercase letter or digit, then up to 63
+ * of those, `-` and `_`), so `#e2e`, `#b2b` and `#2fa` are spelled exactly as
+ * a colour and `#2026` and `#911` as an issue's number. Prose names rooms that
+ * way, a seat's and a model's alike, and only the company's own rooms can say
+ * which a sentence means: a name this holds is a room, and every other `#word`
+ * is read by its shape, as it would be in a company with no chat of its own.
  *
  * WHAT IT READS: `chat_room_names`, every named room the reader may read,
  * joined or not (a public room and a unit's room are any seat's), the archived

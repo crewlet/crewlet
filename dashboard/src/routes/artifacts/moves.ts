@@ -19,7 +19,7 @@
 
 import { useCallback, useState } from "react";
 import { useToast } from "@crewlethq/ui";
-import { ARTIFACT_MOVE_MAX_ITEMS } from "~/contract/artifacts.ts";
+import { ARTIFACT_MOVE_MAX_ITEMS } from "~/contract/artifactsworkspace.ts";
 import { asSentence, plural } from "~/lib/format.ts";
 import { keyedWrite, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { fileArtifact, fileArtifacts } from "~/lib/artifacts/api.ts";
