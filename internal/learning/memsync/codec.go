@@ -47,6 +47,16 @@
 // answer is a row whole wherever it holds one past the replay, and only a copy
 // behind it leaves one there.
 //
+// A PULL AT A TIME, bounded in rows and in bytes, each written in one
+// transaction: at most fetchBatch rows, which sets a table's round trips, and
+// at most one message at the transport's limit and the room the broker counts
+// beside it ([Syncer.pullBytes]), which is what a hydration holds of the
+// changelog's rows at once — beside, where a table's replay ran on a copy
+// behind the leader, the one row the leader answers with. Bounded by its rows
+// alone, one pull held up to 256 rows of up to 8 MiB each
+// (crewlet/crewlet#1052). A row larger than this node's pull is refused by
+// name, never read as a copy that stalled.
+//
 // # What is deliberately not replicated
 //
 // DELETES. The lifecycle drops rows constantly — mid-state turns, tool-free

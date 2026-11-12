@@ -40,13 +40,15 @@ import (
 // carried tables takes 35 before any table's second fetch, and a seat with
 // none 29, where one replay of the whole seat took 6: 3.5 s at 100 ms a round
 // trip, a leaf link across regions; 175 ms at 5 ms; 35 ms at 1 ms. Past
-// those, a fetch for each further 256 rows of a table ([fetchBatch]), and the
-// bytes the rows carry. No round trip but a fetch carries a row: the leader's
-// word that nothing lies past a replay is an answer of no message. Only for a
-// table whose replay ran on a copy behind the leader is the answer a row — the
-// first the copy had not applied, whole and a third larger, which crosses the
-// link once more beside its replay — and the replay then spends a fetch
-// waiting for the copy to apply it, and another word of the leader's.
+// those, a fetch for each further 256 rows of a table ([fetchBatch]) or,
+// where its rows are large, for each further pull's bytes
+// ([Syncer.pullBytes]), and the bytes the rows carry. No round trip but a
+// fetch carries a row: the leader's word that nothing lies past a replay is an
+// answer of no message. Only for a table whose replay ran on a copy behind the
+// leader is the answer a row — the first the copy had not applied, whole and a
+// third larger, which crosses the link once more beside its replay — and the
+// replay then spends a fetch waiting for the copy to apply it, and another
+// word of the leader's.
 //
 // SO FIFTEEN SECONDS STAYS. On the brokers it was chosen for, the replays
 // cost under a fifth of a second of it. Across a 100 ms link they cost 2.9 s
@@ -72,14 +74,39 @@ const hydrateWait = 15 * time.Second
 // so only a delete under way as [hydrateWait] runs out runs past it.
 const consumerCleanupTimeout = 5 * time.Second
 
-// fetchBatch is how many rows one replay pull asks for.
+// fetchBatch is the most rows one replay pull asks for. It sets the ROUND
+// TRIPS a table's rows take, where the bytes every pull is bounded by beside it
+// ([Syncer.pullBytes]) set the MEMORY a pull holds.
 //
-// It sets the replay's round trips: 256 clears a seat with a few hundred
-// episodes in a couple of pulls. It is no bound on memory: a pull holds up to
-// this many rows whole, and a row is bounded only by the transport
-// ([exportPageBytes]), so where a publish holds a page, a pull can hold up to
-// 2 GiB on the embedded broker (crewlet/crewlet#1052).
+// A pull ends at whichever bound it meets first. The rows a seat mostly holds,
+// a diary note or an episode with the vector it carries (8 KiB at 1 536
+// dimensions), are some 10 KiB, so 256 of them are about 2.5 MiB, inside a
+// pull's bytes, and their count sets their pulls: a few hundred episodes take
+// a couple, and a year of them, about eighteen thousand, 70. That is 70 ms of
+// round trips at 1 ms a round trip, 0.35 s at 5 ms, and 7 s across a 100 ms
+// leaf link, of the 11.5 s [hydrateWait] leaves a seat's rows there. Rows of
+// more than 32 KiB on average, episodes with long asks, fill a pull's bytes
+// first, at a pull per 8 MiB on the embedded broker. A pull's count is its
+// transaction's too ([Syncer.replay]), which holds this store's write while it
+// runs, and 256 of the common rows keep that to a few MiB of writes.
+//
+// NOT A BOUND ON MEMORY: a row is bounded only by the transport, so a pull
+// bounded by its count alone held up to 256 rows of 8 MiB each, 2 GiB on the
+// embedded broker, inside seat acquisition (crewlet/crewlet#1052).
 const fetchBatch = 256
+
+// deliveryOverhead is what the broker counts against a pull's bytes beside a
+// message's headers and payload: its subject, and the acknowledgement subject
+// it is delivered with (nats-server's consumer.go counts the four together).
+// A row's subject is at most 111 bytes: `crewlet.memory.`, a seat's
+// 36-character id, the longest table's name and a hash of 32 hex digits
+// ([table.subject]). Its acknowledgement subject is a couple of hundred:
+// `$JS.ACK.`, the broker's domain, an account's 8-character hash, the stream's
+// and the consumer's names, and five counters of up to twenty digits each.
+// Four KiB holds both with room for any domain, and is the room
+// statelog.MaxDeliveryBytes keeps for the same two beside a state log's
+// largest record.
+const deliveryOverhead = 4 << 10
 
 // exportPageBytes is how much of a seat's memory one read of a table holds
 // before it is published: rows are read in watermark order until their
@@ -457,9 +484,10 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 // replay carries one table of a seat's memory into this node's store, and says
 // how many rows it wrote: every row of the table the changelog holds for the
 // seat, read until the changelog's leader holds none past the last the replay
-// delivered ([Syncer.pastReplay]), a fetch at a time, each fetch written in
-// one transaction. A row whose parent the store does not hold is not written,
-// and is counted in orphaned instead ([table.parent]).
+// delivered ([Syncer.pastReplay]), a fetch at a time, each bounded in rows and
+// in bytes ([fetchBatch], [Syncer.pullBytes]) and written in one transaction.
+// A row whose parent the store does not hold is not written, and is counted in
+// orphaned instead ([table.parent]).
 //
 // # Why the leader is asked, and what
 //
@@ -564,14 +592,39 @@ func (s *Syncer) replay(ctx context.Context, handle string, ref seatRef, spec ta
 		// ON THE HYDRATION'S OWN CONTEXT, so the fetches share its one
 		// budget: each used to wait a whole hydrateWait of its own, so a
 		// replay that stalled twice held seat acquisition for twice the
-		// bound this package documents.
-		batch, err := consumer.Fetch(want, jetstream.FetchContext(ctx))
+		// bound this package documents. AND BOUNDED IN BYTES as well as in
+		// rows, because a pull is held whole until its transaction has
+		// written it ([Syncer.pullBytes]).
+		bound := s.pullBytes()
+		batch, err := consumer.Fetch(want, jetstream.FetchContext(ctx),
+			jetstream.FetchMaxBytes(bound))
 		if err != nil {
 			return carried, fmt.Errorf("memsync: replay %s's %s: %w", handle, spec.name, err)
 		}
 		rows, err := received(batch, handle, spec, &reached, &pending)
 		if err != nil {
 			return carried, err
+		}
+		if len(rows) == 0 && pending > 0 && ctx.Err() == nil {
+			// A ROW LARGER THAN THIS NODE'S PULLS CARRY. The copy holds
+			// more of the table's rows and the budget is not spent, so
+			// the pull ended with none because the next is larger than
+			// its bytes: the broker ends such a pull rather than send it
+			// (`409 Message Size Exceeds MaxBytes`, which the client
+			// reads as the pull's ordinary end), and every pull of this
+			// bound ends the same way, on every node behind this limit,
+			// at every sweep. Neither a copy behind its leader nor a
+			// spent budget, so it is said as what it is, naming the
+			// limit to align ([Syncer.pullBytes]).
+			return carried, fmt.Errorf("memsync: replay %s's %s: %w: the copy serving it "+
+				"holds %d more of the table's rows and sent none in a pull of up to %d "+
+				"bytes, one message at this node's connection's max_payload of %d bytes "+
+				"and the room the broker counts beside it. Such a row was published "+
+				"through a server, an account or a user that carries more than this "+
+				"node's connection does: every node's connection to the broker must "+
+				"carry the same max_payload (docs/guides/deployment.md, %q)",
+				handle, spec.name, errRowPastPull, pending, bound, bound-deliveryOverhead,
+				"The largest message every server must carry")
 		}
 		if len(rows) == 0 {
 			// THE BUDGET RAN OUT WITH THE LEADER HOLDING A ROW THE COPY
@@ -622,6 +675,55 @@ func (s *Syncer) replay(ctx context.Context, handle string, ref seatRef, spec ta
 		}
 	}
 }
+
+// pullBytes is the byte bound of every replay pull: the largest message this
+// node's connection to the broker carries, its max_payload, and the room the
+// broker counts beside it ([deliveryOverhead]).
+//
+// It bounds what a hydration HOLDS of the changelog's rows. A pull is held
+// whole until its transaction has written it, and a hydration makes one at a
+// time ([Syncer.replay]), so it holds one pull's bytes of rows at once: 8 MiB
+// and 4 KiB on the embedded broker, where a pull bounded by its row count
+// alone ([fetchBatch]) held up to 2 GiB. Beside it, and only for a table whose
+// replay ran on a copy behind the leader, it holds the leader's word on what
+// lies past the replay ([Syncer.pastReplay]): the first row that copy lacked,
+// as a reply a third larger than the row and the row decoded out of it, until
+// its sequence is read.
+//
+// # Never below the largest row the changelog can hold
+//
+// The broker sends a pull nothing past what is left of its bytes: it ends the
+// pull instead (`409 Message Size Exceeds MaxBytes`, which the client reads as
+// the pull's ordinary end). So a pull bounded below its next row ends with no
+// row, and so does every pull after it with the same bound, and the seat is
+// refused ([errRowPastPull]), on every node at every sweep for as long as the
+// row is on the changelog. One message at the transport's limit, whole, is the
+// least a pull can be bounded at, and it is what this is: a larger bound would
+// save only the pulls of rows that large, and hold more of them at once.
+//
+// # Read off the connection, at each pull, never fixed at the contract
+//
+// Nothing holds the changelog's rows to the contract's 8 MiB
+// (queue.MaxPayloadBytes): internal/queue/jetstream provisions the changelog
+// with no largest message of its own, so a row is bounded by the max_payload
+// of the connection that published it. On the embedded broker that is the
+// contract, which the engine configures every member and leaf at. On an
+// external one it is what the servers announce, and the engine refuses only a
+// limit below the contract, so servers an operator runs at 16 MiB take rows of
+// up to 16 MiB. A bound fixed at the contract would refuse every such row, and
+// its seat, on every node at every sweep. This node's own limit holds the
+// largest row any node published wherever every server announces the same
+// limit, which the deployment guide asks of an external broker ("The largest
+// message every server must carry"). Read at each pull, so a connection that
+// has moved to another member is held to that member's.
+func (s *Syncer) pullBytes() int {
+	return int(s.js.Conn().MaxPayload()) + deliveryOverhead
+}
+
+// errRowPastPull is a pull that ended with no row while its copy held more of
+// the table's rows and the hydration's budget was not spent: the next row is
+// larger than a pull of this node's bound carries ([Syncer.pullBytes]).
+var errRowPastPull = errors.New("the next row is larger than a pull this node's connection carries")
 
 // errMisroutedRow is a row a replay read on one table's subjects whose body
 // names another table ([received]).

@@ -2,6 +2,7 @@ package memsync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -204,5 +205,42 @@ func TestARowAtTheTransportsLimitHydratesAcrossALeafLink(t *testing.T) {
 				t.Errorf("the note arrived with %d bytes of content, want its %d", length, want)
 			}
 		})
+	}
+}
+
+// A ROW LARGER THAN THIS NODE'S CONNECTION CARRIES IS REFUSED AS THAT.
+//
+// A pull is bounded at one message at this node's connection's max_payload,
+// and the broker sends a pull nothing past what is left of its bytes: it ends
+// the pull with none (`409 Message Size Exceeds MaxBytes`, which the client
+// reads as the pull's ordinary end). So a row published through a server, an
+// account or a user carrying more than this node's connection is never sent to
+// it, at any pull of any sweep, and the seat is refused there. That refusal
+// read as a copy behind its leader whose budget ran out, said a second into a
+// fifteen-second budget and naming no limit, so nothing pointed at the setting
+// to align. It is refused by name, naming the limit. The fleet here is a
+// member carrying 128 KiB a message and a leaf carrying 64 KiB, and the row is
+// a note of 96 KiB, published through the member; the link stays up, since
+// the broker never sends the row across it.
+//
+// Mutation: read a pull that ended with no row while its copy held more as a
+// copy that stalled, and this goes red.
+func TestARowLargerThanThisNodesConnectionCarriesIsRefusedAsThat(t *testing.T) {
+	t.Parallel()
+	member, leaf := leafFleet(t, 128<<10, 64<<10)
+	note := noteOfSize(t, "past-the-leaf", 96<<10)
+	publishOn(t, member, registered(t, "agent_diary").subject(seat.AgentID, note.Values), note)
+
+	satellite, err := New(openStore(t), embeddedOn(t, leaf), func(string) string { return seat.AgentID }, true)
+	if err != nil || satellite == nil {
+		t.Fatalf("New: %v", err)
+	}
+	carried, err := satellite.Hydrate(t.Context(), seat.Handle)
+	if !errors.Is(err, errRowPastPull) {
+		t.Fatalf("a row larger than the satellite's connection carries answered (%d, %v), want "+
+			"the seat refused for a row past its pull's bound", carried, err)
+	}
+	if !strings.Contains(err.Error(), "max_payload of 65536 bytes") {
+		t.Errorf("the refusal does not name the satellite's limit: %v", err)
 	}
 }

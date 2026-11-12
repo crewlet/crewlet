@@ -34,10 +34,26 @@ func broker(t *testing.T) *nats.Conn {
 // that stands between a read and the stream's leader ([jsapitest]).
 func brokerServer(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
+	return brokerServerCarrying(t, 0)
+}
+
+// brokerCarrying is [broker] whose server holds every connection to messages
+// of maxPayload bytes, its max_payload, for a case about the largest message
+// the transport carries.
+func brokerCarrying(t *testing.T, maxPayload int32) *nats.Conn {
+	t.Helper()
+	_, conn := brokerServerCarrying(t, maxPayload)
+	return conn
+}
+
+// brokerServerCarrying is [brokerServer] at a max_payload of maxPayload bytes,
+// and at nats-server's own default, a mebibyte, where it is 0.
+func brokerServerCarrying(t *testing.T, maxPayload int32) (*server.Server, *nats.Conn) {
+	t.Helper()
 	dir := t.TempDir()
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "memsync-test", JetStream: true, Port: -1,
-		DontListen: true, StoreDir: dir,
+		DontListen: true, StoreDir: dir, MaxPayload: maxPayload,
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

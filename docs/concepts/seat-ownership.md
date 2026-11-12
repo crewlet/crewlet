@@ -314,6 +314,27 @@ a leaf link to another region, at 100 ms a round trip, about three and a half
 seconds before the rows' own bytes, so a seat whose rows take longer than the
 other eleven and a half to cross such a link is refused there.
 
+**A replay holds one pull of rows at a time, bounded in rows and in bytes.**
+A pull asks for at most 256 rows, which sets how many round trips a table's
+rows take, and for at most one message at the broker's limit (its
+`max_payload`, 8 MiB on the embedded broker) with room for the subjects the
+broker counts beside it, which is what a hydration holds of the changelog's
+rows at once. Beside that it holds one more row only where a table's replay
+ran on a copy that was behind: the leader's answer, the row a third larger,
+until its sequence is read. A memory row is bounded only by the broker (an
+episode keeps its ask whole), so a pull bounded by its rows alone held up to
+256 rows of 8 MiB each, 2 GiB, inside seat acquisition
+([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a
+pull nothing past its bytes, so a pull bounded below its next row would be
+sent nothing on every attempt and the seat refused: a row at the broker's limit
+always fits one. The limit is read off the node's own connection rather than
+fixed at 8 MiB, because nothing else bounds a memory row: an external broker
+may carry more, and a row that large is published there. That is why an
+external broker's servers must all
+[carry the same limit](../guides/deployment.md#the-largest-message-every-server-must-carry):
+a node whose connection carries less than the row is refused the seat at
+every sweep, with an error that names its `max_payload` and that setting.
+
 The subject carries the seat's **id**, as its lease and its mailbox do.
 
 Four of the tables name a seat by its handle inside the row rather than by the
