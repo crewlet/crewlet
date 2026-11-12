@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1116,6 +1117,26 @@ func (p Principal) Actor() string {
 		return p.Seat
 	}
 	return p.OperatorID
+}
+
+// WriterKind is what kind of writer p is, in the identity directory's own
+// words, as iam.ActorFor classes a principal: a seat is an agent; a person,
+// through a credential bound to their human seat, is human; a credential bound
+// to nobody is an operator; and the engine's own account, and the zero
+// principal of a request a repository's home asks, which names nobody, are
+// the system. It is the kind [types.WrittenFor.For] holds whom a write is made
+// for to, so a request's own rule ([writtenForInvalid]) and the estate's check
+// before the request is asked anywhere read one answer.
+func (p Principal) WriterKind() iam.ActorKind {
+	switch {
+	case p.Kind == PrincipalAgent:
+		return iam.ActorAgent
+	case p.Kind == PrincipalOperator && p.Seat != "":
+		return iam.ActorHuman
+	case p.Kind == PrincipalOperator:
+		return iam.ActorOperator
+	}
+	return iam.ActorSystem
 }
 
 // RunProvenance is what made a seat's push, as the SERVER stamps it from the

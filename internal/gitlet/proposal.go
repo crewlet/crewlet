@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -93,6 +94,26 @@ type Proposal struct {
 	// the push. It rides the estate's wire as it rides the record, in the
 	// base format ([PushEntry.Change]).
 	Change *ChangeOption `json:"change,omitempty"`
+	// WrittenFor is whom a SEAT'S push is made for (ADR-0109), as
+	// [ChangeProposal.WrittenFor] is: whoever the turn that asked an engine
+	// write works for, handed on by the Gitlet node that built it
+	// ([EngineWrite.WrittenFor]), or stated nobody for a push made for the
+	// seat alone — a coding box's among them, its run's row holding no
+	// carrier for its code writes. A person's states nothing, and so does the
+	// engine's own expiry, which carries nobody. Held to the principal by
+	// [writtenForInvalid]: a push carries no ceiling, its builder having held
+	// it to the write's or the run's already.
+	//
+	// A proposal is no record, so this field takes no versionedFields row. It
+	// crosses the estate's wire to whichever data node decides it, and a node
+	// of a build without it refuses a push carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([Proposal.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 }
 
 // ProposeResult is what became of one proposal.
@@ -448,6 +469,11 @@ func (p Proposal) validFields() error {
 	case len(p.Commands) > MaxCommandsPerPush:
 		return fmt.Errorf("%w: commands: %d, past the %d one push may carry (MaxCommandsPerPush)",
 			ErrInvalidProposal, len(p.Commands), MaxCommandsPerPush)
+	}
+	// WHOM IT IS MADE FOR, held to its pusher: a seat's push states it, and
+	// nobody else's carries anybody ([writtenForInvalid]).
+	if err := writtenForInvalid(p.Principal, p.WrittenFor); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
 	}
 	if err := validCommands(p.Commands); err != nil {
 		return err

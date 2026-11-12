@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -235,6 +236,24 @@ type EngineWrite struct {
 	// Gitlet node, and every Gitlet node asked it reads it: the domain landed
 	// on main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
+	// WrittenFor is whom a SEAT'S write is made for (ADR-0109), as
+	// [ChangeProposal.WrittenFor] is: whoever the turn that asks it works for,
+	// composed by the engine from the call's own bound ceiling, or stated
+	// nobody; a person's states nothing. Held to the principal and the
+	// ceiling by [writtenForUnder]: by Validate, and against its chart by the
+	// Gitlet node that builds the write ([EngineWrite.WrittenForOn]), which
+	// hands it on to the push, the merge or the enqueue it lands.
+	//
+	// A write is no record, so this field takes no versionedFields row. It
+	// crosses the estate's wire to the repository's Gitlet node, and a node of
+	// a build without it refuses a write carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([EngineWrite.UnmarshalJSONFrom]), decided by its ceiling.
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 	// Change is a merge_change's or a rebase_change's change, by its number
 	// on the repository — web!42's 42, the name every change tool and the
 	// `change` read give it — whose row the Gitlet node reads at the caller's
@@ -709,6 +728,12 @@ func (w EngineWrite) Validate() error {
 		if why := w.Ceiling.invalid(w.Principal); why != "" {
 			return fmt.Errorf("%w: %s", ErrInvalid, why)
 		}
+	}
+	// WHOM IT IS MADE FOR, held to the principal and to the ceiling beside
+	// it ([writtenForUnder]); the half only a chart decides is the Gitlet
+	// node's that builds the write ([EngineWrite.WrittenForOn]).
+	if err := writtenForUnder(w.Principal, w.WrittenFor, w.Ceiling, nil); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		var bad *statelog.CallerOpIDError

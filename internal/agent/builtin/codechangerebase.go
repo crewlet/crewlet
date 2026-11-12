@@ -93,9 +93,9 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	repo := cv.g.repo
 	op := opIDFor(cv.g.c.actor, tool, rebaseVerb, repo.ID, args)
-	w := gitlet.EngineWrite{Kind: gitlet.WriteRebaseChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := written(ctx, turn, cv.g.c, gitlet.EngineWrite{Kind: gitlet.WriteRebaseChange, RepoID: repo.ID,
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.SourceRef, ExpectedHead: head,
-		Change: cv.change.Number, Ceiling: cv.g.c.write}
+		Change: cv.change.Number})
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}

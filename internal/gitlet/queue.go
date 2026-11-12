@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -252,7 +253,29 @@ type QueueProposal struct {
 	// it — so this field takes no versionedFields row; it crosses the
 	// estate's wire to whichever data node decides it, and every node asked
 	// it reads it: the domain landed on main with it ([RecordVersion]).
-	Ceiling      *WriteCeiling `json:"ceiling,omitempty"`
+	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
+	// WrittenFor is whom a SEAT'S enqueue or dequeue is made for (ADR-0109),
+	// as [ChangeProposal.WrittenFor] is: whoever the turn that asks it works
+	// for, composed by the engine from the call's own bound ceiling — an
+	// enqueue's handed on by the Gitlet node that forms it from the merge it
+	// was asked — or stated nobody; a person's states nothing, and the queue's
+	// own records, which name no asker, carry nobody. Held to the asker by
+	// [writtenForInvalid], and a dequeue's to its ceiling too
+	// ([writtenForUnder]: by Validate, and against its chart by the committer
+	// that decides it); an enqueue carries no ceiling to hold it to, its
+	// merge's held by the Gitlet node that formed it.
+	//
+	// A proposal is no record, so this field takes no versionedFields row. It
+	// crosses the estate's wire to whichever data node decides it, and a node
+	// of a build without it refuses a proposal carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([QueueProposal.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
+
 	Enqueue      *Enqueue      `json:"enqueue,omitempty"`
 	Dequeue      *Dequeue      `json:"dequeue,omitempty"`
 	Candidate    *Candidate    `json:"candidate,omitempty"`
@@ -482,16 +505,18 @@ func (r MergeRefusal) Valid() bool { return slices.Contains(MergeRefusals(), r) 
 // naming the field), before it is queued: anything but exactly one of the
 // records a queue proposal may be; an operation id this engine does not
 // accept; an enqueue's or a dequeue's asker that is no principal, or names a
-// run, and an asker on one of the queue's own records, which name nobody; a
-// Seen that is no position on the code log; a repository id that is no UUID
-// in its canonical spelling; a drop epoch below zero, or set on a record
-// other than a candidate or a landing; an entry id that is no bare UUIDv7 — and an
-// enqueue's that is not [QueueEntryID] of its operation id; a change id that
-// is no bare UUIDv7; a target that is no branch a change may name; a head that
-// is no whole object id; a method this build does not know; a principal the
-// asker set, which the committer stamps; each of the queue's own records'
-// rules (queuerecords.go); and a record past what one proposal may carry
-// ([EntryRoom]).
+// run, and an asker on one of the queue's own records, which name nobody;
+// whom the write is made for, where its asker may not state it so, or a
+// dequeue's ceiling does not bound it ([writtenForUnder]: the chart's half is
+// the decide's); a Seen that is no position on the code log; a repository id
+// that is no UUID in its canonical spelling; a drop epoch below zero, or set
+// on a record other than a candidate or a landing; an entry id that is no bare
+// UUIDv7 — and an enqueue's that is not [QueueEntryID] of its operation id; a
+// change id that is no bare UUIDv7; a target that is no branch a change may
+// name; a head that is no whole object id; a method this build does not know;
+// a principal the asker set, which the committer stamps; each of the queue's
+// own records' rules (queuerecords.go); and a record past what one proposal
+// may carry ([EntryRoom]).
 func (p QueueProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -554,6 +579,15 @@ func (p QueueProposal) validFields() error {
 		case !p.Asker.Run.IsZero():
 			return badField("asker.run", "a queue's write names its asker alone, never a run")
 		}
+	}
+	// WHOM IT IS MADE FOR: a dequeue's held to its ceiling too, the one queue
+	// write a ceiling rides on.
+	carried := writtenForInvalid(p.Asker, p.WrittenFor)
+	if p.Dequeue != nil {
+		carried = writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, nil)
+	}
+	if carried != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidProposal, carried)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -835,6 +869,15 @@ func (d queueDecision) refuse(code MergeRefusal, detail string) (queueDecision, 
 func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRules, limits Limits,
 	retention time.Duration, capacity int, now time.Time) (queueDecision, error) {
 
+	// WHOM A DEQUEUE IS MADE FOR, ON THE DECIDING CHART, before anything is
+	// read ([writtenForUnder]), whatever the queue holds: a carrier its
+	// ceiling does not bound is its sender's bug, and one this chart alone
+	// refuses a chart that moved under the turn ([ChartRefusal]).
+	if p.Dequeue != nil {
+		if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, seats.Roster); err != nil {
+			return queueDecision{}, fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		}
+	}
 	repoID := p.RepoID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
@@ -1239,7 +1282,7 @@ func (c *Committer) refusedQueue(ctx context.Context, p QueueProposal, err error
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		c.log.ErrorContext(ctx, "code_queue_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
+		c.log.Log(ctx, invalidLevel(err), "code_queue_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
 		return QueueResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
 		c.countBusy(p.RepoID(), kindQueue, busyContended, 1)

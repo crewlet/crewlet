@@ -6,12 +6,15 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -640,4 +643,712 @@ func TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite(t *testi
 			t.Errorf("askedWhateverItsActor lists %s, which no operation is declared as", name)
 		}
 	}
+}
+
+// EVERY CODE WRITE REFUSES AN AGENT'S REQUEST THAT STATES NOBODY, BEFORE IT IS
+// ASKED (ADR-0109). A code operation runs as no actor: its asker travels inside
+// its request, beside whom the write is made for, so a serving node reads a
+// carrier that never arrived as stated nobody — whichever build left it off —
+// and would decide an agent's write that states nothing as the seat's own
+// work. So each operation whose request holds an asker and a carrier declares
+// the refusal itself ([op.refusedBeforeAsking] over [codeWrites]). Found from
+// the registry — every operation whose arguments hold a gitlet.Principal and a
+// types.WrittenFor — each is asked with its request built around an agent
+// asker that states nothing, which it refuses, and around one stated for
+// nobody, which it admits. A walk that finds fewer than the six code writes
+// fails, rather than hold nothing to anything; one holding the two deeper than
+// the request itself is named, for this gate to be taught.
+//
+// Mutation: drop refusedBeforeAsking from code.conversation, and the gate
+// names it; have the walk find no request, and the gate fails.
+func TestEveryCodeWriteRefusesAnAgentsRequestThatStatesNobody(t *testing.T) {
+	t.Parallel()
+	principal, carrier := reflect.TypeFor[gitlet.Principal](), reflect.TypeFor[types.WrittenFor]()
+	agent := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
+	var found []string
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		if !holds(spec.args, principal, map[reflect.Type]bool{}) || !holds(spec.args, carrier, map[reflect.Type]bool{}) {
+			continue
+		}
+		var askers, carriers []int
+		if spec.args.Kind() == reflect.Struct {
+			for i, field := range slices.Collect(spec.args.Fields()) {
+				switch field.Type {
+				case principal:
+					askers = append(askers, i)
+				case carrier:
+					carriers = append(carriers, i)
+				}
+			}
+		}
+		if len(askers) != 1 || len(carriers) != 1 {
+			t.Errorf("%s holds an asker and whom its write is made for beyond its request's own fields, where "+
+				"this gate builds neither: teach it to", name)
+			continue
+		}
+		found = append(found, name)
+		if spec.asked == nil {
+			t.Errorf("%s holds an asker and whom its write is made for and declares no refusal before it is "+
+				"asked: declare refusedBeforeAsking over codeWrites", name)
+			continue
+		}
+		request := func(writtenFor types.WrittenFor) any {
+			v := reflect.New(spec.args).Elem()
+			v.Field(askers[0]).Set(reflect.ValueOf(agent))
+			v.Field(carriers[0]).Set(reflect.ValueOf(writtenFor))
+			return v.Interface()
+		}
+		if err := spec.asked(request(types.WrittenFor{})); !errors.Is(err, types.ErrWrittenForUnstated) {
+			t.Errorf("%s, asked with an agent's request that states nothing, answered %v; want it refused for "+
+				"stating nobody", name, err)
+		}
+		if err := spec.asked(request(types.ForNobody())); err != nil {
+			t.Errorf("%s, asked with an agent's request stated for nobody, answered %v; want it admitted", name, err)
+		}
+	}
+	if len(found) < 6 {
+		t.Fatalf("the walk found %d operations holding an asker and whom its write is made for (%v), want the six "+
+			"code writes at least", len(found), found)
+	}
+}
+
+// A CODE WRITE FOR SOMEBODY MOVES OFF A NODE WHOSE BUILD HAS NO CARRIER
+// (ADR-0109's roll). A data node or a Gitlet node of the build before the
+// carrier, with the wire's rule for what an operation takes (crewlet#910),
+// does not declare whom a code write is made for, so it refuses a request
+// carrying somebody, naming args.written_for, and runs nothing of it: the walk
+// asks the repository's next node, of this build, where the write is decided
+// for whom it was made. A request made for nobody sends no member, and runs on
+// the older node as it always did. And a request from a seat of the older
+// build, which sends its ceiling and no carrier at all, is served by a node of
+// this build as stated nobody beside the ceiling it sent, which its decide
+// holds it to as before the carrier. For a change's write and a push, asked
+// of the repository's committing data nodes, and an engine write, asked of its
+// Gitlet nodes.
+//
+// Mutation: have WrittenFor.IsZero answer the zero value alone, and the writes
+// for nobody carry a key the older node refuses; have a request's decoder
+// state nothing it received, and the older seat's writes arrive stating
+// nothing.
+func TestACodeWriteForSomebodyMovesOffANodeWithoutTheCarrier(t *testing.T) {
+	t.Parallel()
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	older := func(n *fakeNode) { n.undeclared = []string{"args.written_for"} }
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
+	change := func(repo string, writtenFor types.WrittenFor) gitlet.ChangeProposal {
+		return gitlet.ChangeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000d0.code_close_change", Asker: seat,
+			ExpectedVersion: 3, WrittenFor: writtenFor,
+			Close: &gitlet.ChangeClose{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1"}}
+	}
+	push := func(repo string, writtenFor types.WrittenFor) gitlet.Proposal {
+		p := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11d")
+		p.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
+			Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+		p.Via, p.WrittenFor = gitlet.ViaEngine, writtenFor
+		return p
+	}
+
+	for _, tc := range []struct {
+		name       string
+		writtenFor types.WrittenFor
+		// onOlder is whether the older node runs the writes.
+		onOlder bool
+	}{
+		{"made for nobody, on the older node", types.ForTurn(nil), true},
+		{"made for ada, on a node of this build", types.ForTurn(ada), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// A DATA NODE'S: a change's write and a push.
+			holders := []string{"data-a", "data-b"}
+			f := newFleet(t, holders...)
+			const repo = "repo-written-for"
+			o := rendezvous.Order(repo, holders)
+			committer, runnerUp := f.nodes[o[0]], f.nodes[o[1]]
+			committer.set(older)
+			if _, err := f.client.Code().Change(t.Context(), change(repo, tc.writtenFor)); err != nil {
+				t.Fatalf("the change's write %s: %v", tc.name, err)
+			}
+			if _, err := f.client.Code().Propose(t.Context(), push(repo, tc.writtenFor)); err != nil {
+				t.Fatalf("the push %s: %v", tc.name, err)
+			}
+			ran, idle := runnerUp, committer
+			if tc.onOlder {
+				ran, idle = committer, runnerUp
+			}
+			idle.mu.Lock()
+			idleChanges, idleProposals := len(idle.changes), len(idle.proposals)
+			idle.mu.Unlock()
+			ran.mu.Lock()
+			changes, proposals := slices.Clone(ran.changes), slices.Clone(ran.proposals)
+			ran.mu.Unlock()
+			if idleChanges+idleProposals != 0 || len(changes) != 1 || len(proposals) != 1 {
+				t.Fatalf("%s ran %d changes and %d pushes and %s ran %d and %d, want the one of each on %s alone",
+					ran.name, len(changes), len(proposals), idle.name, idleChanges, idleProposals, ran.name)
+			}
+			for what, got := range map[string]types.WrittenFor{"change's write": changes[0].WrittenFor,
+				"push": proposals[0].WrittenFor} {
+				if !got.Stated() || !reflect.DeepEqual(got.Carrier(), tc.writtenFor.Carrier()) {
+					t.Errorf("the %s ran made for %+v (stated: %v), want %+v", what, got.Carrier(), got.Stated(),
+						tc.writtenFor.Carrier())
+				}
+			}
+
+			// A GITLET NODE'S: an engine write.
+			gits := []string{"git-a", "git-b"}
+			halves := f.gitletNodes(t, gits)
+			w := seatWriteOf(repoID(41))
+			order := rendezvous.Order(w.RepoID, gits)
+			f.nodes[order[0]].set(older)
+			w.WrittenFor = tc.writtenFor
+			if _, err := f.client.Code().GitWrite(t.Context(), w); err != nil {
+				t.Fatalf("the engine write %s: %v", tc.name, err)
+			}
+			built, spared := halves[order[1]], halves[order[0]]
+			if tc.onOlder {
+				built, spared = halves[order[0]], halves[order[1]]
+			}
+			asked := built.writes()
+			if len(spared.writes()) != 0 || len(asked) != 1 || !asked[0].w.WrittenFor.Stated() ||
+				!reflect.DeepEqual(asked[0].w.WrittenFor.Carrier(), tc.writtenFor.Carrier()) {
+				t.Errorf("the engine write %s was built %+v and %d times elsewhere, want once, by %s, made for %+v",
+					tc.name, asked, len(spared.writes()), built.name, tc.writtenFor.Carrier())
+			}
+		})
+	}
+
+	// A SEAT OF THE OLDER BUILD sends its ceiling and no carrier.
+	t.Run("an older seat's write", func(t *testing.T) {
+		t.Parallel()
+		f := newFleet(t, "data-a")
+		halves := f.gitletNodes(t, []string{"git-a"})
+		q := f.start(t)
+		ceiling := `"ceiling":{"kind":"seat","seat":"lead"}`
+		for _, c := range []struct {
+			op, subject, args string
+		}{
+			{opCodeChange.spec.name, laneProposals.subject("data-a"),
+				`{"op_id":"019a0c2e-0000-7000-8000-0000000000d0.code_close_change","asker":{"kind":"agent","seat":"swe"},` +
+					`"expected_version":3,` + ceiling + `,"close":{"repo_id":"repo-older",` +
+					`"change_id":"019a0c2e-0000-7000-8000-0000000000d1"}}`},
+			{opCodeGitWrite.spec.name, laneGitWrites.subject("git-a"),
+				`{"kind":"create_branch","repo_id":"` + repoID(42) + `","principal":{"kind":"agent","seat":"swe",` +
+					`"run":{"turn_id":"019a0c2e-0000-7000-8000-00000000d00d"}},` +
+					`"op_id":"019a0c2e-0000-7000-8000-0000000000f4","fresh":{"level":"linearizable"},` +
+					`"ref":"refs/heads/seats/swe/a","commit":"7777777777777777777777777777777777777777",` + ceiling + `}`},
+		} {
+			rep := askSignedOn(t, q, c.subject, request{Op: c.op, Args: json.RawMessage(c.args)})
+			if rep.Err != nil || rep.Unserved != "" {
+				t.Fatalf("%s from an older seat was answered %+v, want it served", c.op, rep)
+			}
+		}
+		node := f.nodes["data-a"]
+		node.mu.Lock()
+		changes := slices.Clone(node.changes)
+		node.mu.Unlock()
+		lead := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: "lead"}
+		if len(changes) != 1 || !changes[0].WrittenFor.Stated() || changes[0].WrittenFor.Carrier() != nil ||
+			!reflect.DeepEqual(changes[0].Ceiling, lead) {
+			t.Errorf("the older seat's change arrived as %+v, want stated nobody beside the ceiling it sent", changes)
+		}
+		writes := halves["git-a"].writes()
+		if len(writes) != 1 || !writes[0].w.WrittenFor.Stated() || writes[0].w.WrittenFor.Carrier() != nil ||
+			!reflect.DeepEqual(writes[0].w.Ceiling, lead) {
+			t.Errorf("the older seat's engine write arrived as %+v, want stated nobody beside the ceiling it sent",
+				writes)
+		}
+	})
+}
+
+// A CODE WRITE FROM A BUILD WITHOUT THE CARRIER IS MADE FOR NOBODY (ADR-0109's
+// roll). A seat or a Gitlet node of the build before the carrier sends a code
+// write's request with no member for whom it is made at all, beside its
+// ceiling where the request takes one. Decoded as a serving node decodes a
+// request's inputs, each of the six arrives stated nobody, and the rule every
+// node holds one to admits it: with no ceiling, with a colleague's and with
+// nobody's — the two its decide still holds it to as before the carrier, a
+// colleague's grant bounding it and nobody's sparing only the seat's own work
+// (gitlet's TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused, its older
+// sender's rows).
+//
+// Mutations: a request's decoder stating nothing it received — that request
+// arrives stating nothing, red; the rule refusing a ceiling that comes with no
+// carrier — every ceilinged request refused, red.
+func TestACodeWriteFromABuildWithoutTheCarrierIsMadeForNobody(t *testing.T) {
+	t.Parallel()
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
+	op := "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change"
+	repo, changeID := repoID(43), "019a0c2e-0000-7000-8000-0000000000d1"
+	head := "7777777777777777777777777777777777777777"
+	enqueue := gitlet.QueueProposal{OpID: op, Asker: seat, Enqueue: &gitlet.Enqueue{RepoID: repo,
+		EntryID: gitlet.QueueEntryID(op), ChangeID: changeID, TargetRef: "refs/heads/main", HeadOID: head,
+		Method: gitlet.MergeMethodMerge}}
+	merge := gitlet.MergeProposal{OpID: op, Asker: seat, Merge: gitlet.Merge{RepoID: repo,
+		MergeID: gitlet.WritePushID(op), ChangeID: changeID, Method: gitlet.MergeMethodFastForward,
+		TargetRef: "refs/heads/main", BaseOID: "6666666666666666666666666666666666666666", HeadOID: head,
+		CommitOID: head, Node: "git-a", ReceivedAt: envelopeInstant}}
+	push := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11d")
+	push.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
+		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+	push.Via = gitlet.ViaEngine
+	for _, ceiling := range []*gitlet.WriteCeiling{nil, {Kind: gitlet.WriteCeilingSeat, Seat: "lead"},
+		{Kind: gitlet.WriteCeilingNobody}} {
+		write := seatWriteOf(repo)
+		write.Ceiling = ceiling
+		requests := map[*opSpec]any{
+			opCodeChange.spec: gitlet.ChangeProposal{OpID: op, Asker: seat, ExpectedVersion: 3, Ceiling: ceiling,
+				Close: &gitlet.ChangeClose{RepoID: repo, ChangeID: changeID}},
+			opCodeConversation.spec: gitlet.ConversationWrite{OpID: op, Asker: seat, Ceiling: ceiling,
+				Comment: &gitlet.Comment{RepoID: repo, ChangeID: changeID, Body: "Why two retries?"}},
+			opCodeGitWrite.spec: write,
+			opCodeQueue.spec: gitlet.QueueProposal{OpID: op, Asker: seat, Ceiling: ceiling,
+				Dequeue: &gitlet.Dequeue{RepoID: repo, EntryID: gitlet.QueueEntryID(op)}},
+		}
+		if ceiling == nil {
+			// The three that take no ceiling: their builder held the write
+			// to its own.
+			requests[opCodePropose.spec], requests[opCodeMerge.spec] = push, merge
+			requests[&opSpec{name: opCodeQueue.spec.name + " (an enqueue)", decode: opCodeQueue.spec.decode}] =
+				enqueue
+		}
+		for spec, sent := range requests {
+			// AS THE OLDER BUILD SENDS IT: no member for whom it is made.
+			v := reflect.New(reflect.TypeOf(sent)).Elem()
+			v.Set(reflect.ValueOf(sent))
+			v.FieldByName("WrittenFor").Set(reflect.ValueOf(types.WrittenFor{}))
+			raw, err := encodeInput(v.Interface())
+			if err != nil {
+				t.Fatalf("encode %s: %v", spec.name, err)
+			}
+			if strings.Contains(string(raw), "written_for") {
+				t.Fatalf("%s as an older build sends it holds a carrier: %s", spec.name, raw)
+			}
+			args, _, refused, err := inputs(spec, request{Op: spec.name, Args: raw})
+			if err != nil || refused != nil {
+				t.Fatalf("%s from an older build does not decode: %v %v", spec.name, refused, err)
+			}
+			arrived := reflect.ValueOf(args)
+			writtenFor := arrived.FieldByName("WrittenFor").Interface().(types.WrittenFor)
+			if carrier, err := writtenFor.For(iam.ActorAgent); err != nil || carrier != nil {
+				t.Errorf("%s from an older build under the ceiling %+v arrives made for %+v (%v), want stated "+
+					"nobody", spec.name, ceiling, carrier, err)
+			}
+			if err := args.(interface{ Validate() error }).Validate(); err != nil {
+				t.Errorf("%s from an older build under the ceiling %+v is refused: %v, want it admitted, decided "+
+					"by its ceiling", spec.name, ceiling, err)
+			}
+		}
+	}
+}
+
+// laterApp is a name this build does not know as an app: one a newer build
+// adds, as #1020 added atlas. laterKind is a name this build does not know as
+// a kind of carrier: one a newer build adds beside the seat and the
+// credential. The cases that read either check first that this build still
+// does not know it.
+const (
+	laterApp  iam.Grant            = "ledger"
+	laterKind types.WorkingForKind = "group"
+)
+
+// olderCarrier is a data node or a Gitlet node of a build that does not know a
+// value a carrier names, as the router meets one: every request it is sent
+// holds, wherever it carries a carrier, what rename makes of that carrier — a
+// name this build does not know in the place of a value the asker's build
+// knows and this node's does not.
+func olderCarrier(rename func(carrier map[string]any)) func(request) request {
+	return func(req request) request {
+		doc, err := looseDoc(req.Args)
+		if err != nil {
+			panic("the arguments of " + req.Op + " do not decode: " + err.Error())
+		}
+		if args, held := doc.(map[string]any); held {
+			if carrier, held := args["written_for"].(map[string]any); held {
+				rename(carrier)
+			}
+		}
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			panic(err)
+		}
+		req.Args = raw
+		return req
+	}
+}
+
+// knowsNoApp is a node of a build that does not know app, as atlas was to every
+// build before it became one: a credential's carrier naming app names laterApp
+// in its place.
+func knowsNoApp(app iam.Grant) func(request) request {
+	return olderCarrier(func(carrier map[string]any) {
+		apps, _ := carrier["apps"].([]any)
+		for i, named := range apps {
+			if named == string(app) {
+				apps[i] = string(laterApp)
+			}
+		}
+	})
+}
+
+// knowsNoKind is a node of a build that does not know kind, as every build is
+// before a kind of carrier is added: a carrier of that kind names laterKind in
+// its place.
+func knowsNoKind(kind types.WorkingForKind) func(request) request {
+	return olderCarrier(func(carrier map[string]any) {
+		if carrier["kind"] == string(kind) {
+			carrier["kind"] = string(laterKind)
+		}
+	})
+}
+
+// carrierWalk is one code write of a case about a node whose build does not
+// know a value a carrier names: whom it is made for and under which ceiling,
+// and where it runs — on the node that does not know the value (onLacking), on
+// the one after it, or, where every node lacks it (nowhere), on none.
+type carrierWalk struct {
+	name               string
+	writtenFor         types.WrittenFor
+	ceiling            *gitlet.WriteCeiling
+	onLacking, nowhere bool
+}
+
+// walksPastANodeLacking holds a code write's walk to each case, on fleets
+// whose first node is older (a build that does not know lacks, a value a
+// carrier names): a change's write and a push, asked of the repository's
+// committing data nodes, and an engine write, asked of its Gitlet nodes. Each
+// runs where its case says, once, made for whom it was sent for; and where no
+// node serves it, the caller is told that every node refused it, naming key,
+// and that nothing ran — an estate nobody served, which the tool answers as
+// fleet_builds_differ — never that the request is malformed.
+func walksPastANodeLacking(t *testing.T, older func(request) request, lacks, key string, cases []carrierWalk) {
+	t.Helper()
+	lacking := func(n *fakeNode) { n.olderBuild = older }
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
+	change := func(repo string, tc carrierWalk) gitlet.ChangeProposal {
+		return gitlet.ChangeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000d0.code_close_change", Asker: seat,
+			ExpectedVersion: 3, Ceiling: tc.ceiling, WrittenFor: tc.writtenFor,
+			Close: &gitlet.ChangeClose{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1"}}
+	}
+	push := func(repo string, writtenFor types.WrittenFor) gitlet.Proposal {
+		p := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11d")
+		p.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
+			Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+		p.Via, p.WrittenFor = gitlet.ViaEngine, writtenFor
+		return p
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// A DATA NODE'S: a change's write and a push.
+			holders := []string{"data-a", "data-b"}
+			f := newFleet(t, holders...)
+			const repo = "repo-older-carrier"
+			o := rendezvous.Order(repo, holders)
+			committer, runnerUp := f.nodes[o[0]], f.nodes[o[1]]
+			committer.set(lacking)
+			if tc.nowhere {
+				runnerUp.set(lacking)
+			}
+			_, changeErr := f.client.Code().Change(t.Context(), change(repo, tc))
+			_, pushErr := f.client.Code().Propose(t.Context(), push(repo, tc.writtenFor))
+
+			// A GITLET NODE'S: an engine write.
+			gits := []string{"git-a", "git-b"}
+			halves := f.gitletNodes(t, gits)
+			w := seatWriteOf(repoID(46))
+			order := rendezvous.Order(w.RepoID, gits)
+			f.nodes[order[0]].set(lacking)
+			if tc.nowhere {
+				f.nodes[order[1]].set(lacking)
+			}
+			w.Ceiling, w.WrittenFor = tc.ceiling, tc.writtenFor
+			_, writeErr := f.client.Code().GitWrite(t.Context(), w)
+
+			for what, err := range map[string]error{"change's write": changeErr, "push": pushErr,
+				"engine write": writeErr} {
+				if !tc.nowhere {
+					if err != nil {
+						t.Errorf("the %s %s: %v, want it run", what, tc.name, err)
+					}
+					continue
+				}
+				var refused *ErrUnknownKeys
+				switch {
+				case !errors.As(err, &refused) || !slices.Equal(refused.Keys, []string{key}) ||
+					len(refused.Nodes) != 2:
+					t.Errorf("the %s %s answered %v, want it refused by both nodes, naming %s", what, tc.name,
+						err, key)
+				case !errors.As(err, new(*ErrUnserved)) || errors.Is(err, ErrOutcomeUnknown):
+					t.Errorf("the %s %s answered %v, want an estate nobody served, in which nothing ran", what,
+						tc.name, err)
+				}
+			}
+			if tc.nowhere {
+				for _, node := range []*fakeNode{committer, runnerUp} {
+					node.mu.Lock()
+					ran := len(node.changes) + len(node.proposals)
+					node.mu.Unlock()
+					if ran != 0 {
+						t.Errorf("%s, which does not know %s, ran %d writes carrying it", node.name, lacks, ran)
+					}
+				}
+				for name, half := range halves {
+					if built := len(half.writes()); built != 0 {
+						t.Errorf("%s, which does not know %s, built %d engine writes carrying it", name, lacks,
+							built)
+					}
+				}
+				return
+			}
+
+			ran, idle := runnerUp, committer
+			built, spared := halves[order[1]], halves[order[0]]
+			if tc.onLacking {
+				ran, idle = committer, runnerUp
+				built, spared = halves[order[0]], halves[order[1]]
+			}
+			idle.mu.Lock()
+			idleRan := len(idle.changes) + len(idle.proposals)
+			idle.mu.Unlock()
+			ran.mu.Lock()
+			changes, proposals := slices.Clone(ran.changes), slices.Clone(ran.proposals)
+			ran.mu.Unlock()
+			if idleRan != 0 || len(changes) != 1 || len(proposals) != 1 {
+				t.Fatalf("%s ran %d changes and %d pushes and %s ran %d writes, want the one of each on %s alone",
+					ran.name, len(changes), len(proposals), idle.name, idleRan, ran.name)
+			}
+			asked := built.writes()
+			if len(spared.writes()) != 0 || len(asked) != 1 {
+				t.Fatalf("the engine write was built %d times by %s and %d by %s, want once, by %s",
+					len(asked), built.name, len(spared.writes()), spared.name, built.name)
+			}
+			for what, got := range map[string]types.WrittenFor{"change's write": changes[0].WrittenFor,
+				"push": proposals[0].WrittenFor, "engine write": asked[0].w.WrittenFor} {
+				if !reflect.DeepEqual(got.Carrier(), tc.writtenFor.Carrier()) {
+					t.Errorf("the %s ran made for %+v, want %+v", what, got.Carrier(), tc.writtenFor.Carrier())
+				}
+			}
+		})
+	}
+}
+
+// A CODE WRITE FOR A CREDENTIAL MOVES OFF A NODE WHOSE BUILD DOES NOT KNOW ITS
+// APP (ADR-0109's roll). A credential's carrier names the apps its turn was
+// held to, and no sender composes one its own build does not know, so a node
+// whose build does not know one is an older build's, in the roll that adds the
+// app — as atlas was to every build before it became one. That node runs
+// nothing of a code write made for such a credential: the request's decoder
+// refuses the app as the wire refuses a member the build does not declare,
+// naming args.written_for.apps[], so the walk asks the repository's next node,
+// which knows it and decides the write carrying it. A write made for a
+// credential holding only apps the older node knows runs there as ever. And
+// where no node knows the app, the caller is told that nothing ran and that a
+// node of the writer's build is needed — the tool's fleet_builds_differ —
+// never that the request is malformed, which would end the walk and tell a
+// newer build's valid request it is. For a change's write and a push, asked of
+// the repository's committing data nodes, and an engine write, asked of its
+// Gitlet nodes.
+//
+// Mutation: refuse the app this build does not know as invalid, and the writes
+// for the credential holding atlas end at the node that does not know it.
+func TestACodeWriteForACredentialMovesOffANodeThatDoesNotKnowItsApp(t *testing.T) {
+	t.Parallel()
+	if laterApp.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a name it does not", laterApp)
+	}
+	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
+	holding := func(apps ...iam.Grant) types.WrittenFor {
+		return types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci", Apps: apps})
+	}
+	walksPastANodeLacking(t, knowsNoApp(iam.GrantAtlas), "atlas", "args.written_for.apps[]", []carrierWalk{
+		{"holding gitlet, on the node that does not know atlas", holding(iam.GrantGitlet), nobody, true, false},
+		{"holding atlas, on a node that knows it", holding(iam.GrantGitlet, iam.GrantAtlas), nobody, false, false},
+		{"holding atlas, where no node knows it", holding(iam.GrantGitlet, iam.GrantAtlas), nobody, false, true},
+	})
+}
+
+// A CODE WRITE MOVES OFF A NODE WHOSE BUILD DOES NOT KNOW ITS CARRIER'S KIND
+// (ADR-0109's roll). A carrier names by its kind whom a write is made for — a
+// seat, a credential — and no sender composes a kind its own build does not
+// know, so a node whose build does not know one is an older build's, in the
+// roll that adds the kind. That node runs nothing of a code write carrying
+// one: the request's decoder refuses the kind as the wire refuses a member the
+// build does not declare, naming args.written_for.kind, so the walk asks the
+// repository's next node, which knows it and decides the write carrying it. A
+// write made for a kind the older node knows runs there as ever. And where no
+// node knows the kind, the caller is told that nothing ran and that a node of
+// the writer's build is needed — the tool's fleet_builds_differ — never that
+// the request is malformed, which would end the walk and tell a newer build's
+// valid request it is. The older node here knows no credential's carrier, as
+// a build before that kind would not; for a change's write and a push, asked
+// of the repository's committing data nodes, and an engine write, asked of
+// its Gitlet nodes.
+//
+// Mutation: refuse the kind this build does not know as invalid, and the
+// writes made for the credential end at the node that does not know its kind.
+func TestACodeWriteMovesOffANodeThatDoesNotKnowItsCarriersKind(t *testing.T) {
+	t.Parallel()
+	if laterKind.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a kind it does not", laterKind)
+	}
+	lead := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: "lead"}
+	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
+	forLead := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "lead"})
+	forCI := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet}})
+	walksPastANodeLacking(t, knowsNoKind(types.WorkingForCredential), "a credential's carrier",
+		"args.written_for.kind", []carrierWalk{
+			{"made for a seat, on the node that does not know a credential's carrier", forLead, lead, true, false},
+			{"made for a credential, on a node that knows its carrier", forCI, nobody, false, false},
+			{"made for a credential, where no node knows its carrier", forCI, nobody, false, true},
+		})
+}
+
+// carrierRead is a carrier a case about decoding a code write's request
+// carries, and what becomes of the request: refused unread, naming unread; or
+// read whole, and then admitted by the rule every node holds it to (says "")
+// or refused by that rule, naming says.
+type carrierRead struct {
+	name         string
+	carrier      types.WorkingFor
+	unread, says string
+}
+
+// readsEachCodeWrite decodes each of the six requests a code write forms on
+// repo, carrying each case's carrier — under the ceiling of nobody, where the
+// request takes a ceiling — as a serving node decodes a request's inputs, and
+// holds it to the case.
+func readsEachCodeWrite(t *testing.T, repo string, cases []carrierRead) {
+	t.Helper()
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
+	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
+	op := "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change"
+	changeID := "019a0c2e-0000-7000-8000-0000000000d1"
+	head := "7777777777777777777777777777777777777777"
+	write := seatWriteOf(repo)
+	write.Ceiling = nobody
+	push := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11d")
+	push.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
+		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+	push.Via = gitlet.ViaEngine
+	requests := map[*opSpec]any{
+		opCodeChange.spec: gitlet.ChangeProposal{OpID: op, Asker: seat, ExpectedVersion: 3, Ceiling: nobody,
+			Close: &gitlet.ChangeClose{RepoID: repo, ChangeID: changeID}},
+		opCodeConversation.spec: gitlet.ConversationWrite{OpID: op, Asker: seat, Ceiling: nobody,
+			Comment: &gitlet.Comment{RepoID: repo, ChangeID: changeID, Body: "Why two retries?"}},
+		opCodeGitWrite.spec: write,
+		opCodeQueue.spec: gitlet.QueueProposal{OpID: op, Asker: seat, Ceiling: nobody,
+			Dequeue: &gitlet.Dequeue{RepoID: repo, EntryID: gitlet.QueueEntryID(op)}},
+		opCodeMerge.spec: gitlet.MergeProposal{OpID: op, Asker: seat, Merge: gitlet.Merge{RepoID: repo,
+			MergeID: gitlet.WritePushID(op), ChangeID: changeID, Method: gitlet.MergeMethodFastForward,
+			TargetRef: "refs/heads/main", BaseOID: "6666666666666666666666666666666666666666", HeadOID: head,
+			CommitOID: head, Node: "git-a", ReceivedAt: envelopeInstant}},
+		opCodePropose.spec: push,
+	}
+	for _, tc := range cases {
+		carrier := types.ForTurn(&tc.carrier)
+		for spec, sent := range requests {
+			v := reflect.New(reflect.TypeOf(sent)).Elem()
+			v.Set(reflect.ValueOf(sent))
+			v.FieldByName("WrittenFor").Set(reflect.ValueOf(carrier))
+			raw, err := encodeInput(v.Interface())
+			if err != nil {
+				t.Fatalf("encode %s: %v", spec.name, err)
+			}
+			args, _, refused, err := inputs(spec, request{Op: spec.name, Args: raw})
+			if err != nil {
+				t.Errorf("%s carrying %s failed to decode: %v, want it refused unread or read whole", spec.name,
+					tc.name, err)
+				continue
+			}
+			if tc.unread != "" {
+				if refused == nil || !slices.Equal(refused.Keys, []string{tc.unread}) {
+					t.Errorf("%s carrying %s was refused %v, want it refused unread, naming %s", spec.name,
+						tc.name, refused, tc.unread)
+				}
+				continue
+			}
+			if refused != nil {
+				t.Errorf("%s carrying %s was refused unread, naming %v, want it read whole", spec.name, tc.name,
+					refused.Keys)
+				continue
+			}
+			err = args.(interface{ Validate() error }).Validate()
+			switch {
+			case tc.says == "" && err != nil:
+				t.Errorf("%s carrying %s: %v, want it admitted", spec.name, tc.name, err)
+			case tc.says != "" && (err == nil || !strings.Contains(err.Error(), tc.says)):
+				t.Errorf("%s carrying %s: %v, want it refused naming %s", spec.name, tc.name, err, tc.says)
+			}
+		}
+	}
+}
+
+// A CODE WRITE NAMING AN APP ITS BUILD DOES NOT KNOW IS REFUSED UNREAD, by
+// every request a code write forms (ADR-0109's roll). Decoded as a serving node
+// decodes a request's inputs, each of the six, its credential's carrier naming
+// an app this build does not know, is refused as one the build cannot read
+// whole — named args.written_for.apps[], nothing of it to run — and never read
+// to be refused as malformed. A name this build knows is the rule's to judge:
+// admin, which it knows as no app, and the zero, which names none, are read
+// whole and refused by the rule every node holds the request to, since no
+// build composes either; and a credential holding apps this build knows is
+// read whole and admitted.
+//
+// Mutations: the merge's decoder skipping the apps — code.merge's request read
+// whole, red; every name that is no app read as one the build does not know —
+// admin and the zero refused unread, red.
+func TestACodeWriteNamingAnAppItsBuildDoesNotKnowIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	if laterApp.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a name it does not", laterApp)
+	}
+	holding := func(apps ...iam.Grant) types.WorkingFor {
+		return types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci", Apps: apps}
+	}
+	readsEachCodeWrite(t, repoID(47), []carrierRead{
+		{"a credential naming an app this build does not know", holding(iam.GrantGitlet, laterApp),
+			"args.written_for.apps[]", ""},
+		{"a credential naming admin, which this build knows as no app", holding(iam.GrantGitlet, iam.GrantAdmin),
+			"", "written_for.apps"},
+		{"a credential naming the zero, which names no app", holding(iam.GrantGitlet, ""), "", "written_for.apps"},
+		{"a credential holding apps this build knows", holding(iam.GrantGitlet, iam.GrantAtlas), "", ""},
+	})
+}
+
+// A CODE WRITE NAMING A KIND ITS BUILD DOES NOT KNOW IS REFUSED UNREAD, by
+// every request a code write forms (ADR-0109's roll). Decoded as a serving node
+// decodes a request's inputs, each of the six, its carrier of a kind this
+// build does not know, is refused as one the build cannot read whole — named
+// args.written_for.kind, nothing of it to run — and never read to be refused
+// as malformed: whether this build knows a carrier's kind is decided where it
+// decides whether it knows its apps, in one place every request's decoder
+// asks. A kind this build knows is the rule's to judge, and so is the zero:
+// the zero, which names none, is read whole and refused by the rule every node
+// holds the request to, since no build composes it, and so is a stranger's,
+// which this build knows and no code write is made for; and a credential's is
+// read whole and admitted.
+//
+// Mutations: the kind this build does not know read whole — every request
+// refused by the rule as malformed, red; the zero kind read as one the build
+// does not know — refused unread, red; a stranger's read as one the build does
+// not know — refused unread, red; the conversation's decoder skipping the one
+// place — code.conversation's request read whole, red.
+func TestACodeWriteNamingAKindItsBuildDoesNotKnowIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	if laterKind.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a kind it does not", laterKind)
+	}
+	of := func(kind types.WorkingForKind) types.WorkingFor {
+		return types.WorkingFor{Kind: kind, Login: "token:ci", Apps: []iam.Grant{iam.GrantGitlet}}
+	}
+	readsEachCodeWrite(t, repoID(48), []carrierRead{
+		{"a carrier of a kind this build does not know", of(laterKind), "args.written_for.kind", ""},
+		{"a carrier of the zero kind, which names none", of(""), "", "written_for.kind"},
+		{"a stranger's carrier, of a kind this build knows", types.WorkingFor{Kind: types.WorkingForStranger}, "",
+			"stranger"},
+		{"a credential's carrier, of a kind this build knows", of(types.WorkingForCredential), "", ""},
+	})
 }

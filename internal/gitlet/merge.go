@@ -164,7 +164,25 @@ type MergeProposal struct {
 	// not: the decide reads it and nothing else does, so the merge record's
 	// format does not move for it.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
-	Merge     Merge `json:"merge"`
+	// WrittenFor is whom a SEAT'S merge is made for (ADR-0109), as
+	// [ChangeProposal.WrittenFor] is: whoever the turn that asked it works
+	// for, handed on by the Gitlet node that builds the merge from the engine
+	// write it was asked ([EngineWrite.WrittenFor]), or stated nobody; a
+	// person's states nothing. Held to the asker by [writtenForInvalid]: a
+	// merge carries no ceiling, the Gitlet node that built it having held the
+	// write to its ceiling already.
+	//
+	// A proposal is no record, so this field takes no versionedFields row. It
+	// crosses the estate's wire to whichever data node decides it, and a node
+	// of a build without it refuses a merge carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([MergeProposal.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
+	Merge      Merge            `json:"merge"`
 }
 
 // MergeResult is what became of one merge proposal.
@@ -192,19 +210,21 @@ type MergeResult struct {
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
 // naming the field), before it is queued: an operation id this engine does not
-// accept; an asker that is no principal, or names an executor; a Seen that is
-// no position on the code log; a drop epoch below zero; a repository id that
-// is no UUID in its canonical spelling; a merge id that is not [WritePushID] of the operation
-// id; a change id that is no bare UUIDv7; a target that is no branch a change
-// may name; a method this build does not know; a base, a head or a commit
-// that is no whole object id, or a commit that is the base, which moves
-// nothing; a fast-forward to anything but the head, or carrying a pack; a merge
-// or a squash carrying none, or a commit that is the head; a pack whose row is
-// no bundle's ([PackRef.Check]) or past what an engine-built pack may store
-// ([MaxWritePackBytes]); an override past [MaxOverrideReasonBytes] or not
-// valid text; no node, or no instant it was asked at; a field the committer
-// stamps (the principal, the source, Protected and Green) set by the asker;
-// and a record past what one proposal may carry ([EntryRoom]).
+// accept; an asker that is no principal, or names an executor; whom the merge
+// is made for, where its asker may not state it so ([writtenForInvalid]); a
+// Seen that is no position on the code log; a drop epoch below zero; a
+// repository id that is no UUID in its canonical spelling; a merge id that is
+// not [WritePushID] of the operation id; a change id that is no bare UUIDv7; a
+// target that is no branch a change may name; a method this build does not
+// know; a base, a head or a commit that is no whole object id, or a commit that
+// is the base, which moves nothing; a fast-forward to anything but the head, or
+// carrying a pack; a merge or a squash carrying none, or a commit that is the
+// head; a pack whose row is no bundle's ([PackRef.Check]) or past what an
+// engine-built pack may store ([MaxWritePackBytes]); an override past
+// [MaxOverrideReasonBytes] or not valid text; no node, or no instant it was
+// asked at; a field the committer stamps (the principal, the source, Protected
+// and Green) set by the asker; and a record past what one proposal may carry
+// ([EntryRoom]).
 func (p MergeProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -268,6 +288,9 @@ func (p MergeProposal) validFields() error {
 	case p.Asker.Run.RunID != "":
 		return badField("asker.run.run_id", "a merge is a tool call's, whose run is its turn: it names no "+
 			"executor")
+	}
+	if err := writtenForInvalid(p.Asker, p.WrittenFor); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
 	}
 	if !p.Seen.IsZero() {
 		switch {

@@ -119,14 +119,16 @@ import (
 // naming the field), before it is queued: anything but exactly one of the
 // seven records; an operation id this engine does not accept
 // (statelog.CheckCallerOpID); an asker that is no principal, or that names a
-// run — and a landing that names any asker, being the home's own; a Seen that
-// is no position on the code log; a repository id that is no UUID in its
+// run — and a landing that names any asker, being the home's own; whom the
+// write is made for, where its asker may not state it so or its ceiling does
+// not bound it ([writtenForUnder]: the chart's half is the decide's); a Seen
+// that is no position on the code log; a repository id that is no UUID in its
 // canonical spelling; a change id that is no bare UUIDv7 — and an open's that
 // is not [OpenChangeID] of its operation id; an open or a landing that names a
 // version, or any other write that names none; a branch that is no branch a
 // change may name ([branchProblem]); a title, a body, a close's reason, a work
-// item, a turn or a run its bounds refuse; an edit that sets nothing, or sets
-// a work item and clears it; a field the committer stamps — who wrote it, an
+// item, a turn or a run its bounds refuse; an edit that sets nothing, or sets a
+// work item and clears it; a field the committer stamps — who wrote it, an
 // open's or a reopen's head — set by the asker; a landing of no revision, of a
 // head or a tip that is no whole object id, or found by a node no node id
 // names; and a record past what one proposal may carry ([EntryRoom]). What the
@@ -328,6 +330,9 @@ func (p ChangeProposal) validFields() error {
 		if why := p.Ceiling.invalid(p.Asker); why != "" {
 			return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
 		}
+	}
+	if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, nil); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -693,6 +698,13 @@ func (d changeDecision) refuse(code ChangeRefusal, detail string) (changeDecisio
 func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatRules,
 	retention time.Duration) (changeDecision, error) {
 
+	// WHOM IT IS MADE FOR, ON THE DECIDING CHART, before anything is read
+	// ([writtenForUnder]), whatever the repository holds: a carrier its
+	// ceiling does not bound is its sender's bug, and one this chart alone
+	// refuses a chart that moved under the turn ([ChartRefusal]).
+	if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, seats.Roster); err != nil {
+		return changeDecision{}, fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+	}
 	repoID := p.RepoID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
@@ -1227,7 +1239,7 @@ func (c *Committer) refusedChange(ctx context.Context, p ChangeProposal, err err
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		c.log.ErrorContext(ctx, "code_change_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
+		c.log.Log(ctx, invalidLevel(err), "code_change_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
 		return ChangeResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
 		c.countBusy(p.RepoID(), kindChange, busyContended, 1)

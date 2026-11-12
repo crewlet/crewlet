@@ -2024,6 +2024,24 @@ type ChangeProposal struct {
 	// estate's wire to whichever data node decides it, and every node asked
 	// it reads it: the domain landed on main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
+	// WrittenFor is whom a SEAT'S write is made for (ADR-0109): whoever the
+	// turn that asks it works for, composed by the engine from the call's own
+	// bound ceiling (internal/agent/builtin), never from a tool's arguments,
+	// and stated nobody for a write made for its seat alone. A person's, a
+	// token's and a landing's state nothing, and carry nobody. Held to the
+	// asker and the ceiling by [writtenForUnder]: by Validate, and against its
+	// chart by the committer that decides it.
+	//
+	// A proposal is no record, so this field takes no versionedFields row. It
+	// crosses the estate's wire to whichever data node decides it, and a node
+	// of a build without it refuses a proposal carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([ChangeProposal.UnmarshalJSONFrom]), decided by its ceiling.
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 
 	Open     *ChangeOpen     `json:"open,omitempty"`
 	Edit     *ChangeEdit     `json:"edit,omitempty"`
@@ -2119,6 +2137,24 @@ type ConversationWrite struct {
 	// wire to whichever data node decides it, and every node asked it reads
 	// it: the domain landed on main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
+	// WrittenFor is whom a SEAT'S write is made for (ADR-0109), as
+	// [ChangeProposal.WrittenFor] is: whoever the turn that asks it works for,
+	// composed by the engine from the call's own bound ceiling, or stated
+	// nobody; a person's states nothing, and the home's own writes, which name
+	// no asker, carry nobody. Held to the asker and the ceiling by
+	// [writtenForUnder]: by Validate, and against its chart by the change
+	// writer that decides it.
+	//
+	// A write is no record, so this field takes no versionedFields row. It
+	// crosses the estate's wire to whichever data node decides it, and a node
+	// of a build without it refuses a write carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([ConversationWrite.UnmarshalJSONFrom]), decided by its ceiling.
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 
 	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`
 	Comment        *Comment         `json:"comment,omitempty"`

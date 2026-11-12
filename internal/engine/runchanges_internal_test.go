@@ -183,7 +183,8 @@ func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 	}
 	op := openOpID(run, runWebID)
 	wantOpen := gitlet.ChangeProposal{OpID: op, Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"},
-		Seen: firstPageAt, Open: &gitlet.ChangeOpen{RepoID: runWebID, ChangeID: gitlet.OpenChangeID(op),
+		Seen: firstPageAt, WrittenFor: types.ForTurn(nil),
+		Open: &gitlet.ChangeOpen{RepoID: runWebID, ChangeID: gitlet.OpenChangeID(op),
 			SourceRef: branch, TargetRef: "refs/heads/main", Title: "Retry the upload once",
 			WorkItem: run.WorkItem, TurnID: "t1", RunID: runLaunch}}
 	if len(writes) != 1 || !reflect.DeepEqual(writes[0], wantOpen) {

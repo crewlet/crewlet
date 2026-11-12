@@ -10,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
@@ -151,7 +152,8 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 					cmds[i] = gitlet.Command{Ref: ref + strings.Repeat(fill, gitlet.MaxRefNameBytes-len(ref)),
 						Old: oidOf(fmt.Sprint("old", i)), New: oidOf(fmt.Sprint("new", i))}
 				}
-				return gitlet.Proposal{Principal: arm.principal, Via: arm.via, Node: node, Commands: cmds}
+				return gitlet.Proposal{Principal: arm.principal, Via: arm.via, Node: node, Commands: cmds,
+					WrittenFor: types.ForNobody()}
 			}
 
 			if err := skeleton(gitlet.MaxCommandsPerPush, "x").ValidateCommands(); err != nil {

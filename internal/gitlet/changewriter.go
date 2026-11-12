@@ -549,8 +549,8 @@ func (w *ChangeWriter) refused(ctx context.Context, cw ConversationWrite, err er
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		w.log.ErrorContext(ctx, "code_conversation_invalid", "repo", cw.RepoID(), "change", cw.ChangeID(),
-			"op_id", cw.OpID, "error", err)
+		w.log.Log(ctx, invalidLevel(err), "code_conversation_invalid", "repo", cw.RepoID(), "change",
+			cw.ChangeID(), "op_id", cw.OpID, "error", err)
 		return ConversationResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
 		return ConversationResult{Refusal: ConversationRefusalBusy, Detail: "the change kept moving for every " +

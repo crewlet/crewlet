@@ -234,9 +234,14 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 		item = &types.WorkItem{Backend: w.Backend, ID: gitlet.FitProvenance(w.ID), Key: gitlet.FitProvenance(w.Key),
 			Project: gitlet.FitProvenance(w.Project)}
 	}
+	// WHOM THE OPEN IS MADE FOR (gitlet.ChangeProposal.WrittenFor): the run's
+	// row holds no carrier for its code writes, its code ceiling naming a
+	// colleague seat alone, so the change its collection opens is stated made
+	// for nobody, the seat's own work — a carrier its committer holds to no
+	// ceiling, whichever the row names.
 	res, err := reader.Change(ctx, gitlet.ChangeProposal{OpID: op,
 		Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: run.AgentHandle}, Seen: at,
-		Ceiling: openCeiling(run),
+		Ceiling: openCeiling(run), WrittenFor: types.ForTurn(nil),
 		Open: &gitlet.ChangeOpen{RepoID: r.RepoID, ChangeID: id, SourceRef: branchRef(r.Branch),
 			TargetRef: r.Open.Target, Title: title, Draft: r.Open.Draft, WorkItem: item, TurnID: run.TurnID,
 			RunID: run.LaunchID}})

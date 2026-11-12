@@ -145,26 +145,28 @@ import (
 // but exactly one of the eight records; an operation id this engine does not
 // accept (statelog.CheckCallerOpID); an asker that is no principal, or that
 // names a run — and a revise, a mergeability or a settling of asks that names
-// any asker, each being the home's own; a Seen that is no position on the code log; a
-// repository id that is no UUID in its canonical spelling; a change id that is no bare
-// UUIDv7; a field the writer stamps — who wrote it, a reviewer's kind, a
-// comment's id or thread, a review's id or a finding's — set by the asker; an
-// ask that names nobody, a handle twice or one that is no seat's handle, past
-// [MaxReviewersPerChange] in either list, or a note its bound refuses; a
-// comment its bound refuses, one replying to a root and a finding both, an
-// anchor on a reply or one [anchorProblem] refuses, or a turn its bound
-// refuses; a thread named by no comment id; a review of no revision, of a
-// verdict this build does not know, that comments and says nothing, past
-// [MaxFindingsPerReview] findings or [MaxStandingFindings] carried, a finding
-// [findingProblem] refuses, a carried id twice or no finding's id, or a turn
-// or a model its bound refuses; an answer naming no finding, past
-// [MaxFindingsPerReview], one twice, an answer no write gives, a commit that
-// is no whole object id or a note its bound refuses; a revise or a
+// any asker, each being the home's own; whom the write is made for, where its
+// asker may not state it so or its ceiling does not bound it
+// ([writtenForUnder]: the chart's half is the decide's); a Seen that is no
+// position on the code log; a repository id that is no UUID in its canonical
+// spelling; a change id that is no bare UUIDv7; a field the writer stamps —
+// who wrote it, a reviewer's kind, a comment's id or thread, a review's id or
+// a finding's — set by the asker; an ask that names nobody, a handle twice or
+// one that is no seat's handle, past [MaxReviewersPerChange] in either list, or
+// a note its bound refuses; a comment its bound refuses, one replying to a root
+// and a finding both, an anchor on a reply or one [anchorProblem] refuses, or a
+// turn its bound refuses; a thread named by no comment id; a review of no
+// revision, of a verdict this build does not know, that comments and says
+// nothing, past [MaxFindingsPerReview] findings or [MaxStandingFindings]
+// carried, a finding [findingProblem] refuses, a carried id twice or no
+// finding's id, or a turn or a model its bound refuses; an answer naming no
+// finding, past [MaxFindingsPerReview], one twice, an answer no write gives, a
+// commit that is no whole object id or a note its bound refuses; a revise or a
 // mergeability its own rules refuse ([Revise], revise.go; [Mergeability],
 // mergeability.go); a settling of asks moving them to no state it may, or
-// naming the asks the writer stamps; and a record past what one write of a conversation may
-// carry ([MaxConversationBytes]). What the
-// repository and the change hold is the decide's to judge, from the rows.
+// naming the asks the writer stamps; and a record past what one write of a
+// conversation may carry ([MaxConversationBytes]). What the repository and the
+// change hold is the decide's to judge, from the rows.
 func (w ConversationWrite) Validate() error {
 	_, err := w.measure()
 	return err
@@ -362,6 +364,9 @@ func (w ConversationWrite) validFields() error {
 		if why := w.Ceiling.invalid(w.Asker); why != "" {
 			return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
 		}
+	}
+	if err := writtenForUnder(w.Asker, w.WrittenFor, w.Ceiling, nil); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
 	}
 	if !w.Seen.IsZero() {
 		switch {
@@ -695,6 +700,13 @@ func (d conversationDecision) refuse(code ConversationRefusal, detail string) (c
 func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, seats SeatRules,
 	retention time.Duration, noGitlet map[string]bool) (conversationDecision, error) {
 
+	// WHOM IT IS MADE FOR, ON THE DECIDING CHART, before anything is read
+	// ([writtenForUnder]), whatever the change holds: a carrier its ceiling
+	// does not bound is its sender's bug, and one this chart alone refuses a
+	// chart that moved under the turn ([ChartRefusal]).
+	if err := writtenForUnder(w.Asker, w.WrittenFor, w.Ceiling, seats.Roster); err != nil {
+		return conversationDecision{}, fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+	}
 	repoID, changeID := w.RepoID(), w.ChangeID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {

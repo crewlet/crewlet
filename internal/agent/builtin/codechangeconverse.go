@@ -133,14 +133,17 @@ func (cv conversing) send(ctx context.Context, w gitlet.ConversationWrite) (gitl
 	return cv.decided(ctx, w)
 }
 
-// decided completes w with its asker and asks it, held first to the rule every
-// change writer holds a write to (gitlet.ConversationWrite's Validate), so one no
-// node would decide is refused naming its field before it is routed.
+// decided completes w with its asker, the ceiling whoever the turn works for
+// bounds it by and whom it is made for — the three stamped together from the
+// call's caller, the carrier composed from the call's own bound ceiling and
+// never from a tool's arguments — and asks it, held first to the rule every
+// change writer holds a write to (gitlet.ConversationWrite's Validate), so one
+// no node would decide is refused naming its field before it is routed.
 func (cv conversing) decided(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult,
 	*tools.Result) {
 
 	g := cv.g
-	w.Asker, w.Ceiling = g.c.asker, g.c.write
+	w.Asker, w.Ceiling, w.WrittenFor = g.c.asker, g.c.write, g.c.actor.WrittenFor
 	if err := w.Validate(); err != nil {
 		r := codeWriteFailure(ctx, g.tool, g.c.actor, g.repo.Name, err)
 		return gitlet.ConversationResult{}, &r

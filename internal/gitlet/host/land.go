@@ -88,6 +88,14 @@ type landing struct {
 	Change *gitlet.ChangeOption
 	// Principal is who pushes.
 	Principal gitlet.Principal
+	// WrittenFor is whom the push is made for (gitlet.Proposal.WrittenFor), as
+	// its builder was handed it: an engine write's, from the write it builds
+	// (gitlet.EngineWrite.WrittenFor); a coding box's, nobody, the seat's own
+	// work, since its run's row holds no carrier for its code writes
+	// (session.go's boxWrittenFor); and a person's, nothing. The proposal
+	// carries it as handed, never stated anew here, so a push lands for whom
+	// its write was made.
+	WrittenFor types.WrittenFor
 	// Via is how the builder built the push's pack — the relay's is
 	// gitlet.ViaGit, an engine write's gitlet.ViaEngine — which the proposal
 	// and the push row carry as it says:
@@ -422,6 +430,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
 			Atomic: l.Atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
 			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch, Change: change,
+			WrittenFor: l.WrittenFor,
 		}
 	}
 	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref, title,

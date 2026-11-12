@@ -584,9 +584,10 @@ var zeroByMethod = map[string]string{
 	"objstore.Key":                 "Go's own zero: its method compares the key with Key{}",
 	"artifacts.ID":                 "Go's own zero: its method compares the id with ID{}",
 	"types.WrittenFor": "a carrier of nobody, stated or not: the asking node refuses an agent's " +
-		"actor that states nothing before anything is asked (estate's actorWrites), and the serving " +
-		"node reads the absence as stated nobody (each actor's UnmarshalJSONFrom calls " +
-		"types.WrittenFor.Received), which is what a build without the field sends",
+		"actor, or a code write's agent asker, that states nothing before anything is asked (estate's " +
+		"actorWrites and codeWrites), and the serving node reads the absence as stated nobody (each " +
+		"actor's and each code write's request's UnmarshalJSONFrom calls types.WrittenFor.Received), " +
+		"which is what a build without the field sends",
 }
 
 // isZeroer is a type with an IsZero method of its own, which the encoder asks
@@ -831,7 +832,23 @@ var decodesItself = map[string]string{
 		"handed (jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own " +
 		"error, so the wire's rule refuses a member the carrier does not declare inside it, as " +
 		"anywhere; all it adds is that the carrier was stated",
+	"gitlet.ChangeProposal":    codeWriteDecodes,
+	"gitlet.ConversationWrite": codeWriteDecodes,
+	"gitlet.EngineWrite":       codeWriteDecodes,
+	"gitlet.QueueProposal":     codeWriteDecodes,
+	"gitlet.MergeProposal":     codeWriteDecodes,
+	"gitlet.Proposal":          codeWriteDecodes,
 }
+
+// codeWriteDecodes is why each request a code write forms drops no member
+// decoding itself (gitlet's writtenfor.go).
+const codeWriteDecodes = "refuses one there too: it decodes through the decoder it is handed " +
+	"(jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own error, so " +
+	"the wire's rule refuses a member its build does not declare anywhere inside it, as anywhere in " +
+	"what an operation takes; all it adds is that whom the write is made for was stated " +
+	"(types.WrittenFor.Received), and the same refusal of its carrier's kind, or an app a " +
+	"credential's carrier names, that the build does not know (gitlet's unknownToThisBuild), which " +
+	"drops nothing either"
 
 // NO TYPE AN OPERATION TAKES DECODES A KEY AWAY BY ITSELF. The wire's rule
 // refuses an undeclared member at every depth the standard library decodes,

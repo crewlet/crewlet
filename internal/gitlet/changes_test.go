@@ -64,18 +64,20 @@ func changeRepo(t testing.TB, n *node, name string) string {
 }
 
 // opening is an open of source into target on repo, asked by asker under an
-// operation id of its own.
+// operation id of its own, made for nobody but the asker.
 func opening(repo, source, target string, asker gitlet.Principal) gitlet.ChangeProposal {
 	opID := statelog.NewOpID(time.Now(), "code_open_change")
-	return gitlet.ChangeProposal{OpID: opID, Asker: asker, Open: &gitlet.ChangeOpen{RepoID: repo,
-		ChangeID: gitlet.OpenChangeID(opID), SourceRef: source, TargetRef: target, Title: "Retry the upload"}}
+	return gitlet.ChangeProposal{OpID: opID, Asker: asker, WrittenFor: types.ForNobody(),
+		Open: &gitlet.ChangeOpen{RepoID: repo, ChangeID: gitlet.OpenChangeID(opID), SourceRef: source,
+			TargetRef: target, Title: "Retry the upload"}}
 }
 
 // writing is a write of a change's lifecycle by asker at version, under an
-// operation id of its own: set fills in the one record it carries.
+// operation id of its own, made for nobody but the asker: set fills in the one
+// record it carries.
 func writing(asker gitlet.Principal, version int64, set func(p *gitlet.ChangeProposal)) gitlet.ChangeProposal {
 	p := gitlet.ChangeProposal{OpID: statelog.NewOpID(time.Now(), "code_update_change"), Asker: asker,
-		ExpectedVersion: version}
+		WrittenFor: types.ForNobody(), ExpectedVersion: version}
 	set(&p)
 	return p
 }

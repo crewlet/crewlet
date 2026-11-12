@@ -128,7 +128,11 @@ var errWritesStopping = errors.New("host: Gitlet is stopping")
 //  1. A stopping host answers gitlet.ErrNotServing, about this node. A SEAT'S
 //     write on a node confirmed behind the company's configuration (Current
 //     false) is gitlet.ErrGitUnready{behind_config}, having started nothing, so
-//     the walk asks the runner-up; a person's never consults it.
+//     the walk asks the runner-up; a person's never consults it. Whom a seat's
+//     write is made for is then held to its ceiling on this node's chart
+//     (writtenForOn): a carrier its ceiling does not bound is refused
+//     gitlet.ErrInvalid, and one a node holding no chart yet cannot judge is
+//     gitlet.ErrGitUnready{no_chart}, each before anything is read or built.
 //  2. A second write of the same push id on this node waits for the first
 //     (the IN-FLIGHT JOIN) and is answered what it is answered — a push id
 //     names one scratch, once — unless the first ended only because ITS
@@ -196,6 +200,9 @@ func (s *Server) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.Engine
 			"%s is behind the company's configuration and judges no seat's write from the chart the fleet "+
 				"replaced; a current Gitlet node builds it", s.o.NodeID)}
 	}
+	if err := s.writtenForOn(w); err != nil {
+		return gitlet.EngineWriteResult{}, err
+	}
 	for {
 		f, leads := s.joinWrite(pushID)
 		if leads {
@@ -221,6 +228,28 @@ func (s *Server) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.Engine
 			return gitlet.EngineWriteResult{}, s.cutOrGone(ctx)
 		}
 	}
+}
+
+// writtenForOn is why a seat's write w may not be made for whom it states, on
+// this node's chart (gitlet.EngineWrite.WrittenForOn), or nil: only the chart
+// tells a person's seat, which bounds nothing, from a colleague's, whose
+// ceiling the write carries beside it. Asked before anything of the write is
+// read or built, since what it judges is the request; a write carrying
+// somebody that a node holding no chart yet cannot judge is answered unready,
+// about this node, so a Gitlet node holding one builds it, as every rule that
+// judges a seat's write answers there. A write carrying nobody, and a
+// person's, which carries nothing, need no chart for it.
+func (s *Server) writtenForOn(w gitlet.EngineWrite) error {
+	if w.Principal.Kind != gitlet.PrincipalAgent || w.WrittenFor.Carrier() == nil {
+		return nil
+	}
+	roster := s.o.Roster()
+	if roster == nil {
+		return &gitlet.ErrGitUnready{Reason: gitlet.UnreadyNoChart, Detail: fmt.Sprintf("%s holds no chart yet "+
+			"to judge whom seat %q's write is made for; a Gitlet node holding one builds it", s.o.NodeID,
+			w.Principal.Seat)}
+	}
+	return w.WrittenForOn(roster)
 }
 
 // enter admits one write to a running host — the in-process twin of begin,
@@ -785,7 +814,8 @@ func (wr *writing) land(ctx context.Context, sc *cache.Scratch) (gitlet.EngineWr
 	wr.landed = true
 	landStart := s.now()
 	l, err := s.land(ctx, landing{Synced: wr.synced, Scratch: sc, Commands: []gitlet.Command{wr.cmd},
-		Change: wr.opens, Principal: w.Principal, Via: gitlet.ViaEngine, PushID: wr.pushID, ReceivedAt: s.now()})
+		Change: wr.opens, Principal: w.Principal, WrittenFor: w.WrittenFor, Via: gitlet.ViaEngine, PushID: wr.pushID,
+		ReceivedAt: s.now()})
 	wr.landTook = s.now().Sub(landStart)
 	if err != nil {
 		return gitlet.EngineWriteResult{}, err

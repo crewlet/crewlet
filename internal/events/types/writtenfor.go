@@ -95,8 +95,9 @@ func (f WrittenFor) Carrier() *WorkingFor { return f.carrier.Clone() }
 // credential or the engine ([ErrWrittenForNotAnAgents]).
 //
 // ONE RULE FOR EVERY DOMAIN, whose author kinds are the identity directory's
-// own words (iam.ActorFor), so Worklet, Doclet and Chatlet cannot each decide
-// differently which actors must say.
+// own words (iam.ActorFor), so Worklet, Doclet, Chatlet and Gitlet — whose
+// code writes' askers it reads by the kind of writer each is — cannot each
+// decide differently which actors must say.
 func (f WrittenFor) For(kind iam.ActorKind) (*WorkingFor, error) {
 	if kind == iam.ActorAgent {
 		if !f.stated {
@@ -168,8 +169,9 @@ func (f WrittenFor) IsZero() bool { return f.carrier == nil }
 // wire calls it from its own UnmarshalJSONFrom, on the actor itself, whatever
 // members arrived: internal/estate's Actor whether or not a provenance did,
 // since an older node sends an agent's provenance that carries nothing as no
-// member at all. So a data node never refuses an agent's write for a key its
-// sender left out because it carried nobody.
+// member at all; and so does every request a code write forms, on the request
+// itself (internal/gitlet's writtenfor.go). So a data node never refuses an
+// agent's write for a key its sender left out because it carried nobody.
 func (f WrittenFor) Received() WrittenFor {
 	f.stated = true
 	return f

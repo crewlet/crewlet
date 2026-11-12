@@ -1135,8 +1135,8 @@ func TestABoxMayPushBackAnEngineCommitTheRepositoryHolds(t *testing.T) {
 	written := c.land(files(c.repo, alice(), branch, "", c.head, text("tool.md", "written by a tool\n")))
 	_, before := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
 	checkout := before.Clone(c.BoxURL(0))
-	c.land(gitlet.EngineWrite{Kind: gitlet.WriteDeleteBranch, RepoID: c.repo, Principal: alice(), OpID: opNow(),
-		Fresh: linear, Ref: branch, ExpectedHead: written.Commit})
+	c.land(gitlet.EngineWrite{Kind: gitlet.WriteDeleteBranch, RepoID: c.repo, Principal: alice(),
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: branch, ExpectedHead: written.Commit})
 	_, after := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
 
 	res := after.Push(c.Ctx, checkout, c.BoxURL(0), written.Commit+":"+branch)
