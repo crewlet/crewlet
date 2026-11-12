@@ -81,8 +81,9 @@ import (
 // log takes is numbered as it is appended, [BridgeCall.Appended]), or, for
 // the take of a job still working or one cut off, the newest its launch is
 // known to hold (savepoint.go) — and the last note read the record says it
-// holds, none for a session cut off ([SessionCapture.NoteCursor]): what a
-// launch that continues the session would need to know of what came after it.
+// holds, none for a session cut off and none from a take the record marks
+// unanswered on ([SessionCapture.NoteCursor]): what a launch that continues the
+// session would need to know of what came after it.
 // How it came out is stamped beside: LANDED, REFUSED with why (no box to
 // read it out of, a pack that failed, a session past its bounds, the seat's
 // budget, an upload the store had no room for, a record the log will never
@@ -611,10 +612,14 @@ type SessionCapture struct {
 
 	// NoteCursor is the last note read ([RunSteer.Reads]) the run's record says
 	// the session holds ([notesHeld]): every note the record says was read when
-	// the archive was packed, where its harness ended its own run, and none
-	// where it was cut off. A launch that continues the session hands it every
-	// note read after — of a session cut off, every note the turn has read, as
-	// notes it may already show (internal/agent/runner's keptSession).
+	// the archive was packed, where its harness ended its own run, up to the
+	// first read the record marks unanswered ([NoteRead.Unanswered]) and not
+	// past it; and none where it was cut off. A launch that continues the
+	// session hands it every note read after — as notes it may already show
+	// where the cursor stopped before an unanswered read, since the session holds
+	// the answered ones after it; and of a session cut off, every note the turn
+	// has read, as notes it may already show (internal/agent/runner's
+	// keptSession).
 	NoteCursor int `json:"note_cursor,omitempty"`
 
 	// Interrupted says the session's harness was CUT OFF rather than exiting
@@ -1165,8 +1170,21 @@ func openPlaces(calls BridgeLog, last int) []int {
 
 // notesHeld is the last note read ([RunSteer.Reads]) run's record says a
 // session packed from its job holds ([SessionCapture.NoteCursor]): every one
-// the record says was read, where its harness ended its own run; and NONE where
-// it was cut off.
+// the record says was read, where its harness ended its own run, up to the
+// first read it marks unanswered; and NONE where it was cut off.
+//
+// NEVER PAST A READ MARKED UNANSWERED ([NoteRead.Unanswered]): its take's write
+// landed and its answer never reached the harness, so the session lacks that
+// note however cleanly it ended — while it holds the answered reads after it.
+// One number cannot say both, so the cursor stops before the unanswered read,
+// and a launch that continues the session tells every note past it, as notes it
+// may already show (internal/agent/runner's keptSession). WHICHEVER JOB'S TAKE
+// it was: a later job's brief that told the note again is not known to have
+// been built after the mark landed — a mark is made off the take's frame, and a
+// store's bad moment can hold it past the next launch — so a read marked
+// unanswered stops the cursor of every capture after it, told again rather than
+// never. An older build, which tells a continuation every note past the cursor
+// with no header, tells the unanswered note too.
 //
 // NONE, NOT THE NOTES BEFORE THE JOB'S LAST TAKE. A take is recorded read in
 // the write that answers the harness's ask, before the answer is handed back
@@ -1185,7 +1203,13 @@ func notesHeld(run PendingRun, cutOff bool) int {
 	if cutOff {
 		return 0
 	}
-	return run.Steer.Reads
+	held := run.Steer.Reads
+	for _, n := range run.Steer.Notes {
+		if n.Read != nil && n.Read.Unanswered && n.Read.Order > 0 && n.Read.Order <= held {
+			held = n.Read.Order - 1
+		}
+	}
+	return held
 }
 
 // spooledCapture is a capture taken out of its box and spooled, sealed, on this

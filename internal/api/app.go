@@ -963,6 +963,10 @@ func New(opts Options) (*App, error) {
 	if d, ok := opts.Runtime.(delegatedRuntime); ok {
 		sources.Delegated = d.DelegatedReads()
 	}
+	// And the company's atlas, where the runtime reads one (ADR-0126).
+	if a, ok := opts.Runtime.(atlasRuntime); ok {
+		sources.Atlas = a.AtlasReads()
+	}
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()

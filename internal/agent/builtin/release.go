@@ -50,13 +50,15 @@ import (
 // # What a delegate's allow needs
 //
 // Read from the code host when the verdict is given ([ReleaseDeps.unmet]): for
-// a merge, the head asked about, open, every check its target requires passed
-// on that head, mergeable, every other precondition of the target's gate met,
-// an approving review of that head by somebody other than its authors and the
+// a merge, the head asked about, open, every check its target requires and
+// every one its rule declares for that repository and branch passed on that
+// head, mergeable, every other precondition of the target's gate met, an
+// approving review of that head by somebody other than its authors and the
 // requester, and no always-escalate path; for a deploy, every change merged
 // into one branch, the commit holding each and on that branch, every check the
-// branch requires passed on the commit, and no always-escalate path in any
-// change. GitLab merge requests are not release requests: GitLab records no
+// branch requires and the rule declares passed on the commit, and no
+// always-escalate path in any change. A target with no check of either kind
+// is unmet. GitLab merge requests are not release requests: GitLab records no
 // approval of one commit, so nothing could bind an allow to the head shown.
 
 // The release tools' names, each its authority row's action.
@@ -120,9 +122,11 @@ const (
 	CheckMissing = "missing"
 )
 
-// CheckFact is one required check's result on a commit.
+// CheckFact is one required check's result on a commit, and whether the
+// delegation rule declared it rather than the code host.
 type CheckFact struct {
 	Name, Result string
+	Declared     bool
 }
 
 // PullFacts are a pull request as a release request's conditions read it.
@@ -140,8 +144,9 @@ type PullFacts struct {
 	// Approvers are the reviewers other than the author whose latest review
 	// approved Head.
 	Approvers []string
-	// Required is each check the base branch requires, with its result on
-	// Head; RequiredRead is false where the list could not be read.
+	// Required is each check the base branch requires, and each the rule
+	// declared for it, with its result on Head; RequiredRead is false where
+	// the list could not be read.
 	Required     []CheckFact
 	RequiredRead bool
 	// Paths are the paths it touches; PathsComplete false past GitHub's cap.
@@ -158,15 +163,17 @@ type PullRequests interface {
 	Ref(address string) (PullRef, bool)
 	// Repo is the repository address names there, likewise.
 	Repo(address string) (PullRef, bool)
-	// Facts are a pull request's facts, read as seat.
-	Facts(ctx context.Context, seat string, ref PullRef) (PullFacts, error)
+	// Facts are a pull request's facts, read as seat, the checks declared
+	// for its repository's base branch among them.
+	Facts(ctx context.Context, seat string, ref PullRef, declared []delegated.RequiredChecks) (PullFacts, error)
 	// Contains reports whether commit holds ancestor, in repo.
 	Contains(ctx context.Context, seat string, repo PullRef, commit, ancestor string) (bool, error)
 	// OnBranch reports whether branch's tip holds commit, in repo.
 	OnBranch(ctx context.Context, seat string, repo PullRef, branch, commit string) (bool, error)
-	// Checks are the results on commit of every check branch requires, and
-	// whether that list could be read.
-	Checks(ctx context.Context, seat string, repo PullRef, branch, commit string) ([]CheckFact, bool, error)
+	// Checks are the results on commit of every check branch requires and
+	// every one declared for it in repo, and whether that list could be read.
+	Checks(ctx context.Context, seat string, repo PullRef, branch, commit string,
+		declared []delegated.RequiredChecks) ([]CheckFact, bool, error)
 	// Merge merges the pull request at exactly head, as seat's app, and
 	// answers the commit its base moved to.
 	Merge(ctx context.Context, seat string, ref PullRef, head, method string) (string, error)
@@ -393,7 +400,7 @@ func (t *askToMerge) current(ctx context.Context, turn *turnctx.Turn, handle str
 	*tools.Result) {
 
 	if a.github {
-		f, err := t.deps.Pulls.Facts(ctx, handle, a.pull)
+		f, err := t.deps.Pulls.Facts(ctx, handle, a.pull, nil)
 		if err != nil {
 			r := nodeFailure(ctx, t.Name(), err, t.Name()+" didn't ask anything: "+a.ref+" could not be read "+
 				"from GitHub", "Call it again.")

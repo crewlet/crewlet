@@ -1,10 +1,15 @@
 package config
 
 import (
+	"fmt"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/toolname"
@@ -33,6 +38,28 @@ type DelegatedRule struct {
 	SampleOneIn int `yaml:"sample_one_in,omitempty" json:"sample_one_in,omitempty" desc:"One decision in this many is shown to the escalate_to people for a spot-check after the fact: 1 to 1000. Empty is 10."`
 
 	AlwaysEscalatePaths []string `yaml:"always_escalate_paths,omitempty" json:"always_escalate_paths,omitempty" desc:"Repository path globs (docs/**, services/*/billing/**) a merge or deploy touching which goes to people, beside the built-in list: only for a rule of pr_merge or deploy. At most 64, each at most 128 bytes."`
+
+	RequiredChecks []DelegatedRequiredChecks `yaml:"required_checks,omitempty" json:"required_checks,omitempty" desc:"Checks a GitHub repository's branch requires before a delegate's merge into it or deploy from it stands, beside any its branch protection or rulesets require: each passes only as a check run that completed with success on exactly the commit decided, reported by an app that is not one of the company's agents. Only for a rule of pr_merge or deploy. At most 64 entries, one per repository and branch."`
+}
+
+// DelegatedRequiredChecks are the checks a rule requires on one GitHub
+// repository's branch (delegated.RequiredChecks).
+type DelegatedRequiredChecks struct {
+	Repo string `yaml:"repo" json:"repo" js:"required" desc:"The repository on the company's GitHub, as owner/name."`
+
+	Branch string `yaml:"branch" json:"branch" js:"required" desc:"The branch a merge targets, or a deploy's changes merged into, as GitHub names it."`
+
+	Checks []string `yaml:"checks" json:"checks" js:"required" desc:"The checks' names exactly as GitHub shows their check runs (a workflow job's name). At least one, at most 32, each at most 128 bytes."`
+}
+
+// Release is what the rule adds to a merge's or a deploy's conditions.
+func (r DelegatedRule) Release() delegated.Release {
+	out := delegated.Release{EscalatePaths: slices.Clone(r.AlwaysEscalatePaths)}
+	for _, rc := range r.RequiredChecks {
+		out.RequiredChecks = append(out.RequiredChecks, delegated.RequiredChecks{Repo: rc.Repo, Branch: rc.Branch,
+			Checks: slices.Clone(rc.Checks)})
+	}
+	return out
 }
 
 // fieldDescriptions is the schema's description of the rule's kinds, which
@@ -58,6 +85,14 @@ const (
 	// delegatedMaxPaths bounds a rule's own globs, the SSH list's bound: a
 	// company's sensitive places are a handful of directories, not a tree.
 	delegatedMaxPaths = 64
+	// delegatedMaxRequiredChecks bounds a rule's required_checks entries at
+	// the paths' bound: one per repository and branch a company releases
+	// from, which is a handful of services.
+	delegatedMaxRequiredChecks = 64
+	// delegatedMaxCheckNameBytes is a declared check's longest name, a path
+	// glob's bound: a workflow job's name with its matrix values is a few
+	// dozen bytes.
+	delegatedMaxCheckNameBytes = 128
 )
 
 // SampleRate is one in how many of the rule's decisions are spot-checked.
@@ -199,6 +234,7 @@ func (c *Company) validateDelegatedDecisions(o *org.Organization) error {
 				s, delegatedMaxSampleOneIn, delegated.DefaultSampleOneIn)
 		}
 		checkRulePaths(&p, at(here, "always_escalate_paths"), r)
+		checkRequiredChecks(&p, at(here, "required_checks"), r)
 	}
 	return p.err()
 }
@@ -269,6 +305,12 @@ func firstLLM(r *org.Role) string {
 	return strings.TrimSpace(r.LLM[0])
 }
 
+// releases reports whether r delegates a merge or a deploy, the two kinds a
+// rule's paths and checks are read for.
+func (r DelegatedRule) releases() bool {
+	return slices.Contains(r.Kinds, delegated.KindPRMerge) || slices.Contains(r.Kinds, delegated.KindDeploy)
+}
+
 // checkRulePaths holds a rule's own always-escalate globs to a rule that
 // delegates a merge or a deploy, and each to a path glob a repository's paths
 // are matched by (gitref.ParsePathGlob).
@@ -276,7 +318,7 @@ func checkRulePaths(p *problems, path Path, r DelegatedRule) {
 	if len(r.AlwaysEscalatePaths) == 0 {
 		return
 	}
-	if !slices.Contains(r.Kinds, delegated.KindPRMerge) && !slices.Contains(r.Kinds, delegated.KindDeploy) {
+	if !r.releases() {
 		p.add(path, ErrConflict, "paths escalate a merge or a deploy; this rule delegates neither %s nor %s",
 			delegated.KindPRMerge, delegated.KindDeploy)
 		return
@@ -290,4 +332,129 @@ func checkRulePaths(p *problems, path Path, r DelegatedRule) {
 			p.add(idx(path, i), ErrUnknownValue, "%q is not a path glob: %s", glob, err.Error())
 		}
 	}
+}
+
+// githubRepoName is a GitHub repository's name: letters, digits, '.', '_' and
+// '-', at most 100, as GitHub allows one.
+var githubRepoName = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+})
+
+// checkRequiredChecks holds a rule's required checks to a rule that delegates
+// a merge or a deploy, each entry to one owner/name repository's branch once,
+// and each check to a name a check run can carry, once.
+func checkRequiredChecks(p *problems, path Path, r DelegatedRule) {
+	if len(r.RequiredChecks) == 0 {
+		return
+	}
+	if !r.releases() {
+		p.add(path, ErrConflict, "required checks hold a merge or a deploy; this rule delegates neither %s nor %s",
+			delegated.KindPRMerge, delegated.KindDeploy)
+		return
+	}
+	if n := len(r.RequiredChecks); n > delegatedMaxRequiredChecks {
+		p.add(path, ErrOutOfRange, "%d entries is more than %d", n, delegatedMaxRequiredChecks)
+		return
+	}
+	targets := map[string]int{}
+	for i, rc := range r.RequiredChecks {
+		here := idx(path, i)
+		owner, name, ok := strings.Cut(rc.Repo, "/")
+		if !ok || !ownerName().MatchString(strings.ToLower(owner)) || !githubRepoName().MatchString(name) ||
+			name == "." || name == ".." {
+			p.add(at(here, "repo"), ErrShape, "%q is not a GitHub repository; give it as owner/name, such as "+
+				"acme/api", rc.Repo)
+		}
+		if !gitref.ValidBranch(rc.Branch) {
+			p.add(at(here, "branch"), ErrShape, "%q is not a branch name; give the branch as GitHub names it, "+
+				"such as main", rc.Branch)
+		}
+		target := strings.ToLower(rc.Repo) + "\x00" + rc.Branch
+		if was, dup := targets[target]; dup {
+			p.add(here, ErrConflict, "%s's %s is listed twice (first at required_checks[%d]); give its checks "+
+				"in one entry", rc.Repo, rc.Branch, was)
+		} else {
+			targets[target] = i
+		}
+		checkCheckNames(p, at(here, "checks"), rc.Checks)
+	}
+}
+
+// checkCheckNames holds one entry's checks to at least one and at most a
+// merge gate's bound, each a name a check run can carry, once.
+func checkCheckNames(p *problems, path Path, checks []string) {
+	switch n := len(checks); {
+	case n == 0:
+		p.add(path, ErrMissing, "name at least one check, as GitHub shows its check run")
+		return
+	case n > CodeMaxRequiredChecks:
+		p.add(path, ErrOutOfRange, "%d checks is more than the %d one branch may require", n,
+			CodeMaxRequiredChecks)
+		return
+	}
+	named := map[string]int{}
+	for i, name := range checks {
+		switch was, dup := named[name]; {
+		case strings.TrimSpace(name) == "":
+			p.add(idx(path, i), ErrMissing, "a check has a name")
+		case strings.TrimSpace(name) != name || strings.ContainsFunc(name, unicode.IsControl):
+			p.add(idx(path, i), ErrShape, "%q has spaces at its ends or a control character; GitHub matches a "+
+				"check's name exactly", name)
+		case len(name) > delegatedMaxCheckNameBytes:
+			p.add(idx(path, i), ErrOutOfRange, "a check's name is at most %d bytes", delegatedMaxCheckNameBytes)
+		case dup:
+			p.add(idx(path, i), ErrConflict, "%q is listed twice (first at checks[%d])", name, was)
+		default:
+			named[name] = i
+		}
+	}
+}
+
+// delegatedAdvisories says where a rule requires checks of a repository the
+// company's GitHub does not cover: no merge or deploy is asked there, so the
+// entry is never read.
+func (c *Company) delegatedAdvisories() []Warning {
+	var out []Warning
+	gh := c.Integrations.GitHub
+	owners, known := c.literalGitHubOwners()
+	for i, r := range c.DelegatedDecisions.Rules {
+		for j, rc := range r.RequiredChecks {
+			here := idx(at(idx(at(field("delegated_decisions"), "rules"), i), "required_checks"), j)
+			owner, _, _ := strings.Cut(rc.Repo, "/")
+			switch {
+			case gh == nil || !gh.Enabled:
+				out = append(out, advisory(at(here, "repo"), fmt.Sprintf("the company runs no GitHub "+
+					"(integrations.github), so the checks required of %s are never read", rc.Repo)))
+			case known && !slices.Contains(owners, strings.ToLower(owner)):
+				out = append(out, advisory(at(here, "repo"), fmt.Sprintf("%s is not under an owner the "+
+					"company's GitHub covers (%s), so no merge or deploy there is asked and its checks are "+
+					"never read; name its owner in integrations.github.provisioning.org or a seat's "+
+					"integrations.github.repos", rc.Repo, words.And(owners))))
+			}
+		}
+	}
+	return out
+}
+
+// literalGitHubOwners is the owners the GitHub configuration names, and
+// whether every one is written out: one given as a ${VAR} reference is known
+// only where it is expanded, so no advisory can say a repository is outside.
+func (c *Company) literalGitHubOwners() ([]string, bool) {
+	gh := c.Integrations.GitHub
+	if gh == nil {
+		return nil, false
+	}
+	var named []string
+	if pv := gh.Provisioning; pv != nil {
+		named = append(append(named, pv.Org), pv.Repos...)
+	}
+	for role := range c.EachRole() {
+		if rg := role.Integrations.GitHub; rg != nil {
+			named = append(named, rg.Repos...)
+		}
+	}
+	if slices.ContainsFunc(named, envref.Has) {
+		return nil, false
+	}
+	return c.GitHubOwners(func(v string) string { return v }), true
 }

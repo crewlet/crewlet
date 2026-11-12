@@ -1372,9 +1372,11 @@ const (
 	// on top it measured 401.8 KiB (411,426 bytes), 222 bytes inside 402 KiB.
 	// A page action's report held to the engine's line and a seat or a space
 	// declared by its grammar past an enum's 64 add 26 bytes to it (the
-	// report's bound beside the page registry's other bounds), so it measures
-	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB: the next addition to
-	// the entry moves this budget only with a reason of its own.
+	// report's bound beside the page registry's other bounds), so it measured
+	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB. Merged on top of
+	// each delegated rule's required checks it measures 401.8 KiB (411,449
+	// bytes), 199 bytes inside 402 KiB: the next addition to the entry moves
+	// this budget only with a reason of its own.
 	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2236,7 +2238,10 @@ const (
 	// first press, a decision written in part said as such and a work list
 	// starting again from its first page when the engine refuses its cursor,
 	// merged on top of it, took it to 5743.0 KiB (5,880,861 bytes, +1,480, all
-	// script): 5744 KiB.
+	// script): 5744 KiB. Atlas named among the apps People grants, and each
+	// delegated rule's required checks with Settings › Delegated decisions
+	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
+	// all script): 5745 KiB.
 	// An open draft held to what the engine takes (draft.set's arguments
 	// declared only while one schema holds them, and sizes counted as the
 	// engine encodes them), Ask Crewlet reading and proposing to the agents'
@@ -2245,15 +2250,13 @@ const (
 	// page action's arguments and the page context held to the engine's
 	// bounds, the Budgets ceiling's seat held to a handle's grammar past an
 	// enum's 64, and the org builder's identities and a mention held to the
-	// engine's, +11,156 bytes on the tree they were built on, merged on top of
-	// it, took it to 5753.9 KiB (5,892,019 bytes, +11,158, all script):
-	// 5754 KiB. The atlas named among the access words a refusal uses, merged
-	// on top of it, took it to 5754.2 KiB (5,892,306 bytes, +287, all
-	// script): 5755 KiB. A page action's report held to the engine's line (a
-	// refusal written within it, the report cut at a whole character) and a
-	// seat or a space declared by its grammar past an enum's 64 took it to
-	// 5755.6 KiB (5,893,768 bytes, +1,462, all script): 5756 KiB.
-	treeBudget = 5<<20 + 636<<10
+	// engine's, +11,156 bytes on the tree they were built on, then a page
+	// action's report held to the engine's line (a refusal written within it,
+	// the report cut at a whole character) and a seat or a space declared by
+	// its grammar past an enum's 64, +1,462 on the tree they were built on,
+	// merged on top of it, took it to 5756.5 KiB (5,894,685 bytes, +12,671,
+	// all script): 5757 KiB.
+	treeBudget = 5<<20 + 637<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

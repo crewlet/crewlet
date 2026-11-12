@@ -91,8 +91,9 @@ type DelegatedDesk interface {
 	Rule(kind delegated.Kind) (delegates []string, rule, sampleOneIn int, ok bool)
 	// SSHPatterns are the company's additions to the SSH always-escalate list.
 	SSHPatterns() []string
-	// RulePaths are the always-escalate path globs the rule naming kind adds.
-	RulePaths(kind delegated.Kind) []string
+	// Release is what the rule naming kind adds to a merge's or a deploy's
+	// conditions: its always-escalate paths and its required checks.
+	Release(kind delegated.Kind) delegated.Release
 	// Held is the active run whose row holds held call id.
 	Held(ctx context.Context, id string) (sandbox.PendingRun, bool, error)
 	// Arguments are run's held call's arguments, opened from their seal.
@@ -393,7 +394,7 @@ func (t *reviewDelegated) overrule(ctx context.Context, turn *turnctx.Turn, run 
 	case delegated.KindPRMerge, delegated.KindDeploy:
 		// THE KIND'S OWN CONDITIONS, read from its code host now: what the
 		// request was when it was asked is not what an allow carries out.
-		for _, u := range t.deps.Release.unmet(ctx, turn, run.AgentHandle, kind, callArgs, desk.RulePaths(kind),
+		for _, u := range t.deps.Release.unmet(ctx, turn, run.AgentHandle, kind, callArgs, desk.Release(kind),
 			releaseFacts{labels: desk.Labels}) {
 			add(u.Word, u.Says)
 		}

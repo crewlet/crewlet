@@ -290,7 +290,7 @@ func fractionWords(t *testing.T, share float64) string {
 func numberWord(t *testing.T, n int) string {
 	t.Helper()
 	words := []string{"zero", "one", "two", "three", "four", "five", "six",
-		"seven", "eight", "nine", "ten", "eleven", "twelve"}
+		"seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen"}
 	if n < 0 || n >= len(words) {
 		t.Fatalf("%d state logs: numberWord cannot say it", n)
 	}

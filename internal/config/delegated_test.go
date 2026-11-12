@@ -152,3 +152,107 @@ func TestAMergeRuleAddsOnlyPathGlobsItCanMatch(t *testing.T) {
 		}
 	}
 }
+
+// A rule's required checks are held to a merge or deploy rule, one GitHub
+// repository's branch per entry, and names a check run can carry, each once;
+// the rule hands them to the engine as written.
+//
+// Mutation: accept required checks on an ssh_operate rule, a repository that
+// is not owner/name, a check twice or an entry for one branch twice, and the
+// rule says it holds a merge to checks it can never read.
+func TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases(t *testing.T) {
+	t.Parallel()
+	good := "    - {kinds: [pr_merge, deploy], delegates: [sre], escalate_to: [ops-lead], required_checks: [" +
+		"{repo: acme/api, branch: main, checks: [test, 'lint (ubuntu-latest)']}, " +
+		"{repo: acme/web, branch: release/v2, checks: [build]}]}\n"
+	doc, err := config.ParseCompany([]byte(delegatedDoc(t, good)))
+	if err != nil {
+		t.Fatalf("a merge rule with required checks was refused: %v", err)
+	}
+	rule, _, _ := doc.DelegatedDecisions.RuleFor(delegated.KindPRMerge)
+	got := rule.Release().RequiredChecks
+	if len(got) != 2 || got[0].Repo != "acme/api" || got[0].Branch != "main" ||
+		strings.Join(got[0].Checks, ",") != "test,lint (ubuntu-latest)" || got[1].Branch != "release/v2" {
+		t.Fatalf("the rule's required checks read %+v", got)
+	}
+	entry := func(e string) string {
+		return "    - {kinds: [pr_merge], delegates: [security-a], escalate_to: [ops-lead], " +
+			"required_checks: [" + e + "]}\n"
+	}
+	many := make([]string, 65)
+	for i := range many {
+		many[i] = "{repo: acme/api, branch: b" + strings.Repeat("x", i) + ", checks: [test]}"
+	}
+	for _, c := range []struct{ name, rules, path, kind string }{
+		{"checks on a server command rule", "    - {kinds: [ssh_operate], delegates: [security-a], " +
+			"escalate_to: [ops-lead], required_checks: [{repo: acme/api, branch: main, checks: [test]}]}\n",
+			"delegated_decisions.rules[0].required_checks", "conflict"},
+		{"a repository with no owner", entry("{repo: api, branch: main, checks: [test]}"),
+			"delegated_decisions.rules[0].required_checks[0].repo", "shape"},
+		{"a repository path too deep", entry("{repo: acme/api/x, branch: main, checks: [test]}"),
+			"delegated_decisions.rules[0].required_checks[0].repo", "shape"},
+		{"an empty branch", entry("{repo: acme/api, branch: '', checks: [test]}"),
+			"delegated_decisions.rules[0].required_checks[0].branch", "shape"},
+		{"no checks", entry("{repo: acme/api, branch: main, checks: []}"),
+			"delegated_decisions.rules[0].required_checks[0].checks", "missing"},
+		{"an empty check", entry("{repo: acme/api, branch: main, checks: ['']}"),
+			"delegated_decisions.rules[0].required_checks[0].checks[0]", "missing"},
+		{"a check with a trailing space", entry("{repo: acme/api, branch: main, checks: ['test ']}"),
+			"delegated_decisions.rules[0].required_checks[0].checks[0]", "shape"},
+		{"a check twice", entry("{repo: acme/api, branch: main, checks: [test, test]}"),
+			"delegated_decisions.rules[0].required_checks[0].checks[1]", "conflict"},
+		{"one branch twice", entry("{repo: acme/api, branch: main, checks: [test]}, " +
+			"{repo: Acme/API, branch: main, checks: [lint]}"),
+			"delegated_decisions.rules[0].required_checks[1]", "conflict"},
+		{"past 64 entries", entry(strings.Join(many, ", ")),
+			"delegated_decisions.rules[0].required_checks", "out_of_range"},
+	} {
+		_, parseErr := config.ParseCompany([]byte(delegatedDoc(t, c.rules)))
+		if p, ok := problemAt(parseErr, c.path); !ok || p.Kind != c.kind {
+			t.Errorf("%s: %v, want %s at %s", c.name, parseErr, c.kind, c.path)
+		}
+	}
+}
+
+// A required check of a repository the company's GitHub does not cover is
+// advised, never refused: it is never read, since no merge or deploy is asked
+// there. An owner given by reference is known only at run time, so nothing is
+// advised against it.
+func TestARequiredCheckOutsideTheCompanysGitHubIsAdvised(t *testing.T) {
+	t.Parallel()
+	rules := "    - {kinds: [pr_merge], delegates: [security-a], escalate_to: [ops-lead], required_checks: [" +
+		"{repo: acme/api, branch: main, checks: [test]}, {repo: other/api, branch: main, checks: [test]}]}\n"
+	advised := func(github string) []string {
+		t.Helper()
+		doc := delegatedDoc(t, rules)
+		if github != "" {
+			doc = strings.Replace(doc, "integrations:\n", "integrations:\n  github: "+github+"\n", 1)
+		}
+		cfg, err := config.ParseCompany([]byte(doc))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		var out []string
+		for _, w := range cfg.AdvisoryWarnings() {
+			if strings.Contains(w.Path, "required_checks") {
+				out = append(out, w.Path)
+			}
+		}
+		return out
+	}
+	first := "delegated_decisions.rules[0].required_checks[0].repo"
+	second := "delegated_decisions.rules[0].required_checks[1].repo"
+	for _, c := range []struct {
+		name, github string
+		want         []string
+	}{
+		{"no GitHub", "", []string{first, second}},
+		{"an organization", "{enabled: true, webhook_secret: s, provisioning: {org: Acme}}", []string{second}},
+		{"an organization by reference", "{enabled: true, webhook_secret: s, provisioning: {org: '${GH_ORG}'}}",
+			nil},
+	} {
+		if got := advised(c.github); strings.Join(got, " ") != strings.Join(c.want, " ") {
+			t.Errorf("%s: advised %v, want %v", c.name, got, c.want)
+		}
+	}
+}

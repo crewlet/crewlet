@@ -33,7 +33,10 @@ import (
 // # What it bounds, and what it does not
 //
 // The give-backs, and nothing else. A member that has lost its coordination
-// store ALONE stops in about one allowance: 15 s at the shipped 45 s TTL. A
+// store ALONE stops in about one allowance: 15 s at the shipped 45 s TTL — and
+// up to five seconds more where it holds settles of note takes whose answers
+// were lost, whose last attempts have a window of their own ("Only what
+// lapses" below), which nothing else in that stop overlaps. A
 // member that has lost BOTH stores — a lone embedded member whose peers have
 // gone, where the event stream and the buckets lose their quorum together —
 // also pays every bound the stream's records keep, which this allowance
@@ -54,7 +57,10 @@ import (
 // what follows the drain can take about 46 s: 15 for the seats, 15 for the
 // listeners, 16 for the aux, keeper, usage and admission bounds — about 50 s
 // on a node without `data`, which flushes its custody batches on a ten-second
-// budget instead of a keeper and a usage flush. docs/guides/deployment.md
+// budget instead of a keeper and a usage flush. The settles' window adds
+// nothing to either: it opens as the teardown begins, before the engine's
+// auxiliary-spend flush, and is over by the end of that flush's five seconds
+// wherever the flush spends them. docs/guides/deployment.md
 // therefore has every pod given a grace of at least its longest turn plus
 // 60 s, plus any preStop sleep (Kubernetes counts the hook inside the grace):
 // the drain's share, this stop's 50 s at most, and room for the process to
@@ -64,7 +70,7 @@ import (
 //
 // A round trip whose fallback is NOT a lease lapsing is never a step of it,
 // because the allowance's whole argument is that running out of it costs no
-// more than not trying. Two of a stop's round trips are not that:
+// more than not trying. Three of a stop's round trips are not that:
 //
 //   - Its LIFECYCLE EVENTS — the node's `org_stopped`, each seat's last
 //     `agent_terminated` — travel on the event stream, which is replicated
@@ -80,6 +86,13 @@ import (
 //     restarts under the same id or an operator excludes it. The engine
 //     reserves it a share of the allowance no step before it can spend, and
 //     hands this budget the rest.
+//   - The engine's last attempts at the SETTLES of note takes whose answers
+//     were lost fall back to a take said unsettled: the run records are a
+//     bucket of their own, which can lose its quorum alone — which is when
+//     settles are held — so as steps of this allowance they spent what the
+//     give-backs made later in the stop needed. The engine makes them in a
+//     window of their own from the teardown's start, five seconds
+//     (internal/engine's steerSettleStopBudget), beside the give-backs.
 //
 // # The clock runs only while a step does
 //

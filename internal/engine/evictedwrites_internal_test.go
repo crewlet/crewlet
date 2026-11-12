@@ -16,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -427,6 +429,35 @@ var evictedWriters = map[string]evictedWriter{
 			return accessdomain.NewGates(db)
 		},
 	},
+	atlasdomain.Domain{}.Name(): {
+		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
+			statelog.Position, statelog.Outcome, error) {
+			t.Helper()
+			// A PERSON'S PURPOSE FOR A SERVICE, through the writer every
+			// person's claim is written with.
+			claim, err := atlas.Says(atlas.MustRef(atlas.KindService, "evicted"), atlas.FactPurpose,
+				"evicted "+tag, atlas.PersonSource("ceo"), time.Now())
+			if err != nil {
+				t.Fatalf("build the claim: %v", err)
+			}
+			res, err := e.core.Load().atlasWriter.Record(ctx, atlasdomain.Call{
+				By:   iam.Actor{Name: "ceo", Kind: iam.ActorHuman},
+				OpID: statelog.NewOpID(time.Now(), "claim-"+tag),
+			}, claim, atlasdomain.NoIfMatch)
+			return res.Position, res.Outcome, err
+		},
+		applied: func(t *testing.T, back *Backends, tag string) bool {
+			return rowExists(t, back, "atlas_claims", "value_text", "evicted "+tag)
+		},
+		evictionSubject: func(node string) string {
+			return atlasdomain.EvictionSubject(node).String()
+		},
+		eviction:  atlasEviction,
+		evictions: "atlas_evictions",
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return atlasdomain.NewGates(db)
+		},
+	},
 }
 
 // evictedDigest is a snapshot digest's spelling, for a told record whose
@@ -729,6 +760,32 @@ func accessEviction(t *testing.T, node string) []byte {
 			Subject: accessdomain.EvictionSubject(node), Op: accessdomain.OpEviction,
 			Writer: "node-peer", CreatedAt: time.Now().UTC(),
 			Scope: accessdomain.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
+		OperatorID: "operator",
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction record: %v", err)
+	}
+	return payload
+}
+
+// atlasEviction is the same for the atlas log.
+func atlasEviction(t *testing.T, node string) []byte {
+	t.Helper()
+	body, err := json.Marshal(atlasdomain.Eviction{
+		V: atlasdomain.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		EvictedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction: %v", err)
+	}
+	payload, err := atlasdomain.Encode(atlasdomain.MutationRecord{
+		RecordEnvelope: atlasdomain.RecordEnvelope{
+			V: atlasdomain.GateRecordVersion, OpID: "op-evict-" + node,
+			Subject: atlasdomain.EvictionSubject(node), Op: atlasdomain.OpEviction,
+			Writer: "node-peer", CreatedAt: time.Now().UTC(),
+			Scope: atlasdomain.ScopeSet{Subject: true},
 		},
 		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
 		OperatorID: "operator",

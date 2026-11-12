@@ -218,8 +218,10 @@ type Continuation struct {
 	// its own run, that the session was cut off or may have been, every call
 	// of the round and every note the turn has read, any of which such a copy
 	// may lack, and where it did, the calls the round's log took late, which
-	// no copy is known to hold ([Runner.inPlaceAfter]); and the notes
-	// [AgentRunRequest.Notes] carries, which no copy has read. The floor of a
+	// no copy is known to hold ([Runner.inPlaceAfter]), and the notes from a
+	// read the record marks unanswered on; and the notes
+	// [AgentRunRequest.Notes] carries, which no copy has read — a served one
+	// told as a note it may already show ([Runner.inPlaceNotes]). The floor of a
 	// launch that continues the copy counts all of it where a capture measured
 	// the copy's context, and is the static floor where none did
 	// (internal/engine's continuedFloor).
@@ -304,8 +306,10 @@ type SessionBasis struct {
 	// session may not have been answered — and the last note read the run's
 	// record says it holds (sandbox.SessionCapture.NoteCursor), read only where
 	// its harness ended its own run: a session cut off is told every note the
-	// turn has read ([Runner.keptSession]). Zero holds none of the round's
-	// calls.
+	// turn has read ([Runner.keptSession]). The cursor stops before the first
+	// read the record marks unanswered, and is stopped there again by the
+	// turn's carried reads where that mark landed after the capture was
+	// stamped ([Runner.notesHeldBy]). Zero holds none of the round's calls.
 	Through    int
 	NoteCursor int
 
@@ -638,8 +642,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// a fresh run's after every note the turn read, as any brief does; the
 	// asking run's own session after the answer — and, where its harness is
 	// not known to have ended its own run, after every note the turn has
-	// read, which such a copy may lack ([Runner.inPlaceAfter]): a copy whose
-	// harness ended its own run holds every note it read, and its brief's.
+	// read, which such a copy may lack ([Runner.inPlaceNotes]): a copy whose
+	// harness ended its own run holds every note it read, and its brief's,
+	// but a read its record marks unanswered.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
@@ -722,8 +727,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	for _, part := range inPlaceAfter {
 		continued += "\n\n" + part
 	}
-	if rendered := renderedNotes(fresh); len(rendered) > 0 {
-		continued += "\n\n" + strings.Join(rendered, "\n\n")
+	// THEN THE NOTES: what the copy may lack of those the turn has read, and
+	// the ones this brief is the first to read ([Runner.inPlaceNotes]).
+	if notes := r.inPlaceNotes(carry, fresh); len(notes) > 0 {
+		continued += "\n\n" + strings.Join(notes, "\n\n")
 	}
 	// A FRESH RUN'S BRIEF is the round's own, and what became of the run
 	// before it — what it asked and was told, or how it was cut off: it
@@ -1247,10 +1254,16 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 // that names a job is one of those jobs': a reviewer's reads are review's, the
 // first segment's name no job, and an earlier round's run has a record of its
 // own.
+//
+// NEVER A READ MARKED UNANSWERED (steer.Reading.Unanswered): its take's write
+// landed and its answer never reached the job's harness, so the job did not read
+// it, whatever the record's read says — the turn's later phases carry it, and
+// the record of the step that never handed it over does not list it.
 func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 	var out []types.PhaseSteer
 	for _, read := range reads {
-		if read.Phase != types.PhaseExecute || read.Iteration != iteration || read.Launch == "" {
+		if read.Phase != types.PhaseExecute || read.Iteration != iteration || read.Launch == "" ||
+			read.Unanswered {
 			continue
 		}
 		out = append(out, types.PhaseSteer{Round: runRound, NoteID: read.ID, Boundary: read.Boundary})
