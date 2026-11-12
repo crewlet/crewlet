@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
@@ -136,7 +137,7 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	order := []string{trackerLog, vectors, doclet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name(), codeLog, usage.Domain{}.Name(), iamdomain.Domain{}.Name(),
 		assistantdomain.Domain{}.Name(), chatlet.Domain{}.Name(), executordomain.Domain{}.Name(),
-		accessdomain.Domain{}.Name()}
+		accessdomain.Domain{}.Name(), atlasdomain.Domain{}.Name()}
 	var registered []string
 	for _, domain := range registeredDomains() {
 		registered = append(registered, domain.Name())

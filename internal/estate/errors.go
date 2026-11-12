@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
@@ -306,6 +307,17 @@ var sentinels = []sentinel{
 	{"accessdomain.ErrNotDue", accessdomain.ErrNotDue},
 	{"accessdomain.ErrRecorded", accessdomain.ErrRecorded},
 	{"accessdomain.ErrUnreadable", accessdomain.ErrUnreadable},
+
+	// THE ATLAS LOG'S, answered by a data node for a person or a node holding
+	// no data ([AtlasReads], [AtlasWrites]): a value or a key the vocabulary
+	// refuses, an edit decided from a version the entry moved past, something
+	// an administrator purged, a lost race and an expiry no longer due.
+	{"atlasdomain.ErrConflict", atlasdomain.ErrConflict},
+	{"atlasdomain.ErrExists", atlasdomain.ErrExists},
+	{"atlasdomain.ErrInvalid", atlasdomain.ErrInvalid},
+	{"atlasdomain.ErrNotDue", atlasdomain.ErrNotDue},
+	{"atlasdomain.ErrPurged", atlasdomain.ErrPurged},
+	{"atlasdomain.ErrStaleVersion", atlasdomain.ErrStaleVersion},
 	// And the session's bound the log refuses a capture past, which is
 	// internal/executorkeep's: the sandbox that takes a session stops at it too.
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
@@ -400,6 +412,7 @@ var typedKinds = []typedKind{
 	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
 	{"accessdomain.ErrFutureVersion", reflect.TypeFor[*accessdomain.ErrFutureVersion]()},
+	{"atlasdomain.ErrFutureVersion", reflect.TypeFor[*atlasdomain.ErrFutureVersion]()},
 	{"executordomain.ErrFutureVersion", reflect.TypeFor[*executordomain.ErrFutureVersion]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},

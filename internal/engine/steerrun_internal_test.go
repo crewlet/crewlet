@@ -10,7 +10,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,6 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // A person's note to a turn whose executor is out, through the real turn: the
@@ -588,6 +591,759 @@ func TestAStoreFailureAnswersEmptyNeverAnError(t *testing.T) {
 	}
 }
 
+// lostAnswerStore is a run store whose takes land and answer an error, as a take
+// does whose compare-and-swap the store answered after its caller's deadline;
+// its settles fail as many times as failSettles says before they are made.
+type lostAnswerStore struct {
+	sandbox.PendingStore
+	mu          sync.Mutex
+	failSettles int
+}
+
+func (s *lostAnswerStore) TakeNotes(ctx context.Context, turnID string, take sandbox.NoteTake) ([]sandbox.RunNote,
+	error) {
+	if _, err := s.PendingStore.TakeNotes(ctx, turnID, take); err != nil {
+		return nil, err
+	}
+	return nil, context.DeadlineExceeded
+}
+
+func (s *lostAnswerStore) SettleTake(ctx context.Context, turnID string, settle sandbox.NoteSettle) (
+	[]sandbox.RunNote, error) {
+	s.mu.Lock()
+	failing := s.failSettles > 0
+	if failing {
+		s.failSettles--
+	}
+	s.mu.Unlock()
+	if failing {
+		return nil, context.DeadlineExceeded
+	}
+	return s.PendingStore.SettleTake(ctx, turnID, settle)
+}
+
+// readOn is the read turnID's record holds of note id, nil while it waits or
+// the record cannot say.
+func readOn(ctx context.Context, store sandbox.PendingStore, turnID, id string) *sandbox.NoteRead {
+	run, found, err := store.Get(ctx, turnID)
+	if err != nil || !found {
+		return nil
+	}
+	for _, n := range run.Steer.Notes {
+		if n.ID == id {
+			return n.Read
+		}
+	}
+	return nil
+}
+
+// A HOOK'S TAKE WHOSE ANSWER WAS LOST HANDS THE HARNESS NOTHING, AND IS NEVER LEFT
+// SAYING THE RUN READ IT. A take the store recorded after the hook's five seconds
+// ran out — its write landed, its answer an error — answers the hook with
+// nothing, as every failed take does, and is settled off the hook's path, asked
+// again while the store does not answer: the note it recorded is marked
+// unanswered, where it was read and by which job kept, so no capture of the
+// job's session counts it held and a launch that continues one tells it again.
+// Nothing publishes it delivered, since nothing was delivered, and no later take
+// hands it over, the note being read: the review reads it, carried as read and
+// said unanswered to the segment that resumes the turn, and a relaunch's brief
+// is told the mark as the record holds it then.
+//
+// Mutation: skip the settle, settle without marking, give up on the settle's
+// first failure, publish the note delivered, carry it without its mark, or
+// tell a brief no mark, and a check goes red.
+func TestAHooksTakeWhoseAnswerWasLostIsSettledUnanswered(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, published := steersOver(t, steerRing, &lostAnswerStore{PendingStore: store, failSettles: 1})
+	runs.stopped = ctx.Done()
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, inbox, 1)
+	if got := inbox.Take(ctx, mcpbridge.SteerEventToolBatch); got != "" {
+		t.Fatalf("a take whose answer was lost answered the hook %q, want nothing", got)
+	}
+	eventually(t, "the lost take's note marked unanswered", func() bool {
+		read := readOn(ctx, store, "run-1", "n-1")
+		return read != nil && read.Unanswered
+	})
+	if read := readOn(ctx, store, "run-1", "n-1"); read.Launch != launch || read.Take == "" ||
+		read.Boundary != string(types.SteerBoundaryToolBatch) || read.Order != 1 {
+		t.Errorf("the note is read %+v, want the lost take's read by job %s, kept", read, launch)
+	}
+	// CARRIED AS READ, AND SAID UNANSWERED, to the segment that resumes the turn.
+	row, _, err := store.Get(ctx, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if carried := runs.carried(row); len(carried) != 1 || carried[0].ID != "n-1" || !carried[0].Unanswered {
+		t.Errorf("the turn carries %+v, want the note read and unanswered", carried)
+	}
+	// AND TO A RELAUNCH'S BRIEF AS THE RECORD MARKS IT THEN, whatever the
+	// segment's claim read: a mark can land after the claim.
+	if brief := claimedSource(t, store, runs, launch).Brief(ctx); len(brief.Notes) != 0 ||
+		!slices.Equal(brief.Unanswered, []string{"n-1"}) {
+		t.Errorf("a relaunch's brief is %+v, want no note to read and n-1 said unanswered", brief)
+	}
+	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+		t.Errorf("the run's finish was handed %q, want nothing: the note is read", got)
+	}
+	for _, rec := range steered(published) {
+		if rec.NoteID == "n-1" {
+			t.Errorf("the note nobody was handed is recorded %s", rec.Outcome)
+		}
+	}
+}
+
+// claimedSource is the notes of a segment that resumes run-1 from launch, as
+// runs serves them, closed with the case.
+func claimedSource(t *testing.T, store sandbox.PendingStore, runs *runSteers, launch string) *rowSource {
+	t.Helper()
+	claimed, won, err := store.ClaimForResume(t.Context(), "run-1", sandbox.CompletionTail(launch), sandbox.Fence{})
+	if err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	source := runs.source(t.Context(), claimed, sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch})
+	t.Cleanup(func() { source.Close(t.Context()) })
+	return source
+}
+
+// viewCaughtUp waits until the segment's view of the record holds no waiting
+// note: a view follows the record a write behind, and a note it still shows
+// waiting would answer Waiting for the lost take a case asks about.
+func viewCaughtUp(t *testing.T, source *rowSource) {
+	t.Helper()
+	eventually(t, "the segment's view to hold no waiting note", func() bool {
+		view, opened, _ := source.watch.snapshot()
+		return view.Found && len(opened) == 0
+	})
+}
+
+// reviewRound is the reading of round n of a review's first iteration.
+func reviewRound(n int) steer.Reading {
+	return steer.Reading{Phase: types.PhaseReview, Iteration: 1, Round: n, Boundary: types.SteerBoundaryRound}
+}
+
+// A REVIEW'S TAKE WHOSE ANSWER WAS LOST HANDS ITS NOTES OVER ALL THE SAME. A take
+// of a resumed segment's whose write landed and whose answer was an error is
+// settled on its own path, its round still waiting on it: the settle answers
+// what the take recorded, and the round is handed that — read by the record's
+// word, so no later take would ever hand it over. Where the store answers the
+// settle no more than the take, the take is kept: it stands for a note waiting,
+// so a round asking for tools ends and the next opens; the next round's take,
+// or a relaunch's brief, settles it again and hands over what it recorded,
+// never marking it; a brief a failed launch hands back hands its take back too,
+// and the write of one that launches records the note read by the job it opens,
+// in the take's place — the brief is the first to tell it — so the job's ending
+// reports it where the job never started, with the rest of its brief, and a
+// resume carries it as that job's read, which the job's execute record lists:
+// at the take's own place among the reads, which the brief says, so a note a
+// later round read, correcting it, is told after it by every brief. Only a take
+// still unsettled when the segment ends is handed off its path, and marked
+// unanswered.
+//
+// Mutation: hand the round nothing where the settle answers, settle a lost take
+// at no later round or brief, mark it where a later one answers, forget it when
+// a brief is handed back, seal a brief without the takes its notes came from,
+// number the read taken over at the write's place, place no note a settle hands
+// over, report no note waiting while it is lost, or never hand it off at the
+// segment's end, and a case goes red.
+func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T, failSettles int) (*sandbox.CoordStore, *runSteers, *rowSource) {
+		t.Helper()
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		runs, _ := steersOver(t, steerRing, &lostAnswerStore{PendingStore: store, failSettles: failSettles})
+		runs.stopped = t.Context().Done()
+		launch := workingRun(t, store, runs, "run-1")
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		return store, runs, claimedSource(t, store, runs, launch)
+	}
+	handed := func(t *testing.T, got []steer.Note, what string) {
+		t.Helper()
+		if len(got) != 1 || got[0].ID != "n-1" || got[0].Text != "use staging" {
+			t.Fatalf("%s was handed %+v, want the note the lost take recorded", what, got)
+		}
+	}
+	answered := func(t *testing.T, store *sandbox.CoordStore) {
+		t.Helper()
+		if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || read.Unanswered ||
+			read.Boundary != string(types.SteerBoundaryRound) || read.Take == "" {
+			t.Errorf("the note handed over is read %+v, want the review take's read, never marked", read)
+		}
+	}
+	t.Run("its settle answering", func(t *testing.T) {
+		t.Parallel()
+		store, _, source := setup(t, 0)
+		handed(t, source.Take(t.Context(), reviewRound(1)), "the round whose take was lost")
+		answered(t, store)
+		viewCaughtUp(t, source)
+		if source.Waiting() {
+			t.Error("a source with nothing left to hand over reports a note waiting")
+		}
+	})
+	t.Run("its settle failing once, the next round settling it", func(t *testing.T) {
+		t.Parallel()
+		store, _, source := setup(t, 1)
+		if got := source.Take(t.Context(), reviewRound(1)); len(got) != 0 {
+			t.Fatalf("the round was handed %+v by a take nothing settled", got)
+		}
+		viewCaughtUp(t, source)
+		if !source.Waiting() {
+			t.Error("a lost take the store may yet settle does not stand for a note waiting")
+		}
+		handed(t, source.Take(t.Context(), reviewRound(2)), "the next round")
+		answered(t, store)
+		if source.Waiting() {
+			t.Error("a source whose lost take was handed over still reports a note waiting")
+		}
+	})
+	t.Run("its settle failing once, a relaunch's brief settling it", func(t *testing.T) {
+		t.Parallel()
+		store, _, source := setup(t, 1)
+		if got := source.Take(t.Context(), reviewRound(1)); len(got) != 0 {
+			t.Fatalf("the round was handed %+v by a take nothing settled", got)
+		}
+		brief := source.Brief(t.Context())
+		handed(t, brief.Notes, "the relaunch's brief")
+		// THE LAUNCH FAILS BEFORE ITS WRITE: the brief, and the take with it,
+		// come back, and the next round hands the note over again.
+		source.Return(t.Context(), brief.Notes)
+		handed(t, source.Take(t.Context(), reviewRound(2)), "the round after the failed launch")
+		answered(t, store)
+	})
+	t.Run("its settle failing once, a relaunch's brief settling it and its launch writing", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		store, runs, source := setup(t, 1)
+		if got := source.Take(ctx, reviewRound(1)); len(got) != 0 {
+			t.Fatalf("the round was handed %+v by a take nothing settled", got)
+		}
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag the release", By: "founder"})
+		brief := source.Brief(ctx)
+		var briefed []string
+		for _, n := range brief.Notes {
+			briefed = append(briefed, n.ID)
+		}
+		if !slices.Equal(briefed, []string{"n-1", "n-2"}) {
+			t.Fatalf("the relaunch's brief carries %v, want the lost take's note, then the waiting one", briefed)
+		}
+		// THE LAUNCH'S WRITE, its brief sealed as its launcher seals it, and
+		// then the launch fails: its job never starts.
+		sealed, err := runs.briefNotes("run-1", 2, brief.Notes, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed := mustRow(t, store, "run-1")
+		relaunch := claimed
+		relaunch.BriefNotes = sealed
+		relaunched, err := store.BeginLaunch(ctx, relaunch, sandbox.Fence{Owner: claimed.Owner,
+			Epoch: claimed.OwnerEpoch})
+		if err != nil {
+			t.Fatalf("BeginLaunch: %v", err)
+		}
+		row := mustRow(t, store, "run-1")
+		for _, read := range runs.carried(row) {
+			if read.Phase != types.PhaseExecute || read.Iteration != 2 ||
+				read.Boundary != types.SteerBoundaryBrief || read.Launch != relaunched.LaunchID {
+				t.Errorf("note %s is carried read %+v, want it read by job %s's brief", read.ID, read.Reading,
+					relaunched.LaunchID)
+			}
+		}
+		var unread []string
+		for _, n := range row.UnreadNotes() {
+			unread = append(unread, n.ID)
+		}
+		if !slices.Equal(unread, []string{"n-1", "n-2"}) {
+			t.Errorf("the ending of the job that never started reports %v, want every note its brief carried",
+				unread)
+		}
+	})
+	t.Run("a later round's note correcting it, its brief handing it over in its place", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		// ITS SETTLE FAILING TWICE: on the round's own path, and again at the
+		// next round, whose own take of the later note is answered.
+		store, runs, source := setup(t, 2)
+		if got := source.Take(ctx, reviewRound(1)); len(got) != 0 {
+			t.Fatalf("the round was handed %+v by a take nothing settled", got)
+		}
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "no, use production instead of staging",
+			By: "founder"})
+		if got := source.Take(ctx, reviewRound(2)); len(got) != 1 || got[0].ID != "n-2" {
+			t.Fatalf("the next round was handed %+v, want the later note alone", got)
+		}
+		brief := source.Brief(ctx)
+		handed(t, brief.Notes, "the relaunch's brief")
+		if lost, later := brief.Orders["n-1"], brief.Orders["n-2"]; lost == 0 || later <= lost {
+			t.Errorf("the brief places the lost take's note at %d and the later round's at %d, want the lost "+
+				"one first, where its take was made", lost, later)
+		}
+		sealed, err := runs.briefNotes("run-1", 2, brief.Notes, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed := mustRow(t, store, "run-1")
+		relaunch := claimed
+		relaunch.BriefNotes = sealed
+		if _, err := store.BeginLaunch(ctx, relaunch, sandbox.Fence{Owner: claimed.Owner,
+			Epoch: claimed.OwnerEpoch}); err != nil {
+			t.Fatalf("BeginLaunch: %v", err)
+		}
+		// EVERY LATER BRIEF TELLS THE TWO IN THE ORDER THE RECORD READ THEM,
+		// the correction after the note it corrects.
+		var carried []string
+		for _, read := range runs.carried(mustRow(t, store, "run-1")) {
+			carried = append(carried, read.ID)
+		}
+		if !slices.Equal(carried, []string{"n-1", "n-2"}) {
+			t.Errorf("the record carries the notes as %v, want n-1 then n-2: the later round's note, "+
+				"correcting it, is told ahead of the note it corrects", carried)
+		}
+	})
+	t.Run("its settle failing until the segment ends", func(t *testing.T) {
+		t.Parallel()
+		store, _, source := setup(t, 2)
+		for round := 1; round <= 2; round++ {
+			if got := source.Take(t.Context(), reviewRound(round)); len(got) != 0 {
+				t.Fatalf("round %d was handed %+v by a take nothing settled", round, got)
+			}
+		}
+		if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || read.Unanswered {
+			t.Fatalf("the note is read %+v before the segment ends, want it read and unmarked", read)
+		}
+		source.Close(t.Context())
+		eventually(t, "the take still lost at the segment's end marked unanswered", func() bool {
+			read := readOn(t.Context(), store, "run-1", "n-1")
+			return read != nil && read.Unanswered
+		})
+	})
+	t.Run("a lost take standing for a note for its patience", func(t *testing.T) {
+		t.Parallel()
+		_, runs, source := setup(t, 1000)
+		clock := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+		runs.now = func() time.Time { return clock }
+		if got := source.Take(t.Context(), reviewRound(1)); len(got) != 0 {
+			t.Fatalf("the round was handed %+v by a take nothing settled", got)
+		}
+		viewCaughtUp(t, source)
+		clock = clock.Add(steerSettlePatience - time.Second)
+		if !source.Waiting() {
+			t.Error("a take lost less than its patience ago does not stand for a note waiting")
+		}
+		clock = clock.Add(2 * time.Second)
+		if source.Waiting() {
+			t.Error("a take lost past its patience still stands for a note waiting: a silent store would " +
+				"hold the review's rounds open for as long as it is down")
+		}
+	})
+}
+
+// gatedSettles is a run store whose settles the store does not answer while
+// unavailable says so, and which wait at gate while one is set: counting the
+// attempts, and the most it held at once. Nil unavailable answers every settle;
+// answering, where set, is called as a settle is about to be answered.
+//
+// UNAVAILABLE IS THE CASE'S OWN LITERAL, written inside its bubble, because
+// whether the store answers yet is a decision on the clock, and only a bubble's
+// is the case's to advance: SettleTake is the double's half of the store's
+// contract, run inside the bubble by every case here but held by none
+// lexically, so a reading written in it would sit outside every bubble — and as
+// the method sandbox.PendingStore names, it can be neither unexported nor
+// declared bubble-only (go doc ./internal/fixedwait).
+type gatedSettles struct {
+	sandbox.PendingStore
+	unavailable func() bool
+	answering   func()
+	gate        chan struct{}
+
+	mu                    sync.Mutex
+	asked, inFlight, most int
+}
+
+func (s *gatedSettles) SettleTake(ctx context.Context, turnID string, settle sandbox.NoteSettle) (
+	[]sandbox.RunNote, error) {
+	s.mu.Lock()
+	s.asked++
+	s.inFlight++
+	s.most = max(s.most, s.inFlight)
+	gate := s.gate
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.mu.Unlock()
+	}()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	// A CONTEXT THAT HAS ENDED IS ANSWERED ITS ERROR, as a store over a
+	// connection answers it.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.unavailable != nil && s.unavailable() {
+		return nil, coord.ErrUnavailable
+	}
+	if s.answering != nil {
+		s.answering()
+	}
+	return s.PendingStore.SettleTake(ctx, turnID, settle)
+}
+
+// counts is how many settles were asked, and the most held at once.
+func (s *gatedSettles) counts() (asked, most int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.asked, s.most
+}
+
+// lostTakes is a working run-1 whose notes takes recorded and whose answers were
+// lost, one take a note: each named after its note, for a settle to find.
+func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ...string) {
+	t.Helper()
+	launch := workingRun(t, store, runs, "run-1")
+	for _, id := range ids {
+		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
+		if _, err := store.TakeNotes(t.Context(), "run-1", sandbox.NoteTake{IDs: []string{id}, Launch: launch,
+			Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "execute", Round: 1,
+				Boundary: string(types.SteerBoundaryToolBatch), Launch: launch, Take: "take-" + id}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A SETTLE ASKS UNTIL ITS STORE ANSWERS, AND NO LONGER THAN ITS NODE. A settle a
+// clock gave up on would leave the record saying the run read notes its reader
+// was never handed, while the store that did not answer in time answers once it
+// is back: so it asks again until the store answers — a minute's outage past its
+// patience included — and the note is marked then, however long ago the take
+// that lost it ended: its hook's request is answered, or its segment over,
+// within seconds. And a run's lost takes settle in one loop, whatever their
+// number: never two of its settles at once — a take lost while the loop's
+// round is asked joining it, even the round the store first answers past the
+// patience, which met no error to say the take unsettled with and says nothing.
+//
+// It stops when its node stops — once it has asked every take once more, in a
+// window of its own the teardown opens as it begins and none of the stop's
+// allowance, which the give-backs made after it are owed: a store back while
+// the loop slept between rounds settles then, and so does a take a segment the
+// teardown ended hands off, one joining that last round included, whereas a
+// store still silent is asked nothing more once the window is over — of every
+// run and every take together. And once the teardown has waited the settles
+// out, a take lost is asked nothing at all: the store it would ask is closing.
+//
+// Mutation: give the settle up at its patience, end it with the context of the
+// take that lost it, ask on past the node's stop, start a loop for every take,
+// say unsettled a round that met no error, sleep through the node's stop, make
+// no last attempt, leave a take joining the last round unasked, make the last
+// attempts on the stop's allowance or hold them to no window, or start a loop
+// once the teardown waited them out, and a case goes red — the panic one a
+// crash of the test binary, as it would end the node.
+func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
+	t.Parallel()
+	t.Run("its store answering a minute after", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			answerAt := time.Now().Add(time.Minute)
+			settles := &gatedSettles{PendingStore: store,
+				unavailable: func() bool { return time.Now().Before(answerAt) }}
+			runs, _ := steersOver(t, steerRing, settles)
+			runs.stopped = t.Context().Done()
+			lostTakes(t, store, runs, "n-1")
+			took, ended := context.WithCancel(t.Context())
+			runs.settleUnanswered(took, "run-1", "take-n-1")
+			ended()
+			time.Sleep(time.Minute + 30*time.Second)
+			synctest.Wait()
+			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || !read.Unanswered {
+				t.Errorf("the note is read %+v once the store answered, a minute in: the settle gave up", read)
+			}
+		})
+	})
+	t.Run("its node stopping first", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			settles := &gatedSettles{PendingStore: store, unavailable: func() bool { return true }}
+			runs, _ := steersOver(t, steerRing, settles)
+			e := &Engine{}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			time.Sleep(20 * time.Second)
+			synctest.Wait()
+			before, _ := settles.counts()
+			e.tearingDown()
+			runs.waitSettles()
+			if asked, _ := settles.counts(); asked != before+1 {
+				t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
+			}
+			time.Sleep(time.Minute)
+			synctest.Wait()
+			if asked, _ := settles.counts(); asked != before+1 {
+				t.Errorf("the settle was asked %d times after its last attempt", asked-before-1)
+			}
+			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || read.Unanswered {
+				t.Errorf("the note is read %+v, want it read and unmarked: nothing settled it", read)
+			}
+		})
+	})
+	t.Run("its store back as its node stops, a take joining its last round", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			var back, joined atomic.Bool
+			var runs *runSteers
+			settles := &gatedSettles{PendingStore: store,
+				unavailable: func() bool { return !back.Load() },
+				// A SEGMENT THE TEARDOWN ENDED, handing off a take of its own
+				// while the loop's last round is asked.
+				answering: func() {
+					if joined.CompareAndSwap(false, true) {
+						runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
+					}
+				}}
+			runs, _ = steersOver(t, steerRing, settles)
+			e := &Engine{}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1", "n-2")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			time.Sleep(10 * time.Second)
+			synctest.Wait()
+			// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS, and the
+			// node stops before the loop's next round.
+			back.Store(true)
+			e.tearingDown()
+			synctest.Wait()
+			for _, id := range []string{"n-1", "n-2"} {
+				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
+					t.Errorf("note %s is read %+v as its node stops, want it marked by the settle's last attempt",
+						id, read)
+				}
+			}
+			runs.waitSettles()
+		})
+	})
+	t.Run("a take handed off once its node stopped", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			settles := &gatedSettles{PendingStore: store}
+			runs, _ := steersOver(t, steerRing, settles)
+			e := &Engine{}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1")
+			e.tearingDown()
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			runs.waitSettles()
+			if asked, _ := settles.counts(); asked != 1 {
+				t.Errorf("a take handed off once its node stopped was asked %d times, want once", asked)
+			}
+			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || !read.Unanswered {
+				t.Errorf("the note is read %+v, want it marked by the take's one attempt", read)
+			}
+		})
+	})
+	t.Run("its last attempts in a window of their own, beside the stop's allowance", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			// A STORE THAT NEVER ANSWERS: every attempt waits until its
+			// context ends.
+			settles := &gatedSettles{PendingStore: store, gate: make(chan struct{})}
+			runs, _ := steersOver(t, steerRing, settles)
+			// THE SHIPPED TTL, of an Engine literal as the stop's other cases
+			// build: its allowance is longer than the settles' window, so last
+			// attempts made on the allowance would hold the stop past the
+			// window, and leave the give-backs after them less than the
+			// allowance, or none.
+			e := &Engine{}
+			allowance := seat.StopAllowance(e.stopTTL()) - e.admissionShare()
+			if allowance <= steerSettleStopBudget {
+				t.Fatalf("the premise: the stop's allowance of %v is no longer than the settles' window of %v",
+					allowance, steerSettleStopBudget)
+			}
+			runs.stopWith(e)
+			// SEVERAL RUNS AND TAKES, each loop's first attempt in flight as
+			// the teardown begins, and a take joining one of them then.
+			lostTakes(t, store, runs, "n-1", "n-2")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
+			runs.settleUnanswered(t.Context(), "run-2", "take-x")
+			synctest.Wait()
+			begun := time.Now()
+			e.tearingDown()
+			runs.settleUnanswered(t.Context(), "run-1", "take-joined")
+			runs.waitSettles()
+			if took := time.Since(begun); took > steerSettleStopBudget {
+				t.Errorf("the settles held their node's stop %v, past their window of %v", took,
+					steerSettleStopBudget)
+			}
+			// AND A GIVE-BACK MADE AFTER THEM IS HANDED THE WHOLE ALLOWANCE.
+			step, done := seat.StopStep(seat.WithStopBudget(context.Background(), e.stopping()))
+			defer done()
+			if deadline, ok := step.Deadline(); !ok || time.Until(deadline) != allowance {
+				t.Errorf("a give-back after the settles is handed %v, want the whole allowance of %v: the "+
+					"settles spent the rest", time.Until(deadline), allowance)
+			}
+		})
+	})
+	t.Run("a take lost once its node waited its settles out", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			settles := &gatedSettles{PendingStore: store}
+			runs, _ := steersOver(t, steerRing, settles)
+			e := &Engine{}
+			runs.stopWith(e)
+			lostTakes(t, store, runs, "n-1")
+			e.tearingDown()
+			runs.waitSettles()
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			synctest.Wait()
+			if asked, _ := settles.counts(); asked != 0 {
+				t.Errorf("a take lost once its node waited its settles out was asked %d times, want none", asked)
+			}
+		})
+	})
+	t.Run("a take joining the round the store first answers, past the patience", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			answerAt := time.Now().Add(steerSettlePatience)
+			var runs *runSteers
+			var joined atomic.Bool
+			settles := &gatedSettles{PendingStore: store,
+				unavailable: func() bool { return time.Now().Before(answerAt) },
+				// A HOOK'S TAKE LOST ON THE SAME OUTAGE, failing as the
+				// store comes back: it joins the run's loop while the loop's
+				// first answered round is asked.
+				answering: func() {
+					if joined.CompareAndSwap(false, true) {
+						runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
+					}
+				}}
+			runs, _ = steersOver(t, steerRing, settles)
+			runs.stopped = t.Context().Done()
+			lostTakes(t, store, runs, "n-1", "n-2")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			time.Sleep(2 * time.Minute)
+			synctest.Wait()
+			for _, id := range []string{"n-1", "n-2"} {
+				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
+					t.Errorf("note %s is read %+v, want it marked once the store answered", id, read)
+				}
+			}
+		})
+	})
+	t.Run("two takes of one run", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			gate := make(chan struct{})
+			settles := &gatedSettles{PendingStore: store, gate: gate}
+			runs, _ := steersOver(t, steerRing, settles)
+			runs.stopped = t.Context().Done()
+			lostTakes(t, store, runs, "n-1", "n-2")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
+			runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
+			synctest.Wait()
+			if _, most := settles.counts(); most != 1 {
+				t.Errorf("%d settles of one run were asked at once, want its takes in one loop", most)
+			}
+			close(gate)
+			time.Sleep(time.Minute)
+			synctest.Wait()
+			for _, id := range []string{"n-1", "n-2"} {
+				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
+					t.Errorf("note %s is read %+v, want it marked by the run's one loop", id, read)
+				}
+			}
+		})
+	})
+}
+
+// unservingStore is a run store whose serves of a poll's notes fail.
+type unservingStore struct{ sandbox.PendingStore }
+
+func (unservingStore) ServeNotes(context.Context, string, sandbox.NoteServe) ([]sandbox.RunNote, error) {
+	return nil, context.DeadlineExceeded
+}
+
+// A POLLED NOTE IS SERVED ON ITS RECORD BEFORE IT IS ANSWERED. A harness that
+// polls for its notes — OpenCode's plugin — delivers what it is answered and
+// confirms it only once it has, so a note answered with nothing on the record
+// could sit in a session the record says never read it. The poll answers a note
+// only once its record says it was served to the run's job: still waiting, its
+// read the confirmation's alone, and the mark kept once the confirmation reads
+// it — and carried, by id, to the segment that resumes the turn. A poll whose
+// serve the store does not answer answers nothing from the note it could not
+// mark on, though a later note was marked by an earlier poll: the poller's
+// cursor moves past every note it is answered, and would never ask again for
+// the one passed over.
+//
+// Mutation: answer the poll without the serve, answer a note past one the serve
+// did not mark, drop the mark once the note is read, or carry none to the
+// resume, and a check goes red.
+func TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag the release", By: "founder"})
+	// THE LATER NOTE SERVED ALREADY, by an earlier poll.
+	if served, err := store.ServeNotes(ctx, "run-1", sandbox.NoteServe{IDs: []string{"n-2"}, Launch: launch,
+		Statuses: steerTakeStatuses}); err != nil || len(served) != 1 {
+		t.Fatalf("serving n-2 = %+v, %v", served, err)
+	}
+
+	// THE STORE NOT ANSWERING THE SERVE: nothing is answered, n-2 included.
+	unserved, _ := steersOver(t, steerRing, unservingStore{store})
+	refused := boundInbox(t, unserved, store, "run-1", launch)
+	viewHolds(t, refused, 2)
+	if notes, _ := refused.Wait(ctx, 0); len(notes) != 0 {
+		t.Fatalf("a poll whose serve failed was answered %+v, want nothing", notes)
+	}
+	if row, _, _ := store.Get(ctx, "run-1"); row.Steer.Notes[0].Served != "" || !row.Steer.Notes[0].Waiting() {
+		t.Fatalf("a serve that failed left n-1 %+v, want it waiting and unmarked", row.Steer.Notes[0])
+	}
+
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, inbox, 2)
+	notes, _ := inbox.Wait(ctx, 0)
+	if len(notes) != 2 || notes[0].ID != "n-1" || notes[1].ID != "n-2" {
+		t.Fatalf("the poll was answered %+v, want both notes, in order", notes)
+	}
+	row, _, err := store.Get(ctx, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := row.Steer.Notes[0]; n.Served != launch || !n.Waiting() {
+		t.Fatalf("the note answered is %+v on its record, want it waiting, served to job %s", n, launch)
+	}
+	if got := runnerResume(resumeInput{Run: row}, nil, nil).Served; !slices.Equal(got, []string{"n-1", "n-2"}) {
+		t.Errorf("the resume carries the served notes %v, want n-1 and n-2", got)
+	}
+	// CONFIRMED: read by the job, still served.
+	if err := inbox.Read(ctx, []string{"n-1"}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if row, _, _ := store.Get(ctx, "run-1"); row.Steer.Notes[0].Waiting() ||
+		row.Steer.Notes[0].Served != launch {
+		t.Errorf("the confirmed note is %+v, want it read and still served", row.Steer.Notes[0])
+	}
+}
+
 // THE FINISH READS THE STORE EVEN WHEN THE VIEW IS STALE: the run's last
 // boundary is its last chance to read a note in its own loop, so it asks the
 // record itself, where a batch answers from a view one write behind.
@@ -650,12 +1406,12 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
 	}
 	source := runs.source(ctx, claimed, sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch})
-	t.Cleanup(source.Close)
-	brief := source.Brief(ctx)
+	t.Cleanup(func() { source.Close(t.Context()) })
+	brief := source.Brief(ctx).Notes
 	if len(brief) != 2 || brief[0].ID != "n-before" || brief[1].ID != "n-parked" {
 		t.Fatalf("the relaunch's brief carries %+v, want both notes, oldest first", brief)
 	}
-	sealed, err := runs.briefNotes("run-1", 2, brief)
+	sealed, err := runs.briefNotes("run-1", 2, brief, source)
 	if err != nil {
 		t.Fatal(err)
 	}

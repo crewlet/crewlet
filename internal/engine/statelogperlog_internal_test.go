@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
@@ -71,6 +72,8 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 			topics.ExecutorLogWildcard},
 		accessdomain.Domain{}.Name(): {topics.AccessLogStream, topics.AccessLogPrefix,
 			topics.AccessLogWildcard},
+		atlasdomain.Domain{}.Name(): {topics.AtlasLogStream, topics.AtlasLogPrefix,
+			topics.AtlasLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

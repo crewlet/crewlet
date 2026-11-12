@@ -296,11 +296,12 @@ type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 
 // register is every domain this build runs, in a FIXED order.
 //
-// THE ARTIFACTS DOMAINS, THE ASSISTANT'S, CHAT, THE EXECUTOR LOG, GITLET AND
-// THE ACCESS LOG ARE APPENDED LAST, in the order they joined, from entries
-// declared beside their wiring (artifactsregister.go, artifactdataregister.go,
-// assistantregister.go, chatregister.go, executorregister.go and
-// accessregister.go; Gitlet's below) so each domain's entry is written where the rest of its engine
+// THE ARTIFACTS DOMAINS, THE ASSISTANT'S, CHAT, THE EXECUTOR LOG, GITLET, THE
+// ACCESS LOG AND THE ATLAS LOG ARE APPENDED LAST, in the order they joined,
+// from entries declared beside their wiring (artifactsregister.go,
+// artifactdataregister.go, assistantregister.go, chatregister.go,
+// executorregister.go, accessregister.go and atlasregister.go; Gitlet's below)
+// so each domain's entry is written where the rest of its engine
 // wiring lives. Appending keeps every existing
 // domain's position, which is the order every operator surface already
 // reports in.
@@ -621,7 +622,8 @@ func register() []registration {
 			},
 		},
 	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations(),
-		chatRegistrations(), executorRegistrations(), codeRegistrations(), accessRegistrations())
+		chatRegistrations(), executorRegistrations(), codeRegistrations(), accessRegistrations(),
+		atlasRegistrations())
 }
 
 // codeRegistrations is Gitlet's entry in the register: the company's

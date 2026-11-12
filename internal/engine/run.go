@@ -1911,6 +1911,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// write its launch makes to create the run's record — before any box or
 	// harness exists — and every late offer to the turn after it (steer.go).
 	steers.runs = e.runSteers
+	// AND THE SETTLES THOSE RECORDS TAKE OFF THE PATH THAT TOOK END WITH THE
+	// NODE: each asks its store until it answers, and no longer than this
+	// node's teardown, which is when its store goes — asking every take once
+	// more as it begins, in a window of its own beside the give-backs, never
+	// on the stop's allowance (runsteer.go, steerSettleStopBudget).
+	e.runSteers.stopWith(e)
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
@@ -3446,6 +3452,15 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
 	e.stopBridgeFleet(ctx)
+	// AND THE SETTLES OF TAKES WHOSE ANSWERS WERE LOST, once nothing is left
+	// to lose one — the drain ended the turns, and the sandbox's resumes and
+	// the bridge's relay are stopped above — and while the coordination store
+	// they write is still there: each loop made its last attempt in the window
+	// the teardown opened as it began, which is over within
+	// steerSettleStopBudget of that — the ledgers' flush above covers it where
+	// that flush spends its own bound — and is waited out here, having spent
+	// none of the allowance the give-backs after it are owed.
+	e.runSteers.waitSettles()
 	e.stopIssueSender()
 	// AND THEN THE CORE, whose logs are the last thing standing — see the
 	// comment above stopNative.
@@ -3898,7 +3913,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
 	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told, nil)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,

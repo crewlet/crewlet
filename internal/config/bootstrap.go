@@ -1949,7 +1949,7 @@ type Stream struct {
 	// runs a state log, whether or not the company hosts code, as every
 	// domain's log does — so its derived ask is paid by every company:
 	// below about 653 GiB free it comes out of the other logs' share (at
-	// 100 GiB the mutation log is created at 9.1 GiB rather than 11.1;
+	// 100 GiB the mutation log is created at 9.0 GiB rather than 11.0;
 	// docs/guides/replication.md, "What the code log's reservation costs",
 	// has the other volumes, and internal/engine's
 	// TestThePagesPrintTheCeilingsAFirstBootCreates holds both to what a
@@ -2070,6 +2070,17 @@ type Stream struct {
 	// unrecorded. How long the records are kept is the company's own
 	// `access_history.retention_days`, and does not depend on this.
 	AccessLogMaxBytes int64 `yaml:"access_log_max_bytes,omitempty" json:"access_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the access log, where what each seat was told about its access and every SSH certificate and command are recorded; unset takes 128 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
+
+	// AtlasLogMaxBytes is the byte ceiling on the atlas log, where what people
+	// record about what the company runs on (an entry, a correction, two
+	// entries joined or kept apart, a purge) is recorded before it is applied.
+	//
+	// UNSET TAKES 128 MiB ([DefaultAtlasLogMaxBytes]), sized by what people
+	// record rather than by the disk, and scaled down as far as its 64 MiB
+	// floor where the broker is short. Crossing it refuses the append: a
+	// person's edit to the atlas is refused. How long its history is kept is
+	// the company's own `atlas.retention_days`, and does not depend on this.
+	AtlasLogMaxBytes int64 `yaml:"atlas_log_max_bytes,omitempty" json:"atlas_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the atlas log, where what people record about what the company runs on is kept with its history; unset takes 128 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -2605,6 +2616,8 @@ func (s *Stream) validate(path Path) error {
 		ExecutorLogMaxBytesFloor, ExecutorLogMaxBytesCeiling)
 	bytesInRange(&p, path, "access_log_max_bytes", s.AccessLogMaxBytes,
 		AccessLogMaxBytesFloor, AccessLogMaxBytesCeiling)
+	bytesInRange(&p, path, "atlas_log_max_bytes", s.AtlasLogMaxBytes,
+		AtlasLogMaxBytesFloor, AtlasLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2615,7 +2628,7 @@ func (s *Stream) validate(path Path) error {
 	// moment to say so is now.
 	//
 	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor,
-	// code and access logs included. The sum is what the broker will be asked to back, so a log
+	// code, access and atlas logs included. The sum is what the broker will be asked to back, so a log
 	// left out of it is a limit this check passes and the boot refuses —
 	// which is the one outcome the check exists to prevent, arriving with a
 	// message that says the configuration was fine.
@@ -2643,7 +2656,8 @@ func (s *Stream) validate(path Path) error {
 				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
 				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
 				"chat_log_max_bytes %d + executor_log_max_bytes %d + "+
-				"code_log_max_bytes %d + access_log_max_bytes %d = %d): the "+
+				"code_log_max_bytes %d + access_log_max_bytes %d + "+
+				"atlas_log_max_bytes %d = %d): the "+
 				"broker refuses a stream "+
 				"whose ceiling it cannot back, so this node would fail to "+
 				"provision one of them. Raise store_max_bytes, or lower the "+
@@ -2654,7 +2668,7 @@ func (s *Stream) validate(path Path) error {
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
 			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, s.AccessLogMaxBytes,
-			declared)
+			s.AtlasLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

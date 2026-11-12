@@ -620,6 +620,10 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 			b.Access.Writer = c.accessWriter
 		}
 	}
+	// AND THE ATLAS LOG, read by whichever node asks (ADR-0126).
+	if c.atlasReader != nil {
+		b.Atlas = estate.AtlasHalf{Reader: c.atlasReader}
+	}
 	if n == nil {
 		return b
 	}

@@ -224,6 +224,14 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			tc.fn(t, staged, over(staged))
 		})
 	}
+	for _, tc := range noteStagedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, runs := newStore(t)
+			vanishing := &vanishingRuns{records: runs}
+			tc.fn(t, vanishing, over(vanishing))
+		})
+	}
 }
 
 func run(turnID string) sandbox.PendingRun {

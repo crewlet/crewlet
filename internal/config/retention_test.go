@@ -394,6 +394,7 @@ func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 		"assistant_log_max_bytes": config.AssistantLogMaxBytesFloor,
 		"executor_log_max_bytes":  config.ExecutorLogMaxBytesFloor,
 		"access_log_max_bytes":    config.AccessLogMaxBytesFloor,
+		"atlas_log_max_bytes":     config.AtlasLogMaxBytesFloor,
 	}
 	// EVERY LOG IS IN EXACTLY ONE OF THE TWO, read off config.Stream rather
 	// than listed: a log that joins the broker with a ceiling and is in

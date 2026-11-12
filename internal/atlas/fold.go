@@ -53,7 +53,7 @@ func Fold(claims []Claim, now time.Time) View {
 	byEntry := map[Ref][]*Claim{}
 	for i := range live {
 		c := &live[i]
-		if c.Facet.Kind == FacetDistinct {
+		if c.Facet.Kind == FacetDistinct || c.Facet.Kind == FacetSame {
 			continue
 		}
 		c.Subject = canonical.of(c.Subject)
@@ -408,7 +408,8 @@ func (m merges) of(r Ref) Ref {
 // merge decides which entries are one. An address or a forge address carried
 // by two entries of ONE source is shared (a load balancer, a NAT, two copies
 // of one mirror) and merges nothing; an account's own id is the account
-// wherever it is named. Keys are taken in a fixed order, so a person's
+// wherever it is named. A person's "the same" joins two entries no key joins,
+// after every key. Keys and pairs are taken in a fixed order, so a person's
 // "not the same" that blocks one of two merges blocks the same one whatever
 // order the claims came in.
 func merge(claims []Claim) merges {
@@ -427,17 +428,21 @@ func merge(claims []Claim) merges {
 		facet   facetID
 	}
 	joinFacets := map[subjectFacet][]*Claim{}
-	distinct := map[[2]Ref][]*Claim{}
+	distinct, same := map[[2]Ref][]*Claim{}, map[[2]Ref][]*Claim{}
 	for i := range claims {
 		c := &claims[i]
 		nodes[c.Subject] = true
 		switch {
-		case c.Facet.Kind == FacetDistinct:
+		case c.Facet.Kind == FacetDistinct || c.Facet.Kind == FacetSame:
 			pair := [2]Ref{c.Subject, c.Facet.Target.Entry}
 			if compareRef(pair[1], pair[0]) < 0 {
 				pair[0], pair[1] = pair[1], pair[0]
 			}
-			distinct[pair] = append(distinct[pair], c)
+			if c.Facet.Kind == FacetSame {
+				same[pair] = append(same[pair], c)
+			} else {
+				distinct[pair] = append(distinct[pair], c)
+			}
 		case c.Facet.Kind == FacetFact && slices.Contains([]Fact{FactAddress, FactPullMirrorOf, FactPushMirrorTo,
 			FactImportedFrom, FactAccountRef}, c.Facet.Fact):
 			k := subjectFacet{c.Subject, facetOf(c)}
@@ -474,6 +479,21 @@ func merge(claims []Claim) merges {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
+	join := func(x, y Ref) {
+		a, b := m.of(x), m.of(y)
+		if a == b || blocked(groups[a], groups[b], apart) {
+			return
+		}
+		if compareRef(b, a) < 0 {
+			a, b = b, a
+		}
+		for _, member := range groups[b] {
+			m.parent[member] = a
+		}
+		m.parent[b] = a
+		groups[a] = append(groups[a], groups[b]...)
+		delete(groups, b)
+	}
 	for _, key := range keys {
 		if !strings.Contains(key, "\x00account\x00") && shared(holders[key]) {
 			continue
@@ -484,20 +504,20 @@ func merge(claims []Claim) merges {
 		}
 		slices.SortFunc(refs, compareRef)
 		for _, r := range refs[1:] {
-			a, b := m.of(refs[0]), m.of(r)
-			if a == b || blocked(groups[a], groups[b], apart) {
-				continue
-			}
-			if compareRef(b, a) < 0 {
-				a, b = b, a
-			}
-			for _, member := range groups[b] {
-				m.parent[member] = a
-			}
-			m.parent[b] = a
-			groups[a] = append(groups[a], groups[b]...)
-			delete(groups, b)
+			join(refs[0], r)
 		}
+	}
+	sameAs := make([][2]Ref, 0, len(same))
+	for pair, cs := range same {
+		if w := resolve(cs).winner; !w.Denied {
+			sameAs = append(sameAs, pair)
+		}
+	}
+	slices.SortFunc(sameAs, func(x, y [2]Ref) int {
+		return cmp.Or(compareRef(x[0], y[0]), compareRef(x[1], y[1]))
+	})
+	for _, pair := range sameAs {
+		join(pair[0], pair[1])
 	}
 	for r := range nodes {
 		m.byID[r.ID()] = r
