@@ -134,7 +134,7 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 	if got := CalledAfter(AfterSave{Late: late}); got != lateCallsHeader+"\n"+late {
 		t.Errorf("a session whose only untold call is late is told:\n%s\nwant its section alone", got)
 	}
-	for _, said := range []string{"ONE call, made once", "outcome told here stands", "gave up on them",
+	for _, said := range []string{"ONE call, made once", "outcome told here stands", "gave up on it",
 		"no outcome, as still running, as interrupted or as failed"} {
 		if !strings.Contains(lateCallsHeader, said) {
 			t.Errorf("a late call's heading does not say %q:\n%s", said, lateCallsHeader)
@@ -149,6 +149,92 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 	}
 	if !strings.Contains(lateSubmission, "does NOT stand") {
 		t.Errorf("the line under a late submission does not say it does not stand: %q", lateSubmission)
+	}
+}
+
+// A CALL WHOSE OUTCOME IS UNKNOWN IS NEVER TOLD IT FINISHED. A call still in
+// flight as its round was read is told among the late calls, failed, its line
+// saying its outcome is unknown and that what it did may have taken effect
+// (internal/agent/runner's UnfinishedNote). The section's words are true of it
+// as of the others: the heading, and the words under it, name a call whose
+// outcome is unknown beside one its run stopped waiting for; they say a call
+// finished only as what it had not done when its run stopped waiting for it;
+// and they say a call marked `→ error` did not take effect only with the
+// exception, in the line's own terms, of one that says its outcome is unknown,
+// which may have, and is to be checked before it is made again. Under words
+// that said the calls finished after their run stopped waiting for them and
+// that every error did not take effect, a run that trusted them made such a
+// call again: the duplicate the section exists to prevent.
+//
+// Mutation: restore those words, drop the exception, or name only the calls
+// their run stopped waiting for, in the heading or under it, and the case goes
+// red.
+func TestACallWhoseOutcomeIsUnknownIsNeverToldItFinished(t *testing.T) {
+	t.Parallel()
+	heading, words, _ := strings.Cut(lateCallsHeader, "\n")
+	for part, said := range map[string]string{"heading": heading, "words": words} {
+		if !strings.Contains(said, "whose outcome is unknown") {
+			t.Errorf("the late calls' %s name no call whose outcome is unknown:\n%s", part, said)
+		}
+	}
+	notDone := strings.NewReplacer("before it finished", "", "before they finished", "").Replace(lateCallsHeader)
+	if strings.Contains(notDone, "finished") {
+		t.Errorf("the late calls' words say a call finished:\n%s", lateCallsHeader)
+	}
+	const excepted = "did not take effect, unless it says its outcome is unknown: that one may have, so check" +
+		" whether it did before making it again."
+	if !strings.Contains(words, excepted) ||
+		strings.Count(words, "did not take effect") != strings.Count(words, excepted) {
+		t.Errorf("the late calls' words say a failed call did not take effect without excepting one whose "+
+			"outcome is unknown:\n%s", lateCallsHeader)
+	}
+}
+
+// A CALL WHOSE OUTCOME IS UNKNOWN IS NEVER TOLD IT DID NOT TAKE EFFECT, BY ANY
+// RULE IT IS READ BY. Such a call is on its round's record failed, its line
+// saying its outcome is unknown and that what it did may have taken effect
+// (internal/agent/runner's UnfinishedNote), and every reader of that record
+// reads the line under a rule for a call marked `→ error`: the round's reviewer
+// ([ReviewHeader]), every later round's fresh brief over the prior-work ledger
+// ([PriorWorkHeader]), a send-back continuing the session that made it
+// ([ContinuedRoundRules]), and a run carrying the round on, among the late
+// calls ([lateCallsHeader]). Each rule says a failed call did not take effect
+// only with the exception, in the line's own terms, of one that says its
+// outcome is unknown, which may have; and each the executor reads says to
+// check whether it did before making it again, which is the executor's to do,
+// so the reviewer's says only that it may have. Told that every failed call
+// did not take effect, and to retry it, a reviewer would send the round back
+// to make such a call again, and a run would make it again: a second post or
+// delegation. The rules for the calls after a save keep no exception
+// ([calledAfterHeader], [calledSinceHeader]), and are true of them:
+// internal/agent/runner's calledAfter tells no call whose outcome is unknown
+// among them.
+//
+// Mutation: drop the exception from any of the rules, rule a failed call
+// retried before excepting it, or leave out of an executor's rule that the
+// call is checked before it is made again, and a row goes red.
+func TestACallWhoseOutcomeIsUnknownIsNeverToldItDidNotTakeEffect(t *testing.T) {
+	t.Parallel()
+	const (
+		excepted = "did not take effect, unless it says its outcome is unknown: that one may have"
+		checked  = excepted + ", so check whether it did before making it again."
+	)
+	for reader, tc := range map[string]struct{ rules, exception string }{
+		"the round's reviewer":               {ReviewHeader, excepted + "."},
+		"a later round's fresh brief":        {PriorWorkHeader, checked},
+		"a send-back continuing its session": {ContinuedRoundRules, checked},
+		"a run carrying the round on":        {lateCallsHeader, checked},
+	} {
+		said := strings.Count(tc.rules, "did not take effect")
+		if said == 0 {
+			t.Errorf("%s is told no rule that a failed call did not take effect, so this case reads no "+
+				"exception to one: hold the rule's new words to it:\n%s", reader, tc.rules)
+			continue
+		}
+		if said != strings.Count(tc.rules, tc.exception) {
+			t.Errorf("%s is told a failed call did not take effect without excepting, as %q, one whose "+
+				"outcome is unknown:\n%s", reader, tc.exception, tc.rules)
+		}
 	}
 }
 

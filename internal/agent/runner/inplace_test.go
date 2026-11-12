@@ -643,7 +643,7 @@ func TestACutOffCopyIsToldItsEarlierSubmitWorkDoesNotStand(t *testing.T) {
 // red.
 func TestACopyHoldingItsEarlierSubmitWorkIsToldItDoesNotStand(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 	submission := func(failed bool) runner.BridgedCall {
 		return runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
 			Args:   map[string]any{"outcome": "delivered", "summary": "the asking job's submission"},

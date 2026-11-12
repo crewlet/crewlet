@@ -46,6 +46,14 @@ const sentBackHeader = "## Your work was reviewed and sent back" +
 // that a delivery an earlier round made is citable — a model forbidden to
 // repeat a write it cannot cite submitted with no citation, or went looking
 // for some other surface to deliver on.
+//
+// AND A FAILED CALL WHOSE OUTCOME IS UNKNOWN EXCEPTED, as [PriorWorkHeader]
+// excepts it: a call still in flight as an earlier round was read is on that
+// round's record failed, and told to the session, in the late calls' section
+// of this brief or of an earlier one, in a line that says its outcome is
+// unknown and that what it did may have taken effect. Told beside it that a
+// call that failed did not take effect and to retry it, the run would make it
+// again.
 const ContinuedRoundRules = "## Already done earlier in this turn" +
 	"\nYour earlier rounds of this turn are in this session above, and every call they made" +
 	" that succeeded ALREADY RAN:" +
@@ -53,7 +61,8 @@ const ContinuedRoundRules = "## Already done earlier in this turn" +
 	"\n- **Everything else** changed something outside the engine: do NOT issue it again — a" +
 	" person sees the second one as a duplicate. If it was the delivery, it still counts: name" +
 	" it in `" + toolname.SubmitWork + "`'s `deliveries`." +
-	"\n- **A call that failed** did not take effect: retry it, fixed." +
+	"\n- **A call that failed** did not take effect, unless it says its outcome is unknown: that one may have," +
+	" so check whether it did before making it again. Retry any other, fixed." +
 	"\nDeliver only what is still missing. A follow-up to an earlier delivery ADDS to it — reply" +
 	" in its thread, edit the item — rather than re-sending it, and is not a duplicate."
 
@@ -155,25 +164,46 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 	" write among them again; one marked `→ error` did not take effect."
 
 // lateCallsHeader introduces the calls of the round that finished only after
-// the run that made them stopped waiting for them ([AfterSave.Late]): calls an
-// earlier run of the work made that were still running when a relaunch carried
-// the work on, which its record took only after that run was replaced; and
-// calls a run gave up on, or whose session ended under them, before they
-// returned. TOLD UNDER WORDS OF THEIR OWN, WHATEVER THE SESSION'S END, since no
-// point tells them and each of the other headings is untrue of them: the
-// session above may show such a call with no outcome, as still running, as
-// interrupted or as failed, its harness having died, given up on it, been
-// answered that it was still running as its session on the bridge ended, or
-// been replaced before the call returned; and an earlier brief may have told
-// it, since every continuation of the work tells it again. So it is said to be
-// ONE call, made once, whose outcome as told here stands — never one the
-// session lacks.
-const lateCallsHeader = "## Calls that finished after the run that made them stopped waiting for them" +
-	"\nA run of this work made these calls through your tools, and they finished only after that run had stopped" +
-	" waiting for them — it gave up on them, or it was cut off or replaced — so the session above may show one" +
-	" with no outcome, as still running, as interrupted or as failed, and an earlier message may have told it." +
-	" Each is ONE call, made once, not two, and the outcome told here stands: a call marked `→ success` ALREADY" +
-	" RAN, so do NOT issue a write among them again; one marked `→ error` did not take effect."
+// the run that made them stopped waiting for them, and the ones still in flight
+// as the round was read ([AfterSave.Late]): calls an earlier run of the work
+// made that were still running when a relaunch carried the work on, which its
+// record took only after that run was replaced; calls a run gave up on, or
+// whose session ended under them, before they returned; and calls whose outcome
+// is unknown, not recorded as finished when the round's collection stopped
+// waiting for them (internal/agent/runner's UnfinishedNote). TOLD UNDER WORDS
+// OF THEIR OWN, WHATEVER THE SESSION'S END, since no point tells them and each
+// of the other headings is untrue of them: the session above may show such a
+// call with no outcome, as still running, as interrupted or as failed, its
+// harness having died, given up on it, been answered that it was still running
+// as its session on the bridge ended, or been replaced before the call
+// returned; and an earlier brief may have told it, since every continuation of
+// the work tells it again. So it is said to be ONE call, made once, whose
+// outcome as told here stands, never one the session lacks.
+//
+// NEVER THAT THE CALLS FINISHED, NOR THAT EVERY ERROR FAILED. A call still in
+// flight is failed on the record, so that nothing takes it for a delivery or a
+// submission, and its line says its outcome is unknown and that what it did may
+// have taken effect. Under words saying the calls finished after their run
+// stopped waiting for them, and that one marked `→ error` did not take effect,
+// the section contradicted that line, and a run that trusted its words made
+// the call again: a second post or delegation, the duplicate this section
+// exists to prevent. So the words say a call marked `→ error` did not take
+// effect unless its line says its outcome is unknown, in the line's own terms,
+// and that such a one may have, to be checked before it is made again. And
+// they are true of every such call, as the line's are: one still running as the
+// turn stopped waiting for it, one whose process stopped, and one that had
+// returned, its harness handed its answer, whose update the store had not
+// taken. Its run never stopped waiting for that last one, so of each call the
+// words say only that it is one its run stopped waiting for before it
+// finished, or one whose outcome is unknown.
+const lateCallsHeader = "## Calls the run that made them stopped waiting for, or whose outcome is unknown" +
+	"\nA run of this work made these calls through your tools, and each is one that run stopped waiting for" +
+	" before it finished (it gave up on it, or it was cut off or replaced) or one whose outcome is unknown." +
+	" So the session above may show one with no outcome, as still running, as interrupted or as failed, and an" +
+	" earlier message may have told it. Each is ONE call, made once, not two, and the outcome told here stands:" +
+	" a call marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked `→ error` did" +
+	" not take effect, unless it says its outcome is unknown: that one may have, so check whether it did before" +
+	" making it again."
 
 // lateSubmission tells a run that a successful `submit_work` among the calls
 // under [lateCallsHeader] is no submission of the work it carries on: the run
@@ -293,6 +323,13 @@ type AfterSave struct {
 	// with Calls', spent on these first, "" for none: none of them is among
 	// Calls. Told in a section of their own, under
 	// [lateCallsHeader], whatever Interrupted says.
+	//
+	// AND THE CALLS STILL IN FLIGHT AS THE ROUND WAS READ, rendered and capped
+	// with them: each one whose outcome is unknown (ledger.Call.Unfinished),
+	// failed, its line saying that what it did may have taken effect. None of
+	// those finished on the record, so the section's words never say its calls
+	// finished, and say an error whose line says its outcome is unknown may
+	// have taken effect.
 	Late string
 
 	// LateSubmission says a successful `submit_work` is among Late, which is
@@ -318,9 +355,10 @@ type AfterSave struct {
 // way every other reader of a long run's calls is told what was dropped — of a
 // session cut off, as calls it may already show ([AfterSave.Interrupted]) —
 // and then, in a section of its own, the calls that finished only after the run
-// that made them stopped waiting for them ([AfterSave.Late]), and how many more
-// such calls the record dropped ([AfterSave.LateDropped]). "" where there is
-// none of either and the session holds no submission of its round.
+// that made them stopped waiting for them and the ones whose outcome is unknown
+// ([AfterSave.Late]), and how many more such calls the record dropped
+// ([AfterSave.LateDropped]). "" where there is none of either and the session
+// holds no submission of its round.
 //
 // A SUCCESSFUL SUBMISSION AMONG EITHER LIST is said to be none of the work's,
 // right after the list it is in and in words true of that list: the calls

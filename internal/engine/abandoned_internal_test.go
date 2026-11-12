@@ -29,7 +29,7 @@ import (
 // run is told nothing of a call it holds as timed out.
 func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 	for name, end := range map[string]sandbox.HarnessEnd{
 		"its harness having ended its own run": sandbox.HarnessEndOwnRun,
 		"its harness cut off":                  sandbox.HarnessEndCutOff,

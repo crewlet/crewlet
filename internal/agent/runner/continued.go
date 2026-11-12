@@ -65,7 +65,9 @@ import (
 //     whatever the session's end — one may be shown, as interrupted, failed or
 //     with no outcome, or told by an earlier brief, since every continuation
 //     of the round tells it again, and it is one call — and a submission
-//     among them told as none of the round's;
+//     among them told as none of the round's; and among them every call still
+//     in flight as the round was read ([Resume.Unfinished]), whose outcome is
+//     unknown, which those words say may have taken effect;
 //   - every note a person sent the turn that the session has not read — read
 //     after it was saved, by the run that went on in it or by a review, which
 //     is never the session's — or, of a session cut off, every note the turn
@@ -98,16 +100,17 @@ import (
 // every call of the round, as a session cut off is told its calls
 // ([Runner.inPlaceAfter]), and every note the turn has read, as it is told its
 // notes ([Runner.inPlaceNotes]).
-// Where it did, the copy holds every call its job made and every call its
-// job's brief told — every call of the round but the ones the log took late,
-// where that brief told the round's calls (a fresh run's brief tells none) —
-// and is not known to hold a late one, nor the outcome of one its harness gave
-// up on ([heldAt]), which it shows with no outcome or a failed one: it is told
-// those, as every continuation of the round built after they landed is told
-// them, and before them that a successful submission among the calls it holds
-// is none of the round's ([prompts.AfterSave.HeldSubmission]) — and every note
-// from the first read the record marks unanswered on, as notes it may already
-// show, since it lacks that one.
+// Where it did, the copy holds every call its job made and every call its job's
+// brief told — every call of the round but the ones the log took late, where
+// that brief told the round's calls (a fresh run's brief tells none) — and is
+// not known to hold a late one, nor the outcome of one its harness gave up on
+// ([heldAt]), which it shows with no outcome or a failed one, nor that of one
+// still in flight as the round was read ([Resume.Unfinished]), which no record
+// holds: it is told those, as every continuation of the round built after they
+// landed is told them, and before them that a successful submission among the
+// calls it holds is none of the round's ([prompts.AfterSave.HeldSubmission]) —
+// and every note from the first read the record marks unanswered on, as notes
+// it may already show, since it lacks that one.
 //
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
 // skills the launch state of the job it follows held and that job's own loads —
@@ -235,16 +238,18 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // tells. The notes follow it ([Runner.inPlaceNotes]).
 //
 // WHERE THE HARNESS ENDED ITS OWN RUN, ONLY THE CALLS THE LOG TOOK LATE
-// ([BridgedCall.Late]) AND THE ONES NOBODY WAITED FOR ([BridgedCall.Abandoned]),
-// whose outcomes that copy is not known to hold ([heldAt] at a nil save point),
-// while it holds every other call its job made and every call its job's brief
-// told: every other call of the round, where that brief told the round's calls
-// (a fresh run's brief tells none). A call nobody waited for is one the job
-// made whose harness gave up on it — a harness ends its own run once every
-// call it made is answered or given up on — or whose session ended under it:
-// the copy shows it with no outcome or a failed one, its harness having been
-// told it timed out, though it ran on and its effect happened, and it is told
-// under the late calls' words, which hold of it. A late call is one the log took after
+// ([BridgedCall.Late]), THE ONES NOBODY WAITED FOR ([BridgedCall.Abandoned])
+// AND THE ONES STILL IN FLIGHT AS THE ROUND WAS READ ([Resume.Unfinished]),
+// whose outcomes that copy is not known to hold ([heldAt] at a nil save point,
+// and no point holds a call in flight), while it holds every other call its
+// job made and every call its job's brief told: every other call of the round,
+// where that brief told the round's calls (a fresh run's brief tells none). A
+// call nobody waited for is one the job made whose harness gave up on it — a
+// harness ends its own run once every call it made is answered or given up on —
+// or whose session ended under it: the copy shows it with no outcome or a
+// failed one, its harness having been told it timed out, though it ran on and
+// its effect happened, and it is told under the late calls' words, which hold
+// of it. A late call is one the log took after
 // the job that made it was replaced — after this job's opening, or after the
 // read this job's brief was built from, which its opening marks — so no brief
 // had told it when the log took it, and that job's session may not hold its
@@ -427,18 +432,21 @@ func (r *Runner) checkoutName() string {
 // in the order the bridge admitted them — the ones it took after that read,
 // with how many more it took after the read and dropped from its middle and
 // the round's tally of every call it dropped ([droppedAfterSave]); and, apart,
-// the ones it took late ([BridgedCall.Late]) and the ones nobody waited for
-// ([BridgedCall.Abandoned]), with how many such it dropped from its middle
-// ([prompts.AfterSave.LateDropped]).
+// the ones it took late ([BridgedCall.Late]), the ones nobody waited for
+// ([BridgedCall.Abandoned]) and the ones it still held in flight as the round
+// was read (round.unfinished, [Resume.Unfinished]), with how many such it
+// dropped from its middle ([prompts.AfterSave.LateDropped]), never one in
+// flight.
 //
 // A NIL through is the job's own copy of its session in its box whose harness
 // ended its own run, as [heldAt] reads it: it holds every call its job made and
 // every one its job's brief told — every call of the round but the late ones,
 // listed or dropped, where that brief told the round's calls — and the outcome
-// of each but one nobody waited for, so it is told the late ones and those
-// alone, listed and dropped, as every continuation is told them, with the
-// round's tally, and first that a successful submission among the rest, which
-// it holds, does not stand (below).
+// of each but one nobody waited for, so it is told the late ones, those and the
+// ones still in flight, whose outcome no record holds, and no others, listed
+// and dropped, as every continuation is told them, with the round's tally, and
+// first that a successful submission among the rest, which it holds, does not
+// stand (below).
 //
 // A DROPPED LATE CALL IS COUNTED UNDER THE LATE CALLS' WORDS, WHATEVER THE
 // POINT: it keeps no mark and no number, so no save point can be read against
@@ -560,8 +568,13 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	// AND EVERY CALL WHOSE OUTCOME IS UNKNOWN ([Resume.Unfinished]), under the
 	// late calls' words, whatever the point: the log held it in flight when the
 	// round was read, so no save point holds what it did, and the session that
-	// made it shows it with no outcome or as still running — which those words
-	// say — while its effects may stand. Never a submission: it is failed.
+	// made it may show it with no outcome or as still running, which those
+	// words say, or with the answer its harness was handed where the store
+	// refused its update. Its line says its outcome is unknown and that what it
+	// did may have taken effect ([UnfinishedNote]), and those words say no less:
+	// never that it finished, nor that a failed call did not take effect where
+	// its line says its outcome is unknown, so a run checks whether it did
+	// before making it again. Never a submission: it is failed.
 	for _, call := range inAdmissionOrder(round.unfinished) {
 		if !slices.Contains(r.cfg.SkipNames, call.Name) {
 			late = append(late, call.Call)

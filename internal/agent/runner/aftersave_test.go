@@ -311,7 +311,7 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 		t.Errorf("the continuation lists %d reads, want the one cap of %d:\n%s", reads, ledger.MaxReadCalls, brief)
 	}
 	afterAt := strings.Index(brief, "## Calls made after the session above was saved")
-	lateAt := strings.Index(brief, "## Calls that finished after the run that made them stopped waiting for them")
+	lateAt := strings.Index(brief, "## Calls the run that made them stopped waiting for, or whose outcome is unknown")
 	if afterAt < 0 || lateAt < afterAt {
 		t.Fatalf("the continuation is not told the calls after its save, then its late calls:\n%s", brief)
 	}

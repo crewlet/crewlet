@@ -61,11 +61,25 @@ import (
 // everything the agent did took a run that fixed a bug and pushed the branch
 // for one that narrated a fix it never made — "no git or test calls, so the
 // claim is fabricated" — and sent a delivered turn back to max_iterations.
+//
+// NOT EVERY `→ error` FAILED. A call its run's log still held in flight when
+// the round was read is in the log failed, so the delivery check never takes it
+// for a delivery, and its line says its outcome is unknown and that what it did
+// may have taken effect (internal/agent/runner's UnfinishedNote). Told that
+// every `→ error` call did not take effect, a reviewer would read such a post
+// as one that never landed and send the round back to make it again: the
+// duplicate its own rule exists to catch. So the rule excepts it in the line's
+// own terms, as every rule such a call is read by does ([PriorWorkHeader]). THE
+// FACT AND NOT THE RULE THAT FOLLOWS FROM IT: that a round sent back checks
+// whether such a call took effect before making it again is the executor's
+// rule, which its brief states ([PriorWorkHeader], [ContinuedRoundRules]), and
+// this header is every review's, paid for on every one of them.
 const ReviewHeader = "\n## REVIEW phase" +
 	"\nJudge the work below, then call `" + toolname.SubmitReview + "` exactly once." +
 	"\n" +
 	"\n`## What the agent did` is the evidence: calls marked `→ success` " +
-	"happened, and `→ error` calls did not take effect. `## What the agent " +
+	"happened, and a call marked `→ error` did not take effect, unless it says " +
+	"its outcome is unknown: that one may have. `## What the agent " +
 	"produced` is the agent's own account of itself." +
 	"\n**The agent ran as a harness with its own shell.** Its local work " +
 	"— editing files, running commands and tests, committing — is not in " +
