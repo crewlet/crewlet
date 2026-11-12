@@ -1494,8 +1494,8 @@ func (e emitter) steered(ctx context.Context, read steer.Read) {
 	if !e.on() {
 		return
 	}
-	at := read.Reading
-	e.publish(ctx, events.New(steer.Record(e.steerTurn(), read.Note, &at), e.traceFor(ctx)))
+	e.publish(ctx, events.New(steer.Record(e.steerTurn(), read.Note, steer.Delivered(read.Reading)),
+		e.traceFor(ctx)))
 }
 
 // steerExpired records a note the turn took and never read.
@@ -1503,7 +1503,7 @@ func (e emitter) steerExpired(ctx context.Context, n steer.Note) {
 	if !e.on() {
 		return
 	}
-	e.publish(ctx, events.New(steer.Record(e.steerTurn(), n, nil), e.traceFor(ctx)))
+	e.publish(ctx, events.New(steer.Record(e.steerTurn(), n, steer.Expired()), e.traceFor(ctx)))
 }
 
 // steerTurn is the turn a note this runner records was sent to.

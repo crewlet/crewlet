@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -44,6 +46,7 @@ var noteCases = []struct {
 	{"AResetKeepsTheTurnsNotesAndClearsPulled", testAResetKeepsTheTurnsNotesAndClearsPulled},
 	{"ALaunchTakesOverTheReadOfTheLostTakeItsBriefNames",
 		testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames},
+	{"ALaunchRecordsTheMarkedNotesItsBriefTellsAgain", testALaunchRecordsTheMarkedNotesItsBriefTellsAgain},
 	{"ALaunchFilesTheBoxsNotesWaitingAfterItsBrief", testALaunchFilesTheBoxsNotesWaitingAfterItsBrief},
 	{"EveryWriteThatRecordsAReadTakesTheNextPlace", testEveryWriteThatRecordsAReadTakesTheNextPlace},
 	{"APullIsRecordedOnceAndOnlyForItsJob", testAPullIsRecordedOnceAndOnlyForItsJob},
@@ -552,12 +555,115 @@ func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandb
 		t.Errorf("n-1 is read at %+v and n-2, read by a later take, at %+v: the note taken over is no longer "+
 			"ahead of it", n1, n2)
 	}
-	var unread []string
-	for _, n := range row.UnreadNotes() {
-		unread = append(unread, n.ID)
+	var expired []string
+	for _, n := range row.EndedNotes() {
+		if n.Outcome == types.SteerExpired {
+			expired = append(expired, n.Note.ID)
+		}
 	}
-	if !slices.Equal(unread, []string{"n-1", "n-3"}) {
-		t.Errorf("the ending of the job that never started reports %v, want every note its brief took", unread)
+	if !slices.Equal(expired, []string{"n-1", "n-3"}) {
+		t.Errorf("the ending of the job that never started reports %v expired, want every note its brief took",
+			expired)
+	}
+}
+
+// A LAUNCH RECORDS THE MARKED NOTES ITS BRIEF TELLS AGAIN. A take whose write
+// landed and whose answer never reached its reader is marked unanswered, and
+// the brief of every later launch tells its notes again; so the launch's write
+// records each note its brief names as told again (sandbox.PendingRun
+// .RetoldNotes) read by the job it opens, told again, in the marked take's
+// place and at that take's own place among the reads, never the write's — a
+// note a later take read stays after it, and the write moves the record's
+// count of reads only for the notes it is the first to read — and keeps the
+// take's read beside the telling (sandbox.NoteRead.Retold). A note it names
+// that the record holds read and unmarked is left as it was read, and one the
+// record does not hold is never added. The job's ending reports the note told
+// again missed at that take where the job never started, the brief having
+// handed nothing over, and delivered at the brief where it did.
+//
+// Mutation: leave a marked read as it was, record the telling at the write's
+// place, leave the read marked or under its take, drop the take's read or keep
+// it unmarked, record a note the record holds unmarked as told again, or add
+// one it does not hold, and the case goes red.
+func testALaunchRecordsTheMarkedNotesItsBriefTellsAgain(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-retold"))
+	for _, id := range []string{"n-1", "n-2", "n-3"} {
+		mustFile(t, s, "t-retold", id)
+	}
+	lost, err := s.TakeNotes(ctx, "t-retold", namedTake(launch, "lost", "n-1"))
+	if err != nil || len(lost) != 1 {
+		t.Fatalf("the lost take took %d (%v), want n-1", len(lost), err)
+	}
+	if _, err = s.SettleTake(ctx, "t-retold", sandbox.NoteSettle{Take: "lost", Unanswered: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.TakeNotes(ctx, "t-retold", namedTake(launch, "answered", "n-2")); err != nil {
+		t.Fatal(err)
+	}
+	mustClaim(t, s, "t-retold")
+
+	again := run("t-retold")
+	brief := &sandbox.NoteRead{Phase: "execute", Iteration: 2, Round: 1, Boundary: "brief"}
+	again.BriefNotes = []sandbox.RunNote{{ID: "n-3", Read: brief}}
+	again.RetoldNotes = []sandbox.RunNote{{ID: "n-1", Read: brief}, {ID: "n-2", Read: brief},
+		{ID: "absent", Read: brief}}
+	relaunched, err := s.BeginLaunch(ctx, again, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	row := mustGet(t, s, "t-retold")
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range row.Steer.Notes {
+		byID[n.ID] = n
+	}
+	if read := byID["n-1"].Read; read == nil || read.Retold == nil || read.Unanswered || read.Take != "" ||
+		read.Launch != relaunched.LaunchID || read.Boundary != "brief" || read.Iteration != 2 ||
+		read.Order != lost[0].Read.Order {
+		t.Errorf("the marked note is read %+v, want it told again by job %s's brief, at its take's place %d",
+			read, relaunched.LaunchID, lost[0].Read.Order)
+	} else if kept := read.Retold; !kept.Unanswered || kept.Take != "lost" || kept.Launch != launch ||
+		kept.Boundary != lost[0].Read.Boundary || kept.Order != lost[0].Read.Order {
+		t.Errorf("the telling kept the take's read as %+v, want the lost take's read by job %s, marked", kept,
+			launch)
+	}
+	if read := byID["n-2"].Read; read == nil || read.Retold != nil || read.Take != "answered" || read.Launch != launch {
+		t.Errorf("a note an answered take read is read %+v, want it left as that take read it", read)
+	}
+	if n1, n2, n3 := byID["n-1"].Read, byID["n-2"].Read, byID["n-3"].Read; n1 == nil || n2 == nil || n3 == nil ||
+		n1.Order >= n2.Order || n2.Order >= n3.Order || n3.Order != row.Steer.Reads {
+		t.Errorf("the reads are placed n-1 %+v, n-2 %+v, n-3 %+v (of %d), want the note told again ahead of "+
+			"the later take's and the brief's own note last", n1, n2, n3, row.Steer.Reads)
+	}
+	if _, added := byID["absent"]; added || len(row.Steer.Notes) != 3 {
+		t.Errorf("the write added a note it was told to tell again: %+v", row.Steer.Notes)
+	}
+	// THE JOB EACH OUTCOME OF THE NOTE TOLD AGAIN IS AT: the lost take's,
+	// missed, and the brief's that told it, delivered.
+	reportedBy := map[types.SteerOutcome]string{types.SteerMissed: launch,
+		types.SteerDelivered: relaunched.LaunchID}
+	ends := func() map[string]types.SteerOutcome {
+		out := map[string]types.SteerOutcome{}
+		for _, n := range mustGet(t, s, "t-retold").EndedNotes() {
+			out[n.Note.ID] = n.Outcome
+			if n.Note.ID == "n-1" && (n.Read == nil || n.Read.Launch != reportedBy[n.Outcome]) {
+				t.Errorf("the note told again is reported %s at %+v, want it at the take it was missed at, or "+
+					"at the brief that told it where its job started", n.Outcome, n.Read)
+			}
+		}
+		return out
+	}
+	if got := ends(); !maps.Equal(got, map[string]types.SteerOutcome{"n-1": types.SteerMissed,
+		"n-3": types.SteerExpired}) {
+		t.Errorf("the ending of the job that never started reports %v, want the note it told again missed and "+
+			"the one it was the first to tell expired", got)
+	}
+	if err = s.AttachSandbox(ctx, "t-retold", sandbox.BoxRef{SandboxID: "box-retold", CommandID: "cmd-1",
+		Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	if got := ends(); !maps.Equal(got, map[string]types.SteerOutcome{"n-1": types.SteerDelivered}) {
+		t.Errorf("the ending of the job that started reports %v, want the note told again delivered", got)
 	}
 }
 
@@ -693,8 +799,8 @@ func testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox(t *testing
 	}
 	unread := func(turnID string) []string {
 		var out []string
-		for _, n := range mustGet(t, s, turnID).UnreadNotes() {
-			out = append(out, n.ID)
+		for _, n := range mustGet(t, s, turnID).EndedNotes() {
+			out = append(out, n.Note.ID)
 		}
 		return out
 	}

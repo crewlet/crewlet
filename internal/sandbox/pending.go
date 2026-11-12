@@ -1961,6 +1961,16 @@ type PendingRun struct {
 	// place among the reads ([RunNote.LostTake]). Never persisted as itself.
 	BriefNotes []RunNote `json:"-"`
 
+	// RetoldNotes is TRANSIENT as well: the notes the turn has read that the
+	// job's brief tells again, by ID, each with the read to record (its Read,
+	// as a brief's note carries one): the ones whose read the record marked
+	// unanswered as the brief was built, a take having recorded them read and
+	// its answer never having reached its reader. The write that opens the job
+	// records each such note read by it, told again ([NoteRead.Retold]), in
+	// that take's place and at that take's own place among the reads, where
+	// the record still marks it. Never persisted as itself.
+	RetoldNotes []RunNote `json:"-"`
+
 	// HandedNotes is TRANSIENT as well: the notes the turn's first segment's
 	// box still held unread when the launch began ([LaunchRequest.HandedNotes]),
 	// which the write that opens the job files WAITING — after the brief's
@@ -2509,7 +2519,10 @@ type PendingStore interface {
 	// again. A note the row holds read already is left as it was read, but for
 	// one the brief names the take that read it as lost ([RunNote.LostTake]):
 	// that take's reader never had it, and its read is the job's from this
-	// write, at that take's own place among the reads ([NoteRead.Order]). And
+	// write, at that take's own place among the reads ([NoteRead.Order]). So
+	// is a note the brief tells again whose read the row marks unanswered
+	// ([PendingRun.RetoldNotes]): read by the job, told again
+	// ([NoteRead.Retold]), at the marked take's own place. And
 	// the notes the turn's box still held
 	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
 	// them: from the write that creates the record, nothing a person files on
@@ -4232,7 +4245,7 @@ type LaunchRecord struct {
 	// the attach that names the job's command ([PendingStore.AttachSandbox]),
 	// the write a launch makes once its job exists and before it returns.
 	// What tells a brief's notes a job ran with from ones read into the
-	// brief of a launch that failed before its job ([PendingRun.UnreadNotes]).
+	// brief of a launch that failed before its job ([PendingRun.EndedNotes]).
 	//
 	// ON THE JOB'S RECORD, AND NEVER CLEARED FOR THE JOB — never read off
 	// the row's command ([PendingRun.CommandID]), which is the BOX's: a

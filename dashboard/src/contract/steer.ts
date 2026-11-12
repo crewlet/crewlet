@@ -33,3 +33,17 @@ export const STEER_READS = ["next_step", "after_answer"] as const;
  * `internal/events/types.TestTheDashboardNamesEverySteerBoundary`.
  */
 export const STEER_BOUNDARIES = ["round", "brief", "tool_batch", "finish", "step"] as const;
+
+/**
+ * What can become of a note (`types.SteerOutcome`), as the turn's
+ * `agent_turn_steered` says it: `delivered` where a step read it (told again,
+ * `retold`, where a launch's brief told it after a step that took it never
+ * handed it over); `expired`, the turn ended before anything read it; `missed`,
+ * a step took it for its reader, which never had it, and no later launch told
+ * it; `unconfirmed`, the executor was handed it and never confirmed reading it.
+ * The trace says each in words, and every one but an expiry at the step it
+ * names. HELD AGAINST `types.SteerOutcomes` by
+ * `internal/events/types.TestTheDashboardNamesEverySteerOutcome`: an outcome
+ * missing here is drawn as one this version cannot name.
+ */
+export const STEER_OUTCOMES = ["delivered", "expired", "missed", "unconfirmed"] as const;

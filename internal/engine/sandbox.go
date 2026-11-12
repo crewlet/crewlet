@@ -2940,10 +2940,11 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// see [sandbox.CoordinatorOptions.Recovered].
 		Recovered:   e.reopenAgentRun,
 		Unresumable: e.parkedRunUnresumable,
-		// AND EVERY NOTE A PERSON SENT THE TURN THAT IS STILL WAITING ON
-		// THE RUN'S RECORD is recorded expired by the ending, before the
-		// record goes — see runsteer.go.
-		SteersExpired: e.runSteers.expired,
+		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
+		// READING is recorded by the ending, as the run's record knows it
+		// (delivered where a later launch told it again, unconfirmed, missed
+		// or expired), before the record goes. See runsteer.go.
+		SteersEnded: e.runSteers.ended,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,

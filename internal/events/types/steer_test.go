@@ -28,9 +28,52 @@ func TestSteerBoundaryValid(t *testing.T) {
 	}
 }
 
+// AN OUTCOME OFF THE WIRE IS A VALUE, never a decode error, and this build
+// knows four: a newer peer may report a note's end under a name this build has
+// none for, and the record must still arrive as one a reader can say nothing
+// of rather than misread.
+func TestSteerOutcomeValid(t *testing.T) {
+	t.Parallel()
+	for _, o := range SteerOutcomes {
+		if !o.Valid() {
+			t.Errorf("%q is not valid", o)
+		}
+	}
+	if SteerOutcome("forgotten").Valid() || SteerOutcome("").Valid() {
+		t.Error("an outcome this build does not record is valid")
+	}
+	want := []SteerOutcome{"delivered", "expired", "missed", "unconfirmed"}
+	if !slices.Equal(SteerOutcomes, want) {
+		t.Errorf("the outcomes are %v, want %v", SteerOutcomes, want)
+	}
+}
+
+// EACH OUTCOME IS SAID AS WHAT BECAME OF THE NOTE, in the line an activity feed
+// shows: read, finished before reading, missed by a step that took it and never
+// handed it over, or handed over and never confirmed; and one this build does
+// not know as no more than a note having been sent, never as read or as expired.
+//
+// Mutation: say a missed or unconfirmed note as read, or an unknown outcome as
+// read, and the case goes red.
+func TestEachSteerOutcomeIsSaidAsWhatBecameOfTheNote(t *testing.T) {
+	t.Parallel()
+	for outcome, want := range map[SteerOutcome]string{
+		SteerDelivered:   "swe read a note from founder",
+		SteerExpired:     "swe finished before reading a note from founder",
+		SteerMissed:      "swe missed a note from founder, taken by a step that never handed it over",
+		SteerUnconfirmed: "swe was handed a note from founder and never confirmed reading it",
+		"forgotten":      "swe was sent a note from founder",
+	} {
+		if got := (AgentTurnSteered{Outcome: outcome, SteeredBy: "founder"}).SummaryFor("swe"); got != want {
+			t.Errorf("%s says %q, want %q", outcome, got, want)
+		}
+	}
+}
+
 // AN EXPIRED NOTE NAMES NO STEP, and a phase's read always names one. Nothing
-// read an expired note, so its record carries no step, job, phase or round —
-// absent rather than zero, as the dashboard reads them. Every read a phase
+// read an expired note, so its record carries no step, job, phase or round
+// (absent rather than zero, as the dashboard reads them), and says nothing of a
+// re-telling, which only a delivered note's record may. Every read a phase
 // records names the kind of step that read it, so a reader never has to guess
 // one.
 func TestBoundaryAndLaunchIDAreOmittedWhenEmpty(t *testing.T) {
@@ -40,7 +83,7 @@ func TestBoundaryAndLaunchIDAreOmittedWhenEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"boundary"`, `"launch_id"`, `"phase"`, `"round"`} {
+	for _, key := range []string{`"boundary"`, `"launch_id"`, `"phase"`, `"round"`, `"retold"`} {
 		if strings.Contains(string(raw), key) {
 			t.Errorf("an expired note's record carries %s: %s", key, raw)
 		}
@@ -51,6 +94,30 @@ func TestBoundaryAndLaunchIDAreOmittedWhenEmpty(t *testing.T) {
 	}
 	if string(steer) != `{"round":2,"note_id":"n-1","boundary":"round"}` {
 		t.Errorf("a round's read encodes as %s", steer)
+	}
+}
+
+// THE DASHBOARD NAMES EVERY OUTCOME A NOTE CAN HAVE, read out of its own
+// source. The turn trace says each in words and places every one that names a
+// step on that step; an outcome the engine records that the dashboard does not
+// list is drawn as one it cannot name, and one it lists that the engine never
+// records is copy nobody can reach.
+//
+// Mutation: add an outcome to SteerOutcomes alone, and this goes red.
+func TestTheDashboardNamesEverySteerOutcome(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "STEER_OUTCOMES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := clientsource.Strings(body)
+	engine := make([]string, 0, len(SteerOutcomes))
+	for _, o := range SteerOutcomes {
+		engine = append(engine, string(o))
+	}
+	if !slices.Equal(client, engine) {
+		t.Errorf("the dashboard names %v as what can become of a note and the engine records %v: "+
+			"change STEER_OUTCOMES in contract/steer.ts, and the trace's words for each", client, engine)
 	}
 }
 
