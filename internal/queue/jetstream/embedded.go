@@ -1751,6 +1751,20 @@ const externalHandshake = 2 * time.Second
 // at once, and a peer that dies under small writes is found by the client's
 // pings as before. A member's own connection is in its own process and
 // crosses nothing, and keeps the client's minute.
+//
+// AND IT HOLDS EVERY CALLER ON THE CONNECTION PAST ITS OWN DEADLINE, not only
+// the one whose write is in the socket: the client checks a caller's context
+// before a request is sent and while its reply is awaited (nats.go v1.55.0,
+// context.go:49, :67-79), but the send (nats.go:4873, :4730) and giving up on
+// the reply (context.go:76) each wait for the connection's lock, unchecked, and
+// a large Write holds that lock for its whole length: publish's own flush past
+// the write buffer (:4814 to :4825), the flusher's (:4248 to :4272) and a
+// reconnect's flush of its buffer (:3554 to :3632). So a caller, a small write
+// and a lease renewal among them, is held behind every large Write ahead of it
+// on the connection, each up to this deadline, about eight minutes where the
+// client's minute cut the Write and the connection with it, and then for its
+// own; nothing bounds how many are ahead. Bounding the wait needs the write
+// windowed, crewlet/crewlet#1035.
 var externalWriteDeadline = jsapi.Sending(
 	max(nats.DefaultWriteBufSize, nats.DefaultReconnectBufSize)+queue.MaxPayloadBytes, objstore.MiBPace)
 

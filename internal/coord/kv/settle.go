@@ -54,7 +54,15 @@
 // bound, so a write met by in-flight answers for ever ends undecided by it.
 // Whether the connection crosses a link is the caller's to state where a
 // bucket is opened ([Reach]), because nothing here can see how the
-// connection it was handed was made. A caller's own deadline is kept.
+// connection it was handed was made. A caller's own deadline is kept, but on
+// an external broker — whose connection the buckets share with the queue — the
+// client does not check it while a write waits for the connection's lock,
+// which a large write holds for its whole socket Write, nor while the write is
+// in the socket: a write here, a lease renewal among them, is held behind every
+// large write ahead of it on the connection, each up to the dial's write
+// deadline (internal/queue/jetstream's externalWriteDeadline, about eight
+// minutes), and then for its own; bounding that needs the write windowed
+// (crewlet/crewlet#1035).
 //
 // THE HANDLE IS WRAPPED ONCE, where a bucket is opened ([Open], [OpenFleet],
 // [OpenEpochs]), rather than at each call site, because how a write is decided

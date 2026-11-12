@@ -421,7 +421,13 @@ the client may make of it — the client sends a write nobody heard again,
 twice at most, inside the one wait it was given — and an attempt after an
 in-flight answer waits within that same bound, never a bound of its own, so a
 write the leader keeps answering in flight ends unknown at it; on a member's
-own connection it waits the five seconds alone. A caller's own deadline is kept. Each node
+own connection it waits the five seconds alone. A caller's own deadline is kept, but on an
+external broker the client does not check it while a write waits for the
+connection, which a large write holds for its whole length, nor while the
+write is in the socket: a write, a lease renewal among them, is held behind
+every large write ahead of it, each for up to the client's write deadline of
+about eight minutes, and then for its own
+([Delivery Semantics](event-system.md#delivery-semantics)). Each node
 states how its connection reaches the store when it opens it, from its
 broker's kind, since the store cannot see how the connection was made. A
 node's MCP listings are written on a pass of their own beside its fifteen-second

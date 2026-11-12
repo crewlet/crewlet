@@ -284,7 +284,11 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	// it, and held to one crossing, so did the attempt after an in-flight
 	// answer. For those minutes everything the node sends behind it on the
 	// link waits too, its lease renewals among them (crewlet/crewlet#1035,
-	// which this does not fix). A caller's own deadline is kept.
+	// which this does not fix). A caller's own deadline is kept, but on an
+	// external broker it is not checked while the send waits for the
+	// connection's lock behind another large write, nor while the send is in
+	// the client's socket, each such write holding it up to the dial's write
+	// deadline ([externalWriteDeadline]).
 	var ack *jetstream.PubAck
 	sends := l.q.writing(msg)
 	err := jsinflight.Decide(ctx, sends, func(ctx context.Context) error {

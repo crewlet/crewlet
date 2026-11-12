@@ -58,7 +58,13 @@ import (
 // this bound does not fix: it stops a slow write being abandoned as an
 // outage, and does nothing about what the write holds up. A caller that
 // cannot wait that long says so with a deadline of its own, which a budget
-// never extends.
+// never extends — though on an external broker the client does not check that
+// deadline while the request waits for the connection's lock, which a large
+// write holds for its whole socket Write, nor while its own write is in the
+// socket, so the caller is held behind every large write ahead of it, each up
+// to the dial's own write deadline (internal/queue/jetstream's
+// externalWriteDeadline, about eight minutes), and then for its own. Bounding
+// that wait needs the write windowed, crewlet/crewlet#1035 again.
 func WriteBound(js jetstream.JetStream, crossing time.Duration) time.Duration {
 	return js.Options().DefaultTimeout + crossing
 }

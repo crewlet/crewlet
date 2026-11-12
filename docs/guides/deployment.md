@@ -1098,7 +1098,16 @@ makes — a message at 8 MiB behind as much as the client buffers, the 8 MiB it
 holds while reconnecting included — at that floor: about eight minutes. What
 that costs is on a connection that dies in the middle of a large write: the
 client gives it up only when the deadline passes, and nothing else moves on
-the connection meanwhile. A small write never waits on it.
+the connection meanwhile. A small write's own socket write never runs into
+it. But a caller's own deadline is not checked while its request waits for
+the connection, which a large write holds for its whole socket write, nor
+while its own write is in the socket: a caller, a small write or a lease
+renewal among them, is held behind every large write ahead of it, each for
+up to that deadline of about eight minutes (the client's minute cut the write
+and broke the connection), and then for its own. Bounding that wait needs the
+write windowed, which
+[crewlet/crewlet#1035](https://github.com/crewlet/crewlet/issues/1035)
+tracks.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it

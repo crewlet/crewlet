@@ -90,7 +90,13 @@
 // across the link again; a send past the third waits in the budget as it
 // stands. A
 // caller's own deadline is kept, never extended: a caller that cannot wait for
-// a slow link says so.
+// a slow link says so. On an external broker the client does not check that
+// deadline while the request waits for the connection's lock, which a large
+// write holds for its whole socket Write, nor while its own write is in the
+// socket, so the caller is held behind every large write ahead of it, each up
+// to the dial's write deadline (externalWriteDeadline, about eight minutes),
+// and then for its own; bounding that needs the write windowed
+// (crewlet/crewlet#1035).
 //
 // Held to the five seconds alone, a write at the transport's eight-mebibyte
 // ceiling could not be acknowledged on any link slower than 1.6 MiB/s and
