@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE REMOVED SEAT'S MAILBOX.
@@ -86,9 +87,13 @@ import (
 //     to go, and a completion is routed to the control topic that goes with
 //     it), so while the lease is held they are ended ([SeatRunRetirer]) before
 //     a single subscription is deleted, and a retirement that cannot end them
-//     is undone and retried like one that cannot delete. They are found by the
-//     seat's ID, the key their subscriptions are named by, so a mailbox the
-//     broker alone remembered ends its seat's runs like any other.
+//     is undone and retried like one that cannot delete. A run whose tool call
+//     is still running is no run that cannot be ended: it is left WAITING
+//     ([SeatRunsWaiting]), and the retirement is undone and retried the same
+//     way, said at info on every tick it lasts rather than failing them. They
+//     are found by the seat's ID, the key their subscriptions are named by, so
+//     a mailbox the broker alone remembered ends its seat's runs like any
+//     other.
 //
 //   - A RETIREMENT REMOVES THE SEAT'S EXECUTOR SESSIONS, after its runs and
 //     before its subscriptions ([SeatSessionRetirer]). A session is what a
@@ -246,8 +251,36 @@ type SeatLeases interface {
 // whether the seat has runs at all, and the retirement is undone and retried:
 // deleting the subscriptions a run's completion and answer travel on, while
 // the run itself is left behind, would strand it in the fleet's run records
-// for good.
-type SeatRunRetirer func(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64) error
+// for good. A run left because a tool call of it is still running is answered
+// in [SeatRunsWaiting] instead, beside the error and never inside it, and the
+// retirement is undone and retried for it too.
+type SeatRunRetirer func(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64,
+) (SeatRunsWaiting, error)
+
+// SeatRunsWaiting is the runs of a retired seat a [SeatRunRetirer] left for a
+// later tick because a tool call each of them made is still running, named by
+// those calls. Its zero value is a retirer that left no run waiting.
+//
+// A WAIT IS NOT A FAILURE. The call is running, the retirer ends its run once
+// the call is recorded, or once the call's bound passes or its process stops,
+// and nobody has anything to do about it but wait. So the retirement that
+// meets one is undone and retried like one whose runs could not be ended, but
+// said at info (`seat_mailbox_retirement_waiting`) rather than failing the
+// tick, whose warning sent an operator looking for a fault that was a call
+// doing its work. A failure the retirer answers beside it still fails the tick.
+type SeatRunsWaiting struct {
+	// Calls names each call still running, with the turn it is a call of, in
+	// the retirer's words. Empty where no run waits.
+	Calls []string
+	// Until is the latest instant any of them is still waited for, past which
+	// the retirer ends their runs whether or not the calls were recorded. Zero
+	// where no run waits, and where a call has no bound, which only its update
+	// or its process's end stops the wait for.
+	Until time.Time
+}
+
+// waiting reports whether the retirer left any run waiting.
+func (w SeatRunsWaiting) waiting() bool { return len(w.Calls) > 0 }
 
 // SeatSessionRetirer removes every executor session a seat whose mailbox is
 // being retired holds, after its runs are ended and while the retirement holds
@@ -790,10 +823,22 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 
 	// THE RUNS BEFORE THE SUBSCRIPTIONS, under the same lease and budget: a
 	// run left behind once its control topic and inbox are gone is one no
-	// completion, answer or resume can ever reach again.
-	if runsErr := m.runs(work, rec.Seat, rec.Handle, lease.Owner, lease.Epoch); runsErr != nil {
+	// completion, answer or resume can ever reach again. A run left WAITING on
+	// a call is left behind too, so it keeps the mailbox as a failure does —
+	// without failing the tick, and said beside a failure the retirer answers
+	// with it.
+	waiting, runsErr := m.runs(work, rec.Seat, rec.Handle, lease.Owner, lease.Epoch)
+	if waiting.waiting() {
+		sayWaiting(ctx, handle, waiting)
+	}
+	if runsErr != nil || waiting.waiting() {
 		m.unmark(ctx, marked)
+	}
+	if runsErr != nil {
 		return false, fmt.Errorf("end the executor of retired seat %q: %w", handle, runsErr)
+	}
+	if waiting.waiting() {
+		return false, nil
 	}
 	// AND ITS SESSIONS, once nothing can capture another: its runs are
 	// ended, and the lease keeps any node from starting one.
@@ -942,6 +987,33 @@ func (m *Mailboxes) unmark(ctx context.Context, marked coord.MailboxRecord) {
 		log.WarnContext(ctx, "seat_mailbox_unmark_failed", "handle", recordLabel(marked), "error", err.Error(),
 			"detail", "the retirement mark stays until a later sweep resumes it")
 	}
+}
+
+// sayWaiting says, at info, that the retirement of the seat handle names left
+// its runs waiting on the calls waiting names, and until when.
+//
+// SAID ON EVERY TICK THE WAIT LASTS, never only when it changes. A tick is
+// [Interval] apart, so a wait costs one line a quarter of an hour for as long
+// as its calls run, and each line names the whole wait — every call, and the
+// latest instant any of them is waited for — so any one line reads alone.
+// Saying it once per change would need what was said last kept for each seat
+// on whichever node holds the duty, and that memory goes when the duty moves to
+// another node, which then says it again anyway: state kept to spare a line
+// every fifteen minutes.
+func sayWaiting(ctx context.Context, handle string, waiting SeatRunsWaiting) {
+	const kept = "a tool call of the seat's run is still running, so the run is not ended and its " +
+		"mailbox is kept, which is no failure: "
+	if waiting.Until.IsZero() {
+		log.InfoContext(ctx, "seat_mailbox_retirement_waiting", "handle", handle,
+			"calls", words.And(waiting.Calls),
+			"detail", kept+"a call names no bound, so the retirement is tried again on every tick, and "+
+				"ends the run once the call is recorded or its process stops")
+		return
+	}
+	log.InfoContext(ctx, "seat_mailbox_retirement_waiting", "handle", handle,
+		"calls", words.And(waiting.Calls), "until", waiting.Until,
+		"detail", kept+"the retirement is tried again on every tick, and ends the run once the call is "+
+			"recorded, its process stops or until passes")
 }
 
 // restoreInbox creates a seat's inbox, the half of its mailbox every node

@@ -238,8 +238,30 @@ func (f *FleetStore) WatchSandboxRun(ctx context.Context, turnID string) (<-chan
 	if turnID == "" {
 		return nil, errors.New("coord/kv: a sandbox run needs a turn id")
 	}
-	key := encodeKey(turnID)
-	current, w, err := watchUnder(ctx, f.js, f.runs, key, "the sandbox run "+turnID)
+	return f.watchRunKey(ctx, turnID, encodeKey(turnID), "the sandbox run "+turnID)
+}
+
+// WatchSandboxRunPart streams the part beside turnID's run, its first state
+// certified: [FleetStore.WatchSandboxRun]'s watch, on the part's own key, so a
+// write of the record or of another part reaches it not at all, and the part's
+// removal with its record — a delete or purge marker on its key — is delivered
+// as a part that is gone.
+func (f *FleetStore) WatchSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
+) (<-chan coord.SandboxRunUpdate, error) {
+	if err := partOf(turnID, part); err != nil {
+		return nil, err
+	}
+	return f.watchRunKey(ctx, turnID, runPartKey(turnID, part),
+		"the sandbox run "+turnID+"'s "+string(part))
+}
+
+// watchRunKey streams one key of the runs bucket that holds turnID's run — its
+// record, or a part beside it — as [FleetStore.WatchSandboxRun] describes:
+// its first state certified, each later one filtered by revision. what names
+// the key in an error.
+func (f *FleetStore) watchRunKey(ctx context.Context, turnID, key, what string,
+) (<-chan coord.SandboxRunUpdate, error) {
+	current, w, err := watchUnder(ctx, f.js, f.runs, key, what)
 	if err != nil {
 		return nil, err
 	}

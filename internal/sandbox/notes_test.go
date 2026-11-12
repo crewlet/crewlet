@@ -307,7 +307,7 @@ func TestAParkedRunsEndingNeverExpiresTheNotesItsJobsBriefCarried(t *testing.T) 
 			}
 			fileNote(t, rig.pending, "t1", "waiting")
 
-			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
+			if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 				t.Fatalf("RetireSeat: %v", err)
 			}
 

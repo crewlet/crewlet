@@ -4555,7 +4555,13 @@ which names no box and so was 37 941 bytes. The log
 beside it is 478 374 bytes, and only the calls that use it move it: an append
 of the box's next call takes 10.6 ms (15.6), and 10.8 ms (15.3) for a call
 that moved what the job's bridged calls cost, which also writes the new total
-to the record. The sealed set of secrets beside it is about 0.7 KiB for a
+to the record. Every bridged call also writes its entry on that log before it
+runs (the write ahead of it, [Code Sandbox](code-sandbox.md#what-a-runs-record-and-its-log-keep)):
+measured on 2026-11-11, a thousand writes an arm on the same three members, that
+write takes 11.89 ms at the median (17.04 at the 99th percentile) and the update
+that completes it as the call returns 13.62 ms (18.96), beside 12.14 ms (17.13)
+for an append with no entry before it, on a log of 481 440 bytes. The sealed
+set of secrets beside it is about 0.7 KiB for a
 launch handed a model key, two MCP servers' tokens and its own telemetry and
 Gitlet tokens (computed from its encoding: 486 bytes of values, sealed and
 named for the job in a 779-byte part), and at most 64 KiB before sealing; only

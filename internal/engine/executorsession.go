@@ -484,9 +484,10 @@ func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colle
 // the turn reaches: a loss, a stop. KNOWN is false where the log could not be
 // read, or is incomplete — calls not accounted for by name, on a log a build
 // without identities elided or past what its tally of identities holds
-// ([sandbox.BridgeLog.ElisionKnown]) — and what it kept shows no delivery: a
-// definite "did not reply" read off no log, or half of one, is the false
-// account the end exists to prevent.
+// ([sandbox.BridgeLog.ElisionKnown]), or a call whose outcome is unknown, its
+// entry still in flight as the ending read the log ([sandbox.BridgeLog.InFlight])
+// — and what it kept shows no delivery: a definite "did not reply" read off no
+// log, or half of one, is the false account the end exists to prevent.
 //
 // A WORK PICKUP'S TURN IS HELD TO ITS ITEM, as its loop holds it: delivered
 // only where the seat's rows since the turn's first launch typed an answer on
@@ -514,7 +515,7 @@ func (e *Engine) runDelivered(ctx context.Context, c *Company, run sandbox.Pendi
 	}
 	calls = append(calls, ledger.Called(identitiesOf(dropped))...)
 	delivered = turn.Answered(calls, deliverySurface(e.seatRegistry(c, run.AgentHandle)), reply)
-	incomplete := logged.PriorCallsElided || !logged.ElisionKnown()
+	incomplete := logged.PriorCallsElided || !logged.ElisionKnown() || len(logged.InFlight) > 0
 	delivered, known = heldToItem(ctx, run.TurnID, reply.Item, delivered, delivered || !incomplete,
 		e.pickupAnswerFor(run.AgentHandle, run.CreatedAt, reply))
 	return reply, delivered, known

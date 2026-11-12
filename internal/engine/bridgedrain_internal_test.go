@@ -26,16 +26,16 @@ type recordedCalls struct {
 	calls []mcpbridge.Call
 }
 
-func (l *recordedCalls) Append(_ context.Context, _ string, c mcpbridge.Call) error {
+func (l *recordedCalls) Begin(context.Context, string, mcpbridge.Begun) error { return nil }
+
+func (l *recordedCalls) Record(_ context.Context, _ string, c mcpbridge.Call) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.calls = append(l.calls, c)
 	return nil
 }
 
-func (l *recordedCalls) Settle(context.Context, string) bool { return false }
-
-func (l *recordedCalls) End(context.Context, string) bool { return false }
+func (l *recordedCalls) Withdraw(context.Context, string, mcpbridge.Begun) error { return nil }
 
 func (l *recordedCalls) rows() []mcpbridge.Call {
 	l.mu.Lock()

@@ -387,6 +387,18 @@ type Resume struct {
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
 
+	// Unfinished is the round's calls the log held IN FLIGHT when it was read
+	// (sandbox.BridgeLog.InFlight): begun, their identity on the record, and
+	// not finished as the collection stopped waiting for them — still running
+	// past their bound or the turn's cap, their process gone, or their update
+	// refused by the store — each a call whose outcome is unknown
+	// ([ledger.Call.Unfinished], [UnfinishedNote]), its identity alone. Seeded
+	// into the turn's call log by that identity ([seedCalls]), listed in the
+	// round's record after its calls, for the reviewer and the turn's tool
+	// log, and told to a run that carries the round on beside its late calls
+	// ([Runner.calledAfter]); never a submission, a delivery or a load.
+	Unfinished []BridgedCall
+
 	// Elided is the round's calls the log does not list, by identity
 	// (sandbox.BridgeLog.Unlisted): a long run's dropped middle. Calls of the
 	// round all the same, which the turn's call log is seeded with beside

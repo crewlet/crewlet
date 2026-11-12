@@ -400,6 +400,10 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 					back.Status, back.Launch.Collected)
 			}
 			charges := rig.accountant.asked()
+			// THE COLLECTION ENDED THE JOB'S SESSION ITSELF, as every
+			// collection does before it reads ([Coordinator.drainCalls]): what
+			// the stop ends is counted from here.
+			sessions := len(spies.endedRuns())
 			var reads atomic.Int32
 			rig.runner.CollectFunc = func(context.Context) error {
 				reads.Add(1)
@@ -422,9 +426,10 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 			if slices.Contains(rig.provider.KilledIDs(), running.SandboxID) {
 				t.Fatal("the stop reclaimed the box its turn's resume continues in")
 			}
-			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != 0 || len(rig.stopAnnouncements()) != 0 {
+			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != sessions || len(rig.stopAnnouncements()) != 0 {
 				t.Fatalf("the stop closed %d turns, ended %d sessions and announced %d stops of a job it "+
-					"does not end", len(spies.closedTurns()), len(spies.endedRuns()), len(rig.stopAnnouncements()))
+					"does not end", len(spies.closedTurns()), len(spies.endedRuns())-sessions,
+					len(rig.stopAnnouncements()))
 			}
 		})
 	}

@@ -149,7 +149,7 @@ func TestAResumedRunsRepeatSpeltAnotherWayIsTheSameWrite(t *testing.T) {
 		w.write(firstWrite())
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 			buildOpts{calls: calls, register: register(w)})
-		reopened, err := r.ReopenAgentRun(context.Background(), state(), bridged(), nil, nil, runner.Bridged{}, false)
+		reopened, err := r.ReopenAgentRun(context.Background(), state(), bridged(), nil, nil, nil, runner.Bridged{}, false)
 		if err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
 		}
@@ -185,7 +185,7 @@ func TestASeededSubmissionIsReadByTheSurfacesUniverse(t *testing.T) {
 	reopened, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
 		{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: submission(" Delivered "),
 			Result: "recorded"}, Seq: 1},
-	}, nil, nil, runner.Bridged{}, false)
+	}, nil, nil, nil, runner.Bridged{}, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}
