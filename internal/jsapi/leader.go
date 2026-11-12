@@ -188,18 +188,62 @@ func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 	return &c
 }
 
-// Crossing is how long the reply to a message read — a `STREAM.MSG.GET`,
-// this package's or the client's own where a stream allows no direct get —
-// that carries a message of messageBytes takes to cross a link carrying a
-// mebibyte in as long as pace. The reply is JSON, the message base64-encoded
-// inside it beside its envelope ([replyOverhead]), so it is a third larger
-// than the message, and it is heard only once its last byte is in: the one
-// rule for how long such a reply is given before a read is presumed lost,
-// whoever reads ([Leader.Carrying], and a state log's read of a record by its
-// position). A write's request crosses the other way, raw ([Sending]).
+// Crossing is how long the reply to a message read that carries a message of
+// messageBytes ([ReplyBytes]) takes to cross a link carrying a mebibyte in as
+// long as pace, heard only once its last byte is in: the one rule for how long
+// such a reply is given before a read is presumed lost, whoever reads
+// ([Leader.Carrying], and a state log's read of a record by its position). A
+// write's request crosses the other way, raw ([Sending]).
 func Crossing(messageBytes int, pace time.Duration) time.Duration {
-	reply := base64.StdEncoding.EncodedLen(messageBytes) + replyOverhead
-	return time.Duration(float64(pace) * float64(reply) / mebibyte)
+	return time.Duration(float64(pace) * float64(ReplyBytes(messageBytes)) / mebibyte)
+}
+
+// ReplyBytes is the most the reply to a message read — a `STREAM.MSG.GET`,
+// this package's or the client's own where a stream allows no direct get —
+// carries for a message of messageBytes, its header block and its payload: the
+// reply is JSON, the message base64-encoded inside it beside its envelope
+// ([replyOverhead]), so it is a third larger than the message.
+//
+// # A reply past the transport cannot cross a leaf's link
+//
+// The server on the receiving side of a leaf link holds every message the
+// link carries to its own max_payload — the transport's eight mebibytes on
+// every embedded server — and CLOSES THE WHOLE LINK on one larger (nats-server
+// v2.15.2, leafnode.go, processLeafMsgArgs → maxPayloadViolation), every lease
+// and mailbox the node holds across it cut off until it is dialled again. A
+// message of more than about six mebibytes, which the transport carries
+// whole, has a reply larger than that: a reader that may meet one across a
+// leaf's link reads it raw instead (internal/queue/jetstream's copy reads),
+// and one whose messages are held below it reads from the leader. A route
+// carries any size, and nothing checks what a server sends its own client, so
+// a client of a broker somebody else runs reads from the leader whatever the
+// message's size.
+func ReplyBytes(messageBytes int) int {
+	return base64.StdEncoding.EncodedLen(messageBytes) + replyOverhead
+}
+
+// MaxReadable is the largest message, header block and payload, whose reply
+// to a message read ([ReplyBytes]) is no larger than transport — what a
+// leader's read can carry back across a leaf's link held to that max_payload:
+// 6,290,688 bytes at the transport's eight mebibytes, and -1 where not even an
+// empty message's reply fits. A store that holds its values to it
+// ([ReplyBytes]'s doc) is one every read of which crosses any link.
+func MaxReadable(transport int64) int {
+	// ReplyBytes only grows with the message, so the largest that fits is
+	// found by halving.
+	lo, hi := 0, int(max(transport, 0))
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		if int64(ReplyBytes(mid)) <= transport {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if int64(ReplyBytes(lo)) > transport {
+		return -1
+	}
+	return lo
 }
 
 // replyOverhead is the most a message read's reply carries beside the
@@ -300,6 +344,42 @@ func (l *Leader) on(msg Message, subject string) (Message, error) {
 // [ErrNoMessage].
 func (l *Leader) At(ctx context.Context, seq uint64) (Message, error) {
 	return l.get(ctx, server.JSApiMsgGetRequest{Seq: seq})
+}
+
+// Leading is the server that leads the stream, by its name, and how many
+// replicas the stream keeps, as the stream's LEADER states them: one
+// `STREAM.INFO` that names no subjects, so its answer is the stream's state
+// and configuration and none of its messages — a few kibibytes, read at the
+// read term — asked again while nobody answers it, as a message read is (see
+// [Leader]).
+//
+// A reader that cannot ask the leader for a message — one too large for the
+// leader's reply to cross its link (internal/queue/jetstream's copy reads) —
+// reads it from a consumer instead, which the broker places on one of the
+// stream's replicas at random; only the one on the leader's server reads the
+// leader's own copy, and this is how that reader knows which server that is.
+//
+// AN ANSWER THAT NAMES NO LEADER IS REFUSED ([ErrLeaderless]): a stream's
+// info is the leader's except while its group has none, when every member
+// answers from its own copy (nats-server v2.15.2, server/jetstream_api.go,
+// jsStreamInfoRequest), naming no leader to read from. A stream on a server
+// that is not clustered names that server, as a stream of one replica does.
+func (l *Leader) Leading(ctx context.Context) (name string, replicas int, err error) {
+	var resp server.JSApiStreamInfoResponse
+	if _, _, err = page(ctx, l.conn, l.info, server.JSApiStreamInfoRequest{}, jsprovision.ReadTerm,
+		l.timeout, &resp); err != nil {
+		return "", 0, fmt.Errorf("jsapi: read who leads %s: %w", l.stream, err)
+	}
+	switch {
+	case resp.Error != nil:
+		return "", 0, fmt.Errorf("jsapi: read who leads %s: %w", l.stream, resp.Error)
+	case resp.StreamInfo == nil:
+		return "", 0, fmt.Errorf("jsapi: the leader of %s answered a read of who leads it with "+
+			"neither a stream nor an error", l.stream)
+	case resp.Cluster == nil || resp.Cluster.Leader == "":
+		return "", 0, fmt.Errorf("jsapi: read who leads %s: %w", l.stream, ErrLeaderless)
+	}
+	return resp.Cluster.Leader, max(resp.Config.Replicas, 1), nil
 }
 
 // get asks the leader for one message — asked again while nobody answers, see
