@@ -106,11 +106,13 @@
 // old one, or the other way round. A call recorded only once it returned met
 // that wherever the coordination store refused its record for longer than its
 // job's session lasted. So the bridge WRITES EACH CALL'S ENTRY AHEAD OF IT
-// ([Ledger.Begin]) — its identity alone ([Begun]): its tool, its place, the
-// instant the bridge took it, the digest it was admitted under where its tool
-// can never ask a person first, and the instant past which nobody waits for it
-// — on the call's own goroutine, and RUNS THE CALL ONLY ONCE THE ENTRY IS
-// TAKEN ([binding.writeAhead]). Its one update then records what it did
+// ([Ledger.Begin]) — its identity ([Begun]): its tool, its place, the instant
+// the bridge took it, the digest it was admitted under where its tool can
+// never ask a person first, and the instant past which nobody waits for it;
+// and beside it the id its harness gave it, which is no part of that identity
+// ([Begun.CallID], "A call carries the id its harness gave it" below) — on the
+// call's own goroutine, and RUNS THE CALL ONLY ONCE THE ENTRY IS TAKEN
+// ([binding.writeAhead]). Its one update then records what it did
 // ([binding.conclude], [Ledger.Record]), found by that identity.
 //
 // AND THE CALL IS IN THE RUN'S CALL LOG ONLY ONCE ITS ENTRY IS: it is admitted
@@ -157,6 +159,33 @@
 // an outage now refuses the calls it used to let run off the record, and its
 // refused updates are asked for again, one ask of a call's about every seven
 // seconds while it is out.
+//
+// # A call carries the id its harness gave it
+//
+// A harness names each call it makes: Claude Code hands the server the model's
+// tool_use id in the request's `_meta`, under `claudecode/toolUseId` — the id
+// its session's transcript files the call's use and its result under, on its
+// main thread and in its subagents alike, over this transport, a tool its tool
+// search loaded included (measured on 2.1.310). The bridge reads it as the call
+// arrives, under the key the box's runner declares and no other
+// ([Session.CallIDMeta], [Session.callIDOf]), and records it on the call's
+// entry and on its one update alike ([Begun.CallID], [Call.CallID]), on every
+// path that records the call — one that ran, one refused before its tool ran,
+// one the surface could not run, one held for a person, one whose arguments did
+// not parse, one made once the run's tools had closed, and one whose run's
+// tools closed while its entry was being written — so the run's log names each
+// call as its harness's session does. ONLY AN ID THE LOG KEEPS WHOLE IS
+// TAKEN (sandbox.ValidCallID): a value that is not a string, or an id past the
+// bound or outside its characters, is recorded as none, NEVER CUT, since two
+// ids cut alike would name two calls as one.
+//
+// THE BOX'S WORD, AND NO PART OF THE CALL'S IDENTITY: the update finds its
+// entry by the call's place, its instant and its tool, as before, and two
+// calls under one id are two calls — a harness that makes a call again may
+// send the id it sent the first time. A harness whose runner declares no key
+// (OpenCode, whose `_meta` carries no id of the call) has every call recorded
+// with none, and so does a skill load its hook reports, which is the bridge's
+// own call of the loader ([binding.loadSkill]).
 //
 // # A call's answer starts at once and keeps going
 //
@@ -438,6 +467,16 @@ type Session struct {
 	// made through this bridge names the model its run's other writes name.
 	Model string
 
+	// CallIDMeta is the key of a call's `_meta` the box's harness hands its own
+	// id for the call under, as the runner that starts the box declares it
+	// (sandbox.OpenedJob.CallIDMeta): the one key every call's id is read by
+	// ([Call.CallID]). EMPTY READS NONE, whatever the box sends under any key,
+	// the empty one included: a session that declares no key reads every
+	// call's id as none — a test's, or the assistant's deep work's, whose
+	// harness names its calls but whose session records none of them, with no
+	// [Session.Ledger] to record them on.
+	CallIDMeta string
+
 	// Surface is the live tool surface for this run — the SAME object a
 	// tool loop would execute against. See the package doc for why nothing
 	// here reimplements what it does.
@@ -598,11 +637,12 @@ func (s *Session) seat() *tools.Surface { return seatOf(s.Surface) }
 // run's record before it runs".
 type Ledger interface {
 	// Begin writes the call's ENTRY on the run's log before its tool runs:
-	// its identity alone ([Begun]). The call runs only once this answered
-	// nil. [ErrNotTaken] is a log that no longer takes the calls of this job
-	// — its run ended, or a relaunch replaced the job — and any other error a
-	// write the ledger could not land within its own bound; either way the
-	// call is not run, and its box is told so.
+	// its identity, and beside it the id its harness gave it ([Begun]). The
+	// call runs only once this answered nil. [ErrNotTaken] is a log that no
+	// longer takes the calls of this job — its run ended, or a relaunch
+	// replaced the job — and any other error a write the ledger could not
+	// land within its own bound; either way the call is not run, and its box
+	// is told so.
 	Begin(ctx context.Context, runID string, call Begun) error
 
 	// Record is a finished call's ONE UPDATE: its entry, found by its
@@ -647,7 +687,9 @@ var ErrUnrecorded = errors.New("mcpbridge: the call's update did not land, and t
 // Begun is a call's IDENTITY as its entry is written ahead of it
 // ([Ledger.Begin]), and what its update and its withdrawal find the entry by:
 // its tool, its place and the instant the bridge took it — two openings of a
-// job can reuse a place, never at one instant.
+// job can reuse a place, never at one instant. And beside it, the id the call's
+// harness gave it ([Begun.CallID]), which the entry carries and which is no
+// part of that identity.
 type Begun struct {
 	// Name is the tool the call names.
 	Name string
@@ -666,6 +708,10 @@ type Begun struct {
 	// Until is the instant past which nobody waits for the call to finish:
 	// StartedAt, its tool's own bound and the bridge's margin (wait.go).
 	Until time.Time
+	// CallID is the id the call's harness gave it ([Call.CallID]), which the
+	// entry carries for its update to carry too, and NEVER WHAT THE ENTRY IS
+	// FOUND BY: it is the box's word.
+	CallID string
 }
 
 // Call is one finished bridged call, as the ledger records it.
@@ -718,6 +764,17 @@ type Call struct {
 	// guess at what their seal hides (ADR-0077). The record counts such a
 	// call as one of its tool whose arguments are not known.
 	Digest string
+
+	// CallID is the id the call's HARNESS gave it, as the box sent it in the
+	// request's `_meta` under [Session.CallIDMeta] — for Claude Code, the
+	// model's tool_use id — read once as the call arrives ([Session.callIDOf])
+	// and carried by its entry ([Begun.CallID]) and its one update alike, a
+	// held call's included, since the id says nothing of its sealed
+	// arguments. "" where the box sent none the log keeps whole
+	// (sandbox.ValidCallID), on a session that declares no key, and on a
+	// skill load a hook reported. The box's word, and NO PART OF THE CALL'S
+	// IDENTITY (sandbox.BridgeCall.CallID).
+	CallID string
 
 	// Absorbed is the calls the run's call log took in from the call's OWN
 	// WORK — a `delegate`'s workers — by identity
@@ -1993,12 +2050,20 @@ const (
 // opening's end, which answers every call it holds before it closes the box's
 // sessions ([binding.endKeeping]) — see the package doc, "An opening ends
 // without waiting for its calls".
+//
+// THE ID ITS HARNESS GAVE IT is read once, as it arrives ([Session.callIDOf]),
+// and every record of the call carries it: its entry, and its one update on
+// every path that makes one — see the package doc, "A call carries the id its
+// harness gave it".
 func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	s := o.session
 	// THE FENCE BEFORE ANY CALL, outside the lock: it reads the node's own
 	// copy of the seat's grant and pauses, and nothing it answers depends on
 	// another call of this opening.
 	fenced := fence(s)
+	// THE ID ITS HARNESS GAVE IT, outside the lock too: the session's key is
+	// fixed before it opens, and the call's `_meta` is its own.
+	callID := s.callIDOf(in.Meta)
 
 	o.mu.Lock()
 	if o.ended {
@@ -2032,7 +2097,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		o.record(Call{Call: tools.Call{Name: in.Name, Args: args, Output: stoppedNote,
-			Failed: true, Cause: tools.RefusalNotRunning}, Seq: seq}, time.Time{})
+			Failed: true, Cause: tools.RefusalNotRunning}, Seq: seq, CallID: callID}, time.Time{})
 		return refused(stoppedNote)
 	}
 	if in.ArgumentsError != "" {
@@ -2043,7 +2108,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		o.mu.Unlock()
 		out := toolloop.UnparsedArguments(in.Name, in.ArgumentsError)
 		o.record(Call{Call: tools.Call{Name: in.Name, Output: out, Failed: true,
-			Cause: tools.RefusalInvalid}, Seq: seq}, time.Time{})
+			Cause: tools.RefusalInvalid}, Seq: seq, CallID: callID}, time.Time{})
 		return refused(out)
 	}
 	// THE IDENTITY IT WILL BE COUNTED BY in the run's call log, which its
@@ -2070,7 +2135,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// person first ([asksFirst]).
 	started := time.Now()
 	entry := Begun{Name: in.Name, Seq: seq, StartedAt: started.UTC(), Digest: digest,
-		Until: started.Add(callBound(s.Surface, in.Name) + callMargin).UTC()}
+		Until: started.Add(callBound(s.Surface, in.Name) + callMargin).UTC(), CallID: callID}
 	if asksFirst(s.Surface, in.Name) {
 		entry.Digest = ""
 	}
@@ -2096,7 +2161,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			return
 		}
 		written := writtenOf(s.Surface)
-		r := ran{name: in.Name, args: args, digest: digest, seq: seq, abandoned: in.Abandoned,
+		r := ran{name: in.Name, args: args, digest: digest, seq: seq, callID: callID, abandoned: in.Abandoned,
 			written: written, before: written.Changes(), started: started, until: entry.Until}
 		r.res, r.broke, r.err = o.execute(admitted, in.Name, args)
 		r.took = time.Since(r.started)
@@ -2154,9 +2219,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 //     failed: nothing ran. An entry whose write landed and lost its answer is
 //     withdrawn all the same, which finds none where none landed.
 //   - THE OPENING'S TOOLS WERE CLOSED MEANWHILE, by a tool that broke inside
-//     the engine ([binding.stop]): refused as every call that reaches closed
-//     tools is ([stoppedNote]), and RECORDED in its place — its entry updated
-//     to that refusal, its one update.
+//     the engine or by the seat's fence another call found closed
+//     ([binding.stop]): refused as every call that reaches closed tools is
+//     ([stoppedNote]), and RECORDED in its place — its entry updated to that
+//     refusal, its one update, which carries the id the call arrived with.
 //   - THE SEAT'S FENCE, ASKED AGAIN NOW THE ENTRY IS WRITTEN, IS CLOSED: told
 //     the session it reached was closing and to call again ([closingNote]),
 //     failed, and its entry withdrawn. THE OPENING IS NOT STOPPED: the end
@@ -2220,7 +2286,7 @@ func (o *binding) writeAhead(c *bridgedCall, entry Begun, args map[string]any, d
 		return answer{result: refused(stoppedNote), own: true}, nil, func() {
 			o.recordUntil(Call{Call: tools.Call{Name: entry.Name, Args: args, Output: stoppedNote,
 				Failed: true, Cause: tools.RefusalNotRunning}, Seq: entry.Seq,
-				StartedAt: entry.StartedAt, Digest: digest}, entry.Until)
+				StartedAt: entry.StartedAt, Digest: digest, CallID: entry.CallID}, entry.Until)
 		}
 	case fenced != nil:
 		c.own = true
@@ -2254,6 +2320,9 @@ type ran struct {
 	args   map[string]any
 	digest string
 	seq    int
+	// callID is the id the call's harness gave it ([Call.CallID]), which
+	// every update of the call carries.
+	callID string
 	// abandoned is the call's request's [toolsession.Call.Abandoned].
 	abandoned <-chan struct{}
 	// written is the set the call commits to, and before what it held as the
@@ -2362,7 +2431,7 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 		// may make.
 		after := o.record(Call{Call: tools.Call{Name: r.name, Args: r.args, Output: unrunNote,
 			Failed: true, Cause: tools.RefusalNotRunning}, Seq: r.seq, StartedAt: r.started.UTC(),
-			Duration: r.took, Digest: r.digest, Abandoned: !own || gone(r.abandoned)}, r.until)
+			Duration: r.took, Digest: r.digest, CallID: r.callID, Abandoned: !own || gone(r.abandoned)}, r.until)
 		return answer{result: refused(unrunNote), own: own}, after
 	case res.Suspend:
 		// A SUSPEND CANNOT CROSS THIS BOUNDARY. It parks a tool loop with
@@ -2420,7 +2489,7 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 			Cause: res.Cause},
 		Seq: r.seq, StartedAt: r.started.UTC(), Duration: r.took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
-		Digest: digest, Absorbed: res.Absorbed, Committed: r.written.Since(r.before),
+		Digest: digest, CallID: r.callID, Absorbed: res.Absorbed, Committed: r.written.Since(r.before),
 		Abandoned: abandoned,
 	}, r.until)
 	return answer{result: toolsession.Result{Output: res.Output, Failed: res.Failed}, own: own}, after
@@ -2691,6 +2760,25 @@ func asksFirst(s Surface, name string) bool {
 		return a.AsksFirst(name)
 	}
 	return true
+}
+
+// callIDOf is the id a call's harness gave it, read off the request's `_meta`
+// under the one key the session declares ([Session.CallIDMeta]), as the engine
+// host reads a call's id (internal/agent/toolloop's callIDFromMeta), and kept
+// only where the run's log keeps it whole (sandbox.ValidCallID): a value that
+// is not a string, or an id past the bound or outside its characters, is none,
+// never cut, so no record of the bridge's carries what the log would drop. A
+// session that declares no key reads none — even a value under the empty key,
+// which a box can send and a map lookup would find.
+func (s *Session) callIDOf(meta map[string]any) string {
+	if s.CallIDMeta == "" {
+		return ""
+	}
+	id, _ := meta[s.CallIDMeta].(string)
+	if !sandbox.ValidCallID(id) {
+		return ""
+	}
+	return id
 }
 
 // refused is a call answered without the tool's own output.

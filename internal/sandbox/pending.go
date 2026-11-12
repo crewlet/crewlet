@@ -648,6 +648,38 @@ type BridgeCall struct {
 	// as a call of its tool whose arguments are not known.
 	Digest string `json:"digest,omitempty"`
 
+	// CallID is the HARNESS'S OWN ID FOR THE CALL, as the box sent it: what
+	// the request's `_meta` holds under the key the job's runner declares
+	// ([CallIdentifier], [OpenedJob.CallIDMeta]). For Claude Code, the model's
+	// tool_use id (`claudecode/toolUseId`), which the session's transcript
+	// files the call's use and its result under, on its main thread and in a
+	// subagent's alike: the one name a call has both on its run's log and in
+	// its harness's session. Taken by the bridge as the call arrives
+	// (internal/api/mcpbridge's Call.CallID), and carried by the call's entry
+	// in flight and by its one update alike ([AppendBegin], [AppendRecord]).
+	//
+	// THE BOX'S WORD, AND NO PART OF THE CALL'S IDENTITY. The box can send any
+	// value under the key, and a harness that makes a call again may send the
+	// id it sent the first time. So nothing finds a call by it: the update
+	// finds its entry by its place, its instant and its tool
+	// ([BridgeLog.inFlightAt]), and the log knows a listed call by those and
+	// its digest ([BridgeLog.lists]). Two calls under one id are two calls, and
+	// none is ever deduplicated by it. It decides only which of a round's calls
+	// a continuation of the round's session is told, and both sides of that
+	// match are the box's own.
+	//
+	// WHOLE OR NOT AT ALL ([ValidCallID]): an id past [MaxBridgeCallIDBytes]
+	// or outside letters, digits, `-` and `_` is kept as none, never cut, since
+	// two ids cut alike would name two calls as one. A call with none is read
+	// as every call an older build recorded is, by its place. EMPTY where the
+	// harness sent none (OpenCode, whose `_meta` carries no id of the call), on
+	// a call an older build's bridge recorded, on a skill load its harness's
+	// hook reported, and on the call a person approved ([approvedCall]), which
+	// the run's resume made on the engine host where no harness named it.
+	// ADDITIVE ON THE WIRE: a build that does not know it carries it in Extra
+	// through every write it makes of the log (wirekeys.go).
+	CallID string `json:"call_id,omitempty"`
+
 	// At is when the log recorded the call, on the store's clock — what the
 	// Executors board lists a run's calls by. Always set: the store stamps it.
 	// It is the order the calls FINISHED in, and a harness making several calls
@@ -882,10 +914,11 @@ type BridgeAppend struct {
 	// replaced, as every append of a replaced job once was.
 	Round string
 
-	// Call is the call this append is a step of: for a begin and a withdrawal
-	// its identity alone ([BridgeLog.InFlight]), and for a record the whole
-	// finished call. An append naming no call ([BridgeCall.Name] empty)
-	// writes nothing.
+	// Call is the call this append is a step of: for a begin its identity
+	// and the id its harness gave it ([BridgeLog.InFlight],
+	// [BridgeCall.CallID]), for a withdrawal its identity alone, and for a
+	// record the whole finished call, that id with it. An append naming no
+	// call ([BridgeCall.Name] empty) writes nothing.
 	Call BridgeCall
 
 	// Absorbed are the calls the run's call log took in from Call's own work
@@ -2165,14 +2198,15 @@ type BridgeLog struct {
 
 	// InFlight are the round's calls that have BEGUN AND NOT FINISHED: each
 	// one's entry, written by the bridge before its tool runs ([AppendBegin]),
-	// carrying its identity alone — its tool, its place ([BridgeCall.Seq]),
-	// the instant the bridge took it, the digest it was admitted under where
-	// its tool can never ask a person first, who runs it ([BridgeCall.Runner])
-	// and until when it may be waited for ([BridgeCall.Until]) — and taken out
-	// by the call's one update as it finishes, which lists the finished call
-	// in [BridgeLog.Calls] in the same write ([AppendRecord]), or by its
-	// withdrawal where it was then not run ([AppendWithdraw]). ONE ENTRY A
-	// CALL, never two records of it.
+	// carrying its identity — its tool, its place ([BridgeCall.Seq]), the
+	// instant the bridge took it, the digest it was admitted under where its
+	// tool can never ask a person first, who runs it ([BridgeCall.Runner]) and
+	// until when it may be waited for ([BridgeCall.Until]) — beside the id its
+	// harness gave it ([BridgeCall.CallID]), which is no part of that identity,
+	// and taken out by the call's one update as it finishes, which lists the
+	// finished call, the same id with it, in [BridgeLog.Calls] in the same write
+	// ([AppendRecord]), or by its withdrawal where it was then not run
+	// ([AppendWithdraw]). ONE ENTRY A CALL, never two records of it.
 	//
 	// SO NO CALL RUNS OFF THE RECORD: a call whose entry the log did not take
 	// is not run, and one whose update the store refuses keeps its entry — its
@@ -2957,7 +2991,10 @@ type PendingStore interface {
 	// its digest taken first ([BridgeCall.Digest]); a call whose arguments
 	// are withheld is kept with neither ([BridgeCall.Withheld]), whatever the
 	// caller handed. An entry in flight is held to its own share
-	// ([MaxCallInFlightBytes]): its identity, never its arguments or output.
+	// ([MaxCallInFlightBytes]): its identity and the id its harness gave it,
+	// never its arguments or output. And that id is held whole or not at all
+	// ([ValidCallID]) on an entry and a record alike, whatever the caller
+	// handed: one past the rule is kept as none, never cut.
 	//
 	// AND WITH WHAT A RECORD CARRIES, in the same write: the calls the run's
 	// call log took in from the call's own work ([BridgeAppend.Absorbed]).

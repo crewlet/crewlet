@@ -12816,9 +12816,15 @@ reading a marker. `digest` is the call's identity, the SHA-256 of its whole
 arguments as the run counts its calls, absent on a call no tool admitted (one
 refused after the run's tools closed, or whose arguments did not parse) and on
 a `held` or `approved` call, whose arguments ride the record sealed and are
-never digested in the clear. `appended` is the call's place, from 1, in the
-order the round's log took its calls, which is not the order the run made them
-in when it made several at once: a continued session is told every call
+never digested in the clear. `call_id` is the id the run's harness gave the
+call, as its box sent it: Claude Code's `tool_use` id, the id its own session
+names the call by. It is absent where the harness sent none (OpenCode), on an
+`approved` call, on a skill load a harness's hook reported, on a call an older
+engine recorded, and where the id was longer than 64 bytes or held anything but
+letters, digits, `-` and `_`, which is never cut. It is the box's word, not the
+call's identity: two calls may carry one. `appended` is the call's place, from
+1, in the order the round's log took its calls, which is not the order the run
+made them in when it made several at once: a continued session is told every call
 appended after its save ([A relaunch continues the turn's
 session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
 It is absent on a call an older engine appended. `late: true` marks a call the

@@ -11,12 +11,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"github.com/crewlet/crewlet/internal/envfile"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -471,6 +473,10 @@ type Runner struct {
 
 var _ sandbox.Runner = (*Runner)(nil)
 
+// A runner names the key its harness hands each call's id under, or none
+// ([Runner.CallIDMeta]).
+var _ sandbox.CallIdentifier = (*Runner)(nil)
+
 // New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
 	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now}
@@ -483,6 +489,35 @@ func (r *Runner) Name() string { return r.harness.Name() }
 // its steps — see [noteReader]. The coordinator asks it before it says a run
 // that succeeded never asked for its notes (internal/sandbox).
 func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
+
+// CallIDMeta is the `_meta` key this runner's harness sends each of its calls'
+// own id under, which the bridge serving a box of it records each call's id by
+// ([sandbox.CallIdentifier]): the key the harness's BUILT-IN profile reads its
+// calls by (harnessprofile's Requests.CallIDMeta) — `claudecode/toolUseId` for
+// Claude Code, measured on the box's own transport, and none for OpenCode,
+// whose `_meta` carries no id of the call.
+//
+// ONE RULE FOR EVERY HARNESS A BOX RUNS, rather than a key each harness type
+// states: the profile is the one place the key and its measurement live, so a
+// harness whose profile is taught one is read by it here with nothing else to
+// change. THE BUILT-IN PROFILE, NEVER AN ENTRY'S: an entry's `overrides` of the
+// key reach its runs on the engine host, which read the entry's own profile,
+// while a box's runner is the harness's, shared by every entry that launches
+// it; a key an entry got wrong costs its box's calls their ids, each read by
+// its place as an older build's are.
+func (r *Runner) CallIDMeta() string { return callIDKeys()[r.harness.Name()] }
+
+// callIDKeys is the `_meta` key of each harness this build drives
+// ([Names]), read off its built-in profile once: every launch asks.
+var callIDKeys = sync.OnceValue(func() map[string]string {
+	keys := make(map[string]string, len(harnesses))
+	for _, h := range harnesses {
+		if p, ok := harnessprofile.Builtin(h.Name()); ok && p.Requests != nil {
+			keys[h.Name()] = p.Requests.CallIDMeta
+		}
+	}
+	return keys
+})
 
 // noteInstruction is the standing instruction about notes this runner's harness
 // gives its runs, or "" for a harness that takes none — see [noteReader].

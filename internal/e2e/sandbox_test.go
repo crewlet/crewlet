@@ -442,6 +442,16 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // asserted the last two and assumed the first — which was the one that was
 // false, for the whole life of the feature, so the answer ran as an unrelated
 // turn and the box waited out its pause TTL.
+//
+// AND THE ASKING JOB'S CALLS ARE ON ITS RUN'S LOG UNDER THE IDS ITS HARNESS
+// GAVE THEM: the scripted harness hands each bridged call its tool_use id in
+// `_meta`, under Claude Code's key, as Claude Code does, and the runner of the
+// job's harness — the real Claude Code runner — declares that key, so the
+// bridge records each call under its own. Read off the parked run, whose log
+// outlives its job: a run's log goes with its record once the run ends.
+//
+// Mutation: name the job without its runner's key (launch-names-no-key), and
+// the parked run's calls are on its log with no id.
 func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	t.Parallel()
 	n := startCoding(t, codingModeAsk)
@@ -497,6 +507,25 @@ func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	}
 	if parked.PausedAt.IsZero() {
 		t.Fatal("the row does not record that a snapshot is being held")
+	}
+	// EVERY CALL THE ASKING JOB MADE IS ON ITS LOG UNDER ITS OWN ID: the
+	// question, and the submission the bridge refused it once it had asked.
+	logged, err := sandbox.NewCoordStore(n.engine.Backends().Fleet).BridgeLog(t.Context(), parked)
+	if err != nil {
+		t.Fatalf("the parked run's log: %v", err)
+	}
+	ids := map[string]bool{}
+	asked := false
+	for _, call := range logged.Calls {
+		asked = asked || call.Name == builtin.AskAndWaitTool
+		if !claudeToolUseID.MatchString(call.CallID) || ids[call.CallID] {
+			t.Errorf("the parked run's log lists %s at place %d under the id %q, want one of its own, of the "+
+				"shape its harness hands it", call.Name, call.Seq, call.CallID)
+		}
+		ids[call.CallID] = true
+	}
+	if !asked {
+		t.Fatalf("the parked run's log lists %+v, want its question among its calls", logged.Calls)
 	}
 
 	// THE PERSON ANSWERS, top-level on the DM line rather than back in the
