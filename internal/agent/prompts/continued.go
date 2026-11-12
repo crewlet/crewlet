@@ -194,7 +194,8 @@ const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stan
 type AfterSave struct {
 	// Calls are the calls its round's record still lists that came after the
 	// save, as the prior-work ledger renders them within its budgets, under
-	// one read cap with Late's (ledger.FormatCallGroups), "" for none.
+	// one read cap with Late's, spent on Late first (ledger.FormatCallGroups),
+	// "" for none.
 	Calls string
 
 	// Dropped is how many more calls the run made after the save that its
@@ -231,7 +232,7 @@ type AfterSave struct {
 	// (sandbox.BridgeCall.Late), or the run gave up on them, or its session
 	// ended, before they returned (sandbox.BridgeCall.Abandoned) — as the
 	// prior-work ledger renders them within its budgets, under one read cap
-	// with Calls', spent on Calls first, "" for none: none of them is among
+	// with Calls', spent on these first, "" for none: none of them is among
 	// Calls. Told in a section of their own, under
 	// [lateCallsHeader], whatever Interrupted says.
 	Late string

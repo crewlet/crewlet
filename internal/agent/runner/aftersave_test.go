@@ -251,16 +251,18 @@ func TestTheCallsAfterASaveAreHeldToTheLedgersBudgets(t *testing.T) {
 	}
 }
 
-// A CONTINUATION'S TOLD CALLS SHARE ONE READ CAP. The calls after a session's
-// save and its late calls are one round's, told in one brief under two
-// headings, so the ledger's cap counts the reads of both together, spent in
-// the order the brief tells them: nine reads after the save and nine late ones
-// are twelve read lines in all, and the late heading counts the six it leaves
-// out. Only what the brief shows is rewritten: a late read past the cap costs
-// no rewrite of its long argument, and a late write's long body costs one.
+// A CONTINUATION'S TOLD CALLS SHARE ONE READ CAP, SPENT ON THE LATE CALLS
+// FIRST. The calls after a session's save and its late calls are one round's,
+// told in one brief under two headings, so the ledger's cap counts the reads of
+// both together: nine late reads and nine after the save are twelve read lines
+// in all, every late read and the first three after the save, whose heading
+// counts the six it leaves out. Only what the brief shows is rewritten: a read
+// after the save past the cap costs no rewrite of its long argument, and a late
+// write's long body costs one.
 //
 // Mutation: render the two lists with a cap each, and eighteen reads are told;
-// name their payloads list by list, and the late read the brief never shows is
+// spend the cap on the calls after the save first, and three late reads are;
+// name the payloads list by list, and the read the brief never shows is
 // rewritten all the same.
 func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 	t.Parallel()
@@ -268,20 +270,19 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 		return numbered("slack_history", map[string]any{"channel": channel}, n, n)
 	}
 	var bridged []runner.BridgedCall
-	for n := 1; n <= 9; n++ {
+	for n := 1; n <= 8; n++ {
 		bridged = append(bridged, read(n, fmt.Sprintf("C%d", n)))
 	}
-	for n := 10; n <= 17; n++ {
+	bridged = append(bridged, read(9, strings.Repeat("u", 2000)))
+	for n := 10; n <= 18; n++ {
 		late := read(n, fmt.Sprintf("C%d", n))
 		late.Late = true
 		bridged = append(bridged, late)
 	}
-	unseen := read(18, strings.Repeat("u", 2000))
-	unseen.Late = true
 	write := numbered("jira_create", map[string]any{"summary": "a late write", "body": strings.Repeat("b", 2000)},
 		19, 19)
 	write.Late = true
-	bridged = append(bridged, unseen, write)
+	bridged = append(bridged, write)
 
 	const rewrite = 37
 	meter := &countingMeter{}
@@ -315,13 +316,13 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 		t.Fatalf("the continuation is not told the calls after its save, then its late calls:\n%s", brief)
 	}
 	after, late := brief[afterAt:lateAt], brief[lateAt:]
-	if n := strings.Count(after, "- slack_history("); n != 9 || strings.Contains(after, "omitted") {
-		t.Errorf("the calls after the save list %d reads, want all nine and none omitted:\n%s", n, after)
+	if n := strings.Count(late, "- slack_history("); n != 9 || strings.Contains(late, "omitted") {
+		t.Errorf("the late calls list %d reads, want all nine and none omitted:\n%s", n, late)
 	}
-	lateReads := strings.Count(late, "- slack_history(")
-	if lateReads != 3 || !strings.Contains(late, "(+6 further read call(s) omitted)") {
-		t.Errorf("the late calls list %d reads, want the three the cap leaves and the six past it counted:\n%s",
-			lateReads, late)
+	afterReads := strings.Count(after, "- slack_history(")
+	if afterReads != 3 || !strings.Contains(after, "(+6 further read call(s) omitted)") {
+		t.Errorf("the calls after the save list %d reads, want the three the cap leaves and the six past it "+
+			"counted:\n%s", afterReads, after)
 	}
 	if !strings.Contains(late, "a late write") || strings.Contains(late, strings.Repeat("b", 300)) {
 		t.Errorf("the late write is not told within its budget:\n%s", late)
@@ -333,7 +334,7 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 		}
 	}
 	if rewrites != 1 {
-		t.Errorf("%d rewrites, want the late write's body alone: the late read past the cap is never shown", rewrites)
+		t.Errorf("%d rewrites, want the late write's body alone: the read past the cap is never shown", rewrites)
 	}
 }
 
