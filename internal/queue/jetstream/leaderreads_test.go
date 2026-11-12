@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // leaderReadsToken is what accountQueue's broker requires: the dial refuses an
@@ -790,6 +791,37 @@ func TestARecordReadAcrossALinkIsGivenItsRecordsCrossing(t *testing.T) {
 		if n := held.Count(); n < c.min || n > c.max {
 			t.Errorf("%s across a link was asked %d times in %v, want %d to %d", c.name, n, wait,
 				c.min, c.max)
+		}
+	}
+}
+
+// A QUEUE IS PACED BY HOW ITS OWN CONNECTION WAS MADE, read where the queue is
+// built.
+//
+// The reading itself is held below (linkPaceOf); this holds the one site that
+// hands it to a queue, on real queues: a member's own client, a leaf's, and a
+// client of an external cluster, each opened as a node opens one. A member
+// paced as though it crossed a link would hold its reads and writes to
+// crossings they never make; a leaf or an external client left unpaced would
+// hold a large write to the request term alone.
+//
+// Mutation: build a queue with any pace but its connection's reading, and its
+// row goes red.
+func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
+	t.Parallel()
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
+	for _, c := range []struct {
+		name string
+		q    *Queue
+		want time.Duration
+	}{
+		{"a member's own client", openForTest(t, Config{}), 0},
+		{"a leaf's client", openLeafForTest(t, Config{}), objstore.MiBPace},
+		{"a client of an external cluster", newQueueWith(t, Config{URL: srv.URL(),
+			Token: externaltest.Token}), objstore.MiBPace},
+	} {
+		if c.q.pace != c.want {
+			t.Errorf("%s is paced at %v a mebibyte, want %v", c.name, c.q.pace, c.want)
 		}
 	}
 }
