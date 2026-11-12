@@ -132,6 +132,28 @@ func ctResult(parent, uuid, content, result string) string {
 		`{"decision":"accept","source":"config","reasonType":"mode"},` + ctTail("2.1.310") + `}`
 }
 
+// ctInterrupted is the result 2.1.310's resume writes for a call its last
+// process left with none: a failure, its content and its own toolUseResult
+// the same string.
+func ctInterrupted(parent, uuid string) string {
+	const text = "[Tool call interrupted: the session ended before this call's result was recorded, so its " +
+		"outcome is unknown. Check whether it took effect before relying on it or running it again.]"
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"promptId":"` + ctPrompt + `","type":"user","message":` +
+		`{"role":"user","content":[{"type":"tool_result","content":"` + text + `","is_error":true,"tool_use_id":"` +
+		ctCall + `"}]},"uuid":"` + uuid + `","timestamp":"` + ctStamp + `","toolUseResult":"` + text +
+		`","toolDenialKind":"interrupted","sourceToolAssistantUUID":"` + parent + `",` + ctTail("2.1.310") + `}`
+}
+
+// ctKilled is the result 2.1.310 writes for a shell command killed by a signal:
+// a failure, its content the exit code.
+func ctKilled(parent, uuid string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"promptId":"` + ctPrompt + `","type":"user","message":` +
+		`{"role":"user","content":[{"type":"tool_result","content":"Exit code 137","is_error":true,"tool_use_id":"` +
+		ctCall + `"}]},"uuid":"` + uuid + `","timestamp":"` + ctStamp + `","toolUseResult":"Error: Exit code 137",` +
+		`"sandboxed":false,"sourceToolAssistantUUID":"` + parent + `","permissionDecision":{"decision":"accept",` +
+		`"source":"config","reasonType":"mode"},` + ctTail("2.1.310") + `}`
+}
+
 // A model's calls and their results: a shell command answered with its output,
 // and an MCP tool answered with blocks.
 const (
@@ -1309,23 +1331,28 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // blocks and a user's tool_result blocks, each with its id and what it
 // carries raw (a call's input as written, a result's content, its is_error
 // where present), and nothing from any other record, an api-request-blob
-// repeating a result included. A call block in the other record, which the
-// Messages API never writes, is a kind and no call: a result in a model's
-// message, a call in a user's. A message that does not decode is an error,
-// never a message with half a call in it: one that is no object, a content
-// absent, null or neither a string nor a list, a block that is no object or
-// has no string type, a tool_use's id not a string that names a call or its
-// name not a string, a tool_result's tool_use_id not a string that names a
-// call or its is_error not a boolean.
+// repeating a result included. A failed call's result says so, as the resume's
+// result for a call it found unanswered and a killed command's do. A call
+// block in the other record, which the Messages API never writes, is a kind
+// and no call: a result in a model's message, a call in a user's. A message
+// that does not decode is an error, never a message with half a call in it:
+// one that is no object, a content absent, null or neither a string nor a
+// list, a block that is no object or has no string type, a tool_use's id not
+// a string that names a call or its name not a string, a tool_result's
+// tool_use_id not a string that names a call or its is_error not a boolean.
 //
 // Mutation: read calls off every record's message, and the blob's result is a
 // call; decode a block loosely, and a tool_use whose id is a number is a call
 // with no id; take an id that names no call, and a block whose id is empty is
 // a call with no id; take either kind of call block in either record, and a
-// result in a model's message, or a call in a user's, is a call.
+// result in a model's message, or a call in a user's, is a call; read is_error
+// as false wherever it is present, and a failed call's result reads as a
+// success.
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
-	isFalse := false
+	isFalse, isTrue := false, true
+	interrupted := "\"[Tool call interrupted: the session ended before this call's result was recorded, so its " +
+		"outcome is unknown. Check whether it took effect before relying on it or running it again.]\""
 	for name, tc := range map[string]struct {
 		record string
 		calls  []threadCall
@@ -1336,6 +1363,10 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 			{Kind: blockToolResult, ID: ctCall, IsError: &isFalse, Content: []byte(`"b1"`)}}},
 		"an MCP tool's result, in blocks": {record: ctResult(ctUUID(9), ctUUID(10), ctMCPResult, ctMCPBlocks),
 			calls: []threadCall{{Kind: blockToolResult, ID: ctMCPCall, Content: []byte(ctMCPBlocks)}}},
+		"the result a resume writes for a call it found unanswered": {record: ctInterrupted(ctUUID(4), ctUUID(5)),
+			calls: []threadCall{{Kind: blockToolResult, ID: ctCall, IsError: &isTrue, Content: []byte(interrupted)}}},
+		"a killed command's result": {record: ctKilled(ctUUID(4), ctUUID(5)), calls: []threadCall{
+			{Kind: blockToolResult, ID: ctCall, IsError: &isTrue, Content: []byte(`"Exit code 137"`)}}},
 		"a model's text":                    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`)},
 		"a brief":                           {record: ctBrief(ctUUID(1))},
 		"a request blob repeating a result": {record: ctRequestBlob},
