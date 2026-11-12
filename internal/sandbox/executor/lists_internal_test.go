@@ -66,6 +66,29 @@ func allocationsOf(read func()) (objects, bytes uint64) {
 	return objects, bytes
 }
 
+// heldBy is how many bytes what read returns keeps alive, the fewest of three
+// calls: the heap in use after a collection with what it returned still held,
+// less the heap in use after a collection before it was called. What a read
+// allocates and lets go of along the way is no part of it, so this is what a
+// reader that keeps the read's answer holds, where [allocationsOf]'s bytes are
+// what the read cost while it ran. GOMAXPROCS is one while it measures, as
+// [allocationsOf]'s is.
+func heldBy(read func() any) uint64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	held := uint64(math.MaxUint64)
+	var before, after runtime.MemStats
+	for range 3 {
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		answer := read()
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		runtime.KeepAlive(answer)
+		held = min(held, after.HeapAlloc-min(before.HeapAlloc, after.HeapAlloc))
+	}
+	return held
+}
+
 // A LIST IN A HARNESS'S RECORD COSTS ITS READER ONE ELEMENT AT A TIME: every
 // list a run's event stream, its result and a person's transcript read (a
 // message's blocks, a call's result, a result's errors, an OpenCode step's

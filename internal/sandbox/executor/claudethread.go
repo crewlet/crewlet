@@ -1001,9 +1001,11 @@ func knownKind(kind string) string {
 // for each block and a call for each call block, each kept as it is accepted:
 // while it reads, a message holds, beyond those, one copy of its content and
 // one block's decode. A list of four million `1`s at [threadLineMax] is
-// refused at its first block for the allocations a list of one costs, and a
-// line at that bound of the smallest results a list can hold leaves their
-// calls held, about three times the line (measured).
+// refused at its first block for the allocations a list of one costs and, in
+// bytes, the one copy of its content, and a line at that bound of the
+// smallest results a list can hold leaves their calls held, about three times
+// the line (measured): a kind's header and a call's fields for each, at most
+// a quarter over for append's growth.
 func (l threadLine) Message() (threadMessage, error) {
 	var call string
 	switch l.Head.Type {

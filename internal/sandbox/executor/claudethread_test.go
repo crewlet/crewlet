@@ -1725,21 +1725,32 @@ func ctListRecord(t *testing.T, head, element, tail string, size int) string {
 
 // A CONTENT LIST COSTS ONE BLOCK AT A TIME: a message's content and a reply's
 // applied context edits are read a block at a time, each held to its type as
-// it is read, so a list refused at its first block costs the allocations a
-// list of that block alone costs, however many follow it. A line at the
-// layer's bound holding four million `1`s, or a list of empty objects, costs
-// no allocation a list of one does not, never a header and a copy for each
-// before the first is checked. The walk itself, with nobody keeping what it
-// hands out, costs the same for a list at the bound as for a list of one: it
-// never collects the elements.
+// it is read. So a list refused at its first block costs what a list of that
+// block alone costs, however many follow it: no allocation more, and no byte
+// more than the copies of the list its reader makes as it decodes the record
+// around it (Message one, its content's; ToolResultsCleared two, its report's
+// and its edits'), never a header and a copy for each element, nor a slice of
+// them, before the first is checked. A line at the layer's bound holding four
+// million `1`s, or a list of empty objects, shows it. The walk itself, with
+// nobody keeping what it hands out, costs the same for a long list as for a
+// list of one, in allocations and in bytes: it never collects the elements.
+// And a list read to its end leaves held what Message says it does, a kind
+// for each block and a call for each call block, and nothing of the list: for
+// a list of the smallest blocks of a kind no reader names, and of the smallest
+// results, each a header for each kind and each call's fields, at most a
+// quarter over for append's growth, and the bytes of each kind and id.
 //
-// Not parallel: testing.AllocsPerRun counts every allocation the process makes
-// while it measures, and a parallel test's would be counted with this one's.
+// Not parallel: the counts are the process's, and a parallel test's
+// allocations would be counted with this one's.
 //
 // Mutation: decode a message's content, or a reply's edits, whole before its
-// first block is checked, or have the walk collect the list before it hands
-// out the first element, and a list at the bound costs millions of
-// allocations more than a list of one.
+// first block is checked, and a list at the bound costs millions of
+// allocations more than a list of one; collect its blocks or its edits before
+// the first is checked, size its kinds from the list's length, or have the
+// walk collect the list before it hands out the first element, and it costs
+// from several times to tens of times the line more, in a few allocations;
+// keep a copy of the content in the message, and a list read to its end holds
+// that copy beside its kinds.
 func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	// slack is how many more allocations a list at the bound may cost than a
 	// list of one, though it reads no more of it. The count is the process's,
@@ -1763,40 +1774,94 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	for name, tc := range map[string]struct {
 		head, element, tail string
 		read                func(threadLine) error
+		// copies is how many copies of the list its reader makes as it decodes
+		// the record around it, measured: Message its content's, and
+		// ToolResultsCleared its report's and its edits'. A list may cost
+		// those and ONE LINE MORE, so a reader that makes a copy more still
+		// passes, where a slice of the list's elements, or a header for each,
+		// costs several lines.
+		copies uint64
 	}{
-		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message},
-		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message},
-		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared},
+		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message, copies: 1},
+		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message, copies: 1},
+		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared, copies: 2},
 	} {
 		one := ctLine(t, tc.head+tc.element+tc.tail)
 		full := ctLine(t, ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
 		if len(full.Raw) != threadLineMax-1 || tc.read(one) == nil || tc.read(full) == nil {
 			t.Fatalf("%s: a line of %d bytes whose first block is none reads with no error", name, len(full.Raw)+1)
 		}
-		few := testing.AllocsPerRun(5, func() { _ = tc.read(one) })
-		many := testing.AllocsPerRun(5, func() { _ = tc.read(full) })
-		if many > few+slack {
-			t.Errorf("%s: refused at its first block, a list at the line's bound costs %v allocations, and a list "+
-				"of one %v", name, many, few)
+		fewObjects, fewBytes := allocationsOf(func() { _ = tc.read(one) })
+		manyObjects, manyBytes := allocationsOf(func() { _ = tc.read(full) })
+		if manyObjects > fewObjects+slack {
+			t.Errorf("%s: refused at its first block, a list at the line's bound costs %d allocations, and a list "+
+				"of one %d", name, manyObjects, fewObjects)
+		}
+		if manyBytes > fewBytes+(tc.copies+1)*uint64(threadLineMax) {
+			t.Errorf("%s: refused at its first block, a list at the line's bound costs %d bytes, and a list of one "+
+				"%d: more than %d copies of the line and one line more", name, manyBytes, fewBytes, tc.copies)
 		}
 	}
 
+	// A list of listBytes shows per element what one at the bound costs, in an
+	// eighth of the time, which the race detector multiplies.
 	oneList := json.RawMessage(`[1]`)
-	fullList := json.RawMessage(ctListRecord(t, "[", "1", "]", threadLineMax))
+	longList := json.RawMessage(ctListRecord(t, "[", "1", "]", listBytes))
 	elements := 0
 	count := func(json.RawMessage) error {
 		elements++
 		return nil
 	}
-	if err := eachElement(fullList, count); err != nil || elements != strings.Count(string(fullList), "1") {
-		t.Fatalf("a list at the line's bound walks as %d elements, %v; want every one of its %d", elements, err,
-			strings.Count(string(fullList), "1"))
+	if err := eachElement(longList, count); err != nil || elements != strings.Count(string(longList), "1") {
+		t.Fatalf("a list of %d bytes walks as %d elements, %v; want every one of its %d", len(longList), elements,
+			err, strings.Count(string(longList), "1"))
 	}
 	keepNone := func(json.RawMessage) error { return nil }
-	few := testing.AllocsPerRun(1, func() { _ = eachElement(oneList, keepNone) })
-	many := testing.AllocsPerRun(1, func() { _ = eachElement(fullList, keepNone) })
-	if many > few+slack {
-		t.Errorf("a walk of a list at the line's bound costs %v allocations, and of a list of one %v", many, few)
+	fewObjects, fewBytes := allocationsOf(func() { _ = eachElement(oneList, keepNone) })
+	manyObjects, manyBytes := allocationsOf(func() { _ = eachElement(longList, keepNone) })
+	if manyObjects > fewObjects+slack || manyBytes > fewBytes+uint64(len(longList)) {
+		t.Errorf("a walk of a list of %d bytes costs %d allocations and %d bytes, and of a list of one %d and %d: "+
+			"more than the list's own size more", len(longList), manyObjects, manyBytes, fewObjects, fewBytes)
+	}
+
+	// heldSlack is how many bytes a message read to its end may hold beyond its
+	// kinds and its calls: the message itself, and whatever else the heap holds
+	// at the second collection that it did not at the first. Measured, a
+	// message held its two arrays and nothing more to within a few dozen
+	// bytes; a copy of the list is the list's size.
+	const heldSlack = 64 << 10
+	for name, tc := range map[string]struct {
+		element string
+		// own is how many bytes of its own each block may hold beyond its kind's
+		// header and its call's fields: the text of a kind the layer does not
+		// name, and a call's id. A kind the layer names is its own constant
+		// (TestAKnownBlockKindIsHeldAsTheLayersOwnString).
+		own   uint64
+		calls bool
+	}{
+		"blocks of a kind no reader names": {element: `{"type":"x"}`, own: 1},
+		"the smallest results":             {element: `{"type":"tool_result","tool_use_id":"a"}`, own: 1, calls: true},
+	} {
+		line := ctLine(t, ctListRecord(t, user, tc.element, `]}}`, listBytes))
+		read := func() any {
+			m, _ := line.Message()
+			return m
+		}
+		m, err := line.Message()
+		blocks, calls := uint64(strings.Count(string(line.Raw), tc.element)), uint64(0)
+		if tc.calls {
+			calls = blocks
+		}
+		if err != nil || uint64(len(m.Kinds())) != blocks || uint64(len(m.Calls())) != calls {
+			t.Fatalf("%s: a list of %d blocks reads as %d kinds and %d calls, %v; want %d and %d", name, blocks,
+				len(m.Kinds()), len(m.Calls()), err, blocks, calls)
+		}
+		kinds := blocks * (uint64(unsafe.Sizeof("")) + tc.own)
+		fields := calls * uint64(unsafe.Sizeof(threadCall{}))
+		if held, limit := heldBy(read), (kinds+fields)*5/4+heldSlack; held > limit {
+			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d kinds and %d calls "+
+				"take: %d", name, len(line.Raw)+1, held, blocks, calls, limit)
+		}
 	}
 }
 
