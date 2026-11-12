@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/a2a"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
@@ -218,8 +218,8 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// into a DIVERGENT table — each node's own rows, so each node
 			// sweeps them, a person's at the company's inbox horizon asked
 			// at every sweep as the tracker's is, a seat's at the
-			// turn-detail horizon (code.NoticeJobs).
-			jobs = append(jobs, code.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
+			// turn-detail horizon (gitlet.NoticeJobs).
+			jobs = append(jobs, gitlet.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
 			// is a consequence rather than an omission. Its three passes
 			// were a change retention, a revision prune and an orphan

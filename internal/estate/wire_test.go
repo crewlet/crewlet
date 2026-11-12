@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -562,7 +562,7 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 		},
 		"a Gitlet node that cannot answer": {
 			value: reply{Node: "git-a", Request: "r-5", Unserved: unservedBehind, Detail: "syncing",
-				Unready: code.UnreadySyncing},
+				Unready: gitlet.UnreadySyncing},
 			want: `{"node":"git-a","request":"r-5","unserved":"behind","detail":"syncing","unready":"syncing"}`,
 		},
 	} {

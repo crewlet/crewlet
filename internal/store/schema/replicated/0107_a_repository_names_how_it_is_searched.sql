@@ -1,6 +1,6 @@
 -- A repository names how it is searched.
 --
--- code_repos.search is how code search reads the repository (code.SearchMode):
+-- code_repos.search is how code search reads the repository (gitlet.SearchMode):
 -- `indexed`, from an index of its default branch's tip, which a search across
 -- the company's repositories reads as well as one naming it; or `grep`, with
 -- git grep over a copy of it, and only by a search that names it. Indexed is
@@ -10,7 +10,7 @@
 --
 -- A SETTING LIKE EVERY OTHER: carried whole by every create, settings and
 -- restore record, written by the applier from the record, compared by the
--- reconcile with the declaration's (code.RepoSettings.equal), so a revision
+-- reconcile with the declaration's (gitlet.RepoSettings.equal), so a revision
 -- that changes only a repository's mode writes one settings record.
 --
 -- THE DEFAULT IS '' — no mode at all — because SQLite requires one for a NOT

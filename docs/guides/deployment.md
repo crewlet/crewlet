@@ -2144,7 +2144,7 @@ cache on its own disk. What such a node needs from its host:
   whole copies the multi-pack-index keeps — 8.5–9% more over a history of
   pushes that add files and 48–57% more over one of pushes that edit them, for
   more of the node's CPU too (measured over copies the cache made,
-  `internal/code/cache`'s `BenchmarkPackReuse`; the spread is which copy of
+  `internal/gitlet/cache`'s `BenchmarkPackReuse`; the spread is which copy of
   each edited object a copy's index happened to keep).
 - **A volume for `gitlet.cache_dir`.** The cache holds every repository the node
   serves, whole, and a cold sync writes everything it downloads at the speed

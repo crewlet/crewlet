@@ -2591,7 +2591,7 @@ some 29 KB at fifty and 179 KB at 304. A merged pack's row is kept one more
 day, as a retired row of about 608 bytes: at most sixteen for every fifteen
 pushes, about 2.0 MB at this rate. So the line stops growing once the push history
 reaches its horizon — where it grew by about 644 MB of pack rows a year while nothing
-merged a repository's packs — measured in `internal/code`'s "What a push
+merged a repository's packs — measured in `internal/gitlet`'s "What a push
 costs, measured", and set out with the code log's share, a seat's one counter
 row and a larger company's figures under
 [What every data node holds for Gitlet](../concepts/scaling.md#gitlet-nodes).
@@ -2659,7 +2659,7 @@ a day at 176 bytes, 18 % of what the log takes. That figure is a term in the
 log's own size, so it is printed with its derivation rather than assumed: it
 comes from an assumed 125 linearizable reads a day per agent seat, which is
 12 500 for the reference company's 100 seats, at 176 bytes a barrier — the
-code log's `code.BarrierRecordBytes`, which a mutation-log barrier costs too
+code log's `gitlet.BarrierRecordBytes`, which a mutation-log barrier costs too
 from the log's second generation to its tenth (168 bytes at its first). On a
 fleet that trims they are about 15 MB of the 85. On one whose trim is blocked
 the log keeps the whole day, about 4.4 GB a year, so a log created at 16 GiB

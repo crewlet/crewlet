@@ -47,7 +47,7 @@ const StatusKey = "status"
 // run of a repository's maintenance on that node is admitted against — the
 // node's memory less what its serving keeps — read again at every maintenance
 // pass, so a container resized in place says its new figure within a pass and
-// a beat (internal/code/cache, Cache.BackgroundBudget). Every Gitlet node weighs
+// a beat (internal/gitlet/cache, Cache.BackgroundBudget). Every Gitlet node weighs
 // every other by it to place a repository's maintenance on the first node of
 // the repository's git order whose budget holds the work, the home on a fleet
 // of alike nodes (internal/estate, Router.Maintainer).

@@ -3,7 +3,7 @@
 -- 0087 keyed code_ref_drops (repo_id, position, ref, old) and gave it a second
 -- index, code_ref_drops_at_idx (repo_id, at, position, ref, old), for the one
 -- order every statement over a repository's drops reads: the push apply's
--- expiry of the drops past code.PruneGrace, oldest first by instant and cut at
+-- expiry of the drops past gitlet.PruneGrace, oldest first by instant and cut at
 -- the record's row budget; a purge part's removal, in the same order; the
 -- final purge's; and the purge's bounded count, which only asks whether a
 -- repository holds any. The index was the key with the instant moved ahead of
@@ -15,7 +15,7 @@
 --
 -- SO THE KEY LEADS WITH THE INSTANT and the index goes: one order serves the
 -- expiry, the purge and the bounded count, each seeking the key's own index
--- (internal/code names it, sqlite_autoindex_code_ref_drops_1, and its plan
+-- (internal/gitlet names it, sqlite_autoindex_code_ref_drops_1, and its plan
 -- test holds every statement to that seek), and a drop is two b-trees' entries
 -- rather than three — a third fewer, each of which carried the repository, the
 -- position, the ref and the object again, on every data node. The instant

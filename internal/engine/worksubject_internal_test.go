@@ -13,11 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/changefeed"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -106,30 +106,30 @@ func TestATrackerWakeNamesItsItem(t *testing.T) {
 func codeWake(t *testing.T, item *types.WorkItem) *events.Event {
 	t.Helper()
 	const repo, change = "repo-1", "change-1"
-	mutation, err := json.Marshal(code.Comment{RepoID: repo, ChangeID: change, CommentID: "comment-1",
+	mutation, err := json.Marshal(gitlet.Comment{RepoID: repo, ChangeID: change, CommentID: "comment-1",
 		ThreadID: "comment-1", Body: "@swe is the retry bounded?", Mentions: []string{"swe"},
-		Routing: &code.ChangeRouting{ChangeID: change, ChangeRef: "web!42", RepoName: "web",
-			Title: "Retry the upload", Actor: "cto", Owner: "dev", OwnerKind: code.PartyAgent,
+		Routing: &gitlet.ChangeRouting{ChangeID: change, ChangeRef: "web!42", RepoName: "web",
+			Title: "Retry the upload", Actor: "cto", Owner: "dev", OwnerKind: gitlet.PartyAgent,
 			WorkItem: item, Mentions: []string{"swe"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := code.Encode(code.MutationRecord{
-		RecordEnvelope: code.RecordEnvelope{OpID: "op-comment", Subject: code.ChangeSubject(change),
-			Op: code.OpComment, CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
-			Scope: code.Scope{code.RepoPath(repo), code.ChangePath(change)}},
-		Mutation: mutation, Actor: "node-a", ActorKind: code.ActorSystem,
+	payload, err := gitlet.Encode(gitlet.MutationRecord{
+		RecordEnvelope: gitlet.RecordEnvelope{OpID: "op-comment", Subject: gitlet.ChangeSubject(change),
+			Op: gitlet.OpComment, CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
+			Scope: gitlet.Scope{gitlet.RepoPath(repo), gitlet.ChangePath(change)}},
+		Mutation: mutation, Actor: "node-a", ActorKind: gitlet.ActorSystem,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, relayed, err := code.NewTranslator().Translate(t.Context(), changefeed.Record{
+	d, relayed, err := gitlet.NewTranslator().Translate(t.Context(), changefeed.Record{
 		Key: "crewlet.code.log.change." + change, Payload: payload, Position: 7,
-		Stream: code.Domain{}.Stream().Name})
+		Stream: gitlet.Domain{}.Stream().Name})
 	if err != nil || !relayed {
 		t.Fatalf("the code feed relays the comment: %v, %v", relayed, err)
 	}
-	routed, err := code.NewParser(code.ParserOptions{}).Parse(t.Context(), types.RawWebhook{Body: d.Body}, nil)
+	routed, err := gitlet.NewParser(gitlet.ParserOptions{}).Parse(t.Context(), types.RawWebhook{Body: d.Body}, nil)
 	if err != nil || len(routed) != 1 || routed[0].To.Handle != "swe" {
 		t.Fatalf("the comment wakes %+v (%v), want swe", routed, err)
 	}
@@ -146,7 +146,7 @@ func codeWake(t *testing.T, item *types.WorkItem) *events.Event {
 // rule, whatever backend the item is on. A change that names no item names
 // none, and its wake's turn is on nothing until a sole write says otherwise.
 //
-// Mutation: leave code.Prompt out of workItemNamers, or the work item out of
+// Mutation: leave gitlet.Prompt out of workItemNamers, or the work item out of
 // the wake's metadata, and the turn is on nothing.
 func TestACodeWakeNamesItsWorkItem(t *testing.T) {
 	t.Parallel()

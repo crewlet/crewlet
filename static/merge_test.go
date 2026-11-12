@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 )
 
 // GIT MUST NEVER TEXT-MERGE THE COMMITTED DASHBOARD, NOR THE ARTIFACT TREE.

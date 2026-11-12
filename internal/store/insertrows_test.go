@@ -168,7 +168,7 @@ func (c *countingQuery) QueryContext(ctx context.Context, query string, args ...
 // under ON CONFLICT DO NOTHING a row that collides with one already stored is
 // skipped and never handed to scan, the rows of every chunk are handed in
 // the order given, and the count is of the rows handed — which is what a
-// writer that announces each row it wrote (internal/code's notices) needs and
+// writer that announces each row it wrote (internal/gitlet's notices) needs and
 // a chunk's RowsAffected cannot say.
 //
 // Mutation: execute each chunk rather than query it, or hand over every row

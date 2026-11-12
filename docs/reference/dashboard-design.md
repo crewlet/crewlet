@@ -3316,7 +3316,7 @@ byline's note says why it reached the reader in Gitlet's own words
 LIST ASKS NOTHING per card: every word above came with the list it was
 opened from, which asks the engine for its rows' cards (`inbox{cards: true}`):
 read once the page is composed, for the notices it keeps, no older than the
-page, the readiness judged for the reader there (`code.NoticeChange`) — so a
+page, the readiness judged for the reader there (`gitlet.NoticeChange`) — so a
 page of fifty cards is one question and no card describes its change as it
 stood before the row beside it. Snoozed and Earlier ask for cards once each
 is opened; the badge's count, Home's Updates and the Snoozed link's count
@@ -8115,13 +8115,13 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   a reviewer, what its changes wait on or a window they moved in, and is
   refused naming none. So the
   section lists the OPEN changes until told otherwise (`state=`, the engine's
-  `CHANGE_STATES`, held to `code.ChangeStates`), and **Every state** is offered
+  `CHANGE_STATES`, held to `gitlet.ChangeStates`), and **Every state** is offered
   only where a repository, a work item, a reviewer, a need or a window narrows
   the walk —
   said in place, never sent, where nothing does. **Waiting on** is the
-  engine's `needs` (`CHANGE_NEEDS`, held to `code.Needs`): on me, on a review,
+  engine's `needs` (`CHANGE_NEEDS`, held to `gitlet.Needs`): on me, on a review,
   on a fix, on a person. **Moved** is the engine's `window` (`CHANGE_WINDOWS`,
-  held to `code.ChangeWindows`): the changes that moved within the last day,
+  held to `gitlet.ChangeWindows`): the changes that moved within the last day,
   week or month; beside every state, or a merged or closed one, and nothing
   else narrowing the walk, the engine walks its two indexes of that instant
   and the rows come newest move first, while beside a live state (the
@@ -8130,7 +8130,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   reader may read; `owner=`, `reviewer=` and `work=` arrive from a link (the
   peek's owner and work item) and are said in the bar with a Clear. **A row's
   readiness is the engine's judgement**, made again on the read that answered
-  it against its own chart (`code.ReadinessOf`): a Meter of the preconditions
+  it against its own chart (`gitlet.ReadinessOf`): a Meter of the preconditions
   met of how many, drawn as done only when every one is, and titled by the
   engine's sentence of the first that is not; a change no longer live has
   none. **Open findings** is the engine's count of the change's findings none
@@ -8151,8 +8151,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   (`code_change`): its branches, owner, revisions and work item (the owner's
   other open changes, and every change of the item, one link each), its
   readiness — every precondition in the engine's order (`PRECONDITION_KINDS`
-  and `PRECONDITION_STATES`, held to `code.PreconditionKinds` and
-  `code.PreconditionStates`) with where it stands and the engine's sentence —
+  and `PRECONDITION_STATES`, held to `gitlet.PreconditionKinds` and
+  `gitlet.PreconditionStates`) with where it stands and the engine's sentence —
   its conversation's counts and its authors. A change's reference typed in
   ⌘K (`web!42`) opens its page, parsed by the engine's grammar, and the
   peek's Open leads there too.
@@ -8188,7 +8188,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   past one answer a page at a time, **Load more lines** asking the page
   after from the cursor the last one ended at, and the hunks drawn from every
   page read (`lib/patchPages.ts`); every finding
-  the engine placed in that revision (`code.PlaceFindings`, the rule a seat's
+  the engine placed in that revision (`gitlet.PlaceFindings`, the rule a seat's
   `code_get_change` reads by) is drawn under its last line, every thread on a
   line of it under its line — the findings and comments past their first page
   loaded by **Load more findings and comments** above the diff, each part's
@@ -8197,8 +8197,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   revision — is drawn above the diff under a Disclosure that counts it, never
   dropped. **On the head, a reviewer picks lines by their numbers** and drafts
   a finding under them — its weight and subject in the engine's words
-  (`FINDING_SEVERITIES`, `FINDING_CATEGORIES`, held to `code.Severities` and
-  `code.Categories`), a title, a body and, on the newer side, the lines it
+  (`FINDING_SEVERITIES`, `FINDING_CATEGORIES`, held to `gitlet.Severities` and
+  `gitlet.Categories`), a title, a body and, on the newer side, the lines it
   suggests in their place — and a draft is the TAB'S, kept in
   `sessionStorage` per change and revision, until **Approve**, **Request
   changes** or **Comment** sends every draft of the head in ONE
@@ -8226,7 +8226,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   authors and how it ended; **Woke** whom each record about it reached
   (`code_change_routing`), newest first, each recipient with the one reason it
   heard under in the voice of somebody else's notice (`CODE_PHRASES`' `about`,
-  held both ways to `code.Reasons`; `short` is the reader's own, for a notice
+  held both ways to `gitlet.Reasons`; `short` is the reader's own, for a notice
   of theirs), and, where none is listed, whether nobody was told or the
   notices were swept with the turn detail they named.
 - **Repositories** is the engine's listing, `code_repos`, by name and a page
@@ -8239,7 +8239,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   purged), who owns it (a unit by its name, a seat by its badge), which seats
   read it, its default branch and the commit it stands at, its last push, its
   pushes, its size and how many protection rules it carries. `status=` is the
-  engine's own filter (`REPO_STATUSES`, held to `code.RepoStatuses`). A row
+  engine's own filter (`REPO_STATUSES`, held to `gitlet.RepoStatuses`). A row
   opens the repository's page. A declared repository's settings are the
   company document's `code.repos`, and an empty listing offers the
   configuration to a reader who may open it. The listing's one write is
@@ -8281,7 +8281,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   it meets the lines after it; every step costs the Gitlet node one stream of
   the whole file, however wide). The blame does the same through its own
   `start_line`, its first range the one that holds the line, and reads a
-  range of at most `code.MaxBlameLines` (500) lines at a time, forward and
+  range of at most `gitlet.MaxBlameLines` (500) lines at a time, forward and
   back, range after range, so **Load more lines** reaches a blame's last line.
   A press picks a line on screen and so reads nothing; a line the file does
   not have, which the engine refuses as a `start_line`, reads the file again
@@ -8315,7 +8315,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   WriteButton, never optimistic — the page is redrawn from the read the
   write's position brings — and each drawn for every reader, held with the
   sentence that says why: **Search mode** (`code_update_repo`'s `search`, a
-  button a mode of `REPO_SEARCH_MODES`, held to `code.SearchModes`: the mode
+  button a mode of `REPO_SEARCH_MODES`, held to `gitlet.SearchModes`: the mode
   it has is no change, and a scratch repository is never indexed);
   **Mirrors**, a person's alone (`code_update_repo`'s `mirror_from` and
   `mirror_to`, each set whole from a dialog or removed — an https URL, the
@@ -8443,7 +8443,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   order the pushes landed. The engine keeps a history per repository and none
   that spans them, so the section is narrowed to one by `repo=` — chosen from
   the repositories in its bar, or arriving from a link — and a
-  name no repository can have (`REPO_NAME`, held to `code.ValidName`) is said
+  name no repository can have (`REPO_NAME`, held to `gitlet.ValidName`) is said
   in place rather than asked about. A row is when it landed, who pushed (the
   seat, or the credential a person pushed through with the seat it acts as),
   what became of its refs (created, moved, forced, deleted, unchanged, or
@@ -8506,7 +8506,7 @@ where the company hosts no code). It asks no question of its own: the code
 log's row of the retention report, drawn by Backups & retention's own row so
 the two pages cannot disagree about the log; Gitlet's alarms on every
 node, from the fleet's node rows (each node's own table at its last beat, the
-kinds `CODE_ALARM_KINDS` names, which `internal/code`'s gate holds to the
+kinds `CODE_ALARM_KINDS` names, which `internal/gitlet`'s gate holds to the
 engine's alarm table both ways), with a node that has evaluated no table yet
 named apart rather than counted as quiet; the company document's
 `code.scratch` and `code.identity_domain`, each unset field drawn beside the

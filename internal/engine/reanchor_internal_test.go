@@ -17,11 +17,11 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
@@ -1086,25 +1086,25 @@ func TestAReanchorOfTheCodeLogIsGitletsOwn(t *testing.T) {
 	e, js := aRunningNode(t)
 	rt := e.core.Load()
 	s := rt.log
-	running := s.Domain(code.Domain{}.Name())
+	running := s.Domain(gitlet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the node runs no code log")
 	}
-	store, err := code.NewStore(code.StoreOptions{Publisher: running.publisher,
+	store, err := gitlet.NewStore(gitlet.StoreOptions{Publisher: running.publisher,
 		DB: s.estate().Reader(), NodeID: rt.nodeID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	operator := code.Actor{ID: "ops-1", Kind: code.ActorOperator, OperatorID: "ops-1"}
+	operator := gitlet.Actor{ID: "ops-1", Kind: gitlet.ActorOperator, OperatorID: "ops-1"}
 	if res, err := store.EvictNode(t.Context(), operator,
 		statelog.NewOpID(time.Now(), ""), "node-x"); err != nil || res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a code write before the rebuild: %+v, %v", res, err)
 	}
 	trackerBefore := readCursorRow(t, e, worklet.Domain{}.Name())
 
-	rebuildLog(t, js, code.Domain{}.Stream())
+	rebuildLog(t, js, gitlet.Domain{}.Stream())
 	s.publishPositions(t.Context())
-	stream := code.Domain{}.Stream().Name
+	stream := gitlet.Domain{}.Stream().Name
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)

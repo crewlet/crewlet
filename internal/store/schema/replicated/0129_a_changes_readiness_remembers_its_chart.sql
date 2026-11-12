@@ -36,7 +36,7 @@
 -- home pass, and a column ALTER TABLE adds goes after the conflicted paths,
 -- the row's wide column, where reading it would read each row's overflow
 -- chain. No release carries 0117: the code domain is on no build of main and
--- in no image or tag (the domain's stated condition, code.RecordVersion), so
+-- in no image or tag (the domain's stated condition, gitlet.RecordVersion), so
 -- no store holds a row of it outside a development branch, and a change whose
 -- row is gone is due its merge again at its home's next pass — a function of
 -- two commits, recorded again. 0117 IS NOT EDITED: `schema_migrations` keys on

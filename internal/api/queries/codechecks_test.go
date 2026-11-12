@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -46,8 +46,8 @@ func TestACheckLogAnswerIsImmutable(t *testing.T) {
 	t.Parallel()
 	at := func(seq uint64, level statelog.ReadLevel) *stubCode {
 		stub := &stubCode{}
-		stub.answer = func(q code.ReadQuery) (code.ReadAnswer, error) {
-			return code.ReadAnswer{Level: level, Position: statelog.Position{Stream: "CREWLET_CODE_LOG",
+		stub.answer = func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+			return gitlet.ReadAnswer{Level: level, Position: statelog.Position{Stream: "CREWLET_CODE_LOG",
 				Generation: 1, Seq: seq}, Check: stubCheck(q, int64(len(stubLog)))}, nil
 		}
 		return stub
@@ -148,10 +148,10 @@ func TestAnAttemptIsNamedBesideItsBranch(t *testing.T) {
 		"limit": "262145"})); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a log page past %d bytes answered %v, want bad_params", queries.CheckLogPageBytes, err)
 	}
-	passed := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+	passed := &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 		c := stubCheck(q, 0)
-		c.State, c.Log = code.CheckStatePassed, nil
-		return code.ReadAnswer{Check: c}, nil
+		c.State, c.Log = gitlet.CheckStatePassed, nil
+		return gitlet.ReadAnswer{Check: c}, nil
 	}}
 	var nf *queries.NotFound
 	if _, err := askNative(t, queries.Sources{Code: passed}, "code_check_log", checkLogArgs(nil)); !errors.As(err,
@@ -179,8 +179,8 @@ func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := stub.last()
-	if got.Kind != code.ReadChecks || got.Repo != "web" || got.Checks == nil || *got.Checks != (code.CheckQuery{
-		Change: 42, OID: stubOID, Name: "unit", State: code.CheckStateFailed}) {
+	if got.Kind != gitlet.ReadChecks || got.Repo != "web" || got.Checks == nil || *got.Checks != (gitlet.CheckQuery{
+		Change: 42, OID: stubOID, Name: "unit", State: gitlet.CheckStateFailed}) {
 		t.Errorf("the reader was asked %+v of %q, want web's change 42 at %s, unit's failed attempts",
 			got.Checks, got.Repo, stubOID)
 	}
@@ -188,7 +188,7 @@ func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 		"oid": stubOID, "target": "refs/heads/main", "latest": "true"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := stub.last(); got.Checks == nil || *got.Checks != (code.CheckQuery{OID: stubOID,
+	if got := stub.last(); got.Checks == nil || *got.Checks != (gitlet.CheckQuery{OID: stubOID,
 		Target: "refs/heads/main", Latest: true}) {
 		t.Errorf("the reader was asked %+v, want %s's checks for main at their latest attempts", got.Checks,
 			stubOID)

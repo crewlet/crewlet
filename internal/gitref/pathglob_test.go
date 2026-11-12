@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
@@ -20,7 +20,7 @@ var pathTree = []string{
 	"README.md", "Makefile", ".gitignore", "main.go",
 	"docs/a.md", "docs/guides/b.md", "docs/guides/deep/c.md",
 	"web/app.go", "web/app_test.go", "web/internal/x.go", "web/web/web.go",
-	"internal/code/doc.go", "internal/code/cache/sync.go",
+	"internal/gitlet/doc.go", "internal/gitlet/cache/sync.go",
 	"a b/c.go",
 	deepPath,
 }
@@ -87,7 +87,7 @@ func TestOnePathGlobRuleMatchesTreePaths(t *testing.T) {
 	}
 
 	goFiles := []string{"main.go", "web/app.go", "web/app_test.go", "web/internal/x.go", "web/web/web.go",
-		"internal/code/doc.go", "internal/code/cache/sync.go", "a b/c.go", deepPath}
+		"internal/gitlet/doc.go", "internal/gitlet/cache/sync.go", "a b/c.go", deepPath}
 	for _, tc := range []struct {
 		glob string
 		want []string
@@ -105,9 +105,9 @@ func TestOnePathGlobRuleMatchesTreePaths(t *testing.T) {
 		{"web/**", []string{"web/app.go", "web/app_test.go", "web/internal/x.go", "web/web/web.go"}},
 		{"**/web/*.go", []string{"web/app.go", "web/app_test.go", "web/web/web.go"}},
 		{"web/**/web.go", []string{"web/web/web.go"}},
-		{"*/*/*.go", []string{"web/internal/x.go", "web/web/web.go", "internal/code/doc.go"}},
-		{"internal/**/sync.go", []string{"internal/code/cache/sync.go"}},
-		{"**/code/**", []string{"internal/code/doc.go", "internal/code/cache/sync.go"}},
+		{"*/*/*.go", []string{"web/internal/x.go", "web/web/web.go", "internal/gitlet/doc.go"}},
+		{"internal/**/sync.go", []string{"internal/gitlet/cache/sync.go"}},
+		{"**/gitlet/**", []string{"internal/gitlet/doc.go", "internal/gitlet/cache/sync.go"}},
 		{"a b/*", []string{"a b/c.go"}},
 		{"d/**/x/**/y.go", []string{deepPath}},
 		{"d/**/x/x/**/y.go", []string{deepPath}},
@@ -343,7 +343,7 @@ func TestMatchingAPathAllocatesNothingAndNeverPanics(t *testing.T) {
 
 // longestTouched is the longest single path a revision's facts can list as
 // touched — 48 KiB of six-byte components, every byte of the touched list's
-// bound (internal/code's MaxTouchedBytes, as JSON) less its brackets and the
+// bound (internal/gitlet's MaxTouchedBytes, as JSON) less its brackets and the
 // path's quotes — so a glob asked about it costs what it may cost asked about
 // all of one revision's paths, whose bytes that bound holds to the same.
 var longestTouched = strings.Repeat("aaaaaa/", 7021) + "b"
@@ -373,7 +373,7 @@ var benchPathGlobs = []struct {
 
 // BenchmarkPathGlobMatch is what a path owner's glob, parsed once, costs a
 // path: the matching a repository's home pays for every glob of every owner
-// against every path a revision touches (internal/code's MatchOwners).
+// against every path a revision touches (internal/gitlet's MatchOwners).
 func BenchmarkPathGlobMatch(b *testing.B) {
 	for _, bc := range benchPathGlobs {
 		parsed, err := gitref.ParsePathGlob(bc.glob)

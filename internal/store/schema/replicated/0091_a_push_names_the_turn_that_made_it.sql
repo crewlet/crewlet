@@ -5,7 +5,7 @@
 -- took it; `engine`, the engine built the commit and its pack itself from a
 -- tool's call) and, for a SEAT's push, the run behind it: the turn that made
 -- the write, the work item that turn is charged to — its tracker and the key
--- that tracker shows — and the model it ran on (code.RunProvenance). Each is
+-- that tracker shows — and the model it ran on (gitlet.RunProvenance). Each is
 -- stamped by the server from the call that made the push and never read from
 -- a commit, whose headers and trailers whoever made the commit writes. A seat's
 -- row names the seat as both actor and actor_seat, beside actor_kind `agent`;
@@ -14,14 +14,14 @@
 -- EVERY DEFAULT IS '' because SQLite requires one for a NOT NULL column added
 -- to a table, and the push apply writes every column of every row. via's is
 -- deliberately no way at all: a row whose via is not one this build knows is
--- refused by every reader of it (code's scanPush), so an apply that forgot the
+-- refused by every reader of it (gitlet's scanPush), so an apply that forgot the
 -- column fails a read rather than answering every push the engine built as one
 -- a client's git sent, which a default of 'git' would have done.
 --
 -- WHAT A ROW WEIGHS GROWS WITH THE RUN: code_pushes.row_bytes, which the
 -- history's horizon and a purge part are bounded by, counts the four run
 -- fields beside the commands and the introduced ids — up to four times
--- code.MaxProvenanceBytes, 256 bytes each.
+-- gitlet.MaxProvenanceBytes, 256 bytes each.
 --
 -- code_seat_days is a seat's pushes counted on its company day, which the
 -- decide reads to hold the seat to code.limits.pushes_per_seat_day: one row a
@@ -41,7 +41,7 @@
 --
 -- Class: code_pushes stays reproducible: every column is written only from the
 -- records the applier applies. code_seat_days is reproducible
--- (code.ReproducibleTables): written only by the push apply, from the push
+-- (gitlet.ReproducibleTables): written only by the push apply, from the push
 -- records, so a replay from zero rebuilds it.
 ALTER TABLE code_pushes ADD COLUMN via          TEXT NOT NULL DEFAULT '';
 ALTER TABLE code_pushes ADD COLUMN turn_id      TEXT NOT NULL DEFAULT '';
@@ -50,7 +50,7 @@ ALTER TABLE code_pushes ADD COLUMN work_key     TEXT NOT NULL DEFAULT '';
 ALTER TABLE code_pushes ADD COLUMN model        TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE code_seat_days (
-    seat   TEXT    NOT NULL,   -- the agent entry's code.Principal.Seat
+    seat   TEXT    NOT NULL,   -- the agent entry's gitlet.Principal.Seat
     day    TEXT    NOT NULL,   -- period.Day's label on the company calendar ('2026-09-23')
     pushes INTEGER NOT NULL,
     PRIMARY KEY (seat, day)

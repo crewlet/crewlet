@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 )
 
 // A REUSED BOX KEEPS WHAT IT HOLDS AND IS GIVEN NOTHING AGAIN. A job that

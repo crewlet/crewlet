@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -23,7 +23,7 @@ import (
 
 var (
 	fleetRing = recordseal.OneKey("k1", "the code search suite's fleet key material")
-	person    = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
+	person    = gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
 )
 
 func wire(t *testing.T, ring recordseal.Keyring) *codesearch.Wire {
@@ -38,9 +38,9 @@ func wire(t *testing.T, ring recordseal.Keyring) *codesearch.Wire {
 // repo is one repository of the fake company: its row, its git order, and
 // the lines each node answers for it.
 type repo struct {
-	ref   code.RepoRef
+	ref   gitlet.RepoRef
 	order []string
-	lines []code.SearchHit
+	lines []gitlet.SearchHit
 	// stops, where set, is a search of the repository that stops early —
 	// at its answer's bound or its budget — after stopAt of its lines.
 	stops  bool
@@ -49,8 +49,8 @@ type repo struct {
 
 // answerOf is r's search as a Gitlet node answers sq: its lines after sq's
 // place, the first sq.Hits() of them, Truncated where it left lines out.
-func answerOf(r repo, sq *code.SearchQuery) *code.SearchAnswer {
-	var lines []code.SearchHit
+func answerOf(r repo, sq *gitlet.SearchQuery) *gitlet.SearchAnswer {
+	var lines []gitlet.SearchHit
 	for _, h := range r.lines {
 		if sq.After != nil {
 			raw, _ := sq.After.Raw()
@@ -60,7 +60,7 @@ func answerOf(r repo, sq *code.SearchQuery) *code.SearchAnswer {
 		}
 		lines = append(lines, h)
 	}
-	a := &code.SearchAnswer{Tip: tip(r), Via: code.SearchViaIndex}
+	a := &gitlet.SearchAnswer{Tip: tip(r), Via: gitlet.SearchViaIndex}
 	limit := sq.Hits()
 	if r.stops && r.stopAt < limit {
 		limit = r.stopAt
@@ -73,7 +73,7 @@ func answerOf(r repo, sq *code.SearchQuery) *code.SearchAnswer {
 }
 
 func indexed(name string, order ...string) repo {
-	return repo{ref: code.RepoRef{ID: "id-" + name, Name: name, Search: code.SearchIndexed}, order: order}
+	return repo{ref: gitlet.RepoRef{ID: "id-" + name, Name: name, Search: gitlet.SearchIndexed}, order: order}
 }
 
 // estate answers the listing and the walk from the fake company; where head
@@ -91,33 +91,33 @@ type estate struct {
 	heads []statelog.Position
 }
 
-func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (e *estate) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.reads++
-	var out code.ReadAnswer
+	var out gitlet.ReadAnswer
 	if !e.head.IsZero() {
 		out.Position, out.Level = e.head, cmp.Or(e.level, statelog.ReadLinearizable)
 	}
 	switch q.Kind {
-	case code.ReadRepos:
+	case gitlet.ReadRepos:
 		for _, r := range e.repos {
-			out.Repos = append(out.Repos, code.RepoSummary{RepoRef: r.ref})
+			out.Repos = append(out.Repos, gitlet.RepoSummary{RepoRef: r.ref})
 		}
 		return out, nil
-	case code.ReadRepo:
+	case gitlet.ReadRepo:
 		for _, r := range e.repos {
 			if r.ref.Name == q.Repo {
-				out.Repo = &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: r.ref}}
+				out.Repo = &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{RepoRef: r.ref}}
 				return out, nil
 			}
 		}
-		return code.ReadAnswer{}, code.ErrRepoNotFound
+		return gitlet.ReadAnswer{}, gitlet.ErrRepoNotFound
 	}
-	return code.ReadAnswer{}, fmt.Errorf("the fake reads no %s", q.Kind)
+	return gitlet.ReadAnswer{}, fmt.Errorf("the fake reads no %s", q.Kind)
 }
 
-func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (e *estate) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.reads++
@@ -125,10 +125,10 @@ func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, er
 	for _, r := range e.repos {
 		if r.ref.ID == q.RepoID {
 			e.at = append(e.at, r.ref.Name+"@"+q.Search.Ref)
-			return code.GitAnswer{Kind: code.GitSearch, Search: answerOf(r, q.Search)}, nil
+			return gitlet.GitAnswer{Kind: gitlet.GitSearch, Search: answerOf(r, q.Search)}, nil
 		}
 	}
-	return code.GitAnswer{}, code.ErrRepoNotFound
+	return gitlet.GitAnswer{}, gitlet.ErrRepoNotFound
 }
 
 func (e *estate) GitOrders(ids []string) (map[string][]string, error) {
@@ -156,7 +156,7 @@ type node struct {
 	mu    sync.Mutex
 }
 
-func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (n *node) Read(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	for _, r := range n.e.repos {
 		if r.ref.ID != q.RepoID {
 			continue
@@ -167,11 +167,11 @@ func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) 
 		n.heads = append(n.heads, q.Head)
 		n.mu.Unlock()
 		if err := n.fault[r.ref.Name]; err != nil {
-			return code.GitAnswer{}, err
+			return gitlet.GitAnswer{}, err
 		}
-		return code.GitAnswer{Kind: code.GitSearch, Search: answerOf(r, q.Search)}, nil
+		return gitlet.GitAnswer{Kind: gitlet.GitSearch, Search: answerOf(r, q.Search)}, nil
 	}
-	return code.GitAnswer{}, code.ErrRepoNotFound
+	return gitlet.GitAnswer{}, gitlet.ErrRepoNotFound
 }
 
 // fleet is the scatter's broker: every node's server is handed every
@@ -204,7 +204,7 @@ func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool)
 }
 
 // shareUnits is every fake node's seat git-work share: four units, a Gitlet
-// node of eight cores (code.ShareOf).
+// node of eight cores (gitlet.ShareOf).
 const shareUnits = 4
 
 func newFleet(t *testing.T, e *estate, nodes map[string]*node) *fleet {
@@ -234,8 +234,8 @@ func query(text string) codesearch.Query {
 	return codesearch.Query{Search: codeindex.Query{Text: text, Mode: codeindex.ModeLiteral}, Asker: person}
 }
 
-func line(path string, n int) code.SearchHit {
-	return code.SearchHit{Path: path, Line: n, Text: "needle " + path, Blob: strings.Repeat("b", 40)}
+func line(path string, n int) gitlet.SearchHit {
+	return gitlet.SearchHit{Path: path, Line: n, Text: "needle " + path, Blob: strings.Repeat("b", 40)}
 }
 
 // A SILENT NODE IS NAMED IN THE COVERAGE: a repository whose first node does
@@ -248,8 +248,8 @@ func line(path string, n int) code.SearchHit {
 func TestASilentNodeIsNamedInTheCoverage(t *testing.T) {
 	t.Parallel()
 	alpha, beta, gamma := indexed("alpha", "git-b", "git-a"), indexed("beta", "git-b"), indexed("gamma", "git-a")
-	alpha.lines = []code.SearchHit{line("a.go", 1)}
-	gamma.lines = []code.SearchHit{line("g.go", 2)}
+	alpha.lines = []gitlet.SearchHit{line("a.go", 1)}
+	gamma.lines = []gitlet.SearchHit{line("g.go", 2)}
 	e := &estate{repos: []repo{alpha, beta, gamma}}
 	a, b := &node{}, &node{}
 	f := newFleet(t, e, map[string]*node{"git-a": a, "git-b": b})
@@ -292,7 +292,7 @@ func TestTheMergeIsExactWhateverAnswersFirst(t *testing.T) {
 			h := line(fmt.Sprintf("p%d.go", (j*7+i)%5), j+1)
 			r.lines = append(r.lines, h)
 		}
-		slices.SortFunc(r.lines, func(x, y code.SearchHit) int {
+		slices.SortFunc(r.lines, func(x, y gitlet.SearchHit) int {
 			return strings.Compare(fmt.Sprintf("%s:%04d", x.Path, x.Line), fmt.Sprintf("%s:%04d", y.Path, y.Line))
 		})
 		for _, h := range r.lines {
@@ -360,7 +360,7 @@ func TestACodeQueryIsBoundedAsKnowledge(t *testing.T) {
 	e := &estate{repos: []repo{r}}
 	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}}))
 	_, err := s.Search(context.Background(), query(strings.Repeat("q", knowledge.MaxQueryBytes+1)))
-	if !errors.Is(err, code.ErrInvalid) || !errors.Is(err, codeindex.ErrQueryTooLong) {
+	if !errors.Is(err, gitlet.ErrInvalid) || !errors.Is(err, codeindex.ErrQueryTooLong) {
 		t.Fatalf("a %d-byte search = %v, want ErrInvalid naming its length", knowledge.MaxQueryBytes+1, err)
 	}
 	if e.reads != 0 {
@@ -381,8 +381,8 @@ func TestACodeQueryIsBoundedAsKnowledge(t *testing.T) {
 func TestARepositoryNamedTwiceIsSearchedOnce(t *testing.T) {
 	t.Parallel()
 	alpha, beta := indexed("alpha", "git-a"), indexed("beta", "git-a")
-	alpha.lines = []code.SearchHit{line("a.go", 1)}
-	beta.lines = []code.SearchHit{line("b.go", 2)}
+	alpha.lines = []gitlet.SearchHit{line("a.go", 1)}
+	beta.lines = []gitlet.SearchHit{line("b.go", 2)}
 	e := &estate{repos: []repo{alpha, beta}}
 	a := &node{}
 	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": a}))
@@ -411,14 +411,14 @@ func TestARepositoryNamedTwiceIsSearchedOnce(t *testing.T) {
 func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	t.Parallel()
 	r := indexed("alpha", "git-a")
-	r.lines = []code.SearchHit{line("a.go", 1)}
+	r.lines = []gitlet.SearchHit{line("a.go", 1)}
 	n := &node{e: &estate{repos: []repo{r}}}
 	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-1", Deadline: time.Now().Add(time.Minute),
-		Asker: person, Search: code.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
+		Asker: person, Search: gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
 		Assign: map[string][]codesearch.Assigned{"git-a": {{RepoID: r.ref.ID, Name: "alpha", Home: true}}}}
 	stranger := recordseal.OneKey("k1", "somebody else's key material")
 	forged, err := wire(t, stranger).SealRequest(req)
@@ -466,8 +466,8 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 // not permitted: its listing answers, its Gitlet nodes do not.
 type refusingWalk struct{ *estate }
 
-func (refusingWalk) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, code.ErrNotPermitted
+func (refusingWalk) GitRead(context.Context, gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return gitlet.GitAnswer{}, gitlet.ErrNotPermitted
 }
 
 // A REFUSAL NAMES ITS REPOSITORY: a repo: filter naming a repository nobody
@@ -485,7 +485,7 @@ func TestARefusalNamesItsRepository(t *testing.T) {
 	_, err := s.Search(context.Background(), codesearch.Query{Search: codeindex.Query{Text: "needle",
 		Mode: codeindex.ModeLiteral, Repos: []string{"alpha", "nope"}}, Asker: person})
 	var refused *codesearch.RepoRefusal
-	if !errors.As(err, &refused) || refused.Repo != "nope" || !errors.Is(err, code.ErrRepoNotFound) {
+	if !errors.As(err, &refused) || refused.Repo != "nope" || !errors.Is(err, gitlet.ErrRepoNotFound) {
 		t.Fatalf("a search naming an undeclared repository = %v, want a RepoRefusal of nope, not found", err)
 	}
 
@@ -497,7 +497,7 @@ func TestARefusalNamesItsRepository(t *testing.T) {
 	_, err = walk.Search(context.Background(), codesearch.Query{Search: codeindex.Query{Text: "needle",
 		Mode: codeindex.ModeLiteral, Repos: []string{"alpha"}}, Asker: person})
 	refused = nil
-	if !errors.As(err, &refused) || refused.Repo != "alpha" || !errors.Is(err, code.ErrNotPermitted) {
+	if !errors.As(err, &refused) || refused.Repo != "alpha" || !errors.Is(err, gitlet.ErrNotPermitted) {
 		t.Fatalf("a one-repository search its walk refused = %v, want a RepoRefusal of alpha, not permitted", err)
 	}
 }
@@ -611,8 +611,8 @@ func TestAPageContinuesAfterItsKey(t *testing.T) {
 	}
 
 	bad := query("needle")
-	bad.After = &codesearch.Key{Repo: "amber", Tip: "main", SearchAfter: code.SearchAfter{Path: "a.go", Line: 1}}
-	if _, err := s.Search(context.Background(), bad); !errors.Is(err, code.ErrInvalid) {
+	bad.After = &codesearch.Key{Repo: "amber", Tip: "main", SearchAfter: gitlet.SearchAfter{Path: "a.go", Line: 1}}
+	if _, err := s.Search(context.Background(), bad); !errors.Is(err, gitlet.ErrInvalid) {
 		t.Errorf("a key naming a branch for its commit = %v, want ErrInvalid", err)
 	}
 }
@@ -717,24 +717,24 @@ func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
 // read's search holds a unit of it until the test lets it go, and how many
 // reads have begun is counted.
 type sharedReads struct {
-	share   *code.GitShare
+	share   *gitlet.GitShare
 	release chan struct{}
 	mu      sync.Mutex
 	began   int
 }
 
-func (r *sharedReads) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (r *sharedReads) Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	r.mu.Lock()
 	r.began++
 	r.mu.Unlock()
 	done, err := r.share.Take(ctx, q.SeatWork())
 	if err != nil {
-		return code.GitAnswer{}, err
+		return gitlet.GitAnswer{}, err
 	}
 	defer done()
 	<-r.release
-	return code.GitAnswer{Kind: code.GitSearch, Search: &code.SearchAnswer{Hits: []code.SearchHit{},
-		Tip: strings.Repeat("c", 40), Via: code.SearchViaIndex}}, nil
+	return gitlet.GitAnswer{Kind: gitlet.GitSearch, Search: &gitlet.SearchAnswer{Hits: []gitlet.SearchHit{},
+		Tip: strings.Repeat("c", 40), Via: gitlet.SearchViaIndex}}, nil
 }
 
 func (r *sharedReads) begun() int {
@@ -746,7 +746,7 @@ func (r *sharedReads) begun() int {
 // grep is a `search: grep` repository of the fake company.
 func grep(name string, order ...string) repo {
 	r := indexed(name, order...)
-	r.ref.Search = code.SearchGrep
+	r.ref.Search = gitlet.SearchGrep
 	return r
 }
 
@@ -769,7 +769,7 @@ func TestAFilterPastTheGrepBoundIsRefusedUnread(t *testing.T) {
 	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}}))
 	q := query("needle")
 	q.Search.Repos = names
-	if _, err := s.Search(context.Background(), q); !errors.Is(err, code.ErrInvalid) ||
+	if _, err := s.Search(context.Background(), q); !errors.Is(err, gitlet.ErrInvalid) ||
 		!strings.Contains(err.Error(), "searched with git grep") {
 		t.Fatalf("a filter naming %d grep repositories = %v, want refused past the bound", len(names), err)
 	}
@@ -789,8 +789,8 @@ type wave struct {
 	all  chan struct{}
 }
 
-func (w *wave) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
-	if q.Kind == code.ReadRepo {
+func (w *wave) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	if q.Kind == gitlet.ReadRepo {
 		w.mu.Lock()
 		if w.in++; w.in == w.want {
 			close(w.all)
@@ -799,7 +799,7 @@ func (w *wave) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, err
 		select {
 		case <-w.all:
 		case <-time.After(10 * time.Second):
-			return code.ReadAnswer{}, errors.New("the row's read began alone: no other name's began beside it")
+			return gitlet.ReadAnswer{}, errors.New("the row's read began alone: no other name's began beside it")
 		}
 	}
 	return w.estate.Read(ctx, q)
@@ -897,7 +897,7 @@ func TestEveryRepositoryLooksAtTheHeadItsListingRead(t *testing.T) {
 func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
 	t.Parallel()
 	const readSlots = 8
-	share := code.NewGitShare("git-a", readSlots, nil)
+	share := gitlet.NewGitShare("git-a", readSlots, nil)
 	units := share.Units()
 	bound := codesearch.ScatterReads(units)
 	reads := &sharedReads{share: share, release: make(chan struct{})}
@@ -911,7 +911,7 @@ func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
 			Home: true})
 	}
 	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-share", Deadline: time.Now().Add(time.Minute),
-		Asker: person, Search: code.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
+		Asker: person, Search: gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
 		Assign: map[string][]codesearch.Assigned{"git-a": assign}}
 	sealed, err := wire(t, fleetRing).SealRequest(req)
 	if err != nil {
@@ -937,9 +937,9 @@ func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
 				units)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), code.GitShareWait)
+	ctx, cancel := context.WithTimeout(context.Background(), gitlet.GitShareWait)
 	defer cancel()
-	done, err := share.Take(ctx, code.SeatWorkRead)
+	done, err := share.Take(ctx, gitlet.SeatWorkRead)
 	if err != nil {
 		t.Fatalf("a seat's read beside the search = %v, want a unit at once", err)
 	}

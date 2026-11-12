@@ -1,19 +1,19 @@
 # ADR-0098: A check is a measurement of a commit, defined by the target branch and run where no author can reach it
 
 - **Status:** accepted
-- **Authority:** `internal/code`
-- **Enforced-by:** `internal/code/home.TestCheckDefinitionsComeFromTheTarget`, `internal/code/home.TestATipCheckIsDefinedAtItsLandingsBase`, `internal/code/home.TestARedTipIsBisectedOverLandingRows`, `internal/code.TestTipChecksRunOnAPersonsDirectLanding`, `internal/code/checkrun.TestACheckBoxHoldsNoModelCredential`, `internal/code/checkrun.TestACheckSpendsNoTokens`, `internal/code/checkrun.TestALosingClaimStartsNoBox`
+- **Authority:** `internal/gitlet`
+- **Enforced-by:** `internal/gitlet/home.TestCheckDefinitionsComeFromTheTarget`, `internal/gitlet/home.TestATipCheckIsDefinedAtItsLandingsBase`, `internal/gitlet/home.TestARedTipIsBisectedOverLandingRows`, `internal/gitlet.TestTipChecksRunOnAPersonsDirectLanding`, `internal/gitlet/checkrun.TestACheckBoxHoldsNoModelCredential`, `internal/gitlet/checkrun.TestACheckSpendsNoTokens`, `internal/gitlet/checkrun.TestALosingClaimStartsNoBox`
 - **Tag-status:** unreleased
 
 ## The decision
 
 A check is a MEASUREMENT OF A COMMIT for a target branch: one row a
 (repository, commit, target, check, attempt) on the repository's checks
-subject (`code.CheckQueued`), whatever asked for it — a change's head, a
+subject (`gitlet.CheckQueued`), whatever asked for it — a change's head, a
 queue's candidate, a protected branch's tip or a bisect's probe — so a
 fast-forward landing is judged by the attempts its change's head already
 recorded, and a merge gate, a green row and a broken record all read the same
-rows (`code.GateCheck`).
+rows (`gitlet.GateCheck`).
 
 What a check RUNS is defined by the target branch, never by the commit it
 measures. A change's head is dispatched under `.crewlet/checks.yaml` at its
@@ -42,7 +42,7 @@ push — lies above the target's green row; the repository's home dispatches the
 target's NEWEST landing only (coalesced), moves the green row onto it once
 every required check passed, and where one failed, BISECTS the failed checks
 over the landing rows down to the first landing they failed on, which it
-records broken (`code.Green`, `code.Broken`, `code_target_broken`).
+records broken (`gitlet.Green`, `gitlet.Broken`, `code_target_broken`).
 
 ## Why the obvious alternative is wrong
 

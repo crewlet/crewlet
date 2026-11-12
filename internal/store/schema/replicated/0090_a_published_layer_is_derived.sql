@@ -8,7 +8,7 @@
 -- its bitmap, and the commit-graph layer over the same packs — stores its bytes
 -- in the object store, and names it on the code log, where every git node
 -- reads it and installs it. A layer is published as a compaction record that
--- carries it (internal/code's LayerRef), decided by the repository's committer
+-- carries it (internal/gitlet's LayerRef), decided by the repository's committer
 -- like any compaction, so everything that moves a repository's packs or its
 -- index has one writer.
 --
@@ -16,7 +16,7 @@
 -- `seq` 1.. in chain order and contiguous. The chain order is the only thing
 -- that names a layer's base — a layer file does not — so the rows are its
 -- authority. A publication replaces the chain's top rows it names and adds
--- one, so the table holds at most code.MaxPublishedLayers rows a repository,
+-- one, so the table holds at most gitlet.MaxPublishedLayers rows a repository,
 -- replaced in place, and every read of a chain reads it whole by its key. No
 -- index beside the key: a chain is 32 rows at most, and every reader — the
 -- decide, the apply, a snapshot, an answer — reads all of them. `packs` is the
@@ -26,7 +26,7 @@
 --
 -- code_layer_parts is the objects a layer's bytes are stored in — its
 -- multi-pack-index, its bitmap and its commit-graph layer back to back, cut
--- into parts of code.LayerPartBytes, uploaded together — one row a part, `part`
+-- into parts of gitlet.LayerPartBytes, uploaded together — one row a part, `part`
 -- 0.. in byte order. It is the table that NAMES OBJECTS, declared
 -- objstore.Derived in internal/objstore/references (ADR-0081): any git node
 -- can build the layer again from the packs code_packs names, so a part is kept
@@ -46,7 +46,7 @@
 -- where it is byte-identical to a published one, until the next publication
 -- recounts it: an active or archived repository's tail is the packs no layer
 -- covers or more, never fewer. Keeping it exact would make every push's apply
--- read the chain's checksums, up to code.MaxPacksPerRepo of them, to correct a
+-- read the chain's checksums, up to gitlet.MaxPacksPerRepo of them, to correct a
 -- count whose error costs a listing row and a plan that finds nothing to
 -- publish (the index below). published_at is the last publication's broker
 -- instant as store.EncodeTime writes it (unix microseconds), 0 for a

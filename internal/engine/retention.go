@@ -14,11 +14,11 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -188,7 +188,7 @@ type retention struct {
 	// rows at now, and false where it measures none ([Engine.refsNearLimit]).
 	// Measured on the trim's tick alone ([retention.measureRefs]) and read
 	// back by every report. Nil reads as nothing to report.
-	refs func(ctx context.Context, now time.Time) (code.RefsNear, bool, error)
+	refs func(ctx context.Context, now time.Time) (gitlet.RefsNear, bool, error)
 	// entries fills the per-entry alarms' half of a reading: each model
 	// entry's and each MCP server's condition across the fleet. Nil reads
 	// as nothing to report.
@@ -253,7 +253,7 @@ type retention struct {
 	// figure, taken on the tick and read by the report for the coverage's
 	// reason: a walk of the repositories and a count over each one's refs
 	// near the bound, which no report may repeat. See [retention.measureRefs].
-	refsNear      code.RefsNear
+	refsNear      gitlet.RefsNear
 	refsNearKnown bool
 
 	// pooled is the last `sql.DBStats` wait counters seen per store file,
@@ -1439,7 +1439,7 @@ var (
 	_ evictionLister = assistantdomain.Domain{}
 	_ evictionLister = chatlet.Domain{}
 	_ evictionLister = executordomain.Domain{}
-	_ evictionLister = code.Domain{}
+	_ evictionLister = gitlet.Domain{}
 
 	// AND EVERY ONE READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [checkRegister] refuses a registered
@@ -1452,7 +1452,7 @@ var (
 	_ statelog.EvictionProbe = assistantdomain.Domain{}
 	_ statelog.EvictionProbe = chatlet.Domain{}
 	_ statelog.EvictionProbe = executordomain.Domain{}
-	_ statelog.EvictionProbe = code.Domain{}
+	_ statelog.EvictionProbe = gitlet.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.

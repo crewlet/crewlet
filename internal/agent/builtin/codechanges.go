@@ -11,8 +11,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -31,7 +31,7 @@ import (
 // ([CodeDeps.caller]); the repository a call names resolved once a turn and
 // held ([CodeDeps.repo]); and every question held, where it is answered, to
 // the grant on the change's repository — of the caller and of the colleague
-// a turn reads for ([code.JudgeRead]). [changeToolNeeds] names, one table for
+// a turn reads for ([gitlet.JudgeRead]). [changeToolNeeds] names, one table for
 // every change tool, the access each one's call needs.
 //
 // # Rows at the seat's level, once a call
@@ -52,7 +52,7 @@ import (
 //
 // A read that needs the change's state, its revision, its head and its
 // branches — a revision's files, a patch, the findings, a write of its
-// conversation — reads it IN BRIEF ([code.ReadQuery.Brief]): its row beside
+// conversation — reads it IN BRIEF ([gitlet.ReadQuery.Brief]): its row beside
 // its head revision, and none of what its detail reads besides — its
 // description, kept on rows of its own so a hot read skips it, its authors,
 // its conversation, its mergeability and its readiness judged anew. Only the
@@ -96,10 +96,10 @@ import (
 // A row read pages by the estate's bound, four mebibytes; a tool answer is 64
 // KiB. So every page these tools answer is cut WHOLE-ROW at one tool answer
 // as it is sent, fences and all ([fitLabelled]), and resumes after the last
-// row it kept by that row's own cursor — [code.ReadQuery.ChangesCursor] for a
+// row it kept by that row's own cursor — [gitlet.ReadQuery.ChangesCursor] for a
 // listing, each part's row's Cursor for a change's — never by a spelling of
 // the reader's cursors written again here. A Gitlet node cuts its page at
-// code.MaxGitAnswerBytes, which leaves these tools' wrapping room in the
+// gitlet.MaxGitAnswerBytes, which leaves these tools' wrapping room in the
 // answer, as it does code_diff's.
 
 // The change read tools' names: each is its authority row's action.
@@ -120,8 +120,8 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 //
 // A READ NEEDS READ, the one access the node that answers it judges both
 // principals at: every question a read makes carries the colleague as its
-// ceiling ([code.ReadQuery.CeilingSeat], [code.GitQuery.CeilingSeat]), and
-// [code.JudgeRead] serves only what the caller and the colleague may each
+// ceiling ([gitlet.ReadQuery.CeilingSeat], [gitlet.GitQuery.CeilingSeat]), and
+// [gitlet.JudgeRead] serves only what the caller and the colleague may each
 // read. A read tool's need above read would be one no read holds a colleague
 // to, so a read's row is read and nothing else.
 //
@@ -137,34 +137,34 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 // dismissal by the raiser, a maintainer or a person — read.
 //
 // A WRITE IN A TURN A COLLEAGUE SEAT WOKE holds that colleague at the same
-// access, on the data node that decides it (code.ChangeProposal.Ceiling,
-// code.ConversationWrite.Ceiling, [CodeDeps.writeCaller]): the relation beyond
+// access, on the data node that decides it (gitlet.ChangeProposal.Ceiling,
+// gitlet.ConversationWrite.Ceiling, [CodeDeps.writeCaller]): the relation beyond
 // it is the seat's own to meet, so an author may ask a seat to review the
 // change it could never review itself. The committer reads that access from
 // the write's kind — review for a review, read for every other — which
 // TestEveryChangeToolNamesTheAccessItNeeds holds to these rows. A REBASE is a
 // branch move and nothing else, so the Gitlet node that builds it holds the
-// colleague as it holds every branch write (code.EngineWrite.Ceiling,
-// code.Grant.Under on the source it moves, the seat's own work spared), and no
+// colleague as it holds every branch write (gitlet.EngineWrite.Ceiling,
+// gitlet.Grant.Under on the source it moves, the seat's own work spared), and no
 // decide reads an access for it.
-var changeToolNeeds = map[string]code.Access{
-	CodeListChangesTool:     code.AccessRead,
-	CodeGetChangeTool:       code.AccessRead,
-	CodeOpenChangeTool:      code.AccessRead,
-	CodeUpdateChangeTool:    code.AccessRead,
-	CodeCloseChangeTool:     code.AccessRead,
-	CodeRequestReviewTool:   code.AccessRead,
-	CodeReviewChangeTool:    code.AccessReview,
-	CodeCommentOnChangeTool: code.AccessRead,
-	CodeResolveFindingTool:  code.AccessRead,
+var changeToolNeeds = map[string]gitlet.Access{
+	CodeListChangesTool:     gitlet.AccessRead,
+	CodeGetChangeTool:       gitlet.AccessRead,
+	CodeOpenChangeTool:      gitlet.AccessRead,
+	CodeUpdateChangeTool:    gitlet.AccessRead,
+	CodeCloseChangeTool:     gitlet.AccessRead,
+	CodeRequestReviewTool:   gitlet.AccessRead,
+	CodeReviewChangeTool:    gitlet.AccessReview,
+	CodeCommentOnChangeTool: gitlet.AccessRead,
+	CodeResolveFindingTool:  gitlet.AccessRead,
 	// An apply pushes the change's source branch — a full_access seat's own
 	// namespace on a repository it reads among them — so read, the push's
 	// rule the Gitlet node's and the committer's.
-	CodeApplySuggestionsTool: code.AccessRead,
+	CodeApplySuggestionsTool: gitlet.AccessRead,
 	// A rebase force-pushes the change's source branch, its rule likewise the
 	// Gitlet node's and the committer's — and, in a turn a colleague woke, the
-	// colleague's too, on that Gitlet node (code.EngineWrite.Ceiling).
-	CodeRebaseChangeTool: code.AccessRead,
+	// colleague's too, on that Gitlet node (gitlet.EngineWrite.Ceiling).
+	CodeRebaseChangeTool: gitlet.AccessRead,
 	// A merge and a dequeue are decided from the deciding node's own chart —
 	// who may merge into the target is its gate's merge_by (M5-D2), who may
 	// take an entry out its enqueuer, its change's owner, a maintainer or a
@@ -172,12 +172,12 @@ var changeToolNeeds = map[string]code.Access{
 	// a turn somebody woke each carries the turn's ceiling, held to that
 	// same relation for the requester where it is decided (the Gitlet node for
 	// a merge, the committer for a dequeue), never to an access alone.
-	CodeMergeChangeTool:   code.AccessRead,
-	CodeDequeueChangeTool: code.AccessRead,
+	CodeMergeChangeTool:   gitlet.AccessRead,
+	CodeDequeueChangeTool: gitlet.AccessRead,
 	// A revert creates a branch — a full_access seat's own namespace — and
 	// opens a change in that push's record, so its rule is the push's, the
 	// Gitlet node's and the committer's, as a rebase's: read.
-	CodeRevertChangeTool: code.AccessRead,
+	CodeRevertChangeTool: gitlet.AccessRead,
 }
 
 // The listing's page. A listed change is its row and its readiness in a line,
@@ -195,8 +195,8 @@ const (
 // a finding or a review about a kilobyte, a comment about half of one) under
 // half of one tool answer; a page of long rows is cut whole-row at the answer.
 // The findings' page is also at most what one re-anchoring places,
-// code.MaxReanchors, which the constant below holds at compile time, so a
-// page of them is placed by one read (code.Place).
+// gitlet.MaxReanchors, which the constant below holds at compile time, so a
+// page of them is placed by one read (gitlet.Place).
 const (
 	changeRevisionsPage = 25
 	changeFindingsPage  = 25
@@ -207,7 +207,7 @@ const (
 // A page of findings is placed in one read: its size may not pass what one
 // re-anchoring places (a negative constant does not compile), since a larger
 // page would cost a turn a read more than it needs.
-const _ = uint(code.MaxReanchors - changeFindingsPage)
+const _ = uint(gitlet.MaxReanchors - changeFindingsPage)
 
 // ---- a change as these tools name it ------------------------------------ //
 
@@ -216,24 +216,24 @@ const _ = uint(code.MaxReanchors - changeFindingsPage)
 // the work it carries, its version, which a write of it names — never the
 // ids and positions that are Gitlet's own bookkeeping.
 type codeChangeRow struct {
-	Ref         string           `json:"ref"`
-	Title       string           `json:"title" untrusted:"name"`
-	State       code.ChangeState `json:"state"`
-	SourceRef   string           `json:"source_ref"`
-	TargetRef   string           `json:"target_ref"`
-	Head        string           `json:"head"`
-	Revision    int64            `json:"revision"`
-	Owner       string           `json:"owner"`
-	OwnerKind   code.PartyKind   `json:"owner_kind"`
-	WorkItem    *types.WorkItem  `json:"work_item,omitempty"`
-	Access      string           `json:"access,omitempty"`
-	OpenedAt    time.Time        `json:"opened_at"`
-	ClosedAt    time.Time        `json:"closed_at,omitzero"`
-	CloseReason string           `json:"close_reason,omitempty" untrusted:"name"`
-	MergedAt    time.Time        `json:"merged_at,omitzero"`
-	MergedVia   code.MergedVia   `json:"merged_via,omitempty"`
-	MergeOID    string           `json:"merge_oid,omitempty"`
-	Version     int64            `json:"version"`
+	Ref         string             `json:"ref"`
+	Title       string             `json:"title" untrusted:"name"`
+	State       gitlet.ChangeState `json:"state"`
+	SourceRef   string             `json:"source_ref"`
+	TargetRef   string             `json:"target_ref"`
+	Head        string             `json:"head"`
+	Revision    int64              `json:"revision"`
+	Owner       string             `json:"owner"`
+	OwnerKind   gitlet.PartyKind   `json:"owner_kind"`
+	WorkItem    *types.WorkItem    `json:"work_item,omitempty"`
+	Access      string             `json:"access,omitempty"`
+	OpenedAt    time.Time          `json:"opened_at"`
+	ClosedAt    time.Time          `json:"closed_at,omitzero"`
+	CloseReason string             `json:"close_reason,omitempty" untrusted:"name"`
+	MergedAt    time.Time          `json:"merged_at,omitzero"`
+	MergedVia   gitlet.MergedVia   `json:"merged_via,omitempty"`
+	MergeOID    string             `json:"merge_oid,omitempty"`
+	Version     int64              `json:"version"`
 	// Readiness is a live change's merge readiness in one line; the whole
 	// judgment is code_get_change's merge_readiness.
 	Readiness *codeReadyLine `json:"readiness,omitempty"`
@@ -248,7 +248,7 @@ type codeReadyLine struct {
 }
 
 // changeRowOf is s as the change tools name it.
-func changeRowOf(s code.ChangeSummary) codeChangeRow {
+func changeRowOf(s gitlet.ChangeSummary) codeChangeRow {
 	row := codeChangeRow{Ref: s.Ref, Title: s.Title, State: s.State, SourceRef: s.SourceRef,
 		TargetRef: s.TargetRef, Head: s.Head, Revision: s.Revision, Owner: s.Owner, OwnerKind: s.OwnerKind,
 		WorkItem: s.WorkItem, Access: s.Access, OpenedAt: s.OpenedAt, ClosedAt: s.ClosedAt,
@@ -264,11 +264,11 @@ func changeRowOf(s code.ChangeSummary) codeChangeRow {
 // commenter — as a fence names its writer: a seat by its handle, a person by
 // the human seat they hold, and a kind this build does not name resolved
 // against the turn's chart as an unkinded record's is.
-func (r *foreignRead) party(handle string, kind code.PartyKind) provenance.Author {
+func (r *foreignRead) party(handle string, kind gitlet.PartyKind) provenance.Author {
 	switch kind {
-	case code.PartyAgent:
+	case gitlet.PartyAgent:
 		return r.writer(handle, iam.ActorAgent)
-	case code.PartyPerson:
+	case gitlet.PartyPerson:
 		return r.writer(handle, iam.ActorHuman)
 	}
 	return r.writer(handle, "")
@@ -291,12 +291,12 @@ func (t *codeListChanges) Description() string {
 }
 
 func (t *codeListChanges) Parameters() map[string]any {
-	states := make([]string, 0, len(code.ChangeStates()))
-	for _, s := range code.ChangeStates() {
+	states := make([]string, 0, len(gitlet.ChangeStates()))
+	for _, s := range gitlet.ChangeStates() {
 		states = append(states, string(s))
 	}
-	needs := make([]string, 0, len(code.Needs()))
-	for _, n := range code.Needs() {
+	needs := make([]string, 0, len(gitlet.Needs()))
+	for _, n := range gitlet.Needs() {
 		needs = append(needs, string(n))
 	}
 	return map[string]any{
@@ -340,20 +340,20 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	q := code.ReadQuery{Kind: code.ReadChanges, Owner: strings.TrimSpace(argString(args, "owner")),
+	q := gitlet.ReadQuery{Kind: gitlet.ReadChanges, Owner: strings.TrimSpace(argString(args, "owner")),
 		Reviewer: strings.TrimSpace(argString(args, "reviewer")),
 		Cursor:   strings.TrimSpace(argString(args, "cursor")), Fresh: seatRead}
 	work := strings.TrimSpace(argString(args, "work"))
-	if s := code.ChangeState(strings.TrimSpace(argString(args, "state"))); s != "" {
+	if s := gitlet.ChangeState(strings.TrimSpace(argString(args, "state"))); s != "" {
 		if !s.Valid() {
-			return failed(fmt.Sprintf("%s: `state` is one of %s, not %q.", t.Name(), words.Or(code.ChangeStates()),
+			return failed(fmt.Sprintf("%s: `state` is one of %s, not %q.", t.Name(), words.Or(gitlet.ChangeStates()),
 				clip(string(s)))), nil
 		}
 		q.State = s
 	}
-	if n := code.Need(strings.TrimSpace(argString(args, "needs"))); n != "" {
+	if n := gitlet.Need(strings.TrimSpace(argString(args, "needs"))); n != "" {
 		if !n.Valid() {
-			return failed(fmt.Sprintf("%s: `needs` is one of %s, not %q.", t.Name(), words.Or(code.Needs()),
+			return failed(fmt.Sprintf("%s: `needs` is one of %s, not %q.", t.Name(), words.Or(gitlet.Needs()),
 				clip(string(n)))), nil
 		}
 		q.Needs = n
@@ -367,7 +367,7 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// index holds every change the company has, so a listing names what
 		// it walks.
 		return failed(fmt.Sprintf("%s needs to know what to list: a `repo`, a `work` item, a `state`, a "+
-			"`reviewer` or `needs` (%s) — `needs: me` is what waits on you.", t.Name(), words.Or(code.Needs()))), nil
+			"`reviewer` or `needs` (%s) — `needs: me` is what waits on you.", t.Name(), words.Or(gitlet.Needs()))), nil
 	}
 	if work == noWorkItem {
 		// `none` IS A WRITE'S WORD, carrying no item: the work index holds
@@ -377,8 +377,8 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	var (
 		name     string
-		repo     code.RepoRef
-		resolved *code.ReadAnswer
+		repo     gitlet.RepoRef
+		resolved *gitlet.ReadAnswer
 	)
 	if named {
 		var refusal *tools.Result
@@ -410,7 +410,7 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		q.Repo = repo.Name
 	}
 	var (
-		answer code.ReadAnswer
+		answer gitlet.ReadAnswer
 		err    error
 	)
 	if resolved != nil {
@@ -427,14 +427,14 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	rows := make([]codeChangeRow, len(answer.Changes))
 	for i, s := range answer.Changes {
 		if named {
-			if r := t.deps.sameRepo(turn, t.Name(), c.asker, repo, code.RepoRef{ID: s.RepoID}); r != nil {
+			if r := t.deps.sameRepo(turn, t.Name(), c.asker, repo, gitlet.RepoRef{ID: s.RepoID}); r != nil {
 				return *r, nil
 			}
 		}
 		rows[i] = changeRowOf(s)
 	}
 	// A PAGE CUT WHOLE-ROW AT THE ANSWER, resuming after the last change
-	// kept by the walk's own cursor ([code.ReadQuery.ChangesCursor]): a row
+	// kept by the walk's own cursor ([gitlet.ReadQuery.ChangesCursor]): a row
 	// is bounded by the domain's own limits — a title, two branch names, a
 	// close reason and a readiness sentence, each at its longest a few
 	// kilobytes — so one row always fits, and a page of the widest is cut.
@@ -681,7 +681,7 @@ type changeRead struct {
 	// the name resolved to: the turn's resolution, or — zero until then —
 	// the call's own first read's ([changeRead.ask]).
 	name   string
-	repo   code.RepoRef
+	repo   gitlet.RepoRef
 	number int64
 }
 
@@ -689,26 +689,26 @@ type changeRead struct {
 // repository resolved to, or by the call's own before it resolved.
 func (g *changeRead) ref() string {
 	if g.repo.Name == "" {
-		return code.ChangeRef(g.name, g.number)
+		return gitlet.ChangeRef(g.name, g.number)
 	}
-	return code.ChangeRef(g.repo.Name, g.number)
+	return gitlet.ChangeRef(g.repo.Name, g.number)
 }
 
 // ask is q, a read of the repository the call names, asked as its caller. A
 // call that has not resolved the repository yet makes q that RESOLUTION
 // ([CodeDeps.repoRead]): q asks Gitlet for the repository its name
-// resolves to beside its own answer ([code.ReadQuery.Resolve]), at the seat's
+// resolves to beside its own answer ([gitlet.ReadQuery.Resolve]), at the seat's
 // level, and the call keeps it — so the call's first read is ONE
 // linearizable read, where a `repo` read and then q were two barriers on the
 // code log, one after the other. A turn that resolved the name before answers
 // the resolution from its lookups, and q is asked by the name it resolved to.
-func (g *changeRead) ask(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, *tools.Result) {
+func (g *changeRead) ask(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, *tools.Result) {
 	if g.repo.ID == "" {
 		first := q
 		first.Resolve = true
 		repo, answer, refusal := g.deps.repoRead(ctx, g.turn, g.tool, g.c, g.name, &first)
 		if refusal != nil {
-			return code.ReadAnswer{}, refusal
+			return gitlet.ReadAnswer{}, refusal
 		}
 		g.repo = repo
 		if answer != nil {
@@ -719,7 +719,7 @@ func (g *changeRead) ask(ctx context.Context, q code.ReadQuery) (code.ReadAnswer
 	answer, err := g.deps.read(ctx, g.c, q)
 	if err != nil {
 		r := g.deps.failed(ctx, g.turn, g.tool, g.c.asker, g.repo, err)
-		return code.ReadAnswer{}, &r
+		return gitlet.ReadAnswer{}, &r
 	}
 	return answer, nil
 }
@@ -729,16 +729,16 @@ func (g *changeRead) ask(ctx context.Context, q code.ReadQuery) (code.ReadAnswer
 // floored at it — a later read of the call, at or past what its first saw. A
 // change naming another repository than the one the turn resolved the name
 // to is refused as a name taken again between the two ([CodeDeps.sameRepo]).
-func (g *changeRead) read(ctx context.Context, q code.ReadQuery, after statelog.Position) (code.ReadAnswer,
+func (g *changeRead) read(ctx context.Context, q gitlet.ReadQuery, after statelog.Position) (gitlet.ReadAnswer,
 	*tools.Result) {
 
-	q.Kind, q.Change, q.Fresh = code.ReadChange, g.number, seatRead
+	q.Kind, q.Change, q.Fresh = gitlet.ReadChange, g.number, seatRead
 	if !after.IsZero() {
 		q.Fresh = statelog.FloorAt(statelog.ReadSession, after)
 	}
 	answer, refusal := g.ask(ctx, q)
 	if refusal != nil {
-		return code.ReadAnswer{}, refusal
+		return gitlet.ReadAnswer{}, refusal
 	}
 	answered := ""
 	switch {
@@ -747,43 +747,43 @@ func (g *changeRead) read(ctx context.Context, q code.ReadQuery, after statelog.
 	case answer.ChangeBrief != nil:
 		answered = answer.ChangeBrief.RepoID
 	}
-	if r := g.deps.sameRepo(g.turn, g.tool, g.c.asker, g.repo, code.RepoRef{ID: answered}); r != nil {
-		return code.ReadAnswer{}, r
+	if r := g.deps.sameRepo(g.turn, g.tool, g.c.asker, g.repo, gitlet.RepoRef{ID: answered}); r != nil {
+		return gitlet.ReadAnswer{}, r
 	}
 	return answer, nil
 }
 
 // head is the change IN BRIEF and its head revision — its row beside a first
-// page of its revisions, one revision long ([code.ReadQuery.Brief]) — and the
+// page of its revisions, one revision long ([gitlet.ReadQuery.Brief]) — and the
 // position it was read at: what every read that acts on the change's state,
 // its revision, its head or its branches asks, none of which reads its
 // description, its authors, its conversation, its mergeability or its
 // readiness.
-func (g *changeRead) head(ctx context.Context, after statelog.Position) (*code.ChangeSummary, code.RevisionRow,
+func (g *changeRead) head(ctx context.Context, after statelog.Position) (*gitlet.ChangeSummary, gitlet.RevisionRow,
 	statelog.Position, *tools.Result) {
 
-	answer, refusal := g.read(ctx, code.ReadQuery{Limit: 1, Brief: true}, after)
+	answer, refusal := g.read(ctx, gitlet.ReadQuery{Limit: 1, Brief: true}, after)
 	if refusal != nil {
-		return nil, code.RevisionRow{}, statelog.Position{}, refusal
+		return nil, gitlet.RevisionRow{}, statelog.Position{}, refusal
 	}
 	if answer.ChangeBrief == nil || len(answer.Revisions) != 1 {
 		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's first page in brief with %d "+
 			"revisions and row %v", g.ref(), len(answer.Revisions), answer.ChangeBrief != nil),
 			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
-		return nil, code.RevisionRow{}, statelog.Position{}, &r
+		return nil, gitlet.RevisionRow{}, statelog.Position{}, &r
 	}
 	return answer.ChangeBrief, answer.Revisions[0], answer.Position, nil
 }
 
 // row is the change's ROW ALONE — in brief and with no revision
-// ([code.ReadQuery.Brief] beside DetailOnly), one seek of its number on
+// ([gitlet.ReadQuery.Brief] beside DetailOnly), one seek of its number on
 // Gitlet — and the position it was read at, at the seat's level: what a
 // read that needs nothing of the change but its state, its branches, its id
 // and its number asks, which an executor's launch on a change is
 // ([CodeDeps.runChange]). Its detail would read its description, authors,
 // conversation and mergeability and judge its readiness, all of it dropped.
-func (g *changeRead) row(ctx context.Context) (*code.ChangeSummary, statelog.Position, *tools.Result) {
-	answer, refusal := g.read(ctx, code.ReadQuery{Brief: true, DetailOnly: true}, statelog.Position{})
+func (g *changeRead) row(ctx context.Context) (*gitlet.ChangeSummary, statelog.Position, *tools.Result) {
+	answer, refusal := g.read(ctx, gitlet.ReadQuery{Brief: true, DetailOnly: true}, statelog.Position{})
 	if refusal != nil {
 		return nil, statelog.Position{}, refusal
 	}
@@ -800,18 +800,18 @@ func (g *changeRead) row(ctx context.Context) (*code.ChangeSummary, statelog.Pos
 // read at: what a read that presents the change's readiness, or acts on it,
 // asks, at the price of its description, its authors, its conversation, its
 // mergeability and its readiness judged ([changeRead.head] reads none).
-func (g *changeRead) detail(ctx context.Context, after statelog.Position) (*code.ChangeDetail, code.RevisionRow,
+func (g *changeRead) detail(ctx context.Context, after statelog.Position) (*gitlet.ChangeDetail, gitlet.RevisionRow,
 	statelog.Position, *tools.Result) {
 
-	answer, refusal := g.read(ctx, code.ReadQuery{Limit: 1}, after)
+	answer, refusal := g.read(ctx, gitlet.ReadQuery{Limit: 1}, after)
 	if refusal != nil {
-		return nil, code.RevisionRow{}, statelog.Position{}, refusal
+		return nil, gitlet.RevisionRow{}, statelog.Position{}, refusal
 	}
 	if answer.Change == nil || len(answer.Revisions) != 1 {
 		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's first page with %d revisions "+
 			"and detail %v", g.ref(), len(answer.Revisions), answer.Change != nil),
 			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
-		return nil, code.RevisionRow{}, statelog.Position{}, &r
+		return nil, gitlet.RevisionRow{}, statelog.Position{}, &r
 	}
 	return answer.Change, answer.Revisions[0], answer.Position, nil
 }
@@ -819,38 +819,38 @@ func (g *changeRead) detail(ctx context.Context, after statelog.Position) (*code
 // revision is revision n of a change whose latest is latest, read at session
 // floored at after: the page of its revisions that resumes after n+1, one
 // revision long — refused where the change has fewer than n.
-func (g *changeRead) revision(ctx context.Context, n, latest int64, after statelog.Position) (code.RevisionRow,
+func (g *changeRead) revision(ctx context.Context, n, latest int64, after statelog.Position) (gitlet.RevisionRow,
 	*tools.Result) {
 
 	if n > latest {
 		r := failed(fmt.Sprintf("%s: %s has %d %s, numbered from 1, and no revision %d.", g.tool, g.ref(), latest,
 			plural(latest, "revision", "revisions"), n))
-		return code.RevisionRow{}, &r
+		return gitlet.RevisionRow{}, &r
 	}
-	answer, refusal := g.read(ctx, code.ReadQuery{Cursor: code.RevisionRow{N: n + 1}.Cursor(), Limit: 1}, after)
+	answer, refusal := g.read(ctx, gitlet.ReadQuery{Cursor: gitlet.RevisionRow{N: n + 1}.Cursor(), Limit: 1}, after)
 	if refusal != nil {
-		return code.RevisionRow{}, refusal
+		return gitlet.RevisionRow{}, refusal
 	}
 	if len(answer.Revisions) != 1 || answer.Revisions[0].N != n {
 		r := faulted(ctx, g.tool, fmt.Errorf("builtin: Gitlet answered %s's revision %d with %d revisions",
 			g.ref(), n, len(answer.Revisions)), fmt.Sprintf("%s could not read revision %d of %s: %s.", g.tool, n,
 			g.ref(), faultSaid))
-		return code.RevisionRow{}, &r
+		return gitlet.RevisionRow{}, &r
 	}
 	return answer.Revisions[0], nil
 }
 
 // revisionAt is [changeRead.revision] as the code domain reads a change's
-// revisions beside each other ([code.ChangeRevisions]): each of a change whose
+// revisions beside each other ([gitlet.ChangeRevisions]): each of a change whose
 // latest is latest, read at session floored at after, its refusal carried as
 // an error ([refusedRead]).
 func (g *changeRead) revisionAt(ctx context.Context, latest int64, after statelog.Position) func(int64) (
-	code.RevisionRow, error) {
+	gitlet.RevisionRow, error) {
 
-	return func(n int64) (code.RevisionRow, error) {
+	return func(n int64) (gitlet.RevisionRow, error) {
 		rev, refusal := g.revision(ctx, n, latest, after)
 		if refusal != nil {
-			return code.RevisionRow{}, refusedRead{refusal}
+			return gitlet.RevisionRow{}, refusedRead{refusal}
 		}
 		return rev, nil
 	}
@@ -865,10 +865,10 @@ func plural(n int64, one, many string) string {
 }
 
 // floor is what a read by object id of revs is asked with ([changeRead]'s
-// doc): the code domain's one rule ([code.ObjectFloor]) over this node's own
+// doc): the code domain's one rule ([gitlet.ObjectFloor]) over this node's own
 // floor on the repository.
-func (g *changeRead) floor(revs ...code.RevisionRow) statelog.Freshness {
-	return code.ObjectFloor(g.deps.Code.FloorOf(g.repo.ID), revs...)
+func (g *changeRead) floor(revs ...gitlet.RevisionRow) statelog.Freshness {
+	return gitlet.ObjectFloor(g.deps.Code.FloorOf(g.repo.ID), revs...)
 }
 
 // ---- summary --------------------------------------------------------------- //
@@ -886,9 +886,9 @@ type codeChangeDetail struct {
 // push moved its head, from the revision they first wrote — whose approval
 // never counts toward its merge.
 type codeAuthor struct {
-	Author        string         `json:"author"`
-	Kind          code.PartyKind `json:"kind"`
-	FirstRevision int64          `json:"first_revision"`
+	Author        string           `json:"author"`
+	Kind          gitlet.PartyKind `json:"kind"`
+	FirstRevision int64            `json:"first_revision"`
 }
 
 // codeConversation is what a change's conversation counts.
@@ -907,7 +907,7 @@ type codeRevision struct {
 	N          int64              `json:"n"`
 	Head       string             `json:"head"`
 	Pusher     string             `json:"pusher"`
-	PusherKind code.PartyKind     `json:"pusher_kind"`
+	PusherKind gitlet.PartyKind   `json:"pusher_kind"`
 	At         time.Time          `json:"at"`
 	Facts      *codeRevisionFacts `json:"facts,omitempty"`
 }
@@ -935,7 +935,7 @@ type codeChangeSummary struct {
 }
 
 // detailOf is d as the summary names it.
-func detailOf(d *code.ChangeDetail) *codeChangeDetail {
+func detailOf(d *gitlet.ChangeDetail) *codeChangeDetail {
 	out := &codeChangeDetail{codeChangeRow: changeRowOf(d.ChangeSummary), Description: d.Body,
 		Authors: make([]codeAuthor, len(d.Authors))}
 	for i, a := range d.Authors {
@@ -947,7 +947,7 @@ func detailOf(d *code.ChangeDetail) *codeChangeDetail {
 
 // conversationOf is what a change's conversation counts, nil for a change
 // nobody has discussed.
-func conversationOf(v *code.ConversationRow) *codeConversation {
+func conversationOf(v *gitlet.ConversationRow) *codeConversation {
 	if v == nil {
 		return nil
 	}
@@ -956,7 +956,7 @@ func conversationOf(v *code.ConversationRow) *codeConversation {
 }
 
 // revisionOf is r as the summary names it.
-func revisionOf(r code.RevisionRow) codeRevision {
+func revisionOf(r gitlet.RevisionRow) codeRevision {
 	out := codeRevision{N: r.N, Head: r.Head, Pusher: r.Pusher, PusherKind: r.PusherKind, At: r.At}
 	if f := r.Facts; f != nil {
 		out.Facts = &codeRevisionFacts{TargetRef: f.TargetRef, TargetOID: f.TargetOID, Base: f.BaseOID,
@@ -969,7 +969,7 @@ func revisionOf(r code.RevisionRow) codeRevision {
 // page at a time; a later page, after the cursor of the one before, carries
 // its revisions alone.
 func (g *changeRead) summary(ctx context.Context, cursor string) (tools.Result, error) {
-	answer, refusal := g.read(ctx, code.ReadQuery{Cursor: cursor, Limit: changeRevisionsPage}, statelog.Position{})
+	answer, refusal := g.read(ctx, gitlet.ReadQuery{Cursor: cursor, Limit: changeRevisionsPage}, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -990,7 +990,7 @@ func (g *changeRead) summary(ctx context.Context, cursor string) (tools.Result, 
 		}
 		// NONE KEPT BESIDE THE DETAIL: the next page starts at this one's
 		// first revision, a page of revisions alone.
-		return code.RevisionRow{N: answer.Revisions[0].N + 1}.Cursor()
+		return gitlet.RevisionRow{N: answer.Revisions[0].N + 1}.Cursor()
 	}
 	build := func(k int) (*foreignRead, any) {
 		read := newForeignRead(g.turn, g.c.asker.Seat)
@@ -1028,29 +1028,29 @@ func (g *changeRead) summary(ctx context.Context, cursor string) (tools.Result, 
 // change no longer live, which merges nothing — its head's recorded merge into
 // its target, and its conversation's counts.
 type codeChangeReadiness struct {
-	Repo         string            `json:"repo"`
-	Change       string            `json:"change"`
-	State        code.ChangeState  `json:"state"`
-	Revision     int64             `json:"revision"`
-	Head         string            `json:"head"`
-	TargetRef    string            `json:"target_ref"`
-	Readiness    *code.Readiness   `json:"readiness,omitempty"`
-	Mergeability *codeMergeability `json:"mergeability,omitempty"`
-	Conversation *codeConversation `json:"conversation,omitempty"`
-	Position     statelog.Position `json:"position"`
+	Repo         string             `json:"repo"`
+	Change       string             `json:"change"`
+	State        gitlet.ChangeState `json:"state"`
+	Revision     int64              `json:"revision"`
+	Head         string             `json:"head"`
+	TargetRef    string             `json:"target_ref"`
+	Readiness    *gitlet.Readiness  `json:"readiness,omitempty"`
+	Mergeability *codeMergeability  `json:"mergeability,omitempty"`
+	Conversation *codeConversation  `json:"conversation,omitempty"`
+	Position     statelog.Position  `json:"position"`
 }
 
 // codeMergeability is whether a revision merged cleanly into its target, as
 // its home recorded it: the revision, the target tip it merged into, and the
 // paths that conflict, the rest counted.
 type codeMergeability struct {
-	Revision         int64           `json:"revision"`
-	TargetRef        string          `json:"target_ref"`
-	TargetOID        string          `json:"target_oid"`
-	State            code.MergeState `json:"state"`
-	Conflicts        []string        `json:"conflicts,omitempty"`
-	ConflictsOmitted int64           `json:"conflicts_omitted,omitempty"`
-	At               time.Time       `json:"at"`
+	Revision         int64             `json:"revision"`
+	TargetRef        string            `json:"target_ref"`
+	TargetOID        string            `json:"target_oid"`
+	State            gitlet.MergeState `json:"state"`
+	Conflicts        []string          `json:"conflicts,omitempty"`
+	ConflictsOmitted int64             `json:"conflicts_omitted,omitempty"`
+	At               time.Time         `json:"at"`
 }
 
 // readiness answers whether the change may merge.
@@ -1098,14 +1098,14 @@ type codeChangeDiff struct {
 	Change        string `json:"change"`
 	Revision      int64  `json:"revision"`
 	SinceRevision int64  `json:"since_revision,omitempty"`
-	code.GitAnswer
+	gitlet.GitAnswer
 }
 
 // diff answers a revision's files or one file's patch: from the revision's
 // recorded base to its head, or — since an earlier revision — the interdiff
 // of the two, kept to the files either touches (gitlet.md, "What changed
 // between two revisions") — the two revisions read at once once the head is
-// ([code.ChangeRevisions]), as the API's change question reads them.
+// ([gitlet.ChangeRevisions]), as the API's change question reads them.
 func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, error) {
 	d, head, first, refusal := g.head(ctx, statelog.Position{})
 	if refusal != nil {
@@ -1121,7 +1121,7 @@ func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, e
 		return failed(fmt.Sprintf("%s: `since_revision` is a revision before %d, the one read.", g.tool,
 			asked)), nil
 	}
-	rev, since, err := code.ChangeRevisions(head, call.revision, call.since,
+	rev, since, err := gitlet.ChangeRevisions(head, call.revision, call.since,
 		g.revisionAt(ctx, d.Revision, first))
 	if refusal = refusedIn(err); refusal != nil {
 		return *refusal, nil
@@ -1131,7 +1131,7 @@ func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, e
 		return faulted(ctx, g.tool, err, fmt.Sprintf("%s could not read %s's revisions: %s.", g.tool, g.ref(),
 			faultSaid)), nil
 	}
-	revs := []code.RevisionRow{rev}
+	revs := []gitlet.RevisionRow{rev}
 	if since != nil {
 		revs = append(revs, *since)
 	}
@@ -1140,7 +1140,7 @@ func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, e
 			return *refusal, nil
 		}
 	}
-	q, err := code.RevisionDiff(g.repo.ID, rev, since, call.file, call.fileB64)
+	q, err := gitlet.RevisionDiff(g.repo.ID, rev, since, call.file, call.fileB64)
 	if err != nil {
 		// UNREACHABLE past recorded's refusals and changeCallArgs' order of
 		// the two revisions, so this node's own fault, never the caller's.
@@ -1166,27 +1166,27 @@ func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, e
 }
 
 // recorded refuses a revision whose files cannot be read from its facts
-// ([code.RevisionRow.FilesGap]): none recorded — a live change's home reads
+// ([gitlet.RevisionRow.FilesGap]): none recorded — a live change's home reads
 // them within a minute of the push, and a change merged or closed before it
 // did never has them — or, where based, none of a base to diff its head from:
 // a history that shares no commit with its target, whose change is every file
 // of its head.
-func (g *changeRead) recorded(d *code.ChangeSummary, r code.RevisionRow, based bool) *tools.Result {
+func (g *changeRead) recorded(d *gitlet.ChangeSummary, r gitlet.RevisionRow, based bool) *tools.Result {
 	switch r.FilesGap(d.State, based) {
-	case code.FilesPending:
+	case gitlet.FilesPending:
 		// A WAIT CLEARS IT ([waits]): the home records the facts on its own,
 		// within a minute of the push, and nothing a person does is needed.
 		res := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s: revision %d of %s has no "+
 			"recorded base yet: the repository's home Gitlet node records each revision's facts against its "+
 			"target within a minute of its push. Try again shortly.", g.tool, r.N, g.ref()))
 		return &res
-	case code.FilesUnrecorded:
+	case gitlet.FilesUnrecorded:
 		res := refused(tools.RefusalNotFound, fmt.Sprintf("%s: %s was %s before its home recorded revision %d's "+
 			"base against its target, so it has none to read the revision's files from: read the commits it "+
 			"brought with %s from its head %s, or compare that head with a commit of your choosing with %s.",
 			g.tool, g.ref(), d.State, r.N, CodeLogTool, r.Head, CodeCompareTool))
 		return &res
-	case code.FilesUnrelated:
+	case gitlet.FilesUnrelated:
 		res := refused(tools.RefusalNotFound, fmt.Sprintf("%s: revision %d of %s shares no history with %s, so "+
 			"its change is every file of its head: read them with %s at %s.", g.tool, r.N, g.ref(),
 			r.Facts.TargetRef, CodeReadTool, r.Head))
@@ -1213,30 +1213,30 @@ type codeChangeFindings struct {
 // they were read in — how much it weighs, what it says and suggests, where it
 // stands, and AT, where its lines are in the revision asked about.
 type codeFinding struct {
-	ID             string            `json:"id"`
-	ReviewID       string            `json:"review_id"`
-	Raiser         string            `json:"raiser"`
-	RaiserKind     code.PartyKind    `json:"raiser_kind"`
-	Revision       int64             `json:"revision"`
-	Path           string            `json:"path"`
-	Side           code.Side         `json:"side"`
-	LineStart      int               `json:"line_start"`
-	LineEnd        int               `json:"line_end"`
-	CommitOID      string            `json:"commit_oid"`
-	BlobOID        string            `json:"blob_oid"`
-	Severity       code.Severity     `json:"severity"`
-	Category       code.Category     `json:"category"`
-	Title          string            `json:"title" untrusted:"name"`
-	Body           string            `json:"body,omitempty" untrusted:"fence"`
-	Suggestion     *string           `json:"suggestion,omitempty"`
-	State          code.FindingState `json:"state"`
-	ResolutionNote string            `json:"resolution_note,omitempty" untrusted:"name"`
-	ResolvedBy     string            `json:"resolved_by,omitempty"`
-	ResolvedCommit string            `json:"resolved_commit,omitempty"`
+	ID             string              `json:"id"`
+	ReviewID       string              `json:"review_id"`
+	Raiser         string              `json:"raiser"`
+	RaiserKind     gitlet.PartyKind    `json:"raiser_kind"`
+	Revision       int64               `json:"revision"`
+	Path           string              `json:"path"`
+	Side           gitlet.Side         `json:"side"`
+	LineStart      int                 `json:"line_start"`
+	LineEnd        int                 `json:"line_end"`
+	CommitOID      string              `json:"commit_oid"`
+	BlobOID        string              `json:"blob_oid"`
+	Severity       gitlet.Severity     `json:"severity"`
+	Category       gitlet.Category     `json:"category"`
+	Title          string              `json:"title" untrusted:"name"`
+	Body           string              `json:"body,omitempty" untrusted:"fence"`
+	Suggestion     *string             `json:"suggestion,omitempty"`
+	State          gitlet.FindingState `json:"state"`
+	ResolutionNote string              `json:"resolution_note,omitempty" untrusted:"name"`
+	ResolvedBy     string              `json:"resolved_by,omitempty"`
+	ResolvedCommit string              `json:"resolved_commit,omitempty"`
 	// At is where its lines are in the revision the answer is of
-	// ([code.FindingPlace]); none for a finding on the old side of a revision
+	// ([gitlet.FindingPlace]); none for a finding on the old side of a revision
 	// whose base its home has not recorded yet.
-	At *code.FindingPlace `json:"at,omitempty"`
+	At *gitlet.FindingPlace `json:"at,omitempty"`
 }
 
 // findings answers a page of the change's findings, each placed in the
@@ -1246,7 +1246,7 @@ type codeFinding struct {
 // page was raised on; then ONE re-anchoring of every finding raised on
 // another revision than the one asked about.
 func (g *changeRead) findings(ctx context.Context, call changeCall) (tools.Result, error) {
-	page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartFindings, Cursor: call.cursor,
+	page, refusal := g.read(ctx, gitlet.ReadQuery{Part: gitlet.PartFindings, Cursor: call.cursor,
 		Limit: changeFindingsPage}, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
@@ -1316,18 +1316,18 @@ func (g *changeRead) findings(ctx context.Context, call changeCall) (tools.Resul
 
 // place is where each finding of findings is in revision rev of a change whose
 // head revision is head, by the finding's id: what the rows say without a read
-// ([code.PlaceFindings]), and every other finding by the re-anchoring reads
-// the code domain's rule asks ([code.Place]) — one, for a page of this tool's
+// ([gitlet.PlaceFindings]), and every other finding by the re-anchoring reads
+// the code domain's rule asks ([gitlet.Place]) — one, for a page of this tool's
 // size — floored at the head revision — the latest any finding was raised on
 // — and at rev's own head and base. A finding on the old side of a revision
 // whose base is not yet recorded is in neither, unplaced.
-func (g *changeRead) place(ctx context.Context, head, rev code.RevisionRow,
-	findings []code.FindingRow) (map[string]code.FindingPlace, *tools.Result) {
+func (g *changeRead) place(ctx context.Context, head, rev gitlet.RevisionRow,
+	findings []gitlet.FindingRow) (map[string]gitlet.FindingPlace, *tools.Result) {
 
 	fresh := g.floor(head, rev)
-	placed, err := code.Place(rev, findings, func(reanchor *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
-		answer, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, code.GitQuery{
-			Kind: code.GitReanchor, RepoID: g.repo.ID, Fresh: fresh, Reanchor: reanchor})
+	placed, err := gitlet.Place(rev, findings, func(reanchor *gitlet.ReanchorQuery) (*gitlet.ReanchorAnswer, error) {
+		answer, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, gitlet.GitQuery{
+			Kind: gitlet.GitReanchor, RepoID: g.repo.ID, Fresh: fresh, Reanchor: reanchor})
 		if refusal != nil {
 			return nil, refusedRead{refusal}
 		}
@@ -1346,7 +1346,7 @@ func (g *changeRead) place(ctx context.Context, head, rev code.RevisionRow,
 
 // refusedRead carries a read's refusal, already composed as this tool's
 // answer, through the code domain's helpers, which take a caller's reads as
-// functions answering errors ([code.Place]); [refusedIn] takes it back out.
+// functions answering errors ([gitlet.Place]); [refusedIn] takes it back out.
 type refusedRead struct{ r *tools.Result }
 
 func (e refusedRead) Error() string { return e.r.Output }
@@ -1376,20 +1376,20 @@ type codeChangeReviews struct {
 // codeReview is one review: the revision it judged, its reviewer, its
 // verdict and what it says, and how many findings it raised.
 type codeReview struct {
-	ID           string         `json:"id"`
-	Revision     int64          `json:"revision"`
-	Reviewer     string         `json:"reviewer"`
-	ReviewerKind code.PartyKind `json:"reviewer_kind"`
-	Verdict      code.Verdict   `json:"verdict"`
-	Summary      string         `json:"summary,omitempty" untrusted:"fence"`
-	Findings     int64          `json:"findings"`
-	At           time.Time      `json:"at"`
+	ID           string           `json:"id"`
+	Revision     int64            `json:"revision"`
+	Reviewer     string           `json:"reviewer"`
+	ReviewerKind gitlet.PartyKind `json:"reviewer_kind"`
+	Verdict      gitlet.Verdict   `json:"verdict"`
+	Summary      string           `json:"summary,omitempty" untrusted:"fence"`
+	Findings     int64            `json:"findings"`
+	At           time.Time        `json:"at"`
 }
 
 // reviews answers a page of the change's reviews, each summary its reviewer's
 // words.
 func (g *changeRead) reviews(ctx context.Context, cursor string) (tools.Result, error) {
-	page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartReviews, Cursor: cursor, Limit: changeReviewsPage},
+	page, refusal := g.read(ctx, gitlet.ReadQuery{Part: gitlet.PartReviews, Cursor: cursor, Limit: changeReviewsPage},
 		statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
@@ -1430,22 +1430,22 @@ type codeChangeComments struct {
 // the line a thread's first comment points at, whether its thread is
 // resolved, and what it says.
 type codeComment struct {
-	ID         string              `json:"id"`
-	ThreadID   string              `json:"thread_id"`
-	ParentID   string              `json:"parent_id,omitempty"`
-	FindingID  string              `json:"finding_id,omitempty"`
-	Author     string              `json:"author"`
-	AuthorKind code.PartyKind      `json:"author_kind"`
-	Anchor     *code.CommentAnchor `json:"anchor,omitempty"`
-	Resolved   bool                `json:"resolved,omitempty"`
-	ResolvedBy string              `json:"resolved_by,omitempty"`
-	Body       string              `json:"body" untrusted:"fence"`
-	At         time.Time           `json:"at"`
+	ID         string                `json:"id"`
+	ThreadID   string                `json:"thread_id"`
+	ParentID   string                `json:"parent_id,omitempty"`
+	FindingID  string                `json:"finding_id,omitempty"`
+	Author     string                `json:"author"`
+	AuthorKind gitlet.PartyKind      `json:"author_kind"`
+	Anchor     *gitlet.CommentAnchor `json:"anchor,omitempty"`
+	Resolved   bool                  `json:"resolved,omitempty"`
+	ResolvedBy string                `json:"resolved_by,omitempty"`
+	Body       string                `json:"body" untrusted:"fence"`
+	At         time.Time             `json:"at"`
 }
 
 // comments answers a page of the change's comments, each its writer's words.
 func (g *changeRead) comments(ctx context.Context, cursor string) (tools.Result, error) {
-	page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartComments, Cursor: cursor,
+	page, refusal := g.read(ctx, gitlet.ReadQuery{Part: gitlet.PartComments, Cursor: cursor,
 		Limit: changeCommentsPage}, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil

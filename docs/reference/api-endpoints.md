@@ -7711,7 +7711,7 @@ is about** and **what would make the same request land**:
 A refusal of one of [Gitlet's](../concepts/gitlet.md) writes also
 names Gitlet's own word for it in **`refusal`** — `head_moved`,
 `target_moving`, `queue_full`, `gate_unmet`, the write's `conflict` and the
-rest of each family (`code.MergeRefusals`, the write and change refusals) —
+rest of each family (`gitlet.MergeRefusals`, the write and change refusals) —
 beside the class in `error`. Several share one class: a change whose head
 moved and a train whose base moved are both `stale_version`, a target still
 moving and a full queue both `conflict`. So a client that answers each in its

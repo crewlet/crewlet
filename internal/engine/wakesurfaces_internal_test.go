@@ -16,13 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
@@ -126,10 +126,10 @@ func wakeSurfaces() map[string]wakeSurface {
 			"monitor.triggered", map[string]string{
 				datadog.RoutedViaField: datadog.RoutedViaTag,
 			}), provenance.SourceAlert},
-		code.Source: {code.Prompt{}, routedWake(code.Source, code.Prompt{},
-			string(code.OpComment), map[string]string{
-				code.MetaVia: string(code.ReasonMention), code.MetaChangeID: "c-1",
-				code.MetaChangeRef: "web!42", code.MetaRepo: "web",
+		gitlet.Source: {gitlet.Prompt{}, routedWake(gitlet.Source, gitlet.Prompt{},
+			string(gitlet.OpComment), map[string]string{
+				gitlet.MetaVia: string(gitlet.ReasonMention), gitlet.MetaChangeID: "c-1",
+				gitlet.MetaChangeRef: "web!42", gitlet.MetaRepo: "web",
 				notify.BodySourceField: string(provenance.SourceChangeComment),
 				notify.BodyAuthorField: "ada", notify.BodyAuthorKindField: "human",
 			}), provenance.SourceChangeComment},

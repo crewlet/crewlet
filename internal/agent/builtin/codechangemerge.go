@@ -10,8 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -21,7 +21,7 @@ import (
 
 // THE MERGE: code_merge_change merges a live change into its target by its
 // method, from the head its caller read, as ONE ENGINE WRITE
-// (code.WriteMergeChange) the repository's Gitlet node builds and lands as one
+// (gitlet.WriteMergeChange) the repository's Gitlet node builds and lands as one
 // merge record its committer decides (M5-D10, M5-D11) — or, on a target whose
 // gate requires a check, puts in that target's queue (M5-D9). It answers one
 // of three things:
@@ -54,7 +54,7 @@ import (
 //
 // `delete_branch` is the caller's; unsaid, a source in a seat's namespace
 // (refs/heads/seats/…) is deleted with the merge unless a gate over the
-// target keeps it (delete_source: none, code.GateRules.KeepsSource), and every
+// target keeps it (delete_source: none, gitlet.GateRules.KeepsSource), and every
 // other source is kept (Q4): a seat's branch is the engine's working copy,
 // and a person's is theirs. The default is the Gitlet node's to decide, on the
 // snapshot it judges the merge on ([deleteSource]), and its answer says what
@@ -62,7 +62,7 @@ import (
 //
 // THE DEQUEUE: code_dequeue_change takes a change's live entry out of its
 // target's queue — the entry the call's one read of the change names
-// ([entryOf]) — by one dequeue record its committer decides (code.Dequeue),
+// ([entryOf]) — by one dequeue record its committer decides (gitlet.Dequeue),
 // at the ask of its enqueuer, the change's owner, a maintainer of the
 // repository or a person.
 
@@ -99,7 +99,7 @@ func (t *codeMergeChange) Parameters() map[string]any {
 			"repo":          changeRepoParam(),
 			"change":        changeParam(),
 			"expected_head": map[string]any{"type": "string", "description": "The change's head, as you read it."},
-			"method": map[string]any{"type": "string", "enum": spelled(code.MergeMethods()),
+			"method": map[string]any{"type": "string", "enum": spelled(gitlet.MergeMethods()),
 				"description": "A merge commit (the default), one squashed commit, or a fast-forward of the target."},
 			"delete_branch": map[string]any{"type": "boolean", "description": "Delete the change's branch as it " +
 				"merges. Unsaid: a seat's branch is deleted unless the target's rule keeps it; any other is kept."},
@@ -133,13 +133,13 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("%s needs `expected_head`: the change's head as %s answered it, a whole commit "+
 			"id — the merge lands the head you read, and no later one.", tool, CodeGetChangeTool)), nil
 	}
-	method := code.MergeMethod(strings.TrimSpace(argString(args, "method")))
+	method := gitlet.MergeMethod(strings.TrimSpace(argString(args, "method")))
 	if method == "" {
-		method = code.MergeMethodMerge
+		method = gitlet.MergeMethodMerge
 	}
 	if !method.Valid() {
 		return failed(fmt.Sprintf("%s: `method` %q is not one of %s.", tool, method,
-			words.Or(code.MergeMethods()))), nil
+			words.Or(gitlet.MergeMethods()))), nil
 	}
 	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
@@ -151,12 +151,12 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// change_not_open its committer would answer, in the class and
 		// under the word every other merge refusal takes.
 		return mergeRefused(tool, cv.g.ref(), strings.TrimPrefix(cv.change.TargetRef, branchRoot),
-			code.MergeRefusalChangeNotOpen, fmt.Sprintf("%s is %s, and only a live change merges", cv.g.ref(),
+			gitlet.MergeRefusalChangeNotOpen, fmt.Sprintf("%s is %s, and only a live change merges", cv.g.ref(),
 				cv.change.State), nil), nil
 	}
 	repo := cv.g.repo
 	op := opIDFor(cv.g.c.actor, tool, mergeVerb, repo.ID, args)
-	w := code.EngineWrite{Kind: code.WriteMergeChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.TargetRef, ExpectedHead: head,
 		Change: cv.change.Number, Method: method, DeleteSource: deleteSource(args),
 		Override: strings.TrimSpace(argString(args, "override_reason")), CloseTask: argBool(args, "close_task"),
@@ -175,7 +175,7 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch {
 	case m != nil && m.Refusal != "":
 		return mergeRefused(tool, cv.g.ref(), out.Target, m.Refusal, m.Detail, m.Unmet), nil
-	case res.Refusal == code.WriteConflict:
+	case res.Refusal == gitlet.WriteConflict:
 		return conflictedWrite(ctx, turn, cv.g.c, tool, codeBranchAnswer{Repo: repo.Name, RenamedTo: repo.Redirect,
 			RedirectUntil: repo.RedirectUntil, Branch: out.Target, OpID: out.OpID}, res)
 	case res.Refusal != "":
@@ -241,7 +241,7 @@ type codeMergeAnswer struct {
 // default — a seat's branch deleted unless a gate over the target keeps it,
 // and no other ([codeMergeChange]'s doc) — is the Gitlet node's to decide, on
 // the snapshot it judges the merge on, reading the gate it reads for the
-// merge anyway (code.EngineWrite.DeleteSource), so the call reads nothing
+// merge anyway (gitlet.EngineWrite.DeleteSource), so the call reads nothing
 // for it.
 func deleteSource(args map[string]any) *bool {
 	if _, said := args["delete_branch"]; !said {
@@ -307,11 +307,11 @@ func (t *codeMergeChange) closeTask(ctx context.Context, cv conversing, op strin
 // change does not meet yet as not_ready, naming every unmet precondition and
 // whom it waits on. A person's words ride beside the sentence for a model
 // wherever the catalog has them ([mergeRefusalWords], [caveat.MergeGateUnmet]).
-func mergeRefused(tool, change, target string, refusal code.MergeRefusal, detail string,
-	unmet []code.Precondition) tools.Result {
+func mergeRefused(tool, change, target string, refusal gitlet.MergeRefusal, detail string,
+	unmet []gitlet.Precondition) tools.Result {
 
 	cause := writeRefusalError(string(refusal), detail)
-	if refusal != code.MergeRefusalGateUnmet {
+	if refusal != gitlet.MergeRefusalGateUnmet {
 		r := refusedBy(mergeRefusalClass(refusal), cause, fmt.Sprintf("%s: %s (%s).", tool, detail, refusal))
 		if words := mergeRefusalWords(tool, refusal); !words.IsZero() {
 			r = toPerson(r, words)
@@ -339,7 +339,7 @@ func mergeRefused(tool, change, target string, refusal code.MergeRefusal, detail
 // gateConditions is unmet as the refusal catalog takes it: each precondition's
 // kind and the handles of whoever it waits on, and nothing of its sentence,
 // which is written for a model.
-func gateConditions(unmet []code.Precondition) []caveat.GateCondition {
+func gateConditions(unmet []gitlet.Precondition) []caveat.GateCondition {
 	out := make([]caveat.GateCondition, 0, len(unmet))
 	for _, p := range unmet {
 		c := caveat.GateCondition{Kind: string(p.Kind)}
@@ -359,13 +359,13 @@ func gateConditions(unmet []code.Precondition) []caveat.GateCondition {
 // [caveat.MergeGateUnmet]. Every other merge refusal is answered in the
 // controls' own words on the change page, by the host's word beside its class,
 // and in its code's own sentence everywhere else: the floor ADR-0060 sets.
-func mergeRefusalWords(tool string, refusal code.MergeRefusal) caveat.Refusal {
+func mergeRefusalWords(tool string, refusal gitlet.MergeRefusal) caveat.Refusal {
 	switch refusal {
-	case code.MergeRefusalSourceRefused:
+	case gitlet.MergeRefusalSourceRefused:
 		return caveat.MergeWouldDeleteAKeptBranch()
-	case code.MergeRefusalRepoSize:
+	case gitlet.MergeRefusalRepoSize:
 		return caveat.RepositoryFull()
-	case code.MergeRefusalNotPermitted:
+	case gitlet.MergeRefusalNotPermitted:
 		if tool == CodeDequeueChangeTool {
 			return caveat.QueueEntryNotYours()
 		}
@@ -418,33 +418,33 @@ func mergeRefusalWords(tool string, refusal code.MergeRefusal) caveat.Refusal {
 // object refuses it, and the same request lands once somebody changes that
 // (or, for a change merged, never). Every value is listed, so a refusal the
 // domain adds is examined here
-// (TestEveryMergeRefusalIsClassedByWhatClearsIt walks code.MergeRefusals());
+// (TestEveryMergeRefusalIsClassedByWhatClearsIt walks gitlet.MergeRefusals());
 // one off the wire this build does not know is invalid, the class that says
 // nothing more specific.
-func mergeRefusalClass(r code.MergeRefusal) tools.Refusal {
+func mergeRefusalClass(r gitlet.MergeRefusal) tools.Refusal {
 	switch r {
-	case code.MergeRefusalGateUnmet:
+	case gitlet.MergeRefusalGateUnmet:
 		return tools.RefusalNotReady
-	case code.MergeRefusalStale, code.MergeRefusalHeadMoved, code.MergeRefusalTargetMoved:
+	case gitlet.MergeRefusalStale, gitlet.MergeRefusalHeadMoved, gitlet.MergeRefusalTargetMoved:
 		return tools.RefusalStaleVersion
-	case code.MergeRefusalChangeNotOpen, code.MergeRefusalChangeDraft, code.MergeRefusalRepoArchived,
-		code.MergeRefusalRepoMirrored, code.MergeRefusalTargetMoving, code.MergeRefusalQueueFull:
+	case gitlet.MergeRefusalChangeNotOpen, gitlet.MergeRefusalChangeDraft, gitlet.MergeRefusalRepoArchived,
+		gitlet.MergeRefusalRepoMirrored, gitlet.MergeRefusalTargetMoving, gitlet.MergeRefusalQueueFull:
 		return tools.RefusalConflict
-	case code.MergeRefusalRepoSize:
+	case gitlet.MergeRefusalRepoSize:
 		return tools.RefusalQuotaExceeded
-	case code.MergeRefusalBusy, code.MergeRefusalCompactionBehind, code.MergeRefusalRepoImporting,
-		code.MergeRefusalExpunging, code.MergeRefusalUploadExpired, code.MergeRefusalUnavailable,
-		code.MergeRefusalNotApplied:
+	case gitlet.MergeRefusalBusy, gitlet.MergeRefusalCompactionBehind, gitlet.MergeRefusalRepoImporting,
+		gitlet.MergeRefusalExpunging, gitlet.MergeRefusalUploadExpired, gitlet.MergeRefusalUnavailable,
+		gitlet.MergeRefusalNotApplied:
 		return tools.RefusalUnavailable
-	case code.MergeRefusalNotPerson, code.MergeRefusalNotPermitted:
+	case gitlet.MergeRefusalNotPerson, gitlet.MergeRefusalNotPermitted:
 		return tools.RefusalForbidden
-	case code.MergeRefusalRepoDeleted, code.MergeRefusalChangeNotFound, code.MergeRefusalNotQueued:
+	case gitlet.MergeRefusalRepoDeleted, gitlet.MergeRefusalChangeNotFound, gitlet.MergeRefusalNotQueued:
 		return tools.RefusalNotFound
-	case code.MergeRefusalAlreadyQueued:
+	case gitlet.MergeRefusalAlreadyQueued:
 		return tools.RefusalExists
-	case code.MergeRefusalQueueTarget, code.MergeRefusalNoQueue, code.MergeRefusalSourceRefused,
-		code.MergeRefusalNotGreen, code.MergeRefusalNotRed, code.MergeRefusalNoLanding,
-		code.MergeRefusalRecordFull:
+	case gitlet.MergeRefusalQueueTarget, gitlet.MergeRefusalNoQueue, gitlet.MergeRefusalSourceRefused,
+		gitlet.MergeRefusalNotGreen, gitlet.MergeRefusalNotRed, gitlet.MergeRefusalNoLanding,
+		gitlet.MergeRefusalRecordFull:
 		return tools.RefusalInvalid
 	}
 	return tools.RefusalInvalid
@@ -500,9 +500,9 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// asker as a party, so the dequeue names no run, as the enqueue does —
 	// but it carries whom the turn works for (the write's ceiling), which
 	// the committer holds the dequeue to beside the seat itself.
-	asker.Run = code.RunProvenance{}
-	p := code.QueueProposal{OpID: op, Asker: asker, Seen: cv.at, Ceiling: g.c.write,
-		Dequeue: &code.Dequeue{RepoID: g.repo.ID, EntryID: entry}}
+	asker.Run = gitlet.RunProvenance{}
+	p := gitlet.QueueProposal{OpID: op, Asker: asker, Seen: cv.at, Ceiling: g.c.write,
+		Dequeue: &gitlet.Dequeue{RepoID: g.repo.ID, EntryID: entry}}
 	if err := p.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, g.c.actor, g.repo.Name, err), nil
 	}
@@ -521,17 +521,17 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				CodeGetChangeTool), "")), nil
 	}
 	out := codeMergeAnswer{Repo: g.repo.Name, RenamedTo: g.repo.Redirect, RedirectUntil: g.repo.RedirectUntil,
-		Change: g.ref(), Target: target, State: string(code.QueueDequeued), Outcome: res.Outcome, EntryID: entry,
+		Change: g.ref(), Target: target, State: string(gitlet.QueueDequeued), Outcome: res.Outcome, EntryID: entry,
 		Position: positionText(res.Position), OpID: g.c.actor.Operation}
 	return newForeignRead(turn, g.c.asker.Seat).page(ctx, tool, out, "")
 }
 
 // entryOf is the change's LIVE entry in its target's queue as the call's one
 // read of the change named it — on its readiness's queue precondition
-// (code.Precondition.Queue), which that read resolves over the change's own
+// (gitlet.Precondition.Queue), which that read resolves over the change's own
 // index — or the refusal of a change no queue holds. The dequeue reads
 // nothing more: its committer decides it at or past that read
-// (code.QueueProposal.Seen), so an entry the queue landed or ejected since is
+// (gitlet.QueueProposal.Seen), so an entry the queue landed or ejected since is
 // the committer's to refuse, from its own snapshot. A change no queue holds
 // is the committer's not_queued, refused before anything is asked: not
 // found, since an entry that is not live — never queued, landed or ejected —
@@ -539,14 +539,14 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 func entryOf(cv conversing) (string, *tools.Result) {
 	if r := cv.change.Readiness; r != nil {
 		for _, p := range r.Preconditions {
-			if p.Kind == code.PreconditionQueue && p.Queue != nil {
+			if p.Kind == gitlet.PreconditionQueue && p.Queue != nil {
 				return p.Queue.EntryID, nil
 			}
 		}
 	}
 	g := cv.g
 	target := strings.TrimPrefix(cv.change.TargetRef, branchRoot)
-	r := mergeRefused(g.tool, g.ref(), target, code.MergeRefusalNotQueued,
+	r := mergeRefused(g.tool, g.ref(), target, gitlet.MergeRefusalNotQueued,
 		fmt.Sprintf("%s is in no queue of %s, so nothing was taken out", g.ref(), target), nil)
 	return "", &r
 }

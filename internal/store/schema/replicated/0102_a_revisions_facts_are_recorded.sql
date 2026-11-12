@@ -3,7 +3,7 @@
 -- What one revision of a change IS against the branch it would merge into —
 -- where its history meets the target's, the files it touches, the id of the
 -- change it makes — is a function of two commits alone, which the
--- repository's HOME git node reads from its cache (internal/code/query's
+-- repository's HOME git node reads from its cache (internal/gitlet/query's
 -- revision_facts) and records on the change: a `revise` record on the
 -- change's own subject (0100), which the repository's committing data node
 -- publishes for it. Every reader of a revision's facts after that reads these
@@ -34,7 +34,7 @@
 --     took itself to be, which asked for them.
 --   - owners_digest, owners and skipped are its PATH-OWNER MATCH: the digest
 --     of the repository's path owners the home matched the touched paths
---     against (code.OwnersDigest), the owners one of whose globs matched a
+--     against (gitlet.OwnersDigest), the owners one of whose globs matched a
 --     touched path — every owner, where it touches all — and the owners the
 --     record asked no review of, with why; each list JSON. A record whose
 --     snapshot holds path owners of another digest records nothing: the home
@@ -46,9 +46,9 @@
 -- A revision whose head its target holds already has NO ROW: whatever moved
 -- the target there merged the change, which its home lands with a record on
 -- the repository's subject, and a revise naming its head as its own base is
--- refused (code.Revise).
+-- refused (gitlet.Revise).
 --
--- THE WIDE COLUMNS ARE DECLARED LAST: a list of up to code.MaxTouchedPaths
+-- THE WIDE COLUMNS ARE DECLARED LAST: a list of up to gitlet.MaxTouchedPaths
 -- paths does not fit a leaf page, and a row read for a column before it stops
 -- there (0094's measurement).
 --

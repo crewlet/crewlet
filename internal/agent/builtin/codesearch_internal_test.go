@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // shortestLines is a search's answer of n of the shortest lines that carry
@@ -16,7 +16,7 @@ func shortestLines(n int) codesearch.Answer {
 	a := codesearch.Answer{Tips: map[string]string{"a": strings.Repeat("c", 40)},
 		Coverage: codesearch.Coverage{Searched: 1, Truncated: true}}
 	for i := range n {
-		a.Hits = append(a.Hits, codesearch.Hit{Repo: "a", SearchHit: code.SearchHit{Path: "a", Line: i + 1,
+		a.Hits = append(a.Hits, codesearch.Hit{Repo: "a", SearchHit: gitlet.SearchHit{Path: "a", Line: i + 1,
 			Text: "x", Blob: strings.Repeat("b", 40)}})
 	}
 	return a
@@ -30,7 +30,7 @@ func shortestLines(n int) codesearch.Answer {
 // the search having stopped at them, names the page after it: lines may
 // follow.
 //
-// Mutations: ask for code.MaxSearchHits — one answer holds far fewer, red;
+// Mutations: ask for gitlet.MaxSearchHits — one answer holds far fewer, red;
 // name the next page only where the page was cut (searchPage's Truncated) —
 // the full page of a search that stopped names none, and paging ends with
 // lines unread, red.

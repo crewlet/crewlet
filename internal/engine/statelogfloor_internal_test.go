@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -30,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -934,16 +934,16 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 		// over the running log's write authority rather than the native
 		// runtime's, which a company hosting no repositories builds none of:
 		// the code log is reserved and runs whether or not it hosts code.
-		code.Domain{}.Name(): func(ctx context.Context, key string) error {
-			store, err := code.NewStore(code.StoreOptions{
-				Publisher: s.Domain(code.Domain{}.Name()).publisher,
+		gitlet.Domain{}.Name(): func(ctx context.Context, key string) error {
+			store, err := gitlet.NewStore(gitlet.StoreOptions{
+				Publisher: s.Domain(gitlet.Domain{}.Name()).publisher,
 				DB:        s.estate().Reader(), NodeID: c.nodeID,
 			})
 			if err != nil {
 				return err
 			}
 			_, err = store.EvictNode(ctx,
-				code.Actor{ID: "ops-1", Kind: code.ActorOperator, OperatorID: "ops-1"},
+				gitlet.Actor{ID: "ops-1", Kind: gitlet.ActorOperator, OperatorID: "ops-1"},
 				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
 			return err
 		},

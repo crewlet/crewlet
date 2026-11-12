@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/gitlet/query"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -647,8 +647,8 @@ func TestGitletIsStoppedOnceWithinOneBudget(t *testing.T) {
 // Mutation: set query.MaxPatchSpools to one — red.
 func TestEveryFactsReadOfAHomeHasASpool(t *testing.T) {
 	t.Parallel()
-	if query.MaxPatchSpools != codehome.Concurrency {
+	if query.MaxPatchSpools != gitlethome.Concurrency {
 		t.Errorf("a Gitlet node spools %d patches at once and its home asks %d facts at once, want them equal",
-			query.MaxPatchSpools, codehome.Concurrency)
+			query.MaxPatchSpools, gitlethome.Concurrency)
 	}
 }

@@ -387,7 +387,7 @@ var allowed = []Allowance{
 	// filesystem.
 	// -----------------------------------------------------------------
 	{
-		Package: "internal/code/gitproc/gittest",
+		Package: "internal/gitlet/gitproc/gittest",
 		Test:    "TestACheckoutAnotherUserOwnsIsReadOnlyWhereTrusted/chowned_to_another_uid",
 		When:    Environment,
 		Why: "Needs a process that may chown (root, or CAP_CHOWN) to hand a repository to " +

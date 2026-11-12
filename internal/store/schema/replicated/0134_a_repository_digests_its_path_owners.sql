@@ -1,7 +1,7 @@
 -- A repository digests its path owners.
 --
 -- code_repos.owners_digest is the digest of the repository's path owners
--- (code.OwnersDigest: the SHA-256, in lowercase hex, of their one canonical
+-- (gitlet.OwnersDigest: the SHA-256, in lowercase hex, of their one canonical
 -- JSON form), written by the applier in the same statement batch that writes
 -- the code_path_owners rows it digests — a create, a settings change and a
 -- restore, every record that writes them.
@@ -26,7 +26,7 @@
 -- writes the column: '' is the digest of nothing, so a row an apply forgot
 -- would read as owners no facts were matched against, never as a match that
 -- holds (0107's reason). No release carries the code domain (its stated
--- condition, code.RecordVersion), so no store outside a development branch
+-- condition, gitlet.RecordVersion), so no store outside a development branch
 -- holds a repository the column was not written for.
 --
 -- NO INDEX: every reader reaches the column through the repository's key.

@@ -86,7 +86,7 @@ export const REPO_PARAM = "repo";
 
 /**
  * What Gitlet › Changes is narrowed to, by its query keys: the engine's own
- * filters of a listing of changes (`code.ReadQuery`), each as the listing
+ * filters of a listing of changes (`gitlet.ReadQuery`), each as the listing
  * sends it.
  */
 export interface ChangesFilter {

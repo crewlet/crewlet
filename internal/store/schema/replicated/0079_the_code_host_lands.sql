@@ -32,7 +32,7 @@
 -- A deleted ref stays as a row with an EMPTY target, at the position of the
 -- record that deleted it, so a cache syncing a delta learns the deletion from
 -- the rows a delta reads. The push apply sweeps tombstones older than
--- code.RefTombstoneHorizon — as many as the record's row budget has left, so
+-- gitlet.RefTombstoneHorizon — as many as the record's row budget has left, so
 -- a repository whose pushes delete refs in bulk does not keep them for ever —
 -- and raises code_repos.tombstones_through as it does: a delta from below that
 -- mark can no longer learn every deletion, so a snapshot asked for one answers
@@ -50,7 +50,7 @@
 --
 -- # Why push rows have a horizon, inside their repository
 --
--- A push row is history ("who pushed what, when"), kept code.PushHistory
+-- A push row is history ("who pushed what, when"), kept gitlet.PushHistory
 -- (usage.History, 181 days). The push apply deletes a bounded number of a
 -- repository's own expired rows as it adds new ones — a pure function of the
 -- record's broker instant, inside the record's own scope — because a sweep
@@ -147,7 +147,7 @@ CREATE TABLE code_packs (
 CREATE INDEX code_packs_object_idx ON code_packs (object);                                          -- objstore.ReferenceTable statements (ObjectsAmong, ReferencesAfter): the collector, its audit and the backup
 CREATE INDEX code_packs_added_idx ON code_packs (repo_id, added_position, pack_id, part);           -- Reader.Snapshot: the packs a delta and a tail read, in cursor order
 
--- code_pushes — the push history, kept code.PushHistory inside each repository.
+-- code_pushes — the push history, kept gitlet.PushHistory inside each repository.
 CREATE TABLE code_pushes (
     push_id          TEXT    NOT NULL PRIMARY KEY,
     repo_id          TEXT    NOT NULL,
@@ -169,7 +169,7 @@ CREATE TABLE code_pushes (
     -- The bytes of commands and introduced as written: what deleting the row
     -- costs, since a wide row's delete frees its overflow pages. A purge part
     -- and the PushHistory horizon are bounded by it as well as by rows
-    -- (code.PurgePartBytes, code.HorizonBytesPerRecord); no default, so no
+    -- (gitlet.PurgePartBytes, gitlet.HorizonBytesPerRecord); no default, so no
     -- writer can store a row that reads as free.
     row_bytes        INTEGER NOT NULL
 );

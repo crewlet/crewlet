@@ -15,8 +15,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -362,7 +362,7 @@ func (d ReleaseDeps) mergeAskOf(tool string, args map[string]any) (mergeAsk, *to
 	if refusal != nil {
 		return mergeAsk{}, refusal
 	}
-	a.repo, a.number, a.ref = name, number, code.ChangeRef(name, number)
+	a.repo, a.number, a.ref = name, number, gitlet.ChangeRef(name, number)
 	return a, nil
 }
 
@@ -484,8 +484,8 @@ func (t *askToMerge) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 		merge := &codeMergeChange{deps: t.deps.Code}
 		res, _, err := tools.Invoke(ctx, tools.Invocation{Name: merge.Name(), Tool: merge,
 			Args: tools.ArgsOf(merge, false, map[string]any{"repo": a.repo, "change": strconv.FormatInt(a.number, 10),
-				"expected_head": a.head, "method": map[string]string{releaseMerge: string(code.MergeMethodMerge),
-					releaseSquash: string(code.MergeMethodSquash)}[a.method]}),
+				"expected_head": a.head, "method": map[string]string{releaseMerge: string(gitlet.MergeMethodMerge),
+					releaseSquash: string(gitlet.MergeMethodSquash)}[a.method]}),
 			AsSeat: true, Turn: turn, Where: t.Name()})
 		if err != nil {
 			return faulted(ctx, t.Name(), err, t.Name()+" was approved and the merge did not finish"), nil
@@ -661,7 +661,7 @@ func (a deployAsk) changeRef(n int64) string {
 	if a.github {
 		return PullRef{Owner: a.pulls.Owner, Repo: a.pulls.Repo, Number: int(n)}.String()
 	}
-	return code.ChangeRef(a.repo, n)
+	return gitlet.ChangeRef(a.repo, n)
 }
 
 // where is the deploy's repository as a person names it.

@@ -8,8 +8,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -18,8 +18,8 @@ import (
 // THE SUGGESTIONS' APPLY: code_apply_suggestions puts findings' suggestions
 // in place of the lines they are anchored to, on the change's source branch,
 // as ONE ENGINE WRITE the repository's Gitlet node builds and lands as one push
-// (code.WriteApplySuggestions, ADR-0092) — each suggestion placed in the
-// head's file by the one rule its finding is shown by (code.Reanchor), all of
+// (gitlet.WriteApplySuggestions, ADR-0092) — each suggestion placed in the
+// head's file by the one rule its finding is shown by (gitlet.Reanchor), all of
 // them or none — and then answers each finding resolved with the commit it
 // made, as a SECOND write, a step of the same operation decided at or past
 // the push's record.
@@ -111,9 +111,9 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	case len(ids) == 0:
 		return failed(fmt.Sprintf("%s needs `findings`: the ids of the findings whose suggestions it applies.",
 			tool)), nil
-	case len(ids) > code.MaxSuggestionOps:
+	case len(ids) > gitlet.MaxSuggestionOps:
 		return failed(fmt.Sprintf("%s: %d findings, past the %d one apply makes: apply them in two.", tool,
-			len(ids), code.MaxSuggestionOps)), nil
+			len(ids), gitlet.MaxSuggestionOps)), nil
 	case !gitref.ValidOID(head):
 		return failed(fmt.Sprintf("%s needs `expected_head`: the change's head as %s answered it, a whole commit "+
 			"id — the commit sits on the head you read, and on no later one.", tool, CodeGetChangeTool)), nil
@@ -123,7 +123,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return *refusal, nil
 	}
 	if !cv.change.State.Live() {
-		return refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s is %s", cv.g.ref(), cv.change.State),
+		return refusedBy(tools.RefusalConflict, fmt.Errorf("gitlet: %s is %s", cv.g.ref(), cv.change.State),
 			fmt.Sprintf("%s: %s is %s: its branch is no longer what it proposes, and takes no suggestion.", tool,
 				cv.g.ref(), cv.change.State)), nil
 	}
@@ -137,7 +137,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if message == "" {
 		message = fmt.Sprintf("Apply the review's suggestions to %s", cv.g.ref())
 	}
-	w := code.EngineWrite{Kind: code.WriteApplySuggestions, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := gitlet.EngineWrite{Kind: gitlet.WriteApplySuggestions, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.SourceRef, ExpectedHead: head,
 		Message: message, Suggestions: suggestions, Ceiling: cv.g.c.write}
 	if err := w.Validate(); err != nil {
@@ -159,7 +159,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	out := codeAppliedAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Change: cv.g.ref(), Branch: strings.TrimPrefix(w.Ref, branchRoot), OpID: cv.g.c.actor.Operation}
 	switch {
-	case res.Refusal == code.WriteSuggestionOutdated:
+	case res.Refusal == gitlet.WriteSuggestionOutdated:
 		return refusedBy(tools.RefusalStaleVersion, writeRefusalError(string(res.Refusal), res.Detail),
 			fmt.Sprintf("%s applied nothing: %s (%s). Read the findings again with %s at the change's head, and "+
 				"apply those still in place.", tool, res.Detail, res.Refusal, CodeGetChangeTool)), nil
@@ -169,14 +169,14 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 				tool, res.Detail, res.Refusal)), nil
 	case res.Outcome == statelog.OutcomeApplied, res.Outcome == statelog.OutcomePending:
 		out.Outcome, out.Commit, out.Position = res.Outcome, res.Commit, positionText(res.Position)
-		if res.Command.Old != code.ZeroOID {
+		if res.Command.Old != gitlet.ZeroOID {
 			out.Previous = res.Command.Old
 		}
 	case res.Outcome == statelog.OutcomeUnknown:
 		return unknownWrite(cv.g.c.actor, tool, fmt.Sprintf("the suggestions' commit to %s landed", cv.g.ref()), op,
 			false, unknownNext(false, sameCall(cv.g.c.actor, tool), fmt.Sprintf("Read %s with %s", cv.g.ref(),
 				CodeGetChangeTool), "the same commit would be made twice")), nil
-	case res.Command.Result == code.ResultNG:
+	case res.Command.Result == gitlet.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, out.Branch, res.Command, cv.g.c.actor), nil
 	default:
 		return faulted(ctx, tool, fmt.Errorf("builtin: Gitlet answered an apply with no outcome and no "+
@@ -188,28 +188,28 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 
 // suggestions are the suggestions of the findings ids names, in that order,
 // read from the change's conversation from the call's read of the change: ONE
-// read narrowed to those findings (code.ReadQuery.FindingIDs), each a seek on
+// read narrowed to those findings (gitlet.ReadQuery.FindingIDs), each a seek on
 // the node that answers it, never a walk of the change's findings — which are
 // paged by time-ordered id, so the newest review's, the ones an apply names,
 // would be on the last page of a history that only grows — and a page more
 // only where findings at their bounds filled one. Or the refusal of a finding
 // no apply may take: one the change does not hold, one that no longer stands,
 // one that suggests nothing, or one on the old side of its revision's diff.
-func (cv conversing) suggestions(ctx context.Context, ids []string) ([]code.SuggestionOp, *tools.Result) {
+func (cv conversing) suggestions(ctx context.Context, ids []string) ([]gitlet.SuggestionOp, *tools.Result) {
 	g := cv.g
 	// EACH ID ASKED ONCE, AND ONLY ONE A FINDING COULD HAVE: one no finding
 	// carries is one the change does not hold, refused below as such rather
 	// than by the read it would make invalid.
-	want := map[string]*code.FindingRow{}
+	want := map[string]*gitlet.FindingRow{}
 	var asked []string
 	for _, id := range ids {
-		if _, seen := want[id]; !seen && code.ValidFindingID(id) {
+		if _, seen := want[id]; !seen && gitlet.ValidFindingID(id) {
 			asked = append(asked, id)
 		}
 		want[id] = nil
 	}
 	for cursor := ""; len(asked) > 0; {
-		page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartFindings, FindingIDs: asked, Cursor: cursor},
+		page, refusal := g.read(ctx, gitlet.ReadQuery{Part: gitlet.PartFindings, FindingIDs: asked, Cursor: cursor},
 			cv.at)
 		if refusal != nil {
 			return nil, refusal
@@ -225,7 +225,7 @@ func (cv conversing) suggestions(ctx context.Context, ids []string) ([]code.Sugg
 		}
 		cursor = page.Next
 	}
-	out := make([]code.SuggestionOp, 0, len(ids))
+	out := make([]gitlet.SuggestionOp, 0, len(ids))
 	for _, id := range ids {
 		f := want[id]
 		switch {
@@ -240,12 +240,12 @@ func (cv conversing) suggestions(ctx context.Context, ids []string) ([]code.Sugg
 		case f.Suggestion == nil:
 			r := failed(fmt.Sprintf("%s: finding %s of %s suggests nothing to apply.", g.tool, id, g.ref()))
 			return nil, &r
-		case f.Side != code.SideNew:
+		case f.Side != gitlet.SideNew:
 			r := failed(fmt.Sprintf("%s: finding %s of %s is on the %s side, its revision's base: a suggestion "+
 				"replaces lines a head holds.", g.tool, id, g.ref(), f.Side))
 			return nil, &r
 		}
-		out = append(out, code.SuggestionOp{FindingID: f.ID, Path: f.Path, BlobOID: f.BlobOID,
+		out = append(out, gitlet.SuggestionOp{FindingID: f.ID, Path: f.Path, BlobOID: f.BlobOID,
 			LineStart: f.LineStart, LineEnd: f.LineEnd, Text: *f.Suggestion})
 	}
 	return out, nil
@@ -258,16 +258,16 @@ func (cv conversing) suggestions(ctx context.Context, ids []string) ([]code.Sugg
 // answer is an author's. Whatever became of it is said on the answer beside
 // the commit, never as the apply's failure: the commit WAS made, and the call
 // made again is the same push, which makes it once.
-func (cv conversing) resolveApplied(ctx context.Context, ids []string, res code.EngineWriteResult,
+func (cv conversing) resolveApplied(ctx context.Context, ids []string, res gitlet.EngineWriteResult,
 	out *codeAppliedAnswer) {
 
 	g := cv.g
-	answer := code.FindingResolve{RepoID: g.repo.ID, ChangeID: cv.change.ID}
+	answer := gitlet.FindingResolve{RepoID: g.repo.ID, ChangeID: cv.change.ID}
 	for _, id := range ids {
-		answer.Findings = append(answer.Findings, code.FindingResolution{FindingID: id,
-			Resolution: code.FindingResolved, Commit: res.Commit})
+		answer.Findings = append(answer.Findings, gitlet.FindingResolution{FindingID: id,
+			Resolution: gitlet.FindingResolved, Commit: res.Commit})
 	}
-	w := code.ConversationWrite{OpID: statelog.StepOpID(cv.op(), stepTwo), Seen: res.Position,
+	w := gitlet.ConversationWrite{OpID: statelog.StepOpID(cv.op(), stepTwo), Seen: res.Position,
 		FindingResolve: &answer}
 	if _, refusal := cv.decided(ctx, w); refusal != nil {
 		out.FindingsNotResolved = fmt.Sprintf("The suggestions WERE applied, as %s, but answering their findings "+

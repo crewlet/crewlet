@@ -1,8 +1,8 @@
 -- A queue's enqueues are counted by their own index.
 --
--- Every page of the home's queue work (internal/code's queuework.go,
+-- Every page of the home's queue work (internal/gitlet's queuework.go,
 -- enqueuedSince) counts the entries enqueued on its target within
--- code.MergeRateWindow, which the merge rate is priced against, and the home
+-- gitlet.MergeRateWindow, which the merge rate is priced against, and the home
 -- reads a page for every target of a repository on every nudge of it — every
 -- push and every check attempt queued, claimed or ended. Counted from the
 -- indexes 0110 gave the queue, the read took two seeks: the target's live
@@ -17,7 +17,7 @@
 -- code_queue_enqueued_idx is a target's entries by their enqueue's instant,
 -- live and ended alike, so the count is ONE seek of the entries it counts,
 -- answered from the index without the table, and stopped at
--- code.MergeRateScan. An entry's enqueue never changes after its insert, so
+-- gitlet.MergeRateScan. An entry's enqueue never changes after its insert, so
 -- the index costs one insert an enqueue and one delete when the queue's
 -- history sweep removes the entry, and no state transition touches it.
 -- code_queue_ended_idx keeps the queue's horizon and its sweep, and no

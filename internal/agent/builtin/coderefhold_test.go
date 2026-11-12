@@ -15,8 +15,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -49,7 +49,7 @@ func withSeatBranch(host *gitletHost, seat string, unset time.Duration) *gitletH
 
 // seatBranchKey is the hold key of seatBranch of the repository the cases
 // read — site, and the scratch repository, which share an id.
-var seatBranchKey = code.RefHoldKey(siteID, seatBranch)
+var seatBranchKey = gitlet.RefHoldKey(siteID, seatBranch)
 
 // refEvents is every question a turn's calls sent Gitlet, in order:
 // the reads (read:<kind>, resolve_ref, git_read:<kind>) and the writes
@@ -333,7 +333,7 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 
 	// AN OPERATOR'S CALL: no turn, nothing held and nothing recorded, however
 	// long the branch has gone unset.
-	host, writer := withSeatBranch(newGitletHost(), "qa", code.RefHoldRecordAfter+time.Hour), &codeWrites{}
+	host, writer := withSeatBranch(newGitletHost(), "qa", gitlet.RefHoldRecordAfter+time.Hour), &codeWrites{}
 	deps := writeDeps(host, writer)
 	deps.Actor = builtin.PrincipalActor
 	read := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
@@ -465,7 +465,7 @@ func TestACallsSeatBranchesAreHeldInOneRowWrite(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			want := []string{seatBranchKey, code.RefHoldKey(siteID, other)}
+			want := []string{seatBranchKey, gitlet.RefHoldKey(siteID, other)}
 			if len(written) != 1 ||
 				!slices.Equal(slices.Sorted(slices.Values(written[0])), slices.Sorted(slices.Values(want))) {
 				t.Errorf("%s wrote %v on the turn's row, want ONE write of both branches' keys %v", c.tool,
@@ -479,7 +479,7 @@ func TestACallsSeatBranchesAreHeldInOneRowWrite(t *testing.T) {
 }
 
 // ONLY THE SEAM RESOLVES A REF FOR A TURN: in this package's own files, a
-// code.RefQuery is built only inside CodeDeps.refsOf — the one ref read, which
+// gitlet.RefQuery is built only inside CodeDeps.refsOf — the one ref read, which
 // takes the turn's hold on every seat's branch it answers — so no tool reads a
 // ref for a turn around the hold.
 //
@@ -515,7 +515,7 @@ func TestOnlyTheSeamResolvesARefForATurn(t *testing.T) {
 				if sel, ok := lit.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "RefQuery" {
 					built++
 					if who != seam {
-						t.Errorf("%s builds a code.RefQuery: only %s reads a ref for a turn, taking its hold",
+						t.Errorf("%s builds a gitlet.RefQuery: only %s reads a ref for a turn, taking its hold",
 							who, seam)
 					}
 				}
@@ -524,12 +524,12 @@ func TestOnlyTheSeamResolvesARefForATurn(t *testing.T) {
 		}
 	}
 	if built == 0 {
-		t.Fatal("the walk found no code.RefQuery at all — it no longer recognises what it checks")
+		t.Fatal("the walk found no gitlet.RefQuery at all — it no longer recognises what it checks")
 	}
 }
 
 // A REF HOLD OF AN IDLE SEAT BRANCH IS RECORDED FIRST: a read through a seat's
-// branch unset code.RefHoldRecordAfter or more sends a hold request — naming
+// branch unset gitlet.RefHoldRecordAfter or more sends a hold request — naming
 // the whole ref, decided at the resolve's checkpoint — before its read by
 // object id; one unset less, or a branch no seat set, sends none. A hold
 // answered ref_deleted refuses the call naming the commit the read answered,
@@ -548,25 +548,25 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 		name     string
 		seat     string
 		unset    time.Duration
-		answer   func(code.LifecycleRequest) (code.LifecycleResult, error)
+		answer   func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
 		recorded bool
 		read     bool
 		class    tools.Refusal
 	}{
-		{name: "unset past the threshold", seat: "qa", unset: code.RefHoldRecordAfter + time.Hour,
+		{name: "unset past the threshold", seat: "qa", unset: gitlet.RefHoldRecordAfter + time.Hour,
 			recorded: true, read: true},
-		{name: "unset under it", seat: "qa", unset: code.RefHoldRecordAfter - time.Hour, read: true},
-		{name: "no seat's", unset: code.RefHoldRecordAfter + time.Hour, read: true},
-		{name: "answered deleted", seat: "qa", unset: code.RefHoldRecordAfter + time.Hour, recorded: true,
+		{name: "unset under it", seat: "qa", unset: gitlet.RefHoldRecordAfter - time.Hour, read: true},
+		{name: "no seat's", unset: gitlet.RefHoldRecordAfter + time.Hour, read: true},
+		{name: "answered deleted", seat: "qa", unset: gitlet.RefHoldRecordAfter + time.Hour, recorded: true,
 			class: tools.RefusalNotFound,
-			answer: func(code.LifecycleRequest) (code.LifecycleResult, error) {
-				return code.LifecycleResult{Refusal: code.LifecycleRefDeleted,
+			answer: func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+				return gitlet.LifecycleResult{Refusal: gitlet.LifecycleRefDeleted,
 					Detail: seatBranch + " is no live ref of site"}, nil
 			}},
-		{name: "unconfirmed", seat: "qa", unset: code.RefHoldRecordAfter + time.Hour, recorded: true,
+		{name: "unconfirmed", seat: "qa", unset: gitlet.RefHoldRecordAfter + time.Hour, recorded: true,
 			class: tools.RefusalUnavailable,
-			answer: func(code.LifecycleRequest) (code.LifecycleResult, error) {
-				return code.LifecycleResult{Outcome: statelog.OutcomeUnknown}, nil
+			answer: func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+				return gitlet.LifecycleResult{Outcome: statelog.OutcomeUnknown}, nil
 			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -583,8 +583,8 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 			seen := ev.list()
 			if c.recorded {
 				h := lifecycles[0]
-				if h.Kind != code.LifecycleHold || h.Ref != seatBranch || h.Seen != codeAt(12) || h.TurnID != turn.RunID ||
-					h.RepoID != siteID || h.Actor != (code.Principal{Kind: code.PrincipalAgent, Seat: "agent-cto"}) {
+				if h.Kind != gitlet.LifecycleHold || h.Ref != seatBranch || h.Seen != codeAt(12) || h.TurnID != turn.RunID ||
+					h.RepoID != siteID || h.Actor != (gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "agent-cto"}) {
 					t.Errorf("the hold record is %+v, want the turn's on %s, decided at its resolve", h, seatBranch)
 				}
 				if i := slices.Index(seen, "lifecycle:hold"); i < 0 || slices.Index(seen, "git_read:blob") >= 0 &&
@@ -612,9 +612,9 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 
 	// THE WRITE ARM: a revert that conflicts sends the resolve and the hold
 	// before its write; a create sends neither.
-	host := withSeatBranch(newGitletHost(), "qa", code.RefHoldRecordAfter+time.Hour)
-	writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
-		return code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "a.txt conflicts"}, nil
+	host := withSeatBranch(newGitletHost(), "qa", gitlet.RefHoldRecordAfter+time.Hour)
+	writer := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		return gitlet.EngineWriteResult{Refusal: gitlet.WriteConflict, Detail: "a.txt conflicts"}, nil
 	}}
 	ev := watch(host, writer, nil)
 	reg := codeRegistry(t, writeDeps(host, writer))
@@ -728,21 +728,21 @@ func TestAFailedHoldRecordLeavesTheBranchUnconfirmed(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name   string
-		answer func(code.LifecycleRequest) (code.LifecycleResult, error)
+		answer func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
 	}{
-		{"unknown", func(code.LifecycleRequest) (code.LifecycleResult, error) {
-			return code.LifecycleResult{Outcome: statelog.OutcomeUnknown}, nil
+		{"unknown", func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+			return gitlet.LifecycleResult{Outcome: statelog.OutcomeUnknown}, nil
 		}},
-		{"deleted", func(code.LifecycleRequest) (code.LifecycleResult, error) {
-			return code.LifecycleResult{Refusal: code.LifecycleRefDeleted, Detail: "gone"}, nil
+		{"deleted", func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+			return gitlet.LifecycleResult{Refusal: gitlet.LifecycleRefDeleted, Detail: "gone"}, nil
 		}},
-		{"unserved", func(code.LifecycleRequest) (code.LifecycleResult, error) {
-			return code.LifecycleResult{}, code.ErrNotServing
+		{"unserved", func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+			return gitlet.LifecycleResult{}, gitlet.ErrNotServing
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host := withSeatBranch(newGitletHost(), "qa", code.RefHoldRecordAfter+time.Hour)
+			host := withSeatBranch(newGitletHost(), "qa", gitlet.RefHoldRecordAfter+time.Hour)
 			writer := &codeWrites{life: c.answer}
 			ev := watch(host, writer, nil)
 			reg := codeRegistry(t, writeDeps(host, writer))

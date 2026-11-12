@@ -20,15 +20,15 @@ import (
 )
 
 // Gitlet's limits that both tiers and the domain read: config VALIDATES
-// a document against them and internal/code DECIDES a push with them, and code
-// imports config, so they are defined here once. internal/code names each of
+// a document against them and internal/gitlet DECIDES a push with them, and gitlet
+// imports config, so they are defined here once. internal/gitlet names each of
 // them again as a constant of its own, which is the same value rather than a
 // copy — a Go constant alias cannot drift.
 const (
 	// CodeMaxPushBytesCeiling is the largest pack one push may send,
 	// whatever code.limits.max_push_bytes says — equal to
 	// worklet.MaxFileBytes, the engine's one "largest object". What a
-	// push STORES may be larger (internal/code.MaxPackBytes: a thin pack
+	// push STORES may be larger (internal/gitlet.MaxPackBytes: a thin pack
 	// completed against the repository, with its indexes), and
 	// internal/objstore/references pins that larger figure against the
 	// collector's write bound.
@@ -50,7 +50,7 @@ const (
 	// this is also what one repository may take of each such node's disk.
 	// And of ONE node's memory: a repository's bitmap is written once for
 	// the fleet, by the first Gitlet node whose background budget holds its
-	// publication — internal/code/cache's PublishBytesPerObject an object
+	// publication — internal/gitlet/cache's PublishBytesPerObject an object
 	// with a clone's room beside it, 840 bytes measured on the node pin —
 	// some 50 GB at this size's 60 million objects, which the large Gitlet node
 	// docs/guides/deployment.md names (96 GiB and 16 cores, about 68 GiB of
@@ -95,7 +95,7 @@ const (
 	// rules with their merge gates, the description and the default branch
 	// make such a record 631 780 bytes, so path owners at this bound make it
 	// 893 939, some 150 KB to spare for whatever a later field adds
-	// (internal/code's TestTheLargestSettingsFitTheirRecordAndTheDetail holds
+	// (internal/gitlet's TestTheLargestSettingsFitTheirRecordAndTheDetail holds
 	// the sum). The counts alone would not: 2 048 globs at gitref's 128 bytes,
 	// each byte JSON spells as six (`&`, `<` and `>`), weigh 1 565 505 bytes,
 	// and made such a record 2 197 300. Generous for any ownership a person
@@ -108,7 +108,7 @@ const (
 	// gate names: the parts of a repository's tree a change touching which
 	// waits for a person's approval — `deploy/**`, `migrations/**`; a rule
 	// requiring checks holds `.crewlet/**` beside them without naming it
-	// (code.ChecksDirGlob), so it costs no entry. A JUDGMENT: a gate keeps a
+	// (gitlet.ChecksDirGlob), so it costs no entry. A JUDGMENT: a gate keeps a
 	// person in front of a few directories, and thirty-two is past any
 	// rule's; it is one of the two lists a gate's bytes grow with
 	// ([CodeMaxGateBytes]).
@@ -155,7 +155,7 @@ const (
 	CodeMaxQueueBatch = 8
 
 	// CodeDefaultQueueBatch is an unset landing.batch: TWO changes a
-	// candidate at most, measured by internal/code/home's
+	// candidate at most, measured by internal/gitlet/home's
 	// BenchmarkQueueThroughput and held there by a test: the batch whose
 	// changes land soonest from their arrival, at p99, at the 5 % failure
 	// rate and the default depth under saturating arrivals (2 000 rounds,
@@ -201,7 +201,7 @@ const (
 	// FIFTY MINUTES. A remote box on E2B's smallest plan lives an hour, and a
 	// check's box is given ten minutes past its timeout for its setup — its
 	// git's check and its checkout, each a setup step under the sandbox's ten
-	// minutes (internal/code's CheckBoxGrace, which a test there holds this
+	// minutes (internal/gitlet's CheckBoxGrace, which a test there holds this
 	// sum to) — so a check at the default fits the shortest session a
 	// company's remote cell may have. A company on a larger plan, or running
 	// its checks in containers alone, raises it to what its longest job takes.
@@ -282,13 +282,13 @@ const (
 	// reconcile decides any number of declarations. At this bound an
 	// activation that creates, deletes or restores every declared repository
 	// takes 16–19 s on one node before the last has its record
-	// (internal/code's doc.go), beside the apply rather than inside it, and
+	// (internal/gitlet's doc.go), beside the apply rather than inside it, and
 	// one that changes nothing half a second.
 	//
 	// AND THE RUNTIME BOUND on the PROJECT repositories a tool's create may
 	// bring the code log to: every status short of purged, declared ones
 	// included, so declared and tool-made projects count alike and a tool's
-	// create past it is refused repo_limit (internal/code's lifecycle). Read
+	// create past it is refused repo_limit (internal/gitlet's lifecycle). Read
 	// there, one bound for both: a company whose declarations already reach
 	// it has no room a tool could fill beside them. A seat's scratch
 	// repositories are held by code.scratch.max_per_seat instead and never
@@ -341,7 +341,7 @@ const (
 	// some thirty-three times that, which no seat working as intended meets,
 	// and it caps what a seat pushing in a loop costs the code log at a
 	// thousand push records a day — a seat's push alone in its record is
-	// at most 1 625 bytes, from its coding box (internal/code's
+	// at most 1 625 bytes, from its coding box (internal/gitlet's
 	// BenchmarkPushLogBytes, its push=box arm; 1 481 where the engine builds
 	// it for a tool), so about 1.6 MB a day — rather than without bound.
 	DefaultCodePushesPerSeatDay = 1_000
@@ -365,7 +365,7 @@ const (
 
 	// CodeScratchIdleDaysFloor and CodeScratchIdleDaysCeiling bound
 	// code.scratch.idle_days. A DAY AT LEAST: a turn holding a scratch
-	// repository idle code.HoldRecordAfter (22 h) records its hold on the
+	// repository idle gitlet.HoldRecordAfter (22 h) records its hold on the
 	// repository's subject, and that threshold is this floor less the two
 	// hours two nodes' clocks may disagree by (references'
 	// TestAHoldRecordCoversEveryPassInFlight holds the arithmetic), so a
@@ -441,7 +441,7 @@ type Code struct {
 	// MergeByFloor is the least authority a merge into ANY protected branch
 	// needs, whatever its rules say: a merge is held to the stricter of it
 	// and the merge_by of every rule matching its branch. The EPOCH'S, read at
-	// every decision as the limits are (internal/code.Limits.MergeByFloor).
+	// every decision as the limits are (internal/gitlet.Limits.MergeByFloor).
 	MergeByFloor CodeMergeBy `yaml:"merge_by_floor,omitempty" json:"merge_by_floor,omitempty" js:"enum=writers|maintainers|persons" desc:"The least a merge into any protected branch needs, whatever its rules say: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. A merge is held to the stricter of this and the merge_by of every rule matching its branch; a rule with no merge gate reads as writers."`
 	// RemoteCredentials are the variables a repository's mirror or import may
 	// name for its credential, each with the hosts its value may be sent to
@@ -458,7 +458,7 @@ const (
 	// CodeGitlet is Gitlet, the engine's own git host: the company's
 	// repositories hosted on the engine's own code log, every data node
 	// committing their pushes, and served over git by the nodes with the
-	// `gitlet` role. See internal/code.
+	// `gitlet` role. See internal/gitlet.
 	CodeGitlet CodeBackend = "gitlet"
 
 	// CodeNone is a company that hosts no repositories in the engine: what
@@ -491,7 +491,7 @@ func (c *Company) CodeBackendFor() CodeBackend {
 
 // CodeScratch is the policy for seats' SCRATCH repositories: the ones a seat's
 // own tool creates for its experiments, each named <handle>.<slug> after the
-// seat that owns it (internal/code's lifecycle requests). An unset field takes
+// seat that owns it (internal/gitlet's lifecycle requests). An unset field takes
 // its default ([CodeScratch.Resolved]).
 //
 // THE EPOCH'S, read where it is used: the create's cap at the create's decide,
@@ -515,7 +515,7 @@ type CodeScratch struct {
 
 // Resolved is the scratch policy with its defaults applied — THE ONE PLACE
 // they are applied, read by the code domain's own conversion
-// (internal/code.ScratchOf), so what `crewlet validate` judges and what a
+// (internal/gitlet.ScratchOf), so what `crewlet validate` judges and what a
 // create and an expiry are held to are one reading of the document.
 func (s CodeScratch) Resolved() (idleDays, maxPerSeat int) {
 	idleDays, maxPerSeat = s.IdleDays, DefaultCodeScratchMaxPerSeat
@@ -550,7 +550,7 @@ func (s CodeScratch) validate(scratch Path) error {
 }
 
 // CodeChecks is how the company runs the CHECKS its repositories define in
-// their `.crewlet/checks.yaml` (internal/code's ParseChecks): which cells a
+// their `.crewlet/checks.yaml` (internal/gitlet's ParseChecks): which cells a
 // check runs in, which of the company's secrets a check may name, and how
 // long the company lets one run. The file names; this block decides
 // (docs/concepts/gitlet.md, "Checks"). Every field unset is a valid block.
@@ -593,7 +593,7 @@ type CodeChecks struct {
 
 // CodeChecksRemote is code.checks.remote: how many remote (e2b) check boxes
 // the company runs at once, and how many hours of them it starts in a UTC day
-// (internal/code/checkrun's RemoteSlots). A check either would take past its
+// (internal/gitlet/checkrun's RemoteSlots). A check either would take past its
 // cap waits QUEUED — claimed by no node — until a box ends or the day turns
 // over, and then runs. Every field unset is a valid block, its defaults
 // PROVISIONAL (U45 a).
@@ -798,7 +798,7 @@ func validDomainName(s string) bool {
 // checks, and a name with a space one a shell splits. And nothing any URL
 // encoder escapes — a `~` among them, which some (Java's URLEncoder) write
 // `%7E` — since a name rides a route as it is spelled. The token a check's box
-// fetches with carries its name base64url-encoded (internal/code/host's
+// fetches with carries its name base64url-encoded (internal/gitlet/host's
 // CheckTokens), so no character a name holds is ever the token's: a `.`,
 // which this rule admits, is the token's own separator.
 func ValidCodeCheckName(name string) bool {
@@ -981,7 +981,7 @@ func (v CodeVisibility) Resolved() CodeVisibility {
 // INDEXED for a repository this document declares — a project the company
 // named is the code its seats work in, so it is what a search across the
 // company's repositories reads — while a repository a tool makes starts at grep
-// (the code domain's rule, internal/code's SearchMode).
+// (the code domain's rule, internal/gitlet's SearchMode).
 type CodeSearchMode string
 
 const (
@@ -1083,7 +1083,7 @@ func (l CodeLanding) Resolved() CodeLanding {
 // THE ONE FORMULA both judgments of a queue's rate read — `crewlet
 // validate`'s advisory, at code.checks.max_timeout_seconds and over a day,
 // and code_merge_rate_over_capacity, at the round its home observed and over
-// internal/code's MergeRateWindow — so the threshold the alarm borrows is the
+// internal/gitlet's MergeRateWindow — so the threshold the alarm borrows is the
 // queue's own capacity and never a number of the alarm's (ADR-0015).
 //
 // Exact in integers, never rounded through a float: depth × batch × over is
@@ -1109,7 +1109,7 @@ func LandingCapacity(depth, batch int, round, over time.Duration) int {
 }
 
 // CodeGate is a protection rule's merge gate RESOLVED — every field its value
-// or its default — in the shape the code domain records it: code.MergeGate's
+// or its default — in the shape the code domain records it: gitlet.MergeGate's
 // keys, in its order and with its omissions, so its encoding is as long as
 // the record's ([CodeGate.EncodedBytes]; the engine's
 // TestADeclaredGateWeighsWhatTheDomainRecords holds the two). Its lists are in
@@ -1345,7 +1345,7 @@ type CodeLimits struct {
 
 // Resolved is the limits with their defaults applied — THE ONE PLACE they are
 // applied: config's own order rules below and the code domain's
-// (internal/code.LimitsOf) both read it, so what `crewlet validate` judges and
+// (internal/gitlet.LimitsOf) both read it, so what `crewlet validate` judges and
 // what a push is held to are one reading of the document.
 func (l CodeLimits) Resolved() CodeLimits {
 	if l.MaxPushBytes == 0 {
@@ -1796,7 +1796,7 @@ func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *
 }
 
 // mirrorSeatReads reports whether seat reads the repository r, as the code
-// domain grants a read (internal/code's GrantOf, ADR-0088): a PERSON'S seat
+// domain grants a read (internal/gitlet's GrantOf, ADR-0088): a PERSON'S seat
 // reads every repository as far as the chart goes — whether the person holding
 // it uses Gitlet (ADR-0110) is the identity directory's to say, which no
 // configuration reads, so a push mirror asks it at a person's create and
@@ -1955,7 +1955,7 @@ func codePathOwnersBytes(o *org.Index, list []CodePathOwner) (int, bool) {
 }
 
 // codeRecordedPathOwner is a path owner in the shape the code domain records
-// it: code.PathOwner's keys, the owner by what the chart resolves it to, and
+// it: gitlet.PathOwner's keys, the owner by what the chart resolves it to, and
 // its globs as the document lists them, whose canonical order the record
 // sorts them into changes no length.
 type codeRecordedPathOwner struct {
@@ -1964,7 +1964,7 @@ type codeRecordedPathOwner struct {
 }
 
 // codeRecordedOwner is a path owner's owner as the code domain records it,
-// code.Owner's keys: a unit by its key, a seat by its handle.
+// gitlet.Owner's keys: a unit by its key, a seat by its handle.
 type codeRecordedOwner struct {
 	Kind string `json:"kind"`
 	Ref  string `json:"ref"`

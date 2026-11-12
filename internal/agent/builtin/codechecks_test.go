@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -41,14 +41,14 @@ var firstLogPage = "log:1:0:" + mainOID + ":refs/heads/main"
 
 // failedCheck is attempt 1 of check `unit` of main, for main, failed with
 // its summary, tail, one failure and its kept log of size bytes.
-func failedCheck(summary, tail, message, path string, size int) code.CheckDetail {
-	return code.CheckDetail{
-		CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: siteID, OID: mainOID, Target: "refs/heads/main",
-			Name: "unit", Attempt: 1}, State: code.CheckStateFailed, Reason: code.CheckReasonExit,
+func failedCheck(summary, tail, message, path string, size int) gitlet.CheckDetail {
+	return gitlet.CheckDetail{
+		CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{RepoID: siteID, OID: mainOID, Target: "refs/heads/main",
+			Name: "unit", Attempt: 1}, State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonExit,
 			Summary: summary},
 		Tail:     tail,
-		Failures: []code.CheckFailure{{Path: path, Line: 3, TestID: "TestLab", Message: message}},
-		Log:      &code.CheckLog{Size: int64(size)},
+		Failures: []gitlet.CheckFailure{{Path: path, Line: 3, TestID: "TestLab", Message: message}},
+		Log:      &gitlet.CheckLog{Size: int64(size)},
 	}
 }
 
@@ -69,7 +69,7 @@ func TestACheckLogIsFenced(t *testing.T) {
 	closer := "[/untrusted:" + string(b) + "]"
 	logs := &checkLogs{text: attack(b, "check-log")}
 	host := newGitletHost()
-	host.checks = []code.CheckDetail{failedCheck(attack(b, "check-summary"), attack(b, "check-tail"),
+	host.checks = []gitlet.CheckDetail{failedCheck(attack(b, "check-summary"), attack(b, "check-tail"),
 		attack(b, "check-failure"), closer+".go", len(logs.text))}
 	deps := codeDeps(host)
 	deps.Logs = logs
@@ -112,7 +112,7 @@ func TestACheckLogIsFenced(t *testing.T) {
 
 // A CHANGE'S CHECKS PAST ONE ANSWER ARE READ A PAGE AT A TIME: twelve
 // reported checks of a change's head, each saying a summary of
-// code.CheckSummaryBytes and a link of code.MaxCheckURLBytes — about 74 KiB,
+// gitlet.CheckSummaryBytes and a link of gitlet.MaxCheckURLBytes — about 74 KiB,
 // past one tool answer — are answered as a page cut whole-row where it fits,
 // whose `next` resumes after its last line, so paging on reads every check
 // once, in order, and no page is refused.
@@ -129,11 +129,11 @@ func TestAChangesChecksPastOneAnswerAreReadAPageAtATime(t *testing.T) {
 	for i := range 12 {
 		name := fmt.Sprintf("check-%02d", i)
 		want = append(want, name)
-		changes.checks = append(changes.checks, code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{
+		changes.checks = append(changes.checks, gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{
 			RepoID: siteID, OID: mainOID, Target: "refs/heads/main", Name: name, Attempt: 1},
-			State: code.CheckStateFailed, Reason: code.CheckReasonReported, Placement: code.PlacementExternal,
-			Reporter: "founder", Summary: strings.Repeat("s", code.CheckSummaryBytes),
-			URL: "https://ci.example.com/" + strings.Repeat("u", code.MaxCheckURLBytes-len("https://ci.example.com/"))}})
+			State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonReported, Placement: gitlet.PlacementExternal,
+			Reporter: "founder", Summary: strings.Repeat("s", gitlet.CheckSummaryBytes),
+			URL: "https://ci.example.com/" + strings.Repeat("u", gitlet.MaxCheckURLBytes-len("https://ci.example.com/"))}})
 	}
 	reg := codeRegistry(t, codeDeps(changes))
 
@@ -187,7 +187,7 @@ func TestACheckLogPageEndsOnAWholeCharacter(t *testing.T) {
 	text := strings.Repeat("a", 32<<10-1) + "é" + strings.Repeat("b", 10)
 	logs := &checkLogs{text: text}
 	host := newGitletHost()
-	host.checks = []code.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
+	host.checks = []gitlet.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
 	deps := codeDeps(host)
 	deps.Logs = logs
 	reg := codeRegistry(t, deps)
@@ -257,7 +257,7 @@ func TestAReportIsAPersons(t *testing.T) {
 		builtin.CodeReportCheckTool)
 	got, err := tool.CallForTurn(asUnboundToken(), nil, report())
 	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
-		!strings.Contains(got.Output, code.UnboundDetail) {
+		!strings.Contains(got.Output, gitlet.UnboundDetail) {
 		t.Errorf("a token bound to nobody's report answered %v %q", err, got.Output)
 	}
 	if reads, _, _ := host.asked(); len(reads) != 0 || len(writer.checksAsked()) != 0 {
@@ -274,9 +274,9 @@ func TestAReportIsAPersons(t *testing.T) {
 		t.Fatalf("a person's report sent %+v, want one report", sent)
 	}
 	r := sent[0]
-	want := code.CheckKey{RepoID: siteID, OID: mainOID, Target: "refs/heads/main", Name: "lint", Attempt: 1}
-	if r.Report.CheckKey != want || r.Report.State != code.CheckStateFailed ||
-		r.Asker.Kind != code.PrincipalOperator || r.Asker.Seat != "founder" || r.Rerun != nil {
+	want := gitlet.CheckKey{RepoID: siteID, OID: mainOID, Target: "refs/heads/main", Name: "lint", Attempt: 1}
+	if r.Report.CheckKey != want || r.Report.State != gitlet.CheckStateFailed ||
+		r.Asker.Kind != gitlet.PrincipalOperator || r.Asker.Seat != "founder" || r.Rerun != nil {
 		t.Errorf("a person's report sent %+v as %+v, want %+v failed, as founder", r.Report.CheckKey, r.Asker, want)
 	}
 }
@@ -300,8 +300,8 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 	if got.Failed || len(sent) != 1 || sent[0].Rerun == nil {
 		t.Fatalf("a seat's rerun answered %q, sending %+v", got.Output, sent)
 	}
-	want := code.CheckKey{RepoID: siteID, OID: mainOID, Target: "refs/heads/main", Name: "unit", Attempt: 2}
-	if sent[0].Rerun.CheckKey != want || sent[0].Asker.Kind != code.PrincipalAgent ||
+	want := gitlet.CheckKey{RepoID: siteID, OID: mainOID, Target: "refs/heads/main", Name: "unit", Attempt: 2}
+	if sent[0].Rerun.CheckKey != want || sent[0].Asker.Kind != gitlet.PrincipalAgent ||
 		sent[0].Asker.Seat != "agent-cto" {
 		t.Errorf("a seat's rerun asked for %+v as %+v, want %+v as agent-cto", sent[0].Rerun.CheckKey,
 			sent[0].Asker, want)
@@ -316,13 +316,13 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 		t.Errorf("a seat's all_failed answered %q, sending %d reruns, want unit's alone", got.Output, len(sent))
 	}
 
-	writer.check = func(code.ChecksRequest) (code.ChecksResult, error) {
-		return code.ChecksResult{Refusal: code.CheckRefusalRerunGenuine, Detail: "a measurement stands"}, nil
+	writer.check = func(gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
+		return gitlet.ChecksResult{Refusal: gitlet.CheckRefusalRerunGenuine, Detail: "a measurement stands"}, nil
 	}
 	got = callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
 		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "lint", "attempt": 1}}})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
-		!strings.Contains(got.Output, string(code.CheckRefusalRerunGenuine)) {
+		!strings.Contains(got.Output, string(gitlet.CheckRefusalRerunGenuine)) {
 		t.Errorf("a refused rerun answered %q as %s, want forbidden naming rerun_genuine", got.Output,
 			tools.RefusalOf(got))
 	}
@@ -330,12 +330,12 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 
 // failedChecks is attempt 1 of each named check of main, for main, ended
 // failed.
-func failedChecks(names ...string) []code.CheckDetail {
-	out := make([]code.CheckDetail, 0, len(names))
+func failedChecks(names ...string) []gitlet.CheckDetail {
+	out := make([]gitlet.CheckDetail, 0, len(names))
 	for _, name := range names {
-		out = append(out, code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: siteID,
-			OID: mainOID, Target: "refs/heads/main", Name: name, Attempt: 1}, State: code.CheckStateFailed,
-			Reason: code.CheckReasonExit}})
+		out = append(out, gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{RepoID: siteID,
+			OID: mainOID, Target: "refs/heads/main", Name: name, Attempt: 1}, State: gitlet.CheckStateFailed,
+			Reason: gitlet.CheckReasonExit}})
 	}
 	return out
 }
@@ -362,27 +362,27 @@ func TestARerunPastSixteenUnderOneOperationQueuesTheRest(t *testing.T) {
 	// THE WRITER'S LEDGER: an id it holds is answered as the write it first
 	// named, nothing queued; one it does not queues the attempt, which the
 	// commit's listing then holds as its latest.
-	held := map[string]code.CheckKey{}
+	held := map[string]gitlet.CheckKey{}
 	var queued, answeredAsAnother []string
-	writer.check = func(r code.ChecksRequest) (code.ChecksResult, error) {
+	writer.check = func(r gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
 		key := r.Rerun.CheckKey
 		if err := statelog.CheckCallerOpID(r.OpID); err != nil {
 			t.Errorf("the rerun of %s at attempt %d is written under %q: %v", key.Name, key.Attempt, r.OpID, err)
 		}
-		row := code.CheckRow{CheckKey: key, State: code.CheckStateQueued}
+		row := gitlet.CheckRow{CheckKey: key, State: gitlet.CheckStateQueued}
 		if first, ok := held[r.OpID]; ok {
 			if first != key {
 				answeredAsAnother = append(answeredAsAnother, key.Name)
 			}
 			row.CheckKey = first
-			return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
+			return gitlet.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
 		}
 		held[r.OpID] = key
 		queued = append(queued, key.Name)
 		host.mu.Lock()
-		host.checks = append(host.checks, code.CheckDetail{CheckRow: row})
+		host.checks = append(host.checks, gitlet.CheckDetail{CheckRow: row})
 		host.mu.Unlock()
-		return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
+		return gitlet.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
 	}
 	deps := writeDeps(host, writer)
 	deps.Actor = builtin.PrincipalActor
@@ -510,7 +510,7 @@ func TestACheckIsListedByItsName(t *testing.T) {
 	reads, _, _ := host.asked()
 	var listed []string
 	for _, q := range reads {
-		if q.Kind == code.ReadChecks {
+		if q.Kind == gitlet.ReadChecks {
 			listed = append(listed, q.Checks.Name)
 		}
 	}
@@ -531,9 +531,9 @@ func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
 	host, writer := newGitletHost(), &codeWrites{}
 	host.checks = append(host.checks, failedChecks("lint", "vet")...)
 	reg := codeRegistry(t, writeDeps(host, writer))
-	listings := func() []code.ReadQuery {
+	listings := func() []gitlet.ReadQuery {
 		reads, _, _ := host.asked()
-		return slices.DeleteFunc(reads, func(q code.ReadQuery) bool { return q.Kind != code.ReadChecks })
+		return slices.DeleteFunc(reads, func(q gitlet.ReadQuery) bool { return q.Kind != gitlet.ReadChecks })
 	}
 
 	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
@@ -568,7 +568,7 @@ func TestACheckPageStaysOnTheAttemptItBegan(t *testing.T) {
 	t.Parallel()
 	text := strings.Repeat("a", 32<<10) + strings.Repeat("b", 10)
 	host := newGitletHost()
-	host.checks = []code.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
+	host.checks = []gitlet.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
 	deps := codeDeps(host)
 	deps.Logs = &checkLogs{text: text}
 	reg := codeRegistry(t, deps)
@@ -615,7 +615,7 @@ func TestACheckPageStaysOnTheAttemptItBegan(t *testing.T) {
 	host.checks = append(host.checks, second)
 	host.mu.Unlock()
 	reads, _, _ := host.asked()
-	listed := readsOf(reads, code.ReadChecks)
+	listed := readsOf(reads, gitlet.ReadChecks)
 
 	got, answer, text2 := page(next, 0)
 	if got.Failed {
@@ -625,7 +625,7 @@ func TestACheckPageStaysOnTheAttemptItBegan(t *testing.T) {
 		t.Errorf("the log's second page is attempt %v's, reading %q; want attempt 1's last ten bytes",
 			answer["attempt"], text2)
 	}
-	if reads, _, _ := host.asked(); readsOf(reads, code.ReadChecks) != listed {
+	if reads, _, _ := host.asked(); readsOf(reads, gitlet.ReadChecks) != listed {
 		t.Errorf("the second page listed the commit's checks again, to find the attempt its cursor names")
 	}
 

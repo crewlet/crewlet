@@ -14,10 +14,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -50,7 +50,7 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 // to choose. Its readers are zero values, because only the estates' names are
 // read here.
 func objectsRuntime() *native {
-	return &native{trackerFiles: &worklet.Reader{}, codeReader: &code.Reader{}}
+	return &native{trackerFiles: &worklet.Reader{}, codeReader: &gitlet.Reader{}}
 }
 
 // collectorEstates is every estate the collector reads on a data node, as

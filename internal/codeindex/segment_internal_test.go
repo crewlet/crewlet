@@ -478,11 +478,11 @@ func TestATipMapRoundTrips(t *testing.T) {
 	t.Parallel()
 	tip := testOID(99)
 	entries := []TipEntry{
-		{Path: "internal/code/doc.go", Blob: testOID(1)},
+		{Path: "internal/gitlet/doc.go", Blob: testOID(1)},
 		{Path: "README.md", Blob: testOID(2)},
 		{Path: "assets/logo.png", Blob: testOID(3), Skipped: true},
 		{Path: "caf\xe9.txt", Blob: testOID(4)},
-		{Path: "internal/code/doc_test.go", Blob: testOID(1)},
+		{Path: "internal/gitlet/doc_test.go", Blob: testOID(1)},
 	}
 	var out bytes.Buffer
 	if err := WriteTipMap(&out, tip, entries); err != nil {

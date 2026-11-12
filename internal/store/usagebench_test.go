@@ -19,7 +19,7 @@ import (
 // repository read, and with fifty thousand records of them, a company whose
 // CI and seats read its unit repositories all day: a thousand principals over
 // twenty repositories, both ways, spread across the day, each record one
-// reader's reads of a flush (internal/code/readaudit), one to four of them.
+// reader's reads of a flush (internal/gitlet/readaudit), one to four of them.
 //
 // THE DELTA DECIDED A SHAPE (M3-decisions M3-O22). The publisher derives
 // today and yesterday every fifteen seconds the day moves, so whatever the
@@ -121,7 +121,7 @@ func seedUsageDay(b *testing.B, db *store.DB, day time.Time, fetches int) {
 			Time: at(a, auxiliary), Category: "system", Tags: store.ExtractTags(aux), Payload: aux})
 	}
 	for f := range fetches {
-		// A RECORD IS A READER'S READS OF A FLUSH (internal/code/readaudit):
+		// A RECORD IS A READER'S READS OF A FLUSH (internal/gitlet/readaudit):
 		// one to four of them here, which the derivation sums, at the same
 		// cost a record whatever it counts.
 		reads := int64(1 + f%4)

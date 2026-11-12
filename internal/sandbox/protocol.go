@@ -370,12 +370,12 @@ type Spec struct {
 // ONE AFTER ANOTHER, never at once, which would cut that wait to the slowest
 // clone's: a clone's index-pack keeps an entry for every commit and tree it
 // receives while it writes their index — 1.37 million of them for a gigabyte
-// of history (internal/code/host's BenchmarkBoxClone) — and eight at once
+// of history (internal/gitlet/host's BenchmarkBoxClone) — and eight at once
 // would share a box its template sized for one harness. In turn, the
 // clones cost a run with many repositories time; at once, they would cost
 // its box memory.
 //
-// NEVER PAST code.MaxRunRepos, the most a read of a run's pushes names: a run
+// NEVER PAST gitlet.MaxRunRepos, the most a read of a run's pushes names: a run
 // given more would have every collected result's "what it pushed" refused,
 // seen only as the sentence that its push record was unread. internal/engine's
 // TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
@@ -563,7 +563,7 @@ func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 //
 // EXPORTED FOR THE ONE OTHER PLACE A CONE IS WRITTEN: a repository's
 // .crewlet/checks.yaml names the cone its check's box checks out
-// (internal/code's ParseChecks), and that cone becomes a box's clone step as a
+// (internal/gitlet's ParseChecks), and that cone becomes a box's clone step as a
 // run's does, so a file is held to the rule the step is written under rather
 // than to a second reading of it — one the box would refuse at setup, after
 // the check had taken its box.

@@ -4,14 +4,14 @@
 -- beside the facts its home read (0102), by the same `revise` record: what a
 -- merge gate's exemptions read (a protection's approvals_unless and its
 -- human paths' unless), and what carries an approval from one revision to the
--- next where its patch id cannot (code.ReadinessOf).
+-- next where its patch id cannot (gitlet.ReadinessOf).
 --
 -- code_revision_facts gains three columns:
 --   - base_tree and head_tree are the trees of the revision's base — the
 --     empty tree's id for a history that shares no commit with its target's —
 --     and of its head. Two revisions whose rows name the same pair hold the
 --     same code, byte for byte: an approval of the one carries to the other
---     (code.ChangeClassNoCodeChange, a revision carry-forward kind), however
+--     (gitlet.ChangeClassNoCodeChange, a revision carry-forward kind), however
 --     their histories differ and whatever their patch ids say, an omitted one
 --     included — which an equal patch id, the other kind, cannot do. The
 --     TREES are recorded and the class is not: no_code_change is a relation
@@ -20,9 +20,9 @@
 --     against the row it read of the revision before would stand after a late
 --     record of that revision replaced the row.
 --   - classes is the PATH classes of the touched files' changes, as JSON
---     (code.RevisionClasses): each path a class holds of — whitespace_only or
+--     (gitlet.RevisionClasses): each path a class holds of — whitespace_only or
 --     comment_only, as the language's own lexer judges a Go file changed in
---     place (code.ClassifyGo) — named by its place in `touched`, counted from
+--     place (gitlet.ClassifyGo) — named by its place in `touched`, counted from
 --     0, in the list of its narrowest class; and whether the classification
 --     was complete, which is what lets a reader take a path no list names as
 --     one of no class rather than one never lexed. '' is no class at all, the
@@ -30,17 +30,17 @@
 --
 -- CODE_REVISION_FACTS IS CREATED AGAIN, EMPTY, RATHER THAN ALTERED, for
 -- 0106's reason: every column ALTER TABLE adds goes after `touched`, the wide
--- column a list of up to code.MaxTouchedPaths paths makes — and a change's
+-- column a list of up to gitlet.MaxTouchedPaths paths makes — and a change's
 -- readiness, judged on every read of it and every row of a listing, reads
 -- the two trees of its head revision and of each revision an approval stands
 -- on, which past `touched` would read each row's whole overflow chain. So the
 -- trees sit among the narrow columns, and `classes` — wide, but at most some
 -- four kilobytes where `touched` is up to 48 — among the wide ones, before
 -- `touched`. No release carries 0102: the code domain is on no build of main
--- and in no image or tag (the domain's stated condition, code.RecordVersion),
+-- and in no image or tag (the domain's stated condition, gitlet.RecordVersion),
 -- so no store anywhere holds a row of it outside a development branch, and a
 -- live change whose facts are gone is due them again at its home's next pass
--- (code.ReadChangesDue: a head revision with no facts) — a function of two
+-- (gitlet.ReadChangesDue: a head revision with no facts) — a function of two
 -- commits, recorded again. 0102 IS NOT EDITED: `schema_migrations` keys on
 -- the filename, so a store that applied it would never see the change.
 --

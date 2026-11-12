@@ -8,7 +8,7 @@
 -- and their applies drop its candidates and put its entries back to waiting,
 -- which leaves its attempts queued or running on commits nothing tests,
 -- holding the runners' cells ahead of the live train's, since a runner claims
--- oldest first. The home's queue worker cancels them (internal/code/home's
+-- oldest first. The home's queue worker cancels them (internal/gitlet/home's
 -- queue.go), and these indexes are how it finds them.
 --
 -- code_checks_train_idx is a repository's attempts a merge queue queued that

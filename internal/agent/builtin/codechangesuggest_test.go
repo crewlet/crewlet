@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -25,19 +25,19 @@ const (
 func suggestedChange() *changeFixture {
 	f := siteChange()
 	retry, deleted := "retry(3)\n", ""
-	finding := func(id, path, blob string, side code.Side, start, end int, state code.FindingState,
-		s *string) code.FindingRow {
-		return code.FindingRow{ID: id, ReviewID: reviewedID, Raiser: "agent-ceo", RaiserKind: code.PartyAgent,
+	finding := func(id, path, blob string, side gitlet.Side, start, end int, state gitlet.FindingState,
+		s *string) gitlet.FindingRow {
+		return gitlet.FindingRow{ID: id, ReviewID: reviewedID, Raiser: "agent-ceo", RaiserKind: gitlet.PartyAgent,
 			Revision: 3, Path: path, Side: side, LineStart: start, LineEnd: end, CommitOID: revHead(3),
-			BlobOID: blob, Severity: code.SeverityMajor, Category: code.CategoryCorrectness, Title: "t",
+			BlobOID: blob, Severity: gitlet.SeverityMajor, Category: gitlet.CategoryCorrectness, Title: "t",
 			State: state, Suggestion: s}
 	}
-	f.findings = []code.FindingRow{
-		finding(suggestedA, "a.txt", aNew, code.SideNew, 3, 3, code.FindingOpen, &retry),
-		finding(suggestedB, "r3.txt", r3New, code.SideNew, 2, 4, code.FindingWontFix, &deleted),
-		finding(suggestsNone, "a.txt", aNew, code.SideNew, 1, 1, code.FindingOpen, nil),
-		finding(suggestsOld, "a.txt", aOld, code.SideOld, 1, 1, code.FindingOpen, &retry),
-		finding(dismissedOne, "a.txt", aNew, code.SideNew, 5, 5, code.FindingDismissed, &retry),
+	f.findings = []gitlet.FindingRow{
+		finding(suggestedA, "a.txt", aNew, gitlet.SideNew, 3, 3, gitlet.FindingOpen, &retry),
+		finding(suggestedB, "r3.txt", r3New, gitlet.SideNew, 2, 4, gitlet.FindingWontFix, &deleted),
+		finding(suggestsNone, "a.txt", aNew, gitlet.SideNew, 1, 1, gitlet.FindingOpen, nil),
+		finding(suggestsOld, "a.txt", aOld, gitlet.SideOld, 1, 1, gitlet.FindingOpen, &retry),
+		finding(dismissedOne, "a.txt", aNew, gitlet.SideNew, 5, 5, gitlet.FindingDismissed, &retry),
 	}
 	return f
 }
@@ -56,11 +56,11 @@ func TestAnApplyReadsOnlyTheFindingsItNames(t *testing.T) {
 	t.Parallel()
 	f := suggestedChange()
 	// A HISTORY OF EARLIER REVIEWS, two pages' worth before the findings named.
-	var history []code.FindingRow
-	for i := range 2 * code.MaxFindingsPerPage {
-		history = append(history, code.FindingRow{ID: fmt.Sprintf("0192f6c1-6a7e-7c1b-9d4e-%012x", i),
-			ReviewID: reviewedID, Raiser: "agent-ceo", RaiserKind: code.PartyAgent, Revision: 1, Path: "a.txt",
-			Side: code.SideNew, LineStart: 1, LineEnd: 1, Title: "t", State: code.FindingSuperseded})
+	var history []gitlet.FindingRow
+	for i := range 2 * gitlet.MaxFindingsPerPage {
+		history = append(history, gitlet.FindingRow{ID: fmt.Sprintf("0192f6c1-6a7e-7c1b-9d4e-%012x", i),
+			ReviewID: reviewedID, Raiser: "agent-ceo", RaiserKind: gitlet.PartyAgent, Revision: 1, Path: "a.txt",
+			Side: gitlet.SideNew, LineStart: 1, LineEnd: 1, Title: "t", State: gitlet.FindingSuperseded})
 	}
 	f.findings = append(history, f.findings...)
 	host := newChangeHost(f)
@@ -70,9 +70,9 @@ func TestAnApplyReadsOnlyTheFindingsItNames(t *testing.T) {
 	if writes, _ := writer.asked(); got.Failed || len(writes) != 1 || len(writes[0].Suggestions) != 2 {
 		t.Fatalf("the apply answered %q, sending %d writes", got.Output, len(writes))
 	}
-	findingReads := func(host *gitletHost) []code.ReadQuery {
+	findingReads := func(host *gitletHost) []gitlet.ReadQuery {
 		reads, _, _ := host.asked()
-		return slices.DeleteFunc(reads, func(q code.ReadQuery) bool { return q.Part != code.PartFindings })
+		return slices.DeleteFunc(reads, func(q gitlet.ReadQuery) bool { return q.Part != gitlet.PartFindings })
 	}
 	if parts := findingReads(host); len(parts) != 1 ||
 		!slices.Equal(parts[0].FindingIDs, []string{suggestedA, suggestedB}) || parts[0].Limit != 0 ||
@@ -135,13 +135,13 @@ func TestAnAppliedSuggestionResolvesItsFindingAsAStep(t *testing.T) {
 		t.Fatalf("the apply answered %q, sending %d writes and %d answers", got.Output, len(writes), len(converses))
 	}
 	w := writes[0]
-	want := []code.SuggestionOp{
+	want := []gitlet.SuggestionOp{
 		{FindingID: suggestedA, Path: "a.txt", BlobOID: aNew, LineStart: 3, LineEnd: 3, Text: "retry(3)\n"},
 		{FindingID: suggestedB, Path: "r3.txt", BlobOID: r3New, LineStart: 2, LineEnd: 4, Text: ""},
 	}
-	if w.Kind != code.WriteApplySuggestions || w.Ref != "refs/heads/feature" || w.ExpectedHead != revHead(3) ||
+	if w.Kind != gitlet.WriteApplySuggestions || w.Ref != "refs/heads/feature" || w.ExpectedHead != revHead(3) ||
 		!slices.Equal(w.Suggestions, want) || !strings.Contains(w.Message, "site!7") ||
-		w.Principal.Kind != code.PrincipalAgent || w.Principal.Run.TurnID == "" {
+		w.Principal.Kind != gitlet.PrincipalAgent || w.Principal.Run.TurnID == "" {
 		t.Errorf("the apply is %+v, want site!7's two suggestions onto feature at revision 3's head", w)
 	}
 	answer := converses[0]
@@ -150,8 +150,8 @@ func TestAnAppliedSuggestionResolvesItsFindingAsAStep(t *testing.T) {
 			answer.FindingResolve, answer.OpID, answer.Seen, w.OpID, codeAt(13))
 	}
 	for i, id := range []string{suggestedA, suggestedB} {
-		if f := answer.FindingResolve.Findings[i]; f != (code.FindingResolution{FindingID: id,
-			Resolution: code.FindingResolved, Commit: writtenOID}) {
+		if f := answer.FindingResolve.Findings[i]; f != (gitlet.FindingResolution{FindingID: id,
+			Resolution: gitlet.FindingResolved, Commit: writtenOID}) {
 			t.Errorf("finding %s is answered %+v, want resolved with the commit %s", id, f, writtenOID)
 		}
 	}
@@ -179,8 +179,8 @@ func TestAnAppliedSuggestionResolvesItsFindingAsAStep(t *testing.T) {
 		}
 	}
 
-	outdated := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
-		return code.EngineWriteResult{Refusal: code.WriteSuggestionOutdated,
+	outdated := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		return gitlet.EngineWriteResult{Refusal: gitlet.WriteSuggestionOutdated,
 			Detail: "finding " + suggestedA + "'s lines 3 to 3 of a.txt changed since they were read"}, nil
 	}}
 	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(suggestedChange()), outdated)),

@@ -395,7 +395,7 @@ type Census struct {
 
 	// Clients is the linearizable reads a day a log's OWN SIZING declares
 	// for readers that are NEITHER seats NOR the engine's own passes — the
-	// code log's git clients (code.GitReadsPerDay): a company's people and
+	// code log's git clients (gitlet.GitReadsPerDay): a company's people and
 	// their CI, whose number no seat count predicts. Zero on every other
 	// log. Its caller sizes it by the ceiling the log's stream HOLDS, which
 	// every node reads alike and only a resize moves — and counts it on
@@ -417,8 +417,8 @@ type Census struct {
 	// box's, a turn's code tools' second look and an engine write's
 	// re-judgement each draw on a bucket of its run or its turn and on its
 	// seat's ONE bucket of the Gitlet node that answers, which all three pay —
-	// LinearizableReadsPerSeatDay a day, after a burst of code.ResyncBurst
-	// (internal/code's NewResyncs) — and past it are answered at the seat's
+	// LinearizableReadsPerSeatDay a day, after a burst of gitlet.ResyncBurst
+	// (internal/gitlet's NewResyncs) — and past it are answered at the seat's
 	// floor with no barrier. A check's box's re-syncs are no seat's and no
 	// client's: bounded alike by its repository's checks on each Gitlet node,
 	// and counted in no term here.
@@ -907,7 +907,7 @@ type Reading struct {
 	// work; CodeMaintenanceLargest is the largest of those charges, and
 	// CodeMaintenanceBudget what the node can give: its memory as the cache
 	// last read it, less what it keeps for its git lanes, the store, the
-	// broker and the engine (internal/code/cache). The node's own
+	// broker and the engine (internal/gitlet/cache). The node's own
 	// measurement, never a threshold of the table's: the alarm fires where
 	// the largest charge passes it. All zero on a node that serves no git.
 	CodeMaintenanceRefused                        int
@@ -920,8 +920,8 @@ type Reading struct {
 	// into them is refused `compaction_behind` until a compaction lands;
 	// CodeCompactionBehindLargest is the most live packs among them and
 	// CodeCompactionBehindRepo that repository's name. Counted against
-	// code.MaxPacksPerRepo by the compactor, which already judged each
-	// repository it names (internal/code/compact): this framework imports no
+	// gitlet.MaxPacksPerRepo by the compactor, which already judged each
+	// repository it names (internal/gitlet/compact): this framework imports no
 	// Gitlet package, and the alarm borrows the bound the push decide
 	// refuses at (ADR-0015) rather than holding a number of its own. All zero
 	// on a node that serves no git, compacts nothing, or found none.
@@ -935,7 +935,7 @@ type Reading struct {
 	// TrimInterval: a repository's queue full, the node holding its whole
 	// bound across every repository it commits for, or a proposal that
 	// queued with time to spare and lost it waiting behind earlier ones
-	// (internal/code's Committer.AlarmReading). CodeCommitBusyRepo is the
+	// (internal/gitlet's Committer.AlarmReading). CodeCommitBusyRepo is the
 	// repository with the most of them, by the name this node's rows hold
 	// for it, else its id; CodeCommitBusyOfRepo is how many were that
 	// repository's; CodeCommitBusyNode is how many met the node's whole bound
@@ -949,7 +949,7 @@ type Reading struct {
 	// EACH WAS ALREADY JUDGED AT THE COMMITTER'S OWN BOUNDS, which this
 	// framework does not import, so the alarm borrows them whole (ADR-0015)
 	// and fires at any count. And the window is TrimInterval itself, which
-	// the committer borrows in turn (code.CommitBusyWindow), so the detail
+	// the committer borrows in turn (gitlet.CommitBusyWindow), so the detail
 	// names the span from this package's own constant rather than from a
 	// copy of it. All zero on a node that decides no push — no data role, or
 	// a company that hosts no code — and on one that turned none away.
@@ -963,8 +963,8 @@ type Reading struct {
 	// a runner longer than their OWN timeout — each held to the
 	// timeout_seconds of the definition it was queued under, the time its
 	// author gave the check to run — as this node's rows hold them
-	// (internal/code's Reader.ChecksBacklog, read in the order they fell
-	// overdue), exact up to code.BacklogScan; CodeChecksBacklogMore reports
+	// (internal/gitlet's Reader.ChecksBacklog, read in the order they fell
+	// overdue), exact up to gitlet.BacklogScan; CodeChecksBacklogMore reports
 	// more than that many, the count then the bound;
 	// CodeChecksBacklogOldest is the longest wait among those counted and
 	// CodeChecksBacklogCheck that attempt, by its repository's name, its
@@ -992,7 +992,7 @@ type Reading struct {
 	// CodeMergeRateOverAsked its enqueues within the window,
 	// CodeMergeRateOverCapacity what it can land in it and
 	// CodeMergeRateOverRound the mean round it was priced at.
-	// CodeMergeRateWindow is the window itself — internal/code's
+	// CodeMergeRateWindow is the window itself — internal/gitlet's
 	// MergeRateWindow — handed in by the node that measured over it, since
 	// this framework imports no Gitlet package and the detail names it.
 	//
@@ -1014,13 +1014,13 @@ type Reading struct {
 	// hold them, set refs so fast that they reach the most live refs a
 	// repository may hold within the ref lifecycle's window unless refs are
 	// deleted: their live refs and the refs of those set within the window
-	// together reach the bound (internal/code's NearLimit and
+	// together reach the bound (internal/gitlet's NearLimit and
 	// Reader.RefsNearLimit). CodeRefsNearLimitRepo is the one with the most
 	// of the two together, by name, CodeRefsNearLimitLive its live refs and
 	// CodeRefsNearLimitRecent those of them set within the window.
 	// CodeRefsLimit and CodeRefsWindow are the bound and the window
-	// themselves — code.MaxRefsPerRepo, at which the push decide refuses a
-	// create repo_refs, and code.RefExpiry, after which the lifecycle deletes
+	// themselves — gitlet.MaxRefsPerRepo, at which the push decide refuses a
+	// create repo_refs, and gitlet.RefExpiry, after which the lifecycle deletes
 	// a seat's idle branch — handed in by the node that measured against
 	// them, since this framework imports no Gitlet package and the detail
 	// names both.
@@ -1043,9 +1043,9 @@ type Reading struct {
 	// home to — a pull mirror's syncs from its source, a push mirror's
 	// pushes to its target, each the Gitlet node that runs them — have not been
 	// brought level for longer than their own refresh promise:
-	// code.MirrorInterval, how often a home brings a mirror level, plus
-	// internal/code/mirror's AttemptDeadline, the grace an attempt in flight
-	// is given beyond it (internal/code/mirror's Mirrors.AlarmReading).
+	// gitlet.MirrorInterval, how often a home brings a mirror level, plus
+	// internal/gitlet/mirror's AttemptDeadline, the grace an attempt in flight
+	// is given beyond it (internal/gitlet/mirror's Mirrors.AlarmReading).
 	// CodeMirrorFailingRepo is the one failing longest, by its repository's
 	// name, and CodeMirrorFailingFor how long since it was last brought
 	// level — or since this node first tried it, where it never has been

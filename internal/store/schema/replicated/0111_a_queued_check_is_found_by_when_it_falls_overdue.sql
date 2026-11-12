@@ -3,7 +3,7 @@
 -- The code_checks_backlog alarm counts the queued attempts of checks that have
 -- waited for a runner longer than their OWN timeout_seconds (ADR-0015: the
 -- threshold is every check's, never the alarm's), and it reads at most
--- code.BacklogScan rows a reading. It walked code_checks_queued_idx, oldest
+-- gitlet.BacklogScan rows a reading. It walked code_checks_queued_idx, oldest
 -- QUEUED first — but each attempt is judged at its own timeout, from a second
 -- to six hours, so the oldest queued are not the first overdue: a thousand
 -- attempts of a fifty-minute check queued a minute before a one-minute lint
@@ -34,10 +34,10 @@
 --
 -- THE DEFAULT IS 0 — never overdue — because SQLite requires one for a NOT
 -- NULL column added to a table. No release carries the code domain (the
--- domain's stated condition, code.RecordVersion), so no store anywhere holds a
+-- domain's stated condition, gitlet.RecordVersion), so no store anywhere holds a
 -- row of 0103 outside a development branch, and none is rewritten here.
 --
--- Class: code_checks stays reproducible (code.ReproducibleTables): the column
+-- Class: code_checks stays reproducible (gitlet.ReproducibleTables): the column
 -- is written only by the applier, from the records on a repository's checks
 -- subject, and an index carries no rows of its own.
 ALTER TABLE code_checks ADD COLUMN overdue_at INTEGER NOT NULL DEFAULT 0;

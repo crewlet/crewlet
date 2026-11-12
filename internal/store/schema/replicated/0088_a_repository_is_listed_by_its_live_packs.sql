@@ -3,10 +3,10 @@
 -- Every push stores one pack, so a busy repository's pack count grows with its
 -- pushes until something merges them: a compaction, which a git node builds for
 -- the repositories it is home for and the repository's committer decides
--- (internal/code's Compaction). The node finds those repositories by polling
+-- (internal/gitlet's Compaction). The node finds those repositories by polling
 -- the code host's `compaction_due` read — every active or archived repository
--- holding at least code.CompactMinMerge live packs, MOST LIVE PACKS FIRST, so a
--- repository near code.MaxPacksPerRepo, whose pushes are about to be refused,
+-- holding at least gitlet.CompactMinMerge live packs, MOST LIVE PACKS FIRST, so a
+-- repository near gitlet.MaxPacksPerRepo, whose pushes are about to be refused,
 -- never waits behind a thousand barely due — once a minute, on every git node.
 -- Without this index that listing reads every repository the company declares
 -- and sorts the ones it keeps, on whichever data node answers it, for every
@@ -19,7 +19,7 @@
 --
 -- (live_packs, id), walked backwards: the listing's order is most live packs
 -- first and then by id, its cursor the last row's pair, and a backward walk of
--- an ascending index serves it with no sort (internal/code's plan test holds the
+-- an ascending index serves it with no sort (internal/gitlet's plan test holds the
 -- listing's two statements to that seek and to no sort).
 --
 -- What it costs is the push apply's: every record that moves a repository's

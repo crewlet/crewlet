@@ -500,7 +500,7 @@ func worstRow(t *testing.T) PendingRun {
 		}
 	}
 	// THE TURN'S HOLDS, the most a turn may take ([MaxCodeHolds]), each a
-	// seat branch's key at Gitlet's fixed width (internal/code's
+	// seat branch's key at Gitlet's fixed width (internal/gitlet's
 	// RefHoldKey, 69 bytes, the wider of the two kinds); and its floors, a
 	// statelog position's token each — a stream's name, under 64 bytes, and
 	// two 64-bit numbers at their widest — which the engine mints and this

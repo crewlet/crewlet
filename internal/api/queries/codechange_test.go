@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -33,24 +33,24 @@ func oid(c string) string { return strings.Repeat(c, 40) }
 // each measured against main, revision 1 at position 10 and revision 2 at 20
 // — answered at position answeredAt; and of its one finding, raised on
 // revision 1's new side.
-func twoRevisions(answeredAt statelog.Position) func(code.ReadQuery) (code.ReadAnswer, error) {
-	rev := func(n int64, head, base string, at uint64) code.RevisionRow {
-		return code.RevisionRow{N: n, Head: oid(head), Position: atCodeSeq(at), Facts: &code.RevisionFactsRow{
+func twoRevisions(answeredAt statelog.Position) func(gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	rev := func(n int64, head, base string, at uint64) gitlet.RevisionRow {
+		return gitlet.RevisionRow{N: n, Head: oid(head), Position: atCodeSeq(at), Facts: &gitlet.RevisionFactsRow{
 			TargetRef: "refs/heads/main", TargetOID: oid("a"), TargetPosition: atCodeSeq(at - 1),
 			BaseOID: oid(base), Touched: []string{"upload/retry.go"}}}
 	}
-	return func(q code.ReadQuery) (code.ReadAnswer, error) {
-		out := code.ReadAnswer{Level: q.Fresh.Level, Position: answeredAt}
+	return func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		out := gitlet.ReadAnswer{Level: q.Fresh.Level, Position: answeredAt}
 		switch {
-		case q.Part == code.PartFindings:
-			out.Findings = []code.FindingRow{{ID: "f1", Revision: 1, Path: "upload/retry.go", Side: code.SideNew,
+		case q.Part == gitlet.PartFindings:
+			out.Findings = []gitlet.FindingRow{{ID: "f1", Revision: 1, Path: "upload/retry.go", Side: gitlet.SideNew,
 				BlobOID: oid("b"), LineStart: 4, LineEnd: 4}}
 		case q.Cursor == "2":
-			out.Revisions = []code.RevisionRow{rev(1, "1", "a", 10)}
+			out.Revisions = []gitlet.RevisionRow{rev(1, "1", "a", 10)}
 		default:
-			out.Change = &code.ChangeDetail{ChangeSummary: code.ChangeSummary{ChangeRow: code.ChangeRow{
-				ID: "change-1", RepoID: webID, Number: 1, State: code.ChangeStateOpen, Revision: 2}}}
-			out.Revisions = []code.RevisionRow{rev(2, "2", "a", 20)}
+			out.Change = &gitlet.ChangeDetail{ChangeSummary: gitlet.ChangeSummary{ChangeRow: gitlet.ChangeRow{
+				ID: "change-1", RepoID: webID, Number: 1, State: gitlet.ChangeStateOpen, Revision: 2}}}
+			out.Revisions = []gitlet.RevisionRow{rev(2, "2", "a", 20)}
 		}
 		return out, nil
 	}
@@ -63,7 +63,7 @@ func twoRevisions(answeredAt statelog.Position) func(code.ReadQuery) (code.ReadA
 // row of its answer at `session` floored at that first read's position — so
 // it is never assembled from a copy older than the one its first read saw —
 // and asks the Gitlet node at the floor of the records that moved each revision
-// it reads and its target (code.ObjectFloor), never at the caller's floor or
+// it reads and its target (gitlet.ObjectFloor), never at the caller's floor or
 // a row read's checkpoint.
 //
 // Mutations: read a later revision at the caller's freshness → its read is
@@ -93,7 +93,7 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 		// reads is each row read's kind and freshness, in order; git the
 		// read by object id the answer asks, if any, and gitFloor its floor.
 		reads    []statelog.Freshness
-		git      code.GitReadKind
+		git      gitlet.GitReadKind
 		gitFloor statelog.Position
 	}{
 		{"code_changes", map[string]any{"repo": "web", "name": nil, "change": nil},
@@ -105,18 +105,18 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 		{"code_change", map[string]any{"part": "reviews"}, []statelog.Freshness{asked}, "", statelog.Position{}},
 		// The head's files: the head read, then the diff at the floor of
 		// the record that moved its head (20).
-		{"code_change", map[string]any{"part": "files"}, []statelog.Freshness{asked}, code.GitDiff,
+		{"code_change", map[string]any{"part": "files"}, []statelog.Freshness{asked}, gitlet.GitDiff,
 			atCodeSeq(20)},
 		// What changed since revision 1: the head, revision 1 floored at
 		// the head's answer, the interdiff at the later of the two.
 		{"code_change", map[string]any{"part": "diff", "since_revision": "1", "file": "upload/retry.go"},
-			[]statelog.Freshness{asked, after}, code.GitInterdiff, atCodeSeq(20)},
+			[]statelog.Freshness{asked, after}, gitlet.GitInterdiff, atCodeSeq(20)},
 		// Revision 1's files: the head, revision 1 floored, its diff at 10.
 		{"code_change", map[string]any{"part": "files", "revision": "1"},
-			[]statelog.Freshness{asked, after}, code.GitDiff, atCodeSeq(10)},
+			[]statelog.Freshness{asked, after}, gitlet.GitDiff, atCodeSeq(10)},
 		// The findings placed in the head: the head, the findings page
 		// floored at its answer, and a re-anchoring at the head's floor.
-		{"code_change", map[string]any{"part": "findings"}, []statelog.Freshness{asked, after}, code.GitReanchor,
+		{"code_change", map[string]any{"part": "findings"}, []statelog.Freshness{asked, after}, gitlet.GitReanchor,
 			atCodeSeq(20)},
 	} {
 		name := tc.what
@@ -130,12 +130,12 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 			}
 		}
 		stub := &stubCode{answer: twoRevisions(answered),
-			git: func(q code.GitQuery) (code.GitAnswer, error) {
-				out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
+			git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+				out := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
 				if q.Reanchor != nil {
-					out.Reanchor = &code.ReanchorAnswer{}
+					out.Reanchor = &gitlet.ReanchorAnswer{}
 					for _, a := range q.Reanchor.Anchors {
-						out.Reanchor.Anchors = append(out.Reanchor.Anchors, code.Reanchored{ID: a.ID, Start: 6,
+						out.Reanchor.Anchors = append(out.Reanchor.Anchors, gitlet.Reanchored{ID: a.ID, Start: 6,
 							End: 6})
 					}
 				}
@@ -161,7 +161,7 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 			t.Errorf("%s asked the reads by object id %+v, want one %s", name, stub.read, tc.git)
 		case !reflect.DeepEqual(stub.read[0].Fresh, statelog.FloorAt(statelog.ReadSession, tc.gitFloor)):
 			t.Errorf("%s asked its %s at %+v, want session at %s", name, tc.git, stub.read[0].Fresh, tc.gitFloor)
-		case stub.read[0].RepoID != webID || stub.read[0].Asker == (code.Principal{}):
+		case stub.read[0].RepoID != webID || stub.read[0].Asker == (gitlet.Principal{}):
 			t.Errorf("%s asked its %s of %q as %+v, want the change's repository as the caller", name, tc.git,
 				stub.read[0].RepoID, stub.read[0].Asker)
 		}
@@ -175,9 +175,9 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 }
 
 // A PAGE OF FINDINGS PAST ONE RE-ANCHORING IS PLACED WHOLE: the findings part
-// takes any page the reader serves (up to code.MaxFindingsPerPage, which a
+// takes any page the reader serves (up to gitlet.MaxFindingsPerPage, which a
 // screen asks), and a Gitlet node's re-anchoring places at most
-// code.MaxReanchors — so a page of findings raised on an earlier revision
+// gitlet.MaxReanchors — so a page of findings raised on an earlier revision
 // past that is placed by several re-anchorings, each one a Gitlet node takes,
 // all at the head's floor, never refused as the request's mistake naming a
 // field it never sent.
@@ -188,21 +188,21 @@ func TestAPageOfFindingsPastOneReanchoringIsPlacedWhole(t *testing.T) {
 	t.Parallel()
 	const findings = 100
 	rows := twoRevisions(atCodeSeq(4800))
-	stub := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+	stub := &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 		out, err := rows(q)
-		if q.Part == code.PartFindings {
+		if q.Part == gitlet.PartFindings {
 			out.Findings = nil
 			for i := range findings {
-				out.Findings = append(out.Findings, code.FindingRow{ID: fmt.Sprintf("f%03d", i), Revision: 1,
-					Path: "upload/retry.go", Side: code.SideNew, BlobOID: oid("b"), LineStart: i + 1,
+				out.Findings = append(out.Findings, gitlet.FindingRow{ID: fmt.Sprintf("f%03d", i), Revision: 1,
+					Path: "upload/retry.go", Side: gitlet.SideNew, BlobOID: oid("b"), LineStart: i + 1,
 					LineEnd: i + 1})
 			}
 		}
 		return out, err
-	}, git: func(q code.GitQuery) (code.GitAnswer, error) {
-		out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Reanchor: &code.ReanchorAnswer{}}
+	}, git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+		out := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Reanchor: &gitlet.ReanchorAnswer{}}
 		for _, a := range q.Reanchor.Anchors {
-			out.Reanchor.Anchors = append(out.Reanchor.Anchors, code.Reanchored{ID: a.ID, Start: a.Start + 2,
+			out.Reanchor.Anchors = append(out.Reanchor.Anchors, gitlet.Reanchored{ID: a.ID, Start: a.Start + 2,
 				End: a.End + 2})
 		}
 		return out, nil
@@ -224,13 +224,13 @@ func TestAPageOfFindingsPastOneReanchoringIsPlacedWhole(t *testing.T) {
 	}
 	if len(stub.read) < 2 {
 		t.Errorf("a page of %d findings was placed by %d re-anchorings, want one for every %d", findings,
-			len(stub.read), code.MaxReanchors)
+			len(stub.read), gitlet.MaxReanchors)
 	}
 	for _, q := range stub.read {
-		if q.Kind != code.GitReanchor || len(q.Reanchor.Anchors) > code.MaxReanchors ||
+		if q.Kind != gitlet.GitReanchor || len(q.Reanchor.Anchors) > gitlet.MaxReanchors ||
 			!reflect.DeepEqual(q.Fresh, statelog.FloorAt(statelog.ReadSession, atCodeSeq(20))) {
 			t.Errorf("asked %s of %d anchors at %+v, want a re-anchoring of at most %d at the head's floor", q.Kind,
-				len(q.Reanchor.Anchors), q.Fresh, code.MaxReanchors)
+				len(q.Reanchor.Anchors), q.Fresh, gitlet.MaxReanchors)
 		}
 	}
 }
@@ -239,7 +239,7 @@ func TestAPageOfFindingsPastOneReanchoringIsPlacedWhole(t *testing.T) {
 // revision 1 of a change whose head is 3 reads the head, then the two
 // revisions — neither needing the other's row — beside each other, each
 // floored at the head's answer, so a node reading the estate through another
-// pays one round trip for the two (code.ChangeRevisions, which the code tools
+// pays one round trip for the two (gitlet.ChangeRevisions, which the code tools
 // read by too). And a findings page is read beside the revision it is placed
 // in.
 //
@@ -264,28 +264,28 @@ func TestAChangesTwoRevisionsAreReadAtOnce(t *testing.T) {
 			return false
 		}
 	}
-	rev := func(n int64) code.RevisionRow {
+	rev := func(n int64) gitlet.RevisionRow {
 		head := fmt.Sprint(n)
-		return code.RevisionRow{N: n, Head: oid(head), Position: atCodeSeq(uint64(10 * n)),
-			Facts: &code.RevisionFactsRow{TargetRef: "refs/heads/main", TargetOID: oid("a"),
+		return gitlet.RevisionRow{N: n, Head: oid(head), Position: atCodeSeq(uint64(10 * n)),
+			Facts: &gitlet.RevisionFactsRow{TargetRef: "refs/heads/main", TargetOID: oid("a"),
 				TargetPosition: atCodeSeq(uint64(10*n - 1)), BaseOID: oid("a"), Touched: []string{"upload/retry.go"}}}
 	}
-	stub := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
-		out := code.ReadAnswer{Level: q.Fresh.Level, Position: answered}
+	stub := &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		out := gitlet.ReadAnswer{Level: q.Fresh.Level, Position: answered}
 		if q.Cursor == "" && q.Part == "" {
-			out.Change = &code.ChangeDetail{ChangeSummary: code.ChangeSummary{ChangeRow: code.ChangeRow{
-				ID: "change-1", RepoID: webID, Number: 1, State: code.ChangeStateOpen, Revision: 3}}}
-			out.Revisions = []code.RevisionRow{rev(3)}
+			out.Change = &gitlet.ChangeDetail{ChangeSummary: gitlet.ChangeSummary{ChangeRow: gitlet.ChangeRow{
+				ID: "change-1", RepoID: webID, Number: 1, State: gitlet.ChangeStateOpen, Revision: 3}}}
+			out.Revisions = []gitlet.RevisionRow{rev(3)}
 			return out, nil
 		}
 		if !meet() {
-			return code.ReadAnswer{}, fmt.Errorf("the read %+v was made alone", q)
+			return gitlet.ReadAnswer{}, fmt.Errorf("the read %+v was made alone", q)
 		}
 		switch q.Cursor {
 		case "3":
-			out.Revisions = []code.RevisionRow{rev(2)}
+			out.Revisions = []gitlet.RevisionRow{rev(2)}
 		case "2":
-			out.Revisions = []code.RevisionRow{rev(1)}
+			out.Revisions = []gitlet.RevisionRow{rev(1)}
 		}
 		return out, nil
 	}}
@@ -353,8 +353,8 @@ func TestAChangeQuestionRefusesWhatItsPartDoesNotTake(t *testing.T) {
 	if !errors.As(err, &missing) || missing.Reason != queries.ReasonNoRevision {
 		t.Errorf("a revision web!1 does not hold answered %v, want not_found (no_revision)", err)
 	}
-	stub = &stubCode{answer: func(code.ReadQuery) (code.ReadAnswer, error) {
-		return code.ReadAnswer{}, errors.Join(code.ErrChangeNotFound, errors.New("web!9"))
+	stub = &stubCode{answer: func(gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		return gitlet.ReadAnswer{}, errors.Join(gitlet.ErrChangeNotFound, errors.New("web!9"))
 	}}
 	_, err = askNative(t, queries.Sources{Code: stub}, "code_change_routing", map[string]any{"name": "web",
 		"change": "9"})
@@ -382,26 +382,26 @@ func TestAChangesReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 		err   error
 		check func(error) bool
 	}{
-		{"no file", fmt.Errorf("%w: revision 2 holds no file upload/gone.go", code.ErrNotABlob),
+		{"no file", fmt.Errorf("%w: revision 2 holds no file upload/gone.go", gitlet.ErrNotABlob),
 			func(err error) bool {
 				var absent *queries.NotFound
 				return errors.As(err, &absent) && absent.Reason == queries.ReasonNoObject &&
 					strings.Contains(absent.Detail, "upload/gone.go")
 			}},
-		{"no object", fmt.Errorf("%w: web holds no object %s", code.ErrObjectNotFound, oid("2")),
+		{"no object", fmt.Errorf("%w: web holds no object %s", gitlet.ErrObjectNotFound, oid("2")),
 			func(err error) bool {
 				var absent *queries.NotFound
 				return errors.As(err, &absent) && absent.Reason == queries.ReasonNoObject
 			}},
-		{"too large", fmt.Errorf("%w: past its budget", code.ErrSliceTooLarge),
+		{"too large", fmt.Errorf("%w: past its budget", gitlet.ErrSliceTooLarge),
 			func(err error) bool { return errors.Is(err, queries.ErrBadParams) }},
-		{"no Gitlet node in time", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling its copy"},
+		{"no Gitlet node in time", &gitlet.ErrGitUnready{Reason: gitlet.UnreadyNotHeld, Detail: "filling its copy"},
 			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},
-		{"Gitlet not served", fmt.Errorf("estate: %w", code.ErrNotServing),
+		{"Gitlet not served", fmt.Errorf("estate: %w", gitlet.ErrNotServing),
 			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},
 	} {
 		stub := &stubCode{answer: twoRevisions(atCodeSeq(30)),
-			git: func(code.GitQuery) (code.GitAnswer, error) { return code.GitAnswer{}, tc.err }}
+			git: func(gitlet.GitQuery) (gitlet.GitAnswer, error) { return gitlet.GitAnswer{}, tc.err }}
 		_, err := askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
 			"change": "1", "part": "diff", "file": "upload/gone.go"})
 		if !tc.check(err) {

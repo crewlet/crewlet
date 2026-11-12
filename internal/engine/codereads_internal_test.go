@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/auxspend"
-	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 )
 
 // heldBroker is a publisher the broker has not answered: every publish is told

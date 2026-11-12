@@ -36,7 +36,7 @@
  * # A page at a time, like every code listing
  *
  * The engine answers fifty entries a page, and one branch's queue may hold
- * up to 1 024 waiting (`code.MaxQueueEntries`), so Load more follows `next`
+ * up to 1 024 waiting (`gitlet.MaxQueueEntries`), so Load more follows `next`
  * through the pager every code listing shares (`lib/usePaged.ts`), each page
  * joined to the one before it. Each page answers the trains of the
  * targets it reaches, so the bands draw every page's.

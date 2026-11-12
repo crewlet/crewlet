@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -25,7 +25,7 @@ var errCodeReconcileStopped = errors.New("engine: the engine stopped before the 
 // A reconcile costs a write for every repository that CHANGED, each one this
 // node waits to apply, and a document may declare ten thousand: an activation
 // that declares them all for the first time, removes them all or restores them
-// all is that many writes — 16–19 s on one 4-core node (internal/code's
+// all is that many writes — 16–19 s on one 4-core node (internal/gitlet's
 // doc.go, measured section) — and in a fleet every data node decides the same
 // writes at once, the losers of each race deciding it again from the winner's
 // record, each node's applier applying every record. Inside the apply, that
@@ -45,7 +45,7 @@ var errCodeReconcileStopped = errors.New("engine: the engine stopped before the 
 // repository again from its own document, and the fence it raises first
 // refuses, on every node, what the older one would still write — so letting it
 // finish spends those writes for nothing and holds the newer one back by them.
-// It is ended with [code.ErrSuperseded] as its cause, which is what its log
+// It is ended with [gitlet.ErrSuperseded] as its cause, which is what its log
 // line says. A request for the activation already running or waiting — to run,
 // or to run again — or for an older one, is dropped: the activation asked for
 // last is decided whole.
@@ -127,7 +127,7 @@ const (
 	// after the first failure. From there a failure that does not clear costs
 	// one reconcile every five minutes — an empty fence decision, a paged
 	// walk of the rows, and one batch read of the unchanged declarations,
-	// 0.47–0.59 s at the ten thousand a document may declare (internal/code's
+	// 0.47–0.59 s at the ten thousand a document may declare (internal/gitlet's
 	// measured section) — plus a write and a line for each repository still
 	// not applied, which is the point: a declaration not in force is said
 	// every five minutes until it is, rather than once and then never.
@@ -176,7 +176,7 @@ func (r *codeReconciler) ask(ctx context.Context, c *Company, at time.Time) {
 	}
 	if r.running != nil && r.running.at.Before(at) {
 		r.end(fmt.Errorf("%w: the activation at %s asked for a reconcile of its own",
-			code.ErrSuperseded, at.UTC().Format(time.RFC3339Nano)))
+			gitlet.ErrSuperseded, at.UTC().Format(time.RFC3339Nano)))
 	}
 	r.pending = &codeReposWanted{company: c, at: at}
 	// THE RETRY GOES WITH THE OLDER ACTIVATION: the newer one decides every

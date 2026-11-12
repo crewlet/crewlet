@@ -4,7 +4,7 @@
 -- object the ref held behind it: no ref names it any more, and every object
 -- only it reached stays in the repository's packs, fetchable by its id.
 -- Dropping a repository's unreachable objects (an expunge) must keep those for
--- code.PruneGrace — git's own gc.pruneExpire, two weeks — so history
+-- gitlet.PruneGrace — git's own gc.pruneExpire, two weeks — so history
 -- force-pushed away or deleted can still be fetched, and a branch restored at
 -- it, for that long after the drop. Which objects they are cannot be learned
 -- from the refs, which no longer name them, nor from the push history without
@@ -21,9 +21,9 @@
 -- of the key: every one is kept, and an apply that meets one twice keeps it
 -- once.
 --
--- A push record removes its own repository's rows older than code.PruneGrace
+-- A push record removes its own repository's rows older than gitlet.PruneGrace
 -- by its broker instant, oldest first, with what its row budget leaves after
--- the tombstones (internal/code's push apply), and a purge removes a
+-- the tombstones (internal/gitlet's push apply), and a purge removes a
 -- repository's whole. The index's order is the one both read — by instant,
 -- and then by the key, so a removal cut short at a record's budget cuts every
 -- node's rows at the same row.

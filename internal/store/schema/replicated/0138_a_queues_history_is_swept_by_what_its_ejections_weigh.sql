@@ -1,16 +1,16 @@
 -- A queue's history is swept by what its ejections weigh.
 --
--- A repository's ended queue entries past code.QueueHistory are removed oldest
--- first — at most code.queueHorizonRows by each candidate, eject and land
--- record, and at most code.QueueSweepRows by a queue_sweep record of the
+-- A repository's ended queue entries past gitlet.QueueHistory are removed oldest
+-- first — at most gitlet.queueHorizonRows by each candidate, eject and land
+-- record, and at most gitlet.QueueSweepRows by a queue_sweep record of the
 -- retention duty — and 0110 bounded both by a COUNT of rows alone. An
 -- ejected entry is not a narrow row: its `ejected` column holds the JSON of
 -- what a person reads first — the failed checks, and up to
--- code.MaxEjectedPaths conflicted paths within code.MaxConflictBytes — about
+-- gitlet.MaxEjectedPaths conflicted paths within gitlet.MaxConflictBytes — about
 -- 16 KiB at its widest, and deleting it frees its overflow pages. A sweep of
 -- 3 999 of them was some 64 MiB, past the third of
 -- statelog.ApplyTxTimeBudget every other bound of the domain's deletes is
--- sized to (code.PurgePartBytes), in one apply on every data node.
+-- sized to (gitlet.PurgePartBytes), in one apply on every data node.
 --
 -- code_queue gains ejected_bytes: what `ejected` takes, in bytes, written by
 -- the one apply that writes `ejected` (an eject's), 0 on every other entry.
