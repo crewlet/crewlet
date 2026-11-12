@@ -6,10 +6,11 @@
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import type { Vendor as MarkVendor } from "@crewlethq/icons";
-import type { Tone } from "@crewlethq/ui";
+import type { GraphEdgeFamily, Tone } from "@crewlethq/ui";
 import type {
   AtlasCoverageSource,
   AtlasFact,
+  AtlasFamily,
   AtlasFactView,
   AtlasHealth,
   AtlasKind,
@@ -60,11 +61,18 @@ export const KIND_ORDER = Object.keys(KINDS) as AtlasKind[];
 export const LANES: Readonly<
   Record<
     AtlasLane,
-    { label: string; empty: string; link?: { label: string; path: string[]; grant: Grant } }
+    {
+      label: string;
+      /** How many columns of cards the lane is wide on the map. */
+      columns: number;
+      empty: string;
+      link?: { label: string; path: string[]; grant: Grant };
+    }
   >
 > = {
   entry: {
     label: "Entry",
+    columns: 2,
     empty:
       "Domains, host names and certificates appear from the zones, DNS records and certificate packs the Cloudflare integration reads, and host names from the addresses this engine answers at.",
     link: {
@@ -75,40 +83,61 @@ export const LANES: Readonly<
   },
   services: {
     label: "Services",
+    columns: 3,
     empty: "Services appear when a person adds one, by asking Ask Crewlet.",
   },
   runtime: {
     label: "Runtime",
+    columns: 4,
     empty: "Servers appear from the SSH servers the SSH integration declares.",
     link: { label: "Open SSH", path: ["company", "integrations", "ssh"], grant: "admin" },
   },
   data: {
     label: "Data",
+    columns: 2,
     empty: "Databases, queues and buckets appear when a person adds one, by asking Ask Crewlet.",
   },
   platforms: {
     label: "Platforms",
+    columns: 2,
     empty: "Each integration the company connects appears here as its account.",
     link: { label: "Open Integrations", path: ["company", "integrations"], grant: "admin" },
   },
   code: {
     label: "Code and delivery",
+    columns: 3,
     empty:
       "Repositories appear from Gitlet and from the repositories the GitHub and GitLab integrations name, with the checks Gitlet runs.",
   },
   observability: {
     label: "Observability",
+    columns: 2,
     empty: "Monitors appear when a person adds one, by asking Ask Crewlet.",
   },
   tools: {
     label: "Tools and models",
+    columns: 2,
     empty: "Tool servers and models appear from Settings › MCP & tools and Settings › Models.",
     link: { label: "Open Models", path: ["settings", "models"], grant: "admin" },
   },
 };
 
-/** The title of the band beneath the lanes a request travels. */
-export const BAND_LABEL = "Around it";
+/**
+ * The map's rows, top to bottom: what a request travels, what that stands on,
+ * and what stands around it. A lane the engine adds joins the last row.
+ */
+export const MAP_ROWS: readonly { id: string; lanes: readonly AtlasLane[] }[] = [
+  { id: "request", lanes: ["entry", "services", "data"] },
+  { id: "under", lanes: ["runtime", "platforms"] },
+  { id: "around", lanes: ["code", "observability", "tools"] },
+];
+
+/** The family of line the map draws each of the engine's in. */
+export const FAMILIES: Readonly<Record<AtlasFamily, GraphEdgeFamily>> = {
+  calls: "flow",
+  runs_on: "support",
+  around: "context",
+};
 
 /** Each vendor's name, and its mark where the kit draws one. */
 export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVendor }>> = {
@@ -141,13 +170,36 @@ export const WORDS: Readonly<Record<AtlasWord, string>> = {
   unconfirmed: "Unconfirmed",
 };
 
-/** What an entry's health is called, and the tone its dot and tag take. */
+/**
+ * What an entry's health is called, the tone its mark takes, the tone of its
+ * notch on the map (a quiet entry draws none) and its part of the ring.
+ */
 export const HEALTH: Readonly<
-  Record<AtlasHealth, { label: string; tone: Tone; dot?: "danger" | "warning" }>
+  Record<AtlasHealth, { label: string; tone: Tone; dot?: "danger" | "warning"; color: string }>
 > = {
-  alerting: { label: "Alerting", tone: "danger", dot: "danger" },
-  needs_look: { label: "Needs a look", tone: "warning", dot: "warning" },
-  quiet: { label: "Quiet", tone: "neutral" },
+  alerting: {
+    label: "Alerting",
+    tone: "danger",
+    dot: "danger",
+    color: "var(--color-feedback-danger)",
+  },
+  needs_look: {
+    label: "Needs a look",
+    tone: "warning",
+    dot: "warning",
+    color: "var(--color-feedback-warning)",
+  },
+  quiet: { label: "Quiet", tone: "neutral", color: "var(--color-border-control)" },
+};
+
+/** The healths, the most urgent first: the order the catalogue groups in. */
+export const HEALTH_ORDER: readonly AtlasHealth[] = ["alerting", "needs_look", "quiet"];
+
+/** Each confidence word's part of the bar that says where the record comes from. */
+export const WORD_COLORS: Readonly<Record<AtlasWord, string>> = {
+  confirmed: "var(--color-brand-accent)",
+  likely: "var(--color-brand-accent-soft-strong)",
+  unconfirmed: "var(--color-border-control)",
 };
 
 /** Where an entry stands, where that is worth a word beside its name. */

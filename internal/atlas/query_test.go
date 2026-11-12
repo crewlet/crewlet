@@ -126,6 +126,43 @@ func TestAListPagesOnItsCursor(t *testing.T) {
 	}
 }
 
+// THE HEALTH ORDER READS THE MOST URGENT FIRST, then the map's order, on
+// every page: a list grouped by health never meets a group twice.
+func TestAListByHealthReadsTheMostUrgentFirst(t *testing.T) {
+	t.Parallel()
+	v := chain(t)
+	for i := range v.Entries {
+		switch v.Entries[i].Ref.Key {
+		case "checkout-api":
+			v.Entries[i].Review = true
+		case "ssh/web-1":
+			v.Entries[i].Signals = []atlas.Signal{{Kind: atlas.SignalServerTestFailed, Severity: atlas.SeverityDanger}}
+		}
+	}
+	entries := v.Select(atlas.Query{})
+	var got []atlas.Health
+	after := ""
+	for range len(entries) + 1 {
+		page, err := atlas.List(entries, v.Summaries(false), atlas.SortHealth, after, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range page.Rows {
+			got = append(got, r.Health)
+		}
+		if after = page.Next; after == "" {
+			break
+		}
+	}
+	want := []atlas.Health{atlas.HealthAlerting, atlas.HealthNeedsLook}
+	for range len(entries) - len(want) {
+		want = append(want, atlas.HealthQuiet)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the health order paged %v, want %v", got, want)
+	}
+}
+
 // A FACET COUNTS OVER EVERY OTHER FILTER, so a menu says what picking it
 // leaves; a vendor is an account's, or the account an entry belongs to.
 func TestAFacetCountsOverEveryOtherFilter(t *testing.T) {

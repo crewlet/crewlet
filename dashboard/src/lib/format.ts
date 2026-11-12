@@ -570,6 +570,17 @@ export function fmtCount(n: number | null | undefined): string {
   return `${whole((n / 1_000_000_000).toFixed(1))}B`;
 }
 
+/**
+ * A count for a place four characters wide (the figure inside a ring): whole
+ * under a thousand, then shortened as [fmtCount] shortens, a step sooner
+ * ("2k", "2.4k", "12k"). The whole number is said beside it.
+ */
+export function fmtCountShort(n: number): string {
+  if (!Number.isFinite(n) || Math.abs(n) < 1000) return fmtCount(n);
+  if (Math.abs(n) < 10_000) return `${whole((n / 1000).toFixed(1))}k`;
+  return fmtCount(Math.abs(n) < 1_000_000 ? Math.round(n / 1000) * 1000 : n);
+}
+
 /** A shortened figure that is whole at its precision says so: `60M`, not
  *  `60.0M`. The `.0` was a digit carrying nothing, on the ceilings a founder
  *  writes as round numbers above all ("60.0M/day and 900.0M/month"). */
