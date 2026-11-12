@@ -89,6 +89,7 @@ export type Workspace =
   | "org"
   | "schedules"
   | "integrations"
+  | "atlas"
   | "budgets"
   | "worklet"
   | "gitlet"
@@ -671,6 +672,33 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "n",
     place: "company",
     renderer: "none",
+    sections: [],
+  },
+  {
+    // WHAT THE COMPANY RUNS ON, beside what it connected: Integrations is what
+    // the company connected, the atlas what those connections, its settings
+    // and its records say it runs on. ATLAS'S, the one app given only on
+    // purpose (ADR-0127): locked, never hidden, for a reader without it.
+    key: "atlas",
+    label: "Atlas",
+    icon: "map",
+    path: ["company", "atlas"],
+    hint: "What the company runs on: domains, servers, repositories, accounts, tools and models, and how they depend on each other",
+    keywords: [
+      "service catalog",
+      "infrastructure",
+      "inventory",
+      "map",
+      "dependencies",
+      "servers",
+      "domains",
+      "what we use",
+    ],
+    // `g o`: no other chord holds it, and `a` is Structure's.
+    chord: "o",
+    place: "company",
+    renderer: "none",
+    grants: ["atlas"],
     sections: [],
   },
   {

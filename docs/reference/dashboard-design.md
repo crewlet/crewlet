@@ -1388,6 +1388,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|activity\|settings`, and a section's word (`code`, `turns`, `memory`, `schedules`, `access`) lands on the tab holding it, scrolled to that section · `session=` (Memory); human: overview · work · settings (Work only where the company runs Worklet or hosts code) · `from=` (the address it was opened from, which its trail names and its crumbs go back to) |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
+| `#/company/atlas` · `#/company/atlas/{id}` | **Atlas** *(needs Atlas access, locked for a reader without it)*: what the company runs on, drawn as a map read the way a request travels, or as the list (`shape=list`), under a coverage line that says how many entries and where from and never that it is complete; one entry's page, its tabs Overview, Relations and Sources ([Company › Atlas](#company--atlas)) | `shape=map\|list` · `q=` · `kind=` · `lane=` · `vendor=` · `confidence=` · `health=` · `unconfirmed=true` · `order=name\|last_seen` (the list) · `trace=up\|down\|both` (the map) · `peek=atlas:{id}` (the selection) · on an entry's page `tab=` |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
 | `#/chatlet` | **Chatlet**: the company's own rooms and conversations, under a top bar (Menu, the Rooms and Messages switchers, and the open room's actions), with the Rooms panel slid in from Menu or pinned beside the conversation *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room. The bare address is no page of its own: it opens Activity, Chatlet's landing, and is replaced at once (never a step of Back) by `#/chatlet/activity`, keeping a `pane=` | `dm=` (a seat's handle, from its page or peek: replaced at once by `#/chatlet/new?to={handle}`) · `pane=` (on every Chatlet address: see the room) |
 | `#/chatlet/activity` | **Chatlet › Activity**, where Chatlet opens (its sidebar row, its `g t` chord and its palette entry): every message that named you, every reply in a thread you follow and every reaction to what you said, across every room, by day. With nothing open the list is the whole view and each item reads as the message it is, in full, with why it is here under it; an open item splits the view, the list keeping half beside the thread (for a reply in a thread) or the message in its room. The whole away story: the engine sends no email, no push and no SMS. A reader in no rooms is told how a room comes to exist | `item=` (the open activity's key; Close and Escape drop it) |
@@ -9199,6 +9200,106 @@ under it waits for an answer that will never be asked. On a phone each task is
 the overview card's compact row — key and title with what drove it under, the
 tokens at the end — rather than a labelled card per task.
 
+## Company › Atlas
+
+`#/company/atlas`, the row after Integrations (`g o`): Integrations is what the
+company connected, and the atlas is what those connections, the company's
+settings and the engine's own records say it runs on
+([the atlas](../concepts/atlas.md)). It is the **Atlas** app's, the one app a
+person is given only on purpose, so the row is locked, never hidden, for a
+reader without it, and its lock names the access to ask for. One item is an
+**entry** everywhere on screen ("48 entries").
+
+**It opens on the map**, the kit's `GraphCanvas`, read left to right the way a
+request travels: Entry, Services, Runtime, Data and Platforms, with Code and
+delivery, Observability, and Tools and models in a band titled "Around it"
+beneath. The lanes are the engine's (`lane` on every entry), and **every lane
+is drawn**: an empty one says what in this build fills it (the Cloudflare
+integration's zones, the SSH servers, the integrations' accounts, Gitlet and
+the repositories the code hosts name, the models and tool servers) or, for a
+lane nothing in this build fills yet, says exactly that, never a promise. A
+link to fill it (Open Cloudflare, Open SSH, Open Integrations, Open Models) is
+drawn only for a reader who may open it. With a filter set, an empty lane says
+nothing matched instead. With nothing at all to draw, the coverage line says
+so and where the atlas fills from; nothing is laid over the lanes, which each
+already say what would fill them.
+
+A card is the kind's glyph, the entry's name and its key in the quiet ink, or
+"Last seen 9 days ago" where no source has seen it lately. **Health is one dot
+on the card**, danger for Alerting and warning for Needs a look, said in words
+to a screen reader; a quiet entry draws none. Confidence is a line, never a
+colour: an unconfirmed entry draws a dashed edge. Entries stand in groups by
+vendor inside their lane. Past 150 entries drawn the groups open closed, each
+one card saying what it holds, and the selection's group opens; a map past what
+the engine draws at once arrives with groups the engine closed (`collapsed`),
+named in a banner above the map with a link to read each in the list, so a
+partial map is never taken for the whole. The relations the engine draws at
+rest are the edges; selecting an entry also lights its others (the account it
+belongs to, the check it is built from), read from its own answer. The legend
+keys Alerting, Needs a look and Quiet, each counted over the cards drawn, and a
+pressed key pushes the others back. **Trace** (Off, Depends on, Used by, Both)
+lights everything the selection reaches and says how many ("14 entries depend
+on orders-db").
+
+**The selection is the peek** (`peek=atlas:{id}`), so a reload, Back or a link
+lands on the same picture, `trace=` included. The peek is the entry's header
+(its kind, name, key, health word, vendor, confidence, last seen and number of
+sources), its signals ("Nothing open on this entry." when there are none), its
+facts, what it depends on and what depends on it (six each, then a pointer to
+the page), and the way to show what depends on it on the map.
+
+**The coverage line** (the kit's `PageNote` under the toolbar, which wraps on
+a phone where a status line would cut it) is how many
+entries the filters leave and which vendors they come from, most entries
+first, four named before "and N more": "48 entries, from GitHub, Cloudflare,
+Gitlet and Anthropic". It never says complete. Its notes are what the read
+could not read in full, in the engine's own reason (Gitlet for a reader who
+does not use it), and how many values were left out for looking like a
+credential, counted and never shown. It is drawn once the first count
+arrives.
+
+**The filters** sit in the page's toolbar beside the shape switch and carry
+between the map and the list: the search (a name, a key or an id, asked once
+the typing settles), Kind, Lane, Vendor, Health and Confidence, each menu
+listing the values with entries and counting each over every other filter
+(`atlas_facets`), and **Show unconfirmed**. An entry only an agent reported,
+with nothing the engine could check, is left out of every read until a person
+confirms it, so the switch is off by default and says how many it would add;
+choosing Unconfirmed under Confidence shows them and holds the switch on, with
+its reason.
+
+**The list** (`shape=list`) is the frame's grid over `atlas_entries`, fifty a
+page with Load more, in the engine's order: the map's by default, or by name or
+by last seen from the Order menu, since the engine orders the whole atlas and a
+grid sorting the pages it holds would answer another question. A row is the
+entry (glyph, name, key), its kind, vendor, health, confidence word and when it
+was last seen, with its lane among the optional columns. A row opens the peek,
+a modifier press the entry's page, and the foot says "That is all of it" with
+the count once there is no page left.
+
+**An entry's page** (`#/company/atlas/{id}`) is its header and three tabs.
+**Overview**: its signals, its facts grouped as Identity, Meaning and Details,
+each with a by-line saying where the value came from and how far it is
+trusted ("seen by Cloudflare · confirmed · 4 min ago", "observed by sre ·
+likely · turn"), its use channel by channel, the agents holding an account at
+it, and the exact keys merged into it. **Relations**: what it depends on, what
+depends on it, the seats, units and pages it names, and everything that depends
+on it hop by hop (`atlas_trace`), with the way to show it on the map.
+**Sources**: where the sources disagree, first, each fact or relation with the
+value shown, every other value beside it and the rule in words (a person's
+value is shown over a newer report, or the newest of two equally trusted
+sources), and in every case that the entry waits for a person: nothing is
+settled on the reader's behalf. Then every source and what it says. A
+disagreement marks the Sources tab.
+
+**An internal address says so**: a value on a private network carries an
+Internal tag, because the atlas keeps the company's own map rather than hiding
+it. **Nothing leaves the screen**: no export, print or share, and the page bar
+holds none. Every screen asks again every thirty seconds (`ATLAS_POLL_MS`),
+the cadence of a screen whose signals nothing pushes. The screens, the peek
+and the map code are one chunk of their own (`routes/atlas`), fetched when the
+atlas is first opened or by the idle prefetch.
+
 ## Company › Budgets, raised in place
 
 `#/company/budgets`, the last row under Company (what the company decides,
@@ -10579,8 +10680,9 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/routes/<dir>/         one directory per group of framed screens, each
                             its own lazy chunk, as ScreenDir in
                             app/lazyScreen.ts declares them (home, inbox, me,
-                            worklet, gitlet, chatlet, agents, live, doclet,
-                            artifacts, brand, spend, settings, account), with
+                            worklet, gitlet, atlas, chatlet, agents, live,
+                            doclet, artifacts, brand, spend, settings,
+                            account), with
                             one file per screen inside it and an index.ts
                             naming what its chunk exports. Four things sit
                             outside that shape: NotFound, which belongs to no

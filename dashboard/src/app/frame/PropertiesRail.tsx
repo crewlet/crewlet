@@ -61,7 +61,7 @@ function kitProperty(property: Property): PropertyListItem {
     value: property.value,
     href: property.path ? href(property.path, property.query) : undefined,
     setBy: setBy ? kitSetBy(setBy) : undefined,
-    change: setBy ? [setBy.actorKind ?? "", setBy.at ?? ""].join(" ") : undefined,
+    change: setBy ? [setBy.actorKind ?? "", setBy.verb ?? "", setBy.at ?? ""].join(" ") : undefined,
     title: property.title,
     identifierLabel: property.identifierLabel,
   };
