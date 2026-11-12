@@ -153,7 +153,9 @@ func (q *Queue) DeadLetterMarks(_ context.Context, under string) (queue.Marks, e
 
 // DropDeadLetter implements queue.EventQueue: the entry seq removed from
 // subject, an entry already gone answered nil, and a seq that names an entry
-// of another subject refused with nothing removed.
+// of another subject refused with nothing removed. The entry's identity stays
+// in the window ([Broker.keptLocked]), so a keep of it inside the window is
+// answered already kept, as on a running broker.
 func (q *Queue) DropDeadLetter(_ context.Context, subject string, seq uint64) error {
 	if seq == 0 {
 		return fmt.Errorf("memory: drop a dead letter on %s: sequence 0 names no entry", subject)

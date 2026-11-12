@@ -1036,10 +1036,11 @@ type EventQueue interface {
 	// refused, unmarked) — and in the body the bytes only a reader acting
 	// on one entry needs. Both are the caller's bytes, verbatim, never an
 	// event: no publish listener hears them and no event-store row is
-	// written for them. RETURNING MEANS IT IS DURABLE, as for Publish, and
-	// a header and body the transport cannot carry together
-	// ([LetterFraming]) are refused with ErrTooLarge, which no retry
-	// changes.
+	// written for them. A KEEP THAT STORED ITS ENTRY RETURNS ONCE THE ENTRY
+	// IS DURABLE, as a Publish does — one answered already kept stored
+	// nothing (below) — and a header and body the transport cannot carry
+	// together ([LetterFraming]) are refused with ErrTooLarge, which no
+	// retry changes.
 	//
 	// ONE ENTRY FOR ONE IDENTITY. id is the entry's identity, which its
 	// keeper derives from WHAT it keeps and never from the delivery that
@@ -1055,19 +1056,33 @@ type EventQueue interface {
 	// cannot hold the delivery: the second keep, its own or a peer's, is
 	// what has to come to nothing. One id on two subjects is two entries,
 	// and so are two ids on one. An empty id is refused, unmarked
-	// ([LetterIdentity]). What a keep of an id answers past the window, or
-	// once its entry was dropped, is not promised: a backend may still
-	// remember it, or may not.
+	// ([LetterIdentity]).
+	//
+	// A DROPPED ENTRY'S ID IS STILL KEPT FOR THE REST OF THE WINDOW, ON A
+	// RUNNING BROKER: a keep of it on subject inside the window keeps nothing
+	// and answers already kept, on every backend alike, which is what the
+	// discard means — no node is to read the entry ([EventQueue.DropDeadLetter]),
+	// so none keeps it again. THE CAVEAT IS THE BROKER'S: a broker that
+	// restarts, recovers its stream, resets it to replay its log, or brings a
+	// copy up from a snapshot rebuilds the window from the entries it still
+	// holds, so it forgets a dropped entry's id, and a keep of it there
+	// stores a new entry, which the listing shows again. Past the window a
+	// keep of an id stores a new entry; how soon after the window a backend
+	// lets the id go is not promised.
 	//
 	// ALREADY KEPT IS AN ANSWER, NOT A FAILURE, and it is the bool beside a
-	// nil error rather than a sentinel: the entry the caller asked for is
-	// durable, which is what a nil error means, so the caller settles what
-	// it kept exactly as after a keep that stored it — and, told it was
-	// already there, does not count or report the keep a second time. As an
-	// error it would read as a failed keep to every caller that branches on
-	// one, which hands the thing back to be kept again: the very loop an
-	// identity ends. The contract's sentinels are failures a caller acts
-	// on, and this is none.
+	// nil error rather than a sentinel. It says an entry of id was stored on
+	// subject inside the window — still held, or dropped since — so what the
+	// caller asked for is done: the thing is kept, or was let go by whoever
+	// decided to, and the caller settles it exactly as after a keep that
+	// stored it. It says nothing of which keep stored the entry, nor of what
+	// that keep was answered: a keep can store its entry and still answer an
+	// error — refused or lost on its way back, as a publish's can
+	// ([ErrUnavailable]) — and the next keep of the id is then the first to
+	// be answered at all. As an error it would read as a failed keep to every
+	// caller that branches on one, which hands the thing back to be kept
+	// again: the very loop an identity ends. The contract's sentinels are
+	// failures a caller acts on, and this is none.
 	KeepDeadLetter(ctx context.Context, subject, id string, header, body []byte) (bool, error)
 
 	// DeadLettersOn lists every entry subject holds, oldest first —
@@ -1122,6 +1137,14 @@ type EventQueue interface {
 	// entry on ANOTHER subject is refused, unmarked, and removes nothing, so
 	// a caller that names the wrong subject cannot drop somebody else's; so
 	// is a seq of zero, which names no entry on any backend.
+	//
+	// THE ENTRY GOES AND ITS ID STAYS, on a running broker: a keep of the
+	// dropped entry's id on subject inside [DeadLetterWindow] keeps nothing
+	// and answers already kept ([EventQueue.KeepDeadLetter]), which is what a
+	// drop decides — no node is to read the entry, so none keeps it again.
+	// A broker that restarts, or rebuilds its window from the entries it
+	// still holds, forgets the id, and a keep of it there stores a new entry
+	// that the listing shows again.
 	DropDeadLetter(ctx context.Context, subject string, seq uint64) error
 
 	// Start connects the backend and begins consuming.

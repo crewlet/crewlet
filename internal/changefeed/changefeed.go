@@ -911,9 +911,10 @@ var errNoDeadLetters = errors.New("changefeed: this feed keeps no dead letters "
 // between the two. A keep that fails hands the record back again with the
 // backoff, to be kept by the next delivery that gets there.
 //
-// A KEEP THE QUEUE ANSWERS ALREADY KEPT acks the record and nothing more: its
-// entry is durable — a peer's keep, or this node's own earlier one, stored it
-// under the record's identity ([keepID]) — so the record is settled, and the
+// A KEEP THE QUEUE ANSWERS ALREADY KEPT acks the record and nothing more: an
+// entry of it was stored under the record's identity ([keepID]) — by a peer's
+// keep, or this node's own earlier one — and is still held, or an operator
+// has discarded it since, so the record is settled, and the
 // record was dead-lettered once, which whoever stored the entry counted and
 // said. Counted again here, `feed_dead_lettered`'s reading and the count would
 // see one record let go twice.

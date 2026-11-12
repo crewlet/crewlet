@@ -194,8 +194,12 @@ type Broker struct {
 	// was stored: what makes a second keep of it come to nothing, as the
 	// broker this twin stands for collapses a repeated message id within
 	// its dead-letter stream's duplicate window. Remembered whether or not
-	// the entry is still held, as the broker's window is; let go once the
-	// window passes. See deadletter.go.
+	// the entry is still held — a drop leaves it, as a running broker's
+	// delete leaves the id in its window — and let go once the window
+	// passes. The broker forgets a dropped entry's id when it restarts and
+	// rebuilds its window from the entries it still holds; this twin has no
+	// restart to forget it at, so it answers as the running broker does.
+	// See deadletter.go.
 	keptIDs map[keptID]time.Time
 
 	// now is the broker's clock, which an entry is stamped and let go

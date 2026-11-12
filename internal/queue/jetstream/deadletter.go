@@ -363,6 +363,20 @@ func (q *Queue) DeadLetterMarks(ctx context.Context, under string) (queue.Marks,
 
 // DropDeadLetter implements queue.EventQueue: the entry seq deleted from the
 // dead-letter stream, once its leader says seq holds an entry of subject.
+//
+// THE DELETE LEAVES THE ENTRY'S MESSAGE ID IN THE STREAM'S DUPLICATE WINDOW,
+// so a keep of its identity inside [queue.DeadLetterWindow] is answered a
+// duplicate — already kept — while the stream runs: in nats-server v2.15.2 a
+// delete (stream.go's deleteMsg, and eraseMsg, through which every copy
+// applies a clustered one) removes the message from the store and never
+// touches the window, which lets an id go only by its age (purgeMsgIds), and
+// a leader elected since holds the id too, since every copy records the id of
+// each message it applies. THE WINDOW IS REBUILT FROM THE MESSAGES STILL
+// STORED (rebuildDedupe) when the stream is recovered at a restart and when it
+// is reset to replay its log (prepareForWALReplay), and a copy caught up from
+// a snapshot is never sent a deleted message (processCatchupMsg records the id
+// of each message it is sent), so after any of those the identity is
+// forgotten and a keep of it stores a new entry.
 func (q *Queue) DropDeadLetter(ctx context.Context, subject string, seq uint64) error {
 	if seq == 0 {
 		return fmt.Errorf("jetstream: drop a dead letter on %s: sequence 0 names no entry", subject)

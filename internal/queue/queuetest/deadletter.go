@@ -325,6 +325,14 @@ func (s *suite) runDeadLetters(t *testing.T) {
 	// must come to nothing. A backend that kept it would hold two entries of
 	// one record; one that collapsed two identities, or one identity across
 	// two subjects, would lose an entry somebody else kept.
+	//
+	// AND A DROPPED ENTRY'S IDENTITY IS STILL KEPT for the rest of the
+	// window, the broker running: an operator who discarded the entry
+	// decided no node is to read it, so a keep of it again keeps nothing.
+	//
+	// Mutation: forget an identity when its entry is dropped (the twin's
+	// DropDeadLetter clearing the subject's identities), and the keep after
+	// the drop stores the entry again, on the memory backend.
 	t.Run("a_second_keep_of_one_identity_keeps_nothing_and_is_answered_already_kept", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -349,10 +357,26 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		}
 		wantCounts(t, "after four keeps of three things", marksOf(ctx, t, q, lettersUnder),
 			map[string]uint64{subject: 2, elsewhere: 1})
-		if got := listedAsMarked(ctx, t, q, lettersUnder, subject); len(got) != 2 ||
-			string(got[0].Header) != `"first"` || string(got[1].Header) != `"another"` {
-			t.Errorf("the subject lists %q, want the first keep's entry and the other identity's",
-				headersOf(got))
+		listed := listedAsMarked(ctx, t, q, lettersUnder, subject)
+		if len(listed) != 2 || string(listed[0].Header) != `"first"` || string(listed[1].Header) != `"another"` {
+			t.Fatalf("the subject lists %q, want the first keep's entry and the other identity's",
+				headersOf(listed))
+		}
+		// KEEP, DROP, KEEP: the identity outlives its entry's drop inside the
+		// window, so the keep after the drop keeps nothing, says so, and the
+		// subject lists no entry of it.
+		if err := q.DropDeadLetter(ctx, subject, listed[0].Seq); err != nil {
+			t.Fatalf("DropDeadLetter: %v", err)
+		}
+		if !keepAs(ctx, t, q, subject, "the record", letterOf([]byte(`"after the drop"`), []byte("frame"))) {
+			t.Error("a keep of a dropped entry's identity inside the window was not answered already kept")
+		}
+		wantCounts(t, "after a keep of a dropped entry's identity", marksOf(ctx, t, q, lettersUnder),
+			map[string]uint64{subject: 1, elsewhere: 1})
+		if got := listedAsMarked(ctx, t, q, lettersUnder, subject); len(got) != 1 ||
+			string(got[0].Header) != `"another"` {
+			t.Errorf("after the drop and the keep of its identity the subject lists %q, want the "+
+				"other identity's entry alone", headersOf(got))
 		}
 		// AN EMPTY IDENTITY names nothing, and a keep of it is refused as the
 		// caller's mistake, keeping nothing.
@@ -361,7 +385,7 @@ func (s *suite) runDeadLetters(t *testing.T) {
 			t.Errorf("a keep of no identity was answered %v, want it refused as the caller's mistake", err)
 		}
 		wantCounts(t, "after a keep of no identity", marksOf(ctx, t, q, lettersUnder),
-			map[string]uint64{subject: 2, elsewhere: 1})
+			map[string]uint64{subject: 1, elsewhere: 1})
 	})
 
 	t.Run("a_dead_letter_the_transport_cannot_carry_is_refused_as_too_large", func(t *testing.T) {
