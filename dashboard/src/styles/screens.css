@@ -4413,6 +4413,15 @@ a.knowledge-reader-how:hover {
   text-align: center;
 }
 
+/* A LIST ROW'S TITLE AND WHAT HOLDS IT UP, laid out as the grid cell lays out
+   its own children: one line, the title cut first. A phone wraps it (frame.css). */
+.work-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
 /* ---- The card ----------------------------------------------------------- */
 
 .work-card {
