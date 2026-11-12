@@ -28,15 +28,20 @@ type askDesk struct {
 	mu sync.Mutex
 	// seat, where set, keeps each recorded ask as a running row of that
 	// seat's, which ListActiveForSeat answers from; listErr fails that read,
-	// and onList runs inside it, once the rows are read.
-	seat    string
-	rows    []sandbox.PendingRun
-	listErr error
-	onList  func()
+	// and onList runs inside it, once the rows are read, as onRecord runs
+	// inside RecordAsk before anything is written.
+	seat     string
+	rows     []sandbox.PendingRun
+	listErr  error
+	onList   func()
+	onRecord func()
 }
 
 func (d *askDesk) RecordAsk(_ context.Context, turnID, launch string, ask sandbox.Ask,
 ) (sandbox.AskOutcome, error) {
+	if d.onRecord != nil {
+		d.onRecord()
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.recorded = append(d.recorded, ask)
@@ -73,8 +78,6 @@ func (d *askDesk) ListActiveForSeat(_ context.Context, handle string) ([]sandbox
 		}
 	}
 	d.mu.Unlock()
-	// AFTER THE ROWS ARE READ, so what a caller does in the hook is done
-	// between this read and the write that follows it.
 	if d.onList != nil {
 		d.onList()
 	}

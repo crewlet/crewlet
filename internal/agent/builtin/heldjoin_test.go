@@ -2,8 +2,8 @@ package builtin_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -196,41 +196,30 @@ func TestAnAskWhoseOpenRequestsCannotBeReadHoldsNothing(t *testing.T) {
 }
 
 // Two turns of one seat asking the same thing at the same moment come to one
-// request: the second reads the seat's open requests only once the first has
-// recorded its own.
+// request: the seat's open requests are read, and the new one recorded, under
+// one lock, so the second turn reads only once the first has recorded its own.
 //
-// Mutation: read and record outside one lock, and both turns read no open
+// Mutation: read or record outside the lock, and both turns read no open
 // request and each holds its call.
+//
+// Not parallel: the lock is the process's, and another case's hold would pass
+// for this one's.
 func TestTwoTurnsAskingAtOnceComeToOneRequest(t *testing.T) {
-	t.Parallel()
 	f := newJoinFixture(t)
-	var once sync.Once
-	second := make(chan toolloop.ToolResult, 1)
-	read := make(chan struct{}, 1)
-	f.desk.onList = func() {
-		first := false
-		once.Do(func() { first = true })
-		if !first {
-			read <- struct{}{}
-			return
-		}
-		go func() { second <- f.ask("sre", "run-2", builtin.AskToMergeTool, pullMergeArgs(pullHead)) }()
-		// THE OTHER TURN'S CHANCE to read before this one records: it takes
-		// it at once where nothing serialises the two.
-		select {
-		case <-read:
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
+	var read, recorded []bool
+	f.desk.onList = func() { read = append(read, builtin.HoldingLocked()) }
+	f.desk.onRecord = func() { recorded = append(recorded, builtin.HoldingLocked()) }
 	first := f.ask("sre", "run-1", builtin.AskToMergeTool, pullMergeArgs(pullHead))
-	var other toolloop.ToolResult
-	select {
-	case other = <-second:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the first ask never read its seat's open requests, so no second turn asked beside it")
+	if !first.Held || !slices.Equal(read, []bool{true}) || !slices.Equal(recorded, []bool{true}) {
+		t.Fatalf("the first ask answered %+v, reading under the lock %v and recording under it %v, want both "+
+			"under it", first, read, recorded)
 	}
-	if !first.Held || other.Held || other.Refusal() != tools.RefusalConflict || f.held() != 1 {
-		t.Fatalf("two turns asking at once answered %+v and %+v with %d calls held, want one request and one "+
-			"join", first, other, f.held())
+	other := f.ask("sre", "run-2", builtin.AskToMergeTool, pullMergeArgs(pullHead))
+	if other.Held || other.Refusal() != tools.RefusalConflict || f.held() != 1 || !slices.Equal(read, []bool{true, true}) {
+		t.Fatalf("the second ask answered %+v with %d calls held, reading under the lock %v, want it joined",
+			other, f.held(), read)
+	}
+	if builtin.HoldingLocked() {
+		t.Fatal("the lock is still taken once both asks answered")
 	}
 }
