@@ -1103,7 +1103,9 @@ func (m threadMessage) Text() (string, bool) { return m.text, m.isText }
 // says so), and the zero message every record but a user's or an assistant's
 // reads as; an empty list is an empty Kinds, never nil. A reader tells a
 // turn's own message from the results of its calls by it: a user record whose
-// blocks are tool_result alone, or not.
+// blocks are tool_result alone, or not. A kind the layer does not name is
+// handed out as written, for its reader to treat as unknown: never as a sign
+// that a reply finished, nor as a block that holds no call.
 func (m threadMessage) Kinds() []string { return m.kinds }
 
 // Calls is the message's call blocks: an assistant's tool_use blocks, a user's
