@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
@@ -1387,10 +1388,13 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 
 // A MESSAGE SAYS ITS CONTENT'S SHAPE: content that is one string is Text, with
 // no blocks; content that is a list is each block's type, in order, and no
-// Text. Every user and assistant record measured holds one block a record;
-// the API's own messages hold several, which a list of two holds to its order.
+// Text, and an empty list is an empty Kinds, never the nil one a content that
+// is no list reads as. Every user and assistant record measured holds one
+// block a record; the API's own messages hold several, which a list of two
+// holds to its order.
 //
-// Mutation: read content as one shape, and a string content is no message.
+// Mutation: read content as one shape, and a string content is no message;
+// start a list's kinds at nil, and an empty list reads as no list.
 func TestAMessageSaysItsContentsShape(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1404,6 +1408,7 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 		"a call's result":   {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), kinds: []string{blockToolResult}},
 		"a skill's text":    {record: ctSkillText(ctUUID(4), ctUUID(5)), kinds: []string{"text"}},
 		"a text and a call": {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), kinds: []string{"text", blockToolUse}},
+		"an empty list":     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), kinds: []string{}},
 	} {
 		m, err := ctLine(t, tc.record).Message()
 		if err != nil {
@@ -1415,6 +1420,186 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 			(tc.kinds == nil) != (m.Kinds() == nil) {
 			t.Errorf("%s reads as the text %q (%t) and the blocks %q, want %q and %q", name, text, isText,
 				strings.Join(m.Kinds(), " "), tc.text, strings.Join(tc.kinds, " "))
+		}
+	}
+}
+
+// A LIST IS WALKED AN ELEMENT AT A TIME: each element is handed out as it is
+// read, in order and as written but for the whitespace around it; the walk
+// stops at the first error its callback returns, returns that error itself,
+// never wrapped, and reads no element after it, so a list whose later elements
+// are no JSON at all still ends with the callback's error; and a value that is
+// no list, a list cut short, one whose element is no JSON and one followed by
+// more are each an error of the walk's own, never io.EOF. An empty list hands
+// out nothing.
+//
+// Mutation: read the list whole before handing out its first element, and the
+// list whose third element is no JSON ends with the decode's error, its first
+// two never handed out; wrap the callback's error, and it no longer comes back
+// as itself; walk on past it, and the walk ends with the decode's error; take
+// any value for a list, and a string or nothing ends the walk with io.EOF;
+// take what follows a list, and a list followed by another reads as one.
+func TestAListIsWalkedAnElementAtATime(t *testing.T) {
+	t.Parallel()
+	walk := func(list string, stopAt int, stop error) ([]string, error) {
+		var handed []string
+		err := eachElement(json.RawMessage(list), func(element json.RawMessage) error {
+			handed = append(handed, string(element))
+			if len(handed) == stopAt {
+				return stop
+			}
+			return nil
+		})
+		return handed, err
+	}
+	handed, err := walk(` [ 1 , "two" , {"three": [3, 3]} , [ ] , null , false ] `, 0, nil)
+	if want := []string{`1`, `"two"`, `{"three": [3, 3]}`, `[ ]`, `null`, `false`}; err != nil || !slices.Equal(handed, want) {
+		t.Errorf("a list's elements are handed out as %q, %v; want %q", handed, err, want)
+	}
+	handed, err = walk(`[]`, 0, nil)
+	if err != nil || handed != nil {
+		t.Errorf("an empty list hands out %q, %v; want nothing", handed, err)
+	}
+	stop := errors.New("the reader has read enough")
+	handed, err = walk(`[1,"two",}`, 2, stop)
+	if !errors.Is(err, stop) || errors.Unwrap(err) != nil || !slices.Equal(handed, []string{`1`, `"two"`}) {
+		t.Errorf("a walk its callback stops at the second element hands out %q and ends with %v; want the two "+
+			"elements, and the callback's own error as it returned it", handed, err)
+	}
+	for name, list := range map[string]string{
+		"an object":                       `{"a":[1]}`,
+		"a string":                        `"[1]"`,
+		"nothing":                         ``,
+		"a list cut short":                `[1,2`,
+		"a list whose element is no JSON": `[1,}]`,
+		"a list followed by more":         `[1] [2]`,
+	} {
+		if handed, err := walk(list, 0, nil); err == nil || errors.Is(err, io.EOF) {
+			t.Errorf("%s walks as %q, %v; want an error of the walk's own, never io.EOF, which a reader could "+
+				"take for the list's end", name, handed, err)
+		}
+	}
+}
+
+// ctListRecord is a record that opens with head, ends with tail, and holds
+// between them a list of element written over and over, filled out to a line
+// of exactly size bytes, its break included.
+func ctListRecord(t *testing.T, head, element, tail string, size int) string {
+	t.Helper()
+	fill := size - 1 - len(head) - len(element) - len(tail)
+	if fill < 0 {
+		t.Fatalf("a line of %d bytes cannot hold %s%s%s", size, head, element, tail)
+	}
+	more, pad := fill/(len(element)+1), fill%(len(element)+1)
+	return head + element + strings.Repeat(","+element, more) + strings.Repeat(" ", pad) + tail
+}
+
+// A CONTENT LIST COSTS ONE BLOCK AT A TIME: a message's content and a reply's
+// applied context edits are read a block at a time, each held to its type as
+// it is read, so a list refused at its first block costs the allocations a
+// list of that block alone costs, however many follow it. A line at the
+// layer's bound holding four million `1`s, or a list of empty objects, costs
+// no allocation a list of one does not, never a header and a copy for each
+// before the first is checked. The walk itself, with nobody keeping what it
+// hands out, costs the same for a list at the bound as for a list of one: it
+// never collects the elements.
+//
+// Not parallel: testing.AllocsPerRun counts every allocation the process makes
+// while it measures, and a parallel test's would be counted with this one's.
+//
+// Mutation: decode a message's content, or a reply's edits, whole before its
+// first block is checked, or have the walk collect the list before it hands
+// out the first element, and a list at the bound costs millions of
+// allocations more than a list of one.
+func TestAContentListCostsOneBlockAtATime(t *testing.T) {
+	// slack is how many more allocations a list at the bound may cost than a
+	// list of one, though it reads no more of it. The count is the process's,
+	// and the bound's copy of its content can set off a collection while it
+	// is measured, which empties the process's pools (fmt's printers, the
+	// decoders): the call goes on to build what it takes from them afresh, a
+	// few allocations each, eleven in all where measured. Under the race
+	// detector a pool also drops a quarter of what is put in it. A whole
+	// decode costs millions more.
+	const slack = 64
+	message := func(l threadLine) error {
+		_, err := l.Message()
+		return err
+	}
+	cleared := func(l threadLine) error {
+		_, err := l.ToolResultsCleared()
+		return err
+	}
+	user := `{"type":"user","message":{"role":"user","content":[`
+	reply := `{"type":"assistant","message":{"role":"assistant","content":[],"context_management":{"applied_edits":[`
+	for name, tc := range map[string]struct {
+		head, element, tail string
+		read                func(threadLine) error
+	}{
+		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message},
+		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message},
+		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared},
+	} {
+		one := ctLine(t, tc.head+tc.element+tc.tail)
+		full := ctLine(t, ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
+		if len(full.Raw) != threadLineMax-1 || tc.read(one) == nil || tc.read(full) == nil {
+			t.Fatalf("%s: a line of %d bytes whose first block is none reads with no error", name, len(full.Raw)+1)
+		}
+		few := testing.AllocsPerRun(5, func() { _ = tc.read(one) })
+		many := testing.AllocsPerRun(5, func() { _ = tc.read(full) })
+		if many > few+slack {
+			t.Errorf("%s: refused at its first block, a list at the line's bound costs %v allocations, and a list "+
+				"of one %v", name, many, few)
+		}
+	}
+
+	oneList := json.RawMessage(`[1]`)
+	fullList := json.RawMessage(ctListRecord(t, "[", "1", "]", threadLineMax))
+	elements := 0
+	count := func(json.RawMessage) error {
+		elements++
+		return nil
+	}
+	if err := eachElement(fullList, count); err != nil || elements != strings.Count(string(fullList), "1") {
+		t.Fatalf("a list at the line's bound walks as %d elements, %v; want every one of its %d", elements, err,
+			strings.Count(string(fullList), "1"))
+	}
+	keepNone := func(json.RawMessage) error { return nil }
+	few := testing.AllocsPerRun(1, func() { _ = eachElement(oneList, keepNone) })
+	many := testing.AllocsPerRun(1, func() { _ = eachElement(fullList, keepNone) })
+	if many > few+slack {
+		t.Errorf("a walk of a list at the line's bound costs %v allocations, and of a list of one %v", many, few)
+	}
+}
+
+// A KNOWN BLOCK KIND IS HELD AS THE LAYER'S OWN STRING: a block of a kind the
+// layer names (a text, a thinking and a redacted thinking, a call and a
+// result) is held in Kinds as the layer's own constant, so a list of such
+// blocks holds no string of its own for a block's kind, only its place in the
+// list; a kind the layer does not name is held as written.
+//
+// Mutation: hold every kind as its decode left it, and each known kind is a
+// string of its own.
+func TestAKnownBlockKindIsHeldAsTheLayersOwnString(t *testing.T) {
+	t.Parallel()
+	reply, err := ctLine(t, ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+
+		`{"type":"thinking","thinking":"the batch","signature":"c2ln"},{"type":"redacted_thinking","data":"ZGF0YQ=="},`+
+		ctUseContent[1:len(ctUseContent)-1]+`,{"type":"server_tool_use","id":"srvtoolu_test","name":"web_search",`+
+		`"input":{}}]`)).Message()
+	if err != nil {
+		t.Fatalf("a reply of every kind reads no message: %v", err)
+	}
+	result, err := ctLine(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)).Message()
+	if err != nil {
+		t.Fatalf("a result reads no message: %v", err)
+	}
+	kinds := append(slices.Clone(reply.Kinds()), result.Kinds()...)
+	want := []string{blockText, blockThinking, blockRedactedThinking, blockToolUse, "server_tool_use", blockToolResult}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("the blocks read as %q, want %q", strings.Join(kinds, " "), strings.Join(want, " "))
+	}
+	for i, kind := range kinds {
+		if known := i != 4; known != (unsafe.StringData(kind) == unsafe.StringData(want[i])) {
+			t.Errorf("block %d, a %s, is held as the layer's own string %t, want %t", i+1, kind, !known, known)
 		}
 	}
 }

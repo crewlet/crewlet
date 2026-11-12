@@ -39,6 +39,9 @@ import (
 //     decide from a thread with a hole in it.
 //   - EVERY WHOLE LINE IS DECODED into its head before anything reads it, with
 //     no keyword prefilter ([threadHead]).
+//   - A LIST IS READ AN ELEMENT AT A TIME ([eachElement]), each element held
+//     to its type as it is read and never the whole list first, so a list a
+//     box wrote costs its reader one element at a time.
 //   - EVERY VALUE IS DECODED AS CLAUDE CODE'S OWN JSON.parse READS IT, under
 //     one set of options ([threadDecoding]): a key exactly as written, never
 //     matched by case as encoding/json matches a struct's fields; a key
@@ -452,8 +455,9 @@ func (h threadHead) Root() bool { return bytes.Equal(h.Parent, jsonNull) }
 func (h threadHead) Main() bool { return h.Sidechain != nil && !*h.Sidechain && h.AgentID == "" }
 
 // threadDecoding is the ONE set of options every decode this layer makes goes
-// through ([wireDecode]), so a value reads as Claude Code's own JSON.parse
-// reads it, whichever decode reads it. Each option is set for its own reason:
+// through ([wireDecode], [eachElement]), so a value reads as Claude Code's own
+// JSON.parse reads it, whichever decode reads it. Each option is set for its
+// own reason:
 //
 //   - EXACT KEY NAMES (encoding/json/v2's MatchCaseInsensitiveNames, off): a
 //     key fills the field it names exactly, as JSON.parse holds `toolUseID`
@@ -489,6 +493,50 @@ var threadDecoding = jsonv2.JoinOptions(
 // reads as U+FFFD.
 func wireDecode(raw []byte, v any) error {
 	return jsonv2.Unmarshal(raw, v, threadDecoding)
+}
+
+// eachElement hands each element of list, raw JSON holding one list, to each,
+// in order, as it reads it: the element's raw bytes, as written but for the
+// whitespace around them, valid only while each runs, so each copies what it
+// keeps. It NEVER COLLECTS THEM. It stops at the first error each returns,
+// reads no element after it, and returns that error unchanged; a list that is
+// no list, or that does not decode, is an error of its own.
+//
+// THE ONE WALK of a list a box wrote, under [threadDecoding], so what a list
+// costs its reader is what each makes of one element at a time, never the
+// whole list first. Decoded whole, a line at [threadLineMax] holding a list of
+// four million `1`s, which a box can write into its own thread, would cost the
+// engine host a header and a copy for every element, hundreds of MiB, before
+// anything refused the first. Its readers: a message's content
+// ([threadLine.Message]), a reply's applied context edits
+// ([threadLine.ToolResultsCleared]), the content lists a run's event stream and
+// a person's transcript decode (claudestream.go, transcript.go), and a call's
+// result content, which the reader that tells a relaunch which of its calls a
+// kept session holds (exact telling) reads no further than its second element.
+func eachElement(list json.RawMessage, each func(element json.RawMessage) error) error {
+	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
+		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
+	}
+	dec := jsontext.NewDecoder(bytes.NewBuffer(list), threadDecoding)
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	for dec.PeekKind() != ']' {
+		element, err := dec.ReadValue()
+		if err != nil {
+			return err
+		}
+		if err = each(element); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return errors.New("a list is followed by more than whitespace")
+	}
+	return nil
 }
 
 // wireString is raw, a key named key, held to a string: "" where the key is
@@ -792,11 +840,34 @@ type threadCall struct {
 	Content json.RawMessage
 }
 
-// The content blocks that are calls.
+// The content blocks this layer names: the blocks that are calls, and those
+// that carry a model's text and its thinking.
 const (
-	blockToolUse    = "tool_use"
-	blockToolResult = "tool_result"
+	blockToolUse          = "tool_use"
+	blockToolResult       = "tool_result"
+	blockText             = "text"
+	blockThinking         = "thinking"
+	blockRedactedThinking = "redacted_thinking"
 )
+
+// knownKind is kind, a block's type, held as this layer's own constant where
+// it is one of the blocks the layer names, so a list of such blocks holds no
+// string of its own for a block's kind.
+func knownKind(kind string) string {
+	switch kind {
+	case blockToolUse:
+		return blockToolUse
+	case blockToolResult:
+		return blockToolResult
+	case blockText:
+		return blockText
+	case blockThinking:
+		return blockThinking
+	case blockRedactedThinking:
+		return blockRedactedThinking
+	}
+	return kind
+}
 
 // Message is a user or assistant record's `message`, decoded from the line's
 // raw `message` on each call: nothing keeps it, so a reader that asks twice
@@ -810,6 +881,17 @@ const (
 // `tool_use_id` a string and its `is_error` a boolean where present. An absent
 // or null content is no message either: every user and assistant record
 // measured holds one.
+//
+// A CONTENT LIST IS READ A BLOCK AT A TIME ([eachElement]), each block held to
+// its type as it is read, and never decoded whole before its first block is
+// checked. So a list refused at a block costs what the blocks up to it cost,
+// however many follow, and what a list read to its end leaves held is a kind
+// for each block and a call for each call block, each kept as it is accepted:
+// while it reads, a message holds, beyond those, one copy of its content and
+// one block's decode. A list of four million `1`s at [threadLineMax] is
+// refused at its first block for the allocations a list of one costs, and a
+// line at that bound of the smallest results a list can hold leaves their
+// calls held, about three times the line (measured).
 func (l threadLine) Message() (threadMessage, error) {
 	var call string
 	switch l.Head.Type {
@@ -849,20 +931,24 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		}
 		return threadMessage{text: text, isText: true}, nil
 	}
-	var blocks []json.RawMessage
-	if err := wireDecode(content, &blocks); err != nil {
-		return threadMessage{}, fmt.Errorf("content: %w", err)
-	}
-	m := threadMessage{kinds: make([]string, 0, len(blocks))}
-	for i, raw := range blocks {
+	// A BLOCK AT A TIME ([eachElement]), and the kinds and the calls grown
+	// from what was accepted, never sized from the list's length, which only
+	// a whole decode knows: a list refused at its first block costs that
+	// block. An empty list's kinds are empty, never nil, which only a content
+	// that is no list reads as.
+	m := threadMessage{kinds: []string{}}
+	if err := eachElement(content, func(raw json.RawMessage) error {
 		b, err := contentBlock(raw)
 		if err != nil {
-			return threadMessage{}, fmt.Errorf("content block %d: %w", i+1, err)
+			return fmt.Errorf("content block %d: %w", len(m.kinds)+1, err)
 		}
 		m.kinds = append(m.kinds, b.Kind)
 		if b.Kind == call {
 			m.calls = append(m.calls, b)
 		}
+		return nil
+	}); err != nil {
+		return threadMessage{}, err
 	}
 	return m, nil
 }
@@ -889,7 +975,7 @@ func contentBlock(raw json.RawMessage) (threadCall, error) {
 	if err != nil {
 		return threadCall{}, err
 	}
-	c := threadCall{Kind: kind}
+	c := threadCall{Kind: knownKind(kind)}
 	switch kind {
 	case blockToolUse:
 		if c.ID, err = wireRequiredString("id", b.ID); err != nil {
@@ -1008,17 +1094,19 @@ func (l threadLine) ToolResultsCleared() (bool, error) {
 	case len(applied.Edits) == 0 || applied.Edits[0] != '[':
 		return false, fmt.Errorf("context_management.applied_edits is %s, not a list", wireKind(applied.Edits))
 	}
-	var edits []json.RawMessage
-	if err := wireDecode(applied.Edits, &edits); err != nil {
-		return false, fmt.Errorf("context_management.applied_edits: %w", err)
-	}
-	cleared := false
-	for i, raw := range edits {
+	// AN EDIT AT A TIME ([eachElement]), as a message's content is read: a list
+	// of edits refused at its first costs that edit, however many follow.
+	cleared, edits := false, 0
+	if err := eachElement(applied.Edits, func(raw json.RawMessage) error {
+		edits++
 		uses, err := clearedToolUses(raw)
 		if err != nil {
-			return false, fmt.Errorf("context_management.applied_edits entry %d: %w", i+1, err)
+			return fmt.Errorf("context_management.applied_edits entry %d: %w", edits, err)
 		}
 		cleared = cleared || uses > 0
+		return nil
+	}); err != nil {
+		return false, err
 	}
 	return cleared, nil
 }

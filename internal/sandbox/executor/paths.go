@@ -48,9 +48,10 @@
 // ([threadDecoding]: every key exactly as written, never matched by case as
 // encoding/json matches a struct's fields, a key written twice by its last
 // value, and a string's invalid UTF-8 or lone surrogate as the replacement
-// character, never refused), and
-// `parentUuid` handed over as written, since the harness's bookkeeping carries
-// none and only a root carries null; a key only one reader reads held to its
+// character, never refused), and `parentUuid` handed over as written, since
+// the harness's bookkeeping carries none and only a root carries null; a list
+// a box wrote read an element at a time ([eachElement]), never decoded whole
+// before its first element is checked; a key only one reader reads held to its
 // type in that reader's accessor; and a hook's firing handed out by
 // [threadLine.Hook] alone, a call's id by [threadMessage.Calls] alone, since a
 // PostToolUse hook's firing carries the id of the call it followed.
