@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // domainQueue opens an embedded broker and returns it with a domain stream
@@ -331,7 +333,8 @@ func TestACreatedStreamCarriesEveryFieldTheSpecAsked(t *testing.T) {
 
 // THE ENGINE STREAMS ARE BYTE-IDENTICAL to what they were before domain
 // streams existed — the six that predate them, and the custody stream, which
-// was born in their shape.
+// was born in their shape — but for the one domain field set on purpose: the
+// dead letters' duplicate window.
 //
 // A stream is created once and never updated, so a spec that changed shape is
 // not a migration — it is a difference between the streams on a deployment
@@ -339,6 +342,13 @@ func TestACreatedStreamCarriesEveryFieldTheSpecAsked(t *testing.T) {
 // second has the new value. This pins every field of every engine stream, so
 // adding a field to streamSpec with a non-zero default is a failing test
 // rather than a fleet that quietly runs two topologies.
+//
+// THE WINDOW IS THE EXCEPTION, AND IT IS PINNED TOO: a keep carries its
+// identity as its message id, and CREWLET_DLQ's window is what makes a second
+// keep of one identity nothing (queue.DeadLetterWindow), so the window is part
+// of what the dead letters mean. A CREWLET_DLQ an earlier build created keeps
+// the broker's default window — the field is a capacity one, reported at boot
+// and never applied — and no tag shipped such a stream.
 func TestTheEngineStreamsAreUnchanged(t *testing.T) {
 	t.Parallel()
 	specs := engineStreams(0)
@@ -353,8 +363,12 @@ func TestTheEngineStreamsAreUnchanged(t *testing.T) {
 			if spec.maxBytes != 0 {
 				t.Errorf("max_bytes = %d, want unset", spec.maxBytes)
 			}
-			if spec.duplicates != 0 {
-				t.Errorf("duplicates = %v, want unset", spec.duplicates)
+			window := time.Duration(0)
+			if spec.name == streamDeadLetter {
+				window = queue.DeadLetterWindow
+			}
+			if spec.duplicates != window {
+				t.Errorf("duplicates = %v, want %v", spec.duplicates, window)
 			}
 			if spec.discard != jetstream.DiscardOld {
 				t.Errorf("discard = %v, want the zero value", spec.discard)

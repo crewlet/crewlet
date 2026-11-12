@@ -1886,8 +1886,10 @@ var table = []rule{
 			"is given up with `crewlet feeds discard <id> -confirm <id>`, its wake lost for good " +
 			"(`crewlet.tracker.feed.dead_letter_discarded`). An entry nothing replays " +
 			"or discards expires after `stream.event_retention_hours` and its wake is " +
-			"lost (`crewlet.tracker.feed.dead_letter_expired`). Each entry's " +
-			"`changefeed_record_dead_lettered` log line names the record and why.",
+			"lost (`crewlet.tracker.feed.dead_letter_expired`). Each record's " +
+			"`changefeed_record_dead_lettered` log line names the record and why, " +
+			"logged by the data node that counted it: whichever node took the " +
+			"record's dead-letter claim, whichever of its keeps stored the entry.",
 	},
 	{
 		// THE FEED THAT IS NOT RUNNING, beside the feed that is stuck:

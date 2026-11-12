@@ -53,6 +53,28 @@ import (
 // a moment, across a sweep) one whose definition was removed, which it answers
 // as unknown. A definition waiting for a review is kept before any other, so a
 // change is shown whole to whoever reviews it.
+//
+// # Each listing waits as long as its bytes take, on a pass of its own
+//
+// A listing is up to coord.MaxMCPListingBytes and its definitions up to
+// coord.MaxMCPListingDefinitionBytes, and on a node whose connection crosses a
+// link — a node without `data`, and every node on an external broker, data
+// nodes included — they cross it at the link's pace, which the engine allows
+// to be as slow as a mebibyte in thirty seconds: a listing at
+// its bound alone takes about 26 seconds. The beat once held every step to one
+// deadline of [coord.ReconcileInterval], fifteen seconds, so on any link below
+// about 60 KiB a second a large listing was never acknowledged, and each beat
+// sent the whole of it again while the earlier copies were still crossing.
+// So a beat's writes of its listings, and of the definitions they name, carry
+// NO deadline of the beat's: each waits as long as the coordination store's
+// rule gives its bytes (internal/coord/kv's settled writes) — the request term
+// and, across a link, their crossing at the floor for every send the client
+// may make of them — and they are made on a pass of their own
+// ([Engine.startListingPass]), one at a time, so a slow listing holds no beat:
+// the next beat reads the fleet's presence and accepts first listings on time,
+// and leaves its listings to the pass in flight, the next beat after it
+// writing whatever moved meanwhile. The beat's own steps keep their bound
+// ([mcpBeatBound]).
 
 // mcpListingSweepPasses is how many consecutive sweeps must find a definition
 // named by no listing before it is removed: TWO, a maintenance interval
@@ -60,6 +82,14 @@ import (
 // and a sweep reading the listings between the two would otherwise remove a
 // definition about to be named.
 const mcpListingSweepPasses = 2
+
+// mcpBeatBound is how long one beat's own steps may take — reading the fleet's
+// presence and the definitions a moved catalogue names, and accepting a
+// server's first listing — before the beat gives them up for the next: the
+// beat's interval, [coord.ReconcileInterval], so a beat whose broker does not
+// answer ends before the next would start. Each carries small records. The
+// listings' writes are not held to it ([Engine.startListingPass]).
+const mcpBeatBound = coord.ReconcileInterval
 
 // mcpListings is this node's half of the fleet's MCP listings.
 type mcpListings struct {
@@ -102,6 +132,12 @@ type mcpListings struct {
 	// unnamed is how many consecutive sweeps this node ran found each
 	// stored definition named by no listing ([mcpListingSweepPasses]).
 	unnamed map[string]int
+
+	// writing is a pass of this node's listing writes in flight
+	// ([Engine.startListingPass]), which a beat leaves its listings to; pass
+	// is the pass's goroutine, which the publisher waits for when it stops.
+	writing bool
+	pass    sync.WaitGroup
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -155,6 +191,10 @@ func (e *Engine) startMCPListings(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
+		// A PASS IN FLIGHT ENDS WITH THE PUBLISHER: its writes carry the
+		// loop's context, which stopping cancels, so the listings a stop
+		// removes are never written again behind it.
+		defer e.listings.pass.Wait()
 		ticker := time.NewTicker(coord.ReconcileInterval)
 		defer ticker.Stop()
 		for {
@@ -402,11 +442,13 @@ func listedDigests(listings []coord.MCPListing) []string {
 }
 
 // publishMCPListings is one beat of this node's publisher: read the fleet's
-// presence, derive this node's listings, write each that moved, remove each
-// for a server this node no longer runs, and accept the first listing of each
-// server nobody has accepted a listing of ([Engine.baselineMCPTools]).
+// presence, derive this node's listings, start a pass writing each that moved
+// and removing each for a server this node no longer runs
+// ([Engine.startListingPass]), and accept the first listing of each server
+// nobody has accepted a listing of ([Engine.baselineMCPTools]). Its own steps
+// are held to [mcpBeatBound]; the pass's writes are not.
 func (e *Engine) publishMCPListings(ctx context.Context) {
-	beatCtx, cancel := context.WithTimeout(ctx, coord.ReconcileInterval)
+	beatCtx, cancel := context.WithTimeout(ctx, mcpBeatBound)
 	defer cancel()
 	if presence, err := e.backends.Coord.ListLive(beatCtx, coord.ClassNode); err == nil {
 		e.listings.mu.Lock()
@@ -435,8 +477,47 @@ func (e *Engine) publishMCPListings(ctx context.Context) {
 	node := e.nodeID()
 	now := time.Now()
 	desired := e.nodeMCPListings(node, epoch, now)
-	e.writeMCPListings(beatCtx, node, epoch, desired)
+	e.startListingPass(ctx, node, epoch, desired)
 	e.baselineMCPTools(beatCtx, desired, now)
+}
+
+// startListingPass starts a pass writing desired under epoch
+// ([Engine.writeMCPListings]) on a goroutine of its own, and reports whether
+// it did: a pass already in flight is left to finish, and the beat that found
+// it starts none, since the pass after it compares what it wrote with what the
+// node lists then and writes what moved.
+//
+// ITS WRITES CARRY NO DEADLINE OF THE BEAT'S: ctx is the publisher's own, which
+// stopping cancels and nothing else ends, so each write waits as long as the
+// coordination store's rule gives the bytes it carries — the request term and,
+// across a link, their crossing at the floor for every send the client may
+// make of them (internal/coord/kv's settled writes). A listing at its bound is
+// about 26 seconds a send across a link at the floor, which the beat's fifteen
+// seconds could never give it; across a node's own connection, the request
+// term. ONE PASS AT A TIME, so a slow listing holds no beat and no two passes
+// write this node's listings over each other.
+func (e *Engine) startListingPass(ctx context.Context, node string, epoch int64,
+	desired map[string]nodeListing) bool {
+
+	l := &e.listings
+	l.mu.Lock()
+	if l.writing {
+		l.mu.Unlock()
+		return false
+	}
+	l.writing = true
+	l.pass.Add(1)
+	l.mu.Unlock()
+	go func() {
+		defer l.pass.Done()
+		defer func() {
+			l.mu.Lock()
+			l.writing = false
+			l.mu.Unlock()
+		}()
+		e.writeMCPListings(ctx, node, epoch, desired)
+	}()
+	return true
 }
 
 // writeMCPListings brings the fleet's record of this node's listings to

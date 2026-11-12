@@ -56,7 +56,7 @@ func TestCreatesOverARemovedRecordAreRacesOnAReplicatedFleet(t *testing.T) {
 	c := StartCluster(t, 3, js.Config{})
 	store, err := coordkv.OpenFleet(t.Context(), c.Client(t, 0).JetStream(),
 		coordkv.FleetConfig{
-			BucketPrefix: "raced", Replicas: len(c.Servers), Clustered: true,
+			BucketPrefix: "raced", Replicas: len(c.Servers), Clustered: true, Reach: coordkv.InProcess,
 			MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 			LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 			FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,

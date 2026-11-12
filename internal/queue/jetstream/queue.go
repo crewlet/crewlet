@@ -324,6 +324,13 @@ type Queue struct {
 	nc         *nats.Conn
 	js         jetstream.JetStream
 
+	// pace is the slowest nc may carry a mebibyte either way: the object
+	// store's floor where it crosses a link, none on a member's own
+	// connection ([linkPaceOf]). Decided once, where the connection is made,
+	// and read by every crossing on it, a read's reply and a write's request
+	// alike.
+	pace time.Duration
+
 	// lost is where this queue's own connection, and every second one
 	// dialled through [Queue.DialWatched], records being closed for good.
 	// See [Queue.Lost], and [Queue.AcksLost] for the queue's own alone.
@@ -432,6 +439,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		contract:    contract,
 		embedded:    embedded,
 		ownsServer:  owns,
+		pace:        linkPaceOf(embedded),
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},
@@ -876,7 +884,7 @@ func (q *Queue) createOrObserveStream(
 		// subject whose derived stream overlapped the engine's own paid
 		// that on every call, because a stream is remembered only once
 		// it exists.
-		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
+		return fmt.Errorf("ensure stream %s: %w%s", spec.name, createErr, q.windowCause(spec, createErr))
 	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
@@ -921,6 +929,34 @@ func (q *Queue) createOrObserveStream(
 			"exists, which is a peer having won the race; its configuration "+
 			"is compared here exactly as one found on the first look would be")
 	return q.observeStream(spec, config, info)
+}
+
+// windowCause is what a create the broker refused as an invalid configuration
+// most likely means, for a stream that declares a duplicate window on a broker
+// the operator runs — and nothing for any other refusal, or on a broker the
+// engine embeds.
+//
+// AN OPERATOR'S SERVER MAY CAP THE WINDOW: nats-server refuses a stream whose
+// duplicate window is above its own `jetstream { limits { duplicate_window } }`
+// (v2.15.2, server/stream.go's checkStreamCfg), where it clamps the default
+// window of a stream that declares none, and on `stream.type: nats` the
+// setting is the operator's. The dead letters declare fifteen minutes
+// ([queue.DeadLetterWindow]), and refused on the broker's words alone the boot
+// named neither that window nor where the limit is set. A LIKELY CAUSE, NEVER A
+// CERTAINTY: the broker answers every invalid configuration with one code
+// ([jsprovision.InvalidConfig]), its words are no contract to match, and no
+// client can read the server's limit to compare, so the sentence names the
+// cause as likely and the broker's own error stays beside it. An embedded
+// broker sets no such limit, so a refusal there is the engine's own.
+func (q *Queue) windowCause(spec streamSpec, err error) string {
+	if q.cfg.URL == "" || spec.duplicates <= 0 || !jsprovision.InvalidConfig(err) {
+		return ""
+	}
+	return fmt.Sprintf("; %s declares a duplicate window of %v, and a server whose JetStream limits "+
+		"cap the window below that refuses the stream as an invalid configuration, so the likely "+
+		"cause is jetstream { limits { duplicate_window } } set below %v: raise it to %v or more, "+
+		"or remove it, in the configuration of every server stream.url reaches",
+		spec.name, spec.duplicates, spec.duplicates, spec.duplicates)
 }
 
 // observeStream compares a running stream against this node's spec and decides
@@ -1311,7 +1347,17 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// the lane is how this backend keeps one subscription's order and not
 	// a different destination.
 	subject := queue.SubjectFor(topic, ev)
-	if _, err := q.js.Publish(ctx, subject, data); err != nil {
+	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
+	// deadline: the request term, and across a link the time the event takes
+	// at the connection's pace, each time it is sent ([Queue.write]) — an
+	// event may be the transport's whole eight mebibytes, about four minutes
+	// at the slowest pace allowed, and held to the request term alone it
+	// failed as an outage while the link was carrying it. For those minutes
+	// everything the node sends behind it on the link waits too, its lease
+	// renewals among them (crewlet/crewlet#1035, which this does not fix).
+	// Classified on the CALLER's context, for the keep's reason
+	// ([Queue.KeepDeadLetter]).
+	if _, err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {
 		// TRANSLATED, not passed through. "Too large" is the one publish
 		// failure a producer must not retry, and nats.ErrMaxPayload is
 		// this backend's private word for it — a caller matching on that
@@ -2002,16 +2048,31 @@ func (q *Queue) attachmentsLocked() []*attachment {
 
 // deadLetter publishes a message the delivery budget has exhausted, to a
 // subject outside the crewlet.* space so the dashboard's crewlet.events.>
-// stream cannot resurface poison as live traffic.
-func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) {
+// stream cannot resurface poison as live traffic, and answers why it could
+// not, which its caller logs ([attachment.returnMsg]).
+//
+// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([Queue.write]), as every
+// write of this queue's whose caller set no deadline is: the consume loop's
+// context carries none, and the message may be as large as the transport
+// carries. Held to the request term alone, a large one dead-lettered across a
+// slow link was reported as failed while its bytes were still crossing to
+// land: a `dead_letter_failed` line for a message the stream went on to keep.
+//
+// IT NAMES NO IDENTITY, where a keep through the contract does
+// ([Queue.KeepDeadLetter]), because no second node is ever handed the message
+// it keeps: it is kept from the delivery that spent the subscription's budget,
+// and the broker hands a message past its MaxDeliver to nobody, however long
+// that delivery goes unacknowledged (nats-server v2.15.2,
+// server/consumer.go:2430-2457, hasMaxDeliveries, asked as the
+// acknowledgement window lapses at :6185-6191) — a window of thirty minutes
+// besides ([DefaultAckWait]), past the longest a keep waits.
+func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) error {
 	subject := topics.DeadLetter(topic, group)
 	if _, err := q.streamFor(ctx, subject); err != nil {
-		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
-		return
+		return err
 	}
-	if _, err := q.js.Publish(ctx, subject, data); err != nil {
-		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
-	}
+	_, err := q.write(ctx, &nats.Msg{Subject: subject, Data: data})
+	return err
 }
 
 var _ queue.EventQueue = (*Queue)(nil)

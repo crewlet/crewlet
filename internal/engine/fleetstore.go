@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/kv"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -21,10 +22,11 @@ var ErrNoFleetStoreHere = errors.New("engine: the fleet's store cannot be reache
 // FleetStore is the fleet's coordination store, reached by a process that is
 // not this node's engine — a `crewlet` command, while the engine is stopped.
 type FleetStore struct {
-	// Fleet is the store. Its buckets are the engine's own, opened through
-	// the engine's own constructor ([openFleet]) with the engine's own
-	// settings, so a bucket this creates on a node that has never booted is
-	// the one the engine's first boot would have created, and adopts.
+	// Fleet is the store. Its buckets are the engine's own, opened with the
+	// configuration the engine's boot opens them with ([coordinationStoresOf],
+	// through kv.OpenFleet), so a bucket this creates on a node that has never
+	// booted is the one the engine's first boot would have created, and
+	// adopts.
 	Fleet coord.Fleet
 	// Where names the broker it was reached through, for the reader of a
 	// command's output: "this node's broker on <stream.store_dir>", or
@@ -104,7 +106,7 @@ func OpenFleetStore(ctx context.Context, b *config.Bootstrap) (*FleetStore, erro
 	openCtx, cancel := context.WithTimeout(ctx,
 		jsprovision.Clustered(clustered).SequenceBudget())
 	defer cancel()
-	fleet, err := openFleet(openCtx, broker.JetStream(), b.Stream.Replicas, clustered)
+	fleet, err := kv.OpenFleet(openCtx, broker.JetStream(), coordinationStoresOf(b).fleet)
 	if err != nil {
 		broker.Close()
 		return nil, fmt.Errorf("engine: open the fleet's store on %s: %w", broker.Where(), err)

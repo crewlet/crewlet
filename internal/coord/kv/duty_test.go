@@ -138,7 +138,7 @@ func TestTheDutyBucketAgeIsOnlyEverRaised(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("pre-create the duty bucket: %v", err)
 			}
-			s, err := Open(ctx, jsOf(nc), Config{TTL: productionSeatTTL, BucketPrefix: prefix})
+			s, err := Open(ctx, jsOf(nc), Config{TTL: productionSeatTTL, BucketPrefix: prefix, Reach: InProcess})
 			if err != nil {
 				t.Fatalf("Open over an existing duty bucket: %v", err)
 			}

@@ -484,8 +484,8 @@ type letterBox struct {
 	marked, listed, frames int
 }
 
-func (b *letterBox) KeepDeadLetter(context.Context, string, []byte, []byte) error {
-	return errors.New("no case here keeps through the box")
+func (b *letterBox) KeepDeadLetter(context.Context, string, string, []byte, []byte) (bool, error) {
+	return false, errors.New("no case here keeps through the box")
 }
 
 func (b *letterBox) DeadLettersOn(context.Context, string) ([]queue.Kept, error) {

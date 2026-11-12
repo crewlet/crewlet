@@ -1365,7 +1365,7 @@
               "type": "string"
             }
           ],
-          "description": "Event stream retention; 0 takes the queue default."
+          "description": "Event stream retention; 0 takes the queue default, otherwise at least 0.25 (the dead letters' fifteen-minute duplicate window)."
         },
         "executor_log_max_bytes": {
           "anyOf": [

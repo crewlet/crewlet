@@ -1086,7 +1086,9 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay tim
 		// its failure count is dead weight.
 		a.settled(md.Sequence.Stream)
 		a.log.Error("dead_lettered", "deliveries", md.NumDelivered)
-		a.q.deadLetter(ctx, a.key.topic, a.key.group, msg.Data())
+		if err := a.q.deadLetter(ctx, a.key.topic, a.key.group, msg.Data()); err != nil {
+			a.log.Error("dead_letter_failed", "error", err.Error())
+		}
 		// Term, not Ack: the message is being discarded from this
 		// subscription deliberately, and Term says so to anyone reading
 		// consumer state.

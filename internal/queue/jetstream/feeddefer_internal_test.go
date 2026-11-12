@@ -11,6 +11,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -56,7 +58,8 @@ func TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention(t *test
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			q := openForTest(t, tc.cfg)
-			if err := q.KeepDeadLetter(t.Context(), subject, []byte(`{"v":1}`), []byte("frame")); err != nil {
+			if _, err := q.KeepDeadLetter(t.Context(), subject, "the record", []byte(`{"v":1}`),
+				[]byte("frame")); err != nil {
 				t.Fatalf("KeepDeadLetter: %v", err)
 			}
 			stream, err := q.streamFor(t.Context(), subject)
@@ -84,6 +87,45 @@ func TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention(t *test
 					kept[0].StoredAt, kept[0].Expires, want, tc.keep)
 			}
 		})
+	}
+}
+
+// A SECOND KEEP OF ONE IDENTITY IS STORED AS NOTHING FOR AS LONG AS A KEEP CAN
+// TAKE.
+//
+// A keep carries its identity as its message id, and the dead-letter stream
+// collapses a repeated one within its duplicate window — the contract's
+// window, which has to outlast the slowest keep this backend makes: one at the
+// transport's ceiling across a link at the floor, the request term and a
+// crossing for each of its sends. Left to the broker's default of two minutes,
+// a peer's copy of a record whose first keep was still crossing four minutes
+// later was a second entry. So the stream is provisioned with the window, and
+// the window holds the slowest keep.
+//
+// Mutation: provision the dead letters without the window, or shorten the
+// window below the slowest keep, and it goes red.
+func TestTheDeadLettersCollapseASecondKeepForAsLongAsAKeepCanTake(t *testing.T) {
+	t.Parallel()
+	slowest := jsapi.RequestTerm + jsapi.WriteSends*jsapi.Sending(queue.MaxPayloadBytes, objstore.MiBPace)
+	if queue.DeadLetterWindow < slowest {
+		t.Errorf("the dead letters collapse a second keep for %v, and the slowest keep waits %v: "+
+			"a copy still crossing past the window is a second entry", queue.DeadLetterWindow, slowest)
+	}
+	q := openForTest(t, Config{})
+	subject := changefeed.DeadLetterSubject(changefeed.Source{Name: "work", Group: "crewlet-tracker-feed"})
+	for i, want := range []bool{false, true} {
+		already, err := q.KeepDeadLetter(t.Context(), subject, "the record", []byte(`{"v":1}`), []byte("frame"))
+		if err != nil || already != want {
+			t.Fatalf("keep %d of one identity = (already %t, %v), want already %t", i+1, already, err, want)
+		}
+	}
+	st, err := q.js.Stream(t.Context(), streamDeadLetter)
+	if err != nil {
+		t.Fatalf("read %s: %v", streamDeadLetter, err)
+	}
+	if got := st.CachedInfo().Config.Duplicates; got != queue.DeadLetterWindow {
+		t.Errorf("%s collapses a repeated keep for %v, want the contract's window, %v",
+			streamDeadLetter, got, queue.DeadLetterWindow)
 	}
 }
 
@@ -117,7 +159,7 @@ func TestAListingMovesNoFrameAndLeavesNoConsumer(t *testing.T) {
 	frame := bytes.Repeat([]byte("f"), 1<<20)
 	headers := []string{`{"v":1,"seq":1}`, `{"v":1,"seq":2}`, `{"v":1,"seq":3}`}
 	for _, header := range headers {
-		if err := q.KeepDeadLetter(t.Context(), subject, []byte(header), frame); err != nil {
+		if _, err := q.KeepDeadLetter(t.Context(), subject, header, []byte(header), frame); err != nil {
 			t.Fatalf("KeepDeadLetter: %v", err)
 		}
 	}
@@ -173,7 +215,8 @@ func TestAListingMovesNoFrameAndLeavesNoConsumer(t *testing.T) {
 func TestTheFramingAKeepIsHeldToCoversItsHeaderBlock(t *testing.T) {
 	t.Parallel()
 	header, body := []byte(`{"v":1}`), []byte("frame")
-	msg := letterMsg("dlq.changefeed.work.grp.0123456789ab", streamDeadLetter, header, body)
+	msg := letterMsg("dlq.changefeed.work.grp.0123456789ab", streamDeadLetter,
+		strings.Repeat("an identity of any length ", 64), header, body)
 	block := msg.Size() - len(msg.Subject) - len(header) - len(body)
 	if block > queue.LetterFraming {
 		t.Errorf("a keep's message adds %d bytes to its header and body, past the %d "+
@@ -214,7 +257,10 @@ func TestAWakeFeedsLargestEntryIsKept(t *testing.T) {
 	}
 	q := openForTest(t, Config{})
 	subject := changefeed.DeadLetterSubject(changefeed.Source{Name: "work", Group: "crewlet-tracker-feed"})
-	if err := q.KeepDeadLetter(t.Context(), subject, header, frame); err != nil {
+	// THE LONGEST IDENTITY a feed derives too, which the message carries at
+	// a fixed size whatever its length.
+	id := strings.Repeat("CREWLET_TRACKER_LOG", 32)
+	if _, err := q.KeepDeadLetter(t.Context(), subject, id, header, frame); err != nil {
 		t.Fatalf("an entry of a %d-byte frame and a %d-byte header was refused: %v",
 			len(frame), len(header), err)
 	}

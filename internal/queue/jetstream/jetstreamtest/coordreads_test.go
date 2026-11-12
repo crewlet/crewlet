@@ -66,7 +66,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		awaitRoutes(t, c, i, 2)
 	}
 	cfg := coordkv.FleetConfig{
-		BucketPrefix: "behind", Replicas: len(c.Servers), Clustered: true,
+		BucketPrefix: "behind", Replicas: len(c.Servers), Clustered: true, Reach: coordkv.InProcess,
 		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
