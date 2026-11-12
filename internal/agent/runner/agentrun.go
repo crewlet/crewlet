@@ -437,9 +437,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 
 	// The submission tool is on the surface because it is how the executor
 	// says what it did. The harness calls it over the bridge, and the value it
-	// captures here is read only when the resume happens in THIS process —
-	// otherwise the resume rebuilds it from the run's durable bridged-call
-	// log.
+	// captures here is NEVER READ: every collection, in this process or
+	// another, replays submit_work from the run's durable bridged-call log
+	// into a fresh decoder ([Runner.resumeAgentRun]). What this tool decides
+	// is only what the run is told, and whether the log records the call as
+	// failed, which the replay skips.
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
 		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
@@ -945,9 +947,11 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 //
 // It launches nothing and parks nothing: the run is going already, and its
 // collection resumes the turn as it would have. THE SUBMISSION IT CAPTURES IS
-// NEVER READ, exactly as the launch's is not when the run is collected in
-// another process: the collection replays submit_work from the run's durable
-// log ([Runner.resumeAgentRun]).
+// NEVER READ, exactly as the launch's is not: every collection, in this
+// process or another, replays submit_work from the run's durable log into a
+// fresh decoder ([Runner.resumeAgentRun]). What its tool decides is only what
+// the run is told, and whether the log records the call as failed, which the
+// replay skips.
 //
 // AND THE CALLS ITS LOG HOLDS IN FLIGHT (unfinished, [Resume.Unfinished]), which
 // its call log counts by their identity: a call of the run still running on
