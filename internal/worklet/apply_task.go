@@ -495,6 +495,17 @@ func applyPatch(task Task, patch TaskPatch) Task {
 		}
 		task.Changes[s.Ref] = *s
 	}
+	if d := patch.DeadWait; d != nil && d.Ref != "" {
+		task.DeadWaits = maps.Clone(task.DeadWaits)
+		if task.DeadWaits == nil {
+			task.DeadWaits = map[string]DeadWait{}
+		}
+		task.DeadWaits[d.Ref] = *d
+	}
+	if ref := patch.DeadWaitEnded; ref != nil {
+		task.DeadWaits = maps.Clone(task.DeadWaits)
+		delete(task.DeadWaits, *ref)
+	}
 	switch {
 	case patch.ClearDue:
 		task.DueAt = nil
@@ -555,6 +566,21 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	if patch.BodyRevision != nil {
 		task.BodyVersion = patch.BodyRevision.Version + 1
 	}
+	return pruneDeadWaits(task)
+}
+
+// pruneDeadWaits drops each dead wait on a change the task no longer waits on,
+// or one recorded settled: only an open wait can be dead.
+func pruneDeadWaits(task Task) Task {
+	kept := maps.Clone(task.DeadWaits)
+	maps.DeleteFunc(kept, func(ref string, _ DeadWait) bool {
+		_, settled := task.Changes[ref]
+		return settled || !waitsOn(task, ref)
+	})
+	if len(kept) == 0 {
+		kept = nil
+	}
+	task.DeadWaits = kept
 	return task
 }
 
@@ -817,16 +843,17 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 const (
 	clearDepsStatement = `DELETE FROM tracker_task_deps WHERE task_id = ?`
 	depsInsertPrefix   = `
-		INSERT INTO tracker_task_deps (blocker_id, task_id, blocker_open, cleared_at)
+		INSERT INTO tracker_task_deps (blocker_id, task_id, blocker_open, cleared_at, dead_head)
 		VALUES`
 	depsInsertRow = `(?, ?,
 		  COALESCE((SELECT CASE WHEN b.status_group IN ('done','closed')
 		                        THEN 0 ELSE 1 END
 		            FROM tracker_tasks b WHERE b.id = ?), ?),
-		  COALESCE((SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?), ?))`
+		  COALESCE((SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?), ?), ?)`
 	depsInsertConflict = `ON CONFLICT (blocker_id, task_id) DO UPDATE SET
 			blocker_open = excluded.blocker_open,
-			cleared_at = excluded.cleared_at`
+			cleared_at = excluded.cleared_at,
+			dead_head = excluded.dead_head`
 	clearDependentsStatement = `
 		UPDATE tracker_task_deps SET
 			blocker_open = CASE WHEN ? IN ('done','closed') THEN 0 ELSE 1 END,
@@ -863,12 +890,13 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	// tracker_task_deps, so batching cannot change what any of them sees.
 	written, err := insertMany(ctx, tx, c.maxVariables, depsInsertPrefix,
 		depsInsertRow, depsInsertConflict, blockers, func(r Relation) []any {
-			// A CHANGE IS NO TASK: open until the task records it settled.
+			// A CHANGE IS NO TASK: open until the task records it settled,
+			// and dead at the head the task records nothing moving it at.
 			open, cleared := 1, any(nil)
 			if s, settled := task.Changes[r.Other]; settled {
 				open, cleared = 0, nullableTime(&s.At)
 			}
-			return []any{r.Other, task.ID, r.Other, open, r.Other, cleared}
+			return []any{r.Other, task.ID, r.Other, open, r.Other, cleared, task.DeadWaits[r.Other].Head}
 		})
 	if err != nil {
 		return 0, fmt.Errorf("worklet: write the dependencies of %s: %w",

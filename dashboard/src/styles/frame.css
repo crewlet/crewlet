@@ -949,4 +949,9 @@
     text-overflow: clip;
     overflow-wrap: anywhere;
   }
+  /* A TITLE'S BADGE WRAPS UNDER IT: beside it, a badge naming what holds the
+     task up took the line and left the title a letter wide. */
+  .work-title {
+    flex-wrap: wrap;
+  }
 }

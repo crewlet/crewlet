@@ -211,6 +211,10 @@ type Blocker struct {
 	// never be mirrored — a different fact from "not mirrored yet", and
 	// the one that stops a reader waiting for it to settle.
 	OneSidedFinal bool `json:"one_sided_final,omitempty"`
+
+	// Dead is a change the task waits on that nothing moves: open, with no
+	// reviewer asked, no review of its head and no merge asked (ADR-0128).
+	Dead bool `json:"dead,omitempty"`
 }
 
 // Incomplete says what an answer could not account for.
@@ -2230,7 +2234,7 @@ func taskRowsStatement(set taskSet, terms []sortTerm) (string, []any) {
 // named for the plan test.
 func blockersStatement(n int) string {
 	return `SELECT r.task_id, r.other_id, r.one_sided, r.one_sided_final,
-	                 COALESCE(d.blocker_open, 0)
+	                 COALESCE(d.blocker_open, 0), COALESCE(d.dead_head, '') <> ''
 	          FROM tracker_relations r
 	          LEFT JOIN tracker_task_deps d
 	                 ON d.task_id = r.task_id AND d.blocker_id = r.other_id
@@ -2268,9 +2272,9 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 	for found.Next() {
 		var task string
 		var edge Blocker
-		var oneSided, oneSidedFinal, open int
+		var oneSided, oneSidedFinal, open, dead int
 		if err := found.Scan(&task, &edge.ID, &oneSided, &oneSidedFinal,
-			&open); err != nil {
+			&open, &dead); err != nil {
 			return fmt.Errorf("worklet: read a dependency edge: %w", err)
 		}
 		i, ok := at[task]
@@ -2280,6 +2284,7 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 		edge.Open = open == 1
 		edge.OneSided = oneSided == 1
 		edge.OneSidedFinal = oneSidedFinal == 1
+		edge.Dead = open == 1 && dead == 1
 		rows[i].WaitingOn = append(rows[i].WaitingOn, edge)
 	}
 	if err := found.Err(); err != nil {
