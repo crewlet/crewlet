@@ -1006,9 +1006,13 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 // runner that could not be built, a refused budget) is given none and keeps its
 // retry. A seat handed to another node mid-turn keeps its retry too, but as
 // a DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
-// what detects it. So does a refused budget, whose seat is parked until the
-// refusing window turns over rather than NAKed into the same refusal: see
-// [Dispatcher.parkOnBudget].
+// what detects it. So does a failure a redelivery would meet again until
+// something changes, whose seat is parked or paused until it does rather than
+// NAKed into the same refusal: a refused budget until the refusing window
+// turns over ([Dispatcher.parkOnBudget]), a chain every member of which is at
+// its limit until the first is tried again ([Dispatcher.Provider]), and a
+// failure a retry cannot cure, the second time in a row, until its settings
+// change or a person resumes it ([Dispatcher.Failure]).
 //
 // It is not silent. A turn that ran has already published its own completion
 // marked failed (see [Engine.publishTurnCompleted], which fires on the error

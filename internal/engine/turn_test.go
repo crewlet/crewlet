@@ -442,11 +442,14 @@ func TestAFailedTurnIsStillRecordedAsWorked(t *testing.T) {
 //
 // A broken phase whose record shows no act is the case the dispatcher's old
 // comment described for EVERY failure: nothing was recorded, so a redelivery
-// genuinely does run it cleanly. A provider that never answered, a runner
-// that could not be built and a refused budget all land here — none of them
-// shows a write, and every one of them is worth trying again. A seat handed
-// to another node mid-turn is worth trying again too, and gets the cheaper
-// verb: see the deferral test below.
+// genuinely does run it cleanly. A provider that never answered and a runner
+// that could not be built land here — neither shows a write, and both are
+// worth trying again. A seat handed to another node mid-turn is worth trying
+// again too, and gets the cheaper verb: see the deferral test below. So does
+// a failure a redelivery would meet again until something changes, whose
+// seat is parked or paused until it does: a refused budget, a chain every
+// model of which is at its usage limit, and a failure a retry cannot cure,
+// the second time in a row.
 func TestABrokenPhaseWhoseRecordShowsNoActStillNAKsAndRecordsNothing(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
