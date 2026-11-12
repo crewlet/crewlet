@@ -313,10 +313,13 @@ func TestASettledWriteMetByInFlightAnswersForeverEndsUndecidedAtItsBound(t *test
 // store that guessed "in process" for a leaf's connection would hold a large
 // write to the request term alone. So each store's configuration states it,
 // and one that does not — or states a reach nothing knows — is refused,
-// naming the field.
+// naming the field of the configuration its caller built, exactly as the
+// error opens: the lease store's "Config.Reach" is also the tail of
+// "EpochsConfig.Reach", the configuration it derives and checks after its own.
 //
 // Mutation: open a store whose configuration states no reach, and its row
-// goes red.
+// goes red; drop the lease store's own check, and the refusal names the
+// epochs' configuration, which its caller never built.
 func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -343,7 +346,7 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 		}},
 	} {
 		for _, r := range []Reach{"", "nearby"} {
-			if err := c.open(r); err == nil || !strings.Contains(err.Error(), c.field) {
+			if err := c.open(r); err == nil || !strings.HasPrefix(err.Error(), "coord/kv: "+c.field+" ") {
 				t.Errorf("%s opened with the reach %q = %v, want it refused naming %s",
 					c.name, r, err, c.field)
 			}
