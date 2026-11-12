@@ -2226,8 +2226,12 @@ const (
 	// script): 5744 KiB. Atlas named among the apps People grants, and each
 	// delegated rule's required checks with Settings › Delegated decisions
 	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
-	// all script): 5745 KiB.
-	treeBudget = 5<<20 + 625<<10
+	// all script): 5745 KiB. Every end of a person's note to a running turn
+	// said in its trace as the run's record knows it (missed, unconfirmed,
+	// told again after a step that never handed it over, and an end this
+	// bundle does not know said as that, never as expired), merged on top of
+	// it, took it to 5745.5 KiB (5,883,359 bytes, +1,345, all script): 5746 KiB.
+	treeBudget = 5<<20 + 626<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
