@@ -1044,8 +1044,10 @@ type EventQueue interface {
 	//
 	// ONE ENTRY FOR ONE IDENTITY. id is the entry's identity, which its
 	// keeper derives from WHAT it keeps and never from the delivery that
-	// handed it over — a wake feed names the record's place in its log,
-	// which every node handed the record derives alike — so that a second
+	// handed it over — a wake feed names the message the broker stored for
+	// the record, its log, its position there and the broker's instant for
+	// it, which every node handed the record reads off the delivery alike,
+	// whether or not it can open the record — so that a second
 	// keep of one thing is harmless: a keep of id on subject within
 	// [DeadLetterWindow] of the first keep of it there keeps nothing and
 	// answers already kept, on every backend alike. A reader that settles

@@ -95,8 +95,10 @@
 // what the feed recorded of it the entry's header ([DeadLetter]), which every
 // listing reads without the frame — and only then acked, so it stops holding
 // a slot of the consumer's pending set without anybody's wake being lost.
-// The entry is kept under the record's IDENTITY, its place in its log
-// ([keepID]), which makes a second keep of the record harmless: a keep waits
+// The entry is kept under the record's IDENTITY, the message the broker stored
+// for it — its log, its position there and the broker's instant for it, which
+// every node reads off the delivery whether or not it can open the record
+// ([keepID]) — which makes a second keep of the record harmless: a keep waits
 // as long as the frame takes to cross the node's link, which can outlast the
 // delivery's thirty-second acknowledgement window, and the record is then
 // handed to another node, which keeps it too. Whichever of the two keeps
@@ -1064,22 +1066,30 @@ func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Messag
 }
 
 // keepID is the identity a record's dead letter is kept under
-// ([queue.EventQueue.KeepDeadLetter]): the record's PLACE — the feed's source,
-// the log it was delivered from, the log's generation and its position there.
+// ([queue.EventQueue.KeepDeadLetter]): the record's STORED MESSAGE — the feed's
+// source, the log it was delivered from, its position there, and the broker's
+// own instant for it ([Record.StoredAt]), in nanoseconds since the epoch.
 //
-// WHAT IS KEPT, NEVER THE DELIVERY: every node handed the record derives the
-// same identity, whichever delivery of it reached them and however many times
-// it was delivered before, so a second keep of it — a peer's, handed the
-// record while this node's keep was still crossing its link and the delivery's
-// window lapsed, or this node's own after an acknowledgement that was lost —
-// is answered already kept rather than kept twice. A position is comparable
-// only on its log and its generation, a reanchor renumbering a log, so both
-// are in it; the generation is the one the delivery carries, zero where the
-// node that keeps it never read the envelope, which every node that cannot
-// read it reads alike. Quoted, so no source or stream name can run into
-// another's.
+// WHAT IS KEPT, NEVER THE DELIVERY, AND NOTHING READ OUT OF THE FRAME: every
+// node handed the record reads all four off the delivery itself, whether or
+// not it can open the envelope — whichever delivery of it reached them and
+// however many times it was delivered before — so a second keep of it, a
+// peer's handed the record while a keep of it was still crossing a link, or
+// this node's own after an answer that was lost, is answered already kept
+// rather than kept twice. The instant is what tells one incarnation of a log
+// from the next: a reanchored or rebuilt log numbers its records again, and
+// the record at a reused position was stored at another instant. The log's
+// generation is no substitute: a stream deleted and remade, or restored from
+// an older copy and written past, keeps its generation, which only a reanchor
+// moves. It is LEFT OUT besides, because only a node that read the envelope
+// knows it: a node that could not would key the same record apart from one
+// that could, and both entries would be kept.
+//
+// NEVER ZERO HERE: the broker stamps every message it stores, and a record its
+// estate dates nothing for is never dead-lettered ([Feed.ageOf]). Quoted, so no
+// source or stream name can run into another's.
 func keepID(src Source, rec Record) string {
-	return fmt.Sprintf("%q %q %d %d", src.Name, rec.Stream, rec.Gen, rec.Position)
+	return fmt.Sprintf("%q %q %d %d", src.Name, rec.Stream, rec.Position, rec.StoredAt.UnixNano())
 }
 
 // replay re-derives every dead letter this feed's group holds, once a process,
@@ -1113,7 +1123,8 @@ func keepID(src Source, rec Record) string {
 // somebody is published through the same claim a delivery passes
 // ([Feed.derive]), and its entry is DROPPED once the wake is published, or once
 // the translator decided it wakes nobody — and so is every other entry of the
-// same record, which two nodes can each have kept. One whose claim a peer holds
+// same record, kept further apart than the window its broker holds the
+// record's identity for ([keepID]). One whose claim a peer holds
 // is LEFT for that peer, which drops it once its publish lands: dropped on the
 // claim's word, it would be a wake nobody has the moment the peer's publish
 // failed. One this node still cannot read (any deferral, a record it cannot
@@ -1163,11 +1174,20 @@ const (
 	entryGone
 )
 
-// recordPlace names one record of a log: the stream it was delivered from and
-// its sequence there, which every entry kept of it carries.
+// recordPlace names one record of a log as its dead letters name it: the
+// stream it was delivered from, its sequence there and the broker's instant
+// for it, which every entry kept of it carries ([keepID]) and the record a
+// rebuilt log stored at a reused sequence does not share.
+//
+// THE INSTANT IN NANOSECONDS, NEVER A time.Time: a map compares a time.Time's
+// location beside its instant, and the instant a header decodes to carries
+// another location than the one a delivery handed over. Its header carries
+// it as RFC 3339 with nanoseconds ([DeadLetter.StoredAt]), so the nanoseconds
+// read back exactly.
 type recordPlace struct {
 	stream string
 	seq    uint64
+	stored int64
 }
 
 // replayOne re-derives one dead letter and answers what became of its entry.
@@ -1184,15 +1204,18 @@ func (f *Feed) replayOne(ctx context.Context, src Source, subject string, record
 			"subject", subject, "seq", entry.Seq, "error", err.Error())
 		return entryLeft
 	}
-	place := recordPlace{stream: letter.Stream, seq: letter.Seq}
+	place := recordPlace{stream: letter.Stream, seq: letter.Seq, stored: letter.StoredAt.UnixNano()}
 	if settled[place] {
-		// THE SAME RECORD KEPT TWICE — under two identities, by a node that
-		// read its envelope's generation and one that never did ([keepID]),
-		// or by keeps further apart than the queue's window — whose wake
-		// this replay has settled already: dropped with nothing derived
-		// again, and its frame never read. Asked of the claim instead, it
-		// would answer held — by this very replay — and the entry would be
-		// left as though a peer held it.
+		// THE SAME RECORD KEPT TWICE, under its one identity ([keepID]),
+		// by keeps further apart than the window its broker holds the
+		// identity for (a restart never leaves two: it rebuilds the window
+		// from the entries it still holds, so it forgets only a dropped
+		// entry's identity), whose wake this replay has settled already:
+		// dropped with nothing derived again, and its frame never read.
+		// Asked of the claim instead, it would answer held — by this very
+		// replay — and the entry would be left as though a peer held it. A
+		// rebuilt log's record at the same sequence was stored at another
+		// instant, so it is another place, and derived on its own.
 		return f.drop(ctx, src, subject, entry)
 	}
 	frame, held, err := f.deadLetters.DeadLetterFrame(ctx, subject, entry.Seq)

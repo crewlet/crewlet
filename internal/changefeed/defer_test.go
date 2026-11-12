@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
@@ -828,15 +829,17 @@ func keptRecord(clk *clock) changefeed.Record {
 
 // A REPLAY DERIVES A KEPT RECORD'S WAKE ONCE, AND DROPS ITS ENTRY.
 //
-// Two entries can hold the same record: a node that never read its envelope
-// keeps it at generation zero, under an identity of its own beside the one a
-// node that read it keeps (keepID), and keeps further apart than the queue's
-// window are two entries whatever they name. The feed's start publishes the
-// first entry's wake through the claim a delivery passes and drops the entry;
-// the second is the same record, whose wake this replay has just settled, so it
-// is dropped with nothing published again — never left as though the claim
-// this replay took were a peer's — and its frame never read. The wake carries
-// the record's own place, as a delivered one does.
+// Two entries can hold the same record, under its one identity (keepID), only
+// when its keeps are further apart than the window the broker holds the
+// identity for: a restart rebuilds the window from the entries still held, so
+// it forgets only a dropped entry's identity and never leaves two. So the case
+// keeps the record twice that far apart on the twin's clock, which a bubble
+// moves. The feed's start publishes the first entry's
+// wake through the claim a delivery passes and drops the entry; the second is
+// the same record, whose wake this replay has just settled, so it is dropped
+// with nothing published again — never left as though the claim this replay
+// took were a peer's — and its frame never read. The wake carries the record's
+// own place, as a delivered one does.
 //
 // Mutation: settle each entry alone, and the second is left as though a peer
 // held the claim this replay took; leave an entry whose wake was published,
@@ -844,36 +847,122 @@ func keptRecord(clk *clock) changefeed.Record {
 // settled, and two are read.
 func TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFleet(t)
+		rec := keptRecord(newClock())
+		deadLetterOf(t, f, rec)
+		// PAST THE QUEUE'S WINDOW on the twin's clock, the bubble's, so the
+		// record's second keep stores an entry of its own.
+		time.Sleep(queue.DeadLetterWindow + time.Second)
+		deadLetterOf(t, f, rec)
+
+		newer := f.join(t, true)
+		if len(newer.kept(t)) != 2 {
+			t.Fatalf("the store holds %d entries, want the record kept twice", len(newer.kept(t)))
+		}
+		if !changefeed.Replay(t.Context(), newer.feed, newer.docs) {
+			t.Fatal("the replay's listing did not answer")
+		}
+		if got := newer.pub.count(); got != 1 {
+			t.Fatalf("the replay published %d wake(s) for one record kept twice, want one", got)
+		}
+		// ONE FRAME READ, the entry it derived the wake from: the second
+		// entry of the same record is settled by its header alone.
+		if got := f.frames.Load(); got != 1 {
+			t.Errorf("the replay read %d frames, want the one it derived the wake from", got)
+		}
+		w, _ := events.DataAs[*types.RawWebhook](newer.pub.first(t))
+		at, err := statelog.ParsePosition(w.Trigger)
+		if want := (statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}); err != nil ||
+			at != want || w.Body["key"] != rec.Key {
+			t.Errorf("the replayed wake carries %q at %q (%v), want %s at %v", w.Body["key"], w.Trigger, err, rec.Key, want)
+		}
+		if left := newer.kept(t); len(left) != 0 {
+			t.Errorf("%d entries are still kept after their wake was published", len(left))
+		}
+	})
+}
+
+// A REBUILT LOG'S RECORD AT A REUSED SEQUENCE IS REPLAYED ON ITS OWN.
+//
+// A deleted and rebuilt log numbers its records from one again while the dead
+// letters keep their entries for the event stream's retention, so an old
+// incarnation's entry and a new one's can name the same stream and sequence.
+// The broker stored the two at different instants, which both entries carry:
+// they are two records, kept under two identities, and the replay derives each
+// one's wake from its own frame. Neither is dropped unread as a copy of the
+// other.
+//
+// Mutation: name a record's place without its stored instant, and the second
+// entry is dropped unread as the first one's copy, its wake lost.
+func TestARebuiltLogsRecordAtAReusedSequenceIsReplayedOnItsOwn(t *testing.T) {
+	t.Parallel()
 	f := newFleet(t)
-	rec := keptRecord(newClock())
-	deadLetterOf(t, f, rec)
-	unread := rec
-	unread.Gen = 0
-	deadLetterOf(t, f, unread)
+	old := keptRecord(newClock())
+	deadLetterOf(t, f, old)
+	rebuilt := old
+	rebuilt.StoredAt = old.StoredAt.Add(10 * time.Minute)
+	rebuilt.ID, rebuilt.Key, rebuilt.Payload = "op-2", "item/u2", []byte(`{"frame":"u2"}`)
+	deadLetterOf(t, f, rebuilt)
 
 	newer := f.join(t, true)
 	if len(newer.kept(t)) != 2 {
-		t.Fatalf("the store holds %d entries, want the record kept twice", len(newer.kept(t)))
+		t.Fatalf("the store holds %d entries, want one for each incarnation's record", len(newer.kept(t)))
 	}
 	if !changefeed.Replay(t.Context(), newer.feed, newer.docs) {
 		t.Fatal("the replay's listing did not answer")
 	}
-	if got := newer.pub.count(); got != 1 {
-		t.Fatalf("the replay published %d wake(s) for one record kept twice, want one", got)
+	if got := newer.pub.count(); got != 2 {
+		t.Fatalf("the replay published %d wake(s) for two records at one sequence, want one each", got)
 	}
-	// ONE FRAME READ, the entry it derived the wake from: the second entry
-	// of the same record is settled by its header alone.
-	if got := f.frames.Load(); got != 1 {
-		t.Errorf("the replay read %d frames, want the one it derived the wake from", got)
-	}
-	w, _ := events.DataAs[*types.RawWebhook](newer.pub.first(t))
-	at, err := statelog.ParsePosition(w.Trigger)
-	if want := (statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}); err != nil ||
-		at != want || w.Body["key"] != rec.Key {
-		t.Errorf("the replayed wake carries %q at %q (%v), want %s at %v", w.Body["key"], w.Trigger, err, rec.Key, want)
+	if got := f.frames.Load(); got != 2 {
+		t.Errorf("the replay read %d frames, want each record's own", got)
 	}
 	if left := newer.kept(t); len(left) != 0 {
-		t.Errorf("%d entries are still kept after their wake was published", len(left))
+		t.Errorf("%d entries are still kept after both wakes were published", len(left))
+	}
+}
+
+// TWO NODES KEEP ONE RECORD ONCE, WHETHER OR NOT THEY READ ITS ENVELOPE.
+//
+// A node that cannot open a record's frame — a key it does not hold, an
+// envelope a newer build writes — defers it knowing only what the delivery
+// says: its log, its position and the broker's instant, and no generation. A
+// node that read the envelope also knows the log's generation, one or more on
+// a log reanchored since it began. Both keep the one record, the second once
+// the first's delivery window lapsed, and the queue keeps it once: the
+// identity is what both read alike.
+//
+// Mutation: key the identity on the generation rather than the stored instant,
+// and the store holds two entries of the one record.
+func TestTwoNodesKeepOneRecordOnceWhetherOrNotTheyReadItsEnvelope(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	read, blind := f.join(t, true), f.join(t, true)
+	rec := aRecord(read.clock.now().Add(-changefeed.DeadLetterAge-time.Minute), 120)
+	if rec.Gen < 1 {
+		t.Fatalf("the record is at generation %d, want a reanchored log's", rec.Gen)
+	}
+	var first, second settled
+	read.handle(t, rec, aFrame, &changefeed.Deferral{Reason: changefeed.DeferNewerRecord}, &first)
+	unread := rec
+	unread.ID, unread.Gen, unread.Delivered = "", 0, 121
+	blind.handle(t, unread, aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &second)
+	for name, s := range map[string]*settled{"the node that read it": &first, "the node that could not": &second} {
+		if acks, naks, _ := s.read(); acks != 1 || len(naks) != 0 {
+			t.Errorf("%s acked the record %d time(s) and handed it back %v, want it settled once",
+				name, acks, naks)
+		}
+	}
+	if entries := read.kept(t); len(entries) != 1 {
+		t.Errorf("the store holds %d entries of the one record, want one", len(entries))
+	}
+	counted := read.counted(metrics.TrackerFeedDeadLettered,
+		map[string]string{"source": "work", "reason": string(changefeed.DeferNewerRecord)}) +
+		blind.counted(metrics.TrackerFeedDeadLettered,
+			map[string]string{"source": "work", "reason": string(changefeed.DeferUnknownKey)})
+	if counted != 1 {
+		t.Errorf("the one record was counted dead-lettered %d time(s) across the two nodes, want once", counted)
 	}
 }
 
