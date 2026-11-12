@@ -758,7 +758,8 @@ See [The health tools](fleet.md#the-health-tools).
 
 ### The company's atlas
 
-Three read-only tools read the company's [atlas](../concepts/atlas.md):
+Three read-only tools read the company's [atlas](../concepts/atlas.md), and an
+agent holds two more that record in it. The three:
 `atlas_search` finds entries by part of a name or key, or by id;
 `atlas_get` reads one entry in full, named by its `id` or by its exact name or
 key, with `used_by`, what relies on it; and `atlas_trace` walks from one entry
@@ -772,6 +773,29 @@ In a turn somebody woke, a seat reads the atlas only if they hold `atlas` too,
 and its repositories only if they hold `gitlet`
 ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 
+Two more are an agent's alone, and record in the atlas
+([What agents record](../concepts/atlas.md#what-agents-record),
+[ADR-0132](../../adr/0132-an-agent-records-in-the-atlas-only-what-a-call-of-its-own-turn-showed.md)):
+
+| Tool | Arguments | What it records |
+|---|---|---|
+| `atlas_record` | `atlas_entry` (an id, or `kind:key`, which the atlas need not hold yet), `name`, `facts` (up to eight, each a `fact` and a `value`), `relation` and `to`, and `seen_in` | The entry, its facts and one relation, each a claim in the agent's voice naming the turn |
+| `atlas_dispute` | `atlas_entry`, `reason` (`gone`, `wrong_value` with `fact` and for a fact that holds several a `value`, or `wrong_link` with `relation` and `to`), and `seen_in` | That the entry, the fact or the relation is not as the atlas holds it. Nothing is removed |
+
+`seen_in` is required on both: the name of a tool the agent called in the same
+turn. The engine reads that call's answer and refuses a record whose values it
+does not show, and it decides from that tool how far the record is trusted: a
+read of a server or of a vendor through the agent's own credential makes it
+likely, a repository file makes it likely as declared in code, and anything
+else leaves it unconfirmed and hidden until a person confirms it. The answer
+says which (`evidence`, `shown_as`), how many claims were `recorded`, and how
+many the atlas `already_known`. An agent cannot record a purpose, an
+environment, an importance, an owner or a dependency, and a value shaped like
+a credential is refused. A turn records at most 20 times and an agent at most
+200 times a day; past either the call is refused as `quota_exceeded`. Neither
+tool is offered to a person, and both are refused in a turn woken by somebody
+without `atlas`. `atlas.agent_records: false` turns both off for the company.
+
 **An agent reads an internal address only within its own reach.** A private IP
 address, or a host name on a private network, is shown to an agent only on an
 entry its own access reaches: a server its SSH access names, a tool server it
@@ -780,6 +804,9 @@ at a vendor. Any other entry keeps its name and loses its private values, an
 entry whose key is itself a private address is left out with every relation to
 it, and the answer counts what it left out as `private_withheld`. A person
 holding `atlas` reads every address.
+
+**An agent never reads an unbacked record.** What an agent recorded with
+nothing the engine could check behind it is left out of every agent's read.
 
 **Every answer is fenced as text somebody else wrote**, labelled at the least
 trust any writer of what it carries earns: the settings, the engine's records

@@ -172,10 +172,12 @@ func (a atlasRead) attribute(entries []atlas.Entry) {
 }
 
 // AtlasForSeat is v as an agent seat reads it: no signal only administrators
-// read, and a private address only of an entry its own access reaches
-// (ADR-0109). It answers how many private values it left out.
+// read, a private address only of an entry its own access reaches (ADR-0109),
+// and nothing only an agent's unbacked report says ([atlas.Vouched]), so one
+// agent's report never reaches another as a fact (ADR-0132). It answers how
+// many private values it left out.
 func AtlasForSeat(v atlas.View, c *config.Company, seat *org.Role) (atlas.View, int) {
-	return atlas.Within(atlas.For(v, atlas.Reader{}), seatReach(c, seat))
+	return atlas.Within(atlas.Vouched(atlas.For(v, atlas.Reader{})), seatReach(c, seat))
 }
 
 // seatReach is which entries an agent seat's own access reaches: the servers

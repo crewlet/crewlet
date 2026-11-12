@@ -151,6 +151,11 @@ type Deps struct {
 	// whoever woke its turn (ADR-0109), a private address only within its own
 	// reach. The zero value omits them. See atlas.go.
 	Atlas AtlasDeps
+
+	// AtlasRecord is the atlas's agent tools': what a seat records in the
+	// atlas from a call of its own turn, and its dispute of what the atlas
+	// holds (ADR-0132). The zero value omits them. See atlasrecord.go.
+	AtlasRecord AtlasRecordDeps
 	// Delegated is what a delegate's verdict tool acts through (ADR-0125);
 	// a nil desk omits review_delegated.
 	Delegated DelegatedDeps
@@ -367,6 +372,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
 		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
 		atlasCandidates(atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
+		atlasAgentCandidates(deps.AtlasRecord,
+			atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
 		releaseCandidates(release), delegatedCandidates(delegatedDeps))
 
 	var names []string
@@ -492,6 +499,9 @@ func annotationsFor(name string) tools.Annotations {
 		return a
 	}
 	if a, ok := atlasAnnotations(name); ok {
+		return a
+	}
+	if a, ok := atlasAgentAnnotations(name); ok {
 		return a
 	}
 	if name == ReviewDelegatedTool {

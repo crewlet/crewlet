@@ -308,6 +308,7 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		authz.ActionColleagueAsk, authz.ActionSessionsList, authz.ActionSessionRead,
 		authz.ActionWithdrawAsk,
 		authz.ActionRequestAccess,
+		authz.ActionAtlasRecord, authz.ActionAtlasDispute,
 		// a person's approval of an agent's call, and of its production command
 		authz.ActionToolsApprove, authz.ActionSSHOperateApprove, authz.ActionReleaseApprove,
 	}

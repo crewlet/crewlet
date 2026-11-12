@@ -254,6 +254,12 @@ const (
 	// ActionAtlasPurge is the tool `atlas_purge`: an entry or a value erased
 	// everywhere, its history included, and kept from coming back.
 	ActionAtlasPurge Action = "atlas_purge"
+	// ActionAtlasRecord is the tool `atlas_record`: an agent's record of what
+	// a tool call of its own turn showed it (ADR-0132).
+	ActionAtlasRecord Action = "atlas_record"
+	// ActionAtlasDispute is the tool `atlas_dispute`: an agent's word that
+	// something the atlas holds is wrong or gone, which removes nothing.
+	ActionAtlasDispute Action = "atlas_dispute"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -982,6 +988,10 @@ type rule struct {
 	// in, and keeps no executor session, reading a seat's as its trail
 	// ([ActionSeatTrailRead]).
 	//
+	// TWO TAKE AN APP BESIDE IT, since they write an app's shared surface:
+	// an agent's record in the atlas and its dispute name the atlas app, so
+	// the requester ceiling holds them to whoever woke the turn (ADR-0132).
+	//
 	// IT REPLACED A PERMISSION. Asking a colleague rode on the permission
 	// that wrote work — so a role that did not use the tracker could not ask
 	// anybody anything — and that was never a decision anybody made about a
@@ -1424,6 +1434,18 @@ var rules = map[Action]rule{
 	// included, and nothing brings it back (ADR-0127).
 	ActionAtlasPurge: {class: ClassAdmin, humanOnly: true, seated: true, irreversible: true,
 		recency: iam.RecencyStepUp, assist: AssistApprove},
+
+	// --- an agent's record in the atlas ------------------------------ //
+	//
+	// THE APP, AND AN AGENT'S ALONE (ADR-0132): a person changes the atlas
+	// with the tools above, in their own rank, and an agent only with these
+	// two, at the lowest. Held to whoever woke the turn as every atlas verb is
+	// (ADR-0109), so a turn a stranger woke, or somebody without Atlas,
+	// records nothing: what an agent records is read back by every agent.
+	ActionAtlasRecord: {class: ClassApp, app: iam.GrantAtlas, seatOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionAtlasDispute: {class: ClassApp, app: iam.GrantAtlas, seatOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label
@@ -2359,6 +2381,10 @@ var assistantNever = map[Action]neverEntry{
 		"work item, and withdraws nothing an agent's run waits on", tellSeat},
 	ActionRequestAccess: {"an agent seat's own verb: a person changes an agent's access in the " +
 		"organization, and asks nobody for it", tellSeat},
+	ActionAtlasRecord: {"an agent seat's own verb: a person records in the atlas in their own rank, " +
+		"with the tools that add, correct and confirm", tellSeat},
+	ActionAtlasDispute: {"an agent seat's own verb: a person who finds the atlas wrong corrects or " +
+		"retires what it holds", tellSeat},
 	ActionSessionsList: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
 		"person reads a seat's as its trail", tellSeat},
 	ActionSessionRead: {"an agent seat's own verb: only an agent seat keeps executor sessions, and a " +
