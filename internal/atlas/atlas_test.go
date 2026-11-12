@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -108,6 +109,71 @@ func TestAValueShapedLikeACredentialIsRefused(t *testing.T) {
 		if _, err := atlas.NewRef(atlas.KindService, secret); err == nil {
 			t.Errorf("a key holding %.6s... was accepted", secret)
 		}
+	}
+}
+
+// A KEY SHAPED LIKE A CREDENTIAL IS NEVER RECORDED, though a key's grammar
+// admits a vendor's identifiers that share a token's alphabet: refused as it was
+// written (a host name's canonical form is lowercase, where a token's shape can
+// be lost) and as every recorded claim names it, its subject, its target and a
+// seat it names, and the refusal never echoes the key.
+//
+// Mutation: drop the check of the key as written in RecordedRef, or the
+// target's in Claim.Recordable, and a row goes red.
+func TestAKeyShapedLikeACredentialIsNeverRecorded(t *testing.T) {
+	t.Parallel()
+	person := atlas.PersonSource("ana")
+	at := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	service := atlas.MustRef(atlas.KindService, "checkout-api")
+	type keyed struct {
+		kind atlas.Kind
+		key  string
+	}
+	// AN ACCESS KEY ID AS A HOST NAME'S FIRST LABEL, whose shape is its case:
+	// the canonical name is lowercase, so only the key as written shows it.
+	cases := []keyed{{atlas.KindHostname, "AKIA" + "ABCDEFGHIJKLMNOP" + ".acme.example"}}
+	for _, secret := range tokens() {
+		cases = append(cases, keyed{atlas.KindHost, "addr/" + secret})
+	}
+	admitted := 0
+	for _, c := range cases {
+		if _, err := atlas.NewRef(c.kind, c.key); err != nil {
+			continue
+		}
+		admitted++
+		_, err := atlas.RecordedRef(c.kind, c.key)
+		if !errors.Is(err, atlas.ErrCredential) {
+			t.Errorf("a %s keyed %.10s...: %v, want ErrCredential", c.kind, c.key, err)
+		}
+		if err != nil && strings.Contains(err.Error(), c.key) {
+			t.Errorf("the refusal of a %s echoes its key", c.kind)
+		}
+	}
+	if admitted < 3 {
+		t.Fatalf("the grammar admits %d of the cases; this tests nothing the grammar does not refuse", admitted)
+	}
+	host := atlas.Ref{Kind: atlas.KindHost, Key: "addr/" + tokens()[0]}
+	if _, err := atlas.NewRef(host.Kind, host.Key); err != nil {
+		t.Fatalf("the case needs a key the grammar admits: %v", err)
+	}
+	runs, err := atlas.Relates(service, atlas.RelationRunsOn, host, person, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runs.Recordable(); !errors.Is(err, atlas.ErrCredential) ||
+		strings.Contains(err.Error(), tokens()[0]) {
+		t.Errorf("a relation to a host keyed by a token: %v, want ErrCredential naming no key", err)
+	}
+	owner, err := atlas.Names(service, atlas.RelationOwnedBy, atlas.ExternalSeat, tokens()[0], person, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Recordable(); !errors.Is(err, atlas.ErrCredential) {
+		t.Errorf("an owner named by a token: %v, want ErrCredential", err)
+	}
+	plain, _ := atlas.Relates(service, atlas.RelationRunsOn, atlas.MustRef(atlas.KindHost, "ssh/web-1"), person, at)
+	if err := plain.Recordable(); err != nil {
+		t.Errorf("a relation to ssh/web-1 is refused: %v", err)
 	}
 }
 
@@ -287,6 +353,31 @@ func TestTheAtlasImportsNoWritePath(t *testing.T) {
 			if strings.Contains(imp, banned) {
 				t.Errorf("internal/atlas imports %s", imp)
 			}
+		}
+	}
+}
+
+// AN ENTRY THE ENGINE NAMES IS DECLARED WHERE IT IS NAMED: a model and a tool
+// server in the settings, a server keyed ssh/ in the SSH settings, a repository
+// or a check keyed gitlet/ in Gitlet; any other key is one a person may add.
+//
+// Mutation: drop the ssh/ case from Ref.EngineNamed and web-1 is a person's.
+func TestAnEntryTheEngineNamesIsDeclaredWhereItIsNamed(t *testing.T) {
+	t.Parallel()
+	for ref, want := range map[atlas.Ref]atlas.SourceKind{
+		atlas.MustRef(atlas.KindHost, "ssh/web-1"):                 atlas.SourceSettings,
+		atlas.MustRef(atlas.KindToolServer, "mcp/tracker"):         atlas.SourceSettings,
+		atlas.MustRef(atlas.KindModel, "llm/main"):                 atlas.SourceSettings,
+		atlas.MustRef(atlas.KindRepository, "gitlet/api"):          atlas.SourceRecords,
+		atlas.MustRef(atlas.KindPipeline, "gitlet/api#unit"):       atlas.SourceRecords,
+		atlas.MustRef(atlas.KindAccount, "gitlet"):                 atlas.SourceRecords,
+		atlas.MustRef(atlas.KindHost, "addr/web-2.acme.example"):   "",
+		atlas.MustRef(atlas.KindRepository, "github.com/acme/api"): "",
+		atlas.MustRef(atlas.KindService, "checkout-api"):           "",
+	} {
+		src, named := ref.EngineNamed()
+		if named != (want != "") || named && src.Kind != want {
+			t.Errorf("%s is named by the engine %v, from %s; want %q", ref, named, src.Kind, want)
 		}
 	}
 }

@@ -6732,7 +6732,19 @@ token without it
 it serves the deployment's health — `fleet_health`, and `code_status` where the
 code reads are — an administrator's reads, refused to anybody else, which an
 agent seat holds only by its role's grant (see
-[The health tools](../guides/fleet.md#the-health-tools)). A schema, a default, a trimmed field
+[The health tools](../guides/fleet.md#the-health-tools)). And it serves the
+company's [atlas](../concepts/atlas.md) to a holder of `atlas`, with the three
+tools every agent seat holds: `atlas_search`, a `query` (part of a name or key,
+or an id), a `kind` and a `limit` (default 50, at most 500), answered with
+`entries` and the `total` that matched; `atlas_get`, one entry in full by its
+`id` or its exact `name` or key, with `used_by`, what relies on it; and
+`atlas_trace`, from one entry `up` to what depends on it (the default) or
+`down` to what it depends on, at most six hops (`depth`) and fifty entries,
+every relation with `all`. Each answers each source's `coverage` and how many
+values were `withheld` for being shaped like a credential, and lists
+repositories only for a caller who holds `gitlet` too
+([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)).
+A schema, a default, a trimmed field
 and the wording of a refusal are each written once — two copies of "file an
 item" drift on exactly the parts nobody looks at, and only one of the two is
 ever tested.
@@ -6824,7 +6836,7 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-seven no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-six no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
@@ -6838,13 +6850,7 @@ and, beside the code reads and on their terms,
 [`code_repo_readers`](#get-gitletreposnamereaders), who read a `visibility: unit`
 repository, and beside the code writes `code_mark_inbox`, a person's marks
 over their own code notices: a seat is woken, never shown an inbox, so it has
-none to mark. And `atlas_search`, the company's
-[atlas](../concepts/atlas.md) for a holder of `atlas`, every entry with its
-facts, sources and relations, and its repositories only for a caller who holds
-`gitlet` too: a `query` (part of a name or key, or an id), a `kind` and a
-`limit` (default 50, at most 500), answered with `entries`, the `total` that
-matched, each source's `coverage` and how many values were `withheld` for being
-shaped like a credential. A view is furniture (a name, a shape
+none to mark. A view is furniture (a name, a shape
 and a filter, arranged so a person finds the same question tomorrow), and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -6868,6 +6874,34 @@ that could steer a colleague's turn would be directing it past the person who
 asked for the work. And who read a unit's code is an audit of the people who
 read it — an admin's, which no other person is answered either: a seat that
 could ask would be a model watching the people it works for.
+
+### Changing the atlas
+
+And the atlas's **eleven writes**, each a claim in the person's own name on the
+atlas's log ([Changing the atlas](../concepts/atlas.md#changing-the-atlas)):
+every one takes `atlas` but the purge, which is `admin`'s with a proof inside
+`step_up`, and every one is a person's, made as the seat they hold: refused to an
+agent whatever it holds, and to a credential bound to no seat (`unseated`).
+An entry is named by `atlas_entry` (and `to` or `other` where a write names a
+second one): its `id`, or `kind:key` (`host:ssh/web-1`). Every write takes an optional
+`if_match`, the entry's `version` it was decided from, and is refused
+`stale_version` when the entry moved since; it answers `entry`, the entry's id, its
+new `version`, what it recorded (`change`, and the fact, relation, value or
+owner) and the `outcome` and `position` every write carries, or `unchanged`
+where what it asked for already held and nothing was recorded. Over MCP each
+also takes back the `op_id` its answer carried, as the tracker's writes do.
+
+| Tool | Arguments |
+|---|---|
+| `atlas_add_entry` | `kind`, `key` in its kind's grammar, and an optional `name`. An entry the atlas holds already is refused `exists` (a retired one is brought back with `atlas_restore`); a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the settings or Gitlet name, are refused `conflict` |
+| `atlas_correct` | `atlas_entry`, `fact` (one its kind carries), and `value` in the fact's grammar, which a fact holding many values gains as one more; or `wrong: true`, saying the `value` shown (the one value of a fact of one) is wrong. A fact the settings, Gitlet or the engine's own records declare is refused `conflict` |
+| `atlas_confirm` | `atlas_entry`, and either `fact` (with `value` for a fact holding many, or to confirm another value a source reports) or `relation` and `to`; neither confirms the entry itself |
+| `atlas_relate` | `atlas_entry`, `relation` (any but `owned_by` and `documented_in`), `to` |
+| `atlas_unrelate` | `atlas_entry`, `relation`, `to`: a relation the settings declare is refused `conflict` |
+| `atlas_set_owner` | `atlas_entry`, and one of `seat` (a handle of the chart), `unit` (a unit's key) or `clear: true`. The owner a person named before is withdrawn; an owner Gitlet declares is refused `conflict` |
+| `atlas_retire`, `atlas_restore` | `atlas_entry`. An entry the settings declare is refused `conflict` |
+| `atlas_merge`, `atlas_split` | `atlas_entry` and `other`, of one kind. A merge withdraws a "not the same" that stands between them first |
+| `atlas_purge` | `atlas_entry`, or `value` exactly as the atlas holds it, never both. Nothing undoes it; the answer never repeats the value, and only its digest leaves the node it was asked of |
 
 ### The chat gestures only a person makes
 

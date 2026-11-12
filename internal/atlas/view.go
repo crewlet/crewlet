@@ -72,8 +72,9 @@ type Entry struct {
 	ID   uuid.UUID `json:"id"`
 	Ref  Ref       `json:"ref"`
 	Lane Lane      `json:"lane"`
-	// Name is its name fact, or its key where nothing names it.
-	Name string `json:"name"`
+	// Name is its name fact, or its key where nothing names it: somebody's
+	// words, which a tool answers only under their writers' label.
+	Name string `json:"name" untrusted:"name"`
 	// Members is every entry an exact key merged into this one, the canonical
 	// one first; one member for an entry nothing merged.
 	Members    []Ref      `json:"members"`

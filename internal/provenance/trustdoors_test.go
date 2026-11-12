@@ -132,6 +132,18 @@ var trustDoors = map[string]trustDoor{
 	// A repository's bytes, which the engine hosts and nobody a read can
 	// name wrote: read by provenance.Repository through every door, and
 	// costed by the same label where a log's or a blame's pages are cut.
+	// THE ATLAS'S ENTRIES A TURN'S ASK NAMES, in its prompt: the engine's own
+	// text by the hosted rule, a vendor's listing in it by the vendor's.
+	"internal/agent/prefetch/systems.go:systems": {either, []string{
+		"internal/agent/prefetch.TestTheSystemsBlockIsFencedAtTheLeastTrustItsWritersEarn",
+	}},
+	// WHAT A VENDOR LISTED INTO THE ATLAS, which nobody the read can name
+	// wrote: an entry's other sources are the engine's own, read through
+	// the hosted door above.
+	"internal/agent/builtin/atlas.go:attribute": {vendor, []string{
+		"internal/agent/builtin.TestAVendorsListingInTheAtlasIsAnOutsidePartysText",
+		"internal/agent/builtin.TestAnAtlasAnswerSaysWhoWroteWhatItCarries",
+	}},
 	"internal/agent/builtin/fence.go:fenceRepository": {vendor, []string{
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 	}},

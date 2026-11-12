@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
@@ -16,14 +18,26 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// AtlasSearchTool reads the company's atlas: its entries, or those a query or a
-// kind names. Reading it takes the atlas app (ADR-0127).
-const AtlasSearchTool = string(authz.ActionAtlasSearch)
+// The atlas tools, each reading the company's atlas on the atlas app
+// (ADR-0127), a seat held to whoever woke its turn (ADR-0109).
+const (
+	// AtlasSearchTool lists the atlas's entries, or those a query or a kind
+	// names.
+	AtlasSearchTool = toolname.AtlasSearch
+	// AtlasGetTool reads one entry in full, and what relies on it.
+	AtlasGetTool = toolname.AtlasGet
+	// AtlasTraceTool walks what depends on one entry, or what it depends on.
+	AtlasTraceTool = toolname.AtlasTrace
+)
 
 // The listing's page: fifty entries by default, a screen of them, and at most
 // five hundred, the most a person reads through before narrowing by kind. Each
@@ -77,14 +91,177 @@ func (d AtlasDeps) AtlasRead(ctx context.Context, reads gather.GitletReads, aske
 	}), true
 }
 
-// atlasSearch is atlas_search: the atlas as its caller may read it. Gitlet is
-// read as the caller and only where they may read code (ADR-0110), since the
-// atlas never opens another app's records (ADR-0127).
-type atlasSearch struct {
+// atlasReader is what the atlas tools share: the atlas read as the caller.
+// Gitlet is read as the caller and only where they may read code (ADR-0110),
+// since the atlas never opens another app's records (ADR-0127).
+type atlasReader struct {
 	deps      AtlasDeps
 	code      CodeDeps
 	authorize Authorizer
 }
+
+// atlasRead is one read of the atlas, as one caller may read it.
+type atlasRead struct {
+	view     atlas.View
+	coverage []gather.Coverage
+	// withheld is the values left out for being shaped like a credential,
+	// and hidden the private addresses left out of an agent's read as
+	// outside its own reach, each counted and never shown.
+	withheld int
+	hidden   int
+	// read is the answer's provenance: who wrote what it carries.
+	read *foreignRead
+}
+
+// read reads the atlas as the call's caller. An administrator reads what
+// only administrators read elsewhere; an agent seat reads a private address
+// only of an entry its own access reaches; and the answer names who wrote
+// what it carries, at the least trust any of them earns.
+func (r atlasReader) read(ctx context.Context, turn *turnctx.Turn, tool string) (atlasRead, *tools.Result) {
+	settings, running := AtlasSettings{}, false
+	if r.deps.Settings != nil {
+		settings, running = r.deps.Settings(ctx)
+	}
+	if !running {
+		res := failed(fmt.Sprintf("%s: %s", tool, noAtlas))
+		return atlasRead{}, &res
+	}
+	answer, _, _ := r.atlas(ctx, turn, tool, seatRead, time.Now().UTC())
+	principal, _ := iam.From(ctx)
+	out := atlasRead{view: atlas.For(answer.View, atlas.Reader{Admin: principal.Can(iam.GrantAdmin)}),
+		coverage: answer.Coverage, withheld: len(answer.Withheld)}
+	if turn != nil && turn.Seat != nil && !turn.Seat.IsHuman() {
+		out.view, out.hidden = AtlasForSeat(out.view, settings.Company, turn.Seat)
+	}
+	out.read = newForeignRead(turn, iam.ActorFor(principal).Name)
+	return out, nil
+}
+
+// noAtlas is why a node that runs no company yet answers no atlas.
+const noAtlas = "this node runs no company yet, so there is no atlas to read. " +
+	"Try again once its settings are applied."
+
+// atlas is the atlas as this call's caller reads it, at fresh: every source
+// this node reaches, what people recorded among them, and Gitlet as the caller
+// and only where they may read code (gitlet says whether it was read).
+// missing says why there is no atlas at all: a node that runs no company yet.
+func (r atlasReader) atlas(ctx context.Context, turn *turnctx.Turn, tool string, fresh statelog.Freshness,
+	now time.Time) (answer gather.Answer, gitlet bool, missing string) {
+
+	reads, asker, why := r.gitlet(ctx, turn, tool)
+	answer, running := r.deps.AtlasRead(ctx, reads, asker, fresh, now)
+	if !running {
+		return gather.Answer{}, false, noAtlas
+	}
+	if why != "" {
+		answer = answer.Unread(gather.SourceGitlet, why)
+	}
+	return answer, reads != nil, ""
+}
+
+// attribute names who wrote what entries carry on the answer's envelope: a
+// person and an agent by their seats, the settings as the company's and the
+// engine's records as the engine's, each read by the rule for a surface the
+// engine hosts; and a vendor's listing by the rule for a vendor's site, where
+// nobody named is an outside party, the least a reader may rely on.
+func (a atlasRead) attribute(entries []atlas.Entry) {
+	writers, listed := atlas.Writers(entries)
+	if len(writers) > 0 {
+		a.read.attribute(writers, false)
+	}
+	if listed {
+		a.read.trusts = append(a.read.trusts, provenance.TrustFor(a.read.self, nil))
+	}
+}
+
+// AtlasForSeat is v as an agent seat reads it: no signal only administrators
+// read, and a private address only of an entry its own access reaches
+// (ADR-0109). It answers how many private values it left out.
+func AtlasForSeat(v atlas.View, c *config.Company, seat *org.Role) (atlas.View, int) {
+	return atlas.Within(atlas.For(v, atlas.Reader{}), seatReach(c, seat))
+}
+
+// seatReach is which entries an agent seat's own access reaches: the servers
+// its SSH access grants, the tool servers it is granted, the accounts it
+// holds one at, its Gitlet repositories (Gitlet lists it no other), the
+// models one of its own chains names, and the embeddings its searches use.
+func seatReach(c *config.Company, seat *org.Role) func(atlas.Entry) bool {
+	var hosts []string
+	if c != nil {
+		hosts = c.SSHReachOf(seat.Handle()).HostIDs()
+	}
+	chained := func(key string) bool {
+		return c != nil && slices.ContainsFunc(c.ProviderReferences(key), func(r config.ProviderReference) bool {
+			return r.Seat == seat.Handle()
+		})
+	}
+	return func(e atlas.Entry) bool {
+		for _, m := range e.Members {
+			switch m.Kind {
+			case atlas.KindHost:
+				if id, ok := strings.CutPrefix(m.Key, atlas.HostSSHPrefix+"/"); ok && slices.Contains(hosts, id) {
+					return true
+				}
+			case atlas.KindToolServer:
+				name := strings.TrimPrefix(m.Key, atlas.ToolServerPrefix+"/")
+				if c != nil && slices.ContainsFunc(c.MCPServers, func(s config.MCPServer) bool {
+					return s.Name == name && s.Grants(seat)
+				}) {
+					return true
+				}
+			case atlas.KindRepository:
+				if strings.HasPrefix(m.Key, atlas.GitletPrefix+"/") {
+					return true
+				}
+			case atlas.KindModel:
+				if key, ok := strings.CutPrefix(m.Key, atlas.ModelLLMPrefix+"/"); ok && chained(key) ||
+					m.Key == atlas.ModelEmbeddings {
+					return true
+				}
+			}
+		}
+		return slices.ContainsFunc(e.Holders, func(h atlas.Holder) bool { return h.Seat == seat.Handle() })
+	}
+}
+
+// gitlet is the Gitlet source this call reads and who it reads as: none where
+// this surface serves no code or the caller (or whoever a seat's turn works
+// for) may not read it, and then why says which, for the answer's coverage.
+func (r atlasReader) gitlet(ctx context.Context, turn *turnctx.Turn, tool string) (
+	src gather.GitletReads, asker gitlet.Principal, why string) {
+
+	if !r.code.serves() || r.authorize == nil {
+		return nil, gitlet.Principal{}, ""
+	}
+	switch err := r.authorize(ctx, authz.ActionCodeRead, authz.Object{}); {
+	case errors.Is(err, ErrUndecidable):
+		return nil, gitlet.Principal{}, "whether you may read the company's code could not be " +
+			"decided right now, so no repository was read; ask again shortly"
+	case err != nil:
+		return nil, gitlet.Principal{}, "you do not use Gitlet, so no repository was read"
+	}
+	caller, refusal := r.code.callerOn(ctx, turn, tool, authz.ActionCodeRead)
+	if refusal != nil {
+		return nil, gitlet.Principal{}, "whoever this turn works for may not read the company's " +
+			"code now, so no repository was read"
+	}
+	return atlasGitlet{code: r.code, caller: caller}, caller.asker, ""
+}
+
+// atlasGitlet is Gitlet as one call reads it: every query asked as the
+// call's caller, with its ceiling, through [CodeDeps.read].
+type atlasGitlet struct {
+	code   CodeDeps
+	caller codeCaller
+}
+
+func (g atlasGitlet) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	return g.code.read(ctx, g.caller, q)
+}
+
+// atlasSearch is atlas_search: the atlas's entries as the caller may read
+// them.
+type atlasSearch struct{ atlasReader }
 
 var _ tools.SeatCallable = (*atlasSearch)(nil)
 
@@ -94,7 +271,8 @@ func (t *atlasSearch) Description() string {
 	return "Search the company's atlas: the map of everything it runs on (vendor accounts, domains, " +
 		"hostnames, servers, data stores, repositories, monitoring, tool servers and models). Lists the " +
 		"entries a `query` or a `kind` names, each with its facts, where each fact came from, and what it " +
-		"depends on. Repositories are listed only for a caller who uses Gitlet."
+		"depends on. Repositories are listed only for a caller who uses Gitlet. Read it before probing a " +
+		"server or a vendor for what the company already knows."
 }
 
 func (t *atlasSearch) Parameters() map[string]any {
@@ -123,14 +301,26 @@ func (t *atlasSearch) Call(ctx context.Context, args map[string]any) (tools.Resu
 	return t.CallForTurn(ctx, nil, args)
 }
 
-// atlasList is atlas_search's answer: the entries, how many matched, which
-// sources were read in full, and how many values were left out for being
-// shaped like a credential, counted and never shown.
-type atlasList struct {
-	Entries  []atlas.Entry     `json:"entries"`
-	Total    int               `json:"total"`
+// atlasCoverage is what every atlas tool's answer says of its read: which
+// sources were read in full, how many values were left out for being shaped
+// like a credential, and how many private addresses were left out as outside
+// the reading agent's reach, each counted and never shown.
+type atlasCoverage struct {
 	Coverage []gather.Coverage `json:"coverage"`
 	Withheld int               `json:"withheld,omitempty"`
+	Hidden   int               `json:"private_withheld,omitempty"`
+}
+
+func (a atlasRead) said() atlasCoverage {
+	return atlasCoverage{Coverage: a.coverage, Withheld: a.withheld, Hidden: a.hidden}
+}
+
+// atlasList is atlas_search's answer: the entries, how many matched, and what
+// the read says of itself.
+type atlasList struct {
+	Entries []atlas.Entry `json:"entries"`
+	Total   int           `json:"total"`
+	atlasCoverage
 }
 
 func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
@@ -145,22 +335,15 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if limit < 1 || limit > maxAtlasList {
 		return failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxAtlasList)), nil
 	}
-	settings, running := t.deps.Settings(ctx)
-	if !running {
-		return failed(fmt.Sprintf("%s: this node runs no company yet, so there is no atlas to read. "+
-			"Try again once its settings are applied.", t.Name())), nil
+	a, refusal := t.read(ctx, turn, t.Name())
+	if refusal != nil {
+		return *refusal, nil
 	}
-	sources, asker, why := t.gitlet(ctx, turn)
-	answer := gather.Read(ctx, sources, gather.Request{
-		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
-		Asker: asker, Fresh: seatRead, Now: time.Now().UTC(),
-	})
-	coverage := gitletSaid(answer.Coverage, why)
-	matched := atlasMatches(answer.View.Entries, strings.TrimSpace(argString(args, "query")), kind)
+	matched := a.view.Select(atlas.Query{Text: argString(args, "query"), Kind: kind})
 	shown := matched[:min(limit, len(matched))]
+	a.attribute(shown)
 	rendered, err := fitPages(len(shown), func(k int) (json.RawMessage, error) {
-		return json.Marshal(atlasList{Entries: shown[:k], Total: len(matched),
-			Coverage: coverage, Withheld: len(answer.Withheld)})
+		return a.read.render(atlasList{Entries: shown[:k], Total: len(matched), atlasCoverage: a.said()})
 	})
 	if err != nil {
 		return labelFault(ctx, t.Name(), err), nil
@@ -168,74 +351,199 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return compactAnswer(rendered, "Ask for fewer with `limit`, or narrow by `kind` or `query`.")
 }
 
-// gitlet is the Gitlet source this call reads and who it reads as: none where
-// this surface serves no code or the caller (or whoever a seat's turn works
-// for) may not read it, and then why says which, for the answer's coverage.
-func (t *atlasSearch) gitlet(ctx context.Context, turn *turnctx.Turn) (
-	src gather.Sources, asker gitlet.Principal, why string) {
+// atlasEntryArg is the entry a call names: by `id`, or by `name`, an entry's
+// exact name or key. A name more than one entry answers to is refused,
+// naming each by its id.
+func (a atlasRead) entryArg(tool string, args map[string]any) (atlas.Entry, *tools.Result) {
+	if raw := strings.TrimSpace(argString(args, "id")); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			res := failed(fmt.Sprintf("%s: `id` is an atlas entry's id, as %s answers it.", tool, AtlasSearchTool))
+			return atlas.Entry{}, &res
+		}
+		e, ok := a.view.Find(id)
+		if !ok {
+			res := failed(fmt.Sprintf("%s: no entry of the atlas you may read has this id. Find it with "+
+				"%s.", tool, AtlasSearchTool))
+			return atlas.Entry{}, &res
+		}
+		return e, nil
+	}
+	name := strings.ToLower(strings.TrimSpace(argString(args, "name")))
+	if name == "" {
+		res := failed(fmt.Sprintf("%s: name the entry by `id` or by `name`.", tool))
+		return atlas.Entry{}, &res
+	}
+	var found []atlas.Entry
+	for _, e := range a.view.Entries {
+		if e.State != atlas.StateRetired && (strings.ToLower(e.Name) == name || strings.ToLower(e.Ref.Key) == name) {
+			found = append(found, e)
+		}
+	}
+	switch len(found) {
+	case 0:
+		res := failed(fmt.Sprintf("%s: no entry of the atlas you may read is named that. Search for it "+
+			"with %s.", tool, AtlasSearchTool))
+		return atlas.Entry{}, &res
+	case 1:
+		return found[0], nil
+	}
+	ids := make([]string, len(found))
+	for i, e := range found {
+		ids[i] = e.ID.String() + " (" + string(e.Ref.Kind) + ")"
+	}
+	res := failed(fmt.Sprintf("%s: %d entries are named that; name one by `id`: %s.", tool, len(found),
+		strings.Join(ids, ", ")))
+	return atlas.Entry{}, &res
+}
 
-	if !t.code.serves() || t.authorize == nil {
-		return gather.Sources{}, gitlet.Principal{}, ""
+// entryParameters is how an atlas tool names one entry.
+func entryParameters(extra map[string]any) map[string]any {
+	props := map[string]any{
+		"id": map[string]any{
+			"type":        "string",
+			"description": "The entry's id, as " + AtlasSearchTool + " answers it.",
+		},
+		"name": map[string]any{
+			"type":        "string",
+			"description": "The entry's exact name or key, where `id` is not given.",
+		},
 	}
-	switch err := t.authorize(ctx, authz.ActionCodeRead, authz.Object{}); {
-	case errors.Is(err, ErrUndecidable):
-		return gather.Sources{}, gitlet.Principal{}, "whether you may read the company's code could not be " +
-			"decided right now, so no repository was read; ask again shortly"
-	case err != nil:
-		return gather.Sources{}, gitlet.Principal{}, "you do not use Gitlet, so no repository was read"
+	for k, v := range extra {
+		props[k] = v
 	}
-	caller, refusal := t.code.callerOn(ctx, turn, t.Name(), authz.ActionCodeRead)
+	return map[string]any{"type": "object", "properties": props}
+}
+
+// atlasGet is atlas_get: one entry in full, and what relies on it.
+type atlasGet struct{ atlasReader }
+
+var _ tools.SeatCallable = (*atlasGet)(nil)
+
+func (t *atlasGet) Name() string { return AtlasGetTool }
+
+func (t *atlasGet) Description() string {
+	return "Read one entry of the company's atlas in full: its facts with where each came from and how sure " +
+		"the atlas is of it, its relations, its use, the agents holding accounts at it, its open signals, " +
+		"and every entry that relies on it. Name it by `id` or by its exact `name`."
+}
+
+func (t *atlasGet) Parameters() map[string]any { return entryParameters(nil) }
+
+func (t *atlasGet) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+// atlasEntryAnswer is atlas_get's answer.
+type atlasEntryAnswer struct {
+	Entry  atlas.Entry  `json:"entry"`
+	UsedBy []atlas.Link `json:"used_by"`
+	atlasCoverage
+}
+
+func (t *atlasGet) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	a, refusal := t.read(ctx, turn, t.Name())
 	if refusal != nil {
-		return gather.Sources{}, gitlet.Principal{}, "whoever this turn works for may not read the company's " +
-			"code now, so no repository was read"
+		return *refusal, nil
 	}
-	return gather.Sources{Gitlet: atlasGitlet{code: t.code, caller: caller}}, caller.asker, ""
-}
-
-// gitletSaid puts why on the Gitlet source's coverage, where the call did not
-// read it for a reason of its own rather than the read's.
-func gitletSaid(coverage []gather.Coverage, why string) []gather.Coverage {
-	if why == "" {
-		return coverage
+	e, refusal := a.entryArg(t.Name(), args)
+	if refusal != nil {
+		return *refusal, nil
 	}
-	out := slices.Clone(coverage)
-	for i := range out {
-		if out[i].Source == gather.SourceGitlet {
-			out[i].Complete, out[i].Reason = false, why
+	usedBy := a.view.UsedBy(e.ID)
+	carried := []atlas.Entry{e}
+	for _, l := range usedBy {
+		if found, ok := a.view.Find(l.Entry.ID); ok {
+			carried = append(carried, found)
 		}
 	}
-	return out
+	a.attribute(carried)
+	return a.read.answer(ctx, t.Name(), atlasEntryAnswer{Entry: e, UsedBy: usedBy, atlasCoverage: a.said()}, "")
 }
 
-// atlasGitlet is Gitlet as one call reads it: every query asked as the
-// call's caller, with its ceiling, through [CodeDeps.read].
-type atlasGitlet struct {
-	code   CodeDeps
-	caller codeCaller
+// atlasTrace is atlas_trace: what depends on one entry, or what it depends on.
+type atlasTrace struct{ atlasReader }
+
+var _ tools.SeatCallable = (*atlasTrace)(nil)
+
+func (t *atlasTrace) Name() string { return AtlasTraceTool }
+
+func (t *atlasTrace) Description() string {
+	return fmt.Sprintf("Walk the company's atlas from one entry: `up` for what depends on it (what breaks if "+
+		"it breaks), `down` for what it depends on, hop by hop, at most %d hops and %d entries. Name the "+
+		"entry by `id` or by its exact `name`.", atlas.TraceDepthMax, atlas.TraceToolMax)
 }
 
-func (g atlasGitlet) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
-	return g.code.read(ctx, g.caller, q)
-}
-
-// atlasMatches is the entries of kind, or of every kind, whose name or key
-// holds query, case folded, or whose id is query; every entry where query is
-// empty. In the view's order.
-func atlasMatches(entries []atlas.Entry, query string, kind atlas.Kind) []atlas.Entry {
-	folded := strings.ToLower(query)
-	return slices.DeleteFunc(slices.Clone(entries), func(e atlas.Entry) bool {
-		if kind != "" && e.Ref.Kind != kind {
-			return true
-		}
-		if folded == "" || e.ID.String() == folded {
-			return false
-		}
-		return !strings.Contains(strings.ToLower(e.Name), folded) &&
-			!strings.Contains(strings.ToLower(e.Ref.Key), folded)
+func (t *atlasTrace) Parameters() map[string]any {
+	return entryParameters(map[string]any{
+		"direction": map[string]any{
+			"type": "string", "enum": []string{string(atlas.DirectionUp), string(atlas.DirectionDown)},
+			"description": "`up` (default) for what depends on the entry, `down` for what it depends on.",
+		},
+		"depth": map[string]any{
+			"type":        "integer",
+			"description": fmt.Sprintf("How many hops, 1..%d (default %d).", atlas.TraceDepthMax, atlas.TraceDepthMax),
+		},
+		"all": map[string]any{
+			"type": "boolean",
+			"description": "Walk every relation (ownership, monitoring, the account a thing belongs to), " +
+				"not only those a request travels through.",
+		},
 	})
 }
 
-// atlasKinds is every kind of entry, as the tool's schema names them.
+func (t *atlasTrace) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+// atlasTraceAnswer is atlas_trace's answer.
+type atlasTraceAnswer struct {
+	atlas.Trace
+	atlasCoverage
+}
+
+func (t *atlasTrace) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	direction := atlas.Direction(strings.TrimSpace(argString(args, "direction")))
+	if direction == "" {
+		direction = atlas.DirectionUp
+	}
+	a, refusal := t.read(ctx, turn, t.Name())
+	if refusal != nil {
+		return *refusal, nil
+	}
+	e, refusal := a.entryArg(t.Name(), args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	trace, _, err := a.view.Trace(e.ID, direction, argInt(args, "depth", atlas.TraceDepthMax),
+		argBool(args, "all"), atlas.TraceToolMax)
+	if err != nil {
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), strings.TrimPrefix(err.Error(), "atlas: bad read: "))), nil
+	}
+	reached := []atlas.Entry{e}
+	for _, hop := range trace.Hops {
+		for _, s := range hop.Entries {
+			if found, ok := a.view.Find(s.ID); ok {
+				reached = append(reached, found)
+			}
+		}
+	}
+	a.attribute(reached)
+	return a.read.answer(ctx, t.Name(), atlasTraceAnswer{Trace: trace, atlasCoverage: a.said()},
+		"Ask for fewer hops with `depth`.")
+}
+
+// atlasCandidates is the atlas tools, offered where this node runs a company.
+func atlasCandidates(r atlasReader) []candidate {
+	on := r.deps.Settings != nil
+	return []candidate{{&atlasSearch{r}, on}, {&atlasGet{r}, on}, {&atlasTrace{r}, on}}
+}
+
+// atlasKinds is every kind of entry, as the tools' schemas name them.
 func atlasKinds() []string {
 	out := make([]string, len(atlas.Kinds))
 	for i, k := range atlas.Kinds {

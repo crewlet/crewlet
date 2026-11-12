@@ -137,6 +137,17 @@ const (
 	UpdateWorkItem = "update_work_item"
 )
 
+// The atlas tools (ADR-0126); here because a turn's prompt block
+// (internal/agent/prefetch), below the builtins, names them.
+const (
+	// AtlasSearch lists the atlas's entries, or those a query names.
+	AtlasSearch = "atlas_search"
+	// AtlasGet reads one entry in full.
+	AtlasGet = "atlas_get"
+	// AtlasTrace walks what depends on one entry, or what it depends on.
+	AtlasTrace = "atlas_trace"
+)
+
 // WithdrawAsk withdraws a seat's own question or held call; here because the
 // access review (internal/accessreview), below the builtins, names it.
 const WithdrawAsk = "withdraw_ask"

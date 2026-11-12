@@ -884,6 +884,7 @@ func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		OpenAsks:            r.cfg.Context.OpenAsks,
+		Systems:             r.cfg.Context.Systems,
 		Workers:             r.workerCatalogue(),
 		Access:              r.cfg.Access,
 	})
