@@ -991,7 +991,9 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // ctAll is everything a line hands out through every accessor, as text: its
 // head, its hook, its message and its calls, its origin's kind, its own
 // toolUseResult, whether it says tool results were cleared, why its reply
-// stopped and what its request took, each beside the error it answered.
+// stopped and what its request took, each beside the error it answered. A raw
+// value it hands out is printed by [ctRaw], so an absent one and a null one
+// never read alike.
 func ctAll(l threadLine) string {
 	var b strings.Builder
 	h := l.Head
@@ -1000,10 +1002,10 @@ func ctAll(l threadLine) string {
 		side = strconv.FormatBool(*h.Sidechain)
 	}
 	fmt.Fprintf(&b, "head: type %q, subtype %q, uuid %q, parent %s, sidechain %s, agent %q, replaces a span %t\n",
-		h.Type, h.Subtype, h.UUID, h.Parent, side, h.AgentID, h.ReplacesSpan)
+		h.Type, h.Subtype, h.UUID, ctRaw(h.Parent), side, h.AgentID, h.ReplacesSpan)
 	hook, isHook, err := l.Hook()
 	fmt.Fprintf(&b, "hook %t: record %q, event %q, firing %q, command %q, content %s, stdout %s; %v\n", isHook,
-		hook.Record, hook.Event, hook.Firing, hook.Command, hook.Content, hook.Stdout, err)
+		hook.Record, hook.Event, hook.Firing, hook.Command, ctRaw(hook.Content), ctRaw(hook.Stdout), err)
 	m, err := l.Message()
 	text, isText := m.Text()
 	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
@@ -1012,12 +1014,12 @@ func ctAll(l threadLine) string {
 		if c.IsError != nil {
 			failed = strconv.FormatBool(*c.IsError)
 		}
-		fmt.Fprintf(&b, "call %q: id %q, name %q, input %s, is_error %s, content %s\n", c.Kind, c.ID, c.Name, c.Input,
-			failed, c.Content)
+		fmt.Fprintf(&b, "call %q: id %q, name %q, input %s, is_error %s, content %s\n", c.Kind, c.ID, c.Name,
+			ctRaw(c.Input), failed, ctRaw(c.Content))
 	}
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
-	fmt.Fprintf(&b, "toolUseResult: %s\n", l.ToolUseResult())
+	fmt.Fprintf(&b, "toolUseResult: %s\n", ctRaw(l.ToolUseResult()))
 	cleared, err := l.ToolResultsCleared()
 	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
 	reason, err := l.StopReason()
@@ -1026,6 +1028,17 @@ func ctAll(l threadLine) string {
 	fmt.Fprintf(&b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
 		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
 	return b.String()
+}
+
+// ctRaw is a raw value a line hands out, as text: "absent" where it is nil,
+// else its bytes. Never %s alone, which prints a nil json.RawMessage as null:
+// an absent parentUuid would read as a root's, and an absent toolUseResult as
+// a null one.
+func ctRaw(v json.RawMessage) string {
+	if v == nil {
+		return "absent"
+	}
+	return string(v)
 }
 
 // A KEY IS READ EXACTLY AS WRITTEN, as Claude Code reads its own records with
@@ -1069,6 +1082,8 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"parentUuid":null,"PARENTUUID":"` + ctUUID(9) + `"`},
 		"parentuuid alone": {record: ctDequeue, from: `"type":"queue-operation"`,
 			to: `"type":"queue-operation","parentuuid":"` + ctUUID(9) + `"`},
+		"ParentUuid null alone": {record: ctDequeue, from: `"type":"queue-operation"`,
+			to: `"type":"queue-operation","ParentUuid":null`},
 		"a type, then Type": {record: brief, from: `"type":"user"`, to: `"type":"user","Type":"attachment"`},
 		"a Type, then type": {record: brief, from: `"type":"user"`, to: `"Type":"attachment","type":"user"`},
 		"Type alone": {record: ctReplace(t, ctDequeue, `"type":"queue-operation",`, ""), from: `"operation"`,
@@ -1103,6 +1118,8 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			from: `"hookCount":1`, to: `"hookCount":1,"ToolUseID":"` + ctStopFire + `"`},
 		"a toolUseResult, then ToolUseResult": {record: result, from: `"toolUseResult":` + ctResultOwn,
 			to: `"toolUseResult":` + ctResultOwn + `,"ToolUseResult":{"stdout":"other"}`},
+		"ToolUseResult null alone": {record: brief, from: `"isSidechain":false`,
+			to: `"isSidechain":false,"ToolUseResult":null`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
