@@ -158,6 +158,16 @@ export const CHANGES = [
     mark: "unlink",
     phrase: "recorded a pull request it waited on as merged or closed",
   },
+  {
+    kind: "dead_wait",
+    mark: "circle-alert",
+    phrase: "recorded that nothing moves a pull request it waits on",
+  },
+  {
+    kind: "dead_wait_ended",
+    mark: "refresh-cw",
+    phrase: "recorded that a pull request it waits on is moving again",
+  },
 ] as const satisfies readonly { kind: string; mark: string; phrase: string }[];
 
 /**

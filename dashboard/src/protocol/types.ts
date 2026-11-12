@@ -2953,6 +2953,9 @@ export interface WorkBlocker {
    *  different fact from "not mirrored yet", and the one that stops a reader
    *  waiting for it to settle. */
   one_sided_final?: boolean;
+  /** A pull request the task waits on that nothing moves: open, with no
+   *  reviewer asked, no review of its head and no merge asked (ADR-0128). */
+  dead?: boolean;
 }
 
 /** What an answer could NOT account for: records this node holds and cannot

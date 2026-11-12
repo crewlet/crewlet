@@ -20,6 +20,7 @@ import {
   Assignee,
   CARD_FACTS,
   WorkCard,
+  blockedBy,
   cardHidden,
   cardHideParam,
   fitTags,
@@ -261,4 +262,25 @@ test("a card too narrow for its labels names the rest in a +N and keeps the coun
     if (offset) Object.defineProperty(HTMLElement.prototype, "offsetWidth", offset);
     if (client) Object.defineProperty(Element.prototype, "clientWidth", client);
   }
+});
+
+// A WAIT NOTHING MOVES IS NAMED ON THE BOARD (ADR-0128): the pull request nobody
+// is reviewing comes first, the rest counted; a live one keeps the plain line.
+test("a blocked row names the pull request nobody is reviewing", () => {
+  const pull = "https://github.com/acme/web/pull/42";
+  expect(blockedBy(row({ waiting_on: [{ id: pull, open: true, dead: true }] }))).toBe(
+    "Nobody is reviewing PR #42",
+  );
+  expect(
+    blockedBy(
+      row({
+        waiting_on: [
+          { id: "t-7", open: true },
+          { id: pull, open: true, dead: true },
+        ],
+      }),
+      (id) => (id === "t-7" ? "ENG-7" : undefined),
+    ),
+  ).toBe("Nobody is reviewing PR #42 +1");
+  expect(blockedBy(row({ waiting_on: [{ id: pull, open: true }] }))).toBe("Blocked");
 });

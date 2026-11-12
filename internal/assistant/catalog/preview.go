@@ -109,6 +109,17 @@ var previews = map[string]func(t Tool) proposal.Previewer{
 	"update_chat_room":          chatRoomPreview,
 	"set_chat_room_members":     chatMembersPreview,
 	"leave_chat_room":           chatLeavePreview,
+	addAtlasEntryTool:           addAtlasPreview,
+	correctAtlasFactTool:        correctAtlasPreview,
+	confirmAtlasEntryTool:       confirmAtlasPreview,
+	relateAtlasEntriesTool:      relateAtlasPreview(false),
+	unrelateAtlasEntriesTool:    relateAtlasPreview(true),
+	setAtlasOwnerTool:           ownerAtlasPreview,
+	retireAtlasEntryTool:        retireAtlasPreview(true),
+	restoreAtlasEntryTool:       retireAtlasPreview(false),
+	mergeAtlasEntriesTool:       pairAtlasPreview(true),
+	splitAtlasEntriesTool:       pairAtlasPreview(false),
+	purgeAtlasEntryTool:         purgeAtlasPreview,
 }
 
 // withHome is args with arg named: as the call names it, else the person's own
@@ -198,11 +209,11 @@ func built(t Tool, args map[string]any) (exec.Request, error) { return t.Request
 
 func createTaskPreview(t Tool) proposal.Previewer {
 	return func(ctx context.Context, read proposal.Read, now time.Time, args map[string]any) (proposal.Preview, error) {
-		company, err := companyOf(ctx, read)
+		chart, err := companyOf(ctx, read)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		args, due, err := company.resolveDue(args, now)
+		args, due, err := chart.resolveDue(args, now)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
@@ -218,8 +229,8 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		var c changes
 		c.fact("project", "Project", a.String("project"))
 		c.add("title", "Title", a.String("title"))
-		c.add("assignee", "Assignee", company.seatName(a.String("assignee")))
-		c.add("ask", "Asks", company.seatName(a.String("ask")))
+		c.add("assignee", "Assignee", chart.seatName(a.String("assignee")))
+		c.add("ask", "Asks", chart.seatName(a.String("ask")))
 		for _, f := range []struct{ arg, label string }{{"parent", "Parent"}, {"type", "Type"},
 			{"status", "Status"}, {"priority", "Priority"}} {
 			c.add(f.arg, f.label, a.String(f.arg))
@@ -230,9 +241,9 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		note := ""
 		switch {
 		case a.String("ask") != "":
-			note = company.seatName(a.String("ask")) + " is asked the question and owes an answer."
+			note = chart.seatName(a.String("ask")) + " is asked the question and owes an answer."
 		case a.String("assignee") != "":
-			note = company.handover(ctx, read, a.String("assignee"), "the new task")
+			note = chart.handover(ctx, read, a.String("assignee"), "the new task")
 		}
 		return proposal.Preview{Title: "Create task", Target: a.String("title"), Note: note,
 			ApproveLabel: "Approve and create", Changes: c.rows(), Request: req}, nil
@@ -241,11 +252,11 @@ func createTaskPreview(t Tool) proposal.Previewer {
 
 func updateTaskPreview(t Tool) proposal.Previewer {
 	return func(ctx context.Context, read proposal.Read, now time.Time, args map[string]any) (proposal.Preview, error) {
-		company, err := companyOf(ctx, read)
+		chart, err := companyOf(ctx, read)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		args, due, err := company.resolveDue(args, now)
+		args, due, err := chart.resolveDue(args, now)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
@@ -274,11 +285,11 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 			}
 		}
 		if _, given := args["assignee"]; given {
-			c.move("assignee", "Assignee", company.seatName(value(doc, "task.assignee")),
-				company.seatName(a.String("assignee")))
+			c.move("assignee", "Assignee", chart.seatName(value(doc, "task.assignee")),
+				chart.seatName(a.String("assignee")))
 		}
 		if _, given := args["due"]; given {
-			c.move("due", "Due", company.dueOf(value(doc, "task.due_at"),
+			c.move("due", "Due", chart.dueOf(value(doc, "task.due_at"),
 				value(doc, "task.due_all_day") == "true"), due)
 		}
 		if _, given := args["labels"]; given {
@@ -293,7 +304,7 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 		if to, given := args["assignee"]; given && to != value(doc, "task.assignee") {
 			note = "Nobody is assigned to it any more."
 			if a.String("assignee") != "" {
-				note = company.handover(ctx, read, a.String("assignee"), "the work")
+				note = chart.handover(ctx, read, a.String("assignee"), "the work")
 			}
 		}
 		return proposal.Preview{Title: "Update task", Target: key, Note: note,
@@ -917,7 +928,7 @@ func pageActionPreview(t Tool) proposal.Previewer {
 		if !ok {
 			return proposal.Preview{}, fmt.Errorf("%w: no such page action", ErrInvalidArguments)
 		}
-		company, err := companyOf(ctx, read)
+		chart, err := companyOf(ctx, read)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
@@ -934,7 +945,7 @@ func pageActionPreview(t Tool) proposal.Previewer {
 			// NEVER A RAW PATH: a dotted key reads as its words, and a
 			// draft's own labels replace these where the turn's page
 			// declared them (assistant's draftRows).
-			row := proposal.Fact(k, cards.FieldLabel(k), company.valueShown(draftValueShown(payload[k])))
+			row := proposal.Fact(k, cards.FieldLabel(k), chart.valueShown(draftValueShown(payload[k])))
 			if items, ok := plainItems(payload[k]); ok {
 				row.Items = items
 			}
@@ -992,6 +1003,9 @@ var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, 
 	case proposal.RevisionRoom, proposal.RevisionMessage:
 		// A CHAT ROOM OR MESSAGE, re-read through the route its preview read.
 		return chatRevision(ctx, read, r)
+	case proposal.RevisionAtlasEntry:
+		// AN ATLAS ENTRY, re-read as the card showed it.
+		return atlasEntryRevision(ctx, read, r)
 	}
 	var req exec.Request
 	path, versionAt, idAt := "", "", ""

@@ -188,10 +188,12 @@ func (holdingHolder) Hold(context.Context, *turnctx.Turn, tools.HeldCall) (tools
 // everybody who reads the seat's trail — so a digest of them there, beside the
 // tool's name, would let any reader confirm a guess at what the seal hides. The
 // record says the call was held, which every later reader counts by, and keeps
-// neither.
+// neither. NOR DOES THE ENTRY WRITTEN AHEAD OF IT, before anything knows it will
+// be held: a tool that may ask a person first gets an entry with no digest.
 //
 // Mutation: record a held call's digest, or its arguments, and both are on the
-// run's record in the clear.
+// run's record in the clear; write every entry with its digest (`false &&`
+// before the surface's word on the tool), and the entry carries it.
 func TestAHeldCallIsRecordedWithoutItsArgumentsOrTheirDigest(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -211,5 +213,9 @@ func TestAHeldCallIsRecordedWithoutItsArgumentsOrTheirDigest(t *testing.T) {
 	if row := rows[0]; !row.Held || row.Args != nil || row.Digest != "" {
 		t.Errorf("the held call is recorded as held %v with arguments %v and identity %q, want it held "+
 			"with neither", row.Held, row.Args, row.Digest)
+	}
+	if entries := f.ledger.entries(); len(entries) != 1 || entries[0].Name != "close_issue" ||
+		entries[0].Digest != "" {
+		t.Errorf("the call's entry, written ahead of it, is %+v, want its identity with no digest", entries)
 	}
 }

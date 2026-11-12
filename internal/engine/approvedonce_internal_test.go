@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -24,9 +25,17 @@ import (
 // every other call of the round, the held one included, and that one nowhere
 // else.
 //
+// AND WITH A CALL OF THE ROUND STILL IN FLIGHT, its entry written ahead of it
+// and its update not landed: a call a person approved never passes the bridge,
+// so it writes no entry — its identity is on the row before it is made, and its
+// append to the log is keyed by its held call's id — and it is placed after the
+// call in flight, never at its place; the copy is told the call in flight once,
+// as a call whose outcome is unknown, and the approved call by the lead alone.
+//
 // Mutation: drop the held call's id from the calls a resume hands the runner,
 // or from the held call it is handed, or list the lead's approved call among
-// the round's calls, and the call is told twice.
+// the round's calls, and the call is told twice; place the approved call off
+// the listed calls alone, and it takes the place of the call in flight.
 func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -44,6 +53,11 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 		Round: asking.row(t, turnID).Round, Call: held})
 	if err != nil || !recorded {
 		t.Fatalf("the held call's append = %v, %v", recorded, err)
+	}
+	if begun, err := asking.pending.AppendBridgeCall(ctx, turnID, sandbox.BridgeAppend{Step: sandbox.AppendBegin,
+		Launch: launch, Round: asking.row(t, turnID).Round,
+		Call: sandbox.BridgeCall{Name: "delegate", Seq: 3, StartedAt: time.Now().UTC()}}); err != nil || !begun {
+		t.Fatalf("the entry of the call in flight = %v, %v", begun, err)
 	}
 	parkedOnAHeldCall(t, asking.pending, turnID, launch)
 	seal := sandbox.NewCallSeal(valueRing(t, "k1"))
@@ -86,11 +100,16 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 	if err != nil {
 		t.Fatalf("TurnLog: %v", err)
 	}
-	if !slices.ContainsFunc(logged.Calls, func(c sandbox.BridgeCall) bool {
+	at := slices.IndexFunc(logged.Calls, func(c sandbox.BridgeCall) bool {
 		return c.Approved && c.HeldID == claimed.HeldCall.ID
-	}) {
+	})
+	if at < 0 {
 		t.Fatalf("the round's calls read %+v, want the call the first attempt made under its held call's id",
 			logged.Calls)
+	}
+	if len(logged.InFlight) != 1 || logged.Calls[at].Seq <= logged.InFlight[0].Seq {
+		t.Errorf("the approved call is at place %d beside %+v in flight, want it placed after the call in flight",
+			logged.Calls[at].Seq, logged.InFlight)
 	}
 	row.Launch.HarnessEnd = sandbox.HarnessEndCutOff
 	brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: row, Bridged: logged,
@@ -108,6 +127,10 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 	if strings.Contains(brief, sealed+"success") || strings.Count(brief, sealed+"error:") != 1 ||
 		strings.Count(brief, "- read_page(") != 1 {
 		t.Errorf("the copy is not told every call of the round but the one its lead tells, once each:\n%s",
+			brief)
+	}
+	if strings.Count(brief, runner.UnfinishedNote) != 1 {
+		t.Errorf("the copy is not told the call still in flight once, as one whose outcome is unknown:\n%s",
 			brief)
 	}
 }

@@ -421,6 +421,24 @@ func (s *Surface) DigestOf(name string, raw map[string]any) string {
 	return turnctx.ArgsDigest(s.ArgsOf(name, raw).Map())
 }
 
+// AsksFirst reports whether a call to name may wait for a person's answer
+// before it runs — its entry is at Needs approval ([Entry.NeedsApproval]), or
+// its definition can be held for a change nobody accepted yet
+// ([Entry.Unreviewed], whatever it answers now) — so that a record written of
+// the call before it runs keeps no digest of its arguments: a held call's ride
+// sealed, and a digest of them in the clear would confirm a guess at them
+// (ADR-0077). A NAME THE UNIVERSE DOES NOT HOLD asks nobody: no call to it is
+// ever held. Asked of the universe, never of a later moment's level, so a
+// definition that changes between the record and the call cannot put a held
+// call's digest on it.
+func (s *Surface) AsksFirst(name string) bool {
+	e, ok := s.universe.Lookup(name)
+	if !ok {
+		return false
+	}
+	return e.NeedsApproval || e.ApprovalFixed || e.Unreviewed != nil
+}
+
 // Admit records a call in its run's call log NOW, in the order calls arrive,
 // for a caller that runs calls side by side — see [turnctx.CallLog.Admit] for
 // why a count read against the order calls RETURN in is one a re-run does not

@@ -1375,18 +1375,20 @@ const (
 	// report's bound beside the page registry's other bounds), so it measured
 	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB. Merged on top of
 	// each delegated rule's required checks it measured 401.8 KiB (411,449
-	// bytes), 199 bytes inside 402 KiB. A new project's key, a deck's title
-	// and the copied engine bounds held to the engine's (+181), then the
-	// sidebar's pin page in a contract module of its own and the projects'
-	// page beside the work bounds the entry already reads (+15), took it to
-	// 402.0 KiB (411,648 bytes), the budget itself, on the tree before the
-	// required checks. The artifacts' contract split in two, the frame's half
-	// in the entry and every declaration only the workspace reads out of it
-	// (the formats' bounds held to the engine's among them, and the pin page
-	// folded into the frame's half), took it to 400.5 KiB (410,133 bytes,
-	// -1,515) there. Merged with the required checks it measures 400.5 KiB
-	// (410,149 bytes), 1,499 bytes inside 402 KiB: the next addition to
-	// the entry moves this budget only with a reason of its own.
+	// bytes), 199 bytes inside 402 KiB, and on top of the atlas and dead-wait
+	// train 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB. A new
+	// project's key, a deck's title and the copied engine bounds held to the
+	// engine's (+181), then the sidebar's pin page in a contract module of its
+	// own and the projects' page beside the work bounds the entry already
+	// reads (+15), took it to 402.0 KiB (411,648 bytes), the budget itself, on
+	// the tree before the required checks. The artifacts' contract split in
+	// two, the frame's half in the entry and every declaration only the
+	// workspace reads out of it (the formats' bounds held to the engine's
+	// among them, and the pin page folded into the frame's half), took it to
+	// 400.5 KiB (410,133 bytes, -1,515) there. Merged with the required checks
+	// and the atlas and dead-wait train it measures 400.7 KiB (410,294
+	// bytes), 1,354 bytes inside 402 KiB: the next addition to the entry
+	// moves this budget only with a reason of its own.
 	initialBudget = 402 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2264,8 +2266,9 @@ const (
 	// action's report held to the engine's line (a refusal written within it,
 	// the report cut at a whole character) and a seat or a space declared by
 	// its grammar past an enum's 64, +1,462 on the tree they were built on,
-	// merged on top of it, took it to 5756.5 KiB (5,894,685 bytes, +12,671,
-	// all script): 5757 KiB.
+	// merged on top of it, took it to 5757.3 KiB (5,895,500 bytes, +12,671
+	// over main's 5,882,829 with the atlas and dead-wait train, all script):
+	// 5758 KiB.
 	// A new project's key checked by the engine's grammar, a deck's title held
 	// to its bytes with Save held past it or past a slide's notes, a model's
 	// secret named by the secret store's grammar and every other copied engine
@@ -2275,9 +2278,9 @@ const (
 	// change part bounds held to the engine's (+1,713 when they were merged on
 	// the tree before the required checks), then the artifacts' contract split
 	// in two, the workspace's half a module of its own (+547 there), merged on
-	// top of it, took it to 5758.7 KiB (5,896,959 bytes, +2,274, all script):
-	// 5759 KiB.
-	treeBudget = 5<<20 + 639<<10
+	// top of it, took it to 5759.5 KiB (5,897,774 bytes, +2,274, all script):
+	// 5760 KiB.
+	treeBudget = 5<<20 + 640<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

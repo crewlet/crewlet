@@ -52,6 +52,19 @@ type Call struct {
 	// it as a call of its tool whose arguments are not known — never as the
 	// tool called with none, which it was not.
 	Withheld bool `json:"Withheld,omitempty"`
+
+	// Unfinished is a call whose OUTCOME IS NOT KNOWN: an executor run's log
+	// held it in flight when its round's calls were read — begun, its identity
+	// on the record, and not finished as its collection stopped waiting for it:
+	// still running past its bound or its turn's cap, its process gone, or its
+	// update refused by the store (internal/sandbox's BridgeLog.InFlight). It
+	// is Failed, so no reader takes it for a delivery or a submission, and its
+	// Result says its effects may stand and are to be checked before it is
+	// made again, never that it failed; Args are empty, an entry keeping none.
+	// A later segment's call log counts it by Digest, or, where it has none —
+	// a tool that may ask a person first — as a call of its tool whose
+	// arguments are not known, never as the tool called with none.
+	Unfinished bool `json:"Unfinished,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.

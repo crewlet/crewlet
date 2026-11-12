@@ -561,7 +561,7 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 				s.nothing += r.Turns
 			}
 		}
-		if r.Wake == pickupWake {
+		if r.Wake == pickupWake || r.Wake == deadWaitWake {
 			s.pickups += r.Turns
 			if outcome == types.OutcomeWords {
 				s.pickupsWords += r.Turns
@@ -571,10 +571,12 @@ func seatsOf(ledger []usage.TurnLedgerRow) []*seatTurns {
 	return out
 }
 
-// pickupWake is the ledger's wake for work handed to an idle seat, and
+// pickupWake is the ledger's wake for work handed to an idle seat,
+// deadWaitWake for work handed back over a dead wait (ADR-0128), and
 // scheduleWake the prefix of every schedule's.
 const (
 	pickupWake   = types.OriginWorkItem + ":" + types.PickupReason
+	deadWaitWake = types.OriginWorkItem + ":" + types.DeadWaitReason
 	scheduleWake = types.OriginSchedule + ":"
 )
 

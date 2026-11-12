@@ -47,19 +47,26 @@ import (
 //	                                                      ---------
 //	                                  RowBytes            8,384,512
 //
-// and the log's two ways, beside it:
+// and the log's three ways, beside it, a split that closes as its figures are
+// stated (TestACallInFlightIsHeldToItsShare):
 //
 //	its calls and their tallies ..... BridgeLogBytes      3,473,408  (3.3125 MiB)
+//	its calls in flight ............. InFlightBytes       1,048,576  (1 MiB)
 //	the turn's earlier rounds' tool
 //	  names, the log's own fields,
 //	  and the room a later build
-//	  adds keys to the log in ....... the rest            4,911,104  (4.68 MiB)
+//	  adds keys to the log in ....... LogRestBytes        3,862,528  (3.68 MiB)
 //	                                                      ---------
 //	                                  RowBytes            8,384,512
 //
 // The handed set beside them ([PendingStore.Handed]) is the third value, at
 // most [MaxHandedBytes] before it is sealed: a fraction of [RowBytes], which
 // TestTheWholeRowFitsItsBudget holds it to as well.
+//
+// THE LOG'S CALLS IN FLIGHT are held by construction too: [MaxCallsInFlight]
+// entries, each its call's identity alone, held to [MaxCallInFlightBytes]
+// ([keptEntry]) — measured, every one at its widest, inside their share by
+// TestTheWholeLogFitsItsBudget, with the log's calls at theirs beside them.
 //
 // THE LOG'S CALLS are held by construction: [MaxBridgeCalls] calls, one of them
 // (the newest successful submission, which the collection replays) at most
@@ -340,6 +347,45 @@ const (
 	// of a run's ask, and where its turn's own record keeps the whole.
 	MaxRunTitleBytes = 16 << 10
 
+	// MaxCallsInFlight bounds the calls of a round a run's log holds IN FLIGHT
+	// at once ([BridgeLog.InFlight]): begun, and not yet finished. TWO HUNDRED
+	// AND FIFTY-SIX, TIED TO THE LOG'S BYTE BUDGET: that many entries, each at
+	// its widest ([MaxCallInFlightBytes]), are a line of their own in the
+	// log's arithmetic ([InFlightBytes], one MiB of the room the log leaves
+	// beside its calls), which TestTheWholeLogFitsItsBudget measures with
+	// every one of them in the worst log. Past it a call is not begun, so not
+	// run: its harness is told it could not be recorded, failed, and may make
+	// it again ([ErrCallsInFlight]). No figure in this tree bounds how many
+	// calls a run makes at once; this bounds what its log holds of them.
+	MaxCallsInFlight = 256
+
+	// MaxCallInFlightBytes bounds one entry in flight as the log holds it
+	// ([keptEntry]): its identity alone — its name at its worst (256 bytes
+	// escaped six-fold, 1,538 as the encoder writes it), its digest, its
+	// place, the instants the log and the bridge took it at, its bound
+	// ([BridgeCall.Until]) and the incarnation that runs it
+	// ([BridgeCall.Runner], held to [maxIncarnationBytes], 770 at its most
+	// escaped) — 2,539 bytes at their widest, measured by
+	// TestACallInFlightIsHeldToItsShare. FOUR KIB is that rounded up to the
+	// next power of two: what is left is the room for the keys a later build
+	// adds to an entry, which this build carries unread ([BridgeCall.Extra]).
+	MaxCallInFlightBytes = 4 << 10
+
+	// InFlightBytes is the log's entries in flight at their most:
+	// [MaxCallsInFlight] of [MaxCallInFlightBytes] each, taken out of the room
+	// the log leaves beside its calls.
+	InFlightBytes = MaxCallsInFlight * MaxCallInFlightBytes
+
+	// LogRestBytes is the rest of the log's value beside its calls and its
+	// calls in flight: the turn's earlier rounds' tool names, the log's own
+	// fields, and the room a later build adds keys to the log in. STATED, NOT
+	// DERIVED, as the table above states it, so the log's split closes only
+	// while every line of it is the table's: a change of [BridgeLogBytes] or of
+	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
+	// TestACallInFlightIsHeldToItsShare until this figure, and the table and
+	// docs/concepts/code-sandbox.md that state it, move with it.
+	LogRestBytes = 3_862_528
+
 	// MaxPriorCalls bounds [BridgeLog.PriorCalls]: the tool names a turn's
 	// earlier rounds called with success. Five hundred and twelve is past
 	// any seat's catalogue a run can call through its harness; a set that
@@ -559,6 +605,38 @@ func (l BridgeLog) lists(call BridgeCall) bool {
 	return slices.ContainsFunc(l.Calls, func(c BridgeCall) bool {
 		return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
 			c.Digest == kept.Digest
+	})
+}
+
+// keptEntry is call's entry in flight as the log keeps it
+// ([BridgeLog.InFlight]): its IDENTITY ALONE, within [MaxCallInFlightBytes] —
+// its name held to [MaxBridgeCallNameBytes] as a finished call's is, the
+// digest the bridge handed (none, for a tool that may ask a person first:
+// ADR-0077), its place, the instants it was taken at, its bound and its runner,
+// held to the most an incarnation may be ([maxIncarnationBytes]) — never its
+// arguments, its output or a mark, which its one update brings.
+func keptEntry(call BridgeCall) BridgeCall {
+	return BridgeCall{
+		Name: textcut.Within(call.Name, MaxBridgeCallNameBytes), Digest: call.Digest,
+		At: call.At, Seq: call.Seq, StartedAt: call.StartedAt,
+		Runner: textcut.Within(call.Runner, maxIncarnationBytes), Until: call.Until,
+	}
+}
+
+// inFlightAt is the index of call's entry in flight in l, found by its
+// IDENTITY — its place ([BridgeCall.Seq]), the instant the bridge took it and
+// its tool, as the log keeps them — or -1 where l holds none. NEVER BY ITS
+// DIGEST: an entry leaves it out for a tool that may ask a person first, and
+// the finished call may then carry one. Two openings of a job can reuse a
+// place, never at one instant. A call with no place, which the bridge never
+// numbered, has no entry.
+func (l BridgeLog) inFlightAt(call BridgeCall) int {
+	if call.Seq <= 0 {
+		return -1
+	}
+	name := textcut.Within(call.Name, MaxBridgeCallNameBytes)
+	return slices.IndexFunc(l.InFlight, func(entry BridgeCall) bool {
+		return entry.Seq == call.Seq && entry.StartedAt.Equal(call.StartedAt) && entry.Name == name
 	})
 }
 

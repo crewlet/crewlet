@@ -116,7 +116,13 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// reverts and the class a change it could not open was refused under, and
 	// a purge's request by its id with the Gitlet nodes that serve and hold it.
 	"entry_id", "target", "state", "sha", "checked_for", "reverts", "change_refusal",
-	"request", "maintainer", "gitlet_nodes"}
+	"request", "maintainer", "gitlet_nodes",
+	// THE ATLAS'S WRITES: the entries a write names by the ids a screen opens
+	// them by, what it recorded as its word, the fact, the relation and the
+	// owner as the atlas keeps them, a value as the person gave it, what a
+	// purge erased by its word, and who held a value a write replaced and
+	// the word it read as.
+	"entry", "other", "to", "change", "fact", "relation", "value", "owner", "purged", "source", "word"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

@@ -242,7 +242,7 @@ func (s Sources) atlasTrace(ctx context.Context, p Params) (any, error) {
 	if !found {
 		return nil, noAtlasEntry()
 	}
-	trace, _, err := view.Trace(e.ID, direction, p.Int("depth", atlas.TraceDepthMax), all)
+	trace, _, err := view.Trace(e.ID, direction, p.Int("depth", atlas.TraceDepthMax), all, atlas.TraceMax)
 	if err != nil {
 		return nil, badAtlas(err)
 	}

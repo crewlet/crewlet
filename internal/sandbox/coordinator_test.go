@@ -1703,7 +1703,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			// reclaim — so it is the ending most likely to be forgotten,
 			// and it was: the contract's own doc named two reporting
 			// sites and this was the third.
-			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
+			if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 				t.Fatalf("RetireSeat: %v", err)
 			}
 		}, []string{"swe/t1"}},
@@ -1717,7 +1717,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			// can tell. The retirement retries on its next tick, where a
 			// second report finds nothing left to drop — while staying
 			// quiet is the indicator standing over an agent that stopped.
-			_ = rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12)
+			_, _ = rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12)
 		}, []string{"swe/t1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3824,7 +3824,7 @@ func TestAFinishedRunDropsItsRequeueCount(t *testing.T) {
 		// with it.
 		"a run whose record is deleted": func(t *testing.T, rig *coordRig) {
 			t.Helper()
-			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
+			if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
 				t.Fatalf("RetireSeat: %v", err)
 			}
 		},
@@ -4441,7 +4441,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 	rig.coordinator.countRun("swe", StatusRunning)
 
-	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
+	if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("RetireSeat: %v", err)
 	}
 	for _, id := range []string{"running", "launching", "parked", "claimed", "reseed"} {
@@ -4499,7 +4499,7 @@ func TestRetiringASeatByItsIDEndsItsRunsAndNoNamesakes(t *testing.T) {
 	}
 	rig.coordinator.countRun("swe", StatusRunning)
 
-	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "", "retirement:1", 12); err != nil {
+	if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "", "retirement:1", 12); err != nil {
 		t.Fatalf("RetireSeat: %v", err)
 	}
 	rig.finished("running")
@@ -4535,7 +4535,7 @@ func TestRetiringASeatStopsWhenItsBudgetEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12); err == nil {
+	if _, err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement past its budget reported every run ended")
 	}
 	if got := rig.get("t1"); got.Status != StatusRunning {
@@ -4559,7 +4559,7 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
-	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
+	if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement under an older lease reported the newer lease's run ended")
 	}
 	if killed := rig.provider.KilledIDs(); slices.Contains(killed, run.SandboxID) {
@@ -4586,7 +4586,7 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.KillErr = errors.New("the provider is unreachable")
 
-	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
+	if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement that could not reclaim a box reported the run ended")
 	}
 	if got := rig.get("t1"); got.SandboxID != run.SandboxID {
@@ -4597,7 +4597,7 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 	}
 
 	rig.provider.KillErr = nil
-	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
+	if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("the retry: %v", err)
 	}
 	rig.finished("t1")

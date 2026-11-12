@@ -97,11 +97,12 @@ type Fleet struct {
 	maintRev    uint64
 
 	// pauseWatchers are the open seat-pause watches, runWatchers the open
-	// watches of each executor's row by its turn id, and chatReadWatchers the
-	// open watches of the chat read state, each told of every change under
-	// the lock that made it.
+	// watches of each executor's row by its turn id, partWatchers those of a
+	// part beside one, and chatReadWatchers the open watches of the chat read
+	// state, each told of every change under the lock that made it.
 	pauseWatchers    map[*watcher[coord.SeatPauseUpdate]]struct{}
 	runWatchers      map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
+	partWatchers     map[runPartKey]map[*watcher[coord.SandboxRunUpdate]]struct{}
 	chatReadWatchers map[*watcher[coord.ChatReadUpdate]]struct{}
 
 	// retries and signIns are the two classes keyed by a model entry, each
