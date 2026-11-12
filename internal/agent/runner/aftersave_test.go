@@ -251,6 +251,91 @@ func TestTheCallsAfterASaveAreHeldToTheLedgersBudgets(t *testing.T) {
 	}
 }
 
+// A CONTINUATION'S TOLD CALLS SHARE ONE READ CAP. The calls after a session's
+// save and its late calls are one round's, told in one brief under two
+// headings, so the ledger's cap counts the reads of both together, spent in
+// the order the brief tells them: nine reads after the save and nine late ones
+// are twelve read lines in all, and the late heading counts the six it leaves
+// out. Only what the brief shows is rewritten: a late read past the cap costs
+// no rewrite of its long argument, and a late write's long body costs one.
+//
+// Mutation: render the two lists with a cap each, and eighteen reads are told;
+// name their payloads list by list, and the late read the brief never shows is
+// rewritten all the same.
+func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
+	t.Parallel()
+	read := func(n int, channel string) runner.BridgedCall {
+		return numbered("slack_history", map[string]any{"channel": channel}, n, n)
+	}
+	var bridged []runner.BridgedCall
+	for n := 1; n <= 9; n++ {
+		bridged = append(bridged, read(n, fmt.Sprintf("C%d", n)))
+	}
+	for n := 10; n <= 17; n++ {
+		late := read(n, fmt.Sprintf("C%d", n))
+		late.Late = true
+		bridged = append(bridged, late)
+	}
+	unseen := read(18, strings.Repeat("u", 2000))
+	unseen.Late = true
+	write := numbered("jira_create", map[string]any{"summary": "a late write", "body": strings.Repeat("b", 2000)},
+		19, 19)
+	write.Late = true
+	bridged = append(bridged, unseen, write)
+
+	const rewrite = 37
+	meter := &countingMeter{}
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	basis := keptBasis
+	basis.Through = 0
+	relauncher := &probingLauncher{basis: basis}
+	lost := runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
+	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: rewrite}, nil).
+			For(nil, auxspend.Use{Stage: types.AuxStageTurn}),
+		resume: &runner.Resume{State: parked.State, Bridged: bridged, Lost: &lost}})
+	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	again := relauncher.last(t)
+	if again.Session == nil {
+		t.Fatal("the lost job's round continues no kept session")
+	}
+	brief := again.Session.Brief
+
+	if reads := strings.Count(brief, "- slack_history("); reads != ledger.MaxReadCalls {
+		t.Errorf("the continuation lists %d reads, want the one cap of %d:\n%s", reads, ledger.MaxReadCalls, brief)
+	}
+	afterAt := strings.Index(brief, "## Calls made after the session above was saved")
+	lateAt := strings.Index(brief, "## Calls that finished after the run that made them stopped waiting for them")
+	if afterAt < 0 || lateAt < afterAt {
+		t.Fatalf("the continuation is not told the calls after its save, then its late calls:\n%s", brief)
+	}
+	after, late := brief[afterAt:lateAt], brief[lateAt:]
+	if n := strings.Count(after, "- slack_history("); n != 9 || strings.Contains(after, "omitted") {
+		t.Errorf("the calls after the save list %d reads, want all nine and none omitted:\n%s", n, after)
+	}
+	if n := strings.Count(late, "- slack_history("); n != 3 || !strings.Contains(late, "(+6 further read call(s) omitted)") {
+		t.Errorf("the late calls list %d reads, want the three the cap leaves and the six past it counted:\n%s", n,
+			late)
+	}
+	if !strings.Contains(late, "a late write") || strings.Contains(late, strings.Repeat("b", 300)) {
+		t.Errorf("the late write is not told within its budget:\n%s", late)
+	}
+	rewrites := 0
+	for _, charge := range meter.charges() {
+		if charge == rewrite {
+			rewrites++
+		}
+	}
+	if rewrites != 1 {
+		t.Errorf("%d rewrites, want the late write's body alone: the late read past the cap is never shown", rewrites)
+	}
+}
+
 // A CARRIED-ON RELAUNCH LAUNCHES NOTHING WHEN THE CALLS AFTER ITS SAVE FILL THE
 // WINDOW. Telling a continued session the calls after its save rewrites a
 // payload past its budget with the seat's auxiliary model, charged to the

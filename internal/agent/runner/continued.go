@@ -465,6 +465,15 @@ func (r *Runner) checkoutName() string {
 // each up to the 16 KiB a call's record keeps. And defused under b: its
 // arguments are a model's, and a failed call's error is whatever the tool
 // said.
+//
+// ONE READ CAP FOR BOTH LISTS ([ledger.FormatCallGroups]), never one each: they
+// are one round's calls, told in one brief, and capped apart they would be
+// told twice the reads the cap allows a round. It is spent in the order the brief tells
+// them, the calls after the save first: those are the calls the session cannot
+// otherwise know were made, while a late call is one it may already show, and
+// a read's line never carries what the read returned, so a read told and a
+// read counted are alike one the session may run again. The fit is over the
+// two lists together, which names exactly what the one cap shows.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, leadHeld string,
 	surface *tools.Surface, b provenance.Boundary) prompts.AfterSave {
 
@@ -502,18 +511,13 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	}
 	if len(after)+len(late) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
-		pieces := ledger.CallPieces(after, opts)
-		for _, p := range ledger.CallPieces(late, opts) {
-			if !slices.Contains(pieces, p) {
-				pieces = append(pieces, p)
-			}
-		}
-		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, pieces)
+		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, ledger.CallPieces(slices.Concat(after, late), opts))
+		told := ledger.FormatCallGroups([][]ledger.Call{after, late}, opts)
 		if len(after) > 0 {
-			out.Calls = provenance.Neutralise(b, ledger.FormatCalls(after, opts))
+			out.Calls = provenance.Neutralise(b, told[0])
 		}
 		if len(late) > 0 {
-			out.Late = provenance.Neutralise(b, ledger.FormatCalls(late, opts))
+			out.Late = provenance.Neutralise(b, told[1])
 		}
 	}
 	if out.Dropped > 0 || out.LateDropped > 0 {

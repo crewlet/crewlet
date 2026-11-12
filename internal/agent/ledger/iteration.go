@@ -96,10 +96,12 @@ type FormatOptions struct {
 	Fitted Fitted
 }
 
-// Format is the budgeted form the cross-round ledger uses, and the list of the
-// calls a relaunch that continues a kept session is told its run made after the
-// session's save (internal/agent/runner's calledAfter), which [FormatElided]
-// follows there as it does a round here.
+// Format is the budgeted form the cross-round ledger uses, and the lists of
+// the calls a relaunch that continues a kept session is told its run made
+// (internal/agent/runner's calledAfter): those after the session's save, which
+// [FormatElided] follows there as it does a round here, and those that finished
+// only after their run stopped waiting for them, rendered together under one
+// read cap ([FormatCallGroups]).
 // The caller fits the pieces it names and sets [FormatOptions.Fitted].
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
