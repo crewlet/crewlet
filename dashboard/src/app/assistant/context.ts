@@ -50,6 +50,12 @@ import {
   ASSISTANT_PAGE_ACTIONS,
   ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS,
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
+  ASSISTANT_PAGE_ID_MAX_BYTES,
+  ASSISTANT_PAGE_KEY_PATTERN,
+  ASSISTANT_PAGE_MAP_MAX_KEYS,
+  ASSISTANT_PAGE_SCREEN_PATTERN,
+  ASSISTANT_PAGE_TITLE_MAX_RUNES,
+  ASSISTANT_PAGE_VALUE_MAX_BYTES,
   type AssistantActionArgs,
   type AssistantDraftFileRef,
   type AssistantPageContext,
@@ -57,7 +63,7 @@ import {
   type AssistantRecordNoun,
   type AssistantResourceRef,
 } from "~/contract/assistant.ts";
-import { pageContextFits } from "~/protocol/assistantWire.ts";
+import { actionArgsProblem, pageContextFits } from "~/protocol/assistantWire.ts";
 import { resolve } from "../routes.ts";
 import type { Crumb } from "../crumbs.ts";
 import { LENS_LABELS, scopeAt } from "../scope.ts";
@@ -195,7 +201,8 @@ export interface PageActionSpec<P> {
    * screen draws), so the two cannot disagree. Sent in the page context's
    * `action_args`; the model reads it, and the engine holds every proposal to
    * it before a card is drawn, so a call the screen could only refuse never
-   * reaches the person.
+   * reaches the person. Held to the engine's bounds for a schema before it
+   * is sent ([buildPageContext]).
    */
   args: AssistantActionArgs;
   /**
@@ -324,12 +331,10 @@ export interface PageSnapshot {
   context: AssistantPageContext;
 }
 
-const SCREEN = /^[a-z][a-z0-9-]{0,63}$/;
-const KEY = /^[a-z][a-z0-9_.]{0,63}$/;
-const TITLE_MAX_RUNES = 120;
-const VALUE_MAX_BYTES = 512;
-const ID_MAX_BYTES = 200;
-const MAP_MAX_KEYS = 32;
+// THE ENGINE'S OWN GRAMMARS AND BOUNDS (`contract/assistant.ts`, held equal by
+// the client gate), so what is left out here is exactly what it would refuse.
+const SCREEN = new RegExp(ASSISTANT_PAGE_SCREEN_PATTERN);
+const KEY = new RegExp(ASSISTANT_PAGE_KEY_PATTERN);
 
 let frame: FramePage | null = null;
 /** Every mounted component's registration, oldest first. */
@@ -361,8 +366,8 @@ function plainMap(map: Readonly<Record<string, string>>): Record<string, string>
   const out: Record<string, string> = {};
   let n = 0;
   for (const [key, value] of Object.entries(map).sort(([a], [b]) => a.localeCompare(b))) {
-    if (n >= MAP_MAX_KEYS) break;
-    if (!KEY.test(key) || !plain(value, VALUE_MAX_BYTES)) continue;
+    if (n >= ASSISTANT_PAGE_MAP_MAX_KEYS) break;
+    if (!KEY.test(key) || !plain(value, ASSISTANT_PAGE_VALUE_MAX_BYTES)) continue;
     out[key] = value;
     n += 1;
   }
@@ -372,9 +377,9 @@ function plainMap(map: Readonly<Record<string, string>>): Record<string, string>
 /** The title, cut to the engine's bound at a whole character. */
 function title(text: string): string {
   const runes = [...text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")];
-  return runes.length <= TITLE_MAX_RUNES
+  return runes.length <= ASSISTANT_PAGE_TITLE_MAX_RUNES
     ? runes.join("")
-    : runes.slice(0, TITLE_MAX_RUNES).join("");
+    : runes.slice(0, ASSISTANT_PAGE_TITLE_MAX_RUNES).join("");
 }
 
 /** A short, stable name for a text: FNV-1a, because it is compared and never read. */
@@ -419,14 +424,27 @@ function revisionOf(
   return `${page.screen}@${hashOf(parts)}`;
 }
 
+/** The actions left out of a page context for arguments past the engine's bounds, by screen and id. */
+const leftOutSaid = new Set<string>();
+
+/** Say once, to whoever builds the dashboard, that an action was left out of a screen's context, and why. */
+function leftOut(screen: string, id: string, problem: string): void {
+  const key = `${screen} ${id}`;
+  if (leftOutSaid.has(key)) return;
+  leftOutSaid.add(key);
+  console.warn(
+    `Ask Crewlet is not offered ${id} on ${screen}: ${problem}, which the engine refuses.`,
+  );
+}
+
 /** The wire context for a page and its registration, held to the engine's bounds. */
 export function buildPageContext(
   page: FramePage,
   reg: AssistantPageRegistration | null,
 ): AssistantPageContext {
   const resources = (reg?.resources ?? [])
-    .filter((r) => r.id !== "" && plain(r.id, ID_MAX_BYTES))
-    .filter((r) => r.version === undefined || plain(r.version, ID_MAX_BYTES))
+    .filter((r) => r.id !== "" && plain(r.id, ASSISTANT_PAGE_ID_MAX_BYTES))
+    .filter((r) => r.version === undefined || plain(r.version, ASSISTANT_PAGE_ID_MAX_BYTES))
     .slice(0, ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES)
     .map((r) => (r.version === undefined ? { kind: r.kind, id: r.id } : { ...r }));
   // WHAT IS OPEN, in the order a person sees it: what the screen says it has
@@ -436,21 +454,35 @@ export function buildPageContext(
       ? reg.selection
       : (resourceOf(parseRef(page.query.peek)) ?? subjectOf(page));
   const selection =
-    chosen && chosen.id !== "" && plain(chosen.id, ID_MAX_BYTES) ? withNoun(chosen) : null;
+    chosen && chosen.id !== "" && plain(chosen.id, ASSISTANT_PAGE_ID_MAX_BYTES)
+      ? withNoun(chosen)
+      : null;
   // ONLY THE CONTRACT'S IDS, which the engine's catalogue holds too (its
   // client gate keeps the two equal): an id the engine does not know is one
-  // every proposal for would be refused, so it is never offered.
-  const accepts = Object.keys(reg?.actions ?? {})
-    .filter(isPageActionId)
-    .slice(0, ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS);
-  // WHAT EACH TAKES AND WHAT EACH DEPENDS ON, by its id: the engine holds a
-  // proposal to the first and binds it to the second.
+  // every proposal for would be refused, so it is never offered. WHAT EACH
+  // TAKES AND WHAT EACH DEPENDS ON, by its id: the engine holds a proposal to
+  // the first and binds it to the second.
+  //
+  // EVERY ACTION'S ARGUMENTS ARE HELD TO THE ENGINE'S BOUNDS FIRST
+  // ([actionArgsProblem]): one past them is a page context the engine
+  // refuses, and every question asked with it. `draft.set` past them goes
+  // without its arguments, which the engine takes for it alone, reading the
+  // draft's editable fields instead; any other action past them is left out,
+  // said once to the console, rather than take the page down with it.
+  const accepts: PageActionId[] = [];
   const actionArgs: Record<string, AssistantActionArgs> = {};
   const actionRevisions: Record<string, string> = {};
-  for (const id of accepts) {
+  for (const id of Object.keys(reg?.actions ?? {}).filter(isPageActionId)) {
+    if (accepts.length >= ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS) break;
     const spec = reg?.actions?.[id];
     if (!spec) continue;
-    actionArgs[id] = spec.args;
+    const problem = actionArgsProblem(spec.args);
+    if (problem !== null && id !== "draft.set") {
+      leftOut(page.screen, id, problem);
+      continue;
+    }
+    accepts.push(id);
+    if (problem === null) actionArgs[id] = spec.args;
     actionRevisions[id] = revisionOf(page, reg, spec.tracks ?? ALL_PARTS);
   }
   const context: AssistantPageContext = {
@@ -466,11 +498,18 @@ export function buildPageContext(
   };
   if (reg?.draft) context.draft = { ...reg.draft, fields: [...reg.draft.fields] };
   // OVER ITS BYTE BUDGET, it sheds what matters least first: the query (the
-  // screen's resources still say what is in view), then the resources from
-  // the end, then the open draft's fields from its end, each counted in its
-  // `more`, and last its help. The engine's `page_context` frame says
-  // `trimmed`.
+  // screen's resources still say what is in view), then what `draft.set`
+  // declares it takes (the open draft's editable fields say it again, and the
+  // engine reads them when it declares nothing), then the resources from the
+  // end, then the open draft's fields from its end, each counted in its
+  // `more`, and last its help. A field shed with its member still declared
+  // was one the model was offered and the engine refused as not in the draft.
+  // The engine's `page_context` frame says `trimmed`.
   if (!pageContextFits(context)) context.query = {};
+  if (!pageContextFits(context) && context.action_args?.["draft.set"]) {
+    const { "draft.set": _, ...rest } = context.action_args;
+    context.action_args = rest;
+  }
   while (!pageContextFits(context) && context.resources.length > 0) context.resources.pop();
   const draft = context.draft;
   while (draft && !pageContextFits(context) && draft.fields.length > 0) {
@@ -724,6 +763,7 @@ on("assistant.action.apply", (request) => {
 /** Test seam: the registry as a fresh page has it. */
 export function resetPageContextForTest(): void {
   undos.clear();
+  leftOutSaid.clear();
   frame = null;
   registrations = [];
   registration = null;

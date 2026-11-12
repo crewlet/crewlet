@@ -148,6 +148,13 @@ func SetCommitterIdle(c *Committer, d time.Duration) { c.idle = d }
 // clock rather than the wall clock — set before c's first proposal.
 func SetCommitterClock(c *Committer, clock func() time.Time) { c.clock = clock }
 
+// SetCommitterWithdrawal has c arm every queued push's withdrawal by arm
+// rather than a timer: arm is told how long the withdrawal waits, and its
+// channel fires it — set before c's first proposal.
+func SetCommitterWithdrawal(c *Committer, arm func(d time.Duration) (<-chan time.Time, func())) {
+	c.withdrawAfter = arm
+}
+
 // SetCommitterNodeBytes has c hold at most n bytes of proposals across its
 // repositories, rather than CommitterNodeBytes — the case that fills a node
 // across two repositories without four repositories' queues of maximal

@@ -48,7 +48,8 @@ type level struct {
 var levels = []level{
 	{
 		id: config.CloudflareLevelRead, name: "Read",
-		note: "Reads zones, zone settings, DNS, cache rules, firewall and WAF rules, IP lists, SSL and analytics.",
+		note: "Reads zones, zone settings, DNS, cache rules, transform rules, firewall and WAF rules, IP lists, " +
+			"SSL and analytics.",
 		// Account Settings Read is what Cloudflare's MCP server needs to find
 		// the account at all. Firewall Services covers the legacy firewall
 		// only: WAF custom rules are rulesets, read with Zone WAF, and the IP
@@ -59,6 +60,7 @@ var levels = []level{
 			{"Analytics Read", "Analytics: Read", true},
 			{"DNS Read", "DNS: Read", true},
 			{"Cache Settings Read", "Cache Rules: Read", true},
+			{"Zone Transform Rules Read", "Transform Rules: Read", true},
 			{"Firewall Services Read", "Firewall Services: Read", true},
 			{"Zone WAF Read", "Zone WAF: Read", true},
 			{"SSL and Certificates Read", "SSL and Certificates: Read", true},
@@ -77,13 +79,15 @@ var levels = []level{
 	},
 	{
 		id: config.CloudflareLevelConfigure, name: "Configure",
-		note: "Everything Operate does, plus editing compression rules and every zone setting, " +
-			"the SSL mode and security level included.",
+		note: "Everything Operate does, plus editing transform rules, compression rules and every zone " +
+			"setting, the SSL mode and security level included.",
 		// Cloudflare grants every zone setting as one group, the cache, tiered
-		// cache, protocol and SSL mode settings alike.
+		// cache, protocol and SSL mode settings alike, and every transform rule
+		// as one: URL rewrites and request and response header changes.
 		adds: []permission{
 			{"Zone Settings Write", "Zone Settings: Edit", true},
 			{"Response Compression Write", "Response Compression: Edit", true},
+			{"Zone Transform Rules Write", "Transform Rules: Edit", true},
 		},
 	},
 	{

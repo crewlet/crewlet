@@ -117,6 +117,19 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
+	// The atlas's entries by name: a search's and a trace's rows do not say
+	// which source named them, so the whole table takes the least any
+	// writer earns (a vendor's integration names what it reports); one
+	// entry says its sources, and is a vendor's where an integration is
+	// among them and the company's own words otherwise.
+	"internal/assistant/catalog/atlasread.go:atlasReads": {vendor, []string{
+		"internal/assistant/catalog.TestAnAtlasSearchIsATableOfEntriesWithTheMapToOpen",
+		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
+	}},
+	"internal/assistant/catalog/atlasread.go:atlasEntryTrust": {either, []string{
+		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
+		"internal/assistant/catalog.TestAnAtlasEntryIsAChipThatOpensTheMapOnIt",
+	}},
 	"internal/assistant/catalog/reads.go:knowledgeTrust": {either, []string{
 		// Doclet's pages by the hosted rule and a connected knowledge base's
 		// as a vendor's, as each backend labels its own hits.

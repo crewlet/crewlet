@@ -175,15 +175,22 @@ be made in another screen's editor it offers that screen to open.
 
 **Work on what you have open.** Every screen with a draft or a form (the brand
 setup, the Brand page's cards, the principles, a page or a doc being written,
-the org builder, a new artifact) tells Ask Crewlet what is open: which draft,
-the step you are on, and its current values, so "check my draft" is answered
-from the draft in front of you rather than a search. Values are sent as you
-typed them, with any password, token or key left out, and only while the page
-chip is attached. A change Ask Crewlet proposes to that draft shows each
-field's value now beside the proposed one, applies to the draft once you
-approve it, and is saved when you save. On the brand screens it proposes
-colours, typefaces and the voice; a logo can be proposed only from a file in
-your own conversation, shown on the card as a thumbnail before you approve.
+the org builder, a new artifact, an integration's Agents tab and an agent's
+Access tab) tells Ask Crewlet what is open: which draft, the step you are on,
+and its current values, so "check my draft" is answered from the draft in
+front of you rather than a search. Values are sent as you typed them, with any
+password, token or key left out, and only while the page chip is attached. A
+change Ask Crewlet proposes to that draft shows each field's value now beside
+the proposed one, applies to the draft once you approve it, and is saved when
+you save. On the brand screens it proposes colours, typefaces and the voice; a
+logo can be proposed only from a file in your own conversation, shown on the
+card as a thumbnail before you approve. On an Agents or Access tab it reads
+each agent's access as the tab holds it, your changes not saved yet first, and
+proposes only what the tab's own controls offer: turning an agent on or off, a
+level from the integration's list, a GitHub permission's own values, and scope
+entries the connection reaches, or typed where the tab takes typed ones. An
+approved change lands in the tab's unsaved changes, and nothing changes at the
+vendor until you review and save them there.
 
 **Do deep work** on a task that needs research, scripts, generated files, the
 images you attached, or many steps, where your company turns it on: for

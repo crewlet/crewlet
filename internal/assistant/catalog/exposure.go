@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The exposure table: which surface each CURATED tool is built on, one row per
@@ -73,7 +74,9 @@ var questionExposures = []Exposure{
 	asked("chat_search", "search_chat"),
 	asked("atlas_entries", searchAtlasTool),
 	asked("atlas_entry", getAtlasEntryTool),
-	asked("atlas_trace", traceAtlasEntryTool),
+	// THE TRACE QUESTION SHARES ITS NAME WITH THE AGENTS' TOOL, so it is
+	// read off the one constant that declares it.
+	asked(toolname.AtlasTrace, traceAtlasEntryTool),
 	// READ BY A PREVIEW ONLY: a priority change is bound to the person's
 	// record at the version its preview read. (The room and the thread every
 	// chat write's preview reads are read by get_chat_room and

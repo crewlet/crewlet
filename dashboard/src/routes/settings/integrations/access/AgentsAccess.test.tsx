@@ -20,12 +20,24 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { AppAnnouncer } from "~/app/announcer.tsx";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+  type FramePage,
+} from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pick } from "~/testing.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
+import {
+  AccessDraftParts,
+  AccessDraftPartsContext,
+  useGatheredAccessDraft,
+} from "./assistantDraft.ts";
 import {
   awsAnswer,
   cloudflareAnswer,
@@ -160,6 +172,7 @@ beforeEach(() => {
   calls.planRefusal = null;
 });
 afterEach(cleanup);
+afterEach(resetPageContextForTest);
 
 /** The shapes a glyph draws, compared as drawn: the attributes are every glyph's alike. */
 const shapes = (glyph: ReactElement) => {
@@ -1971,4 +1984,153 @@ test("an idle access table does not re-render as the clock ticks", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+/** The integration's page, as the frame publishes it under the assistant. */
+const INTEGRATION_PAGE: FramePage = {
+  screen: "integration",
+  title: "Settings › Integrations › Datadog",
+  path: ["company", "integrations", "datadog"],
+  params: {},
+  query: {},
+};
+
+/** Apply a change Ask Crewlet proposed to the page's draft, as an approval does. */
+function propose(values: Record<string, unknown>) {
+  const context = pageSnapshot()!.context;
+  let result: ReturnType<typeof applyPageAction> | undefined;
+  act(() => {
+    result = applyPageAction({
+      correlation_id: "c1",
+      action: "draft.set",
+      payload: { values },
+      source_revision: context.action_revisions!["draft.set"]!,
+    });
+  });
+  return result;
+}
+
+// THE TAB'S DRAFT IS ASK CREWLET'S TO READ: every control a field, and the
+// row not saved yet first. A read-only tab, or one held for this reader, has
+// no draft to tell. Mutation: declare nothing, or declare a held tab's.
+test("tells Ask Crewlet the tab's draft, the row not saved yet first, and nothing where it is held", () => {
+  setFramePage(INTEGRATION_PAGE);
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  const context = pageSnapshot()!.context;
+  expect(context.draft?.fields.slice(0, 2).map((f) => [f.path, f.value])).toEqual([
+    ["agent_2.datadog.enabled", "On"],
+    ["agent_2.datadog.level", "Datadog Read Only Role"],
+  ]);
+  expect(context.accepts).toContain("draft.set");
+  cleanup();
+  draw(datadogAnswer(), { readOnly: OPERATOR_MANAGED });
+  expect(pageSnapshot()!.context.draft).toBeUndefined();
+  cleanup();
+  draw(datadogAnswer(), { held: "Admins change an agent's access." });
+  expect(pageSnapshot()!.context.draft).toBeUndefined();
+});
+
+// A PROPOSAL IS THE DRAFT THE DIALOGS MAKE: Workflows to Read and write and
+// acme/frontend added, once through the permissions and repositories dialogs
+// and once as a change Ask Crewlet proposes, reach the review as one draft,
+// and the change saves nothing by itself. Mutation: land a proposal by any
+// other way than the update path the dialogs call, and the two differ.
+test("a change Ask Crewlet proposes reaches the review as the dialogs' own change", async () => {
+  setFramePage(INTEGRATION_PAGE);
+  draw(githubAnswer());
+  fireEvent.click(screen.getByRole("button", { name: "Edit QA's GitHub permissions" }));
+  let dialog = await screen.findByRole("dialog", { name: "QA's GitHub permissions" });
+  const workflows = within(dialog).getByRole("radiogroup", { name: "QA's Workflows permission" });
+  fireEvent.click(within(workflows).getByRole("radio", { name: "Read and write" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Edit QA's GitHub repositories" }));
+  dialog = await screen.findByRole("dialog", { name: "QA's GitHub repositories" });
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "acme/frontend" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  cleanup();
+
+  draw(githubAnswer());
+  expect(
+    propose({
+      "agent_1.github.permission.workflows": "Read and write",
+      "agent_1.github.scope": ["acme/backend", "acme/frontend"],
+    }),
+  ).toMatchObject({ outcome: "applied" });
+  expect(screen.getByText("Not saved")).toBeTruthy();
+  expect(calls.save).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(2));
+  expect(calls.plan[1]).toEqual(calls.plan[0]);
+  expect(calls.plan[0]).toMatchObject({
+    seats: {
+      qa: {
+        github: {
+          permissions: { workflows: "write" },
+          scope: ["acme/backend", "acme/frontend"],
+        },
+      },
+    },
+  });
+});
+
+// AN AGENT'S OWN PAGE DRAWS A TAB PER INTEGRATION AND DECLARES ONE DRAFT:
+// each tab puts its own into the page's, and declares none of its own, so
+// Ask Crewlet reads both rather than whichever tab registered last, and a
+// change lands in the tab it names. Mutation: let each tab declare its own,
+// or gather none, and one integration's fields are gone; let a gathered tab
+// declare its own as well, and a read of a newer revision, which moves that
+// tab's own declaration and not the page's, puts it in the page's place.
+test("an agent's own page tells Ask Crewlet every tab's draft as one", () => {
+  setFramePage({ ...INTEGRATION_PAGE, screen: "seat", path: ["company", "org", "seats", "sre"] });
+  const parts = new AccessDraftParts();
+  function Gathered() {
+    useGatheredAccessDraft(parts, "SRE");
+    return null;
+  }
+  const tabFor = (data: AccessAnswer, name: string) => (
+    <AgentsAccess
+      kind={data.kind}
+      name={name}
+      data={data}
+      reload={() => {}}
+      held={undefined}
+      avatarOf={() => null}
+      only="sre"
+    />
+  );
+  const page = (datadog: AccessAnswer) => (
+    <Router>
+      <LayerHost>
+        <AppAnnouncer />
+        <AccessDraftPartsContext.Provider value={parts}>
+          <Gathered />
+          {tabFor(datadog, "Datadog")}
+          {tabFor(cloudflareAnswer(), "Cloudflare")}
+        </AccessDraftPartsContext.Provider>
+      </LayerHost>
+    </Router>
+  );
+  const { rerender } = render(page(datadogAnswer()));
+  // ONE AGENT, SO ONE PLACE, and each product's key its own integration's.
+  const both = [
+    "agent_1.datadog.enabled",
+    "agent_1.datadog.level",
+    "agent_1.cloudflare.enabled",
+    "agent_1.cloudflare.level",
+  ];
+  expect(pageSnapshot()!.context.draft?.fields.map((f) => f.path)).toEqual(both);
+  rerender(page({ ...datadogAnswer(), revision: "rev-8" }));
+  expect(pageSnapshot()!.context.draft?.fields.map((f) => f.path)).toEqual(both);
+  expect(propose({ "agent_1.cloudflare.level": "Configure" })).toMatchObject({
+    outcome: "applied",
+  });
+  expect(screen.getAllByText("Not saved")).toHaveLength(1);
+  expect(
+    within(screen.getByRole("table", { name: "Access on Cloudflare" })).getByText("Not saved"),
+  ).toBeTruthy();
 });

@@ -617,9 +617,9 @@ func (b *BriefCard) Validate() error {
 	case !screenPattern().MatchString(b.Scope.Screen):
 		return fmt.Errorf("%w: a brief's scope screen %q is not a screen name", ErrInvalid,
 			b.Scope.Screen)
-	case !briefText(b.Scope.Title, pageTitleMaxRunes):
+	case !briefText(b.Scope.Title, PageTitleMaxRunes):
 		return fmt.Errorf("%w: a brief's scope title is not one line of at most %d characters",
-			ErrInvalid, pageTitleMaxRunes)
+			ErrInvalid, PageTitleMaxRunes)
 	case b.About == "" || !briefText(b.About, BriefAboutMaxRunes):
 		return fmt.Errorf("%w: a brief's about is not one line of 1 to %d characters",
 			ErrInvalid, BriefAboutMaxRunes)

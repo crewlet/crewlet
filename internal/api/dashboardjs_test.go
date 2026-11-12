@@ -1369,6 +1369,25 @@ const (
 	// registry names) and the entry +79 (the Atlas row, its routes, crumb and
 	// peek kind). Every screen's module of it is lazy. So it moved to 404 KiB,
 	// 2.21 seconds.
+	// Every page action's arguments held to the engine's bounds for a schema
+	// before a page context is sent took it from 400.8 KiB to 401.3 KiB on the
+	// tree it was built on: the chunk the assistant's page registry is built
+	// in +404 bytes gzipped (the guard, and the words it names an action it
+	// leaves out in), since every page context is built there, with no
+	// screen's module in the entry. Merged on top of delegated decisions it
+	// measured 401.7 KiB, inside 402 KiB. With the atlas's access words merged
+	// on top it measured 401.8 KiB (411,426 bytes), 222 bytes inside 402 KiB.
+	// A page action's report held to the engine's line and a seat or a space
+	// declared by its grammar past an enum's 64 add 26 bytes to it (the
+	// report's bound beside the page registry's other bounds), so it measured
+	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB. Merged on top of
+	// each delegated rule's required checks it measured 401.8 KiB (411,449
+	// bytes), 199 bytes inside 402 KiB, and on top of the atlas and dead-wait
+	// train it measured 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB.
+	// Merged on top of Company › Atlas on kit 0.122.0 and every end of a
+	// person's note said in the trace it measures 403.8 KiB (413,481 bytes),
+	// 215 bytes inside 404 KiB: the next addition to the entry moves this
+	// budget only with a reason of its own.
 	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2243,11 +2262,25 @@ const (
 	// unconfirmed, told again after a step that never handed it over, and an
 	// end this bundle does not know said as that, never as expired), merged on
 	// top of it, took it to 5826.0 KiB (5,965,816 bytes, +1,345, all script):
-	// 5826 KiB. Ask Crewlet reading the atlas (an entry's chip with the map
-	// glyph, matched by its name and worded as an entry, and the link suite
-	// reading a map link's query) took it to 5826.1 KiB (5,965,946 bytes,
-	// +130, all script): 5827 KiB.
-	treeBudget = 5<<20 + 707<<10
+	// 5826 KiB.
+	// An open draft held to what the engine takes (draft.set's arguments
+	// declared only while one schema holds them, and sizes counted as the
+	// engine encodes them), Ask Crewlet reading and proposing to the agents'
+	// access draft (an integration's Agents tab and an agent's Access tab, one
+	// draft over its tabs) with draft.set written in its fields' order, every
+	// page action's arguments and the page context held to the engine's
+	// bounds, the Budgets ceiling's seat held to a handle's grammar past an
+	// enum's 64, and the org builder's identities and a mention held to the
+	// engine's, +11,156 bytes on the tree they were built on, then a page
+	// action's report held to the engine's line (a refusal written within it,
+	// the report cut at a whole character) and a seat or a space declared by
+	// its grammar past an enum's 64, +1,462 on the tree they were built on,
+	// merged on top of it, took it to 5838.4 KiB (5,978,501 bytes, +12,685,
+	// all script): 5839 KiB. Ask Crewlet reading the atlas (an entry's chip
+	// with the map glyph, matched by its name and worded as an entry), merged
+	// on top of it, took it to 5838.5 KiB (5,978,622 bytes, +121, all
+	// script), still inside it.
+	treeBudget = 5<<20 + 719<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

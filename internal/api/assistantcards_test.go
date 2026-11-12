@@ -288,15 +288,7 @@ func filledWorld(t *testing.T) cardsWorld {
 	atlasCompany.Integrations.Cloudflare = &config.Cloudflare{Enabled: true,
 		Provisioning: &config.CloudflareProvisioning{AccountID: "0123456789abcdef0123456789abcdef",
 			Zones: []string{atlasZone}}}
-	s.Atlas = &builtin.AtlasDeps{
-		Settings: func(context.Context) (builtin.AtlasSettings, bool) {
-			return builtin.AtlasSettings{Company: atlasCompany, Revision: "r1",
-				Deployment: derive.Deployment{APIAddress: "https://" + atlasHostName}}, true
-		},
-		Records: func(context.Context) gather.Sources {
-			return gather.Sources{Integrations: reconciledStates(s.Reconciles), Alarms: filledAlarms{}}
-		},
-	}
+	s.Atlas = atlasDepsOf(atlasCompany, s.Reconciles)
 	status := filled[coord.NodeStatus]()
 	if _, _, err := s.Coord.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a/1", TTL: time.Hour,
@@ -304,6 +296,25 @@ func filledWorld(t *testing.T) cardsWorld {
 		t.Fatalf("report node-a to the fleet: %v", err)
 	}
 	return cardsWorld{paritySources: s, building: building}
+}
+
+// atlasDepsOf is an atlas over company's settings, the deployment answering at
+// the filled host name, and the record sources a fixture has: its reconcile
+// states where it keeps any, and alarms the fleet has evaluated.
+func atlasDepsOf(company *config.Company, reconciles func(context.Context) []integration.State) *builtin.AtlasDeps {
+	return &builtin.AtlasDeps{
+		Settings: func(context.Context) (builtin.AtlasSettings, bool) {
+			return builtin.AtlasSettings{Company: company, Revision: "r1",
+				Deployment: derive.Deployment{APIAddress: "https://" + atlasHostName}}, true
+		},
+		Records: func(context.Context) gather.Sources {
+			sources := gather.Sources{Alarms: filledAlarms{}}
+			if reconciles != nil {
+				sources.Integrations = reconciledStates(reconciles)
+			}
+			return sources
+		},
+	}
 }
 
 // reconciledStates is the fixture's reconcile states as the atlas reads them.

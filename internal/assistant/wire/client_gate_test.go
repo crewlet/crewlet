@@ -101,11 +101,28 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_PAGE_DRAFT_MAX_FIELDS":      strconv.Itoa(wire.PageDraftMaxFields),
 		"ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES": strconv.Itoa(wire.PageDraftValueMaxRunes),
 		"ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES":  strconv.Itoa(wire.PageDraftHelpMaxRunes),
+		"ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES": strconv.Itoa(wire.PageDraftLabelMaxRunes),
+		"ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES":  strconv.Itoa(wire.PageDraftHintMaxRunes),
 		"ASSISTANT_PAGE_DRAFT_SECRET_PATH":     wire.PageDraftSecretPath,
 		"ASSISTANT_AUDIT_REASON_MAX_RUNES":     strconv.Itoa(wire.AuditReasonMaxRunes),
 		"ASSISTANT_KEEPALIVE_SECONDS":          strconv.Itoa(wire.KeepaliveSeconds),
 		"ASSISTANT_ACTION_CONTEXT_INVALIDATE":  wire.ActionContextInvalidate,
 		"ASSISTANT_DIGEST_PREFIX":              wire.DigestPrefix,
+		// --- a page action's report ---
+		"ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES": strconv.Itoa(wire.ActionReportLineMaxBytes),
+		// --- a page context's grammars and its strings' bounds ---
+		"ASSISTANT_PAGE_SCREEN_PATTERN":            wire.PageScreenPattern,
+		"ASSISTANT_PAGE_KEY_PATTERN":               wire.PageKeyPattern,
+		"ASSISTANT_PAGE_TITLE_MAX_RUNES":           strconv.Itoa(wire.PageTitleMaxRunes),
+		"ASSISTANT_PAGE_VALUE_MAX_BYTES":           strconv.Itoa(wire.PageValueMaxBytes),
+		"ASSISTANT_PAGE_ID_MAX_BYTES":              strconv.Itoa(wire.PageIDMaxBytes),
+		"ASSISTANT_PAGE_MAP_MAX_KEYS":              strconv.Itoa(wire.PageMapMaxKeys),
+		"ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES": strconv.Itoa(wire.PageDraftFileNameMaxBytes),
+		// --- a schema's bounds, which every action's arguments are held within ---
+		"ASSISTANT_ACTION_ARGS_MAX_BYTES":             strconv.Itoa(wire.ActionArgsMaxBytes),
+		"ASSISTANT_ACTION_ARGS_MAX_MEMBERS":           strconv.Itoa(wire.ActionArgsMaxMembers),
+		"ASSISTANT_ACTION_ARGS_MAX_ENUM":              strconv.Itoa(wire.ActionArgsMaxEnum),
+		"ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES": strconv.Itoa(wire.ActionArgsDescriptionMaxRunes),
 		// --- deep work (im-deep) ---
 		"ASSISTANT_DEEP_ACTIVITY_LINES":     strconv.Itoa(wire.DeepActivityLines),
 		"ASSISTANT_FILE_MAX_BYTES":          strconv.Itoa(wire.FileMaxBytes),

@@ -134,6 +134,11 @@ func (d *e2eDesk) Get(context.Context, string) (sandbox.PendingRun, bool, error)
 	return sandbox.PendingRun{}, false, nil
 }
 
+// ListActiveForSeat lists no run: the desk holds one call and no rows.
+func (d *e2eDesk) ListActiveForSeat(context.Context, string) ([]sandbox.PendingRun, error) {
+	return nil, nil
+}
+
 // noRequesters composes nobody: a turn nobody woke asks for no requester.
 type noRequesters struct{}
 

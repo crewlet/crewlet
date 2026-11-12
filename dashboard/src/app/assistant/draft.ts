@@ -33,10 +33,18 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import {
+  ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
+  ASSISTANT_ACTION_ARGS_MAX_BYTES,
+  ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES,
+  ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES,
+  ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES,
+  ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES,
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
   ASSISTANT_PAGE_DRAFT_SECRET_PATH,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
+  ASSISTANT_PAGE_ID_MAX_BYTES,
+  ASSISTANT_PAGE_KEY_PATTERN,
   type AssistantActionArgs,
   type AssistantDraftField,
   type AssistantDraftFieldKind,
@@ -44,6 +52,8 @@ import {
   type AssistantDraftKind,
   type AssistantPageDraft,
 } from "~/contract/assistant.ts";
+import { bytesOf, clipUtf8 } from "~/lib/clip.ts";
+import { wireBytes } from "~/protocol/assistantWire.ts";
 import {
   hashOf,
   type PageActionParse,
@@ -69,6 +79,98 @@ export class DraftRefusal {
 /** A field's `write` refusing a value: the sentence is the person's to read. */
 export function refuse(reason: string): DraftRefusal {
   return new DraftRefusal(reason);
+}
+
+/** A list a refusal names ([said]): as many of its names as fit, then how many more. */
+export interface Listing {
+  readonly names: readonly string[];
+  /** All of the names, said where they fit: "a, b, c", or "a, b or c". */
+  readonly whole: (names: readonly string[]) => string;
+}
+
+/** Names joined by commas, as a list in a sentence reads where it ends in nothing. */
+function commas(names: readonly string[]): string {
+  return names.join(", ");
+}
+
+/** `names` as a refusal lists them ([said]), `whole` saying all of them where they fit. */
+export function listing(
+  names: readonly string[],
+  whole: (names: readonly string[]) => string = commas,
+): Listing {
+  return { names, whole };
+}
+
+/**
+ * `names` within `room`, as `measure` counts it: all of them, said by
+ * `whole`, where they fit, else as many as fit and how many more, and how many
+ * there are where not even the first does.
+ */
+export function listedWithin(
+  names: readonly string[],
+  room: number,
+  measure: (text: string) => number,
+  whole: (names: readonly string[]) => string = commas,
+): string {
+  const all = whole(names);
+  if (measure(all) <= room) return all;
+  const kept: string[] = [];
+  for (const name of names) {
+    const more = ` and ${names.length - kept.length - 1} more`;
+    if (measure([...kept, name].join(", ")) + measure(more) > room) break;
+    kept.push(name);
+  }
+  return kept.length === 0
+    ? `${names.length} of them`
+    : `${kept.join(", ")} and ${names.length - kept.length} more`;
+}
+
+/**
+ * `room` shared out among values of `sizes`: each takes its own size where the
+ * room holds it, and THE LONGEST GIVE WAY FIRST, each in turn to an even share
+ * of what the shorter ones left.
+ */
+function shares(room: number, sizes: readonly number[]): number[] {
+  const caps = sizes.map(() => 0);
+  const order = sizes.map((_, i) => i).sort((a, b) => sizes[a]! - sizes[b]!);
+  let left = Math.max(room, 0);
+  order.forEach((i, at) => {
+    const cap = Math.min(sizes[i]!, Math.floor(left / (order.length - at)));
+    caps[i] = cap;
+    left -= cap;
+  });
+  return caps;
+}
+
+/**
+ * A REFUSAL IN ONE SHORT LINE, written as a tagged template, as in
+ * said`${field.label} is a line of text.`. A refusal is the reason a page
+ * action's report carries back to the model (`chunk/pageActions.ts`), which
+ * the engine takes as one line of [ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES]
+ * bytes, and the report cuts a longer one at its end: where a refusal says
+ * what its field DOES take. So the template's own words stay whole and the
+ * values placed in it give way to them, the longest first ([shares]): a text
+ * is cut at a whole character and marked ([clipUtf8]), and a [Listing] says as
+ * many of its names as fit and how many more. A name or a value somebody typed
+ * can run to any length; the sentence around it cannot.
+ */
+export function said(
+  words: TemplateStringsArray,
+  ...values: readonly (string | Listing)[]
+): string {
+  const whole = values.map((v) => (typeof v === "string" ? v : v.whole(v.names)));
+  const fixed = words.reduce((n, w) => n + bytesOf(w), 0);
+  const caps = shares(ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES - fixed, whole.map(bytesOf));
+  let out = words[0] ?? "";
+  values.forEach((v, i) => {
+    const cap = caps[i]!;
+    out +=
+      typeof v === "string"
+        ? clipUtf8(v, cap)
+        : clipUtf8(listedWithin(v.names, cap, bytesOf, v.whole), cap);
+    out += words[i + 1] ?? "";
+  });
+  return out;
 }
 
 /** One field of an open draft, as the screen declares it. */
@@ -152,11 +254,8 @@ export interface DraftChange<D> {
   readonly rows: readonly PageActionRow[];
 }
 
-const KEY = /^[a-z][a-z0-9_.]{0,63}$/;
+const KEY = new RegExp(ASSISTANT_PAGE_KEY_PATTERN);
 const SECRET_PATH = new RegExp(ASSISTANT_PAGE_DRAFT_SECRET_PATH);
-const LABEL_MAX_RUNES = 120;
-const HINT_MAX_RUNES = 200;
-const ID_MAX_BYTES = 200;
 /** The longest text one proposed value may be: well past any field a draft screen draws. */
 const PROPOSED_MAX_RUNES = 16 * 1024;
 /** Every control character but a line break and a tab. */
@@ -214,7 +313,7 @@ function plainId(value: string | number | null | undefined): string | undefined 
   if (value === null || value === undefined) return undefined;
   const text = String(value);
   return text !== "" &&
-    encoder.encode(text).length <= ID_MAX_BYTES &&
+    encoder.encode(text).length <= ASSISTANT_PAGE_ID_MAX_BYTES &&
     !/[\u0000-\u001f\u007f-\u009f]/.test(text)
     ? text
     : undefined;
@@ -238,12 +337,12 @@ export function draftSnapshot<D>(spec: AssistantDraftSpec<D>): AssistantPageDraf
     const value = f.read(spec.value);
     const field: AssistantDraftField = {
       path: f.path,
-      label: line(f.label, LABEL_MAX_RUNES),
+      label: line(f.label, ASSISTANT_PAGE_DRAFT_LABEL_MAX_RUNES),
       kind: kindOf(f, value),
       value: "",
     };
     const hint = f.file ? (f.hint ?? `A file: ${f.file.accepts.join(", ")}`) : f.hint;
-    if (hint) field.hint = line(hint, HINT_MAX_RUNES);
+    if (hint) field.hint = line(hint, ASSISTANT_PAGE_DRAFT_HINT_MAX_RUNES);
     if (f.secret || isSecretDraftPath(f.path)) {
       // A CREDENTIAL NEVER LEAVES THE PAGE, and is never the assistant's to set.
       field.redacted = true;
@@ -298,7 +397,7 @@ function fileRef(raw: unknown, accepts: readonly string[]): AssistantDraftFileRe
   if (typeof name !== "string" || name === "" || /[/\\\u0000-\u001f\u007f-\u009f]/.test(name)) {
     return null;
   }
-  if (encoder.encode(name).length > ID_MAX_BYTES) return null;
+  if (encoder.encode(name).length > ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES) return null;
   if (typeof media_type !== "string" || !accepts.includes(media_type)) return null;
   return { kind: "file", file_id, conversation_id, name, media_type };
 }
@@ -334,7 +433,7 @@ function written<D>(
   if (field.file) {
     const ref = fileRef(value, field.file.accepts);
     if (ref === null) {
-      return `${field.label} takes one of your files: ${field.file.accepts.join(", ")}.`;
+      return said`${field.label} takes one of your files: ${listing(field.file.accepts)}.`;
     }
     const next = field.file.write(draft, ref);
     if (next instanceof DraftRefusal) return next.reason;
@@ -352,7 +451,9 @@ function written<D>(
   const list = typeof field.read(now) !== "string";
   const typed = proposed(value, list);
   if (typed === null) {
-    return list ? `${field.label} is a list of short lines.` : `${field.label} is a line of text.`;
+    return list
+      ? said`${field.label} is a list of short lines.`
+      : said`${field.label} is a line of text.`;
   }
   const next = field.write!(draft, typed);
   if (next instanceof DraftRefusal) return next.reason;
@@ -372,6 +473,13 @@ function written<D>(
  * field the screen lets the assistant set (an unknown path is refused, never
  * ignored), every value in its field's shape and taken by its `write`, or the
  * whole change refused in a sentence.
+ *
+ * WRITTEN IN THE SCREEN'S ORDER, never the payload's. A change is a set of
+ * values, and the order a proposal names them in is an accident of how it
+ * was encoded (the engine's encoder sorts them by path). A screen declares its
+ * fields in the order its controls are filled in, so a field whose control
+ * waits on another (an agent's access, chosen once the agent is on) is
+ * written after that one, and its card's rows read in the screen's order.
  */
 export function parseDraftChange<D>(
   spec: AssistantDraftSpec<D>,
@@ -394,13 +502,22 @@ export function parseDraftChange<D>(
   if (entries.length === 0) return refused("That changes nothing in the draft.");
   if (entries.length > ASSISTANT_PAGE_DRAFT_MAX_FIELDS)
     return refused("That changes more fields than the draft has.");
-  let next = spec.value;
-  const rows: PageActionRow[] = [];
+  const given = new Map<string, unknown>();
   for (const [path, value] of entries) {
     const field = spec.fields.find((f) => f.path === path);
-    if (!field) return refused(`The draft has no field “${path}”.`);
+    if (!field) return refused(said`The draft has no field “${path}”.`);
     if (!settable(field))
-      return refused(`${field.label} is not something Ask Crewlet can set here.`);
+      return refused(said`${field.label} is not something Ask Crewlet can set here.`);
+    given.set(path, value);
+  }
+  let next = spec.value;
+  const rows: PageActionRow[] = [];
+  for (const field of spec.fields) {
+    // A PATH IS ITS FIRST FIELD'S, as the snapshot lists it and the lookup
+    // above finds it; a repeat is never written twice.
+    if (!given.has(field.path)) continue;
+    const value = given.get(field.path);
+    given.delete(field.path);
     const out = written(field, next, spec.value, value);
     if (typeof out === "string") return refused(out);
     next = out.next;
@@ -409,23 +526,39 @@ export function parseDraftChange<D>(
   return { ok: true, value: { next, rows } };
 }
 
+/**
+ * A field's description, `what` it is and then `how` its kind is written,
+ * within the engine's bound for one description: `what` (a label and a hint
+ * the screen wrote, each long within its own bound) gives way, marked, so the
+ * kind's own words always arrive.
+ */
+function described(what: string, how: string): string {
+  const tail = how === "" ? "" : `. ${how}`;
+  const room = ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES - [...tail].length;
+  const fitted = cut(what, room);
+  return fitted.cut ? `${cut(what, room - 1).text}…${tail}` : `${what}${tail}`;
+}
+
 /** What one editable field takes, by its kind: text, a list, or a file of this conversation. */
 function fieldArgs(field: AssistantPageDraft["fields"][number]): AssistantActionArgs {
-  const description = field.hint ? `${field.label}. ${field.hint}` : field.label;
+  const what = field.hint ? `${field.label}. ${field.hint}` : field.label;
   switch (field.kind) {
     case "list":
       return {
         type: ["array", "string"],
-        description: `${description}. A list of items, or one item per line.`,
+        description: described(what, "A list of items, or one item per line."),
         items: { type: "string" },
       };
     case "file":
       return {
         type: ["string", "object"],
-        description: `${description}. The id of a file delivered or attached in this conversation.`,
+        description: described(
+          what,
+          "The id of a file delivered or attached in this conversation.",
+        ),
       };
     default:
-      return { type: "string", description };
+      return { type: "string", description: described(what, "") };
   }
 }
 
@@ -433,15 +566,21 @@ function fieldArgs(field: AssistantPageDraft["fields"][number]): AssistantAction
  * What `draft.set` takes on this draft: `values`, each an editable field by
  * its path, in its kind's shape. Built from the snapshot the page sends, so
  * the model reads the same fields the screen's parser sets.
+ *
+ * A MEMBER PER EDITABLE FIELD grows with the draft past what one schema may
+ * declare (its members, its bytes), and the frame then sends `draft.set`
+ * without its arguments (`buildPageContext`), which the engine takes for it
+ * alone, reading what it takes from the draft's editable fields
+ * (`catalog.PageActionFor`). What is better cut than lost with the rest is cut
+ * here: each description to its bound ([described]), and the example offered
+ * only where it still fits.
  */
 export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs {
   const properties: Record<string, AssistantActionArgs> = {};
   for (const field of draft.fields) {
     if (field.editable === true) properties[field.path] = fieldArgs(field);
   }
-  // THE FIELD'S OWN VALUE is the one example every field takes as it stands.
-  const first = draft.fields.find((f) => f.editable === true && f.kind === "text" && f.value);
-  return {
+  const args: AssistantActionArgs = {
     type: "object",
     description: "Values for the open draft's editable fields, by path.",
     additionalProperties: false,
@@ -449,8 +588,13 @@ export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs {
     properties: {
       values: { type: "object", additionalProperties: false, properties },
     },
-    ...(first ? { examples: [{ values: { [first.path]: first.value } }] } : {}),
   };
+  // THE FIELD'S OWN VALUE is the one example every field takes as it stands,
+  // offered where it still fits: a value runs to a thousand characters.
+  const first = draft.fields.find((f) => f.editable === true && f.kind === "text" && f.value);
+  if (!first) return args;
+  const shown = { ...args, examples: [{ values: { [first.path]: first.value } }] };
+  return wireBytes(shown) <= ASSISTANT_ACTION_ARGS_MAX_BYTES ? shown : args;
 }
 
 /** What the draft's fields read now, as one comparable value. */

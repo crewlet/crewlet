@@ -351,10 +351,11 @@ func TestEachLevelMintsExactlyItsGroups(t *testing.T) {
 	readAccount := []string{"Account Analytics Read", "Account Rule Lists Read", "Account Settings Read"}
 	readZone := []string{
 		"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read", "Cache Settings Read",
-		"Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read",
+		"Zone Transform Rules Read", "Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read",
 	}
 	operateZone := append(slices.Clone(readZone), "Cache Purge", "Cache Settings Write")
-	configureZone := append(slices.Clone(operateZone), "Zone Settings Write", "Response Compression Write")
+	configureZone := append(slices.Clone(operateZone),
+		"Zone Settings Write", "Response Compression Write", "Zone Transform Rules Write")
 	for _, tc := range []struct {
 		level         string
 		account, zone []string
@@ -499,6 +500,65 @@ func TestATokenMintedBeforeItsLevelGrewIsBroughtUpToIt(t *testing.T) {
 	}
 	if after, _ := w.sink.Held(sealed); after != value || w.record().Account.ID != id {
 		t.Error("bringing the token up replaced it or its value")
+	}
+}
+
+// A CONFIGURE TOKEN MINTED BEFORE THE LEVEL COVERED TRANSFORM RULES GAINS THEM
+// on the next pass with nobody acting: one update of the same token, which
+// keeps its name, expiry and value. Mutation: drop Zone Transform Rules Write
+// from Configure, and the rewritten token never gains it.
+func TestAConfigureTokenFromBeforeTransformRulesIsRewrittenInPlace(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, config.CloudflareLevelConfigure)
+	w.sync()
+	id := w.record().Account.ID
+	value, _ := w.sink.Held(sealed)
+	transform := []string{groupID("Zone Transform Rules Read"), groupID("Zone Transform Rules Write")}
+	holds := func(tok fakeToken, group string) bool {
+		return slices.ContainsFunc(tok.Policies, func(p cloudflare.Policy) bool {
+			return slices.ContainsFunc(p.PermissionGroups, func(g cloudflare.GroupRef) bool { return g.ID == group })
+		})
+	}
+	w.f.edit(id, func(tok *fakeToken) {
+		for i := range tok.Policies {
+			tok.Policies[i].PermissionGroups = slices.DeleteFunc(slices.Clone(tok.Policies[i].PermissionGroups),
+				func(g cloudflare.GroupRef) bool { return slices.Contains(transform, g.ID) })
+		}
+	})
+	before, _ := w.f.token(id)
+	if got := w.levelOf(before); got != "" {
+		t.Fatalf("a Configure token without the transform rule groups reads as %q", got)
+	}
+
+	writes := len(w.f.wrote())
+	if report := w.sync(); len(report.Findings) != 0 {
+		t.Fatalf("bringing the token up reported %+v", report.Findings)
+	}
+	if got := w.f.wrote()[writes:]; !slices.Equal(got, []string{"update " + id}) {
+		t.Fatalf("bringing the token up wrote %q, want its policy rewritten in place", got)
+	}
+	after, _ := w.f.token(id)
+	if got := w.levelOf(after); got != config.CloudflareLevelConfigure {
+		t.Errorf("the token reads as %q, want configure", got)
+	}
+	for _, group := range transform {
+		if !holds(after, group) {
+			t.Errorf("the rewritten token does not hold %s", group)
+		}
+	}
+	if after.Name != before.Name || after.ExpiresOn != before.ExpiresOn || after.Value != before.Value {
+		t.Errorf("the rewrite changed the token: name %q to %q, expiry %q to %q, value kept %t",
+			before.Name, after.Name, before.ExpiresOn, after.ExpiresOn, after.Value == before.Value)
+	}
+	if held, _ := w.sink.Held(sealed); held != value || w.record().Account.ID != id {
+		t.Error("bringing the token up replaced it or its sealed value")
+	}
+
+	// CONVERGED: the pass after writes nothing.
+	writes = len(w.f.wrote())
+	w.sync()
+	if got := w.f.wrote()[writes:]; len(got) != 0 {
+		t.Errorf("a converged pass wrote %q", got)
 	}
 }
 

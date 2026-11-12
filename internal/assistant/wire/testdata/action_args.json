@@ -274,10 +274,8 @@
     "properties": {
       "seat": {
         "type": "string",
-        "enum": [
-          "engineer",
-          "qa"
-        ],
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "maxLength": 64,
         "description": "The seat's handle. Leave it out for the company's own ceiling."
       },
       "period": {
@@ -300,7 +298,7 @@
     },
     "examples": [
       {
-        "seat": "engineer",
+        "seat": "seat-1",
         "period": "day",
         "ceiling": "1.5M"
       },
