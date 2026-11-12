@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -298,6 +299,16 @@ func (l *headLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writ
 
 func (l *headLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	return sealed, nil
+}
+
+func (l *headLog) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	body, ok := l.archives[row.Object.Key.String()]
+	if !ok {
+		return nil, executordomain.ErrUnreadable
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 // headReads is how many times a head was read off the log.

@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -278,6 +279,16 @@ func (l *conversationLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst
 
 func (l *conversationLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	return sealed, nil
+}
+
+func (l *conversationLog) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	body, ok := l.archives[row.Object.Key.String()]
+	if !ok {
+		return nil, errors.New("the store holds no such object")
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 // frozenReadOf is the read a turn's dispatch made of the conversation whose

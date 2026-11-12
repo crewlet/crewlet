@@ -1008,8 +1008,13 @@ type Coordinator struct {
 	// restore is [CoordinatorOptions.Restore], and relaunchWait how long a
 	// relaunch waits for the capture of the job it follows to be kept
 	// ([relaunchCaptureWait]) — a test's shorter.
+	//
+	// holdingsWait is how long a reading of what a cut-off session holds may
+	// take at most ([holdingsReadWait]): a field, as every wait of the
+	// coordinator is, for a case to set its own.
 	restore      SessionRestore
 	relaunchWait time.Duration
+	holdingsWait time.Duration
 	// endWait is how long a read waits for a job its script was asked to end
 	// ([JobEndWait]), and endPoll how often it asks whether it is over
 	// ([jobEndPoll]) — a test's shorter.
@@ -1206,6 +1211,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		keep:         opts.Keep,
 		restore:      opts.Restore,
 		relaunchWait: relaunchCaptureWait,
+		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
 		endPoll:      jobEndPoll,
 		spoolDir:     opts.SpoolDir,

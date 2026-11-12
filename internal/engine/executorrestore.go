@@ -95,6 +95,17 @@ func (r executorRestore) OpenSpooled(row executorkeep.TurnRow, sealed io.Reader)
 	return store.OpenSpooled(storedSession(row), sealed)
 }
 
+// Open streams the object row names out of the session store, opened against
+// the row as it streams ([executordomain.SessionStore.Open]): what a reading of
+// what the session holds reads, spooling nothing on this node's disk.
+func (r executorRestore) Open(ctx context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
+	store, err := r.engine.executorSessionStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(ctx, storedSession(row))
+}
+
 // storedSession is the row the session store fetches and opens by: whose turn
 // it is, which names the seal's associated data, and the object it names. The
 // store reads nothing else of a row.

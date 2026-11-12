@@ -143,7 +143,7 @@ import (
 // own, handed the brief written for one, and is logged with its reason
 // (`executor_session_not_continued`). The session is fetched SEALED onto this
 // node's disk and opened whole once before a byte of it reaches the box
-// ([executorkeep.TurnRowStore.Fetch]), so the decision is made before the
+// (executordomain.SessionStore.Fetch), so the decision is made before the
 // brief is, never part way through writing the archive into the box.
 
 // SessionRestore is what continuing a turn's kept session needs of the engine:
@@ -153,8 +153,9 @@ import (
 // `linearizable`, which waits for this node's copy, or asks a data node whose
 // copy has it), as the sandbox's view of it ([executorkeep.TurnRow]); and the
 // sealed object it names, fetched and opened through the domain's session
-// store. The row is the leaf's type because the sandbox links no state log:
-// the log's own row type carries its positions, and so its graph.
+// store, or streamed opened for a reading of what the session holds
+// (holdings.go). The row is the leaf's type because the sandbox links no state
+// log: the log's own row type carries its positions, and so its graph.
 type SessionRestore interface {
 	// Session reads one turn's row (executordomain.Reader.Session, made the
 	// sandbox's view by executordomain.Session.Kept), wrapping
@@ -162,11 +163,25 @@ type SessionRestore interface {
 	Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error)
 
 	// Fetch copies the sealed object row names into dst, checked against the
-	// row (executorkeep.TurnRowStore.Fetch), and OpenSpooled opens what it
+	// row (executordomain.SessionStore.Fetch), and OpenSpooled opens what it
 	// copied against the row's associated data
-	// (executorkeep.TurnRowStore.OpenSpooled).
+	// (executordomain.SessionStore.OpenSpooled).
 	Fetch(ctx context.Context, row executorkeep.TurnRow, dst io.Writer) error
 	OpenSpooled(row executorkeep.TurnRow, sealed io.Reader) (io.Reader, error)
+
+	// Open streams the sealed object row names, opened as it streams
+	// (executordomain.SessionStore.Open): checked against the row, and every
+	// chunk authenticated against the row's associated data before a byte of
+	// it is handed out. WHAT IT HANDS OUT IS PROVISIONAL UNTIL io.EOF, since
+	// a stream cut short is known to be cut only at the read past its last
+	// whole chunk: so it serves a reader that decides nothing until its
+	// stream has ended ([Coordinator.HoldingsOf]), never a restore, which
+	// writes what it reads into a box and so fetches the object first
+	// ([Coordinator.fetchSession]). A row naming no object, an object the
+	// store no longer holds and bytes not sealed for the row are unreadable,
+	// at the call or from the Read that reaches the fault. The caller closes
+	// what it answers.
+	Open(ctx context.Context, row executorkeep.TurnRow) (io.ReadCloser, error)
 }
 
 // ErrTurnRowNotFound is [SessionRestore.Session]'s answer for a turn the
