@@ -120,6 +120,12 @@ func claudeSubagentThread(session, agent string) (string, bool) {
 // claudeSubagentMeta is the member holding subagent agent's metadata, beside
 // its thread: `projects/crewlet/<session>/subagents/agent-<agent>.meta.json`.
 // False where [claudeSubagentThread] is.
+//
+// ONE JSON DOCUMENT WITH NO LINE BREAK, NEVER A THREAD: 2.1.310 writes it so
+// (every metadata measured ends in its closing brace with no break), and the
+// take's scrub keeps it so. Read through [threadReader] it is no line at all,
+// only a torn piece and io.EOF with no error, so its reader decodes it whole,
+// within a bound of its own, under [threadDecoding].
 func claudeSubagentMeta(session, agent string) (string, bool) {
 	if !sandbox.ValidSessionID(session) || !validClaudeAgent(agent) {
 		return "", false
@@ -210,7 +216,9 @@ func validClaudeAgent(agent string) bool {
 
 // threadReader reads one member of a Claude Code session a whole line at a
 // time, each line's head decoded ([threadReader.Next]). One goroutine reads
-// it.
+// it. A THREAD'S MEMBER: a subagent's metadata is one JSON document with no
+// line break ([claudeSubagentMeta]), which it reads as nothing but a torn
+// piece.
 type threadReader struct {
 	r *bufio.Reader
 	// maxBytes is the member's bound, and left what of it the lines read so
@@ -226,7 +234,8 @@ type threadReader struct {
 
 // newThreadReader reads r, one member, a whole line at a time: at most maxBytes
 // of it, the caller's figure ([threadPlainMax] for a whole thread, what is left
-// of an archive's budget for one member of it); at or below zero, no byte.
+// of an archive's budget for one member of it); at or below zero, no byte. The
+// member is a thread, never a subagent's metadata ([claudeSubagentMeta]).
 func newThreadReader(r io.Reader, maxBytes int64) *threadReader {
 	maxBytes = max(maxBytes, 0)
 	return &threadReader{r: bufio.NewReaderSize(threadSource{r}, lineChunkBytes), maxBytes: maxBytes, left: maxBytes}

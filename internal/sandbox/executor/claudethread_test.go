@@ -269,6 +269,12 @@ func ctNotification(parent, uuid string) string {
 		`"turnPosition":{"promptIndex":0,"turnIndex":2},"queueSkipAttachments":true,` + ctTail("2.1.310") + `}`
 }
 
+// ctMeta is a subagent's metadata, as 2.1.310 writes it: one JSON document, the
+// call that started the subagent named, and no line break after it.
+const ctMeta = `{"agentType":"general-purpose","isBuiltIn":true,"description":"the subagent's task",` +
+	`"toolUseId":"toolu_test_agent","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true,` +
+	`"finished":true}`
+
 // ctSkillHook is a skill's PostToolUse hook's success, as 2.1.118 records it:
 // its firing is the id of the call it followed.
 func ctSkillHook(parent, uuid string) string {
@@ -452,11 +458,14 @@ func ctTypes(lines []threadLine) []string {
 // member that shrank out with). Torn says the piece was there. A carriage
 // return ends no line: before a break it is the line's own, which JSON reads
 // as whitespace, and alone it breaks nothing. The member's end is the end:
-// asked again, the reader answers it again.
+// asked again, the reader answers it again. A subagent's metadata, one JSON
+// document with no break after it, is no line at all, only a torn piece: no
+// reader of a thread reads it through this one.
 //
 // Mutation: hand out the last piece with no break as a line, and the torn
-// record, the padding and a piece a carriage return ends each come back as a
-// line, or a line that is no record, where the member's end belongs.
+// record, the padding, a piece a carriage return ends and a subagent's
+// metadata each come back as a line, or a line that is no record, where the
+// member's end belongs.
 func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -474,6 +483,7 @@ func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 		"records each ended by CRLF":                {text: ctEnqueue + "\r\n" + brief + "\r\n", types: both},
 		"a record ended by a carriage return alone": {text: whole + reply + "\r", types: both, torn: true},
 		"an empty member":                           {text: ""},
+		"a subagent's metadata":                     {text: ctMeta, torn: true},
 	} {
 		got := ctRead(tc.text, threadPlainMax)
 		for _, broken := range got.broken {
