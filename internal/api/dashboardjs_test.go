@@ -2234,8 +2234,8 @@ const (
 	// delegated rule's required checks with Settings › Delegated decisions
 	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
 	// all script): 5745 KiB. Company › Atlas on kit 0.122.0 took it to
-	// 5823.8 KiB (5,963,607 bytes, +81,593: script +73,081, of which the atlas
-	// chunk, its screens and the map code, is 68,130; the sheets +8,512, the
+	// 5823.8 KiB (5,963,567 bytes, +81,553: script +73,041, of which the atlas
+	// chunk, its screens and the map code, is 68,090; the sheets +8,512, the
 	// kit's GraphCanvas rules in the one sheet and the atlas screens' own
 	// 1,083): 5824 KiB.
 	treeBudget = 5<<20 + 704<<10
