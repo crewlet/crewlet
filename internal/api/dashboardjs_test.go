@@ -1362,7 +1362,14 @@ const (
 	// and one storage key, +207 over the entry and its shared chunks, and the
 	// one sheet the escalation note's rules, +44; every screen's module of it
 	// is lazy. So it moved to 402 KiB, 2.20 seconds.
-	initialBudget = 402 << 10
+	// Kit 0.122.0 and Company › Atlas took it to 403.0 KiB, past that by
+	// bytes (about +1,460 gzipped): the one sheet +937 (the kit's GraphCanvas
+	// rules, which ride it by rule while the map's code is the atlas chunk's),
+	// the kit's shared chunks +430 (the by-line verbs and the six glyphs'
+	// registry names) and the entry +79 (the Atlas row, its routes, crumb and
+	// peek kind). Every screen's module of it is lazy. So it moved to 404 KiB,
+	// 2.21 seconds.
+	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2226,8 +2233,12 @@ const (
 	// script): 5744 KiB. Atlas named among the apps People grants, and each
 	// delegated rule's required checks with Settings › Delegated decisions
 	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
-	// all script): 5745 KiB.
-	treeBudget = 5<<20 + 625<<10
+	// all script): 5745 KiB. Company › Atlas on kit 0.122.0 took it to
+	// 5823.8 KiB (5,963,607 bytes, +81,593: script +73,081, of which the atlas
+	// chunk, its screens and the map code, is 68,130; the sheets +8,512, the
+	// kit's GraphCanvas rules in the one sheet and the atlas screens' own
+	// 1,083): 5824 KiB.
+	treeBudget = 5<<20 + 704<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
