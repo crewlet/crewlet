@@ -235,7 +235,13 @@ counts, and so does commenting on a Worklet item, while a diary write
 does not. The read side of that test is `mcp.ReadOnlyProven`, which exists
 beside `mcp.WritesToSharedSurface` precisely because the two questions fail
 in opposite directions: reusing the worker guard's answer here would read
-every under-annotated write tool as having reached nobody.
+every under-annotated write tool as having reached nobody. It counts a call
+to an MCP tool that no hint marks as a read or as a write, from its server
+or from a `tool_annotations` override, without knowing that it wrote,
+though, so no correction tells a turn that its work landed somewhere else
+on such a call alone; a call to a tool marked `read_only: false` or
+`destructive: true`, by its server or by an override, is a write the engine
+knows of.
 
 ### `open_world` is a tri-state, and unset is not `false`
 

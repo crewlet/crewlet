@@ -315,6 +315,58 @@ func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
 	}
 }
 
+// A REFUSAL CLAIMS A WRITE ELSEWHERE ONLY WHERE THE ENGINE KNOWS OF ONE. A
+// turn waiting on the tracker that only searched through an MCP tool that no
+// hint marks as a read or as a write, which the delivery check counts as a
+// delivery to that server, is not told "a call that reached somewhere else":
+// it is told what it called and that none of it reached the person waiting.
+//
+// Mutation: key the elsewhere case on turn.Delivered again, and the search is
+// told it reached somewhere else.
+func TestACitationRefusalDoesNotCallAPresumedWriteOne(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue:      []string{"comment_on_work_item", "jira_search_issues"},
+		Deliveries:     map[string]string{"comment_on_work_item": "work", "jira_search_issues": "jira"},
+		PresumedWrites: []string{"jira_search_issues"},
+	}
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["comment_on_work_item"]}`
+	refused := mustErr(t, decodeWork(turn.ToolReply("work"),
+		func() []ledger.Call { return []ledger.Call{{Name: "jira_search_issues"}} },
+		func() turn.Surface { return s }), claim)
+	if !strings.HasPrefix(refused.Error(), NotDeliveredOn("work")) ||
+		!strings.Contains(refused.Error(), `called "jira_search_issues"`) ||
+		strings.Contains(refused.Error(), "somewhere else") {
+		t.Errorf("refusal = %v, want the search named and no write elsewhere claimed", refused)
+	}
+}
+
+// A FAILED POST ELSEWHERE IS NO WRITE ELSEWHERE AT SUBMISSION EITHER. A turn
+// waiting on the tracker whose one call was a chat post that failed reached
+// nobody, so its refusal says no call in this turn has reached anybody, never
+// that a call reached somewhere else.
+//
+// Mutation: count a failed call in turn.KnownDelivered, and the failed post is
+// told it reached somewhere else.
+func TestACitationRefusalDoesNotCallAFailedPostAWriteElsewhere(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue: []string{"comment_on_work_item", "mattermost_post_message"},
+		Deliveries: map[string]string{"comment_on_work_item": "work",
+			"mattermost_post_message": "mattermost"},
+	}
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["comment_on_work_item"]}`
+	refused := mustErr(t, decodeWork(turn.ToolReply("work"),
+		func() []ledger.Call { return []ledger.Call{{Name: "mattermost_post_message", Failed: true}} },
+		func() turn.Surface { return s }), claim)
+	if !strings.HasPrefix(refused.Error(), NotDeliveredOn("work")) ||
+		!strings.Contains(refused.Error(), "no call in this turn has reached anybody") ||
+		strings.Contains(refused.Error(), "somewhere else") {
+		t.Errorf("refusal = %v, want it to say no call reached anybody and claim no write elsewhere",
+			refused)
+	}
+}
+
 // A REFUSAL THAT FINDS NO DELIVERY SAYS WHAT THE TURN DID CALL. A turn that
 // asked a colleague or reacted, and then claimed the work delivered, was told
 // "no call in this turn has reached anybody", or that no tool acting outside

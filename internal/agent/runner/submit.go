@@ -276,11 +276,14 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 		named := on != "" && s.Reaches(on)
 		acted := turn.ActedWith(calls, s)
 		switch {
-		case named && turn.Delivered(calls, s):
+		case named && turn.KnownDelivered(calls, s):
 			// NAMED WHEN IT IS KNOWN. "No tool that acts outside the engine
 			// was called" reads as plainly false to a model looking at its
 			// own successful write to another surface, and a refusal a model
 			// does not believe is one it argues with rather than acts on.
+			// Known, not presumed ([turn.KnownDelivered]): a turn that only
+			// searched through a tool that no hint marks as a read or as a
+			// write is told what it called by the next case instead.
 			return fmt.Errorf("%s — a call that reached somewhere else does not "+
 				"answer the person waiting. %s Do that before reporting the work "+
 				"delivered", NotDeliveredOn(on), remedy)

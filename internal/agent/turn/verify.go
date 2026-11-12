@@ -257,6 +257,25 @@ func Delivered(calls []ledger.Call, s Surface) bool {
 	return false
 }
 
+// KnownDelivered reports whether this record shows a delivery the engine
+// KNOWS of: a successful call that delivers ([Deliverable]) other than by
+// presumption alone ([Surface.PresumedWrites]).
+//
+// FOR SAYING WHERE A TURN WROTE, NEVER FOR JUDGING WHETHER IT DELIVERED. The
+// delivery check counts a presumed write, and must; but a correction that
+// tells a turn it filed its work somewhere else, or reached somebody, says so
+// only of a write it knows of. Told so after it only searched through a tool
+// that no hint marks as a read or as a write, a model goes looking for a
+// write it never made and argues with the correction.
+func KnownDelivered(calls []ledger.Call, s Surface) bool {
+	for _, c := range calls {
+		if !c.Failed && Deliverable(c.Name, s) && !slices.Contains(s.PresumedWrites, c.Name) {
+			return true
+		}
+	}
+	return false
+}
+
 // DeliveredTo reports whether this turn's record shows a call that reached the
 // party who is waiting, ON THE SURFACE THEY ARE WAITING ON.
 //
@@ -526,9 +545,10 @@ func actsOutside(c ledger.Call, s Surface) bool {
 // TWO KINDS OF CORRECTION TURN ON AN ACT: the `no_action` correction, for any
 // act, a delivery included, which says what the turn did through
 // [ActedAccount]; and each correction that finds the turn acted but delivered
-// nothing, which names the tools through this. Having delivered nothing, that
-// turn made no call the engine only presumes wrote ([Surface.PresumedWrites]):
-// every such call counts as a delivery.
+// nothing the engine knows of ([KnownDelivered]), which names the tools
+// through this. Those say only that the turn called them, which is as true of
+// a call the engine only presumes wrote ([Surface.PresumedWrites]) as of an
+// ask.
 //
 // A SENTENCE THAT SAYS NOTHING WAS DONE MUST BE TRUE. "No tool that acts
 // outside the engine was called", said to a turn that asked a colleague, reads
@@ -709,31 +729,36 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 		on := reply.Surface
 		named := on != "" && s.Reaches(on)
 		switch {
-		case named && Delivered(record, s):
+		case named && KnownDelivered(record, s):
 			// NAMED WHERE IT IS KNOWN, exactly as [OverrideDone] and the
 			// submission check do. A turn that DID write somewhere is told
 			// "no tool was called", reads that as false against its own
 			// record, and argues with the correction instead of acting on
-			// it. Keyed on a DELIVERY elsewhere, never on an act: "filing
-			// the work somewhere else" said to a turn that only asked a
-			// colleague is false too.
+			// it. Keyed on a delivery elsewhere the engine KNOWS of, never
+			// on an act or a presumed write: "filing the work somewhere
+			// else" said to a turn that only asked a colleague, or only
+			// searched through a tool that no hint marks as a read or as a
+			// write, is false too.
 			return Verdict{Correction: "You reported the work as delivered, and you " +
 				"did act — but nothing was delivered on `" + on + "`, which is where " +
 				"this was asked. Filing the work somewhere else does not tell the " +
 				"person waiting. " + Remedy(s, reply) + " If you cannot, report " +
 				"honestly what is blocking you."}
 		case acted:
-			// ACTED, AND DELIVERED NOTHING: an ask, a reaction, a publish.
-			// Told "no tool that acts outside the engine was called", the
-			// model reads that as false against its own record.
+			// ACTED, AND DELIVERED NOTHING THE ENGINE KNOWS OF: an ask, a
+			// reaction, a publish, or a call it only presumes wrote,
+			// elsewhere. Told "no tool that acts outside the engine was
+			// called", the model reads that as false against its own record;
+			// told it "did act" after only a search, it does the same. So it
+			// is told what it called, which is true of both.
 			where := ""
 			if named {
 				where = " on `" + on + "`, which is where this was asked"
 			}
-			return Verdict{Correction: "You reported the work as delivered, and you did act — " +
-				"you called " + ActedWith(record, s) + " — but none of it delivered anything to the " +
-				"person waiting" + where + ". " + Remedy(s, reply) + " If you cannot, report " +
-				"honestly what is blocking you."}
+			return Verdict{Correction: "You reported the work as delivered, and you called " +
+				ActedWith(record, s) + ", but none of it delivered anything to the person waiting" +
+				where + ". " + Remedy(s, reply) + " If you cannot, report honestly what is " +
+				"blocking you."}
 		}
 		return Verdict{Correction: "You reported the work as delivered, but no tool " +
 			"that acts outside the engine was called in this turn: writing about an " +
@@ -759,7 +784,8 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 // Judged on the TURN's record — earlier is the rounds already closed — for
 // the reason [Check] is: an answer the first round gave is still an answer
 // when the reviewer approves the third. Where the turn called something that
-// acts without delivering, the correction names it ([ActedWith]).
+// acts without delivering, the correction names it ([ActedWith]), and it says
+// the turn reached somebody only of a delivery it knows of ([KnownDelivered]).
 func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 ) (override bool, correction string) {
 	record := w.Record(earlier)
@@ -773,7 +799,7 @@ func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 	named := on != "" && s.Reaches(on)
 	acted := ActedWith(record, s)
 	switch {
-	case named && Delivered(record, s):
+	case named && KnownDelivered(record, s):
 		// NAMED, because this is the case the flat check used to pass. The
 		// turn DID reach somebody — just not the person waiting — so a
 		// correction saying "no tool was called" would read as false to a
@@ -784,7 +810,9 @@ func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 			Remedy(s, reply)
 	case named && acted != "":
 		// NAMED WHAT IT DID CALL: an ask, a reaction or a publish reached
-		// somebody, just nobody waiting there.
+		// somebody, just nobody waiting there — or a call the engine only
+		// presumes wrote did, if it wrote at all, which is why this says
+		// only that the turn called it.
 		return true, "Nothing in this turn reached the person waiting for it: it called " + acted +
 			", but nothing was delivered on `" + on + "`, which is where this was asked. " +
 			Remedy(s, reply)

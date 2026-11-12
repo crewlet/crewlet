@@ -181,8 +181,10 @@ type Surface struct {
 	// nothing says its call changed anything.
 	//
 	// It exists for the correction that says what a turn did
-	// ([ActedAccount]): told it "acted" after only searching through such a
-	// tool, a model reads the correction as false against its own call.
+	// ([ActedAccount]) — told it "acted" after only searching through such a
+	// tool, a model reads the correction as false against its own call — and
+	// for the corrections that say a turn wrote somewhere else or reached
+	// somebody, which never say so of a presumed write ([KnownDelivered]).
 	PresumedWrites []string
 	// Discoverable is every tool the phase reaches only by DISCOVERING it
 	// — an MCP server's, which `list_mcp_server_tools` lists and

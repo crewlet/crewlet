@@ -911,3 +911,76 @@ func TestOverrideDoneClaimsAWriteElsewhereOnlyWhenThereWasOne(t *testing.T) {
 		}
 	}
 }
+
+// A WRITE THE ENGINE ONLY PRESUMES IS NOT A WRITE ELSEWHERE. A call to an MCP
+// tool that no hint marks as a read or as a write counts as a delivery to its
+// server, and must; but a turn waiting on the tracker that only searched Jira
+// through one, told it "did act" and filed its work somewhere else, or that it
+// reached somebody, goes looking for a write it never made. It is told what it
+// called and that nothing reached the person waiting, and a write elsewhere
+// the engine knows of is still called one.
+//
+// Mutation: key the elsewhere cases on Delivered again, and the search is told
+// it filed the work somewhere else and reached somebody.
+func TestAPresumedWriteElsewhereIsNotCalledOne(t *testing.T) {
+	t.Parallel()
+	s := trackerSurface()
+	s.Catalogue = append(s.Catalogue, "jira_search_issues")
+	s.Deliveries["jira_search_issues"] = "jira"
+	s.PresumedWrites = []string{"jira_search_issues"}
+	asked := turn.ToolReply("work")
+
+	searched := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "looked it up",
+		Calls: []ledger.Call{{Name: "jira_search_issues"}}}
+	v := turn.Check(searched, nil, asked, s)
+	if !strings.Contains(v.Correction, `called "jira_search_issues"`) ||
+		strings.Contains(v.Correction, "somewhere else") || strings.Contains(v.Correction, "did act") {
+		t.Errorf("correction = %q, want the search named and no write elsewhere claimed", v.Correction)
+	}
+	if _, c := turn.OverrideDone(searched, nil, asked, s); !strings.Contains(c, `called "jira_search_issues"`) ||
+		strings.Contains(c, "reached somebody") {
+		t.Errorf("correction = %q, want the search named and nobody said to be reached", c)
+	}
+
+	posted := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "posted it",
+		Calls: []ledger.Call{{Name: "mattermost_post_message"}}}
+	if v := turn.Check(posted, nil, asked, s); !strings.Contains(v.Correction, "Filing the work somewhere else") {
+		t.Errorf("correction = %q, want a write elsewhere the engine knows of called one", v.Correction)
+	}
+	if _, c := turn.OverrideDone(posted, nil, asked, s); !strings.Contains(c, "reached somebody") {
+		t.Errorf("correction = %q, want a write elsewhere the engine knows of called one", c)
+	}
+}
+
+// A FAILED POST ELSEWHERE IS NO WRITE ELSEWHERE. A turn waiting on the tracker
+// whose one call was a chat post that FAILED reached nobody, so no correction
+// tells it that it did act and filed its work somewhere else, or that it
+// reached somebody: a write elsewhere the engine knows of is a successful
+// call's, as a delivery is. A retry that succeeded is one.
+//
+// Mutation: count a failed call in KnownDelivered, and the failed post is told
+// it did act, filed the work somewhere else and reached somebody.
+func TestAFailedPostElsewhereIsNoWriteElsewhere(t *testing.T) {
+	t.Parallel()
+	s := trackerSurface()
+	asked := turn.ToolReply("work")
+	failed := []ledger.Call{{Name: "mattermost_post_message", Failed: true}}
+	if turn.KnownDelivered(failed, s) {
+		t.Error("a failed chat post counted as a write elsewhere the engine knows of")
+	}
+	if !turn.KnownDelivered([]ledger.Call{{Name: "mattermost_post_message", Failed: true},
+		{Name: "mattermost_post_message"}}, s) {
+		t.Error("a retry that succeeded did not count")
+	}
+
+	posted := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "posted it", Calls: failed}
+	if v := turn.Check(posted, nil, asked, s); v.Correction == "" ||
+		strings.Contains(v.Correction, "somewhere else") || strings.Contains(v.Correction, "did act") {
+		t.Errorf("Check = %+v, want a correction that claims no act and no write elsewhere", v)
+	}
+	if override, c := turn.OverrideDone(posted, nil, asked, s); !override ||
+		strings.Contains(c, "reached somebody") {
+		t.Errorf("override = %v, correction = %q; want the done overturned without saying "+
+			"the turn reached somebody", override, c)
+	}
+}
