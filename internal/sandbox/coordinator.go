@@ -1968,7 +1968,8 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"collection is retried until it has failed for the poll's give-up window")
 	// COUNTED: the claim did not move the seat's holding count — running and
 	// resumed both hold it — and handing it back to running leaves it there.
-	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, failure{collectFailed: now}, nil); err != nil {
+	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, failure{collectFailed: now}, nil,
+		BudgetWindow{}); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
 		// redelivered completion would find nothing to claim.
@@ -3919,7 +3920,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			failed.resumeFailed = now
 		}
 		c.uncountRun(run.AgentHandle, StatusResumed)
-		if unclaimErr := c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failed, nil); unclaimErr != nil {
+		// AND THE WINDOW AN ANSWER'S RELAUNCH WAS REFUSED BELOW ITS FLOOR IN,
+		// onto the job's record ([Release.RelaunchRefusedIn]): the answer's
+		// wait is its series', in this node's memory, but the relaunch its
+		// next attempt makes, here or on the seat's next holder, reads the
+		// row, and waits for its brief's room no longer than that window.
+		if unclaimErr := c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failed, nil,
+			refusal.Window); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent
@@ -4330,11 +4337,14 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // since running and resumed both hold it. A resume's failure gives the claim's
 // count back first and hands back through [Coordinator.unclaimAt].
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, detail string) error {
-	return c.unclaimAt(ctx, run, true, detail, failure{}, nil)
+	return c.unclaimAt(ctx, run, true, detail, failure{}, nil, BudgetWindow{})
 }
 
 // unclaimHeld hands back a claim whose resume the seat's conditions refused,
-// holding the run's resume until refusal lifts ([Release.Hold]).
+// holding the run's resume until refusal lifts ([Release.Hold]), and counting
+// onto the job's record the window its relaunch was refused below its floor
+// in, where the refusal names one ([Release.RelaunchRefusedIn]): the relaunch
+// the hold's lifting lets the turn try again reads it.
 //
 // A REFUSAL ONLY AN EVENT LIFTS is held until [answerWaitBackstop], the bound
 // a recorded answer's series waits for the same signal: the signal lifts it
@@ -4349,17 +4359,19 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 		"reason", refusal.Reason, "until", refusal.Until.UTC().Format(time.RFC3339),
 		"detail", "the job stays collected in its paused box and its seat held behind it; "+
 			"its completion is announced again when the refusal lifts")
-	return c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failure{}, &refusal)
+	return c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failure{}, &refusal, refusal.Window)
 }
 
 // unclaimAt is [Coordinator.unclaim] for a claim handed back because the
 // collection it was taken for, or the resume after it, failed: failed is what
 // the release counts onto the job's record, and its zero value is any other
 // hand-back. counted is whether the seat still counts the run, so the release
-// counts it again only where it does not; and hold, where set, holds the
-// run's resume back ([Release.Hold]).
+// counts it again only where it does not; hold, where set, holds the run's
+// resume back ([Release.Hold]); and refusedIn, where it names a window, is the
+// one the claim's resume had its relaunch refused below its floor in, which the
+// release counts onto the job's record ([Release.RelaunchRefusedIn]).
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
-	failed failure, hold *Refusal,
+	failed failure, hold *Refusal, refusedIn BudgetWindow,
 ) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
@@ -4368,6 +4380,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
 		Published: run.Launch.Published, CollectFailedAt: failed.collectFailed, ResumeFailedAt: failed.resumeFailed,
 		Collected: run.Collected, CollectedAt: run.Launch.CollectedAt, Fence: fenceOf(run), Hold: hold,
+		RelaunchRefusedIn: refusedIn,
 	})
 	switch {
 	case err != nil:

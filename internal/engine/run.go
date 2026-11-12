@@ -364,6 +364,11 @@ type Engine struct {
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
 
+	// floorWaits is every seat whose launch this node parked below its
+	// floor, with the window the park waited on, for the seat's next launch
+	// to take. See budgetpark.go.
+	floorWaits floorWaits
+
 	// providerParks is every seat inbox this node holds because every model
 	// of the seat's chain is limited, each with the alarm that lifts it for
 	// a probe when the first is tried again. See providerpark.go.
@@ -3921,7 +3926,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
 	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told, nil)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told, nil, nil)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,

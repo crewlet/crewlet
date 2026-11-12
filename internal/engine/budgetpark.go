@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,21 +93,105 @@ var budgetParkSpec = parkSpec{
 
 // budgetParks is every seat inbox this node holds for want of budget, by the
 // seat's id, each with the ceilings it was decided under, which a change of
-// the company releases it on. The floor it waits for room for — the static
-// floor, or the larger one a launch that continues its conversation's session
-// was refused below — is the refusal's, read again on the delivery the park
-// hands back, and no reader asks it of the park: an ask waiting behind the park
-// is owed for as long as the park holds, which its holder answers
-// (parkheld.go).
+// the company releases it on. The floor it waits for room for (the static
+// floor, or the one a launch was refused below: its brief beside the static
+// floor, a continued session's context beside its brief, or, where its fresh
+// brief's floor is held, the static floor or the room below it) is the
+// refusal's, read again on the delivery the park hands back, and no reader asks
+// it of the park: an ask waiting behind the park is owed for as long as the
+// park holds, which its holder answers (parkheld.go).
 type budgetParks = seatParks[budgetBasis]
+
+// floorWaits is every seat this node parked on a launch's refusal below its
+// floor, by the seat's id, with the window the park waited on
+// ([Engine.budgetPark]): what the seat's next dispatched launch takes to know
+// that its turn waited a turnover for that floor
+// ([agentLauncher.continuedFloor]), and so is held, in a later window, to no
+// more than the floor a launch with no brief needs.
+//
+// WAITED FOR WITHOUT A BOUND, A FLOOR ABOVE THE STATIC ONE HELD A DELIVERY FOR
+// EVER. A launch's brief, or a session it continues, can take its floor within
+// the most room a window can leave it and past what a busy window leaves at its
+// read, the company's other seats spending there first after every turnover:
+// refused, parked and refused again in every window, the delivery never ran,
+// where before the brief was counted a fresh brief's or an unmeasured
+// session's launch went out on the static floor, and a measured session's,
+// whose floor counted its brief already, had that band then too. So it waits
+// one turnover, and no more.
+//
+// WHO HAS TO AGREE ON IT: this node alone, as the park does. It rides the park,
+// and the seat's next launch is this node's: the park holds the seat's whole
+// inbox, and its release hands the seat's mail back in order, the delivery it
+// deferred at its head. A seat that moves takes nothing of it to its next
+// holder, which may hold the launch one window more, still bounded: refused
+// there, it is parked there, and its next try there takes the record that park
+// writes. TAKEN, never read, by the seat's next launch, whichever delivery's it
+// is: a record left behind would hold a later delivery's launch, which never
+// waited, below its floor. And dropped with the seat's other parks when this
+// node lets the seat go ([Engine.forgetBudgetPark]).
+type floorWaits struct {
+	mu    sync.Mutex
+	seats map[uuid.UUID]sandbox.BudgetWindow
+}
+
+// parked records that seat's launch was refused below its floor and its park
+// waits on window w, replacing what an earlier park recorded.
+func (f *floorWaits) parked(seat uuid.UUID, w sandbox.BudgetWindow) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.seats == nil {
+		f.seats = map[uuid.UUID]sandbox.BudgetWindow{}
+	}
+	f.seats[seat] = w
+}
+
+// take is the window seat's last park on a launch's floor waited on, the zero
+// window where none is recorded, and forgets it.
+func (f *floorWaits) take(seat uuid.UUID) sandbox.BudgetWindow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w := f.seats[seat]
+	delete(f.seats, seat)
+	return w
+}
+
+// forget drops what seat's parks recorded, for a seat this node lets go of.
+func (f *floorWaits) forget(seat uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.seats, seat)
+}
+
+// launchRefusedIn is the window r names where refused is an executor launch's
+// refusal below its floor ([floorRefusal]), the zero window for every other
+// refusal: a round's, or none. What a launch's next try reads to know it has
+// waited out the window it was refused in ([floorWaits],
+// [sandbox.Refusal.Window]).
+func launchRefusedIn(refused error, r refusal) sandbox.BudgetWindow {
+	var below *floorRefusal
+	if !errors.As(refused, &below) {
+		return sandbox.BudgetWindow{}
+	}
+	return sandbox.BudgetWindow{Period: r.Window.Period, Label: r.Window.Label}
+}
 
 // budgetPark is the dispatcher's budget stage: it parks handle's seat when one
 // of its capped windows is refusing, or leaves less room than the delivery's
 // launch needs, reporting the deferral reason. refused is the budget refusal the
 // delivery's turn met, nil before any turn ran: the floor the park waits for
-// room for is the one that launch was refused below ([floorOf]) — a first
-// launch that continues its conversation's session needs that session's context
-// beside its brief — and the static floor otherwise.
+// room for is the one that launch was refused below ([floorOf]): its brief
+// beside the static floor; for a first launch that continues its
+// conversation's session, that session's context beside its brief; and, where
+// its fresh brief's floor is held, the static floor or the room below it
+// ([launchFloor.tokens]). It is the static floor where no launch was refused.
+//
+// AND WHERE A LAUNCH WAS, the window the park waits on is recorded for the
+// seat's next launch ([floorWaits]), which takes it in a later window and is
+// held there to no more than the floor a launch with no brief needs: a floor
+// within the most room a window can leave the launch is still past what a busy
+// company's window leaves at the launch's read, and waited for again in every
+// window, it went out in none. So the launch waits one turnover for it, and
+// no more.
 //
 // What it does NOT do is decide an unknown: a counter that cannot be read
 // lets the delivery through, logged, because the turn's own meter is the gate
@@ -143,6 +229,12 @@ func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (
 		"the window turned over"); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
+	// THE WINDOW A LAUNCH WAS REFUSED BELOW ITS FLOOR IN, recorded with the
+	// park and before the seat is asked for below, for the race that ask
+	// closes for the park: a release that finds the seat gone forgets both.
+	if w := launchRefusedIn(refused, r); w.Valid() {
+		e.floorWaits.parked(seat, w)
+	}
 	reason := refusingReason(r)
 	if refusing {
 		// THE PARK IS THE GATE SAYING NO, and it is recorded as the
@@ -172,6 +264,7 @@ func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (
 	// it held is one that release will forget ([seatParks.forget]).
 	if _, held := e.launchFence(handle); !held {
 		e.releaseBudgetPark(ctx, seat, seatReleasedHere)
+		e.floorWaits.forget(seat)
 		return reason, true, nil
 	}
 	if !budgetBasisOf(e.Company(), seat).equal(m.basis) {
@@ -197,10 +290,13 @@ func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (
 // as both its halves are.
 //
 // THE FLOOR IS THE CALLER'S: the static one for a delivery no launch has been
-// refused for yet, and the one a launch was refused below where one was — a
-// turn's first launch that continues its conversation's session needs that
-// session's context beside its brief ([launchFloor]), and a window with room
-// for the static floor alone holds that launch back as surely as a full one.
+// refused for yet, and the one a launch was refused below where one was
+// ([launchFloor]). A turn's first launch needs its brief beside the static
+// floor, and one that continues its conversation's session that session's
+// context beside its brief, and a window with room for the static floor alone
+// holds either back as surely as a full one; one whose fresh brief's floor is
+// held is refused below the static floor itself, or below the room its own
+// turn's spend left under it, and parks on that.
 func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusing, starved bool, err error) {
 	r, refusing, err = m.refusing(ctx)
 	if err == nil && !refusing {
@@ -214,7 +310,8 @@ func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusi
 // needs ([meter.starved]) — the two conditions the budget stage parks a seat's
 // mail on — as a refusal that lifts when that window turns over. False where
 // neither holds, and where the counters cannot be read, for the reason
-// [Engine.budgetPark] gives.
+// [Engine.budgetPark] gives. refused is the budget refusal the resume met, nil
+// for a gate asked before any launch ([Engine.seatCannotRun]).
 //
 // FOR A RESUME THAT WILL LAUNCH, which has no mail to park, and so waits for
 // the window's end rather than parks; a delivery that arrives meanwhile takes
@@ -225,28 +322,38 @@ func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusi
 // on it ([sandbox.ErrResumeHeld]). A completion's gate asks it nothing: the
 // job is collected and charged first.
 //
-// AGAINST floor, the room the launch it holds back needs ([launchFloor]): a
-// relaunch that continues its turn's session needs the session's context
-// beside its brief, and held to the static floor it was found not starved,
-// released, and refused at its launch again.
-func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string, floor launchFloor) (sandbox.Refusal, bool) {
+// AGAINST THE FLOOR THE LAUNCH IT HOLDS BACK WAS REFUSED BELOW ([floorOf]): a
+// relaunch's brief beside the static floor, the context of the turn's session
+// it continues beside its brief, or, where its fresh brief's floor is held,
+// the static floor or the room below it; the static floor where no launch was
+// refused. Held to the static floor alone, a resume refused below a larger
+// floor was found not starved, released, and refused at its launch again.
+//
+// AND NAMING THE WINDOW IT WAITS ON where a launch was refused
+// ([sandbox.Refusal.Window]), which the release counts onto the job's record
+// for the turn's next relaunch, held in a later window to no more than the
+// floor a launch with no brief needs, as a dispatch's next launch is through
+// its park ([floorWaits]).
+func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string, refused error) (sandbox.Refusal, bool) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		return sandbox.Refusal{}, false
 	}
+	floor := floorOf(c, refused)
 	r, refusing, err := m.refusing(ctx)
 	if err != nil {
 		return sandbox.Refusal{}, false
 	}
 	if refusing {
-		return sandbox.Refusal{Condition: waitBudget, Reason: refusingReason(r), Until: r.Window.End}, true
+		return sandbox.Refusal{Condition: waitBudget, Reason: refusingReason(r), Until: r.Window.End,
+			Window: launchRefusedIn(refused, r)}, true
 	}
 	r, starved, err := m.starved(ctx, floor.tokens())
 	if err != nil || !starved {
 		return sandbox.Refusal{}, false
 	}
 	return sandbox.Refusal{Condition: waitBudget, Reason: starvedReason(r, floor),
-		Until: r.Window.End}, true
+		Until: r.Window.End, Window: launchRefusedIn(refused, r)}, true
 }
 
 // refusingReason is the reason a seat waits on a window r with no room left:
@@ -259,15 +366,27 @@ func refusingReason(r refusal) string {
 
 // starvedReason is the reason a seat waits on a window r whose room is below
 // floor, the tokens an executor launch needs ([launchFloor]); see
-// [refusingReason]. A floor made of a continued session's context says so, in
-// the figures it is made of.
+// [refusingReason]. A floor made of a continued session's context, or of a
+// brief beside the static floor, says so in the figures it is made of, and a
+// held one says why and where it is held: past the most room the seat's and
+// the company's capped windows can leave the launch, and what that room is made
+// of, or a floor held after its launch was refused below its floor in a window
+// that has turned over since ([launchFloor.heldFor]).
 func starvedReason(r refusal, floor launchFloor) string {
 	need := fmt.Sprintf("the %d an executor launch needs (turn_engine.executor_min_budget_tokens)",
 		floor.tokens())
-	if floor.context > 0 {
+	switch {
+	case floor.context > 0:
 		need = fmt.Sprintf("the %d an executor launch that continues its session needs (its last "+
 			"request carried %d tokens and its brief about %d; turn_engine.executor_min_budget_tokens "+
 			"is %d)", floor.tokens(), floor.context, floor.brief, floor.static)
+	case floor.held():
+		need = fmt.Sprintf("the %d an executor launch needs (its brief about %d beside "+
+			"turn_engine.executor_min_budget_tokens, %d, is %s, so it is held at %s)", floor.tokens(),
+			floor.brief, floor.static, floor.heldFor(), floor.heldAt())
+	case floor.brief > 0:
+		need = fmt.Sprintf("the %d an executor launch needs (its brief about %d beside "+
+			"turn_engine.executor_min_budget_tokens, %d)", floor.tokens(), floor.brief, floor.static)
 	}
 	return fmt.Sprintf("budget: %s window %s leaves %d tokens, below %s; resets %s",
 		r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), need, rfc3339(r.Window.End))
@@ -299,9 +418,16 @@ func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
 	}
 }
 
-// forgetBudgetPark drops a released seat's park without resuming anything;
-// see [seatParks.forget].
+// forgetBudgetPark drops a released seat's park without resuming anything
+// ([seatParks.forget]), and what its parks recorded of a launch's floor for its
+// next launch here ([floorWaits]): the seat's next holder decides its own.
+//
+// THE RECORD FIRST, before the park's hold is lifted: a lifted hold may hand
+// the seat's mail to a handler at once (the in-memory queue drains into it
+// synchronously), and a launch there would take the record the release is
+// dropping.
 func (e *Engine) forgetBudgetPark(ctx context.Context, seat uuid.UUID) {
+	e.floorWaits.forget(seat)
 	e.budgetParks.forget(ctx, e, budgetParkSpec, seat)
 }
 

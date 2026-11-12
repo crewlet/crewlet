@@ -3348,12 +3348,17 @@ gate that reads the room left *before* it starts:
   collected, and they reach both the seat's counter and the company's in the
   windows the launch is collected in. A launch that takes a counter past its cap is logged as
   `sandbox_spend_over_budget`. Its gate is
-  `turn_engine.executor_min_budget_tokens` (default 25 000): every launch, a
-  turn's first and each relaunch, is refused while a capped window of the seat
-  or the company has less than that left, and the seat
+  `turn_engine.executor_min_budget_tokens` (default 25 000), with the
+  launch's brief counted beside it: every launch, a turn's first and each
+  relaunch, is refused while a capped window of the seat or the company has
+  less than that left, and the seat
   [parks](../concepts/agent-runtime.md#the-budget-park) until the window turns
   over or a ceiling moves; a ceiling below the floor is refused when the
-  document is validated.
+  document is validated, and a launch whose brief takes it past the most room
+  a window can leave it (its ceiling less what the launch's own turn spent
+  there first) is held at the floor alone, or at that room where the turn's
+  own spend left less than the floor, and its first request may take the
+  window past its ceiling.
 - **An auxiliary pass** — the reflection, profiling, compaction and summary
   calls the [learning subsystem](../concepts/agent-learning.md) makes on a
   seat's behalf. A pass does not start for a seat or company with no room

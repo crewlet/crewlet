@@ -236,9 +236,9 @@ type Continuation struct {
 	// from a read the record marks unanswered on; and the notes
 	// [AgentRunRequest.Notes] carries, which no copy has read — a served one
 	// told as a note it may already show ([Runner.inPlaceNotes]). The floor of a
-	// launch that continues the copy counts all of it where a capture measured
-	// the copy's context, and is the static floor where none did
-	// (internal/engine's continuedFloor).
+	// launch that continues the copy counts all of it: beside the copy's
+	// context where a capture measured it, and beside the static floor where
+	// none did (internal/engine's continuedFloor).
 	SessionID string
 	Brief     string
 
@@ -251,7 +251,7 @@ type Continuation struct {
 	// its newest capture measured it ([SessionBasis.ContextTokens]): what
 	// the relaunch sends again before Brief where it continues the session
 	// in its box, which its floor is made of. Zero where no capture measured
-	// it, which holds the launch to the static floor.
+	// it, which holds the launch to the static floor with Brief beside it.
 	ContextTokens int64
 
 	// BriefRead is how many calls the round's log had taken at the read

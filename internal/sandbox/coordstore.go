@@ -1032,6 +1032,14 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		if hold := release.Hold; hold != nil {
 			run.HeldFor, run.HeldUntil = hold.Condition, hold.Until.UTC()
 		}
+		// THE WINDOW ITS RELAUNCH WAS REFUSED IN, unlike the hold, is KEPT by
+		// a release that names none: it is what the turn's next relaunch
+		// reads, and a resume that failed in between for some other reason
+		// has not tried that relaunch yet ([LaunchRecord.RelaunchRefusedIn]).
+		// A window that is no window is never written.
+		if w := release.RelaunchRefusedIn; w.Valid() {
+			run.Launch.RelaunchRefusedIn = w
+		}
 		return true
 	})
 	return released, err

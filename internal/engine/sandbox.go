@@ -1691,6 +1691,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
+	refusedIn := in.Run.Launch.RelaunchRefusedIn
 	return RunnerInput{
 		Task:    resumeTask(in),
 		Compact: e.compactorFor(company),
@@ -1712,9 +1713,13 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// THE LAUNCHER, for the turn's LATER iterations rather than this
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
-		// whichever member of the pinned chain can take it then.
-		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil, notes),
-		Budget:   tel.budget.budget(),
+		// whichever member of the pinned chain can take it then. With the
+		// window the run's last relaunch was refused below its floor in, off
+		// its job's record, so this segment's relaunch waits for its brief's
+		// room no longer than that window ([agentLauncher.continuedFloor]).
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil,
+			notes, &refusedIn),
+		Budget: tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives
 		// rather than a cap to extend, and the onboarding pass — the one
@@ -1743,15 +1748,20 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 // and for a refusal whose window has turned over since, which an ordinary
 // retry now runs.
 //
-// HELD AGAINST THE FLOOR THE LAUNCH WAS REFUSED BELOW ([floorOf]): a relaunch
-// that continues its turn's session needs more than the static floor, and a
-// window with room for the static one alone would release the resume into the
-// same refusal.
+// HELD AGAINST THE FLOOR THE LAUNCH WAS REFUSED BELOW ([floorOf]): its brief
+// beside the static floor, the context of the turn's session it continues
+// beside its brief, or, where its fresh brief's floor is held, the static
+// floor or the room below it ([launchFloor.tokens]). Held against the static
+// floor alone, a resume refused below a larger floor was released by a window
+// with room for the static floor into the same refusal. And where a launch was
+// refused below its floor, the hold names the window it was refused in
+// ([sandbox.Refusal.Window]), for the turn's next relaunch to wait for its
+// floor no longer than that window.
 func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle string, err error) *sandbox.HeldError {
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		return nil
 	}
-	refusal, held := e.budgetHold(ctx, company, handle, floorOf(company, err))
+	refusal, held := e.budgetHold(ctx, company, handle, err)
 	if !held {
 		return nil
 	}
@@ -3480,11 +3490,17 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 	c := e.Company()
 	if route == sandbox.ResumeAnswer {
 		// THE STATIC FLOOR: the gate is asked before the claim and names no
-		// run, so it cannot know the session the answer's relaunch continues.
-		// A relaunch whose own floor is above it is refused at its launch and
-		// held on its window there ([Engine.heldByBudget]), so the answer
-		// waits either way rather than circling.
-		if refusal, held := e.budgetHold(ctx, c, handle, staticFloor(c)); held {
+		// run, so it cannot know the brief the answer's relaunch is handed,
+		// nor the session it continues. A relaunch whose own floor is above
+		// it is refused at its launch and held on its window there
+		// ([Engine.heldByBudget]), so the answer waits either way rather than
+		// circling. And one held below it ([launchFloor.held]), at the room
+		// its segment's own spend leaves, goes out in the windows the gate
+		// reads only where each had that room and that spend left when the
+		// gate asked: the ceiling of the window leaving the least room, which
+		// config holds at or above the static floor. So in those windows the
+		// gate holds back no answer its relaunch could go out on.
+		if refusal, held := e.budgetHold(ctx, c, handle, nil); held {
 			return refusal, true
 		}
 	}

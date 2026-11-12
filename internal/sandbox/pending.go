@@ -204,6 +204,16 @@ type Release struct {
 	// release put on it.
 	Hold *Refusal
 
+	// RelaunchRefusedIn, where it names a window, is the budget window the
+	// claim's resume had its relaunch refused below its floor in
+	// ([Refusal.Window]): the release counts it onto the job's record
+	// ([LaunchRecord.RelaunchRefusedIn]) for the turn's next relaunch. A held
+	// completion's names one beside its Hold, and a recorded answer's whose
+	// relaunch its seat's budget turned back names one with no Hold, its wait
+	// being its own series'. The zero window counts nothing, and leaves one an
+	// earlier release counted.
+	RelaunchRefusedIn BudgetWindow
+
 	// Collected is whether the claim being handed back READ THE JOB'S BOX
 	// BACK — a collection that succeeded, whose park or resume then failed
 	// — and it ENDS the job's run of failed collections: the release clears
@@ -4399,6 +4409,28 @@ type LaunchRecord struct {
 	// RELEASE ([Release.ResumeFailedAt]).
 	ResumeFailures     int       `json:"resume_failures,omitempty"`
 	ResumeFailingSince time.Time `json:"resume_failing_since,omitzero"`
+
+	// RelaunchRefusedIn is the budget window the last relaunch a resume of
+	// this job's turn tried was refused below its floor in, where one was
+	// ([Refusal.Window]): what the turn's next relaunch reads to know it has
+	// waited that window out, so in a later window it is held to no more than
+	// the floor a launch with no brief needs (internal/engine's launchfloor.go)
+	// and waits for its brief's room one turnover at most. Its floor is within
+	// the most room a window can leave it and still past what a busy window
+	// leaves at the launch's read, the other seats spending there first after
+	// every turnover, so waited for again in every window, it went out in none.
+	//
+	// ON THE JOB'S RECORD, WRITTEN BY THE RELEASE ([Release.RelaunchRefusedIn]),
+	// for the reason ResumeFailures is: the next relaunch may be tried on
+	// another node or after a restart, a held completion's when its hold
+	// lifts, and a recorded answer's on its series' next attempt. Kept by a
+	// release that names none, and replaced with the job by the relaunch that
+	// goes out, which is the one it was kept for. An older build's relaunch
+	// drops it with the job's record too, and its release carries it in
+	// [LaunchRecord.Extra], so it never outlives the job it was counted onto;
+	// a record that holds none, as an older build's release writes it, reads
+	// as never refused, which costs that relaunch at most one more window.
+	RelaunchRefusedIn BudgetWindow `json:"relaunch_refused_in,omitzero"`
 
 	// Collected is whether a collection READ THIS JOB'S BOX BACK and handed
 	// what it found to the job's turn, whose resume then gave the claim back

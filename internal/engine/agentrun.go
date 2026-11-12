@@ -13,8 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/origin"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -70,6 +72,16 @@ type agentLauncher struct {
 	// was lost is sealed naming that take, whose read the launch's write takes
 	// over ([rowSource.lostTakes]).
 	notes *rowSource
+
+	// relaunchRefusedIn is, on a resumed segment's launcher, the window the
+	// last relaunch a resume of its run's job tried was refused below its
+	// floor in, off that job's record
+	// ([sandbox.LaunchRecord.RelaunchRefusedIn]): the zero window where none
+	// was, or where the record was written by a build that kept none. NIL on a
+	// dispatched segment's launcher, whose launch takes what the seat's park
+	// recorded on this node instead ([floorWaits]). Read by
+	// [agentLauncher.continuedFloor].
+	relaunchRefusedIn *sandbox.BudgetWindow
 
 	// run is the launch past the turn's fence, nil for [agentLauncher.launch]:
 	// a case's stand-in for the sandbox.
@@ -271,12 +283,15 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		cell = memberCell(company, manager, member.Key)
 		inBox = l.continuesInItsBox(ctx, pending, manager, agent, cell, req.Continue)
 	}
-	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): a launch that
-	// may continue a session sends its context before its brief, so its floor
-	// is the session's context with the brief that continues it, never the
-	// static one alone — and one no window of the seat's budget can ever
-	// carry continues nothing, its run starting a session of its own on the
-	// static floor ([agentLauncher.continuedFloor]).
+	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): its fresh
+	// brief beside the static floor, held at the static floor, or at the room
+	// below it, where that is past the most room a window can leave the
+	// launch; and, for a launch that may continue a session, that session's
+	// context with the brief that continues it where that is larger, since a
+	// continued session sends its context before its brief. A session no
+	// window of the seat's budget can ever carry is not continued, its run
+	// starting a session of its own on its fresh brief
+	// ([agentLauncher.continuedFloor]).
 	req, floor := l.continuedFloor(ctx, req, agent, inBox)
 	if err = executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
@@ -597,30 +612,37 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	return runner.Launched{LaunchID: result.LaunchID, BridgeFrom: bridgeFrom}, nil
 }
 
-// continuedFloor is req as the seat's budget lets it be launched on member — the
-// member the launch picked, nil where it could pick none — and the floor it is
-// held to ([launchFloor]): the larger of the static floor and, for each session
-// the launch may still continue, that session's context with the brief that
-// continues it — the turn's kept capture, in the longer of its two briefs, since
-// which box the launch gets is the launch's to learn; the session its
-// conversation's last turn left, with the brief that continues it in a box of
-// its own, the one box it is continued in; and the job before's own copy in its
-// box with the brief that carries it on, where inBox says the launch can
-// continue in that box at all ([agentLauncher.continuesInItsBox]). A context no
-// capture measured is unknown, and holds the launch to the static floor.
+// continuedFloor is req as the seat's budget lets it be launched on member (the
+// member the launch picked, nil where it could pick none) and the floor it is
+// held to ([launchFloor]): the largest floor of every brief the launch may hand
+// its run. Its fresh brief, req.Brief, which its box starts a session of its
+// own on wherever it takes none up, holds it to the static floor with that
+// brief beside it, held where that is past the most room the seat's and the
+// company's capped windows can leave the launch, each window's ceiling less
+// what the launch's own turn charged in it before the launch ([windowRoom]):
+// at the static floor where that fits in the room, and at the room otherwise
+// ([launchFloor.fresh]). And each session the launch may still continue holds
+// it to that session's context with the brief that continues it, or, where no
+// capture measured that context, to the static floor with that brief beside
+// it: the turn's kept capture, in the longer of its two briefs, since which box
+// the launch gets is the launch's to learn; the session its conversation's last
+// turn left, with the brief that continues it in a box of its own, the one box
+// it is continued in; and the job before's own copy in its box with the brief
+// that carries it on, where inBox says the launch can continue in that box at
+// all ([agentLauncher.continuesInItsBox]).
 //
 // THE SESSION ONLY WHERE MEMBER RUNS THE HARNESS THAT WROTE IT
 // ([runner.SessionBasis.Harness]): a session is continued only by its own
 // harness, so a launch on a member running another starts a session of its own,
-// and is held to the static floor rather than to a session it will not send —
-// as one whose member cannot continue in the job before's box is held to no
-// floor of that box's session.
+// and is held to its fresh brief's floor rather than to a session it will not
+// send, as one whose member cannot continue in the job before's box is held to
+// no floor of that box's session.
 //
-// A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR ([launchFloor.fits]) is not waited
-// for: req goes without the session it would continue at that floor, and the
-// line says why. A seat with no capped window carries any session. Nor is a
-// session one request of member's model cannot carry ([launchFloor.carriedBy]),
-// under the window its run is pinned to.
+// A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR ([launchFloor.fits]), one past that
+// room, is not waited for: req goes without the session it would continue at
+// that floor, and the line says why. A seat with no capped window carries any
+// session. Nor is a session one request of member's model cannot carry
+// ([launchFloor.carriedBy]), under the window its run is pinned to.
 //
 // EACH SESSION HELD TO ITS OWN FLOOR, never to the other's. A relaunch may be
 // offered both the session it was asked to continue in any box and the job
@@ -634,8 +656,19 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // whose short brief fits was dropped for the copy's longer brief, which the
 // launch sends only where its box cannot restore the kept one, and its run
 // started a session of its own. Where neither is left, its run starts a session
-// of its own on the static floor, which config already holds every ceiling
-// above.
+// of its own on its fresh brief's floor, which a capped window can always be
+// given: where that floor is past the most room a window can leave the launch,
+// it is held at the static floor, or at the room where that is below it.
+//
+// AND A LAUNCH WHOSE EARLIER TRY WAS REFUSED BELOW ITS FLOOR waits for that
+// floor one turnover at most ([agentLauncher.refusedIn], [meter.turnedOver]):
+// in a window after the one that try was refused in, its fresh brief's floor
+// is held as one past the room is ([launchFloor.after]), and a session whose
+// floor the seat's windows still leave no room for, read once here, is dropped
+// as one past the room is, the line saying why ([launchFloor.stillShort]). A
+// floor within the room is past what a busy company's window leaves at the
+// launch's read wherever the other seats spend there first, and waited for in
+// every window, the launch went out in none.
 func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
 	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
@@ -648,18 +681,57 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		req.Session = nil
 	}
 	static := staticFloor(l.company)
+	// THE MOST ROOM A WINDOW CAN LEAVE THIS LAUNCH: each capped window's
+	// ceiling less what the launch's own turn has charged in it, which is in
+	// that window before the launch reads it and is charged there again by
+	// every turn that tries again ([windowRoom]).
+	var room windowRoom
 	m := l.engine.meterFor(l.company, l.seat.Handle())
-	floor := static
+	if m != nil {
+		room = m.basis.room(turnCharged(l.turn, m.windows()))
+	}
+	// THE WINDOW AN EARLIER TRY WAS REFUSED BELOW ITS FLOOR IN, where it has
+	// turned over since: that try waited for it, and this one waits for no
+	// more than the static floor alone ([launchFloor.after]).
+	var waited sandbox.BudgetWindow
+	if w := l.refusedIn(); m.turnedOver(w) {
+		waited = w
+	}
+	// THE FRESH BRIEF FIRST, since every launch may hand its run that brief,
+	// however many sessions it offers: its box falls back to it wherever it
+	// takes none of them up, a restore that fails in the box included.
+	fresh := static.fresh(harness.EstimateTokens(req.Brief), room)
+	if waited.Valid() {
+		fresh = fresh.after(waited)
+	}
+	floor := fresh
+	// WHAT THE SEAT'S WINDOWS LEAVE NOW, read once where the launch has waited
+	// and offers a session, which it drops where they are short of its floor
+	// again ([launchFloor.stillShort]). A read that fails drops nothing: the
+	// launch's own read of the same counters refuses it then
+	// ([executorHeadroom]), so no session is given up on a store's blip.
+	stillShort := func(launchFloor) string { return "" }
+	if waited.Valid() && (req.Session != nil || (req.Continue != nil && req.Continue.SessionID != "" && inBox)) {
+		if left, err := m.Remaining(ctx); err == nil {
+			stillShort = func(f launchFloor) string { return f.stillShort(left, waited) }
+		}
+	}
 	var keptWhy, inPlaceWhy string
 	if s := req.Session; s != nil {
 		kept := keptFloor(static, s)
-		if keptWhy = uncarried(member, m, kept); keptWhy == "" {
+		if keptWhy = uncarried(member, room, kept); keptWhy == "" {
+			keptWhy = stillShort(kept)
+		}
+		if keptWhy == "" {
 			floor = floor.atLeast(kept)
 		}
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
 		inPlace := static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief))
-		if inPlaceWhy = uncarried(member, m, inPlace); inPlaceWhy == "" {
+		if inPlaceWhy = uncarried(member, room, inPlace); inPlaceWhy == "" {
+			inPlaceWhy = stillShort(inPlace)
+		}
+		if inPlaceWhy == "" {
 			floor = floor.atLeast(inPlace)
 		}
 	}
@@ -673,7 +745,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	}
 	// SAID ONCE BOTH ARE DECIDED, so the line names what the launch still
 	// offers its run rather than what it offered before the other was judged.
-	outcome := "the run starts a session of its own, on the static floor"
+	outcome := "the run starts a session of its own, on its fresh brief's floor"
 	if req.Session != nil || (req.Continue != nil && req.Continue.SessionID != "" && inBox) {
 		outcome = "the launch offers its run the other session it may continue, which its box takes " +
 			"up where it can; otherwise the run starts a session of its own"
@@ -684,7 +756,54 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 				"turn_id", l.turn.RunID, "detail", why, "outcome", outcome)
 		}
 	}
+	// THE HOLD, SAID ONCE THE LAUNCH'S FLOOR IS DECIDED, and naming that
+	// floor. A held fresh floor is the static floor or the room below it, so a
+	// session the launch still offers, its own floor within that room, may
+	// hold the launch higher: said before the sessions were judged, the line
+	// named a floor the launch was not held to. And it is said wherever the
+	// fresh floor is held, whatever floor holds the launch: its box may still
+	// start its run on the fresh brief, a restore that fails in the box
+	// included, and that run's first request is the one the hold lets past
+	// what the window has left.
+	if fresh.held() {
+		heldOutcome := fmt.Sprintf("the launch is held at %s, and its run's first request may take its "+
+			"window past its ceiling, which the run's charge then says (sandbox_spend_over_budget)",
+			fresh.heldAt())
+		if !floor.held() {
+			// A SESSION'S FLOOR HOLDS THE LAUNCH, being the larger: a
+			// session's floor carries no room ([launchFloor.room]), so it is
+			// never held.
+			heldOutcome = fmt.Sprintf("the launch is held at %d, the floor of a session it offers its run, "+
+				"which its box takes up where it can; where its run starts a session of its own on the "+
+				"fresh brief, that run's first request may take its window past its ceiling, which the "+
+				"run's charge then says (sandbox_spend_over_budget)", floor.tokens())
+		}
+		log.InfoContext(ctx, "executor_floor_held", "seat", l.seat.Handle(),
+			"turn_id", l.turn.RunID, "floor", floor.tokens(), "detail", fmt.Sprintf("the run's fresh brief "+
+				"is about %d tokens, which beside turn_engine.executor_min_budget_tokens (%d) is %s",
+				fresh.brief, fresh.static, fresh.heldFor()),
+			"outcome", heldOutcome)
+	}
 	return req, floor
+}
+
+// refusedIn is the window an earlier try of this launcher's work was refused
+// below its floor in, the zero window where none is known: on a resumed
+// segment's launcher, the one its run's job's record names
+// ([agentLauncher.relaunchRefusedIn]); on a dispatched one's, the one the
+// seat's last park on this node waited on, which this TAKES, so a later
+// delivery's launch, which never waited, is held to its floor ([floorWaits]).
+func (l *agentLauncher) refusedIn() sandbox.BudgetWindow {
+	if l.relaunchRefusedIn != nil {
+		return *l.relaunchRefusedIn
+	}
+	if l.company == nil || l.company.Org == nil {
+		return sandbox.BudgetWindow{}
+	}
+	if seat, ok := l.company.Org.AgentIDFor(l.seat); ok {
+		return l.engine.floorWaits.take(seat)
+	}
+	return sandbox.BudgetWindow{}
 }
 
 // keptFloor is the floor of a launch that continues s, the session it was asked
@@ -707,18 +826,34 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 
 // uncarried is why no launch on member can carry f, "" where one can: one
 // request of a Claude Code member's model, under the window its run is pinned
-// to ([launchFloor.carriedBy]), and a window of the seat's budget as it turns
-// over ([launchFloor.fits]), where m meters the seat at all.
-func uncarried(member *harness.Provider, m *meter, f launchFloor) string {
+// to ([launchFloor.carriedBy]), and room, the most room a window of the seat's
+// budget can leave the launch as it turns over ([launchFloor.fits]), none to
+// judge where nothing is capped.
+func uncarried(member *harness.Provider, room windowRoom, f launchFloor) string {
 	if member != nil && member.Harness() == executor.ClaudeCodeName {
 		if why := f.carriedBy(sandbox.ClaudeCodeWindow(member.ModelArgument())); why != "" {
 			return why
 		}
 	}
-	if m == nil {
-		return ""
+	return f.fits(room)
+}
+
+// turnCharged is what t's turn has charged in each window of w, by period, read
+// off the meter it charges through ([turnctx.Turn.Budget], that turn segment's
+// [meter] wherever a counter counts the seat), nil where it has none.
+//
+// THAT METER, never one the launch builds: what reaches a window before the
+// launch reads it is the turn's own context assembly, its review and its
+// rewrites, every one charged through the turn's meter ([turnTelemetry.aux]),
+// and a meter of the launch's own has charged nothing.
+func turnCharged(t *turnctx.Turn, w coord.Windows) map[period.Period]int {
+	if t == nil {
+		return nil
 	}
-	return f.fits(m.basis)
+	if m, ok := t.Budget.(*meter); ok && m != nil {
+		return m.chargedIn(w)
+	}
+	return nil
 }
 
 // continuesInItsBox reports whether a launch on agent, its run in cell, could
@@ -1037,8 +1172,12 @@ func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duratio
 // nil for a resumed segment's, whose relaunches read what that launch froze.
 // notes is a resumed segment's notes on its run's record, which its relaunches'
 // briefs are sealed from ([agentLauncher.notes]); nil for a dispatched one's.
+// relaunchRefusedIn is a resumed segment's window its run's last relaunch was
+// refused below its floor in ([agentLauncher.relaunchRefusedIn]); nil for a
+// dispatched one's.
 func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
 	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn, notes *rowSource,
+	relaunchRefusedIn *sandbox.BudgetWindow,
 ) runner.AgentLauncher {
 	if t == nil || company == nil || company.Models == nil {
 		return nil
@@ -1048,7 +1187,7 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
 		return nil
 	}
 	return &agentLauncher{engine: e, turn: t, seat: seat, company: company, ask: ask,
-		conversation: conversation, told: told, notes: notes}
+		conversation: conversation, told: told, notes: notes, relaunchRefusedIn: relaunchRefusedIn}
 }
 
 // agentPlacement is the cell an executor entry runs in: its own `run_in`, then

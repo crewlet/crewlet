@@ -228,6 +228,53 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	}
 }
 
+// A RESUMED SEGMENT'S LAUNCHER KNOWS THE WINDOW ITS RUN'S LAST RELAUNCH WAS
+// REFUSED IN. The release that handed back the claim whose relaunch the seat's
+// budget refused below its floor counted that window onto the job's record, and
+// the segment the resume rebuilds launches the turn's next relaunch from it:
+// its launcher reads it there, so that relaunch, in a later window, waits for
+// its floor no longer ([TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost]).
+// A record naming none hands the launcher the zero window, never nothing,
+// since a resumed launcher takes no park's record a dispatch left on the seat.
+//
+// Mutation: build the resumed segment's launcher without the job's record's
+// window, or with none at all, and a case goes red.
+func TestAResumedSegmentsLauncherKnowsTheWindowItsRelaunchWasRefusedIn(t *testing.T) {
+	t.Parallel()
+	for name, window := range map[string]sandbox.BudgetWindow{
+		"a record naming the window": {Period: "day", Label: "2026-09-23"},
+		"a record naming none":       {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			admitted, seat := executorCompany(t)
+			admitted.Tools = tools.NewRegistry()
+			e := resumingEngine(t)
+			e.backends = &Backends{Queue: memory.New()}
+			e = withSessions(t, e)
+			e.epoch.current.Store(admitted)
+			in := resumed(theDM, theDMThread)
+			in.Company = admitted
+			in.Run.AgentHandle = seat.Handle()
+			in.Run.TurnID = newRunID()
+			in.Run.Launch.RelaunchRefusedIn = window
+			in.Turn = resumedTurn(in.Run, seat, admitted.Org, turnctx.NewHolds(in.Run.CodeHolds))
+			input, _, err := e.parkedTurnRunner(t.Context(), admitted, in, nil)
+			if err != nil {
+				t.Fatalf("parkedTurnRunner: %v", err)
+			}
+			l, ok := input.Launcher.(*agentLauncher)
+			if !ok {
+				t.Fatalf("the resumed segment's launcher is %T, want the engine's", input.Launcher)
+			}
+			if l.relaunchRefusedIn == nil || *l.relaunchRefusedIn != window {
+				t.Fatalf("the resumed segment's launcher reads %v, want the job's record's window %+v",
+					l.relaunchRefusedIn, window)
+			}
+		})
+	}
+}
+
 // A PARKED ROW OUTLIVES THE BUILD THAT WROTE IT, so who is waiting for a
 // resumed turn is read off it defensively.
 //

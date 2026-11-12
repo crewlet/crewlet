@@ -1604,7 +1604,8 @@ turn_engine:
     call_timeout_seconds: 900            # wall-clock cap on the whole call, waves included;
                                          #   also counts toward an executor box's wait for a call
   executor_min_budget_tokens: 25000      # refuse an executor launch below this remaining
-                                         #   budget; a ceiling below it is refused
+                                         #   budget with the launch's brief beside it; a
+                                         #   ceiling below it is refused
   delegation_depth_limit: 3
   extension_enabled: true                # round-cap extension judge (onboarding)
   onboarding_max_tool_rounds_ceiling: 20 # hard cap on total onboarding rounds with extensions

@@ -330,8 +330,13 @@ session at the window is charged about a million input tokens, most of them
 cache reads ([Schedules](#schedules)).
 
 **Its first launch is held to that context.** The launch needs the larger of
-`turn_engine.executor_min_budget_tokens` and the base's context with the lead
-and the brief beside it. A base no capped window can ever carry starts fresh; a
+`turn_engine.executor_min_budget_tokens` with the turn's fresh brief beside it,
+which its box starts a session of its own on wherever it cannot take the base
+up, held at the floor alone, or at the room below it, where that is past the
+most room a window can leave the launch
+([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)),
+and the base's context with the lead and the brief beside it. A base no
+capped window can ever carry starts fresh; a
 first launch refused only because a window is full right now **parks the seat's
 mail on that figure** until a window has room for it, as a held resume does
 ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).

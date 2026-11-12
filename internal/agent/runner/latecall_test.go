@@ -232,7 +232,7 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 // of the round, the late ones apart from the rest. Where the job's box is gone,
 // which no launch continues in, nothing of it is built, whatever its harness's
 // end. All of it is in the brief the launch continues the copy with, which the
-// floor of that launch counts where a capture measured the copy.
+// floor of that launch counts, whether or not a capture measured the copy.
 //
 // Mutation: tell an own run's copy nothing, read a late call as one it holds,
 // tell a cut-off copy's late calls among the round's other calls, leave the

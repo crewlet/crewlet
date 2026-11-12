@@ -853,11 +853,12 @@ func TestEveryFreshFallbackIsToldTheFrozenEndings(t *testing.T) {
 
 // A CONVERSATION NO WINDOW CAN CARRY STARTS FRESH; ONE A WINDOW CAN IS
 // CONTINUED. A turn's first launch that would continue its conversation's
-// session weighs that session's context — the base's own, which its row
-// recorded — with the brief that continues it against the smallest ceiling of
-// the seat's capped windows: past it no window turning over ever leaves room,
-// so the run starts a session of its own on the static floor; within it, the
-// session is continued.
+// session weighs that session's context (the base's own, which its row
+// recorded) with the brief that continues it against the most room the seat's
+// and the company's capped windows can leave the launch, each ceiling less
+// what its own turn spent there: past it no window turning over ever leaves
+// room, so the run starts a session of its own on its fresh brief's floor;
+// within it, the session is continued.
 //
 // Mutation: weigh the first launch's floor by anything but the base's context,
 // or wait for a floor no window can meet, and a row goes red.

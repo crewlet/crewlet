@@ -107,13 +107,16 @@ type Dispatcher struct {
 	// refusing, or leaves less room than the delivery's launch needs, and
 	// reports the deferral reason naming the window — see budgetpark.go.
 	// refused is the budget refusal the delivery's turn met, nil before any
-	// turn ran: a launch refused below its own floor — one that continues the
-	// session its conversation's last turn left, whose context it sends first
-	// — carries that floor, and the park waits for room for it rather than
-	// for the static floor a fresh launch needs, which the window may already
-	// have ([floorOf]). An error is a park that could not be taken, which
-	// DEFERS the delivery rather than running a turn the counter refuses:
-	// the refusal is the node's, and a deferral keeps the message's place.
+	// turn ran: a launch refused below its own floor (its brief beside the
+	// static floor; for one that continues the session its conversation's
+	// last turn left, whose context it sends first, that context beside its
+	// brief; or, where its fresh brief's floor is held, the static floor or
+	// the room below it) carries that floor, and the park waits for room for
+	// it rather than for the static floor alone, which a window may have
+	// without room for a larger one ([floorOf]). An error is a park that
+	// could not be taken, which DEFERS the delivery rather than running a
+	// turn the counter refuses: the refusal is the node's, and a deferral
+	// keeps the message's place.
 	//
 	// Nil parks nothing, which is a dispatcher with no counters: every
 	// turn then runs, and its own meter, if it has one, is the gate.
@@ -871,10 +874,13 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// recorded, not run again when the window resets.
 			//
 			// ON THE FLOOR THE TURN'S LAUNCH WAS REFUSED BELOW, which the
-			// refusal carries: a first launch that continues its
-			// conversation's session needs that session's context beside
-			// its brief, and parked on the static floor it found the
-			// window not starved, and was NAKed into the same refusal.
+			// refusal carries: its brief beside the static floor, the
+			// context of its conversation's session it continues beside its
+			// brief, or, where its fresh brief's floor is held, the static
+			// floor or the room below it ([launchFloor]). Parked on the
+			// static floor alone, a launch refused below a larger floor
+			// found the window not starved, and was NAKed into the same
+			// refusal.
 			if errors.Is(err, toolloop.ErrBudgetExhausted) {
 				if result, parked := d.parkOnBudget(ctx, handle, err); parked {
 					log.InfoContext(ctx, "turn_budget_parked", "seat", handle,

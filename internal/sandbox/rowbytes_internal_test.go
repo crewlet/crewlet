@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -635,7 +636,11 @@ func worstRow(t *testing.T) PendingRun {
 		FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), ResumeCarry: ResumeCarry(plain(32)),
 		Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt, CollectFailingSince: worstAt,
 		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
-		EndedAtDeadline: true, HarnessEnd: HarnessEnd(plain(32)),
+		// THE WIDEST WINDOW A RELEASE COUNTS ONTO THE RECORD, a day's: a
+		// release writes none that is no window (BudgetWindow.Valid), and of
+		// the three periods a day spells the widest pair, written as itself.
+		RelaunchRefusedIn: BudgetWindow{Period: period.Day, Label: period.At(period.Day, worstAt, nil).Label},
+		EndedAtDeadline:   true, HarnessEnd: HarnessEnd(plain(32)),
 		Bridged: EngineSpend{Aux: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,

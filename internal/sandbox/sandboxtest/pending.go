@@ -105,6 +105,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
 		{"AJobKeepsTheInstantItWasFirstCollected", testAJobKeepsTheInstantItWasFirstCollected},
 		{"AReleaseCountsAFailedResumeOntoTheJob", testAReleaseCountsAFailedResumeOntoTheJob},
+		{"ARefusedRelaunchsWindowStaysOnItsJobUntilTheNextLaunch", testARefusedRelaunchsWindowStaysOnItsJobUntilTheNextLaunch},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
 		{"ANewerLeasesEndingIsStillASeatNotHeld", testANewerLeasesEndingIsStillASeatNotHeld},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
@@ -1680,6 +1681,70 @@ func testAReleaseCountsAFailedResumeOntoTheJob(t *testing.T, s sandbox.PendingSt
 	if got := mustGet(t, s, "t1"); got.Launch.ResumeFailures != 0 ||
 		!got.Launch.ResumeFailingSince.IsZero() {
 		t.Fatal("a relaunch's job inherited the failed resumes of the job before it")
+	}
+}
+
+// A REFUSED RELAUNCH'S WINDOW STAYS ON ITS JOB UNTIL THE NEXT LAUNCH. A resume
+// whose relaunch the seat's budget refused below its floor is handed back
+// naming the window it was refused in, and the release counts that onto the
+// job's record, for the turn's next relaunch to wait for its floor no longer
+// than that window: written by a release that names one, held or not (an
+// answer's wait is its own series', with no hold on the row), replaced by a
+// later one, KEPT by a release that names none, since a resume that failed in
+// between tried no relaunch, and never a window that is no window. The
+// relaunch that goes out is the one it was kept for, and its job's record
+// starts without it.
+func testARefusedRelaunchsWindowStaysOnItsJobUntilTheNextLaunch(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	day := sandbox.BudgetWindow{Period: "day", Label: "2026-09-23"}
+	held := releaseOf(mustClaim(t, s, "t1"))
+	// PAST ITS INSTANT, so the next claim takes the run: a hold that still
+	// stands refuses every claim (testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts).
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: time.Now().UTC().Add(-time.Minute), Window: day}
+	held.RelaunchRefusedIn = day
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("release t1 held = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != day {
+		t.Fatalf("a held release left the job's record naming %+v, want the window %+v its relaunch was "+
+			"refused in", got.Launch.RelaunchRefusedIn, day)
+	}
+	failed := releaseOf(mustClaim(t, s, "t1"))
+	failed.ResumeFailedAt = base
+	if released, err := s.ReleaseClaim(ctx, "t1", failed); err != nil || !released {
+		t.Fatalf("release t1 failed = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != day {
+		t.Fatalf("a release naming no window left %+v, want the earlier %+v kept for the relaunch it has not "+
+			"tried yet", got.Launch.RelaunchRefusedIn, day)
+	}
+	next := sandbox.BudgetWindow{Period: "week", Label: "2026-W40"}
+	turned := releaseOf(mustClaim(t, s, "t1"))
+	turned.RelaunchRefusedIn = next
+	if released, err := s.ReleaseClaim(ctx, "t1", turned); err != nil || !released {
+		t.Fatalf("release t1 turned back = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != next || got.HeldFor != "" {
+		t.Fatalf("a release naming a window and no hold left %+v held for %q, want %+v and no hold",
+			got.Launch.RelaunchRefusedIn, got.HeldFor, next)
+	}
+	for _, none := range []sandbox.BudgetWindow{{Period: "day", Label: "2026-02-30"},
+		{Period: "fortnight", Label: "2026-09-23"}, {Period: "day", Label: "2026-W40"}} {
+		bogus := releaseOf(mustClaim(t, s, "t1"))
+		bogus.RelaunchRefusedIn = none
+		if released, err := s.ReleaseClaim(ctx, "t1", bogus); err != nil || !released {
+			t.Fatalf("release t1 naming %+v = %v, %v", none, released, err)
+		}
+		if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != next {
+			t.Fatalf("a release naming %+v, which is no window, left %+v, want %+v kept", none,
+				got.Launch.RelaunchRefusedIn, next)
+		}
+	}
+	mustLaunched(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != (sandbox.BudgetWindow{}) {
+		t.Fatalf("a relaunch's job inherited the window %+v the job before it was refused in",
+			got.Launch.RelaunchRefusedIn)
 	}
 }
 

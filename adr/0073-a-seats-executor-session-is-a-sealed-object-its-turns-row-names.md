@@ -1556,17 +1556,18 @@ note the turn has read, for every copy not known to have ended its own run,
 which includes every relaunch after a replaced sign-in whose refused harness
 exited with a status other than 0, and every job a build before this one
 collected; and a continuation of a kept capture cut off is the longer for every
-note the turn has read. Where a capture measured the copy's context — its job's
-newest, kept or not — the floor its launch is held to counts that brief and
-grows with it: where it is past what the seat's capped windows or its model's
-window can carry, the launch does not continue the copy, continuing the turn's
-kept capture instead where it offers one whose own floor fits (ADR-0066's
-amendment), and otherwise starting a session of its own, which is told none of
+note the turn has read. The floor its launch is held to counts that brief and
+grows with it, beside the copy's context where a capture measured it (its job's
+newest, kept or not) and beside the static floor where none did (every copy in
+a company that keeps no session; ADR-0066's amendment on a launch's brief):
+where it is past what the seat's capped windows or its model's window can
+carry, or past what its window leaves a launch that already waited a turnover
+for it, the launch does not continue the copy, continuing the turn's kept
+capture instead where it offers one whose own floor fits (ADR-0066's
+amendments), and otherwise starting a session of its own, which is told none of
 the round's calls; and a launch that offers both is held to the larger of their
 floors, since its box takes up the copy only where it cannot restore the
-capture. A copy no capture measured — every copy in a company that keeps no
-session — holds its launch to the static floor whatever its brief, and only its
-harness's own compaction bounds what that brief adds.
+capture.
 
 **Mid-upgrade.** The field is wire-additive (`omitempty`), and an older build
 keeps it in `LaunchRecord.Extra` through every write it makes to the record. A
@@ -1810,7 +1811,7 @@ words that hold whatever the session's end — it finished only after the run th
 made it was replaced, the session may show it with no outcome or as interrupted,
 or an earlier brief may have told it, and it is one call, made once, whose
 outcome as told stands (internal/agent/prompts' `lateCallsHeader`) — the telling
-counted in the continued launch's floor where a capture measured the session;
+counted in the continued launch's floor;
 and how many late calls the log dropped from its middle is told under those
 words too, whatever the point (`prompts.AfterSave.LateDropped`): a dropped call
 keeps no mark and no number, and under the words of calls after a save the count
@@ -1835,9 +1836,9 @@ line on a late submission and how many of them the log
 dropped from its middle, as every continuation counts them; where the harness
 may have been cut off, the copy is told every call of the round, the late ones
 apart. Its guard counts none of a late call's loads, and the telling is in the
-brief the copy is continued with, which its launch's floor counts where a
-capture measured the copy. So every continuation of the round built after a
-marked call landed is told it, in a kept session and in the job's own box alike.
+brief the copy is continued with, which its launch's floor counts. So every
+continuation of the round built after a marked call landed is told it, in a
+kept session and in the job's own box alike.
 
 **Never the round's submission.** The round's collection never takes a late
 `submit_work` for the round's submission (`sinceAnswer`), and the log never
@@ -1995,9 +1996,9 @@ a late call's does, whether the log lists it or has dropped it from its middle
 takes it before its round's last collection reads the log (below).
 
 **What it costs.** Each such call is told to every continuation of its round,
-in its brief and so in the continued launch's floor where a capture measured
-the session, and again by every later one. The harness of a call still running
-as its opening ends is handed the end's answer at once, before the end closes
+in its brief and so in the continued launch's floor, and again by every later
+one. The harness of a call still running as its opening ends is handed the
+end's answer at once, before the end closes
 the box's sessions on the bridge, and waits for no other (ADR-0056's amendment
 on an opening's end): the session that made the call holds that answer, never
 the call's output, so a continuation of the round is told the call's result

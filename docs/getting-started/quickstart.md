@@ -385,9 +385,9 @@ is emitted, naming the window and when it resets. Until then the agent's new
 messages wait on its inbox rather than being lost, and they are delivered when
 the window turns over — or at once, if you raise the ceiling. Every turn
 launches an executor, which needs `turn_engine.executor_min_budget_tokens`
-(25000 by default) left in every capped window: a seat whose window leaves less
-waits parked the same way, and a `token_budget` ceiling below that floor is
-refused when you write it. The run's own spend is charged when it is
+(25000 by default) with the run's brief beside it left in every capped window:
+a seat whose window leaves less waits parked the same way, and a
+`token_budget` ceiling below that floor is refused when you write it. The run's own spend is charged when it is
 collected.
 
 Usage is **durable** — it lives in the fleet's
