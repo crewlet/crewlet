@@ -322,10 +322,9 @@ type HeldCall struct {
 	// other for every other call.
 	Act string `json:"act,omitempty"`
 
-	// Subject is the identity of what a fixed call decides, apart from the
-	// words it was asked in ([delegated.Subject]): its seat's repeat of it
-	// joins this call while it waits ([PendingRun.HeldOpen]). Empty for a
-	// call no later one joins.
+	// Subject is the identity of what a fixed call decides, apart from its
+	// wording ([delegated.Subject]): its seat's repeat joins this call while
+	// it waits ([PendingRun.HeldOpen]). Empty for a call nothing joins.
 	Subject string `json:"subject,omitempty"`
 
 	// Delegation is the rule that put the call to agent delegates before any
@@ -368,9 +367,8 @@ func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
 func (h HeldCall) Delegated() bool { return h.Delegation != nil && h.Delegation.Escalated == nil }
 
 // HeldOpen reports whether the run's held call still waits for its answer, on
-// its delegates or on people: held by the job the row holds, from the moment
-// it is recorded (the job has yet to park) until an answer, an ending or the
-// next job takes the question.
+// delegates or on people: from its recording, before the job parks, until an
+// answer, an ending or the run's next job takes the question.
 func (r PendingRun) HeldOpen() bool {
 	return r.HeldCall != nil && r.HeldCall.LaunchID == r.LaunchID && r.Ending == nil &&
 		!r.HeldCall.Calling() && r.AskedBy(r.LaunchID) &&

@@ -265,9 +265,8 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 }
 
 // joined answers a call whose seat already holds an open request of the same
-// act and subject on another run (ADR-0125): nothing is held, so the request
-// stays one for its delegates and for people. A read that fails refuses the
-// call, since holding it unread is how a second request is made.
+// act and subject on another run (ADR-0125), so nothing new is held. A read
+// that fails refuses the call: holding it unread is how a second one is made.
 func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.HeldCall) (tools.Result, bool) {
 	if held.Subject == "" {
 		return tools.Result{}, false
