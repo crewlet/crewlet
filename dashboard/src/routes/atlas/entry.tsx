@@ -21,7 +21,7 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { ATLAS_POLL_MS } from "./filters.ts";
 import { FactValue, KindGlyph, sourceSetBy } from "./parts.tsx";
-import { FACTS, KINDS, MEANING, RELATIONS, SIGNALS, WORDS } from "./words.ts";
+import { factLabel, KINDS, MEANING, RELATIONS, SIGNALS, WORDS } from "./words.ts";
 
 /** The address of an entry's page. */
 export function entryPath(id: string): string[] {
@@ -108,7 +108,7 @@ function factProperty(
   now: number,
 ): PropertyGroup["properties"][number] {
   return {
-    label: FACTS[fact.fact],
+    label: factLabel(fact),
     value: <FactValue value={fact.value} />,
     setBy: sourceSetBy(fact, seatName, now),
     title:

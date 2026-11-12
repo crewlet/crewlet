@@ -61,9 +61,11 @@ import type {
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
 import type {
+  AtlasActivityAnswer,
   AtlasEntriesAnswer,
   AtlasEntryAnswer,
   AtlasFacetsAnswer,
+  AtlasLogAnswer,
   AtlasMapAnswer,
   AtlasTraceAnswer,
 } from "../contract/atlas.ts";
@@ -7961,6 +7963,8 @@ export interface QueryMap {
   atlas_entry: AtlasEntryAnswer;
   atlas_trace: AtlasTraceAnswer;
   atlas_facets: AtlasFacetsAnswer;
+  atlas_log: AtlasLogAnswer;
+  atlas_activity: AtlasActivityAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;

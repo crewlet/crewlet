@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"slices"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // NotUsedFor is how long an entry the engine records use of can go unused
@@ -101,6 +103,16 @@ const (
 	// SignalStandingAlarm is a standing engine alarm about a tool server or a
 	// model entry (an `mcp_` or `llm_` alarm), named by the alarm's kind.
 	SignalStandingAlarm SignalKind = "standing_alarm"
+	// SignalMonitorAlerting is a monitor in its alert state, on the monitor
+	// and on every entry it watches.
+	SignalMonitorAlerting SignalKind = "monitor_alerting"
+	// SignalMonitorWarning is a monitor in its warning state, likewise.
+	SignalMonitorWarning SignalKind = "monitor_warning"
+	// SignalMonitorNoData is a monitor whose data stopped arriving, likewise.
+	SignalMonitorNoData SignalKind = "monitor_no_data"
+	// SignalPipelineFailing is a pipeline whose last result is a failure, on
+	// the pipeline and on every entry it deploys.
+	SignalPipelineFailing SignalKind = "pipeline_failing"
 )
 
 // SignalKinds is every signal.
@@ -108,6 +120,8 @@ var SignalKinds = []SignalKind{
 	SignalIntegrationBlocked, SignalIntegrationFailing, SignalToolServerDown, SignalToolServerWaiting,
 	SignalSignInExpired, SignalSignInExpiring, SignalSignInFailed, SignalModelSittingOut, SignalModelFailing,
 	SignalServerTestFailed, SignalStandingAlarm,
+	SignalMonitorAlerting, SignalMonitorWarning, SignalMonitorNoData,
+	SignalPipelineFailing,
 }
 
 // Valid reports whether k is a member of the closed set.
@@ -167,9 +181,11 @@ type Joined struct {
 }
 
 // Join attaches what the records say to the entries of v, each through the
-// entry its ref merged into, and marks every entry of a counted channel with
-// no use in [NotUsedFor] as not used recently. It is pure, like the fold: v's
-// own entries are left as they were.
+// entry its ref merged into, reads each monitor's state as a signal on it and
+// on what it watches ([watch]) and each pipeline's failure as one on it and on
+// what it deploys ([deliver]), and marks every entry of a counted channel
+// with no use in [NotUsedFor] as not used recently. It is pure, like the fold:
+// v's own entries are left as they were.
 func Join(v View, j Joined, now time.Time) View {
 	v.Entries = slices.Clone(v.Entries)
 	for i := range v.Entries {
@@ -198,6 +214,8 @@ func Join(v View, j Joined, now time.Time) View {
 			e.Signals = append(e.Signals, signals...)
 		}
 	}
+	watch(v)
+	deliver(v)
 	for i := range v.Entries {
 		e := &v.Entries[i]
 		e.Use = mergeUse(e.Use)
@@ -217,6 +235,106 @@ func Join(v View, j Joined, now time.Time) View {
 		})
 	}
 	return v
+}
+
+// monitorSignals is the signal each state of a monitor raises; a state with
+// none (ok, unknown) raises nothing.
+var monitorSignals = map[string]Signal{
+	MonitorAlert:  {Kind: SignalMonitorAlerting, Severity: SeverityDanger, Audience: AudienceHolders},
+	MonitorWarn:   {Kind: SignalMonitorWarning, Severity: SeverityWarning, Audience: AudienceHolders},
+	MonitorNoData: {Kind: SignalMonitorNoData, Severity: SeverityWarning, Audience: AudienceHolders},
+}
+
+// watch raises each live monitor's state as a signal on the monitor and on
+// every live entry a monitored_by relation joins to it. READ OFF THE CLAIMS ON
+// EVERY READ, never copied onto the watched entry: a monitor that recovers, is
+// retired or stops watching an entry takes its signal with it. The state is a
+// claim every holder reads, so the signal is every holder's too.
+func watch(v View) {
+	raised := map[uuid.UUID]Signal{}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		if e.Ref.Kind != KindMonitor || e.State == StateRetired {
+			continue
+		}
+		var sig Signal
+		var since time.Time
+		for _, f := range e.Facts {
+			switch f.Fact {
+			case FactMonitorState:
+				if s, ok := monitorSignals[f.Value.Text]; ok {
+					sig = s
+					sig.Since = f.ObservedAt
+				}
+			case FactStateSince:
+				since, _ = time.Parse(time.RFC3339, f.Value.Text)
+			}
+		}
+		if sig.Kind == "" {
+			continue
+		}
+		// THE VENDOR'S OWN INSTANT where it gave one: the claim's is when a
+		// read first saw the state, up to a refresh interval later.
+		if !since.IsZero() {
+			sig.Since = since
+		}
+		raised[e.ID] = sig
+		e.Signals = append(e.Signals, sig)
+	}
+	if len(raised) == 0 {
+		return
+	}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		if e.State == StateRetired {
+			continue
+		}
+		for _, ed := range e.Relations {
+			if sig, ok := raised[ed.To]; ok && ed.Relation == RelationMonitoredBy {
+				e.Signals = append(e.Signals, sig)
+			}
+		}
+	}
+}
+
+// deliver raises each live pipeline whose last result is a failure as a
+// signal on the pipeline and on every live entry a deployed_by relation joins
+// to it. READ OFF THE CLAIMS ON EVERY READ, as [watch] reads a monitor's: a
+// pipeline that passes again, is retired or stops deploying an entry takes its
+// signal with it. A WARNING, never danger: a failed run or deployment leaves
+// what was running before it in place, so it needs a person and breaks nothing.
+func deliver(v View) {
+	raised := map[uuid.UUID]Signal{}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		if e.Ref.Kind != KindPipeline || e.State == StateRetired {
+			continue
+		}
+		for _, f := range e.Facts {
+			if f.Fact != FactLastResult || (f.Value.Text != ResultFailed && f.Value.Text != ResultErrored) {
+				continue
+			}
+			sig := Signal{Kind: SignalPipelineFailing, Severity: SeverityWarning, Audience: AudienceHolders,
+				Since: f.ObservedAt}
+			raised[e.ID] = sig
+			e.Signals = append(e.Signals, sig)
+			break
+		}
+	}
+	if len(raised) == 0 {
+		return
+	}
+	for i := range v.Entries {
+		e := &v.Entries[i]
+		if e.State == StateRetired {
+			continue
+		}
+		for _, ed := range e.Relations {
+			if sig, ok := raised[ed.To]; ok && ed.Relation == RelationDeployedBy {
+				e.Signals = append(e.Signals, sig)
+			}
+		}
+	}
 }
 
 // mergeUse folds the uses of one entry's members into one per channel: the

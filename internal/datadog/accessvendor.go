@@ -135,29 +135,43 @@ func (v accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seatacce
 // open is [accessVendor.Open] with the transport a test points at a fake
 // region; nil is the default client.
 func (accessVendor) open(in seataccess.OpenInput, hc *http.Client) (seataccess.Session, error) {
-	if in.Config == nil {
-		return nil, fmt.Errorf("datadog: %w: no company document", integration.ErrNotConfigured)
-	}
-	cfg := in.Config.Integrations.Datadog
-	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil {
-		return nil, fmt.Errorf("datadog: %w: integrations.datadog is off or has no provisioning block",
-			integration.ErrNotConfigured)
-	}
-	client, err := NewClient(ClientOptions{Site: cfg.Provisioning.Site, HTTP: hc})
+	client, creds, provisioning, err := companyClient(in.Config, in.Env, hc)
 	if err != nil {
 		return nil, err
 	}
+	return &accessSession{client: client, creds: creds, provisioning: provisioning}, nil
+}
+
+// companyClient is the one client every pass over the company's Datadog
+// block makes, with the organization's key pair: the seat access session's
+// and the atlas read's. It answers [integration.ErrNotConfigured] where the
+// company does not connect Datadog or a key does not resolve.
+func companyClient(company *config.Company, env *config.Resolver, hc *http.Client) (
+	*Client, Credentials, *config.DatadogProvisioning, error) {
+
+	if company == nil {
+		return nil, Credentials{}, nil, fmt.Errorf("datadog: %w: no company document", integration.ErrNotConfigured)
+	}
+	cfg := company.Integrations.Datadog
+	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil {
+		return nil, Credentials{}, nil, fmt.Errorf("datadog: %w: integrations.datadog is off or has no "+
+			"provisioning block", integration.ErrNotConfigured)
+	}
+	client, err := NewClient(ClientOptions{Site: cfg.Provisioning.Site, HTTP: hc})
+	if err != nil {
+		return nil, Credentials{}, nil, err
+	}
 	creds := Credentials{}
-	if in.Env != nil {
-		creds.APIKey = strings.TrimSpace(in.Env.Value(cfg.Provisioning.APIKey))
-		creds.AppKey = strings.TrimSpace(in.Env.Value(cfg.Provisioning.AppKey))
+	if env != nil {
+		creds.APIKey = strings.TrimSpace(env.Value(cfg.Provisioning.APIKey))
+		creds.AppKey = strings.TrimSpace(env.Value(cfg.Provisioning.AppKey))
 	}
 	if creds.APIKey == "" || creds.AppKey == "" {
-		return nil, fmt.Errorf("datadog: %w: the organization's API key and application "+
-			"key did not both resolve, and Datadog refuses a write carrying only one",
+		return nil, Credentials{}, nil, fmt.Errorf("datadog: %w: the organization's API key and application "+
+			"key did not both resolve, and Datadog refuses a call carrying only one",
 			integration.ErrNotConfigured)
 	}
-	return &accessSession{client: client, creds: creds, provisioning: cfg.Provisioning}, nil
+	return client, creds, cfg.Provisioning, nil
 }
 
 // accessSession is one pass's connection to Datadog.

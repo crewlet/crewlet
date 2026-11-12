@@ -218,3 +218,50 @@ func BenchmarkAtlasClaimApply(b *testing.B) {
 		}
 	}
 }
+
+// referenceReader is a reader over the reference company's estate.
+func referenceReader(b *testing.B) *atlasdomain.Reader {
+	b.Helper()
+	db, seq, _ := seedReference(b)
+	authority, err := statelogtest.LocalReader(atlasdomain.Domain{}, db, position(seq))
+	if err != nil {
+		b.Fatal(err)
+	}
+	r, err := atlasdomain.NewReader(atlasdomain.ReaderOptions{DB: db.Reader(), Log: authority})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return r
+}
+
+// BenchmarkAtlasLogPage reads the newest page of the reference company's log,
+// at the largest page a question scans: what one atlas_log costs a data node.
+func BenchmarkAtlasLogPage(b *testing.B) {
+	r := referenceReader(b)
+	q := atlasdomain.LogQuery{Limit: atlasdomain.MaxPageSize, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	b.ResetTimer()
+	for b.Loop() {
+		page, err := r.Log(b.Context(), q)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportMetric(float64(len(page.Lines)), "lines")
+	}
+}
+
+// BenchmarkAtlasActivity counts the reference company's log with every line
+// inside the window, the worst case, and reads each entry's newest record:
+// what one atlas_activity costs a data node.
+func BenchmarkAtlasActivity(b *testing.B) {
+	r := referenceReader(b)
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	b.ResetTimer()
+	for b.Loop() {
+		activity, err := r.Activity(b.Context(), t0.Add(-time.Hour), fresh)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportMetric(float64(len(activity.Days)), "counts")
+		b.ReportMetric(float64(len(activity.Last)), "last")
+	}
+}

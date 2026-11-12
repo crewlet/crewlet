@@ -10,6 +10,7 @@ import type { Tone } from "@crewlethq/ui";
 import type {
   AtlasCoverageSource,
   AtlasFact,
+  AtlasFactView,
   AtlasHealth,
   AtlasKind,
   AtlasLane,
@@ -186,6 +187,7 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   last_result: "Last result",
   runner: "Runner",
   required: "Required",
+  pipeline_state: "State",
   harness: "Harness",
   model: "Model",
   sign_in: "Sign-in",
@@ -203,7 +205,26 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   issuer: "Issuer",
   validity: "Validity",
   certificate_type: "Type",
+  monitor_state: "State",
+  state_since: "In this state since",
 };
+
+/** The forges a repository's key names by their host. */
+const FORGE_HOSTS: Readonly<Record<string, string>> = {
+  "github.com": "GitHub",
+  "gitlab.com": "GitLab",
+};
+
+/** What a fact is called on an entry. A fact of each host says whose it is:
+ *  "Visibility on GitHub" beside "Visibility in Gitlet", never one row with
+ *  two values. A host the atlas has no name for is named by its address. */
+export function factLabel(fact: Pick<AtlasFactView, "fact" | "of">): string {
+  const label = FACTS[fact.fact];
+  if (!fact.of) return label;
+  const host = fact.of.key.split("/", 1)[0] ?? "";
+  if (host === "gitlet") return `${label} in Gitlet`;
+  return `${label} on ${FORGE_HOSTS[host] ?? host}`;
+}
 
 /** The facts of meaning, which only people and the settings decide. */
 export const MEANING: ReadonlySet<AtlasFact> = new Set(["purpose", "environment", "importance"]);
@@ -239,6 +260,10 @@ export const SIGNALS: Readonly<Record<AtlasSignalKind, string>> = {
   model_failing: "The model's last call failed, with no answer since",
   server_test_failed: "The server's last connection test failed",
   standing_alarm: "A standing alarm is raised",
+  monitor_alerting: "A monitor is alerting",
+  monitor_warning: "A monitor is warning",
+  monitor_no_data: "A monitor is receiving no data",
+  pipeline_failing: "A pipeline's last run failed",
 };
 
 /** What each kind of use the engine records is called. */
