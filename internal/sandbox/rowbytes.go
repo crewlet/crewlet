@@ -97,8 +97,9 @@ import (
 //
 // THE REST is every other field of the row, each at the bound its own writer
 // holds it to (TestTheWholeRowFitsItsBudget builds every one of them at that
-// bound, through the code that writes it, escaped at its worst), and the
-// shares stated here:
+// bound, through the code that writes it, escaped at its worst, and
+// TestTheWorstRowSetsEveryField holds that model to every field the row
+// carries), and the shares stated here:
 //
 //	a recorded answer ............... MaxAnswerBytes            524,288  (512 KiB)
 //	the copies one owes back ........ MaxAnswerBytes            524,288  (512 KiB)
@@ -106,27 +107,40 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,702,523  (with 2,987,355 to spare)
+//	every other field, measured ..... measuredOtherFields     1,975,773
+//	to spare, measured .............. measuredSpare           2,714,105
 //
-// — the identity, status and time fields; the title a launch keeps
-// ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
-// refusal beside its answer ([PendingRun.AnswerRefusal], a hundred delivery
-// ids at most, two figures and where it was posted, [MaxRefusalAddressBytes])
-// and the round's refusals kept for its review ([maxRoundRefusals]); the ask and its
-// decision, and the seats it is put to ([MaxAudienceHandles]); a held call's
-// sealed result and the call a person approved, on the held call and owed to
-// the log ([OwedCall]); the branch and the notes ([MaxNoteSealedBytes]); the
-// job's own record; the owed end and the captures; and what the job may do on
-// Gitlet — the holds of its turn ([MaxCodeHolds]), its
-// repositories ([MaxRunRepos], each held to its grammar, its cone and its
-// change's title, [MaxChangeTitleBytes], among them) and its floors. Every one
-// of them is bounded by THIS ENGINE: a person's reply, a tool's arguments and a
-// box's account of its session are each held to their share by the write that
-// puts them on the row, which refuses one past it by name ([ErrAnswerTooLarge],
-// [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather than leave it to the
-// broker; and the turn's read of its conversation is held to its line by
-// construction, made of a read the executor log bounds field by field
-// ([NewConversationBase]), the largest of which a test holds under it.
+// Every other field is the identity, status and time fields; the title a
+// launch keeps ([MaxRunTitleBytes], twice) and a colleague's question; a
+// refused reply's refusal beside its answer ([PendingRun.AnswerRefusal], a
+// hundred delivery ids at most, two figures and where it was posted,
+// [MaxRefusalAddressBytes]) and the round's refusals kept for its review
+// ([maxRoundRefusals]); the ask and its decision, and the seats it is put to
+// ([MaxAudienceHandles]); a held call's sealed result and the call a person
+// approved, on the held call and owed to the log ([OwedCall]), and the
+// decision the call carries out, whose question, for one asked in words, is
+// the body of the comment that asked it, and the delegates it was put to
+// first ([HeldCall.Acting], [HeldCall.Delegation]); the branch and the notes
+// ([MaxNoteSealedBytes]); who the turn works for and the answers that woke it
+// ([PendingRun.WorkingFor], [PendingRun.Answered]); the job's own record; the
+// owed end and the captures; and what the job may do on Gitlet: the holds of
+// its turn ([MaxCodeHolds]), its repositories ([MaxRunRepos], each held to
+// its grammar, its cone and its change's title, [MaxChangeTitleBytes], among
+// them) and its floors. Every one of them is bounded by THIS ENGINE: a
+// person's reply, a tool's arguments and a box's account of its session are
+// each held to their share by the write that puts them on the row, which
+// refuses one past it by name ([ErrAnswerTooLarge], [ErrHeldCallTooLarge],
+// [ErrCaptureUnbounded]) rather than leave it to the broker; and the turn's
+// read of its conversation is held to its line by construction, made of a
+// read the executor log bounds field by field ([NewConversationBase]), the
+// largest of which a test holds under it.
+//
+// The two measured lines are the model's, and pinned ([measuredOtherFields],
+// [measuredSpare]): what every other field weighs at its worst, a held call's
+// arguments among them as none (their key, and the two quotes their share
+// counts as well), and what is left once every line above it is counted and
+// the keys a recorded answer, its copies and the turn's read are written
+// under, each with its comma, those two quotes counted once.
 //
 // [ExtraRowBytes] is the room for the keys a LATER BUILD ADDS to the row — at
 // its top and in its sections (the job's own record, [LaunchRecord], first
@@ -252,6 +266,21 @@ const (
 	// unchanged: an answer is authorized on the seat and its requester, never
 	// on this list.
 	MaxAudienceHandles = 256
+)
+
+// The two figures the table above measures rather than shares out: what every
+// other field of the row weighs at its worst, and what the rest's share leaves
+// to spare beside it and the room a later build adds fields in, each as
+// TestTheWholeRowFitsItsBudget measures its model of the worst row.
+//
+// PINNED, so they cannot go stale: that test compares both with what the model
+// weighs, exactly, and fails until a change that moves either (a field the row
+// gains, above all) restates both here and in the table. The figure the table
+// stated before them was read by nothing, and stayed what it was while the row
+// grew.
+const (
+	measuredOtherFields = 1_975_773
+	measuredSpare       = 2_714_105
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
