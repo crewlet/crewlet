@@ -91,7 +91,7 @@ func TestASilentFileTransferIsAbandonedAndSaysWhy(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "moved no byte") {
 				t.Errorf("%s: a silent envd answered %v; want the transfer abandoned for its silence", name, err)
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			t.Fatalf("%s: a silent envd held the transfer past ten seconds against a 50ms bound", name)
 		}
 	}

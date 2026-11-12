@@ -462,7 +462,7 @@ func TestALaunchItsCallerCancelledIsNoClass(t *testing.T) {
 				cancel()
 				return
 			}
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 		}
 	}()
 	box, err := l.Create(ctx, Spec{})

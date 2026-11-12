@@ -233,14 +233,20 @@ func TestARefusalLetGoOfSendsTheReplyBackAsItCame(t *testing.T) {
 // person's "any luck?" written since included, which then carries the run on
 // as its answer. The ADR and the docs say so beside the guarantee.
 //
+// THE CLOCK MOVES ON after the question is asked, so a let-go that anchored
+// it again would anchor it at another instant, where the rig's clock left
+// standing read the two equal.
+//
 // Mutation: close the question for good once it has let a reply go (WaitsOn
 // false while DeclinedAnswers holds any), and the person's next reply is an
-// ordinary message, the run waiting on a question nothing can answer.
+// ordinary message, the run waiting on a question nothing can answer; anchor
+// the question again as the refusal is let go of, and it was not asked then.
 func TestARefusalLetGoOfLeavesItsQuestionToTheNextReply(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
 	parkOnAQuestion(t, rig)
 	asked := rig.get("t1").AskedAt
+	rig.now = rig.now.Add(time.Second)
 	rig.resumer.failWith(errors.New("this build cannot read the suspended conversation"))
 	reply := tooLargeReply(rig)
 	if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); err != nil || d != AnswerRefused {
@@ -692,14 +698,21 @@ func TestARefusalATurnTookAndDiedHoldingIsSpentByTheReap(t *testing.T) {
 // nothing on the row about the reply can be attributed once its seal does not
 // open.
 //
+// THE CLOCK MOVES ON after the question is asked, so a let-go that anchored
+// it again would anchor it at another instant, where the rig's clock left
+// standing read the two equal.
+//
 // Mutation: let it go without its announcement, as an answer whose seal does
 // not open is (dropUnopened skipping announceRefusalLetGo), and the record
-// that the run would be told stands for a run waiting on its question again.
+// that the run would be told stands for a run waiting on its question again;
+// anchor the question again as the refusal is let go of, and it was not asked
+// then.
 func TestARefusalWhoseSealDoesNotOpenIsLetGoOfAndSaidOnce(t *testing.T) {
 	t.Parallel()
 	rig := refusingRig(t)
 	parkOnAQuestion(t, rig)
 	asked := rig.get("t1").AskedAt
+	rig.now = rig.now.Add(time.Second)
 	rig.resumer.failWith(errors.New("the node is draining"))
 	reply := tooLargeReply(rig)
 	if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); err != nil || d != AnswerRefused {

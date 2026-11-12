@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -113,66 +114,79 @@ func testAHeldCallIsRecordedWithItsQuestionAndPinnedToItsJob(t *testing.T, s san
 // earlier attempt marked from that read, before it asks whether the call may
 // be made at all (internal/agent/runner's makeHeld).
 //
+// IN A BUBBLE, so the store's clock is the case's: the first mark is dated
+// the instant it is made, and the clock moves on before the call is marked or
+// claimed again. A repeat or a claim that wrote the mark again carries that
+// later instant, where on the machine's clock it read equal to the first
+// inside one tick.
+//
 // Mutation: let ReleaseClaim clear the mark, or the mark write a call already
 // marked, and the call is made twice; return the claimed row without the held
 // call's mark or result, and a later attempt reads a call it made as one
-// nobody made.
+// nobody made; date the mark again on a repeat or a claim, and it is no longer
+// the first mark's.
 func testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack(t *testing.T, s sandbox.PendingStore) {
-	ctx := t.Context()
-	launch := heldParked(t, s, "t1")
-	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "once"), sandbox.Fence{}); err != nil || !ok {
-		t.Fatalf("RecordAnswer = %v, %v", ok, err)
-	}
-	claim := func() sandbox.HeldCall {
-		t.Helper()
-		claimed, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{})
-		if err != nil || !ok || claimed.HeldCall == nil {
-			t.Fatalf("ClaimForResume = %v, %v, holding %+v, want the claim with its held call", ok, err,
-				claimed.HeldCall)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		launch := heldParked(t, s, "t1")
+		if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "once"), sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("RecordAnswer = %v, %v", ok, err)
 		}
-		return *claimed.HeldCall
-	}
-	release := func() {
-		t.Helper()
-		if ok, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{Launch: launch, To: sandbox.StatusAnswered}); err != nil || !ok {
-			t.Fatalf("ReleaseClaim = %v, %v", ok, err)
+		claim := func() sandbox.HeldCall {
+			t.Helper()
+			claimed, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{})
+			if err != nil || !ok || claimed.HeldCall == nil {
+				t.Fatalf("ClaimForResume = %v, %v, holding %+v, want the claim with its held call", ok, err,
+					claimed.HeldCall)
+			}
+			return *claimed.HeldCall
 		}
-	}
-	if read := claim(); read.Calling() || read.Made() {
-		t.Fatalf("the first claim reads %+v, want the call unmarked", read)
-	}
-	held, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
-	if err != nil || !first || !held.Calling() || held.Made() {
-		t.Fatalf("the first mark = %+v, %v, %v, want this mark the first", held, first, err)
-	}
-	again, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
-	if err != nil || first || !again.CallingAt.Equal(held.CallingAt) {
-		t.Fatalf("a second mark = %+v, %v, %v, want it found marked", again, first, err)
-	}
-	release()
-	if read := claim(); !read.Calling() || !read.CallingAt.Equal(held.CallingAt) || read.Made() {
-		t.Fatalf("the claim taken again reads %+v, want the call marked as the first mark left it", read)
-	}
-	again, first, err = s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
-	if err != nil || first {
-		t.Fatalf("a mark after the claim came back = %+v, %v, %v, want it found marked", again, first, err)
-	}
-	ok, err := s.RecordHeldResult(ctx, "t1", launch, heldMade("sealed-result"), sandbox.Fence{})
-	if err != nil || !ok {
-		t.Fatalf("RecordHeldResult = %v, %v", ok, err)
-	}
-	if ok, err = s.RecordHeldResult(ctx, "t1", launch, heldMade("another"), sandbox.Fence{}); err != nil || !ok {
-		t.Fatalf("a second RecordHeldResult = %v, %v, want it answered as recorded", ok, err)
-	}
-	made, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
-	if err != nil || first || !made.Made() || made.Result != "sealed-result" {
-		t.Fatalf("a mark after the result = %+v, %v, %v, want the first result", made, first, err)
-	}
-	release()
-	if read := claim(); !read.Calling() || !read.Made() || read.Result != "sealed-result" {
-		t.Fatalf("the claim taken again after the result reads %+v, want the call marked and the first "+
-			"result recorded", read)
-	}
+		release := func() {
+			t.Helper()
+			if ok, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{Launch: launch, To: sandbox.StatusAnswered}); err != nil || !ok {
+				t.Fatalf("ReleaseClaim = %v, %v", ok, err)
+			}
+		}
+		if read := claim(); read.Calling() || read.Made() {
+			t.Fatalf("the first claim reads %+v, want the call unmarked", read)
+		}
+		marked := time.Now().UTC()
+		held, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
+		if err != nil || !first || !held.Calling() || held.Made() || !held.CallingAt.Equal(marked) {
+			t.Fatalf("the first mark = %+v, %v, %v, want this mark the first, made at %s", held, first,
+				err, marked)
+		}
+		time.Sleep(time.Second)
+		again, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
+		if err != nil || first || !again.CallingAt.Equal(marked) {
+			t.Fatalf("a second mark = %+v, %v, %v, want it found marked at %s", again, first, err, marked)
+		}
+		release()
+		if read := claim(); !read.Calling() || !read.CallingAt.Equal(marked) || read.Made() {
+			t.Fatalf("the claim taken again reads %+v, want the call marked at %s, as the first mark "+
+				"left it", read, marked)
+		}
+		again, first, err = s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
+		if err != nil || first {
+			t.Fatalf("a mark after the claim came back = %+v, %v, %v, want it found marked", again, first, err)
+		}
+		ok, err := s.RecordHeldResult(ctx, "t1", launch, heldMade("sealed-result"), sandbox.Fence{})
+		if err != nil || !ok {
+			t.Fatalf("RecordHeldResult = %v, %v", ok, err)
+		}
+		if ok, err = s.RecordHeldResult(ctx, "t1", launch, heldMade("another"), sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("a second RecordHeldResult = %v, %v, want it answered as recorded", ok, err)
+		}
+		made, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
+		if err != nil || first || !made.Made() || made.Result != "sealed-result" {
+			t.Fatalf("a mark after the result = %+v, %v, %v, want the first result", made, first, err)
+		}
+		release()
+		if read := claim(); !read.Calling() || !read.Made() || read.Result != "sealed-result" {
+			t.Fatalf("the claim taken again after the result reads %+v, want the call marked and the first "+
+				"result recorded", read)
+		}
+	})
 }
 
 // A HELD CALL IS MARKED ONLY BY THE CLAIM OF ITS ANSWER: not while the run

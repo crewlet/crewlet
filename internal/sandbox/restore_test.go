@@ -1431,19 +1431,24 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 	t.Parallel()
 	t.Run("each record stops at its bound", func(t *testing.T) {
 		t.Parallel()
-		c := &Coordinator{pending: &silentStamps{}, recordBudget: time.Minute, sessionRetry: time.Millisecond}
-		stamp := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureBegun}
-		for name, record := range map[string]func(by time.Time){
-			"a place's reservation": func(by time.Time) { _, _ = c.reserveCapture(t.Context(), by, "t1", stamp) },
-			"an outcome's stamp":    func(by time.Time) { c.stampSettled(t.Context(), by, "t1", stamp) },
-		} {
-			began := time.Now()
-			record(began.Add(300 * time.Millisecond))
-			if took := time.Since(began); took > 10*time.Second {
-				t.Errorf("%s asked a silent store for %s past a bound 300ms off, want it stopped there",
-					name, took)
+		// IN A BUBBLE, where the silent store's wait ends at the bound's own
+		// instant: a record asks until exactly its bound, and one that asked
+		// on past it, by a second or by the record's whole budget, reads so.
+		inBubble(t, func(t *testing.T) {
+			c := &Coordinator{pending: &silentStamps{}, recordBudget: time.Minute, sessionRetry: time.Millisecond}
+			stamp := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureBegun}
+			for name, record := range map[string]func(by time.Time){
+				"a place's reservation": func(by time.Time) { _, _ = c.reserveCapture(t.Context(), by, "t1", stamp) },
+				"an outcome's stamp":    func(by time.Time) { c.stampSettled(t.Context(), by, "t1", stamp) },
+			} {
+				began := time.Now()
+				record(began.Add(300 * time.Millisecond))
+				if took := time.Since(began); took != 300*time.Millisecond {
+					t.Errorf("%s asked a silent store for %s against a bound 300ms off, want it stopped there",
+						name, took)
+				}
 			}
-		}
+		})
 	})
 	t.Run("a take reserves its place within its own time", func(t *testing.T) {
 		t.Parallel()
