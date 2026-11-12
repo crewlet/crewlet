@@ -404,17 +404,39 @@ func worstRow(t *testing.T) PendingRun {
 	// was read, and read by a take that named itself — the engine's takes name
 	// themselves by a fresh UUID — and was settled unanswered, and then by a
 	// launch's brief that told it again, keeping that take's read beside its
-	// own: every field of both reads at its widest.
+	// own: every field of both reads at its widest, marked restarted too. And
+	// each served to one job's hooks as often as a note may be
+	// ([MaxNoteServes]), every serve lost to a cancel, at the widest step, and
+	// keeping the call it answered at the widest the store keeps one: each
+	// half at [MaxNoteCallBytes] in the bytes that escape the most.
 	read := func() *NoteRead {
 		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
-			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true}
+			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true,
+			Restarted: true}
+	}
+	serves := func() []HookServed {
+		out := make([]HookServed, MaxNoteServes)
+		for i := range out {
+			out[i] = HookServed{Take: uuid.NewString(), Launch: uuid.NewString(), Boundary: "tool_batch",
+				Iteration: 99, At: worstAt, Lost: ServeCancelled,
+				Call: &NoteCall{Session: markup(MaxNoteCallBytes), ID: markup(MaxNoteCallBytes)}}
+		}
+		return out
 	}
 	notes := make([]RunNote, 10)
 	for i := range notes {
 		told := read()
 		told.Retold = read()
 		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
-			Served: uuid.NewString(), Read: told}
+			Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
+	}
+	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]), each sealed
+	// at a note's bound, for a job, served as often and read by its job's own
+	// step: no brief tells an item again, the next launch removing it.
+	for range MaxJobItems {
+		notes = append(notes, RunNote{ID: uuid.NewString(), Seq: len(notes) + 1,
+			Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt, Served: uuid.NewString(), Place: math.MaxInt,
+			Serves: serves(), For: uuid.NewString(), Read: read()})
 	}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), BridgeSeq: math.MaxInt,

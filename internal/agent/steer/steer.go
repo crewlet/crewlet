@@ -88,9 +88,12 @@ import (
 // conversation, and a conversation belongs in chat or on the work item, where
 // it is threaded, kept and answered. The bound is also what keeps one step's
 // reading from being a wall of notes the model weighs against its own task.
-// "Unread" on a run's record means not yet recorded read, so a note a harness has
-// been handed and has not yet confirmed putting in front of its model still
-// counts.
+// "Unread" on a run's record means waiting for a step to read it: a note a
+// poll served its harness (OpenCode's), which has not yet confirmed putting it
+// in front of its model at its next step, still counts; a note a hook's answer
+// handed to the model at the step it answered (a live hook serve on the run's
+// record, internal/sandbox's RunNote.LiveServe) does not, whatever its
+// session's record later says, and counts again once its serve is lost.
 const MaxPendingNotes = 5
 
 // MaxTurnNotes bounds the notes one turn takes in all, read or not.

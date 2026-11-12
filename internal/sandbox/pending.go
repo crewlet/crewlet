@@ -3480,17 +3480,31 @@ type PendingStore interface {
 	// [NoteFiling.MaxWaiting] waiting [NoteFull]; a decided ending, or no
 	// record at all, is [NoteClosed]. NONE OF THOSE IS AN ERROR.
 	//
+	// THE TWO BOUNDS ARE A PERSON'S: they count a person's notes alone, and
+	// toward the waiting bound a note a hook's live serve handed to the
+	// record's job ([RunNote.LiveServe]) no longer waits, its hook's answer
+	// having handed it to the model at the step it answered; a note a poll
+	// served still waits until its harness confirms it. AN ITEM FOR ONE JOB
+	// ([RunNote.For]) is filed only while that job is the record's, and is
+	// [NoteClosed] otherwise, since nothing in the job it names will read it;
+	// it is held to [MaxJobItems] items for that job, [NoteSpent] past it, and
+	// counts toward no bound of a person's.
+	//
 	// NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an
 	// append to the turn, never an ownership decision. The note must carry
 	// its id and its seal, a seal within [MaxNoteSealedBytes]
-	// ([ErrNoteTooLarge]); the store opens nothing.
+	// ([ErrNoteTooLarge]); the store opens nothing, and files it waiting and
+	// served to nobody, whatever reads or serves the filing hands in.
 	FileNote(ctx context.Context, turnID string, filing NoteFiling) (NoteFiled, PendingRun, error)
 
 	// TakeNotes records the notes a take names read, where its Read says,
 	// and answers the ones THIS CALL recorded — each with its read. Pinned to
 	// the take's job, its statuses, an undecided ending and its lease
-	// ([NoteTake]); a take that fails any of them, a note no longer waiting
-	// and a record that is gone are each nothing taken, never an error.
+	// ([NoteTake]); a take that fails any of them, a note no longer waiting,
+	// an item for a job its Read does not name ([RunNote.IsFor]) and a record
+	// that is gone are each nothing taken, never an error. Each read is at the
+	// take's own place among the record's reads, but a note a hook's serve
+	// placed, which is read at its own ([RunNote.Place]).
 	//
 	// THE READ IS THE HANDOVER: a caller hands a note to a model only once
 	// this has recorded it read, so a note is never delivered twice by two
@@ -3502,9 +3516,10 @@ type PendingStore interface {
 	// in a status the serve names, its ending undecided ([NoteServe]) — and
 	// answers every one of them that waits served to that job, marked by this
 	// call or an earlier one, in the record's order. A serve that fails its
-	// pin, a note no longer waiting, and a record that is gone or whose ending
-	// is decided are each nothing served, never an error; a serve that names no
-	// job or no status is an error.
+	// pin, a note no longer waiting, an item for another job
+	// ([RunNote.IsFor]), and a record that is gone or whose ending is decided
+	// are each nothing served, never an error; a serve that names no job or
+	// no status is an error.
 	//
 	// THE MARK BEFORE THE HANDOVER: a caller hands a harness a note to deliver
 	// itself only once this has answered it served, so a note the harness may
@@ -3528,6 +3543,70 @@ type PendingStore interface {
 	// NO PIN AND NO FENCE: what a take recorded is a fact about the take,
 	// true whoever holds the record and whatever its status or its ending.
 	SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error)
+
+	// ServeHook records the notes a hook's serve names SERVED to its job's
+	// hook ([HookServed]), and answers the ones THIS CALL served, each with its
+	// serves. Pinned to the serve's job, its statuses and an undecided ending
+	// ([HookServe]); a serve that fails its pin, and a record that is gone,
+	// are each nothing served, never an error; one that names no job, no
+	// status or no take is an error. In ONE write, on the record as it stands:
+	//
+	//   - a waiting note's live serve to the job ([RunNote.LiveServe]) that
+	//     answered a call the serve names cancelled ([HookServe.Cancelled]) is
+	//     lost to the cancel ([ServeCancelled]);
+	//   - a waiting note's serve to the job of a take the serve names
+	//     unanswered ([HookServe.Unanswered]) is removed, its hook having been
+	//     answered nothing, so it spends nothing of the bound;
+	//   - then every note named that waits, is for the job ([RunNote.IsFor]),
+	//     holds no live serve to it and fewer than [MaxNoteServes] serves to it
+	//     (a list of another job's counting none, and replaced) is served: the
+	//     serve appended at the writer's clock, its call kept whole within
+	//     [MaxNoteCallBytes] or as none, [RunNote.Served] naming the job, and a
+	//     note no hook was served before placed at the write's own place among
+	//     the reads ([RunNote.Place]), the record's count of them moved once.
+	//
+	// [RunNote.Served] is cleared wherever the first two steps leave no live
+	// serve to the job, and the record is written where any step changed it.
+	//
+	// A SERVE, NEVER A READ: a caller answers a hook a note only once this has
+	// answered it served, and nothing here records it read, the job's own
+	// session being what says whether the hook took it
+	// ([PendingStore.SettleHook]). So a note a harness may hold is never one
+	// the record says nothing of, nor one it says was read while the session
+	// lacks it.
+	ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error)
+
+	// SettleHook settles the serves of a waiting note to the job the settle
+	// names ([HookSettle]), and acts on no other note, in this order:
+	//
+	//   - the serve of a take named UNANSWERED is removed, its hook having
+	//     been answered nothing, so no session holds the note from it;
+	//   - a note one of whose serves is of a take named HELD is READ, at its
+	//     place among the reads ([RunNote.Place]), off the EARLIEST such serve:
+	//     that serve's take, step and instant, [RunNote.Served] naming the job
+	//     and its serves kept as the read's history. One with no serve of a
+	//     take held and one of a take named RESTARTED is read so, marked
+	//     ([NoteRead.Restarted]). The session outranks a cancel and an
+	//     absence: a note read so is read whatever its serves lost;
+	//   - on a note not read so, a live serve that answered a call named
+	//     CANCELLED is lost to the cancel, and a serve, live or lost to a
+	//     cancel, of a take named ABSENT is lost absent ([ServeAbsent]).
+	//
+	// [RunNote.Served] is cleared wherever no live serve to the job is left. It
+	// answers every note it changed and, where it names a take held or
+	// restarted, every note on the record read off a serve to the job, an
+	// earlier settle's read included: so a settle made again, finding its
+	// verdict landed, answers what it read.
+	//
+	// WRITTEN ONLY WHERE IT CHANGED SOMETHING, but for a take named unanswered
+	// that no serve on the record names: that take's write may still be in
+	// flight, so the record is written all the same, and the serve,
+	// conditioned on a version before this one, never lands after it. NO PIN
+	// AND NO FENCE: what a hook's serve handed over is a fact about the job,
+	// true whoever holds the record and whatever its status or its ending. A
+	// record that is gone, before the settle or under it, answers nothing,
+	// never an error; a settle that names no job is an error.
+	SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error)
 
 	// MarkPulled records that the job named has asked for its notes at least
 	// once ([RunSteer.Pulled]), reporting whether this call recorded it.

@@ -163,7 +163,8 @@ const (
 	// adds to the row, at its top ([PendingRun.Extra]) or in one of its
 	// sections ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
 	// [SessionCapture.Extra], [ConversationBase.Extra] and its session's and
-	// siblings', [RunSteer.Extra] and its notes'), and that this build
+	// siblings', [RunSteer.Extra] and its notes', their hooks' serves' and
+	// the calls those answered), and that this build
 	// carries without reading: STATED HERE, so the next field a
 	// build adds is added inside it, and the build that adds it moves its own
 	// figure out of this one rather than out of a share somebody else's
@@ -229,6 +230,45 @@ const (
 	// at its worst to — and a turn takes at most ten of them
 	// (steer.MaxTurnNotes), each kept on the row once read.
 	MaxNoteSealedBytes = 16 << 10
+
+	// MaxNoteServes bounds the serves of one note, or one job's item, to one
+	// job's hooks ([RunNote.Serves]), held by [PendingStore.ServeHook]: its
+	// first serve and two after losses. THREE, A JUDGMENT VALUE no run of
+	// losses has measured. A serve is lost when its harness gives its hook's
+	// call up, which takes an answer later than the hook's ten seconds
+	// (internal/sandbox/executor's ClaudeHookTimeout): a relay frame retried on
+	// top of a slow take, or a store's leader election across a boundary. One
+	// serve again delivers a note whose answer was lost once, and a second
+	// rides out a stall that spans two boundaries; past two losses in a row the
+	// path holds answers persistently, and each serve more would cost the job
+	// one more ten-second stall. A serve its hook was answered nothing for is
+	// removed rather than lost ([HookServe.Unanswered]), so a slow store spends
+	// none of it. Past it the note is passed over by the job's hooks and waits,
+	// served or lost, for the review or the next launch's brief, which read it
+	// at its place.
+	MaxNoteServes = 3
+
+	// MaxNoteCallBytes bounds each half of the call a hook's serve answered
+	// ([NoteCall]): its MCP session's id and its JSON-RPC id, raw. SIXTY-FOUR
+	// BYTES: the session is the bridge's own (go-sdk mints it as rand.Text, 26
+	// characters) and the id a harness's counter, so an ordinary call is a
+	// fraction of it. A call past it is kept as none, never cut, so a cut call
+	// can never match another cut alike: its serve is then settled only by the
+	// job's own session.
+	MaxNoteCallBytes = 64
+
+	// MaxJobItems bounds the items for one job a run's row holds
+	// ([RunNote.For]), apart from a person's notes: held by every write that
+	// files one, by one count ([jobItems]), a filing answering [NoteSpent]
+	// past it ([PendingStore.FileNote]). TEN: an item for one job is what that
+	// job alone is to be told, such as a call its predecessor still ran when it
+	// was replaced, which is ordinarily one or a few, and Claude Code runs at
+	// most ten tool calls at once by default
+	// (CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY, which nothing in this tree sets).
+	// Ten at the widest seal ([MaxNoteSealedBytes]), each served
+	// [MaxNoteServes] times and read, are about a quarter of a mebibyte of the
+	// row, which TestTheWholeRowFitsItsBudget holds.
+	MaxJobItems = 10
 
 	// MaxAudienceHandles bounds the seats a parked question is put to
 	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`

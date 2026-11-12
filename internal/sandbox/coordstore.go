@@ -421,7 +421,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// is whether its harness asked for them ([RunSteer.Pulled]), which a new
 		// job has not; and the brief's notes are read BY THIS JOB, in the
 		// write that names it, so its harness can never take them again — and
-		// the box's, if the launch hands any, filed after them.
+		// the box's, if the launch hands any, filed after them. An item for
+		// the job before alone ([RunNote.For]) is that job's too, and goes:
+		// [openNotes] removes every one first.
 		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
 		if len(existing.Steer.Seat) == 0 {
 			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)

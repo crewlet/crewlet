@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner/steersourcetest"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -802,4 +803,217 @@ func TestANoteAtItsWorstFitsWhatARunsRowKeepsOfOne(t *testing.T) {
 			len(note.Sealed), sandbox.MaxNoteSealedBytes)
 	}
 	t.Logf("a note at its worst seals to %d bytes of the %d", len(note.Sealed), sandbox.MaxNoteSealedBytes)
+}
+
+// fileItemFor seals an item for job as a note is sealed, and files it on
+// turnID's record under the turn's bounds.
+func fileItemFor(t *testing.T, runs *runSteers, store sandbox.PendingStore, turnID, id, job string) {
+	t.Helper()
+	n, err := runs.seal(turnID, steer.Note{ID: id, Text: "item for the job " + id, By: "founder",
+		ByKind: iam.ActorHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.For = job
+	filed, _, err := store.FileNote(t.Context(), turnID, sandbox.NoteFiling{Note: n,
+		MaxWaiting: steer.MaxPendingNotes, MaxNotes: steer.MaxTurnNotes})
+	if err != nil || filed != sandbox.NoteAccepted {
+		t.Fatalf("file item %s = %s, %v", id, filed, err)
+	}
+}
+
+// EVERY READER OF A RUN'S WAITING NOTES NAMES ITS JOB. An item for one job
+// (sandbox.RunNote.For) is handed to a reader inside that job alone, so every
+// reader of the record's waiting notes names the job it reads inside: the run
+// inbox the job it serves, at a batch off its view and at the finish off the
+// store, each handing the job its own item; and the review and a relaunch's
+// brief none, neither handed an item, nor the review's round ended for one.
+// An item for a job the record no longer names reaches no reader.
+//
+// Mutation: drop the job a reader names, name another, or keep no item in the
+// view a reader filters, and a check goes red.
+func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
+	t.Parallel()
+	t.Run("each job its own", func(t *testing.T) {
+		t.Parallel()
+		runs, _ := steersOver(t, steerRing, sandbox.NewCoordStore(coordmem.NewFleet()))
+		sealed := func(id, job string) sandbox.RunNote {
+			t.Helper()
+			n, err := runs.seal("run-1", steer.Note{ID: id, Text: "note " + id, By: "founder",
+				ByKind: iam.ActorHuman})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.For = job
+			return n
+		}
+		notes := []sandbox.RunNote{sealed("person", ""), sealed("mine", "job-1"), sealed("other", "job-0")}
+		for job, want := range map[string][]string{"": {"person"}, "job-1": {"person", "mine"},
+			"job-0": {"person", "other"}} {
+			var got []string
+			for _, o := range runs.waiting("run-1", notes, job) {
+				got = append(got, o.held.ID)
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("a reader inside job %q is handed %v, want %v", job, got, want)
+			}
+		}
+	})
+	t.Run("the run inbox hands its job its item", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		runs, _ := steersOver(t, steerRing, store)
+		launch := workingRun(t, store, runs, "run-1")
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		fileItemFor(t, runs, store, "run-1", "i-1", launch)
+		inbox := boundInbox(t, runs, store, "run-1", launch)
+		viewHolds(t, inbox, 2)
+		if answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") ||
+			!strings.Contains(answer, "item for the job i-1") {
+			t.Errorf("the batch's hook was answered %q, want the person's note and the job's own item", answer)
+		}
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag it", By: "founder"})
+		fileItemFor(t, runs, store, "run-1", "i-2", launch)
+		if answer := inbox.Take(ctx, mcpbridge.SteerEventFinish); !strings.Contains(answer, "and tag it") ||
+			!strings.Contains(answer, "item for the job i-2") {
+			t.Errorf("the finish's hook was answered %q, want the person's note and the job's own item", answer)
+		}
+	})
+	t.Run("the poll passes another job's item over", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		fleet := coordmem.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
+		runs, _ := steersOver(t, steerRing, store)
+		launch := workingRun(t, store, runs, "run-1")
+		// AN ITEM FOR A JOB THE RECORD NO LONGER NAMES, written onto the record
+		// whole, as a party that reaches the store could: ahead of the
+		// person's note, so a poll that stopped at it answered nothing.
+		other, err := runs.seal("run-1", steer.Note{ID: "i-other", Text: "item for the job before", By: "founder",
+			ByKind: iam.ActorHuman})
+		if err != nil {
+			t.Fatal(err)
+		}
+		other.For = "job-before"
+		if _, ok, err := fleet.MutateSandboxRun(ctx, "run-1", func(current coord.Record) (coord.SandboxRunChange, error) {
+			var row sandbox.PendingRun
+			if err := json.Unmarshal(current.Value, &row); err != nil {
+				return coord.SandboxRunChange{}, err
+			}
+			row.Steer.Seq++
+			other.Seq = row.Steer.Seq
+			row.Steer.Notes = append(row.Steer.Notes, other)
+			raw, err := json.Marshal(row)
+			return coord.SandboxRunChange{Put: raw}, err
+		}); err != nil || !ok {
+			t.Fatalf("write the other job's item: %v %v", ok, err)
+		}
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		inbox := boundInbox(t, runs, store, "run-1", launch)
+		viewHolds(t, inbox, 2)
+		if notes, _ := inbox.Wait(ctx, 0); len(notes) != 1 || notes[0].ID != "n-1" {
+			t.Errorf("the job's poll was answered %+v, want the person's note alone", notes)
+		}
+	})
+	t.Run("the review and a brief take no item", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		runs, _ := steersOver(t, steerRing, store)
+		launch := workingRun(t, store, runs, "run-1")
+		fileItemFor(t, runs, store, "run-1", "i-1", launch)
+		source := claimedSource(t, store, runs, launch)
+		eventually(t, "the segment's view to hold the item", func() bool {
+			view, opened, _ := source.watch.snapshot()
+			return view.Found && len(opened) == 1
+		})
+		if source.Waiting() {
+			t.Error("the review reports a note waiting where only the job's item waits")
+		}
+		if brief := source.Brief(ctx); len(brief.Notes) != 0 {
+			t.Errorf("a relaunch's brief carries %+v, want no job's item", brief.Notes)
+		}
+		if taken := source.Take(ctx, reviewRound(1)); len(taken) != 0 {
+			t.Errorf("the review took %+v, want no job's item", taken)
+		}
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		eventually(t, "the review to see the person's note", source.Waiting)
+		if taken := source.Take(ctx, reviewRound(2)); len(taken) != 1 || taken[0].ID != "n-1" {
+			t.Errorf("the review took %+v, want the person's note alone", taken)
+		}
+	})
+}
+
+// A TURN CARRIES NO JOB'S ITEM. What a segment resuming the turn carries into
+// every later phase is the notes the turn has read, a person's, and the marks
+// a relaunch's brief tells again are a person's notes' too: an item for one
+// job (sandbox.RunNote.For) was that job's alone, so it is never carried nor
+// told again, read or marked, and the person's notes read around it keep the
+// order they were read in.
+//
+// Mutation: carry a read item, or tell a marked one again, and the case goes
+// red.
+func TestATurnCarriesNoJobsItem(t *testing.T) {
+	t.Parallel()
+	runs, _ := steersOver(t, steerRing, sandbox.NewCoordStore(coordmem.NewFleet()))
+	at := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	sealed := func(seq int, id, job string, order int, unanswered bool) sandbox.RunNote {
+		t.Helper()
+		n, err := runs.seal("run-1", steer.Note{ID: id, Text: "note " + id, By: "founder", ByKind: iam.ActorHuman})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.Seq, n.For = seq, job
+		n.Read = &sandbox.NoteRead{At: at, Order: order, Phase: "execute", Iteration: 1, Round: 1,
+			Boundary: string(types.SteerBoundaryToolBatch), Launch: "job-1", Unanswered: unanswered}
+		return n
+	}
+	run := sandbox.PendingRun{TurnID: "run-1", Steer: sandbox.RunSteer{Seq: 4, Reads: 4, Notes: []sandbox.RunNote{
+		sealed(1, "use-postgres", "", 1, false),
+		sealed(2, "late-call", "job-1", 2, false),
+		sealed(3, "use-sqlite", "", 3, true),
+		sealed(4, "marked-call", "job-1", 4, true),
+	}}}
+	var carried []string
+	for _, r := range runs.carried(run) {
+		carried = append(carried, r.Note.ID)
+	}
+	if want := []string{"use-postgres", "use-sqlite"}; !slices.Equal(carried, want) {
+		t.Errorf("the turn carries %v, want the person's notes alone, in the order read: %v", carried, want)
+	}
+	if got := unansweredNotes(run); !slices.Equal(got, []string{"use-sqlite"}) {
+		t.Errorf("a relaunch's brief tells %v again, want the person's marked note alone", got)
+	}
+}
+
+// A NOTE WHOSE SERVE A CANCEL LOST IS TOLD AS ONE A SESSION MAY ALREADY SHOW. A
+// continued session is told a note its harness was served and never confirmed
+// as one it may already show. A hook's serve its harness cancelled clears the
+// note's Served, but the hook's answer may have outrun the cancel, so the note
+// is told so all the same, as it is under a loss this build does not know;
+// only where the job's whole session proves its lost serve absent is it told
+// plainly. And an item for one job is told as nothing here, served or not.
+//
+// Mutation: key the set on Served alone, count a serve proven absent, or list
+// an item, and the case goes red.
+func TestANoteWhoseServeACancelLostIsToldAsOneItMayShow(t *testing.T) {
+	t.Parallel()
+	serves := func(lost sandbox.ServeLoss) []sandbox.HookServed {
+		return []sandbox.HookServed{{Take: "take-1", Launch: "job-1", Boundary: "tool_batch", Lost: lost}}
+	}
+	run := sandbox.PendingRun{Steer: sandbox.RunSteer{Notes: []sandbox.RunNote{
+		{ID: "polled", Served: "job-1"},
+		{ID: "hook-live", Served: "job-1", Place: 1, Serves: serves("")},
+		{ID: "hook-cancelled", Place: 2, Serves: serves(sandbox.ServeCancelled)},
+		{ID: "hook-absent", Place: 3, Serves: serves(sandbox.ServeAbsent)},
+		{ID: "hook-later-loss", Place: 4, Serves: serves("dropped")},
+		{ID: "unserved"},
+		{ID: "item", For: "job-1", Served: "job-1", Place: 5, Serves: serves("")},
+		{ID: "item-cancelled", For: "job-1", Place: 6, Serves: serves(sandbox.ServeCancelled)},
+	}}}
+	if got, want := servedNotes(run), []string{"polled", "hook-live", "hook-cancelled", "hook-later-loss"}; !slices.Equal(
+		got, want) {
+		t.Errorf("a continued session is told %v as notes it may already show, want %v", got, want)
+	}
 }

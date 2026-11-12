@@ -57,6 +57,20 @@ var noteCases = []struct {
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
 	{"ATakeWhoseAnswerWasLostIsSettledByItsIdentity", testATakeWhoseAnswerWasLostIsSettledByItsIdentity},
 	{"ANoteIsServedOnlyToItsJobWhileItWaits", testANoteIsServedOnlyToItsJobWhileItWaits},
+	{"AHooksServeRecordsTheServeAndNoRead", testAHooksServeRecordsTheServeAndNoRead},
+	{"AServeLosesTheCallsItsInboxHeardCancelledFirst", testAServeLosesTheCallsItsInboxHeardCancelledFirst},
+	{"AServeRemovesTheTakesItsInboxSawUnansweredFirst", testAServeRemovesTheTakesItsInboxSawUnansweredFirst},
+	{"AVerdictReadsAHeldServeAtItsNotesPlace", testAVerdictReadsAHeldServeAtItsNotesPlace},
+	{"ARestartedTakeIsReadMarkedSo", testARestartedTakeIsReadMarkedSo},
+	{"AVerdictLosesAServeItIsToldIsAbsent", testAVerdictLosesAServeItIsToldIsAbsent},
+	{"AHeldTakeOutranksACancel", testAHeldTakeOutranksACancel},
+	{"ACancelAndAVerdictCommute", testACancelAndAVerdictCommute},
+	{"EveryReadOfAPlacedNoteTakesItsPlace", testEveryReadOfAPlacedNoteTakesItsPlace},
+	{"AFilingCountsNoHookServedNoteAsWaiting", testAFilingCountsNoHookServedNoteAsWaiting},
+	{"AnItemIsFiledOnlyWhileItsJobIsTheRecords", testAnItemIsFiledOnlyWhileItsJobIsTheRecords},
+	{"AJobsItemsAreBoundedApartFromAPersonsNotes", testAJobsItemsAreBoundedApartFromAPersonsNotes},
+	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
+	{"ACallPastItsBoundIsRecordedAsNoCall", testACallPastItsBoundIsRecordedAsNoCall},
 }
 
 // noteRawCases are the note cases that read the raw record.
@@ -69,6 +83,12 @@ var noteRawCases = []struct {
 		testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite},
 	{"AStateTheNoteViewCannotReadIsPassedOver", testAStateTheNoteViewCannotReadIsPassedOver},
 	{"ASettleOfATakeThatRecordedNothingFencesItsWrite", testASettleOfATakeThatRecordedNothingFencesItsWrite},
+	{"ACancelLosesOnlyALiveServeOfItsJobOnItsSession", testACancelLosesOnlyALiveServeOfItsJobOnItsSession},
+	{"AnUnansweredServeIsRemovedAndFencesItsWriteInFlight",
+		testAnUnansweredServeIsRemovedAndFencesItsWriteInFlight},
+	{"AVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob",
+		testAVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob},
+	{"EveryWriteHandsAnItemOnlyToItsJob", testEveryWriteHandsAnItemOnlyToItsJob},
 }
 
 // The turn's bounds every filing here is held to: internal/agent/steer's,
@@ -1108,6 +1128,9 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 // call, a filing, a take, a pull, a claim and its release, a park, and a
 // relaunch's reset that carries the round on — which replaces the job's record
 // whole, so the key a later build added to it goes with the job it was about.
+// And at two levels more, seeded beside them: a hook's serve of a note and
+// the call that serve answered, read back after a hook's serve and a settle of
+// one as well.
 //
 // Mutation: drop any one section's Extra from its decode or its encode, and the
 // key at that level is gone after the first write; carry the job's record's
@@ -1129,16 +1152,21 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.ServeHook(ctx, turn, hookServe(launch, "served-take", callNo(1), "n-2")); err != nil {
+		t.Fatal(err)
+	}
 
 	// THE NEWER BUILD'S WRITE: one key of its own at every level.
 	seeded := map[string]string{
-		"the notes section": `{"quorum":2}`,
-		"a note":            `"high"`,
-		"a note's read":     `"hook"`,
-		"a bridged call":    `{"span":"s-1"}`,
-		"a dropped call":    `{"span":"s-3"}`,
-		"the log":           `{"kept":"all"}`,
-		"the job's record":  `{"span":"s-2"}`,
+		"the notes section":         `{"quorum":2}`,
+		"a note":                    `"high"`,
+		"a note's read":             `"hook"`,
+		"a hook's serve":            `{"proof":"p-1"}`,
+		"the call a serve answered": `"sse"`,
+		"a bridged call":            `{"span":"s-1"}`,
+		"a dropped call":            `{"span":"s-3"}`,
+		"the log":                   `{"kept":"all"}`,
+		"the job's record":          `{"span":"s-2"}`,
 	}
 	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
 		var row map[string]any
@@ -1150,6 +1178,9 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		first := section["notes"].([]any)[0].(map[string]any)
 		first["priority"] = json.RawMessage(seeded["a note"])
 		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
+		served := section["notes"].([]any)[1].(map[string]any)["serves"].([]any)[0].(map[string]any)
+		served["proof"] = json.RawMessage(seeded["a hook's serve"])
+		served["call"].(map[string]any)["transport"] = json.RawMessage(seeded["the call a serve answered"])
 		row["launch_record"].(map[string]any)["trace"] = json.RawMessage(seeded["the job's record"])
 		raw, err := json.Marshal(row)
 		return coord.SandboxRunChange{Put: raw}, err
@@ -1190,6 +1221,12 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 					Read     *struct {
 						Carrier json.RawMessage `json:"carrier"`
 					} `json:"read"`
+					Serves []struct {
+						Proof json.RawMessage `json:"proof"`
+						Call  *struct {
+							Transport json.RawMessage `json:"transport"`
+						} `json:"call"`
+					} `json:"serves"`
 				} `json:"notes"`
 			} `json:"steer"`
 			Job struct {
@@ -1219,12 +1256,17 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		}
 		got := map[string]string{"the notes section": string(row.Steer.Quorum)}
 		for _, n := range row.Steer.Notes {
-			if n.ID != "n-1" {
-				continue
-			}
-			got["a note"] = string(n.Priority)
-			if n.Read != nil {
-				got["a note's read"] = string(n.Read.Carrier)
+			switch {
+			case n.ID == "n-1":
+				got["a note"] = string(n.Priority)
+				if n.Read != nil {
+					got["a note's read"] = string(n.Read.Carrier)
+				}
+			case n.ID == "n-2" && len(n.Serves) > 0:
+				got["a hook's serve"] = string(n.Serves[0].Proof)
+				if n.Serves[0].Call != nil {
+					got["the call a serve answered"] = string(n.Serves[0].Call.Transport)
+				}
 			}
 		}
 		got["the log"] = string(log.Retention)
@@ -1274,6 +1316,15 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		t.Fatal(err)
 	}
 	check("a pull", true)
+	if _, err := s.ServeHook(ctx, turn, hookServe(launch, "later-take", callNo(2), "n-3")); err != nil {
+		t.Fatal(err)
+	}
+	check("a hook's serve", true)
+	if settled, err := s.SettleHook(ctx, turn, sandbox.HookSettle{Launch: launch,
+		Unanswered: []string{"later-take"}}); err != nil || len(settled) != 1 {
+		t.Fatalf("the settle of the later serve = %d, %v, want its note", len(settled), err)
+	}
+	check("a hook's settle", true)
 	claimed := mustClaim(t, s, turn)
 	check("the claim", true)
 	mustRelease(t, s, claimed)

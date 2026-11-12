@@ -2457,3 +2457,152 @@ func (providerFunc) Model() string { return "scripted" }
 func (f providerFunc) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	return f(ctx, req)
 }
+
+// AN ENDING REPORTS A NOTE A HOOK WAS SERVED AT THAT SERVE. A note a run's hook
+// was served and its job's session never confirmed is UNCONFIRMED at the step
+// the hook answered, of the job it served and at the iteration the serve kept,
+// never at a poll's step; one whose every serve was lost, here to its harness's
+// cancel, and that no step read since, is MISSED at the last of them; and an
+// item for the job, served as a note is, is reported as nothing.
+//
+// Mutation: report a hook's live serve at a poll's step or at no step, report a
+// note whose serves were all lost as expired, or report the job's item, and the
+// case goes red.
+func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	for _, id := range []string{"n-live", "n-lost"} {
+		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
+	}
+	fileItemFor(t, runs, store, "run-1", "i-1", launch)
+	serve := func(take string, call int, boundary types.SteerBoundary, iteration int, ids ...string) {
+		t.Helper()
+		if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: ids, Launch: launch,
+			Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: take, Boundary: string(boundary),
+				Iteration: iteration, Call: &sandbox.NoteCall{Session: "mcp-session-1", ID: fmt.Sprint(call)}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serve("take-1", 1, types.SteerBoundaryFinish, 4, "n-live", "i-1")
+	serve("take-2", 2, types.SteerBoundaryToolBatch, 2, "n-lost")
+	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+		Cancelled: []sandbox.NoteCall{{Session: "mcp-session-1", ID: "2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	run := mustRow(t, store, "run-1")
+	if run.Launch.Iteration == 4 {
+		t.Fatal("the premise: the record keeps the serve's own iteration for its job")
+	}
+	run.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)}
+	if err := runs.ended(ctx, run); err != nil {
+		t.Fatalf("ended: %v", err)
+	}
+	got := map[string]types.AgentTurnSteered{}
+	for _, rec := range steered(p) {
+		got[rec.NoteID] = rec
+	}
+	if rec := got["n-live"]; rec.Outcome != types.SteerUnconfirmed || rec.Phase != types.PhaseExecute ||
+		rec.Round != 1 || rec.Boundary != types.SteerBoundaryFinish || rec.Iteration != 4 || rec.LaunchID != launch {
+		t.Errorf("the note a live serve handed over was reported %+v, want it unconfirmed at the finish, "+
+			"iteration 4, of job %s", rec, launch)
+	}
+	if rec := got["n-lost"]; rec.Outcome != types.SteerMissed || rec.Boundary != types.SteerBoundaryToolBatch ||
+		rec.Iteration != 2 || rec.LaunchID != launch {
+		t.Errorf("the note whose serve a cancel lost was reported %+v, want it missed at the tool batch, "+
+			"iteration 2, of job %s", rec, launch)
+	}
+	if rec, ok := got["i-1"]; ok || len(got) != 2 {
+		t.Errorf("the ending reported %d notes, the job's item among them: %+v", len(got), rec)
+	}
+}
+
+// AN ITEM FOR A JOB NEVER LEAVES IT. An item for one job (sandbox.RunNote.For)
+// is that job's alone. On an OpenCode job its poll serves it and its
+// confirmation reads it, as a person's note; and nothing outside the job takes,
+// tells or reports it, whatever became of it: no record says it was delivered,
+// the review takes none and ends no round for one, a relaunch's brief tells
+// none, the segment resuming the turn carries none and tells none as one its
+// session may show, the ending reports none, and the next launch's write
+// removes it. (The hook's half, on a Claude Code job, is the hook's serve's.)
+//
+// Mutation: let any of those readers take, tell, carry, record or report the
+// item, or keep it past the next launch, and the case goes red.
+func TestAnItemForAJobNeverLeavesIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	// THE ITEMS FILED FIRST, so the record of a confirmation that took one
+	// would be published ahead of the person's note's.
+	fileItemFor(t, runs, store, "run-1", "i-read", launch)
+	fileItemFor(t, runs, store, "run-1", "i-waiting", launch)
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, inbox, 3)
+	polled, _ := inbox.Wait(ctx, 0)
+	var ids []string
+	for _, n := range polled {
+		ids = append(ids, n.ID)
+	}
+	if want := []string{"i-read", "i-waiting", "n-1"}; !slices.Equal(ids, want) {
+		t.Fatalf("the job's poll was answered %v, want its own items and the person's note: %v", ids, want)
+	}
+	if err := inbox.Read(ctx, []string{"i-read", "n-1"}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if read := readOn(ctx, store, "run-1", "i-read"); read == nil || read.Launch != launch ||
+		read.Boundary != string(types.SteerBoundaryStep) {
+		t.Fatalf("the job's confirmed item is read %+v, want it read at job %s's step", read, launch)
+	}
+	eventually(t, "the person's note recorded delivered", func() bool { return len(steered(p)) > 0 })
+
+	source := claimedSource(t, store, runs, launch)
+	eventually(t, "the segment's view to hold the waiting item", func() bool {
+		view, opened, _ := source.watch.snapshot()
+		return view.Found && len(opened) == 1
+	})
+	if source.Waiting() {
+		t.Error("the review reports a note waiting where only the job's item waits")
+	}
+	if taken := source.Take(ctx, reviewRound(1)); len(taken) != 0 {
+		t.Errorf("the review took %+v, want no job's item", taken)
+	}
+	if brief := source.Brief(ctx); len(brief.Notes) != 0 {
+		t.Errorf("a relaunch's brief carries %+v, want no job's item", brief.Notes)
+	}
+	row := mustRow(t, store, "run-1")
+	var carried []string
+	for _, r := range runs.carried(row) {
+		carried = append(carried, r.Note.ID)
+	}
+	if !slices.Equal(carried, []string{"n-1"}) {
+		t.Errorf("the resumed segment carries %v, want the person's note alone", carried)
+	}
+	if got := servedNotes(row); !slices.Equal(got, []string{"n-1"}) {
+		t.Errorf("a continued session is told %v as notes it may already show, want the person's note alone", got)
+	}
+	row.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)}
+	if err := runs.ended(ctx, row); err != nil {
+		t.Fatalf("ended: %v", err)
+	}
+	for _, rec := range steered(p) {
+		if rec.NoteID != "n-1" || rec.Outcome != types.SteerDelivered {
+			t.Errorf("a record of the turn's notes says %+v, want the person's note delivered alone", rec)
+		}
+	}
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe",
+		Role: "SWE", Harness: "opencode"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	var left []string
+	for _, n := range mustRow(t, store, "run-1").Steer.Notes {
+		left = append(left, n.ID)
+	}
+	if !slices.Equal(left, []string{"n-1"}) {
+		t.Errorf("the next launch left notes %v, want the person's note alone", left)
+	}
+}

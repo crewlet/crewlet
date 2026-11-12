@@ -1197,6 +1197,20 @@ func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle No
 	return s.inner.SettleTake(ctx, turnID, settle)
 }
 
+func (s *refusingStore) ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error) {
+	if s.called("ServeHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ServeHook(ctx, turnID, serve)
+}
+
+func (s *refusingStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
+	if s.called("SettleHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.SettleHook(ctx, turnID, settle)
+}
+
 func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
 	if s.called("MarkPulled") {
 		return false, errRefusedCall
