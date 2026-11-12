@@ -24,11 +24,12 @@ import (
 const listBytes = 1 << 20
 
 // listCopies is how many copies of the list a reader may make: three at most,
-// measured, where a transcript's decode of a line keeps the line's message
-// raw, the message's decode its content, and a call's block its result (the
-// stream makes one or two, the result file two, an OpenCode step none or two),
-// and one more for headroom. What a reader may never spend is anything for
-// each element: read whole, a list cost from 56 to 519 times its size.
+// measured, where a decode of a line keeps the line's message raw, the
+// message's decode its content, and a call's block its result (the stream and
+// a person's transcript make two or three, a result's errors one in the
+// stream and two in the result file, an OpenCode step none or two), and one
+// more for headroom. What a reader may never spend is anything for each
+// element: read whole, a list cost from 56 to 519 times its size.
 const listCopies = 4
 
 // listSlack is how many more allocations a list read to its end may cost than

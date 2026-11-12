@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -1674,10 +1673,10 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		// UNCACHED remainder, and a run is almost entirely cached
 		// rounds — so reading it alone put a fraction of every run's
 		// prompt on the budget counter and the spend rollup.
-		res.CacheReadTokens = u.CacheReadInputTokens
-		res.CacheWriteTokens = u.CacheCreationInputTokens
-		res.InputTokens = u.InputTokens + res.CacheReadTokens + res.CacheWriteTokens
-		res.OutputTokens = u.OutputTokens
+		res.CacheReadTokens = u.CacheRead
+		res.CacheWriteTokens = u.CacheCreate
+		res.InputTokens = u.Input + res.CacheReadTokens + res.CacheWriteTokens
+		res.OutputTokens = u.Output
 	}
 	if !res.Success {
 		res.Error = msg.failure()
@@ -1699,35 +1698,34 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 // far as one, and `errors` what went wrong on a subtype that is not success,
 // which carries no `result` at all.
 //
-// Decoded into named fields so the stream's decoder and [ClaudeCode.Parse] read
-// one shape, and TOLERANTLY (a field of an unexpected type is left zero and
-// the rest still read), because a field the vendor reshapes must cost that
-// field rather than the run's whole account.
+// Read into named fields so the stream's decoder and [ClaudeCode.Parse] read
+// one shape, off one decode of the line ([claudeResultWire]) by its keys
+// exactly as written, and TOLERANTLY (a field of an unexpected type is left
+// zero and the rest still read), because a field the vendor reshapes must
+// cost that field rather than the run's whole account.
 type claudeResult struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
-	IsError bool   `json:"is_error"`
-	Result  string `json:"result"`
+	Type    string
+	Subtype string
+	IsError bool
+	Result  string
 	// Errors is the list of what went wrong, raw: read an error at a time
 	// ([claudeResult.errorsSaid]), never decoded whole, and only where a
 	// result that did not succeed is read, since every line of the stream is
-	// decoded into this.
-	Errors       json.RawMessage `json:"errors"`
-	SessionID    string          `json:"session_id"`
-	TotalCostUSD float64         `json:"total_cost_usd"`
+	// decoded for a result's keys.
+	Errors       json.RawMessage
+	SessionID    string
+	TotalCostUSD float64
 	// NumTurns is how many turns the run's agent loop took — one model
 	// call each — on every subtype, a run stopped by its turn cap included.
-	NumTurns int `json:"num_turns"`
+	NumTurns int
 	// TerminalReason is why the run's loop ended, beside the subtype:
 	// "completed" for a loop that finished, and [claudeHookStopped] for one a
 	// hook stopped. Absent on a harness that does not report it.
-	TerminalReason string `json:"terminal_reason"`
-	Usage          *struct {
-		InputTokens              int `json:"input_tokens"`
-		OutputTokens             int `json:"output_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	} `json:"usage"`
+	TerminalReason string
+	// Usage is the session's tokens, in the keys a message's usage has
+	// ([claudeUsage]); nil where the result carries none, or none that is an
+	// object.
+	Usage *claudeUsage
 	// SinceLastResult is, per model, what the calls THIS PROCESS counted
 	// since it wrote its previous result cost — since it started, for its
 	// first — on 2.1.310 and later, absent before. The harness's own SDK schema
@@ -1738,17 +1736,104 @@ type claudeResult struct {
 	// ([claudeEvents.runSpend]). `usage` and `total_cost_usd` beside it are
 	// the session's, which from 2.1.277 a continued session starts from
 	// ([ClaudeCode.TotalsRestored]).
-	SinceLastResult map[string]claudeModelUsage `json:"model_usage_since_last_result"`
+	//
+	// RAW, and read where it is asked for ([claudeResult.sinceLastResult]): on
+	// a result line of the stream, by the reader that sums it, and never by
+	// [ClaudeCode.Parse], which reads none of it, nor on a line of another
+	// type that carries the key.
+	SinceLastResult json.RawMessage
+}
+
+// claudeResultWire is the result message as its one decode leaves it
+// ([wireDecode]): each key a [claudeResult] holds, by its exact name and raw,
+// read into the result by [claudeResultWire.result].
+type claudeResultWire struct {
+	Type            json.RawMessage `json:"type"`
+	Subtype         json.RawMessage `json:"subtype"`
+	IsError         json.RawMessage `json:"is_error"`
+	Result          json.RawMessage `json:"result"`
+	Errors          json.RawMessage `json:"errors"`
+	SessionID       json.RawMessage `json:"session_id"`
+	TotalCostUSD    json.RawMessage `json:"total_cost_usd"`
+	NumTurns        json.RawMessage `json:"num_turns"`
+	TerminalReason  json.RawMessage `json:"terminal_reason"`
+	Usage           json.RawMessage `json:"usage"`
+	SinceLastResult json.RawMessage `json:"model_usage_since_last_result"`
+}
+
+// result is the result w holds, DECODED LOOSELY, as the whole decode it
+// replaced read one: a key of another kind than its field's reads as that
+// field's zero value, a usage that is no object as none, and the rest of the
+// result as written.
+func (w claudeResultWire) result() claudeResult {
+	r := claudeResult{
+		Type: looseString(w.Type), Subtype: looseString(w.Subtype), IsError: looseTrue(w.IsError),
+		Result: looseString(w.Result), Errors: w.Errors, SessionID: looseString(w.SessionID),
+		TotalCostUSD: looseFloat(w.TotalCostUSD), NumTurns: int(looseInt(w.NumTurns)),
+		TerminalReason: looseString(w.TerminalReason), SinceLastResult: w.SinceLastResult,
+	}
+	if wireObject(w.Usage) {
+		usage := looseUsage(w.Usage)
+		r.Usage = &usage
+	}
+	return r
+}
+
+// sinceLastResult is the result's per-run spend, model by model
+// ([claudeResult.SinceLastResult]), and whether the result states it:
+// PRESENT, EVEN EMPTY, IS STATED, and a value that is absent, null or no
+// object states nothing. Each model's spend is read by its keys exactly as
+// written and loosely by type ([looseModelUsage]), and a model the result
+// names twice by its last, as JSON.parse reads it.
+func (r claudeResult) sinceLastResult() (map[string]claudeModelUsage, bool) {
+	if !wireObject(r.SinceLastResult) {
+		return nil, false
+	}
+	var models map[string]json.RawMessage
+	if wireDecode(r.SinceLastResult, &models) != nil {
+		return nil, false
+	}
+	spent := make(map[string]claudeModelUsage, len(models))
+	for name, raw := range models {
+		spent[name] = looseModelUsage(raw)
+	}
+	return spent, true
 }
 
 // claudeModelUsage is one model's spend as Claude Code's result states it per
-// model, in camelCase as `modelUsage` and its per-run sibling print it.
+// model, in camelCase as `modelUsage` and its per-run sibling print it
+// ([claudeModelUsageWire]).
 type claudeModelUsage struct {
-	InputTokens              int     `json:"inputTokens"`
-	OutputTokens             int     `json:"outputTokens"`
-	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
-	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
-	CostUSD                  float64 `json:"costUSD"`
+	InputTokens              int
+	OutputTokens             int
+	CacheReadInputTokens     int
+	CacheCreationInputTokens int
+	CostUSD                  float64
+}
+
+// claudeModelUsageWire is one model's spend as its decode leaves it, each key
+// by its exact name and raw ([looseModelUsage]).
+type claudeModelUsageWire struct {
+	InputTokens              json.RawMessage `json:"inputTokens"`
+	OutputTokens             json.RawMessage `json:"outputTokens"`
+	CacheReadInputTokens     json.RawMessage `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens json.RawMessage `json:"cacheCreationInputTokens"`
+	CostUSD                  json.RawMessage `json:"costUSD"`
+}
+
+// looseModelUsage is the spend raw holds, DECODED LOOSELY, as the whole decode
+// it replaced read one: a figure of another kind than its field's reads as
+// none, the others as written, and a spend that is no object as none at all.
+func looseModelUsage(raw json.RawMessage) claudeModelUsage {
+	var w claudeModelUsageWire
+	if !wireObject(raw) || wireDecode(raw, &w) != nil {
+		return claudeModelUsage{}
+	}
+	return claudeModelUsage{
+		InputTokens: int(looseInt(w.InputTokens)), OutputTokens: int(looseInt(w.OutputTokens)),
+		CacheReadInputTokens:     int(looseInt(w.CacheReadInputTokens)),
+		CacheCreationInputTokens: int(looseInt(w.CacheCreationInputTokens)), CostUSD: looseFloat(w.CostUSD),
+	}
 }
 
 // claudeTotalsRestored is the first Claude Code release whose continued
@@ -1940,15 +2025,14 @@ func decodeClaudeResult(text string) (claudeResult, bool) {
 	if !strings.HasPrefix(text, "{") {
 		return claudeResult{}, false
 	}
-	var msg claudeResult
-	err := json.Unmarshal([]byte(text), &msg)
-	var mismatch *json.UnmarshalTypeError
-	// A syntax error is reported before any field is decoded, so a mismatch
-	// means a whole object with one field of another type.
-	if err == nil || errors.As(err, &mismatch) {
-		return msg, true
+	// A WHOLE OBJECT IS A RESULT'S ACCOUNT, whatever its keys hold: its decode
+	// fails only where the line is no whole JSON object, and a key of another
+	// kind than its field's is read loosely ([claudeResultWire.result]).
+	var w claudeResultWire
+	if wireDecode([]byte(text), &w) != nil {
+		return claudeResult{}, false
 	}
-	return claudeResult{}, false
+	return w.result(), true
 }
 
 // lastLine is the text's last line, trimmed.

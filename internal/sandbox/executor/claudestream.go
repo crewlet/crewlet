@@ -3,7 +3,6 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"maps"
 	"regexp"
 	"slices"
@@ -42,35 +41,81 @@ import (
 // line — the session's init, a retry, a hook's own start and end — is skipped,
 // as before.
 
-// claudeEvent is the part of one stream message this decoder reads: the
-// result message's fields, which the last line carries, and a message's
-// content, which every assistant and user line does.
-type claudeEvent struct {
-	claudeResult
-	// Content is a system line's text — an informational line's, which is
+// claudeEventWire is the part of one stream message this decoder reads, as
+// its one decode leaves it ([wireDecode]): the result message's keys, which
+// the last line carries ([claudeResultWire]), a system line's text and a
+// message, each by its exact name and raw, and each read, loosely by type,
+// only where the line's type asks for it ([claudeEvents.Line]).
+//
+// BY ITS KEYS EXACTLY AS WRITTEN, as Claude Code's own JSON.parse reads them
+// ([threadDecoding]), as a message's blocks are ([eachClaudeBlock]), so one
+// line is read by one rule: decoded by encoding/json, a line was read with a
+// key that differs from one it reads only in case taken for that one, and a
+// message written twice read as the two merged, where its blocks were read
+// exactly and the person's transcript of the same record read the last.
+type claudeEventWire struct {
+	claudeResultWire
+	// Content is a system line's text: an informational line's, which is
 	// the only one read ([claudeSteerLine]). Raw, because a system subtype
 	// this build does not know may carry anything there.
 	Content json.RawMessage `json:"content"`
-	Message struct {
-		// Content is an array of blocks on an assistant message and on a
-		// tool result's user message, and a plain string on a user
-		// message that is a prompt (a subagent's first message).
-		Content json.RawMessage `json:"content"`
-		// ID and Usage are an assistant message's, which the stream repeats
-		// on every line of the one message (a line per content block), so
-		// a message's usage is counted once, by its id.
-		ID    string      `json:"id"`
-		Usage claudeUsage `json:"usage"`
-	} `json:"message"`
+	// Message is an assistant or a user line's message ([claudeMessageWire]).
+	Message json.RawMessage `json:"message"`
+}
+
+// claudeMessageWire is one line's message as its decode leaves it, each key
+// raw: its content, an array of blocks on an assistant message and on a tool
+// result's user message, and a plain string on a user message that is a
+// prompt (a subagent's first message); and an assistant message's id and
+// usage, which the stream repeats on every line of the one message (a line
+// per content block), so a message's usage is counted once, by its id.
+type claudeMessageWire struct {
+	Content json.RawMessage `json:"content"`
+	ID      json.RawMessage `json:"id"`
+	Usage   json.RawMessage `json:"usage"`
+}
+
+// claudeMessageOf is the message raw holds, its keys raw: none where it is no
+// object, as the whole decode it replaced left a message it could not fill.
+func claudeMessageOf(raw json.RawMessage) claudeMessageWire {
+	var m claudeMessageWire
+	if !wireObject(raw) || wireDecode(raw, &m) != nil {
+		return claudeMessageWire{}
+	}
+	return m
 }
 
 // claudeUsage is one API call's tokens as the stream reports them: the
 // uncached prompt, the cache's reads and writes, and the reply.
 type claudeUsage struct {
-	Input       int `json:"input_tokens"`
-	Output      int `json:"output_tokens"`
-	CacheRead   int `json:"cache_read_input_tokens"`
-	CacheCreate int `json:"cache_creation_input_tokens"`
+	Input       int
+	Output      int
+	CacheRead   int
+	CacheCreate int
+}
+
+// claudeUsageWire is a message's usage as its decode leaves it, each count
+// raw ([looseUsage]).
+type claudeUsageWire struct {
+	Input       json.RawMessage `json:"input_tokens"`
+	Output      json.RawMessage `json:"output_tokens"`
+	CacheRead   json.RawMessage `json:"cache_read_input_tokens"`
+	CacheCreate json.RawMessage `json:"cache_creation_input_tokens"`
+}
+
+// looseUsage is the usage raw holds, DECODED LOOSELY, as the whole decode it
+// replaced read one: a count of another kind than a whole number reads as
+// none, the other counts as written, and a usage that is no object as no
+// tokens at all.
+func looseUsage(raw json.RawMessage) claudeUsage {
+	var w claudeUsageWire
+	if !wireObject(raw) || wireDecode(raw, &w) != nil {
+		return claudeUsage{}
+	}
+	return claudeUsage{
+		Input: int(looseInt(w.Input)), Output: int(looseInt(w.Output)),
+		CacheRead: int(looseInt(w.CacheRead)), CacheCreate: int(looseInt(w.CacheCreate)),
+	}
 }
 
 // total is every token of the call, the whole prompt and the reply: the
@@ -196,19 +241,36 @@ func looseInt(raw json.RawMessage) int64 {
 	return n
 }
 
+// looseFloat is raw where it is a JSON number a float64 holds, and 0 where it
+// is absent, of another kind or past a float64's range, as the whole decode it
+// replaced left a float it could not fill. Its kind is read off its first
+// byte, so a value of another kind is never decoded.
+func looseFloat(raw json.RawMessage) float64 {
+	if len(raw) == 0 || (raw[0] != '-' && (raw[0] < '0' || raw[0] > '9')) {
+		return 0
+	}
+	var f float64
+	if wireDecode(raw, &f) != nil {
+		return 0
+	}
+	return f
+}
+
 // claudeToolInput is what a transcript line names of a tool call: the field
 // each of the harness's tools takes its subject in — Bash its command, Read, Edit
 // and Write their file, NotebookEdit its notebook, Grep and Glob their
-// pattern, WebFetch its URL, WebSearch its query, Task its description.
+// pattern, WebFetch its URL, WebSearch its query, Task its description — each
+// as its decode leaves it, by its exact name and raw, read loosely
+// ([claudeToolLine]).
 type claudeToolInput struct {
-	Command      string `json:"command"`
-	FilePath     string `json:"file_path"`
-	NotebookPath string `json:"notebook_path"`
-	Pattern      string `json:"pattern"`
-	URL          string `json:"url"`
-	Query        string `json:"query"`
-	Path         string `json:"path"`
-	Description  string `json:"description"`
+	Command      json.RawMessage `json:"command"`
+	FilePath     json.RawMessage `json:"file_path"`
+	NotebookPath json.RawMessage `json:"notebook_path"`
+	Pattern      json.RawMessage `json:"pattern"`
+	URL          json.RawMessage `json:"url"`
+	Query        json.RawMessage `json:"query"`
+	Path         json.RawMessage `json:"path"`
+	Description  json.RawMessage `json:"description"`
 }
 
 // claudeEvents decodes one stream into a transcript, read whole or followed
@@ -287,23 +349,21 @@ func (d *claudeEvents) Line(line []byte) {
 		d.transcript.add(string(line))
 		return
 	}
-	var ev claudeEvent
-	if err := json.Unmarshal(line, &ev); err != nil {
-		var mismatch *json.UnmarshalTypeError
-		if !errors.As(err, &mismatch) {
-			// A partial object: the stream read mid-write. The next read
-			// has it whole.
-			return
-		}
+	var ev claudeEventWire
+	if wireDecode(line, &ev) != nil {
+		// A partial object: the stream read mid-write. The next read has it
+		// whole.
+		return
 	}
-	switch ev.Type {
+	switch looseString(ev.Type) {
 	case "system":
-		if line, ok := claudeSteerLine(ev.Subtype, ev.Content); ok {
+		if line, ok := claudeSteerLine(looseString(ev.Subtype), ev.Content); ok {
 			d.transcript.add(line)
 		}
 	case "assistant":
-		d.count(ev.Message.ID, ev.Message.Usage)
-		_ = eachClaudeBlock(ev.Message.Content, func(block claudeBlock) error {
+		message := claudeMessageOf(ev.Message)
+		d.count(looseString(message.ID), looseUsage(message.Usage))
+		_ = eachClaudeBlock(message.Content, func(block claudeBlock) error {
 			switch block.Type {
 			case "text":
 				if text := strings.TrimSpace(block.Text); text != "" {
@@ -318,7 +378,7 @@ func (d *claudeEvents) Line(line []byte) {
 			return nil
 		})
 	case "user":
-		_ = eachClaudeBlock(ev.Message.Content, func(block claudeBlock) error {
+		_ = eachClaudeBlock(claudeMessageOf(ev.Message).Content, func(block claudeBlock) error {
 			if block.Type != "tool_result" {
 				return nil
 			}
@@ -340,13 +400,14 @@ func (d *claudeEvents) Line(line []byte) {
 		// A run that succeeded ends on its final text, which the stream
 		// already carried as the assistant's last message; one that did not
 		// says how, as [ClaudeCode.Parse] reads the same line.
-		if !ev.succeeded() {
-			d.transcript.add("[error] the run ended: " + firstLine(ev.failure(), transcriptDetailLimit))
+		result := ev.result()
+		if !result.succeeded() {
+			d.transcript.add("[error] the run ended: " + firstLine(result.failure(), transcriptDetailLimit))
 		}
 		// PRESENT, EVEN EMPTY, IS STATED: a result with no calls since the
 		// one before says the run spent nothing more, which is an answer.
-		if ev.SinceLastResult != nil {
-			d.state(ev.SinceLastResult)
+		if models, stated := result.sinceLastResult(); stated {
+			d.state(models)
 		}
 	}
 }
@@ -398,7 +459,7 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	var content string
-	if json.Unmarshal(raw, &content) != nil {
+	if wireDecode(raw, &content) != nil {
 		return "", false
 	}
 	loc := claudeSteerPrefix.FindStringIndex(content)
@@ -413,13 +474,17 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 func claudeToolLine(block claudeBlock) string {
 	name := firstNonBlank(block.Name, "tool")
 	line := "[tool] " + name
-	// DECODED LOOSELY, as the block around it is: a field a release retyped
-	// leaves the others named, and an input that is no object names no
-	// subject at all — the call's name is still its line.
+	// DECODED LOOSELY, as the block around it is, and by its keys exactly as
+	// written: a field a release retyped leaves the others named, and an input
+	// that is no object names no subject at all — the call's name is still
+	// its line.
 	var in claudeToolInput
-	_ = json.Unmarshal(block.Input, &in)
-	if detail := firstNonBlank(in.Command, in.FilePath, in.NotebookPath, in.Pattern,
-		in.URL, in.Query, in.Path, in.Description); detail != "" {
+	if wireObject(block.Input) && wireDecode(block.Input, &in) != nil {
+		in = claudeToolInput{}
+	}
+	if detail := firstNonBlank(looseString(in.Command), looseString(in.FilePath),
+		looseString(in.NotebookPath), looseString(in.Pattern), looseString(in.URL), looseString(in.Query),
+		looseString(in.Path), looseString(in.Description)); detail != "" {
 		line += ": " + firstLine(detail, transcriptDetailLimit)
 	}
 	return line

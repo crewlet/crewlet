@@ -578,10 +578,13 @@ var threadDecoding = jsonv2.JoinOptions(
 )
 
 // wireDecode decodes raw, one JSON value, into v under [threadDecoding]: the
-// one decode every value this layer reads goes through, encoding/json/v2's.
-// An object's key fills the field it names exactly, a key written twice holds
-// the last value written, and a string's invalid UTF-8 or lone surrogate
-// reads as U+FFFD.
+// one decode every value this layer reads goes through, encoding/json/v2's,
+// and every value the package's other readers of a harness's record read (a
+// run's event stream, [claudeEventWire]; its result, [claudeResultWire]; a
+// person's transcript, [claudeRecord] and [openCodeMessageWire]). An object's
+// key fills the field it names exactly, a key written twice holds the last
+// value written, and a string's invalid UTF-8 or lone surrogate reads as
+// U+FFFD.
 func wireDecode(raw []byte, v any) error {
 	return jsonv2.Unmarshal(raw, v, threadDecoding)
 }
