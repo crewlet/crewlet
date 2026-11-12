@@ -271,7 +271,7 @@
 // recently judged first, and its cycle first judges whether an expunge is
 // DUE: what no ref, no drop the grace keeps and no row in flight reaches OF
 // THE PACKS A CYCLE MAY TAKE — those whose newest content arrived
-// gitlet.PruneGrace or longer ago (below) — is MORE than 1/code.ExpungeShare of
+// gitlet.PruneGrace or longer ago (below) — is MORE than 1/gitlet.ExpungeShare of
 // the live pack bytes AND at least gitlet.ExpungeMinBytes, below which the
 // fleet's re-download of the kept packs costs more than it frees. Weighed
 // over the whole repository instead, garbage in a pack younger than the grace — a

@@ -187,6 +187,7 @@ describe("navigation identity", () => {
       org: "a",
       schedules: "d",
       integrations: "n",
+      atlas: "o",
       budgets: "b",
       worklet: "w",
       // `g`: Gitlet's other letters are chords already (`i` the Inbox's,
@@ -250,7 +251,7 @@ describe("the navigation grammar", () => {
   // Account, which has no row (the user block at the sidebar's foot is the
   // reader, and its menu links it) and is a workspace all the same, so the
   // palette and its chord reach it.
-  test("the sidebar's rows are sixteen workspaces, in the story's order, and the menu holds the seventeenth", () => {
+  test("the sidebar's rows are seventeen workspaces, in the story's order, and the menu holds the eighteenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
     expect(run("company")).toEqual([
@@ -259,6 +260,7 @@ describe("the navigation grammar", () => {
       "org",
       "schedules",
       "integrations",
+      "atlas",
       "budgets",
     ]);
     expect(run("workspace")).toEqual([
@@ -457,6 +459,20 @@ describe("the navigation grammar", () => {
       expect(opens(path, ["gitlet"]), path.join("/")).toBe(true);
       expect(opens(path, ["admin"]), path.join("/")).toBe(true);
       expect(opens(path, ["worklet", "doclet", "chatlet"]), path.join("/")).toBe(false);
+      expect(opens(path, []), path.join("/")).toBe(false);
+    }
+    // THE ATLAS IS ITS APP'S (ADR-0127), its map, its list and every entry:
+    // each reads the atlas questions, which the engine refuses a reader
+    // without it, and no other app, nor the overview, opens them. Mutation:
+    // drop the row's `grants` and the last two lines go red.
+    const ATLAS_ONLY = [
+      ["company", "atlas"],
+      ["company", "atlas", "88888888-8888-4888-8888-888888888888"],
+    ];
+    for (const path of ATLAS_ONLY) {
+      expect(opens(path, ["atlas"]), path.join("/")).toBe(true);
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["worklet", "doclet", "chatlet", "gitlet"]), path.join("/")).toBe(false);
       expect(opens(path, []), path.join("/")).toBe(false);
     }
     const ADMIN_ONLY = [
@@ -952,6 +968,15 @@ describe("the resolver", () => {
   test("a closed set refuses the obvious typo rather than drawing the list", () => {
     expect(resolve(["settings", "spend", "task"]).resolved).toBe(false);
     expect(resolve(["company", "budgets", "x"]).resolved).toBe(false);
+    // AN ATLAS ENTRY IS ITS ID, and nothing else is an entry.
+    expect(resolve(["company", "atlas", "88888888-8888-4888-8888-888888888888"])).toMatchObject({
+      screen: "atlas-entry",
+      id: "88888888-8888-4888-8888-888888888888",
+    });
+    expect(resolve(["company", "atlas", "web-1"]).resolved).toBe(false);
+    expect(
+      resolve(["company", "atlas", "88888888-8888-4888-8888-888888888888", "x"]).resolved,
+    ).toBe(false);
     expect(resolve(["settings", "config", "revision"]).resolved).toBe(false);
     expect(resolve(["settings", "audit", "x"]).resolved).toBe(false);
   });
@@ -1073,6 +1098,7 @@ describe("the breadcrumb", () => {
       ["brand", "Brand"],
       ["schedules", "Schedules"],
       ["integrations", "Integrations"],
+      ["atlas", "Atlas"],
       ["budgets", "Budgets"],
     ] as const) {
       const trail = crumbsFor(["company", segment]);
@@ -1080,6 +1106,11 @@ describe("the breadcrumb", () => {
       expect(trail[0]?.path).toBeUndefined();
       expect(trail[0]?.icon).toBe(workspaceRow(segment)?.icon);
     }
+    // AN ATLAS ENTRY ADDS A CRUMB, named by its page or "Entry" until then,
+    // and the atlas is the way back.
+    const entry = crumbsFor(["company", "atlas", "88888888-8888-4888-8888-888888888888"]);
+    expect(entry.map((c) => c.label)).toEqual(["Atlas", "Entry"]);
+    expect(entry[0]?.path).toEqual(["company", "atlas"]);
     // THE BRAND'S SETUP ADDS A CRUMB, and Brand is the way back.
     const setup = crumbsFor(["company", "brand", "setup"]);
     expect(setup.map((c) => c.label)).toEqual(["Brand", "Set up"]);

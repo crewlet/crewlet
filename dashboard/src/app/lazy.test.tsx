@@ -68,7 +68,7 @@ afterEach(() => {
 
 describe("which chunk draws a screen", () => {
   // A CHUNK IS A SCREEN DIRECTORY, not a sidebar row: Company's rows draw
-  // screens from four of them, and a row that moves moves no code.
+  // screens from five of them, and a row that moves moves no code.
   test("every screen directory is a chunk, and the org editor is one of its own", () => {
     expect([...CHUNKS].sort()).toEqual(
       [
@@ -76,6 +76,7 @@ describe("which chunk draws a screen", () => {
         "agents",
         "artifacts",
         "assistant",
+        "atlas",
         "brand",
         "chatlet",
         "gitlet",
@@ -152,6 +153,9 @@ describe("which chunk draws a screen", () => {
     expect(at("company", "schedules")).toBe("agents");
     expect(at("company")).toBe("settings");
     expect(at("company", "budgets")).toBe("spend");
+    // THE ATLAS AND ITS MAP CODE ARE A CHUNK OF THEIR OWN, the map and every entry.
+    expect(at("company", "atlas")).toBe("atlas");
+    expect(at("company", "atlas", "88888888-8888-4888-8888-888888888888")).toBe("atlas");
     expect(at("settings", "spend")).toBe("spend");
     expect(at("worklet", "ENG-4")).toBe("worklet");
     expect(at("gitlet")).toBe("gitlet");

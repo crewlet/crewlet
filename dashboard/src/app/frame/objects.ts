@@ -38,6 +38,7 @@ export type ObjectKind =
   | "revision"
   | "person"
   | "change"
+  | "atlas"
   | "notice";
 
 export interface ObjectRef {
@@ -136,6 +137,8 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   // one the `!` keeps whole in a query value. Its page is the path the
   // reference is short for, `#/gitlet/repos/web/changes/42`.
   change: { label: "Change", pathOf: changeRefPath, mono: true },
+  // AN ATLAS ENTRY BY ITS ID, the uuid its kind and key derive.
+  atlas: { label: "Entry", pathOf: (id) => ["company", "atlas", id], mono: true },
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
   // somebody's inbox naming a change to something else, so its "page" is the
   // inbox that holds it — and that is where it is read in place and marked,

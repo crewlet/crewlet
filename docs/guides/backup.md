@@ -46,7 +46,7 @@ A deployment's durable state lives in six places:
 
 | Estate | Where | What it holds |
 |---|---|---|
-| **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
+| **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of what the memory sync has carried there and the only copy of what it has not carried yet (see **Held twice** below); and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
 | **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), the company's [git repositories](../concepts/gitlet.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations, the engine's own chat and the rows naming each seat's executor sessions), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload, and of each seat's sealed executor sessions, one object per capture. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, the executors' records, each human seat's chat read state, the sealed credentials |
@@ -63,10 +63,12 @@ Classify before you size the job:
   earlier attempt wrote — and the leases and epochs
   *provided the whole fleet cold-starts together* (they re-form from nothing).
 - **Held twice:** the learning tables. Each row is
-  also on the memory changelog, which is how a seat's memory follows it to a
-  new node — so a store file lost with the stream estate intact costs at most
-  the last sync cycle, and the seat re-hydrates the rest on its next
-  acquisition.
+  also on the memory changelog once the node has carried it there, which is
+  how a seat's memory follows it to a new node — so a store file lost with the
+  stream estate intact costs what a crash costs, the rows not yet carried:
+  about the last sync cycle's writes, and more while a seat's sync is behind
+  ([what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+  The seat re-hydrates the rest on its next acquisition.
 - **Kept by the store, as many copies as it keeps:** the object store's
   objects. On `nats` they are a stream at `stream.replicas` copies, so they
   survive exactly what the logs survive, and a member that fails is caught up
@@ -797,9 +799,14 @@ leaves out. Then:
 - **A store file lost with the stream estate intact is nearly free.** The
   learning tables re-hydrate from the memory
   changelog when the seat is next acquired, so what is actually lost is that
-  node's audit log, its scheduled-run history and its config revision
-  history. Start the node with an empty store; it migrates fresh and its
-  seats arrive remembering. A lost replicated database is re-derived as
+  node's audit log, its scheduled-run history, its config revision history
+  and what of its seats' memory the changelog had not yet acknowledged (see
+  **Held twice** above). Start the node with an empty store; it migrates fresh
+  and its seats arrive remembering what the changelog holds. Until
+  [#1051](https://github.com/crewlet/crewlet/issues/1051) is fixed, though, a
+  seat whose skills have been refined is refused instead: a store that does
+  not already hold the seat's skills fails its hydration. A lost replicated
+  database is re-derived as
   [above](#what-state-exists-and-where) describes, and the node rebuilds its
   reader of each log at the checkpoint its new rows hold, so the records its
   old reader acknowledged are delivered again (see

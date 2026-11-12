@@ -2,12 +2,18 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A SEAT'S MEMORY TRAVELS ON AN EXTERNAL BROKER TOO.
@@ -47,5 +53,523 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 		t.Fatal("a node on an external broker built no memory syncer, so a " +
 			"seat it acquires hydrates nothing and one it releases carries " +
 			"nothing — every move is a seat that forgot")
+	}
+}
+
+// scriptedMemory is the memory syncer as a cycle calls it: each seat's publish
+// is played by a script, and it records the seats the running cycle called,
+// those it called on a bound already spent, and those whose publish returned
+// with nothing wrong.
+type scriptedMemory struct {
+	// play is seat's publish, handed the cycle's bound and runOut, which
+	// spends it as a backlog the cycle cannot carry does before its publish
+	// returns; first says the cycle called no seat before it.
+	play func(ctx context.Context, seat string, first bool, runOut func()) (memsync.Carried, error)
+
+	runOut    context.CancelFunc
+	calls     []string
+	late      []string
+	completed []string
+}
+
+// Publish plays the seat's script, after failing at once on a bound already
+// spent, as the syncer's first read of a seat's rows does.
+func (m *scriptedMemory) Publish(ctx context.Context, seat string) (memsync.Carried, error) {
+	first := len(m.calls) == 0
+	m.calls = append(m.calls, seat)
+	if err := ctx.Err(); err != nil {
+		m.late = append(m.late, seat)
+		return memsync.Carried{StoppedIn: "agent_diary"},
+			fmt.Errorf("memsync: read agent_diary: %w", err)
+	}
+	carried, err := m.play(ctx, seat, first, m.runOut)
+	if err == nil {
+		m.completed = append(m.completed, seat)
+	}
+	return carried, err
+}
+
+// cycle runs one cycle of loop over the held seats, as syncSeatMemory does,
+// under a bound the script can spend; calls, late and completed are then that
+// cycle's.
+func (m *scriptedMemory) cycle(t *testing.T, loop *memorySync, held ...string) syncReport {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m.runOut, m.calls, m.late, m.completed = cancel, nil, nil, nil
+	return loop.cycle(ctx, seatsHeld{held: held}, m)
+}
+
+// carriedWhole is what the publish of a seat that reached the end of every
+// table answers.
+var carriedWhole = memsync.Carried{Rows: 6, Marked: 3}
+
+// draining is what a publish its bound cut inside a backlog answers: the rows
+// the changelog acknowledged, each of which moved a mark.
+var draining = memsync.Carried{Rows: 428, Marked: 428, StoppedIn: "agent_diary"}
+
+// runsOut is the publish of a seat whose memory the cycle cannot carry: it
+// spends the cycle's bound and answers what the bound cut it at.
+func runsOut(ctx context.Context, runOut func(), cut memsync.Carried) (memsync.Carried, error) {
+	runOut()
+	return cut, fmt.Errorf("memsync: publish a %s row: %w", cut.StoppedIn, ctx.Err())
+}
+
+// A CYCLE ITS FIRST SEAT USES UP CARRIES THE NEXT SEAT ON THE NEXT.
+//
+// Every seat the node holds shares a cycle's thirty seconds, one after
+// another. Each cycle used to start at the first sorted seat and call every
+// seat whatever was left of its bound, so a seat whose backlog outlasted a
+// cycle had every cycle, and each seat after it was called on a bound already
+// spent, which failed it at once: none was carried while the backlog lasted
+// (crewlet/crewlet#1033). A cycle now stops at its bound, and the next starts
+// after the seat that had the whole cycle.
+//
+// Mutation: start every cycle at the first sorted seat, start the next at the
+// seat the bound cut whatever its place, keep calling seats once the bound
+// has run out, or forget where the last cycle ran out, and this goes red.
+func TestACycleTheFirstSeatUsesUpCarriesTheNextSeatOnTheNext(t *testing.T) {
+	t.Parallel()
+	m := &scriptedMemory{play: func(ctx context.Context, seat string, _ bool,
+		runOut func(),
+	) (memsync.Carried, error) {
+		if seat == "a" {
+			return runsOut(ctx, runOut, draining)
+		}
+		return carriedWhole, nil
+	}}
+	loop := &memorySync{}
+
+	m.cycle(t, loop, "a", "b", "c")
+	if !slices.Equal(m.calls, []string{"a"}) {
+		t.Fatalf("the cycle seat a ran out called %s, want a alone: the seats after it "+
+			"were called on a bound already spent, which fails each at once", words.And(m.calls))
+	}
+	m.cycle(t, loop, "a", "b", "c")
+	if !slices.Equal(m.completed, []string{"b", "c"}) {
+		t.Fatalf("the next cycle carried %s, want b and c: the seat whose backlog outlasts "+
+			"a cycle had that one too", words.And(m.completed))
+	}
+	m.cycle(t, loop, "a", "b", "c")
+	if !slices.Equal(m.calls, []string{"a"}) {
+		t.Errorf("the third cycle called %s, want a alone, which ran the second out after "+
+			"b and c had been carried", words.And(m.calls))
+	}
+}
+
+// A SEAT THAT RAN A CYCLE OUT BEHIND ANOTHER GOES FIRST IN THE NEXT.
+//
+// A seat whose publish fits in a whole cycle, but not in what a seat before it
+// left of one, runs every cycle out when it comes second. Started after it,
+// the next cycle would put it second again, and it would never complete.
+//
+// Mutation: start the next cycle after the seat the bound cut, wherever it
+// was, and b never completes.
+func TestASeatThatRanOutBehindAnotherGoesFirstNext(t *testing.T) {
+	t.Parallel()
+	m := &scriptedMemory{play: func(ctx context.Context, _ string, first bool,
+		runOut func(),
+	) (memsync.Carried, error) {
+		if first {
+			return carriedWhole, nil
+		}
+		return runsOut(ctx, runOut, draining)
+	}}
+	loop := &memorySync{}
+
+	m.cycle(t, loop, "a", "b")
+	if !slices.Equal(m.calls, []string{"a", "b"}) || !slices.Equal(m.completed, []string{"a"}) {
+		t.Fatalf("the premise: the first cycle called %s and completed %s, want a and b "+
+			"called and a alone completed", words.And(m.calls), words.And(m.completed))
+	}
+	m.cycle(t, loop, "a", "b")
+	if !slices.Contains(m.completed, "b") {
+		t.Fatalf("the cycle after b ran one out completed %s, want b: put second again, a "+
+			"seat that fits a whole cycle but not a remainder never completes",
+			words.And(m.completed))
+	}
+}
+
+// A CYCLE THAT RAN OUT BETWEEN SEATS STARTS AT THE FIRST IT DID NOT REACH.
+//
+// A seat's publish can return with nothing wrong just as the bound runs out.
+// The seats after it were not reached, so the next cycle starts at the first of
+// them: not at the first sorted seat, and not at the seat that completed, which
+// would have the cycle again ahead of the seats it held back.
+//
+// Mutation: start the next cycle at the first sorted seat, or at the seat
+// whose publish returned, and this goes red.
+func TestACycleThatRanOutBetweenSeatsStartsAtTheFirstNotReached(t *testing.T) {
+	t.Parallel()
+	m := &scriptedMemory{play: func(_ context.Context, seat string, _ bool,
+		runOut func(),
+	) (memsync.Carried, error) {
+		if seat == "a" {
+			runOut()
+		}
+		return carriedWhole, nil
+	}}
+	loop := &memorySync{}
+
+	m.cycle(t, loop, "a", "b", "c")
+	if !slices.Equal(m.calls, []string{"a"}) {
+		t.Fatalf("the cycle whose bound ran out as a's publish returned called %s, want a "+
+			"alone", words.And(m.calls))
+	}
+	m.cycle(t, loop, "a", "b", "c")
+	if len(m.calls) == 0 || m.calls[0] != "b" {
+		t.Errorf("the next cycle called %s, want b first: the first seat the cycle before "+
+			"it did not reach", words.And(m.calls))
+	}
+}
+
+// A LONE SEAT THAT RUNS EVERY CYCLE OUT IS CARRIED EVERY CYCLE.
+//
+// The next cycle starts after the seat that had the whole cycle, wrapping
+// round, and a lone seat is its own next: after the last seat of the cycle's
+// order comes the first. A lone seat is the first of every cycle wherever the
+// cycle starts, so what this holds is the wrap, without which the cycle
+// indexes past the end of its order to find the seat after it.
+//
+// Mutation: take the seat after it without wrapping round, and the cycle
+// panics.
+func TestALoneSeatThatRunsEveryCycleOutIsCarriedEveryCycle(t *testing.T) {
+	t.Parallel()
+	m := &scriptedMemory{play: func(ctx context.Context, _ string, _ bool,
+		runOut func(),
+	) (memsync.Carried, error) {
+		return runsOut(ctx, runOut, draining)
+	}}
+	loop := &memorySync{}
+	for cycle := 1; cycle <= 3; cycle++ {
+		m.cycle(t, loop, "a")
+		if !slices.Equal(m.calls, []string{"a"}) {
+			t.Fatalf("cycle %d called %s, want a once", cycle, words.And(m.calls))
+		}
+	}
+}
+
+// EVERY SEAT IS CARRIED WITHIN TWO CYCLES FOR EACH SEAT THAT RUNS ONE OUT.
+//
+// The bound the rule keeps ([memorySync.resume]), in the case that reaches its
+// whole-cycle half: of four seats, a and c run every cycle out and b and d
+// fit. With k = 2 seats the cycles run out at, a and c each have a whole cycle
+// in every 2k = 4 consecutive cycles, and b and d, which no cycle cuts here,
+// each complete in every four as well.
+//
+// Mutation: when the cycle's first seat ran out, start the next cycle at the
+// seat after the one after it, and b and d never complete.
+func TestEverySeatIsCarriedWithinTwoCyclesForEachSeatThatRunsOut(t *testing.T) {
+	t.Parallel()
+	m := &scriptedMemory{play: func(ctx context.Context, seat string, _ bool,
+		runOut func(),
+	) (memsync.Carried, error) {
+		if seat == "a" || seat == "c" {
+			return runsOut(ctx, runOut, draining)
+		}
+		return carriedWhole, nil
+	}}
+	const cycles, round = 8, 4 // round is 2k, with k = 2 seats that run cycles out
+	loop := &memorySync{}
+	started := make([]string, cycles)
+	completed := make([][]string, cycles)
+	for i := range cycles {
+		m.cycle(t, loop, "a", "b", "c", "d")
+		started[i], completed[i] = m.calls[0], m.completed
+	}
+	for from := 0; from+round <= cycles; from++ {
+		window := fmt.Sprintf("cycles %d to %d", from+1, from+round)
+		for _, seat := range []string{"b", "d"} {
+			if !slices.ContainsFunc(completed[from:from+round], func(done []string) bool {
+				return slices.Contains(done, seat)
+			}) {
+				t.Errorf("seat %s completed in none of %s: with a and c running every "+
+					"cycle out, b and d each complete once in every four", seat, window)
+			}
+		}
+		for _, seat := range []string{"a", "c"} {
+			if !slices.Contains(started[from:from+round], seat) {
+				t.Errorf("seat %s started none of %s: a seat with a backlog has a whole "+
+					"cycle at least once in every 2k cycles", seat, window)
+			}
+		}
+	}
+}
+
+// NO SEAT WAITS MORE THAN TWO CYCLES FOR EACH SEAT A CYCLE RUNS OUT AT.
+//
+// The bound the rule keeps ([memorySync.resume]), in the cases that show what
+// it counts. Its k is every seat a cycle runs out at, a seat that fits a whole
+// cycle but was reached with less of one left included: of three seats that
+// each need two thirds of a cycle, none needs more than one, and yet the
+// cycles run out at all three, each when a cycle reaches it second. And its
+// 2k is the cycles between two that reach a seat, which a seat sorted after a
+// backlog can wait in full: of a, b and c, where b needs a little over two
+// cycles once, a completes and the first cycle runs out at b, b has the whole
+// second, and c waits both, 2k for k = 1, before the third reaches it.
+//
+// A seat is reached when a cycle calls its publish with time left: one called
+// on a bound already spent carries nothing.
+//
+// Mutation: start every cycle at the first sorted seat, and the seat after
+// the one each cycle runs out at is never reached.
+func TestNoSeatWaitsMoreThanTwoCyclesForEachSeatACycleRunsOutAt(t *testing.T) {
+	t.Parallel()
+	seats := []string{"a", "b", "c"}
+	for _, tc := range []struct {
+		name string
+		// outlasts says the seat's publish runs its cycle out, as the
+		// seat's n-th call, first saying the cycle called no seat before it.
+		outlasts func(seat string, n int, first bool) bool
+		// ranOutAt is the seats the case's cycles run out at, and waited the
+		// most cycles in a row a seat goes unreached.
+		ranOutAt []string
+		waited   int
+	}{{
+		name:     "three seats that each fit a whole cycle but not what the one before leaves",
+		outlasts: func(_ string, _ int, first bool) bool { return !first },
+		ranOutAt: []string{"a", "b", "c"},
+		waited:   1,
+	}, {
+		name:     "a backlog that holds the seat sorted after it back for two cycles",
+		outlasts: func(seat string, n int, _ bool) bool { return seat == "b" && n <= 2 },
+		ranOutAt: []string{"b"},
+		waited:   2,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			calls := map[string]int{}
+			var ranOutAt []string
+			m := &scriptedMemory{play: func(ctx context.Context, seat string, first bool,
+				runOut func(),
+			) (memsync.Carried, error) {
+				calls[seat]++
+				if !tc.outlasts(seat, calls[seat], first) {
+					return carriedWhole, nil
+				}
+				if !slices.Contains(ranOutAt, seat) {
+					ranOutAt = append(ranOutAt, seat)
+				}
+				return runsOut(ctx, runOut, draining)
+			}}
+			loop := &memorySync{}
+			unreached, longest := map[string]int{}, map[string]int{}
+			for range 9 {
+				m.cycle(t, loop, seats...)
+				for _, seat := range seats {
+					if slices.Contains(m.calls, seat) && !slices.Contains(m.late, seat) {
+						unreached[seat] = 0
+						continue
+					}
+					unreached[seat]++
+					longest[seat] = max(longest[seat], unreached[seat])
+				}
+			}
+			slices.Sort(ranOutAt)
+			k, waited := len(ranOutAt), 0
+			for _, seat := range seats {
+				if longest[seat] > 2*k {
+					t.Errorf("seat %s went %d cycles in a row unreached, past 2k = %d for the %d "+
+						"seats the cycles ran out at, %s", seat, longest[seat], 2*k, k,
+						words.And(ranOutAt))
+				}
+				waited = max(waited, longest[seat])
+			}
+			if !slices.Equal(ranOutAt, tc.ranOutAt) || waited != tc.waited {
+				t.Errorf("the cycles ran out at %s and a seat went at most %d in a row "+
+					"unreached, want %s and %d", words.And(ranOutAt), waited,
+					words.And(tc.ranOutAt), tc.waited)
+			}
+		})
+	}
+}
+
+// A SEAT WHOSE PUBLISH FAILS WITH TIME LEFT HAS HAD ITS PUBLISH, AND THE ORDER
+// HOLDS.
+//
+// A refusal or a broker error while the cycle still has time is that seat's
+// failure, not the cycle's: the seats after it are carried in the same cycle,
+// and the next cycle starts where it would have, at the first seat. Read as
+// the bound running out, it left the seats after it for the next cycle, and
+// started that at the seat that failed.
+//
+// Mutation: read any error as the bound running out, and c is not carried.
+func TestASeatWhosePublishFailsWithTimeLeftKeepsTheOrder(t *testing.T) {
+	t.Parallel()
+	refused := errors.New("memsync: publish a agent_diary row for b: the broker refused the row")
+	m := &scriptedMemory{play: func(_ context.Context, seat string, _ bool,
+		_ func(),
+	) (memsync.Carried, error) {
+		if seat == "b" {
+			return memsync.Carried{StoppedIn: "agent_diary"}, refused
+		}
+		return carriedWhole, nil
+	}}
+	loop := &memorySync{}
+
+	report := m.cycle(t, loop, "a", "b", "c")
+	if !slices.Equal(m.completed, []string{"a", "c"}) {
+		t.Fatalf("the cycle in which b was refused carried %s, want a and c: the seats "+
+			"after a refusal are carried in the same cycle", words.And(m.completed))
+	}
+	if loop.resume != "" {
+		t.Errorf("the next cycle starts at %q, want the first seat: a refusal with time "+
+			"left does not move where the cycles start", loop.resume)
+	}
+	if len(report.failed) != 1 || report.failed[0].handle != "b" ||
+		!errors.Is(report.failed[0].err, refused) {
+		t.Errorf("the cycle reported %d failed publishes, want b's refusal alone",
+			len(report.failed))
+	}
+}
+
+// A CYCLE THAT RAN OUT WITH NOTHING MARKED IS A WARNING.
+//
+// A cycle whose bound runs out says so in one line, at a level progress
+// decides ([syncReport.lines]). A seat whose rows moved a mark before the cut
+// is a backlog draining, which every seat's first cycles after an acquisition
+// are, and is said at INFO. A seat that moved no mark warns, and so does a
+// seat that had the whole cycle and was cut inside a whole-each-cycle table,
+// whatever it marked; a seat that had only part of a cycle is given a whole
+// one next. A seat refused with time left warns of its own, and the seats a
+// cycle did not reach say nothing: its one line names them.
+//
+// Mutation: say every run-out at INFO, or every one as a warning, or warn for
+// any cut inside a whole-each-cycle table whatever the seat's place, and this
+// goes red.
+func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
+	t.Parallel()
+	refused := errors.New("the broker refused the row")
+	cutAt := func(cut memsync.Carried) func(context.Context, func()) (memsync.Carried, error) {
+		return func(ctx context.Context, runOut func()) (memsync.Carried, error) {
+			return runsOut(ctx, runOut, cut)
+		}
+	}
+	whole := memsync.Carried{Rows: 40, Marked: 12, StoppedIn: "synthesized_skills", Whole: true}
+	for _, tc := range []struct {
+		name string
+		// seat is the seat the case scripts, and play its publish; every
+		// other seat of a, b and c reaches the end of its tables.
+		seat string
+		play func(ctx context.Context, runOut func()) (memsync.Carried, error)
+		want []string
+	}{{
+		name: "the first seat cut with nothing acknowledged",
+		seat: "a", play: cutAt(memsync.Carried{StoppedIn: "agent_diary"}),
+		want: []string{"WARN seat_memory_not_carried seat=a next=b not_reached=b,c"},
+	}, {
+		name: "a later seat cut with only its whole tables acknowledged",
+		seat: "b",
+		play: cutAt(memsync.Carried{Rows: 4, StoppedIn: "counterparty_profiles", Whole: true}),
+		want: []string{"WARN seat_memory_not_carried seat=b next=b not_reached=c"},
+	}, {
+		name: "the first seat cut after moving marks",
+		seat: "a", play: cutAt(draining),
+		want: []string{"INFO memory_sync_ran_out seat=a next=b not_reached=b,c"},
+	}, {
+		name: "a later seat cut after moving marks",
+		seat: "b", play: cutAt(draining),
+		want: []string{"INFO memory_sync_ran_out seat=b next=b not_reached=c"},
+	}, {
+		name: "the first seat cut inside a whole-each-cycle table after moving marks",
+		seat: "a", play: cutAt(whole),
+		want: []string{"WARN seat_memory_not_carried seat=a next=b not_reached=b,c"},
+	}, {
+		name: "a later seat cut inside a whole-each-cycle table after moving marks",
+		seat: "b", play: cutAt(whole),
+		want: []string{"INFO memory_sync_ran_out seat=b next=b not_reached=c"},
+	}, {
+		name: "the bound run out between two seats",
+		seat: "a",
+		play: func(_ context.Context, runOut func()) (memsync.Carried, error) {
+			runOut()
+			return carriedWhole, nil
+		},
+		want: []string{"INFO memory_sync_ran_out next=b not_reached=b,c"},
+	}, {
+		name: "a seat refused with time left",
+		seat: "b",
+		play: func(context.Context, func()) (memsync.Carried, error) {
+			return memsync.Carried{StoppedIn: "agent_diary"}, refused
+		},
+		want: []string{"WARN seat_memory_not_carried seat=b"},
+	}, {
+		name: "every seat carried",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := &scriptedMemory{play: func(ctx context.Context, seat string, _ bool,
+				runOut func(),
+			) (memsync.Carried, error) {
+				if seat == tc.seat {
+					return tc.play(ctx, runOut)
+				}
+				return carriedWhole, nil
+			}}
+			report := m.cycle(t, &memorySync{}, "a", "b", "c")
+			if got := said(report.lines()); !slices.Equal(got, tc.want) {
+				t.Errorf("the cycle said %q, want %q", strings.Join(got, "; "),
+					strings.Join(tc.want, "; "))
+			}
+		})
+	}
+}
+
+// said is each line as its level, its message and the seats it names.
+func said(lines []reportLine) []string {
+	var out []string
+	for _, line := range lines {
+		s := line.level.String() + " " + line.msg
+		for _, key := range []string{"seat", "next", "not_reached"} {
+			for i := 0; i+1 < len(line.args); i += 2 {
+				if line.args[i] == key {
+					s += fmt.Sprintf(" %s=%v", key, line.args[i+1])
+				}
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// THE NEXT CYCLE STARTS WHERE THE LAST RAN OUT, WHATEVER THE HOST HOLDS NOW.
+//
+// The held seats are read again every cycle, sorted, and rotated to start at
+// the seat the last cycle ran out at. A seat released since is no longer
+// there, and the cycle starts at the first seat after it, which the last cycle
+// did not reach either; a seat taken since takes its sorted place.
+//
+// Mutation: read a resume the node no longer holds as the first seat, and the
+// released case goes red.
+func TestTheNextCycleStartsWhereTheLastRanOutWhateverTheHostHolds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		held   []string
+		resume string
+		want   []string
+	}{
+		{"no resume starts at the first seat", []string{"c", "a", "b"}, "", []string{"a", "b", "c"}},
+		{"a held resume starts there", []string{"a", "b", "c"}, "b", []string{"b", "c", "a"}},
+		{"the last seat wraps round", []string{"a", "b", "c"}, "c", []string{"c", "a", "b"}},
+		{"a released resume starts at the seat after it", []string{"a", "c"}, "b",
+			[]string{"c", "a"}},
+		{"a resume after every seat starts at the first", []string{"a", "b", "c"}, "d",
+			[]string{"a", "b", "c"}},
+		{"a resume before every seat starts at the first", []string{"b", "c"}, "a",
+			[]string{"b", "c"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			held := slices.Clone(tc.held)
+			if got := cycleOrder(held, tc.resume); !slices.Equal(got, tc.want) {
+				t.Errorf("holding %s from %q, the cycle's order is %s, want %s",
+					words.And(tc.held), tc.resume, words.And(got), words.And(tc.want))
+			}
+			if !slices.Equal(held, tc.held) {
+				t.Errorf("the order rewrote the host's list to %s, want it read as %s",
+					words.And(held), words.And(tc.held))
+			}
+		})
 	}
 }

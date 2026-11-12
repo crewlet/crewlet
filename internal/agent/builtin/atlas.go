@@ -69,9 +69,9 @@ type AtlasDeps struct {
 }
 
 // AtlasRead is one read of the atlas for one caller: Gitlet read as asker
-// where reads is set, every record this node reaches, and the settings it
-// runs. False where it runs no company yet.
-func (d AtlasDeps) AtlasRead(ctx context.Context, reads gather.GitletReads, asker gitlet.Principal,
+// where reads is set (or why it is not, unread), every record this node
+// reaches, and the settings it runs. False where it runs no company yet.
+func (d AtlasDeps) AtlasRead(ctx context.Context, reads gather.GitletReads, unread string, asker gitlet.Principal,
 	fresh statelog.Freshness, now time.Time) (gather.Answer, bool) {
 	if d.Settings == nil {
 		return gather.Answer{}, false
@@ -87,7 +87,7 @@ func (d AtlasDeps) AtlasRead(ctx context.Context, reads gather.GitletReads, aske
 	sources.Gitlet = reads
 	return gather.Read(ctx, sources, gather.Request{
 		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
-		Asker: asker, Fresh: fresh, Now: now,
+		Asker: asker, GitletUnread: unread, Fresh: fresh, Now: now,
 	}), true
 }
 
@@ -149,12 +149,9 @@ func (r atlasReader) atlas(ctx context.Context, turn *turnctx.Turn, tool string,
 	now time.Time) (answer gather.Answer, gitlet bool, missing string) {
 
 	reads, asker, why := r.gitlet(ctx, turn, tool)
-	answer, running := r.deps.AtlasRead(ctx, reads, asker, fresh, now)
+	answer, running := r.deps.AtlasRead(ctx, reads, why, asker, fresh, now)
 	if !running {
 		return gather.Answer{}, false, noAtlas
-	}
-	if why != "" {
-		answer = answer.Unread(gather.SourceGitlet, why)
 	}
 	return answer, reads != nil, ""
 }

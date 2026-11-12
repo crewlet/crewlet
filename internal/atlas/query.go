@@ -128,7 +128,8 @@ const (
 // Sorts is every order.
 var Sorts = []Sort{SortKey, SortName, SortLastSeen}
 
-// Query narrows a read. Its zero value is every current entry.
+// Query narrows a read. Its zero value is every current entry anybody can
+// vouch for: an unconfirmed one stays out until a person confirms it.
 type Query struct {
 	// Text matches a name or a key holding it, case folded, or an id.
 	Text   string
@@ -138,6 +139,10 @@ type Query struct {
 	Word   Word
 	Health Health
 	Show   Show
+	// Unconfirmed takes in the entries whose word is unconfirmed: an agent's
+	// report nothing the engine could check backs. Asking for that word by
+	// Word takes them in too.
+	Unconfirmed bool
 }
 
 // Validate refuses a query naming a value outside its closed set, naming the
@@ -189,11 +194,14 @@ func (q Query) matches(e *Entry, vendor Vendor, skip facet) bool {
 			return false
 		}
 	}
+	// An unconfirmed entry is left out on the word's own dimension, so the
+	// word's facet still counts what showing them would add.
+	hidden := !q.Unconfirmed && q.Word != WordUnconfirmed && e.Word == WordUnconfirmed
 	switch {
 	case skip != facetKind && q.Kind != "" && e.Ref.Kind != q.Kind,
 		skip != facetLane && q.Lane != "" && e.Lane != q.Lane,
 		skip != facetVendor && q.Vendor != "" && vendor != q.Vendor,
-		skip != facetWord && q.Word != "" && e.Word != q.Word,
+		skip != facetWord && (hidden || q.Word != "" && e.Word != q.Word),
 		skip != facetHealth && q.Health != "" && e.Health() != q.Health:
 		return false
 	}
