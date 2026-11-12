@@ -724,6 +724,11 @@ func claudeID(prefix string) string {
 	return prefix + hex.EncodeToString(raw[:])
 }
 
+// claudeToolUseID is the shape [claudeID] mints a call's tool_use id in, the id
+// the scripted harness hands each of its bridged calls under Claude Code's key:
+// `toolu_` and its twelve random bytes in lowercase hex.
+var claudeToolUseID = regexp.MustCompile(`^toolu_[0-9a-f]{24}$`)
+
 func callText(res *mcpsdk.CallToolResult) string {
 	var b strings.Builder
 	for _, c := range res.Content {

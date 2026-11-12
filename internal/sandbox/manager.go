@@ -384,6 +384,22 @@ func (m *Manager) RunnerFor(harness string) (Runner, error) {
 	return runner, nil
 }
 
+// CallIDMeta is the `_meta` key the runner for harness declares its harness
+// sends each call's own id under ([CallIdentifier]): what the bridge serving a
+// job of that harness reads each call's id by ([OpenedJob.CallIDMeta]). ""
+// where no runner is registered for harness, where its runner declares none,
+// and on a nil manager — a node that has had no sandbox runtime yet — so a call
+// is then recorded with no id, never refused for one.
+func (m *Manager) CallIDMeta(harness string) string {
+	if m == nil {
+		return ""
+	}
+	if identifier, ok := m.runners[harness].(CallIdentifier); ok {
+		return identifier.CallIDMeta()
+	}
+	return ""
+}
+
 // SpecInput are the per-role values overlaid onto the provider defaults.
 //
 // A pointer PauseTTL rather than a sentinel duration: nil means "inherit", and

@@ -54,8 +54,9 @@ func newServersFixture(t *testing.T) *serversFixture {
 }
 
 // openServers opens a job's session over surface, its servers' endpoints
-// beneath it, as [newServersFixture] does.
-func openServers(t *testing.T, surface *tools.Surface) *serversFixture {
+// beneath it, as [newServersFixture] does — each of configure readying the
+// session before it opens.
+func openServers(t *testing.T, surface *tools.Surface, configure ...func(*mcpbridge.Session)) *serversFixture {
 	t.Helper()
 	f := &serversFixture{ledger: &ledger{}, surface: surface}
 
@@ -68,10 +69,14 @@ func openServers(t *testing.T, surface *tools.Surface) *serversFixture {
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	mux.Handle(mcpbridge.ServerPattern, bridge.Handler())
 	server.Config.Handler = mux
-	f.endpoint = bridge.Open(t.Context(), &mcpbridge.Session{
+	session := &mcpbridge.Session{
 		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger,
-	})
+	}
+	for _, ready := range configure {
+		ready(session)
+	}
+	f.endpoint = bridge.Open(t.Context(), session)
 	if f.endpoint == "" {
 		t.Fatal("the bridge opened no session")
 	}

@@ -615,6 +615,13 @@ type FakeRunner struct {
 	// collection.
 	TakesNotes bool
 
+	// CallIDKey is what [FakeRunner.CallIDMeta] answers: the `_meta` key the
+	// harness this fake stands in for sends each call's own id under, as a
+	// real runner of a harness that sends one declares it. "" declares none,
+	// as a harness whose `_meta` carries no id does. Set it before the launch
+	// that should read it.
+	CallIDKey string
+
 	// StartErr, when set, fails every Start.
 	StartErr error
 	// PollErr, when set, fails every Poll — the transient case the waiter
@@ -810,6 +817,12 @@ func (r *FakeRunner) Name() string { return r.name }
 // ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
 // whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
+
+// CallIDMeta answers [FakeRunner.CallIDKey]: the optional answer a runner whose
+// harness names each of its calls gives the launch ([CallIdentifier]).
+func (r *FakeRunner) CallIDMeta() string { return r.CallIDKey }
+
+var _ CallIdentifier = (*FakeRunner)(nil)
 
 // Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
