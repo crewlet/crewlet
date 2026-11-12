@@ -61,10 +61,12 @@ type AtlasMapAnswer struct {
 	atlas.Map
 }
 
-// AtlasEntryAnswer is one entry in full, and what relies on it.
+// AtlasEntryAnswer is one entry in full, what its open signals add up to as
+// the reader may read them, and what relies on it.
 type AtlasEntryAnswer struct {
 	AtlasRead
 	Entry  atlas.Entry  `json:"entry"`
+	Health atlas.Health `json:"health"`
 	Vendor atlas.Vendor `json:"vendor,omitempty"`
 	UsedBy []atlas.Link `json:"used_by"`
 }
@@ -234,7 +236,8 @@ func (s Sources) atlasEntry(ctx context.Context, p Params) (any, error) {
 	if !found {
 		return nil, noAtlasEntry()
 	}
-	return AtlasEntryAnswer{AtlasRead: read, Entry: e, Vendor: view.Vendors()[e.ID], UsedBy: view.UsedBy(e.ID)}, nil
+	return AtlasEntryAnswer{AtlasRead: read, Entry: e, Health: e.Health(), Vendor: view.Vendors()[e.ID],
+		UsedBy: view.UsedBy(e.ID)}, nil
 }
 
 func (s Sources) atlasTrace(ctx context.Context, p Params) (any, error) {

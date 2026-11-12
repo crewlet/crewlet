@@ -8025,7 +8025,7 @@ The company's [atlas](../concepts/atlas.md), the map and catalogue of everything
 |---|---|---|---|
 | `atlas_entries` | `GET /atlas` | the filters below; `sort` (`key`, the map's order, by default; `name`; `last_seen`); `cursor`; `limit` (50 by default, at most 500) | `rows`, one summary per entry; `next_cursor`, absent on the last page; `total` |
 | `atlas_map` | `GET /atlas/map` | the filters below; `closed`, the group keys the reader closed, comma separated | `lanes` (every lane, an empty one included), `groups`, `nodes`, `edges` (the relations drawn at rest), `collapsed` |
-| `atlas_entry` | `GET /atlas/{id}` | `id` | `entry`, in full; its `vendor`; `used_by`, every entry with a relation to it |
+| `atlas_entry` | `GET /atlas/{id}` | `id` | `entry`, in full; its `health`, what the signals its reader may read add up to; its `vendor`; `used_by`, every entry with a relation to it |
 | `atlas_trace` | `GET /atlas/{id}/trace` | `id`; `direction` (`up`, what depends on it, by default; `down`, what it depends on); `depth` (1 to 6, 6 by default); `relations` (`structural`, by default, or `all`) | `from`, `direction`, `hops` by distance, `edges`, `truncated` |
 | `atlas_facets` | `GET /atlas/facets` | the filters below | how many entries each `kinds`, `lanes`, `vendors`, `words` and `health` value leaves, each counted over every other filter, and `total` |
 

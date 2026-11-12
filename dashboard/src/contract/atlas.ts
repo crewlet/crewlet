@@ -393,9 +393,11 @@ interface AtlasLink {
   entry: AtlasSummary;
 }
 
-/** `atlas_entry`: one entry in full, and what relies on it. */
+/** `atlas_entry`: one entry in full, what its open signals add up to as the
+ *  reader may read them, and what relies on it. */
 export interface AtlasEntryAnswer extends AtlasRead {
   entry: AtlasEntry;
+  health: AtlasHealth;
   vendor?: AtlasVendor;
   used_by: AtlasLink[];
 }
