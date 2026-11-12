@@ -229,8 +229,38 @@ type threadReader struct {
 // of an archive's budget for one member of it); at or below zero, no byte.
 func newThreadReader(r io.Reader, maxBytes int64) *threadReader {
 	maxBytes = max(maxBytes, 0)
-	return &threadReader{r: bufio.NewReaderSize(r, lineChunkBytes), maxBytes: maxBytes, left: maxBytes}
+	return &threadReader{r: bufio.NewReaderSize(threadSource{r}, lineChunkBytes), maxBytes: maxBytes, left: maxBytes}
 }
+
+// threadSource is a member's reader whose every error but its end reaches
+// [threadReader.Next] tagged as the reader's own ([threadSourceError]).
+//
+// TAGGED, because the line primitive's own bound is told by the error it
+// wraps, errScrubBound, and a reader may wrap it too: a reader that meters a
+// kept archive's plaintext with the take's scrub's own meter fails with the
+// scrub's bound once the archive inflates past a reading. Untagged, that error
+// would be read as a line or a member past this reader's bound, its own words
+// and its errors.Is lost.
+type threadSource struct{ r io.Reader }
+
+// Read reads the member's reader, tagging every error but io.EOF.
+func (s threadSource) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = &threadSourceError{err: err}
+	}
+	return n, err
+}
+
+// threadSourceError is an error of a member's reader on its way through the
+// line primitive ([threadSource]).
+type threadSourceError struct{ err error }
+
+// Error is the reader's error's own.
+func (e *threadSourceError) Error() string { return e.err.Error() }
+
+// Unwrap is the reader's error.
+func (e *threadSourceError) Unwrap() error { return e.err }
 
 // Next is the member's next WHOLE line, one that ends in "\n", its break
 // dropped and its head decoded. It answers:
@@ -251,7 +281,10 @@ func newThreadReader(r io.Reader, maxBytes int64) *threadReader {
 //   - a *threadLineError for a whole line that is not one record (not one JSON
 //     object, or a head key of the wrong type): the reader stays usable, and
 //     what the line costs is the caller's to decide.
-//   - any error of the member's reader, which ends the reading.
+//   - any error of the member's reader, AS IT IS, which ends the reading: one
+//     that wraps the take's scrub's bound, as a reader metering a kept
+//     archive with the scrub's own meter returns, is that reader's, never
+//     errThreadBound ([threadSource]).
 func (t *threadReader) Next() (threadLine, error) {
 	if t.end != nil {
 		return threadLine{}, t.end
@@ -261,7 +294,11 @@ func (t *threadReader) Next() (threadLine, error) {
 		bound = int(t.left)
 	}
 	raw, err := readLine(t.r, bound)
+	var source *threadSourceError
 	switch {
+	case errors.As(err, &source):
+		t.end = source.err
+		return threadLine{}, t.end
 	case errors.Is(err, errScrubBound) && member:
 		t.end = fmt.Errorf("%w: the member runs past the %d bytes it is read within", errThreadBound, t.maxBytes)
 		return threadLine{}, t.end

@@ -511,15 +511,17 @@ func ctPadded(n int) string {
 
 // A LINE OR A MEMBER PAST ITS BOUND ENDS THE READING: a line one byte longer
 // than the take's scrub would hold, or a member one byte longer than its
-// reader's bound, ends it with errThreadBound, and the reading stays over, the
-// record after the line never read. A member past its bound is past it EVEN
-// WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK, where a member metered by
-// io.LimitReader would end cleanly and read as whole. A line or a member AT
-// its bound reads whole, and the bounds are the take's scrub's own.
+// reader's bound, ends it with errThreadBound, saying which of the two it ran
+// past, and the reading stays over, the record after the line never read. A
+// member past its bound is past it EVEN WHERE THE BOUND FALLS RIGHT AFTER A
+// LINE BREAK, where a member metered by io.LimitReader would end cleanly and
+// read as whole. A line or a member AT its bound reads whole, and the bounds
+// are the take's scrub's own.
 //
 // Mutation: skip a line past the bound and read on, and the record after it
 // is read; meter the member with io.LimitReader, and a member past its bound
-// by a break, a record or a line ends cleanly.
+// by a break, a record or a line ends cleanly; swap the two bounds' words, and
+// a line past its bound reads as a member past its.
 func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	t.Parallel()
 	kept := boundsFor(executorkeep.SessionMaxBytes)
@@ -530,27 +532,29 @@ func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	brief := ctBrief(ctUUID(1))
 	head := ctThread(ctEnqueue, brief)
 	n := int64(len(head))
+	// What the error of a reading past a bound says it ran past.
+	const line, member = "a line runs past", "the member runs past"
 	for name, tc := range map[string]struct {
 		text     string
 		maxBytes int64
 		lines    int
-		past     bool
+		past     string
 	}{
 		"a line at its bound, its break included": {
 			text: ctPadded(threadLineMax) + ctThread(brief), maxBytes: threadPlainMax, lines: 2},
 		"a line a byte past its bound, a record after it": {
 			text: ctThread(ctEnqueue) + ctPadded(threadLineMax+1) + ctThread(brief), maxBytes: threadPlainMax,
-			lines: 1, past: true},
+			lines: 1, past: line},
 		"a member at its bound": {text: head, maxBytes: n, lines: 2},
 		"a member a byte past its bound, which falls right after a break": {
-			text: head + "\n", maxBytes: n, lines: 2, past: true},
+			text: head + "\n", maxBytes: n, lines: 2, past: member},
 		"a member past its bound by a record that starts on it": {
-			text: head + ctThread(ctDequeue), maxBytes: n, lines: 2, past: true},
-		"a member past its bound by a piece with no break": {text: head + "{", maxBytes: n, lines: 2, past: true},
-		"a member whose bound falls inside a line":         {text: head, maxBytes: n - 1, lines: 1, past: true},
+			text: head + ctThread(ctDequeue), maxBytes: n, lines: 2, past: member},
+		"a member past its bound by a piece with no break": {text: head + "{", maxBytes: n, lines: 2, past: member},
+		"a member whose bound falls inside a line":         {text: head, maxBytes: n - 1, lines: 1, past: member},
 		"an empty member at a bound of none":               {text: "", maxBytes: 0},
-		"a break at a bound of none":                       {text: "\n", maxBytes: 0, past: true},
-		"a break at a bound below none":                    {text: "\n", maxBytes: -1, past: true},
+		"a break at a bound of none":                       {text: "\n", maxBytes: 0, past: member},
+		"a break at a bound below none":                    {text: "\n", maxBytes: -1, past: member},
 		"an empty member at a bound below none":            {text: "", maxBytes: -1},
 	} {
 		got := ctRead(tc.text, tc.maxBytes)
@@ -558,9 +562,11 @@ func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 			t.Errorf("%s: %d lines read and %d broken, want %d and none", name, len(got.lines), len(got.broken), tc.lines)
 		}
 		switch {
-		case tc.past && (!errors.Is(got.end, errThreadBound) || !errors.Is(got.again, errThreadBound)):
-			t.Errorf("%s: the reading ended with %v and then %v, want errThreadBound both times", name, got.end, got.again)
-		case !tc.past && (!errors.Is(got.end, io.EOF) || got.torn):
+		case tc.past != "" && (!errors.Is(got.end, errThreadBound) || !errors.Is(got.again, errThreadBound) ||
+			!strings.Contains(got.end.Error(), tc.past)):
+			t.Errorf("%s: the reading ended with %v and then %v, want errThreadBound both times, saying %q", name,
+				got.end, got.again, tc.past)
+		case tc.past == "" && (!errors.Is(got.end, io.EOF) || got.torn):
 			t.Errorf("%s: the reading ended with %v, torn %t, want a whole member's io.EOF", name, got.end, got.torn)
 		}
 	}
@@ -573,13 +579,19 @@ func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 // no torn piece, and asked again, the reader answers the same error. Only
 // io.EOF is the member's end: read as one, a cut stream would pass for a
 // thread whose last write tore, and what the cut took (a pair, a compaction's
-// boundary) would be neither read nor missed.
+// boundary) would be neither read nor missed. A reader's error that wraps the
+// take's scrub's bound, as a reader metering a kept archive with the scrub's
+// own meter returns once the archive inflates past a reading, is that error
+// too, in its own words, never the bound the layer reads within.
 //
 // Mutation: read a reader's error as the member's end, the half record before
-// it its torn piece, and each reading ends with io.EOF.
+// it its torn piece, and each reading ends with io.EOF; take a reader's error
+// that wraps the scrub's bound for the layer's own, and the archive that
+// inflated past its reading ends as a line past its bound.
 func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 	t.Parallel()
 	reset := errors.New("read: connection reset by peer")
+	inflated := fmt.Errorf("%w: a kept archive's plaintext runs past what one reading holds", errScrubBound)
 	whole := ctThread(ctEnqueue, ctBrief(ctUUID(1)))
 	call := ctAssistant(ctUUID(1), ctUUID(2), ctUseContent)
 	for name, tc := range map[string]struct {
@@ -590,6 +602,9 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 		"an archive cut part way through a record": {text: whole + call[:len(call)/2], err: io.ErrUnexpectedEOF},
 		"a reset right after a break":              {text: whole, err: reset},
 		"an archive cut right after a break":       {text: whole, err: io.ErrUnexpectedEOF},
+		"an archive inflated past its reading part way through a record": {text: whole + call[:len(call)/2],
+			err: inflated},
+		"an archive inflated past its reading right after a break": {text: whole, err: inflated},
 	} {
 		got := ctReadFrom(io.MultiReader(strings.NewReader(tc.text), iotest.ErrReader(tc.err)), threadPlainMax)
 		if types := ctTypes(got.lines); len(got.broken) != 0 || !slices.Equal(types, []string{"queue-operation", "user"}) {
@@ -599,6 +614,10 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 		if !errors.Is(got.end, tc.err) || errors.Is(got.end, io.EOF) || got.torn || !errors.Is(got.again, tc.err) {
 			t.Errorf("%s: the reading ended with %v, torn %t, and then %v; want %v, not torn, and %v again",
 				name, got.end, got.torn, got.again, tc.err, tc.err)
+		}
+		if errors.Is(got.end, errThreadBound) || got.end == nil || got.end.Error() != tc.err.Error() {
+			t.Errorf("%s: the reading ended with %v; want the reader's own error in its own words, never the "+
+				"layer's bound", name, got.end)
 		}
 	}
 }
