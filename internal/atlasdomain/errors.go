@@ -3,6 +3,10 @@ package atlasdomain
 import (
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The sentinels: each is a fact a caller acts on differently.
@@ -34,4 +38,28 @@ var (
 // invalid is an [ErrInvalid] naming what to change.
 func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
+}
+
+// Sentence is a refusal of this domain worded for whoever reads it: a person's
+// write surface, a seat's tool, the assistant. The state log's own refusals are
+// said in the framework's words for a person ([statelog.Sentence]), and every
+// other loses the package and class words it opens with, which are for a log
+// and say nothing about what to change, the vocabulary's included. No refusal
+// here repeats a value, so nothing is cut from what follows them.
+func Sentence(err error) string {
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
+	text := err.Error()
+	for _, cut := range sentenceCuts {
+		text = strings.ReplaceAll(text, cut, "")
+	}
+	return text
+}
+
+// sentenceCuts are the words [Sentence] removes, the longest first, so a class
+// word is removed whole before the package word inside it.
+var sentenceCuts = []string{
+	ErrInvalid.Error() + ": ", ErrPurged.Error() + ": ", atlas.ErrInvalid.Error() + ": ",
+	"atlasdomain: ", "atlas: ",
 }

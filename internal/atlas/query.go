@@ -32,9 +32,12 @@ const (
 	// data and platform are four hops, and six leaves room for chains of
 	// services without walking the whole company.
 	TraceDepthMax = 6
-	// TraceMax is the most entries a trace answers. Past it the trace is
-	// most of the company, which the map draws better.
+	// TraceMax is the most entries a trace answers a person. Past it the
+	// trace is most of the company, which the map draws better.
 	TraceMax = 200
+	// TraceToolMax is the most an agent's trace answers: fifty summaries
+	// stay well inside one tool answer beside the edges between them.
+	TraceToolMax = 50
 )
 
 // ErrQuery is a read whose parameters the atlas cannot answer. Its message
@@ -260,7 +263,7 @@ type Summary struct {
 	ID              uuid.UUID `json:"id"`
 	Kind            Kind      `json:"kind"`
 	Lane            Lane      `json:"lane"`
-	Name            string    `json:"name"`
+	Name            string    `json:"name" untrusted:"name"`
 	Key             string    `json:"key"`
 	Vendor          Vendor    `json:"vendor,omitempty"`
 	State           State     `json:"state"`
@@ -571,15 +574,15 @@ type Trace struct {
 	Direction Direction  `json:"direction"`
 	Hops      []TraceHop `json:"hops"`
 	Edges     []MapEdge  `json:"edges"`
-	// Truncated is a trace that reached [TraceMax] entries before it walked
-	// every hop it was asked for.
+	// Truncated is a trace that reached its bound of entries before it
+	// walked every hop it was asked for.
 	Truncated bool `json:"truncated"`
 }
 
-// Trace walks from the entry id in dir, at most depth hops, through the
-// structural relations or, with all, every relation between entries. It
-// reports false for an id that names no entry of v.
-func (v View) Trace(id uuid.UUID, dir Direction, depth int, all bool) (Trace, bool, error) {
+// Trace walks from the entry id in dir, at most depth hops and limit
+// entries, through the structural relations or, with all, every relation
+// between entries. It reports false for an id that names no entry of v.
+func (v View) Trace(id uuid.UUID, dir Direction, depth int, all bool, limit int) (Trace, bool, error) {
 	if !slices.Contains(Directions, dir) {
 		return Trace{}, false, fmt.Errorf("%w: `direction` is %s", ErrQuery, words.Or(Directions))
 	}
@@ -627,7 +630,7 @@ func (v View) Trace(id uuid.UUID, dir Direction, depth int, all bool) (Trace, bo
 					continue
 				}
 				if !seen[other] {
-					if reached == TraceMax {
+					if reached == limit {
 						out.Truncated = true
 						break
 					}

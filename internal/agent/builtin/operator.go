@@ -58,6 +58,11 @@ type OperatorDeps struct {
 	// the tools.
 	Atlas AtlasDeps
 
+	// AtlasWrite is the atlas's write tools' half: its log, who writes and
+	// the chart an owner is named from. Each write is decided on the atlas
+	// as Atlas reads it. The zero value omits the tools.
+	AtlasWrite AtlasWriteDeps
+
 	// Readers is `code_repo_readers`' half beside Code — who read a
 	// `visibility: unit` repository — served only where Code serves the
 	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
@@ -140,6 +145,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Work.ops = operations{callerOperations: true}
 	deps.Artifacts.ops = operations{callerOperations: true, now: deps.Artifacts.Now}
 	deps.Code.ops = operations{callerOperations: true}
+	deps.AtlasWrite.ops = operations{callerOperations: true}
 	work, pages, talk := deps.Work, deps.Pages, deps.Chat
 	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},
@@ -188,7 +194,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			deps.Knowledge != nil && deps.Org != nil},
 		// THE ATLAS, read as the caller: every entry to a holder of the app,
 		// and the repositories in it only where they use Gitlet (ADR-0127).
-		{&atlasSearch{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize},
+		{&atlasSearch{atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}},
+			deps.Atlas.Settings != nil},
+		{&atlasGet{atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}},
+			deps.Atlas.Settings != nil},
+		{&atlasTrace{atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}},
 			deps.Atlas.Settings != nil},
 		// A SEAT IS NEVER GIVEN IT: a question an executor asked is a
 		// person's to answer, and a seat that could answer its own
@@ -260,6 +270,9 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	}
 	candidates = slices.Concat(candidates,
 		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),
+		// AND THE ATLAS'S WRITES, which no seat's registry holds: what the
+		// company's map says is a person's to correct (see atlaswrite.go).
+		atlasWriteCandidates(deps),
 		// THE CODE TOOLS, the list a seat's registry takes whole: a person
 		// reads every repository and maintains every one a tool made, so
 		// their assistant answers the same questions a seat's turn does,

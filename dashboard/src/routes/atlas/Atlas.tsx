@@ -56,7 +56,7 @@ import { HEALTH, KINDS, KIND_ORDER, LANES, VENDORS, WORDS, entries } from "./wor
 
 /** What fills the atlas in this build, said where it is empty. */
 export const FILLS =
-  "It fills from what the company settings declare, from Gitlet, and from what the engine already records about the integrations, servers, tool servers and models it uses.";
+  "It fills from what the company settings declare, from Gitlet, from what the engine already records about the integrations, servers, tool servers and models it uses, and from what people add by asking Ask Crewlet.";
 
 const SHAPES: readonly { value: Shape; label: string; glyph: "map" | "list" }[] = [
   { value: "map", label: "Map", glyph: "map" },

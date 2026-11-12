@@ -26,11 +26,18 @@ const KINDS: Record<WakeKind, (reason: string, seat: string) => WakeWords> = {
     who: "An admin, by changing how often it runs",
     path: ["company", "schedules", "role", seat, reason],
   }),
-  work_item: (reason) => ({
-    label: reason === "pickup" ? "Work handed to it while idle" : `Work items${why(reason)}`,
-    who: "Whoever assigns it work or mentions it",
-    path: ["worklet"],
-  }),
+  work_item: (reason) =>
+    reason === "dead_wait"
+      ? {
+          label: "Work handed back: a pull request nobody is moving",
+          who: "Whoever reviews or merges its pull requests",
+          path: ["worklet"],
+        }
+      : {
+          label: reason === "pickup" ? "Work handed to it while idle" : `Work items${why(reason)}`,
+          who: "Whoever assigns it work or mentions it",
+          path: ["worklet"],
+        },
   chat_message: (reason) => ({
     label: `Chat messages${why(reason)}`,
     who: "People and agents who write to it",

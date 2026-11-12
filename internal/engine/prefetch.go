@@ -95,6 +95,8 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
 	src.Embed = e.embedText
+	// THE ATLAS, for the entries a turn's ask names, as its seat reads it.
+	src.Systems = atlasSystems{engine: e}
 	// WHAT A SEAT'S NOTES ARE HELD TO: this build, and when the seat was last
 	// told its access, read for a memory refresh as a turn's start reads it.
 	src.Build, src.AccessTold = version.String(), e.accessToldAt
@@ -118,7 +120,7 @@ func (a ownAsks) OwnAsks(ctx context.Context, asker, person string, limit int) (
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
-	told *toldTurn, workingFor *types.WorkingFor,
+	told *toldTurn, workingFor *types.WorkingFor, readsAtlas bool,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -178,6 +180,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// whose trigger message's document keeps its post's carrier across
 		// an edit made for somebody else.
 		WorkingFor: workingFor,
+		// WHETHER IT MAY READ THE ATLAS, decided with the turn's own ceiling
+		// (turnReadsAtlas), for the entries its ask names.
+		ReadsAtlas: readsAtlas,
 		// THE SEGMENT'S FENCE TOKEN, which its tools fence with too: the
 		// thread is somebody else's words, handed over in the prompt.
 		Boundary: boundary,
@@ -261,6 +266,9 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		CounterpartyBytes:      len(b.CounterpartyProfile),
 		OpenAsksHit:            b.OpenAsks != "",
 		OpenAsksBytes:          len(b.OpenAsks),
+		SystemsHit:             b.Systems != "",
+		SystemsNamed:           b.SystemsNamed,
+		SystemsBytes:           len(b.Systems),
 		SynthesizedSkillsHit:   b.SynthesizedSkills != "",
 		SynthesizedSkillsBytes: len(b.SynthesizedSkills),
 		EpisodeRecallHit:       b.EpisodeRecall != "",

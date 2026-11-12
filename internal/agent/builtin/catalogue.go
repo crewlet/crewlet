@@ -68,6 +68,9 @@ const (
 	// nodes' caches. A shelf of its own rather than the code's, because it
 	// answers about the fleet, not about one repository.
 	GroupHealth Group = "health"
+	// GroupAtlas is the company's atlas: what it runs on, how sure the
+	// atlas is of each entry, and what depends on what.
+	GroupAtlas Group = "atlas"
 	// GroupServers is the company's servers, reached over SSH.
 	GroupServers Group = "servers"
 	// GroupColleagues is finding a colleague and asking another agent.
@@ -79,10 +82,10 @@ const (
 	GroupDiscovery Group = "discovery"
 )
 
-// Groups are the eleven, in the order the catalogue shows them.
+// Groups are the twelve, in the order the catalogue shows them.
 var Groups = []Group{
 	GroupWork, GroupProjects, GroupKnowledge, GroupChat, GroupArtifacts,
-	GroupCode, GroupHealth, GroupServers, GroupColleagues, GroupMemory, GroupDiscovery,
+	GroupCode, GroupHealth, GroupAtlas, GroupServers, GroupColleagues, GroupMemory, GroupDiscovery,
 }
 
 // Valid reports whether g is a group this build files tools under.
@@ -105,6 +108,8 @@ var groupWords = map[Group]struct{ label, description string }{
 		"The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks."},
 	GroupHealth: {"Health",
 		"The deployment's health: every live node, and the Gitlet nodes' caches."},
+	GroupAtlas: {"Atlas",
+		"The company's atlas: what it runs on, how sure the atlas is of each entry, and what depends on what."},
 	GroupServers: {"Servers",
 		"The company's servers over SSH: allowlisted reads, and commands a person or a delegate approves first."},
 	GroupColleagues: {"Colleagues",
@@ -170,6 +175,10 @@ const (
 	// may do to a repository is its grant there, which the code domain
 	// decides, and never this gate.
 	GateGitlet Gate = "gitlet"
+	// GateAtlas names an agent that uses the atlas ([authz.ClassApp] on
+	// [iam.GrantAtlas]), which every seat does as it uses every app: a
+	// private address it reads only within its own reach (ADR-0109).
+	GateAtlas Gate = "atlas"
 	// GateArtifactViewer names anybody the artifact is shared with, as a viewer
 	// or more ([authz.ClassShared], least role viewer, no app).
 	GateArtifactViewer Gate = "artifact_viewer"
@@ -196,10 +205,10 @@ const (
 	GateDelegate Gate = "delegated_decisions"
 )
 
-// Gates are the sixteen, in declaration order.
+// Gates are the seventeen, in declaration order.
 var Gates = []Gate{
 	GateEverybody, GateSelf, GateWorklet, GateWorkletAsked, GateProjectLead,
-	GateDoclet, GateChatlet, GateArtifacts, GateGitlet, GateArtifactViewer,
+	GateDoclet, GateChatlet, GateArtifacts, GateGitlet, GateAtlas, GateArtifactViewer,
 	GateArtifactEditor, GateArtifactOwner, GateHealthTools, GateSSHRead, GateSSHOperate, GateDelegate,
 }
 
@@ -342,6 +351,10 @@ var filed = []struct {
 
 	{FleetHealthTool, GroupHealth, GateHealthTools, reachesNoVendor},
 	{CodeStatusTool, GroupHealth, GateHealthTools, reachesNoVendor},
+
+	{AtlasSearchTool, GroupAtlas, GateAtlas, reachesNoVendor},
+	{AtlasGetTool, GroupAtlas, GateAtlas, reachesNoVendor},
+	{AtlasTraceTool, GroupAtlas, GateAtlas, reachesNoVendor},
 
 	{SSHReadTool, GroupServers, GateSSHRead, reachesNoVendor},
 	{SSHOperateTool, GroupServers, GateSSHOperate, reachesNoVendor},

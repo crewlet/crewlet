@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,11 +36,16 @@ import (
 // wait on a person is an ask, so such a wait comes back to be asked rather
 // than sit out a date nobody was told of, whenever and however it was written.
 //
+// AND A DEAD WAIT IS READY: an item whose every open blocker is a change the
+// engine recorded nothing moving ([DeadWait], ADR-0128), unless a reviewer
+// holds it in review. It is handed once per head and never rechecked.
+//
 // # The order
 //
 // Started work first, then the reviews the seat holds, then its own items in
-// review that nobody reviews, then its priority list in its lead's order, then
-// the queue: priority, then due date, the order `my_work` lists `assigned` in.
+// review that nobody reviews, then its waits on a person nobody asked, then its
+// dead waits, then its priority list in its lead's order, then the queue:
+// priority, then due date, the order `my_work` lists `assigned` in.
 //
 // # What a pickup keys on, and whom its turn works for
 //
@@ -117,6 +124,10 @@ type ReadyItem struct {
 	// writer's open ask, by handle: set on an item ready before its date
 	// ([types.PickupWaitsOnPerson]).
 	WaitsOn []string `json:"waits_on,omitempty"`
+
+	// DeadWaits are the changes nothing moves that the item waits on, by
+	// reference: set on a dead wait ([types.PickupDeadWait]).
+	DeadWaits []DeadWait `json:"dead_waits,omitempty"`
 }
 
 // ReadyWork is one page of a seat's ready items in pickup order.
@@ -177,28 +188,44 @@ func (r *Reader) ReadyWork(ctx context.Context, q ReadyWorkQuery, now time.Time)
 // readyStatuses is the statuses ready work is in, started work first.
 var readyStatuses = []Status{StatusInProgress, StatusInReview, StatusTodo}
 
+// The blockers a held item may wait on: none still open, or open ones that are
+// every one of them a dead wait.
+const (
+	noOpenBlocker = "NOT EXISTS (SELECT 1 FROM tracker_task_deps d " +
+		"WHERE d.task_id = t.id AND d.blocker_open = 1)"
+	onlyDeadBlockers = "EXISTS (SELECT 1 FROM tracker_task_deps d " +
+		"WHERE d.task_id = t.id AND d.blocker_open = 1) " +
+		"AND NOT EXISTS (SELECT 1 FROM tracker_task_deps d " +
+		"WHERE d.task_id = t.id AND d.blocker_open = 1 AND d.dead_head = '')"
+	startPassed = "(t.start_at IS NULL OR t.start_at <= ?)"
+)
+
 // readyBlock is one status's ready items for a seat, in queue order: named for
 // the plan test, which holds it to a seek of the queue index.
 func readyBlock(handle string, status Status, now time.Time) blockQuery {
-	return heldBlock(handle, status, "(t.start_at IS NULL OR t.start_at <= ?)", now)
+	return heldBlock(handle, status, startPassed, noOpenBlocker, now)
 }
 
 // waitBlock is one status's items a seat holds that wait until a later date
 // with a reason: the candidates for a wait on a person ([readyWaits]).
 func waitBlock(handle string, status Status, now time.Time) blockQuery {
 	return heldBlock(handle, status, "t.start_at > ? "+
-		"AND COALESCE(json_extract(t.document, '$.wait_reason'), '') <> ''", now)
+		"AND COALESCE(json_extract(t.document, '$.wait_reason'), '') <> ''", noOpenBlocker, now)
 }
 
-// heldBlock is one status's items a seat holds that wait on no open blocker
-// and no question of its own, whose start meets started, in queue order.
-func heldBlock(handle string, status Status, started string, now time.Time) blockQuery {
+// deadBlock is one status's items a seat holds whose every open blocker is a
+// dead wait ([DeadWait]), in queue order.
+func deadBlock(handle string, status Status, now time.Time) blockQuery {
+	return heldBlock(handle, status, startPassed, onlyDeadBlockers, now)
+}
+
+// heldBlock is one status's items a seat holds that wait on the blockers named
+// and on no question of its own, whose start meets started, in queue order.
+func heldBlock(handle string, status Status, started, blockers string, now time.Time) blockQuery {
 	return blockQuery{
 		where: "t.removed_at IS NULL AND t.assignee = ? AND t.status_group = ? " +
 			"AND t.status = ? AND t.archived = 0 AND t.merging = 0 " +
-			"AND " + started + " " +
-			"AND NOT EXISTS (SELECT 1 FROM tracker_task_deps d " +
-			"WHERE d.task_id = t.id AND d.blocker_open = 1) " +
+			"AND " + started + " AND " + blockers + " " +
 			"AND NOT EXISTS (SELECT 1 FROM tracker_comments c " +
 			"WHERE c.task_id = t.id AND c.author = ? AND c.ask <> '' " +
 			"AND c.resolved = 0 AND c.answered_by IS NULL AND c.removed = 0)",
@@ -233,11 +260,15 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err != nil {
 		return err
 	}
+	dead, err := readyDead(ctx, tx, q.Handle, now, &out.Capped)
+	if err != nil {
+		return err
+	}
 	person, _, err := readPerson(ctx, tx, q.Handle)
 	if err != nil {
 		return err
 	}
-	all := orderReady(blocks[0], reviews, own, waits, blocks[2], person.Priorities)
+	all := orderReady(blocks[0], reviews, own, waits, dead, blocks[2], person.Priorities)
 	out.Total = len(all)
 	out.Fingerprint = fingerprintOf(all)
 	from := min(q.Page*ReadyRows, len(all))
@@ -253,7 +284,56 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err := loadQuiet(ctx, tx, q.Handle, out.Items, now); err != nil {
 		return err
 	}
+	if err := loadDeadWaits(ctx, tx, q.Handle, out.Items); err != nil {
+		return err
+	}
 	return loadFor(ctx, tx, q.Handle, out.Items)
+}
+
+// readyDead is the items handle holds whose every open blocker is a dead wait,
+// in queue order, started work first; one in review only where the seat moved
+// it there itself, since a reviewer holding it is moving it.
+func readyDead(ctx context.Context, tx *sql.Tx, handle string, now time.Time, capped *bool) ([]TaskRow, error) {
+	var blocks [3][]TaskRow
+	for i, status := range readyStatuses {
+		block := deadBlock(handle, status, now)
+		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args), block.terms, MaxReady, now)
+		if err != nil {
+			return nil, fmt.Errorf("worklet: read %s's %s work on dead waits: %w", handle, status, err)
+		}
+		blocks[i] = rows
+		*capped = *capped || more != ""
+	}
+	_, own, err := readyReviews(ctx, tx, handle, blocks[1])
+	if err != nil {
+		return nil, err
+	}
+	out := slices.Clone(blocks[0])
+	for _, r := range own {
+		out = append(out, r.TaskRow)
+	}
+	return append(out, blocks[2]...), nil
+}
+
+// loadDeadWaits stamps each dead wait with the changes nothing moves, read off
+// its task's own record, in reference order.
+func loadDeadWaits(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem) error {
+	for i := range items {
+		if items[i].Why != types.PickupDeadWait {
+			continue
+		}
+		task, held, err := readTask(ctx, tx, items[i].ID)
+		if err != nil {
+			return fmt.Errorf("worklet: read %s's dead waits on %s: %w", handle, items[i].ID, err)
+		}
+		if !held {
+			continue
+		}
+		for _, ref := range slices.Sorted(maps.Keys(task.DeadWaits)) {
+			items[i].DeadWaits = append(items[i].DeadWaits, task.DeadWaits[ref])
+		}
+	}
+	return nil
 }
 
 // fingerprintOf names an ordered ready set by its items' ids, statuses and
@@ -327,6 +407,10 @@ func loadQuiet(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem
 		return fmt.Errorf("worklet: read %s's last word on its ready work: %w", handle, err)
 	}
 	for i := range items {
+		if items[i].Why == types.PickupDeadWait {
+			// HANDED ONCE PER HEAD, never rechecked: only a new head re-arms it.
+			continue
+		}
 		quiet := items[i].MovedAt
 		if waited, ok := passedStart(items[i], now); ok && waited.After(quiet) {
 			quiet = waited
@@ -466,12 +550,12 @@ func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time
 // orderReady is the pickup order over the blocks and the priority list:
 // started work in queue order, then the reviews the seat holds, then its own
 // items in review nobody reviews, then the waits on a person nobody asked,
-// then the waiting items the list names in its order, then the rest in queue
-// order.
-func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow,
+// then the dead waits, then the waiting items the list names in its order,
+// then the rest in queue order.
+func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow, dead []TaskRow,
 	waiting []TaskRow, priorities []string) []ReadyItem {
 
-	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(onPerson)+len(waiting))
+	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(onPerson)+len(dead)+len(waiting))
 	for _, row := range started {
 		out = append(out, ReadyItem{TaskRow: row, Why: types.PickupInProgress})
 	}
@@ -483,6 +567,9 @@ func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow,
 	}
 	for _, w := range onPerson {
 		out = append(out, ReadyItem{TaskRow: w.TaskRow, Why: types.PickupWaitsOnPerson, WaitsOn: w.on})
+	}
+	for _, row := range dead {
+		out = append(out, ReadyItem{TaskRow: row, Why: types.PickupDeadWait})
 	}
 	listed := make(map[string]bool, len(priorities))
 	byID := make(map[string]TaskRow, len(waiting))

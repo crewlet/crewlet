@@ -73,7 +73,7 @@ export const LANES: Readonly<
   },
   services: {
     label: "Services",
-    empty: "No source this version of Crewlet reads names a service yet.",
+    empty: "Services appear when a person adds one, by asking Ask Crewlet.",
   },
   runtime: {
     label: "Runtime",
@@ -82,7 +82,7 @@ export const LANES: Readonly<
   },
   data: {
     label: "Data",
-    empty: "No source this version of Crewlet reads names a database, a queue or a bucket yet.",
+    empty: "Databases, queues and buckets appear when a person adds one, by asking Ask Crewlet.",
   },
   platforms: {
     label: "Platforms",
@@ -96,7 +96,7 @@ export const LANES: Readonly<
   },
   observability: {
     label: "Observability",
-    empty: "No source this version of Crewlet reads names a monitor yet.",
+    empty: "Monitors appear when a person adds one, by asking Ask Crewlet.",
   },
   tools: {
     label: "Tools and models",
@@ -264,6 +264,7 @@ export const RECORDS: Readonly<Record<string, string>> = {
 /** Each place an atlas read reads, named as a reader knows it. */
 export const COVERAGE: Readonly<Record<AtlasCoverageSource, string>> = {
   settings: "The company settings",
+  log: "What people recorded in the atlas",
   gitlet: "Gitlet",
   integrations: "Integration status",
   seat_access: "The agents' account ledger",

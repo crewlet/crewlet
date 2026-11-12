@@ -26,24 +26,25 @@ those come from.
 
 ## What it shows today
 
-This version of the atlas draws what the engine already knows, and nothing it
-has to be told:
+This version of the atlas draws what the engine already knows, and what people
+holding Atlas add and correct, by asking Ask Crewlet or through the operator
+tools ([changing the atlas](../concepts/atlas.md#changing-the-atlas)):
 
 | Lane | What fills it in this version |
 |---|---|
 | Entry | the zones the Cloudflare integration declares, and the host names the engine answers at (`api.external_url`, `api.public.external_url`) |
-| Services | nothing yet: no source this version reads names a service |
+| Services | what people add |
 | Runtime | the servers the SSH integration declares |
-| Data | nothing yet: no source this version reads names a database, a queue or a bucket |
+| Data | what people add: databases, queues and buckets |
 | Platforms | each connected integration's account |
 | Code and delivery | Gitlet's repositories and their checks, and the repositories the GitHub and GitLab integrations name |
-| Observability | nothing yet: no source this version reads names a monitor |
+| Observability | what people add |
 | Tools and models | the tool servers of Settings › MCP & tools and the model entries of Settings › Models |
 
 An empty lane says this on the map itself, so a new company sees what it would
-take to fill each one. Entries people add and correct, and what agents and
-integrations record, arrive with later versions; until then no screen offers to
-write anything.
+take to fill each one. These screens only read: every change goes through Ask
+Crewlet's proposals, which you approve, or the operator tools. What agents and
+integrations record arrives with later versions.
 
 ## The map
 

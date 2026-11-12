@@ -126,6 +126,20 @@ func (e *Engine) AtlasReads() (estate.AtlasReader, bool) {
 	return nil, false
 }
 
+// AtlasWrites is the atlas log's writes as this node makes them: through the
+// router, which a data node that publishes answers, this one where it does, so
+// a person's write is the same call from a node without `data`. False on an
+// engine that reaches no writer at all.
+func (e *Engine) AtlasWrites() (estate.AtlasWriter, bool) {
+	if e.router != nil {
+		return e.router.AtlasWrites(), true
+	}
+	if w := e.AtlasWriter(); w != nil {
+		return w, true
+	}
+	return nil, false
+}
+
 // AtlasReader is this node's atlas read side, or nil on an engine with no core
 // runtime: a node without `data`.
 func (e *Engine) AtlasReader() *atlasdomain.Reader {

@@ -115,7 +115,7 @@ test.each([1440, 768, 390])(
     await eventually(() => expect(texts(".crewlet-graph-canvas__lane-label")).toEqual(LANES));
     // AN EMPTY LANE SAYS WHAT IN THIS BUILD WOULD FILL IT, and a filled one draws its cards.
     const empty = texts(".crewlet-graph-canvas__empty").join(" ");
-    expect(empty).toContain("No source this version of Crewlet reads names a service yet.");
+    expect(empty).toContain("Services appear when a person adds one, by asking Ask Crewlet.");
     expect(empty).toContain("Servers appear from the SSH servers the SSH integration declares.");
     expect(empty).not.toContain("Repositories appear");
     expect(texts(".crewlet-graph-canvas__name")).toEqual(

@@ -2626,6 +2626,29 @@ func (w *Writer) SettleChange(ctx context.Context, opID string, task Task, s Cha
 		TaskPatch{ChangeSettled: &s}, ChangeLinkSettled, notify)
 }
 
+// RecordDeadWait records that nothing moves a change task waits on at d.Head,
+// as the engine read it on its host (ADR-0128). It notifies nobody: the work
+// pickup hands the item back to its holder, once per head.
+func (w *Writer) RecordDeadWait(ctx context.Context, opID string, task Task, d DeadWait) (WriteResult, error) {
+	switch {
+	case d.Ref == "" || d.Head == "" || d.At.IsZero():
+		return WriteResult{}, invalid("a dead wait on task %s names no change, no head or no instant", task.ID)
+	case !waitsOn(task, d.Ref):
+		return WriteResult{}, invalid("task %s does not wait on %s", task.ID, d.Ref)
+	}
+	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch,
+		TaskPatch{DeadWait: &d}, ChangeDeadWait, nil)
+}
+
+// EndDeadWait drops task's dead wait on ref: something moves the change again.
+func (w *Writer) EndDeadWait(ctx context.Context, opID string, task Task, ref string) (WriteResult, error) {
+	if _, dead := task.DeadWaits[ref]; !dead {
+		return WriteResult{}, invalid("task %s holds no dead wait on %s", task.ID, ref)
+	}
+	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch,
+		TaskPatch{DeadWaitEnded: &ref}, ChangeDeadWaitEnded, nil)
+}
+
 // waitsOn reports whether task waits on ref.
 func waitsOn(task Task, ref string) bool {
 	return slices.ContainsFunc(task.Relations, func(r Relation) bool {

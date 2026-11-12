@@ -1,10 +1,20 @@
 package estate
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // atlasRouter is a router that records what it asks of a data node that
@@ -22,12 +32,12 @@ func atlasRouter(t *testing.T) (*Router, *recordingAsker) {
 	return r, asker
 }
 
-// THE FACADE ASKS EXACTLY THE ATLAS LOG'S OPERATIONS, each method one: every
-// atlas read through the reader facade, nothing else through it, and no atlas
-// operation that is not a read.
+// THE FACADES ASK EXACTLY THE ATLAS LOG'S OPERATIONS, each method one: every
+// atlas read through the reader facade and every atlas write through the writer
+// facade, and nothing else through either.
 //
-// Mutation: point AtlasReads.History at opAtlasEntry and the reader's
-// operations lack atlas.history.
+// Mutation: point AtlasReads.History at opAtlasEntry, or AtlasWrites.PurgeEntry
+// at opAtlasPurgeValue, and a facade's operations lack one.
 func TestTheAtlasFacadesAskExactlyTheAtlasOperations(t *testing.T) {
 	t.Parallel()
 	r, asker := atlasRouter(t)
@@ -35,7 +45,8 @@ func TestTheAtlasFacadesAskExactlyTheAtlasOperations(t *testing.T) {
 		facade any
 		want   func(*opSpec) bool
 	}{
-		{r.AtlasReads(), func(s *opSpec) bool { return s.domain == atlasDomain }},
+		{r.AtlasReads(), func(s *opSpec) bool { return s.domain == atlasDomain && s.class == opRead }},
+		{r.AtlasWrites(), func(s *opSpec) bool { return s.domain == atlasDomain && s.class != opRead }},
 	} {
 		v := reflect.ValueOf(tc.facade)
 		got := map[string]bool{}
@@ -65,5 +76,129 @@ func TestTheAtlasFacadesAskExactlyTheAtlasOperations(t *testing.T) {
 			t.Errorf("%s asks %v, want exactly %v", v.Type().Name(),
 				slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
 		}
+	}
+}
+
+// atlasDesk is a data node's atlas log as the cases reach it: every write
+// records its call and answers at a position, and an entry whose version moved
+// answers each refusal the domain has.
+type atlasDesk struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (d *atlasDesk) For(context.Context, string) (Backend, bool) {
+	return Backend{Atlas: AtlasHalf{Reader: d, Writer: d}}, true
+}
+
+func (d *atlasDesk) wrote(what string, c atlasdomain.Call) (statelog.Result, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, what+"|"+c.By.Name+"|"+string(c.By.Kind)+"|"+c.OpID)
+	return statelog.Result{Outcome: statelog.OutcomeApplied, OpID: c.OpID}, nil
+}
+
+func (d *atlasDesk) Record(_ context.Context, c atlasdomain.Call, claim atlas.Claim,
+	ifMatch uint64) (statelog.Result, error) {
+	switch ifMatch {
+	case 7:
+		return statelog.Result{}, fmt.Errorf("%w: at 9, decided from 7", atlasdomain.ErrStaleVersion)
+	case 8:
+		return statelog.Result{}, fmt.Errorf("%w: %s was purged", atlasdomain.ErrPurged, claim.Subject)
+	}
+	return d.wrote(fmt.Sprintf("record:%s:%s:%s=%s:%d", claim.Subject, claim.Facet.Kind, claim.Facet.Fact,
+		claim.Value.Text, ifMatch), c)
+}
+
+func (d *atlasDesk) PurgeEntry(_ context.Context, c atlasdomain.Call, ref atlas.Ref) (statelog.Result, error) {
+	return d.wrote("purge_entry:"+ref.String(), c)
+}
+
+func (d *atlasDesk) PurgeDigest(_ context.Context, c atlasdomain.Call, digest string) (statelog.Result, error) {
+	if !atlasdomain.IsDigest(digest) {
+		return statelog.Result{}, fmt.Errorf("%w: not a digest", atlasdomain.ErrInvalid)
+	}
+	return d.wrote("purge_value:"+digest, c)
+}
+
+func (d *atlasDesk) Live(context.Context, statelog.Freshness) (atlasdomain.Live, error) {
+	return atlasdomain.Live{Complete: true}, nil
+}
+
+func (d *atlasDesk) Entry(context.Context, string, statelog.Freshness) (atlasdomain.EntryRow, bool, error) {
+	return atlasdomain.EntryRow{}, false, nil
+}
+
+func (d *atlasDesk) History(context.Context, string, string, int,
+	statelog.Freshness) (atlasdomain.HistoryPage, error) {
+	return atlasdomain.HistoryPage{}, nil
+}
+
+func (d *atlasDesk) Purges(context.Context, statelog.Freshness) ([]atlasdomain.PurgeRow, error) {
+	return nil, nil
+}
+
+// A PERSON'S ATLAS WRITE FROM A NODE HOLDING NO DATA IS A DATA NODE'S WRITE:
+// the claim, the version it was decided from, the author and the operation
+// cross whole, a purge of a value crosses as its digest alone, and every
+// refusal keeps its identity, so the surface on the asking node answers it as
+// the writer decided it.
+//
+// Mutation: drop IfMatch from atlasRecordArgs, or Writer from the half the
+// serving node answers with, and the case goes red.
+func TestAPersonsAtlasWriteFromANodeWithoutDataCrossesWhole(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	desk := &atlasDesk{}
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
+	ctx := t.Context()
+	w := f.client.AtlasWrites()
+	ana := atlasdomain.Call{By: iam.Actor{Name: "ana", Kind: iam.ActorHuman, OperatorID: "session"},
+		OpID: statelog.NewOpID(time.Now(), "atlas")}
+	at := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	service := atlas.MustRef(atlas.KindService, "checkout-api")
+	claim, err := atlas.Says(service, atlas.FactEnvironment, "production", atlas.PersonSource("ana"), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res, err := w.Record(ctx, ana, claim, 4); err != nil || res.Outcome != statelog.OutcomeApplied ||
+		res.OpID != ana.OpID {
+		t.Errorf("record = (%+v, %v)", res, err)
+	}
+	if _, err := w.Record(ctx, ana, claim, 7); !errors.Is(err, atlasdomain.ErrStaleVersion) {
+		t.Errorf("an edit decided from a moved version crossed as %v", err)
+	}
+	if _, err := w.Record(ctx, ana, claim, 8); !errors.Is(err, atlasdomain.ErrPurged) {
+		t.Errorf("a claim on a purged entry crossed as %v", err)
+	}
+	if _, err := w.PurgeEntry(ctx, ana, service); err != nil {
+		t.Errorf("purge entry: %v", err)
+	}
+	const value = "orders-db.internal.acme.example"
+	if _, err := w.PurgeDigest(ctx, ana, atlasdomain.Digest(value)); err != nil {
+		t.Errorf("purge value: %v", err)
+	}
+	if _, err := w.PurgeDigest(ctx, ana, value); !errors.Is(err, atlasdomain.ErrInvalid) {
+		t.Errorf("a purge naming no digest crossed as %v", err)
+	}
+
+	desk.mu.Lock()
+	defer desk.mu.Unlock()
+	by := "|ana|human|" + ana.OpID
+	want := []string{
+		"record:service:checkout-api:fact:environment=production:4" + by,
+		"purge_entry:service:checkout-api" + by,
+		"purge_value:" + atlasdomain.Digest(value) + by,
+	}
+	if !slices.Equal(desk.calls, want) {
+		t.Errorf("the data node ran %v, want %v", desk.calls, want)
 	}
 }
