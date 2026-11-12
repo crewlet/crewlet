@@ -157,6 +157,26 @@ func TestAnAtlasRefusalReadsAsItsSentence(t *testing.T) {
 	}
 }
 
+// A WRITE DECIDED WHERE AN ENTRY HELD NO RECORD IS REFUSED ONCE IT HOLDS ONE:
+// two people's first words on one entry never land side by side unseen.
+//
+// Mutation: treat IfNoRecord as NoIfMatch in Writer.Record and the second
+// first word lands.
+func TestAFirstWordOnAnEntryIsRefusedOnceItHoldsOne(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAtlasLog(t), "data-1")
+	first := must(t)(atlas.Says(checkout, atlas.FactPurpose, "Takes payments", asPerson, writerClock))
+	if _, err := n.writer.Record(t.Context(), personCall("ada"), first, atlasdomain.IfNoRecord); err != nil {
+		t.Fatalf("a first word on an entry holding none: %v", err)
+	}
+	n.drain()
+	second := must(t)(atlas.Says(checkout, atlas.FactImportance, "critical", asPerson, writerClock))
+	_, err := n.writer.Record(t.Context(), personCall("grace"), second, atlasdomain.IfNoRecord)
+	if !errors.Is(err, atlasdomain.ErrStaleVersion) {
+		t.Fatalf("a second first word: %v, want ErrStaleVersion", err)
+	}
+}
+
 // AN EDIT OVER AN EDIT IT DID NOT SEE IS REFUSED: a person's write names the
 // entry's version they decided from.
 func TestAnEditOverAnEditItDidNotSeeIsRefused(t *testing.T) {
