@@ -2,6 +2,7 @@ package estate
 
 import (
 	"context"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
@@ -26,8 +27,8 @@ import (
 type AtlasReader interface {
 	Live(ctx context.Context, fresh statelog.Freshness) (atlasdomain.Live, error)
 	Entry(ctx context.Context, id string, fresh statelog.Freshness) (atlasdomain.EntryRow, bool, error)
-	History(ctx context.Context, id, cursor string, limit int,
-		fresh statelog.Freshness) (atlasdomain.HistoryPage, error)
+	Log(ctx context.Context, q atlasdomain.LogQuery) (atlasdomain.LogPage, error)
+	Activity(ctx context.Context, since time.Time, fresh statelog.Freshness) (atlasdomain.Activity, error)
 	Purges(ctx context.Context, fresh statelog.Freshness) ([]atlasdomain.PurgeRow, error)
 }
 
@@ -106,20 +107,30 @@ var opAtlasEntry = define("atlas.entry", opRead, atlasDomain, false,
 		return atlasEntryAnswer{Entry: row, Found: found}, err
 	})
 
-type atlasHistoryArgs struct {
-	ID     string
-	Cursor string
-	Limit  int
-	Fresh  statelog.Freshness
-}
-
-var opAtlasHistory = define("atlas.history", opRead, atlasDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a atlasHistoryArgs) (atlasdomain.HistoryPage, error) {
+// ONE PAGE OF THE LOG, newest first: the whole company's, or named entries'.
+var opAtlasLog = define("atlas.log", opRead, atlasDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q atlasdomain.LogQuery) (atlasdomain.LogPage, error) {
 		r, err := b.atlasReader()
 		if err != nil {
-			return atlasdomain.HistoryPage{}, err
+			return atlasdomain.LogPage{}, err
 		}
-		return r.History(ctx, a.ID, a.Cursor, a.Limit, a.Fresh)
+		return r.Log(ctx, q)
+	})
+
+type atlasActivityArgs struct {
+	Since time.Time
+	Fresh statelog.Freshness
+}
+
+// THE LOG COUNTED, a day and an entry at a time since an instant, with each
+// entry's newest record: one transaction on the node that answers.
+var opAtlasActivity = define("atlas.activity", opRead, atlasDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a atlasActivityArgs) (atlasdomain.Activity, error) {
+		r, err := b.atlasReader()
+		if err != nil {
+			return atlasdomain.Activity{}, err
+		}
+		return r.Activity(ctx, a.Since, a.Fresh)
 	})
 
 type atlasPurgesArgs struct {
@@ -207,11 +218,16 @@ func (x AtlasReads) Entry(ctx context.Context, id string,
 	return out.Entry, out.Found, err
 }
 
-// History answers one page of an entry's claims, newest first.
-func (x AtlasReads) History(ctx context.Context, id, cursor string, limit int,
-	fresh statelog.Freshness) (atlasdomain.HistoryPage, error) {
-	return call(ctx, x.r, opAtlasHistory, nil,
-		atlasHistoryArgs{ID: id, Cursor: cursor, Limit: limit, Fresh: fresh})
+// Log answers one page of the log, newest first.
+func (x AtlasReads) Log(ctx context.Context, q atlasdomain.LogQuery) (atlasdomain.LogPage, error) {
+	return call(ctx, x.r, opAtlasLog, nil, q)
+}
+
+// Activity answers the log counted since an instant, and each entry's newest
+// record.
+func (x AtlasReads) Activity(ctx context.Context, since time.Time,
+	fresh statelog.Freshness) (atlasdomain.Activity, error) {
+	return call(ctx, x.r, opAtlasActivity, nil, atlasActivityArgs{Since: since, Fresh: fresh})
 }
 
 // Purges answers every purge, newest first.

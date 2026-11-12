@@ -122,11 +122,21 @@ Each source's standing, kept on the coordination store beside the integration st
 
 ## Reading the atlas
 
-People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through five questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, and the counts a filter menu offers ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
+People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through seven questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, the counts a filter menu offers, its own log as lines, and that log counted a day at a time ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
 
 An entry only an agent reported, with nothing the engine could check behind it, is **unconfirmed**, and a read leaves it out unless it asks for it: it stays hidden until a person confirms it.
 
-Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
+Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. An entry that is not quiet says why in one sentence, its **reason**, built from the engine's own words for its signals and never from text a vendor, an agent or a person wrote. Every row also says who answers for the entry (the owner a person or the engine's records name, never one only suggested), the one line of purpose a person gave it, and how many entries it relies on and how many rely on it.
+
+Relations are drawn in three **families**: `calls`, what a request travels along (`depends_on`, `exposes`, `served_by`, `fronted_by`); `runs_on`, what an entry stands on (`runs_on`, `resolves_to`); and `around`, everything else (its zone, what builds, deploys, watches and secures it, the account it belongs to). The map answers the relations it draws at rest, or every relation between the entries it draws when asked for all. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
+
+### What changed, and when
+
+The atlas's own log is also read as a question: what changed, when and in whose voice, newest first, for the company or for one entry. A **line** is one claim recorded on the log, by a person, an integration's read or an agent: an entry recorded or retired, a fact set or marked wrong, a relation or an owner recorded or removed, two entries joined or kept apart. A claim an integration's read stopped holding is a line of its own, at the read that withdrew it, so a fact that went away is as visible as one that arrived. What the engine computes at every read from the settings and its own records is never recorded, so it leaves no line: activity is a count of the log's lines, and nothing else.
+
+The same log is **counted**: its lines on each of the last 14 days, for the company and for each entry, and each entry's newest line however old. A day is a UTC day, so every node counts the same. That is the whole of what "activity" means in the atlas: there are no request rates, latencies or error budgets in it, because the engine holds none.
+
+A line is shown only to a reader who is shown its entry and the entry it names. A line on a repository or a check of Gitlet's, or naming one, is read only by a reader Gitlet lists that repository to; a line on an unconfirmed entry is left out with the entry; and the counts are of exactly the lines the reader would be shown.
 
 ## One thing, one entry
 
@@ -204,6 +214,7 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | Entry states, merges on exact keys, contested and disputed facts, signals, use and "not used recently" | nobody: computed on every read | the read itself |
 | What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |
 | What an integration's read found that the log did not hold: a changed fact, a withdrawn one, a retirement | every data node identically, with history | the same log, one `read` record an entry, in the integration's voice |
+| The log's lines, its daily counts, an entry's last change, a row's owner, purpose, relation counts and reason, and a relation's family | nobody: computed on every read, from the log's rows and the fold | the read itself |
 | Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
 | Which node reads the vendors | the fleet, one holder at a time | the `worker:atlas-collect` lease |
 | How often: `atlas.refresh_interval_seconds` | the company | the company document |

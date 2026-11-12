@@ -28,7 +28,17 @@ func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	if e == nil {
 		return builtin.AtlasDeps{}
 	}
-	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords}
+	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords, Log: e.atlasLog}
+}
+
+// atlasLog is the atlas's log as this node reads it: through the router, so
+// a node without the data role reads its lines and its counts too.
+func (e *Engine) atlasLog(context.Context) (builtin.AtlasLogReads, bool) {
+	reads, ok := e.AtlasReads()
+	if !ok {
+		return nil, false
+	}
+	return reads, true
 }
 
 // atlasRecords is every record source of the engine's the atlas reads, as

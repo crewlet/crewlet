@@ -166,13 +166,19 @@ func (e *estate) count(statement string, args ...any) int {
 	return c
 }
 
-// history is every claim recorded on r, newest first.
-func (e *estate) history(r atlas.Ref) []atlasdomain.ClaimRow {
+// history is every line of the log on r, newest first.
+func (e *estate) history(r atlas.Ref) []atlasdomain.LogLine {
 	e.t.Helper()
-	page, err := e.reader().History(e.t.Context(), r.ID().String(), "", atlasdomain.MaxPageSize,
-		statelog.Freshness{Level: statelog.ReadStale})
+	return e.log(atlasdomain.LogQuery{Entries: []string{r.ID().String()}, Limit: atlasdomain.MaxPageSize}).Lines
+}
+
+// log is one page of the log, read stale.
+func (e *estate) log(q atlasdomain.LogQuery) atlasdomain.LogPage {
+	e.t.Helper()
+	q.Fresh = statelog.Freshness{Level: statelog.ReadStale}
+	page, err := e.reader().Log(e.t.Context(), q)
 	if err != nil {
-		e.t.Fatalf("read %s's history: %v", r, err)
+		e.t.Fatalf("read the log: %v", err)
 	}
-	return page.Claims
+	return page
 }
