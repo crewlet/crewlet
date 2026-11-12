@@ -177,7 +177,13 @@ type threadMember struct {
 //
 // THE NAME AS THE CALLER CLEANED IT (path.Clean), compared whole and never
 // cleaned here: the caller owns the check for a member an archive holds twice
-// under two spellings, and only it sees both.
+// under two spellings, and only it sees both. And the caller gives NO READING
+// AT ALL of an archive any of whose members is named absolutely or holds a
+// `..` element: path.Clean keeps `/projects/crewlet/<S>.jsonl` absolute, which
+// every tar restores over the main thread by stripping its `/`, and turns
+// `projects/crewlet/x/../<S>.jsonl` into the main thread's own name, which
+// busybox's tar restores there too, so the member this answers for, or the
+// one it refuses, need not be the file a resumed session holds.
 func claudeMemberOf(session, name string) (threadMember, bool) {
 	if !sandbox.ValidSessionID(session) {
 		return threadMember{}, false
