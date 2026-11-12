@@ -250,18 +250,69 @@ the mailbox attaches**, and a hydration that fails refuses the seat — a peer
 that can hydrate should take it instead, and a seat serving with amnesia
 produces work its own history contradicts.
 
-**The replay reads to where the changelog's leader says the seat's rows end.**
-On a fleet the changelog is replicated, and the replay is a consumer the server
-places on any member of the stream, delivering out of that member's copy — and
-a follower applies a row a moment after the leader acknowledged it. A replay
-hosted on a follower that was behind counted what its copy held, delivered it
-and reported success, short of the rows the seat's previous owner published
-last, among them what its release flushed. So the node first asks
-the leader for the sequence of the seat's newest row, and the hydration is not
-done until the replay has delivered a row at or past it. A copy that is behind
-hands over the rest as it applies them; one that has not within the
-hydration's fifteen seconds fails the hydration, which refuses the seat rather
-than admitting it without its newest memory.
+**The replay is a table at a time, in a fixed order.** The changelog keeps no
+order across subjects, and a seat's tables are not independent of each other: a
+skill's versions reference the skill, and the store enforces the reference.
+Every publish sends a seat's skills again, whole, and each version once, so
+from a seat's second publish on the changelog holds a skill's only copy after
+the versions published before it. One replay of the seat in the changelog's own
+order wrote those versions first, and a store that did not already hold the
+skill (a node that never held the seat, a `[seats]` satellite at every boot, a
+node that lost its store) refused them and the seat with them
+([#1051](https://github.com/crewlet/crewlet/issues/1051)). So each table is
+replayed on its own, the skills before their versions, and every skill the
+changelog holds is in the store before the first version is written. A version
+whose skill is still not in the store is left out rather than refusing the
+seat: nothing reads a version without its skill, and refused, the seat could be
+placed on no node whose store lacked the skill. Its skill is missing for one of
+two reasons. The changelog does not hold it at all: the skill was written after
+a publish read the seat's skills and refined before that publish read their
+versions, and its node stopped holding the seat, through a crash or a cut
+flush, before another publish carried the skill. Or the store skipped it,
+because it already held another skill of the seat's under the same name: a
+skill deleted by hand and synthesized again under a new id leaves both on the
+changelog.
+
+**Each table's replay reads until the changelog's leader holds none of that
+table's rows past it.** On a fleet the changelog is replicated, and a replay is
+a consumer the server places on any member of the stream, delivering out of
+that member's copy — and a follower applies a row a moment after the leader
+acknowledged it. A replay hosted on a follower that was behind counted what its
+copy held, delivered it and reported success, short of the rows the seat's
+previous owner published last, among them what its release flushed. So once a
+table's replay has delivered what its copy holds, the node asks the leader
+whether it holds any of the table's rows past the last one delivered, and the
+replay is not done until the leader holds none. A copy that is behind hands
+over the rest as it applies them; one that has not within the hydration's
+fifteen seconds fails the hydration, which refuses the seat rather than
+admitting it without its newest memory.
+
+The leader is asked after the replay, never before it, because its answer to a
+read of a row is the row itself, whole and a third larger. Asked for each
+table's newest row up front, it would send that row on every hydration, and on
+a `[seats]` satellite the answer crosses the leaf link, which the satellite's
+broker holds to its 8 MiB `max_payload` and closes on anything larger: a newest
+episode of some 6 MiB would take the satellite's link down, its lease renewals
+with it, at every hydration of the seat. Asked after the replay, the answer is
+that the leader holds nothing more, a few hundred bytes. Only a copy that was
+behind gets a row for an answer, the first one it lacked, and a row larger than
+about 6 MiB in that moment still closes a satellite's link once
+([#349](https://github.com/crewlet/crewlet/issues/349) is the size contract
+that bounds a memory row below it). Where a node reaches the changelog across
+a link (a satellite, or any node of an external broker), a read of the leader
+is given the time such a row takes to cross before it is asked again, so it is
+asked once; a dropped one waits out the fifteen seconds and refuses the seat
+until the next sweep.
+
+The fifteen seconds are the whole hydration's. Two round trips read the
+changelog's identity, before the first table and after the last; each of the
+six tables costs four for its replay's consumer (made, counted, fetched from
+where the table holds rows, and deleted) and one for the leader's answer; and
+counting the seat's rows of the retired table costs three more. That is 35
+round trips for a seat with rows in every table, 29 for one with none: across
+a leaf link to another region, at 100 ms a round trip, about three and a half
+seconds before the rows' own bytes, so a seat whose rows take longer than the
+other eleven and a half to cross such a link is refused there.
 
 The subject carries the seat's **id**, as its lease and its mailbox do.
 
@@ -279,16 +330,20 @@ carrying: their rows are the replicated estate's, the same on every data node,
 and their bytes the fleet's object store's
 ([Conversation Sessions](conversation-sessions.md#where-a-session-lives)).
 
-A row of a table this build does not carry is skipped, never refused, and the
-hydration says so in one line (`memory_rows_not_carried`), with the rows it
-skipped counted per table. A table a newer build carries is left on the
-changelog for that build. A table this build has **retired** (one it carried
+A hydration reads only the tables this build knows. A table only a newer
+build carries is never read, never refused, and its rows stay on the changelog
+for that build. A table this build has **retired** (one it carried
 before, such as `conversation_sessions`, whose sessions now live in the
-executor log) has nobody left to republish or replace its rows. So the first
-hydration that meets them purges the seat's subjects of that table from the
-changelog, once and for every node. The next hydration, on any node, meets none
-and says nothing. A purge that fails is said (`memory_retired_rows_not_purged`)
-and is tried again by the next hydration. During a rolling upgrade, a node
+executor log) has nobody left to republish or replace its rows. So every
+hydration counts the seat's rows of that table on the changelog, with a
+consumer that delivers none of them, and the first that finds any purges the
+seat's subjects of that table from the changelog, once and for every node; the
+next hydration, on any node, finds none. What a hydration did not carry it says
+in one line (`memory_rows_not_carried`): the retired tables it found rows of,
+with `purged=false` where a purge failed, and the rows it left out for want of
+a parent, counted per table. A count or a purge that fails is said
+(`memory_retired_rows_not_purged`) and is tried again by the next hydration.
+During a rolling upgrade, a node
 still on a build that carried the table may publish its rows again, and the
 next hydration on an upgraded node purges them again. That is harmless, since
 the table's content lives elsewhere now, and it ends with the upgrade.

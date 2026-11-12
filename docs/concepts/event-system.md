@@ -75,7 +75,7 @@ crewlet.rooms.ask
 
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of
-# every write, and a node acquiring a seat replays it in a single pass
+# every write, and a node acquiring a seat reads each row once, a table at a time
 crewlet.memory.{seat-id}.{table}.{key-digest}
 
 # Dead letters, deliberately OUTSIDE the crewlet.* space so the dashboard's

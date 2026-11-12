@@ -91,7 +91,7 @@ func jsOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
 
 func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
 	t.Helper()
-	s, err := New(db, jsOn(t, conn), func(string) string { return seat.AgentID })
+	s, err := New(db, jsOn(t, conn), func(string) string { return seat.AgentID }, false)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -181,15 +181,16 @@ func TestAHydrationWhoseIdentityReadAMemberDropsAsksAgain(t *testing.T) {
 // A HYDRATION WHOSE READ OF THE LEADER'S END A MEMBER DROPS ASKS AGAIN — and
 // that read is the leader's whatever the changelog's allow_direct says.
 //
-// Before the replay is opened, the newest row of the seat's subjects is read
-// from the changelog's leader, so a replay served by a replica that is behind
-// is not taken for the seat's whole memory. Only the leader answers that
-// read, so a member that still believes in a leader its group has just lost
-// drops it without a word. Sent once, it waited out the hydration's whole
-// fifteen-second bound and refused the seat over a reply nobody would send.
+// Once a table's replay has delivered what its copy holds, the changelog's
+// leader is asked whether it holds any of the table's rows past them, so a
+// replay served by a replica that is behind is not taken for the table's
+// whole. Only the leader answers that read, so a member that still believes
+// in a leader its group has just lost drops it without a word. Sent once, it
+// waited out the hydration's whole fifteen-second bound and refused the seat
+// over a reply nobody would send.
 //
 // It is internal/jsapi's leader read, a STREAM.MSG.GET whatever the stream's
-// flag says. The client's own last-message read picks its API from that flag
+// flag says. The client's own message reads pick their API from that flag
 // alone — any replica's DIRECT.GET the moment it is on, which proves nothing
 // — and so a changelog that allowed direct gets refused every hydration
 // outright; read through the leader it hydrates like any other, the dropped
@@ -326,7 +327,7 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 	}
 	// Publish both seats. The peer's syncer resolves its own agent id.
 	syncerOn(t, db, conn).Publish(ctx, seat.Handle)
-	peer, err := New(db, jsOn(t, conn), func(string) string { return "other-agent-id" })
+	peer, err := New(db, jsOn(t, conn), func(string) string { return "other-agent-id" }, false)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -454,7 +455,7 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 
 	// A new node, with a JetStream whose Info call fails.
 	newOwner := openStore(t)
-	syncer, err := New(newOwner, jsOn(t, conn), func(string) string { return seat.AgentID })
+	syncer, err := New(newOwner, jsOn(t, conn), func(string) string { return seat.AgentID }, false)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -479,10 +480,11 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 //
 // A stream that is deleted and remade restarts at sequence 1 and holds
 // nothing. Every check in Hydrate then reads it as a seat with nothing to
-// carry: the pending count is zero, the replay is skipped, and the seat is
-// admitted with a `memory_hydrated` line saying zero rows. Nothing is wrong
-// anywhere — and every seat on the node has silently lost its diary and its
-// episodes, which it reports to a colleague as never having spoken to them.
+// carry: every table's replay delivers no row and the leader holds none past
+// it, and the seat is admitted as one that never wrote any, with no line.
+// Nothing is wrong anywhere — and every seat on the node has silently lost
+// its diary and its episodes, which it reports to a colleague as never having
+// spoken to them.
 //
 // The stream's creation instant is the only thing that can tell the two
 // apart. A sequence cannot: a recreated stream's sequences are plausible. A
@@ -676,7 +678,7 @@ func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
 	newOwner := openStore(t)
 	moved, err := New(newOwner, jsOn(t, conn), func(string) string {
 		return "11111111-2222-4333-8444-555555555555"
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -704,7 +706,7 @@ func TestASeatWithNoIDCarriesNothing(t *testing.T) {
 	db := openStore(t)
 	seedMemory(t, db)
 
-	nobody, err := New(db, jsOn(t, conn), func(string) string { return "" })
+	nobody, err := New(db, jsOn(t, conn), func(string) string { return "" }, false)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

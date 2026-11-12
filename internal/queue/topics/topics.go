@@ -77,9 +77,9 @@ const (
 	//
 	// A SUBJECT PER ROW is the whole design. The stream retains one message
 	// per subject, so it holds the current value of every row rather than a
-	// log of every write — which is what lets a node acquiring a seat replay
-	// that seat's memory in one pass instead of folding a history. See
-	// internal/learning/memsync.
+	// log of every write — which is what lets a node acquiring a seat read
+	// each of that seat's rows once, a table at a time, instead of folding a
+	// history. See internal/learning/memsync.
 	MemoryPrefix = "crewlet.memory."
 
 	// MemoryStream is the stream those subjects live on.

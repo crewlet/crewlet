@@ -802,11 +802,9 @@ leaves out. Then:
   node's audit log, its scheduled-run history, its config revision history
   and what of its seats' memory the changelog had not yet acknowledged (see
   **Held twice** above). Start the node with an empty store; it migrates fresh
-  and its seats arrive remembering what the changelog holds. Until
-  [#1051](https://github.com/crewlet/crewlet/issues/1051) is fixed, though, a
-  seat whose skills have been refined is refused instead: a store that does
-  not already hold the seat's skills fails its hydration. A lost replicated
-  database is re-derived as
+  and its seats arrive remembering what the changelog holds, a refined skill's
+  versions included, since a hydration writes every skill before the first of
+  its versions. A lost replicated database is re-derived as
   [above](#what-state-exists-and-where) describes, and the node rebuilds its
   reader of each log at the checkpoint its new rows hold, so the records its
   old reader acknowledged are delivered again (see

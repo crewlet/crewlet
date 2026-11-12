@@ -778,10 +778,13 @@ decision, not the broker's.
 and placement moves seats — so every memory row also rides
 `crewlet.memory.SEAT-ID.TABLE.DIGEST`, one subject per row, on a stream that
 retains exactly one message per subject. By the seat's **id**, as its lease
-and its mailbox are named. A node acquiring a seat replays that
-seat's rows in a single pass and hydrates them **before** the mailbox is
-attached. Deletes deliberately do not travel: the lifecycle re-converges, and a
-tombstone protocol would be a second thing to keep correct forever.
+and its mailbox are named. A node acquiring a seat replays that seat's rows a
+table at a time, in a fixed order that writes a skill before its versions, each
+table read until the changelog's leader holds none of its rows past the
+replay, and hydrates them **before** the mailbox is attached (see
+[A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it)).
+Deletes deliberately do not travel: the lifecycle re-converges, and a tombstone
+protocol would be a second thing to keep correct forever.
 
 **The line was learned, not designed.** Migrations `0010`–`0013` are what
 breaking it cost: the delivery dedupe, the completion ledger, the config

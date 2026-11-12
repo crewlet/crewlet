@@ -28,11 +28,24 @@
 // fits a seat's memory.
 //
 // Every memory row is published to a COMPACTED CHANGELOG on the stream —
-// one subject per row, `crewlet.memory.<handle>.<table>.<key>`, on a stream
-// configured to retain exactly one message per subject. The stream therefore
-// holds the current value of every row, replicated with everything else on
-// the stream, and a node that acquires a seat replays that seat's subjects
-// into its own database before the seat is allowed to take work.
+// one subject per row, `crewlet.memory.<seat-id>.<table>.<key-digest>`, on a
+// stream configured to retain exactly one message per subject. The stream
+// therefore holds the current value of every row, replicated with everything
+// else on the stream, and a node that acquires a seat replays that seat's
+// subjects into its own database before the seat is allowed to take work.
+//
+// A TABLE AT A TIME, in the registry's order, each table read until the
+// changelog's leader holds none of its rows past the last the replay
+// delivered. A compacted stream keeps no order across subjects, and a skill's
+// versions reference the skill: every publish sends a seat's skills again and
+// each version once, so the changelog holds a skill's only copy after the
+// versions published before it, and one replay in the changelog's order wrote
+// those versions first and refused the seat on any store without the skill
+// (crewlet/crewlet#1051). Replayed table by table, parents are written before
+// children whatever order the changelog keeps. The leader is asked once a
+// table's replay has delivered what its copy holds, never before, because its
+// answer is a row whole wherever it holds one past the replay, and only a copy
+// behind it leaves one there.
 //
 // # What is deliberately not replicated
 //
@@ -54,6 +67,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -68,9 +82,10 @@ var log = logging.Get("learning.memsync")
 
 // Row is one memory row on the wire.
 //
-// The table travels WITH the row rather than being inferred from the subject,
-// because a hydrating node has to know how to write a row before it can trust
-// where it came from — and a subject is a routing decision, not a schema.
+// The table travels WITH the row as well as in its subject, so a replay can
+// hold a row to the subjects it read it on: a replay reads one table's
+// subjects and writes each row as that table's, and a row whose own table is
+// another is refused rather than written in that table's turn ([received]).
 type Row struct {
 	Table string `json:"table"`
 
@@ -291,6 +306,13 @@ func (t table) subject(seat string, values map[string]any) string {
 	return fmt.Sprintf("%s%s.%s.%x", topics.MemoryPrefix, seat, t.name, sum[:16])
 }
 
+// tableFilter matches every subject [table.subject] builds for one seat's rows
+// of the table named: the filter a table's replay reads, a retired table's
+// purge takes, and the changelog's leader is asked the end of.
+func tableFilter(seat, name string) string {
+	return topics.MemoryPrefix + seat + "." + name + ".>"
+}
+
 // upsert writes one carried row into this node's store.
 //
 // ON CONFLICT over the NATURAL key, so hydrating a seat twice — a re-acquire,
@@ -348,6 +370,36 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	return nil
 }
 
+// parentHeld reports whether this store holds the row a carried row of t
+// belongs to ([table.parent]), and true where t has no parent.
+//
+// LOOKED UP BEFORE THE WRITE, never left to the foreign key. The key's refusal
+// is an error like any other a write can meet, and telling it apart would mean
+// matching the driver's text; and the transaction would then have to go on
+// past a statement the store refused, which is the driver's business rather
+// than this package's. A lookup asks neither of it, and keeps one orphan from
+// costing the fetch's every row, and the seat.
+func (t table) parentHeld(ctx context.Context, tx *sql.Tx, row Row) (bool, error) {
+	if t.parent == nil {
+		return true, nil
+	}
+	key, err := decodeCell(row.Values[t.parent.column])
+	if err != nil {
+		return false, err
+	}
+	var one int
+	err = tx.QueryRowContext(ctx, "SELECT 1 FROM "+t.parent.table+" WHERE "+t.parent.key+" = ?",
+		key).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("memsync: look for the %s a carried %s row belongs to: %w",
+			t.parent.table, t.name, err)
+	}
+	return true, nil
+}
+
 // seatRef is one seat, in both spellings the schema uses for it: its handle,
 // which the handle-keyed tables (episodes, counterparty profiles, the two
 // skill tables) hold, and the agent id derived from
@@ -380,26 +432,22 @@ func encode(row Row) ([]byte, error) {
 	return body, nil
 }
 
-// decode reads a row off the wire, refusing one whose table this build does
-// not carry — a newer peer replicating a table added after this binary was
-// built. Skipped rather than failed: a rolling upgrade puts both builds on
-// one stream, and refusing to hydrate at all would be worse than hydrating
-// what this build understands.
-func decode(body []byte) (Row, table, bool, error) {
+// decode reads a row off the wire.
+//
+// The table it names is held to the table whose subjects carried it by the
+// replay that read it ([received]), never looked up here: a hydration replays
+// the tables this build carries, one at a time, so a row of a table it does
+// not carry, a newer build's, is never read at all.
+func decode(body []byte) (Row, error) {
 	var row Row
 	// UseNumber, so decodeCell sees the digits rather than a float64 that
 	// has already lost them — see there for why that matters.
 	reader := json.NewDecoder(bytes.NewReader(body))
 	reader.UseNumber()
 	if err := reader.Decode(&row); err != nil {
-		return Row{}, table{}, false, fmt.Errorf("memsync: decode a carried row: %w", err)
+		return Row{}, fmt.Errorf("memsync: decode a carried row: %w", err)
 	}
-	for _, t := range tables {
-		if t.name == row.Table {
-			return row, t, true, nil
-		}
-	}
-	return row, table{}, false, nil
+	return row, nil
 }
 
 // onConflict is what an import does to a row that will not simply insert.

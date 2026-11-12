@@ -456,10 +456,14 @@ the dependency surface before choosing a host for it:
   own turns is handed to a data node's event log (the audit trail cannot live
   in a store deleted at its next boot), so `GET /events` on that data node
   shows it; its seats' memory rides the compacted changelog every seat's
-  memory does and is rehydrated after a restart, except, until
-  [#1051](https://github.com/crewlet/crewlet/issues/1051) is fixed, a seat
-  whose skills have been refined: the fresh store does not hold the seat's
-  skills, so its hydration fails and the seat is refused. A restart costs that
+  memory does and is rehydrated after a restart into the fresh store, a table
+  at a time, so a refined skill's versions arrive after the skill they belong
+  to. A seat's hydration has fifteen seconds, and about three and a half of
+  them go to round trips across a 100 ms leaf link before its rows' own bytes:
+  a seat whose memory takes longer than the rest to cross the link is refused
+  at every placement sweep, and so can run on no such satellite (see
+  [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+  A restart costs that
   memory whatever the changelog had not acknowledged when the node stopped,
   since the deleted store takes it along: a graceful stop flushes each seat
   for five seconds, about fifty rows across a leaf link to another region,

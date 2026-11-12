@@ -8,7 +8,8 @@ import (
 )
 
 // laggingJS is a JetStream whose replay consumers are served by a COPY OF THE
-// CHANGELOG THAT IS BEHIND its leader by the newest `behind` rows.
+// CHANGELOG THAT IS BEHIND its leader by the newest `behind` rows each replay
+// reads: a table's, since a hydration replays a table at a time.
 //
 // That is what a replay on a fleet can be: the consumer is an R1 ephemeral the
 // server places on a random member of the stream, and a follower applies a row
@@ -16,8 +17,8 @@ import (
 // the window is the gap between an acknowledgement and a follower's apply, and
 // a case that waits for it to open passes with the fix removed.
 //
-// The changelog itself — the identity check and the leader's end — is the real
-// one, by embedding: only the replay is the copy's.
+// The changelog itself — the identity check and the leader's word on what lies
+// past a replay — is the real one, by embedding: only the replay is the copy's.
 type laggingJS struct {
 	jetstream.JetStream
 	behind int
@@ -114,15 +115,16 @@ func (b copyBatch) Error() error                   { return nil }
 //
 // The rows a lagging copy has not applied are the seat's NEWEST — the ones its
 // last owner wrote just before placement moved it — and the replay counted
-// what its copy held, delivered it, and reported success. The hydration now
-// reads where the leader's rows end first and is not done until the replay has
-// reached it: a copy that catches up hands over the rest, and one that does not
-// fails the hydration, which refuses the seat until the next sweep rather than
-// admitting it having forgotten what it did last.
+// what its copy held, delivered it, and reported success. A table's replay is
+// now done only once the leader, asked after the copy has delivered what it
+// holds, holds none of the table's rows past them: a copy that catches up
+// hands over the rest, and one that does not fails the hydration, which
+// refuses the seat until the next sweep rather than admitting it having
+// forgotten what it did last.
 //
-// Mutation: drop the leader's end from the loop's condition, so the replay
-// stops once its copy says it has nothing more, and both cases come back as a
-// success one row short.
+// Mutation: take the copy's word for the end, ending a table's replay once its
+// copy says it has nothing more rather than asking the leader, and both cases
+// come back as a success short of each table's newest row.
 func TestAReplayServedByACopyThatIsBehindIsNeverAShortHydration(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)

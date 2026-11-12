@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/learning/memsync`
-- **Enforced-by:** `internal/learning/memsync.TestASeatsMemoryCrossesToANodeThatHasNeverRunIt`
+- **Enforced-by:** `internal/learning/memsync.TestASeatsMemoryCrossesToANodeThatHasNeverRunIt`, and for the ordering row below `internal/learning/memsync.TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat`, which holds that a hydration writes a skill before its versions whatever order the changelog keeps them in
 - **Cost-when-tried:** the three-answer rule was applied to a seat's memory and returned the wrong answer. Its stated test — "would a peer reading this change any answer?" — was answered *no*, because a seat's memory is read by the node running that seat. The node running that seat CHANGES: placement converges in both directions, so a seat moves on a node joining, leaving, draining or upgrading, and its rows do not move with it. The seat kept working, silently having forgotten everything it learned somewhere else, and on a node that died, forgotten it permanently.
 - **Tag-status:** unreleased
 
