@@ -1044,6 +1044,85 @@ func TestTheReadinessCheckSpellsANameAsOpenCodeDoes(t *testing.T) {
 	})
 }
 
+// A SERVER THAT WOULD SHADOW THE ENGINE'S TOOLS ENDS THE RUN BEFORE IT STARTS.
+// OpenCode names a server's tool `<server>_<tool>`, writing every character
+// but letters, digits, `_` and `-` as `_`, and keeps one tool per name. So a
+// server the image or the repository declares as `crewlet_x` or `crewlet.x`,
+// with a tool `y`, takes the name of the engine's own `x_y`. The readiness
+// loop reads every server OpenCode lists and refuses such a run, naming the
+// server, before `opencode run` starts, whichever side of the engine's own
+// server it is listed on. `crewlet-x` and `crewletx` keep names of their own
+// and the run starts, and a name is held only to the prefix of a server the
+// run offers directly, never to one behind Code Mode. Under every sh a box
+// may run the script with.
+//
+// Mutation: leave the check out of the loop, take `-` for a character
+// OpenCode rewrites, or hold every server's name rather than those offered
+// directly, and a row goes red.
+func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
+	t.Parallel()
+	engine := sandbox.MCPServer{Name: "crewlet", Command: "false", AlwaysLoaded: true}
+	seat := sandbox.MCPServer{Name: "github", Command: "false"}
+	listed := func(names ...string) string {
+		entries := make([]string, len(names))
+		for i, name := range names {
+			entries[i] = `{"name":"` + name + `","status":{"status":"connected"}}`
+		}
+		return `{"location":{"directory":"/home/crewlet/workspace"},"data":[` + strings.Join(entries, ",") + `]}`
+	}
+	for _, tc := range []struct {
+		name    string
+		servers map[string]sandbox.MCPServer
+		list    string
+		refused string
+	}{
+		{"an underscore after the engine's name", map[string]sandbox.MCPServer{"crewlet": engine},
+			listed("crewlet", "crewlet_x"), "crewlet_x"},
+		{"listed before the engine's own", map[string]sandbox.MCPServer{"crewlet": engine},
+			listed("crewlet_docs", "crewlet"), "crewlet_docs"},
+		{"a character OpenCode writes as an underscore", map[string]sandbox.MCPServer{"crewlet": engine},
+			listed("crewlet", "crewlet.x"), "crewlet.x"},
+		{"a hyphen, which OpenCode keeps", map[string]sandbox.MCPServer{"crewlet": engine},
+			listed("crewlet", "crewlet-x"), ""},
+		{"no separator at all", map[string]sandbox.MCPServer{"crewlet": engine},
+			listed("crewlet", "crewletx"), ""},
+		{"beside a server behind Code Mode", map[string]sandbox.MCPServer{"crewlet": engine, "github": seat},
+			listed("crewlet", "github", "github_x"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			forEachShell(t, func(t *testing.T, sh boxShell) {
+				run := runScript(t, scriptOpts{
+					shell: sh,
+					req:   sandbox.RunRequest{MCPServers: tc.servers},
+					env:   []string{"FAKE_MCP_LIST=" + tc.list},
+					times: &executor.OpenCodeTimes{MCP: 3 * time.Second, Sync: time.Hour},
+				})
+				if tc.refused == "" {
+					if run.code != 0 || strings.Contains(run.stderr, "declares an MCP server") {
+						t.Fatalf("a server that keeps a name of its own refused the run (exit %d):\n%s",
+							run.code, run.stderr)
+					}
+					if run.callIndex("run ") < 0 {
+						t.Errorf("the run never started:\n%s", strings.Join(run.calls, "\n"))
+					}
+					return
+				}
+				if run.code == 0 {
+					t.Fatalf("the run started beside %s, whose tools take the engine's names:\n%s",
+						tc.refused, strings.Join(run.calls, "\n"))
+				}
+				if want := "declares an MCP server named " + tc.refused + ","; !strings.Contains(run.stderr, want) {
+					t.Errorf("the refusal does not name the server (%q):\n%s", want, run.stderr)
+				}
+				if run.callIndex("run ") >= 0 {
+					t.Errorf("opencode run started before the refusal:\n%s", strings.Join(run.calls, "\n"))
+				}
+			})
+		})
+	}
+}
+
 // JSON.stringify's spelling, to the byte: `"`, `\` and the control characters
 // escaped — five by their short forms, the rest as \u and lowercase hex — and
 // everything else literal, DEL and U+2029 included. A byte that is not UTF-8
