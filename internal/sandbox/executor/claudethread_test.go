@@ -1312,12 +1312,14 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // repeating a result included. A message that does not decode is an error,
 // never a message with half a call in it: one that is no object, a content
 // absent, null or neither a string nor a list, a block that is no object or
-// has no string type, a tool_use's id or name not a string, a tool_result's
-// tool_use_id not a string or its is_error not a boolean.
+// has no string type, a tool_use's id not a string that names a call or its
+// name not a string, a tool_result's tool_use_id not a string that names a
+// call or its is_error not a boolean.
 //
 // Mutation: read calls off every record's message, and the blob's result is a
 // call; decode a block loosely, and a tool_use whose id is a number is a call
-// with no id.
+// with no id; take an id that names no call, and a block whose id is empty is
+// a call with no id.
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
 	isFalse := false
@@ -1373,6 +1375,8 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 		"a block whose type is a number":     user(`"message":{"role":"user","content":[{"type":7,"text":"b1"}]},`),
 		"a tool_use whose id is a number":    ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":7,"name":"Bash","input":{}}]`),
 		"a tool_use with no id":              ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","name":"Bash","input":{}}]`),
+		"a tool_use whose id names none":     ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":"","name":"Agent","input":{}}]`),
+		"a tool_result whose id names none":  user(`"message":{"role":"user","content":[{"tool_use_id":"","type":"tool_result","content":"b1"}]},`),
 		"a tool_use whose name is null":      ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":"`+ctCall+`","name":null,"input":{}}]`),
 		"a tool_result whose id is a number": user(`"message":{"role":"user","content":[{"tool_use_id":7,"type":"tool_result","content":"b1"}]},`),
 		"a tool_result whose is_error is a string": user(`"message":{"role":"user","content":[{"tool_use_id":"` + ctCall +

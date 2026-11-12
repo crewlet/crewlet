@@ -877,10 +877,10 @@ func knownKind(kind string) string {
 //
 // AN ERROR WHERE IT DOES NOT DECODE, and never a message with half a call in
 // it: `message` an object; its `content` a string or a list of objects, each
-// with a string `type`; a tool_use's `id` and `name` strings; a tool_result's
-// `tool_use_id` a string and its `is_error` a boolean where present. An absent
-// or null content is no message either: every user and assistant record
-// measured holds one.
+// with a string `type`; a tool_use's `id` a string that names a call and its
+// `name` a string; a tool_result's `tool_use_id` a string that names a call
+// and its `is_error` a boolean where present. An absent or null content is no
+// message either: every user and assistant record measured holds one.
 //
 // A CONTENT LIST IS READ A BLOCK AT A TIME ([eachElement]), each block held to
 // its type as it is read, and never decoded whole before its first block is
@@ -978,7 +978,7 @@ func contentBlock(raw json.RawMessage) (threadCall, error) {
 	c := threadCall{Kind: knownKind(kind)}
 	switch kind {
 	case blockToolUse:
-		if c.ID, err = wireRequiredString("id", b.ID); err != nil {
+		if c.ID, err = callID("id", b.ID); err != nil {
 			return threadCall{}, err
 		}
 		if c.Name, err = wireRequiredString("name", b.Name); err != nil {
@@ -986,7 +986,7 @@ func contentBlock(raw json.RawMessage) (threadCall, error) {
 		}
 		c.Input = b.Input
 	case blockToolResult:
-		if c.ID, err = wireRequiredString("tool_use_id", b.ToolUseID); err != nil {
+		if c.ID, err = callID("tool_use_id", b.ToolUseID); err != nil {
 			return threadCall{}, err
 		}
 		if b.IsError != nil {
@@ -999,6 +999,20 @@ func contentBlock(raw json.RawMessage) (threadCall, error) {
 		c.Content = b.Content
 	}
 	return c, nil
+}
+
+// callID is raw, a call block's key named key, held to a string that names a
+// call. AN ID THAT NAMES NONE IS REFUSED, as a hook's record whose firing
+// names none is ([threadLine.Hook]): the API names every call a model makes,
+// no block measured carries an empty id (811 calls and 744 results, every
+// thread the probes kept), and handed out, a call whose id names none is one
+// no reader could match against a call it knows.
+func callID(key string, raw json.RawMessage) (string, error) {
+	id, err := wireRequiredString(key, raw)
+	if err == nil && id == "" {
+		err = fmt.Errorf("%s names no call", key)
+	}
+	return id, err
 }
 
 // Text is the message's content where it is one string.
