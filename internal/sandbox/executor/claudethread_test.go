@@ -1969,6 +1969,56 @@ func TestAReplySaysWhatItsRequestTook(t *testing.T) {
 	}
 }
 
+// A REPLY'S COUNTS ARE HELD TO WHAT JSON.parse READS EXACTLY: a count is read
+// up to 2^53 - 1, up to which Claude Code's own JSON.parse reads every whole
+// number as written, and one past it is an error, whichever count it is:
+// past it JSON.parse can read another number than the one written, and four
+// counts read as int64s can sum past an int64 and wrap to a negative, where
+// the harness's own sum of doubles never does. Four counts at the bound read
+// as written, and their sum is exact.
+//
+// Mutation: drop the bound, and a count of 2^53 reads as one, and four of
+// 2^61 sum to a negative; hold a count below the bound, and one at it is an
+// error; let the bound itself through one place higher, and a count of 2^53
+// reads as one.
+func TestAReplysCountsAreHeldToWhatJSONParseReadsExactly(t *testing.T) {
+	t.Parallel()
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	counts := func(input, write, read, output string) string {
+		return ctReplace(t, reply, ctUsage, `"usage":{"input_tokens":`+input+`,"cache_creation_input_tokens":`+write+
+			`,"cache_read_input_tokens":`+read+`,"output_tokens":`+output+`}`)
+	}
+	const (
+		bound = "9007199254740991" // 2^53 - 1
+		past  = "9007199254740992" // 2^53
+		far   = "2305843009213693952"
+	)
+	usage, ok, err := ctLine(t, counts(bound, bound, bound, bound)).Usage()
+	if !ok || err != nil || usage.Input != wireCountMax || usage.CacheWrite != wireCountMax ||
+		usage.CacheRead != wireCountMax || usage.Output != wireCountMax {
+		t.Errorf("a reply whose four counts are each 2^53 - 1 says its request took %+v (%t), %v; want each as written",
+			usage, ok, err)
+	}
+	if sum := usage.Input + usage.CacheWrite + usage.CacheRead + usage.Output; sum != 4*wireCountMax {
+		t.Errorf("four counts of 2^53 - 1 sum to %d, want %d", sum, int64(4*wireCountMax))
+	}
+	for name, record := range map[string]string{
+		"an input of 2^53":      counts(past, "0", "0", "0"),
+		"a cache write of 2^53": counts("0", past, "0", "0"),
+		"a cache read of 2^53":  counts("0", "0", past, "0"),
+		"an output of 2^53":     counts("0", "0", "0", past),
+		"an input of 2^53 + 1":  counts("9007199254740993", "0", "0", "0"),
+		"four counts of 2^61":   counts(far, far, far, far),
+		"three of 2^62 and one of 2^0": counts("4611686018427387904", "4611686018427387904",
+			"4611686018427387904", "1"),
+	} {
+		if usage, ok, err := ctLine(t, record).Usage(); err == nil {
+			t.Errorf("%s says its request took %+v (%t), want an error: past 2^53 - 1, JSON.parse may read another "+
+				"number than the one written", name, usage, ok)
+		}
+	}
+}
+
 // A LIST IS WALKED AN ELEMENT AT A TIME: each element is handed out as it is
 // read, in order and as written but for the whitespace around it; the walk
 // stops at the first error its callback returns, returns that error itself,

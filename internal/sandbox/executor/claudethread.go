@@ -806,9 +806,21 @@ func wireNumber(key string, raw json.RawMessage) (float64, error) {
 	return n, nil
 }
 
+// wireCountMax is the largest count [wireCount] reads: 2^53 - 1
+// (Number.MAX_SAFE_INTEGER), up to which Claude Code's own JSON.parse reads
+// every whole number exactly as written. Past it, JSON.parse reads a count as
+// the nearest double, which can be another number than the one written
+// (9,007,199,254,740,993 reads as 9,007,199,254,740,992), so a count past it
+// is refused, never read otherwise than the harness reads it. And four counts
+// at it sum below 2^55, so no int64 sum of a reply's counts wraps, nor one of
+// them and a whole thread's bytes ([threadPlainMax]), where four counts that
+// each fit an int64 can sum past one, to a negative, which the harness's own
+// sum of doubles never does.
+const wireCountMax = 1<<53 - 1
+
 // wireCount is raw, a key named key, held to a count: a whole number as JSON
-// writes one, its digits alone with no sign, fraction or exponent, that fits
-// an int64; 0 where the key is absent. Checked by its bytes before it is
+// writes one, its digits alone with no sign, fraction or exponent, at most
+// [wireCountMax]; 0 where the key is absent. Checked by its bytes before it is
 // decoded, for [wireRequiredString]'s reason: a null decodes into an int64 as
 // 0 with no error, and a sign as a negative count.
 func wireCount(key string, raw json.RawMessage) (int64, error) {
@@ -821,6 +833,9 @@ func wireCount(key string, raw json.RawMessage) (int64, error) {
 	var n int64
 	if err := wireDecode(raw, &n); err != nil {
 		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	if n > wireCountMax {
+		return 0, fmt.Errorf("%s is %d, past %d, the most JSON.parse reads exactly", key, n, int64(wireCountMax))
 	}
 	return n, nil
 }
@@ -1392,14 +1407,17 @@ type threadUsage struct {
 // HELD TO ITS TYPES HERE, AND HERE ALONE, as a key one reader reads is: `id`
 // and `model` strings where present, `usage` an object where present, and
 // each count, where present, a whole number as JSON writes one, its digits
-// alone with no sign, fraction or exponent, that fits an int64 ([wireCount]).
-// Anything else is this accessor's error and never Message's, so a reshaped
-// usage costs only the reader that asks. A null usage, and a null count, are
-// errors too, never no usage or 0, though Claude Code itself reads them so:
-// no release measured writes either (every one of 1,891 replies measured
-// carries a string id and model and a usage of four whole counts), and a
-// figure refused costs its reader a reading, the direction in which it tells,
-// where one read as 0 would anchor it on a count nobody measured.
+// alone with no sign, fraction or exponent, at most 2^53 - 1, the most
+// JSON.parse reads exactly ([wireCount], [wireCountMax]). So the four counts
+// sum below 2^55, and no int64 sum of them wraps, nor one of them and a whole
+// thread's bytes. Anything else is this accessor's error and never Message's,
+// so a reshaped usage costs only the reader that asks. A null usage, and a
+// null count, are errors too, never no usage or 0, though Claude Code itself
+// reads them so: no release measured writes either (every one of 1,891
+// replies measured carries a string id and model and a usage of four whole
+// counts), and a figure refused costs its reader a reading, the direction in
+// which it tells, where one read as 0 would anchor it on a count nobody
+// measured.
 //
 // THE USAGE'S OWN FOUR COUNTS: its `iterations`, whose last entry Claude Code
 // counts in their place where that entry is whole, are not read here, and
