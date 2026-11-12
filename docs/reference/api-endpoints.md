@@ -6874,7 +6874,8 @@ could ask would be a model watching the people it works for.
 And the atlas's **eleven writes**, each a claim in the person's own name on the
 atlas's log ([Changing the atlas](../concepts/atlas.md#changing-the-atlas)):
 every one takes `atlas` but the purge, which is `admin`'s with a proof inside
-`step_up`, and every one is a person's, refused to an agent whatever it holds.
+`step_up`, and every one is a person's, made as the seat they hold: refused to an
+agent whatever it holds, and to a credential bound to no seat (`unseated`).
 An entry is named by `atlas_entry` (and `to` or `other` where a write names a
 second one): its `id`, or `kind:key` (`host:ssh/web-1`). Every write takes an optional
 `if_match`, the entry's `version` it was decided from, and is refused

@@ -71,11 +71,18 @@ func (l *atlasLedger) Record(_ context.Context, c atlasdomain.Call, claim atlas.
 	ifMatch uint64) (statelog.Result, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// THE OPERATION IS HELD TO THE RULE THE LOG'S WRITER HOLDS IT TO, so a
+	// step whose id outgrows it is refused here as it is there.
+	if err := statelog.CheckCallerOpID(c.OpID); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: the operation id %w", atlasdomain.ErrInvalid, err)
+	}
 	if res, ok := l.ops[c.OpID]; ok {
 		return res, nil
 	}
 	id := claim.Subject.ID().String()
-	if ifMatch != atlasdomain.NoIfMatch && l.versions[id] != ifMatch {
+	switch {
+	case ifMatch == atlasdomain.IfNoRecord && l.versions[id] != 0,
+		ifMatch != atlasdomain.NoIfMatch && ifMatch != atlasdomain.IfNoRecord && l.versions[id] != ifMatch:
 		return statelog.Result{}, fmt.Errorf("%w: at %d, decided from %d", atlasdomain.ErrStaleVersion,
 			l.versions[id], ifMatch)
 	}
@@ -104,6 +111,9 @@ func (l *atlasLedger) PurgeDigest(_ context.Context, c atlasdomain.Call, digest 
 func (l *atlasLedger) purge(c atlasdomain.Call, what string) (statelog.Result, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if err := statelog.CheckCallerOpID(c.OpID); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: the operation id %w", atlasdomain.ErrInvalid, err)
+	}
 	l.purges = append(l.purges, what)
 	l.calls = append(l.calls, c)
 	return statelog.Result{Outcome: statelog.OutcomeApplied, OpID: c.OpID,
@@ -466,6 +476,34 @@ func TestASplitAlwaysWinsAndAMergeWithdrawsIt(t *testing.T) {
 	if got, _ := atlasCall(t, w[builtin.AtlasMergeTool], map[string]any{"atlas_entry": a.ID().String(),
 		"other": "host:ssh/web-1"}); !got.Failed {
 		t.Error("a service was merged with a host")
+	}
+}
+
+// A MERGE WITHDRAWS EVERY "NOT THE SAME" THAT KEEPS THE TWO ENTRIES APART, one
+// between any member of either, since any one of them blocks the join: a
+// and b are one entry, b and c were said not to be the same, and merging a
+// with c makes the three one.
+//
+// Mutation: withdraw only a "not the same" between the two members the call
+// names, and c stays apart.
+func TestAMergeWithdrawsWhatKeepsEitherEntrysMembersApart(t *testing.T) {
+	t.Parallel()
+	ledger := newAtlasLedger()
+	w := atlasWrites(t, ledger)
+	ref := func(key string) atlas.Ref { return atlas.MustRef(atlas.KindService, key) }
+	for _, key := range []string{"orders", "orders-api", "orders-worker"} {
+		mustWrite(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": "service", "key": key})
+	}
+	mustWrite(t, w[builtin.AtlasMergeTool], map[string]any{"atlas_entry": "service:orders",
+		"other": "service:orders-api"})
+	mustWrite(t, w[builtin.AtlasSplitTool], map[string]any{"atlas_entry": "service:orders-api",
+		"other": "service:orders-worker"})
+	mustWrite(t, w[builtin.AtlasMergeTool], map[string]any{"atlas_entry": "service:orders",
+		"other": "service:orders-worker"})
+	view := viewOf(t, w)
+	if one, other := entryNamed(t, view, ref("orders")), entryNamed(t, view, ref("orders-worker")); one.ID != other.ID {
+		t.Errorf("orders and orders-worker are shown apart after a merge: members %v and %v",
+			one.Members, other.Members)
 	}
 }
 

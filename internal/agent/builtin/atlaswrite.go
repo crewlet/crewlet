@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -175,11 +177,26 @@ type atlasPlan struct {
 }
 
 // atlasStep is one record: a claim, an entry's purge or a value's.
+//
+// A STEP IS NAMED BY ITS VERB AND A SHORT DIGEST of what tells it apart from
+// the call's other steps of that verb (key), never by an entry's id or a
+// handle written out: a step's operation is the call's and the name, and an
+// id the caller brought back leaves a name little more than fifty bytes
+// ([statelog.MaxCallerOpIDBytes]).
 type atlasStep struct {
 	name   string
+	key    string
 	claim  *atlas.Claim
 	purge  *atlas.Ref
 	digest string
+}
+
+// stepObject is the part of a step's operation that tells it from the call's
+// other steps of its verb: twelve hex digits of a digest of its subject and its
+// key, the same for the same step on every attempt of the call.
+func stepObject(subject atlas.Ref, key string) string {
+	sum := sha256.Sum256([]byte(subject.ID().String() + "\x00" + key))
+	return hex.EncodeToString(sum[:6])
 }
 
 // atlasNow is the atlas a write is decided on: as its caller reads it, at the
@@ -301,7 +318,9 @@ func (t *atlasWrite) versions(ctx context.Context, n *atlasNow, plan atlasPlan) 
 			return nil, &r
 		}
 		if !found {
-			out[id] = atlasdomain.NoIfMatch
+			// DECIDED WHERE IT HELD NO RECORD, and recorded only while it
+			// still holds none.
+			out[id] = atlasdomain.IfNoRecord
 			continue
 		}
 		if int64(row.Version) > n.recordedAt.Packed() {
@@ -325,10 +344,17 @@ func (t *atlasWrite) now(ctx context.Context, turn *turnctx.Turn, actor Actor) (
 		r := refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("%s wrote nothing: %s", t.Name(), why))
 		return nil, &r
 	}
-	if !answer.Complete(gather.SourceLog) {
-		r := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: what people recorded in "+
-			"the atlas could not be read in full just now, and a change is decided on all of it. Try "+
-			"again shortly.", t.Name()))
+	// A CHANGE IS DECIDED ON ALL OF WHAT THE CALLER READS: a source this node
+	// serves that answered in part may hold the very fact the write would
+	// claim beside. One this node does not serve, and Gitlet where the caller
+	// may not read it, hold nothing the write may touch.
+	for _, c := range answer.Coverage {
+		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !read {
+			continue
+		}
+		r := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: the atlas's %s "+
+			"could not be read in full just now, and a change is decided on all of it. Try again shortly.",
+			t.Name(), strings.ReplaceAll(string(c.Source), "_", " ")))
 		return nil, &r
 	}
 	n.view, n.recorded, n.recordedAt, n.gitlet = answer.View, answer.Recorded, answer.RecordedAt, read
@@ -352,7 +378,7 @@ func (t *atlasWrite) write(ctx context.Context, actor Actor, plan atlasPlan, ver
 	}
 	if len(plan.steps) == 0 {
 		answer["outcome"], answer["unchanged"] = string(statelog.OutcomeApplied), true
-		if v := versions[plan.entry.ID()]; v != atlasdomain.NoIfMatch {
+		if v, ok := versionOf(versions, plan.entry); ok {
 			answer["version"] = v
 		}
 		r, _ := jsonResult(withOperation(answer, actor))
@@ -360,12 +386,12 @@ func (t *atlasWrite) write(ctx context.Context, actor Actor, plan atlasPlan, ver
 	}
 	by := iam.Actor{Name: actor.Handle, Kind: iam.ActorKind(actor.Kind), OperatorID: actor.OperatorID}
 	var last statelog.Result
-	for _, step := range plan.steps {
-		object := plan.entry.ID().String()
+	for i, step := range plan.steps {
+		subject := plan.entry
 		if step.claim != nil {
-			object = step.claim.Subject.ID().String()
+			subject = step.claim.Subject
 		}
-		opID := opIDFor(actor, t.Name(), "atlas-"+step.name, object, args)
+		opID := opIDFor(actor, t.Name(), "atlas-"+step.name, stepObject(subject, step.key), args)
 		call := atlasdomain.Call{By: by, OpID: opID}
 		var (
 			res statelog.Result
@@ -393,16 +419,40 @@ func (t *atlasWrite) write(ctx context.Context, actor Actor, plan atlasPlan, ver
 				unknownNext(res.Unvouched, sameCall(actor, t.Name()), "Read the entry in the atlas again",
 					"the same claims are recorded again, which changes nothing"))
 		case err != nil:
-			return atlasWriteFailure(ctx, t.Name(), actor, plan.entry, err)
+			failure := atlasWriteFailure(ctx, t.Name(), actor, plan.entry, err)
+			if i > 0 {
+				// WHAT LANDED BEFORE IT STAYS, and the same call finishes the
+				// rest: each step is its own operation, which the log answers
+				// as landed when it is made again.
+				failure.Output += fmt.Sprintf(" The first %d of its %d records landed; %s finishes "+
+					"the rest.", i, len(plan.steps), orAgain(sameCall(actor, t.Name())))
+			}
+			return failure
 		}
 		last = res
 	}
 	answer["outcome"], answer["position"] = string(last.Outcome), positionOf(last.Position)
-	if v, ok := versions[plan.entry.ID()]; ok && plan.steps[len(plan.steps)-1].claim != nil {
+	if v, ok := versionOf(versions, plan.entry); ok {
 		answer["version"] = v
 	}
 	r, _ := jsonResult(withOperation(answer, actor))
 	return r
+}
+
+// versionOf is an entry's version as an answer states it, false where it
+// holds no record.
+func versionOf(versions map[uuid.UUID]uint64, entry atlas.Ref) (uint64, bool) {
+	v, ok := versions[entry.ID()]
+	return v, ok && v != atlasdomain.NoIfMatch && v != atlasdomain.IfNoRecord
+}
+
+// orAgain is the repeat that is the same call, or plain words where the caller
+// has none.
+func orAgain(again string) string {
+	if again == "" {
+		return "making the same call again"
+	}
+	return again
 }
 
 // atlasWriteFailure is a refusal or a failure of the atlas's log as the write
@@ -514,6 +564,11 @@ func (n *atlasNow) entry(a map[string]any, arg string) (member, *tools.Result) {
 		return member{}, &r
 	}
 	e, found := n.view.Find(ref.ID())
+	if !found && ref.OnGitlet() {
+		// GITLET LISTS THE CALLER EVERY REPOSITORY THEY MAY READ, so one it
+		// did not list is one they may not change.
+		return member{}, n.notFound(arg)
+	}
 	return member{ref: ref, entry: e, found: found}, nil
 }
 
@@ -842,9 +897,9 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	}
 	plan.steps = append(plan.steps, atlasStep{name: "add", claim: exists})
 	if name := strings.TrimSpace(argString(a, "name")); name != "" && name != ref.Key {
-		named, refusal := n.claim(atlas.Says(ref, atlas.FactName, name, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		named, bad := n.claim(atlas.Says(ref, atlas.FactName, name, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		plan.steps = append(plan.steps, atlasStep{name: "name", claim: named})
 		plan.said["name"] = named.Value.Text
@@ -978,9 +1033,9 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(pick) && !now.Suggested {
 			return plan, nil
 		}
-		says, refusal := n.claim(atlas.Says(ref, f, pick.Text, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		says, bad := n.claim(atlas.Says(ref, f, pick.Text, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		plan.steps = []atlasStep{{name: "confirm", claim: says}}
 		return plan, nil
@@ -999,9 +1054,9 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		if ed.Source.Kind.Computed() || ed.Source.Kind == atlas.SourcePerson && !ed.Suggested {
 			return plan, nil
 		}
-		claim, refusal := n.claim(atlas.Relates(ref, r, to.entry.Ref, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		claim, bad := n.claim(atlas.Relates(ref, r, to.entry.Ref, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		plan.steps = []atlasStep{{name: "confirm", claim: claim}}
 		return plan, nil
@@ -1040,13 +1095,13 @@ func (n *atlasNow) relation(a map[string]any) (atlas.Relation, member, *tools.Re
 
 func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	return func(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
-		m, refusal := n.held(a, "atlas_entry")
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		m, bad := n.held(a, "atlas_entry")
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
-		r, to, refusal := n.relation(a)
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		r, to, bad := n.relation(a)
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		ref := m.entry.Ref
 		if to.entry.ID == m.entry.ID {
@@ -1073,9 +1128,9 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 				return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("that %s %s %s", ref, r, to.entry.Ref), src)
 			}
 		}
-		claim, refusal := n.claim(atlas.Relates(ref, r, to.entry.Ref, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		claim, bad := n.claim(atlas.Relates(ref, r, to.entry.Ref, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		switch {
 		case !remove && shownNow && ed.Source.Kind == atlas.SourcePerson:
@@ -1083,9 +1138,9 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 		case remove && !shownNow:
 			return plan, nil
 		case remove:
-			denial, refusal := n.claim(atlas.Denial(*claim, n.person, n.at))
-			if refusal != nil {
-				return atlasPlan{}, refusal
+			denial, bad := n.claim(atlas.Denial(*claim, n.person, n.at))
+			if bad != nil {
+				return atlasPlan{}, bad
 			}
 			claim = denial
 		}
@@ -1140,7 +1195,10 @@ func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	// integration only suggested: an owner is one seat or one unit, and a
 	// person's word on it is the whole of it. One the settings or Gitlet
 	// declare is changed there.
+	// THE NEW OWNER FIRST: a write stopped part of the way leaves two owners
+	// shown, never none.
 	kept := false
+	var unown []atlasStep
 	for _, ed := range m.entry.Relations {
 		if ed.Relation != atlas.RelationOwnedBy {
 			continue
@@ -1152,32 +1210,33 @@ func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			kept = ed.Source.Kind == atlas.SourcePerson && !ed.Suggested
 			continue
 		}
-		owner, refusal := n.claim(atlas.Names(ref, atlas.RelationOwnedBy, ed.External, ed.Name, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		owner, bad := n.claim(atlas.Names(ref, atlas.RelationOwnedBy, ed.External, ed.Name, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
-		denial, refusal := n.claim(atlas.Denial(*owner, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		denial, bad := n.claim(atlas.Denial(*owner, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
-		plan.steps = append(plan.steps, atlasStep{name: "unown-" + string(ed.External) + "-" + ed.Name,
+		unown = append(unown, atlasStep{name: "unown", key: string(ed.External) + ":" + ed.Name,
 			claim: denial})
 	}
 	if want.External != "" && !kept {
-		owner, refusal := n.claim(atlas.Names(ref, atlas.RelationOwnedBy, want.External, want.Name, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		owner, bad := n.claim(atlas.Names(ref, atlas.RelationOwnedBy, want.External, want.Name, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		plan.steps = append(plan.steps, atlasStep{name: "own", claim: owner})
 	}
+	plan.steps = append(plan.steps, unown...)
 	return plan, nil
 }
 
 func planRetire(retire bool) func(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	return func(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
-		m, refusal := n.held(a, "atlas_entry")
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		m, bad := n.held(a, "atlas_entry")
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		ref := m.entry.Ref
 		change := "restored"
@@ -1193,13 +1252,13 @@ func planRetire(retire bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 		if (m.entry.State == atlas.StateRetired) == retire {
 			return plan, nil
 		}
-		exists, refusal := n.claim(atlas.Exists(ref, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		exists, bad := n.claim(atlas.Exists(ref, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		if retire {
-			if exists, refusal = n.claim(atlas.Denial(*exists, n.person, n.at)); refusal != nil {
-				return atlasPlan{}, refusal
+			if exists, bad = n.claim(atlas.Denial(*exists, n.person, n.at)); bad != nil {
+				return atlasPlan{}, bad
 			}
 		}
 		plan.steps = []atlasStep{{name: change, claim: exists}}
@@ -1249,6 +1308,21 @@ func (n *atlasNow) apart(a, b atlas.Ref) (atlas.Claim, bool) {
 	return newest, newest.Subject != (atlas.Ref{}) && !newest.Denied
 }
 
+// keptApart is every "not the same" that keeps two shown entries apart: one
+// standing between any member of the first and any member of the second,
+// since any one of them blocks the fold's join of the two groups.
+func (n *atlasNow) keptApart(one, other atlas.Entry) []atlas.Claim {
+	var out []atlas.Claim
+	for _, a := range one.Members {
+		for _, b := range other.Members {
+			if d, ok := n.apart(a, b); ok {
+				out = append(out, d)
+			}
+		}
+	}
+	return out
+}
+
 func planMerge(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	one, other, refusal := n.pair(a)
 	if refusal != nil {
@@ -1259,18 +1333,22 @@ func planMerge(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	if one.entry.ID == other.entry.ID {
 		return plan, nil
 	}
-	if d, ok := n.apart(one.ref, other.ref); ok {
-		withdrawn, bad := n.claim(atlas.Denial(d, n.person, n.at))
-		if bad != nil {
-			return atlasPlan{}, bad
-		}
-		plan.steps = append(plan.steps, atlasStep{name: "withdraw", claim: withdrawn})
-	}
+	// "THE SAME" FIRST, then every "not the same" between the two entries'
+	// members withdrawn: a write stopped part of the way leaves them apart,
+	// as they were.
 	same, refusal := n.claim(atlas.Same(one.ref, other.ref, n.person, n.at))
 	if refusal != nil {
 		return atlasPlan{}, refusal
 	}
 	plan.steps = append(plan.steps, atlasStep{name: "merge", claim: same})
+	for _, d := range n.keptApart(one.entry, other.entry) {
+		withdrawn, bad := n.claim(atlas.Denial(d, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
+		}
+		plan.steps = append(plan.steps, atlasStep{name: "withdraw", key: d.Facet.Target.Entry.String(),
+			claim: withdrawn})
+	}
 	return plan, nil
 }
 
@@ -1299,15 +1377,19 @@ func planPurge(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, &r
 	}
 	if entry != "" {
-		m, refusal := n.entry(a, "atlas_entry")
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		m, bad := n.entry(a, "atlas_entry")
+		if bad != nil {
+			return atlasPlan{}, bad
+		}
+		// WHAT THE ENGINE DECLARES IS COMPUTED AGAIN ON EVERY READ, so a
+		// purge of it would erase nothing it shows: it is removed where it
+		// is declared, whether or not the caller's read showed it.
+		if src, named := m.ref.EngineNamed(); named {
+			return atlasPlan{}, n.declaredRefusal(m.ref.String(), src)
 		}
 		if m.found {
-			for _, s := range m.entry.Sources {
-				if s.Kind.Computed() {
-					return atlasPlan{}, n.declaredRefusal(m.ref.String(), s)
-				}
+			if i := slices.IndexFunc(m.entry.Sources, func(s atlas.Source) bool { return s.Kind.Computed() }); i >= 0 {
+				return atlasPlan{}, n.declaredRefusal(m.ref.String(), m.entry.Sources[i])
 			}
 		}
 		plan := atlasPlan{entry: m.ref, said: said("purged", m.ref)}
@@ -1326,10 +1408,9 @@ func planPurge(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	}
 	for _, e := range n.view.Entries {
 		for _, member := range e.Members {
-			if member.Key == value && slices.ContainsFunc(e.Sources, func(s atlas.Source) bool {
-				return s.Kind.Computed()
-			}) {
-				return atlasPlan{}, n.declaredRefusal("an entry keyed by that value", e.Sources[0])
+			i := slices.IndexFunc(e.Sources, func(s atlas.Source) bool { return s.Kind.Computed() })
+			if member.Key == value && i >= 0 {
+				return atlasPlan{}, n.declaredRefusal("an entry keyed by that value", e.Sources[i])
 			}
 		}
 		for _, fv := range e.Facts {
