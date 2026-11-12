@@ -1386,30 +1386,33 @@ var rules = map[Action]rule{
 	// of its own turn showed it, through a tool of its own, and never retires
 	// anything or names an owner, so a model steered by what it read cannot
 	// decide what the company's map says.
-	ActionAtlasAddEntry: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	// AND MADE AS A SEAT: a claim names the person who made it by the seat
+	// they hold, so a credential acting as no seat (a Tier A token, a service
+	// account bound to none) records no claim in a person's rank.
+	ActionAtlasAddEntry: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasCorrect: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasCorrect: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasConfirm: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasConfirm: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasRelate: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasRelate: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasUnrelate: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasUnrelate: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasSetOwner: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasSetOwner: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasRetire: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasRetire: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasRestore: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasRestore: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasMerge: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasMerge: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
-	ActionAtlasSplit: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true,
+	ActionAtlasSplit: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
 	// A PURGE IS ADMIN'S, A PERSON'S AND A RECENT PROOF'S, as every purge is
 	// ([ActionWorkPurge]): it erases what every holder reads, its history
 	// included, and nothing brings it back (ADR-0127).
-	ActionAtlasPurge: {class: ClassAdmin, humanOnly: true, irreversible: true,
+	ActionAtlasPurge: {class: ClassAdmin, humanOnly: true, seated: true, irreversible: true,
 		recency: iam.RecencyStepUp, assist: AssistApprove},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
