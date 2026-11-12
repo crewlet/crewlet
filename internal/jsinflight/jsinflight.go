@@ -65,11 +65,15 @@ import (
 //
 // The whole wait is held to the publish's own budget ([Sends]) — the caller's
 // deadline, or where it set none what the publish alone would have waited for
-// its acknowledgement, the request term and across a link its bytes' crossing,
-// one more crossing for every attempt after the first, since each sends the
-// whole message again (internal/jsapi's Budget) — because waiting for the
-// write ahead to settle is waiting for THAT write's acknowledgement, and no
-// publish here is promised more patience than its own.
+// its acknowledgement: the request term and, across a link, its bytes'
+// crossing for each of the sends a write may make (internal/jsapi's Budget
+// and WriteSends), since an attempt after an in-flight answer sends the whole
+// message again — because waiting for the write ahead to settle is waiting for
+// THAT write's acknowledgement, and no publish here is promised more patience
+// than its own. That budget's end is fixed when the publish starts: an
+// attempt past its sends, and a wait between two attempts, moves it nowhere,
+// so a publish met by an in-flight answer on every attempt ends [Undecided]
+// at it however fast each answer comes back.
 const (
 	FirstWait = time.Millisecond
 	MaxWait   = 64 * time.Millisecond
@@ -133,9 +137,10 @@ type Sends interface {
 // as in flight when that runs out is [*Undecided].
 //
 // publish is handed ctx, its caller's, and makes each attempt's send within
-// sends (internal/jsapi's Sends.Next), so no send outlasts the budget and each
-// is given its own crossing; the wait between two attempts is held to the
-// budget as it stands.
+// sends (internal/jsapi's Sends.Next or Sends.Whole), so no send outlasts the
+// budget and each of the sends a write may make is given its own crossing; the
+// wait between two attempts is held to the budget as it stands, whose end the
+// attempts never move past the bound it started with.
 func Decide(ctx context.Context, sends Sends, publish func(context.Context) error) error {
 	for attempt := 1; ; attempt++ {
 		err := publish(ctx)

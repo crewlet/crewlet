@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsinflight"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
 )
@@ -188,7 +190,7 @@ func TestACoordinationWriteIsGivenItsBytesCrossingOnlyAcrossALink(t *testing.T) 
 					"put": len(key) + len(value), "update": len(key) + len(value),
 					"delete": len(key), "purge": len(key),
 				} {
-					writes[op] = jsapi.RequestTerm + time.Duration(clientSends)*
+					writes[op] = jsapi.RequestTerm + jsapi.WriteSends*
 						jsapi.Sending(carries+kvHeaderBytes, c.pace)
 				}
 
@@ -234,6 +236,74 @@ func TestACoordinationWriteIsGivenItsBytesCrossingOnlyAcrossALink(t *testing.T) 
 			})
 		})
 	}
+}
+
+// refusingInFlight is deadlined whose every update its leader answers in
+// flight, writing nothing — and answers with errPast an attempt whose deadline
+// is past past, so a write that outran its bound ends rather than running on.
+type refusingInFlight struct {
+	deadlined
+	past time.Time
+}
+
+// errPast is what refusingInFlight answers an attempt waiting past its bound.
+var errPast = errors.New("an attempt waited past the write's bound")
+
+func (r *refusingInFlight) Update(ctx context.Context, _ string, _ []byte, _ uint64) (uint64, error) {
+	r.note(ctx, "update")
+	if deadline, _ := ctx.Deadline(); deadline.After(r.past) { //fixedwait:stated the deadline an attempt was handed against the bound its write began with, both on the case's bubble clock
+		return 0, errPast
+	}
+	return 0, refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
+}
+
+func (r *refusingInFlight) Bucket() string { return "refusing" }
+
+// A SETTLED WRITE MET BY IN-FLIGHT ANSWERS FOR EVER ENDS UNDECIDED AT ITS
+// BOUND, every call of it waiting that one bound.
+//
+// The client sends a write nobody heard again inside the one context it is
+// handed, so each call of it is given the budget's whole bound: the request
+// term and, across a link, a crossing for each of the sends a write may make.
+// An attempt after an in-flight answer is another call within that same
+// bound, never a bound of its own: counted per attempt with no end, a leader
+// answering in flight at once pushed a write's end out faster than time
+// passed, and it never ended undecided. Here every call is answered in flight
+// at once, and the write ends Undecided at its bound. Exact, in a bubble.
+//
+// Mutation: give each attempt a bound of its own, or let the bound grow with
+// the attempts, and an attempt waits past it.
+func TestASettledWriteMetByInFlightAnswersForeverEndsUndecidedAtItsBound(t *testing.T) {
+	t.Parallel()
+	const key = "mcp.listing.big.leaf"
+	value := make([]byte, 64<<10)
+	bound := jsapi.RequestTerm + jsapi.WriteSends*jsapi.Sending(len(key)+len(value)+kvHeaderBytes,
+		objstore.MiBPace)
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		r := &refusingInFlight{past: start.Add(bound)}
+		b := settled(termed{term: jsapi.RequestTerm}, r, AcrossLink)
+		_, err := b.Update(context.Background(), key, value, 1)
+		var undecided *jsinflight.Undecided
+		if !errors.As(err, &undecided) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Update = %v after %v and %d attempts, want Undecided at the write's "+
+				"bound, %v", err, time.Since(start), len(r.writes), bound)
+		}
+		if ended := time.Since(start); ended != bound {
+			t.Errorf("a write met by in-flight answers for ever ended %v after it started, "+
+				"want its bound, %v", ended, bound)
+		}
+		if len(r.writes) < 2 {
+			t.Fatalf("%d attempts, want the in-flight answers waited out", len(r.writes))
+		}
+		for i, w := range r.writes {
+			if !w.set || !w.deadline.Equal(start.Add(bound)) {
+				t.Errorf("attempt %d waited until %v after the write started (set %t), want "+
+					"its bound, %v", i+1, w.deadline.Sub(start), w.set, bound)
+				break
+			}
+		}
+	})
 }
 
 // A STORE IS TOLD HOW ITS CONNECTION REACHES ITS BUCKETS, and refuses to open

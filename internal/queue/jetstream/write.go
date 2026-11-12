@@ -64,9 +64,10 @@ func (q *Queue) write(ctx context.Context, msg *nats.Msg) (*jetstream.PubAck, er
 // sendWithin makes the sends of one acknowledged write of msg on js, its
 // caller's context ctx, each in the context sends gives it: ONE send at a
 // time, with the client's own re-sends off, and the identical message again
-// where nobody heard it — a quarter of a second later and twice at most, the
-// client's own policy (jetstream.DefaultPubRetryWait and
-// DefaultPubRetryAttempts), kept.
+// where nobody heard it — a quarter of a second later and [jsapi.WriteSends]
+// sends in all, the client's own policy (jetstream.DefaultPubRetryWait and
+// DefaultPubRetryAttempts), kept, and the number the budget gives a crossing
+// to.
 //
 // # Why the client's re-sends are off and made here instead
 //
@@ -83,11 +84,11 @@ func (q *Queue) write(ctx context.Context, msg *nats.Msg) (*jetstream.PubAck, er
 func sendWithin(ctx context.Context, sends *jsapi.Sends, js jetstream.JetStream,
 	msg *nats.Msg) (*jetstream.PubAck, error) {
 
-	for resent := 0; ; resent++ {
+	for sent := 1; ; sent++ {
 		send, done := sends.Next(ctx)
 		ack, err := js.PublishMsg(send, msg, jetstream.WithRetryAttempts(0))
 		done()
-		if !errors.Is(err, jetstream.ErrNoStreamResponse) || resent == jetstream.DefaultPubRetryAttempts {
+		if !errors.Is(err, jetstream.ErrNoStreamResponse) || sent == jsapi.WriteSends {
 			return ack, err
 		}
 		if paused := sends.Pause(ctx, jetstream.DefaultPubRetryWait); paused != nil {

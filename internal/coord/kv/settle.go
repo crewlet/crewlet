@@ -45,11 +45,15 @@
 // (crewlet/crewlet#1005's defect, in the coordination store). So every write
 // of a settled bucket whose caller set no deadline waits the request term and,
 // across a link, the crossing of what it carries — its key, its value and its
-// headers — for EVERY TIME it may be sent (internal/jsapi's Budget): the
-// client re-sends a write nobody heard inside the one context it was handed
-// ([clientSends]), and an attempt after an in-flight answer sends it whole
-// again. Whether the connection crosses a link is the caller's to state where
-// a bucket is opened ([Reach]), because nothing here can see how the
+// headers — for every time it may be sent, up to internal/jsapi's WriteSends:
+// the client re-sends a write nobody heard inside the one context it was
+// handed, which no option of a KV write turns off, so each call of the client
+// is given the budget's WHOLE bound, the request term and WriteSends
+// crossings, fixed when the write starts ([settledBucket.budget]); and an
+// attempt after an in-flight answer sends it whole again within that same
+// bound, so a write met by in-flight answers for ever ends undecided by it.
+// Whether the connection crosses a link is the caller's to state where a
+// bucket is opened ([Reach]), because nothing here can see how the
 // connection it was handed was made. A caller's own deadline is kept.
 //
 // THE HANDLE IS WRAPPED ONCE, where a bucket is opened ([Open], [OpenFleet],
@@ -136,18 +140,6 @@ func checkReach(config string, r Reach) error {
 	return nil
 }
 
-// clientSends is the most times one write of the client's KV handle sends
-// its message: once, and again on each re-send it makes when nobody heard it
-// (jetstream.DefaultPubRetryAttempts), all inside the ONE context it was
-// handed. A KV write takes no publish options, so its re-sends cannot be
-// turned off and made one at a time as the queue's are; and across a link to
-// an external cluster the answer that nobody heard a write comes after it
-// crossed whole, so each re-send crosses again. A write's budget therefore
-// gives every one of them its crossing: room a write that is heard the first
-// time never uses, and no longer than the crossings a write nobody heard can
-// take.
-const clientSends = 1 + jetstream.DefaultPubRetryAttempts
-
 // kvHeaderBytes is the most header a write of the client's KV handle carries
 // beside its key and value, as the client encodes it: the operation a removal
 // names, the rollup a purge asks for, the revision a conditional write is
@@ -175,9 +167,16 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstre
 
 // budget is the budget of a write of key and value — none for a removal —
 // made by calls of the client's, each of which may send its message as many
-// as clientSends times inside the one context it is handed: the request term
-// and, across a link, the crossing of all of those sends for each call
-// (internal/jsapi's Budget).
+// as internal/jsapi's WriteSends times inside the ONE context it is handed: a
+// KV write takes no publish options, so its re-sends of a write nobody heard
+// cannot be turned off and made one at a time as the queue's are, and across
+// a link to an external cluster the answer that nobody heard it comes after
+// it crossed whole, so each re-send crosses again. So each call waits in the
+// budget's whole bound ([jsapi.Sends.Whole]), the request term and, across a
+// link, a crossing of what it carries for every one of those sends: room a
+// write heard the first time never uses, and no longer than a write nobody
+// heard can take — and the same bound for every call, so a write sent again
+// after an in-flight answer is given nothing more.
 //
 // NO CREATE IS BUDGETED HERE because none is made through a handle: the
 // client's Create conditions on a marker the sweep may remove and asks a
@@ -186,14 +185,13 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstre
 // TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient holds the
 // package to it.
 func (b settledBucket) budget(key string, value []byte) *jsapi.Sends {
-	carries := len(key) + len(value) + kvHeaderBytes
-	return jsapi.Budget(b.js, time.Duration(clientSends)*jsapi.Sending(carries, b.pace))
+	return jsapi.Budget(b.js, jsapi.Sending(len(key)+len(value)+kvHeaderBytes, b.pace))
 }
 
 // Put writes a value whatever the key holds, waiting as long as its bytes
 // take to cross ([settledBucket.budget]).
 func (b settledBucket) Put(ctx context.Context, key string, value []byte) (uint64, error) {
-	send, done := b.budget(key, value).Next(ctx)
+	send, done := b.budget(key, value).Whole(ctx)
 	defer done()
 	return b.KeyValue.Put(send, key, value)
 }
@@ -240,7 +238,7 @@ func (b settledBucket) settle(ctx context.Context, op, key string, value []byte,
 
 	sends := b.budget(key, value)
 	err := jsinflight.Decide(ctx, sends, func(ctx context.Context) error {
-		send, done := sends.Next(ctx)
+		send, done := sends.Whole(ctx)
 		defer done()
 		return write(send)
 	})

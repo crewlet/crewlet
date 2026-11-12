@@ -102,11 +102,13 @@
 // with something ahead of it — another large write, an object store put's
 // window — whose bytes no budget here counts. And the worst case is long, and
 // not only for the write: one at the ceiling across a link at the floor waits
-// five seconds and about four minutes more before it reads as an outage, and
-// everything the node sends behind it on that link waits as long — its lease
-// renewals among them, which at the shipped lease lapse long before it is in.
-// That is a defect of its own (crewlet/crewlet#1035), which these budgets do
-// not fix.
+// five seconds and about four minutes a send before it reads as an outage —
+// up to three sends, about twelve minutes, for a write whose answer decided
+// nothing, the bound its budget is fixed at when it starts (jsapi.WriteSends)
+// — and everything the node sends behind it on that link waits as long, its
+// lease renewals among them, which at the shipped lease lapse long before it
+// is in. That is a defect of its own (crewlet/crewlet#1035), which these
+// budgets do not fix.
 //
 // # A pull allocates for what it receives, never for what it may
 //

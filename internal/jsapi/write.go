@@ -14,7 +14,8 @@ import (
 // cross the link its connection crosses ([Sending] of what it carries, at the
 // link's pace). A connection that crosses no link — a member's own, in its own
 // process — has no crossing, and its writes keep the request term alone. A
-// write sent again is given one more crossing for each send ([Budget]).
+// write sent again is given one more crossing for each send, up to
+// [WriteSends] in all ([Budget]).
 //
 // # Why a write across a link is given its bytes
 //
@@ -44,16 +45,37 @@ import (
 //
 // SO THE WORST CASE IS LONG, AND NOT ONLY FOR THE WRITE: a write at the
 // ceiling across a link at the floor waits the request term and about four
-// minutes more before it reads as an outage, and for those four minutes
-// everything the node sends behind it on that link waits too — its lease
-// renewals among them, which at the shipped lease lapse long before its last
-// byte is in. That is a defect of its own, crewlet/crewlet#1035, which this
-// bound does not fix: it stops a slow write being abandoned as an outage, and
-// does nothing about what the write holds up. A caller that cannot wait that
-// long says so with a deadline of its own, which a budget never extends.
+// minutes a send before it reads as an outage — and a write whose answer
+// decided nothing is sent up to [WriteSends] times, three, about twelve
+// minutes in all, the bound its budget is fixed at when it starts. For those
+// minutes everything the node sends behind it on that link waits too — its
+// lease renewals among them, which at the shipped lease lapse long before its
+// last byte is in. That is a defect of its own, crewlet/crewlet#1035, which
+// this bound does not fix: it stops a slow write being abandoned as an
+// outage, and does nothing about what the write holds up. A caller that
+// cannot wait that long says so with a deadline of its own, which a budget
+// never extends.
 func WriteBound(js jetstream.JetStream, crossing time.Duration) time.Duration {
 	return js.Options().DefaultTimeout + crossing
 }
+
+// WriteSends is how many sends of one acknowledged write its budget gives a
+// crossing: the first, and the re-sends the client makes of a write nobody
+// heard (jetstream.DefaultPubRetryAttempts, two) — the client's own policy,
+// which every write of the engine is sent by: made by the client inside the
+// one context it is handed where nothing turns it off (a KV write's,
+// internal/coord/kv), and one send at a time by internal/queue/jetstream
+// where it is turned off.
+//
+// THE BUDGET'S WHOLE BOUND, fixed when the write starts: the request term and
+// WriteSends crossings ([Sends]). A send past these — an attempt after a
+// leader's in-flight answer, once the write has been sent this many times —
+// is made within the budget as it stands, and no pause moves it. Counted per
+// send, with no end, a write met by an in-flight answer on every attempt on a
+// link faster than the floor gained a crossing each time and spent a few
+// milliseconds of it, so its budget ran ahead of the clock and it never ended
+// undecided, where held to the term alone it had ended at five seconds.
+const WriteSends = 1 + jetstream.DefaultPubRetryAttempts
 
 // Sends is the budget of ONE acknowledged write across every time it is
 // sent: [Budget] starts it, [Sends.Next] is the context each send waits in,
@@ -61,7 +83,7 @@ func WriteBound(js jetstream.JetStream, crossing time.Duration) time.Duration {
 // context, which it derives from and never keeps. A write's sends are made one
 // at a time, and its Sends is not shared between goroutines.
 //
-// # The crossing is an allowance per SEND, never per call
+// # The crossing is an allowance per SEND, never per call, and it ends
 //
 // A write is sent again where its answer decided nothing — nobody heard it,
 // and it is sent again as the client would have (internal/queue/jetstream);
@@ -74,27 +96,31 @@ func WriteBound(js jetstream.JetStream, crossing time.Duration) time.Duration {
 // larger than that, met by one in-flight answer, read as no answer while the
 // link was still carrying it at a pace the engine allows. So where the caller
 // set no deadline the first send is given [WriteBound] — the request term and
-// its crossing — and every later send ONE MORE CROSSING, and a pause between
-// two is held to the budget as it stands. A caller's own deadline is every
-// send's as it is: never extended, and never shortened either.
+// its crossing — and every later send ONE MORE CROSSING, up to [WriteSends]
+// sends: the budget's end is fixed when it starts, the request term and
+// WriteSends crossings, and no send past those and no pause between two ever
+// moves it. A caller's own deadline is every send's as it is: never extended,
+// and never shortened either.
 type Sends struct {
 	// deadline is the budget as it stands, where the caller set no
 	// deadline: the instant the send being made, or the pause after it, has
 	// to be answered by.
 	deadline time.Time
 
-	// crossing is what each send after the first adds to the budget.
+	// crossing is what each send after the first adds to the budget, up to
+	// [WriteSends] sends.
 	crossing time.Duration
 
-	// sent is whether the first send has been made.
-	sent bool
+	// given is how many sends the budget has given a crossing, up to
+	// [WriteSends]: none before the first send.
+	given int
 }
 
 // Budget starts the budget of one acknowledged write on js, each send of which
-// takes crossing to cross the link its connection crosses: [Sending] of what
-// the send carries at the link's pace, or that times the sends one call of the
-// client may make inside the one context it is handed — and none where the
-// connection crosses no link. The budget runs from now.
+// takes crossing to cross the link its connection crosses — [Sending] of what
+// the send carries at the link's pace, and none where the connection crosses
+// no link. The budget runs from now, and ends at most the request term and
+// [WriteSends] crossings later.
 func Budget(js jetstream.JetStream, crossing time.Duration) *Sends {
 	return &Sends{deadline: time.Now().Add(WriteBound(js, crossing)), crossing: crossing}
 }
@@ -102,15 +128,32 @@ func Budget(js jetstream.JetStream, crossing time.Duration) *Sends {
 // Next is the context the write's next send waits in, derived from ctx, the
 // write's caller's: ctx itself where it carries a deadline, and where it does
 // not, ctx held to the budget so far — [WriteBound] from the budget's start
-// for the first send, and one more crossing for every send after it.
+// for the first send, one more crossing for each send after it up to
+// [WriteSends] sends, and the budget as it stands for every send past those.
 func (s *Sends) Next(ctx context.Context) (context.Context, context.CancelFunc) {
 	if _, set := ctx.Deadline(); set {
 		return ctx, func() {}
 	}
-	if s.sent {
+	if s.given > 0 && s.given < WriteSends {
 		s.deadline = s.deadline.Add(s.crossing)
 	}
-	s.sent = true
+	s.given = min(s.given+1, WriteSends)
+	return context.WithDeadline(ctx, s.deadline)
+}
+
+// Whole is the context a call that may make EVERY send of the write itself
+// waits in — the client's own call, which re-sends a write nobody heard
+// inside the one context it is handed where no option turns that off (a KV
+// write's): ctx itself where it carries a deadline, and where it does not, ctx
+// held to the budget's whole bound, the request term and [WriteSends]
+// crossings from its start. Every send the budget will give a crossing is
+// given it here, so a send after it moves nothing.
+func (s *Sends) Whole(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, set := ctx.Deadline(); set {
+		return ctx, func() {}
+	}
+	s.deadline = s.deadline.Add(time.Duration(WriteSends-max(s.given, 1)) * s.crossing)
+	s.given = WriteSends
 	return context.WithDeadline(ctx, s.deadline)
 }
 

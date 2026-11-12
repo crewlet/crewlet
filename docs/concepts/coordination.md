@@ -400,10 +400,10 @@ over that record had no winner, and a budget charge spent all sixteen of its
 compare-and-set rounds on refusals no other writer had caused and reported the
 store unavailable. So every conditional write waits it out — a millisecond,
 doubling to 64 ms, within the write's own deadline or, where it has none, the
-budget below, each attempt given its bytes' crossing again — until the leader
-answers with something it decided. A write still undecided when that runs out
-is **unknown**, never a race somebody else won. A single node has no proposal
-in flight and never gives the third answer.
+budget below, which is fixed when the write starts and which no attempt moves
+— until the leader answers with something it decided. A write still undecided
+when that runs out is **unknown**, never a race somebody else won. A single
+node has no proposal in flight and never gives the third answer.
 
 A write **across a link waits as long as its bytes take to cross it.** A node
 without the `data` role reaches the coordination store across its leaf link,
@@ -416,8 +416,10 @@ unavailable while its bytes were still on the link: an MCP listing of up to
 floor. So a write whose caller set no deadline waits five seconds and, across
 a link, the time its key, value and headers take at the floor for every send
 the client may make of it — the client sends a write nobody heard again,
-twice at most, inside the one wait it was given; on a member's own connection
-it waits the five seconds alone. A caller's own deadline is kept. Each node
+twice at most, inside the one wait it was given — and an attempt after an
+in-flight answer waits within that same bound, never a bound of its own, so a
+write the leader keeps answering in flight ends unknown at it; on a member's
+own connection it waits the five seconds alone. A caller's own deadline is kept. Each node
 states how its connection reaches the store when it opens it, from its
 broker's kind, since the store cannot see how the connection was made. A
 node's MCP listings are written on a pass of their own beside its fifteen-second

@@ -144,44 +144,49 @@ func TestAWriteKeepsItsCallersDeadline(t *testing.T) {
 	})
 }
 
-// EVERY SEND OF A WRITE IS GIVEN ITS OWN CROSSING, and a pause between two is
-// held to the budget as it stands.
+// EVERY SEND OF A WRITE IS GIVEN ITS OWN CROSSING, UP TO THE SENDS A WRITE MAY
+// MAKE, so the budget's end is fixed when it starts; and a pause between two
+// sends is held to the budget as it stands.
 //
 // A write is sent again where its answer decided nothing — nobody heard it,
 // or a leader refused a compare-and-set while another write to the subject
 // was in flight — and every send carries the whole message across the link
 // again. So where its caller set no deadline the first send is given the
-// request term and its crossing, and each later one a crossing more: a budget
-// counted once for the call left a large record's second send the request
-// term alone, which reads as no answer while the link is still carrying it. A
-// pause that would outlast the budget ends at the budget's end, with the
-// deadline's error; one inside it ends when it was asked to. Exact, in a
-// bubble.
+// request term and its crossing, and each later one a crossing more, up to
+// WriteSends sends; a send past those is given the budget as it stands, so a
+// write met by an in-flight answer on every attempt ends at the request term
+// and WriteSends crossings however many attempts it makes. A pause that would
+// outlast the budget ends at its end, with the deadline's error; one inside
+// it ends when it was asked to. Exact, in a bubble.
 //
 // Mutation: give every send the first send's budget, and the second and third
-// sends are short of their crossing; let a pause run past the budget as it
-// stands, and the pause past it is waited out whole.
-func TestEverySendOfAWriteIsGivenItsOwnCrossing(t *testing.T) {
+// sends are short of their crossing; let every send after the first add its
+// crossing, with no end, and the fourth is a crossing past the bound; let a
+// pause run past the budget as it stands, and the pause past it is waited out
+// whole.
+func TestEverySendOfAWriteIsGivenItsOwnCrossingUpToTheSendsAWriteMayMake(t *testing.T) {
 	t.Parallel()
 	js := clients(t)["embedded"]
 	crossing := jsapi.Sending(1<<20, objstore.MiBPace)
+	bound := jsapi.RequestTerm + jsapi.WriteSends*crossing
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		sends := jsapi.Budget(js, crossing)
-		for i := range 3 {
-			want := jsapi.RequestTerm + time.Duration(i+1)*crossing
+		for i := range jsapi.WriteSends + 2 {
+			given := min(i+1, jsapi.WriteSends)
+			want := jsapi.RequestTerm + time.Duration(given)*crossing
 			send, done := sends.Next(t.Context())
 			deadline, set := send.Deadline()
 			done()
 			if !set || deadline.Sub(start) != want {
 				t.Fatalf("send %d waits until %v from the budget's start (set %t), want the "+
-					"request term and %d crossings, %v", i+1, deadline.Sub(start), set, i+1, want)
+					"request term and %d crossings, %v", i+1, deadline.Sub(start), set, given, want)
 			}
 		}
-		// THE BUDGET AS IT STANDS: the request term and three crossings,
-		// none of it spent yet. A pause inside it ends when asked to.
+		// THE BUDGET AS IT STANDS: its bound, none of it spent yet. A pause
+		// inside it ends when asked to.
 		if err := sends.Pause(t.Context(), crossing); err != nil {
-			t.Fatalf("a pause of one crossing inside a budget of three = %v, want it waited out", err)
+			t.Fatalf("a pause of one crossing inside the budget = %v, want it waited out", err)
 		}
 		if waited := time.Since(start); waited != crossing {
 			t.Errorf("a pause of %v ended %v after the budget's start", crossing, waited)
@@ -191,9 +196,69 @@ func TestEverySendOfAWriteIsGivenItsOwnCrossing(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("a pause past the budget = %v, want the budget's deadline", err)
 		}
-		if ended, want := time.Since(start), jsapi.RequestTerm+3*crossing; ended != want {
-			t.Errorf("a pause past the budget ended %v after its start, want at its end, %v",
-				ended, want)
+		if ended := time.Since(start); ended != bound {
+			t.Errorf("a pause past the budget ended %v after its start, want at its bound, %v",
+				ended, bound)
+		}
+	})
+}
+
+// A CALL THAT MAKES EVERY SEND ITSELF WAITS THE BUDGET'S WHOLE BOUND, and
+// nothing after it moves the bound.
+//
+// The client re-sends a write nobody heard inside the one context it is
+// handed, and a KV write's re-sends cannot be turned off, so each call of it
+// is given every crossing the budget gives, at once: the request term and
+// WriteSends crossings from the budget's start, whatever was sent before it.
+// A second call — an attempt after an in-flight answer — waits the same bound,
+// and so does a send after it. A caller's own deadline is kept. Exact, in a
+// bubble.
+//
+// Mutation: give a call the first send's budget, and a write its client sends
+// again inside one context runs out short of its crossings; add the whole
+// bound for every call, and the second call's is past it.
+func TestACallThatMakesEverySendItselfWaitsTheBudgetsWholeBound(t *testing.T) {
+	t.Parallel()
+	js := clients(t)["embedded"]
+	crossing := jsapi.Sending(8<<20, objstore.MiBPace)
+	bound := jsapi.RequestTerm + jsapi.WriteSends*crossing
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		waits := func(ctx context.Context, done context.CancelFunc) time.Duration {
+			defer done()
+			deadline, set := ctx.Deadline()
+			if !set {
+				return -1
+			}
+			return deadline.Sub(start)
+		}
+		sends := jsapi.Budget(js, crossing)
+		for i, got := range []time.Duration{
+			waits(sends.Whole(t.Context())),
+			waits(sends.Whole(t.Context())),
+			waits(sends.Next(t.Context())),
+		} {
+			if got != bound {
+				t.Errorf("call %d of a budget waits until %v from its start, want its whole bound, %v",
+					i+1, got, bound)
+			}
+		}
+		// AFTER A SEND OF ITS OWN: the first send has its one crossing, and a
+		// call after it the bound, never the bound and the crossing spent.
+		sent := jsapi.Budget(js, crossing)
+		if got := waits(sent.Next(t.Context())); got != jsapi.RequestTerm+crossing {
+			t.Errorf("a budget's first send waits until %v from its start, want the request "+
+				"term and one crossing", got)
+		}
+		if got := waits(sent.Whole(t.Context())); got != bound {
+			t.Errorf("a call after a send waits until %v from the budget's start, want its "+
+				"whole bound, %v", got, bound)
+		}
+		caller, stop := context.WithTimeout(t.Context(), time.Second)
+		defer stop()
+		if got := waits(jsapi.Budget(js, crossing).Whole(caller)); got != time.Second {
+			t.Errorf("a call whose caller set a second waits until %v from now, want the "+
+				"caller's second", got)
 		}
 	})
 }

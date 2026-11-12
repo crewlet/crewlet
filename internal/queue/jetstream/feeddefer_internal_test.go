@@ -106,8 +106,7 @@ func TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention(t *test
 // window below the slowest keep, and it goes red.
 func TestTheDeadLettersCollapseASecondKeepForAsLongAsAKeepCanTake(t *testing.T) {
 	t.Parallel()
-	slowest := jsapi.RequestTerm +
-		time.Duration(1+jetstream.DefaultPubRetryAttempts)*jsapi.Sending(queue.MaxPayloadBytes, objstore.MiBPace)
+	slowest := jsapi.RequestTerm + jsapi.WriteSends*jsapi.Sending(queue.MaxPayloadBytes, objstore.MiBPace)
 	if queue.DeadLetterWindow < slowest {
 		t.Errorf("the dead letters collapse a second keep for %v, and the slowest keep waits %v: "+
 			"a copy still crossing past the window is a second entry", queue.DeadLetterWindow, slowest)

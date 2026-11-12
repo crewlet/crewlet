@@ -193,3 +193,52 @@ func TestAnAttemptAfterAnInFlightAnswerIsGivenItsOwnCrossing(t *testing.T) {
 		}
 	})
 }
+
+// A PUBLISH MET BY IN-FLIGHT ANSWERS FOR EVER ENDS UNDECIDED AT ITS BOUND, AND
+// NEVER LATER.
+//
+// Its budget gives a crossing to each of the sends a write may make and no
+// more, fixed when the publish starts. A leader that goes on answering in
+// flight — a backlog under load, a proposal it cannot commit — answers at
+// once on a link faster than the floor, so an attempt costs milliseconds;
+// counted per attempt with no end, each attempt gained a whole crossing and
+// the publish ran ahead of the clock and never ended undecided, where held to
+// the request term it had ended at five seconds. Here every send is answered
+// in flight at once, as production's publishes make them, each send in the
+// context the budget gives it: the publish ends Undecided exactly at the
+// request term and its three crossings, and no attempt is sent past them.
+// Exact, in a bubble.
+//
+// Mutation: let every send after the first add its crossing with no end, and
+// an attempt is sent past the bound.
+func TestAPublishMetByInFlightAnswersForeverEndsUndecidedAtItsBound(t *testing.T) {
+	t.Parallel()
+	const crossing = 4 * time.Minute
+	inFlight := refusal(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
+	errPast := errors.New("an attempt was sent past the publish's bound")
+	synctest.Test(t, func(t *testing.T) {
+		bound := jsapi.RequestTerm + jsapi.WriteSends*crossing
+		start := time.Now()
+		sends := budget(t, crossing)
+		attempts := 0
+		publish := func(ctx context.Context) error {
+			send, done := sends.Next(ctx)
+			defer done()
+			attempts++
+			if deadline, _ := send.Deadline(); deadline.Sub(start) > bound {
+				return errPast
+			}
+			return inFlight
+		}
+		err := jsinflight.Decide(t.Context(), sends, publish)
+		var undecided *jsinflight.Undecided
+		if !errors.As(err, &undecided) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Decide = %v after %v and %d attempts, want Undecided at the publish's "+
+				"bound, %v", err, time.Since(start), attempts, bound)
+		}
+		if ended := time.Since(start); ended != bound {
+			t.Errorf("a publish met by in-flight answers for ever ended %v after it started, "+
+				"want its bound, %v", ended, bound)
+		}
+	})
+}

@@ -112,8 +112,10 @@ func (a API) String() string {
 // request until it was hedged keeps it as its bound, and is asked at none, two
 // and four seconds inside it ([Leader], [jsprovision.ReadBoundedWith]); a
 // compare-and-set to a coordination bucket waits out a leader's in-flight
-// answer inside it (internal/jsinflight's Decide); and a boot's steps and a
-// duty's tick count each call whose caller set no deadline at it. Inherited, a
+// answer inside it — and across a link inside it and the crossings of the
+// sends a write may make ([WriteSends]) — (internal/jsinflight's Decide); and
+// a boot's steps and a duty's tick count each call whose caller set no
+// deadline at it. Inherited, a
 // library release that moved its default would move every one of those unseen.
 //
 // What it is sized by:
@@ -136,8 +138,8 @@ func (a API) String() string {
 //     again where the new leader answers it.
 //
 // A WRITE ACROSS A LINK IS GIVEN MORE, the time its bytes take to cross it
-// every time it is sent ([WriteBound], [Budget]); a request on a member's own
-// connection crosses nothing.
+// every time it is sent, up to [WriteSends] sends ([WriteBound], [Budget]); a
+// request on a member's own connection crosses nothing.
 const RequestTerm = 5 * time.Second
 
 // Client is a JetStream client over nc that speaks this API, its every
