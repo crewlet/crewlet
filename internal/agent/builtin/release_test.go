@@ -38,7 +38,8 @@ type mergeAsked struct {
 
 // fakePulls is the company's GitHub as the release requests read it: one
 // repository, acme/web, its pull requests' facts by number, which commits
-// hold which, the deploy's checks, and every merge it was asked for.
+// hold which, the deploy's checks, how each check run named in a rule stands,
+// and every merge it was asked for.
 type fakePulls struct {
 	mu        sync.Mutex
 	facts     map[int]builtin.PullFacts
@@ -46,8 +47,26 @@ type fakePulls struct {
 	contains  map[[2]string]bool
 	offBranch bool
 	checks    []builtin.CheckFact
-	merged    []mergeAsked
-	mergeErr  error
+	// runs are the results of the checks a rule declares, by name; one not
+	// here reads missing.
+	runs     map[string]string
+	merged   []mergeAsked
+	mergeErr error
+}
+
+// withDeclared is required with every check declared for acme/web's branch
+// added as GitHub's wiring judges it, from p's runs.
+func (p *fakePulls) withDeclared(required []builtin.CheckFact, branch string,
+	declared []delegated.RequiredChecks) []builtin.CheckFact {
+	out := slices.Clone(required)
+	for _, name := range delegated.DeclaredFor(declared, "acme/web", branch) {
+		result := p.runs[name]
+		if result == "" {
+			result = builtin.CheckMissing
+		}
+		out = append(out, builtin.CheckFact{Name: name, Result: result, Declared: true})
+	}
+	return out
 }
 
 func (p *fakePulls) Ref(address string) (builtin.PullRef, bool) {
@@ -63,11 +82,14 @@ func (p *fakePulls) Repo(address string) (builtin.PullRef, bool) {
 	return builtin.PullRef{Owner: "acme", Repo: "web"}, address == "https://github.com/acme/web"
 }
 
-func (p *fakePulls) Facts(_ context.Context, _ string, ref builtin.PullRef) (builtin.PullFacts, error) {
+func (p *fakePulls) Facts(_ context.Context, _ string, ref builtin.PullRef,
+	declared []delegated.RequiredChecks) (builtin.PullFacts, error) {
 	if p.factsErr != nil {
 		return builtin.PullFacts{}, p.factsErr
 	}
-	return p.facts[ref.Number], nil
+	f := p.facts[ref.Number]
+	f.Required = p.withDeclared(f.Required, f.Base, declared)
+	return f, nil
 }
 
 func (p *fakePulls) Contains(_ context.Context, _ string, _ builtin.PullRef, commit, ancestor string) (bool, error) {
@@ -78,9 +100,9 @@ func (p *fakePulls) OnBranch(context.Context, string, builtin.PullRef, string, s
 	return !p.offBranch, nil
 }
 
-func (p *fakePulls) Checks(context.Context, string, builtin.PullRef, string, string) ([]builtin.CheckFact, bool,
-	error) {
-	return p.checks, true, nil
+func (p *fakePulls) Checks(_ context.Context, _ string, _ builtin.PullRef, branch, _ string,
+	declared []delegated.RequiredChecks) ([]builtin.CheckFact, bool, error) {
+	return p.withDeclared(p.checks, branch, declared), true, nil
 }
 
 func (p *fakePulls) Merge(_ context.Context, seat string, ref builtin.PullRef, head, method string) (string, error) {
@@ -212,7 +234,7 @@ func TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition(t *testing.T) {
 			f.Paths = append(f.Paths, ".github/workflows/ci.yml")
 		}, delegated.PathCIPipelines},
 		{"a path the rule adds", func(f *builtin.PullFacts, _ *fakePulls, d *fakeDesk) {
-			f.Paths, d.rulePaths = append(f.Paths, "billing/rates.go"), []string{"billing/**"}
+			f.Paths, d.release.EscalatePaths = append(f.Paths, "billing/rates.go"), []string{"billing/**"}
 		}, delegated.PathRule},
 		{"more paths than GitHub lists", func(f *builtin.PullFacts, _ *fakePulls, _ *fakeDesk) {
 			f.PathsComplete = false
@@ -234,6 +256,66 @@ func TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition(t *testing.T) {
 		case c.unmet != "" && !putToPeople(desk, c.unmet):
 			t.Errorf("%s: answered %q, carried out %+v and escalated %+v, want it put to people for %s",
 				c.name, res.Output, desk.answers, desk.escalated, c.unmet)
+		}
+	}
+}
+
+// A merge or deploy on a branch GitHub requires no check of, a private
+// repository on a free plan, stands on the checks its rule declares for that
+// repository and branch: every one passed on the commit decided, or it goes
+// to people, saying which and that the rule declared it. A rule declaring
+// none for the branch leaves it requiring nothing, which still goes to people.
+//
+// Mutation: drop the rule's checks from the GitHub reads, and every such
+// merge and deploy goes to people as requiring nothing; judge them as passed
+// without reading them, and a check CI never ran lets a delegate merge.
+func TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares(t *testing.T) {
+	t.Parallel()
+	_, o, _ := sshFixture(t)
+	main := []delegated.RequiredChecks{{Repo: "Acme/Web", Branch: "main", Checks: []string{"test", "lint"}}}
+	for _, c := range []struct {
+		name     string
+		declared []delegated.RequiredChecks
+		runs     map[string]string
+		unmet    string
+	}{
+		{"every declared check passed", main,
+			map[string]string{"test": builtin.CheckPassed, "lint": builtin.CheckPassed}, ""},
+		{"a declared check missing", main, map[string]string{"test": builtin.CheckPassed}, delegated.UnmetChecks},
+		{"a declared check skipped", main,
+			map[string]string{"test": builtin.CheckPassed, "lint": "inconclusive"}, delegated.UnmetChecks},
+		{"checks declared for another branch", []delegated.RequiredChecks{{Repo: "acme/web", Branch: "release",
+			Checks: []string{"test"}}}, map[string]string{"test": builtin.CheckPassed}, delegated.UnmetNoChecks},
+		{"no check declared", nil, nil, delegated.UnmetNoChecks},
+	} {
+		for _, kind := range []delegated.Kind{delegated.KindPRMerge, delegated.KindDeploy} {
+			name := c.name + " (" + string(kind) + ")"
+			facts := readyPull()
+			facts.Required = nil
+			pulls := &fakePulls{runs: c.runs, facts: map[int]builtin.PullFacts{42: facts,
+				41: mergedPull(mergeOf41)}}
+			tool, args := builtin.AskToMergeTool, pullMergeArgs(pullHead)
+			if kind == delegated.KindDeploy {
+				pulls.facts[42] = mergedPull(mergeOf42)
+				pulls.contains = map[[2]string]bool{{deployCommit, mergeOf41}: true, {deployCommit, mergeOf42}: true}
+				tool, args = builtin.AskToDeployTool, deployArgs()
+			}
+			desk := releaseDesk(t, tool, kind, args, "dev")
+			desk.release.RequiredChecks = c.declared
+			res := reviewOver(t, builtin.Deps{Pulls: pulls}, desk, sshTurn(o, "dev", "", nil),
+				verdict(desk, delegated.Allow, delegated.High))
+			switch {
+			case c.unmet == "" && (len(desk.answers) != 1 || desk.answers[0].choice != sandbox.HeldOnce):
+				t.Errorf("%s: answered %q and escalated %+v, want it allowed", name, res.Output, desk.escalated)
+			case c.unmet != "" && !putToPeople(desk, c.unmet):
+				t.Errorf("%s: answered %q, carried out %+v and escalated %+v, want it put to people for %s",
+					name, res.Output, desk.answers, desk.escalated, c.unmet)
+			case c.unmet == delegated.UnmetChecks:
+				if said := strings.Join(desk.escalated[0].Engine, " "); !strings.Contains(said, "lint (") ||
+					!strings.Contains(said, "declared by the rule") {
+					t.Errorf("%s: escalated saying %q, want lint named as declared by the rule", name, said)
+				}
+			}
 		}
 	}
 }

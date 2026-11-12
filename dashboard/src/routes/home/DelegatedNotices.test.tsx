@@ -63,6 +63,7 @@ const ANSWER: DelegatedDecisionsAnswer = {
   day: "2026-11-09",
   since: "2026-11-09T00:00:00Z",
   until: "2026-11-10T00:00:00Z",
+  complete: true,
   decided: [row("2026-11-09T10:00:00Z"), row("2026-11-09T11:00:00Z")],
   decided_more: false,
   spot_checks: [],
@@ -73,6 +74,8 @@ const ANSWER: DelegatedDecisionsAnswer = {
 
 const READER = { owner: "ops-lead", loading: false };
 
+// THE DIGEST LINKS TO ITS OWN DAY: the Settings view opens on today, so far,
+// and a digest of yesterday that landed there would show another list.
 test("the digest and the flagged denials each link to the Settings view", () => {
   read.data = ANSWER;
   render(<DelegatedNotices viewer={READER} />);
@@ -81,7 +84,7 @@ test("the digest and the flagged denials each link to the Settings view", () => 
   const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
   expect(links).toEqual([
     "#/settings/delegated-decisions?verdict=deny",
-    "#/settings/delegated-decisions",
+    "#/settings/delegated-decisions?day=2026-11-09",
   ]);
 });
 

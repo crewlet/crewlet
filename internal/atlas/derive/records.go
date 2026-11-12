@@ -25,6 +25,16 @@ type Records struct {
 	ToolCalls    []ToolUse
 	ModelCalls   []ModelUse
 	Pushes       []RepoPush
+	Alarms       []Alarm
+}
+
+// Alarm is one standing engine alarm about one model entry or one tool
+// server: its kind, which entry it is about, and since when.
+type Alarm struct {
+	Kind  string
+	About atlas.Kind
+	Key   string
+	Since time.Time
 }
 
 // IntegrationStatus is one integration's standing as its reconcile pass left
@@ -222,6 +232,20 @@ func (s Settings) Records(r Records, at time.Time) (Derived, atlas.Joined) {
 	for _, t := range r.ServerTests {
 		if ref := host(t.Host); ref.Key != "" && !t.OK {
 			signal(ref, atlas.SignalServerTestFailed, atlas.SeverityDanger, atlas.AudienceAdmins, t.At)
+		}
+	}
+
+	for _, a := range r.Alarms {
+		var ref atlas.Ref
+		switch a.About {
+		case atlas.KindModel:
+			ref = model(a.Key)
+		case atlas.KindToolServer:
+			ref = toolServer(a.Key)
+		}
+		if ref.Key != "" {
+			j.Signals[ref] = append(j.Signals[ref], atlas.Signal{Kind: atlas.SignalStandingAlarm,
+				Severity: atlas.SeverityDanger, Audience: atlas.AudienceHolders, Since: a.Since, Alarm: a.Kind})
 		}
 	}
 

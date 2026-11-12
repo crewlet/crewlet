@@ -357,6 +357,12 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_data_state":   "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_usage":   "decided_by:" + string(authz.ActionArtifactUsage),
 
+		// THE ATLAS: its app, and the answer reads as the asker (ADR-0127).
+		"atlas_entries": string(iam.GrantAtlas),
+		"atlas_map":     string(iam.GrantAtlas),
+		"atlas_entry":   string(iam.GrantAtlas),
+		"atlas_trace":   string(iam.GrantAtlas),
+		"atlas_facets":  string(iam.GrantAtlas),
 		// GITLET'S ROWS, each asked behind the gitlet app (ADR-0110) and
 		// decided per repository by the grant the serving node derives from
 		// its chart (gitlet.GrantOf, ADR-0088): a listing leaves out what the

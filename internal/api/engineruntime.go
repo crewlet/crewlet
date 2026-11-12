@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -191,6 +192,15 @@ func (r engineRuntime) SeatPauses() queries.SeatPauseLister {
 type delegatedRuntime interface {
 	DelegatedReads() queries.DelegatedReads
 }
+
+// atlasRuntime is a runtime that reads the company's atlas: the settings it
+// runs and the engine's records.
+type atlasRuntime interface {
+	AtlasReads() builtin.AtlasDeps
+}
+
+// AtlasReads is the engine's atlas reads, the same the atlas tools read.
+func (r engineRuntime) AtlasReads() builtin.AtlasDeps { return engine.AtlasToolDeps(r.engine) }
 
 // DelegatedReads is the engine's access log, as the delegated-decisions read
 // takes it.

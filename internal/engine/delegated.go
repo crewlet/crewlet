@@ -89,17 +89,18 @@ func (d delegatedDesk) SSHPatterns() []string {
 	return nil
 }
 
-// RulePaths are the always-escalate path globs the rule naming kind adds.
-func (d delegatedDesk) RulePaths(kind delegated.Kind) []string {
+// Release is what the rule naming kind adds to a merge's or a deploy's
+// conditions.
+func (d delegatedDesk) Release(kind delegated.Kind) delegated.Release {
 	c := d.engine.Company()
 	if c == nil || c.Config == nil {
-		return nil
+		return delegated.Release{}
 	}
 	rule, _, ok := c.Config.DelegatedDecisions.RuleFor(kind)
 	if !ok {
-		return nil
+		return delegated.Release{}
 	}
-	return slices.Clone(rule.AlwaysEscalatePaths)
+	return rule.Release()
 }
 
 func (d delegatedDesk) Held(ctx context.Context, id string) (sandbox.PendingRun, bool, error) {

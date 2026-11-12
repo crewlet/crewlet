@@ -2223,8 +2223,11 @@ const (
 	// first press, a decision written in part said as such and a work list
 	// starting again from its first page when the engine refuses its cursor,
 	// merged on top of it, took it to 5743.0 KiB (5,880,861 bytes, +1,480, all
-	// script): 5744 KiB.
-	treeBudget = 5<<20 + 624<<10
+	// script): 5744 KiB. Atlas named among the apps People grants, and each
+	// delegated rule's required checks with Settings › Delegated decisions
+	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
+	// all script): 5745 KiB.
+	treeBudget = 5<<20 + 625<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

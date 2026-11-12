@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -41,12 +42,39 @@ type AtlasSettings struct {
 	Deployment derive.Deployment
 }
 
-// AtlasDeps are what the atlas tools read the atlas through. The zero value
-// serves none of them.
+// AtlasDeps are what the atlas tools and questions read the atlas through.
+// The zero value serves none of them.
 type AtlasDeps struct {
 	// Settings is the company settings this node runs, read per call, and
 	// false where it runs none yet. Nil omits every atlas tool.
 	Settings func(ctx context.Context) (AtlasSettings, bool)
+	// Records is every record source of the engine's this node reaches, read
+	// per call, Gitlet aside: each caller adds Gitlet as itself. A source this
+	// node does not reach is nil, which the read reports as unread.
+	Records func(ctx context.Context) gather.Sources
+}
+
+// AtlasRead is one read of the atlas for one caller: Gitlet read as asker
+// where reads is set, every record this node reaches, and the settings it
+// runs. False where it runs no company yet.
+func (d AtlasDeps) AtlasRead(ctx context.Context, reads gather.GitletReads, asker gitlet.Principal,
+	fresh statelog.Freshness, now time.Time) (gather.Answer, bool) {
+	if d.Settings == nil {
+		return gather.Answer{}, false
+	}
+	settings, running := d.Settings(ctx)
+	if !running {
+		return gather.Answer{}, false
+	}
+	var sources gather.Sources
+	if d.Records != nil {
+		sources = d.Records(ctx)
+	}
+	sources.Gitlet = reads
+	return gather.Read(ctx, sources, gather.Request{
+		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
+		Asker: asker, Fresh: fresh, Now: now,
+	}), true
 }
 
 // atlasSearch is atlas_search: the atlas as its caller may read it. Gitlet is

@@ -60,6 +60,13 @@ import type {
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
+import type {
+  AtlasEntriesAnswer,
+  AtlasEntryAnswer,
+  AtlasFacetsAnswer,
+  AtlasMapAnswer,
+  AtlasTraceAnswer,
+} from "../contract/atlas.ts";
 import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
@@ -7939,6 +7946,14 @@ export interface QueryMap {
   /** The rules delegates decide by, and what they decided: an administrator's
    *  and the people a rule escalates to (ADR-0125). */
   delegated_decisions: DelegatedDecisionsAnswer;
+  /** The company's atlas (ADR-0126), each read as its asker on the atlas
+   *  app: a page of its entries, the map, one entry, a trace from one, and
+   *  the counts a filter menu offers. */
+  atlas_entries: AtlasEntriesAnswer;
+  atlas_map: AtlasMapAnswer;
+  atlas_entry: AtlasEntryAnswer;
+  atlas_trace: AtlasTraceAnswer;
+  atlas_facets: AtlasFacetsAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;

@@ -90,6 +90,11 @@ func (f fakeAccess) HostUse(context.Context, time.Time, time.Time, statelog.Fres
 	return f.use, f.err
 }
 
+type fakeAlarms []statelog.Alarm
+
+func (f fakeAlarms) LatestAlarms() []statelog.Alarm { return f }
+func (f fakeAlarms) AlarmsEvaluated() bool          { return true }
+
 type fakeUsage struct {
 	spend []usage.SpendRow
 	calls map[string][]usage.ServerToolCallsRow
@@ -167,6 +172,12 @@ func records(t *testing.T, c *config.Company) gather.Sources {
 		AccessLog: fakeAccess{use: []accessdomain.HostUse{
 			{Host: "web-1", Handle: "sre", Week: 4, Month: 9, Last: now.Add(-3 * time.Hour)},
 		}},
+		Alarms: fakeAlarms{
+			{Kind: statelog.KindMCPOAuthExpiring, Entries: []statelog.AlarmEntry{{Key: "tickets", Since: failed,
+				Detail: "atlas-alarm-canary"}}},
+			{Kind: statelog.KindLLMLimit, Entries: []statelog.AlarmEntry{{Key: "a-model-nobody-declares"}}},
+			{Kind: statelog.KindCodeRefsNearLimit, Entries: []statelog.AlarmEntry{{Key: "tickets"}}},
+		},
 		Usage: fakeUsage{
 			spend: []usage.SpendRow{{Day: "2026-11-10", Handle: "sre", Tokens: usage.Tokens{ProviderKey: "main", Calls: 7}}},
 			calls: map[string][]usage.ServerToolCallsRow{"tickets": {{Tool: "search", Handle: "sre", Calls: 5,
@@ -231,8 +242,9 @@ func TestRecordsJoinTheEntryTheyAreAbout(t *testing.T) {
 			t.Errorf("the tickets server's %s is %q, want %q", f, got, want)
 		}
 	}
-	if got := signalsOf(tickets); !slices.Equal(got, []atlas.SignalKind{atlas.SignalSignInExpiring}) {
-		t.Errorf("a sign-in lapsing in three days: %v", got)
+	if got := signalsOf(tickets); !slices.Equal(got, []atlas.SignalKind{atlas.SignalSignInExpiring,
+		atlas.SignalStandingAlarm}) || tickets.Signals[1].Alarm != string(statelog.KindMCPOAuthExpiring) {
+		t.Errorf("a sign-in lapsing in three days and its standing alarm, and no alarm about something else: %v", got)
 	}
 	if len(tickets.Use) != 1 || tickets.Use[0].Month != 5 || tickets.NotUsedRecently {
 		t.Errorf("the tickets server's use: %+v, quiet %v", tickets.Use, tickets.NotUsedRecently)
@@ -278,7 +290,7 @@ func TestAnEmailAddressInARecordIsNeverRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, leak := range []string{"@acme.example", "atlas-instructions-canary", "atlas-description-canary",
-		"atlas-error-canary", "atlas-said-canary"} {
+		"atlas-error-canary", "atlas-said-canary", "atlas-alarm-canary"} {
 		if strings.Contains(string(out), leak) {
 			t.Errorf("%q reached the atlas", leak)
 		}
