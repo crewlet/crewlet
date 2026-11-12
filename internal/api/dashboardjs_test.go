@@ -2231,7 +2231,13 @@ const (
 	// told again after a step that never handed it over, and an end this
 	// bundle does not know said as that, never as expired), merged on top of
 	// it, took it to 5745.5 KiB (5,883,359 bytes, +1,345, all script): 5746 KiB.
-	treeBudget = 5<<20 + 626<<10
+	// The atlas and dead-wait train (agents read the atlas, people correct it,
+	// and dead pull request waits are handed back) took main's to 5744.9 KiB
+	// (5,882,829 bytes, +815: script +711, the sheets +104), inside its 5745
+	// KiB. Merged again with it, main's +815 bytes came to 815 bytes on the
+	// merged tree, taking it from 5745.5 KiB (5,883,359 bytes) to 5746.3 KiB
+	// (5,884,174 bytes), 270 bytes past 5746 KiB: 5747 KiB.
+	treeBudget = 5<<20 + 627<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

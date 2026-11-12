@@ -64,6 +64,9 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		return res
 	}
 
+	// THE ATLAS'S, each over a log that holds what it changes.
+	maps.Copy(out, atlasLandedAnswers(t))
+
 	// THE TRACKER'S AND THE KNOWLEDGE BASE'S, through the fakes every
 	// other walk over the writes uses.
 	w := newLedgerFake(statelog.OutcomeApplied)

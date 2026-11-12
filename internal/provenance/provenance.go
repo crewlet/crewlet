@@ -186,6 +186,12 @@ const (
 	// what a box, a tool or a person wrote. A reader auditing a transcript
 	// has to tell an earlier turn's account from anything this turn read.
 	SourceTurnEnding Source = "turn_ending"
+
+	// SourceAtlas is entries of the company's atlas as a turn's prompt names
+	// them: names and values the settings, the engine's records, people,
+	// agents and vendors' listings gave, each read at the trust its writers
+	// earn.
+	SourceAtlas Source = "atlas"
 )
 
 // Sources are every surface.
@@ -197,7 +203,7 @@ var Sources = []Source{
 	SourcePageContext, SourceDeepWork,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
-	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest,
+	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest, SourceAtlas,
 }
 
 // Valid reports whether s is one of [Sources].

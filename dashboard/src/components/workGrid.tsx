@@ -93,8 +93,9 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
     phoneLead: true,
     // THE WHOLE TITLE ON HOVER: the span below cuts it where the kit cannot measure.
     title: (row) => row.title,
+    // ONE BOX FOR THE TITLE AND ITS BADGE, which wraps on a phone's card.
     cell: (row) => (
-      <>
+      <span className="work-title">
         <span className="truncate">{row.title}</span>
         {/* WHICH TASK HOLDS THIS ONE UP, not merely that something does: the
             first of them, because a row is one line and a task waiting on four
@@ -104,7 +105,7 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
             {blockedBy(row, keyOf)}
           </Tag>
         )}
-      </>
+      </span>
     ),
   };
   const due: Column = {
