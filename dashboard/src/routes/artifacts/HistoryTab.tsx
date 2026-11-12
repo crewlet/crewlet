@@ -37,7 +37,7 @@ import { fmtBytes, openSentence, plural, relTime, utf8Bytes } from "~/lib/format
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
+import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import { contentIsData } from "~/lib/artifacts/kinds.ts";
 import type {
   ArtifactDetail,

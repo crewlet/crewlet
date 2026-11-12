@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/datasetsapi"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -26,20 +27,39 @@ import (
 // share may name, the viewer embeds a frame by the origin mode the engine
 // minted it in, and the history and the company trail word every op a history
 // row is filed under. Every one of those is a closed set the engine owns, so
-// `contract/artifacts.ts` (and `contract/brand.ts`, for a brand kit's) declares each once and this
-// holds it: a value the engine grew that the
+// the contract declares each once (`contract/artifacts.ts`,
+// `contract/artifactsworkspace.ts`, and `contract/brand.ts` for a brand kit's)
+// and this holds it: a value the engine grew that the
 // dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
 // dashboard keeps that the engine dropped is a choice every write refuses.
 // The ORDER is held too, because the role ladder is an order (each includes
 // the ones before it) and the dashboard draws the others in the engine's.
 // contractFile is the dashboard module a gated name is declared in: a brand
-// kit's rows in `contract/brand.ts`, which only the brand's lazy screens read,
-// every other artifacts row in `contract/artifacts.ts`.
+// kit's rows in `contract/brand.ts`, which only the brand's lazy screens read;
+// what the frame reads ([frameRows]) in `contract/artifacts.ts`, which is in
+// the entry; and every other artifacts row in `contract/artifactsworkspace.ts`,
+// which only the artifacts workspace reads.
 func contractFile(name string) string {
-	if strings.HasPrefix(name, "BRAND_") {
+	switch {
+	case strings.HasPrefix(name, "BRAND_"):
 		return "contract/brand.ts"
+	case frameRows[name]:
+		return "contract/artifacts.ts"
 	}
-	return "contract/artifacts.ts"
+	return "contract/artifactsworkspace.ts"
+}
+
+// frameRows are the artifacts rows `contract/artifacts.ts` declares: the ones
+// the frame reads. `app/lazy.test.tsx` holds that module to exactly what the
+// entry's static graph reads, so a row moved out of it is moved here too.
+var frameRows = map[string]bool{
+	"ARTIFACT_KINDS":                true,
+	"ARTIFACT_CAPABILITIES":         true,
+	"ARTIFACT_ROLES":                true,
+	"SHAREABLE_ROLES":               true,
+	"ARTIFACT_HISTORY_OPS":          true,
+	"ARTIFACT_TRASH_RETENTION_DAYS": true,
+	"ARTIFACT_LIST_MAX":             true,
 }
 
 func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
@@ -132,10 +152,18 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"DOC_TAB_TITLE_MAX_BYTES":        docindex.MaxTitleBytes,
 		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,
 		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
+		"DECK_TITLE_MAX_BYTES":           slideformat.MaxTitleBytes,
+		"DECK_NOTES_MAX_RUNES":           slideformat.MaxNotesRunes,
+		"CANVAS_MIN_SIDE":                canvasformat.MinSide,
+		"CANVAS_MAX_SIDE":                canvasformat.MaxSide,
+		"CANVAS_MAX_NOTES":               canvasformat.MaxNotes,
+		"DESIGN_MAX_BOARDS":              canvasformat.MaxBoards,
+		"BOARD_BRIEF_MAX_BYTES":          canvasformat.MaxBriefBytes,
 		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
 		"ARTIFACT_FOLDER_NAME_MAX_BYTES": artifacts.MaxFolderNameBytes,
 		"ARTIFACT_FOLDER_MAX_DEPTH":      artifacts.MaxFolderDepth,
 		"ARTIFACT_MOVE_MAX_ITEMS":        artifacts.MaxMovesPerCall,
+		"ARTIFACT_LIST_MAX":              artifactsdomain.MaxListLimit,
 		"BRAND_NAME_MAX_BYTES":           brandformat.MaxNameBytes,
 		"BRAND_TAGLINE_MAX_BYTES":        brandformat.MaxTaglineBytes,
 		"BRAND_VOICE_SUMMARY_MAX_BYTES":  brandformat.MaxVoiceSummaryBytes,
@@ -162,6 +190,40 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		if client != engine {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
 				"%s to the engine's figure", name, client, engine, contractFile(name))
+		}
+	}
+}
+
+// THE DASHBOARD NAMES EACH FORMAT'S FILES AS THE ENGINE DOES: the editors read
+// and write a version's files by these names — a design's canvas, a deck's
+// index and slides, a doc's index, a brand kit's entry — the design's editor
+// refuses a canvas of any version but the engine's, and a plan's cover is the
+// layout whose title is the deck's own. A name moved on one side alone is
+// every such artifact opening as unreadable, or a save written beside the file
+// the engine reads.
+func TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	if got, want := slideformat.SlidePath("plan"), slideformat.SlidesDir+"plan.html"; got != want {
+		t.Errorf("a slide's file is %q and lib/artifacts/deck.ts writes it as %q: "+
+			"change slidePath there to the engine's", got, want)
+	}
+	for name, engine := range map[string]string{
+		"CANVAS_PATH":       canvasformat.Path,
+		"CANVAS_VERSION":    strconv.Itoa(canvasformat.Version),
+		"DECK_INDEX_PATH":   slideformat.IndexPath,
+		"DECK_SLIDES_DIR":   slideformat.SlidesDir,
+		"DECK_COVER_LAYOUT": slideformat.LayoutCover,
+		"DOC_INDEX_PATH":    docindex.IndexPath,
+		"BRAND_ENTRY_PATH":  brandformat.EntryPath,
+	} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != engine {
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change it in %s",
+				name, got, engine, contractFile(name))
 		}
 	}
 }
@@ -320,8 +382,8 @@ func TestTheRendererDrawsTheSlideSubset(t *testing.T) {
 			t.Fatal(err)
 		}
 		if client := clientsource.Strings(body); !slices.Equal(client, engine) {
-			t.Errorf("the dashboard's %s is %q and the engine's is %q: change contract/artifacts.ts "+
-				"to the engine's", name, client, engine)
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change "+
+				"contract/artifactsworkspace.ts to the engine's", name, client, engine)
 		}
 	}
 	for name, want := range map[string]int{"SLIDE_STAGE_WIDTH": slideformat.StageWidth,
@@ -360,18 +422,23 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 			t.Fatal(err)
 		}
 		if client := clientsource.Strings(body); !slices.Equal(client, engine) {
-			t.Errorf("the dashboard's %s is %q and the engine's is %q: change contract/artifacts.ts "+
-				"to the engine's", name, client, engine)
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change "+
+				"contract/artifactsworkspace.ts to the engine's", name, client, engine)
 		}
 	}
 	for name, want := range map[string]int{"DASHBOARD_COLUMNS": artifacts.DashboardColumns,
 		"DASHBOARD_MIN_REFRESH_SECONDS": artifacts.MinRefreshSeconds,
 		"DASHBOARD_MAX_WIDGETS":         artifacts.MaxDashboardWidgets,
 		"DASHBOARD_MAX_DATASETS":        artifacts.MaxDashboardDatasets,
-		"DASHBOARD_MAX_TABLE_COLUMNS":   artifacts.MaxTableColumns} {
+		"DASHBOARD_MAX_TABLE_COLUMNS":   artifacts.MaxTableColumns,
+		"DASHBOARD_MAX_SHARE_PARTS":     artifacts.MaxShareParts,
+		"DASHBOARD_FORMAT_VERSION":      dashspec.FormatVersion} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil || got != strconv.Itoa(want) {
 			t.Errorf("%s is %q (%v), want %d", name, got, err, want)
 		}
+	}
+	if got, err := clientsource.Scalar(tree, "DASHBOARD_SPEC_PATH"); err != nil || got != dashspec.EntryPath {
+		t.Errorf("DASHBOARD_SPEC_PATH is %q (%v), want %q", got, err, dashspec.EntryPath)
 	}
 }

@@ -38,7 +38,7 @@
  * engine decides every read again as the signed-in reader.
  */
 
-import { RUNTIME_CONTRACT } from "~/contract/artifacts.ts";
+import { RUNTIME_CONTRACT } from "~/contract/artifactsworkspace.ts";
 import type { LiveSocket } from "~/protocol/index.ts";
 import {
   BRIDGE_MESSAGE,

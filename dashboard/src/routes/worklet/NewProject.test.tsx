@@ -69,15 +69,20 @@ describe("who can own a project", () => {
 });
 
 describe("the key", () => {
-  test("is held to capitals, digits and underscores, twelve at most", () => {
-    expect(cleanKey("de-s 1_x")).toBe("DES1_X");
-    expect(cleanKey("abcdefghijklmnop")).toBe("ABCDEFGHIJKL");
+  // THE ENGINE'S GRAMMAR (`CONTAINER_KEY_PATTERN`): the field took an
+  // underscore and twelve characters, and the write naming such a key was
+  // refused after the dialog had called it fine.
+  test("is held to capitals and digits, as wide as the engine's grammar", () => {
+    expect(cleanKey("de-s 1_x")).toBe("DES1X");
+    expect(cleanKey("abcdefghijklmnop")).toBe("ABCDEFGHIJ");
   });
 
-  test("is suggested from the owner's name", () => {
+  test("is suggested from the owner's name, and always one the engine takes", () => {
     expect(suggestedKey("Design")).toBe("DES");
     expect(suggestedKey("User research")).toBe("USE");
     expect(suggestedKey("")).toBe("PRJ");
+    expect(suggestedKey("Q")).toBe("PRJ");
+    expect(suggestedKey("QA")).toBe("QA");
   });
 
   test("says what is wrong with it, or what its tasks will be called", () => {
@@ -87,10 +92,13 @@ describe("the key", () => {
       ok: false,
       message: "Choose a key, such as DES.",
     });
-    expect(keyVerdict("1DES", owner, free)).toEqual({
-      ok: false,
-      message: "Use capital letters, digits and underscores, starting with a letter.",
-    });
+    for (const bad of ["1DES", "D", "MY_PROJ", "ABCDEFGHIJK"]) {
+      expect(keyVerdict(bad, owner, free), bad).toEqual({
+        ok: false,
+        message: "Use a capital letter, then 1 to 9 capitals or digits.",
+      });
+    }
+    expect(keyVerdict("ABCDEFGHI9", owner, free).ok).toBe(true);
     expect(keyVerdict("ENG", owner, { inDocument: true, inTracker: false }).message).toBe(
       "ENG is already a project.",
     );

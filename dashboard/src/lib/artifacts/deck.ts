@@ -17,14 +17,20 @@
  * PURE: no fetch and no React. The screen hands it decks and source texts.
  */
 
+import {
+  DECK_INDEX_PATH,
+  DECK_NOTES_MAX_RUNES,
+  DECK_SLIDES_DIR,
+  DECK_TITLE_MAX_BYTES,
+} from "~/contract/artifactsworkspace.ts";
+import { overWords, utf8Bytes } from "~/lib/format.ts";
 import type { ArtifactDeck, DeckSlide, SlideNode } from "~/protocol/index.ts";
 import { slideSource, titleOf } from "../slides.tsx";
 import { mergeOrder, placeAfter } from "./orderMerge.ts";
 import type { PublishFile } from "./api.ts";
 
-/** The index's path, and where slide id's file is (`slideformat.IndexPath`, `slideformat.SlidePath`). */
-export const DECK_INDEX = "deck.json";
-export const slidePath = (id: string): string => `slides/${id}.html`;
+/** Where slide id's file is (`slideformat.SlidePath`). */
+export const slidePath = (id: string): string => `${DECK_SLIDES_DIR}${id}.html`;
 
 /** One slide of a draft: what a person may change on it. */
 export interface DraftSlide {
@@ -52,6 +58,24 @@ function draftSlide(s: DeckSlide): DraftSlide {
     hidden: !!s.hidden,
     transition: s.transition ?? "",
   };
+}
+
+/**
+ * Why the engine would refuse to publish `draft`'s words, or null: its title
+ * past [DECK_TITLE_MAX_BYTES] in UTF-8 bytes, or a slide's speaker notes past
+ * [DECK_NOTES_MAX_RUNES] characters, which refuse the whole save. Measured as
+ * the engine measures each, on the text as it is sent.
+ */
+export function deckTextProblem(draft: DeckDraft): string | null {
+  if (utf8Bytes(draft.title) > DECK_TITLE_MAX_BYTES) {
+    return `The deck's title is ${overWords(draft.title, DECK_TITLE_MAX_BYTES)}.`;
+  }
+  const at = draft.order.findIndex(
+    (id) => [...(draft.slides[id]?.notes ?? "")].length > DECK_NOTES_MAX_RUNES,
+  );
+  return at < 0
+    ? null
+    : `Slide ${at + 1}'s speaker notes are past ${DECK_NOTES_MAX_RUNES} characters.`;
 }
 
 /** A fresh draft of a version's deck. */
@@ -241,9 +265,9 @@ export function publishOf(
     if (old !== next) edits.push({ path, old_str: old, new_str: next });
   }
   if (c.index) {
-    const old = sources[DECK_INDEX];
+    const old = sources[DECK_INDEX_PATH];
     if (old === undefined) throw new Error("the deck's index was not read");
-    edits.push({ path: DECK_INDEX, old_str: old, new_str: indexSource(old, base, draft) });
+    edits.push({ path: DECK_INDEX_PATH, old_str: old, new_str: indexSource(old, base, draft) });
   }
   if (c.added.length > 0 && !brought) {
     throw new Error(
@@ -265,7 +289,7 @@ export function publishOf(
 /** The paths whose base source a save of draft must read first. */
 export function sourcesNeeded(base: DeckDraft, draft: DeckDraft): string[] {
   const c = changesOf(base, draft);
-  return [...c.slides.map(slidePath), ...(c.index ? [DECK_INDEX] : [])];
+  return [...c.slides.map(slidePath), ...(c.index ? [DECK_INDEX_PATH] : [])];
 }
 
 // ---- the merge ------------------------------------------------------------ //

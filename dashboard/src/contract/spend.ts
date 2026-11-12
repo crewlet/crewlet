@@ -94,3 +94,10 @@ export type WakeKind =
   | "code_change"
   | "alarm"
   | "delegated_request";
+
+/**
+ * The most bands one series answer names (`tokens.MaxSeriesGroups`): past it
+ * the engine refuses the ask. Held by
+ * `internal/api/queries.TestTheSpendScreenAsksForNoMoreBandsThanTheEngineNames`.
+ */
+export const SERIES_MAX_GROUPS = 20;

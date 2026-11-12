@@ -1385,9 +1385,19 @@ const (
 	// bytes), 199 bytes inside 402 KiB, and on top of the atlas and dead-wait
 	// train it measured 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB.
 	// Merged on top of Company › Atlas on kit 0.122.0 and every end of a
-	// person's note said in the trace it measures 403.8 KiB (413,481 bytes),
-	// 215 bytes inside 404 KiB: the next addition to the entry moves this
-	// budget only with a reason of its own.
+	// person's note said in the trace it measured 403.8 KiB (413,481 bytes),
+	// 215 bytes inside 404 KiB. A new project's key, a deck's title and the
+	// copied engine bounds held to the engine's (+181), then the sidebar's pin
+	// page in a contract module of its own and the projects' page beside the
+	// work bounds the entry already reads (+15), took it to 402.0 KiB (411,648
+	// bytes), the budget itself, on the tree before the required checks. The
+	// artifacts' contract split in two, the frame's half in the entry and
+	// every declaration only the workspace reads out of it (the formats'
+	// bounds held to the engine's among them, and the pin page folded into the
+	// frame's half), took it to 400.5 KiB (410,133 bytes, -1,515) there.
+	// Merged with main since the required checks it measures 402.5 KiB
+	// (412,160 bytes), 1,536 bytes inside 404 KiB: the next addition to
+	// the entry moves this budget only with a reason of its own.
 	initialBudget = 404 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2277,7 +2287,18 @@ const (
 	// its grammar past an enum's 64, +1,462 on the tree they were built on,
 	// merged on top of it, took it to 5838.4 KiB (5,978,501 bytes, +12,685,
 	// all script): 5839 KiB.
-	treeBudget = 5<<20 + 719<<10
+	// A new project's key checked by the engine's grammar, a deck's title held
+	// to its bytes with Save held past it or past a slide's notes, a model's
+	// secret named by the secret store's grammar and every other copied engine
+	// bound held to the engine's own (+922 bytes when they were merged on the
+	// tree before these two fixes), then every create page's task text held to
+	// what a task holds and the artifact listing, datastore, board, project and
+	// change part bounds held to the engine's (+1,713 when they were merged on
+	// the tree before the required checks), then the artifacts' contract split
+	// in two, the workspace's half a module of its own (+547 there), merged on
+	// top of it, took it to 5840.6 KiB (5,980,762 bytes, +2,261, all script):
+	// 5841 KiB.
+	treeBudget = 5<<20 + 721<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

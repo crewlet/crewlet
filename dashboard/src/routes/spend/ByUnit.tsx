@@ -19,9 +19,10 @@ import { spenderWords } from "~/lib/spend.ts";
 import { indexOrg, unitByKey, unitPlace, type Unit } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { SERIES_MAX_GROUPS } from "~/contract/spend.ts";
 
-/** `tokens.MaxSeriesGroups`: the most bands the engine names in one answer. */
-export const UNIT_GROUPS = 20;
+/** The most bands the engine names in one answer: By unit asks for every one. */
+export const UNIT_GROUPS = SERIES_MAX_GROUPS;
 
 export function ByUnit({
   params,

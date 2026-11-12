@@ -289,7 +289,8 @@ func validateColumn(col artifacts.Column) error {
 		for _, o := range col.Options {
 			switch {
 			case !optionIDPattern().MatchString(o.ID):
-				return fail("option id %q is 1..64 letters, digits, `_` and `-`", o.ID)
+				return fail("option id %q is 1..%d letters, digits, `_` and `-`", o.ID,
+					MaxOptionIDBytes)
 			case ids[o.ID]:
 				return fail("option id %q is offered twice", o.ID)
 			case len(o.Label) > MaxLabelBytes:

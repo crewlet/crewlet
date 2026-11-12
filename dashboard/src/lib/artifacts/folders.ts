@@ -32,7 +32,7 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { ARTIFACT_FOLDER_NAME_MAX_BYTES } from "~/contract/artifacts.ts";
+import { ARTIFACT_FOLDER_NAME_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import type { ArtifactFolderItem, ArtifactFolderVisibility } from "~/protocol/index.ts";
 import { overWords, utf8Bytes } from "../format.ts";
 import { collator } from "../formatters.ts";

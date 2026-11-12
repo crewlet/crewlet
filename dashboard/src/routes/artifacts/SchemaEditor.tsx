@@ -33,7 +33,11 @@ import {
   type Tone,
 } from "@crewlethq/ui";
 import { PlusGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
-import { COLLECTION_PRESETS, COLUMN_TYPES, STATUS_CATEGORIES } from "~/contract/artifacts.ts";
+import {
+  COLLECTION_PRESETS,
+  COLUMN_TYPES,
+  STATUS_CATEGORIES,
+} from "~/contract/artifactsworkspace.ts";
 import type {
   ArtifactDetail,
   ArtifactRole,

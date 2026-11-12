@@ -16,6 +16,7 @@ import {
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { companyDateLabel, relTime } from "~/lib/format.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { projectPath, viewRun } from "~/lib/work.ts";
@@ -123,13 +124,11 @@ function ViewRows({ view }: { view: WorkView }) {
 
 // ---- One project ---------------------------------------------------------------
 
-const PROJECTS_PAGE = 200;
-
 function useProjects() {
   const viewer = useViewer();
   const read = useQuery(
     "work_projects",
-    { limit: PROJECTS_PAGE },
+    { limit: PROJECT_PAGE },
     { pollMs: 120_000, enabled: viewer.worklet },
   );
   const projects = useMemo(
@@ -146,7 +145,7 @@ function useProjectChoices(): WidgetChoices {
     options: projects.map((p) => ({ value: p.key, label: `${p.key} · ${p.name}` })),
     empty: "No projects yet. Add one with New project in Worklet.",
     partial: read.data?.truncated
-      ? `Only the first ${PROJECTS_PAGE} projects are offered.`
+      ? `Only the first ${PROJECT_PAGE} projects are offered.`
       : undefined,
   };
 }

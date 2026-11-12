@@ -44,7 +44,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useKeymap } from "~/app/keymap.ts";
 import { artifactPath } from "~/app/routes.ts";
-import { ARTIFACT_LIST_DELIMITER, ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
+import { ARTIFACT_LIST_DELIMITER, ARTIFACT_LIST_SORTS } from "~/contract/artifactsworkspace.ts";
 import { fmtCount, fmtDate } from "~/lib/format.ts";
 import { engineOrder } from "~/lib/gridOrder.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";

@@ -65,9 +65,8 @@ import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { publishVersion, readSource } from "~/lib/artifacts/api.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import { CANVAS_MAX_SIDE, CANVAS_MIN_SIDE } from "~/contract/artifactsworkspace.ts";
 import {
-  CANVAS_MAX_SIDE,
-  CANVAS_MIN_SIDE,
   addNote,
   boardItems,
   changeNote,

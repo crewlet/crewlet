@@ -296,6 +296,16 @@ export const CODE_ALARM_KINDS = [
 export const CODE_MAX_BLAME_LINES = 500;
 
 /**
+ * The most rows one page of a change's conversation asks for: its comments',
+ * reviews' and findings' own bound (`gitlet.MaxCommentsPerPage`,
+ * `MaxReviewsPerPage`, `MaxFindingsPerPage`), within its reviewers'
+ * (`MaxReviewersPerPage`). A larger page is refused, and a smaller one reads
+ * a long conversation in more round trips than it needs. Held by
+ * `internal/gitlet.TestTheDashboardReadsAChangesConversationAtTheEnginesPage`.
+ */
+export const CHANGE_PART_PAGE = 200;
+
+/**
  * What an unset `code.scratch` and `code.identity_domain` read as — the
  * engine's own defaults (`config.DefaultCodeScratchIdleDays`,
  * `DefaultCodeScratchMaxPerSeat`, `DefaultCodeIdentityDomain`), which

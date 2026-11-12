@@ -126,6 +126,13 @@ export const TOKEN_DEFAULT_DAYS = 90;
 export const TOKEN_MAX_DAYS = 365;
 
 /**
+ * The most rows one page of the directory answers (`iamdomain.MaxPageSize`):
+ * a larger ask is clamped to it, so Access reads in pages this large. Held by
+ * `internal/api/iamapi.TestTheDashboardPagesTheDirectoryAtTheEnginesSize`.
+ */
+export const DIRECTORY_PAGE_MAX = 200;
+
+/**
  * The kinds of finding `GET /iam/check` reports, in the engine's order
  * (`iamapi.FindingKinds`) — which is the order the report is sorted in, so a
  * company's worst problem (nobody can administer it) comes first.

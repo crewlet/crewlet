@@ -35,7 +35,7 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { LogRefusal, PageSummary, PagesAnswer, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import type { SkillLoad } from "~/contract/pages.ts";
+import { PAGE_LIST_MAX, type SkillLoad } from "~/contract/pages.ts";
 
 /**
  * How many pages one window asks for: the engine's own ceiling
@@ -44,7 +44,7 @@ import type { SkillLoad } from "~/contract/pages.ts";
  * case rather than the way a reader walks the tree — and a window is titles,
  * never bodies, so five hundred rows are tens of kilobytes.
  */
-export const PAGES_WINDOW = 500;
+export const PAGES_WINDOW = PAGE_LIST_MAX;
 
 export interface PagedPages {
   /** The first window as the engine answered it — total, coverage. */

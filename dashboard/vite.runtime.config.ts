@@ -36,7 +36,7 @@ import { defineConfig, type Plugin } from "vite";
 import { cpSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUNTIME_CONTRACT } from "./src/contract/artifacts.ts";
+import { RUNTIME_CONTRACT } from "./src/contract/artifactsworkspace.ts";
 
 const OUT = fileURLToPath(new URL("../static/artifacts", import.meta.url));
 const KIT = fileURLToPath(new URL("./node_modules/@crewlethq/artifact-kit", import.meta.url));

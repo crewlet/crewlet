@@ -28,6 +28,7 @@ func TestTheDashboardBoundsPageTextAtTheEnginesCaps(t *testing.T) {
 		"PAGE_BODY_MAX_BYTES":    doclet.MaxBody,
 		"PAGE_LABELS_MAX":        doclet.MaxLabels,
 		"PAGE_LABEL_MAX_BYTES":   doclet.MaxLabelLength,
+		"PAGE_LIST_MAX":          doclet.MaxLimit,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -38,7 +39,7 @@ func TestTheDashboardBoundsPageTextAtTheEnginesCaps(t *testing.T) {
 			t.Fatalf("%s is %q, which is not an integer: %v", name, raw, err)
 		}
 		if client != engine {
-			t.Errorf("the dashboard bounds %s at %d bytes and the engine at %d — "+
+			t.Errorf("the dashboard bounds %s at %d and the engine at %d — "+
 				"change it in contract/pages.ts to the engine's figure", name, client, engine)
 		}
 	}
