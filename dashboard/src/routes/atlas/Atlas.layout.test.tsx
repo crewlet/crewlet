@@ -20,7 +20,6 @@ import {
   sparseCompany,
   type AtlasFixture,
 } from "~/test/atlas.ts";
-import "~/styles/atlas.css";
 
 const VIEWER = {
   login: "U0FOUNDER",

@@ -19,6 +19,7 @@ import {
   Select,
   Skeleton,
   Switch,
+  cx,
   type SelectOption,
 } from "@crewlethq/ui";
 import { useFillScreen } from "~/app/fill.tsx";
@@ -52,7 +53,6 @@ import {
 } from "./filters.ts";
 import { VendorLead, coverageLine, coverageNotes } from "./parts.tsx";
 import { HEALTH, KINDS, KIND_ORDER, LANES, VENDORS, WORDS, entries } from "./words.ts";
-import "~/styles/atlas.css";
 
 /** What fills the atlas in this build, said where it is empty. */
 export const FILLS =
@@ -69,12 +69,14 @@ export function Atlas() {
   const params = useMemo(() => queryParams(filters), [filters]);
   const narrowed = isNarrowed(filters);
   const held = useHeldGrants() ?? [];
-  useFillScreen(shape === "map");
+  // THE MAP TAKES THE WINDOW'S HEIGHT; the list scrolls with the page.
+  const fills = shape === "map";
+  useFillScreen(fills);
 
   const facets = useQuery("atlas_facets", params, { pollMs: ATLAS_POLL_MS });
 
   return (
-    <div className={shape === "map" ? "atlas-screen atlas-screen--fill" : "atlas-screen"}>
+    <div className={cx("atlas-screen", fills && "atlas-screen--fill")}>
       <PageToolbar>
         <SegmentedControl<Shape>
           semantics="radio"
@@ -114,7 +116,7 @@ function Coverage({ facets, narrowed }: { facets: AtlasFacetsAnswer | null; narr
     facets.total === 0 && !narrowed
       ? ["Nothing in the atlas yet", FILLS, ...coverageNotes(facets)]
       : [coverageLine(facets.total, facets.vendors), ...coverageNotes(facets)];
-  return <PageNote className="atlas-coverage">{line.join(" · ")}</PageNote>;
+  return <PageNote>{line.join(" · ")}</PageNote>;
 }
 
 /** The map, its selection the peek's entry. */

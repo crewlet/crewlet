@@ -20,6 +20,8 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
 import { COVERAGE, HEALTH, KINDS, RECORDS, VENDORS, WORDS, entries, valueWord } from "./words.ts";
+// THE ATLAS'S OWN SHEET, with the chunk: every atlas screen draws these parts.
+import "~/styles/atlas.css";
 
 /** The kind's glyph, decorative: the kind word is always said beside it. */
 export function KindGlyph({ kind, size = "sm" }: { kind: AtlasKind; size?: "sm" | "md" }) {

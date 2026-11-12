@@ -113,7 +113,7 @@ export type AtlasFact =
   | "sign_in_expires";
 
 /** The grammar a fact's value is written in (`atlas.ValueType`). */
-export type AtlasValueType =
+type AtlasValueType =
   | "word"
   | "int"
   | "port"
@@ -132,12 +132,11 @@ export type AtlasValueType =
 export type AtlasSourceKind = "settings" | "records" | "integration" | "agent" | "person";
 
 /** What backs an agent's claim, as the engine checked it (`atlas.Evidence`). */
-export type AtlasEvidence = "call" | "file" | "none";
+type AtlasEvidence = "call" | "file" | "none";
 
 /** How far a claim can be trusted, derived from its source (`atlas.Confidence`),
  *  the most trusted first. */
-export type AtlasConfidence =
-  "declared" | "asserted" | "verified" | "observed" | "inferred" | "reported";
+type AtlasConfidence = "declared" | "asserted" | "verified" | "observed" | "inferred" | "reported";
 
 /** How a confidence reads on screen (`atlas.Word`). */
 export type AtlasWord = "confirmed" | "likely" | "unconfirmed";
@@ -166,11 +165,11 @@ export type AtlasSignalKind =
   | "standing_alarm";
 
 /** How urgent a signal is (`atlas.Severity`). */
-export type AtlasSeverity = "danger" | "warning";
+type AtlasSeverity = "danger" | "warning";
 
 /** Who may read a signal (`atlas.Audience`); an answer carries only the
  *  signals its reader may read. */
-export type AtlasAudience = "holders" | "admins";
+type AtlasAudience = "holders" | "admins";
 
 /** The one word an entry's open signals add up to (`atlas.Health`). */
 export type AtlasHealth = "alerting" | "needs_look" | "quiet";
@@ -180,7 +179,7 @@ export type AtlasUseChannel = "command" | "tool_call" | "model_call" | "push";
 
 /** Which way a trace walks (`atlas.Direction`): `up` is what depends on the
  *  entry, `down` what it depends on. */
-export type AtlasDirection = "up" | "down";
+type AtlasDirection = "up" | "down";
 
 /** A place an atlas read reads (`gather.SourceName`). */
 export type AtlasCoverageSource =
@@ -239,7 +238,7 @@ export interface AtlasEntriesAnswer extends AtlasRead {
 }
 
 /** One lane of the map, drawn whether or not it holds anything. */
-export interface AtlasMapLane {
+interface AtlasMapLane {
   lane: AtlasLane;
   /** In the band beneath the request path. */
   band: boolean;
@@ -247,7 +246,7 @@ export interface AtlasMapLane {
 }
 
 /** One vendor's entries in one lane. */
-export interface AtlasMapGroup {
+interface AtlasMapGroup {
   /** `<lane>/<vendor>`, or the lane alone for entries no vendor names. */
   key: string;
   lane: AtlasLane;
@@ -274,7 +273,7 @@ export interface AtlasMapAnswer extends AtlasRead {
 }
 
 /** An entry by its identity: kind and canonical key. */
-export interface AtlasRef {
+interface AtlasRef {
   kind: AtlasKind;
   key: string;
 }
@@ -339,7 +338,7 @@ export interface AtlasEdge {
 
 /** How much the company relies on an entry through one channel. A channel
  *  that keeps only the last use (pushes) is not `counted`. */
-export interface AtlasUse {
+interface AtlasUse {
   channel: AtlasUseChannel;
   last?: string;
   counted: boolean;
@@ -349,7 +348,7 @@ export interface AtlasUse {
 }
 
 /** One agent's account at the vendor an entry is. */
-export interface AtlasHolder {
+interface AtlasHolder {
   seat: string;
   lane: string;
   level?: string;
@@ -358,7 +357,7 @@ export interface AtlasHolder {
 }
 
 /** One open condition on an entry. `alarm` names a standing alarm's kind. */
-export interface AtlasSignal {
+interface AtlasSignal {
   kind: AtlasSignalKind;
   severity: AtlasSeverity;
   audience: AtlasAudience;
@@ -389,7 +388,7 @@ export interface AtlasEntry {
 }
 
 /** One relation into an entry, with the entry it comes from. */
-export interface AtlasLink {
+interface AtlasLink {
   relation: AtlasRelation;
   entry: AtlasSummary;
 }
@@ -404,7 +403,7 @@ export interface AtlasEntryAnswer extends AtlasRead {
 }
 
 /** The entries a trace reached at one distance. */
-export interface AtlasTraceHop {
+interface AtlasTraceHop {
   distance: number;
   entries: AtlasSummary[];
 }

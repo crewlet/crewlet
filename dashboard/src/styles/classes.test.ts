@@ -975,7 +975,8 @@ describe("every class the dashboard names", () => {
 // agents' access table an integration's Agents tab and an agent's Access tab
 // share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
 // panel), `chatlet-room.css`, a Chatlet room's transcript and composer,
-// `chatlet-panes.css`, Chatlet's panes, dialogs and views, and `diff.css`,
+// `chatlet-panes.css`, Chatlet's panes, dialogs and views, `atlas.css`,
+// Company › Atlas's (its map's box, lists, hops and claims), and `diff.css`,
 // the one diff's, which every screen drawing a diff reaches through
 // `components/DiffView.tsx`. Each is appended after the entry's sheets, so
 // each of its rules must select a class of the screen it arrives with, or a
@@ -1025,6 +1026,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",
     owns: /\.(?:artifacts-(?:folders?|folder-[a-z-]+|move(?:-[a-z]+)?|selection|empty-actions)|artifact-folder-fact)\b/,
+  },
+  "atlas.css": {
+    importer: "routes/atlas/parts.tsx",
+    owns: /\.atlas-[a-z_-]+\b/,
   },
   "diff.css": {
     importer: "components/DiffView.tsx",

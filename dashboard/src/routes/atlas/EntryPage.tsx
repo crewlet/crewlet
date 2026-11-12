@@ -54,7 +54,6 @@ import {
   WORDS,
   entries,
 } from "./words.ts";
-import "~/styles/atlas.css";
 
 const TABS = ["overview", "relations", "sources"] as const;
 type Tab = (typeof TABS)[number];

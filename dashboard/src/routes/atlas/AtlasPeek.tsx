@@ -23,7 +23,6 @@ import {
 } from "./entry.tsx";
 import { HealthTag, VendorLead } from "./parts.tsx";
 import { KINDS, STATES, VENDORS, WORDS } from "./words.ts";
-import "~/styles/atlas.css";
 
 export function AtlasPeek({ id }: { id: string }) {
   const valid = ID_SHAPE.test(id);
