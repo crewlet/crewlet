@@ -35,19 +35,19 @@ func beginCall(t *testing.T, s sandbox.PendingStore, turnID string, a sandbox.Br
 }
 
 // A CALL'S ENTRY IS UPDATED ONCE, BY ITS IDENTITY. The bridge writes a call's
-// entry ahead of it — its identity alone, with who runs it and until when — and
-// the call's one update, as it finishes, takes the entry out and lists the
-// finished call in its place in the same write: the log never holds two records
-// of one call. The update finds the entry by the call's place, the instant the
-// bridge took it and its tool, never by its digest, which an entry leaves out
-// for a tool that may ask a person first and the finished call then carries; so
-// another opening's call at the same place, taken at another instant, is another
-// entry, left as it is. Asked again — a begin or an update whose answer was lost
-// — each writes nothing more. So a call a reader took for one whose outcome is
-// unknown, its entry read in flight, has that unknown replaced by its own
-// outcome once its update lands, while the run's record stands. And a
-// withdrawal takes the entry of a call that was then not run out, listing
-// nothing.
+// entry ahead of it — its identity, with who runs it and until when, beside the
+// id its harness gave it — and the call's one update, as it finishes, takes the
+// entry out and lists the finished call in its place in the same write: the log
+// never holds two records of one call. The update finds the entry by the call's
+// place, the instant the bridge took it and its tool, never by its digest, which
+// an entry leaves out for a tool that may ask a person first and the finished
+// call then carries; so another opening's call at the same place, taken at
+// another instant, is another entry, left as it is. Asked again — a begin or an
+// update whose answer was lost — each writes nothing more. So a call a reader
+// took for one whose outcome is unknown, its entry read in flight, has that
+// unknown replaced by its own outcome once its update lands, while the run's
+// record stands. And a withdrawal takes the entry of a call that was then not
+// run out, listing nothing.
 //
 // Mutation: list the call without taking its entry out, and the log holds the
 // call twice, finished and in flight.

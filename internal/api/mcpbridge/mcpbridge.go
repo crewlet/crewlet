@@ -106,11 +106,13 @@
 // old one, or the other way round. A call recorded only once it returned met
 // that wherever the coordination store refused its record for longer than its
 // job's session lasted. So the bridge WRITES EACH CALL'S ENTRY AHEAD OF IT
-// ([Ledger.Begin]) — its identity alone ([Begun]): its tool, its place, the
-// instant the bridge took it, the digest it was admitted under where its tool
-// can never ask a person first, and the instant past which nobody waits for it
-// — on the call's own goroutine, and RUNS THE CALL ONLY ONCE THE ENTRY IS
-// TAKEN ([binding.writeAhead]). Its one update then records what it did
+// ([Ledger.Begin]) — its identity ([Begun]): its tool, its place, the instant
+// the bridge took it, the digest it was admitted under where its tool can
+// never ask a person first, and the instant past which nobody waits for it;
+// and beside it the id its harness gave it, which is no part of that identity
+// ([Begun.CallID], "A call carries the id its harness gave it" below) — on the
+// call's own goroutine, and RUNS THE CALL ONLY ONCE THE ENTRY IS TAKEN
+// ([binding.writeAhead]). Its one update then records what it did
 // ([binding.conclude], [Ledger.Record]), found by that identity.
 //
 // AND THE CALL IS IN THE RUN'S CALL LOG ONLY ONCE ITS ENTRY IS: it is admitted
@@ -170,8 +172,9 @@
 // entry and on its one update alike ([Begun.CallID], [Call.CallID]), on every
 // path that records the call — one that ran, one refused before its tool ran,
 // one the surface could not run, one held for a person, one whose arguments did
-// not parse, one made once the run's tools had closed — so the run's log names
-// each call as its harness's session does. ONLY AN ID THE LOG KEEPS WHOLE IS
+// not parse, one made once the run's tools had closed, and one whose run's
+// tools closed while its entry was being written — so the run's log names each
+// call as its harness's session does. ONLY AN ID THE LOG KEEPS WHOLE IS
 // TAKEN (sandbox.ValidCallID): a value that is not a string, or an id past the
 // bound or outside its characters, is recorded as none, NEVER CUT, since two
 // ids cut alike would name two calls as one.
@@ -468,8 +471,10 @@ type Session struct {
 	// id for the call under, as the runner that starts the box declares it
 	// (sandbox.OpenedJob.CallIDMeta): the one key every call's id is read by
 	// ([Call.CallID]). EMPTY READS NONE, whatever the box sends under any key,
-	// the empty one included: a session whose harness names no call — the
-	// assistant's deep work, a test's — records every call with none.
+	// the empty one included: a session that declares no key reads every
+	// call's id as none — a test's, or the assistant's deep work's, whose
+	// harness names its calls but whose session records none of them, with no
+	// [Session.Ledger] to record them on.
 	CallIDMeta string
 
 	// Surface is the live tool surface for this run — the SAME object a
@@ -632,11 +637,12 @@ func (s *Session) seat() *tools.Surface { return seatOf(s.Surface) }
 // run's record before it runs".
 type Ledger interface {
 	// Begin writes the call's ENTRY on the run's log before its tool runs:
-	// its identity alone ([Begun]). The call runs only once this answered
-	// nil. [ErrNotTaken] is a log that no longer takes the calls of this job
-	// — its run ended, or a relaunch replaced the job — and any other error a
-	// write the ledger could not land within its own bound; either way the
-	// call is not run, and its box is told so.
+	// its identity, and beside it the id its harness gave it ([Begun]). The
+	// call runs only once this answered nil. [ErrNotTaken] is a log that no
+	// longer takes the calls of this job — its run ended, or a relaunch
+	// replaced the job — and any other error a write the ledger could not
+	// land within its own bound; either way the call is not run, and its box
+	// is told so.
 	Begin(ctx context.Context, runID string, call Begun) error
 
 	// Record is a finished call's ONE UPDATE: its entry, found by its
@@ -681,7 +687,9 @@ var ErrUnrecorded = errors.New("mcpbridge: the call's update did not land, and t
 // Begun is a call's IDENTITY as its entry is written ahead of it
 // ([Ledger.Begin]), and what its update and its withdrawal find the entry by:
 // its tool, its place and the instant the bridge took it — two openings of a
-// job can reuse a place, never at one instant.
+// job can reuse a place, never at one instant. And beside it, the id the call's
+// harness gave it ([Begun.CallID]), which the entry carries and which is no
+// part of that identity.
 type Begun struct {
 	// Name is the tool the call names.
 	Name string
@@ -701,8 +709,8 @@ type Begun struct {
 	// StartedAt, its tool's own bound and the bridge's margin (wait.go).
 	Until time.Time
 	// CallID is the id the call's harness gave it ([Call.CallID]), which the
-	// entry carries for its update to carry too: NEVER WHAT THE ENTRY IS
-	// FOUND BY, which is the box's word.
+	// entry carries for its update to carry too, and NEVER WHAT THE ENTRY IS
+	// FOUND BY: it is the box's word.
 	CallID string
 }
 
@@ -2211,9 +2219,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 //     failed: nothing ran. An entry whose write landed and lost its answer is
 //     withdrawn all the same, which finds none where none landed.
 //   - THE OPENING'S TOOLS WERE CLOSED MEANWHILE, by a tool that broke inside
-//     the engine ([binding.stop]): refused as every call that reaches closed
-//     tools is ([stoppedNote]), and RECORDED in its place — its entry updated
-//     to that refusal, its one update.
+//     the engine or by the seat's fence another call found closed
+//     ([binding.stop]): refused as every call that reaches closed tools is
+//     ([stoppedNote]), and RECORDED in its place — its entry updated to that
+//     refusal, its one update, which carries the id the call arrived with.
 //   - THE SEAT'S FENCE, ASKED AGAIN NOW THE ENTRY IS WRITTEN, IS CLOSED: told
 //     the session it reached was closing and to call again ([closingNote]),
 //     failed, and its entry withdrawn. THE OPENING IS NOT STOPPED: the end

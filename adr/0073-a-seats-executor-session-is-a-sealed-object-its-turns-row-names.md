@@ -2267,11 +2267,14 @@ the runner its job is started on and by a node that serves the job again after
 taking its seat over from its own runner (`internal/engine`'s
 `reopenAgentRun`), and the engine's `openBridge` hands it the session
 (`mcpbridge.Session.CallIDMeta`). The id rides the entry written ahead of the
-call and the one update that lists it (`sandbox.BridgeCall.CallID`, `call_id`
-on the wire), on every path that records a call: one that ran, one refused
-before its tool ran, one its surface could not run, one held for a person, one
-whose arguments did not parse and one made once the run's tools had closed. An
-entry withdrawn takes its id with it.
+call — which carried the call's identity alone until now ("a bridged call's
+identity is on its run's record before it runs", above) and carries the id
+beside that identity, as no part of it — and the one update that lists the
+call (`sandbox.BridgeCall.CallID`, `call_id` on the wire), on every path that
+records a call: one that ran, one refused before its tool ran, one its surface
+could not run, one held for a person, one whose arguments did not parse, one
+made once the run's tools had closed and one whose run's tools closed while its
+entry was being written. An entry withdrawn takes its id with it.
 
 **Whole or not at all, and never the call's identity.** The id is the box's
 word. Only one the log keeps whole is taken (`sandbox.ValidCallID`: at most

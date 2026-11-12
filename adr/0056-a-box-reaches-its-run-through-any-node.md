@@ -250,7 +250,7 @@ broker the record goes through, as the release used to wait for it while
 holding the lease. That wait has no bound of the engine's own, as the drain's
 wait for running turns has none: on a signal, the supervisor's grace bounds it,
 and a call still running when the process is killed never makes its update, on
-the record by its identity alone.
+the record by its entry alone.
 
 **Cost-when-tried:** measured with the SDK's own client as the box, against the
 bridge on `main` at 28ce95e56c, each opening ended with a call held in its tool:

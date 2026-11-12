@@ -268,7 +268,7 @@ func (b *Bridge) AwaitCalls(ctx context.Context) {
 				"error", ctx.Err().Error(),
 				"detail", "stopped waiting for tool calls still running; each goes on until "+
 					"its own bound or this process ends, and one the process ends is on its run's record "+
-					"by its identity alone, its outcome unknown")
+					"by its entry alone, its outcome unknown")
 			return
 		}
 	}
