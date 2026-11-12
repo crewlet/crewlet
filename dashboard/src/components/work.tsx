@@ -690,9 +690,21 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
   // is open" and the two must not disagree.
   const held = (row.waiting_on ?? []).filter((edge) => edge.open !== false);
   if (held.length === 0) return "Blocked";
+  // A WAIT NOTHING MOVES IS NAMED FIRST: it is the one that never ends by itself.
+  const dead = held.find((edge) => edge.dead);
+  if (dead) {
+    const nobody = `Blocked · nobody is reviewing ${pullName(dead.id)}`;
+    return held.length > 1 ? `${nobody} +${held.length - 1}` : nobody;
+  }
   const named = held.map((edge) => keyOf?.(edge.id)).find(Boolean);
   if (!named) return held.length > 1 ? `Blocked · ${held.length}` : "Blocked";
   return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
+}
+
+/** A pull request's address as a person names it, `PR #42`, or the address itself. */
+function pullName(address: string): string {
+  const number = /\/pull\/(\d+)(?:[/?#]|$)/.exec(address)?.[1];
+  return number ? `PR #${number}` : address;
 }
 
 /** The coverage half every tracker answer carries. */

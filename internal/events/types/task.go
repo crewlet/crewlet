@@ -139,6 +139,38 @@ type WorkPickup struct {
 	// WaitsOn is the persons an item set aside until a date names without an
 	// open ask from the seat ([PickupWaitsOnPerson]), by handle.
 	WaitsOn []string `json:"waits_on,omitempty"`
+	// DeadWaits is the changes nothing moves that the item waits on
+	// ([PickupDeadWait]), in reference order.
+	DeadWaits []DeadChange `json:"dead_waits,omitempty"`
+}
+
+// DeadChange is a change (a pull request) a work item waits on that nothing
+// moves at Head: no reviewer asked, no review of Head, no merge asked
+// (ADR-0128). Author is a seat's handle where a seat's app opened it.
+type DeadChange struct {
+	Ref    string `json:"ref"`
+	Head   string `json:"head"`
+	Author string `json:"author,omitempty"`
+	Draft  bool   `json:"draft,omitempty"`
+}
+
+// line is the change as the brief names it.
+func (d DeadChange) line() string {
+	out := d.Ref
+	if len(d.Head) >= 7 {
+		out += " at " + d.Head[:7]
+	}
+	var about []string
+	if d.Author != "" {
+		about = append(about, "opened by "+d.Author)
+	}
+	if d.Draft {
+		about = append(about, "a draft")
+	}
+	if len(about) > 0 {
+		out += " (" + strings.Join(about, ", ") + ")"
+	}
+	return out
 }
 
 // PickupWhy is what put an item first in a seat's ready work.
@@ -159,6 +191,10 @@ const (
 	// whose reason names a person the seat has not asked on it (ADR-0122):
 	// it comes back before its date, so the wait becomes the ask it is.
 	PickupWaitsOnPerson PickupWhy = "waits_on_person"
+	// PickupDeadWait is an item whose every open blocker is a pull request
+	// nothing moves (ADR-0128): the wait cannot end by itself, so it comes
+	// back to its holder, once per head of each.
+	PickupDeadWait PickupWhy = "dead_wait"
 	// PickupPriorityList is the first item of the seat's priority list,
 	// the order somebody arranged for it.
 	PickupPriorityList PickupWhy = "priority_list"
@@ -169,7 +205,7 @@ const (
 // Valid reports whether a reason off the wire is one this build knows.
 func (w PickupWhy) Valid() bool {
 	switch w {
-	case PickupInProgress, PickupReview, PickupUnreviewed, PickupWaitsOnPerson,
+	case PickupInProgress, PickupReview, PickupUnreviewed, PickupWaitsOnPerson, PickupDeadWait,
 		PickupPriorityList, PickupQueue:
 		return true
 	}
@@ -193,6 +229,13 @@ func (w PickupWhy) sentence() string {
 			"it: the date passes whether or not they answer, and nothing reaches their Inbox. Ask " +
 			"them with " + toolname.CommentOnWorkItem + " and `ask` (with a `decision`), or, if " +
 			"the date is real and waits on nobody, restate `wait_reason` without naming them."
+	case PickupDeadWait:
+		return "It waits on a pull request that nothing is moving: no reviewer is requested, nobody has " +
+			"reviewed its head and no merge is asked, so the wait cannot end by itself. Put it in review " +
+			"naming its `reviewer` with " + toolname.UpdateWorkItem + " (and request their review on the pull " +
+			"request), ask the reviewer on it with " + toolname.CommentOnWorkItem + " and `ask`, or, if its " +
+			"review is done, ask to merge it at its head with " + toolname.AskToMerge + ". You are handed it " +
+			"again only when the pull request has a new head that nothing moves either."
 	case PickupPriorityList:
 		return "It is the first ready item on your priority list, the order your lead set for you."
 	case PickupQueue:
@@ -301,8 +344,12 @@ func (e TaskAssigned) SummaryFor(actor string) string {
 }
 
 // PickupReason is the origin reason a pickup's turn is started under, beside
-// the tracker's own routing reasons.
-const PickupReason = "pickup"
+// the tracker's own routing reasons, and DeadWaitReason a dead wait's, so the
+// turn ledger counts the hand-back apart (ADR-0128).
+const (
+	PickupReason   = "pickup"
+	DeadWaitReason = "dead_wait"
+)
 
 // WorkPickupType is the "work_pickup" wire type, an inbox WAKE.
 const WorkPickupType = "work_pickup"
@@ -318,11 +365,17 @@ func (p WorkPickup) AgentID() string { return p.Agent }
 
 // TriggerOrigin files the turn on the item ([Originated]).
 func (p WorkPickup) TriggerOrigin() TriggerOrigin {
+	if p.Why == PickupDeadWait {
+		return TriggerOrigin{Kind: OriginWorkItem, ID: p.Key, Reason: DeadWaitReason}
+	}
 	return TriggerOrigin{Kind: OriginWorkItem, ID: p.Key, Reason: PickupReason}
 }
 
 // SummaryFor names the item handed over.
 func (p WorkPickup) SummaryFor(actor string) string {
+	if p.Why == PickupDeadWait {
+		return lead(actor, "was handed back "+p.Key+", whose wait on a pull request nothing moves")
+	}
 	return lead(actor, "was handed its next ready work item "+p.Key)
 }
 
@@ -341,6 +394,13 @@ func (p WorkPickup) Brief() string {
 	}
 	if p.Why == PickupWaitsOnPerson && len(p.WaitsOn) > 0 {
 		b.WriteString(" Its reason names " + strings.Join(p.WaitsOn, ", ") + ".")
+	}
+	if p.Why == PickupDeadWait && len(p.DeadWaits) > 0 {
+		lines := make([]string, 0, len(p.DeadWaits))
+		for _, d := range p.DeadWaits {
+			lines = append(lines, d.line())
+		}
+		b.WriteString(" It waits on " + strings.Join(lines, "; ") + ".")
 	}
 	switch {
 	case p.ReadyCapped:

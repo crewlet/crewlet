@@ -66,7 +66,9 @@ import (
 // ([MutationRecord.WorkingFor], ADR-0109).
 // Version 14 is an ask the engine stamped with its act ([Comment.Act]): a
 // build reading 13 would keep the question and drop what approving it means.
-const RecordVersion = 14
+// Version 15 is a change the task waits on that nothing moves
+// ([TaskPatch.DeadWait], [TaskPatch.DeadWaitEnded], ADR-0128).
+const RecordVersion = 15
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -143,6 +145,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Comment.Withdrawal", Since: 12, Op: string(OpPatch), Path: []string{"mutation", "comment", "withdrawal"}},
 	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
 	{Name: "Comment.Act", Since: 14, Op: string(OpPatch), Path: []string{"mutation", "comment", "act"}},
+	{Name: "TaskPatch.DeadWait", Since: 15, Op: string(OpPatch), Path: []string{"mutation", "dead_wait"}},
+	{Name: "TaskPatch.DeadWaitEnded", Since: 15, Op: string(OpPatch), Path: []string{"mutation", "dead_wait_ended"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1216,6 +1220,11 @@ const (
 	// ChangeLinkSettled is a change (a pull request) the task waits on
 	// merged or closed, written by the engine, never by an agent's turn.
 	ChangeLinkSettled ChangeKind = "change_settled"
+
+	// ChangeDeadWait records that nothing moves a change the task waits on,
+	// and ChangeDeadWaitEnded that something does again; both by the engine.
+	ChangeDeadWait      ChangeKind = "dead_wait"
+	ChangeDeadWaitEnded ChangeKind = "dead_wait_ended"
 )
 
 // ChangeKinds are every change kind this build writes.
@@ -1233,7 +1242,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
-	ChangeLinkSettled,
+	ChangeLinkSettled, ChangeDeadWait, ChangeDeadWaitEnded,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.

@@ -225,6 +225,22 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 		record.Mutation = patch
+	case "TaskPatch.DeadWait", "TaskPatch.DeadWaitEnded":
+		// A PATCH THAT SAYS NOTHING MOVES A PULL REQUEST THE TASK WAITS ON, or
+		// that something does again.
+		ref := "https://github.com/acme/web/pull/12"
+		changed := worklet.TaskPatch{DeadWaitEnded: &ref}
+		if field.Name == "TaskPatch.DeadWait" {
+			changed = worklet.TaskPatch{DeadWait: &worklet.DeadWait{Ref: ref,
+				Head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				At:   time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC)}}
+		}
+		patch, err := json.Marshal(changed)
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
 	case "Comment.Act":
 		// AN ASK THE ENGINE COMPOSED FOR ONE EXACT COMMAND, carrying its act.
 		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{

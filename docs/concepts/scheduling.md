@@ -645,10 +645,13 @@ the last word anybody said about that item.
   pickup hands such an item to its holder before the date, naming the person,
   however and whenever the wait was written, and hands it once more when the
   date comes ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
+  And one wait on a blocker is ready: a **dead wait**, an item whose every open
+  blocker is a pull request nothing is moving (below).
 - **Next** is work the seat already started first, then the reviews it holds,
   then its own items in review nobody reviews, then its waits on a person
-  nobody asked, then its priority list in the order its lead set, then the rest
-  by priority and due date, the order `my_work` lists them in.
+  nobody asked, then its dead waits, then its priority list in the order its
+  lead set, then the rest by priority and due date, the order `my_work` lists
+  them in.
 - **Once per item version.** A pickup is made once per seat, item, last change
   to the item that would have woken the seat, status and, for started work, the
   seat's own last progress on it other than a comment. That change is the
@@ -675,6 +678,30 @@ the last word anybody said about that item.
   within the hour. A day is the stand-up rhythm a team rechecks a stalled item
   at, and it is not configurable. An item answered in words before this rule
   comes back by it too ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
+- **A wait nothing moves comes back, once per head.** A typed wait on a pull
+  request (`waiting_on` its URL) holds the item until the pull request merges
+  or closes ([ADR-0121](../../adr/0121-a-pull-request-a-task-waits-on-reaches-it-as-the-engines-record.md)),
+  which never happens where nobody reviews or merges it. So the poll of open
+  pull requests also reads whether anything moves each one: a reviewer or a
+  team asked for, a review submitted on its current head by anybody but its
+  author, a merge armed on GitHub, or an `ask_to_merge` call held for it. Where
+  nothing does, and the item has waited at least 15 minutes, the engine records
+  a dead wait on the item at that head
+  ([Worklet](../guides/worklet.md#dependencies-and-the-set-valued-arguments)). An item whose every open
+  blocker is a dead wait is ready for its holder, unless a reviewer holds it in
+  review (somebody else moved it there) or its holder's own question on it is
+  open; its holder's own item in review with nobody reviewing it is ready too.
+  The pickup names the pull request, its head and who opened it, and says the
+  next step: move the item to review naming its `reviewer` (and ask for their
+  review on the pull request), ask the reviewer on the item with `ask`, or ask
+  to merge it with `ask_to_merge`. It is handed **once per head**: its key is
+  the heads nothing moves and nothing else, so another change on the item, a
+  day's wait or the seat's own edits hand it no second time, and a new head
+  that nothing moves either hands it once more. It is never rechecked daily.
+  The completion ledger remembers a pickup for seven days, so a head nothing
+  has moved for a week comes back once more then. A pull request the engine
+  cannot read records nothing, so it wakes nobody
+  ([ADR-0128](../../adr/0128-a-wait-nothing-moves-is-handed-back-once-per-head.md)).
 - **Past the first page.** Ready work is read twenty items at a time, so item
   twenty-one onwards is handed over once the first twenty were, and a seat
   whose whole ready set was handed over already is not asked about again until
@@ -728,7 +755,11 @@ turn owes). A run lost or stopped before its turn ends is held to the same
 reading: its delivery on the executor log stands only where the item was
 answered typed or left the seat. A pickup answered typed, a question put with
 `ask` included, counts as work moved in the advisor's turn ledger, so
-`work.pickup_still_waiting` counts only the pickups nothing typed answered.
+`work.pickup_still_waiting` counts only the pickups nothing typed answered. A
+dead wait handed back is counted under a wake of its own,
+`work_item:dead_wait`, beside `work_item:pickup`, so the spend screen shows how
+often items came back because nobody moved their pull requests, and the advisor
+counts it among the pickups.
 An item set aside until a date is handed once when the date comes. A company
 on a vendor tracker, or with no model, gets no pickups.
 
@@ -736,6 +767,9 @@ on a vendor tracker, or with no model, gets no pickups.
 seat (`woken`, `nothing_ready`, `all_offered`, `cooldown`, `claimed`,
 `unknown`), and every pickup logs `work_pickup_woken` with the seat, the item
 and why; a pickup that could not be sent logs `work_pickup_skipped` at warn.
+The poll logs `dead_wait_recorded` and `dead_wait_ended` for each item it marks,
+and `dead_wait_asks_unread` at warn, once, while the held merge asks cannot be
+read (no wait is judged then).
 
 ---
 

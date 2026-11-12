@@ -225,3 +225,39 @@ func TestAWaitOnAPersonIsHandedUnderAKeyOfItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// A DEAD WAIT IS KEYED ON ITS HEADS ALONE (ADR-0128): whatever else moves on the
+// item, and however long it sits, its key changes only with a head, so it is
+// handed once per head; its brief names the pull request and the next steps.
+func TestADeadWaitIsKeyedOnItsHeadsAlone(t *testing.T) {
+	t.Parallel()
+	const pull = "https://github.com/acme/web/pull/12"
+	dead := item("a", worklet.StatusInProgress, 40)
+	dead.Why, dead.Progressed = types.PickupDeadWait, 9
+	dead.DeadWaits = []worklet.DeadWait{{Ref: pull, Head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Author: "engineer"}}
+	key := pickup.KeyOf(seat, dead, at)
+	moved := dead
+	moved.Moved, moved.Progressed, moved.Status = 41, 12, worklet.StatusTodo
+	moved.Quiet = at.Add(-72 * time.Hour)
+	if again := pickup.KeyOf(seat, moved, at.Add(3*pickup.RecheckAfter)); again != key {
+		t.Errorf("the same head is keyed %+v after the item moved and days passed, want %+v", again, key)
+	}
+	headed := dead
+	headed.DeadWaits = []worklet.DeadWait{{Ref: pull, Head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+	if pickup.KeyOf(seat, headed, at).WakeID() == key.WakeID() {
+		t.Error("a new head is keyed as the old one, so it would never be handed")
+	}
+	ev := pickup.Event(seat, "engineer", dead, key, 1, false, events.TraceContext{})
+	handed, _ := events.DataAs[*types.WorkPickup](ev)
+	brief := handed.Brief()
+	for _, want := range []string{pull + " at aaaaaaa (opened by engineer)", "nothing is moving",
+		"`reviewer`", "`ask`", "ask_to_merge", "new head"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("the brief of a dead wait lacks %q:\n%s", want, brief)
+		}
+	}
+	if origin := handed.TriggerOrigin(); origin.Reason != types.DeadWaitReason {
+		t.Errorf("a dead wait's turn starts under %q, want %q", origin.Reason, types.DeadWaitReason)
+	}
+}
