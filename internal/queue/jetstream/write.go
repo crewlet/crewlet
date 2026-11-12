@@ -19,31 +19,56 @@ import (
 // and is sent by [sendWithin], ONE send at a time. The package doc's "A write
 // across a link is given the time its bytes take to cross" says why.
 
-// linkPaceOf is the slowest a queue's connection, made through embedded, may
-// carry a mebibyte either way — a write's request towards the stream and a
-// read's reply back: the object store's floor, [objstore.MiBPace], where it
-// crosses a LINK — a dial to a broker somebody else runs (no embedded broker
-// at all), or a leaf's link to the members — and none where it reaches the
-// node's own member in its own process, which crosses nothing. It is the fact
-// the engine hands the object store as natsobj.Config.AcrossLink, read here
-// off how the connection was made.
+// link is what stands between a queue's connection and the streams it reads
+// and writes, as the connection was made ([linkOf]): how slow it may be, and
+// whether a leaf's link is part of it.
 //
-// DECIDED ONCE, when the connection is made ([Queue.pace]), and every crossing
+// DECIDED ONCE, when the connection is made ([Queue.link]), and every crossing
 // on it reads that one decision — a read's reply ([Queue.recordCrossing], the
-// dead letters' frames) and a write's request ([Queue.writing]) — so the two
-// directions of one connection are never paced apart by a change to one of
-// them.
-func linkPaceOf(embedded *embeddedServer) time.Duration {
-	if embedded == nil || embedded.leaf {
-		return objstore.MiBPace
+// dead letters' frames), a read that crosses raw ([copyRead]) and a write's
+// request ([Queue.writing]) — so the two directions of one connection are
+// never paced apart by a change to one of them, and a read never decides on a
+// fact about the link that the connection's own making did not.
+type link struct {
+	// pace is the slowest the connection may carry a mebibyte either way —
+	// a write's request towards the stream and a read's reply back: the
+	// object store's floor, [objstore.MiBPace], where it crosses a LINK — a
+	// dial to a broker somebody else runs (no embedded broker at all), or a
+	// leaf's link to the members — and none where it reaches the node's own
+	// member in its own process, which crosses nothing. It is the fact the
+	// engine hands the object store as natsobj.Config.AcrossLink.
+	pace time.Duration
+	// leaf is whether a LEAF'S LINK stands between the connection and every
+	// stream's leader: the connection is to this node's own leaf, whose
+	// server holds every message its link to the members carries to its
+	// max_payload and closes the whole link on one larger (nats-server
+	// v2.15.2, leafnode.go, processLeafMsgArgs → maxPayloadViolation). No
+	// other connection the engine makes has a server that checks what
+	// reaches it: a route carries any size, and a server checks no
+	// delivery it makes to its own client — so a dial to a broker somebody
+	// else runs is paced, and holds no leaf link the engine knows of
+	// ([Queue.leaderCarries]).
+	leaf bool
+}
+
+// linkOf is what stands between a queue's connection, made through embedded,
+// and the streams it reaches: a dial to a broker somebody else runs is paced
+// at the floor; a leaf's own connection is paced at the floor and crosses the
+// leaf's link; a member's own connection crosses nothing.
+func linkOf(embedded *embeddedServer) link {
+	switch {
+	case embedded == nil:
+		return link{pace: objstore.MiBPace}
+	case embedded.leaf:
+		return link{pace: objstore.MiBPace, leaf: true}
 	}
-	return 0
+	return link{}
 }
 
 // writing is the budget an acknowledged write of msg on this queue's
 // connection waits within, msg built whole as it is sent: the request term,
 // and on a connection that crosses a link the time msg takes to cross it at
-// its pace ([Queue.pace]) for each of its first [jsapi.WriteSends] sends
+// its pace ([link.pace]) for each of its first [jsapi.WriteSends] sends
 // ([jsapi.Budget]), a later send — an append's attempt after a leader's
 // in-flight answer — waiting in the budget as it stands; a caller's own
 // deadline kept as it is, by each send's context ([jsapi.Sends.Next]).
@@ -52,7 +77,7 @@ func linkPaceOf(embedded *embeddedServer) time.Duration {
 // given and the bytes it sends are one count: msg's own, header block and
 // payload ([carried]), never a figure a call site works out beside it.
 func (q *Queue) writing(msg *nats.Msg) *jsapi.Sends {
-	return jsapi.Budget(q.js, jsapi.Sending(carried(msg), q.pace))
+	return jsapi.Budget(q.js, jsapi.Sending(carried(msg), q.link.pace))
 }
 
 // write sends msg, an acknowledged write that decides nothing on its own
