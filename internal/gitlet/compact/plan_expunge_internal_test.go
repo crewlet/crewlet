@@ -91,7 +91,7 @@ func checksums(files []pack) []string {
 }
 
 // AN EXPUNGE ON THE SCHEDULE IS DUE PAST A QUARTER AND AT THE LEAST: its
-// unreachable bytes must be MORE than 1/code.ExpungeShare of the live bytes —
+// unreachable bytes must be MORE than 1/gitlet.ExpungeShare of the live bytes —
 // exactly a quarter is not — and AT LEAST the least an expunge frees — one
 // byte under it is not, whatever its share — and every compactor the engine
 // builds holds gitlet.ExpungeMinBytes as that least.
