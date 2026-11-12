@@ -1801,10 +1801,17 @@ var errResultModels = fmt.Errorf("executor: a result states its spend for more t
 
 // sinceLastResult is the result's per-run spend, model by model
 // ([claudeResult.SinceLastResult]), and whether the result states it:
-// PRESENT, EVEN EMPTY, IS STATED, and a value that is absent, null or no
-// object states nothing. Each model's spend is read by its keys exactly as
-// written and loosely by type ([looseModelUsage]), and a model the result
-// names twice by its last, as JSON.parse reads it.
+// PRESENT, EVEN EMPTY, IS STATED, and an absent key states nothing, as on a
+// release before 2.1.310, which never writes it. Each model's spend is read
+// by its keys exactly as written and loosely by type ([looseModelUsage]), and
+// a model the result names twice by its last, as JSON.parse reads it.
+//
+// A VALUE THAT IS THERE AND NO OBJECT IS UNREAD, null among it, never a
+// result that states nothing: both releases measured write the key as an
+// object or not at all (their result schema declares it an optional record
+// of objects), so another kind is a reshape or a line no harness wrote, never
+// a spend of nothing. Read as nothing, it would leave that result's calls out
+// of the run's sum, as a result past the bound would (below).
 //
 // A MODEL AT A TIME ([eachKey]), never the whole object first, and AT MOST
 // [claudeResultModelsMax] OF THEM. The walk keeps each model it meets and a
@@ -1822,8 +1829,12 @@ var errResultModels = fmt.Errorf("executor: a result states its spend for more t
 // reader, the run's event stream, then reads the run's own spend as stated by
 // none of its results ([claudeEvents.runSpend]).
 func (r claudeResult) sinceLastResult() (map[string]claudeModelUsage, bool, error) {
-	if !wireObject(r.SinceLastResult) {
+	switch {
+	case r.SinceLastResult == nil:
 		return nil, false, nil
+	case !wireObject(r.SinceLastResult):
+		return nil, false, fmt.Errorf("executor: a result states its spend as %s, not an object",
+			wireKind(r.SinceLastResult))
 	}
 	var (
 		// place is each model met, by its name, its place in names and last.

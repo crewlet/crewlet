@@ -381,6 +381,58 @@ func TestARunsSpendIsUnreadWhereAResultNamesMoreModelsThanAResultIsReadFor(t *te
 	}
 }
 
+// A RUN'S SPEND IS UNREAD WHERE A RESULT STATES IT AS NO OBJECT: a result whose
+// spend model by model is there and is null, a list, a string, a number or a
+// list holding a spend is read for none of it, so the run's own spend reads as
+// stated by no result, whatever the result before or after it stated, never as
+// that other result's alone, which would leave this one's calls out of the
+// run's sum. A result whose spend is an empty object states a spend of
+// nothing, and one that carries no spend at all states nothing, so beside a
+// result that states its spend, either leaves the run's spend that result's.
+//
+// Mutation: read a spend that is there and no object as one that states
+// nothing, and the run's spend reads as the other result's alone.
+func TestARunsSpendIsUnreadWhereAResultStatesItAsNoObject(t *testing.T) {
+	t.Parallel()
+	const (
+		failed = "[error] the run ended: error_during_execution: it ran out"
+		read   = "own {input:1 cacheRead:3 cacheWrite:4 output:2 costUSD:0.25} (stated true)"
+		unread = "own {input:0 cacheRead:0 cacheWrite:0 output:0 costUSD:0} (stated false)"
+	)
+	spent := `"model_usage_since_last_result":{` + recordsSpent + `}`
+	for name, tc := range map[string]struct{ spend, want string }{
+		"null":                {spend: `"model_usage_since_last_result":null`, want: unread},
+		"an empty list":       {spend: `"model_usage_since_last_result":[]`, want: unread},
+		"a list of one spend": {spend: `"model_usage_since_last_result":[{` + recordsSpent + `}]`, want: unread},
+		"a string":            {spend: `"model_usage_since_last_result":"none"`, want: unread},
+		"a number":            {spend: `"model_usage_since_last_result":0`, want: unread},
+		"an empty object":     {spend: `"model_usage_since_last_result":{}`, want: read},
+	} {
+		other := ctReplace(t, recordsEnding, spent, tc.spend)
+		for order, lines := range map[string][]string{
+			"after a result that states its spend":  {recordsEnding, other},
+			"before a result that states its spend": {other, recordsEnding},
+		} {
+			d := &claudeEvents{tools: map[string]string{}}
+			for _, line := range lines {
+				d.Line([]byte(line))
+			}
+			own, stated := d.runSpend()
+			got := fmt.Sprintf("%q, own %+v (stated %t)", d.Result().Transcript, own, stated)
+			if want := fmt.Sprintf("%q, %s", failed+"\n"+failed, tc.want); got != want {
+				t.Errorf("a result whose spend is %s, %s, reads as\n%s\nwant\n%s", name, order, got, want)
+			}
+		}
+	}
+	d := &claudeEvents{tools: map[string]string{}}
+	d.Line([]byte(recordsEnding))
+	d.Line([]byte(ctReplace(t, recordsEnding, ","+spent, "")))
+	own, stated := d.runSpend()
+	if got := fmt.Sprintf("own %+v (stated %t)", own, stated); got != read {
+		t.Errorf("a result that states its spend, then one that carries none, reads as %s, want %s", got, read)
+	}
+}
+
 // A RESULT'S SPEND MODEL BY MODEL READS AS ITS WHOLE DECODE READ IT, up to the
 // bound on the models it is read for: read a model at a time, every result
 // reads as the decode of the whole object into a map read it, so a model

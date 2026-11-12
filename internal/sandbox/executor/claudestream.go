@@ -294,8 +294,9 @@ type claudeEvents struct {
 	// own is the run's own spend as its results stated it, each result's
 	// per-model figures for the calls since the one before
 	// ([claudeResult.SinceLastResult]) added up; stated whether any result
-	// carried them, and unread whether one carried them for more models than
-	// a result is read for ([claudeEvents.runSpend]).
+	// carried them, and unread whether one carried them in a form they are
+	// not read in: for more models than a result is read for, or as no
+	// object ([claudeEvents.runSpend]).
 	own            runSpend
 	stated, unread bool
 }
@@ -308,10 +309,11 @@ type claudeEvents struct {
 //
 // NONE ONCE ONE RESULT'S FIGURES ARE UNREAD: a result naming more models than
 // a result is read for ([claudeResultModelsMax]) is read for none of them,
-// so the sum of the others is no run's spend, and would charge the run for
-// some of its calls and not the rest. Stated by none, the run is charged by
-// its result's figures for its session, as a run on a release that states
-// none is ([Runner.ownSpend]).
+// and so is one whose figures are there and no object, null among them
+// ([claudeResult.sinceLastResult]), so the sum of the others is no run's
+// spend, and would charge the run for some of its calls and not the rest.
+// Stated by none, the run is charged by its result's figures for its
+// session, as a run on a release that states none is ([Runner.ownSpend]).
 func (d *claudeEvents) runSpend() (runSpend, bool) {
 	if d.unread {
 		return runSpend{}, false
@@ -420,8 +422,9 @@ func (d *claudeEvents) Line(line []byte) {
 		// PRESENT, EVEN EMPTY, IS STATED: a result with no calls since the
 		// one before says the run spent nothing more, which is an answer. One
 		// whose spend is unread, as one naming more models than a result is
-		// read for is ([claudeResult.sinceLastResult]), leaves the run's own
-		// spend unread, and costs the line nothing else.
+		// read for is, or one whose spend is no object
+		// ([claudeResult.sinceLastResult]), leaves the run's own spend
+		// unread, and costs the line nothing else.
 		switch models, stated, err := result.sinceLastResult(); {
 		case err != nil:
 			d.unread = true
