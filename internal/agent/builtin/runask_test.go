@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -22,15 +23,41 @@ type askDesk struct {
 	recorded []sandbox.Ask
 	runs     []string
 	launches []string
+
+	// mu guards every field: two turns of one seat ask at once.
+	mu sync.Mutex
+	// seat, where set, keeps each recorded ask as a running row of that
+	// seat's, which ListActiveForSeat answers from; listErr fails that read,
+	// and onList runs inside it, once the rows are read, as onRecord runs
+	// inside RecordAsk before anything is written.
+	seat     string
+	rows     []sandbox.PendingRun
+	listErr  error
+	onList   func()
+	onRecord func()
 }
 
 func (d *askDesk) RecordAsk(_ context.Context, turnID, launch string, ask sandbox.Ask,
 ) (sandbox.AskOutcome, error) {
+	if d.onRecord != nil {
+		d.onRecord()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.recorded = append(d.recorded, ask)
 	d.runs = append(d.runs, turnID)
 	d.launches = append(d.launches, launch)
 	if d.err != nil {
 		return "", d.err
+	}
+	if d.seat != "" && d.outcome == sandbox.AskRecorded {
+		row := sandbox.PendingRun{TurnID: turnID, LaunchID: launch, AgentHandle: d.seat,
+			Status: sandbox.StatusRunning, Question: ask.Question}
+		if ask.Held != nil {
+			held := *ask.Held
+			row.HeldCall = &held
+		}
+		d.rows = append(d.rows, row)
 	}
 	return d.outcome, nil
 }
@@ -38,6 +65,23 @@ func (d *askDesk) RecordAsk(_ context.Context, turnID, launch string, ask sandbo
 // Get reads no row: the desk records asks and holds none of the run.
 func (d *askDesk) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, d.err
+}
+
+// ListActiveForSeat is the rows the desk kept for handle.
+func (d *askDesk) ListActiveForSeat(_ context.Context, handle string) ([]sandbox.PendingRun, error) {
+	d.mu.Lock()
+	err := d.listErr
+	var out []sandbox.PendingRun
+	for _, r := range d.rows {
+		if r.AgentHandle == handle {
+			out = append(out, r)
+		}
+	}
+	d.mu.Unlock()
+	if d.onList != nil {
+		d.onList()
+	}
+	return out, err
 }
 
 // askCall calls `ask_and_wait` as the job "launch-1" of the run "run-1" makes

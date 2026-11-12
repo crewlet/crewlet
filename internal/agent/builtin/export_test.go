@@ -31,3 +31,13 @@ const (
 // OperateCallDigest is [operateCallDigest], so the cases that compose an
 // approved decision bind it to the call they will make.
 var OperateCallDigest = operateCallDigest
+
+// HoldingLocked reports whether the lock a fixed call is read and recorded
+// under is taken now.
+func HoldingLocked() bool {
+	if holding.TryLock() {
+		holding.Unlock()
+		return false
+	}
+	return true
+}

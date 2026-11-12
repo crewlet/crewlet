@@ -322,6 +322,11 @@ type HeldCall struct {
 	// other for every other call.
 	Act string `json:"act,omitempty"`
 
+	// Subject is the identity of what a fixed call decides, apart from its
+	// wording ([delegated.Subject]): its seat's repeat joins this call while
+	// it waits ([PendingRun.HeldOpen]). Empty for a call nothing joins.
+	Subject string `json:"subject,omitempty"`
+
 	// Delegation is the rule that put the call to agent delegates before any
 	// person (ADR-0125), nil for a call put to people at once. While it is
 	// not escalated the call waits on its delegates alone: it is put to
@@ -360,6 +365,15 @@ func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
 // Delegated reports whether the call waits on its delegates alone: put to
 // agent delegates and not yet escalated to people.
 func (h HeldCall) Delegated() bool { return h.Delegation != nil && h.Delegation.Escalated == nil }
+
+// HeldOpen reports whether the run's held call still waits for its answer, on
+// delegates or on people: from its recording, before the job parks, until an
+// answer, an ending or the run's next job takes the question.
+func (r PendingRun) HeldOpen() bool {
+	return r.HeldCall != nil && r.HeldCall.LaunchID == r.LaunchID && r.Ending == nil &&
+		!r.HeldCall.Calling() && r.AskedBy(r.LaunchID) &&
+		(r.Status == StatusLaunching || r.Status == StatusRunning || slices.Contains(Awaiting, r.Status))
+}
 
 // HeldDelegation is how a held call was put to agent delegates (ADR-0125):
 // the rule, the seats, what a verdict binds to, what each answered, and the
@@ -506,6 +520,10 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 	if h.Binding != "" && (!h.Fixed || len(h.Binding) > maxHeldBindingBytes) {
 		found = append(found, fieldRefusal("held_call.binding", "is set on a call no tool binds, "+
 			"or is longer than a digest"))
+	}
+	if h.Subject != "" && (!h.Fixed || len(h.Subject) != maxHeldBindingBytes) {
+		found = append(found, fieldRefusal("held_call.subject", "is set on a call no tool names "+
+			"the subject of, or is not a digest"))
 	}
 	if h.Act != "" && !delegated.Kind(h.Act).Valid() {
 		found = append(found, fieldRefusal("held_call.act", "is not an act this build knows"))

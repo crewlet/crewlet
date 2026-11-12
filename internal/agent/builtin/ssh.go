@@ -493,6 +493,16 @@ func (t *sshOperate) Binding(turn *turnctx.Turn, args map[string]any) string {
 	return sshint.OperateBinding(h)
 }
 
+// Subject is the server as the person is shown it, the command and the stdin:
+// the same command asked again with another reason is the same request.
+func (t *sshOperate) Subject(turn *turnctx.Turn, args map[string]any) string {
+	a, refusal := sshArgsOf(t.Name(), args, true)
+	if refusal != nil {
+		return ""
+	}
+	return delegated.Subject(delegated.KindSSHOperate, a.host, t.Binding(turn, args), a.command, string(a.stdin))
+}
+
 // OutputUnkept is true: what a server printed reaches the turn and no record.
 func (t *sshOperate) OutputUnkept() bool { return true }
 
