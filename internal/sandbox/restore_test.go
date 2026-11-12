@@ -11,7 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -110,6 +109,10 @@ func keptRow(t *testing.T, kept SessionCapture) executorkeep.TurnRow {
 
 // keptTurn is a keeping rig whose turn t1 ran one job, collected with its
 // session taken whole and kept, and the restore that continues it.
+//
+// Built on [keepingRig], and so only in a bubble ([inBubble]).
+//
+//fixedwait:bubble
 func keptTurn(t *testing.T) (*coordRig, *keptRestore, SessionCapture) {
 	t.Helper()
 	return keptTurnBy(t, nil)
@@ -117,6 +120,10 @@ func keptTurn(t *testing.T) (*coordRig, *keptRestore, SessionCapture) {
 
 // keptTurnBy is [keptTurn] taken by a coordinator built with what with sets on
 // its options ([newCoordRigWith]) — its taker lease, for one: nil sets nothing.
+//
+// Built on [keepingRig], and so only in a bubble ([inBubble]).
+//
+//fixedwait:bubble
 func keptTurnBy(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *keptRestore, SessionCapture) {
 	t.Helper()
 	rig, _, keep := keepingRigWith(t, with)
@@ -196,41 +203,43 @@ func restoreSpools(t *testing.T, rig *coordRig) []string {
 // goes red.
 func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 	t.Parallel()
-	rig, restore, kept := keptTurn(t)
-	req := continuingKept(kept)
-	var decided []LaunchDecision
-	req.Decided = func(d LaunchDecision) { decided = append(decided, d) }
-	res, err := launchRestoring(t, rig, restore, req)
-	if err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	if res.Reused {
-		t.Fatalf("relaunch = %+v, want a new box: the collected job's box was handed back", res)
-	}
-	started := rig.runner.Started()
-	last := started[len(started)-1]
-	if last.Resume != "s-1" || last.Brief != "carry on in a box that replaced yours" ||
-		last.FreshBrief != "the fresh brief" {
-		t.Fatalf("the relaunched job started with session %q, brief %q and fresh brief %q; want the kept "+
-			"session, the new-box continuation and the fresh brief beside it",
-			last.Resume, last.Brief, last.FreshBrief)
-	}
-	carried := rig.runner.Carried()
-	if len(carried) != 1 || string(carried[0].Body) != "the transcript" ||
-		carried[0].Archive.SessionID != "s-1" || carried[0].Replace {
-		t.Fatalf("the box was handed %+v, want the turn's kept archive, kept over no copy", carried)
-	}
-	if res.Continues != "s-1" || res.Brief != BriefContinuedNewBox ||
-		rig.get("t1").Launch.Brief != BriefContinuedNewBox {
-		t.Errorf("the launch answered %+v and recorded brief %q, want the new-box continuation",
-			res, rig.get("t1").Launch.Brief)
-	}
-	if len(decided) != 1 || decided[0] != (LaunchDecision{Brief: BriefContinuedNewBox, Kept: true}) {
-		t.Errorf("the launch's caller was told %+v, want once: the turn's kept session, in a new box", decided)
-	}
-	if left := restoreSpools(t, rig); len(left) != 0 {
-		t.Errorf("the launch left the spool it carried the session in: %v", left)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, restore, kept := keptTurn(t)
+		req := continuingKept(kept)
+		var decided []LaunchDecision
+		req.Decided = func(d LaunchDecision) { decided = append(decided, d) }
+		res, err := launchRestoring(t, rig, restore, req)
+		if err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		if res.Reused {
+			t.Fatalf("relaunch = %+v, want a new box: the collected job's box was handed back", res)
+		}
+		started := rig.runner.Started()
+		last := started[len(started)-1]
+		if last.Resume != "s-1" || last.Brief != "carry on in a box that replaced yours" ||
+			last.FreshBrief != "the fresh brief" {
+			t.Fatalf("the relaunched job started with session %q, brief %q and fresh brief %q; want the kept "+
+				"session, the new-box continuation and the fresh brief beside it",
+				last.Resume, last.Brief, last.FreshBrief)
+		}
+		carried := rig.runner.Carried()
+		if len(carried) != 1 || string(carried[0].Body) != "the transcript" ||
+			carried[0].Archive.SessionID != "s-1" || carried[0].Replace {
+			t.Fatalf("the box was handed %+v, want the turn's kept archive, kept over no copy", carried)
+		}
+		if res.Continues != "s-1" || res.Brief != BriefContinuedNewBox ||
+			rig.get("t1").Launch.Brief != BriefContinuedNewBox {
+			t.Errorf("the launch answered %+v and recorded brief %q, want the new-box continuation",
+				res, rig.get("t1").Launch.Brief)
+		}
+		if len(decided) != 1 || decided[0] != (LaunchDecision{Brief: BriefContinuedNewBox, Kept: true}) {
+			t.Errorf("the launch's caller was told %+v, want once: the turn's kept session, in a new box", decided)
+		}
+		if left := restoreSpools(t, rig); len(left) != 0 {
+			t.Errorf("the launch left the spool it carried the session in: %v", left)
+		}
+	})
 }
 
 // A RUN THAT CONTINUES A SESSION IS WIRED FOR EITHER SESSION ITS BOX MAY START,
@@ -247,54 +256,56 @@ func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 // without the box's own servers, and a check goes red.
 func TestARunThatContinuesASessionIsWiredForEitherSessionItsBoxStarts(t *testing.T) {
 	t.Parallel()
-	const at = "https://engine.example.com/mcp/"
-	opened := func(OpenedJob) (Opening, error) {
-		return Opening{
-			Servers: map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: at + "kept"}},
-			Steer:   SteerWiring{Server: "crewlet", Tool: "steer_take", URL: at + "kept/steer"},
-			Fresh: &Opening{
-				Servers: map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: at + "fresh"}},
-				Steer:   SteerWiring{Server: "crewlet", Tool: "steer_take", URL: at + "fresh/steer"},
-			},
-		}, nil
-	}
-	own := map[string]MCPServer{"repo": {Command: "repo-mcp"}}
+	inBubble(t, func(t *testing.T) {
+		const at = "https://engine.example.com/mcp/"
+		opened := func(OpenedJob) (Opening, error) {
+			return Opening{
+				Servers: map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: at + "kept"}},
+				Steer:   SteerWiring{Server: "crewlet", Tool: "steer_take", URL: at + "kept/steer"},
+				Fresh: &Opening{
+					Servers: map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: at + "fresh"}},
+					Steer:   SteerWiring{Server: "crewlet", Tool: "steer_take", URL: at + "fresh/steer"},
+				},
+			}, nil
+		}
+		own := map[string]MCPServer{"repo": {Command: "repo-mcp"}}
 
-	rig, restore, kept := keptTurn(t)
-	req := continuingKept(kept)
-	req.Opened, req.MCPServers = opened, own
-	if _, err := launchRestoring(t, rig, restore, req); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	started := rig.runner.Started()
-	last := started[len(started)-1]
-	fresh := last.FreshWiring
-	switch {
-	case last.Resume != "s-1":
-		t.Fatalf("the relaunch continues %q, want the kept session", last.Resume)
-	case fresh == nil:
-		t.Fatal("a run that continues a session was handed no wiring for a session of its own")
-	case last.MCPServers["crewlet"].URL != at+"kept" || last.Steer.URL != at+"kept/steer":
-		t.Errorf("the run is wired to %q and %q, want the continued session's token",
-			last.MCPServers["crewlet"].URL, last.Steer.URL)
-	case fresh.MCPServers["crewlet"].URL != at+"fresh" || fresh.Steer.URL != at+"fresh/steer":
-		t.Errorf("a session of its own is wired to %q and %q, want its own token",
-			fresh.MCPServers["crewlet"].URL, fresh.Steer.URL)
-	case last.MCPServers["repo"].Command != "repo-mcp" || fresh.MCPServers["repo"].Command != "repo-mcp":
-		t.Errorf("the box's own servers are %+v and %+v, want them beside each wiring",
-			last.MCPServers["repo"], fresh.MCPServers["repo"])
-	}
+		rig, restore, kept := keptTurn(t)
+		req := continuingKept(kept)
+		req.Opened, req.MCPServers = opened, own
+		if _, err := launchRestoring(t, rig, restore, req); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		started := rig.runner.Started()
+		last := started[len(started)-1]
+		fresh := last.FreshWiring
+		switch {
+		case last.Resume != "s-1":
+			t.Fatalf("the relaunch continues %q, want the kept session", last.Resume)
+		case fresh == nil:
+			t.Fatal("a run that continues a session was handed no wiring for a session of its own")
+		case last.MCPServers["crewlet"].URL != at+"kept" || last.Steer.URL != at+"kept/steer":
+			t.Errorf("the run is wired to %q and %q, want the continued session's token",
+				last.MCPServers["crewlet"].URL, last.Steer.URL)
+		case fresh.MCPServers["crewlet"].URL != at+"fresh" || fresh.Steer.URL != at+"fresh/steer":
+			t.Errorf("a session of its own is wired to %q and %q, want its own token",
+				fresh.MCPServers["crewlet"].URL, fresh.Steer.URL)
+		case last.MCPServers["repo"].Command != "repo-mcp" || fresh.MCPServers["repo"].Command != "repo-mcp":
+			t.Errorf("the box's own servers are %+v and %+v, want them beside each wiring",
+				last.MCPServers["repo"], fresh.MCPServers["repo"])
+		}
 
-	bare := newCoordRig(t)
-	first := launchReq("t9")
-	first.Opened, first.MCPServers = opened, own
-	if _, err := launchRestoring(t, bare, &keptRestore{}, first); err != nil {
-		t.Fatalf("launch: %v", err)
-	}
-	if started := bare.runner.Started(); len(started) != 1 || started[0].Resume != "" ||
-		started[0].FreshWiring != nil || started[0].MCPServers["crewlet"].URL != at+"kept" {
-		t.Errorf("a run starting a session of its own was started %+v, want one wiring", started)
-	}
+		bare := newCoordRig(t)
+		first := launchReq("t9")
+		first.Opened, first.MCPServers = opened, own
+		if _, err := launchRestoring(t, bare, &keptRestore{}, first); err != nil {
+			t.Fatalf("launch: %v", err)
+		}
+		if started := bare.runner.Started(); len(started) != 1 || started[0].Resume != "" ||
+			started[0].FreshWiring != nil || started[0].MCPServers["crewlet"].URL != at+"kept" {
+			t.Errorf("a run starting a session of its own was started %+v, want one wiring", started)
+		}
+	})
 }
 
 // THE BRIEF MATCHES WHAT THE RUN HAS. Of the three briefs, the launch hands the
@@ -424,30 +435,32 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 // read the row below linearizable, and this goes red.
 func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 	t.Parallel()
-	rig, restore, kept := keptTurn(t)
-	sibling := keptRow(t, kept)
-	sibling.Turn, sibling.SessionID = "t2", "s-sibling"
-	sibling.Object.Key = objstore.KeyAt(time.Now())
-	sibling.Ended = true
-	restore.mu.Lock()
-	restore.rows["t2"] = sibling
-	restore.archives[sibling.Object.Key.String()] = []byte("the sibling's transcript")
-	restore.mu.Unlock()
+	inBubble(t, func(t *testing.T) {
+		rig, restore, kept := keptTurn(t)
+		sibling := keptRow(t, kept)
+		sibling.Turn, sibling.SessionID = "t2", "s-sibling"
+		sibling.Object.Key = objstore.KeyAt(time.Now())
+		sibling.Ended = true
+		restore.mu.Lock()
+		restore.rows["t2"] = sibling
+		restore.archives[sibling.Object.Key.String()] = []byte("the sibling's transcript")
+		restore.mu.Unlock()
 
-	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
-	if why != "" || continued.Row.Turn != "t1" || continued.Row.SessionID != "s-1" ||
-		!continued.Capture.samePlace(kept) {
-		t.Fatalf("the relaunch continues %+v (%q), want the turn's own kept session", continued, why)
-	}
-	if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	if asked := restore.askedFor(); slices.ContainsFunc(asked, func(a string) bool { return a != "swe/t1" }) {
-		t.Fatalf("the restore read %v, want the launching seat's own turn alone", asked)
-	}
-	if carried := rig.runner.Carried(); len(carried) != 1 || string(carried[0].Body) != "the transcript" {
-		t.Fatalf("the run was handed %+v, want its own turn's session", carried)
-	}
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		if why != "" || continued.Row.Turn != "t1" || continued.Row.SessionID != "s-1" ||
+			!continued.Capture.samePlace(kept) {
+			t.Fatalf("the relaunch continues %+v (%q), want the turn's own kept session", continued, why)
+		}
+		if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		if asked := restore.askedFor(); slices.ContainsFunc(asked, func(a string) bool { return a != "swe/t1" }) {
+			t.Fatalf("the restore read %v, want the launching seat's own turn alone", asked)
+		}
+		if carried := rig.runner.Carried(); len(carried) != 1 || string(carried[0].Body) != "the transcript" {
+			t.Fatalf("the run was handed %+v, want its own turn's session", carried)
+		}
+	})
 }
 
 // AN UNKEPT NEWEST CAPTURE, OR NONE, CONTINUES NOTHING, and says why. A job
@@ -462,29 +475,31 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 // answer the context only of a capture that is continued, and a case goes red.
 func TestAnUnkeptNewestCaptureStartsFreshAndSaysWhy(t *testing.T) {
 	t.Parallel()
-	rig, _, kept := keptTurn(t)
-	refused := kept
-	refused.CaptureSeq, refused.State, refused.Reason = kept.CaptureSeq+1, CaptureRefused, "past the seat's budget"
-	refused.ContextTokens = 61000
-	if _, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil {
-		t.Fatalf("StampCapture: %v", err)
-	}
-	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
-	if why == "" || !strings.Contains(why, "not kept") || continued.Capture.CaptureSeq != 0 {
-		t.Fatalf("a turn whose newest capture was refused continues %+v (%q), want none, said", continued, why)
-	}
-	if continued.Context != 61000 {
-		t.Errorf("the answer says the job's session carried %d tokens, want the 61000 its newest capture "+
-			"measured, for the floor of a launch that continues it in its box", continued.Context)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, _, kept := keptTurn(t)
+		refused := kept
+		refused.CaptureSeq, refused.State, refused.Reason = kept.CaptureSeq+1, CaptureRefused, "past the seat's budget"
+		refused.ContextTokens = 61000
+		if _, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil {
+			t.Fatalf("StampCapture: %v", err)
+		}
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		if why == "" || !strings.Contains(why, "not kept") || continued.Capture.CaptureSeq != 0 {
+			t.Fatalf("a turn whose newest capture was refused continues %+v (%q), want none, said", continued, why)
+		}
+		if continued.Context != 61000 {
+			t.Errorf("the answer says the job's session carried %d tokens, want the 61000 its newest capture "+
+				"measured, for the floor of a launch that continues it in its box", continued.Context)
+		}
 
-	bare := newCoordRig(t)
-	bare.coordinator.restore = &keptRestore{}
-	bare.launch("t9")
-	if _, why := bare.coordinator.ContinuedCapture(t.Context(), "t9", bare.runner); !strings.Contains(why,
-		"kept no capture") {
-		t.Fatalf("a turn that kept no capture answered %q, want it said", why)
-	}
+		bare := newCoordRig(t)
+		bare.coordinator.restore = &keptRestore{}
+		bare.launch("t9")
+		if _, why := bare.coordinator.ContinuedCapture(t.Context(), "t9", bare.runner); !strings.Contains(why,
+			"kept no capture") {
+			t.Fatalf("a turn that kept no capture answered %q, want it said", why)
+		}
+	})
 }
 
 // fakeRestorer is a runner of a harness that restores its own sessions, and why
@@ -634,31 +649,33 @@ func TestABriefKindIsOneOfFour(t *testing.T) {
 // job before it was told.
 func TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows(t *testing.T) {
 	t.Parallel()
-	rig, restore, kept := keptTurn(t)
-	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",
-		AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	if run := rig.get("t1"); run.LaunchSeq != 2 || run.Kept == nil || !run.Kept.samePlace(kept) {
-		t.Fatalf("the row is at launch %d keeping %+v, want launch 2 and the first job's session",
-			run.LaunchSeq, run.Kept)
-	}
-	if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
-		"left no capture") || continued.Capture.CaptureSeq != 0 {
-		t.Fatalf("the relaunch continues %+v (%q), want none, said: the job it follows left none",
-			continued, why)
-	}
-	// AND THE LAUNCH, asked to continue the first job's session all the same,
-	// starts one of its own.
-	if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	started := rig.runner.Started()
-	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" ||
-		len(rig.runner.Carried()) != 0 {
-		t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own",
-			last.Resume, last.Brief)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, restore, kept := keptTurn(t)
+		if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",
+			AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		if run := rig.get("t1"); run.LaunchSeq != 2 || run.Kept == nil || !run.Kept.samePlace(kept) {
+			t.Fatalf("the row is at launch %d keeping %+v, want launch 2 and the first job's session",
+				run.LaunchSeq, run.Kept)
+		}
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
+			"left no capture") || continued.Capture.CaptureSeq != 0 {
+			t.Fatalf("the relaunch continues %+v (%q), want none, said: the job it follows left none",
+				continued, why)
+		}
+		// AND THE LAUNCH, asked to continue the first job's session all the same,
+		// starts one of its own.
+		if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		started := rig.runner.Started()
+		if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" ||
+			len(rig.runner.Carried()) != 0 {
+			t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own",
+				last.Resume, last.Brief)
+		}
+	})
 }
 
 // A RELAUNCH WAITS BRIEFLY FOR THE CAPTURE OF THE JOB IT FOLLOWS, AND NO LONGER.
@@ -676,46 +693,50 @@ func TestARelaunchWaitsBrieflyForTheCaptureOfTheJobItFollows(t *testing.T) {
 	t.Parallel()
 	t.Run("still being kept", func(t *testing.T) {
 		t.Parallel()
-		rig, _, kept := keptTurn(t)
-		rig.coordinator.relaunchWait = 50 * time.Millisecond
-		begun := kept
-		begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
-		if _, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil {
-			t.Fatalf("StampCapture: %v", err)
-		}
-		asked := time.Now()
-		if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
-			"still being kept") {
-			t.Fatalf("a relaunch whose job's capture is still being kept answered %q, want it said", why)
-		}
-		if waited := time.Since(asked); waited > 10*time.Second {
-			t.Errorf("the relaunch waited %s on the keep, past its own short wait", waited)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, _, kept := keptTurn(t)
+			rig.coordinator.relaunchWait = 50 * time.Millisecond
+			begun := kept
+			begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
+			if _, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil {
+				t.Fatalf("StampCapture: %v", err)
+			}
+			asked := time.Now()
+			if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
+				"still being kept") {
+				t.Fatalf("a relaunch whose job's capture is still being kept answered %q, want it said", why)
+			}
+			if waited := time.Since(asked); waited > 10*time.Second {
+				t.Errorf("the relaunch waited %s on the keep, past its own short wait", waited)
+			}
+		})
 	})
 	t.Run("kept while it waits", func(t *testing.T) {
 		t.Parallel()
-		rig, restore, kept := keptTurn(t)
-		rig.coordinator.relaunchWait = 10 * time.Second
-		begun := kept
-		begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
-		if _, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil {
-			t.Fatalf("StampCapture: %v", err)
-		}
-		landed := begun
-		landed.State = CaptureLanded
-		row := keptRow(t, kept)
-		row.CaptureSeq = landed.CaptureSeq
-		go func() {
-			time.Sleep(20 * time.Millisecond)
-			restore.mu.Lock()
-			restore.rows["t1"] = row
-			restore.mu.Unlock()
-			_, _ = rig.pending.StampCapture(context.Background(), "t1", landed)
-		}()
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
-		if why != "" || !continued.Capture.samePlace(landed) {
-			t.Fatalf("the relaunch continues %+v (%q), want the capture kept while it waited", continued, why)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, restore, kept := keptTurn(t)
+			rig.coordinator.relaunchWait = 10 * time.Second
+			begun := kept
+			begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
+			if _, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil {
+				t.Fatalf("StampCapture: %v", err)
+			}
+			landed := begun
+			landed.State = CaptureLanded
+			row := keptRow(t, kept)
+			row.CaptureSeq = landed.CaptureSeq
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				restore.mu.Lock()
+				restore.rows["t1"] = row
+				restore.mu.Unlock()
+				_, _ = rig.pending.StampCapture(context.Background(), "t1", landed)
+			}()
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			if why != "" || !continued.Capture.samePlace(landed) {
+				t.Fatalf("the relaunch continues %+v (%q), want the capture kept while it waited", continued, why)
+			}
+		})
 	})
 }
 
@@ -754,7 +775,7 @@ func (f *flakyStamps) StampCapture(ctx context.Context, turnID string, c Session
 // or keeps it begun.
 func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		rig, _, kept := keptTurn(t)
 		begun := kept
 		begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
@@ -805,25 +826,27 @@ func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 	for name, cutOff := range map[string]bool{"killed": true, "exited cleanly": false} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, writes, _ := keepingRig(t)
-			rig.launchKept(t, "t1")
-			session := rig.runner.Session
-			session.ContextTokens = 61_000
-			rig.runner.Finish(Result{Success: !cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
-				Captured: &session.Archive, HarnessCutOff: cutOff})
-			collectHeld(t, rig, "t1")
-			run := rig.get("t1")
-			if run.Kept == nil || run.Kept.Interrupted != cutOff {
-				t.Fatalf("the row keeps %+v, want a capture interrupted %v", run.Kept, cutOff)
-			}
-			if captures := writes.captured(); len(captures) != 1 || captures[0].Stamp.Interrupted != cutOff ||
-				captures[0].Stamp.ContextTokens != 61_000 {
-				t.Errorf("the log was asked to record %+v, want one capture interrupted %v of 61000 tokens",
-					captures, cutOff)
-			}
-			if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
-				t.Errorf("the session was taken %+v, want the archive its script packed, as it was", takes)
-			}
+			inBubble(t, func(t *testing.T) {
+				rig, writes, _ := keepingRig(t)
+				rig.launchKept(t, "t1")
+				session := rig.runner.Session
+				session.ContextTokens = 61_000
+				rig.runner.Finish(Result{Success: !cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+					Captured: &session.Archive, HarnessCutOff: cutOff})
+				collectHeld(t, rig, "t1")
+				run := rig.get("t1")
+				if run.Kept == nil || run.Kept.Interrupted != cutOff {
+					t.Fatalf("the row keeps %+v, want a capture interrupted %v", run.Kept, cutOff)
+				}
+				if captures := writes.captured(); len(captures) != 1 || captures[0].Stamp.Interrupted != cutOff ||
+					captures[0].Stamp.ContextTokens != 61_000 {
+					t.Errorf("the log was asked to record %+v, want one capture interrupted %v of 61000 tokens",
+						captures, cutOff)
+				}
+				if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
+					t.Errorf("the session was taken %+v, want the archive its script packed, as it was", takes)
+				}
+			})
 		})
 	}
 }
@@ -911,18 +934,68 @@ func TestACaptureStatesTheNotesItHoldsOnlyWhereItsHarnessEndedItsOwnRun(t *testi
 	}
 }
 
+// A CAPTURE'S NOTE CURSOR STOPS BEFORE A READ ITS HARNESS NEVER HAD. A take
+// whose write landed after its answer was lost is marked unanswered on the
+// record: the session lacks those notes however cleanly its harness ended,
+// while it holds the answered reads after them, which one number cannot say. So
+// the cursor stops before the first read marked unanswered — whichever job's
+// take it was, since a later brief that told the note again is not known to
+// have been built after the mark landed — and a launch that continues the
+// session tells every note past it, as notes it may already show. A record with
+// none marked holds every read, and a capture cut off states none either way.
+//
+// Mutation: count a read marked unanswered as held, stop before the last such
+// read rather than the first, or stop only before the capture's own job's, and
+// a case goes red.
+func TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad(t *testing.T) {
+	t.Parallel()
+	read := func(id string, order int, launch string, unanswered bool) RunNote {
+		return RunNote{ID: id, Read: &NoteRead{Order: order, Boundary: string(types.SteerBoundaryToolBatch),
+			Launch: launch, Unanswered: unanswered}}
+	}
+	for name, tc := range map[string]struct {
+		notes []RunNote
+		want  int
+	}{
+		"no read marked": {notes: []RunNote{read("a", 1, "job-2", false), read("b", 2, "job-2", false),
+			read("c", 3, "job-2", false)}, want: 3},
+		"the job's own take marked": {notes: []RunNote{read("a", 1, "job-2", false), read("b", 2, "job-2", true),
+			read("c", 3, "job-2", false)}, want: 1},
+		"two takes marked, the first stops it": {notes: []RunNote{read("a", 1, "job-2", false),
+			read("b", 2, "job-2", true), read("c", 3, "job-2", true)}, want: 1},
+		"the marked take listed after a later read": {notes: []RunNote{read("c", 3, "job-2", false),
+			read("b", 2, "job-2", true), read("a", 1, "job-2", false)}, want: 1},
+		"an earlier job's take marked": {notes: []RunNote{read("a", 1, "job-1", true), read("b", 2, "job-2", false),
+			read("c", 3, "job-2", false)}, want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := PendingRun{LaunchID: "job-2", Steer: RunSteer{Reads: 3, Notes: tc.notes}}
+			if got := notesHeld(run, false); got != tc.want {
+				t.Errorf("a session its harness ended its own run in holds notes through %d, want %d", got, tc.want)
+			}
+			if got := notesHeld(run, true); got != 0 {
+				t.Errorf("a cut-off session states it holds notes through %d, want none", got)
+			}
+		})
+	}
+}
+
 // EVERY STAMP OF A CAPTURE STATES THE NOTES ITS SESSION HOLDS, TAKEN OR REFUSED.
 // The note cursor on a capture's stamp is what a launch that continues it tells
 // it the notes past, on this build where its harness ended its own run and on
 // an older build whatever it ended: so the stamp of a session its harness ended
-// its own run in states every note the record says was read, and the stamp of
-// one cut off states none — the stamp of a capture taken, and that of one
-// refused before its place was reserved, alike. An older build tells a
-// continuation of a capture cut off every note the turn has read only because
-// its stamp states none.
+// its own run in states every note the record says was read up to the first
+// read it marks unanswered — a take whose answer never reached the harness —
+// and the stamp of one cut off states none — the stamp of a capture taken, and
+// that of one refused before its place was reserved, alike. An older build
+// tells a continuation of a capture cut off every note the turn has read, and
+// one of a capture whose take went unanswered that take's notes, only because
+// its stamp states so.
 //
-// Mutation: stamp a capture cut off with every note read, where it is taken or
-// where it is refused before its place, and that case goes red.
+// Mutation: stamp a capture cut off with every note read, or one whose take
+// went unanswered with that take's notes, where it is taken or where it is
+// refused before its place, and that case goes red.
 func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -933,58 +1006,77 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 		// untaken fails the take, so the capture is refused before its place
 		// was reserved.
 		untaken bool
+		// unanswered settles the job's second take as one whose answer never
+		// reached its harness.
+		unanswered bool
 	}{
 		{name: "a job whose harness ended its own run, its capture taken"},
 		{name: "a job whose harness was killed, its capture taken", cutOff: true},
 		{name: "a job whose harness ended its own run, its take refused", untaken: true},
 		{name: "a job whose harness was killed, its take refused", cutOff: true, untaken: true},
+		{name: "a job whose harness ended its own run, a take of it unanswered, its capture taken",
+			unanswered: true},
+		{name: "a job whose harness ended its own run, a take of it unanswered, its take refused",
+			unanswered: true, untaken: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, _ := keepingRig(t)
-			launched := rig.launchKept(t, "t1")
-			// TWO TAKES OF THE JOB'S NOTES, so the record says two were read.
-			for _, id := range []string{"first", "second"} {
-				fileNote(t, rig.pending, "t1", id)
-				taken, err := rig.pending.TakeNotes(t.Context(), "t1", NoteTake{IDs: []string{id},
-					Launch: launched.LaunchID, Statuses: []string{StatusRunning},
-					Read: NoteRead{Phase: "execute", Round: 1, Boundary: string(types.SteerBoundaryToolBatch)}})
-				if err != nil || len(taken) != 1 {
-					t.Fatalf("taking note %s took %d (%v), want it", id, len(taken), err)
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				launched := rig.launchKept(t, "t1")
+				// TWO TAKES OF THE JOB'S NOTES, so the record says two were read.
+				for _, id := range []string{"first", "second"} {
+					fileNote(t, rig.pending, "t1", id)
+					taken, err := rig.pending.TakeNotes(t.Context(), "t1", NoteTake{IDs: []string{id},
+						Launch: launched.LaunchID, Statuses: []string{StatusRunning},
+						Read: NoteRead{Phase: "execute", Round: 1, Boundary: string(types.SteerBoundaryToolBatch),
+							Take: "take-" + id}})
+					if err != nil || len(taken) != 1 {
+						t.Fatalf("taking note %s took %d (%v), want it", id, len(taken), err)
+					}
 				}
-			}
-			if reads := rig.get("t1").Steer.Reads; reads != 2 {
-				t.Fatalf("the record says %d notes were read, want 2", reads)
-			}
-			if tc.untaken {
-				rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
-			}
-			archive := rig.runner.Session.Archive
-			rig.runner.Finish(Result{Success: !tc.cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
-				Captured: &archive, HarnessCutOff: tc.cutOff})
-			// COLLECTED, the resume after it refused, so the row stays for the
-			// case.
-			rig.resumer.failWith(errors.New("held for the case to read the row"))
-			payload, ev := rig.completion("t1")
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-				t.Logf("OnCompleted: %v", err)
-			}
-			rig.awaitKeeps()
-			state, want := CaptureLanded, 2
-			if tc.untaken {
-				state = CaptureRefused
-			}
-			if tc.cutOff {
-				want = 0
-			}
-			capture := rig.get("t1").Capture
-			if capture == nil || capture.State != state || capture.Interrupted != tc.cutOff {
-				t.Fatalf("the row holds %+v, want the capture %s, cut off: %v", capture, state, tc.cutOff)
-			}
-			if capture.NoteCursor != want {
-				t.Errorf("the capture is stamped holding the notes read through %d, want %d", capture.NoteCursor,
-					want)
-			}
+				if reads := rig.get("t1").Steer.Reads; reads != 2 {
+					t.Fatalf("the record says %d notes were read, want 2", reads)
+				}
+				if tc.unanswered {
+					if settled, err := rig.pending.SettleTake(t.Context(), "t1",
+						NoteSettle{Take: "take-second", Unanswered: true}); err != nil || len(settled) != 1 {
+						t.Fatalf("settling the second take = %d, %v, want its note", len(settled), err)
+					}
+				}
+				if tc.untaken {
+					rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
+				}
+				archive := rig.runner.Session.Archive
+				rig.runner.Finish(Result{Success: !tc.cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+					Captured: &archive, HarnessCutOff: tc.cutOff})
+				// COLLECTED, the resume after it refused, so the row stays for the
+				// case.
+				rig.resumer.failWith(errors.New("held for the case to read the row"))
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Logf("OnCompleted: %v", err)
+				}
+				rig.awaitKeeps()
+				state, want := CaptureLanded, 2
+				if tc.untaken {
+					state = CaptureRefused
+				}
+				switch {
+				case tc.cutOff:
+					want = 0
+				case tc.unanswered:
+					want = 1
+				}
+				capture := rig.get("t1").Capture
+				if capture == nil || capture.State != state || capture.Interrupted != tc.cutOff {
+					t.Fatalf("the row holds %+v, want the capture %s, cut off: %v", capture, state, tc.cutOff)
+				}
+				if capture.NoteCursor != want {
+					t.Errorf("the capture is stamped holding the notes read through %d, want %d", capture.NoteCursor,
+						want)
+				}
+			})
 		})
 	}
 }
@@ -1217,41 +1309,43 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 // job's record, and a case goes red.
 func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
 	t.Parallel()
-	rig, restore, kept := keptTurn(t)
-	if first := rig.get("t1"); first.Launch.FreshSessionID != "" {
-		t.Fatalf("a launch that continued no session named a second one, %q", first.Launch.FreshSessionID)
-	}
-	if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	fresh := rig.get("t1").Launch.FreshSessionID
-	if fresh == "" {
-		t.Fatal("a launch that continues a session named no session its script starts in its place")
-	}
-	run := PendingRun{TurnID: "t1", SessionID: "s-1", SandboxID: "box-1",
-		Launch: LaunchRecord{FreshSessionID: fresh}}
-	for name, tc := range map[string]struct {
-		said SessionStart
-		want string
-	}{
-		"its box took the chosen session up":   {said: SessionStartContinued, want: "s-1"},
-		"its box started a session of its own": {said: SessionStartFresh, want: fresh},
-		"its box has not said":                 {want: ""},
-	} {
-		said := run
-		said.Launch.SessionStart = tc.said
-		if got := said.SessionRan(); got != tc.want {
-			t.Errorf("%s: the job ran %q, want %q", name, got, tc.want)
+	inBubble(t, func(t *testing.T) {
+		rig, restore, kept := keptTurn(t)
+		if first := rig.get("t1"); first.Launch.FreshSessionID != "" {
+			t.Fatalf("a launch that continued no session named a second one, %q", first.Launch.FreshSessionID)
 		}
-		if asked := askedRun(said, AnswerWords{Text: "use main"}); asked.SessionID != tc.want {
-			t.Errorf("%s: an answer carries the round on in %q, want %q", name, asked.SessionID, tc.want)
+		if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
+			t.Fatalf("relaunch: %v", err)
 		}
-	}
-	// A LAUNCH THAT CONTINUED NO SESSION ran the one it named.
-	own := PendingRun{TurnID: "t1", SessionID: "s-own", SandboxID: "box-1"}
-	if got := own.SessionRan(); got != "s-own" {
-		t.Errorf("a job whose launch continued no session ran %q, want the one its launch named", got)
-	}
+		fresh := rig.get("t1").Launch.FreshSessionID
+		if fresh == "" {
+			t.Fatal("a launch that continues a session named no session its script starts in its place")
+		}
+		run := PendingRun{TurnID: "t1", SessionID: "s-1", SandboxID: "box-1",
+			Launch: LaunchRecord{FreshSessionID: fresh}}
+		for name, tc := range map[string]struct {
+			said SessionStart
+			want string
+		}{
+			"its box took the chosen session up":   {said: SessionStartContinued, want: "s-1"},
+			"its box started a session of its own": {said: SessionStartFresh, want: fresh},
+			"its box has not said":                 {want: ""},
+		} {
+			said := run
+			said.Launch.SessionStart = tc.said
+			if got := said.SessionRan(); got != tc.want {
+				t.Errorf("%s: the job ran %q, want %q", name, got, tc.want)
+			}
+			if asked := askedRun(said, AnswerWords{Text: "use main"}); asked.SessionID != tc.want {
+				t.Errorf("%s: an answer carries the round on in %q, want %q", name, asked.SessionID, tc.want)
+			}
+		}
+		// A LAUNCH THAT CONTINUED NO SESSION ran the one it named.
+		own := PendingRun{TurnID: "t1", SessionID: "s-own", SandboxID: "box-1"}
+		if got := own.SessionRan(); got != "s-own" {
+			t.Errorf("a job whose launch continued no session ran %q, want the one its launch named", got)
+		}
+	})
 }
 
 // A COMPANY THAT KEEPS NO SESSION CONTINUES NONE IT KEPT BEFORE. With
@@ -1265,33 +1359,35 @@ func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
 // and the relaunch restores a session the company keeps none of.
 func TestACompanyThatKeepsNoSessionContinuesNoneItKeptBefore(t *testing.T) {
 	t.Parallel()
-	rig, restore, kept := keptTurn(t)
-	keep := rig.coordinator.keep.(*sessionKeep)
-	keep.mu.Lock()
-	keep.policy.Keep = false
-	keep.mu.Unlock()
-	if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != NoKeptSession ||
-		continued.Capture.CaptureSeq != 0 {
-		t.Fatalf("the relaunch continues %+v (%q), want none, said: the company keeps none", continued, why)
-	}
-	launcher, err := NewCoordinator(CoordinatorOptions{
-		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
-		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease), Pushes: &pushSpy{},
-		Restore: restore, Keep: keep, SpoolDir: rig.coordinator.spoolDirectory(),
+	inBubble(t, func(t *testing.T) {
+		rig, restore, kept := keptTurn(t)
+		keep := rig.coordinator.keep.(*sessionKeep)
+		keep.mu.Lock()
+		keep.policy.Keep = false
+		keep.mu.Unlock()
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != NoKeptSession ||
+			continued.Capture.CaptureSeq != 0 {
+			t.Fatalf("the relaunch continues %+v (%q), want none, said: the company keeps none", continued, why)
+		}
+		launcher, err := NewCoordinator(CoordinatorOptions{
+			Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+			Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease), Pushes: &pushSpy{},
+			Restore: restore, Keep: keep, SpoolDir: rig.coordinator.spoolDirectory(),
+		})
+		if err != nil {
+			t.Fatalf("NewCoordinator: %v", err)
+		}
+		t.Cleanup(launcher.Stop)
+		if _, err := launcher.Launch(t.Context(), rig.manager, continuingKept(kept)); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		started := rig.runner.Started()
+		if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" ||
+			len(rig.runner.Carried()) != 0 {
+			t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own",
+				last.Resume, last.Brief)
+		}
 	})
-	if err != nil {
-		t.Fatalf("NewCoordinator: %v", err)
-	}
-	t.Cleanup(launcher.Stop)
-	if _, err := launcher.Launch(t.Context(), rig.manager, continuingKept(kept)); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	started := rig.runner.Started()
-	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" ||
-		len(rig.runner.Carried()) != 0 {
-		t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own",
-			last.Resume, last.Brief)
-	}
 }
 
 // silentStamps is a run store whose stamps of a capture are never answered, as
@@ -1344,29 +1440,31 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 	})
 	t.Run("a take reserves its place within its own time", func(t *testing.T) {
 		t.Parallel()
-		rig, _, _ := keepingRig(t)
-		run := rig.launchKept(t, "t1")
-		// SILENT ON THE RESERVATION ALONE: the settle of the place after it is
-		// answered, so the take's time is the reservation's to spend.
-		silent := &silentStamps{PendingStore: rig.coordinator.pending, only: CaptureBegun}
-		rig.coordinator.pending, rig.coordinator.recordBudget = silent, time.Minute
-		// A READ WITH A DEADLINE, whose take ends two seconds from now and
-		// whose by a pause's grace after that.
-		read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
-		defer cancel()
-		began := time.Now()
-		spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-			readCapture(BoxReadCollect, Result{}, true))
-		if took := time.Since(began); took > 20*time.Second {
-			t.Errorf("the take asked a silent store to reserve its place for %s, past its own deadline "+
-				"two seconds off", took)
-		}
-		if spooled != nil || silent.asked.Load() == 0 {
-			t.Errorf("the take spooled %+v after %d reservations, want none spooled, the place asked for",
-				spooled, silent.asked.Load())
-		}
-		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
-			t.Errorf("the place the take asked for stands %+v, want it settled refused", c)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			run := rig.launchKept(t, "t1")
+			// SILENT ON THE RESERVATION ALONE: the settle of the place after it is
+			// answered, so the take's time is the reservation's to spend.
+			silent := &silentStamps{PendingStore: rig.coordinator.pending, only: CaptureBegun}
+			rig.coordinator.pending, rig.coordinator.recordBudget = silent, time.Minute
+			// A READ WITH A DEADLINE, whose take ends two seconds from now and
+			// whose by a pause's grace after that.
+			read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+			defer cancel()
+			began := time.Now()
+			spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+				readCapture(BoxReadCollect, Result{}, true))
+			if took := time.Since(began); took > 20*time.Second {
+				t.Errorf("the take asked a silent store to reserve its place for %s, past its own deadline "+
+					"two seconds off", took)
+			}
+			if spooled != nil || silent.asked.Load() == 0 {
+				t.Errorf("the take spooled %+v after %d reservations, want none spooled, the place asked for",
+					spooled, silent.asked.Load())
+			}
+			if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+				t.Errorf("the place the take asked for stands %+v, want it settled refused", c)
+			}
+		})
 	})
 }

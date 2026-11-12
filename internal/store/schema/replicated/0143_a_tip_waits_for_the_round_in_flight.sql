@@ -4,9 +4,9 @@
 -- landing held no attempt of a required check, whatever an earlier landing's
 -- round was still doing, and nothing cancels a tip round a newer landing
 -- superseded: a branch taking landings at rate λ whose checks run for T kept
--- about λ·T rounds in flight, each up to code.MaxRequiredChecks boxes. It now
+-- about λ·T rounds in flight, each up to gitlet.MaxRequiredChecks boxes. It now
 -- dispatches a tip only once no tip attempt on the branch is still queued or
--- running (internal/code/home's tips.go), so the landings that arrive while
+-- running (internal/gitlet/home's tips.go), so the landings that arrive while
 -- one round runs are measured together by the next, and a branch keeps one
 -- round in flight however fast it is landed on.
 --

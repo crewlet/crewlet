@@ -441,7 +441,9 @@ alone, and what the seat may do on GitHub is this list:
   its own change as passing. Agent apps are not offered Commit statuses, so a
   required check that external CI reports as a commit status reads as unread
   in a private repository, and the merge or deploy goes to people rather than
-  to a delegate. See [Delegated Decisions](../guides/delegated-decisions.md).
+  to a delegate. A private repository on a plan without branch protection
+  requires no check of its own, so a delegation rule names the check runs its
+  merges and deploys need ([Checks a rule requires](../guides/delegated-decisions.md#checks-a-rule-requires)).
 - **Seats migrated from tiers** keep exactly what their tier granted,
   permission by permission: `read_only` holds Contents, Issues, Pull requests,
   Checks, Actions and Deployments at Read-only; `review` raises Issues and Pull

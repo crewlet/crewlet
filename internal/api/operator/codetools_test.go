@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -22,22 +22,22 @@ import (
 // asked for it: what an operator's code tool reads through.
 type listingHost struct {
 	mu    sync.Mutex
-	asked []code.Principal
+	asked []gitlet.Principal
 }
 
-func (h *listingHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (h *listingHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.asked = append(h.asked, q.Asker)
-	return code.ReadAnswer{Level: q.Fresh.Level}, nil
+	return gitlet.ReadAnswer{Level: q.Fresh.Level}, nil
 }
 
-func (h *listingHost) ResolveRef(context.Context, code.RefQuery) (code.RefAnswer, error) {
-	return code.RefAnswer{}, code.ErrRefNotFound
+func (h *listingHost) ResolveRef(context.Context, gitlet.RefQuery) (gitlet.RefAnswer, error) {
+	return gitlet.RefAnswer{}, gitlet.ErrRefNotFound
 }
 
-func (h *listingHost) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, code.ErrObjectNotFound
+func (h *listingHost) GitRead(context.Context, gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return gitlet.GitAnswer{}, gitlet.ErrObjectNotFound
 }
 
 func (h *listingHost) FloorOf(string) statelog.Position { return statelog.Position{} }
@@ -56,7 +56,7 @@ func (noRequesters) Credential(_ context.Context, login string) (iam.Principal, 
 	return iam.Principal{}, false, fmt.Errorf("the operator surface composes no requester, and was asked for %q", login)
 }
 
-func (h *listingHost) askers() []code.Principal {
+func (h *listingHost) askers() []gitlet.Principal {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.asked)
@@ -107,7 +107,7 @@ func TestTheCodeToolsAreServedPerCallAndAuditedAsReads(t *testing.T) {
 	if err != nil || got.Failed {
 		t.Fatalf("the founder's listing answered %v %q", err, got.Output)
 	}
-	want := code.Principal{Kind: code.PrincipalOperator, OperatorID: "jane.founder", Seat: "jane-founder"}
+	want := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "jane.founder", Seat: "jane-founder"}
 	if asked := host.askers(); len(asked) != 1 || asked[0] != want {
 		t.Errorf("the listing asked as %+v, want the founder bound to their seat, %+v", asked, want)
 	}
@@ -125,36 +125,36 @@ func TestTheCodeToolsAreServedPerCallAndAuditedAsReads(t *testing.T) {
 // since what is under test is which tools are offered.
 type writingHost struct{ listingHost }
 
-func (*writingHost) GitWrite(context.Context, code.EngineWrite) (code.EngineWriteResult, error) {
-	return code.EngineWriteResult{}, code.ErrNotServing
+func (*writingHost) GitWrite(context.Context, gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+	return gitlet.EngineWriteResult{}, gitlet.ErrNotServing
 }
 
-func (*writingHost) Lifecycle(context.Context, code.LifecycleRequest) (code.LifecycleResult, error) {
-	return code.LifecycleResult{}, code.ErrNotServing
+func (*writingHost) Lifecycle(context.Context, gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+	return gitlet.LifecycleResult{}, gitlet.ErrNotServing
 }
 
-func (*writingHost) Change(context.Context, code.ChangeProposal) (code.ChangeResult, error) {
-	return code.ChangeResult{}, code.ErrNotServing
+func (*writingHost) Change(context.Context, gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
+	return gitlet.ChangeResult{}, gitlet.ErrNotServing
 }
 
-func (*writingHost) Converse(context.Context, code.ConversationWrite) (code.ConversationResult, error) {
-	return code.ConversationResult{}, code.ErrNotServing
+func (*writingHost) Converse(context.Context, gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
+	return gitlet.ConversationResult{}, gitlet.ErrNotServing
 }
 
-func (*writingHost) Mark(context.Context, code.MarkWrite) (code.MarkResult, error) {
-	return code.MarkResult{}, code.ErrNotServing
+func (*writingHost) Mark(context.Context, gitlet.MarkWrite) (gitlet.MarkResult, error) {
+	return gitlet.MarkResult{}, gitlet.ErrNotServing
 }
 
-func (*writingHost) Checks(context.Context, code.ChecksRequest) (code.ChecksResult, error) {
-	return code.ChecksResult{}, code.ErrNotServing
+func (*writingHost) Checks(context.Context, gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
+	return gitlet.ChecksResult{}, gitlet.ErrNotServing
 }
 
-func (*writingHost) Queue(context.Context, code.QueueProposal) (code.QueueResult, error) {
-	return code.QueueResult{}, code.ErrNotServing
+func (*writingHost) Queue(context.Context, gitlet.QueueProposal) (gitlet.QueueResult, error) {
+	return gitlet.QueueResult{}, gitlet.ErrNotServing
 }
 
-func (*writingHost) Expunge(context.Context, code.ExpungeProposal) (code.ExpungeResult, error) {
-	return code.ExpungeResult{}, code.ErrNotServing
+func (*writingHost) Expunge(context.Context, gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
+	return gitlet.ExpungeResult{}, gitlet.ErrNotServing
 }
 
 // THE CODE WRITES ARE SERVED WHERE GITLET'S WRITES ARE, AND A PERSON MAY

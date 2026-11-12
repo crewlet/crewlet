@@ -28,7 +28,7 @@ const (
 	// CodeStatus is where a question about the fleet's Gitlet nodes is
 	// scattered: every node serving Gitlet answers it with its own
 	// status — its cache against its budget, the repositories it holds and
-	// the ones it served most (internal/code/host, Server.Status) — and the
+	// the ones it served most (internal/gitlet/host, Server.Status) — and the
 	// asker merges what came back.
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a status read is the ephemeral
@@ -79,7 +79,7 @@ const (
 
 // The object kinds are NOT constants here, for the reason the tracker's are
 // not: a kind is one bare word, and this package's own marker guard matches a
-// dotless constant by shape. They are a typed enum in internal/code, which is
+// dotless constant by shape. They are a typed enum in internal/gitlet, which is
 // the package that switches on them.
 
 // CodeLogSubject builds the subject for one object on the code log:

@@ -89,6 +89,9 @@ type Company struct {
 	// access and SSH use. See [AccessHistory].
 	AccessHistory AccessHistory `yaml:"access_history,omitempty" json:"access_history,omitzero"`
 
+	// Atlas is the company's policy over its atlas. See [Atlas].
+	Atlas Atlas `yaml:"atlas,omitempty" json:"atlas,omitzero"`
+
 	// Diagnostics is what this engine may say about its own defects outside
 	// the company. See [Diagnostics].
 	Diagnostics Diagnostics `yaml:"diagnostics,omitempty" json:"diagnostics,omitzero"`
@@ -711,6 +714,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 	p.wrap(c.Inbox.validate(field("inbox")))
 	p.wrap(c.AccessHistory.validate(field("access_history")))
+	p.wrap(c.Atlas.validate(field("atlas")))
 	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
@@ -1491,7 +1495,7 @@ func (c *Company) CheckRunIn() Placement {
 // resolves no cell for a check at all.
 //
 // THE ONE RESOLUTION of where a check's box is made, read by the check runner
-// (internal/code/checkrun) at each attempt against the epoch it runs under: a
+// (internal/gitlet/checkrun) at each attempt against the epoch it runs under: a
 // repository's file is read at its target's tip, which no validation of the
 // company's sees, so a file naming a cell the company stopped allowing is
 // answered here, when its check would run, rather than refused anywhere

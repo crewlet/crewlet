@@ -7,9 +7,9 @@
 
 /**
  * Where a repository is in its life, in the engine's order
- * (`code.RepoStatuses`): what a listing's `status` filter takes, and what a
+ * (`gitlet.RepoStatuses`): what a listing's `status` filter takes, and what a
  * row says it is. HELD BOTH WAYS, in order, by
- * `internal/code.TestTheDashboardKnowsEveryRepositoryState`: a state the
+ * `internal/gitlet.TestTheDashboardKnowsEveryRepositoryState`: a state the
  * engine grew that this lacks is a filter nobody can choose and a row whose
  * state reads as its raw word, and one this keeps that the engine dropped is a
  * choice every listing refuses.
@@ -17,11 +17,11 @@
 export const REPO_STATUSES = ["importing", "active", "archived", "deleted", "purging"] as const;
 
 /**
- * How code search reads a repository (`code.SearchModes`), in the engine's
+ * How code search reads a repository (`gitlet.SearchModes`), in the engine's
  * order: `indexed`, from a trigram index of its default branch, searched by
  * every search; `grep`, read only by a search naming it. What a repository's
  * Settings tab offers as its search mode. HELD BOTH WAYS, in order, by
- * `internal/code.TestTheDashboardOffersEverySearchModeOfARepository`: a mode
+ * `internal/gitlet.TestTheDashboardOffersEverySearchModeOfARepository`: a mode
  * the engine grew that this lacks is one nobody can set, and one this keeps
  * that the engine dropped is a press every repository refuses.
  */
@@ -29,11 +29,11 @@ export const REPO_SEARCH_MODES = ["indexed", "grep"] as const;
 
 /**
  * What became of one command of a push, in the engine's order
- * (`code.CommandCounts`' fields): a ref made, moved, moved by force or
+ * (`gitlet.CommandCounts`' fields): a ref made, moved, moved by force or
  * removed; asked for the value it already had; or refused. The words a row
  * says of each ref (`lib/code.ts`'s `commandWord`), and the keys a push read
  * in brief counts the commands it leaves out by (`omitted`). HELD BOTH WAYS,
- * in order, by `internal/code.TestTheDashboardKnowsEveryOutcomeOfACommand`:
+ * in order, by `internal/gitlet.TestTheDashboardKnowsEveryOutcomeOfACommand`:
  * an outcome the engine grew that this lacks is a count a summary says in the
  * engine's raw key, and one this keeps that the engine dropped is a word no
  * push is ever counted by.
@@ -48,7 +48,7 @@ export const COMMAND_OUTCOMES = [
 ] as const;
 
 /**
- * A repository's name, as the engine holds it (`code.ValidName`, over
+ * A repository's name, as the engine holds it (`gitlet.ValidName`, over
  * `gitref.ValidRepoName`), in either of its two forms: a PROJECT's, one
  * host-name label in lowercase — letters, digits and hyphens, beginning and
  * ending with a letter or a digit — or a seat's SCRATCH repository's,
@@ -56,7 +56,7 @@ export const COMMAND_OUTCOMES = [
  * (`<handle>.git` is the URL of the repository `<handle>`). This is the SHAPE;
  * the length is [REPO_NAME_MAX_BYTES], which bounds the two labels together
  * and so cannot be spelled in the pattern. Held, with it, by
- * `internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
+ * `internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
  *
  * WHAT AN ADDRESS'S `repo=` IS HELD TO before anything is asked about it
  * (`lib/code.ts`): a name no repository can have is said in place, as one,
@@ -80,16 +80,16 @@ export const REPO_NAME =
  * The longest a repository's name may be, in bytes, whichever its form
  * (`gitref.MaxRepoNameBytes`): 63, the longest DNS label, and the two labels
  * of a scratch repository's name together with their dot. Held with
- * [REPO_NAME] by `internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
+ * [REPO_NAME] by `internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
  */
 export const REPO_NAME_MAX_BYTES = 63;
 
 /**
  * Where a change (`web!42`) is in its life, in the engine's order
- * (`code.ChangeStates`): the live states first, draft and open, then closed
+ * (`gitlet.ChangeStates`): the live states first, draft and open, then closed
  * and merged. What Gitlet › Changes asks its listing for (`state`) and what a
  * row says it is. HELD BOTH WAYS, in order, by
- * `internal/code.TestTheDashboardKnowsEveryStateOfAChange`: a state the engine
+ * `internal/gitlet.TestTheDashboardKnowsEveryStateOfAChange`: a state the engine
  * grew that this lacks is one nobody can list, and one this keeps that the
  * engine dropped is a choice every listing refuses.
  */
@@ -97,33 +97,33 @@ export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
 
 /**
  * What a listing of changes can ask its changes to be waiting on, in the
- * engine's order (`code.Needs`): a review the asker owes, a fix their own
+ * engine's order (`gitlet.Needs`): a review the asker owes, a fix their own
  * change owes, either of the two, or a PERSON — a change whose readiness's
  * first unmet precondition waits on persons alone, which the "Needs a person"
  * band lists. Each lists LIVE changes. HELD BOTH WAYS, in order, by
- * `internal/code.TestTheDashboardKnowsEveryNeedOfAListingOfChanges`.
+ * `internal/gitlet.TestTheDashboardKnowsEveryNeedOfAListingOfChanges`.
  */
 export const CHANGE_NEEDS = ["review", "fix", "me", "person"] as const;
 
 /**
  * Every window a listing of changes narrows to (`window=`), shortest first, in
- * the engine's order (`code.ChangeWindows`): the changes that MOVED within the
+ * the engine's order (`gitlet.ChangeWindows`): the changes that MOVED within the
  * last day, week or month — each by the later of its lifecycle's last record
  * and the last thing somebody said of it, the instant a row's Updated says.
  * HELD BOTH WAYS, in order, by
- * `internal/code.TestTheDashboardKnowsEveryWindowOfAListingOfChanges`.
+ * `internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges`.
  */
 export const CHANGE_WINDOWS = ["24h", "7d", "30d"] as const;
 
 /**
  * Every precondition a live change's readiness judges, ONE A KIND, in the
- * order a change moves through them (`code.PreconditionKinds`): it is opened
+ * order a change moves through them (`gitlet.PreconditionKinds`): it is opened
  * for review, its head is measured, approved by each kind of approval its
  * target's gate asks, cleared of its blockers, checked, merges cleanly, and is
  * merged by somebody who may — then landed by its queue. The order a
  * readiness lists them in and reads its first unmet one by, so the words a
  * screen keys on this cannot be out of their place. HELD BOTH WAYS, in order,
- * by `internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange`.
+ * by `internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange`.
  */
 export const PRECONDITION_KINDS = [
   "draft",
@@ -139,7 +139,7 @@ export const PRECONDITION_KINDS = [
 ] as const;
 
 /**
- * Where one precondition stands (`code.PreconditionStates`): met; unmet,
+ * Where one precondition stands (`gitlet.PreconditionStates`): met; unmet,
  * waiting on somebody it names; or still being computed by the engine — a
  * revision's facts or its merge its home has not recorded — which waits on
  * nobody. Held with [PRECONDITION_KINDS].
@@ -147,18 +147,18 @@ export const PRECONDITION_KINDS = [
 export const PRECONDITION_STATES = ["met", "unmet", "computing"] as const;
 
 /**
- * How much a finding weighs, heaviest first (`code.Severities`): a blocker
+ * How much a finding weighs, heaviest first (`gitlet.Severities`): a blocker
  * holds the change back until its raiser's later review or a dismissal clears
  * it, and the rest are said. What a change page's finding composer offers and
  * a finding is marked by. HELD BOTH WAYS, in order, by
- * `internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords`: a weight the
+ * `internal/gitlet.TestTheDashboardRaisesFindingsInTheEnginesWords`: a weight the
  * engine grew that this lacks is one no reviewer here can give; one this keeps
  * that the engine dropped is a review refused on every press.
  */
 export const FINDING_SEVERITIES = ["blocker", "major", "minor", "nit"] as const;
 
 /**
- * What a finding is about (`code.Categories`), in the engine's order. Held
+ * What a finding is about (`gitlet.Categories`), in the engine's order. Held
  * with [FINDING_SEVERITIES], for the same two reasons.
  */
 export const FINDING_CATEGORIES = [
@@ -172,7 +172,7 @@ export const FINDING_CATEGORIES = [
 ] as const;
 
 /**
- * The twelve reasons a handle hears about a change (`code.Reasons`, in
+ * The twelve reasons a handle hears about a change (`gitlet.Reasons`, in
  * precedence order: the first that names a handle is the one it heard under),
  * as the dashboard phrases them.
  *
@@ -185,7 +185,7 @@ export const FINDING_CATEGORIES = [
  * when asked. One table with three columns, so a reason added in one voice
  * cannot be missing in another.
  *
- * HELD BOTH WAYS by `internal/code.TestEveryCodeReasonReadsAsEnglishOnTheClient`:
+ * HELD BOTH WAYS by `internal/gitlet.TestEveryCodeReasonReadsAsEnglishOnTheClient`:
  * a reason the engine records with no phrase renders as its own snake_case
  * value, and a phrase for a reason nothing records is what a rename leaves.
  */
@@ -272,7 +272,7 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
  * The alarm kinds that are Gitlet's (the `code_` kinds of
  * `statelog.Kinds()`, in its sorted order): what Settings › Gitlet lists from
  * each node's alarms, of everything the node's table can raise. Held both
- * ways, in order, by `internal/code.TestTheDashboardKnowsEveryCodeAlarm`.
+ * ways, in order, by `internal/gitlet.TestTheDashboardKnowsEveryCodeAlarm`.
  */
 export const CODE_ALARM_KINDS = [
   "code_checks_backlog",
@@ -285,11 +285,11 @@ export const CODE_ALARM_KINDS = [
 ] as const;
 
 /**
- * The most lines one blame names, its whole range (`code.MaxBlameLines`): the
+ * The most lines one blame names, its whole range (`gitlet.MaxBlameLines`): the
  * Files tab's blame asks its lines a range at a time, each at most this many,
  * forward and back (a file's own earlier lines step by `EARLIER_FILE_LINES`,
  * `lib/code.ts`, a page's worth). Held by
- * `internal/code.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers`: a
+ * `internal/gitlet.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers`: a
  * wider range is refused, and a narrower one asks the engine more often than
  * it needs to.
  */
@@ -297,11 +297,11 @@ export const CODE_MAX_BLAME_LINES = 500;
 
 /**
  * The most rows one page of a change's conversation asks for: its comments',
- * reviews' and findings' own bound (`code.MaxCommentsPerPage`,
+ * reviews' and findings' own bound (`gitlet.MaxCommentsPerPage`,
  * `MaxReviewsPerPage`, `MaxFindingsPerPage`), within its reviewers'
  * (`MaxReviewersPerPage`). A larger page is refused, and a smaller one reads
  * a long conversation in more round trips than it needs. Held by
- * `internal/code.TestTheDashboardReadsAChangesConversationAtTheEnginesPage`.
+ * `internal/gitlet.TestTheDashboardReadsAChangesConversationAtTheEnginesPage`.
  */
 export const CHANGE_PART_PAGE = 200;
 
@@ -310,7 +310,7 @@ export const CHANGE_PART_PAGE = 200;
  * engine's own defaults (`config.DefaultCodeScratchIdleDays`,
  * `DefaultCodeScratchMaxPerSeat`, `DefaultCodeIdentityDomain`), which
  * Settings › Gitlet says beside an unset field so the page states the policy in
- * force. Held by `internal/code.TestTheDashboardStatesTheCodePolicysDefaults`.
+ * force. Held by `internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults`.
  */
 export const CODE_SCRATCH_IDLE_DAYS = 7;
 export const CODE_SCRATCH_MAX_PER_SEAT = 50;

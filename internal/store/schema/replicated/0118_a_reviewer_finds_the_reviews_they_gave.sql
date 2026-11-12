@@ -4,7 +4,7 @@
 -- are read in the order they were given by code_reviews_change_idx. What ONE
 -- reviewer gave, across every change of every repository — a seat's reviews,
 -- or a person's by the human seat they hold — is a question of its own: the
--- code_reviews question's listing (code.ReadReviews), newest first. Read
+-- code_reviews question's listing (gitlet.ReadReviews), newest first. Read
 -- through the change index it would be every review of every change, so it
 -- reads this index instead: one reviewer's reviews in the order their records
 -- landed, a page from the newest, each kept only where its change's

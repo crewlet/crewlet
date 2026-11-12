@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // reconcileAt is the i-th activation instant of a reconciler case.
@@ -34,7 +34,7 @@ func nextBegun(t *testing.T, began <-chan time.Time, what string) time.Time {
 // THE NEWEST ACTIVATION'S RECONCILE WINS.
 //
 // One reconcile runs at a time. Asked for a newer activation while one runs,
-// the reconciler ENDS the running one, with [code.ErrSuperseded] as its cause
+// the reconciler ENDS the running one, with [gitlet.ErrSuperseded] as its cause
 // — the newer reconcile decides every repository again, and its fence refuses
 // what the older would still write — and of the requests made meanwhile runs
 // only the newest. A request for the activation running, or an older one, is
@@ -91,9 +91,9 @@ func TestTheNewestActivationsReconcileWins(t *testing.T) {
 	mu.Lock()
 	first := runs[0]
 	mu.Unlock()
-	if !errors.Is(first.cause, code.ErrSuperseded) {
+	if !errors.Is(first.cause, gitlet.ErrSuperseded) {
 		t.Errorf("the older reconcile was ended by %v, want a newer activation's request "+
-			"(code.ErrSuperseded)", first.cause)
+			"(gitlet.ErrSuperseded)", first.cause)
 	}
 
 	r.ask(t.Context(), nil, reconcileAt(2))

@@ -8,7 +8,7 @@
 -- seat mentioned by two of a batch's changes, or the author of two changes
 -- one landing merged, heard about the first and nothing of the second, and
 -- the busier the repository the more of its news was lost. A notice is now
--- one (record, change, recipient), what code.NoticeID names: the identity a
+-- one (record, change, recipient), what gitlet.NoticeID names: the identity a
 -- person's mark names and a seat's wake is derived from.
 --
 -- 0109 IS NOT EDITED: `schema_migrations` keys on the filename, so a database

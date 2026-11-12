@@ -8,8 +8,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -17,9 +17,9 @@ import (
 // THE IMPORT: code_import_repo, a person's request that Gitlet create a
 // project repository filled from a repository at another host — once, or for
 // good as a PULL MIRROR (`mirror`), which the repository's home then keeps in
-// step with its source (internal/code/mirror, M6-D16 and M6-D19). It is a
-// lifecycle CREATE carrying the source ([code.LifecycleRequest.Import], or the
-// settings' [code.RepoSettings.MirrorFrom]), decided by a data node like every
+// step with its source (internal/gitlet/mirror, M6-D16 and M6-D19). It is a
+// lifecycle CREATE carrying the source ([gitlet.LifecycleRequest.Import], or the
+// settings' [gitlet.RepoSettings.MirrorFrom]), decided by a data node like every
 // create: the repository exists, `importing`, from the record on, and its home
 // fetches the source and lands it in chunks; nothing waits here for the fetch.
 //
@@ -29,9 +29,9 @@ import (
 // human-only), so no seat is offered it: an import dials another host for the
 // company, and a model's say-so would point Gitlet at any URL a page it
 // read named (U49 a). The deciding data node refuses a seat's create carrying
-// an import or a mirror again, whatever its grant ([code.LifecycleRequest]'s
+// an import or a mirror again, whatever its grant ([gitlet.LifecycleRequest]'s
 // rule), so the two cannot drift. A credential bound to nobody imports nothing
-// ([code.UnboundDetail]): a create names the person it is made for.
+// ([gitlet.UnboundDetail]): a create names the person it is made for.
 //
 // # The credential is a NAME, never a token
 //
@@ -84,7 +84,7 @@ func (t *codeImportRepo) Parameters() map[string]any {
 			"credential": map[string]any{"type": "string",
 				"description": "A variable code.remote_credentials declares for the url's host, by name; never a token."},
 			"owner":          map[string]any{"type": "object", "description": ownerShape},
-			"visibility":     map[string]any{"type": "string", "enum": spelled(code.Visibilities())},
+			"visibility":     map[string]any{"type": "string", "enum": spelled(gitlet.Visibilities())},
 			"default_branch": map[string]any{"type": "string", "description": "`main` when left out."},
 			"mirror":         map[string]any{"type": "boolean"},
 		},
@@ -104,11 +104,11 @@ func (t *codeImportRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	if c.asker.Kind != code.PrincipalOperator || c.asker.Seat == "" {
+	if c.asker.Kind != gitlet.PrincipalOperator || c.asker.Seat == "" {
 		// THE TABLE'S RULE AGAIN, here where the request is formed: a seat
 		// is refused before the call reaches a tool, and a create carrying an
 		// import a seat could send would be refused by every data node.
-		return refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, tool+": an import is a person's, "+
+		return refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, tool+": an import is a person's, "+
 			"through a credential bound to their human seat."), nil
 	}
 	// EVERY ARGUMENT FIRST, so a malformed call mints no operation.
@@ -123,12 +123,12 @@ func (t *codeImportRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	c.actor = actor
 	req.Actor = c.asker
 	req.OpID = opIDFor(actor, tool, lifecycleVerb(req.Kind), newRepoObject, args)
-	id, ok := code.RepoIDOf(req.OpID)
+	id, ok := gitlet.RepoIDOf(req.OpID)
 	if !ok {
 		return faulted(ctx, tool, fmt.Errorf("builtin: operation %s carries no instant", req.OpID),
 			fmt.Sprintf("%s could not name the repository it would create: %s.", tool, faultSaid)), nil
 	}
-	repo := code.RepoRef{ID: id, Name: req.Name, Kind: code.RepoProject}
+	repo := gitlet.RepoRef{ID: id, Name: req.Name, Kind: gitlet.RepoProject}
 	if err := req.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, actor, req.Name, err), nil
 	}
@@ -145,48 +145,48 @@ func (t *codeImportRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // the operation and the actor — or the refusal of an argument no create could
 // take. A tool's repository is searched with grep until somebody who
 // maintains it asks for an index, as code_create_repo's is.
-func importRequest(tool string, args map[string]any) (code.LifecycleRequest, *tools.Result) {
+func importRequest(tool string, args map[string]any) (gitlet.LifecycleRequest, *tools.Result) {
 	name := strings.TrimSpace(argString(args, "name"))
-	if !code.ValidName(name) {
+	if !gitlet.ValidName(name) {
 		r := failed(fmt.Sprintf("%s needs `name`: the project's name — lowercase letters, digits and "+
 			"hyphens; %q is not one.", tool, clip(name)))
-		return code.LifecycleRequest{}, &r
+		return gitlet.LifecycleRequest{}, &r
 	}
 	if handle, scratch := gitref.ScratchName(name); scratch {
 		r := failed(fmt.Sprintf("%s: %s names seat %s's scratch repository, which takes no import — name a "+
 			"project.", tool, name, handle))
-		return code.LifecycleRequest{}, &r
+		return gitlet.LifecycleRequest{}, &r
 	}
 	url := strings.TrimSpace(argString(args, "url"))
 	if url == "" {
 		r := failed(fmt.Sprintf("%s needs `url`: the repository at the other host, an https URL.", tool))
-		return code.LifecycleRequest{}, &r
+		return gitlet.LifecycleRequest{}, &r
 	}
 	credential, refusal := credentialArg(tool, args)
 	if refusal != nil {
-		return code.LifecycleRequest{}, refusal
+		return gitlet.LifecycleRequest{}, refusal
 	}
 	owner, given, refusal := ownerArg(tool, "owner", args)
 	if refusal != nil {
-		return code.LifecycleRequest{}, refusal
+		return gitlet.LifecycleRequest{}, refusal
 	}
 	if !given {
 		r := failed(fmt.Sprintf("%s: the project %s needs an `owner` — %s.", tool, name, ownerShape))
-		return code.LifecycleRequest{}, &r
+		return gitlet.LifecycleRequest{}, &r
 	}
-	settings := code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoProject, Owner: owner,
+	settings := gitlet.RepoSettings{ManagedBy: gitlet.ManagedTools, Kind: gitlet.RepoProject, Owner: owner,
 		DefaultBranch: cmp.Or(strings.TrimSpace(argString(args, "default_branch")), "main"),
-		Visibility: code.Visibility(cmp.Or(strings.TrimSpace(argString(args, "visibility")),
-			string(code.VisibilityCompany))),
-		Search: code.SearchGrep}
-	req := code.LifecycleRequest{Kind: code.LifecycleCreate, Name: name, Create: &settings}
+		Visibility: gitlet.Visibility(cmp.Or(strings.TrimSpace(argString(args, "visibility")),
+			string(gitlet.VisibilityCompany))),
+		Search: gitlet.SearchGrep}
+	req := gitlet.LifecycleRequest{Kind: gitlet.LifecycleCreate, Name: name, Create: &settings}
 	// A PULL MIRROR IS IMPORTED FROM ITS OWN SOURCE as it is created, and an
-	// import beside it would be a second source (code.CreateRepo): so
+	// import beside it would be a second source (gitlet.CreateRepo): so
 	// `mirror` puts the URL on the settings and no import on the request.
 	if argBool(args, "mirror") {
-		settings.MirrorFrom = &code.MirrorSource{URL: url, Credential: credential}
+		settings.MirrorFrom = &gitlet.MirrorSource{URL: url, Credential: credential}
 	} else {
-		req.Import = &code.ImportSource{URL: url, Credential: credential}
+		req.Import = &gitlet.ImportSource{URL: url, Credential: credential}
 	}
 	return req, nil
 }

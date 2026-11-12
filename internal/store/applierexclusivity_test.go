@@ -535,11 +535,11 @@ var allowedReplicatedWriter = []allowance{
 			"VACUUM INTO and the manifest — never to write a row.",
 	},
 	{
-		Prefix: "internal/code/codetest/datanode.go", Kind: holder,
+		Prefix: "internal/gitlet/gitlettest/datanode.go", Kind: holder,
 		Why: "THE DATA NODE OF GITLET'S SUITES: StartDataNode is the engine's " +
 			"own composition of one data node's code domain, used by both " +
 			"topologies — SoloNode's one node and each member of " +
-			"internal/code/codecluster's fleet. It opens the replicated " +
+			"internal/gitlet/gitletcluster's fleet. It opens the replicated " +
 			"estate through storetest.OpenEstate and hands the write handle " +
 			"only to the framework's applier and write authority, as " +
 			"internal/engine/statelog.go does. It writes no row of its own.",
@@ -586,7 +586,7 @@ var allowedReplicatedWriter = []allowance{
 			"a sweep.",
 	},
 	{
-		Prefix: "internal/code/apply", Kind: mechanism,
+		Prefix: "internal/gitlet/apply", Kind: mechanism,
 		Why: "The code domain's applier — the record dispatch, a repository's " +
 			"lifecycle and the activation fence, the push with its horizons " +
 			"and the purge's parts, a repository's changes and their " +
@@ -691,6 +691,14 @@ var allowedReplicatedWriter = []allowance{
 			"the broker instants the rows hold, never a node's clock.",
 	},
 	{
+		Prefix: "internal/atlasdomain/apply", Kind: mechanism,
+		Why: "The atlas domain's applier: a person's claim, a purge and its " +
+			"marker, a return the marker blocked, and an hour's expiry are each a " +
+			"pure function of a committed record and same-log rows; it judges no " +
+			"value, a voice's newer claim replaces its older one in log order, and " +
+			"an expiry deletes by the broker instants the rows hold, never a node's clock.",
+	},
+	{
 		Prefix: "internal/chatlet/apply", Kind: mechanism,
 		Why: "The chat domain's applier, across the files it is split " +
 			"over: the record and the gate, the channel half and the " +
@@ -734,7 +742,7 @@ var allowedReplicatedWriter = []allowance{
 			"rows, so deleting on this node's own authority diverges nothing.",
 	},
 	{
-		Prefix: "internal/code/noticesweep.go", Kind: exception,
+		Prefix: "internal/gitlet/noticesweep.go", Kind: exception,
 		Why: "NoticeJobs range-deletes `code_notifications` past each " +
 			"recipient kind's horizon, and the table is statelog.Divergent " +
 			"for tracker_notifications' reason: whether a record writes a " +

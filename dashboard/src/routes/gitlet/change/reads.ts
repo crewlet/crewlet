@@ -20,7 +20,7 @@
  * ({@link CHANGE_POLL_MS}), and it carries what every part is a function of:
  * the change's `version`, which every record that changes its row counts — a
  * pushed revision, a retarget, its life — and its conversation's, which every
- * record on its conversation counts (`code.ConversationRow.Version`), and when
+ * record on its conversation counts (`gitlet.ConversationRow.Version`), and when
  * somebody last wrote on it (`spoken_at`), which the reviews and comments are
  * keyed on ({@link partMovedBy}), and beside them its newest revisions, each
  * with the facts its home recorded. A part is asked again, quietly, when what
@@ -29,7 +29,7 @@
  * repository's home Gitlet node, holding a share of its read lane that pushes and
  * clones need too, and its answer is a function of the revision's head and the
  * base its facts record ({@link revisionInputs}) — facts its home records
- * again in a record of its own (`code/revise.go`: a retarget's new facts of
+ * again in a record of its own (`gitlet/revise.go`: a retarget's new facts of
  * the same revision replace the row, after the record that moved the change's
  * version) — so it is asked again when either moves. Polled,
  * every open Files tab redid that diff each minute for an answer that could not
@@ -92,7 +92,7 @@ export function changePartParams(
  *
  * A REVIEW OR A COMMENT ROW IS WRITTEN ONLY BY A RECORD SOMEBODY WROTE — a
  * review, a comment, a thread resolved — and every such record moves
- * `spoken_at` (`code.ConversationRow.SpokenAt`), where the conversation's
+ * `spoken_at` (`gitlet.ConversationRow.SpokenAt`), where the conversation's
  * version moves with every record on its subject, the home's facts among them:
  * a revision's, and the mergeability it records again for every live change
  * into a target branch each time that branch moves. Keyed on the versions, a
@@ -220,13 +220,13 @@ export interface StandingRead {
 
 /**
  * The reader's own STANDING findings on the change — open, or answered by an
- * author — which a review of theirs may carry (`code.Review.Carries`): the
+ * author — which a review of theirs may carry (`gitlet.Review.Carries`): the
  * findings a review of a later revision supersedes by leaving them out. READ
  * WHOLE, the engine's `standing` part paged to its last cursor, because a set
  * the dialog does not hold is a set the press would supersede unseen: the
  * findings part pages the change's whole history oldest first, so a
  * reviewer's NEWEST standing findings were past its first page. The engine
- * keeps at most 1 024 of them a reviewer (`code.MaxStandingFindings`), six
+ * keeps at most 1 024 of them a reviewer (`gitlet.MaxStandingFindings`), six
  * pages of {@link CHANGE_PART_PAGE}. None for a reader bound to no seat, who
  * raised none.
  */

@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -29,14 +29,14 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name string
-		as   code.Principal
+		as   gitlet.Principal
 		want builtin.Actor
 	}{
 		// A SEAT'S CLOSE IS MADE FOR NOBODY ELSE: the queue lands the change
 		// outside any turn, and Gitlet's records carry no carrier yet.
-		{"a seat", code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
+		{"a seat", gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"},
 			builtin.Actor{Handle: "dev", Kind: worklet.AuthorAgent, WrittenFor: types.ForNobody()}},
-		{"a person", code.Principal{Kind: code.PrincipalOperator, Seat: "founder", OperatorID: "pat:ada"},
+		{"a person", gitlet.Principal{Kind: gitlet.PrincipalOperator, Seat: "founder", OperatorID: "pat:ada"},
 			builtin.Actor{Handle: "founder", Kind: worklet.AuthorHuman, OperatorID: "pat:ada"}},
 	} {
 		got, err := enqueuerActor(c.as)
@@ -45,28 +45,28 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 			t.Errorf("%s's close is written as %+v (%v), want %+v", c.name, got, err, c.want)
 		}
 	}
-	for _, unbound := range []code.Principal{
-		{Kind: code.PrincipalOperator, OperatorID: "token:founder"},
-		{Kind: code.PrincipalSystem},
+	for _, unbound := range []gitlet.Principal{
+		{Kind: gitlet.PrincipalOperator, OperatorID: "token:founder"},
+		{Kind: gitlet.PrincipalSystem},
 	} {
 		if got, err := enqueuerActor(unbound); err == nil {
 			t.Errorf("%+v, bound to no seat, closes as %+v, want refused", unbound, got)
 		}
 	}
 
-	err := queueCloser{}.CloseWorkItem(t.Context(), codehome.TaskClose{
-		As:       code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
+	err := queueCloser{}.CloseWorkItem(t.Context(), gitlethome.TaskClose{
+		As:       gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"},
 		WorkItem: types.WorkItem{Backend: types.WorkJira, ID: "10042", Key: "ENG-42"},
 	})
-	var refused *codehome.NotClosed
+	var refused *gitlethome.NotClosed
 	if !errors.Is(err, errQueueCloseNotWorklet) || !errors.As(err, &refused) ||
 		!strings.Contains(refused.Why, "ENG-42") {
 		t.Fatalf("closing a Jira issue answered %v, want it settled not closed, naming ENG-42, as not Worklet's",
 			err)
 	}
 	// A CLOSE NO ASKING AGAIN CHANGES is final; an unbound enqueuer is one.
-	err = queueCloser{}.CloseWorkItem(t.Context(), codehome.TaskClose{
-		As:       code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:founder"},
+	err = queueCloser{}.CloseWorkItem(t.Context(), gitlethome.TaskClose{
+		As:       gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:founder"},
 		WorkItem: types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1"},
 	})
 	if !errors.As(err, &refused) {
@@ -103,7 +103,7 @@ func TestACloseWorkletRefusesForGoodIsNotAskedAgain(t *testing.T) {
 		{"the node's own failure", errors.New("the data node did not answer"), false},
 	} {
 		got := closeFailed(item, "dev", "close", c.err)
-		var refused *codehome.NotClosed
+		var refused *gitlethome.NotClosed
 		switch {
 		case !errors.Is(got, c.err):
 			t.Errorf("%s: answered %v, which lost the cause %v", c.name, got, c.err)

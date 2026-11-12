@@ -4,7 +4,7 @@
  * change's and a repository's checks tabs, and the Inbox card.
  *
  * WORDS FOR THE ENGINE'S CLOSED SETS, never the sets themselves: those are
- * `contract/checks.ts`'s, held both ways by `internal/code`. A value a newer
+ * `contract/checks.ts`'s, held both ways by `internal/gitlet`. A value a newer
  * engine names that this build has no word for is drawn as the engine sent
  * it, never as a known one.
  *
@@ -88,7 +88,7 @@ export function queueStateWord(state: string): string {
 }
 
 /**
- * Why a queue put an entry out (`code.QueueEndReason`'s ejections), in a
+ * Why a queue put an entry out (`gitlet.QueueEndReason`'s ejections), in a
  * sentence's words: what the engine found, never a guess at who is to blame.
  */
 const EJECT_WORDS: Readonly<Record<string, string>> = {

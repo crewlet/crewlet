@@ -36,11 +36,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/insights"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -646,7 +646,7 @@ const (
 	TierCompany Tier = "company"
 	// TierBootstrap is Tier A: this node's broker, store and API.
 	TierBootstrap Tier = "bootstrap"
-	// TierChecks is a repository's `.crewlet/checks.yaml` (code.ParseChecks):
+	// TierChecks is a repository's `.crewlet/checks.yaml` (gitlet.ParseChecks):
 	// no config at all, but a document its author checks the same way before
 	// pushing it, so a check's typo is found on a laptop rather than by the
 	// first change it should have run on.
@@ -783,7 +783,7 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 	cfg := addConfigFlags(fs)
 	tier := fs.String("tier", string(TierAuto),
 		"which document a positional file is: auto, company, bootstrap or checks (a repository's "+
-			code.ChecksFilePath+")")
+			gitlet.ChecksFilePath+")")
 	asJSON := fs.Bool("json", false,
 		"emit {valid, tier, file, problems, warnings, summary} instead of prose")
 	if err := fs.Parse(args); err != nil {
@@ -832,7 +832,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		// from the target branch it governs — one parser, so a file that
 		// passes here is one Gitlet runs, and every fault is
 		// located at its field and its line as a config's is.
-		checks, checksErr := code.ParseChecks(raw)
+		checks, checksErr := gitlet.ParseChecks(raw)
 		if checksErr != nil {
 			res.Problems = config.Problems(checksErr)
 			return report(stdout, res, asJSON)

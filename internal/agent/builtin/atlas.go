@@ -14,8 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -41,12 +42,39 @@ type AtlasSettings struct {
 	Deployment derive.Deployment
 }
 
-// AtlasDeps are what the atlas tools read the atlas through. The zero value
-// serves none of them.
+// AtlasDeps are what the atlas tools and questions read the atlas through.
+// The zero value serves none of them.
 type AtlasDeps struct {
 	// Settings is the company settings this node runs, read per call, and
 	// false where it runs none yet. Nil omits every atlas tool.
 	Settings func(ctx context.Context) (AtlasSettings, bool)
+	// Records is every record source of the engine's this node reaches, read
+	// per call, Gitlet aside: each caller adds Gitlet as itself. A source this
+	// node does not reach is nil, which the read reports as unread.
+	Records func(ctx context.Context) gather.Sources
+}
+
+// AtlasRead is one read of the atlas for one caller: Gitlet read as asker
+// where reads is set, every record this node reaches, and the settings it
+// runs. False where it runs no company yet.
+func (d AtlasDeps) AtlasRead(ctx context.Context, reads gather.GitletReads, asker gitlet.Principal,
+	fresh statelog.Freshness, now time.Time) (gather.Answer, bool) {
+	if d.Settings == nil {
+		return gather.Answer{}, false
+	}
+	settings, running := d.Settings(ctx)
+	if !running {
+		return gather.Answer{}, false
+	}
+	var sources gather.Sources
+	if d.Records != nil {
+		sources = d.Records(ctx)
+	}
+	sources.Gitlet = reads
+	return gather.Read(ctx, sources, gather.Request{
+		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
+		Asker: asker, Fresh: fresh, Now: now,
+	}), true
 }
 
 // atlasSearch is atlas_search: the atlas as its caller may read it. Gitlet is
@@ -144,21 +172,21 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // this surface serves no code or the caller (or whoever a seat's turn works
 // for) may not read it, and then why says which, for the answer's coverage.
 func (t *atlasSearch) gitlet(ctx context.Context, turn *turnctx.Turn) (
-	src gather.Sources, asker code.Principal, why string) {
+	src gather.Sources, asker gitlet.Principal, why string) {
 
 	if !t.code.serves() || t.authorize == nil {
-		return gather.Sources{}, code.Principal{}, ""
+		return gather.Sources{}, gitlet.Principal{}, ""
 	}
 	switch err := t.authorize(ctx, authz.ActionCodeRead, authz.Object{}); {
 	case errors.Is(err, ErrUndecidable):
-		return gather.Sources{}, code.Principal{}, "whether you may read the company's code could not be " +
+		return gather.Sources{}, gitlet.Principal{}, "whether you may read the company's code could not be " +
 			"decided right now, so no repository was read; ask again shortly"
 	case err != nil:
-		return gather.Sources{}, code.Principal{}, "you do not use Gitlet, so no repository was read"
+		return gather.Sources{}, gitlet.Principal{}, "you do not use Gitlet, so no repository was read"
 	}
 	caller, refusal := t.code.callerOn(ctx, turn, t.Name(), authz.ActionCodeRead)
 	if refusal != nil {
-		return gather.Sources{}, code.Principal{}, "whoever this turn works for may not read the company's " +
+		return gather.Sources{}, gitlet.Principal{}, "whoever this turn works for may not read the company's " +
 			"code now, so no repository was read"
 	}
 	return gather.Sources{Gitlet: atlasGitlet{code: t.code, caller: caller}}, caller.asker, ""
@@ -186,7 +214,7 @@ type atlasGitlet struct {
 	caller codeCaller
 }
 
-func (g atlasGitlet) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (g atlasGitlet) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	return g.code.read(ctx, g.caller, q)
 }
 

@@ -16,11 +16,12 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -127,7 +128,7 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	t.Parallel()
 	unset := config.Stream{}
 	floored := config.Stream{CodeLogMaxBytes: config.CodeLogMaxBytesFloor}
-	trackerLog, vectors, codeLog := worklet.Domain{}.Name(), search.Domain{}.Name(), code.Domain{}.Name()
+	trackerLog, vectors, codeLog := worklet.Domain{}.Name(), search.Domain{}.Name(), gitlet.Domain{}.Name()
 	quarters := []string{doclet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name()}
 	// THE ORDER THE DEPLOYMENT GUIDE ADDS THE ASKS UP IN, which must name
@@ -136,7 +137,7 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	order := []string{trackerLog, vectors, doclet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name(), codeLog, usage.Domain{}.Name(), iamdomain.Domain{}.Name(),
 		assistantdomain.Domain{}.Name(), chatlet.Domain{}.Name(), executordomain.Domain{}.Name(),
-		accessdomain.Domain{}.Name()}
+		accessdomain.Domain{}.Name(), atlasdomain.Domain{}.Name()}
 	var registered []string
 	for _, domain := range registeredDomains() {
 		registered = append(registered, domain.Name())
@@ -444,7 +445,7 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 	t.Parallel()
 	unset := config.Stream{}
-	trackerLog, codeLog := worklet.Domain{}.Name(), code.Domain{}.Name()
+	trackerLog, codeLog := worklet.Domain{}.Name(), gitlet.Domain{}.Name()
 	about := func(gibs float64) int64 { return int64(math.Ceil(gibs)) }
 	// CREATED: the code log and the mutation log a first boot on free
 	// creates, the code log set at set.
@@ -614,7 +615,7 @@ func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 // the pages say.
 func TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore(t *testing.T) {
 	t.Parallel()
-	trackerLog, vectors, codeLog := worklet.Domain{}.Name(), search.Domain{}.Name(), code.Domain{}.Name()
+	trackerLog, vectors, codeLog := worklet.Domain{}.Name(), search.Domain{}.Name(), gitlet.Domain{}.Name()
 	const example = 100 * gib
 	without := firstBootFit(t, config.Stream{}, example, codeLog)[trackerLog].Bytes
 	// AT K TIMES: the least code log set at no less than k times the

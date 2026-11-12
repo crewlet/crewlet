@@ -416,7 +416,7 @@ every other route.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/advisor/access` | The change that grants an agent one access it asked for (`seat=` the agent's handle, `access=` the grant's key), built from the redacted company for that agent alone ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md)). **Takes `admin`**. Refused in its own words for a key the catalogue does not name, a grant the agent holds, or one it has nothing to add to |
-| `GET` | `/delegated-decisions` | What [delegates](../guides/delegated-decisions.md) decided, and under which rules ([ADR-0125](../../adr/0125-a-delegate-decides-a-request-only-within-rules-the-engine-enforces.md)): `enabled`, `rules` (`rule`, `kinds`, `delegates`, `escalate_to`, `sample_one_in`, `always_escalate_paths`), `limits` (`deadline_minutes`, `decisions_per_hour`, `server_allows_per_hour`), and for one company day (`day=`, `2026-11-09`, the last whole day by default, with its `since` and `until`) `decided`: every request a delegate or the engine settled that day; then `spot_checks`, the week's decisions chosen for a spot-check, and `flagged`, the week's high-confidence denials. Each list holds up to 100 rows, with `*_more` saying the log holds more, each row `request`, `kind`, `rule`, `seat`, `by`, `by_kind` (`agent`, `person` or `engine`), `through`, `asked`, `confidence`, `verdict`, `overruled`, `sampled`, `host`, `item`, `at` and the opened `subject`, `reason` and `findings` (`subject_unopened` where they do not open on this node). **Takes `admin`, or a person a rule names in `escalate_to`** |
+| `GET` | `/delegated-decisions` | What [delegates](../guides/delegated-decisions.md) decided, and under which rules ([ADR-0125](../../adr/0125-a-delegate-decides-a-request-only-within-rules-the-engine-enforces.md)): `enabled`, `rules` (`rule`, `kinds`, `delegates`, `escalate_to`, `sample_one_in`, `always_escalate_paths`, `required_checks`, each `{repo, branch, checks}`), `limits` (`deadline_minutes`, `decisions_per_hour`, `server_allows_per_hour`), and for one company day (`day=`, `2026-11-09`, or `today` for the day still running; the last whole day by default, which Home's digest reads; a day that has not begun is `400 bad_params`), with its `since`, `until` and `complete` (false for the running day, whose list grows until it ends), `decided`: every request a delegate or the engine settled that day, so far for the running one; then `spot_checks`, the week's decisions chosen for a spot-check, and `flagged`, the week's high-confidence denials. Each list holds up to 100 rows, with `*_more` saying the log holds more, each row `request`, `kind`, `rule`, `seat`, `by`, `by_kind` (`agent`, `person` or `engine`), `through`, `asked`, `confidence`, `verdict`, `overruled`, `sampled`, `host`, `item`, `at` and the opened `subject`, `reason` and `findings` (`subject_unopened` where they do not open on this node). **Takes `admin`, or a person a rule names in `escalate_to`** |
 | `GET` | `/advisor/review` | What each agent may do and where it runs, as its next turn is told: per agent (`seat`, `name`), its `access`, the integrations with their levels and permissions, the MCP servers with the tools at each level, and the boxes its runs use with their memory and, once a run has read the box, its browser and container runtime. The go-live check's review. **Takes `admin`** |
 | `GET` | `/advisor` | The [setup advisor](../guides/advisor.md): every finding about the fleet's company, its integrations' last reconcile and the patterns the engine read in its last 7 days of work, the most costly first, each with its class, severity, actor, source, subject, title, why, the document path it sits at, its evidence and the records behind it, and its fix, the `revision` every change was built from, the `notices` that reach every administrator's Inbox (a finding that blocks the company and is the owner's to fix, and an alarm standing on any node past the deferral grace, each `{class, subject, since, nodes}`, open while its condition holds), and `unread` naming what the server could not read (`integrations`, `alarms`). **Takes `admin`**. A fix is never applied here: a change is a `PUT /config/{entity}/{id}` the caller previews with `dry_run=true` and sends with `If-Match` on the entity's own tag from its `GET` |
 | `GET` | `/diagnostics/issue-reports` | The company's [engine issue reports](../guides/engine-issue-reports.md): whether they are on, the relay, every report sent with its status, the bytes it sent and the issue the relay named, and what a report of each class would say. **Takes `admin`**. The setting itself is `diagnostics.issue_reports.enabled`, written under `/config` |
@@ -535,6 +535,11 @@ every other route.
 | `GET` | `/box/gitlet/{repo}/tree` | A **check's box's** listing of a directory of the commit its check measures — `path` (or `path_b64`), `recursive`, `cursor` — on a node whose roles name `gitlet`, with the credential its git presents: the user name `check` and its check's token as the Basic password, admitted by its attempt's row as its git is. Reads that one commit and no other: no revision is a parameter, and one named is refused `400`. Answered as the box's git is where a node serves none of Gitlet (see [Check boxes](../concepts/gitlet.md#check-boxes)) |
 | `GET` | `/box/gitlet/{repo}/blob` | A check's box's read of one file's lines of its commit — `path` (or `path_b64`), `start_line`, `end_line`, `cursor` (same) |
 | `GET` | `/box/gitlet/{repo}/diff` | A check's box's diff of its commit from the base its attempt was queued with — `paths` (repeated) for the stat of those, or `file` (or `file_b64`) for one file's patch, `renames`, `cursor` (same) |
+| `GET` | `/atlas` | The company's [atlas](../concepts/atlas.md), a page of its entries at a time. **Needs the `atlas` permission** (see [The atlas](#the-atlas)) |
+| `GET` | `/atlas/map` | The atlas drawn as its lanes: every lane, its groups, the entries of the open groups and the relations drawn at rest (same) |
+| `GET` | `/atlas/facets` | How many entries each filter value leaves (same) |
+| `GET` | `/atlas/{id}` | One entry in full: its facts with their sources, its relations, its use, the agents holding accounts at it, its open signals, and what relies on it (same) |
+| `GET` | `/atlas/{id}/trace` | What depends on one entry, or what it depends on, hop by hop (same) |
 | `GET` | `/gitlet/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a credential** (see [The code reads](#the-code-reads)) |
 | `GET` | `/gitlet/repos/{name}` | One repository in detail (same) |
 | `GET` | `/gitlet/repos/{name}/pushes` | One repository's push history, newest first in the order the pushes landed, each push naming who made it — a person by their credential and seat, a seat by its handle and the turn behind its push — and how its pack was built (same) |
@@ -7706,7 +7711,7 @@ is about** and **what would make the same request land**:
 A refusal of one of [Gitlet's](../concepts/gitlet.md) writes also
 names Gitlet's own word for it in **`refusal`** — `head_moved`,
 `target_moving`, `queue_full`, `gate_unmet`, the write's `conflict` and the
-rest of each family (`code.MergeRefusals`, the write and change refusals) —
+rest of each family (`gitlet.MergeRefusals`, the write and change refusals) —
 beside the class in `error`. Several share one class: a change whose head
 moved and a train whose base moved are both `stale_version`, a target still
 moving and a full queue both `conflict`. So a client that answers each in its
@@ -8011,6 +8016,26 @@ an address — is resolved against the chart. The lead relation is then asked
 about the seat it all resolved to, so a lead may name their report either way.
 A name nothing answers to is refused, and the refusal lists the seats — the
 roster is everybody's overview.
+
+## The atlas
+
+The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through five questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
+
+| Question | Route | Parameters | Answer |
+|---|---|---|---|
+| `atlas_entries` | `GET /atlas` | the filters below; `sort` (`key`, the map's order, by default; `name`; `last_seen`); `cursor`; `limit` (50 by default, at most 500) | `rows`, one summary per entry; `next_cursor`, absent on the last page; `total` |
+| `atlas_map` | `GET /atlas/map` | the filters below; `closed`, the group keys the reader closed, comma separated | `lanes` (every lane, an empty one included), `groups`, `nodes`, `edges` (the relations drawn at rest), `collapsed` |
+| `atlas_entry` | `GET /atlas/{id}` | `id` | `entry`, in full; its `vendor`; `used_by`, every entry with a relation to it |
+| `atlas_trace` | `GET /atlas/{id}/trace` | `id`; `direction` (`up`, what depends on it, by default; `down`, what it depends on); `depth` (1 to 6, 6 by default); `relations` (`structural`, by default, or `all`) | `from`, `direction`, `hops` by distance, `edges`, `truncated` |
+| `atlas_facets` | `GET /atlas/facets` | the filters below | how many entries each `kinds`, `lanes`, `vendors`, `words` and `health` value leaves, each counted over every other filter, and `total` |
+
+The filters are `q` (part of a name or a key, or an entry's id), `kind`, `lane`, `vendor`, `confidence` (`confirmed`, `likely` or `unconfirmed`), `health` (`alerting`, `needs_look` or `quiet`) and `show` (`current`, every entry but the retired, by default; `retired`; `all`). A value outside its set is refused with `bad_params`, naming the parameter and the values it takes; an `id` no entry answers to is `not_found`. An entry merged into another by an exact key is found by its own id too.
+
+Every answer also carries `revision`, the settings revision it was read from (empty where the serving node cannot tell), `coverage`, each source the read reads and whether it was read in full, with the reason where it was not, and `withheld`, how many values were left out for being shaped like a credential, counted and never shown. A source that fails leaves the rest answering.
+
+**The atlas is never a way round another permission.** A reader without the `gitlet` permission is read no repository, and Gitlet is not asked; one with it is read the repositories Gitlet lists to them. An integration's standing and a server's connection test are signals only an administrator reads, as the screens they come from are. A standing alarm on a tool server or a model entry is every holder's.
+
+**The bounds.** A page is 50 entries and at most 500. The map draws at most 2,000 entries open: past that it closes groups, the largest first, and names them in `collapsed`, so an answer never draws a partial map as if it were whole. A trace walks at most 6 hops and stops at 200 entries, saying so in `truncated`.
 
 ## Worklet and Doclet
 
@@ -8511,7 +8536,11 @@ other. A `200` answers **per log**:
     {"domain": "access", "stream": "CREWLET_ACCESS_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.access:node-4",
      "outcome": "applied",
-     "position": {"stream": "CREWLET_ACCESS_LOG", "generation": 0, "seq": 4120}}
+     "position": {"stream": "CREWLET_ACCESS_LOG", "generation": 0, "seq": 4120}},
+    {"domain": "atlas", "stream": "CREWLET_ATLAS_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.atlas:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_ATLAS_LOG", "generation": 0, "seq": 310}}
   ]
 }
 ```
@@ -12287,7 +12316,7 @@ own `alarm_raised` log line.
       "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
       "config_reported_at": "2026-09-23T08:14:02.118Z",
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
-      "posture": "serve", "appliers_ready": 12, "appliers_total": 12,
+      "posture": "serve", "appliers_ready": 13, "appliers_total": 13,
       "admin": "serve",
       "alarms": [{"kind": "backup_age", "since": "2026-09-23T08:10:02Z"}]
     }

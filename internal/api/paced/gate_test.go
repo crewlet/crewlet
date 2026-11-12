@@ -40,7 +40,7 @@ import (
 // moved onto a timer to dodge it. So the walk judges what each deadline is SET
 // ON, and a handler reaches its client's connection through exactly three
 // doors, each judged in every non-test Go file under internal/api and
-// internal/code/host:
+// internal/gitlet/host:
 //
 //   - an *http.ResponseController — SetReadDeadline or SetWriteDeadline
 //     selected, called or taken as a method value, resolving to the method
@@ -100,8 +100,8 @@ import (
 //
 // # Where it looks
 //
-// internal/api and internal/code/host, the two places a client's connection
-// is served. internal/code/host is named before it exists, and a walk of a
+// internal/api and internal/gitlet/host, the two places a client's connection
+// is served. internal/gitlet/host is named before it exists, and a walk of a
 // root that is not there reads nothing rather than failing; internal/api
 // always exists, and a walk that read nothing there fails, since a guard
 // asserting an absence passes alike on a clean tree and on a walk that saw
@@ -137,14 +137,14 @@ func TestOnePacingImplementation(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("read %d files under internal/api and %d under internal/code/host, and "+
+	t.Logf("read %d files under internal/api and %d under internal/gitlet/host, and "+
 		"%d package(s) in all: %d deadline(s) judged", found.read["internal/api"],
-		found.read["internal/code/host"], found.packages, found.judged)
+		found.read["internal/gitlet/host"], found.packages, found.judged)
 }
 
 // roots are where a client's connection is served, relative to the module
 // root.
-var roots = []string{"internal/api", "internal/code/host"}
+var roots = []string{"internal/api", "internal/gitlet/host"}
 
 // exemption is a file, relative to the module root, and the functions in it
 // that may set a deadline on a client's connection: each a function's name,
@@ -700,7 +700,7 @@ func parentsOf(file *ast.File) map[ast.Node]ast.Node {
 // passing a Hijack on, the exempt functions' own (counted instead — while a
 // second deadline in each exempt file, a closure's among them, is reported),
 // a test file, testdata and a package outside both roots. Then the same tree
-// without internal/code/host, which is not an error.
+// without internal/gitlet/host, which is not an error.
 func TestThePacingWalkFindsADeadline(t *testing.T) {
 	t.Parallel()
 	head := func(imports ...string) string {
@@ -794,7 +794,7 @@ func tested(rc *http.ResponseController) { _ = rc.SetWriteDeadline(time.Time{}) 
 		"internal/api/testdata/w.go": head("net/http", "time") + `
 func fixture(rc *http.ResponseController) { _ = rc.SetWriteDeadline(time.Time{}) }
 `,
-		"internal/code/host/relay.go": head("net", "time") + `
+		"internal/gitlet/host/relay.go": head("net", "time") + `
 type relay struct{ ln net.Listener }
 
 func (r *relay) serve() {
@@ -815,7 +815,7 @@ func (r *relay) direct() {
 	_ = c.SetDeadline(time.Time{})
 }
 `,
-		"internal/code/host/h.go": head("bufio", "net", "net/http", "time") + `
+		"internal/gitlet/host/h.go": head("bufio", "net", "net/http", "time") + `
 func hDeadline(w http.ResponseWriter) {
 	conn, _, err := http.NewResponseController(w).Hijack()
 	if err != nil {
@@ -889,16 +889,16 @@ func elsewhere(rc *http.ResponseController) { _ = rc.SetWriteDeadline(time.Time{
 		"internal/api/x.go connection v.SetReadDeadline",
 		"internal/api/x.go connection v.rc.SetWriteDeadline",
 		"internal/api/x.go connection w",
-		"internal/code/host/h.go connection conn.SetDeadline",
-		"internal/code/host/h.go connection tcp.SetWriteDeadline",
-		"internal/code/host/h.go escaped conn",
+		"internal/gitlet/host/h.go connection conn.SetDeadline",
+		"internal/gitlet/host/h.go connection tcp.SetWriteDeadline",
+		"internal/gitlet/host/h.go escaped conn",
 	}
 	if got := verdicts(found); !slices.Equal(got, want) {
 		t.Errorf("findings\n\t%s\nwant\n\t%s", strings.Join(got, "\n\t"), strings.Join(want, "\n\t"))
 	}
-	if found.read["internal/api"] != 6 || found.read["internal/code/host"] != 2 {
+	if found.read["internal/api"] != 6 || found.read["internal/gitlet/host"] != 2 {
 		t.Errorf("read %v, want the six non-test files under internal/api and the two "+
-			"under internal/code/host", found.read)
+			"under internal/gitlet/host", found.read)
 	}
 	if want := map[string]int{
 		"internal/api/paced/paced.go Writer.Write":   1,
@@ -908,9 +908,9 @@ func elsewhere(rc *http.ResponseController) { _ = rc.SetWriteDeadline(time.Time{
 			"the second in each exempt file reported above", found.exempt, want)
 	}
 
-	hostless := walkForDeadlines(t, tree(t, "internal/code"))
-	if got := verdicts(hostless); len(got) != len(want)-3 || hostless.read["internal/code/host"] != 0 {
-		t.Errorf("without internal/code/host: findings %q, read %v; want internal/api's and no error",
+	hostless := walkForDeadlines(t, tree(t, "internal/gitlet"))
+	if got := verdicts(hostless); len(got) != len(want)-3 || hostless.read["internal/gitlet/host"] != 0 {
+		t.Errorf("without internal/gitlet/host: findings %q, read %v; want internal/api's and no error",
 			got, hostless.read)
 	}
 }

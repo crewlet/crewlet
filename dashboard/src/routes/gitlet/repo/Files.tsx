@@ -22,7 +22,7 @@
  *
  * # A file opens at the line its address picks
  *
- * A page is at most code.MaxGitAnswerBytes, about fifteen hundred lines of
+ * A page is at most gitlet.MaxGitAnswerBytes, about fifteen hundred lines of
  * ordinary source, so a link to a line further in — a search hit, ⌘K, a
  * Permalink — opened on lines that did not hold it, and the reader paged
  * forward to find what the link had named. A path the address picks a line of

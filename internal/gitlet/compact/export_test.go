@@ -1,0 +1,172 @@
+package compact
+
+import (
+	"context"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+)
+
+// ScaleBounds holds every build c makes to a cut of cut and every output's
+// bundle to maxBundle, in place of gitlet.CompactPackBytes and gitlet.MaxPackBytes:
+// a suite builds over mebibytes what production builds over gibibytes, and the
+// plan's full rule and its byte cap follow the cut as they do in production.
+func ScaleBounds(c *Compactor, cut, maxBundle int64) {
+	c.bounds.cut, c.bounds.maxBundle = cut, maxBundle
+}
+
+// MergeFrom has c's plans merge n packs at the least below the target, and its
+// listing name the repositories holding n or more, in place of
+// gitlet.CompactMinMerge: what BenchmarkCompact's min-merge arms vary.
+func MergeFrom(c *Compactor, n int) { c.bounds.minMerge = n }
+
+// BuildWith has c run every git process of a build through run — a merge's
+// pack-objects, a layer's multi-pack-index and commit-graph writes — in place
+// of the admission's reserved slot: a builder a case stands in, one whose
+// outputs a cut cannot bound, or that records what it was asked.
+func BuildWith(c *Compactor, run func(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (
+	gitproc.Result, error)) {
+	c.runBuild = run
+}
+
+// RunInSlot is the production builder BuildWith replaces: cmd run in the
+// admission's reserved slot.
+func RunInSlot(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error) {
+	return runInSlot(ctx, adm, cmd)
+}
+
+// Planned is one plan as a case reads it: whether it is due, and every
+// input's row ids, lightest first.
+type Planned struct {
+	Due    bool
+	Inputs [][]string
+}
+
+// PlanOf is the plan of a repository whose live rows are live, its roll capped
+// at byteCap pack bytes, for outputs cut at cut.
+func PlanOf(live []gitlet.PackRow, byteCap, cut int64) Planned {
+	return PlanOver(live, nil, byteCap, cut)
+}
+
+// PlanOver is PlanOf of a repository whose published layers name the pack
+// checksums in published.
+func PlanOver(live []gitlet.PackRow, published map[string]bool, byteCap, cut int64) Planned {
+	p := plan(live, published, byteCap, bounds{cut: cut, maxBundle: production.maxBundle,
+		minMerge: production.minMerge})
+	out := Planned{Due: p.due}
+	for _, in := range p.inputs {
+		out.Inputs = append(out.Inputs, in.ids)
+	}
+	return out
+}
+
+// LayerPlanned is one publication's plan as a case reads it: what the plan
+// found, how many layers of the chain the new layer is written over, the
+// layers it replaces, every pack checksum it covers before its repack, the
+// pack row ids its repack merges (none where it repacks nothing) and the
+// objects it holds.
+type LayerPlanned struct {
+	Verdict  string
+	Base     int
+	Replaces []string
+	Members  []string
+	Repack   []string
+	Objects  int64
+}
+
+// The verdicts a [LayerPlanned] names.
+const (
+	LayerDue      = "due"
+	LayerNothing  = "nothing"
+	LayerWaiting  = "waiting"
+	LayerTooLarge = "too_large"
+)
+
+// PlanLayerOf is the publication's plan over chain and live, its repack capped
+// at byteCap pack bytes for outputs cut at cut, absorbing absorb layers more
+// than the geometric rule does.
+func PlanLayerOf(chain cache.Chain, live []gitlet.PackRow, byteCap, cut int64, absorb int) LayerPlanned {
+	p, verdict := planLayer(chain, live, byteCap, bounds{cut: cut, maxBundle: production.maxBundle,
+		minMerge: production.minMerge}, absorb)
+	out := LayerPlanned{Verdict: map[layerVerdict]string{layerDue: LayerDue, layerNothing: LayerNothing,
+		layerWaiting: LayerWaiting, layerTooLarge: LayerTooLarge}[verdict], Base: p.base, Replaces: p.replaces,
+		Objects: p.objects}
+	for _, m := range p.members {
+		out.Members = append(out.Members, m.checksum)
+	}
+	if p.repack.due {
+		out.Repack = p.repack.ids()
+	}
+	return out
+}
+
+// LayerEstimate is the upper bound a plan holds a layer of objects objects to.
+func LayerEstimate(objects int64) int64 { return layerEstimate(objects) }
+
+// GeometricSplit is git's split of weights, sorted ascending, at factor: how
+// many of the lightest a geometric repack rolls up.
+func GeometricSplit(weights []int64, factor int64) int { return geometricSplit(weights, factor) }
+
+// CapOf is the pack bytes c's next plan of repoID is capped at.
+func CapOf(c *Compactor, repoID string) int64 { return c.capFor(repoID) }
+
+// HeldBase is how many of rows[:base], from the root, c's object store still
+// holds every part of, or the store's error (Compactor.heldBase).
+func HeldBase(ctx context.Context, c *Compactor, rows []gitlet.LayerRow, base int) (int, error) {
+	return c.heldBase(ctx, rows, base)
+}
+
+// FinishExpunge finishes the expunge open on cand's repository — its rescue
+// and its commit, from the rows — as one whose rescue keeps what a ref drop
+// left for grace would: what an expunge on its maintainer's own schedule
+// keeps, which a case drives over a purge's begin to hold the rescue's drops
+// to the grace it is handed.
+func FinishExpunge(ctx context.Context, c *Compactor, cand gitlet.ExpungeCandidate, grace time.Duration) (Outcome,
+	error) {
+
+	c.expunging.Lock()
+	defer c.expunging.Unlock()
+	if !c.claimExpunge(cand.ID) {
+		return OutcomeBusy, errClaimed
+	}
+	defer c.unclaimExpunge(cand.ID)
+	return c.finish(ctx, cand, openExpunge{id: cand.Open, request: cand.Request, grace: grace, floor: cand.Version})
+}
+
+// Listed is repository id as a pass of c lists it now — the `expunge_due`
+// listing's two arms, its weekly one asked from c's clock less
+// gitlet.ExpungeInterval, every page, as [Compactor.ExpungePass] reads them — and
+// whether the listing names it at all: what a case asks an expunge of again
+// after a cycle answered busy, as the next pass would.
+func Listed(ctx context.Context, c *Compactor, id string) (gitlet.ExpungeCandidate, bool, error) {
+	listed, err := c.listExpunges(ctx, c.now().Add(-gitlet.ExpungeInterval))
+	if err != nil {
+		return gitlet.ExpungeCandidate{}, false, err
+	}
+	for _, cand := range listed {
+		if cand.ID == id {
+			return cand, true, nil
+		}
+	}
+	return gitlet.ExpungeCandidate{}, false, nil
+}
+
+// ExpungeFrom has c's expunges on its own schedule due from n unreachable bytes
+// rather than gitlet.ExpungeMinBytes: what a case's repository of kilobytes is
+// expunged at.
+func ExpungeFrom(c *Compactor, n int64) { c.bounds.expungeMin = n }
+
+// ClockAt has c read now as its clock from here on: what a benchmark's
+// compactor, built by its fleet's own helper, is set past a grace by. Before
+// c starts only.
+func ClockAt(c *Compactor, now func() time.Time) { c.now = now }
+
+// RememberNotDue has c remember cand as a plan found not due at the version the
+// listing names and at its repository's cap now — what a pass over a
+// repository that is not due leaves behind — so BenchmarkCompact's poll arms
+// price the memory's steady state without planning every repository first.
+func RememberNotDue(c *Compactor, cand gitlet.CompactionCandidate) {
+	c.remember(cand, c.capFor(cand.ID))
+}

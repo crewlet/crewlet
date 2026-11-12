@@ -256,11 +256,17 @@ func TestAnApprovedCallCarriedOnInItsBoxIsToldFirstThenWhatItsCopyMayLack(t *tes
 // says a note shown both above and there is one note — a second copy of one,
 // unheaded, would read as a note of its own; the notes waiting follow, once. A
 // copy whose harness ended its own run holds them all, and is told only the
-// notes waiting.
+// notes waiting — but for a read the record marks unanswered, a take whose
+// answer never reached its harness: the copy lacks that note and holds the
+// answered ones after it, so it is told every note from that read on, under the
+// same header, and none before.
 //
 // Mutation: tell the notes from the job's first read, tell none, tell them where
-// the harness ended its own run, tell them without their header, after the
-// waiting notes, or a second time with no header, and a case goes red.
+// the harness ended its own run with every take answered, leave a read marked
+// unanswered untold where it did, tell them from the last read marked rather
+// than the first, tell the notes before it, tell them without their header,
+// after the waiting notes, or a second time with no header, and a case goes
+// red.
 func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 	t.Parallel()
 	read := func(id, text string, order int, boundary types.SteerBoundary, launch string) steer.Read {
@@ -276,6 +282,15 @@ func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 	msg := func(r steer.Read) string { return prompts.SteerMessage(r.By, r.Text) }
 	waiting := steer.Note{ID: "waiting", Text: "the note still waiting", By: "founder"}
 	call := numbered("jira_create", map[string]any{"summary": "an earlier job's issue"}, 1, 1)
+	// A TAKE OF THE JOB'S WHOSE ANSWER WAS LOST, and an answered one after it.
+	lost := read("lost", "the note whose take's answer was lost", 3, types.SteerBoundaryToolBatch, "job-1")
+	lost.Unanswered = true
+	unanswered := []steer.Read{steered[0], steered[1], lost,
+		read("after", "the note an answered take read after it", 4, types.SteerBoundaryToolBatch, "job-1")}
+	// AND A LATER TAKE OF IT LOST TOO, the answered one between them.
+	lostAgain := read("lost-again", "the note a later take lost", 5, types.SteerBoundaryToolBatch, "job-1")
+	lostAgain.Unanswered = true
+	twice := append(append([]steer.Read{}, unanswered...), lostAgain)
 	for name, tc := range map[string]struct {
 		job       string
 		steered   []steer.Read
@@ -291,6 +306,13 @@ func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 			told: []string{msg(steered[0])}, count: "the note below"},
 		"a job whose harness ended its own run": {job: "job-1", steered: steered, end: sandbox.HarnessEndOwnRun,
 			not: []string{msg(steered[0]), msg(steered[1]), msg(steered[2]), notesAgainHeader}},
+		"a job whose harness ended its own run, a take of it unanswered": {job: "job-1", steered: unanswered,
+			end: sandbox.HarnessEndOwnRun, told: []string{msg(unanswered[2]), msg(unanswered[3])},
+			not: []string{msg(unanswered[0]), msg(unanswered[1])}, count: "the 2 notes below"},
+		"a job whose harness ended its own run, two takes of it unanswered around an answered one": {
+			job: "job-1", steered: twice, end: sandbox.HarnessEndOwnRun,
+			told: []string{msg(twice[2]), msg(twice[3]), msg(twice[4])},
+			not:  []string{msg(twice[0]), msg(twice[1])}, count: "the 3 notes below"},
 	} {
 		for _, carry := range inBoxCarries {
 			t.Run(carry.name+", "+name, func(t *testing.T) {
@@ -436,5 +458,70 @@ func TestARunCarriedOnInItsBoxLaunchesNothingWhenTheCallsItsCopyMayLackFillTheWi
 				t.Errorf("relaunched %d runs, want a launch %v", n, !tc.refused)
 			}
 		})
+	}
+}
+
+// A ROUND CARRIED ON IN ITS JOB'S BOX IS TOLD A NOTE ITS HARNESS WAS SERVED AS
+// ONE IT MAY ALREADY SHOW. A note the run's bridge served the job's OpenCode
+// harness is recorded read only once the harness confirms delivering it, so the
+// copy in the job's box may hold one the record says still waits: it is told
+// it under the header of notes it may already show, with every note waiting
+// before it — the order read kept — and the notes after it plainly; where its
+// harness was cut off, after every note the turn has read, under the same
+// header.
+//
+// Mutation: tell a served note plainly, take the notes after it under the
+// header, or tell it apart from the notes the turn has read where the copy was
+// cut off, and a case goes red.
+func TestARunCarriedOnInItsBoxIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.T) {
+	t.Parallel()
+	read := steer.Read{Note: steer.Note{ID: "read", Text: "the note the job's take read", By: "founder"},
+		Reading: steer.Reading{Phase: types.PhaseExecute, Iteration: 1, Round: 1,
+			Boundary: types.SteerBoundaryStep, Launch: "job-1", Order: 1}}
+	note := func(id, text string) steer.Note { return steer.Note{ID: id, Text: text, By: "founder"} }
+	early := note("early", "the note waiting, never served")
+	served := note("served", "the note served to the job's harness, its confirmation lost")
+	late := note("late", "the note filed after it")
+	msg := func(n steer.Note) string { return prompts.SteerMessage(n.By, n.Text) }
+	call := numbered("jira_create", map[string]any{"summary": "an earlier job's issue"}, 1, 1)
+	for name, tc := range map[string]struct {
+		end          sandbox.HarnessEnd
+		again, plain []string
+		count        string
+	}{
+		"a job whose harness ended its own run": {end: sandbox.HarnessEndOwnRun,
+			again: []string{msg(early), msg(served)}, plain: []string{msg(late)}, count: "the 2 notes below"},
+		"a job cut off": {end: sandbox.HarnessEndCutOff,
+			again: []string{msg(read.Note), msg(early), msg(served)}, plain: []string{msg(late)},
+			count: "the 3 notes below"},
+	} {
+		for _, carry := range inBoxCarries {
+			t.Run(carry.name+", "+name, func(t *testing.T) {
+				t.Parallel()
+				box := steer.New()
+				for _, n := range []steer.Note{early, served, late} {
+					box.Offer(n)
+				}
+				brief := inPlaceBrief(t, carry, true, 1, box, func(r *runner.Resume) {
+					r.Bridged, r.Steered, r.HarnessEnd = []runner.BridgedCall{call}, []steer.Read{read}, tc.end
+					r.Served, r.Run = []string{"served"}, runner.RunRecord{LaunchID: "job-1"}
+				})
+				header := strings.Index(brief, notesAgainHeader)
+				if header < 0 || !strings.Contains(brief[header:], tc.count) {
+					t.Fatalf("the notes it may already show are not headed as %s:\n%s", tc.count, brief)
+				}
+				if tc.end.EndedOwnRun() && strings.Contains(brief, msg(read.Note)) {
+					t.Errorf("a copy whose harness ended its own run is told the note it read:\n%s", brief)
+				}
+				at := header
+				for _, want := range append(append([]string{}, tc.again...), tc.plain...) {
+					i := strings.Index(brief, want)
+					if i < 0 || i < at || strings.Count(brief, want) != 1 {
+						t.Errorf("the session is not told %q once, in the order read:\n%s", want, brief)
+					}
+					at = i
+				}
+			})
+		}
 	}
 }

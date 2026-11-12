@@ -129,7 +129,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	input, _, err := e.parkedTurnRunner(ctx, company, resumeInput{
 		Company: company, Run: run, State: state,
 		Turn: resumedTurn(run, seat, company.Org, e.rowHolds(run)),
-	})
+	}, nil)
 	if err != nil {
 		refuse("the run's turn could not be rebuilt here", "error", err.Error())
 		return

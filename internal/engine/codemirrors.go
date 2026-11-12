@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 )
 
-// A GITLET NODE'S IMPORTS AND MIRRORS (internal/code/mirror): a worker of its
+// A GITLET NODE'S IMPORTS AND MIRRORS (internal/gitlet/mirror): a worker of its
 // home's loop on every Gitlet node, filling the repositories it is home to from
 // the other hosts their rows name, and pushing their green tips to the hosts
 // their push mirrors name.
@@ -29,7 +29,7 @@ import (
 // attempts it starts run on goroutines of its own, ended by its Stop in
 // Gitlet's one bounded stop, after the home's loop that starts them.
 func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Cache, pool *gitproc.Pool,
-	objects code.Putter, home *codehome.Loop) (*mirror.Mirrors, error) {
+	objects gitlet.Putter, home *gitlethome.Loop) (*mirror.Mirrors, error) {
 
 	o := mirror.Options{
 		Estate: e.router.Code(), Cache: c, Git: pool, Objects: objects, NodeID: nodeID, Limits: e.codeLimits,

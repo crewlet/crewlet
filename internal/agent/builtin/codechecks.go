@@ -14,7 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -30,7 +30,7 @@ import (
 // glance. Each names its caller as every code tool does ([CodeAskerOf]) and is
 // judged where it is answered: a read by the repository's grant on the data
 // node that answers it, a write by the repository's checks writer from its
-// own chart (internal/code's checkasks.go) — a seat reruns only what its
+// own chart (internal/gitlet's checkasks.go) — a seat reruns only what its
 // infrastructure ended, on a repository it may write or a change it wrote,
 // and in a turn somebody woke for them too ([CodeDeps.writeCaller]); and a
 // report is a person's alone, which the authority table holds before any of
@@ -101,7 +101,7 @@ const (
 	// again: 16. Each rerun is a write of its own, published and awaited to
 	// its outcome one after another, so a call's time grows with its count;
 	// sixteen keeps a call to a short run of writes while the most checks a
-	// file defines (code.MaxChecksPerFile, 64) is four calls. A call naming
+	// file defines (gitlet.MaxChecksPerFile, 64) is four calls. A call naming
 	// more is refused naming the bound; all_failed reruns the first sixteen,
 	// and the same call again — with the same `op_id` or none — the rest,
 	// the first sixteen then being queued and no longer failed, and each
@@ -127,7 +127,7 @@ const (
 // checkScope is the commit a check tool is about: a change's head, checked
 // for the change's target, or a commit named by its id, checked for a branch.
 type checkScope struct {
-	repo   code.RepoRef
+	repo   gitlet.RepoRef
 	change int64
 	oid    string
 	target string
@@ -157,9 +157,9 @@ func checkScopeArgs(tool string, args map[string]any) (repo string, change int64
 		}
 		repo, change, refusal = changeArg(tool, args)
 		return repo, change, "", "", refusal
-	case !gitref.ValidOID(oid) || oid == code.ZeroOID:
+	case !gitref.ValidOID(oid) || oid == gitlet.ZeroOID:
 		return refuse("needs `change` (a change's number or reference) or `sha` (a whole commit id).")
-	case target != "" && (!code.ValidRef(target) || !strings.HasPrefix(target, branchRoot)):
+	case target != "" && (!gitlet.ValidRef(target) || !strings.HasPrefix(target, branchRoot)):
 		return refuse(fmt.Sprintf("`checked_for` %q is not a branch.", clip(target)))
 	}
 	repo, refusal = repoArg(tool, args)
@@ -170,27 +170,27 @@ func checkScopeArgs(tool string, args map[string]any) (repo string, change int64
 // every check where name is empty — for its target, or for every target where
 // the scope names none, at the seat's level, at most [checkListPages] pages.
 //
-// THE NAME NARROWS THE LISTING ON THE DATA NODE ([code.CheckQuery]'s Name),
+// THE NAME NARROWS THE LISTING ON THE DATA NODE ([gitlet.CheckQuery]'s Name),
 // which drops every other check's rows before a row is encoded, so only the
 // named check's attempts travel the estate router — at most
-// code.MaxCheckAttempts for each target — rather than every attempt of every
-// check of the commit (up to code.MaxChecksPerFile × code.MaxCheckAttempts,
+// gitlet.MaxCheckAttempts for each target — rather than every attempt of every
+// check of the commit (up to gitlet.MaxChecksPerFile × gitlet.MaxCheckAttempts,
 // 640 rows, each with a summary of up to 4 KiB and a link of up to 2 KiB),
 // which a report and every read of one check's failures would otherwise move
 // to keep a handful. The target stays a filter here, because a `checks` read
 // refuses one.
 func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, s checkScope,
-	name string) ([]code.CheckRow, statelog.Position, *tools.Result) {
+	name string) ([]gitlet.CheckRow, statelog.Position, *tools.Result) {
 
 	var (
-		rows   []code.CheckRow
+		rows   []gitlet.CheckRow
 		at     statelog.Position
 		cursor string
 	)
 	for range checkListPages {
-		answer, err := d.read(ctx, c, code.ReadQuery{Kind: code.ReadChecks, Repo: s.repo.Name, Fresh: seatRead,
-			Checks: &code.CheckQuery{Change: s.change, OID: s.oid, Name: name}, Cursor: cursor,
-			Limit: code.MaxSnapshotItems})
+		answer, err := d.read(ctx, c, gitlet.ReadQuery{Kind: gitlet.ReadChecks, Repo: s.repo.Name, Fresh: seatRead,
+			Checks: &gitlet.CheckQuery{Change: s.change, OID: s.oid, Name: name}, Cursor: cursor,
+			Limit: gitlet.MaxSnapshotItems})
 		if err != nil {
 			r := d.failed(ctx, turn, tool, c.asker, s.repo, err)
 			return nil, at, &r
@@ -211,9 +211,9 @@ func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string,
 // latestOf is the latest attempt among rows, which are one check's of one
 // commit for one target or refused naming the targets — and false where rows
 // hold none.
-func latestOf(tool, name string, rows []code.CheckRow) (code.CheckRow, bool, *tools.Result) {
+func latestOf(tool, name string, rows []gitlet.CheckRow) (gitlet.CheckRow, bool, *tools.Result) {
 	targets := map[string]bool{}
-	var latest code.CheckRow
+	var latest gitlet.CheckRow
 	for _, row := range rows {
 		targets[row.Target] = true
 		if row.Attempt > latest.Attempt {
@@ -228,7 +228,7 @@ func latestOf(tool, name string, rows []code.CheckRow) (code.CheckRow, bool, *to
 		slices.Sort(names)
 		r := failed(fmt.Sprintf("%s: check %s of that commit was checked for %d branches (%s): name one with "+
 			"`checked_for`.", tool, clip(name), len(names), strings.Join(names, ", ")))
-		return code.CheckRow{}, false, &r
+		return gitlet.CheckRow{}, false, &r
 	}
 	return latest, latest.Attempt > 0, nil
 }
@@ -294,7 +294,7 @@ type checkCursor struct {
 	offset int64
 	// key is the attempt the cursor reads — its OID, Target and Attempt;
 	// zero on a first call, which has no cursor.
-	key code.CheckKey
+	key gitlet.CheckKey
 }
 
 // String is the cursor as an answer gives it.
@@ -327,38 +327,38 @@ func parseCheckCursor(s string) (checkCursor, bool) {
 	attempt, attemptOK := argval.Whole(parts[1])
 	offset, offsetOK := argval.Whole(parts[2])
 	oid, target := parts[3], parts[4]
-	if !attemptOK || attempt < 1 || attempt > code.MaxCheckAttempts || !offsetOK || offset < 0 ||
-		!gitref.ValidOID(oid) || oid == code.ZeroOID || !code.ValidRef(target) ||
+	if !attemptOK || attempt < 1 || attempt > gitlet.MaxCheckAttempts || !offsetOK || offset < 0 ||
+		!gitref.ValidOID(oid) || oid == gitlet.ZeroOID || !gitlet.ValidRef(target) ||
 		!strings.HasPrefix(target, branchRoot) {
 		return checkCursor{}, false
 	}
 	return checkCursor{log: parts[0] == "log", offset: int64(offset),
-		key: code.CheckKey{OID: oid, Target: target, Attempt: attempt}}, true
+		key: gitlet.CheckKey{OID: oid, Target: target, Attempt: attempt}}, true
 }
 
 // codeCheckAnswer is one attempt of a check as code_get_check_failures
 // answers it.
 type codeCheckAnswer struct {
-	Repo            string              `json:"repo"`
-	SHA             string              `json:"sha"`
-	CheckedFor      string              `json:"checked_for"`
-	Name            string              `json:"name"`
-	Attempt         int                 `json:"attempt"`
-	State           code.CheckState     `json:"state"`
-	Reason          code.CheckReason    `json:"reason,omitempty"`
-	Required        bool                `json:"required,omitempty"`
-	Placement       code.CheckPlacement `json:"placement,omitempty"`
-	Reporter        string              `json:"reporter,omitempty"`
-	URL             string              `json:"url,omitempty"`
-	ExitCode        *int                `json:"exit_code,omitempty"`
-	DurationMs      int64               `json:"duration_ms,omitempty"`
-	FinishedAt      *time.Time          `json:"finished_at,omitempty"`
-	Summary         string              `json:"summary,omitempty"`
-	Tail            string              `json:"tail,omitempty"`
-	Failures        []code.CheckFailure `json:"failures,omitempty"`
-	FailuresOmitted int                 `json:"failures_omitted,omitempty"`
-	Next            string              `json:"next,omitempty"`
-	Log             *codeCheckLog       `json:"log,omitempty"`
+	Repo            string                `json:"repo"`
+	SHA             string                `json:"sha"`
+	CheckedFor      string                `json:"checked_for"`
+	Name            string                `json:"name"`
+	Attempt         int                   `json:"attempt"`
+	State           gitlet.CheckState     `json:"state"`
+	Reason          gitlet.CheckReason    `json:"reason,omitempty"`
+	Required        bool                  `json:"required,omitempty"`
+	Placement       gitlet.CheckPlacement `json:"placement,omitempty"`
+	Reporter        string                `json:"reporter,omitempty"`
+	URL             string                `json:"url,omitempty"`
+	ExitCode        *int                  `json:"exit_code,omitempty"`
+	DurationMs      int64                 `json:"duration_ms,omitempty"`
+	FinishedAt      *time.Time            `json:"finished_at,omitempty"`
+	Summary         string                `json:"summary,omitempty"`
+	Tail            string                `json:"tail,omitempty"`
+	Failures        []gitlet.CheckFailure `json:"failures,omitempty"`
+	FailuresOmitted int                   `json:"failures_omitted,omitempty"`
+	Next            string                `json:"next,omitempty"`
+	Log             *codeCheckLog         `json:"log,omitempty"`
 }
 
 // codeCheckLog is a check's kept log: its size and where its pages are read
@@ -388,8 +388,8 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	switch {
 	case check == "":
 		return failed(tool + " needs `name`: the check, as its checks file or the change's checks name it."), nil
-	case attempt < 0 || attempt > code.MaxCheckAttempts:
-		return failed(fmt.Sprintf("%s: `attempt` is 1 to %d.", tool, code.MaxCheckAttempts)), nil
+	case attempt < 0 || attempt > gitlet.MaxCheckAttempts:
+		return failed(fmt.Sprintf("%s: `attempt` is 1 to %d.", tool, gitlet.MaxCheckAttempts)), nil
 	case !ok:
 		return failed(tool + ": `cursor` is one an answer gave, as `next` or `log.cursor`."), nil
 	case cursor.log && t.deps.Logs == nil:
@@ -426,18 +426,18 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		case refusal != nil:
 			return *refusal, nil
 		case !found:
-			return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s "+
+			return refusedBy(tools.RefusalNotFound, gitlet.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s "+
 				"is held for that commit on %s.", tool, clip(check), repo.Name)), nil
 		case attempt == 0:
 			attempt = latest.Attempt
 		case attempt > latest.Attempt:
-			return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: check %s's latest "+
+			return refusedBy(tools.RefusalNotFound, gitlet.ErrCheckNotFound, fmt.Sprintf("%s: check %s's latest "+
 				"attempt is %d.", tool, clip(check), latest.Attempt)), nil
 		}
-		key = code.CheckKey{OID: latest.OID, Target: latest.Target, Attempt: attempt}
+		key = gitlet.CheckKey{OID: latest.OID, Target: latest.Target, Attempt: attempt}
 	}
-	answer, err := t.deps.read(ctx, c, code.ReadQuery{Kind: code.ReadCheck, Repo: repo.Name, Fresh: seatRead,
-		Checks: &code.CheckQuery{OID: key.OID, Target: key.Target, Name: check, Attempt: key.Attempt}})
+	answer, err := t.deps.read(ctx, c, gitlet.ReadQuery{Kind: gitlet.ReadCheck, Repo: repo.Name, Fresh: seatRead,
+		Checks: &gitlet.CheckQuery{OID: key.OID, Target: key.Target, Name: check, Attempt: key.Attempt}})
 	if err != nil {
 		return t.deps.failed(ctx, turn, tool, c.asker, repo, err), nil
 	}
@@ -495,12 +495,12 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 // logPage answers a page of attempt d's kept log from offset: at most
 // [checkLogPage] bytes, cut back to the last whole character, fenced.
 func (t *codeGetCheckFailures) logPage(ctx context.Context, turn *turnctx.Turn, c codeCaller,
-	out codeCheckAnswer, d *code.CheckDetail, offset int64) (tools.Result, error) {
+	out codeCheckAnswer, d *gitlet.CheckDetail, offset int64) (tools.Result, error) {
 
 	tool := t.Name()
 	switch {
 	case d.Log == nil:
-		return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: attempt %d of check %s kept no "+
+		return refusedBy(tools.RefusalNotFound, gitlet.ErrCheckNotFound, fmt.Sprintf("%s: attempt %d of check %s kept no "+
 			"log — a run that passed, or one that ended before it ran, keeps none.", tool, d.Attempt,
 			clip(d.Name))), nil
 	case offset > d.Log.Size:
@@ -547,22 +547,22 @@ func (t *codeGetCheckFailures) logPage(ctx context.Context, turn *turnctx.Turn, 
 
 // codeChangeCheck is one attempt of a change's head's checks in a line.
 type codeChangeCheck struct {
-	Name       string              `json:"name"`
-	Attempt    int                 `json:"attempt"`
-	State      code.CheckState     `json:"state"`
-	Reason     code.CheckReason    `json:"reason,omitempty"`
-	Required   bool                `json:"required,omitempty"`
-	Placement  code.CheckPlacement `json:"placement,omitempty"`
-	Reporter   string              `json:"reporter,omitempty"`
-	URL        string              `json:"url,omitempty"`
-	DurationMs int64               `json:"duration_ms,omitempty"`
-	Summary    string              `json:"summary,omitempty"`
+	Name       string                `json:"name"`
+	Attempt    int                   `json:"attempt"`
+	State      gitlet.CheckState     `json:"state"`
+	Reason     gitlet.CheckReason    `json:"reason,omitempty"`
+	Required   bool                  `json:"required,omitempty"`
+	Placement  gitlet.CheckPlacement `json:"placement,omitempty"`
+	Reporter   string                `json:"reporter,omitempty"`
+	URL        string                `json:"url,omitempty"`
+	DurationMs int64                 `json:"duration_ms,omitempty"`
+	Summary    string                `json:"summary,omitempty"`
 }
 
 // changeChecksPage is the most of a change's head's checks one answer reads:
 // twelve, a checks file's every check on most changes. A line carries a
-// summary of up to code.CheckSummaryBytes (4 KiB), fenced, and a reported
-// run's link of up to code.MaxCheckURLBytes (2 KiB), so twelve at their widest
+// summary of up to gitlet.CheckSummaryBytes (4 KiB), fenced, and a reported
+// run's link of up to gitlet.MaxCheckURLBytes (2 KiB), so twelve at their widest
 // — about 74 KiB before a byte is escaped — are past one tool answer
 // (ToolAnswerBytes, 64 KiB): such a page is cut whole-row where it fits and
 // resumed after its last line, while twelve summaries of a few hundred bytes,
@@ -582,10 +582,10 @@ type codeChangeChecks struct {
 // ([changeRead.ask]).
 func (g *changeRead) checks(ctx context.Context, cursor string) (tools.Result, error) {
 	// BY THE NAME THE CALL GAVE, which the walk its cursors are spelled by
-	// reads as one repository's ([code.ReadQuery.ChecksCursor]); ask reads by
+	// reads as one repository's ([gitlet.ReadQuery.ChecksCursor]); ask reads by
 	// the name it resolved to once it has.
-	q := code.ReadQuery{Kind: code.ReadChecks, Repo: g.name, Fresh: seatRead,
-		Checks: &code.CheckQuery{Change: g.number}, Cursor: cursor, Limit: changeChecksPage}
+	q := gitlet.ReadQuery{Kind: gitlet.ReadChecks, Repo: g.name, Fresh: seatRead,
+		Checks: &gitlet.CheckQuery{Change: g.number}, Cursor: cursor, Limit: changeChecksPage}
 	answer, refusal := g.ask(ctx, q)
 	if refusal != nil {
 		return *refusal, nil
@@ -603,7 +603,7 @@ func (g *changeRead) checks(ctx context.Context, cursor string) (tools.Result, e
 		}
 		// A PAGE CUT WHOLE-ROW AT THE ANSWER resumes after the last line kept,
 		// by the cursor the listing's own walk names for that row
-		// ([code.ReadQuery.ChecksCursor]), never a spelling of it written here.
+		// ([gitlet.ReadQuery.ChecksCursor]), never a spelling of it written here.
 		page.Next = answer.Next
 		if k > 0 && k < len(rows) {
 			page.Next = q.ChecksCursor(rows[k-1])
@@ -666,12 +666,12 @@ func (t *codeRerunChecks) Call(ctx context.Context, args map[string]any) (tools.
 
 // codeRerun is one check's rerun as the answer reports it.
 type codeRerun struct {
-	Name    string            `json:"name"`
-	Attempt int               `json:"attempt"`
-	Outcome statelog.Outcome  `json:"outcome,omitempty"`
-	State   code.CheckState   `json:"state,omitempty"`
-	Refused code.CheckRefusal `json:"refused,omitempty"`
-	Detail  string            `json:"detail,omitempty"`
+	Name    string              `json:"name"`
+	Attempt int                 `json:"attempt"`
+	Outcome statelog.Outcome    `json:"outcome,omitempty"`
+	State   gitlet.CheckState   `json:"state,omitempty"`
+	Refused gitlet.CheckRefusal `json:"refused,omitempty"`
+	Detail  string              `json:"detail,omitempty"`
 }
 
 // codeReruns is code_rerun_checks' answer.
@@ -743,9 +743,9 @@ func rerunAsks(tool string, args map[string]any) ([]rerunAsk, bool, *tools.Resul
 // SEVEN BYTES OF UNPADDED BASE64URL, 42 bits ([rerunStepBytes]): every byte the
 // operation's bound leaves. Two steps collide only when one operation reruns
 // both attempts; even one that reran every attempt a commit's target can hold —
-// code.MaxChecksPerFile × code.MaxCheckAttempts, 640 — collides with odds of
+// gitlet.MaxChecksPerFile × gitlet.MaxCheckAttempts, 640 — collides with odds of
 // about one in twenty million (640² / 2 in 2^42).
-func rerunStep(key code.CheckKey) string {
+func rerunStep(key gitlet.CheckKey) string {
 	h := sha256.New()
 	for _, part := range []string{key.OID, key.Target, key.Name, strconv.Itoa(key.Attempt)} {
 		_, _ = h.Write([]byte(part))
@@ -794,24 +794,24 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	latest := map[string]code.CheckRow{}
+	latest := map[string]gitlet.CheckRow{}
 	for _, r := range rows {
 		k := r.Name + "\x00" + r.Target
 		if r.Attempt > latest[k].Attempt {
 			latest[k] = r
 		}
 	}
-	var keys []code.CheckKey
+	var keys []gitlet.CheckKey
 	note := ""
 	if all {
 		for _, r := range latest {
-			if r.State.Ended() && r.State != code.CheckStatePassed && r.State != code.CheckStateSkipped &&
-				(c.asker.Kind != code.PrincipalAgent || r.State == code.CheckStateErrored ||
-					r.State == code.CheckStateCancelled) {
+			if r.State.Ended() && r.State != gitlet.CheckStatePassed && r.State != gitlet.CheckStateSkipped &&
+				(c.asker.Kind != gitlet.PrincipalAgent || r.State == gitlet.CheckStateErrored ||
+					r.State == gitlet.CheckStateCancelled) {
 				keys = append(keys, r.CheckKey)
 			}
 		}
-		slices.SortFunc(keys, func(a, b code.CheckKey) int {
+		slices.SortFunc(keys, func(a, b gitlet.CheckKey) int {
 			return strings.Compare(a.Name+"\x00"+a.Target, b.Name+"\x00"+b.Target)
 		})
 		if len(keys) > maxRerunsPerCall {
@@ -820,7 +820,7 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	} else {
 		for _, a := range asks {
-			var key code.CheckKey
+			var key gitlet.CheckKey
 			for _, r := range latest {
 				if r.Name == a.name {
 					if key.Name != "" {
@@ -831,7 +831,7 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				}
 			}
 			if key.Name == "" {
-				return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s "+
+				return refusedBy(tools.RefusalNotFound, gitlet.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s "+
 					"is held for that commit on %s.", tool, clip(a.name), repo.Name)), nil
 			}
 			key.Attempt = a.attempt
@@ -842,13 +842,13 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	out := codeReruns{Repo: repo.Name, SHA: oid, OpID: c.actor.Operation, Note: note,
 		Reruns: make([]codeRerun, 0, len(keys))}
 	if change != 0 {
-		out.Change = code.ChangeRef(repo.Name, change)
+		out.Change = gitlet.ChangeRef(repo.Name, change)
 	}
 	by := writer(ctx, turn, c)
 	for _, key := range keys {
 		key.Attempt++
-		r := code.ChecksRequest{OpID: statelog.StepOpID(op, rerunStep(key)), Seen: seen,
-			Asker: by, Rerun: &code.CheckRerun{CheckKey: key, Ceiling: c.write}}
+		r := gitlet.ChecksRequest{OpID: statelog.StepOpID(op, rerunStep(key)), Seen: seen,
+			Asker: by, Rerun: &gitlet.CheckRerun{CheckKey: key, Ceiling: c.write}}
 		res, err := t.deps.Writer.Checks(ctx, r)
 		line := codeRerun{Name: key.Name, Attempt: key.Attempt}
 		switch {
@@ -876,19 +876,19 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // FORBIDDEN; an attempt still running a CONFLICT, the same call again
 // answered once it ends; a check the engine's and a CI's at once, an
 // archived repository and anything else INVALID.
-func checkRefused(tool, what string, refusal code.CheckRefusal, detail string) tools.Result {
+func checkRefused(tool, what string, refusal gitlet.CheckRefusal, detail string) tools.Result {
 	class := tools.RefusalInvalid
 	switch refusal {
-	case code.CheckRefusalNoSuchCheck, code.CheckRefusalRepoDeleted:
+	case gitlet.CheckRefusalNoSuchCheck, gitlet.CheckRefusalRepoDeleted:
 		class = tools.RefusalNotFound
-	case code.CheckRefusalRerunGenuine, code.CheckRefusalAttemptsExhausted, code.CheckRefusalNotPermitted:
+	case gitlet.CheckRefusalRerunGenuine, gitlet.CheckRefusalAttemptsExhausted, gitlet.CheckRefusalNotPermitted:
 		class = tools.RefusalForbidden
-	case code.CheckRefusalNotFinished:
+	case gitlet.CheckRefusalNotFinished:
 		class = tools.RefusalConflict
-	case code.CheckRefusalBusy, code.CheckRefusalUnavailable, code.CheckRefusalNotApplied:
+	case gitlet.CheckRefusalBusy, gitlet.CheckRefusalUnavailable, gitlet.CheckRefusalNotApplied:
 		class = tools.RefusalUnavailable
 	}
-	return refusedBy(class, fmt.Errorf("code: %s: %s", refusal, detail),
+	return refusedBy(class, fmt.Errorf("gitlet: %s: %s", refusal, detail),
 		fmt.Sprintf("%s %s: %s (%s).", tool, what, detail, refusal))
 }
 
@@ -915,9 +915,9 @@ func (t *codeReportCheck) Parameters() map[string]any {
 			"checked_for": map[string]any{"type": "string",
 				"description": "With sha: the branch it is checked for; the repository's default otherwise."},
 			"name": map[string]any{"type": "string", "description": "The check's name."},
-			"status": map[string]any{"type": "string", "enum": []string{string(code.CheckStateRunning),
-				string(code.CheckStatePassed), string(code.CheckStateFailed), string(code.CheckStateErrored),
-				string(code.CheckStateCancelled)}},
+			"status": map[string]any{"type": "string", "enum": []string{string(gitlet.CheckStateRunning),
+				string(gitlet.CheckStatePassed), string(gitlet.CheckStateFailed), string(gitlet.CheckStateErrored),
+				string(gitlet.CheckStateCancelled)}},
 			"summary":          map[string]any{"type": "string", "description": "What a reader is told first."},
 			"tail":             map[string]any{"type": "string", "description": "The run's last output."},
 			"failures":         map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
@@ -941,8 +941,8 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	if c.asker.Kind != code.PrincipalOperator || c.asker.Seat == "" {
-		return refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, tool+": a check is reported by a person's "+
+	if c.asker.Kind != gitlet.PrincipalOperator || c.asker.Seat == "" {
+		return refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, tool+": a check is reported by a person's "+
 			"own CI, through a credential bound to their human seat."), nil
 	}
 	c, refusal = t.deps.bindChecksOperation(c, tool, args)
@@ -953,14 +953,14 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	report := code.CheckReported{State: code.CheckState(strings.TrimSpace(argString(args, "status"))),
+	report := gitlet.CheckReported{State: gitlet.CheckState(strings.TrimSpace(argString(args, "status"))),
 		Summary: argString(args, "summary"), Tail: argString(args, "tail"),
 		FailuresOmitted: argInt(args, "failures_omitted", 0), DurationMs: int64(argInt(args, "duration_ms", 0)),
 		URL: strings.TrimSpace(argString(args, "url"))}
 	raw, _ := argval.List(args["failures"])
 	for _, item := range raw {
 		m, _ := item.(map[string]any)
-		report.Failures = append(report.Failures, code.CheckFailure{Path: argString(m, "path"),
+		report.Failures = append(report.Failures, gitlet.CheckFailure{Path: argString(m, "path"),
 			Line: argInt(m, "line", 0), TestID: argString(m, "test_id"), Message: argString(m, "message")})
 	}
 	check := strings.TrimSpace(argString(args, "name"))
@@ -980,7 +980,7 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	key := code.CheckKey{RepoID: repo.ID, OID: oid, Target: target, Name: check, Attempt: 1}
+	key := gitlet.CheckKey{RepoID: repo.ID, OID: oid, Target: target, Name: check, Attempt: 1}
 	switch {
 	case found:
 		key = latest.CheckKey
@@ -1004,7 +1004,7 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	report.CheckKey = key
 	op := opIDFor(c.actor, tool, checksVerb, repo.ID, args)
-	r := code.ChecksRequest{OpID: op, Seen: seen, Asker: c.asker, Report: &report}
+	r := gitlet.ChecksRequest{OpID: op, Seen: seen, Asker: c.asker, Report: &report}
 	if err := r.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, c.actor, repo.Name, err), nil
 	}

@@ -270,11 +270,12 @@ func TestAProtectedBranchWithoutItsProtectionIsNotUnprotected(t *testing.T) {
 	}
 }
 
-// A STATE OFF THE WIRE IS A VALUE, and only the five are valid.
+// A STATE OFF THE WIRE IS A VALUE, and only the six are valid.
 func TestCheckStatesAreClosed(t *testing.T) {
 	t.Parallel()
 	for _, s := range []github.CheckState{
 		github.CheckPassed, github.CheckFailed, github.CheckPending, github.CheckMissing, github.CheckUnread,
+		github.CheckInconclusive,
 	} {
 		if !s.Valid() {
 			t.Errorf("%q is not valid", s)

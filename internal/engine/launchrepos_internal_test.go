@@ -17,11 +17,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -100,29 +100,29 @@ var (
 // launchHost is Gitlet as the launcher's resolution reads it through
 // the estate's router: repositories by every name that names one, their refs,
 // the commits a read by object id finds, every read judged by the asker's
-// grant from the epoch's chart (code.JudgeRead, as the serving node judges
+// grant from the epoch's chart (gitlet.JudgeRead, as the serving node judges
 // it), and every lifecycle request — a hold record — applied.
 type launchHost struct {
 	mu     sync.Mutex
-	roster func() code.Roster
-	repos  map[string]code.RepoRef
+	roster func() gitlet.Roster
+	repos  map[string]gitlet.RepoRef
 	refs   map[string]map[string]string // repo id → whole ref → oid
 	// commits are the ids a read by object id expands an abbreviation to.
 	commits []string
 	// read, resolved and git are where each kind of read answers, and
 	// floor this node's own writes to every repository.
 	read, resolved, git, floor statelog.Position
-	lifecycles                 []code.LifecycleRequest
+	lifecycles                 []gitlet.LifecycleRequest
 }
 
 func newLaunchHost(e *Engine) *launchHost {
-	return &launchHost{roster: e.codeRoster, repos: map[string]code.RepoRef{},
+	return &launchHost{roster: e.codeRoster, repos: map[string]gitlet.RepoRef{},
 		refs: map[string]map[string]string{}, commits: []string{abbrevOID},
 		read: codeLogAt(5), resolved: codeLogAt(7), git: codeLogAt(8), floor: codeLogAt(9)}
 }
 
 // add declares repo, its refs, and every other name it is known by.
-func (h *launchHost) add(repo code.RepoRef, refs map[string]string, aliases ...string) {
+func (h *launchHost) add(repo gitlet.RepoRef, refs map[string]string, aliases ...string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.repos[repo.Name] = repo
@@ -132,50 +132,50 @@ func (h *launchHost) add(repo code.RepoRef, refs map[string]string, aliases ...s
 	h.refs[repo.ID] = refs
 }
 
-func (h *launchHost) judge(name string, asker code.Principal, ceiling string) (code.RepoRef, error) {
+func (h *launchHost) judge(name string, asker gitlet.Principal, ceiling string) (gitlet.RepoRef, error) {
 	repo, ok := h.repos[name]
 	if !ok {
-		return code.RepoRef{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, name)
+		return gitlet.RepoRef{}, fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound, name)
 	}
-	if _, err := code.JudgeRead(asker, ceiling, repo, h.roster()); err != nil {
-		return code.RepoRef{}, err
+	if _, err := gitlet.JudgeRead(asker, ceiling, repo, h.roster()); err != nil {
+		return gitlet.RepoRef{}, err
 	}
 	return repo, nil
 }
 
-func (h *launchHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (h *launchHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if q.Kind != code.ReadRepo {
-		return code.ReadAnswer{}, fmt.Errorf("%w: a launch read kind %s", code.ErrInvalid, q.Kind)
+	if q.Kind != gitlet.ReadRepo {
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: a launch read kind %s", gitlet.ErrInvalid, q.Kind)
 	}
 	repo, err := h.judge(q.Repo, q.Asker, q.CeilingSeat)
 	if err != nil {
-		return code.ReadAnswer{}, err
+		return gitlet.ReadAnswer{}, err
 	}
 	repo.Position = h.read
-	return code.ReadAnswer{Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: repo}},
+	return gitlet.ReadAnswer{Repo: &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{RepoRef: repo}},
 		Position: h.read, Level: q.Fresh.Level}, nil
 }
 
-func (h *launchHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (h *launchHost) ResolveRef(_ context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	repo, err := h.judge(q.Repo, q.Asker, q.CeilingSeat)
 	if err != nil {
-		return code.RefAnswer{}, err
+		return gitlet.RefAnswer{}, err
 	}
-	out := code.RefAnswer{Repo: repo, Position: h.resolved}
+	out := gitlet.RefAnswer{Repo: repo, Position: h.resolved}
 	for _, asked := range q.Refs {
 		names := []string{asked}
 		if !strings.HasPrefix(asked, "refs/") {
 			names = []string{"refs/heads/" + asked, "refs/tags/" + asked}
 		}
-		resolved := code.ResolvedRef{Name: asked, Missing: "repository " + repo.Name + " holds no live " +
+		resolved := gitlet.ResolvedRef{Name: asked, Missing: "repository " + repo.Name + " holds no live " +
 			strings.Join(names, " or ")}
 		for _, name := range names {
 			if oid, ok := h.refs[repo.ID][name]; ok {
-				resolved = code.ResolvedRef{Name: asked, Ref: name, OID: oid, Moved: codeLogAt(4)}
+				resolved = gitlet.ResolvedRef{Name: asked, Ref: name, OID: oid, Moved: codeLogAt(4)}
 				break
 			}
 		}
@@ -184,28 +184,28 @@ func (h *launchHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAns
 	return out, nil
 }
 
-func (h *launchHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (h *launchHost) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if q.Kind != code.GitTree || q.Tree == nil {
-		return code.GitAnswer{}, fmt.Errorf("%w: a launch git read kind %s", code.ErrInvalid, q.Kind)
+	if q.Kind != gitlet.GitTree || q.Tree == nil {
+		return gitlet.GitAnswer{}, fmt.Errorf("%w: a launch git read kind %s", gitlet.ErrInvalid, q.Kind)
 	}
 	for _, oid := range h.commits {
 		if strings.HasPrefix(oid, q.Tree.Rev) {
-			return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Rev: oid, Position: h.git,
-				Tree: &code.TreeAnswer{Tree: oid, Entries: []code.TreeEntry{}}}, nil
+			return gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Rev: oid, Position: h.git,
+				Tree: &gitlet.TreeAnswer{Tree: oid, Entries: []gitlet.TreeEntry{}}}, nil
 		}
 	}
-	return code.GitAnswer{}, fmt.Errorf("%w: %s", code.ErrObjectNotFound, q.Tree.Rev)
+	return gitlet.GitAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrObjectNotFound, q.Tree.Rev)
 }
 
 func (h *launchHost) FloorOf(string) statelog.Position { return h.floor }
 
-func (h *launchHost) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+func (h *launchHost) Lifecycle(_ context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.lifecycles = append(h.lifecycles, r)
-	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(30)}, nil
+	return gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(30)}, nil
 }
 
 // reposRig is an engine whose executors' boxes are in a fake cell, serving
@@ -299,9 +299,9 @@ func (r *reposRig) launch(t *testing.T, turn *turnctx.Turn, repos ...builtin.Rep
 
 // project is a repository of a unit, visibility company unless said, its
 // default branch main.
-func project(name, unit string, visibility code.Visibility) code.RepoRef {
-	return code.RepoRef{ID: uuid.NewString(), Name: name, Status: code.RepoStatusActive,
-		ManagedBy: code.ManagedConfig, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit, Ref: unit},
+func project(name, unit string, visibility gitlet.Visibility) gitlet.RepoRef {
+	return gitlet.RepoRef{ID: uuid.NewString(), Name: name, Status: gitlet.RepoStatusActive,
+		ManagedBy: gitlet.ManagedConfig, Kind: gitlet.RepoProject, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: unit},
 		Visibility: visibility, DefaultBranch: "main", Position: codeLogAt(5)}
 }
 
@@ -352,7 +352,7 @@ func TestALaunchResolvesEachRepository(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig := newReposRig(t, launchReposDoc, base)
-			web := project("web", "Engineering", code.VisibilityCompany)
+			web := project("web", "Engineering", gitlet.VisibilityCompany)
 			rig.host.add(web, tc.refs, tc.aliases...)
 			turn := rig.turn(t, "swe", tc.item)
 			row, err := rig.launch(t, turn, tc.req)
@@ -397,8 +397,8 @@ func TestALaunchResolvesEachRepository(t *testing.T) {
 func TestACheckoutIsHeldToTheSeatsGrant(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
-	archived := project("old", "Engineering", code.VisibilityCompany)
-	archived.Status = code.RepoStatusArchived
+	archived := project("old", "Engineering", gitlet.VisibilityCompany)
+	archived.Status = gitlet.RepoStatusArchived
 	for _, tc := range []struct {
 		name, seat string
 		req        builtin.RepoRequest
@@ -422,9 +422,9 @@ func TestACheckoutIsHeldToTheSeatsGrant(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig := newReposRig(t, launchReposDoc, base)
-			rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+			rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany),
 				map[string]string{"refs/heads/main": mainHead})
-			rig.host.add(project("secret", "Engineering", code.VisibilityUnit),
+			rig.host.add(project("secret", "Engineering", gitlet.VisibilityUnit),
 				map[string]string{"refs/heads/main": mainHead})
 			rig.host.add(archived, map[string]string{"refs/heads/main": mainHead})
 			turn := rig.turn(t, tc.seat, nil)
@@ -478,7 +478,7 @@ func TestARunChecksOutForWhoeverWokeItsTurn(t *testing.T) {
 	t.Parallel()
 	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
 	rig.requesters = colleagues{}
-	rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+	rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany),
 		map[string]string{"refs/heads/main": mainHead})
 
 	// designer, full_access in Design, reads web and pushes only its own
@@ -544,7 +544,7 @@ func TestARunAPersonWithoutGitletWokeIsGivenNoRepository(t *testing.T) {
 	t.Parallel()
 	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
 	rig.requesters = withoutGitlet{}
-	rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+	rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany),
 		map[string]string{"refs/heads/main": mainHead})
 
 	turn := rig.turn(t, "swe", nil)
@@ -571,7 +571,7 @@ func TestARunAPersonWithoutGitletWokeIsGivenNoRepository(t *testing.T) {
 func TestACheckoutNeedsTheBoxURL(t *testing.T) {
 	t.Parallel()
 	rig := newReposRig(t, launchReposDoc, "")
-	rig.host.add(project("web", "Engineering", code.VisibilityCompany), map[string]string{"refs/heads/main": mainHead})
+	rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany), map[string]string{"refs/heads/main": mainHead})
 	turn := rig.turn(t, "swe", nil)
 	_, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web"})
 	if err == nil || !strings.Contains(err.Error(), sandbox.BoxGitURLVar+" is not set") {
@@ -628,9 +628,9 @@ func TestOnlyABoxWithAKernelOfItsOwnIsGivenGitsMonitor(t *testing.T) {
 		t.Run(string(tc.placement), func(t *testing.T) {
 			t.Parallel()
 			rig := newReposRigIn(t, launchReposDoc, base, tc.placement)
-			rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+			rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany),
 				map[string]string{"refs/heads/main": mainHead})
-			rig.host.add(project("api", "Engineering", code.VisibilityCompany),
+			rig.host.add(project("api", "Engineering", gitlet.VisibilityCompany),
 				map[string]string{"refs/heads/main": mainHead})
 			turn := rig.turn(t, "swe", nil)
 			row, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web"}, builtin.RepoRequest{Repo: "api"})
@@ -679,8 +679,8 @@ func TestABoxReachesOnlyWhatItCheckedOut(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
-	rig.host.add(project("web", "Engineering", code.VisibilityCompany), map[string]string{"refs/heads/main": mainHead})
-	rig.host.add(project("api", "Engineering", code.VisibilityCompany), map[string]string{"refs/heads/main": mainHead})
+	rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany), map[string]string{"refs/heads/main": mainHead})
+	rig.host.add(project("api", "Engineering", gitlet.VisibilityCompany), map[string]string{"refs/heads/main": mainHead})
 	turn := rig.turn(t, "swe", nil)
 	row, err := rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "swe",
 		AgentID: "a-1", Role: "SWE", Harness: executor.ClaudeCodeName, Placement: string(rig.placement),
@@ -698,7 +698,7 @@ func TestABoxReachesOnlyWhatItCheckedOut(t *testing.T) {
 		var names []string
 		for _, g := range run.Repos {
 			access := "read"
-			if g.Access >= code.AccessWrite {
+			if g.Access >= gitlet.AccessWrite {
 				access = "write"
 			}
 			names = append(names, g.Name+":"+access)
@@ -779,7 +779,7 @@ func TestABoxThatLostItsCloneContinuesItsBranchWhereItStands(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
-	web := project("web", "Engineering", code.VisibilityCompany)
+	web := project("web", "Engineering", gitlet.VisibilityCompany)
 	rig.host.add(web, map[string]string{"refs/heads/main": mainHead})
 	turn := rig.turn(t, "swe", nil)
 	row, err := rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "swe",
@@ -859,12 +859,12 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
 	swe := rig.c.Org.AgentSeatByHandle("swe")
 	lab := scratchOf(swe, "lab")
-	web := project("web", "Engineering", code.VisibilityCompany)
+	web := project("web", "Engineering", gitlet.VisibilityCompany)
 	const branch = "refs/heads/seats/swe/ENG-42"
 	rig.host.add(lab, map[string]string{})
 	rig.host.add(web, map[string]string{"refs/heads/main": mainHead, branch: seatHead})
 	secret := scratchOf(rig.c.Org.AgentSeatByHandle("designer"), "secret")
-	secret.Visibility = code.VisibilityUnit
+	secret.Visibility = gitlet.VisibilityUnit
 	rig.host.add(secret, map[string]string{})
 
 	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-42", Key: "ENG-42"}
@@ -889,7 +889,7 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	webKey := code.RefHoldKey(web.ID, branch)
+	webKey := gitlet.RefHoldKey(web.ID, branch)
 	switch {
 	case !slices.Contains(stored.CodeHolds, lab.ID):
 		t.Errorf("the row holds %v, want the scratch repository %s", stored.CodeHolds, lab.ID)
@@ -897,7 +897,7 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 		t.Errorf("the row holds %v, want web's %s", stored.CodeHolds, branch)
 	case slices.Contains(stored.CodeHolds, web.ID):
 		t.Errorf("the row holds the project repository %s itself, which nothing expires", web.ID)
-	case slices.Contains(stored.CodeHolds, code.RefHoldKey(web.ID, "refs/heads/main")):
+	case slices.Contains(stored.CodeHolds, gitlet.RefHoldKey(web.ID, "refs/heads/main")):
 		t.Errorf("the row holds web's main, which no seat's branch is")
 	}
 

@@ -8,9 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -18,8 +18,8 @@ import (
 // queueTasks is the merge queue's step 2 (M5-D27): a landed change's work
 // item closed AS THE ENTRY'S ENQUEUER, never on the queue's own account — the
 // home's queue worker hands it each landed entry that asked it
-// (internal/code/home's Tasks).
-func (e *Engine) queueTasks() codehome.Tasks { return queueCloser{engine: e} }
+// (internal/gitlet/home's Tasks).
+func (e *Engine) queueTasks() gitlethome.Tasks { return queueCloser{engine: e} }
 
 // queueCloser closes a landed change's work item as its enqueuer.
 //
@@ -39,7 +39,7 @@ func (e *Engine) queueTasks() codehome.Tasks { return queueCloser{engine: e} }
 // vendor's (a Jira issue, a GitHub issue) is closed by whoever closes it there
 // — the engine holds no credential of the enqueuer's on a vendor's tracker,
 // and its own on their behalf would put somebody else's name on the close — so
-// it is answered NOT CLOSED ([codehome.NotClosed]) naming the item, which
+// it is answered NOT CLOSED ([gitlethome.NotClosed]) naming the item, which
 // the queue settles and tells the change's authors and its enqueuer: the
 // change has landed whatever becomes of its item.
 //
@@ -60,15 +60,15 @@ var errQueueCloseNotWorklet = errors.New("engine: the work item is not on Workle
 // CloseWorkItem closes c's work item as c.As, under c.OpID: asked twice, the
 // tracker's ledger answers the second with the first's result. An item
 // already finished — done, cancelled or closed — is left as it is.
-func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) error {
+func (q queueCloser) CloseWorkItem(ctx context.Context, c gitlethome.TaskClose) error {
 	item := c.WorkItem
 	if item.Backend != types.WorkWorklet {
-		return &codehome.NotClosed{Why: fmt.Sprintf("%s is a %s work item, which is closed where it lives",
+		return &gitlethome.NotClosed{Why: fmt.Sprintf("%s is a %s work item, which is closed where it lives",
 			workItemName(item), item.Backend), Err: errQueueCloseNotWorklet}
 	}
 	actor, err := enqueuerActor(c.As)
 	if err != nil {
-		return &codehome.NotClosed{Why: "whoever queued the change acts as no seat, and nobody else closes " +
+		return &gitlethome.NotClosed{Why: "whoever queued the change acts as no seat, and nobody else closes " +
 			"the item in their name", Err: err}
 	}
 	halves, ok := q.engine.trackerHalves()
@@ -79,7 +79,7 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) er
 	principal, err := turnRequesters(q).Requester(ctx, actor.Handle)
 	switch {
 	case errors.Is(err, errNoSuchSeat):
-		return &codehome.NotClosed{Why: fmt.Sprintf("%s, who queued the change, holds no seat in the "+
+		return &gitlethome.NotClosed{Why: fmt.Sprintf("%s, who queued the change, holds no seat in the "+
 			"organisation any more", actor.Handle), Err: err}
 	case err != nil:
 		return fmt.Errorf("engine: close work item %s as %s: %w", item.ID, actor.Handle, err)
@@ -89,7 +89,7 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) er
 	var refused *builtin.DecisionRefused
 	switch {
 	case errors.As(err, &refused):
-		return &codehome.NotClosed{Why: fmt.Sprintf("%s, who queued the change, may not update work "+
+		return &gitlethome.NotClosed{Why: fmt.Sprintf("%s, who queued the change, may not update work "+
 			"items any more (%s)", actor.Handle, refused.Decision.Reason), Err: err}
 	case err != nil:
 		return fmt.Errorf("engine: close work item %s as %s: %w", item.ID, actor.Handle, err)
@@ -127,7 +127,7 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) er
 // gone, not unapplied), not the enqueuer's to write ([worklet.ErrForbidden]),
 // a close its content or its state refuses ([worklet.ErrInvalid],
 // [worklet.ErrState]: a project's rule for done, an item in the trash) — is
-// [codehome.NotClosed], so its people hear it once rather than the queue
+// [gitlethome.NotClosed], so its people hear it once rather than the queue
 // asking it every turn for the queue's whole history; every other failure is
 // the node's own, which the queue asks again.
 //
@@ -150,7 +150,7 @@ func closeFailed(item types.WorkItem, handle, doing string, err error) error {
 	default:
 		return fmt.Errorf("engine: %s work item %s as %s: %w", doing, item.ID, handle, err)
 	}
-	return &codehome.NotClosed{Why: why, Err: err}
+	return &gitlethome.NotClosed{Why: why, Err: err}
 }
 
 // workItemName is how a person names item: its key where it has one (ENG-42),
@@ -173,11 +173,11 @@ func workItemName(item types.WorkItem) string {
 // queued change carries nobody it was made for, so the turn this close wakes
 // works for the seat. That is Gitlet's edge of ADR-0109 until crewlet#798's
 // piece 4c carries a carrier on code's records, and this close with it.
-func enqueuerActor(p code.Principal) (builtin.Actor, error) {
+func enqueuerActor(p gitlet.Principal) (builtin.Actor, error) {
 	switch {
-	case p.Kind == code.PrincipalAgent && p.Seat != "":
+	case p.Kind == gitlet.PrincipalAgent && p.Seat != "":
 		return builtin.Actor{Handle: p.Seat, Kind: worklet.AuthorAgent, WrittenFor: types.ForNobody()}, nil
-	case p.Kind == code.PrincipalOperator && p.Seat != "":
+	case p.Kind == gitlet.PrincipalOperator && p.Seat != "":
 		return builtin.Actor{Handle: p.Seat, Kind: worklet.AuthorHuman, OperatorID: p.OperatorID}, nil
 	}
 	return builtin.Actor{}, fmt.Errorf("engine: a %s principal bound to no seat (%q) closes no work item in "+

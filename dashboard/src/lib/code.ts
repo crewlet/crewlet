@@ -49,7 +49,7 @@ export function isRepoName(name: string): boolean {
  * opening of one, which a "0" completes, since a digit may end either label
  * of a name and follow its hyphen or its dot. What a repositories listing
  * takes as its `prefix`, and the engine refuses any other
- * (`internal/code.validRepoPrefix`, the same test), so a picker says in place
+ * (`internal/gitlet.validRepoPrefix`, the same test), so a picker says in place
  * what no name could begin with rather than asking.
  */
 export function isRepoPrefix(prefix: string): boolean {
@@ -59,7 +59,7 @@ export function isRepoPrefix(prefix: string): boolean {
 /**
  * How many digits of an object id a reader is shown: SEVEN, git's own default
  * abbreviation (`core.abbrev`) and the fewest an abbreviated id the engine
- * takes back may have (`code.MinAbbrevDigits`), so what is printed is what a
+ * takes back may have (`gitlet.MinAbbrevDigits`), so what is printed is what a
  * person copies into git or into a tool. The whole id is the title beside it.
  */
 export const SHORT_OID_DIGITS = OBJECT_ID_MIN_ABBREV_DIGITS;
@@ -179,7 +179,7 @@ export const REPO_STATUS_FILTERS: readonly { value: string; label: string }[] = 
 
 /**
  * A change's reference as a person writes it — its repository's name, `!`,
- * its number on that repository: `web!42` (`code.ChangeRef`).
+ * its number on that repository: `web!42` (`gitlet.ChangeRef`).
  */
 export function changeRef(repo: string, number: number): string {
   return `${repo}!${number}`;
@@ -228,7 +228,7 @@ export function changeStateWord(state: CodeChangeState): string {
   return knownChangeState(state) ? CHANGE_STATE_WORDS[state] : state;
 }
 
-/** A state a change still moves from: draft or open (`code.ChangeState.Live`). */
+/** A state a change still moves from: draft or open (`gitlet.ChangeState.Live`). */
 export function changeLive(state: CodeChangeState): boolean {
   return state === "draft" || state === "open";
 }
@@ -237,7 +237,7 @@ export function changeLive(state: CodeChangeState): boolean {
  * The value of the listing's state filter that names no state: every change,
  * whatever its state — which the engine lists only where a repository, a work
  * item, a reviewer or a need narrows the walk, since it keeps no index of
- * every change the company holds (`code.ReadQuery.State`).
+ * every change the company holds (`gitlet.ReadQuery.State`).
  */
 export const EVERY_STATE = "all";
 
@@ -462,7 +462,7 @@ export function commitPath(repo: string, sha: string): string[] {
 /**
  * Git's id of the tree with nothing in it, which git knows without holding
  * it: what a root commit's change is measured from, so its diff is every file
- * it holds (the engine's own `emptyTreeID`, internal/code/host/build.go).
+ * it holds (the engine's own `emptyTreeID`, internal/gitlet/host/build.go).
  */
 export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -539,7 +539,7 @@ export function openingLine(picked: LineRun | null, total = Number.POSITIVE_INFI
 
 /**
  * How many lines of a FILE one press of "Load earlier lines" reads back: as
- * many as one answer page of ordinary source holds — `code.MaxGitAnswerBytes`
+ * many as one answer page of ordinary source holds — `gitlet.MaxGitAnswerBytes`
  * (56 KiB) at under forty bytes a line — so a press draws one page, as a press
  * of "Load more lines" does forward. Any narrower is dearer, not cheaper: a
  * step costs the engine one whole-file stream whatever its width (git cannot

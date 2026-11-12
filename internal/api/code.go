@@ -17,12 +17,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	seatplacement "github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -147,7 +147,7 @@ type CodeSurface interface {
 
 	// VerifyBox is whether token is the credential user presents on a box
 	// route, signed by this fleet — an executor's token under host.BoxUser,
-	// a check's under code.CheckUser (host.VerifyBox) — by the engine's own
+	// a check's under gitlet.CheckUser (host.VerifyBox) — by the engine's own
 	// tokens over the keyring Tier A derives on EVERY node whatever the
 	// company runs: so it answers where GitRoutes finds Gitlet unserved, which
 	// is the one place it is asked — a box route there tells a box why only
@@ -158,7 +158,7 @@ type CodeSurface interface {
 // GitReader is the code domain's reads of a repository by object id, as a
 // check's box's reads of its commit ask them; estate.CodeSeam satisfies it.
 type GitReader interface {
-	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 }
 
 // codeQuestions is the code surface as the code questions find it on every
@@ -344,7 +344,7 @@ func servesGit(b *config.Bootstrap) bool {
 //     ([authz.ActionCodeGit]), as the code questions do, and refuse
 //     everybody else before any repository is read (ADR-0110):
 //     what a holder may fetch or push is the per-repository grant the serving
-//     node derives from the chart once the repository is read (code.GrantOf,
+//     node derives from the chart once the repository is read (gitlet.GrantOf,
 //     ADR-0088), which no route can ask before it.
 //   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
 //     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
@@ -394,9 +394,9 @@ func (a *App) mountCode(mux authz.Mux) error {
 	mux.Handle(host.PatternBoxInfoRefs, a.boxGitRoute(GitRoutes.BoxInfoRefs))
 	mux.Handle(host.PatternBoxUploadPack, a.boxGitRoute(GitRoutes.BoxUploadPack))
 	mux.Handle(host.PatternBoxReceivePack, a.boxGitRoute(GitRoutes.BoxReceivePack))
-	mux.Handle(host.PatternBoxGitletTree, a.boxCodeRoute(code.GitTree))
-	mux.Handle(host.PatternBoxGitletBlob, a.boxCodeRoute(code.GitBlob))
-	mux.Handle(host.PatternBoxGitletDiff, a.boxCodeRoute(code.GitDiff))
+	mux.Handle(host.PatternBoxGitletTree, a.boxCodeRoute(gitlet.GitTree))
+	mux.Handle(host.PatternBoxGitletBlob, a.boxCodeRoute(gitlet.GitBlob))
+	mux.Handle(host.PatternBoxGitletDiff, a.boxCodeRoute(gitlet.GitDiff))
 	// A WRITE TO THE DRAIN GATE, refused while draining like every POST: a
 	// check is new work on the node, a repair a write into its copy. Only
 	// where git is served: it checks THIS node's cache, which a node without
@@ -655,10 +655,10 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusOK
 		}
 		writeJSON(w, status, viewOf(v))
-	case errors.Is(err, code.ErrRepoNotFound):
+	case errors.Is(err, gitlet.ErrRepoNotFound):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 			map[string]string{"reason": queries.ReasonNotDeclared, "detail": queries.RepoNotDeclared(name)})
-	case errors.Is(err, code.ErrInvalid):
+	case errors.Is(err, gitlet.ErrInvalid):
 		// A floor on another log than the repositories' rows.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // signerChart is a company whose seats state every kind of address a role may:
@@ -67,17 +67,17 @@ func TestTheSignerFallsBackToTheIdentityDomain(t *testing.T) {
 		s := codeSigner{e: e}
 		for _, row := range []struct {
 			seat       string
-			kind       code.PrincipalKind
+			kind       gitlet.PrincipalKind
 			name, mail string
 		}{
-			{"plain", code.PrincipalAgent, "No Address", "plain@" + tc.want},
-			{"odd", code.PrincipalAgent, "Odd Address", "odd@" + tc.want},
-			{"referenced", code.PrincipalAgent, "Referenced", "referenced@" + tc.want},
-			{"writer", code.PrincipalAgent, "Writer", "writer@example.com"},
-			{"ana", code.PrincipalAgent, "ana", "ana@" + tc.want},
-			{"pat", code.PrincipalOperator, "Pat", "pat@" + tc.want},
+			{"plain", gitlet.PrincipalAgent, "No Address", "plain@" + tc.want},
+			{"odd", gitlet.PrincipalAgent, "Odd Address", "odd@" + tc.want},
+			{"referenced", gitlet.PrincipalAgent, "Referenced", "referenced@" + tc.want},
+			{"writer", gitlet.PrincipalAgent, "Writer", "writer@example.com"},
+			{"ana", gitlet.PrincipalAgent, "ana", "ana@" + tc.want},
+			{"pat", gitlet.PrincipalOperator, "Pat", "pat@" + tc.want},
 		} {
-			sig, err := s.Sign(code.Principal{Kind: row.kind, Seat: row.seat})
+			sig, err := s.Sign(gitlet.Principal{Kind: row.kind, Seat: row.seat})
 			if err != nil {
 				t.Errorf("%s: %v", row.seat, err)
 				continue
@@ -91,8 +91,8 @@ func TestTheSignerFallsBackToTheIdentityDomain(t *testing.T) {
 					sig.CommitterEmail, tc.want)
 			}
 		}
-		if _, err := s.Sign(code.Principal{Kind: code.PrincipalAgent, Seat: "nobody"}); !errors.Is(err,
-			code.ErrNotServing) {
+		if _, err := s.Sign(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "nobody"}); !errors.Is(err,
+			gitlet.ErrNotServing) {
 			t.Errorf("a seat the chart lacks signs: %v, want ErrNotServing", err)
 		}
 		if got, err := s.Committer(); err != nil || got != "engine@"+tc.want {
@@ -100,11 +100,11 @@ func TestTheSignerFallsBackToTheIdentityDomain(t *testing.T) {
 				"commit is signed by", got, err, tc.want)
 		}
 	}
-	if _, err := (codeSigner{e: &Engine{}}).Sign(code.Principal{Kind: code.PrincipalAgent, Seat: "plain"}); !errors.Is(
-		err, code.ErrNotServing) {
+	if _, err := (codeSigner{e: &Engine{}}).Sign(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "plain"}); !errors.Is(
+		err, gitlet.ErrNotServing) {
 		t.Errorf("a node with no epoch signs: %v, want ErrNotServing", err)
 	}
-	if _, err := (codeSigner{e: &Engine{}}).Committer(); !errors.Is(err, code.ErrNotServing) {
+	if _, err := (codeSigner{e: &Engine{}}).Committer(); !errors.Is(err, gitlet.ErrNotServing) {
 		t.Errorf("a node with no epoch names the engine's committer: %v, want ErrNotServing", err)
 	}
 }

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -21,13 +21,13 @@ import (
 )
 
 // Estate is Gitlet's rows and its keyed git walk as a search reads
-// them: the asker's repositories (code.ReadRepos and code.ReadRepo, held to
+// them: the asker's repositories (gitlet.ReadRepos and gitlet.ReadRepo, held to
 // the asker's grant by the node that serves them) and ONE repository's search
-// (code.GitSearch through the walk, which asks the repository's Gitlet nodes in
+// (gitlet.GitSearch through the walk, which asks the repository's Gitlet nodes in
 // order). Declared here by its consumer; estate.CodeSeam answers both.
 type Estate interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
-	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 }
 
 // Placement is every repository's git order, judged on one reading of who
@@ -48,22 +48,22 @@ type Query struct {
 	// Search is the search: its text, mode and case, and its repo:, path:
 	// and ref: filters — codeindex's one grammar.
 	Search codeindex.Query
-	// Limit is the most hits answered, 1 to code.MaxSearchHits; 0 is
-	// code.MaxSearchHits.
+	// Limit is the most hits answered, 1 to gitlet.MaxSearchHits; 0 is
+	// gitlet.MaxSearchHits.
 	Limit int
 	// After, where set, is the place in the search's order the answer
 	// continues from ([Key]): the lines after it, Limit of them. A page of
 	// a long search is asked after the last line of the page before.
 	After *Key
 	// Asker is who searches, REQUIRED; CeilingSeat and Turn are a seat's
-	// read's as code.GitQuery's are. Every node judges each repository's
+	// read's as gitlet.GitQuery's are. Every node judges each repository's
 	// grant for them.
-	Asker       code.Principal
+	Asker       gitlet.Principal
 	CeilingSeat string
 	Turn        string
 	// Rows is the level the asker's repositories are listed at — a seat's
 	// and a person's linearizable — and Git the floor each copy searched is
-	// brought to, as a read by object id's (code.GitQuery.Fresh).
+	// brought to, as a read by object id's (gitlet.GitQuery.Fresh).
 	Rows statelog.Freshness
 	Git  statelog.Freshness
 }
@@ -129,7 +129,7 @@ type Coverage struct {
 	// Truncated is set beside it.
 	PastLimit RepoSet `json:"past_limit"`
 	// SkippedFiles is the files the searched repositories passed over for
-	// their size or as binaries (code.SearchAnswer.SkippedFiles).
+	// their size or as binaries (gitlet.SearchAnswer.SkippedFiles).
 	SkippedFiles int `json:"skipped_files"`
 	// Truncated says lines may follow the last hit, or be missing: a
 	// repository's search stopped at its limit, its answer's bound or its
@@ -193,13 +193,13 @@ const MaxGrepRepos = 8
 
 // RoundBudget is how long one round of the scatter waits for its nodes:
 // what one node's read of a repository may take — its wait for a unit of the
-// seat git-work share (code.GitShareWait, 2 s), then the search's own budget
-// (code.SearchBudget, 5 s) — and a reply's margin each way
-// (code.ReplyMargin), so a node whose read ran its whole budget answers
+// seat git-work share (gitlet.GitShareWait, 2 s), then the search's own budget
+// (gitlet.SearchBudget, 5 s) — and a reply's margin each way
+// (gitlet.ReplyMargin), so a node whose read ran its whole budget answers
 // while the asker listens. A SUM OF WHOLE BUDGETS (M3-O6), 9 s; a round ends
 // sooner, as soon as every node it asked has answered, and a search takes two
 // rounds only where a node did not answer the first.
-const RoundBudget = code.GitShareWait + code.SearchBudget + 2*code.ReplyMargin
+const RoundBudget = gitlet.GitShareWait + gitlet.SearchBudget + 2*gitlet.ReplyMargin
 
 // Searcher answers code searches over the fleet's Gitlet nodes.
 type Searcher struct {
@@ -242,9 +242,9 @@ func New(o Options) (*Searcher, error) {
 // its grammar (codeindex.Query.Validate: past codeindex.MaxQueryBytes, the
 // knowledge search's 400 bytes, refused, never cut), its limit, its asker, a
 // repo: naming a repository the asker may not read, and more than
-// MaxGrepRepos grep repositories — each code.ErrInvalid or the read's own
+// MaxGrepRepos grep repositories — each gitlet.ErrInvalid or the read's own
 // refusal, a refusal over one repository a [RepoRefusal] naming it. ONE
-// REPOSITORY is a read of it through the keyed walk (code.GitSearch), whose
+// REPOSITORY is a read of it through the keyed walk (gitlet.GitSearch), whose
 // answer or refusal is the search's, as a [RepoRefusal]. More are ONE
 // SCATTER: each repository asked of the first node of its git order, in one
 // signed request on topics.CodeSearch, then once more of its runner-up where
@@ -259,7 +259,7 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	if err != nil {
 		return Answer{}, err
 	}
-	sq := code.SearchQuery{Text: q.Search.Text, Mode: q.Search.Mode, IgnoreCase: q.Search.IgnoreCase,
+	sq := gitlet.SearchQuery{Text: q.Search.Text, Mode: q.Search.Mode, IgnoreCase: q.Search.IgnoreCase,
 		Paths: q.Search.Paths, Ref: q.Search.Ref, Limit: q.Limit}
 	var (
 		out Answer
@@ -273,10 +273,10 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	if q.After != nil {
 		// A REPOSITORY BEFORE THE PLACE IS ASKED NOTHING: every line of it
 		// sorts before the place, and an earlier page answered them.
-		repos = slices.DeleteFunc(repos, func(r code.RepoRef) bool { return r.Name < q.After.Repo })
+		repos = slices.DeleteFunc(repos, func(r gitlet.RepoRef) bool { return r.Name < q.After.Repo })
 	}
 	if single && len(repos) == 1 {
-		var read code.SearchVia
+		var read gitlet.SearchVia
 		if out, read, err = s.one(ctx, q, sq, head, repos[0]); err != nil {
 			return Answer{}, err
 		}
@@ -311,22 +311,22 @@ func (e *RepoRefusal) Unwrap() error { return e.Err }
 
 // validate refuses what no node would answer.
 func (q Query) validate() error {
-	if q.Limit < 0 || q.Limit > code.MaxSearchHits {
-		return fmt.Errorf("%w: limit: %d is not 1 to %d (0 is %d)", code.ErrInvalid, q.Limit, code.MaxSearchHits,
-			code.MaxSearchHits)
+	if q.Limit < 0 || q.Limit > gitlet.MaxSearchHits {
+		return fmt.Errorf("%w: limit: %d is not 1 to %d (0 is %d)", gitlet.ErrInvalid, q.Limit, gitlet.MaxSearchHits,
+			gitlet.MaxSearchHits)
 	}
 	if err := q.Search.Validate(); err != nil {
-		return fmt.Errorf("%w: %w", code.ErrInvalid, err)
+		return fmt.Errorf("%w: %w", gitlet.ErrInvalid, err)
 	}
 	if err := q.Asker.Validate(); err != nil {
 		return fmt.Errorf("asker: %w", err)
 	}
 	if q.After != nil {
-		if !code.ValidName(q.After.Repo) {
-			return fmt.Errorf("%w: after.repo: %q is not a repository's name", code.ErrInvalid, q.After.Repo)
+		if !gitlet.ValidName(q.After.Repo) {
+			return fmt.Errorf("%w: after.repo: %q is not a repository's name", gitlet.ErrInvalid, q.After.Repo)
 		}
 		if !gitref.ValidOID(q.After.Tip) {
-			return fmt.Errorf("%w: after.tip: %q is not a commit's whole id", code.ErrInvalid, q.After.Tip)
+			return fmt.Errorf("%w: after.tip: %q is not a commit's whole id", gitlet.ErrInvalid, q.After.Tip)
 		}
 		if _, err := q.After.Raw(); err != nil {
 			return err
@@ -338,15 +338,15 @@ func (q Query) validate() error {
 // repos is the repositories q searches, by name, the grep repositories an
 // unfiltered q leaves out, and the code log's HEAD as those reads found it
 // where they were linearizable (headOf): what every repository's second
-// look at the log's head syncs to (code.GitQuery.Head).
-func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef, grepLeft []string,
+// look at the log's head syncs to (gitlet.GitQuery.Head).
+func (s *Searcher) repos(ctx context.Context, q Query) (searched []gitlet.RepoRef, grepLeft []string,
 	head statelog.Position, err error) {
 	if len(q.Search.Repos) > 0 {
 		searched, head, err = s.named(ctx, q)
 		return searched, nil, head, err
 	}
-	rq := code.ReadQuery{Kind: code.ReadRepos, Asker: q.Asker, CeilingSeat: q.CeilingSeat, Fresh: q.Rows,
-		Limit: code.MaxReposPerPage}
+	rq := gitlet.ReadQuery{Kind: gitlet.ReadRepos, Asker: q.Asker, CeilingSeat: q.CeilingSeat, Fresh: q.Rows,
+		Limit: gitlet.MaxReposPerPage}
 	for {
 		page, err := s.estate.Read(ctx, rq)
 		if err != nil {
@@ -354,7 +354,7 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 				"read: %w", err)
 		}
 		for _, r := range page.Repos {
-			if r.Search == code.SearchIndexed {
+			if r.Search == gitlet.SearchIndexed {
 				searched = append(searched, r.RepoRef)
 			} else {
 				grepLeft = append(grepLeft, r.Name)
@@ -370,7 +370,7 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 
 // ResolveReads is how many of a repo: filter's names are read at once.
 //
-// A name is one estate read of the repository's row (code.ReadRepo) at the
+// A name is one estate read of the repository's row (gitlet.ReadRepo) at the
 // asker's level, and a seat's and a person's is linearizable: read one after
 // another, a filter of dozens of names — a 400-byte query holds up to 57 —
 // was as many barriers back to back before anything was searched. Read
@@ -389,7 +389,7 @@ const ResolveReads = MaxGrepRepos + 1
 // Otherwise every name is read, and a refusal is the FIRST NAME's, in the
 // order the filter wrote them — whichever read answered first — so a search
 // is refused the same however its reads interleave.
-func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog.Position, error) {
+func (s *Searcher) named(ctx context.Context, q Query) ([]gitlet.RepoRef, statelog.Position, error) {
 	// ONE REPOSITORY NAMED TWICE IS SEARCHED ONCE: codeindex.ParseQuery
 	// names each once, and a Query built otherwise may not, where a
 	// repository listed twice would be read twice by its node, its lines
@@ -406,7 +406,7 @@ func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type read struct {
-		a   code.ReadAnswer
+		a   gitlet.ReadAnswer
 		err error
 	}
 	reads := make([]read, len(names))
@@ -430,12 +430,12 @@ func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog
 		}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			a, err := s.estate.Read(rctx, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Asker: q.Asker,
+			a, err := s.estate.Read(rctx, gitlet.ReadQuery{Kind: gitlet.ReadRepo, Repo: name, Asker: q.Asker,
 				CeilingSeat: q.CeilingSeat, Fresh: q.Rows})
 			mu.Lock()
 			defer mu.Unlock()
 			reads[i] = read{a: a, err: err}
-			if err == nil && a.Repo != nil && a.Repo.Search != code.SearchIndexed {
+			if err == nil && a.Repo != nil && a.Repo.Search != gitlet.SearchIndexed {
 				if grep++; grep > MaxGrepRepos && !over {
 					over = true
 					cancel()
@@ -447,10 +447,10 @@ func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog
 	if over {
 		return nil, statelog.Position{}, fmt.Errorf("%w: repo: names more than %d repositories searched with "+
 			"git grep, and a search reads at most %d of them: name fewer, or search the indexed ones without a "+
-			"repo: filter", code.ErrInvalid, MaxGrepRepos, MaxGrepRepos)
+			"repo: filter", gitlet.ErrInvalid, MaxGrepRepos, MaxGrepRepos)
 	}
 	var (
-		searched []code.RepoRef
+		searched []gitlet.RepoRef
 		head     statelog.Position
 	)
 	for i, r := range reads {
@@ -462,7 +462,7 @@ func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog
 			if err := ctx.Err(); err != nil {
 				return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: err}
 			}
-			return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: code.ErrRepoNotFound}
+			return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: gitlet.ErrRepoNotFound}
 		}
 		searched, head = append(searched, r.a.Repo.RepoRef), headOf(head, r.a)
 	}
@@ -472,10 +472,10 @@ func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog
 // headOf is the later of head and where a read of the rows answered, where
 // that read was LINEARIZABLE: a position every write committed before the
 // search asked is at or before, which each repository's second look can sync
-// to as a floor (code.GitQuery.Head) in place of a barrier of its own — so a
+// to as a floor (gitlet.GitQuery.Head) in place of a barrier of its own — so a
 // company-wide search pays for its listing's barrier once, not for one a
 // repository. A read at any other level found no head, and is not one.
-func headOf(head statelog.Position, a code.ReadAnswer) statelog.Position {
+func headOf(head statelog.Position, a gitlet.ReadAnswer) statelog.Position {
 	if a.Level != statelog.ReadLinearizable || a.Position.IsZero() {
 		return head
 	}
@@ -489,11 +489,11 @@ func headOf(head statelog.Position, a code.ReadAnswer) statelog.Position {
 }
 
 // one searches one repository through the keyed walk.
-func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
-	repo code.RepoRef) (Answer,
-	code.SearchVia, error) {
+func (s *Searcher) one(ctx context.Context, q Query, sq gitlet.SearchQuery, head statelog.Position,
+	repo gitlet.RepoRef) (Answer,
+	gitlet.SearchVia, error) {
 	q.After.continueIn(repo.Name, &sq)
-	got, err := s.estate.GitRead(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: repo.ID, Asker: q.Asker,
+	got, err := s.estate.GitRead(ctx, gitlet.GitQuery{Kind: gitlet.GitSearch, RepoID: repo.ID, Asker: q.Asker,
 		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Head: head, Search: &sq})
 	if err != nil {
 		return Answer{}, "", &RepoRefusal{Repo: repo.Name, Err: err}
@@ -511,7 +511,7 @@ func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, head s
 	if len(out.Hits) > 0 {
 		out.Tips = map[string]string{repo.Name: ans.Tip}
 	}
-	if repo.Search == code.SearchIndexed && ans.Via == code.SearchViaGrep {
+	if repo.Search == gitlet.SearchIndexed && ans.Via == gitlet.SearchViaGrep {
 		out.Coverage.NotIndexed = setOf([]string{repo.Name})
 	}
 	return out, ans.Via, nil
@@ -520,7 +520,7 @@ func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, head s
 // asked is one repository's place in a scatter: its order, which node of it
 // is being asked, and what the last node asked answered.
 type asked struct {
-	repo  code.RepoRef
+	repo  gitlet.RepoRef
 	order []string
 	at    int
 	// done is set once the repository's outcome is final.
@@ -534,8 +534,8 @@ type asked struct {
 
 // scatter asks every repository of its order's first node, then its
 // runner-up where that one did not answer it.
-func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
-	repos []code.RepoRef) (Answer,
+func (s *Searcher) scatter(ctx context.Context, q Query, sq gitlet.SearchQuery, head statelog.Position,
+	repos []gitlet.RepoRef) (Answer,
 	error) {
 	out := Answer{Hits: []Hit{}}
 	if len(repos) == 0 {
@@ -599,7 +599,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, he
 				cut = cut || rep.Cut
 				// A NODE THAT CUT its lines answered the first of them up to
 				// its last; a repository that stopped early, its own first
-				// lines up to ITS last (code.SearchAnswer) — and no line
+				// lines up to ITS last (gitlet.SearchAnswer) — and no line
 				// after either is known to follow every line before it.
 				if rep.Cut && len(rep.Hits) > 0 {
 					ends.at(rep.Hits[len(rep.Hits)-1])
@@ -672,7 +672,7 @@ func classify(c *Coverage, a *asked, tips map[string]string) {
 			c.SkippedFiles += r.SkippedFiles
 			c.Truncated = c.Truncated || r.Truncated
 			tips[name] = r.Tip
-			if a.repo.Search == code.SearchIndexed && r.Via == code.SearchViaGrep {
+			if a.repo.Search == gitlet.SearchIndexed && r.Via == gitlet.SearchViaGrep {
 				add(&c.NotIndexed, name)
 			}
 		case OutcomeNotPermitted:
@@ -689,9 +689,9 @@ func classify(c *Coverage, a *asked, tips map[string]string) {
 		gap(c, "", "no Gitlet node serves the repository", name)
 	case a.silent || r.Outcome != OutcomeUnready:
 		gap(c, a.order[a.at-1], whyOf(a), name)
-	case r.Unready == code.UnreadyIndexBuilding:
+	case r.Unready == gitlet.UnreadyIndexBuilding:
 		add(&c.Building, name)
-	case r.Unready == code.UnreadySyncing || r.Unready == code.UnreadyNoChart || r.Unready == code.UnreadyBehindConfig:
+	case r.Unready == gitlet.UnreadySyncing || r.Unready == gitlet.UnreadyNoChart || r.Unready == gitlet.UnreadyBehindConfig:
 		add(&c.Stale, name)
 	default:
 		gap(c, a.order[a.at-1], whyOf(a), name)
@@ -819,7 +819,7 @@ func jsonLen(s string) int {
 // node: a reply is believed only where it verifies, is bound to this round's
 // request and names a node the round asked. The round ends once every node
 // asked has answered, or at RoundBudget.
-func (s *Searcher) round(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
+func (s *Searcher) round(ctx context.Context, q Query, sq gitlet.SearchQuery, head statelog.Position,
 	assign map[string][]Assigned) (map[string]Reply, error) {
 	rctx, cancel := context.WithTimeout(ctx, RoundBudget)
 	defer cancel()

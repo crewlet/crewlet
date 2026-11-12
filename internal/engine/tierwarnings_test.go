@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
@@ -60,7 +60,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 	if err := os.WriteFile(stray, []byte("an operator's file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	e := unconfiguredEngineWith(t, engine.Options{Bootstrap: b, GitHook: codetest.HookCommand(t)})
+	e := unconfiguredEngineWith(t, engine.Options{Bootstrap: b, GitHook: gitlettest.HookCommand(t)})
 	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
 		o.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	})
@@ -116,7 +116,7 @@ func TestAGitletNodeComparesItsDerivedBudget(t *testing.T) {
 	const gib = int64(1) << 30
 	logs := &logBuffer{}
 	e := unconfiguredEngineWith(t, engine.WithCacheDisk(engine.Options{
-		GitHook: codetest.HookCommand(t)}, 64*gib, 48*gib))
+		GitHook: gitlettest.HookCommand(t)}, 64*gib, 48*gib))
 	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
 		o.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	})
@@ -160,7 +160,7 @@ func TestABootedCompanysTierWarningsAreSaidOnce(t *testing.T) {
 		b.Gitlet.CacheMaxBytes = config.GitletCacheMaxBytesFloor
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b, Company: parsedCompany(t, hosting),
-		GitHook: codetest.HookCommand(t)})
+		GitHook: gitlettest.HookCommand(t)})
 	p := planeFor(t, e)
 	p.activate(t.Context(), t, hosting)
 	if err := p.recon.Tick(t.Context()); err != nil {

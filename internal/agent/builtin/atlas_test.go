@@ -12,8 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -128,7 +128,7 @@ func TestTheAtlasListsRepositoriesOnlyForAGitletHolder(t *testing.T) {
 	if c := gitletCoverage(t, a); !c.Complete {
 		t.Errorf("Gitlet's coverage for a holder of gitlet = %+v, want read in full", c)
 	}
-	if len(both.reads) == 0 || both.reads[0].Asker.Kind != code.PrincipalOperator {
+	if len(both.reads) == 0 || both.reads[0].Asker.Kind != gitlet.PrincipalOperator {
 		t.Errorf("Gitlet was asked %+v, want the listing read as the person", both.reads)
 	}
 

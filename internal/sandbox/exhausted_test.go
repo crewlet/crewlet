@@ -30,46 +30,50 @@ func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 	t.Parallel()
 	t.Run("it ran out", func(t *testing.T) {
 		t.Parallel()
-		rig, writes, keep := keepingRig(t)
-		rig.launchKept(t, "t1")
-		rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
-		collectHeld(t, rig, "t1")
+		inBubble(t, func(t *testing.T) {
+			rig, writes, keep := keepingRig(t)
+			rig.launchKept(t, "t1")
+			rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
+			collectHeld(t, rig, "t1")
 
-		run := rig.get("t1")
-		if want := []string{run.SessionRan()}; want[0] == "" || !slices.Equal(run.ExhaustedSessions, want) {
-			t.Fatalf("the row says %q ran out, want the session the job ran, %q", run.ExhaustedSessions, want)
-		}
-		if run.Capture == nil || run.Capture.State != CaptureRefused || !run.Capture.Final || run.Kept != nil ||
-			len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
-			t.Fatalf("the row holds capture %+v, kept %+v, with %d uploads and %d records: want the capture "+
-				"refused and nothing taken of a session no launch continues", run.Capture, run.Kept,
-				len(keep.uploads()), len(writes.captured()))
-		}
-		recs := rig.collected()
-		if len(recs) != 1 || recs[0].ErrorKind != types.ExecutorErrorContextExhausted ||
-			!strings.Contains(recs[0].SessionNotKept, "ran out") {
-			t.Fatalf("the launch's record is %+v, want its kind and why its session was not kept", recs)
-		}
+			run := rig.get("t1")
+			if want := []string{run.SessionRan()}; want[0] == "" || !slices.Equal(run.ExhaustedSessions, want) {
+				t.Fatalf("the row says %q ran out, want the session the job ran, %q", run.ExhaustedSessions, want)
+			}
+			if run.Capture == nil || run.Capture.State != CaptureRefused || !run.Capture.Final || run.Kept != nil ||
+				len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
+				t.Fatalf("the row holds capture %+v, kept %+v, with %d uploads and %d records: want the capture "+
+					"refused and nothing taken of a session no launch continues", run.Capture, run.Kept,
+					len(keep.uploads()), len(writes.captured()))
+			}
+			recs := rig.collected()
+			if len(recs) != 1 || recs[0].ErrorKind != types.ExecutorErrorContextExhausted ||
+				!strings.Contains(recs[0].SessionNotKept, "ran out") {
+				t.Fatalf("the launch's record is %+v, want its kind and why its session was not kept", recs)
+			}
+		})
 	})
 	t.Run("it failed any other way", func(t *testing.T) {
 		t.Parallel()
-		rig, _, keep := keepingRig(t)
-		rig.launchKept(t, "t1")
-		session := rig.runner.Session
-		rig.runner.Finish(Result{Error: "exit 1", SessionID: "s-1", Captured: &session.Archive})
-		collectHeld(t, rig, "t1")
+		inBubble(t, func(t *testing.T) {
+			rig, _, keep := keepingRig(t)
+			rig.launchKept(t, "t1")
+			session := rig.runner.Session
+			rig.runner.Finish(Result{Error: "exit 1", SessionID: "s-1", Captured: &session.Archive})
+			collectHeld(t, rig, "t1")
 
-		run := rig.get("t1")
-		if len(run.ExhaustedSessions) != 0 {
-			t.Errorf("a launch_failed run retired %q", run.ExhaustedSessions)
-		}
-		if run.Kept == nil || len(keep.uploads()) != 1 {
-			t.Errorf("a launch_failed run kept %+v, with %d uploads, want its session kept", run.Kept,
-				len(keep.uploads()))
-		}
-		if recs := rig.collected(); len(recs) != 1 || recs[0].ErrorKind != types.ExecutorErrorLaunchFailed {
-			t.Errorf("the launch's record is %+v, want launch_failed", recs)
-		}
+			run := rig.get("t1")
+			if len(run.ExhaustedSessions) != 0 {
+				t.Errorf("a launch_failed run retired %q", run.ExhaustedSessions)
+			}
+			if run.Kept == nil || len(keep.uploads()) != 1 {
+				t.Errorf("a launch_failed run kept %+v, with %d uploads, want its session kept", run.Kept,
+					len(keep.uploads()))
+			}
+			if recs := rig.collected(); len(recs) != 1 || recs[0].ErrorKind != types.ExecutorErrorLaunchFailed {
+				t.Errorf("the launch's record is %+v, want launch_failed", recs)
+			}
+		})
 	})
 	for name, spoil := range map[string]func(*PendingRun){
 		"a job a person stopped":     func(r *PendingRun) { r.Stop = &RunStop{By: "ana"} },
@@ -97,52 +101,56 @@ func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 // and kept by the read that the collection then retires.
 func TestACappedRunThatAskedAndRanOutOfContextKeepsNoCapture(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	rig.launchUntil("t1", rig.now.Add(-time.Minute))
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
-		Branch: "wip/t1"})
-	ranOut := finishedOutOfContext(rig.runner.Session)
-	ranOut.JobEnd = JobEndAsked
-	rig.runner.EndsAs(ranOut)
-	// PAST ITS TURN'S CAP a resume that fails is the turn's last: the run is ended,
-	// and its row stays, owing its turn's end, for the case to read.
-	rig.resumer.failWith(errors.New("held for the case to read the row"))
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Logf("OnCompleted: %v", err)
-	}
-	rig.awaitKeeps()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		rig.launchUntil("t1", rig.now.Add(-time.Minute))
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
+			Branch: "wip/t1"})
+		ranOut := finishedOutOfContext(rig.runner.Session)
+		ranOut.JobEnd = JobEndAsked
+		rig.runner.EndsAs(ranOut)
+		// PAST ITS TURN'S CAP a resume that fails is the turn's last: the run is ended,
+		// and its row stays, owing its turn's end, for the case to read.
+		rig.resumer.failWith(errors.New("held for the case to read the row"))
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Logf("OnCompleted: %v", err)
+		}
+		rig.awaitKeeps()
 
-	run := rig.get("t1")
-	if !slices.Equal(run.ExhaustedSessions, []string{"s-1"}) {
-		t.Fatalf("the row says %q ran out, want the session the job ran, s-1", run.ExhaustedSessions)
-	}
-	if takes := rig.runner.Takes(); len(takes) != 0 || run.Kept != nil || len(keep.uploads()) != 0 ||
-		len(writes.captured()) != 0 {
-		t.Fatalf("took %+v and kept %+v, with %d uploads and %d records: want nothing taken of a session "+
-			"no launch continues", takes, run.Kept, len(keep.uploads()), len(writes.captured()))
-	}
-	if run.Capture == nil || run.Capture.State != CaptureRefused {
-		t.Fatalf("the row holds capture %+v, want it refused untaken, so the turn's end names it", run.Capture)
-	}
-	if recs := rig.collected(); len(recs) != 1 || recs[0].ErrorKind != types.ExecutorErrorContextExhausted {
-		t.Errorf("the launch's record is %+v, want it to say the job ran out of context", recs)
-	}
+		run := rig.get("t1")
+		if !slices.Equal(run.ExhaustedSessions, []string{"s-1"}) {
+			t.Fatalf("the row says %q ran out, want the session the job ran, s-1", run.ExhaustedSessions)
+		}
+		if takes := rig.runner.Takes(); len(takes) != 0 || run.Kept != nil || len(keep.uploads()) != 0 ||
+			len(writes.captured()) != 0 {
+			t.Fatalf("took %+v and kept %+v, with %d uploads and %d records: want nothing taken of a session "+
+				"no launch continues", takes, run.Kept, len(keep.uploads()), len(writes.captured()))
+		}
+		if run.Capture == nil || run.Capture.State != CaptureRefused {
+			t.Fatalf("the row holds capture %+v, want it refused untaken, so the turn's end names it", run.Capture)
+		}
+		if recs := rig.collected(); len(recs) != 1 || recs[0].ErrorKind != types.ExecutorErrorContextExhausted {
+			t.Errorf("the launch's record is %+v, want it to say the job ran out of context", recs)
+		}
+	})
 }
 
 // A store that does not take the fact is a collection to ask again, never a resumed turn.
 // Mutation: log the write's failure and carry on, and the collection answers.
 func TestAFactTheStoreDidNotTakeHandsTheCollectionBack(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	rig.launchKept(t, "t1")
-	rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
-	rig.coordinator.pending = &refusesRetirement{PendingStore: rig.pending}
-	if _, _, collected, _ := rig.coordinator.collectClaimed(t.Context(), rig.get("t1")); collected {
-		t.Fatal("the collection answered with the session's failure unrecorded")
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
+		rig.coordinator.pending = &refusesRetirement{PendingStore: rig.pending}
+		if _, _, collected, _ := rig.coordinator.collectClaimed(t.Context(), rig.get("t1")); collected {
+			t.Fatal("the collection answered with the session's failure unrecorded")
+		}
+	})
 }
 
 // refusesRetirement is a run store that does not take a job's running out of context.
@@ -156,54 +164,58 @@ func (*refusesRetirement) RetireSessions(context.Context, string, []string) erro
 // Mutation: drop the check from ContinuityOf and the relaunch continues it.
 func TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut(t *testing.T) {
 	t.Parallel()
-	rig, restore, kept := keptTurn(t)
-	if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != "" ||
-		!continued.Capture.samePlace(kept) {
-		t.Fatalf("the premise: the relaunch continues %+v (%q), want the kept capture", continued, why)
-	}
-	if err := rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
-		t.Fatalf("RetireSessions: %v", err)
-	}
-	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
-	if continued.Capture.CaptureSeq != 0 || !strings.Contains(why, ranOutWords) || !strings.Contains(why, "s-1") {
-		t.Fatalf("the relaunch continues %+v (%q), want none, saying the session ran out", continued, why)
-	}
-	if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	started := rig.runner.Started()
-	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" {
-		t.Fatalf("the relaunch started session %q with brief %q, want a session of its own", last.Resume, last.Brief)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, restore, kept := keptTurn(t)
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != "" ||
+			!continued.Capture.samePlace(kept) {
+			t.Fatalf("the premise: the relaunch continues %+v (%q), want the kept capture", continued, why)
+		}
+		if err := rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
+			t.Fatalf("RetireSessions: %v", err)
+		}
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		if continued.Capture.CaptureSeq != 0 || !strings.Contains(why, ranOutWords) || !strings.Contains(why, "s-1") {
+			t.Fatalf("the relaunch continues %+v (%q), want none, saying the session ran out", continued, why)
+		}
+		if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		started := rig.runner.Started()
+		if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" {
+			t.Fatalf("the relaunch started session %q with brief %q, want a session of its own", last.Resume, last.Brief)
+		}
+	})
 }
 
 // A turn that kept nothing does not go back to the base that ran out.
 // Mutation: drop the check from BaseContinuityOf and the relaunch continues the base.
 func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 	t.Parallel()
-	rig, logbook, _ := conversingRig(t)
-	read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-	ctx := t.Context()
-	if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
-		t.Fatalf("the first launch: %v", err)
-	}
-	if continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner); continued.Base == nil {
-		t.Fatalf("the premise: the relaunch continues no base (%q)", why)
-	}
-	if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
-		t.Fatalf("RetireSessions: %v", err)
-	}
-	continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
-	if continued.Base != nil || !strings.Contains(why, ranOutWords) {
-		t.Fatalf("the relaunch continues base %+v (%q), want none, saying it ran out", continued.Base, why)
-	}
-	opened := rig.get("t2")
-	got := rig.coordinator.continueSession(ctx, continuingBaseRequest("t2"), opened, NewFakeSandbox("box-1"),
-		rig.runner, false, false)
-	t.Cleanup(got.release)
-	if got.kind != BriefFresh || got.session != "" || got.carried != nil {
-		t.Fatalf("the launch hands %s on session %q, want a session of its own", got.kind, got.session)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, logbook, _ := conversingRig(t)
+		read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+		ctx := t.Context()
+		if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+			t.Fatalf("the first launch: %v", err)
+		}
+		if continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner); continued.Base == nil {
+			t.Fatalf("the premise: the relaunch continues no base (%q)", why)
+		}
+		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
+			t.Fatalf("RetireSessions: %v", err)
+		}
+		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+		if continued.Base != nil || !strings.Contains(why, ranOutWords) {
+			t.Fatalf("the relaunch continues base %+v (%q), want none, saying it ran out", continued.Base, why)
+		}
+		opened := rig.get("t2")
+		got := rig.coordinator.continueSession(ctx, continuingBaseRequest("t2"), opened, NewFakeSandbox("box-1"),
+			rig.runner, false, false)
+		t.Cleanup(got.release)
+		if got.kind != BriefFresh || got.session != "" || got.carried != nil {
+			t.Fatalf("the launch hands %s on session %q, want a session of its own", got.kind, got.session)
+		}
+	})
 }
 
 // A relaunch is still told of a base its turn ran out in, while the turn's row holds it: no
@@ -213,24 +225,26 @@ func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 // relaunch names no kept session.
 func TestARelaunchIsToldOfABaseItRanOutInWhileItsRowHoldsIt(t *testing.T) {
 	t.Parallel()
-	rig, logbook, _ := conversingRig(t)
-	read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
-	ctx := t.Context()
-	if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
-		t.Fatalf("the first launch: %v", err)
-	}
-	if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
-		t.Fatalf("RetireSessions: %v", err)
-	}
-	continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
-	if continued.Base != nil || !strings.Contains(why, ranOutWords) {
-		t.Fatalf("the premise: the relaunch continues base %+v (%q), want none, saying it ran out",
-			continued.Base, why)
-	}
-	if continued.KeptTurn != "b1" {
-		t.Errorf("the relaunch names kept session %q, want b1: the turn's row still holds the base it ran "+
-			"out in, which its run may read", continued.KeptTurn)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, logbook, _ := conversingRig(t)
+		read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+		ctx := t.Context()
+		if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+			t.Fatalf("the first launch: %v", err)
+		}
+		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
+			t.Fatalf("RetireSessions: %v", err)
+		}
+		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+		if continued.Base != nil || !strings.Contains(why, ranOutWords) {
+			t.Fatalf("the premise: the relaunch continues base %+v (%q), want none, saying it ran out",
+				continued.Base, why)
+		}
+		if continued.KeptTurn != "b1" {
+			t.Errorf("the relaunch names kept session %q, want b1: the turn's row still holds the base it ran "+
+				"out in, which its run may read", continued.KeptTurn)
+		}
+	})
 }
 
 // continuingBaseRequest is a relaunch of turn asked to continue its frozen base.
@@ -328,26 +342,28 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 // Mutation: drop the assignment in publishEnd and no later turn hears of it.
 func TestATurnsEndNamesTheSessionsItRanOutOfContextIn(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	rig.launchKept(t, "t1")
-	rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
-	collectHeld(t, rig, "t1")
-	ran := rig.get("t1").SessionRan()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
+		collectHeld(t, rig, "t1")
+		ran := rig.get("t1").SessionRan()
 
-	ctx := t.Context()
-	if _, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}); err != nil {
-		t.Fatalf("OweEnd: %v", err)
-	}
-	if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
-		t.Fatalf("publishEnd: %v", err)
-	}
-	ends := writes.endedRecords()
-	if len(ends) != 1 || !slices.Equal(ends[0].Ending.Exhausted, []string{ran}) {
-		t.Fatalf("the end recorded %+v, want it naming session %q", ends, ran)
-	}
-	if u := ends[0].Ending.Unkept; u == nil || !strings.Contains(u.Reason, "ran out") {
-		t.Fatalf("the end names %+v unkept, want the attempt that ran out, so the row names nothing older", u)
-	}
+		ctx := t.Context()
+		if _, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}); err != nil {
+			t.Fatalf("OweEnd: %v", err)
+		}
+		if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+			t.Fatalf("publishEnd: %v", err)
+		}
+		ends := writes.endedRecords()
+		if len(ends) != 1 || !slices.Equal(ends[0].Ending.Exhausted, []string{ran}) {
+			t.Fatalf("the end recorded %+v, want it naming session %q", ends, ran)
+		}
+		if u := ends[0].Ending.Unkept; u == nil || !strings.Contains(u.Reason, "ran out") {
+			t.Fatalf("the end names %+v unkept, want the attempt that ran out, so the row names nothing older", u)
+		}
+	})
 }
 
 // Which sessions a job ran out in is the row's word, and both where the box never said which.

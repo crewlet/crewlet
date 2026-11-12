@@ -22,8 +22,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -31,7 +31,7 @@ import (
 // (estate.CodeSeam satisfies it): the reader's own repositories, narrowed by
 // Gitlet to what the reader may read.
 type GitletReads interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 }
 
 // Sources is where the atlas reads what the engine keeps. A nil source is
@@ -45,6 +45,7 @@ type Sources struct {
 	ServerTests  ServerTests
 	AccessLog    AccessLog
 	Usage        Usage
+	Alarms       Alarms
 }
 
 // Request is one read of the atlas.
@@ -56,7 +57,7 @@ type Request struct {
 	// Deployment is the addresses the deployment answers at.
 	Deployment derive.Deployment
 	// Asker is who reads. Gitlet lists only the repositories they may read.
-	Asker code.Principal
+	Asker gitlet.Principal
 	// Fresh is how fresh the replicated reads must be.
 	Fresh statelog.Freshness
 	// Now is the instant the atlas is read at.
@@ -77,7 +78,15 @@ const (
 	SourceServerTests  SourceName = "server_tests"
 	SourceAccessLog    SourceName = "access_log"
 	SourceUsage        SourceName = "usage"
+	SourceAlarms       SourceName = "alarms"
 )
+
+// SourceNames is every place the atlas reads, in the order an answer's
+// coverage lists them.
+var SourceNames = []SourceName{
+	SourceAccessLog, SourceAlarms, SourceGitlet, SourceIntegrations, SourceNodes, SourceSeatAccess,
+	SourceServerTests, SourceSettings, SourceToolServers, SourceUsage,
+}
 
 // Coverage is one source's part in a read: whether it was read in full, and
 // why not where it was not.
@@ -93,6 +102,18 @@ type Answer struct {
 	Revision string            `json:"revision"`
 	Coverage []Coverage        `json:"coverage"`
 	Withheld []derive.Withheld `json:"withheld,omitempty"`
+}
+
+// Unread is a with the source name marked as not read in full, for why: a
+// reason the caller has for not reading it, rather than the read's.
+func (a Answer) Unread(name SourceName, why string) Answer {
+	a.Coverage = slices.Clone(a.Coverage)
+	for i := range a.Coverage {
+		if a.Coverage[i].Source == name {
+			a.Coverage[i].Complete, a.Coverage[i].Reason = false, why
+		}
+	}
+	return a
 }
 
 // maxRepoPage is the page a repository listing is read in: Gitlet's own
@@ -114,15 +135,15 @@ func Read(ctx context.Context, src Sources, req Request) Answer {
 	take(settings.Claims(req.Now))
 	answer.Coverage = append(answer.Coverage, Coverage{Source: SourceSettings, Complete: true})
 
-	repos, checks, gitlet := readGitlet(ctx, src.Gitlet, settings, req)
+	repos, checks, gitletCovered := readGitlet(ctx, src.Gitlet, settings, req)
 	take(settings.Gitlet(repos, checks, req.Now))
-	answer.Coverage = append(answer.Coverage, gitlet)
+	answer.Coverage = append(answer.Coverage, gitletCovered)
 
 	pushes := make([]derive.RepoPush, 0, len(repos))
 	for _, r := range repos {
 		pushes = append(pushes, derive.RepoPush{Repo: r.Name, Last: r.LastPush})
 	}
-	records, covered := readRecords(ctx, src, settings, req, pushes, gitlet.Complete)
+	records, covered := readRecords(ctx, src, settings, req, pushes, gitletCovered.Complete)
 	answer.Coverage = append(answer.Coverage, covered...)
 	recorded, joined := settings.Records(records, req.Now)
 	take(recorded)
@@ -151,9 +172,9 @@ func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req R
 		cov.Reason = ErrNoSource.Error()
 		return nil, nil, cov
 	}
-	var summaries []code.RepoSummary
+	var summaries []gitlet.RepoSummary
 	for cursor := ""; ; {
-		page, err := reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepos, Asker: req.Asker, Fresh: req.Fresh,
+		page, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepos, Asker: req.Asker, Fresh: req.Fresh,
 			Cursor: cursor, Limit: maxRepoPage})
 		if err != nil {
 			cov.Reason = fmt.Sprintf("listing repositories: %v", err)
@@ -197,7 +218,7 @@ func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req R
 // remotes fills a repository's other hosts from its detail. The credential
 // beside each is a reference the domain holds, and is never read.
 func remotes(ctx context.Context, reads GitletReads, req Request, repo *derive.GitletRepo) error {
-	a, err := reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: req.Asker, Fresh: req.Fresh, Repo: repo.Name})
+	a, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepo, Asker: req.Asker, Fresh: req.Fresh, Repo: repo.Name})
 	if err != nil {
 		return err
 	}
@@ -217,9 +238,9 @@ func remotes(ctx context.Context, reads GitletReads, req Request, repo *derive.G
 }
 
 // headChecks is each check's latest attempt on the default branch's head.
-func headChecks(ctx context.Context, reads GitletReads, req Request, r code.RepoSummary) ([]derive.GitletCheck, error) {
-	a, err := reads.Read(ctx, code.ReadQuery{Kind: code.ReadChecks, Asker: req.Asker, Fresh: req.Fresh, Repo: r.Name,
-		Checks: &code.CheckQuery{OID: r.Head, Target: "refs/heads/" + r.DefaultBranch, Latest: true}})
+func headChecks(ctx context.Context, reads GitletReads, req Request, r gitlet.RepoSummary) ([]derive.GitletCheck, error) {
+	a, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadChecks, Asker: req.Asker, Fresh: req.Fresh, Repo: r.Name,
+		Checks: &gitlet.CheckQuery{OID: r.Head, Target: "refs/heads/" + r.DefaultBranch, Latest: true}})
 	if err != nil {
 		return nil, err
 	}

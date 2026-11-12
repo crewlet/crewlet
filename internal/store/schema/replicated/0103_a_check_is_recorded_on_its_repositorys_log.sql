@@ -8,7 +8,7 @@
 -- records share nothing with the repository's pushes and would wait behind
 -- their batches in its committer's queue. The subject is ADDITIVE — its records
 -- carry no expectation — and every apply is a JOIN over the row it is about, so
--- two records in either order leave one row (internal/code's checks.go): the
+-- two records in either order leave one row (internal/gitlet's checks.go): the
 -- state only rises, a running tie keeps the lower (started_at, runner_node), an
 -- ending's tie keeps a measurement over infrastructure's.
 --
@@ -43,7 +43,7 @@
 --
 -- code_check_logs is the log a failed run kept: one row an attempt whose ending
 -- named one, the object it is stored as (object, hash, size — declared Required
--- in internal/objstore/references, internal/code's CheckLogReferences), moved
+-- in internal/objstore/references, internal/gitlet's CheckLogReferences), moved
 -- with the ending the join keeps.
 --
 -- # The indexes

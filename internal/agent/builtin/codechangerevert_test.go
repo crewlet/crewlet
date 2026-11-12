@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -30,17 +30,17 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			writer := &codeWrites{}
-			writer.write = func(w code.EngineWrite) (code.EngineWriteResult, error) {
-				if w.Kind == code.WriteRevertChange {
-					return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
-						Change: &code.ChangeAnswer{ChangeID: siteChangeID, Number: 8, Opened: true}}, nil
+			writer.write = func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+				if w.Kind == gitlet.WriteRevertChange {
+					return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
+						Change: &gitlet.ChangeAnswer{ChangeID: siteChangeID, Number: 8, Opened: true}}, nil
 				}
 				if refuse {
-					return code.EngineWriteResult{Merge: &code.MergeAnswer{Refusal: code.MergeRefusalBusy,
+					return gitlet.EngineWriteResult{Merge: &gitlet.MergeAnswer{Refusal: gitlet.MergeRefusalBusy,
 						Detail: "the committer is busy"}}, nil
 				}
-				return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: mainOID,
-					Merge: &code.MergeAnswer{}}, nil
+				return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: mainOID,
+					Merge: &gitlet.MergeAnswer{}}, nil
 			}
 			host := newChangeHost(siteChange())
 			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
@@ -53,17 +53,17 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 				t.Fatalf("the revert sent %+v, want the revert and its merge", writes)
 			}
 			revert, merge := writes[0], writes[1]
-			if revert.Kind != code.WriteRevertChange || revert.Change != 7 ||
+			if revert.Kind != gitlet.WriteRevertChange || revert.Change != 7 ||
 				!strings.HasPrefix(revert.Ref, "refs/heads/seats/") || !strings.HasSuffix(revert.Ref, "/revert-7") {
 				t.Errorf("the revert sent %+v, want site!7 reverted on the seat's revert-7", revert)
 			}
-			if merge.Kind != code.WriteMergeChange || merge.OpID != statelog.StepOpID(revert.OpID, "2") ||
+			if merge.Kind != gitlet.WriteMergeChange || merge.OpID != statelog.StepOpID(revert.OpID, "2") ||
 				merge.Change != 8 || merge.ExpectedHead != writtenOID || merge.Ref != "refs/heads/main" {
 				t.Errorf("the revert's merge is %+v, want site!8 at %s into main as step 2 of %s", merge,
 					writtenOID, revert.OpID)
 			}
 			reads, _, _ := host.asked()
-			gated := slices.ContainsFunc(reads, func(q code.ReadQuery) bool { return q.Gates })
+			gated := slices.ContainsFunc(reads, func(q gitlet.ReadQuery) bool { return q.Gates })
 			if merge.DeleteSource != nil || gated {
 				t.Errorf("the revert's merge sent delete_source %v, the gates read %v: its branch's deletion is "+
 					"the Gitlet node's to decide", merge.DeleteSource, gated)

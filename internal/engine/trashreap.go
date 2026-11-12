@@ -139,6 +139,12 @@ func (e *Engine) stopTrashReaper() {
 	}
 }
 
+// reaperActor is the author of every record the trash reaper publishes: a
+// retention delete, a purge of what sat in a trash, an erasure and a forgetting.
+// The reaper's own name, so an operator who finds one in a log finds the duty
+// that made it.
+var reaperActor = iam.Actor{Name: trashreap.Name, Kind: iam.ActorSystem}
+
 // trashSources is every trash this node can empty, in the order a pass visits
 // them: the knowledge base's where this node writes it, then the artifacts'. A
 // domain with a trash appends its source here.
@@ -171,6 +177,10 @@ func (e *Engine) trashSources() []trashreap.Source {
 	// AND THE ACCESS LOG, on the company's access history retention, with a
 	// removed seat's told records forgotten.
 	if src, ok := e.accessSource(); ok {
+		out = append(out, src)
+	}
+	// AND THE ATLAS'S HISTORY, on the company's atlas retention.
+	if src, ok := e.atlasSource(); ok {
 		out = append(out, src)
 	}
 	return out
@@ -214,7 +224,7 @@ func (a artifactsTrash) PurgeTrashed(ctx context.Context, id string, cutoff time
 	}
 	c := artifactsdomain.Call{
 		Authority: artifacts.Authority{
-			Actor: iam.Actor{Name: trashreap.Name, Kind: iam.ActorSystem},
+			Actor: reaperActor,
 			Role:  artifacts.RoleOwner,
 		},
 		OpKey: opID,

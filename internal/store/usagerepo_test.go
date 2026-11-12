@@ -18,7 +18,7 @@ func unitFetch(principal, seat string) types.CodeFetched {
 }
 
 // A DAY COUNTS THE READS ITS RECORDS STAND FOR, not its records: a record is
-// one reader's reads of a flush (internal/code/readaudit), so a CI token that
+// one reader's reads of a flush (internal/gitlet/readaudit), so a CI token that
 // fetched six times in two flushes is two records and six reads. A record that
 // counts no read is no read — neither its bytes nor its instant are the
 // reader's.

@@ -18,7 +18,7 @@ import (
 // network its git may reach.
 type Gitlet struct {
 	// CacheDir is where the node keeps its disposable copies of the
-	// company's repositories (internal/code/cache): relative to the store's
+	// company's repositories (internal/gitlet/cache): relative to the store's
 	// directory, like store.snapshot_dir; unset is <store dir>/git.
 	CacheDir string `yaml:"cache_dir,omitempty" json:"cache_dir,omitempty" desc:"Where this node keeps its disposable copies of the company's repositories; relative to the store's directory; unset is <store dir>/git. A volume of its own is recommended: its own filesystem with its own space, not a subvolume or dataset drawing on the store's pool. Never backed up (it carries a CACHEDIR.TAG)."`
 
@@ -30,7 +30,7 @@ type Gitlet struct {
 	// MaxProcesses is the size of the git pool's READ lane — one core a
 	// slot — and twice its MAINTENANCE lane's. Passed RAW to the pool,
 	// which is the one place its default is resolved
-	// (internal/code/gitproc's Options.MaxProcesses).
+	// (internal/gitlet/gitproc's Options.MaxProcesses).
 	MaxProcesses int `yaml:"max_processes,omitempty" json:"max_processes,omitempty" js:"min=0;max=1024" desc:"Git processes this node runs at once to answer reads, one core each, and half as many again for its caches' background maintenance; 0 is GOMAXPROCS."`
 
 	// MaxTransfers is the size of the pool's TRANSFER lane — the clones,
@@ -38,7 +38,7 @@ type Gitlet struct {
 	MaxTransfers int `yaml:"max_transfers,omitempty" json:"max_transfers,omitempty" js:"min=0;max=65536" desc:"Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the node's memory. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."`
 
 	// ImportAllowPrivate lifts the public-address rule from the one outbound
-	// git dial (internal/code/gitproc's ResolveRemote): set, a remote's host
+	// git dial (internal/gitlet/gitproc's ResolveRemote): set, a remote's host
 	// is pinned to whatever its name resolves to, a forge on this node's own
 	// network among them. It governs every remote a Gitlet node dials — an
 	// import's source and both kinds of mirror — though its name names
@@ -53,7 +53,7 @@ type Gitlet struct {
 	ImportAllowPrivate bool `yaml:"import_allow_private,omitempty" json:"import_allow_private,omitempty" desc:"Let this node's imports and mirrors — pull and push alike, whatever the name says — dial a host that resolves to a loopback, link-local, private or otherwise non-public address, such as a forge on this node's own network. Off, a host any of whose addresses is not on the public internet is refused before git runs. A proxy the process names (HTTPS_PROXY, NO_PROXY) is dialed either way, and resolves the host itself."`
 
 	// MaxChecks is how many of the company's checks this node runs at once
-	// in CONTAINER cells (internal/code/checkrun): a container is a process
+	// in CONTAINER cells (internal/gitlet/checkrun): a container is a process
 	// tree on this node's own machine — a build, a test suite — so what it
 	// may run beside the node's own work is a fact about the node's cores.
 	// A POINTER, because unset and 0 are two settings: unset is a quarter of
@@ -271,7 +271,7 @@ func (g Gitlet) validate(path Path, store Store) error {
 // ancestor of it, and "" where it holds neither.
 //
 // REFUSED AT VALIDATE, before a node is started on the shape: the cache's own
-// guard at boot (internal/code/cache's Prepare refuses a non-empty directory
+// guard at boot (internal/gitlet/cache's Prepare refuses a non-empty directory
 // without its tag) is the second line, not the first, and it cannot see one
 // case at all. The node's store and its replicated estate are opened before
 // Gitlet is built, so a cache directory holding either is non-empty and

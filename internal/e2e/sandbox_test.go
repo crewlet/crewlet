@@ -21,11 +21,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/opkey"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -231,7 +231,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		BoxHostURL: listenerURL(ln),
 		// THIS TEST BINARY IS THE HOOK a node hosting code execs, as
 		// startNode hands it; a company hosting none never reads it.
-		GitHook: codetest.HookCommand(t),
+		GitHook: gitlettest.HookCommand(t),
 	})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
@@ -686,7 +686,7 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	dir := t.TempDir()
 	n := &codingNode{node: bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
 		filepath.Join(dir, "stream"), env, &sameHost{addr: addr, ring: fleetRing(t)}), stateDir: stateDir}
-	repo := awaitRepo(t, "web", code.RepoStatusActive, n.node)
+	repo := awaitRepo(t, "web", gitlet.RepoStatusActive, n.node)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
@@ -720,8 +720,8 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	if !ok {
 		t.Fatal("the node serves no code operations")
 	}
-	answer, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRunPushes, Limit: 10,
-		RunPushes: &code.RunPushesQuery{Run: run.LaunchID, Repos: []string{repo.ID}, After: repo.Position},
+	answer, err := seam.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadRunPushes, Limit: 10,
+		RunPushes: &gitlet.RunPushesQuery{Run: run.LaunchID, Repos: []string{repo.ID}, After: repo.Position},
 		Fresh:     statelog.Freshness{Level: statelog.ReadLinearizable}})
 	if err != nil {
 		t.Fatalf("read the run's pushes: %v", err)
@@ -745,13 +745,13 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	switch {
 	case !strings.HasPrefix(branch, "refs/heads/seats/swe/run-"):
 		t.Errorf("the run worked on %s; want the seat's branch for a run on no work item", branch)
-	case push.Via != code.ViaGit || push.ActorKind != string(code.PrincipalAgent) || push.ActorSeat != "swe":
+	case push.Via != gitlet.ViaGit || push.ActorKind != string(gitlet.PrincipalAgent) || push.ActorSeat != "swe":
 		t.Errorf("the push is recorded via %s by %s %q; want via git by the agent swe", push.Via,
 			push.ActorKind, push.ActorSeat)
 	case push.Run.RunID != run.LaunchID || push.Run.Harness != executor.ClaudeCodeName:
 		t.Errorf("the push is recorded as run %q by %q; want this launch, %s, by %s", push.Run.RunID,
 			push.Run.Harness, run.LaunchID, executor.ClaudeCodeName)
-	case len(push.Commands) != 1 || push.Commands[0].Ref != branch || push.Commands[0].Result != code.ResultOK:
+	case len(push.Commands) != 1 || push.Commands[0].Ref != branch || push.Commands[0].Result != gitlet.ResultOK:
 		t.Fatalf("the push moved %+v; want %s created", push.Commands, branch)
 	}
 
@@ -774,9 +774,9 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	// launches are one executor's work.
 	for _, trailer := range []string{"Crewlet-Seat: swe", "Crewlet-Run: " + run.TurnID,
 		"Crewlet-Work-Item: none"} {
-		got, err := seam.GitRead(t.Context(), code.GitQuery{Kind: code.GitLog, RepoID: repo.ID,
-			Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "swe"},
-			Log:   &code.LogQuery{Rev: push.Commands[0].New, Grep: trailer, Limit: 1}})
+		got, err := seam.GitRead(t.Context(), gitlet.GitQuery{Kind: gitlet.GitLog, RepoID: repo.ID,
+			Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"},
+			Log:   &gitlet.LogQuery{Rev: push.Commands[0].New, Grep: trailer, Limit: 1}})
 		if err != nil {
 			t.Fatalf("read the pushed commit's history: %v", err)
 		}

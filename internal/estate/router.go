@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -138,7 +138,7 @@ type RouterOptions struct {
 // THE SERVING NODE FITS ITS WAITS INTO THE ATTEMPT, rather than the attempt
 // having to outlast them: every wait a node makes before it answers another —
 // for the asker's floor, for a linearizable read's barrier and the position it
-// established, for a write's own record — ends code.ReplyMargin short of the
+// established, for a write's own record — ends gitlet.ReplyMargin short of the
 // attempt's end ([statelog.WithReplyMargin]), so a node that runs out of time
 // says so (`behind`, `no_quorum` — `broker_stalled` on a log one member
 // stores — or `pending`) while its asker is still listening. A shorter attempt therefore costs only that a node behind by more
@@ -159,8 +159,8 @@ type RouterOptions struct {
 //     run a query, so every read it is asked comes back refused or late. The
 //     same holds for a git read's attempt on a Gitlet node.
 //   - A write attempt no longer than [minWriteAttempt]: the serving node's
-//     floor wait at its whole budget, then a whole code.CommitBudget and
-//     code.ReplyMargin. The attempt's end travels to a repository's committer
+//     floor wait at its whole budget, then a whole gitlet.CommitBudget and
+//     gitlet.ReplyMargin. The attempt's end travels to a repository's committer
 //     as the push's deadline, and a committer starts a batch only while a
 //     budget and the margin are left before it — so under the bound a push
 //     whose committer first waited out its floor is answered busy, undecided,
@@ -215,31 +215,31 @@ func Production() Timing {
 }
 
 // GitWriteAttemptFor is an engine write's attempt on one Gitlet node by its kind:
-// [Timing.GitWriteAttempt] with its build term — code.WriteBuildDeadline, the
+// [Timing.GitWriteAttempt] with its build term — gitlet.WriteBuildDeadline, the
 // build of a write landing as one push — replaced by the kind's own
-// (code.EngineWriteKind.BuildDeadline). So a merge_change, whose build is a
-// mergeability's (code.MergeBuildDeadline, 30 s), is given 102 s in
+// (gitlet.EngineWriteKind.BuildDeadline). So a merge_change, whose build is a
+// mergeability's (gitlet.MergeBuildDeadline, 30 s), is given 102 s in
 // production, a rebase_change, whose build replays up to
-// code.MaxRebaseCommits commits (code.RebaseBuildDeadline, 40 s), 112 s, and
+// gitlet.MaxRebaseCommits commits (gitlet.RebaseBuildDeadline, 40 s), 112 s, and
 // every other kind the 82 s it was: the Gitlet node fits every
-// stage of the write into its attempt (internal/code/host's deadline rule),
+// stage of the write into its attempt (internal/gitlet/host's deadline rule),
 // and a kind given a longer build must be given the time to run it before its
 // upload and proposal, or every such build near its bound is answered busy.
-func (t Timing) GitWriteAttemptFor(kind code.EngineWriteKind) time.Duration {
-	return t.GitWriteAttempt - code.WriteBuildDeadline + kind.BuildDeadline()
+func (t Timing) GitWriteAttemptFor(kind gitlet.EngineWriteKind) time.Duration {
+	return t.GitWriteAttempt - gitlet.WriteBuildDeadline + kind.BuildDeadline()
 }
 
 // minReadAttempt is what every read attempt must be longer than: the reply's
-// margin, code.ReplyMargin — the answer's trip back, which a serving node
+// margin, gitlet.ReplyMargin — the answer's trip back, which a serving node
 // leaves between the end of every wait it makes and its asker's deadline
 // ([statelog.WithReplyMargin]). An attempt no longer than that leaves the node
 // nothing to wait or run a query in; what an attempt holds beyond it is what
 // the serving node's waits and its query share. See [Timing].
-const minReadAttempt = code.ReplyMargin
+const minReadAttempt = gitlet.ReplyMargin
 
 // minWriteAttempt is what every write attempt must be longer than: the serving
 // node's floor wait at its whole budget ([statelog.ReadBudget]), then a whole
-// code.CommitBudget and code.ReplyMargin, which a repository's committer must
+// gitlet.CommitBudget and gitlet.ReplyMargin, which a repository's committer must
 // still find before a push's deadline to start the push's batch at all.
 //
 // It is what a PUSH needs, and no bound on how long any write's serving node
@@ -248,21 +248,21 @@ const minReadAttempt = code.ReplyMargin
 // sized for (writeAttempt), and every one of those waits ends inside whatever
 // attempt the write is given, a reply's margin short of it. See [Timing].
 //
-// IT IS code.MinProposeAttempt, the domain's one sum of those three terms,
+// IT IS gitlet.MinProposeAttempt, the domain's one sum of those three terms,
 // because Gitlet holds an engine write to it too — refusing to upload
 // a write whose caller left less than it for the proposal after the upload —
 // and two sums would let the two disagree on what a proposal needs.
-const minWriteAttempt = code.MinProposeAttempt
+const minWriteAttempt = gitlet.MinProposeAttempt
 
 // minGitWriteAttempt is what every git write attempt must be longer than: the
 // proposal the write makes ([minWriteAttempt]) and the reply's margin. The Gitlet
 // node is served until a reply's margin before the attempt ends
-// (code.AnswerBy), and it uploads a write's bundle only while the proposal's
-// whole attempt is still left after the upload (internal/code/host's deadline
+// (gitlet.AnswerBy), and it uploads a write's bundle only while the proposal's
+// whole attempt is still left after the upload (internal/gitlet/host's deadline
 // rule) — so an attempt no longer than the two together leaves no write any
 // time to sync, build or upload in, and answers every one busy before its
 // upload. See [Timing].
-const minGitWriteAttempt = minWriteAttempt + code.ReplyMargin
+const minGitWriteAttempt = minWriteAttempt + gitlet.ReplyMargin
 
 // refusal is why a router may not be built with t, naming the first field it
 // refuses, or nil.
@@ -271,33 +271,33 @@ func (t Timing) refusal() error {
 	switch {
 	case t.ReadAttempt <= minReadAttempt:
 		return fmt.Errorf("estate: a router's Timing.ReadAttempt is %v, and it must be longer "+
-			"than %v — the answer's trip back (code.ReplyMargin), which a serving node leaves "+
+			"than %v — the answer's trip back (gitlet.ReplyMargin), which a serving node leaves "+
 			"between the end of its waits and its asker's deadline, so an attempt no longer "+
 			"leaves it no time to wait for anything or to run the read; %s", t.ReadAttempt,
 			minReadAttempt, production)
 	case t.WriteAttempt <= minWriteAttempt:
 		return fmt.Errorf("estate: a router's Timing.WriteAttempt is %v, and it must be longer "+
 			"than %v — the serving node's wait for the asker's floor (statelog.ReadBudget, %v), "+
-			"then a batch (code.CommitBudget, %v) and its answer (code.ReplyMargin, %v), which a "+
+			"then a batch (gitlet.CommitBudget, %v) and its answer (gitlet.ReplyMargin, %v), which a "+
 			"repository's committer must still have before a push's deadline or it answers the "+
 			"push busy, undecided; %s", t.WriteAttempt, minWriteAttempt, statelog.ReadBudget,
-			code.CommitBudget, code.ReplyMargin, production)
+			gitlet.CommitBudget, gitlet.ReplyMargin, production)
 	case t.AdmissionAsk <= 0:
 		return fmt.Errorf("estate: a router's Timing.AdmissionAsk is %v, and it must be a "+
 			"positive duration — a zero or negative budget is a deadline already past, which "+
 			"withholds every seat's claim; %s", t.AdmissionAsk, production)
 	case t.GitReadAttempt <= minReadAttempt:
 		return fmt.Errorf("estate: a router's Timing.GitReadAttempt is %v, and it must be longer "+
-			"than %v — the answer's trip back (code.ReplyMargin), which a Gitlet node leaves between "+
+			"than %v — the answer's trip back (gitlet.ReplyMargin), which a Gitlet node leaves between "+
 			"the end of its waits and its asker's deadline, so an attempt no longer leaves it no "+
 			"time to sync its copy or run the read; %s", t.GitReadAttempt, minReadAttempt, production)
 	case t.GitWriteAttempt <= minGitWriteAttempt:
 		return fmt.Errorf("estate: a router's Timing.GitWriteAttempt is %v, and it must be longer "+
 			"than %v — a git write's attempt must hold the proposal it makes: the Gitlet node uploads a "+
-			"write only while the proposal's own attempt (code.MinProposeAttempt, %v) is left after "+
-			"the upload, and answers its asker the reply's trip (code.ReplyMargin, %v) before the "+
+			"write only while the proposal's own attempt (gitlet.MinProposeAttempt, %v) is left after "+
+			"the upload, and answers its asker the reply's trip (gitlet.ReplyMargin, %v) before the "+
 			"attempt ends, so an attempt no longer answers every write busy before its upload; %s",
-			t.GitWriteAttempt, minGitWriteAttempt, minWriteAttempt, code.ReplyMargin, production)
+			t.GitWriteAttempt, minGitWriteAttempt, minWriteAttempt, gitlet.ReplyMargin, production)
 	}
 	return nil
 }
@@ -472,7 +472,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 // TEN SECONDS: every wait a serving node makes for a linearizable read at its
 // whole budget — the asker's floor ([statelog.ReadBudget]), the read's barrier
 // ([statelog.DefaultBarrierBudget]) and the barrier's position (ReadBudget
-// again) — and the reply's margin on top (code.ReplyMargin): 2 + 5 + 2 + 1.
+// again) — and the reply's margin on top (gitlet.ReplyMargin): 2 + 5 + 2 + 1.
 // So production cuts a healthy node's waits short only where its barrier
 // first waits out one already in flight, and the node then says so in time
 // ([statelog.WithReplyMargin]); a node that has said nothing at all in that
@@ -498,7 +498,7 @@ const ReadAttempt = 10 * time.Second
 //
 // The attempt's end travels with the request ([request.Deadline]), and a
 // repository's committer answers a push inside it: it starts a batch only
-// while a code.CommitBudget and code.ReplyMargin are left before it, so the
+// while a gitlet.CommitBudget and gitlet.ReplyMargin are left before it, so the
 // attempt, less the serving node's floor wait, has to hold more than both —
 // [minWriteAttempt], which [NewRouter] holds every timing to — and what is left
 // over, twenty-seven seconds, is how long a push may queue behind its

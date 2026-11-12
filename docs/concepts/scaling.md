@@ -148,8 +148,8 @@ same one — four vCPUs of a 2.1 GHz Xeon, or two or four E-cores of an Intel
 Core Ultra 7 265U — so read a figure beside those its own paragraph gives,
 never across paragraphs. Where a paragraph does not name the machine, the git
 or the object store behind a figure, the measured section it comes from does:
-those of the `internal/code`, `internal/code/host`, `internal/code/cache`,
-`internal/code/compact` and `internal/code/codecluster` package docs carry
+those of the `internal/gitlet`, `internal/gitlet/host`, `internal/gitlet/cache`,
+`internal/gitlet/compact` and `internal/gitlet/gitletcluster` package docs carry
 every arm and say what each ran on.
 
 **What a committer and the code log commit.** Measured on three data nodes of

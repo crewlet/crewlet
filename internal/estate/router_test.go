@@ -19,10 +19,10 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -179,13 +179,13 @@ type fakeNode struct {
 	// conversation, codeSeq the code log's last position it committed at, and
 	// codeErr what its code half refuses every operation with — a proposal and
 	// every read — where it is set (codeops_test.go).
-	proposals     []code.Proposal
-	compactions   []code.CompactionProposal
-	expunges      []code.ExpungeProposal
-	changes       []code.ChangeProposal
-	conversations []code.ConversationWrite
-	marks         []code.MarkWrite
-	checks        []code.ChecksRequest
+	proposals     []gitlet.Proposal
+	compactions   []gitlet.CompactionProposal
+	expunges      []gitlet.ExpungeProposal
+	changes       []gitlet.ChangeProposal
+	conversations []gitlet.ConversationWrite
+	marks         []gitlet.MarkWrite
+	checks        []gitlet.ChecksRequest
 	codeSeq       uint64
 	codeErr       error
 
@@ -678,7 +678,7 @@ func newFleet(t *testing.T, names ...string) *fleet {
 // and time moves only once every goroutine of the case is blocked.
 //
 // FOR THE CASES THAT HOLD A NODE'S ANSWER INSIDE ITS ASKER'S ATTEMPT BY THE
-// REPLY'S MARGIN: a serving node ends its waits code.ReplyMargin before the
+// REPLY'S MARGIN: a serving node ends its waits gitlet.ReplyMargin before the
 // deadline its router stamped, and the answer then has that margin to be
 // sealed, carried over the twin broker and opened. On the machine's clock
 // that is a claim about how late a loaded race-detector run wakes the
@@ -1167,7 +1167,7 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 // floor at all and says it is behind at once. Waiting out its floor budget
 // instead, it answered after its asker had stopped listening, which asked an
 // HONEST node last for suspectFor and told the placement it was gone. The
-// bound is spelled from code.ReplyMargin itself, never from the router's own
+// bound is spelled from gitlet.ReplyMargin itself, never from the router's own
 // constant, so a floor that drifted from the margin fails.
 //
 // IN A SYNCTEST BUBBLE ([inBubble]), for
@@ -1182,7 +1182,7 @@ func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 func testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 	f := newFleet(t, "data-a")
 	timing := Production()
-	timing.ReadAttempt = code.ReplyMargin
+	timing.ReadAttempt = gitlet.ReplyMargin
 	if _, err := NewRouter(RouterOptions{Self: "agent-2", Queue: f.start(t),
 		Placement: f.placement, Git: f.git, Session: NewSession(), Timing: timing,
 		Envelopes: fleetEnvelopes}); err == nil ||
@@ -1190,7 +1190,7 @@ func testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 		t.Fatalf("a router whose read attempt is the reply's margin (%v) answered %v, want a "+
 			"refusal naming Timing.ReadAttempt", timing.ReadAttempt, err)
 	}
-	timing.ReadAttempt = code.ReplyMargin + time.Nanosecond
+	timing.ReadAttempt = gitlet.ReplyMargin + time.Nanosecond
 	r := f.routerTimed(t, "agent-2", nil, timing)
 
 	r.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
@@ -1231,7 +1231,7 @@ func testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 //
 // IN A SYNCTEST BUBBLE ([inBubble]), so the refusal is held to the instant
 // the margin puts it at: a reply's margin before the attempt ends, the
-// attempt less code.ReplyMargin to the nanosecond. On the machine's clock the
+// attempt less gitlet.ReplyMargin to the nanosecond. On the machine's clock the
 // refusal had the margin's one second to be sealed, carried and opened, and
 // a loaded race-detector run spent it before the router heard (CI run
 // 41694160997): the router gave up on an honest node, as the case exists to
@@ -1244,7 +1244,7 @@ func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 		f := newFleet(t, "data-a")
 		timing := Production()
 		timing.ReadAttempt = minReadAttempt + time.Second
-		if timing.ReadAttempt >= statelog.ReadBudget+code.ReplyMargin {
+		if timing.ReadAttempt >= statelog.ReadBudget+gitlet.ReplyMargin {
 			t.Fatalf("the premise: a %v attempt must end before the read's own wait would",
 				timing.ReadAttempt)
 		}
@@ -1260,9 +1260,9 @@ func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 			t.Fatalf("a read of a node lagging its barrier, at a %v attempt, answered %v — want "+
 				"the node heard refusing it %q", timing.ReadAttempt, err, statelog.RefuseBehind)
 		}
-		if want := timing.ReadAttempt - code.ReplyMargin; waited != want {
+		if want := timing.ReadAttempt - gitlet.ReplyMargin; waited != want {
 			t.Errorf("the refusal came %v into the router's %v attempt, want %v: a reply's %v "+
-				"margin before it ends", waited, timing.ReadAttempt, want, code.ReplyMargin)
+				"margin before it ends", waited, timing.ReadAttempt, want, gitlet.ReplyMargin)
 		}
 		f.placement.mu.Lock()
 		told := slices.Clone(f.placement.unanswered)
@@ -1280,7 +1280,7 @@ func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 // without the attempt fails here rather than in a fleet.
 func TestProductionsReadAttemptHoldsALinearizableReadsWaits(t *testing.T) {
 	t.Parallel()
-	waits := 2*statelog.ReadBudget + statelog.DefaultBarrierBudget + code.ReplyMargin
+	waits := 2*statelog.ReadBudget + statelog.DefaultBarrierBudget + gitlet.ReplyMargin
 	if read := Production().ReadAttempt; read < waits {
 		t.Errorf("production's read attempt is %v, under the %v a linearizable read's waits "+
 			"take at their whole budgets with the reply's margin", read, waits)
@@ -3489,7 +3489,7 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 	// NO STICKY NODE: a code read answered by one node leaves it the node
 	// asked first for READS, and a push to a repository it is not the
 	// committer of still goes to that repository's committer.
-	if _, err := r.Code().Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos}); err != nil {
+	if _, err := r.Code().Read(t.Context(), gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: gitlet.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	sticky := r.order(opCodeRead.spec, holders)[0]
@@ -3599,7 +3599,7 @@ func TestACommitterThatRanNothingHandsTheRepositoryOn(t *testing.T) {
 	f := newFleet(t, holders...)
 	const repo = "repo-handed-on"
 	o := rendezvous.Order(repo, holders)
-	stopping := fmt.Errorf("%w: stopping", code.ErrNotServing)
+	stopping := fmt.Errorf("%w: stopping", gitlet.ErrNotServing)
 	f.nodes[o[0]].set(func(n *fakeNode) { n.codeErr = stopping })
 	got, err := f.client.Code().Propose(t.Context(), proposalTo(repo, "push-1"))
 	if err != nil || got.OpID != o[1] {
@@ -3648,7 +3648,7 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 	r := f.router(t, "agent-2", nil)
 	const repo = "repo-declined"
 	o := rendezvous.Order(repo, holders)
-	publishesNothing := fmt.Errorf("%w: this node publishes nothing", code.ErrNotServing)
+	publishesNothing := fmt.Errorf("%w: this node publishes nothing", gitlet.ErrNotServing)
 	f.nodes[o[0]].set(func(n *fakeNode) { n.codeErr = publishesNothing })
 
 	if got, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-1")); err != nil ||
@@ -3705,7 +3705,7 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 }
 
 // A CODE HALF THAT DECLINES A READ HANDS IT ON: a data node whose code half
-// refuses a read code.ErrNotServing — a Served holding no reader of the code
+// refuses a read gitlet.ErrNotServing — a Served holding no reader of the code
 // log, a half that is stopping — ran nothing, so every read Gitlet
 // makes moves on to the next data node and is answered there, rather than
 // failing the admission, the sync or the listing on the first node that
@@ -3718,7 +3718,7 @@ func TestACodeHalfThatDeclinesAReadHandsItOn(t *testing.T) {
 	// every node but the LAST declines, so each declining node is asked
 	// before the one that serves.
 	o := rendezvous.Order("agent-1", holders)
-	declined := fmt.Errorf("%w: this node holds no reader of the code log", code.ErrNotServing)
+	declined := fmt.Errorf("%w: this node holds no reader of the code log", gitlet.ErrNotServing)
 	covered := map[string]bool{}
 	for _, r := range codeReads(t.Context(), CodeSeam{}) {
 		covered[r.op] = true
@@ -3817,10 +3817,10 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 		opCodeResolve.spec,
 		opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
 	for _, spec := range ops {
-		if spec.domain != "code" || spec.floorStream != (code.Domain{}).Stream().Name ||
+		if spec.domain != "code" || spec.floorStream != (gitlet.Domain{}).Stream().Name ||
 			spec.copies != "code" {
 			t.Errorf("%s reads the %q copy with its floor on %q, want the code copy and %q",
-				spec.name, spec.domain, spec.floorStream, (code.Domain{}).Stream().Name)
+				spec.name, spec.domain, spec.floorStream, (gitlet.Domain{}).Stream().Name)
 		}
 	}
 	f := newFleet(t, "data-a")
@@ -3829,53 +3829,53 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	f.client.Observe(codeFloor)
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 12})
 	ctx, seam := t.Context(), f.client.Code()
-	if _, err := seam.Resolve(ctx, code.ResolveQuery{Name: "app"}); err != nil {
+	if _, err := seam.Resolve(ctx, gitlet.ResolveQuery{Name: "app"}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if _, err := seam.RepoState(ctx, code.StateQuery{RepoID: "repo-1"}); err != nil {
+	if _, err := seam.RepoState(ctx, gitlet.StateQuery{RepoID: "repo-1"}); err != nil {
 		t.Fatalf("repo state: %v", err)
 	}
-	if _, err := seam.PushOutcome(ctx, code.OutcomeQuery{RepoID: "repo-1", PushID: "p"}); err != nil {
+	if _, err := seam.PushOutcome(ctx, gitlet.OutcomeQuery{RepoID: "repo-1", PushID: "p"}); err != nil {
 		t.Fatalf("push outcome: %v", err)
 	}
-	if _, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos}); err != nil {
+	if _, err := seam.Read(ctx, gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: gitlet.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if _, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Refs: []string{"main"},
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}}); err != nil {
+	if _, err := seam.ResolveRef(ctx, gitlet.RefQuery{Repo: "app", Refs: []string{"main"},
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}}); err != nil {
 		t.Fatalf("resolve ref: %v", err)
 	}
 	if _, err := seam.Propose(ctx, proposalTo("repo-1", "push-floor")); err != nil {
 		t.Fatalf("propose: %v", err)
 	}
-	if _, err := seam.Compact(ctx, code.CompactionProposal{Compaction: code.Compaction{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.Compact(ctx, gitlet.CompactionProposal{Compaction: gitlet.Compaction{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
-	if _, err := seam.Expunge(ctx, code.ExpungeProposal{Request: &code.ExpungeRequest{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.Expunge(ctx, gitlet.ExpungeProposal{Request: &gitlet.ExpungeRequest{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("expunge: %v", err)
 	}
-	if _, err := seam.Import(ctx, code.ImportProposal{Done: &code.ImportDone{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.Import(ctx, gitlet.ImportProposal{Done: &gitlet.ImportDone{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if _, err := seam.MirrorSync(ctx, code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.MirrorSync(ctx, gitlet.MirrorSyncProposal{Sync: gitlet.MirrorSync{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("mirror sync: %v", err)
 	}
-	if _, err := seam.Change(ctx, code.ChangeProposal{Close: &code.ChangeClose{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.Change(ctx, gitlet.ChangeProposal{Close: &gitlet.ChangeClose{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("change: %v", err)
 	}
-	if _, err := seam.Queue(ctx, code.QueueProposal{Dequeue: &code.Dequeue{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.Queue(ctx, gitlet.QueueProposal{Dequeue: &gitlet.Dequeue{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("queue: %v", err)
 	}
-	if _, err := seam.Merge(ctx, code.MergeProposal{Merge: code.Merge{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.Merge(ctx, gitlet.MergeProposal{Merge: gitlet.Merge{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if _, err := seam.Converse(ctx, code.ConversationWrite{Comment: &code.Comment{RepoID: "repo-1"}}); err != nil {
+	if _, err := seam.Converse(ctx, gitlet.ConversationWrite{Comment: &gitlet.Comment{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("converse: %v", err)
 	}
-	if _, err := seam.Mark(ctx, code.MarkWrite{Handle: "founder"}); err != nil {
+	if _, err := seam.Mark(ctx, gitlet.MarkWrite{Handle: "founder"}); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
-	if _, err := seam.Checks(ctx, code.ChecksRequest{Started: &code.CheckStarted{CheckKey: code.CheckKey{
+	if _, err := seam.Checks(ctx, gitlet.ChecksRequest{Started: &gitlet.CheckStarted{CheckKey: gitlet.CheckKey{
 		RepoID: "repo-1"}}}); err != nil {
 		t.Fatalf("checks: %v", err)
 	}

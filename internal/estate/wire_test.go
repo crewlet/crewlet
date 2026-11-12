@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -340,7 +340,7 @@ var floorless = map[string]string{
 // CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, Gitlet's
 // CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG, chat's
 // CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG, the access log's
-// CREWLET_ACCESS_LOG or the artifacts
+// CREWLET_ACCESS_LOG, the atlas log's CREWLET_ATLAS_LOG or the artifacts
 // estate's and its datastore's, each named as its domain declares it. One that
 // waited on none would carry no floor at all, and one that named another
 // domain's would wait on an applier it does not depend on ([ready]).
@@ -356,6 +356,7 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		chatDomain:         "CREWLET_CHAT_LOG",
 		executorDomain:     "CREWLET_EXECUTOR_LOG",
 		accessDomain:       "CREWLET_ACCESS_LOG",
+		atlasDomain:        "CREWLET_ATLAS_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
@@ -405,7 +406,8 @@ var seatCopyOps = map[string]string{
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
-		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain, accessDomain}
+		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain, accessDomain,
+		atlasDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]
@@ -560,7 +562,7 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 		},
 		"a Gitlet node that cannot answer": {
 			value: reply{Node: "git-a", Request: "r-5", Unserved: unservedBehind, Detail: "syncing",
-				Unready: code.UnreadySyncing},
+				Unready: gitlet.UnreadySyncing},
 			want: `{"node":"git-a","request":"r-5","unserved":"behind","detail":"syncing","unready":"syncing"}`,
 		},
 	} {
