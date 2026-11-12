@@ -8,9 +8,10 @@
 # Prints the directory holding that build's `git` (its bin/) and nothing else on stdout, building it first unless
 # an intact build is already there. A refusal, a build's progress and a build's failure go to stderr. Exits 0 with
 # the directory printed, 1 when a download or a build failed (a tarball whose SHA-256 the machine's hash could not
-# compute among them), 2 when it was asked something it refuses — an unknown pin, a malformed pin file, a tool the
-# build needs and the machine lacks or a hash that cannot compute the recipe's own SHA-256 — before anything is
-# downloaded.
+# compute among them), 2 when it was asked something it refuses — an unknown pin, a pin file missing beside it or
+# malformed, a path that is not absolute (the build cache, GIT_PIN_PREFIX or DESTDIR), a GIT_PIN_TARGET_ARCH that is
+# neither amd64 nor arm64 or, without GIT_PIN_PREFIX, not this machine's, a tool the build needs and the machine
+# lacks or a hash that cannot compute the recipe's own SHA-256 — before anything is downloaded.
 #
 # Environment (each optional):
 #   CREWLET_GIT_CACHE    where builds are kept; ${XDG_CACHE_HOME:-$HOME/.cache}/crewlet/git
