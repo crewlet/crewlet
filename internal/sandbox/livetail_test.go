@@ -1122,10 +1122,10 @@ func eventually(t *testing.T, done func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for !done() {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatal(msg)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

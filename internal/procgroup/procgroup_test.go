@@ -123,11 +123,11 @@ func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
 func waitGone(pid int) bool {
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline: its caller fails the case on the false it returns
 		if !alive(pid) {
 			return true
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 	return false
 }

@@ -658,8 +658,9 @@ func TestABoxLeftToItsHostIsReclaimedWhenTheHostIsTold(t *testing.T) {
 	w := rig.startedWaiter(DrivesLocal, "node-a")
 	w.Nudge(Nudge{TurnID: "t-left", LaunchID: run.LaunchID, Why: NudgeReleased})
 	deadline := time.Now().Add(10 * time.Second)
+	//fixedwait:measure a poll's own deadline: the kill is asserted after it, and a box left to the next pass waits the hour
 	for time.Now().Before(deadline) && !slices.Contains(rig.local.KilledIDs(), run.SandboxID) {
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	if !slices.Contains(rig.local.KilledIDs(), run.SandboxID) {
 		t.Error("the host was told and did not reclaim the box no run needs any more")

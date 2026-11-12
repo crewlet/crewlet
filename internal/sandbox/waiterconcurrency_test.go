@@ -102,7 +102,7 @@ func TestABoxsPollIsBounded(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the tick did not end at its box's bound")
 	}
 	if !bounded.Load() {
@@ -157,10 +157,10 @@ func TestABoxIsPolledByOnePollAtATime(t *testing.T) {
 		if polled == 1 && !rig.waiter.isBusy(other.TurnID) {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the other box's first poll did not end (polled %d times)", polled)
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
 	if _, err := rig.waiter.Tick(t.Context()); err != nil {
 		t.Fatalf("the second tick: %v", err)
@@ -260,7 +260,7 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	}{{"began", firstHeld}, {"ended", firstEnded}} {
 		select {
 		case <-step.ch:
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			t.Fatalf("the held box's first poll never %s", step.name)
 		}
 	}
@@ -375,7 +375,7 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 	defer waiter.Stop()
 	select {
 	case <-reaching:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("no poll reached the box in 10 s, so there was nothing for a lost duty to stop")
 	}
 	select {
@@ -383,7 +383,7 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("the poll ended with %v; want it stopped when the duty went to a peer", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(5 * time.Second): //fixedwait:liveness
 		t.Fatal("a poll the lost duty authorised was still running 5 s later")
 	}
 	waiter.Stop()

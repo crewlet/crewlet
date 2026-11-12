@@ -2023,11 +2023,11 @@ func TestTheRuntimeGetsWhatItsRuntimeEnvDeclares(t *testing.T) {
 func waitFor(t *testing.T, limit time.Duration, done func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 		if done() {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	t.Fatal(msg)
 }

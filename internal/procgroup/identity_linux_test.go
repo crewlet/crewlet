@@ -146,10 +146,10 @@ func TestAGroupKilledWholeLeavesItsLeaderNoneOfItsChildrensTime(t *testing.T) {
 	})
 	var read time.Duration
 	for deadline := time.Now().Add(30 * time.Second); read < 200*time.Millisecond; {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the group's loop had spent %v after 30 s", read)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 		var err error
 		if read, err = GroupCPU(cmd.Process.Pid); err != nil {
 			t.Fatalf("GroupCPU: %v", err)
