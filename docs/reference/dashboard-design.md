@@ -5073,7 +5073,17 @@ turn never heard, waiting on the action until its expiry. A gate
 (`app/assistant/draftGate.test.ts`) fails for a module with draft or form state
 (a leave guard, an editing status, a setup wizard, a rich, inline or list
 editor, a form field) that neither declares a draft nor is listed as part of a
-screen that does, or as a modal or signed-out form with its reason. A page
+screen that does, or as a modal or signed-out form with its reason. A modal
+whose change outlives it is part of its page, so a modal listing is held to the
+draft's types: a screen holds what it declares in branded state
+(`useDraftState`, `useDraftReducer`, or a store that extends `DraftStore`), its
+spec takes only a write made from that state, and through the TypeScript
+checker the gate refuses a module listed as a modal that holds any of a page's
+draft (from context or a prop), or that a page hands its draft to, directly or
+through a closure or local function that reaches it. The checker is read
+through TypeScript's unstable API (`test/checker.ts`), at the exact version
+`package.json` pins, so a TypeScript bump that changes it fails this gate in
+its own pull request. A page
 with several boxes open at once declares ONE draft whose fields are every box
 open on it (`app/assistant/boxes.ts`), each read from its box and set through
 the box's own setter, and the draft's step names the box written in last: the

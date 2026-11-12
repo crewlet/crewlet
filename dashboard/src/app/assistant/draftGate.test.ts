@@ -25,9 +25,54 @@
  * one fails here, so the lists cannot rot into permission. Read as syntax
  * trees (`test/source.ts`), never grepped: a comment naming a mark is not
  * one, and a call broken over lines still is.
+ *
+ * A MODAL WHOSE CHANGE OUTLIVES IT IS PART OF ITS PAGE. A modal that keeps
+ * only its own transient state holds nothing anyone could ask about, as the
+ * drawer is inert while it holds the page; but one whose change is written
+ * into the page's draft (a dialog whose change stays in the tab until its
+ * Review, a sheet whose edits stay on the board) changes what the page
+ * declares, and listing it as a modal hid it from the assistant. So a modal
+ * listing is held to the draft's TYPES ([refusedModals]): a screen holds
+ * what it declares in branded state (`draft.ts`), and through the TypeScript
+ * checker (`test/checker.ts`) a module listed modal is refused once it holds
+ * a branded value, from context or a prop, or a page hands it one, or a
+ * closure or a local function that reaches one. A name could not say it:
+ * the setter of a form's errors is spelled like the setter of its values,
+ * and a dispatch taken from context is spelled `dispatch` whatever it
+ * writes.
  */
 
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import {
+  SymbolFlags,
+  TypeFlags,
+  type Symbol as TsSymbol,
+  type Type,
+} from "typescript/unstable/sync";
+import {
+  isArrowFunction,
+  isAsExpression,
+  isCallExpression,
+  isClassDeclaration,
+  isFunctionDeclaration,
+  isFunctionExpression,
+  isIdentifier,
+  isInterfaceDeclaration,
+  isJsxExpression,
+  isJsxNamespacedName,
+  isJsxOpeningLikeElement,
+  isJsxSpreadAttribute,
+  isPropertyAccessExpression,
+  isTypeAssertion,
+  isVariableDeclaration,
+  type InterfaceDeclaration,
+  type JsxAttributeLike,
+  type JsxOpeningLikeElement,
+  type JsxTagNameExpression,
+  type Node as TsNode,
+  type SourceFile,
+} from "typescript/unstable/ast";
+import { nodesOf, placeOf, typedFixture, typedTree, type Typed } from "~/test/checker.ts";
 import { modules, parse, stringValue, walk, type Module, type Node } from "~/test/source.ts";
 
 /** The hooks whose call says a module guards unsaved work. */
@@ -379,5 +424,579 @@ describe("a draft field's label", () => {
     expect(found, "a draft field labelled with a path: give it the words the screen shows").toEqual(
       [],
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A modal whose change outlives it is part of its page.
+
+/** The module that mints a draft's branded state, and the one place a cast to it is made. */
+const DRAFT_MODULE = "app/assistant/draft.ts";
+
+/** The kinds of type that are never a draft's branded state, answered without asking the checker. */
+const NEVER_HELD =
+  TypeFlags.Any |
+  TypeFlags.Unknown |
+  TypeFlags.Never |
+  TypeFlags.StringLike |
+  TypeFlags.NumberLike |
+  TypeFlags.BooleanLike |
+  TypeFlags.BigIntLike |
+  TypeFlags.Void |
+  TypeFlags.Undefined |
+  TypeFlags.Null |
+  TypeFlags.ESSymbolLike |
+  TypeFlags.EnumLike;
+
+/** Where a tag's component is declared when it comes from a package (the design system, React). */
+const LIBRARY = "a package";
+
+/** Where a tag's component is declared when the checker cannot place it. */
+const UNPLACED = "a component the checker cannot place";
+
+/** A component rendered in a module, and where it is declared. */
+interface Site {
+  element: JsxOpeningLikeElement;
+  where: string;
+}
+
+/** A program read for a draft's branded state. */
+interface Branded {
+  typed: Typed;
+  /** Whether a type is a draft's branded state: assignable to the brand `draft.ts` declares. */
+  held(type: Type | undefined): boolean;
+  /** Each module's render sites, placed once for every listing read. */
+  sites: Map<string, Site[]>;
+  places: Map<number, string>;
+}
+
+/** Why a module listed modal is refused. */
+interface Refusal {
+  /** The module listed modal, or [UNPLACED]. */
+  module: string;
+  /** Where the draft reaches it: a line of the module, or of the page rendering it. */
+  at: string;
+  /** What reaches it. */
+  says: string;
+}
+
+/**
+ * The brand as the checker reads it: a type is a draft's own when it is
+ * assignable to `DraftHeld`, which every branded value carries and nothing
+ * else can.
+ */
+function branded(typed: Typed): Branded {
+  const { program, checker } = typed;
+  const declared = program
+    .getSourceFile(typed.src + DRAFT_MODULE)
+    ?.statements.find(
+      (s): s is InterfaceDeclaration => isInterfaceDeclaration(s) && s.name.text === "DraftHeld",
+    );
+  const symbol = declared && checker.getSymbolAtLocation(declared.name);
+  if (!symbol) throw new Error(`${DRAFT_MODULE} declares no DraftHeld, the brand this gate reads`);
+  const brand = checker.getDeclaredTypeOfSymbol(symbol);
+  const assignable = (type: Type) =>
+    !(type.flags & NEVER_HELD) && checker.isTypeAssignableTo(type, brand);
+  const known = new Map<number, boolean>();
+  return {
+    typed,
+    held(type) {
+      if (!type || type.flags & NEVER_HELD) return false;
+      let held = known.get(type.id);
+      if (held === undefined) {
+        held = assignable(type);
+        // AN OPTIONAL ONE IS STILL THE DRAFT'S: `DraftSetter<D> | undefined`.
+        if (!held && type.flags & TypeFlags.Union) {
+          const present = checker.getNonNullableType(type);
+          held = present !== undefined && present.id !== type.id && assignable(present);
+        }
+        known.set(type.id, held);
+      }
+      return held;
+    },
+    sites: new Map(),
+    places: new Map(),
+  };
+}
+
+/** The program's modules that ship, by their path under `src/`: no suite, benchmark or test kit. */
+function shipped(typed: Typed): string[] {
+  return typed.program
+    .getSourceFileNames()
+    .filter((f) => f.startsWith(typed.src) && /\.tsx?$/.test(f) && !f.endsWith(".d.ts"))
+    .map((f) => f.slice(typed.src.length))
+    .filter((path) => !path.startsWith("test/") && !/\.(test|bench)\./.test(path));
+}
+
+/** A module the program holds, or why the gate cannot read it. */
+function sourceOf(typed: Typed, path: string): SourceFile {
+  const file = typed.program.getSourceFile(typed.src + path);
+  if (!file) throw new Error(`${path} is not in the program tsconfig.json builds`);
+  return file;
+}
+
+/**
+ * Every cast to a draft's branded state outside `draft.ts`: a brand minted
+ * there would call a value a draft's own without the state that proves it.
+ */
+function forgedBrands(b: Branded, paths: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const path of paths) {
+    if (path === DRAFT_MODULE) continue;
+    const file = sourceOf(b.typed, path);
+    const casts = nodesOf(file).filter((n) => isAsExpression(n) || isTypeAssertion(n));
+    if (casts.length === 0) continue;
+    const types = b.typed.checker.getTypeAtLocation(casts);
+    casts.forEach((cast, i) => {
+      if (b.held(types[i])) out.push(`${placeOf(b.typed, file, cast)} ${cast.getText(file)}`);
+    });
+  }
+  return out;
+}
+
+/**
+ * Every name in a module typed by a draft's branded state: what it holds of
+ * a page's draft, whether it took it from context, from a prop, or minted it.
+ */
+function heldIn(b: Branded, path: string): Refusal[] {
+  const file = sourceOf(b.typed, path);
+  const names = nodesOf(file).filter(isIdentifier);
+  const types = b.typed.checker.getTypeAtLocation(names);
+  return names.flatMap((name, i) =>
+    b.held(types[i])
+      ? [{ module: path, at: placeOf(b.typed, file, name), says: `holds ${name.text}` }]
+      : [],
+  );
+}
+
+/** A tag the browser draws itself (`div`), or a namespaced one: never a component. */
+function intrinsic(tag: JsxTagNameExpression): boolean {
+  return (isIdentifier(tag) && /^[a-z]/.test(tag.text)) || isJsxNamespacedName(tag);
+}
+
+/**
+ * A declaration that is a component itself: a function, a class, or a const
+ * holding one, bare or through `memo` or `forwardRef`. Never `lazy`, whose
+ * component is the module it imports, not the one that calls it.
+ */
+function declaresComponent(node: TsNode): boolean {
+  if (isFunctionDeclaration(node) || isClassDeclaration(node)) return true;
+  if (!isVariableDeclaration(node) || !node.initializer) return false;
+  const init = node.initializer;
+  if (isArrowFunction(init) || isFunctionExpression(init)) return true;
+  if (!isCallExpression(init)) return false;
+  const callee = init.expression;
+  const name = isIdentifier(callee)
+    ? callee.text
+    : isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : "";
+  return name === "memo" || name === "forwardRef";
+}
+
+/** Where the component a tag's name resolves to is declared: its module, [LIBRARY] or [UNPLACED]. */
+function placed(b: Branded, symbol: TsSymbol | undefined): string {
+  if (!symbol) return UNPLACED;
+  const known = b.places.get(symbol.id);
+  if (known !== undefined) return known;
+  const { checker, src } = b.typed;
+  const target = symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  const at = target.valueDeclaration ?? target.declarations[0];
+  let where = UNPLACED;
+  if (at?.path.includes("/node_modules/")) where = LIBRARY;
+  else if (at?.path.startsWith(src)) {
+    const node = at.resolve();
+    if (node && declaresComponent(node)) where = at.path.slice(src.length);
+  }
+  b.places.set(symbol.id, where);
+  return where;
+}
+
+/** Every component a module renders, placed by the checker. */
+function sitesIn(b: Branded, path: string): Site[] {
+  const known = b.sites.get(path);
+  if (known) return known;
+  const file = sourceOf(b.typed, path);
+  const elements = nodesOf(file).filter(
+    (n): n is JsxOpeningLikeElement => isJsxOpeningLikeElement(n) && !intrinsic(n.tagName),
+  );
+  const symbols =
+    elements.length === 0
+      ? []
+      : b.typed.checker.getSymbolAtLocation(elements.map((e) => e.tagName));
+  const sites = elements.map((element, i) => ({ element, where: placed(b, symbols[i]) }));
+  b.sites.set(path, sites);
+  return sites;
+}
+
+/** The body a local declaration runs: a declared function, or a const holding one or made by a call (a hook's callback). */
+function runs(node: TsNode | undefined): TsNode | null {
+  if (!node) return null;
+  if (isFunctionDeclaration(node)) return node.body ?? null;
+  if (isVariableDeclaration(node) && node.initializer) {
+    const init = node.initializer;
+    if (isArrowFunction(init) || isFunctionExpression(init) || isCallExpression(init)) return init;
+  }
+  return null;
+}
+
+/**
+ * How an expression reaches a draft's branded state: a name in it typed by
+ * one, or a local function, closure or callback it names that does, followed
+ * through its own module's declarations; null where it reaches none.
+ */
+function reaches(b: Branded, file: SourceFile, expr: TsNode, seen: Set<number>): string | null {
+  const names = nodesOf(expr).filter(isIdentifier);
+  if (names.length === 0) return null;
+  const { checker } = b.typed;
+  const types = checker.getTypeAtLocation(names);
+  const direct = names.findIndex((_, i) => b.held(types[i]));
+  if (direct !== -1) return names[direct]!.text;
+  const symbols = checker.getSymbolAtLocation(names);
+  for (let i = 0; i < names.length; i++) {
+    const symbol = symbols[i];
+    if (!symbol || seen.has(symbol.id)) continue;
+    seen.add(symbol.id);
+    const at = symbol.valueDeclaration ?? symbol.declarations[0];
+    if (!at || at.path !== file.path) continue;
+    const body = runs(at.resolve());
+    const via = body && reaches(b, file, body, seen);
+    if (via) return `${names[i]!.text} > ${via}`;
+  }
+  return null;
+}
+
+/**
+ * A branded member of an object handed whole, one property down: a page's
+ * API, its dispatch with it. Deeper is the page's data, which carries no
+ * write of its own.
+ */
+function heldMember(b: Branded, expr: TsNode): string | null {
+  const { checker } = b.typed;
+  const type = checker.getTypeAtLocation(expr);
+  if (!type || !(type.flags & TypeFlags.Object)) return null;
+  const members = checker.getPropertiesOfType(type);
+  if (members.length === 0) return null;
+  const types = checker.getTypeOfSymbol(members);
+  const hit = members.findIndex((_, i) => b.held(types[i]));
+  return hit === -1 ? null : `.${members[hit]!.name}`;
+}
+
+/** The expression an attribute hands over: a spread's, or the braces' of a valued one. */
+function handed(attribute: JsxAttributeLike): TsNode | undefined {
+  if (isJsxSpreadAttribute(attribute)) return attribute.expression;
+  const value = attribute.initializer;
+  return value && isJsxExpression(value) ? value.expression : undefined;
+}
+
+/**
+ * Every render site in `paths` that hands a draft's branded state to a
+ * module in `modal`, or to a component the checker cannot place: an
+ * attribute whose value is one, or carries one a property down, or names a
+ * closure, a local function or a callback that reaches one.
+ */
+function handedOver(b: Branded, paths: readonly string[], modal: ReadonlySet<string>): Refusal[] {
+  const out: Refusal[] = [];
+  for (const path of paths) {
+    if (!path.endsWith(".tsx")) continue;
+    for (const { element, where } of sitesIn(b, path)) {
+      if (where !== UNPLACED && !modal.has(where)) continue;
+      if (where === path) continue;
+      const file = sourceOf(b.typed, path);
+      for (const attribute of element.attributes.properties) {
+        const value = handed(attribute);
+        if (!value) continue;
+        const via = reaches(b, file, value, new Set()) ?? heldMember(b, value);
+        if (!via) continue;
+        const name = isJsxSpreadAttribute(attribute) ? "{...}" : attribute.name.getText(file);
+        out.push({
+          module: where,
+          at: placeOf(b.typed, file, element),
+          says: `<${element.tagName.getText(file)}> ${name} via ${via}`,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Every refusal of a listing's modals over `paths`: what each holds of a
+ * page's draft, what a page hands each of it, and what is handed to a
+ * component the checker cannot place, which no listing can answer for.
+ */
+function refusedModals(
+  b: Branded,
+  listing: Readonly<Record<string, string>>,
+  paths: readonly string[],
+): Refusal[] {
+  const modal = new Set(
+    Object.entries(listing)
+      .filter(([, why]) => why.startsWith("modal: "))
+      .map(([path]) => path),
+  );
+  return [...[...modal].flatMap((path) => heldIn(b, path)), ...handedOver(b, paths, modal)];
+}
+
+/** Refusals as their module, the file the draft reaches it from, and what reaches it: lines move. */
+const said = (refusals: readonly Refusal[]) =>
+  refusals.map((r) => `${r.module} <- ${r.at.replace(/:\d+$/, "")} ${r.says}`);
+
+describe("a module listed modal", () => {
+  let tree: Typed | undefined;
+  let brand: Branded;
+  let paths: string[];
+  beforeAll(() => {
+    tree = typedTree();
+    brand = branded(tree);
+    paths = shipped(tree);
+  });
+  afterAll(() => tree?.close());
+
+  /** A listing's refusals with `path` listed modal too. */
+  const listed = (path: string) =>
+    said(refusedModals(brand, { ...NOT_A_DRAFT, [path]: "modal: listed by this case" }, paths));
+
+  test("holds none of a page's draft, and no page hands it any", () => {
+    expect(
+      said(refusedModals(brand, NOT_A_DRAFT, paths)),
+      "a module listed modal that holds a page's draft, or is handed it: list it in PART_OF as " +
+        "a part of the page its change outlives it in, or keep the draft out of it",
+    ).toEqual([]);
+  });
+
+  // THE AGENTS TAB'S DIALOGS write every change into the tab's draft, which
+  // outlives them until the tab's Review: listed modal, the hand-off at each
+  // render site is read through the tab's own closures to its setter.
+  test("is refused once a page hands it its draft: the Agents tab's dialogs", () => {
+    const dialogs = "routes/settings/integrations/access/Dialogs.tsx";
+    const from = `${dialogs} <- routes/settings/integrations/access/AgentsAccess.tsx`;
+    const refused = listed(dialogs);
+    for (const site of [
+      "<PermissionsDialog> onChange",
+      "<ScopeDialog> onChange",
+      "<ReviewDialog> onSaved",
+    ]) {
+      expect(
+        refused.some((r) => r.startsWith(`${from} ${site} via `)),
+        site,
+      ).toBe(true);
+    }
+  });
+
+  // HOME'S WIDGET SHEET writes each setting into the board being arranged as
+  // it is made: its Cancel takes back what the sheet wrote, through Home's own.
+  test("is refused once a page hands it its draft: Home's widget sheet", () => {
+    const sheet = "routes/home/board/settings.tsx";
+    const from = `${sheet} <- routes/home/Home.tsx`;
+    const refused = listed(sheet);
+    for (const site of ["<WidgetSettings> onChange", "<WidgetSettings> onCancel"]) {
+      expect(
+        refused.some((r) => r.startsWith(`${from} ${site} via `)),
+        site,
+      ).toBe(true);
+    }
+  });
+
+  // THE BUILDER'S SIDE SHEET is handed nothing: it records through the
+  // builder's dispatch, which it takes from context.
+  test("is refused once it writes the draft it takes from context: the org builder's side sheet", () => {
+    const editor = "routes/org/builder/NodeEditor.tsx";
+    expect(listed(editor)).toContain(`${editor} <- ${editor} holds dispatch`);
+  });
+
+  test("is never a module a cast hands a draft's brand", () => {
+    expect(
+      forgedBrands(brand, paths),
+      `a cast to a draft's branded state outside ${DRAFT_MODULE}: hold the draft in ` +
+        "useDraftState, useDraftReducer or a DraftStore and make its write from that",
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The checker's reading on modules held only in memory, so each rule has a
+ * case that fails without it: a page with a draft and a non-draft state of
+ * the draft's own type, a modal that keeps its own, a field that writes a
+ * draft taken from context, an object handed whole, a component nothing
+ * names, and a forged brand.
+ */
+const FIXTURE: Readonly<Record<string, string>> = {
+  "routes/probe/Page.tsx": `
+import { useCallback, useState } from "react";
+import { useDraftState } from "~/app/assistant/draft.ts";
+import { Sheet } from "./Sheet.tsx";
+
+export function Page() {
+  const [values, setValues] = useDraftState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const forget = () => setErrors({});
+  const keep = useCallback((name: string) => setValues((was) => ({ ...was, name })), [setValues]);
+  return (
+    <>
+      <Sheet title="Errors" onDone={forget} />
+      <Sheet title="Values" onDone={keep} />
+      <output>{Object.keys(values).length + Object.keys(errors).length}</output>
+    </>
+  );
+}
+`,
+  "routes/probe/Sheet.tsx": `
+import { useState } from "react";
+
+export function Sheet({ title, onDone }: { title: string; onDone: (name: string) => void }) {
+  const [name, setName] = useState("");
+  return (
+    <label>
+      {title}
+      <input value={name} onChange={(event) => setName(event.target.value)} onBlur={() => onDone(name)} />
+    </label>
+  );
+}
+`,
+  "routes/probe/Board.tsx": `
+import { createContext, useContext } from "react";
+import type { DraftDispatch } from "~/app/assistant/draft.ts";
+
+export const BoardContext = createContext<{ dispatch: DraftDispatch<string> } | null>(null);
+export const useBoard = () => useContext(BoardContext);
+`,
+  "routes/probe/Field.tsx": `
+import { useBoard } from "./Board.tsx";
+
+export function Field() {
+  const board = useBoard();
+  return <button type="button" onClick={() => board?.dispatch("add")}>Add</button>;
+}
+`,
+  "routes/probe/Picked.tsx": `
+import { useDraftState } from "~/app/assistant/draft.ts";
+import { Sheet } from "./Sheet.tsx";
+
+const SHEETS = [Sheet];
+
+export function Picked() {
+  const [, setValue] = useDraftState("");
+  const Shown = SHEETS[0]!;
+  return <Shown title="Picked" onDone={setValue} />;
+}
+`,
+  "routes/probe/Handed.tsx": `
+import { useDraftReducer } from "~/app/assistant/draft.ts";
+import { Panel } from "./Panel.tsx";
+
+export function Handed() {
+  const [count, dispatch] = useDraftReducer((n: number, by: number) => n + by, 0);
+  const api = { count, dispatch };
+  return <Panel api={api} />;
+}
+`,
+  "routes/probe/Panel.tsx": `
+export function Panel({ api }: { api: { count: number } }) {
+  return <output>{api.count}</output>;
+}
+`,
+  "routes/probe/Forged.tsx": `
+import type { DraftWrite } from "~/app/assistant/draft.ts";
+
+export const forged = ((next: string) => void next) as DraftWrite<string>;
+`,
+};
+
+describe("the checker's reading of a draft", () => {
+  let fixture: Typed | undefined;
+  let brand: Branded;
+  beforeAll(() => {
+    fixture = typedFixture(FIXTURE);
+    brand = branded(fixture);
+  });
+  afterAll(() => fixture?.close());
+
+  const sheet = { "routes/probe/Sheet.tsx": "modal: a name, in its sheet" };
+
+  // A STATE OF THE DRAFT'S OWN TYPE IS NOT THE DRAFT: the errors' setter is
+  // spelled as the values' is, and only the values' is branded.
+  test("passes a modal keeping its own state, and refuses one handed a closure over the draft", () => {
+    expect(said(refusedModals(brand, sheet, ["routes/probe/Page.tsx"]))).toEqual([
+      "routes/probe/Sheet.tsx <- routes/probe/Page.tsx <Sheet> onDone via keep > setValues",
+    ]);
+  });
+
+  test("refuses a modal that holds the draft it takes from context", () => {
+    const field = { "routes/probe/Field.tsx": "modal: an addition, in its dialog" };
+    expect(said(refusedModals(brand, field, ["routes/probe/Field.tsx"]))).toEqual([
+      "routes/probe/Field.tsx <- routes/probe/Field.tsx holds dispatch",
+    ]);
+  });
+
+  // AN OBJECT HANDED WHOLE carries what it holds: a page's API, its dispatch with it.
+  test("refuses a modal handed an object that carries the draft's dispatch", () => {
+    const panel = { "routes/probe/Panel.tsx": "modal: a count, in its panel" };
+    expect(said(refusedModals(brand, panel, ["routes/probe/Handed.tsx"]))).toEqual([
+      "routes/probe/Panel.tsx <- routes/probe/Handed.tsx <Panel> api via .dispatch",
+    ]);
+  });
+
+  test("refuses a draft handed to a component it cannot place, whatever is listed", () => {
+    expect(said(refusedModals(brand, {}, ["routes/probe/Picked.tsx"]))).toEqual([
+      `${UNPLACED} <- routes/probe/Picked.tsx <Shown> onDone via setValue`,
+    ]);
+  });
+
+  test("refuses a cast to a draft's brand", () => {
+    expect(forgedBrands(brand, ["routes/probe/Forged.tsx", "routes/probe/Page.tsx"])).toEqual([
+      expect.stringMatching(
+        /^routes\/probe\/Forged\.tsx:4 \(\(next: string\) => void next\) as DraftWrite<string>$/,
+      ),
+    ]);
+  });
+});
+
+/**
+ * A SAVED DRAFT IS THE ONLY ONE HELD NOWHERE ON THE PAGE. `readOnlySaved()`
+ * proves nothing about the page's state, so a spec says it only of a draft
+ * saved at the engine (`kind: "server"`): said of any other, a draft the page
+ * holds would be declared as one it does not, and no modal it hands it to
+ * could be found. Mutation: say it of a client draft.
+ */
+function savedClaims(module: Module): string[] {
+  const all = new Set<Node>();
+  const kept = new Set<Node>();
+  walk(parse(module.text, module.lang === "tsx" ? "tsx" : "ts"), (node) => {
+    if (node.type === "CallExpression") {
+      const callee = node.callee as Node;
+      if (callee.type === "Identifier" && callee.name === "readOnlySaved") all.add(node);
+    }
+    if (node.type !== "ObjectExpression") return;
+    const props = new Map<string, Node>();
+    for (const p of node.properties as Node[]) {
+      if (p.type !== "Property") continue;
+      const key = p.key as Node;
+      const name = key.type === "Identifier" ? String(key.name) : stringValue(key);
+      if (name) props.set(name, p.value as Node);
+    }
+    const write = props.get("write");
+    const kind = props.get("kind");
+    if (write && kind && stringValue(kind) === "server") kept.add(write);
+  });
+  return [...all].filter((call) => !kept.has(call)).map(() => module.path);
+}
+
+describe("a saved draft", () => {
+  test("is said of a server draft alone", () => {
+    const probe = (spec: string): Module => ({
+      path: "routes/probe/Saved.ts",
+      lang: "ts",
+      text: `const spec = ${spec};`,
+    });
+    expect(savedClaims(probe('{ kind: "server", write: readOnlySaved() }'))).toEqual([]);
+    expect(savedClaims(probe('{ kind: "client", write: readOnlySaved() }'))).toEqual([
+      "routes/probe/Saved.ts",
+    ]);
+    expect(savedClaims(probe("{ write: readOnlySaved() }"))).toEqual(["routes/probe/Saved.ts"]);
+    const found = modules()
+      .filter((m) => m.lang === "tsx" || m.lang === "ts")
+      .flatMap(savedClaims);
+    expect(found, "readOnlySaved() said of a draft not saved at the engine").toEqual([]);
   });
 });
