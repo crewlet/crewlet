@@ -117,7 +117,7 @@ func (f *pickupFleet) WorkedAt(_ context.Context, _ string, keys []string) map[s
 func (f *pickupFleet) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if until, held := f.claims[key]; held && now.Before(until) {
+	if until, held := f.claims[key]; held && now.Before(until) { //fixedwait:stated the picker's instant against the one the claim was taken at
 		return false, nil
 	}
 	f.claims[key] = now.Add(ttl)
