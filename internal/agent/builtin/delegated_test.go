@@ -44,7 +44,7 @@ type fakeDesk struct {
 	labelsErr error
 	// itemLabels are the labels of items other than the run's, by id.
 	itemLabels map[string][]string
-	rulePaths  []string
+	release    delegated.Release
 	full       map[string]bool // buckets whose hour is spent
 	allowErr   error
 	buckets    []string
@@ -57,7 +57,7 @@ type fakeDesk struct {
 
 func (d *fakeDesk) Rule(delegated.Kind) ([]string, int, int, bool) { return d.delegates, 1, 10, d.live }
 func (d *fakeDesk) SSHPatterns() []string                          { return d.patterns }
-func (d *fakeDesk) RulePaths(delegated.Kind) []string              { return d.rulePaths }
+func (d *fakeDesk) Release(delegated.Kind) delegated.Release       { return d.release }
 
 func (d *fakeDesk) Held(_ context.Context, id string) (sandbox.PendingRun, bool, error) {
 	d.mu.Lock()

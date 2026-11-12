@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
@@ -60,6 +61,17 @@ type Usage interface {
 	Spend(ctx context.Context, q usage.SpendQuery) ([]usage.SpendRow, error)
 	ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error)
 }
+
+// Alarms is this node's latest alarm evaluation (the engine's), and whether
+// it has evaluated any yet.
+type Alarms interface {
+	LatestAlarms() []statelog.Alarm
+	AlarmsEvaluated() bool
+}
+
+// errAlarmsUnevaluated is a node that has not evaluated its alarms yet: no
+// alarm is unknown, not none.
+var errAlarmsUnevaluated = errors.New("this node has not evaluated its alarms yet")
 
 // UseWeek is the short window a use is counted over beside the month.
 const UseWeek = 7 * 24 * time.Hour
@@ -220,10 +232,42 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 		}
 		note(SourceUsage, errors.Join(modelErr, toolErr))
 	}
+	switch {
+	case src.Alarms == nil:
+		note(SourceAlarms, ErrNoSource)
+	case !src.Alarms.AlarmsEvaluated():
+		note(SourceAlarms, errAlarmsUnevaluated)
+	default:
+		r.Alarms = standingAlarms(src.Alarms.LatestAlarms())
+		note(SourceAlarms, nil)
+	}
 	if pushesRead {
 		r.Pushes = pushes
 	}
 	return r, cov
+}
+
+// standingAlarms is every standing alarm about one model entry or one tool
+// server, by its kind and the entry it names. An alarm's detail is the
+// engine's sentence about it, and is never read: the kind says what it is.
+func standingAlarms(alarms []statelog.Alarm) []derive.Alarm {
+	models, servers := statelog.PerModelKinds(), statelog.PerServerKinds()
+	out := []derive.Alarm{}
+	for _, a := range alarms {
+		var about atlas.Kind
+		switch {
+		case slices.Contains(models, a.Kind):
+			about = atlas.KindModel
+		case slices.Contains(servers, a.Kind):
+			about = atlas.KindToolServer
+		default:
+			continue
+		}
+		for _, e := range a.Entries {
+			out = append(out, derive.Alarm{Kind: string(a.Kind), About: about, Key: e.Key, Since: e.Since})
+		}
+	}
+	return out
 }
 
 // currentTests is each server's newest test against its settings as they are
