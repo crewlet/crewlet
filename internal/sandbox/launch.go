@@ -429,6 +429,20 @@ type OpenedJob struct {
 	// which reads the round's calls in that order: its record, the log its
 	// reviewer reads, and its submissions, where the last one made wins.
 	LastSeq int
+
+	// CallIDMeta is the `_meta` key the job's harness sends each of its calls'
+	// own ids under, as the runner that starts the job's box declares it
+	// ([CallIdentifier], [Manager.CallIDMeta]): what serves the box records
+	// each call's id by ([BridgeCall.CallID]), and "" where the runner
+	// declares none, which records every call with none.
+	//
+	// THE RUNNER'S, NEVER THE ROW'S: the key is a fact of the harness and of
+	// the build that reads its calls, so the launch names the one its own
+	// manager's runner declares, the one the job is started on, and a node that
+	// serves the job again after taking its seat over names its own runner's
+	// (internal/engine's reopenAgentRun). Nothing records it, and a build that
+	// does not know it serves the job reading no id.
+	CallIDMeta string
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
@@ -715,7 +729,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [Opening.Fresh] — nil where what named the job answered none.
 	var fresh *Wiring
 	if req.Opened != nil {
-		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter))
+		// AND HOW ITS HARNESS NAMES ITS CALLS, as the runner the job is
+		// started on declares it: m's, which the spec was built with and
+		// which starts the box.
+		job := opened.NamedJob(opened.OpenedAfter)
+		job.CallIDMeta = m.CallIDMeta(req.Spec.Harness)
+		named, openErr := req.Opened(job)
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)

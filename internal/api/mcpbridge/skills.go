@@ -123,7 +123,9 @@ func (o *binding) skillMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 // a call of load_tool_skill with the skill's key on the opening — or nothing,
 // for a name that is no skill of the run's. The call's answer, the skill's
 // text, is the harness's already: the model read it from the harness's own
-// tool.
+// tool. AND WITH NO ID OF A HARNESS'S ([Call.CallID]): the call is the bridge's
+// own, which no harness made over the bridge, and the hook's request that
+// reported it is no call of the run's.
 func (o *binding) loadSkill(name string) {
 	key, ok := o.session.skillKey(name)
 	if !ok {
