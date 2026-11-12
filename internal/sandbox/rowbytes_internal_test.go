@@ -32,11 +32,12 @@ var worstAt = time.Date(2026, 11, 3, 23, 59, 59, 999_999_999, time.FixedZone("x"
 // past its bound; arguments holding a body of markup beside the identifiers
 // that say where it went, and forty notes of markup a few hundred bytes each,
 // so what is kept once the body is left out is as close to its share as
-// whole notes come; an output of markup; and every kind of change a call can
-// commit to its turn, each once ([everyKind]). NOT HELD AND NOT APPROVED: a
-// call whose arguments are withheld keeps none of them ([BridgeCall.Withheld]),
-// so the flags cost a call twenty-seven bytes and the arguments it then does
-// not keep eight thousand.
+// whole notes come; an output of markup; every kind of change a call can
+// commit to its turn, each once ([everyKind]); and the id its harness gave it
+// at its bound ([worstCallID]). NOT HELD AND NOT APPROVED: a call whose
+// arguments are withheld keeps none of them ([BridgeCall.Withheld]), so the
+// flags cost a call twenty-seven bytes and the arguments it then does not keep
+// eight thousand.
 func worstCall(t *testing.T, name string) BridgeCall {
 	t.Helper()
 	notes := map[string]any{}
@@ -56,9 +57,14 @@ func worstCall(t *testing.T, name string) BridgeCall {
 		Failed: true, At: worstAt, Seq: math.MaxInt, Appended: math.MaxInt, Late: true, Abandoned: true,
 		StartedAt: worstAt, DurationMS: math.MaxInt64, Origin: "mcp:" + server, Server: server,
 		Source: "mcp:" + server, Refusal: string(mcp.RefusalReassignmentBudget), Digest: strings.Repeat("f", 64),
-		HeldID: uuid.NewString(), Committed: everyKind(),
+		HeldID: uuid.NewString(), Committed: everyKind(), CallID: worstCallID,
 	}
 }
+
+// worstCallID is the id a call's harness gave it at the widest the log keeps
+// one ([MaxBridgeCallIDBytes]): every character it may hold is written as
+// itself, so any id at the bound is the widest.
+var worstCallID = strings.Repeat("Az09-_", MaxBridgeCallIDBytes/6) + strings.Repeat("x", MaxBridgeCallIDBytes%6)
 
 // everyKind is every kind of change a call can commit to its turn, each once,
 // as the log spells them ([BridgeCall.Committed]): the closed set
@@ -78,22 +84,26 @@ func everyKind() []string {
 // A BRIDGED CALL IS HELD TO ITS SHARE OF THE LOG, AT ITS WORST. Every field of a
 // call kept by the log, each at the widest the log's encoder writes it — a name
 // past its bound in markup, arguments and an output of a megabyte of markup,
-// both its marks and every kind of change it can commit — weighs no more than
-// [MaxBridgeCallBytes] less the room left for what a later build adds to a
-// call; the newest successful submission no more than [MaxSubmissionCallBytes]
-// less the same. And the parts are each within the figure rowbytes.go states
-// for them, and those figures with the room close at the share, so the
-// arithmetic there is this test's.
+// both its marks, every kind of change it can commit and the id its harness
+// gave it at its bound — weighs no more than [MaxBridgeCallBytes] less the room
+// left for what a later build adds to a call; the newest successful submission
+// no more than [MaxSubmissionCallBytes] less the same. And the parts are each
+// within the figure rowbytes.go states for them, and those figures with the
+// room close at the share, so the arithmetic there is this test's. A call
+// handed an id past its bound, in markup, is kept with none, so the share holds
+// whatever a writer hands the log.
 //
 // Mutation: keep the arguments or the output whole, or measure a cut by the
 // payload's own length rather than escaped, and the call overruns its share;
 // leave the name uncut, and the name does; keep a call without the kinds it
-// committed, and the case is no longer at its worst.
+// committed, or without its id, and the case is no longer at its worst; keep
+// an id whatever it is (log-keeps-any-id), and the call handed one past its
+// bound keeps it.
 func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
 	const (
-		others  = 700  // what rowbytes.go counts for a call's every other field
-		reserve = 1858 // what rowbytes.go leaves a later build in one call
+		others  = 800  // what rowbytes.go counts for a call's every other field
+		reserve = 1758 // what rowbytes.go leaves a later build in one call
 	)
 	if MaxBridgeCallNameBytes*6+2+MaxBridgeArgsBytes+MaxBridgeOutputBytes+others+reserve != MaxBridgeCallBytes {
 		t.Errorf("a call's name, arguments, output and other fields, with the room left for a later build, "+
@@ -138,44 +148,69 @@ func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 				call.ArgsBytes, call.OutputBytes)
 		}
 		// AND EVERY KIND IT COMMITTED KEPT, or the other fields were measured
-		// short of them.
+		// short of them, and so its id at its bound.
 		if !slices.Equal(call.Committed, everyKind()) {
 			t.Errorf("%s: is kept with %d of the %d kinds of change it committed: the case is not at its worst",
 				name, len(call.Committed), len(types.CommittedChanges))
 		}
+		if call.CallID != worstCallID {
+			t.Errorf("%s: is kept with the id %q, want its harness's whole: the case is not at its worst",
+				name, call.CallID)
+		}
+	}
+	handed := worstCall(t, strings.Repeat("<", 4<<10))
+	handed.CallID = strings.Repeat("<", 64<<10)
+	if kept := keptCall(handed, MaxBridgeArgsBytes); kept.CallID != "" {
+		t.Errorf("a call handed an id of %d bytes is kept with one of %d, want none: an id past its bound is "+
+			"kept as none, never cut", len(handed.CallID), len(kept.CallID))
 	}
 }
 
 // worstEntry is one call's entry in flight at its widest as the log keeps it
 // ([keptEntry]): a name past its bound in the bytes that escape the most, a
-// digest, both places and every instant at their widest, and a runner past the
-// most an incarnation may be in markup.
+// digest, both places and every instant at their widest, a runner past the
+// most an incarnation may be in markup, and the id its harness gave it at its
+// bound ([worstCallID]).
 func worstEntry(seq int) BridgeCall {
 	return keptEntry(BridgeCall{
 		Name: strings.Repeat("<", 4<<10), Digest: strings.Repeat("f", 64), At: worstAt,
 		Seq: math.MaxInt - seq, StartedAt: worstAt, Runner: strings.Repeat("<", 4<<10), Until: worstAt,
+		CallID: worstCallID,
 	})
 }
 
 // A CALL IN FLIGHT IS HELD TO ITS SHARE. An entry written ahead of a call keeps
-// its identity alone ([keptEntry]): at its widest — its name and its runner past
-// their bounds in markup the encoder escapes six-fold, every instant at its
-// longest — it weighs no more than [MaxCallInFlightBytes], whatever the caller
-// handed it, arguments and output included. And the log's split closes as its
+// its identity and the id its harness gave it ([keptEntry]): at its widest —
+// its name and its runner past their bounds in markup the encoder escapes
+// six-fold, every instant at its longest, its id at its bound — it weighs no
+// more than [MaxCallInFlightBytes], whatever the caller handed it, arguments,
+// output and an id past its bound included; and that id it keeps as none,
+// never cut, as a finished call keeps one. And the log's split closes as its
 // table states it: its calls, its calls in flight and the rest of it
 // ([BridgeLogBytes], [InFlightBytes], [LogRestBytes]) are [RowBytes] together,
 // so a share moved without the table fails here.
 //
 // Mutation: keep a caller's runner, or its arguments, as handed
-// (entry-keeps-its-runner-whole), and an entry overruns its share; hold more
-// calls in flight than the table states (more-calls-in-flight-than-the-table-says),
-// and the log's split no longer closes.
+// (entry-keeps-its-runner-whole), or its id whatever it is (log-keeps-any-id),
+// and an entry overruns its share; cut an entry's id to its bound rather than
+// keep it as none (entry-cuts-its-id), and the entry handed one past it keeps a
+// cut id; hold more calls in flight than the table states
+// (more-calls-in-flight-than-the-table-says), and the log's split no longer
+// closes.
 func TestACallInFlightIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
 	entry := worstEntry(0)
+	if entry.CallID != worstCallID {
+		t.Errorf("the widest entry keeps the id %q, want its harness's whole: the case is not at its worst",
+			entry.CallID)
+	}
 	handed := entry
 	handed.Args, handed.Output = strings.Repeat("<", 64<<10), strings.Repeat("<", 64<<10)
-	handed.Runner = strings.Repeat("<", 64<<10)
+	handed.Runner, handed.CallID = strings.Repeat("<", 64<<10), strings.Repeat("<", 64<<10)
+	if kept := keptEntry(handed); kept.CallID != "" {
+		t.Errorf("an entry handed an id of %d bytes is kept with one of %d, want none: an id past its bound is "+
+			"kept as none, never cut", len(handed.CallID), len(kept.CallID))
+	}
 	for name, call := range map[string]BridgeCall{"at its widest": entry, "as a caller handed it": keptEntry(handed)} {
 		raw, err := json.Marshal(call)
 		if err != nil {
@@ -395,7 +430,7 @@ func worstRow(t *testing.T) PendingRun {
 	// THE CALL A PERSON APPROVED, as the store records it on the held call
 	// ([approvedCall]) and a reset carries it on to the log it is owed to
 	// ([OwedCall]): the worst call's every other field, with none of its
-	// arguments, their digest or its output.
+	// arguments, their digest, its output or an id a harness gave it.
 	approved := approvedCall(worstCall(t, markup(4<<10)), *held)
 	held.Call = &approved
 	if err := HeldArgsFit(held.Arguments); err != nil {

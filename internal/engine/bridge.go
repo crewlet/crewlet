@@ -163,22 +163,23 @@ func decodeBridgeArgs(raw string) map[string]any {
 // row, and with each finished one what the run's bridged calls have cost the
 // engine so far, which the row keeps.
 //
-// EVERY CALL IS ON THE LOG BEFORE IT RUNS. Its entry — its identity alone — is
-// written ahead of it ([bridgeLedger.Begin], [sandbox.BridgeLog.InFlight]), and
-// the bridge runs the call only once the log has taken it; then the call makes
-// ONE UPDATE of that entry as it returns ([bridgeLedger.Record]), with what it
-// answered, cost and committed. So no call runs off the record of its run: a
-// resumed segment's call log counts every call the run made, a call still
-// running elsewhere included, and a later call that asks for something else
-// never derives an earlier call's operation id. An ENTRY THE STORE DOES NOT
-// TAKE within [beginBudget] is a call not run, its box told it could not be
-// recorded and may make it again (`bridge_call_not_recorded`); an UPDATE THE
-// STORE DOES NOT TAKE within [appendAttempts] leaves the entry — the call's
-// identity on the record — and is answered [mcpbridge.ErrUnrecorded], so the
-// call's own goroutine on the bridge asks for the same update again once the
-// call's answer is out, until it lands or the call's bound passes. Nothing is
-// carried by another write: no later write of the session has anything of this
-// one's to bring.
+// EVERY CALL IS ON THE LOG BEFORE IT RUNS. Its entry — its identity, and the id
+// its harness gave it ([sandbox.BridgeCall.CallID]), which is no part of that
+// identity — is written ahead of it ([bridgeLedger.Begin],
+// [sandbox.BridgeLog.InFlight]), and the bridge runs the call only once the log
+// has taken it; then the call makes ONE UPDATE of that entry as it returns
+// ([bridgeLedger.Record]), with what it answered, cost and committed. So no
+// call runs off the record of its run: a resumed segment's call log counts
+// every call the run made, a call still running elsewhere included, and a later
+// call that asks for something else never derives an earlier call's operation
+// id. An ENTRY THE STORE DOES NOT TAKE within [beginBudget] is a call not run,
+// its box told it could not be recorded and may make it again
+// (`bridge_call_not_recorded`); an UPDATE THE STORE DOES NOT TAKE within
+// [appendAttempts] leaves the entry — the call's identity on the record — and
+// is answered [mcpbridge.ErrUnrecorded], so the call's own goroutine on the
+// bridge asks for the same update again once the call's answer is out, until it
+// lands or the call's bound passes. Nothing is carried by another write: no
+// later write of the session has anything of this one's to bring.
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB AND ITS ROUND BEFORE
 // ITS BOX EXISTS ([bridgeLedger.bind], handed to
@@ -316,11 +317,13 @@ func (l *bridgeLedger) bound(ctx context.Context, runID, tool string) (launch, r
 var errUnbound = errors.New("engine: the call's bridge session is bound to no job, so its entry has nowhere to go")
 
 // Begin writes a call's entry on its run's log ahead of it
-// ([mcpbridge.Ledger.Begin]): its identity, and who runs it until when
-// ([bridgeLedger.runner], [mcpbridge.Begun.Until]). Tried again on a store's
-// error within [beginBudget], under a context of its own: the box's request is
-// not the call's, and a write cut with it would refuse a call the store would
-// have taken.
+// ([mcpbridge.Ledger.Begin]): its identity, who runs it until when
+// ([bridgeLedger.runner], [mcpbridge.Begun.Until]), and the id its harness gave
+// it ([sandbox.BridgeCall.CallID]), which the call's update carries too and
+// nothing finds the entry by. Tried again on a store's error within
+// [beginBudget], under a context of its own: the box's request is not the
+// call's, and a write cut with it would refuse a call the store would have
+// taken.
 //
 // NIL IS A CALL THE BRIDGE MAY RUN. [mcpbridge.ErrNotTaken] is a log open
 // neither for the session's job nor, by its round, for a job of its — the run
@@ -338,7 +341,7 @@ func (l *bridgeLedger) Begin(ctx context.Context, runID string, call mcpbridge.B
 		return errUnbound
 	}
 	entry := sandbox.BridgeCall{Name: call.Name, Seq: call.Seq, StartedAt: call.StartedAt,
-		Digest: call.Digest, Runner: l.runner, Until: call.Until}
+		Digest: call.Digest, CallID: call.CallID, Runner: l.runner, Until: call.Until}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), beginBudget)
 	defer cancel()
 	taken, err := l.stepRetrying(ctx, runID, sandbox.BridgeAppend{Step: sandbox.AppendBegin,
@@ -435,6 +438,10 @@ func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.
 			// store holds them to the call's share of the log, so this is
 			// what a later segment's call log counts the call by.
 			Digest: call.Digest,
+			// AND THE ID ITS HARNESS GAVE IT, as its entry carries it: the
+			// box's word, which names the call as its harness's session
+			// does, and which nothing finds the call by.
+			CallID: call.CallID,
 			// WHAT IT COMMITTED, which the run's collection settles the
 			// turn's outcome by ([Engine.describeResume]).
 			Committed: changeNames(call.Committed),

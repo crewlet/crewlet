@@ -441,7 +441,7 @@ func ledgerOn(t *testing.T, store sandbox.PendingStore) (*bridgeLedger, *bytes.B
 	var logs bytes.Buffer
 	l := newBridgeLedger(store, nil)
 	l.log = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	l.bind(launched.NamedJob(0))
+	l.bind(launched.NamedJob(0, ""))
 	return l, &logs, launched
 }
 

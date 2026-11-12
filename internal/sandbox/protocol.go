@@ -146,7 +146,9 @@
 // carries the identity its run's call log admitted it under
 // ([BridgeCall.Digest]), but for one whose arguments are withheld
 // ([BridgeCall.Withheld]), so neither a cut argument nor a dropped call moves an
-// operation id a resumed segment derives. See rowbytes.go.
+// operation id a resumed segment derives; and the id its harness gave it, where
+// the box sent one the log keeps whole ([BridgeCall.CallID]), which is no part
+// of that identity. See rowbytes.go.
 //
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
 // NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
@@ -1228,6 +1230,21 @@ type Runner interface {
 	// has said nothing yet reads as nothing rather than as an error.
 	Follow(handle RunHandle) LiveReading
 }
+
+// CallIdentifier is a [Runner] whose harness hands each tool call it makes over
+// the bridge an id of its own, in the request's `_meta`: CallIDMeta is the key
+// it sends the id under, the one the bridge reads ([BridgeCall.CallID],
+// [OpenedJob.CallIDMeta]) — `claudecode/toolUseId` for Claude Code — and ""
+// for a harness that sends none.
+//
+// OPTIONAL, as [SessionTaker] is: a runner that declares no key — a harness
+// whose `_meta` carries no id of the call, OpenCode's, or a test's — has every
+// call of its runs recorded with none, each read by its place as every call an
+// older build recorded is. EXPORTED so a runner asserts it implements it, as
+// internal/sandbox/executor's does: a method renamed out from under it would
+// read as a harness that declares nothing, and every id would be dropped
+// without a word.
+type CallIdentifier interface{ CallIDMeta() string }
 
 // RunRequest is one launch's inputs.
 //
