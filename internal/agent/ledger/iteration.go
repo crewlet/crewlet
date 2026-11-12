@@ -86,7 +86,9 @@ type FormatOptions struct {
 	// call's error is a [Piece] the caller fits; 0 renders every one whole.
 	ValueLimit int
 
-	// MaxReadCalls caps the READ lines rendered; 0 renders every one.
+	// MaxReadCalls caps the READ lines one render shows: [FormatCalls]'s
+	// list, or every group of [FormatCallGroups] together; 0 renders every
+	// one.
 	MaxReadCalls int
 
 	// Fitted is the caller's rewrite of each piece [CallPieces] named.
@@ -106,22 +108,35 @@ func Format(skip, reads []string) FormatOptions {
 	}
 }
 
-// visible is the calls a render shows: everything but the skipped names, and
-// the reads past MaxReadCalls.
+// visible is the calls a render of one list shows: everything but the skipped
+// names, and the reads past MaxReadCalls.
 func visible(calls []Call, opts FormatOptions) []Call {
-	out := make([]Call, 0, len(calls))
+	return visibleGroups([][]Call{calls}, opts)[0]
+}
+
+// visibleGroups is the calls each group of one render shows: everything but
+// the skipped names, and the reads past MaxReadCalls, COUNTED ACROSS THE
+// GROUPS in the order given, so a group shows only the reads the groups before
+// it left of the cap. Of their concatenation, [visible] shows exactly these
+// calls, in the same order.
+func visibleGroups(groups [][]Call, opts FormatOptions) [][]Call {
+	out := make([][]Call, len(groups))
 	reads := 0
-	for _, call := range calls {
-		if slices.Contains(opts.Skip, call.Name) {
-			continue
-		}
-		if slices.Contains(opts.Reads, call.Name) {
-			if opts.MaxReadCalls > 0 && reads >= opts.MaxReadCalls {
+	for i, calls := range groups {
+		shown := make([]Call, 0, len(calls))
+		for _, call := range calls {
+			if slices.Contains(opts.Skip, call.Name) {
 				continue
 			}
-			reads++
+			if slices.Contains(opts.Reads, call.Name) {
+				if opts.MaxReadCalls > 0 && reads >= opts.MaxReadCalls {
+					continue
+				}
+				reads++
+			}
+			shown = append(shown, call)
 		}
-		out = append(out, call)
+		out[i] = shown
 	}
 	return out
 }
@@ -136,8 +151,37 @@ func visible(calls []Call, opts FormatOptions) []Call {
 // string, so a reader sees an explicit "no action taken" signal rather than an
 // absent section. The difference matters: a missing section reads as a section
 // the engine forgot to fill in.
+//
+// It is [FormatCallGroups]' render of one group, so the two never part.
 func FormatCalls(calls []Call, opts FormatOptions) string {
-	shown := visible(calls, opts)
+	return FormatCallGroups([][]Call{calls}, opts)[0]
+}
+
+// FormatCallGroups renders the lists of calls one brief tells under headings
+// of its own (internal/agent/runner's calledAfter: the calls after a session's
+// save, and those that finished only after their run stopped waiting for them),
+// one string per group in the order given, each as [FormatCalls] renders a
+// list, "(none)" and its omitted line included, UNDER ONE READ CAP:
+// [FormatOptions.MaxReadCalls] counts the read lines of every group together,
+// spent in the order the groups are given, and each group's omitted line counts
+// the reads of that group the cap left out.
+//
+// ONE CAP, NEVER ONE PER GROUP: the cap bounds what one render tells of a round,
+// and a brief rendering a round's calls as N lists capped apart is told N times
+// the reads the cap allows. Fit them with [CallPieces] over the groups'
+// concatenation, which names exactly what this shows.
+func FormatCallGroups(groups [][]Call, opts FormatOptions) []string {
+	shown := visibleGroups(groups, opts)
+	out := make([]string, len(groups))
+	for i, calls := range groups {
+		out[i] = renderCalls(calls, shown[i], opts)
+	}
+	return out
+}
+
+// renderCalls is one group's lines: shown, the calls of calls the render shows
+// ([visibleGroups]), and the line counting the reads of calls it leaves out.
+func renderCalls(calls, shown []Call, opts FormatOptions) string {
 	var lines []string
 	readsShown := 0
 	for _, call := range shown {

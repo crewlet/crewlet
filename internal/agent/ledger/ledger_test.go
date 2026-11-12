@@ -2,6 +2,8 @@ package ledger
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -65,6 +67,138 @@ func TestOnlyReadsAreEverDropped(t *testing.T) {
 	}
 	if n := strings.Count(FormatCalls(writes, Format(nil, nil)), "slack_post"); n != 20 {
 		t.Errorf("writes rendered = %d, want all 20", n)
+	}
+}
+
+// ONE READ CAP SERVES EVERY GROUP OF A RENDER. A brief that tells one round's
+// calls under several headings (a continuation's calls after its save and its
+// late calls) renders them as groups, and the cap counts the reads of all of
+// them together, spent in the order the groups come: a group shows the reads
+// the groups before it left, and its own omitted line counts its own reads
+// left out. Every write renders, a skipped name never does, and an empty group
+// still says "(none)". The reads the groups show are those one list of the
+// same calls shows, in the same order.
+//
+// Mutation: count the reads of each group from zero, and the render shows
+// sixteen reads where the cap is twelve. Spend the groups in reverse, or count
+// a group's omitted line over every group, and the lines below are wrong.
+func TestOneReadCapServesEveryGroup(t *testing.T) {
+	t.Parallel()
+	read := func(n int) Call { return Call{Name: "get", Args: map[string]any{"n": n}} }
+	write := func(group int) Call { return Call{Name: "post", Args: map[string]any{"group": group}} }
+	opts := Format([]string{"activate_tool"}, []string{"get"})
+	var groups [][]Call
+	made := 0
+	for g, reads := range []int{8, 8, 3, 2} {
+		var calls []Call
+		for range reads {
+			made++
+			calls = append(calls, read(made))
+		}
+		if g < 3 {
+			calls = append(calls, write(g), Call{Name: "activate_tool", Args: map[string]any{"group": g}})
+		}
+		groups = append(groups, calls)
+	}
+	groups = append(groups, nil)
+	line := func(call Call) string { return FormatCalls([]Call{call}, opts) }
+
+	got := FormatCallGroups(groups, opts)
+	if len(got) != len(groups) {
+		t.Fatalf("%d renders for %d groups", len(got), len(groups))
+	}
+	if reads := strings.Count(strings.Join(got, "\n"), "(read)"); reads != MaxReadCalls {
+		t.Errorf("the groups show %d reads in all, want the one cap of %d:\n%s", reads, MaxReadCalls,
+			strings.Join(got, "\n---\n"))
+	}
+	for g, want := range []struct {
+		shown   []int
+		omitted string
+	}{
+		{shown: []int{1, 8}},
+		{shown: []int{9, 12}, omitted: "(+4 further read call(s) omitted)"},
+		{omitted: "(+3 further read call(s) omitted)"},
+		{omitted: "(+2 further read call(s) omitted)"},
+	} {
+		for n := 1; n <= 21; n++ {
+			shown := len(want.shown) == 2 && n >= want.shown[0] && n <= want.shown[1]
+			if strings.Contains(got[g], line(read(n))) != shown {
+				t.Errorf("group %d shows read %d: %t, want %t:\n%s", g, n, !shown, shown, got[g])
+			}
+		}
+		if want.omitted == "" && strings.Contains(got[g], "omitted") {
+			t.Errorf("group %d counts reads it showed as omitted:\n%s", g, got[g])
+		}
+		if want.omitted != "" && !strings.Contains(got[g], want.omitted) {
+			t.Errorf("group %d does not say %q:\n%s", g, want.omitted, got[g])
+		}
+		if g < 3 && !strings.Contains(got[g], line(write(g))) {
+			t.Errorf("group %d dropped its write to fit the read cap:\n%s", g, got[g])
+		}
+		if strings.Contains(got[g], "activate_tool") {
+			t.Errorf("group %d renders a skipped name:\n%s", g, got[g])
+		}
+	}
+	if got[3] != "- (+2 further read call(s) omitted)" {
+		t.Errorf("a group whose every read is past the cap reads %q, want its omitted line alone", got[3])
+	}
+	if got[4] != noCalls {
+		t.Errorf("an empty group reads %q, want %q", got[4], noCalls)
+	}
+
+	one := FormatCalls(slices.Concat(groups...), opts)
+	for n := 1; n <= 21; n++ {
+		if strings.Contains(one, line(read(n))) != strings.Contains(strings.Join(got, "\n"), line(read(n))) {
+			t.Errorf("read %d is shown by one of the render and the list of the same calls, not both", n)
+		}
+	}
+	for g, calls := range groups {
+		if FormatCalls(calls, opts) != FormatCallGroups([][]Call{calls}, opts)[0] {
+			t.Errorf("FormatCalls and the one-group render part on group %d", g)
+		}
+	}
+}
+
+// THE GROUPS' PIECES ARE THOSE THEIR RENDER SHOWS. Fitted over the groups'
+// concatenation, every payload past its budget the groups show is named, so
+// none renders whole, and nothing is named that the one cap leaves out, so no
+// rewrite is spent on a read the brief never shows.
+//
+// Mutation: let the pieces ignore the read cap, as naming them group by group
+// under a cap each does, and the read the one cap leaves out of the later group
+// is named all the same.
+func TestTheGroupsPiecesAreThoseTheirRenderShows(t *testing.T) {
+	t.Parallel()
+	payload := func(n int) string { return fmt.Sprintf("%03d %s", n, strings.Repeat("p", 400)) }
+	opts := Format(nil, []string{"search"})
+	var first, second []Call
+	for n := range MaxReadCalls {
+		first = append(first, Call{Name: "search", Args: map[string]any{"query": payload(n)}})
+	}
+	second = append(second,
+		Call{Name: "search", Args: map[string]any{"query": payload(100)}},
+		Call{Name: "post", Args: map[string]any{"text": payload(101)}},
+		Call{Name: "post", Failed: true, Result: payload(102)},
+	)
+	groups := [][]Call{first, second}
+
+	pieces := CallPieces(slices.Concat(groups...), opts)
+	opts.Fitted = Fitted{}
+	for i, p := range pieces {
+		opts.Fitted[p] = fmt.Sprintf("(rewrite %d)", i)
+	}
+	told := strings.Join(FormatCallGroups(groups, opts), "\n")
+	for i := range pieces {
+		if !strings.Contains(told, fmt.Sprintf("(rewrite %d)", i)) {
+			t.Errorf("piece %.12q is fitted and the groups never show it:\n%s", pieces[i].Text, told)
+		}
+	}
+	if strings.Contains(told, strings.Repeat("p", 400)) {
+		t.Errorf("the groups show a payload past its budget whole:\n%s", told)
+	}
+	if len(pieces) != MaxReadCalls+2 {
+		t.Errorf("%d pieces, want the %d shown reads' queries, the post's text and its error", len(pieces),
+			MaxReadCalls)
 	}
 }
 
