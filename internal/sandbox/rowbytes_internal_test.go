@@ -270,6 +270,60 @@ func TestAWithheldCallKeepsNeitherItsArgumentsNorTheirDigest(t *testing.T) {
 	}
 }
 
+// A FINISHED CALL IS NOBODY'S TO WAIT FOR, whoever hands it to the log. Only a
+// call's entry in flight carries the process running it and the bound a
+// collection waits for it until ([keptEntry]); a call kept finished keeps
+// neither ([keptCall]), though it is handed both: as the log keeps any call, as
+// the store records the call a person approved on its held call
+// ([approvedCall]), and as the log appends that call, which no append over the
+// bridge takes ([BridgeLog.withApproved]). A runner on a finished call is
+// bounded by nothing, so a call kept with the one it was handed would hold the
+// log's share and the row's to nothing.
+//
+// Mutation: keep a finished call's runner and bound as handed
+// (kept-call-keeps-its-runner), and each of the three keeps both.
+func TestAFinishedCallIsNobodysToWaitFor(t *testing.T) {
+	t.Parallel()
+	waited := func(call BridgeCall) BridgeCall {
+		call.Runner, call.Until = strings.Repeat("<", 4<<10), worstAt
+		return call
+	}
+	approved := approvedCall(waited(BridgeCall{Name: "close_issue", Origin: "builtin"}),
+		HeldCall{ID: "held-1", Tool: "close_issue", MadeAt: worstAt})
+	appended, ok := BridgeLog{Round: "r1"}.withApproved("r1", waited(approved))
+	if !ok || len(appended.Calls) != 1 {
+		t.Fatalf("the approved call's append left %d calls (appended %v), want it appended", len(appended.Calls), ok)
+	}
+	for name, call := range map[string]BridgeCall{
+		"kept by the log":               keptCall(waited(BridgeCall{Name: "post_message", Seq: 1}), MaxBridgeArgsBytes),
+		"approved, on its held call":    approved,
+		"approved, appended to its log": appended.Calls[0],
+	} {
+		if call.Runner != "" || !call.Until.IsZero() {
+			t.Errorf("a finished call %s keeps a runner of %d bytes and the bound %s, want neither", name,
+				len(call.Runner), call.Until)
+		}
+	}
+}
+
+// THE CALL A PERSON APPROVED STATES NO SIZE OF THE OUTPUT IT DROPS. Its result
+// rides the row sealed on the held call, and the call keeps none of it
+// ([approvedCall]), so a size beside no output would read as a whole output cut
+// to nothing: whoever hands the call one, it keeps no size of its output, as it
+// keeps none of its arguments' ([keptCall]).
+//
+// Mutation: keep the size of the approved call's output as handed
+// (approved-call-keeps-an-output-size), and it states one.
+func TestTheApprovedCallStatesNoSizeOfTheOutputItDrops(t *testing.T) {
+	t.Parallel()
+	got := approvedCall(BridgeCall{Name: "close_issue", Output: "closed", OutputBytes: 64 << 10,
+		Args: `{"id":7}`, ArgsBytes: 64 << 10}, HeldCall{ID: "held-1", Tool: "close_issue", MadeAt: worstAt})
+	if got.Output != "" || got.OutputBytes != 0 || got.Args != "" || got.ArgsBytes != 0 {
+		t.Errorf("the approved call keeps the output %q stated at %d bytes and the arguments %q stated at %d, "+
+			"want neither, nor a size of either", got.Output, got.OutputBytes, got.Args, got.ArgsBytes)
+	}
+}
+
 // IDENTITIES FOLD PAST THEIR SHARE AND NEVER LOSE A COUNT. A long run's dropped
 // middle is a tally of identities held to [MaxElidedIdentityBytes]: while they
 // fit, every identity is exact; past it identities fold into their tool's

@@ -495,6 +495,16 @@ var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments ar
 // takes none other, and the log holds every writer to the same rule, so a
 // call's share holds by construction whatever bridge, or build, handed it.
 //
+// AND NOTHING THAT WAITS FOR IT: a finished call is nobody's to wait for, so it
+// keeps neither the process that ran it nor the bound a collection would wait
+// for it until ([BridgeCall.Runner], [BridgeCall.Until]), which only its entry
+// in flight carries ([keptEntry]). Held here, whoever handed the call: the
+// bridge's update, the store's append of the call a person approved, which no
+// append over the bridge takes ([BridgeLog.withApproved]), the row's copy of
+// that call ([approvedCall]), or a later build. Left to each caller, a runner
+// on a finished call would be bounded by nothing, since only an entry's is
+// held to an incarnation's bound.
+//
 // IDEMPOTENT, so a call kept once is kept again unchanged, and a call an older
 // build recorded whole is kept within its bounds the next time this build
 // writes the log. A size already recorded is the whole's and is never replaced
@@ -502,6 +512,7 @@ var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments ar
 func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	call.Name = textcut.Within(call.Name, MaxBridgeCallNameBytes)
 	call.CallID = keptCallID(call.CallID)
+	call.Runner, call.Until = "", time.Time{}
 	if call.Withheld() {
 		call.Args, call.ArgsBytes, call.Digest = "", 0, ""
 	}

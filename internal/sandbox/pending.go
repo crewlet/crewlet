@@ -843,8 +843,9 @@ type BridgeCall struct {
 	// appended after its result was recorded on the row
 	// ([PendingStore.RecordHeldResult], [OwedCall]). A call of its round
 	// like any other, which is what the readers of whether the turn replied
-	// need of it; its arguments and output are never here, and ride the row
-	// sealed on the held call until the next job opens.
+	// need of it; its arguments and output are never here, nor the size of
+	// either, and ride the row sealed on the held call until the next job
+	// opens ([approvedCall]).
 	Approved bool `json:"approved,omitempty"`
 
 	// HeldID names the held call an Approved call was made for
@@ -874,15 +875,17 @@ type BridgeCall struct {
 	// under (coord.TakerResource), by which a collection on ANY node reads
 	// whether that process still runs the call — a call whose process stopped
 	// will never be recorded, and is not waited for. Empty on a finished call,
-	// and on an entry whose process holds no taker lease, which is waited for
-	// by its bound alone ([BridgeCall.Until]). Additive on the wire.
+	// which the log keeps with none whoever hands it one ([keptCall]), and on
+	// an entry whose process holds no taker lease, which is waited for by its
+	// bound alone ([BridgeCall.Until]). Additive on the wire.
 	Runner string `json:"runner,omitempty"`
 
 	// Until is the instant past which no collection waits for a call whose
 	// entry is in flight: when the bridge took it, its tool's own bound and the
 	// bridge's margin after it (internal/api/mcpbridge's wait.go), stamped by
 	// the bridge, which alone knows the tool's bound, so a node that does not
-	// hold the call reads it. Zero on a finished call. Additive on the wire.
+	// hold the call reads it. Zero on a finished call, which the log keeps
+	// with none whoever hands it one ([keptCall]). Additive on the wire.
 	Until time.Time `json:"until,omitzero"`
 
 	// Extra is every key of the call this build does not know, kept verbatim

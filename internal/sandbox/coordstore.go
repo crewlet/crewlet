@@ -1431,10 +1431,20 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // OF A HARNESS'S ([BridgeCall.CallID]), which the bridge gives the calls a box
 // makes: no harness named this one, and what the box's session holds is the
 // HELD call's, under the held call's own id.
+//
+// AND NO SIZE OF THE OUTPUT IT DROPS ([BridgeCall.OutputBytes]), whatever it
+// was handed: a size beside no output reads as a whole output cut to nothing,
+// and the result is the held call's, sealed, as a withheld call's arguments
+// are, whose size the log keeps none of either ([keptCall]). Nor a runner or a
+// bound to wait for it until, which no finished call keeps ([keptCall]). So
+// every field of the call is one this writer keeps or leaves out, never one
+// left to what its caller happens to hand it: the engine's resume hands a
+// name, a failure, who answered and a refusal alone (internal/engine's
+// heldCommit.Record), and the row's budget holds whatever a later one hands.
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
-	made.Args, made.Output, made.Held, made.Seq, made.Appended, made.Digest = "", "", false, 0, 0, ""
-	made.Late, made.Abandoned, made.CallID = false, false, ""
+	made.Args, made.Output, made.OutputBytes, made.Digest = "", "", 0, ""
+	made.Held, made.Seq, made.Appended, made.Late, made.Abandoned, made.CallID = false, 0, 0, false, false, ""
 	return keptCall(made, MaxBridgeArgsBytes)
 }
 
@@ -2242,8 +2252,8 @@ func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (log
 	if !listed {
 		call := a.Call
 		call.Late = taken == takeLate
-		// A FINISHED CALL IS NOBODY'S TO WAIT FOR: it carries neither.
-		call.Runner, call.Until = "", time.Time{}
+		// A FINISHED CALL IS NOBODY'S TO WAIT FOR: the append keeps it with
+		// neither the runner nor the bound its entry carried ([keptCall]).
 		l.appendCall(stamp(call), a.Absorbed)
 	}
 	return taken, true, nil
