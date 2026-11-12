@@ -286,10 +286,13 @@ func (e *threadSourceError) Unwrap() error { return e.err }
 //
 //   - io.EOF at the member's end. A last piece with no break is never a line:
 //     it is a write its harness never finished, or the NULs GNU tar fills a
-//     member out with when it shrank as it was packed. The box cuts exactly
-//     that piece away before a harness resumes the session
-//     ([claudeSessionGate]'s torn), so no harness reads it either, and a
-//     reader that decoded it would take half a record for one.
+//     member out with when it shrank as it was packed, and a reader that
+//     decoded it would take half a record for one. The box cuts exactly that
+//     piece away before a harness resumes the session ([claudeSessionGate]'s
+//     torn), but for two files it leaves as they are: one that holds no whole
+//     line, and every subagent's thread in a box that has no find. There this
+//     reader reads less than the harness may, and what it leaves is never a
+//     whole record, so it holds nothing a reader counts.
 //     [threadReader.Torn] says it was there.
 //   - errThreadBound once a line runs past [threadLineMax] or the member past
 //     the reader's bound, EVEN WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK:
