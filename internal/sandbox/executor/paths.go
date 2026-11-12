@@ -450,6 +450,24 @@ func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-sett
 // ([Paths.ClaudeNotesSettings]). Beside the others, for their reason.
 func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
 
+// ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
+// settings with the compaction point pinned besides ([claudeCompactionPin]),
+// which the run's script names in that file's place on a release that takes
+// the pin ([claudePinGate]). Beside it, for its reason.
+func (p Paths) ClaudeSettingsPinned() string { return p.WorkDir() + "/claude-settings-pinned.json" }
+
+// ClaudeNotesSettingsPinned is [Paths.ClaudeNotesSettings]'s pinned copy
+// ([Paths.ClaudeSettingsPinned]).
+func (p Paths) ClaudeNotesSettingsPinned() string {
+	return p.WorkDir() + "/claude-settings-notes-pinned.json"
+}
+
+// ClaudeSkillsSettingsPinned is [Paths.ClaudeSkillsSettings]'s pinned copy
+// ([Paths.ClaudeSettingsPinned]).
+func (p Paths) ClaudeSkillsSettingsPinned() string {
+	return p.WorkDir() + "/claude-settings-skills-pinned.json"
+}
+
 // OpenCodeConfig is where an OpenCode run's own configuration is written
 // ([OpenCode.WriteConfig]), and read from by the run's script, which hands its
 // content to the run's server alone as OPENCODE_CONFIG_CONTENT

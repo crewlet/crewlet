@@ -177,12 +177,15 @@ func AttributionHook(a sandbox.CommitAttribution) ([]byte, error) {
 	return attributionHook(trailers), nil
 }
 
-// ClaudeSkillsFloor and ClaudeNotesFloor are the oldest Claude Code releases a
-// run is started with its skills' plugin, and the settings that keep its hook
-// on, and with its notes' hooks ([claudeSkillsFloor], [claudeNotesFloor]).
+// ClaudeSkillsFloor, ClaudeNotesFloor and ClaudeCompactionPinFloor are the
+// oldest Claude Code releases a run is started with its skills' plugin, and the
+// settings that keep its hook on, with its notes' hooks, and with its settings'
+// pinned copy ([claudeSkillsFloor], [claudeNotesFloor],
+// [claudeCompactionPinFloor]).
 const (
-	ClaudeSkillsFloor = claudeSkillsFloor
-	ClaudeNotesFloor  = claudeNotesFloor
+	ClaudeSkillsFloor        = claudeSkillsFloor
+	ClaudeNotesFloor         = claudeNotesFloor
+	ClaudeCompactionPinFloor = claudeCompactionPinFloor
 )
 
 // ReleaseAtLeast reports whether a Claude Code release is at or after floor,

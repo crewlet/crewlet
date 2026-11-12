@@ -158,8 +158,10 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ter
 	if argv[0] != "-p" || slices.Contains(argv, brief) {
 		t.Errorf("the brief is on the harness's argv: %q", argv)
 	}
-	if got := after(argv, "--settings"); got != p.ClaudeNotesSettings() {
-		t.Errorf("--settings names %q, want %q", got, p.ClaudeNotesSettings())
+	// The notes' settings as their pinned copy, which the stand-in's 2.1.310
+	// takes ([claudePinGate]): it holds the same hooks.
+	if got := after(argv, "--settings"); got != p.ClaudeNotesSettingsPinned() {
+		t.Errorf("--settings names %q, want %q", got, p.ClaudeNotesSettingsPinned())
 	}
 	if stdin := strings.Join(lines(t, filepath.Join(record, "stdin")), "\n"); stdin != brief {
 		t.Errorf("the harness read %q on stdin, want the brief", stdin)
