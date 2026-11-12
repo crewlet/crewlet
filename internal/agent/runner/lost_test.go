@@ -141,6 +141,34 @@ func TestARoundLostTooOftenIsNotStartedAgain(t *testing.T) {
 	}
 }
 
+// A CARRIED-ON ROUND IS REFUSED A NO_ACTION ITS LOST JOB ACTED IN. The run
+// that carries a lost job's round on is the same round, so its submission is
+// judged against what the lost job did: a job that posted, and a run after it
+// that said nobody was asking, is refused while it can still report the post.
+//
+// Mutation: the relaunch's submission back to decodeWork, and the no_action is
+// accepted.
+func TestACarriedOnRoundIsRefusedANoActionItsLostJobActedIn(t *testing.T) {
+	t.Parallel()
+	before := run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"starting on it"}`)}}
+	relauncher, _, err := lostRound(t, before,
+		runner.Lost{Why: "the engine it ran under restarted, which killed it", Losses: 1, Limit: 2},
+		buildOpts{reply: turn.NoReply()})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	res, err := relauncher.last(t).Surface.Execute(context.Background(), llm.ToolCall{
+		Name: runner.SubmitWorkTool, Arguments: map[string]any{"outcome": "no_action", "summary": "not mine"},
+	})
+	if err != nil {
+		t.Fatalf("submit_work: %v", err)
+	}
+	if !res.Failed || !strings.Contains(res.Output, `called "slack_post"`) {
+		t.Errorf("failed = %v, output = %q; want the no_action refused, naming the post the "+
+			"lost job made", res.Failed, res.Output)
+	}
+}
+
 // A FRESH RUN IS TOLD WHERE TO LOOK, NOT PROMISED WHAT IS THERE. Whether it is
 // in the lost job's box is the launch's to decide, so a kept box is described
 // as a place to look first, and a box that went with its host as a fresh

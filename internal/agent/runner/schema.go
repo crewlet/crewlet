@@ -33,9 +33,14 @@ var workSchema = map[string]any{
 			"description": "delivered: the work is done, and where delivering it " +
 				"meant calling a tool, you called it. " +
 				"blocked: you cannot proceed — say what stopped you in `evidence`. " +
-				"no_action: nobody was asking you to do anything, so the turn " +
-				"ends silently. Declining something you were asked, mentioned in " +
-				"or assigned is a reply, not no_action: report it as delivered.",
+				"no_action: nobody was asking you to do anything, and you changed " +
+				"nothing outside the engine (a read changes nothing, though a call " +
+				"the engine cannot tell from a write counts as a change, and a " +
+				"refused no_action names it), so the turn ends silently. Declining " +
+				"something you were asked, mentioned in or assigned is a reply, not " +
+				"no_action: report it as delivered, as you report anything you " +
+				"changed outside the engine — asking a colleague, reacting to a " +
+				"message, publishing an artifact.",
 		},
 		"summary": map[string]any{
 			"type": "string",

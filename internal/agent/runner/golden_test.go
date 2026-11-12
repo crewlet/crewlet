@@ -11,8 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -281,6 +283,98 @@ func TestGoldenNoActionOnAnAwaitedTurnIsRefusedInsideTheRound(t *testing.T) {
 	}
 	if !sawResult(plays, "even to decline") {
 		t.Error("the run was not told that silence is not an option here")
+	}
+}
+
+// asksColleagues registers a2a_ask as the engine's builtin is registered: a
+// first-party tool annotated open-world and not read-only, which delivers
+// nothing and acts all the same.
+func asksColleagues(t *testing.T, reg *tools.Registry) {
+	t.Helper()
+	if err := reg.RegisterWith(stubTool{name: toolname.A2AAsk, out: "asked"}, tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+}
+
+// A NO_ACTION AFTER A COLLEAGUE ASK IS REFUSED INSIDE THE ROUND. Nobody asked
+// for this turn, but it asked a colleague, so ending it as "nobody was
+// asking" would leave the ask unreported. The run's own submission is refused,
+// naming the ask, and the run reports what it did in the same round — rather
+// than the engine's check sending the round back for a fresh run. The
+// annotation travels from the registry through the run's surface to the
+// submission tool, which no piece shows alone.
+//
+// Mutation: the launch back to decodeWork, and the no_action is accepted,
+// leaving no refusal for the run to see.
+func TestGoldenANoActionAfterAColleagueAskIsRefusedInsideTheRound(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	}
+	res, plays := goldenTurn(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{reply: turn.NoReply(), register: asksColleagues}, turn.NoReply(),
+		run{calls: []llm.ToolCall{
+			{ID: "a", Name: toolname.A2AAsk, Arguments: map[string]any{"to": "cto", "question": "is this yours?"}},
+			call(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"not mine"}`),
+			call(t, runner.SubmitWorkTool, `{"outcome":"delivered","summary":"asked the CTO whether it is theirs"}`),
+		}})
+	if res.Decision != phase.Done {
+		t.Fatalf("decision = %s (breach %+v)", res.Decision, res.Breach)
+	}
+	if res.Rounds != 1 {
+		t.Errorf("rounds = %d — the refusal should have stayed inside the round", res.Rounds)
+	}
+	if n := len(prov.requestsFor("review")); n != 1 {
+		t.Errorf("the reviewer ran %d times, want once", n)
+	}
+	if len(plays) != 1 || len(plays[0].bridged) < 2 || !plays[0].bridged[1].Failed {
+		t.Fatal("the run's no_action after its ask was not refused")
+	}
+	if !sawResult(plays, `called "a2a_ask"`) {
+		t.Error("the refusal did not name the ask the run made")
+	}
+}
+
+// A NO_ACTION MADE BEFORE THE RUN ACTED IS CORRECTED BY THE CHECK. The run
+// said nobody was asking while it had done nothing — accepted, as it was true
+// then — and asked a colleague after. The collection replays the submission
+// against every call the round made, and must take it as the run's own
+// account: refused there, the round would be rescued as one that submitted
+// nothing. turn.Check then corrects it from the same record, naming the ask,
+// and the next run reports what the turn did.
+//
+// Mutation: refuse the no_action in decodeWork rather than at the live
+// submission alone, and the replay rescues round one, whose rescue the
+// reviewer judges, ending the turn after one run.
+func TestGoldenANoActionMadeBeforeTheRunActedIsCorrectedByTheCheck(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	}
+	res, plays := goldenTurn(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{reply: turn.NoReply(), register: asksColleagues}, turn.NoReply(),
+		run{calls: []llm.ToolCall{
+			call(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"not mine"}`),
+			{ID: "a", Name: toolname.A2AAsk, Arguments: map[string]any{"to": "cto", "question": "is this yours?"}},
+		}},
+		run{calls: []llm.ToolCall{
+			call(t, runner.SubmitWorkTool, `{"outcome":"delivered","summary":"asked the CTO whether it is theirs"}`),
+		}})
+	if len(plays) != 2 {
+		t.Fatalf("%d runs were launched, want two: the check sends round one back", len(plays))
+	}
+	if plays[0].bridged[0].Failed {
+		t.Fatalf("the run's no_action, made before it acted, was refused: %s", plays[0].bridged[0].Result)
+	}
+	if !strings.Contains(plays[1].req.Brief, `called "a2a_ask"`) {
+		t.Errorf("the second run was not told what the first called:\n%s", plays[1].req.Brief)
+	}
+	if n := len(prov.requestsFor("review")); n != 1 {
+		t.Errorf("the reviewer ran %d times, want once, on round two", n)
+	}
+	if res.Decision != phase.Done || res.Rounds != 2 {
+		t.Errorf("decision = %s at round %d, want done at round 2", res.Decision, res.Rounds)
 	}
 }
 
@@ -585,6 +679,14 @@ func TestGoldenAnAskWithADecisionEndsTheTurnBlockedOnThatBranch(t *testing.T) {
 	if res.Rounds != 1 {
 		t.Errorf("rounds = %d — the seat was sent back to make a choice that is "+
 			"not its own", res.Rounds)
+	}
+	// THE BLOCKED SUBMISSION WAS TAKEN AS MADE, though the ask before it had
+	// acted: once a turn has, only a no_action is refused at submission.
+	if len(plays) != 1 || len(plays[0].bridged) < 2 {
+		t.Fatalf("%d runs were launched; want the one run, its ask and its submission bridged", len(plays))
+	}
+	if plays[0].bridged[1].Failed {
+		t.Errorf("the run's blocked submission after its ask was refused: %s", plays[0].bridged[1].Result)
 	}
 	calls := asker.recorded()
 	if len(calls) != 1 {

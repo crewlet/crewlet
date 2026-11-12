@@ -74,6 +74,9 @@ func TestEachSubmissionRuleLivesOnItsField(t *testing.T) {
 	for _, want := range []struct{ got, phrase string }{
 		{field(workSchema, "outcome"), "Declining something you were asked"},
 		{field(workSchema, "outcome"), "report it as delivered"},
+		{field(workSchema, "outcome"), "you changed nothing outside the engine"},
+		{field(workSchema, "outcome"), "a read changes nothing"},
+		{field(workSchema, "outcome"), "a call the engine cannot tell from a write counts as a change"},
 		{field(workSchema, "deliveries"), "checks them against its own record"},
 		{field(reviewSchema, "notes"), "Required on self_iterate"},
 		{field(reviewSchema, "completed_work"), "ALREADY landed"},

@@ -106,8 +106,8 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
          incomplete
 
 3. Engine check (no model call), over the whole turn's record
-   ├── no_action nobody asked for, and nothing done outside the
-   │     engine -> the turn ends
+   ├── no_action nobody asked for, and nothing changed outside
+   │     the engine -> the turn ends
    ├── a claim the record refutes -> loop back with a correction
    │     naming what the turn did and the tools that deliver where
    │     the asker is waiting

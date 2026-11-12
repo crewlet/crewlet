@@ -184,6 +184,39 @@ func keptWhole(decode func(map[string]any) (workPayload, error)) func(map[string
 	}
 }
 
+// makingWork is decode for a submission a run is MAKING: every rule
+// [decodeWork] holds a submission to, and then a no_action refused once the
+// turn's record shows it acted outside the engine ([turn.Acted]), saying what
+// it did ([turn.ActedAccount]: a call the engine only presumes wrote named as
+// one) — one bounced call inside the round, where [turn.Check]'s correction
+// of the same claim relaunches the round in a new run and spends a review
+// after it. On a turn somebody is waiting on, decodeWork's own refusal of any
+// no_action speaks first.
+//
+// LIVE ONLY, as [keptWhole] is, and for a reason of its own: the collection
+// replays a submission against EVERY call the round made
+// ([Runner.resumeAgentRun]), those the run made after submitting included. A
+// no_action the run made before it acted would be refused there, and the round
+// collected as one that submitted nothing — rescued as incomplete, its account
+// lost, while the lost path's [submitted] reads the same calls as a
+// submission. Accepted on replay, the claim reaches [turn.Check], which
+// corrects it by the same rule on the same record.
+func makingWork(reply turn.Reply, called func() []ledger.Call, surface func() turn.Surface,
+) func(map[string]any) (workPayload, error) {
+	decode := decodeWork(reply, called, surface)
+	return func(args map[string]any) (workPayload, error) {
+		w, err := decode(args)
+		if err != nil || turn.Outcome(w.Outcome) != turn.OutcomeNoAction {
+			return w, err
+		}
+		if account := turn.ActedAccount(called(), surface()); account != "" {
+			return w, fmt.Errorf("no_action is not available: %s. Report what this turn did, as "+
+				"delivered, or as blocked with what stopped you", account)
+		}
+		return w, nil
+	}
+}
+
 // NotDeliveredOn is the clause each of [citations]' surface-named refusals
 // opens with: a turn that claims delivery while nothing reached the surface it
 // was asked on.

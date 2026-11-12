@@ -185,7 +185,8 @@ const (
 	OutcomeDelivered Outcome = "delivered"
 
 	// OutcomeNoAction — nobody was asking this seat to do anything, and it
-	// did nothing outside the engine. The turn ends and nothing is posted.
+	// changed nothing outside the engine. The turn ends and nothing is
+	// posted.
 	//
 	// Deliberately NOT the way to decline. A seat that was mentioned,
 	// assigned or asked and is saying no must say so where it was asked,
@@ -194,9 +195,10 @@ const (
 	//
 	// Nor the way to end a turn that ACTED outside the engine ([Acted]),
 	// though nobody asked: one that asked a colleague, reacted or published
-	// reports what it did as delivered, and [Check] sends its no_action
-	// back. Ended as one that did nothing, it would leave no episode and
-	// nothing reviewed, and the conversation's next turn would not know.
+	// reports what it did as delivered. The runner's live submission refuses
+	// its no_action, and [Check] sends back any that reaches it. Ended as
+	// one that changed nothing, it would leave no episode and nothing
+	// reviewed, and the conversation's next turn would not know.
 	OutcomeNoAction Outcome = "no_action"
 
 	// OutcomeBlocked — the work cannot proceed and the executor says why.
@@ -460,12 +462,13 @@ func DeliverersFor(s Surface, reply Reply) []string {
 // and that ending it as though nobody was asking would leave something that
 // happened unreported.
 //
-// ONE RULE, TWO READERS. [Abandon] spends a trigger on a true answer — a
+// ONE RULE, THREE READERS. [Abandon] spends a trigger on a true answer — a
 // redelivery that would have re-run the turn is given up instead — and [Check]
-// will not end as skipped a `no_action` this answers true for. Check read
-// [Delivered] instead, the other question below, so a turn nobody asked for
-// that asked a colleague, reacted or published and then said nobody was asking
-// ended skipped, with no episode and nothing reviewed.
+// will not end as skipped a `no_action` this answers true for, nor will the
+// runner's live submission accept one ([ActedAccount] says what it did).
+// Check read [Delivered] instead, the other question below, so a turn nobody
+// asked for that asked a colleague, reacted or published and then said nobody
+// was asking ended skipped, with no episode and nothing reviewed.
 //
 // A DIFFERENT QUESTION FROM [Delivered], and the two must not be merged.
 // Delivered asks whether an answer could have reached somebody, so it counts
@@ -477,17 +480,18 @@ func DeliverersFor(s Surface, reply Reply) []string {
 //
 // TWO HALVES, FAILING IN OPPOSITE DIRECTIONS. A false positive costs [Abandon]
 // work that never left the process — a trigger given up that a redelivery
-// would have run cleanly — and costs Check a round sent back to report what it
-// did, and a review; a false negative merely leaves today's behaviour in place.
-// So the half this rule adds counts PROOF alone: a call whose own annotations
-// say open-world and do not say read-only, and a first-party tool nobody
-// classified proves nothing and is not counted. The other half is the delivery
-// check's ([Deliverable]): a first-party tool registered as reaching somebody,
-// or an MCP-served tool not proven read-only, which FAILS CLOSED, the rule
-// that has survived two incidents, so an MCP tool that no hint marks as a read
-// or as a write, from its server or from an operator's override, counts though
-// nothing says it wrote: [ActedAccount] names such a call apart, as one the
-// engine cannot tell from a write ([Surface.PresumedWrites]).
+// would have run cleanly — and costs Check a round sent back, or the live
+// submission a call refused, to report what the turn did, and a review; a
+// false negative merely leaves today's behaviour in place. So the half this
+// rule adds counts PROOF alone: a call whose own annotations say open-world
+// and do not say read-only, and a first-party tool nobody classified proves
+// nothing and is not counted. The other half is the delivery check's
+// ([Deliverable]): a first-party tool registered as reaching somebody, or an
+// MCP-served tool not proven read-only, which FAILS CLOSED, the rule that has
+// survived two incidents, so an MCP tool that no hint marks as a read or as a
+// write, from its server or from an operator's override, counts though nothing
+// says it wrote: [ActedAccount] names such a call apart, as one the engine
+// cannot tell from a write ([Surface.PresumedWrites]).
 //
 // A READ OF THE WORLD IS NOT AN ACT. A web search or `ssh_read` is open-world
 // — it reaches outside the process — and read-only: it changes nothing anybody

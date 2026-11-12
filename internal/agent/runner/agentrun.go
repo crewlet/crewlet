@@ -444,7 +444,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// failed, which the replay skips.
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(makingWork(r.cfg.Reply,
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))))
 
@@ -627,7 +627,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// included, or a delivery made before the question, or before the loss,
 	// would be refused here and accepted there.
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(makingWork(r.cfg.Reply,
 			func() []ledger.Call {
 				carried := append(slices.Clone(logged), ledger.Called(elided)...)
 				return turn.Record(history, append(carried, calls(surface)...))
@@ -967,7 +967,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(makingWork(r.cfg.Reply,
 			func() []ledger.Call {
 				return turn.Record(history, append(slices.Clone(called), calls(surface)...))
 			},
@@ -1150,8 +1150,11 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	unfinished := inAdmissionOrder(r.cfg.Resume.Unfinished)
 
 	// THE REPLAY'S DECODER IS NOT HELD TO WHAT THE LOG KEEPS WHOLE
-	// ([keptWhole]): the submission is already made, and one a build before
-	// that bound recorded whole is replayed as it stands.
+	// ([keptWhole]), NOR DOES IT REFUSE A NO_ACTION AFTER AN ACT
+	// ([makingWork]): the submission is already made. One a build before
+	// that bound recorded whole is replayed as it stands, and a no_action
+	// the run made before it acted is collected as the run's own account,
+	// which [turn.Check] corrects from the same record.
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
 		typedPickup(r.cfg.Reply, r.pickupAnswer, decodeWork(r.cfg.Reply,
