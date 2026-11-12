@@ -54,7 +54,8 @@ jobs:
     # A fork's own push to its main would run with the fork's token and
     # identity, so it could only fail here.
     if: github.repository == 'crewlet/crewlet'
-    runs-on: ubuntu-latest
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
     # Two binaries and one two-platform image whose arm64 leg runs its
     # package install under QEMU. Not the six-hour default, under which a hung
     # step holds `main` back until the next push cancels it.

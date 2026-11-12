@@ -106,6 +106,10 @@ type Sources struct {
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads
 
+	// Atlas is the atlas's reads on this node (atlas.go); nil serves no
+	// atlas question.
+	Atlas AtlasReads
+
 	// Chart answers the lead relations the personal questions are scoped
 	// by, through the SAME seam internal/authz asks every other surface's
 	// through — see [Sources.recordHandle]. Nil is a surface with no
@@ -1172,6 +1176,10 @@ func Register(r *Registry, s Sources) {
 		// GITLET'S ROWS, each decided per repository by the grant
 		// the serving node derives from its chart (code.go).
 		registerCode(r, s)
+	}
+	if s.Atlas != nil {
+		// THE ATLAS, read as its asker on the atlas app (atlas.go).
+		registerAtlas(r, s)
 	}
 }
 

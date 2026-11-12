@@ -322,9 +322,9 @@ func (e *Engine) attachSeatReflection(ctx context.Context, seat placement.Seat) 
 // detachSeatReflection lets a released seat's reflection subject go, BEFORE the
 // release's last memory flush. Detach does not wait for a reflection already
 // running ([queue.EventQueue.Detach] — the fenced release must not), so one
-// that finishes after the flush writes rows this node no longer carries: the
-// same bounded loss the flush documents for a crash. A seat this node never
-// attached detaches to nothing.
+// that finishes after the flush writes rows this node no longer carries, lost
+// to the seat's next holder as whatever the flush does not reach is
+// ([memoryFlushTimeout]). A seat this node never attached detaches to nothing.
 func (e *Engine) detachSeatReflection(ctx context.Context, seat placement.Seat) {
 	subject, group := topics.AgentReflect(seat.ID), topics.AgentReflectGroup(seat.ID)
 	if subject == "" || e.backends == nil || e.backends.Queue == nil {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -15,7 +15,7 @@ import (
 // THE PURGE: code_purge_unreachable, a person's request that a repository's
 // objects no ref reaches be dropped — the leaked secret force-pushed away, the
 // history a deleted branch left — which the repository's MAINTAINER serves by
-// expunging them (internal/code/compact), with no grace for what a ref drop
+// expunging them (internal/gitlet/compact), with no grace for what a ref drop
 // left: a purge is asked because something must go now.
 //
 // # A person's, and a maintainer's
@@ -26,7 +26,7 @@ import (
 // the tool holds it to the repository's grant, maintain or above, read once
 // the repository is — every person maintains every repository (ADR-0085), so
 // what that refuses is a principal of a kind a future grant ranks lower. A
-// credential bound to nobody purges nothing ([code.UnboundDetail]): the
+// credential bound to nobody purges nothing ([gitlet.UnboundDetail]): the
 // request names the person who asked, for its attribution, and nobody is no
 // one a purge may be answered to.
 //
@@ -37,7 +37,7 @@ import (
 // again — after an `unknown`, or a lost answer — is the same request, which
 // the repository's committer's ledger collapses and answers from its own
 // record. A request asked while another is open WIDENS that one to itself
-// (internal/code's ExpungeRequest): the repository holds ONE open purge,
+// (internal/gitlet's ExpungeRequest): the repository holds ONE open purge,
 // served once nothing from before the latest request is left.
 //
 // # What the answer says still holds the objects
@@ -51,7 +51,7 @@ import (
 // object store, every backup taken before the store deletes them: a nats
 // backup is a snapshot of the bucket's stream, which carries every byte the
 // bucket holds, a retired object's among them), and the object store for
-// [code.RetireGrace] after the commit, until the retired rows' sweep and the
+// [gitlet.RetireGrace] after the commit, until the retired rows' sweep and the
 // store's next collection take them (and a versioned S3 bucket for as long as
 // its own rules keep a deleted object's noncurrent version). The
 // repository's detail (code_get_repo's `expunge`) says when the commit
@@ -119,7 +119,7 @@ var (
 		"the instant the purge committed."
 	purgeStoreUntil = fmt.Sprintf("the object store keeps them for %d hours after the purge commits, until "+
 		"the retired packs' sweep and the store's next collection take them, and a versioned S3 bucket for as "+
-		"long as its own rules keep a deleted object's noncurrent version.", int(code.RetireGrace.Hours()))
+		"long as its own rules keep a deleted object's noncurrent version.", int(gitlet.RetireGrace.Hours()))
 )
 
 // codePurgeUnreachable is the purge.
@@ -155,11 +155,11 @@ func (t *codePurgeUnreachable) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if refusal != nil {
 		return *refusal, nil
 	}
-	if c.asker.Kind != code.PrincipalOperator || c.asker.Seat == "" {
+	if c.asker.Kind != gitlet.PrincipalOperator || c.asker.Seat == "" {
 		// THE TABLE'S RULE AGAIN, here where the request is formed: a seat
 		// is refused before the call reaches a tool, and a request a seat
 		// could send would be refused by every committer.
-		return refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, tool+": a purge is a person's, "+
+		return refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, tool+": a purge is a person's, "+
 			"through a credential bound to their human seat."), nil
 	}
 	name, refusal := repoArg(tool, args)
@@ -175,12 +175,12 @@ func (t *codePurgeUnreachable) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if refusal != nil {
 		return *refusal, nil
 	}
-	if g := code.GrantOf(c.asker, repo, nil); g.Access < code.AccessMaintain {
-		return refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, fmt.Sprintf("%s purged nothing of %s: "+
+	if g := gitlet.GrantOf(c.asker, repo, nil); g.Access < gitlet.AccessMaintain {
+		return refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, fmt.Sprintf("%s purged nothing of %s: "+
 			"a purge is a maintainer's, and you hold %s on it.", tool, repo.Name, g.Access)), nil
 	}
 	op := opIDFor(actor, tool, purgeVerb, repo.ID, args)
-	p := code.ExpungeProposal{Request: &code.ExpungeRequest{RepoID: repo.ID, RequestID: op, By: c.asker}}
+	p := gitlet.ExpungeProposal{Request: &gitlet.ExpungeRequest{RepoID: repo.ID, RequestID: op, By: c.asker}}
 	if err := p.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, actor, repo.Name, err), nil
 	}
@@ -213,7 +213,7 @@ func (t *codePurgeUnreachable) CallForTurn(ctx context.Context, turn *turnctx.Tu
 // that may hold a copy, from this node's view of the Gitlet nodes — a view that
 // could not be read is said, never answered as nobody: the request is
 // recorded either way.
-func (t *codePurgeUnreachable) place(repo code.RepoRef, out *purgeAnswer) {
+func (t *codePurgeUnreachable) place(repo gitlet.RepoRef, out *purgeAnswer) {
 	if t.deps.Placement == nil {
 		out.Unplaced = "this node names no git placement"
 		return
@@ -239,7 +239,7 @@ func (t *codePurgeUnreachable) place(repo code.RepoRef, out *purgeAnswer) {
 // UNAVAILABLE — the same call again being the same request — and anything
 // else the engine's own fault, since nothing about a request but the
 // repository is judged.
-func purgeRefused(ctx context.Context, tool, repo string, res code.ExpungeResult, actor Actor) tools.Result {
+func purgeRefused(ctx context.Context, tool, repo string, res gitlet.ExpungeResult, actor Actor) tools.Result {
 	cause := writeRefusalError(string(res.Refusal), res.Detail)
 	class, known := pushClass(res.Refusal)
 	if !known || class != tools.RefusalNotFound && class != tools.RefusalUnavailable {

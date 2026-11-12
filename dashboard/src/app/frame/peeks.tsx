@@ -60,6 +60,7 @@ const PersonPeek = lazyScreen("settings", (m) => m.PersonPeek);
 const PagePeek = lazyScreen("doclet", (m) => m.PagePeek);
 const ContainerPeek = lazyScreen("doclet", (m) => m.ContainerPeek);
 const ChangePeek = lazyScreen("gitlet", (m) => m.ChangePeek);
+const AtlasPeek = lazyScreen("atlas", (m) => m.AtlasPeek);
 
 /**
  * What every peek is handed.
@@ -103,6 +104,7 @@ export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.React
   revision: ({ id }) => <RevisionPeek id={id} />,
   person: ({ id }) => <PersonPeek id={id} />,
   change: ({ id }) => <ChangePeek reference={id} />,
+  atlas: ({ id }) => <AtlasPeek id={id} />,
 };
 
 /** Whether this kind can be peeked at all. */

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -25,29 +25,29 @@ import (
 // once ([changeHost.meet]).
 type changeHost struct {
 	mu       sync.Mutex
-	heads    map[pushKey]code.BranchChange
+	heads    map[pushKey]gitlet.BranchChange
 	next     int64
 	subject  string
-	reads    []code.ReadQuery
-	writes   []code.ChangeProposal
-	gits     []code.GitQuery
+	reads    []gitlet.ReadQuery
+	writes   []gitlet.ChangeProposal
+	gits     []gitlet.GitQuery
 	together int
 	arrived  int
 	met      chan struct{}
 }
 
 func newChangeHost() *changeHost {
-	return &changeHost{heads: map[pushKey]code.BranchChange{}, next: 7, subject: "Retry the upload once"}
+	return &changeHost{heads: map[pushKey]gitlet.BranchChange{}, next: 7, subject: "Retry the upload once"}
 }
 
-func (h *changeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (h *changeHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.reads = append(h.reads, q)
-	if q.Kind != code.ReadBranchChanges || q.BranchChanges == nil {
-		return code.ReadAnswer{}, fmt.Errorf("%w: a collection read kind %s", code.ErrInvalid, q.Kind)
+	if q.Kind != gitlet.ReadBranchChanges || q.BranchChanges == nil {
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: a collection read kind %s", gitlet.ErrInvalid, q.Kind)
 	}
-	out := code.ReadAnswer{Position: firstPageAt, Level: q.Fresh.Level}
+	out := gitlet.ReadAnswer{Position: firstPageAt, Level: q.Fresh.Level}
 	for _, repo := range q.BranchChanges.Repos {
 		for _, ref := range repo.Refs {
 			if bc, ok := h.heads[pushKey{repo: repo.RepoID, ref: ref}]; ok {
@@ -70,13 +70,13 @@ func recordOf(pushed []sandbox.PushedRef) sandbox.PushRecord {
 
 // atTheRecord reports whether q was read at session floored at the push
 // record's position — no barrier of its own.
-func atTheRecord(q code.ReadQuery) bool {
+func atTheRecord(q gitlet.ReadQuery) bool {
 	return q.Fresh.Level == statelog.ReadSession && q.Fresh.Floor(topics.CodeLogStream) == pushRecordAt
 }
 
-func (h *changeHost) Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+func (h *changeHost) Change(ctx context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
 	if err := h.meet(ctx); err != nil {
-		return code.ChangeResult{}, err
+		return gitlet.ChangeResult{}, err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -84,21 +84,21 @@ func (h *changeHost) Change(ctx context.Context, p code.ChangeProposal) (code.Ch
 	o := p.Open
 	key := pushKey{repo: o.RepoID, ref: o.SourceRef}
 	if live, ok := h.heads[key]; ok {
-		return code.ChangeResult{Refusal: code.ChangeRefusalChangeExists,
+		return gitlet.ChangeResult{Refusal: gitlet.ChangeRefusalChangeExists,
 			Detail: fmt.Sprintf("%s already heads change %d", o.SourceRef, live.Number)}, nil
 	}
-	h.heads[key] = code.BranchChange{Ref: o.SourceRef, ChangeID: o.ChangeID, Number: h.next}
+	h.heads[key] = gitlet.BranchChange{Ref: o.SourceRef, ChangeID: o.ChangeID, Number: h.next}
 	h.next++
-	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: o.ChangeID, Number: h.next - 1,
+	return gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: o.ChangeID, Number: h.next - 1,
 		Version: 1, Position: firstPageAt}, nil
 }
 
-func (h *changeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (h *changeHost) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.gits = append(h.gits, q)
-	return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Log: &code.LogAnswer{
-		Commits: []code.LogCommit{{OID: q.Log.Rev, Subject: h.subject}}}}, nil
+	return gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Log: &gitlet.LogAnswer{
+		Commits: []gitlet.LogCommit{{OID: q.Log.Rev, Subject: h.subject}}}}, nil
 }
 
 // meet holds an open, where the host is set to answer opens together, until
@@ -123,7 +123,7 @@ func (h *changeHost) meet(ctx context.Context) error {
 }
 
 // asked is what the host was asked, copied under its lock.
-func (h *changeHost) asked() ([]code.ReadQuery, []code.ChangeProposal, []code.GitQuery) {
+func (h *changeHost) asked() ([]gitlet.ReadQuery, []gitlet.ChangeProposal, []gitlet.GitQuery) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.reads), slices.Clone(h.writes), slices.Clone(h.gits)
@@ -159,7 +159,7 @@ func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 	t.Parallel()
 	run := openingRun()
 	branch := "refs/heads/seats/swe/ENG-42"
-	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("1"), Pushes: 2}}
+	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: gitlet.ZeroOID, New: oidOf("1"), Pushes: 2}}
 	host := newChangeHost()
 
 	named, opened, err := readerOf(host).Changes(t.Context(), run, recordOf(pushed), true)
@@ -182,8 +182,8 @@ func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 		t.Fatalf("the collection titled the change by %+v, want one read of the delivered commit as swe", gits)
 	}
 	op := openOpID(run, runWebID)
-	wantOpen := code.ChangeProposal{OpID: op, Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "swe"},
-		Seen: firstPageAt, Open: &code.ChangeOpen{RepoID: runWebID, ChangeID: code.OpenChangeID(op),
+	wantOpen := gitlet.ChangeProposal{OpID: op, Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"},
+		Seen: firstPageAt, Open: &gitlet.ChangeOpen{RepoID: runWebID, ChangeID: gitlet.OpenChangeID(op),
 			SourceRef: branch, TargetRef: "refs/heads/main", Title: "Retry the upload once",
 			WorkItem: run.WorkItem, TurnID: "t1", RunID: runLaunch}}
 	if len(writes) != 1 || !reflect.DeepEqual(writes[0], wantOpen) {
@@ -247,12 +247,12 @@ func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 func TestARunsOpenIsHeldToWhoeverWokeItsTurn(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
-	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("1"), Pushes: 1}}
+	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: gitlet.ZeroOID, New: oidOf("1"), Pushes: 1}}
 	for _, tc := range []struct {
 		name, colleague string
-		want            *code.WriteCeiling
+		want            *gitlet.WriteCeiling
 	}{
-		{"a colleague's ask", "designer", &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "designer"}},
+		{"a colleague's ask", "designer", &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: "designer"}},
 		{"nobody's ask", "", nil},
 	} {
 		run := openingRun()
@@ -269,7 +269,7 @@ func TestARunsOpenIsHeldToWhoeverWokeItsTurn(t *testing.T) {
 		if got := writes[0].Ceiling; !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: the open was asked for %+v, want %+v", tc.name, got, tc.want)
 		}
-		if got := writes[0].Asker; got != (code.Principal{Kind: code.PrincipalAgent, Seat: "swe"}) {
+		if got := writes[0].Asker; got != (gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}) {
 			t.Errorf("%s: the open was asked by %+v, want the run's seat", tc.name, got)
 		}
 	}
@@ -277,7 +277,7 @@ func TestARunsOpenIsHeldToWhoeverWokeItsTurn(t *testing.T) {
 
 // A RUN'S CHANGE IS TITLED WHATEVER ITS BRANCH IS NAMED: a run that delivered
 // a commit with no subject asks the open titled by its branch's name, made a
-// title as a push's change is (code.DeliveredTitle) — and a branch git accepts
+// title as a push's change is (gitlet.DeliveredTitle) — and a branch git accepts
 // may hold U+0085, a C1 control character an open refuses in a title as a
 // line break — so the ask is never left unopened for a title nobody wrote.
 //
@@ -289,7 +289,7 @@ func TestARunsChangeIsTitledWhateverItsBranchIsNamed(t *testing.T) {
 	branch := "refs/heads/" + run.Repos[0].Branch
 	host := newChangeHost()
 	host.subject = ""
-	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("1"), Pushes: 1}}
+	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: gitlet.ZeroOID, New: oidOf("1"), Pushes: 1}}
 	if _, opened, err := readerOf(host).Changes(t.Context(), run, recordOf(pushed), true); err != nil || len(opened) != 1 ||
 		!opened[0].Opened {
 		t.Fatalf("a run that delivered a commit with no subject to a branch holding U+0085: %+v, %v", opened, err)
@@ -298,7 +298,7 @@ func TestARunsChangeIsTitledWhateverItsBranchIsNamed(t *testing.T) {
 	if len(writes) != 1 || writes[0].Open == nil {
 		t.Fatalf("the collection asked %+v, want one open", writes)
 	}
-	if title := writes[0].Open.Title; title != "seats/swe/a b" || code.TitleProblem(title) != "" {
+	if title := writes[0].Open.Title; title != "seats/swe/a b" || gitlet.TitleProblem(title) != "" {
 		t.Fatalf("the open is titled %q, want its branch's name made a title, %q", title, "seats/swe/a b")
 	}
 }
@@ -317,8 +317,8 @@ func TestARunsAsksAreOpenedAtOnce(t *testing.T) {
 	run.Repos[2].Open = &sandbox.OpenChange{Target: "refs/heads/main", Title: "Fix the api"}
 	branch := "refs/heads/seats/swe/ENG-42"
 	pushed := []sandbox.PushedRef{
-		{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("1"), Pushes: 1},
-		{Repo: "api", Ref: branch, Old: code.ZeroOID, New: oidOf("2"), Pushes: 1},
+		{Repo: "web", Ref: branch, Old: gitlet.ZeroOID, New: oidOf("1"), Pushes: 1},
+		{Repo: "api", Ref: branch, Old: gitlet.ZeroOID, New: oidOf("2"), Pushes: 1},
 	}
 	host := newChangeHost()
 	host.together, host.met = 2, make(chan struct{})
@@ -359,18 +359,18 @@ func TestARunsAsksAreOpenedAtOnce(t *testing.T) {
 func TestADeliveredRefNamesItsChange(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost()
-	host.heads[pushKey{repo: runWebID, ref: "refs/heads/seats/swe/ENG-42"}] = code.BranchChange{
+	host.heads[pushKey{repo: runWebID, ref: "refs/heads/seats/swe/ENG-42"}] = gitlet.BranchChange{
 		Ref: "refs/heads/seats/swe/ENG-42", ChangeID: "0190d8f0-6666-7000-8000-0123456789ab", Number: 42}
-	host.heads[pushKey{repo: runAPIID, ref: "refs/heads/fix"}] = code.BranchChange{Ref: "refs/heads/fix",
+	host.heads[pushKey{repo: runAPIID, ref: "refs/heads/fix"}] = gitlet.BranchChange{Ref: "refs/heads/fix",
 		ChangeID: "0190d8f0-7777-7000-8000-0123456789ab", Number: 5}
-	host.heads[pushKey{repo: runAPIID, ref: "refs/heads/old"}] = code.BranchChange{Ref: "refs/heads/old",
+	host.heads[pushKey{repo: runAPIID, ref: "refs/heads/old"}] = gitlet.BranchChange{Ref: "refs/heads/old",
 		ChangeID: "0190d8f0-8888-7000-8000-0123456789ab", Number: 6}
 	pushed := []sandbox.PushedRef{
 		{Repo: "web", Ref: "refs/heads/seats/swe/ENG-42", Old: oidOf("1"), New: oidOf("2"), Pushes: 1},
-		{Repo: "web", Ref: "refs/tags/v1", Old: code.ZeroOID, New: oidOf("2"), Pushes: 1},
+		{Repo: "web", Ref: "refs/tags/v1", Old: gitlet.ZeroOID, New: oidOf("2"), Pushes: 1},
 		{Repo: "api", Ref: "refs/heads/fix", Old: oidOf("3"), New: oidOf("4"), Pushes: 1},
-		{Repo: "api", Ref: "refs/heads/old", Old: oidOf("5"), New: code.ZeroOID, Pushes: 1},
-		{Repo: "api", Ref: "refs/heads/spike", Old: code.ZeroOID, New: oidOf("6"), Pushes: 1},
+		{Repo: "api", Ref: "refs/heads/old", Old: oidOf("5"), New: gitlet.ZeroOID, Pushes: 1},
+		{Repo: "api", Ref: "refs/heads/spike", Old: gitlet.ZeroOID, New: oidOf("6"), Pushes: 1},
 	}
 	named, opened, err := readerOf(host).Changes(t.Context(), pushedRun(), recordOf(pushed), true)
 	if err != nil || opened != nil {
@@ -386,7 +386,7 @@ func TestADeliveredRefNamesItsChange(t *testing.T) {
 	if len(reads) != 1 || !atTheRecord(reads[0]) {
 		t.Fatalf("the collection read %+v, want ONE read at session at its push record's %s", reads, pushRecordAt)
 	}
-	wantRepos := []code.RepoBranches{{RepoID: runWebID, Refs: []string{"refs/heads/seats/swe/ENG-42"}},
+	wantRepos := []gitlet.RepoBranches{{RepoID: runWebID, Refs: []string{"refs/heads/seats/swe/ENG-42"}},
 		{RepoID: runAPIID, Refs: []string{"refs/heads/fix", "refs/heads/spike"}}}
 	if got := reads[0].BranchChanges.Repos; !reflect.DeepEqual(got, wantRepos) {
 		t.Errorf("the read named %+v, want each repository's live branches, in the run's order: %+v", got,
@@ -396,12 +396,12 @@ func TestADeliveredRefNamesItsChange(t *testing.T) {
 	// MORE BRANCHES THAN ONE READ ANSWERS: read in two, every branch named.
 	many := newChangeHost()
 	var lots []sandbox.PushedRef
-	for i := range code.MaxRefsPerQuery + 1 {
+	for i := range gitlet.MaxRefsPerQuery + 1 {
 		lots = append(lots, sandbox.PushedRef{Repo: "web", Ref: fmt.Sprintf("refs/heads/b%d", i),
-			Old: code.ZeroOID, New: oidOf("1"), Pushes: 1})
+			Old: gitlet.ZeroOID, New: oidOf("1"), Pushes: 1})
 	}
 	last := lots[len(lots)-1].Ref
-	many.heads[pushKey{repo: runWebID, ref: last}] = code.BranchChange{Ref: last,
+	many.heads[pushKey{repo: runWebID, ref: last}] = gitlet.BranchChange{Ref: last,
 		ChangeID: "0190d8f0-9999-7000-8000-0123456789ab", Number: 9}
 	named, _, err = readerOf(many).Changes(t.Context(), pushedRun(), recordOf(lots), false)
 	if err != nil || named[len(named)-1].Change != "web!9" {
@@ -415,9 +415,9 @@ func TestADeliveredRefNamesItsChange(t *testing.T) {
 		for _, repo := range q.BranchChanges.Repos {
 			n += len(repo.Refs)
 		}
-		if n > code.MaxRefsPerQuery || !atTheRecord(q) {
+		if n > gitlet.MaxRefsPerQuery || !atTheRecord(q) {
 			t.Errorf("a read named %d branches at %+v, want at most %d at the push record's position", n,
-				q.Fresh, code.MaxRefsPerQuery)
+				q.Fresh, gitlet.MaxRefsPerQuery)
 		}
 		asked += n
 	}

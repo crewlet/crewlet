@@ -127,6 +127,7 @@ func richExecutorInput() ExecutorInput {
 		RelevantKnowledge:   "## Runbook: deploys\n1. tag\n2. ship 🚢",
 		ThreadContext:       "- Ana: ## not a heading of ours\n- Bo: ok",
 		OpenAsks:            "To Ana Lind (ana), 1 open:\n- ACME-12 \"Ship it\": \"Merge now?\"",
+		Systems:             "- orders-db (datastore, on/ssh/db-1/postgres/5432): confirmed; runs_on db-1",
 		Access: "## Your access\nWhat you can reach with your own credentials now.\n" +
 			"- GitHub (acme/api): Contents Read and write. Not in your Crewlet grant: Workflows.",
 	}

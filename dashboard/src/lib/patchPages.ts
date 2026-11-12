@@ -1,9 +1,9 @@
 /**
  * One file's patch read whole, a page at a time, and drawn as one.
  *
- * The engine answers a file's patch a page at a time (`code.DiffAnswer.Patch`,
+ * The engine answers a file's patch a page at a time (`gitlet.DiffAnswer.Patch`,
  * `next` the byte of the patch the page after begins at), each page at most
- * one answer's bound (`code.MaxGitAnswerBytes`, 56 KiB of JSON) and cut at a
+ * one answer's bound (`gitlet.MaxGitAnswerBytes`, 56 KiB of JSON) and cut at a
  * line, never inside one: so a change of a thousand lines or so — a generated
  * file, a large refactor, a vendored drop — is several pages, and the pages'
  * texts, joined in order, are the patch git wrote. Read as its first page

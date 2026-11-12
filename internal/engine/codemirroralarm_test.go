@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -21,7 +21,7 @@ import (
 // another host, as the agent seat that owns it. A person's seat would push only
 // while its holder uses Gitlet (ADR-0110), which this case's identity directory
 // holds nobody for, and the alarm, not who a mirror may push as, is its
-// subject (internal/code's and internal/code/mirror's own suites hold that).
+// subject (internal/gitlet's and internal/gitlet/mirror's own suites hold that).
 const mirrorCompany = `
 name: Nimbus
 tracker:
@@ -52,7 +52,7 @@ roles:
 // whose push mirror's every dial is refused — so its home loop's mirrors
 // worker tries it at its first pass and again once its retry is due, each
 // attempt failing at the dial — raises nothing while the mirror is inside its
-// own refresh promise (code.MirrorInterval and mirror.AttemptDeadline) and
+// own refresh promise (gitlet.MirrorInterval and mirror.AttemptDeadline) and
 // code_mirror_failing, naming the repository, once it has gone that long
 // without being brought level: its reading through codeReading, and the alarm
 // the retention loop's evaluation of it stands. The node's clock is the
@@ -72,7 +72,7 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	e, err := engine.New(t.Context(), engine.WithMirrorSeams(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, mirrorCompany),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-		GitHook:     codetest.HookCommand(t),
+		GitHook:     gitlettest.HookCommand(t),
 	}, func(o mirror.Options) mirror.Options {
 		o.Now = clock
 		o.Dial = func(_ context.Context, url, _ string) (gitproc.Remote, error) {
@@ -99,7 +99,7 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 		t.Helper()
 		select {
 		case <-dialed:
-		case <-time.After(3*codehome.Backstop + time.Minute):
+		case <-time.After(3*gitlethome.Backstop + time.Minute):
 			t.Fatalf("the push mirror's %s attempt never dialed its target", which)
 		}
 	}
@@ -111,7 +111,7 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	waitDial("second")
 	if r := engine.CodeReadingForTest(t.Context(), e); r.CodeMirrorFailing != 0 {
 		t.Fatalf("the reading counts %d failing mirror(s) twenty minutes into its first failure (%s, %s); "+
-			"want none inside code.MirrorInterval + mirror.AttemptDeadline", r.CodeMirrorFailing,
+			"want none inside gitlet.MirrorInterval + mirror.AttemptDeadline", r.CodeMirrorFailing,
 			r.CodeMirrorFailingRepo, r.CodeMirrorFailingFor)
 	}
 
@@ -120,10 +120,10 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	offset.Store(int64(40 * time.Minute))
 	reading := engine.CodeReadingForTest(t.Context(), e)
 	if reading.CodeMirrorFailing != 1 || reading.CodeMirrorFailingRepo != "web" ||
-		reading.CodeMirrorFailingFor <= code.MirrorInterval+mirror.AttemptDeadline {
+		reading.CodeMirrorFailingFor <= gitlet.MirrorInterval+mirror.AttemptDeadline {
 		t.Fatalf("the reading counts %d failing mirror(s), the longest %q for %s; want web's, past %s",
 			reading.CodeMirrorFailing, reading.CodeMirrorFailingRepo, reading.CodeMirrorFailingFor,
-			code.MirrorInterval+mirror.AttemptDeadline)
+			gitlet.MirrorInterval+mirror.AttemptDeadline)
 	}
 
 	// AND THE ALARM, at the retention loop's next evaluation of its reading.

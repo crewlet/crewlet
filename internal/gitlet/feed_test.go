@@ -1,0 +1,496 @@
+package gitlet_test
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// THE CODE FEED (feed.go, wake.go): a seat hears about a change by a wake the
+// code log's own consumer derives from the committed record, and a person
+// never does.
+
+// feedRecord is the record at p on n's log as the feed is handed it: the
+// verified body, keyed by its subject, at its position.
+func feedRecord(t *testing.T, n *node, p statelog.Position) changefeed.Record {
+	t.Helper()
+	subject, body, _, ok, err := n.records.At(t.Context(), p.Seq)
+	if err != nil || !ok {
+		t.Fatalf("read the record at %s: %v (held: %v)", p, err, ok)
+	}
+	return changefeed.Record{Key: subject, Payload: body, Position: p.Seq, Stream: p.Stream,
+		Gen: uint64(p.Generation)}
+}
+
+// wakesOf is what the feed and the parser make of rec: whether the
+// translator relays it, and each wake the parser derives as
+// "handle:reason".
+func wakesOf(t *testing.T, rec changefeed.Record) (changefeed.Delivery, bool, []notify.Routed) {
+	t.Helper()
+	d, relayed, err := gitlet.NewTranslator().Translate(t.Context(), rec)
+	if err != nil {
+		t.Fatalf("translate the record at %d: %v", rec.Position, err)
+	}
+	if !relayed {
+		return d, false, nil
+	}
+	at := statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}
+	routed, err := gitlet.NewParser(gitlet.ParserOptions{}).Parse(t.Context(),
+		types.RawWebhook{Body: d.Body, Trigger: at.String()}, nil)
+	if err != nil {
+		t.Fatalf("parse the record at %d: %v", rec.Position, err)
+	}
+	return d, true, routed
+}
+
+// woken is each wake as "handle:reason".
+func woken(routed []notify.Routed) []string {
+	var out []string
+	for _, r := range routed {
+		out = append(out, r.To.Handle+":"+r.Metadata[gitlet.MetaVia])
+	}
+	return out
+}
+
+// THE CODE FEED DERIVES ONLY WAKES, AND ONLY SEATS': a record about a change
+// is relayed exactly when its routing tells a seat something, and the parser
+// wakes exactly those seats — each once, under the reason the record's routing
+// gives it, with an id derived from the record, the change and the seat, the
+// change's name, who wrote what it announces, and the change as what starts
+// the turn it wakes, under that seat's own reason. A person the same record
+// tells is never queue-woken: their notice row is written all the same, and
+// is where they read it. A record that tells nobody but its actor, or only
+// persons, is acknowledged with no delivery, as is a push that moves no
+// change; a record of a newer build is deferred to a peer on that build.
+//
+// Mutation: drop the person filter in the parser → the open wakes founder;
+// relay a record whatever its routing tells (drop wakesASeat) → the ask of a
+// person alone, and the aside nobody hears, are relayed; derive the wake id
+// from the change rather than the record → the comment's wakes collapse into
+// the ask's; name no origin, or one reason for every recipient, → the ask's
+// and the comment's origins are wrong; answer a newer build's record "no
+// wake" → it is not deferred, and the feed would acknowledge it fleet-wide.
+func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	// AN HOUR OLD at the harness's batch instant, inside every notice
+	// horizon, so the person's notice row is written and can be read.
+	storedBefore(n, time.Hour)
+	c, _ := committerOn(t, n, n.pub)
+	repo := changeRepo(t, n, "web")
+	open := opening(repo, featureRef, mainRef, dev)
+	open.Open.Mentions = []string{"founder", "cto"}
+	opened, err := c.ProposeChange(t.Context(), open)
+	requireChanged(t, opened, err)
+	change := opened.ChangeID
+	w, _ := writerOn(t, n, n.pub)
+
+	if _, _, routed := wakesOf(t, feedRecord(t, n, opened.Position)); !slices.Equal(woken(routed),
+		[]string{"cto:mention"}) {
+		t.Errorf("an open naming a person and a seat wakes %v, want the seat alone", woken(routed))
+	}
+	if got := noticesOf(t, n, opened.Position); !slices.Equal(got,
+		[]string{"cto:mention:agent", "founder:mention:person"}) {
+		t.Errorf("the open wrote the notices %v, want one each, the person's read in their inbox", got)
+	}
+	aside := converse(t, w, saying(repo, change, dev, "", "Noted for later."))
+	if _, relayed, _ := wakesOf(t, feedRecord(t, n, aside.Position)); relayed {
+		t.Error("a comment that starts a thread nobody else is in is relayed")
+	}
+
+	askSeat := converse(t, w, asking(repo, change, dev, "plat-lead"))
+	d, relayed, routed := wakesOf(t, feedRecord(t, n, askSeat.Position))
+	if !relayed || !slices.Equal(woken(routed), []string{"plat-lead:review_requested"}) {
+		t.Fatalf("an ask of plat-lead wakes %v (relayed %v), want plat-lead asked to review", woken(routed), relayed)
+	}
+	rec := n.recordAt(askSeat.Position)
+	if d.ID != rec.OpID || d.Actor != "dev" {
+		t.Errorf("the delivery is %q by %q, want the record's own op id %q by dev", d.ID, d.Actor, rec.OpID)
+	}
+	wake := routed[0]
+	switch {
+	case wake.WakeID != changefeed.WakeID(gitlet.NoticeID(rec.OpID, change), "plat-lead"):
+		t.Errorf("the wake's id is %s, want the one derived from the record, the change and the seat", wake.WakeID)
+	case !wake.WakeAt.Equal(rec.CreatedAt):
+		t.Errorf("the wake is stamped %v, want the record's own instant %v", wake.WakeAt, rec.CreatedAt)
+	case wake.Source != gitlet.Source || wake.Metadata[gitlet.MetaChangeRef] != "web!1" ||
+		wake.Metadata[gitlet.MetaChangeID] != change || wake.Body != "the retry loop":
+		t.Errorf("the wake is %+v, want web!1 by its id on the code source, carrying the ask's note", wake.Inbound)
+	case wake.Writer == nil || wake.Writer.Kind != iam.ActorAgent || wake.Writer.Seat != "dev":
+		t.Errorf("the wake says %+v wrote it, want the seat dev", wake.Writer)
+	case wake.Origin != (types.TriggerOrigin{Kind: types.OriginCodeChange, ID: "web!1",
+		Reason: string(gitlet.ReasonReviewRequested)}):
+		t.Errorf("the wake names %+v as what starts its turn, want the change web!1, asked to review",
+			wake.Origin)
+	}
+
+	askPerson := converse(t, w, asking(repo, change, dev, "founder"))
+	if _, relayed, routed := wakesOf(t, feedRecord(t, n, askPerson.Position)); relayed || len(routed) != 0 {
+		t.Errorf("an ask of a person alone is relayed (%v) and wakes %v, want no delivery", relayed, woken(routed))
+	}
+	if got := noticesOf(t, n, askPerson.Position); !slices.Equal(got, []string{"founder:review_requested:person"}) {
+		t.Fatalf("the ask of a person wrote the notices %v, want the person's own, which their inbox reads", got)
+	}
+
+	say := saying(repo, change, ada, "", "Is the retry bounded, @plat-lead and @cto?")
+	say.Comment.Mentions = []string{"plat-lead", "cto"}
+	said := converse(t, w, say)
+	_, _, routed = wakesOf(t, feedRecord(t, n, said.Position))
+	if got := woken(routed); !slices.Equal(got, []string{"plat-lead:mention", "cto:mention"}) {
+		t.Fatalf("a person's comment naming two seats wakes %v, want both mentioned", got)
+	}
+	for _, r := range routed {
+		if r.Writer == nil || r.Writer.Kind != iam.ActorHuman || r.Writer.Seat != "founder" {
+			t.Errorf("%s's wake says %+v wrote it, want the person, as the seat founder they hold",
+				r.To.Handle, r.Writer)
+		}
+		if want := (types.TriggerOrigin{Kind: types.OriginCodeChange, ID: "web!1",
+			Reason: r.Metadata[gitlet.MetaVia]}); r.Origin != want {
+			t.Errorf("%s's wake names %+v as what starts its turn, want %+v: the change, under its own "+
+				"reason", r.To.Handle, r.Origin, want)
+		}
+		if r.WakeID == wake.WakeID {
+			t.Errorf("%s's wake of the comment has the ask's id, so it would collapse into it", r.To.Handle)
+		}
+	}
+
+	reviewed := converse(t, w, reviewing(repo, change, platLead, 1, gitlet.VerdictRequestChanges, nil,
+		raising(gitlet.SeverityBlocker, 7, "the retry races")))
+	_, _, routed = wakesOf(t, feedRecord(t, n, reviewed.Position))
+	if got := woken(routed); !slices.Equal(got, []string{"dev:changes_requested"}) {
+		t.Fatalf("a review asking for changes wakes %v, want its author", got)
+	}
+	answered := converse(t, w, answering(repo, change, dev, gitlet.FindingDisputed, reviewed.FindingIDs...))
+	_, _, routed = wakesOf(t, feedRecord(t, n, answered.Position))
+	if got := woken(routed); !slices.Equal(got, []string{"plat-lead:finding_replied"}) {
+		t.Fatalf("an answer to plat-lead's finding wakes %v, want its raiser", got)
+	}
+
+	moved, err := c.Propose(t.Context(), proposal(repo, update(releaseRef, oidOf("R"), oidOf("R2"))))
+	if err != nil || moved.Position.IsZero() {
+		t.Fatalf("a push to a branch no change uses answered %+v, %v", moved, err)
+	}
+	if _, relayed, _ := wakesOf(t, feedRecord(t, n, moved.Position)); relayed {
+		t.Error("a push that moves no change is relayed")
+	}
+
+	// A NEWER BUILD'S RECORD: the envelope reads, the payload's rules are not
+	// this build's, so it is DEFERRED to a peer on that build — never
+	// answered "no wake", which the feed would acknowledge for the whole
+	// fleet (#838).
+	future := feedRecord(t, n, askSeat.Position)
+	var body map[string]any
+	if err := json.Unmarshal(future.Payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	body["v"] = gitlet.RecordVersion + 1
+	if future.Payload, err = json.Marshal(body); err != nil {
+		t.Fatal(err)
+	}
+	_, relayed, err = gitlet.NewTranslator().Translate(t.Context(), future)
+	var deferral *changefeed.Deferral
+	if relayed || !errors.As(err, &deferral) || deferral.Reason != changefeed.DeferNewerRecord {
+		t.Errorf("a newer build's record is relayed (%v) and answered %v, want it deferred "+
+			"to a newer peer (%s)", relayed, err, changefeed.DeferNewerRecord)
+	}
+	// AND BYTES THAT ARE NO RECORD are an error, which the feed returns
+	// rather than acknowledges: a record it cannot read is never decided.
+	if _, _, err := gitlet.NewTranslator().Translate(t.Context(),
+		changefeed.Record{Key: "x", Payload: []byte("not a record")}); err == nil {
+		t.Error("bytes that are no record were acknowledged")
+	}
+}
+
+// A RELAYED CODE RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER THAT READS
+// IT, on the parser's side of the relay as on the feed's.
+//
+// The feed on a newer node relays the record's wake, and whichever node wins
+// the delivery parses it, so an older node meets the record here too. Refused
+// as a payload nobody can read, the notify service acked it on the one group
+// every node takes inbound mail from, and the wake was gone for the fleet
+// (crewlet#993); answered with the spine's deferral, the service passes it to
+// a peer on the newer build.
+//
+// Mutation: return the decode's error as it is, and no deferral reaches the
+// service.
+func TestARelayedCodeRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
+	t.Parallel()
+	future, err := encodeSuiteRecord(string(gitlet.KindRepo), "repo-a", "op-1",
+		gitlet.RecordVersion+1)
+	if err != nil {
+		t.Fatalf("encode a newer build's record: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(future, &body); err != nil {
+		t.Fatalf("read the record back: %v", err)
+	}
+
+	_, err = gitlet.NewParser(gitlet.ParserOptions{}).Parse(t.Context(),
+		types.RawWebhook{Body: body}, nil)
+	var deferral *notify.Deferral
+	if !errors.As(err, &deferral) || deferral.Reason != notify.DeferNewerRecord {
+		t.Fatalf("a relayed code record a newer build wrote answered %v, want it "+
+			"deferred to a peer on that build (%s)", err, notify.DeferNewerRecord)
+	}
+}
+
+// A BATCHED RECORD TELLS A HANDLE ABOUT EACH OF ITS CHANGES: the committer
+// folds pushes from unrelated clients into one record, so two pushes of one
+// record each open a change that mentions the same seat and the same person.
+// The seat is woken about each change — two wakes, each about its own change,
+// each id derived from the record, that change and the seat — and the seat
+// and the person each keep a notice row a change. The person's inbox lists
+// the two apart, by ids a mark names one at a time, and a page of one notice
+// holds both, since it closes between two records and never inside one.
+//
+// Mutation: offer one record's routings to one builder (the add-once rule
+// across the record), and the second change wakes nobody and writes no row;
+// derive the wake id from the record and the seat alone, and the two wakes
+// share an id, the second collapsing into the first; name an inbox notice by
+// its record alone, and founder's two notices carry one id; end an inbox page
+// at its limit, and a page of one shows one of the record's two notices.
+func TestABatchedRecordTellsAHandleAboutEachOfItsChanges(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	// AN HOUR OLD at the harness's batch instant, inside every notice
+	// horizon, so every notice row is written and can be read.
+	storedBefore(n, time.Hour)
+	repo := changeRepo(t, n, "web")
+	// WHAT THE PUSH DECIDE STAMPS on each entry that opens a change: its
+	// routing, the pusher its actor, the options' mentions held to the chart.
+	routed := func(push, ref, title string) gitlet.ChangeRouting {
+		return gitlet.ChangeRouting{ChangeID: gitlet.PushChangeID(push), ChangeRef: ref, RepoName: "web",
+			Title: title, Actor: "harness", Mentions: []string{"cto", "founder"},
+			Persons: []string{"founder", "harness"}}
+	}
+	first := entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("B"), oidOf("C")))
+	first.Change = &gitlet.ChangeOption{Target: mainRef, Title: "One"}
+	first.Routing = []gitlet.ChangeRouting{routed(first.PushID, "web!1", "One")}
+	second := entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/topic", gitlet.ZeroOID, oidOf("T")))
+	second.Change = &gitlet.ChangeOption{Target: releaseRef, Title: "Two"}
+	second.Routing = []gitlet.ChangeRouting{routed(second.PushID, "web!2", "Two")}
+	pushed := n.push(repo, first, second)
+	rec := n.recordAt(pushed.Position)
+	changes := []string{gitlet.PushChangeID(first.PushID), gitlet.PushChangeID(second.PushID)}
+
+	_, relayed, wakes := wakesOf(t, feedRecord(t, n, pushed.Position))
+	if !relayed || !slices.Equal(woken(wakes), []string{"cto:mention", "cto:mention"}) {
+		t.Fatalf("a record whose two changes mention the cto wakes %v (relayed %v), want the cto about each",
+			woken(wakes), relayed)
+	}
+	for i, change := range changes {
+		w := wakes[i]
+		if w.Metadata[gitlet.MetaChangeID] != change ||
+			w.WakeID != changefeed.WakeID(gitlet.NoticeID(rec.OpID, change), "cto") {
+			t.Errorf("wake %d is about %s under id %s, want change %s under the id its record, its change and "+
+				"the cto derive", i, w.Metadata[gitlet.MetaChangeID], w.WakeID, change)
+		}
+	}
+	if len(wakes) == 2 && wakes[0].WakeID == wakes[1].WakeID {
+		t.Errorf("the two wakes share the id %s, so the second collapses into the first", wakes[0].WakeID)
+	}
+
+	var rows []string
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		got, err := tx.QueryContext(t.Context(), `SELECT recipient, change_id FROM code_notifications
+			WHERE record_id = ? ORDER BY recipient, change_id`, rec.OpID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = got.Close() }()
+		for got.Next() {
+			var recipient, change string
+			if err := got.Scan(&recipient, &change); err != nil {
+				return err
+			}
+			rows = append(rows, recipient+":"+change)
+		}
+		return got.Err()
+	}); err != nil {
+		t.Fatalf("read the record's notices: %v", err)
+	}
+	want := []string{"cto:" + changes[0], "cto:" + changes[1], "founder:" + changes[0], "founder:" + changes[1]}
+	slices.Sort(want)
+	if !slices.Equal(rows, want) {
+		t.Fatalf("the record wrote the notices %v, want one a change for the cto and for founder: %v", rows, want)
+	}
+
+	ids := []string{gitlet.NoticeID(rec.OpID, changes[0]), gitlet.NoticeID(rec.OpID, changes[1])}
+	page, _ := readInbox(t, n, gitlet.InboxQuery{}, "", 1)
+	got := idsOf(page)
+	slices.Sort(got)
+	if !slices.Equal(got, slices.Sorted(slices.Values(ids))) {
+		t.Fatalf("a page of one of founder's inbox lists %v, want the record's two notices together: %v", got,
+			ids)
+	}
+	mark(t, markerOn(t, n, n.pub), marking(gitlet.MarkGesture{Read: ids[:1]}))
+	page, _ = readInbox(t, n, gitlet.InboxQuery{}, "", 0)
+	read := map[string]bool{}
+	for _, notice := range page.Notices {
+		read[notice.RecordID] = notice.Read
+	}
+	if len(read) != 2 || !read[ids[0]] || read[ids[1]] {
+		t.Errorf("marking %s read leaves founder's notices read %v, want it alone read", ids[0], read)
+	}
+}
+
+// A CHECK RECORD NO ROUTING RIDES IS ACKNOWLEDGED UNDECODED: of a repository's
+// checks only an attempt's ending can carry a routing, so its queue, its
+// start, a dispatch and a sweep are acknowledged off the envelope alone —
+// shown by records whose payload is no payload at all, which any decode
+// refuses — while an ending is decoded, so the same bytes on an ending are an
+// error the feed returns rather than acknowledges.
+//
+// Mutation: admit every checks record in wakesAnybody (drop the op test) —
+// the queued record is decoded and refused, red.
+func TestACheckRecordNoRoutingRidesIsAcknowledgedUndecoded(t *testing.T) {
+	t.Parallel()
+	record := func(op gitlet.OpKind) changefeed.Record {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"v": gitlet.RecordVersion, "op_id": "op-" + string(op),
+			"subject": gitlet.ChecksSubject("repo-web"), "op": op, "mutation": "not a payload"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return changefeed.Record{Key: "checks.repo-web", Payload: body, Position: 7,
+			Stream: gitlet.Domain{}.Stream().Name}
+	}
+	for _, op := range []gitlet.OpKind{gitlet.OpCheckQueued, gitlet.OpCheckStarted, gitlet.OpCheckDispatched,
+		gitlet.OpChecksSweep} {
+		if d, relayed, err := gitlet.NewTranslator().Translate(t.Context(), record(op)); relayed || err != nil {
+			t.Errorf("a %s record is relayed as %+v (%v) or refused (%v), want it acknowledged without its "+
+				"payload read", op, d, relayed, err)
+		}
+	}
+	if _, relayed, err := gitlet.NewTranslator().Translate(t.Context(), record(gitlet.OpCheckFinished)); err == nil {
+		t.Errorf("an ending whose payload is no payload was acknowledged (relayed %v): an attempt's ending "+
+			"is the checks record a routing rides, and must be decoded", relayed)
+	}
+}
+
+// A REPLAY OF THE RECORDS FROM BEFORE CHANGES WAKES NOBODY: the code feed's
+// consumer is new, and a new consumer starts from the first record its log
+// still holds — every repository created, every push, every setting from
+// before a change existed. Not one of them carries a routing, so the replay
+// that turning the feed on makes is acknowledged record by record and wakes
+// no seat about history.
+//
+// Mutation: relay every record about a repository (drop the routing test in
+// Translate) → the pushes are relayed.
+func TestAReplayOfPreChangeRecordsWakesNobody(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := repoOn(t, n, "web")
+	repoOn(t, n, "api")
+	c, _ := committerOn(t, n, n.pub)
+	head := oidOf("A")
+	for _, next := range []string{"B", "C", "D"} {
+		res, err := c.Propose(t.Context(), proposal(repo, update(mainRef, head, oidOf(next))))
+		if err != nil || res.Position.IsZero() {
+			t.Fatalf("the push to %s answered %+v, %v", next, res, err)
+		}
+		head = oidOf(next)
+	}
+	first, last, err := n.log.Bounds(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last < first+5 {
+		t.Fatalf("the log holds %d..%d, want the two repositories' creates and pushes", first, last)
+	}
+	stream := gitlet.Domain{}.Stream().Name
+	for seq := first; seq <= last; seq++ {
+		rec := feedRecord(t, n, statelog.Position{Stream: stream, Seq: seq})
+		if d, relayed, err := gitlet.NewTranslator().Translate(t.Context(), rec); relayed || err != nil {
+			t.Errorf("the record at %d (%s) is relayed as %+v (%v), want it acknowledged", seq, rec.Key, d, err)
+		}
+	}
+}
+
+// A MERGED WAKE WHOSE CLOSE WAS NOT MADE SAYS WHY (M5-D27): the wake a
+// close_settled that ended not_closed sends under `merged` tells its seat the
+// work item was left open, the reason beside, and what to do about it; a
+// plain merged wake says only that the change merged.
+//
+// Mutation: drop the opener's not_closed case — the seat reads only that its
+// change merged, red.
+func TestAMergedWakeWhoseCloseWasNotMadeSaysWhy(t *testing.T) {
+	t.Parallel()
+	p := gitlet.Prompt{}
+	why := "ENG-7 is a jira work item, which is closed where it lives"
+	wake := func(meta map[string]string) string {
+		meta[gitlet.MetaVia], meta[gitlet.MetaChangeRef] = string(gitlet.ReasonMerged), "web!42"
+		return p.Build(notify.Inbound{Source: gitlet.Source, Subject: "web!42: Retry the upload",
+			Metadata: meta}, nil)
+	}
+	if text := wake(map[string]string{gitlet.MetaNotClosed: why}); !strings.Contains(text, why) ||
+		!strings.Contains(text, "its work item was not closed") {
+		t.Errorf("a merged wake whose close was not made does not say so and why:\n%s", text)
+	}
+	if text := wake(map[string]string{}); strings.Contains(text, "not closed") ||
+		!strings.Contains(text, "web!42 was merged.") {
+		t.Errorf("a plain merged wake says more than that the change merged:\n%s", text)
+	}
+}
+
+// THE PROMPT IS THE CHANGE'S: a code wake keys its conversation on the
+// change's id, never its name, which a repository's rename moves; it is
+// always a pointer at the change; it asks for an answer exactly under the
+// reasons that ask something; and it wakes the record's actor only for a
+// check's ending (Reason.WakesActor).
+func TestACodeWakeIsAboutItsChange(t *testing.T) {
+	t.Parallel()
+	p := gitlet.Prompt{}
+	before := map[string]string{gitlet.MetaChangeID: "c-1", gitlet.MetaChangeRef: "web!42"}
+	after := map[string]string{gitlet.MetaChangeID: "c-1", gitlet.MetaChangeRef: "site!42"}
+	for _, meta := range []map[string]string{before, after} {
+		if got := p.ConversationIdentity(meta, ""); got != "change:c-1" {
+			t.Errorf("the conversation is %q, want the change by its id", got)
+		}
+		if got := p.PartitionKey(meta, ""); got != "change:c-1" {
+			t.Errorf("the partition is %q, want the change by its id", got)
+		}
+	}
+	if p.ConversationIdentity(map[string]string{gitlet.MetaChangeRef: "web!42"}, "") != "" {
+		t.Error("a wake naming no change keys a conversation")
+	}
+	for _, r := range gitlet.Reasons() {
+		n := notify.Inbound{Source: gitlet.Source, Subject: "web!42: Retry the upload",
+			Metadata: map[string]string{gitlet.MetaVia: string(r), gitlet.MetaChangeRef: "web!42"}}
+		if p.Addressed(n) != r.Addressed() {
+			t.Errorf("a wake under %s is addressed %v, want %v", r, p.Addressed(n), r.Addressed())
+		}
+		if !p.RequiresRecon(n) {
+			t.Errorf("a wake under %s is not a pointer at the change", r)
+		}
+		if text := p.Build(n, nil); !strings.Contains(text, "web!42") ||
+			!strings.Contains(text, "`code_get_change`") {
+			t.Errorf("a wake under %s does not send its seat to the change:\n%s", r, text)
+		}
+	}
+	// ONLY A CHECK'S ENDING WAKES ITS ACTOR: the one code record whose reason
+	// — a failed check of a change's head — is news to who made it.
+	for _, op := range []gitlet.OpKind{gitlet.OpCheckFinished, gitlet.OpMerge, gitlet.OpLand, gitlet.OpEject, gitlet.OpBroken,
+		gitlet.OpDequeue, gitlet.OpPush, gitlet.OpReview, gitlet.OpMergeability} {
+		n := notify.Inbound{Source: gitlet.Source, EventType: string(op)}
+		if p.WakesActor(n) != (op == gitlet.OpCheckFinished) {
+			t.Errorf("a wake of a %s record wakes its actor = %v, want only a check's ending to", op,
+				p.WakesActor(n))
+		}
+	}
+}

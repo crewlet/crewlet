@@ -76,6 +76,7 @@ var companyFields = map[string]classified{
 	"Diagnostics":    {exposure: exposureGuarded, why: "whether the engine reports its own defects: an operational setting and an administrator's, read through the config query and `issue_reports`"},
 	"Inbox":          {exposure: exposureGuarded, why: "how long a person's inbox keeps a notice: an operational setting, read through the config question as Worklet's settings read it"},
 	"AccessHistory":  {exposure: exposureGuarded, why: "how long the record of what seats were told about their access and of their SSH use is kept: an operational setting, read through the config query"},
+	"Atlas":          {exposure: exposureGuarded, why: "how long the atlas keeps its history: an operational setting, read through the config query"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
 	"Providers": {exposure: exposureResolved, into: "llm",
 		why: "only the KEYS reach an admin, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},

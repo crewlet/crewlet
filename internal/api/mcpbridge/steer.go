@@ -34,8 +34,9 @@ import (
 //     tools were still connecting.
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
 //     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
-//     ones waiting past the cursor, rendered; POST `read` records the notes the
-//     harness reported putting in front of its model.
+//     ones waiting past the cursor, rendered, each recorded served to the run's
+//     job before it is answered (the inbox's [SteerInbox.Wait]); POST `read`
+//     records the notes the harness reported putting in front of its model.
 //
 // THE BRIDGE DECIDES NOTHING ABOUT NOTES. What waits, what fits, what is read
 // and what is recorded is the inbox's (internal/engine, runsteer.go); the
@@ -67,13 +68,18 @@ type SteerInbox interface {
 
 	// Wait is the notes waiting past the cursor after, oldest first, and a
 	// channel closed when the inbox's view of them next changes or the inbox
-	// closes. A PEEK: nothing is recorded read.
+	// closes. Nothing is recorded READ; every note answered is recorded SERVED
+	// to the run's job first, and one that cannot be is not answered, so a
+	// note the harness may deliver is never one the record says nothing of.
 	Wait(ctx context.Context, after int) ([]SteerNote, <-chan struct{})
 
 	// Read records the notes named read at the run's next step — the harness
-	// reported putting them in front of its model. A note no longer waiting
-	// is skipped; an error is a record that could not be written, and the
-	// notes wait.
+	// reported putting them in front of its model — and reports each read
+	// there. A note no longer waiting is not recorded again, and one an
+	// earlier read of the same job recorded is reported again, as the same
+	// record; an error is a read that could not be confirmed written, and its
+	// notes wait, or, where the write landed, are reported when the harness
+	// confirms them again.
 	Read(ctx context.Context, ids []string) error
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]

@@ -54,7 +54,7 @@
 // subjects' news by construction — Gitlet's, which folds pushes from
 // unrelated clients into one record and lands several queue entries in one —
 // keys both on the subject too, and offers each subject's news to a Builder
-// of its own (internal/code's Concerns and NoticeID).
+// of its own (internal/gitlet's Concerns and NoticeID).
 //
 // # Words wake only the seats they address (ADR-0113)
 //

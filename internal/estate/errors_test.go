@@ -17,11 +17,12 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -452,19 +453,19 @@ var neverCrosses = map[string]string{
 		"the server answers as the unserved status no_backend with the half's " +
 		"reason as its detail (ranNothingDetail), and the router's own walk " +
 		"reads in process: the asker moves on, so no error crosses",
-	"estate.unreadyGit": "a git half's code.ErrGitUnready as the walk reads it, " +
+	"estate.unreadyGit": "a git half's gitlet.ErrGitUnready as the walk reads it, " +
 		"which the server answers as the unserved status behind with the " +
 		"half's sentence as its detail and its reason beside it (reply.Unready): " +
 		"what crosses is that status, never this wrapper",
-	"code.checksFileError": "a .crewlet/checks.yaml refused where its bytes are " +
+	"gitlet.checksFileError": "a .crewlet/checks.yaml refused where its bytes are " +
 		"read, and answered there: no estate operation answers one, and its " +
 		"faults' kinds, errors, would not survive the wire's JSON; a caller " +
-		"reads it as a join of *config.Fault that IS code.ErrInvalid, never " +
+		"reads it as a join of *config.Fault that IS gitlet.ErrInvalid, never " +
 		"as the type",
-	"code.formatError": "a layer file's bytes refused by the Gitlet node reading " +
-		"them, which CheckLayer and LayLayer answer as code.ErrBadLayer — the " +
+	"gitlet.formatError": "a layer file's bytes refused by the Gitlet node reading " +
+		"them, which CheckLayer and LayLayer answer as gitlet.ErrBadLayer — the " +
 		"registered sentinel — and isFormat alone asks errors.As for it, in " +
-		"the code package itself",
+		"the gitlet package itself",
 }
 
 // THE REGISTRY IS COMPLETE, and this is the gate that keeps it so: every
@@ -558,9 +559,9 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 // domain declares itself — held against [floorStreams] by [crossingDomains],
 // so a domain the router floors is one whose package the error gate reads.
 var flooredDomains = []statelog.Domain{
-	worklet.Domain{}, doclet.Domain{}, usage.Domain{}, code.Domain{},
+	worklet.Domain{}, doclet.Domain{}, usage.Domain{}, gitlet.Domain{},
 	iamdomain.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
-	chatlet.Domain{}, executordomain.Domain{}, accessdomain.Domain{},
+	chatlet.Domain{}, executordomain.Domain{}, accessdomain.Domain{}, atlasdomain.Domain{},
 }
 
 // crossingDomains is the package of every domain an operation floors on,

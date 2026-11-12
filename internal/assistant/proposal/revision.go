@@ -55,6 +55,11 @@ const (
 	// something holds the path, and the approval's re-read answers
 	// [VersionPresent] for a path somebody filled since the preview.
 	RevisionCreate RevisionKind = "create"
+	// RevisionAtlasEntry is an atlas entry by id, at a digest of the entry as
+	// a card shows it: its state, and each fact and relation with the source
+	// holding it, which a change moves and a new sighting of the same value
+	// does not.
+	RevisionAtlasEntry RevisionKind = "atlas_entry"
 )
 
 // The two versions a [RevisionCreate] is at.
@@ -67,10 +72,10 @@ const (
 	VersionPresent = "present"
 )
 
-// RevisionKinds are the ten, in declaration order.
+// RevisionKinds are the eleven, in declaration order.
 var RevisionKinds = []RevisionKind{RevisionTask, RevisionPage, RevisionArtifact, RevisionPerson,
 	RevisionRoom, RevisionMessage, RevisionCharter, RevisionEntity, RevisionResource,
-	RevisionCreate}
+	RevisionCreate, RevisionAtlasEntry}
 
 // CharterID is the one charter's id in a revision: a company has one.
 const CharterID = "company"

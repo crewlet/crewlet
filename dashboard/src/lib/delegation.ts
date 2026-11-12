@@ -117,7 +117,7 @@ const OVERRULED_WORDS: Readonly<Record<string, string>> = {
   facts_unread: "a condition could not be read from the code host",
   head_moved: "the change's head is not the one asked about",
   not_open: "the change is not open",
-  no_required_checks: "its branch requires no check",
+  no_required_checks: "its branch requires no check and its rule names none",
   checks_not_passed: "a required check has not passed",
   not_mergeable: "the change does not merge cleanly",
   not_ready: "the target's own merge gate is not met",

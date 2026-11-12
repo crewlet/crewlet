@@ -132,7 +132,7 @@ export interface CodeChangesOptions extends CodeQueryOptions {
    * the listing ends, for at most [CHANGES_FILL_PAGES] pages, rather than
    * answer the first page alone.
    *
-   * A PAGE IS THE ROWS THE ENGINE READ, NOT THE ROWS IT KEPT (`code.Reader`'s
+   * A PAGE IS THE ROWS THE ENGINE READ, NOT THE ROWS IT KEPT (`gitlet.Reader`'s
    * listChanges: `limit` bounds the walk of the listing's index, and a row of
    * a repository the reader may not read, a change no longer live, or — for
    * `needs=person` — a change whose readiness judged at the read no longer
@@ -202,7 +202,7 @@ function sentenceOf(err: RestError | null): string | null {
 /**
  * How many immutable answers the tab keeps: the most recently read 64.
  *
- * AN ANSWER IS AT MOST ONE PAGE, `code.MaxGitAnswerBytes` (56 KiB of JSON), so
+ * AN ANSWER IS AT MOST ONE PAGE, `gitlet.MaxGitAnswerBytes` (56 KiB of JSON), so
  * the store holds at most about 3.5 MiB of answers — a tab's memory, beside a
  * screen that already draws what it holds. Sixty-four is the files a reviewer
  * moves between in a large change and the pages of a long patch together, so

@@ -78,6 +78,35 @@ func countRows(t *testing.T, db *store.DB, tableName string) int {
 	return n
 }
 
+// exportAll is every row of the seat's a turn would carry from spec above
+// after, read as a turn reads them, and the mark it would leave: a watermark
+// table page after page, the mark the last row's, and a whole-each-cycle
+// table whole, after left as it was.
+func exportAll(t *testing.T, db *store.DB, spec table, after int64) ([]Row, int64) {
+	t.Helper()
+	if spec.wholeEachCycle {
+		rows, err := exportWhole(t.Context(), db.SQL(), spec, seat)
+		if err != nil {
+			t.Fatalf("export %s: %v", spec.name, err)
+		}
+		return rows, after
+	}
+	var rows []Row
+	for {
+		page, more, err := exportPage(t.Context(), db.SQL(), spec, seat, after)
+		if err != nil {
+			t.Fatalf("export %s: %v", spec.name, err)
+		}
+		for _, read := range page {
+			rows = append(rows, read.row)
+			after = read.mark
+		}
+		if !more {
+			return rows, after
+		}
+	}
+}
+
 // carry moves every one of a seat's rows from one store to another the way a
 // handoff would: export from the old owner, import into the new one.
 func carry(t *testing.T, from, to *store.DB) int {
@@ -85,10 +114,7 @@ func carry(t *testing.T, from, to *store.DB) int {
 	ctx := context.Background()
 	carried := 0
 	for _, spec := range tables {
-		rows, _, err := export(ctx, from.SQL(), spec, seat, 0)
-		if err != nil {
-			t.Fatalf("export %s: %v", spec.name, err)
-		}
+		rows, _ := exportAll(t, from, spec, 0)
 		for _, row := range rows {
 			body, err := encode(row)
 			if err != nil {
@@ -210,23 +236,16 @@ func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedMemory(t, db)
-	ctx := context.Background()
 
 	episodes := tables[1]
 	if episodes.name != "episodes" {
 		t.Fatalf("fixture drifted: tables[1] is %s", episodes.name)
 	}
-	first, high, err := export(ctx, db.SQL(), episodes, seat, 0)
-	if err != nil {
-		t.Fatalf("first export: %v", err)
-	}
+	first, high := exportAll(t, db, episodes, 0)
 	if len(first) != 1 {
 		t.Fatalf("first export carried %d rows", len(first))
 	}
-	again, _, err := export(ctx, db.SQL(), episodes, seat, high)
-	if err != nil {
-		t.Fatalf("second export: %v", err)
-	}
+	again, _ := exportAll(t, db, episodes, high)
 	if len(again) != 0 {
 		t.Errorf("the watermark re-carried %d rows nothing had changed about", len(again))
 	}
@@ -237,10 +256,7 @@ func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 	if profiles.name != "counterparty_profiles" || !profiles.wholeEachCycle {
 		t.Fatalf("fixture drifted: tables[2] is %s", profiles.name)
 	}
-	whole, _, err := export(ctx, db.SQL(), profiles, seat, 1<<40)
-	if err != nil {
-		t.Fatalf("whole export: %v", err)
-	}
+	whole, _ := exportAll(t, db, profiles, 1<<40)
 	if len(whole) != 1 {
 		t.Errorf("a whole-each-cycle table carried %d rows past a high watermark", len(whole))
 	}

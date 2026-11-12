@@ -165,7 +165,9 @@ type SteerOutcome string
 const (
 	// SteerDelivered — the turn read the note, at the boundary its record
 	// names ([SteerBoundary]): what "read" means differs by boundary, and
-	// the boundary says which.
+	// the boundary says which. A launch's brief that told the note again,
+	// after a step that took it never handed it over, says so
+	// ([AgentTurnSteered.Retold]).
 	SteerDelivered SteerOutcome = "delivered"
 
 	// SteerExpired — the turn ended before anything read the note. It is not
@@ -173,10 +175,25 @@ const (
 	// flight, and a later turn is other work. Never at a park: a turn parked
 	// on its executor's question holds its notes for whatever resumes it.
 	SteerExpired SteerOutcome = "expired"
+
+	// SteerMissed is a note a step took for its reader, which never had it.
+	// The take's write landed and its answer was lost, so the run's record
+	// marks the read unanswered, and no later launch whose job started was
+	// told the note: one that was records it read by its brief, which is then
+	// delivered there. Named at the step that took it, and reported by the
+	// turn's ending, since no step recorded handing it over.
+	SteerMissed SteerOutcome = "missed"
+
+	// SteerUnconfirmed is a note the run's bridge handed to its executor's
+	// harness, one that takes notes as it polls (OpenCode's), which never
+	// confirmed putting it in front of its model before the turn ended. Its
+	// session may hold it, and nothing says it does. Named at the job it was
+	// handed to.
+	SteerUnconfirmed SteerOutcome = "unconfirmed"
 )
 
 // SteerOutcomes is every outcome this build records.
-var SteerOutcomes = []SteerOutcome{SteerDelivered, SteerExpired}
+var SteerOutcomes = []SteerOutcome{SteerDelivered, SteerExpired, SteerMissed, SteerUnconfirmed}
 
 // Valid reports whether an outcome off the wire is one this build knows.
 func (o SteerOutcome) Valid() bool { return slices.Contains(SteerOutcomes, o) }
@@ -223,14 +240,17 @@ var SteerBoundaries = []SteerBoundary{
 func (b SteerBoundary) Valid() bool { return slices.Contains(SteerBoundaries, b) }
 
 // AgentTurnSteered records what became of one person's note to a running turn
-// (internal/agent/steer): read at a boundary of the turn, or expired unread
-// because the turn ended first.
+// (internal/agent/steer): read at a boundary of the turn, expired unread
+// because the turn ended first, missed by the step that took it, or handed to
+// an executor that never confirmed reading it ([SteerOutcome]).
 //
 // PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE — the runner's node for a round
 // of the engine's loop or an executor's brief, the node serving the run's tool
 // bridge for a read inside the run — or BY THE NODE THAT FINISHED THE TURN'S
-// ENDING, for a note nothing read. Never by the node that took the request,
-// which answered `pending` and cannot see the turn. A note to a turn with no run
+// ENDING, for every note no step reported reading: expired, missed or
+// unconfirmed, as the run's record knows it, or delivered where a launch's brief
+// told it again ([AgentTurnSteered.Retold]). Never by the node that took the
+// request, which answered `pending` and cannot see the turn. A note to a turn with no run
 // record yet travels on an ephemeral scatter that leaves no record, and one
 // waiting on a run's record is deleted with it, so this row is the only durable
 // account that the note existed at all; that is why it carries the note's text.
@@ -258,20 +278,31 @@ type AgentTurnSteered struct {
 	// phase and iteration that read it, and the round, on the phase's
 	// one-based scale, whose provider call first saw it — round 1 for an
 	// executor, whose record is one round of the engine's
-	// ([AgentPhaseCompleted.Rounds]). Absent on an expired note, which
-	// nothing read.
+	// ([AgentPhaseCompleted.Rounds]). For a MISSED note, the step that took
+	// it; for an UNCONFIRMED one, the executor's job it was handed to, whose
+	// iteration is absent where the record no longer names it. Absent on an
+	// expired note, which nothing read.
 	Phase     Phase `json:"phase,omitempty"`
 	Iteration int   `json:"iteration,omitempty"`
 	Round     int   `json:"round,omitempty"`
 
 	// Boundary is the kind of step that read a delivered note
-	// ([SteerBoundary]), and LaunchID the executor's launch that read it —
-	// set for a brief and for every read inside a run, so a reader puts the
-	// note on the job whose record the read belongs to. Both absent on an
-	// expired note, which nothing read — and LaunchID on a read the engine's
-	// own loop made.
+	// ([SteerBoundary]), and LaunchID the executor's launch that read it, set
+	// for a brief and for every read inside a run so a reader puts the note on
+	// the job whose record the read belongs to; and the same of the step that
+	// took a missed note, or handed an unconfirmed one over. Both are absent
+	// on an expired note, which nothing read, and LaunchID on a step of the
+	// engine's own loop.
 	Boundary SteerBoundary `json:"boundary,omitempty"`
 	LaunchID string        `json:"launch_id,omitempty"`
+
+	// Retold says a delivered note was read in a launch's brief that told it
+	// again, after a step that took it never handed it over: that step's
+	// take recorded it read and its answer was lost, and this brief is where
+	// the executor was handed it. Reported by the turn's ending, as the run's
+	// record knows it, where that brief's job started. Absent on every other
+	// record.
+	Retold bool `json:"retold,omitempty"`
 
 	// Note is what the person wrote.
 	Note string `json:"note"`
@@ -294,10 +325,20 @@ func (e AgentTurnSteered) Role() string { return e.RoleName }
 // AgentID is the instance whose turn was steered.
 func (e AgentTurnSteered) AgentID() string { return e.Agent }
 
-// SummaryFor names who sent the note and whether the turn read it.
+// SummaryFor names who sent the note and what became of it. An outcome this
+// build does not know, a newer peer's, is said as no more than the note having
+// been sent: claimed as read or as expired, it would say what nobody recorded.
 func (e AgentTurnSteered) SummaryFor(actor string) string {
-	if e.Outcome == SteerExpired {
+	switch e.Outcome {
+	case SteerDelivered:
+		return lead(actor, "read a note from "+e.SteeredBy)
+	case SteerExpired:
 		return lead(actor, "finished before reading a note from "+e.SteeredBy)
+	case SteerMissed:
+		return lead(actor, "missed a note from "+e.SteeredBy+", taken by a step that never handed it over")
+	case SteerUnconfirmed:
+		return lead(actor, "was handed a note from "+e.SteeredBy+" and never confirmed reading it")
+	default:
+		return lead(actor, "was sent a note from "+e.SteeredBy)
 	}
-	return lead(actor, "read a note from "+e.SteeredBy)
 }

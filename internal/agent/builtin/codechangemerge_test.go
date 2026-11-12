@@ -12,8 +12,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -36,13 +36,13 @@ func mergeArgs() map[string]any {
 // precondition → red.
 func TestAMergeRefusalNamesEveryUnmetPrecondition(t *testing.T) {
 	t.Parallel()
-	writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
-		return code.EngineWriteResult{Merge: &code.MergeAnswer{Refusal: code.MergeRefusalGateUnmet,
-			Detail: "site!7 does not meet main's merge gate", Unmet: []code.Precondition{
-				{Kind: code.PreconditionApproval, State: code.PreconditionUnmet, Detail: "no approval counts",
-					WaitsOn: []code.Party{{Handle: "agent-ceo", Kind: code.PartyAgent}}},
-				{Kind: code.PreconditionBlocker, State: code.PreconditionUnmet, Detail: "a blocker stands",
-					WaitsOn: []code.Party{{Handle: "agent-qa", Kind: code.PartyAgent}}},
+	writer := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		return gitlet.EngineWriteResult{Merge: &gitlet.MergeAnswer{Refusal: gitlet.MergeRefusalGateUnmet,
+			Detail: "site!7 does not meet main's merge gate", Unmet: []gitlet.Precondition{
+				{Kind: gitlet.PreconditionApproval, State: gitlet.PreconditionUnmet, Detail: "no approval counts",
+					WaitsOn: []gitlet.Party{{Handle: "agent-ceo", Kind: gitlet.PartyAgent}}},
+				{Kind: gitlet.PreconditionBlocker, State: gitlet.PreconditionUnmet, Detail: "a blocker stands",
+					WaitsOn: []gitlet.Party{{Handle: "agent-qa", Kind: gitlet.PartyAgent}}},
 			}}}, nil
 	}}
 	args := mergeArgs()
@@ -64,8 +64,8 @@ func TestAMergeRefusalNamesEveryUnmetPrecondition(t *testing.T) {
 		t.Fatalf("%d writes were sent, want one merge", len(writes))
 	}
 	w := writes[0]
-	if w.Kind != code.WriteMergeChange || w.Ref != "refs/heads/main" || w.ExpectedHead != revHead(3) ||
-		w.Change != 7 || w.Method != code.MergeMethodSquash || w.DeleteSource != nil || w.CloseTask ||
+	if w.Kind != gitlet.WriteMergeChange || w.Ref != "refs/heads/main" || w.ExpectedHead != revHead(3) ||
+		w.Change != 7 || w.Method != gitlet.MergeMethodSquash || w.DeleteSource != nil || w.CloseTask ||
 		w.Validate() != nil {
 		t.Errorf("the merge is %+v, want site!7 squashed into main at revision 3's head, its branch's "+
 			"deletion left to the Gitlet node", w)
@@ -98,9 +98,9 @@ func TestAnUnsaidDeleteBranchIsTheGitletNodes(t *testing.T) {
 			seats := siteChange()
 			seats.detail.SourceRef = "refs/heads/seats/agent-ceo/retry"
 			host := newChangeHost(seats)
-			writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
-				return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
-					Merge: &code.MergeAnswer{DeleteSource: c.deleted}}, nil
+			writer := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+				return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
+					Merge: &gitlet.MergeAnswer{DeleteSource: c.deleted}}, nil
 			}}
 			args := mergeArgs()
 			for k, v := range c.said {
@@ -119,7 +119,7 @@ func TestAnUnsaidDeleteBranchIsTheGitletNodes(t *testing.T) {
 				t.Errorf("the merge sent delete_source %v, want %v", sent, c.sent)
 			}
 			reads, _, _ := host.asked()
-			if slices.ContainsFunc(reads, func(q code.ReadQuery) bool { return q.Gates }) {
+			if slices.ContainsFunc(reads, func(q gitlet.ReadQuery) bool { return q.Gates }) {
 				t.Error("the merge read the target's gates: the default is the Gitlet node's to decide")
 			}
 			if out := decoded(t, got); (out["deleted_branch"] == true) != c.deleted {
@@ -137,9 +137,9 @@ func TestAnUnsaidDeleteBranchIsTheGitletNodes(t *testing.T) {
 // Mutation: answer a queued merge as merged; drop the place → red.
 func TestAQueuedMergeAnswersItsPosition(t *testing.T) {
 	t.Parallel()
-	writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
-		return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18),
-			Merge: &code.MergeAnswer{Queued: true, EntryID: "entry-1", Place: 3}}, nil
+	writer := &codeWrites{write: func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18),
+			Merge: &gitlet.MergeAnswer{Queued: true, EntryID: "entry-1", Place: 3}}, nil
 	}}
 	closer := &closes{}
 	deps := writeDeps(newChangeHost(workedChange()), writer)
@@ -291,7 +291,7 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 		t.Errorf("the dequeue asked %+v, want site!7's own entry out as its caller", asked)
 	}
 	reads, _, _ := host.asked()
-	if n, q := readsOf(reads, code.ReadChange), readsOf(reads, code.ReadQueue); n != 1 || q != 0 {
+	if n, q := readsOf(reads, gitlet.ReadChange), readsOf(reads, gitlet.ReadQueue); n != 1 || q != 0 {
 		t.Errorf("the dequeue read the change %d times and the queue %d, want the change once and the queue "+
 			"never: its one read names the entry", n, q)
 	}
@@ -304,7 +304,7 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	// it carries the committer's own word, not_queued, as its refusal would.
 	var word *builtin.HostRefusal
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalNotFound || len(writer.queuesAsked()) != 0 ||
-		!errors.As(got.Cause, &word) || word.Refusal != string(code.MergeRefusalNotQueued) {
+		!errors.As(got.Cause, &word) || word.Refusal != string(gitlet.MergeRefusalNotQueued) {
 		t.Errorf("a change in no queue answered %q (%s, %v) after %d dequeues, want not_found under "+
 			"not_queued and none asked", got.Output, tools.RefusalOf(got), got.Cause, len(writer.queuesAsked()))
 	}
@@ -321,7 +321,7 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 // Mutation: refuse it as invalid again → red.
 func TestAMergeOfAnEndedChangeIsAConflict(t *testing.T) {
 	t.Parallel()
-	for _, state := range []code.ChangeState{code.ChangeStateClosed, code.ChangeStateMerged} {
+	for _, state := range []gitlet.ChangeState{gitlet.ChangeStateClosed, gitlet.ChangeStateMerged} {
 		ended := siteChange()
 		ended.detail.State = state
 		writer := &codeWrites{}
@@ -330,7 +330,7 @@ func TestAMergeOfAnEndedChangeIsAConflict(t *testing.T) {
 		writes, _ := writer.asked()
 		var host *builtin.HostRefusal
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict || len(writes) != 0 ||
-			!errors.As(got.Cause, &host) || host.Refusal != string(code.MergeRefusalChangeNotOpen) {
+			!errors.As(got.Cause, &host) || host.Refusal != string(gitlet.MergeRefusalChangeNotOpen) {
 			t.Errorf("a merge of a %s change answered %q (%s, %v) after %d writes, want conflict under "+
 				"change_not_open and none sent", state, got.Output, tools.RefusalOf(got), got.Cause, len(writes))
 		}

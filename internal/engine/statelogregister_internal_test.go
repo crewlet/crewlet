@@ -12,12 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -126,7 +127,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		iamdomain.Domain{}.Name(): true,
 		search.Domain{}.Name():    false,
 		usage.Domain{}.Name():     false,
-		code.Domain{}.Name():      true,
+		gitlet.Domain{}.Name():    true,
 
 		artifactsdomain.Domain{}.Name(): true,
 		artifactdata.Domain{}.Name():    true,
@@ -143,6 +144,9 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		// linearizable: a told record another node published must be applied
 		// before the next turn diffs against it.
 		accessdomain.Domain{}.Name(): true,
+		// A BARRIER, for every strict log's reason: a read may ask for
+		// linearizable, though none does today.
+		atlasdomain.Domain{}.Name(): true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -202,9 +206,12 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		assistantdomain.Domain{}.Name(): new(0),
 		executordomain.Domain{}.Name():  new(150),
 		// The tracker's figure: a seat's code tools read at linearizable.
-		code.Domain{}.Name(): new(125),
+		gitlet.Domain{}.Name(): new(125),
 		// One dispatch read a turn, at thirty turns a seat a day.
 		accessdomain.Domain{}.Name(): new(30),
+		// No read takes a barrier: a person's edit decides from the entry's
+		// version in its own snapshot.
+		atlasdomain.Domain{}.Name(): new(0),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()
@@ -533,8 +540,9 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		assistantdomain.Domain{}.Name(),
 		chatlet.Domain{}.Name(),
 		executordomain.Domain{}.Name(),
-		code.Domain{}.Name(),
+		gitlet.Domain{}.Name(),
 		accessdomain.Domain{}.Name(),
+		atlasdomain.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {

@@ -755,7 +755,7 @@ checks file](../concepts/gitlet.md#the-checks-file).
    ```json
    { "valid": false, "tier": "checks", "file": ".crewlet/checks.yaml",
      "problems": [ { "path": "checks[0].timeout_seconds", "kind": "out_of_range", "line": 4,
-       "message": "checks[0].timeout_seconds: value out of range: 99999 seconds: a check runs for 1 to 21600 seconds (code.CheckTimeoutCeiling, six hours) (line 4)" } ],
+       "message": "checks[0].timeout_seconds: value out of range: 99999 seconds: a check runs for 1 to 21600 seconds (gitlet.CheckTimeoutCeiling, six hours) (line 4)" } ],
      "warnings": [] }
    ```
 

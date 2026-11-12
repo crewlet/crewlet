@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
 // A CHECK'S BOX READS ITS COMMIT WHERE THE API SERVES IT: the base the engine

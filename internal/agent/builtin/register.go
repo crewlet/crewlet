@@ -6,9 +6,9 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -146,6 +146,11 @@ type Deps struct {
 	// SSH block grants them. The zero value omits both. Offered only to a seat
 	// whose role carries the grant, as Health is. See ssh.go.
 	SSH SSHDeps
+
+	// Atlas is the atlas tools': the company's atlas, read as the seat within
+	// whoever woke its turn (ADR-0109), a private address only within its own
+	// reach. The zero value omits them. See atlas.go.
+	Atlas AtlasDeps
 	// Delegated is what a delegate's verdict tool acts through (ADR-0125);
 	// a nil desk omits review_delegated.
 	Delegated DelegatedDeps
@@ -361,6 +366,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	delegatedDeps.Release = release
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
 		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
+		atlasCandidates(atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
 		releaseCandidates(release), delegatedCandidates(delegatedDeps))
 
 	var names []string
@@ -408,7 +414,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		case slices.Contains(CodeWrites(), c.tool.Name()):
 			// AND A CODE WRITE REACHES GITLET: a branch moved or a
 			// repository changed is the answer to work that came from it.
-			opts = append(opts, tools.DeliversTo(code.Source))
+			opts = append(opts, tools.DeliversTo(gitlet.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own
@@ -485,12 +491,16 @@ func annotationsFor(name string) tools.Annotations {
 	if a, ok := releaseAnnotations(name); ok {
 		return a
 	}
+	if a, ok := atlasAnnotations(name); ok {
+		return a
+	}
 	if name == ReviewDelegatedTool {
 		return reviewAnnotations()
 	}
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
-		LoadToolSkillTool, SearchKnowledgeTool, ListSessionsTool, ReadSessionTool:
+		LoadToolSkillTool, SearchKnowledgeTool, ListSessionsTool, ReadSessionTool, AtlasSearchTool, AtlasGetTool,
+		AtlasTraceTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing, which is what lets a phase retry one safely. The
 		// session tools are reads of the seat's own record that take no

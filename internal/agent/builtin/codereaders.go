@@ -9,8 +9,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -59,7 +59,7 @@ const RepoReadersPageBytes = ToolAnswerBytes / 2
 // estate.CodeSeam and the code questions' reads (internal/api/queries)
 // satisfy it.
 type RepoRowReader interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 }
 
 // RepoReaders is the usage domain's readers of a repository, a page at a time —
@@ -114,10 +114,10 @@ type ReadersAnswer struct {
 // page with how many the per-day cap dropped. today is the company's day now,
 // which a range that names no end ends on.
 //
-// Its errors are the domain's: code.ErrRepoNotFound for a repository nobody
+// Its errors are the domain's: gitlet.ErrRepoNotFound for a repository nobody
 // declared, usage.ErrBadRange or usage.ErrBadCursor for a range or a cursor the
 // read cannot take, and a routed read's own refusal where no node answered.
-func ReadersOf(ctx context.Context, rows RepoRowReader, readers RepoReaders, asker code.Principal,
+func ReadersOf(ctx context.Context, rows RepoRowReader, readers RepoReaders, asker gitlet.Principal,
 	q ReadersQuery, today period.Window) (ReadersAnswer, error) {
 
 	from, to, err := readersRange(q.From, q.To, today)
@@ -132,7 +132,7 @@ func ReadersOf(ctx context.Context, rows RepoRowReader, readers RepoReaders, ask
 	if _, err = usage.ParseCursor(q.Cursor); err != nil {
 		return ReadersAnswer{}, err
 	}
-	answer, err := rows.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: asker, Repo: q.Repo, Fresh: seatRead})
+	answer, err := rows.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepo, Asker: asker, Repo: q.Repo, Fresh: seatRead})
 	if err != nil {
 		return ReadersAnswer{}, err
 	}
@@ -140,7 +140,7 @@ func ReadersOf(ctx context.Context, rows RepoRowReader, readers RepoReaders, ask
 		return ReadersAnswer{}, fmt.Errorf("builtin: Gitlet answered repository %s with no detail", q.Repo)
 	}
 	repo := answer.Repo.RepoRef
-	if repo.Visibility != code.VisibilityUnit {
+	if repo.Visibility != gitlet.VisibilityUnit {
 		return ReadersAnswer{Repo: repo.Name, Detail: fmt.Sprintf("%s is visibility: %s, so its readers are "+
 			"not recorded — every seat of the company reads it by declaration. Declare it visibility: unit "+
 			"in code.repos to have who reads it recorded from then on.", repo.Name, repo.Visibility)}, nil

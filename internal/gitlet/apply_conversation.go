@@ -1,0 +1,709 @@
+package gitlet
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// THE CONVERSATION'S APPLIES: every record on a change's own subject
+// ([KindChange]), each in the one transaction the framework holds a record's
+// apply to, and each PURE IN THE RECORD, ITS POSITION AND ITS INSTANT, like every
+// apply here: it reads no clock, no configuration and no chart — a reviewer's
+// kind rides the record, stamped by the writer — and decides nothing again.
+//
+// THE SUBJECT GUARD: a record on one change's subject may write only that
+// change's conversation — its payload names the subject's change — and the
+// change is the repository's its payload names, which is the one its scope
+// names, or the record is one no correct writer forms, an error rather than a
+// skip: a record about one repository's change that named another would
+// escape that repository's deletion gate, which [Applier.Gated] reads off the
+// scope.
+//
+// EVERY OTHER GUARD IS A SKIP, never a refusal that would stop the log on every
+// node: a record whose change has no row — a repository's purge removed it, and
+// only a record the ledger would have collapsed reaches a change that gone —
+// applies as nothing, whole, logged (code_conversation_not_applied); one at or
+// below its conversation's position is a redelivery; a comment or a review
+// whose id is held already, a thread whose root is gone, and an answer whose
+// every finding no longer stands apply as nothing too.
+//
+// EVERY RECORD COUNTS ONE VERSION of its change's conversation and moves its
+// position to its own (code_conversations): the version guard a redelivery
+// meets, and what an answer is read from ([ChangeWriter.applied]). One that
+// moves what the change's readiness reads counts one READINESS VERSION too
+// ([movesReadiness]): what its home's due listing finds a stored readiness
+// judged before (changesdue.go).
+
+// applyChange is every record on a change's own subject.
+func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	payload, err := DecodeMutation(at.record)
+	if err != nil {
+		return 0, err
+	}
+	var repoID, changeID string
+	switch p := payload.(type) {
+	case ReviewerRequest:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case Comment:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case ThreadResolve:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case Review:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case FindingResolve:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case Revise:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case Mergeability:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case MergeabilityKept:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case AskSettle:
+		repoID, changeID = p.RepoID, p.ChangeID
+	default:
+		return 0, fmt.Errorf("gitlet: %s is not an op this build applies to a change (the record at %s)",
+			at.record.Op, at.position)
+	}
+	if changeID != at.record.Subject.ID {
+		return 0, fmt.Errorf("gitlet: the record at %s arbitrated change.%s and its payload names change %s — a "+
+			"record on one change's subject may write only that change's conversation", at.position,
+			at.record.Subject.ID, changeID)
+	}
+	if scoped, _ := scopedRepo(at.record.Scope.Set()); scoped != repoID {
+		return 0, fmt.Errorf("gitlet: the record at %s names repository %s in its payload and %q in its scope — "+
+			"a record no writer forms, which the deletion gate judges by the repository its scope names",
+			at.position, repoID, scoped)
+	}
+	var held string
+	err = tx.QueryRowContext(ctx, changeRepoSQL, changeID).Scan(&held)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return conversationNotApplied(ctx, at, repoID, changeID, "the change has no row")
+	case err != nil:
+		return 0, fmt.Errorf("gitlet: read change %s at %s: %w", changeID, at.position, err)
+	case held != repoID:
+		return 0, fmt.Errorf("gitlet: the record at %s names change %s of repository %s, and the change is "+
+			"repository %s's — a record no writer forms, which would escape that repository's deletion gate",
+			at.position, changeID, repoID, held)
+	}
+	_, position, _, err := conversationIn(ctx, tx, changeID)
+	if err != nil {
+		return 0, err
+	}
+	if position >= at.packed {
+		return 0, nil
+	}
+	var rows int
+	var counts conversationCounts
+	switch p := payload.(type) {
+	case ReviewerRequest:
+		rows, err = applyReviewers(ctx, tx, at, p)
+	case Comment:
+		rows, counts, err = applyComment(ctx, tx, at, p)
+	case ThreadResolve:
+		rows, err = applyThreadResolve(ctx, tx, at, p)
+	case Review:
+		rows, counts, err = applyReview(ctx, tx, at, p)
+	case FindingResolve:
+		rows, counts, err = applyFindingResolve(ctx, tx, at, p)
+	case Revise:
+		rows, counts, err = applyRevise(ctx, tx, at, p)
+	case Mergeability:
+		rows, counts, err = applyMergeability(ctx, tx, at, p)
+	case MergeabilityKept:
+		rows, err = applyMergeabilityKept(ctx, tx, at, p)
+	case AskSettle:
+		rows, err = applyAsks(ctx, tx, at, p)
+	}
+	if err != nil || rows == 0 {
+		return 0, err
+	}
+	if movesReadiness(payload) {
+		counts.readiness = 1
+	}
+	if spoken(payload) {
+		counts.spokenAt = at.at()
+	}
+	if err := touchConversation(ctx, tx, at, repoID, changeID, counts); err != nil {
+		return 0, err
+	}
+	if movesAsks(payload) {
+		// THE ASKS COUNTED AGAIN FROM THE CHANGE'S OWN, never moved by a
+		// delta: what waits and what ended are each a range of the
+		// reviewers' key a change's distinct reviewers bound, and a count
+		// read off them stays the rows' whatever this record's ups and downs.
+		if _, err := tx.ExecContext(ctx, countAsksSQL, changeID); err != nil {
+			return 0, fmt.Errorf("gitlet: count change %s's asks at %s: %w", changeID, at.position, err)
+		}
+	}
+	return a.noticed(ctx, tx, at, repoID, payload, rows+1, nil)
+}
+
+// movesReadiness reports a record whose apply moves what the change's
+// readiness reads ([ReadinessOf]): an ask for review — whom an approval waits
+// on — a review — its verdict and its blockers, and the ask it answers — an
+// answer to findings — its blockers — a revision's facts — the patch ids an
+// approval is carried by, and the asks it opens again — and a settling of the
+// asks with the change's lifecycle. A comment, a thread's resolution and a
+// mergeability move none of it: a mergeability that moved
+// code_conversations.readiness_version would make its own change due a
+// refresh again at every refresh, for ever.
+func movesReadiness(payload any) bool {
+	switch payload.(type) {
+	case ReviewerRequest, Review, FindingResolve, Revise, AskSettle:
+		return true
+	}
+	return false
+}
+
+// spoken reports a record SOMEBODY WROTE about the change — an ask for
+// review, a comment, a thread resolved, a review, an answer to a finding —
+// which dates its conversation's last move (code_conversations.updated_at,
+// replicated 0147): what a listing says of when the change last moved, and
+// what one narrowed to a window walks. The home's facts and the engine's
+// settling of the asks date nothing: a target branch that moves re-checks
+// every live change into it, and a change listed as moved because its target
+// did would put every change of a busy branch in every day's window.
+func spoken(payload any) bool {
+	switch payload.(type) {
+	case ReviewerRequest, Comment, ThreadResolve, Review, FindingResolve:
+		return true
+	}
+	return false
+}
+
+// movesAsks reports a record whose apply moves an ask's state
+// (code_reviewers): an ask for review, a review — which answers its
+// reviewer's own — a revision's facts — whose path owners it asks and whose
+// reviewers on request_changes it asks to look again — and a settling of the
+// asks with the change's lifecycle.
+func movesAsks(payload any) bool {
+	switch payload.(type) {
+	case ReviewerRequest, Review, Revise, AskSettle:
+		return true
+	}
+	return false
+}
+
+// conversationCounts is what one record moves its conversation's counters by:
+// its comments and its reviews; its OPEN findings — none of whose authors has
+// answered — and its STANDING BLOCKERS, the blockers that hold the change back
+// whatever their authors answered (S40); how many reviewers' standing verdict
+// asks for changes; what its wide text weighs; and its readiness inputs'
+// version, by one for a record that moves what the readiness reads; and the
+// broker instant (store.EncodeTime) of a record somebody wrote ([spoken]), 0
+// for one nobody did.
+type conversationCounts struct {
+	comments, reviews, openFindings, openBlockers, changesRequested, textBytes, readiness, spokenAt int64
+}
+
+// touchConversation moves changeID's conversation by one record: its counters
+// by counts, its version by one and its position to the record's own — the
+// row made by the change's first conversation record — and, for a record
+// somebody wrote, its instant to the record's ([spoken]). A record nobody
+// wrote names no instant, so its write rewrites no entry of
+// code_conversations_updated_idx (the driver rewrites an index entry for
+// every column a write names, whatever the value).
+func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID, changeID string,
+	counts conversationCounts) error {
+
+	stmt := touchConversationSQL
+	if counts.spokenAt > 0 {
+		stmt = touchSpokenConversationSQL
+	}
+	if _, err := tx.ExecContext(ctx, stmt, changeID, repoID, counts.comments, counts.reviews,
+		counts.openFindings, counts.openBlockers, counts.changesRequested, counts.textBytes, counts.readiness,
+		at.packed, counts.spokenAt); err != nil {
+		return fmt.Errorf("gitlet: move change %s's conversation at %s: %w", changeID, at.position, err)
+	}
+	return nil
+}
+
+// applyReview writes a review: its row, every finding it raises and its text,
+// its reviewer as a participant — their STANDING VERDICT on the change moved
+// to this review's where it judges (approve, request_changes), and left as it
+// was where it comments, which judges nothing — and the supersession of every
+// standing finding of its reviewer raised on an earlier revision that it does
+// not carry ([supersededBy], the decide's own rule over the same rows):
+// moving the conversation's counters by all of it, its changes_requested by
+// the reviewer's standing verdict before this one and after.
+func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (int, conversationCounts, error) {
+	by, kind := r.By.party()
+	if by == "" {
+		n, err := conversationNotApplied(ctx, at, r.RepoID, r.ChangeID, "its reviewer names no seat")
+		return n, conversationCounts{}, err
+	}
+	var before string
+	switch err := tx.QueryRowContext(ctx, standingVerdictSQL, r.ChangeID, by).Scan(&before); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: read %s's standing verdict on change %s at %s: %w", by,
+			r.ChangeID, at.position, err)
+	}
+	// THE CREDENTIAL A PERSON REVIEWED WITH, as a comment keeps its own.
+	var operator string
+	if kind == PartyPerson {
+		operator = r.By.OperatorID
+	}
+	res, err := tx.ExecContext(ctx, addReviewSQL, r.ReviewID, r.ChangeID, r.Revision, by, string(kind), operator,
+		string(r.Verdict), len(r.Findings), r.TurnID, r.Model, len(r.Summary), at.packed, at.at(), r.Summary)
+	if err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write review %s at %s: %w", r.ReviewID, at.position, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		n, err := conversationNotApplied(ctx, at, r.RepoID, r.ChangeID, "a review already holds its id")
+		return n, conversationCounts{}, err
+	}
+	counts := conversationCounts{reviews: 1, textBytes: int64(len(r.Summary))}
+	judges := r.Verdict != VerdictComment
+	switch was, is := Verdict(before) == VerdictRequestChanges, r.Verdict == VerdictRequestChanges; {
+	case !judges:
+	case is && !was:
+		counts.changesRequested = 1
+	case was && !is:
+		counts.changesRequested = -1
+	}
+	rows := 1
+	_, superseded, err := supersededBy(ctx, tx, r.ChangeID, by, kind, r)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	if len(superseded) > 0 {
+		ids := make([]string, len(superseded))
+		for i, f := range superseded {
+			ids[i] = f.id
+			if f.state == FindingOpen {
+				counts.openFindings--
+			}
+			if f.severity == SeverityBlocker {
+				counts.openBlockers--
+			}
+		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		list, err := jsonList(ids)
+		if err != nil {
+			return 0, conversationCounts{}, err
+		}
+		if _, err := tx.ExecContext(ctx, supersedeFindingsSQL, string(FindingSuperseded), by, string(kind),
+			at.packed, list); err != nil {
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: supersede %s's findings on change %s at %s: %w", by,
+				r.ChangeID, at.position, err)
+		}
+		rows += len(ids)
+	}
+	// EVERY FINDING AND EVERY TEXT, A COLLECTION EACH, through as few
+	// multi-row statements as the engine's bind limit allows — one each for
+	// the widest review — never a statement a row: this runs in the code
+	// domain's one applier on every data node, which the pushes queue behind.
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables, addFindingsSQL, findingValuesSQL,
+		`ON CONFLICT (id) DO NOTHING`, len(r.Findings), func(i int) []any {
+			f := r.Findings[i]
+			return []any{f.ID, r.ChangeID, r.ReviewID, by, string(kind), r.Revision, f.CommitOID, f.Path,
+				f.BlobOID, string(f.Side), f.LineStart, f.LineEnd, string(f.Severity), string(f.Category),
+				string(FindingOpen), at.packed}
+		}); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write review %s's findings at %s: %w", r.ReviewID,
+			at.position, err)
+	}
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables, addFindingTextsSQL, `(?, ?, ?, ?, ?, ?)`,
+		`ON CONFLICT (change_id, finding_id) DO NOTHING`, len(r.Findings), func(i int) []any {
+			f := r.Findings[i]
+			return []any{r.ChangeID, f.ID, findingTextBytes(f), f.Title, f.Body, f.Suggestion}
+		}); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write review %s's findings' texts at %s: %w",
+			r.ReviewID, at.position, err)
+	}
+	for _, f := range r.Findings {
+		counts.openFindings++
+		if f.Severity == SeverityBlocker {
+			counts.openBlockers++
+		}
+		counts.textBytes += findingTextBytes(f)
+		rows += 2
+	}
+	participant, args := addParticipantSQL, []any{r.ChangeID, by, string(kind), at.packed}
+	if judges {
+		participant, args = judgeParticipantSQL, append(args, string(r.Verdict), r.Revision, r.ReviewID)
+	}
+	if _, err = tx.ExecContext(ctx, participant, args...); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: add %s to change %s at %s: %w", by, r.ChangeID,
+			at.position, err)
+	}
+	mentioned, err := addMentioned(ctx, tx, at, r.ChangeID, r.Routing)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	// THE REVIEW ANSWERS ITS REVIEWER'S OWN ASK, whatever its verdict: the
+	// review they were asked for is given, so the change waits on them no
+	// longer — until somebody asks again, or a later revision asks them to
+	// look again where their verdict asks for changes (applyRevise).
+	answered, err := moveAsks(ctx, tx, at, r.ChangeID, ReviewerRequested, ReviewerReviewed, []string{by})
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return rows + 1 + mentioned + answered, counts, nil
+}
+
+// addMentioned makes everybody a record's routing names as mentioned a
+// participant of its change — a watcher, told when the change closes, reopens
+// or moves (concerns.go) — each a person or a seat as the routing says, and
+// answers the rows it wrote. A participant already there stays as it was: a
+// mention moves nobody's standing verdict.
+func addMentioned(ctx context.Context, tx store.Execer, at applyContext, changeID string, r *ChangeRouting) (int,
+	error) {
+
+	if r == nil {
+		return 0, nil
+	}
+	rows := 0
+	for _, h := range r.Mentions {
+		kind := PartyAgent
+		if r.Person(h) {
+			kind = PartyPerson
+		}
+		res, err := tx.ExecContext(ctx, addParticipantSQL, changeID, h, string(kind), at.packed)
+		if err != nil {
+			return 0, fmt.Errorf("gitlet: add %s, mentioned, to change %s at %s: %w", h, changeID, at.position, err)
+		}
+		n, _ := res.RowsAffected()
+		rows += int(n)
+	}
+	return rows, nil
+}
+
+// applyFindingResolve answers findings: each that still stands moves to the
+// state the record gives it, with its note, who answered, the commit named and
+// the record's position — a finding no longer standing, or in that state
+// already, applies as nothing — and the conversation's counters move with
+// them: an open finding answered leaves the open ones, and a blocker dismissed
+// the standing blockers (S40: resolved, won't fix and disputed keep it).
+func applyFindingResolve(ctx context.Context, tx *sql.Tx, at applyContext, fr FindingResolve) (int,
+	conversationCounts, error) {
+
+	by, kind := fr.By.party()
+	if by == "" {
+		n, err := conversationNotApplied(ctx, at, fr.RepoID, fr.ChangeID, "who answered names no seat")
+		return n, conversationCounts{}, err
+	}
+	// EVERY FINDING IT ANSWERS READ IN ONE STATEMENT, driven from their list;
+	// each answer written by its key, its values its own.
+	ids := make([]string, len(fr.Findings))
+	for i, a := range fr.Findings {
+		ids[i] = a.FindingID
+	}
+	held, err := findingsAmong(ctx, tx, ids)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	var counts conversationCounts
+	rows := 0
+	for _, a := range fr.Findings {
+		f, found := held[a.FindingID]
+		if !found || f.changeID != fr.ChangeID || !f.state.Stands() || f.state == a.Resolution {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, answerFindingSQL, string(a.Resolution), a.Note, by, string(kind), a.Commit,
+			at.packed, a.FindingID); err != nil {
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: answer finding %s at %s: %w", a.FindingID,
+				at.position, err)
+		}
+		if f.state == FindingOpen {
+			counts.openFindings--
+		}
+		if a.Resolution == FindingDismissed && f.severity == SeverityBlocker {
+			counts.openBlockers--
+		}
+		rows++
+	}
+	if rows == 0 {
+		n, err := conversationNotApplied(ctx, at, fr.RepoID, fr.ChangeID, "no finding it answers still stands")
+		return n, conversationCounts{}, err
+	}
+	return rows, counts, nil
+}
+
+// applyReviewers writes an ask for review: each reviewer asked — named again
+// where their ask was withdrawn — and a participant of the change, and each
+// withdrawn ask still standing marked so.
+func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p ReviewerRequest) (int, error) {
+	by, byKind := p.By.party()
+	if by == "" {
+		return conversationNotApplied(ctx, at, p.RepoID, p.ChangeID, "who asked names no seat")
+	}
+	for _, r := range p.Request {
+		if !r.Kind.Valid() {
+			return 0, fmt.Errorf("gitlet: the ask for review at %s names reviewer %q of kind %q, which no writer "+
+				"stamps", at.position, r.Handle, r.Kind)
+		}
+	}
+	// THE REVIEWERS ASKED AND THEIR PARTICIPANT ROWS, A COLLECTION EACH, and
+	// the withdrawals in one statement driven from their list: as few
+	// statements as the engine's bind limit allows, never one a reviewer.
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables, askReviewersSQL, `(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		askReviewersConflictSQL, len(p.Request), func(i int) []any {
+			r := p.Request[i]
+			return []any{p.ChangeID, r.Handle, string(r.Kind), string(ReviewerAsked), string(ReviewerRequested), by,
+				string(byKind), p.Note, at.packed}
+		}); err != nil {
+		return 0, fmt.Errorf("gitlet: ask change %s's reviewers at %s: %w", p.ChangeID, at.position, err)
+	}
+	if err := addParticipants(ctx, tx, at, p.ChangeID, p.Request); err != nil {
+		return 0, err
+	}
+	rows := 2 * len(p.Request)
+	withdrawn, err := moveAsks(ctx, tx, at, p.ChangeID, ReviewerRequested, ReviewerWithdrawn, p.Withdraw)
+	if err != nil {
+		return 0, err
+	}
+	rows += withdrawn
+	// AN ASK THAT MOVED NOTHING still moves the conversation: its decide
+	// found something to move, and a record on the change's subject is one
+	// version of it whatever its rows.
+	return max(rows, 1), nil
+}
+
+// applyComment writes a comment, its author as a participant and everybody it
+// mentions as one too, counting it and what its body weighs on its
+// conversation.
+func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (int, conversationCounts, error) {
+	by, kind := c.By.party()
+	if by == "" {
+		n, err := conversationNotApplied(ctx, at, c.RepoID, c.ChangeID, "who said it names no seat")
+		return n, conversationCounts{}, err
+	}
+	var anchor string
+	if c.Anchor != nil {
+		encoded, err := json.Marshal(c.Anchor)
+		if err != nil {
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: encode comment %s's anchor: %w", c.CommentID, err)
+		}
+		anchor = string(encoded)
+	}
+	// THE CREDENTIAL A PERSON SAID IT WITH, as every record a write leaves
+	// names it (iam.ActorFor); a seat acts as itself with none.
+	var operator string
+	if kind == PartyPerson {
+		operator = c.By.OperatorID
+	}
+	res, err := tx.ExecContext(ctx, addCommentSQL, c.CommentID, c.ChangeID, c.ThreadID, c.ParentID, c.FindingID,
+		by, string(kind), operator, anchor, c.TurnID, len(c.Body), at.packed, at.at(), c.Body)
+	if err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: write comment %s at %s: %w", c.CommentID, at.position,
+			err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		n, err := conversationNotApplied(ctx, at, c.RepoID, c.ChangeID, "a comment already holds its id")
+		return n, conversationCounts{}, err
+	}
+	if _, err = tx.ExecContext(ctx, addParticipantSQL, c.ChangeID, by, string(kind), at.packed); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: add %s to change %s at %s: %w", by, c.ChangeID,
+			at.position, err)
+	}
+	mentioned, err := addMentioned(ctx, tx, at, c.ChangeID, c.Routing)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return 2 + mentioned, conversationCounts{comments: 1, textBytes: int64(len(c.Body))}, nil
+}
+
+// applyThreadResolve marks a thread's root resolved or open again, naming who.
+func applyThreadResolve(ctx context.Context, tx *sql.Tx, at applyContext, t ThreadResolve) (int, error) {
+	by, kind := t.By.party()
+	if by == "" {
+		return conversationNotApplied(ctx, at, t.RepoID, t.ChangeID, "who resolved it names no seat")
+	}
+	resolvedBy, resolvedKind := by, string(kind)
+	if !t.Resolved {
+		resolvedBy, resolvedKind = "", ""
+	}
+	res, err := tx.ExecContext(ctx, resolveThreadSQL, t.Resolved, resolvedBy, resolvedKind, t.ThreadID,
+		t.ChangeID)
+	if err != nil {
+		return 0, fmt.Errorf("gitlet: resolve thread %s of change %s at %s: %w", t.ThreadID, t.ChangeID,
+			at.position, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return conversationNotApplied(ctx, at, t.RepoID, t.ChangeID, "the change holds no thread "+t.ThreadID)
+	}
+	return 1, nil
+}
+
+// applyAsks settles a change's asks with its lifecycle ([AskSettle]): each ask
+// the record names moves to its state from the one the other direction leaves
+// — a waiting ask to ended, an ended one to requested — where the change still
+// stands, as this transaction reads its row, where the record's decide found
+// it: closed or merged for an end, live for an ask again. A change its
+// repository's records moved since — reopened before its end landed, ended
+// again before its ask again — keeps its asks as they are, and the record is
+// one version of the conversation and nothing else: the decide found
+// something to move, and the home's next pass reads the rows again.
+func applyAsks(ctx context.Context, tx *sql.Tx, at applyContext, a AskSettle) (int, error) {
+	row, found, err := changeRowIn(ctx, tx, a.ChangeID)
+	if err != nil || !found {
+		return 0, err
+	}
+	from, ends := ReviewerEnded, a.State == ReviewerEnded
+	if ends {
+		from = ReviewerRequested
+	}
+	if ends == row.state.Live() {
+		return 1, nil
+	}
+	moved, err := moveAsks(ctx, tx, at, a.ChangeID, from, a.State, a.Reviewers)
+	if err != nil {
+		return 0, err
+	}
+	return max(moved, 1), nil
+}
+
+// queryer is what an apply of a change's conversation issues its statements
+// through: a *sql.Tx, and in a test one that counts them
+// (TestTheWidestReviewAppliesInAFixedNumberOfStatements).
+type queryer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// addParticipants writes each of reviewers a participant of changeID where the
+// change holds none of them, at the record's position, as one collection.
+func addParticipants(ctx context.Context, tx store.Execer, at applyContext, changeID string,
+	reviewers []Reviewer) error {
+
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables, addParticipantsSQL, `(?, ?, ?, ?)`,
+		`ON CONFLICT (change_id, handle) DO NOTHING`, len(reviewers), func(i int) []any {
+			return []any{changeID, reviewers[i].Handle, string(reviewers[i].Kind), at.packed}
+		}); err != nil {
+		return fmt.Errorf("gitlet: add change %s's reviewers as its participants at %s: %w", changeID, at.position,
+			err)
+	}
+	return nil
+}
+
+// moveAsks moves each ask of changeID handles names that is in state from to
+// state to, at the record's position, in one statement driven from the list of
+// the handles, and answers how many moved.
+func moveAsks(ctx context.Context, tx store.Execer, at applyContext, changeID string, from, to ReviewerState,
+	handles []string) (int, error) {
+
+	if len(handles) == 0 {
+		return 0, nil
+	}
+	list, err := jsonList(handles)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, moveAsksSQL, string(to), at.packed, changeID, string(from), list)
+	if err != nil {
+		return 0, fmt.Errorf("gitlet: move change %s's asks %s to %s at %s: %w", changeID, from, to, at.position,
+			err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// conversationNotApplied logs a record on a change's subject that applies as
+// nothing, and answers that it wrote no row.
+func conversationNotApplied(ctx context.Context, at applyContext, repoID, changeID, why string) (int, error) {
+	applyLog.WarnContext(ctx, "code_conversation_not_applied", "repo", repoID, "change", changeID,
+		"op", string(at.record.Op), "op_id", at.record.OpID, "position", at.position.String(), "why", why)
+	return 0, nil
+}
+
+// The conversation's writes, and the reads that find the rows they write: the
+// change's repository and its conversation by their keys, a reviewer and a
+// participant by theirs, a comment by its id and a thread's root by its id and
+// change. Every one with a WHERE is registered in plan_test.go, and a conflict
+// on a key is a skip or a merge, never an abort, which would stall the log on
+// every node.
+const (
+	changeRepoSQL = `SELECT repo_id FROM code_changes WHERE id = ?`
+	// touchConversationSQL is a record's move of its conversation, and
+	// touchSpokenConversationSQL a move by one somebody wrote, which dates it.
+	touchConversationSQL = `INSERT INTO code_conversations (change_id, repo_id, comments, reviews, open_findings,
+			open_blockers, changes_requested, text_bytes, readiness_version, version, position, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+		ON CONFLICT (change_id) DO UPDATE SET comments = code_conversations.comments + excluded.comments,
+			reviews = code_conversations.reviews + excluded.reviews,
+			open_findings = code_conversations.open_findings + excluded.open_findings,
+			open_blockers = code_conversations.open_blockers + excluded.open_blockers,
+			changes_requested = code_conversations.changes_requested + excluded.changes_requested,
+			text_bytes = code_conversations.text_bytes + excluded.text_bytes,
+			readiness_version = code_conversations.readiness_version + excluded.readiness_version,
+			version = code_conversations.version + 1, position = excluded.position`
+	touchSpokenConversationSQL = touchConversationSQL + `, updated_at = excluded.updated_at`
+	// A review's writes: the reviewer's standing verdict before this one, by
+	// their participant row's key; the review, its findings and their texts,
+	// each a conflict on its key a skip; the supersession of the findings the
+	// decide's rule names, driven from the list of their ids; the reviewer as
+	// a participant, their standing verdict moved by a review that judges; and
+	// a finding answered by its key.
+	standingVerdictSQL  = `SELECT verdict FROM code_participants WHERE change_id = ? AND handle = ?`
+	judgeParticipantSQL = `INSERT INTO code_participants (change_id, handle, kind, position, verdict,
+			verdict_revision, verdict_review)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (change_id, handle) DO UPDATE SET verdict = excluded.verdict,
+			verdict_revision = excluded.verdict_revision, verdict_review = excluded.verdict_review`
+	addReviewSQL = `INSERT INTO code_reviews (id, change_id, revision, reviewer, reviewer_kind, operator_id,
+			verdict, findings, turn_id, model, summary_bytes, position, at, summary)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO NOTHING`
+	// addFindingsSQL and addFindingTextsSQL are a review's findings and their
+	// texts, each a collection store.InsertRows writes, findingValuesSQL a
+	// finding's row.
+	addFindingsSQL = `INSERT INTO code_findings (id, change_id, review_id, raiser, raiser_kind, revision,
+			commit_oid, path, blob_oid, side, line_start, line_end, severity, category, state, position) VALUES `
+	findingValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	addFindingTextsSQL = `INSERT INTO code_finding_texts (change_id, finding_id, bytes, title, body, suggestion)
+		VALUES `
+	supersedeFindingsSQL = `UPDATE code_findings SET state = ?, resolution_note = '', resolved_by = ?,
+			resolved_by_kind = ?, resolved_commit = '', resolved_position = ?
+		WHERE rowid IN (SELECT f.rowid FROM json_each(?) AS j CROSS JOIN code_findings AS f
+			WHERE f.id = CAST(j.value AS TEXT))`
+	answerFindingSQL = `UPDATE code_findings SET state = ?, resolution_note = ?, resolved_by = ?,
+			resolved_by_kind = ?, resolved_commit = ?, resolved_position = ?
+		WHERE id = ?`
+	// askReviewersSQL and askReviewersConflictSQL are an ask's reviewers, a
+	// collection store.InsertRows writes, each asked again where the change
+	// held an ask of them in any state.
+	askReviewersSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
+			requested_by_kind, note, position) VALUES `
+	askReviewersConflictSQL = `ON CONFLICT (change_id, reviewer) DO UPDATE SET
+			reviewer_kind = excluded.reviewer_kind, reason = excluded.reason, state = excluded.state,
+			requested_by = excluded.requested_by, requested_by_kind = excluded.requested_by_kind,
+			note = excluded.note, position = excluded.position`
+	// moveAsksSQL moves a change's asks named in a list from one state to
+	// another, driven from the list, one seek of the reviewers' key a handle
+	// — the key NAMED ([reviewersKey] says why) — as supersedeFindingsSQL
+	// drives a review's supersessions.
+	moveAsksSQL = `UPDATE code_reviewers SET state = ?1, position = ?2
+		WHERE rowid IN (SELECT r.rowid FROM json_each(?5) AS j
+			CROSS JOIN code_reviewers AS r INDEXED BY ` + reviewersKey + `
+			WHERE r.change_id = ?3 AND r.reviewer = CAST(j.value AS TEXT) AND r.state = ?4)`
+	// countAsksSQL counts a change's asks that wait and those its end left
+	// onto its conversation's row, each a range of the reviewers' key.
+	countAsksSQL = `UPDATE code_conversations SET
+			asked = (SELECT COUNT(*) FROM code_reviewers INDEXED BY ` + reviewersKey + `
+				WHERE change_id = ?1 AND state = 'requested'),
+			ended = (SELECT COUNT(*) FROM code_reviewers INDEXED BY ` + reviewersKey + `
+				WHERE change_id = ?1 AND state = 'ended')
+		WHERE change_id = ?1`
+	addParticipantSQL = `INSERT INTO code_participants (change_id, handle, kind, position) VALUES (?, ?, ?, ?)
+		ON CONFLICT (change_id, handle) DO NOTHING`
+	// addParticipantsSQL is reviewers as a change's participants, a collection
+	// store.InsertRows writes, each where the change holds none of them.
+	addParticipantsSQL = `INSERT INTO code_participants (change_id, handle, kind, position) VALUES `
+	addCommentSQL      = `INSERT INTO code_comments (id, change_id, thread_id, parent_id, finding_id, author,
+			author_kind, author_operator_id, anchor, turn_id, body_bytes, position, at, body)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO NOTHING`
+	resolveThreadSQL = `UPDATE code_comments SET resolved = ?, resolved_by = ?, resolved_by_kind = ?
+		WHERE id = ? AND change_id = ? AND thread_id = id`
+)

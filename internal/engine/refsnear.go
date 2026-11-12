@@ -4,13 +4,13 @@ import (
 	"context"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // refsNearLimit reads code_refs_near_limit's figure from this node's code log
-// rows at now ([code.Reader.RefsNearLimit]), and false where this node
+// rows at now ([gitlet.Reader.RefsNearLimit]), and false where this node
 // measures none: a node with no runtime holding the code log's rows — no data
 // role — and one whose company hosts no code, whose repositories take no push
 // for the bound to refuse.
@@ -19,15 +19,15 @@ import (
 // each holds, so every data node reports the same repositories, as an estate's
 // own alarms are reported — and a fleet with no Gitlet node live still has
 // repositories near the bound, whose pushes wait on one.
-func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (code.RefsNear, bool, error) {
+func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (gitlet.RefsNear, bool, error) {
 	n := e.native.Load()
 	c := e.Company()
 	if n == nil || n.codeReader == nil || c == nil || c.Config == nil || c.Config.CodeBackendFor() != config.CodeGitlet {
-		return code.RefsNear{}, false, nil
+		return gitlet.RefsNear{}, false, nil
 	}
 	near, err := n.codeReader.RefsNearLimit(ctx, now)
 	if err != nil {
-		return code.RefsNear{}, false, err
+		return gitlet.RefsNear{}, false, err
 	}
 	return near, true, nil
 }
@@ -38,8 +38,8 @@ func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (code.RefsNea
 //
 // ON THE TICK AND NEVER ON A REPORT: the reading is a walk of every
 // repository row and a count over each one's refs near the bound — its live
-// refs and its tombstones, up to code.MaxRefsPerRepo +
-// code.MaxTombstonesPerRepo index entries a repository — while a report is
+// refs and its tombstones, up to gitlet.MaxRefsPerRepo +
+// gitlet.MaxTombstonesPerRepo index entries a repository — while a report is
 // assembled on every alarm beat, operator request and dashboard poll, and the
 // figure moves over days: a quarter-hour is a resolution it is honest at.
 //
@@ -55,7 +55,7 @@ func (r *retention) measureRefs(ctx context.Context) {
 	if err != nil {
 		r.logs().WarnContext(ctx, "code_refs_near_limit_unread", "error", err.Error(),
 			"detail", "code_refs_near_limit is not raised until the next trim tick reads the rows again")
-		near, known = code.RefsNear{}, false
+		near, known = gitlet.RefsNear{}, false
 	}
 	r.mu.Lock()
 	r.refsNear, r.refsNearKnown = near, known
@@ -77,6 +77,6 @@ func (r *retention) refsReading(out *statelog.Reading) {
 	out.CodeRefsNearLimitRepo = near.Worst
 	out.CodeRefsNearLimitLive = near.Live
 	out.CodeRefsNearLimitRecent = near.Recent
-	out.CodeRefsLimit = code.MaxRefsPerRepo
-	out.CodeRefsWindow = code.RefExpiry
+	out.CodeRefsLimit = gitlet.MaxRefsPerRepo
+	out.CodeRefsWindow = gitlet.RefExpiry
 }

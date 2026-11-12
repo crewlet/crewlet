@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -73,7 +73,7 @@ var (
 	trackerName = worklet.Domain{}.Name()
 	pagesName   = doclet.Domain{}.Name()
 	vectorsName = search.Domain{}.Name()
-	codeName    = code.Domain{}.Name()
+	codeName    = gitlet.Domain{}.Name()
 )
 
 // soundCopy is a reading of every registered domain's copy: not wrong, and

@@ -1,8 +1,8 @@
 # ADR-0090: A compaction merges packs without judging reachability, and a retired pack outlives its longest read
 
 - **Status:** accepted
-- **Authority:** `internal/code`
-- **Enforced-by:** `internal/code/host.TestTheHostPassesTheSuite` (its cases `C2_CompactionDuringPush`, `C3_CompactionDuringFetch` and `C4_ARetiredPackOutlivesItsLongestRead`), held able to fail by `internal/code/codetest.TestTheSuiteCatchesARetirementWithNoGrace`; `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`; `internal/code/cache.TestASwapKeepsEveryPackAReaderHolds`; `internal/code/cache.TestAMergeCompactionKeepsTheCommitGraph`; `internal/code/compact.TestACompactionKeepsEveryObjectOfItsInputs`; `internal/code/compact.TestTheBuildReadsItsInputsThroughTheAlternate`; `internal/code.TestACompactionOfAPackNoLongerLiveIsStale`
+- **Authority:** `internal/gitlet`
+- **Enforced-by:** `internal/gitlet/host.TestTheHostPassesTheSuite` (its cases `C2_CompactionDuringPush`, `C3_CompactionDuringFetch` and `C4_ARetiredPackOutlivesItsLongestRead`), held able to fail by `internal/gitlet/gitlettest.TestTheSuiteCatchesARetirementWithNoGrace`; `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`; `internal/gitlet/cache.TestASwapKeepsEveryPackAReaderHolds`; `internal/gitlet/cache.TestAMergeCompactionKeepsTheCommitGraph`; `internal/gitlet/compact.TestACompactionKeepsEveryObjectOfItsInputs`; `internal/gitlet/compact.TestTheBuildReadsItsInputsThroughTheAlternate`; `internal/gitlet.TestACompactionOfAPackNoLongerLiveIsStale`
 - **Cost-when-tried:** Gitlet's first build compacted nothing: every push stored one pack, kept live for the repository's life, so a cold sync's length was its pack count — 2 000 packs at the S3 fake's 200 ms first byte took about 26 s at one sync's width (`BenchmarkColdSync`), and the 10 000 of a 10 000-push repository about 130 s (its `bucket=fake/firstbyte=200ms/packs=10000/fetch=16` arm) — every request's pack lookup searched every pack the round's index did not cover, and the code estate's pack rows grew with every push for ever
 - **Tag-status:** unreleased
 
@@ -11,7 +11,7 @@
 A repository's small packs are merged by its HOME Gitlet node — the first of its
 rendezvous order over the live Gitlet nodes
 ([ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md)), in
-`internal/code/compact` — into one or a few pack bundles, each stored as one
+`internal/gitlet/compact` — into one or a few pack bundles, each stored as one
 object, and the merge is decided by the repository's committer as a push is:
 one record on `repo.<id>` (`OpCompact`), one snapshot, alone. Three rules make it
 safe with no fence:
@@ -75,7 +75,7 @@ Which Gitlet node is a repository's home
 ([ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md)). How a
 layer is published over full packs. Expunge. How long a person may wait on a
 refused push: `MaxPacksPerRepo` is derived from a cold sync's share of
-`host.Timing.SpoolWait`, measured in `internal/code`'s doc.
+`host.Timing.SpoolWait`, measured in `internal/gitlet`'s doc.
 
 ## Amendment — the maintainer merges, and a published pack is no input
 

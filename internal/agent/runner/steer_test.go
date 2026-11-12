@@ -428,10 +428,13 @@ func TestAResumeCarriesTheRunsReadNotes(t *testing.T) {
 // and no note a reviewer, the first segment or an earlier round's run read. A
 // job carried on with a person's answer continues the asking job's round, whose
 // calls the record lists first, so the notes the asking job read are listed
-// with them, in the order read.
+// with them, in the order read. A read the record marks unanswered — a take
+// whose answer never reached the job's harness — is no read of the job's, and
+// is not listed.
 //
 // Mutation: list the collected job's reads alone, and the asking job's note is
-// missing; drop the round from the key, and the earlier round's is listed.
+// missing; drop the round from the key, and the earlier round's is listed; list
+// a read marked unanswered, and it is listed.
 func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -444,6 +447,10 @@ func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 		return steer.Read{Note: n, Reading: steer.Reading{Phase: ph, Iteration: iteration, Round: 1,
 			Boundary: b, Launch: launch}}
 	}
+	unanswered := func(r steer.Read) steer.Read {
+		r.Unanswered = true
+		return r
+	}
 	collector, _ := buildWith(t, entries, buildOpts{pub: pub,
 		resume: &runner.Resume{State: parked.State, Answer: "posted",
 			Bridged: play(t, req, deliver(t, "posted")),
@@ -454,6 +461,7 @@ func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 				read("first-segment", types.SteerBoundaryRound, types.PhaseExecute, 2, ""),
 				read("asking-job", types.SteerBoundaryToolBatch, types.PhaseExecute, 2, "job-1"),
 				read("in-brief", types.SteerBoundaryBrief, types.PhaseExecute, 2, "job-2"),
+				unanswered(read("lost-answer", types.SteerBoundaryToolBatch, types.PhaseExecute, 2, "job-2")),
 				read("mid-run", types.SteerBoundaryFinish, types.PhaseExecute, 2, "job-2"),
 			}}})
 	if _, _, err := collector.Resume(t.Context(), nil); err != nil {

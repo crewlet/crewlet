@@ -85,7 +85,7 @@ type Querier interface {
 // and none it skipped, and a count of a chunk says how many were skipped but
 // never which. The alternative was one statement a row, read by its own
 // RowsAffected — the shape this file exists to retire, and the one
-// internal/code's notices measured at 240 ms for one record's 3 904 rows
+// internal/gitlet's notices measured at 240 ms for one record's 3 904 rows
 // against statelog.ApplyTxTimeBudget's 250.
 //
 // scan reads the current row of rows and must not advance it; an error from

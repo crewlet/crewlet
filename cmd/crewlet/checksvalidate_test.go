@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// VALIDATE READS A CHECKS FILE as Gitlet does — code.ParseChecks, the
+// VALIDATE READS A CHECKS FILE as Gitlet does — gitlet.ParseChecks, the
 // one grammar — told apart from either config tier by a `checks:` beside no
 // key of either tier (detectTier), or named with -tier checks: a valid file
 // summarises its checks, and a broken

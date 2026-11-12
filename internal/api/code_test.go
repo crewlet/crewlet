@@ -25,14 +25,14 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -235,19 +235,19 @@ func (f fakeGitRoutes) AwaitVerification(ctx context.Context, name string, id uu
 // question can make first — and answers what answer does: an empty answer at
 // the level asked where it is nil.
 type fakeCodeReads struct {
-	answer func(code.ReadQuery) (code.ReadAnswer, error)
+	answer func(gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 
 	mu       sync.Mutex
-	asked    []code.ReadQuery
-	resolved []code.RefQuery
+	asked    []gitlet.ReadQuery
+	resolved []gitlet.RefQuery
 }
 
-func (f *fakeCodeReads) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (f *fakeCodeReads) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	f.mu.Lock()
 	f.asked = append(f.asked, q)
 	f.mu.Unlock()
 	if f.answer == nil {
-		return code.ReadAnswer{Level: q.Fresh.Level}, nil
+		return gitlet.ReadAnswer{Level: q.Fresh.Level}, nil
 	}
 	return f.answer(q)
 }
@@ -255,13 +255,13 @@ func (f *fakeCodeReads) Read(_ context.Context, q code.ReadQuery) (code.ReadAnsw
 // ResolveRef records q and answers every name a branch at the commit
 // fakeCommit: what the content questions this suite asks by their paths read
 // at.
-func (f *fakeCodeReads) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (f *fakeCodeReads) ResolveRef(_ context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	f.mu.Lock()
 	f.resolved = append(f.resolved, q)
 	f.mu.Unlock()
-	a := code.RefAnswer{Repo: code.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main"}}
+	a := gitlet.RefAnswer{Repo: gitlet.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main"}}
 	for _, name := range q.Refs {
-		a.Refs = append(a.Refs, code.ResolvedRef{Name: name, Ref: "refs/heads/" + name, OID: fakeCommit})
+		a.Refs = append(a.Refs, gitlet.ResolvedRef{Name: name, Ref: "refs/heads/" + name, OID: fakeCommit})
 	}
 	return a, nil
 }
@@ -270,22 +270,22 @@ func (f *fakeCodeReads) ResolveRef(_ context.Context, q code.RefQuery) (code.Ref
 // a history of the commit asked, a comparison of the two — whatever this
 // suite asks by a path is answered, and what a part holds is the queries
 // suite's.
-func (f *fakeCodeReads) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
-	a := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
+func (f *fakeCodeReads) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	a := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
 	switch q.Kind {
-	case code.GitLog:
-		a.Log = &code.LogAnswer{Commits: []code.LogCommit{{OID: q.Log.Rev}}}
-	case code.GitCompare:
-		a.Compare = &code.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head}
+	case gitlet.GitLog:
+		a.Log = &gitlet.LogAnswer{Commits: []gitlet.LogCommit{{OID: q.Log.Rev}}}
+	case gitlet.GitCompare:
+		a.Compare = &gitlet.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head}
 	}
 	return a, nil
 }
 
 // MergePreview answers every preview clean.
-func (f *fakeCodeReads) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer,
+func (f *fakeCodeReads) MergePreview(_ context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer,
 	error) {
 
-	return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeClean}, nil
+	return gitlet.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: gitlet.MergeClean}, nil
 }
 
 // fakeRepoID is the repository every read of this suite answers, and
@@ -299,14 +299,14 @@ const (
 func (f *fakeCodeReads) FloorOf(string) statelog.Position { return statelog.Position{} }
 
 // queries is every query asked so far.
-func (f *fakeCodeReads) queries() []code.ReadQuery {
+func (f *fakeCodeReads) queries() []gitlet.ReadQuery {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.asked)
 }
 
 // resolves is every resolve of refs asked so far.
-func (f *fakeCodeReads) resolves() []code.RefQuery {
+func (f *fakeCodeReads) resolves() []gitlet.RefQuery {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.resolved)
@@ -499,19 +499,19 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			t.Parallel()
 			// EVERY REPOSITORY A DETAIL, the company's, so who read one is
 			// answered from its row — not recorded — without the readers.
-			reads := &fakeCodeReads{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
-				a := code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
-					RepoRef: code.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main",
-						Visibility: code.VisibilityCompany}}}}
+			reads := &fakeCodeReads{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+				a := gitlet.ReadAnswer{Level: q.Fresh.Level, Repo: &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{
+					RepoRef: gitlet.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main",
+						Visibility: gitlet.VisibilityCompany}}}}
 				switch q.Kind {
-				case code.ReadCommit:
-					a.Commit = &code.CommitChanges{Commit: q.Commit}
-				case code.ReadCheck:
+				case gitlet.ReadCommit:
+					a.Commit = &gitlet.CommitChanges{Commit: q.Commit}
+				case gitlet.ReadCheck:
 					// A FAILED ATTEMPT, so its log has a page to answer.
-					a.Check = &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{
+					a.Check = &gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{
 						RepoID: fakeRepoID, OID: fakeCommit, Target: "refs/heads/main", Name: "unit",
-						Attempt: 1}, State: code.CheckStateFailed},
-						Log: &code.CheckLog{Object: fakeLogKey, Size: int64(len(fakeLog))}}
+						Attempt: 1}, State: gitlet.CheckStateFailed},
+						Log: &gitlet.CheckLog{Object: fakeLogKey, Size: int64(len(fakeLog))}}
 				}
 				return a, nil
 			}}
@@ -589,7 +589,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 // it resolves instead, in resolves, and no kind.
 type codeQuestion struct {
 	what, route string
-	kind        code.ReadKind
+	kind        gitlet.ReadKind
 	repo        string
 	resolves    []string
 }
@@ -600,35 +600,35 @@ type codeQuestion struct {
 // asked of no part), whom its records reached and one reviewer's reviews — a
 // repository's content, and its merge queues and its checks.
 var codeQuestions = []codeQuestion{
-	{"code_repos", "GET /gitlet/repos", code.ReadRepos, "", nil},
-	{"code_repo", "GET /gitlet/repos/{name}", code.ReadRepo, "web", nil},
-	{"code_pushes", "GET /gitlet/repos/{name}/pushes", code.ReadPushes, "web", nil},
-	{"code_repo_readers", "GET /gitlet/repos/{name}/readers", code.ReadRepo, "web", nil},
-	{"code_changes", "GET /gitlet/changes", code.ReadChanges, "", nil},
-	{"code_change", "GET /gitlet/repos/{name}/changes/{n}", code.ReadChange, "web", nil},
-	{"code_change_routing", "GET /gitlet/repos/{name}/changes/{n}/routing", code.ReadChangeRouting, "web", nil},
-	{"code_reviews", "GET /gitlet/reviews", code.ReadReviews, "", nil},
+	{"code_repos", "GET /gitlet/repos", gitlet.ReadRepos, "", nil},
+	{"code_repo", "GET /gitlet/repos/{name}", gitlet.ReadRepo, "web", nil},
+	{"code_pushes", "GET /gitlet/repos/{name}/pushes", gitlet.ReadPushes, "web", nil},
+	{"code_repo_readers", "GET /gitlet/repos/{name}/readers", gitlet.ReadRepo, "web", nil},
+	{"code_changes", "GET /gitlet/changes", gitlet.ReadChanges, "", nil},
+	{"code_change", "GET /gitlet/repos/{name}/changes/{n}", gitlet.ReadChange, "web", nil},
+	{"code_change_routing", "GET /gitlet/repos/{name}/changes/{n}/routing", gitlet.ReadChangeRouting, "web", nil},
+	{"code_reviews", "GET /gitlet/reviews", gitlet.ReadReviews, "", nil},
 	// AND A REPOSITORY'S CONTENT: its refs; each read by object id at its
 	// default branch — what `ref` defaults to, and what a request's `base` and
 	// `head` name here — ONE resolve of HEAD, which the reader answers from
-	// the repository's row in the same read (code.HeadRef), with no read of
+	// the repository's row in the same read (gitlet.HeadRef), with no read of
 	// the repository ahead of it; and a commit, its changes read first, for
 	// the repository.
-	{"code_refs", "GET /gitlet/repos/{name}/refs", code.ReadRefs, "web", nil},
-	{"code_tree", "GET /gitlet/repos/{name}/tree", "", "web", []string{code.HeadRef}},
-	{"code_blob", "GET /gitlet/repos/{name}/blob", "", "web", []string{code.HeadRef}},
-	{"code_log", "GET /gitlet/repos/{name}/log", "", "web", []string{code.HeadRef}},
-	{"code_blame", "GET /gitlet/repos/{name}/blame", "", "web", []string{code.HeadRef}},
-	{"code_diff", "GET /gitlet/repos/{name}/diff", "", "web", []string{code.HeadRef}},
-	{"code_compare", "GET /gitlet/repos/{name}/compare", "", "web", []string{code.HeadRef}},
-	{"code_commit", "GET /gitlet/repos/{name}/commits/{sha}", code.ReadCommit, "web", nil},
+	{"code_refs", "GET /gitlet/repos/{name}/refs", gitlet.ReadRefs, "web", nil},
+	{"code_tree", "GET /gitlet/repos/{name}/tree", "", "web", []string{gitlet.HeadRef}},
+	{"code_blob", "GET /gitlet/repos/{name}/blob", "", "web", []string{gitlet.HeadRef}},
+	{"code_log", "GET /gitlet/repos/{name}/log", "", "web", []string{gitlet.HeadRef}},
+	{"code_blame", "GET /gitlet/repos/{name}/blame", "", "web", []string{gitlet.HeadRef}},
+	{"code_diff", "GET /gitlet/repos/{name}/diff", "", "web", []string{gitlet.HeadRef}},
+	{"code_compare", "GET /gitlet/repos/{name}/compare", "", "web", []string{gitlet.HeadRef}},
+	{"code_commit", "GET /gitlet/repos/{name}/commits/{sha}", gitlet.ReadCommit, "web", nil},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed
 	// across repositories where the route names none, one attempt whole, and
 	// a page of its log, read after the attempt that names it.
-	{"code_queue", "GET /gitlet/queue", code.ReadQueue, "", nil},
-	{"code_checks", "GET /gitlet/checks", code.ReadChecks, "", nil},
-	{"code_check", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web", nil},
-	{"code_check_log", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web", nil},
+	{"code_queue", "GET /gitlet/queue", gitlet.ReadQueue, "", nil},
+	{"code_checks", "GET /gitlet/checks", gitlet.ReadChecks, "", nil},
+	{"code_check", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", gitlet.ReadCheck, "web", nil},
+	{"code_check_log", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", gitlet.ReadCheck, "web", nil},
 }
 
 // codeSearchQuestion is the code search: a question of its own beside
@@ -651,7 +651,7 @@ func (f *fakeSearcher) CodeSearch(_ context.Context, q codesearch.Query) (codese
 	if len(q.Search.Repos) > 0 {
 		repo = q.Search.Repos[0]
 	}
-	return codesearch.Answer{Hits: []codesearch.Hit{{Repo: repo, SearchHit: code.SearchHit{Path: "go.mod",
+	return codesearch.Answer{Hits: []codesearch.Hit{{Repo: repo, SearchHit: gitlet.SearchHit{Path: "go.mod",
 		Line: 1, Text: "module " + q.Search.Text, Blob: fakeCommit}}},
 		Tips: map[string]string{repo: fakeCommit}, Coverage: codesearch.Coverage{Searched: 1}}, nil
 }
@@ -689,7 +689,7 @@ func TestCodeSearchIsAnsweredOnItsPath(t *testing.T) {
 		}
 		q := asked[len(asked)-1]
 		if q.Search.Text != "needle" || !slices.Equal(q.Search.Repos, []string{"web"}) ||
-			q.Asker.Kind != code.PrincipalOperator || q.Asker.OperatorID != "token:founder" {
+			q.Asker.Kind != gitlet.PrincipalOperator || q.Asker.OperatorID != "token:founder" {
 			t.Errorf("GET %s searched %+v as %+v, want needle in web as token:founder", at, q.Search, q.Asker)
 		}
 		var body codesearch.Answer
@@ -1046,7 +1046,7 @@ var boxCodeRequests = []struct{ method, path string }{
 
 // aCheckRef is one attempt of a check, as its box is given repository web.
 func aCheckRef() host.CheckRunRef {
-	return host.CheckRunRef{Repo: "web", Attempt: code.CheckKey{RepoID: uuid.NewString(),
+	return host.CheckRunRef{Repo: "web", Attempt: gitlet.CheckKey{RepoID: uuid.NewString(),
 		OID: strings.Repeat("ab", 20), Target: "refs/heads/main", Name: "lint.go", Attempt: 2}}
 }
 
@@ -1074,11 +1074,11 @@ func TestAnUnservedBoxRouteAnswersACheckToken(t *testing.T) {
 	ref := aCheckRef()
 	run := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
 	basic := func(user, password string) string { return "Basic " + basicAuth(user, password) }
-	signed := basic(code.CheckUser, checks.Mint(ref, time.Minute))
+	signed := basic(gitlet.CheckUser, checks.Mint(ref, time.Minute))
 	unsigned := []struct{ name, authorization string }{
 		{"a check's token as a run's", basic(host.BoxUser, checks.Mint(ref, time.Minute))},
-		{"a run's token as a check's", basic(code.CheckUser, boxes.Mint(run))},
-		{"another fleet's check token", basic(code.CheckUser, otherFleet.Mint(ref, time.Minute))},
+		{"a run's token as a check's", basic(gitlet.CheckUser, boxes.Mint(run))},
+		{"another fleet's check token", basic(gitlet.CheckUser, otherFleet.Mint(ref, time.Minute))},
 		{"no credential", ""},
 	}
 	var requests []struct{ method, path string }
@@ -1120,27 +1120,27 @@ func TestAnUnservedBoxRouteAnswersACheckToken(t *testing.T) {
 // with a page naming what it read.
 type fakeGitReads struct {
 	mu    sync.Mutex
-	asked []code.GitQuery
+	asked []gitlet.GitQuery
 }
 
-func (f *fakeGitReads) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (f *fakeGitReads) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	f.mu.Lock()
 	f.asked = append(f.asked, q)
 	f.mu.Unlock()
-	a := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Next: "n",
-		PushedBy: map[string]code.PushedBy{q.Check.OID: {}}}
+	a := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Next: "n",
+		PushedBy: map[string]gitlet.PushedBy{q.Check.OID: {}}}
 	switch q.Kind {
-	case code.GitTree:
-		a.Tree = &code.TreeAnswer{}
-	case code.GitBlob:
-		a.Blob = &code.BlobAnswer{}
-	case code.GitDiff:
-		a.Diff = &code.DiffAnswer{}
+	case gitlet.GitTree:
+		a.Tree = &gitlet.TreeAnswer{}
+	case gitlet.GitBlob:
+		a.Blob = &gitlet.BlobAnswer{}
+	case gitlet.GitDiff:
+		a.Diff = &gitlet.DiffAnswer{}
 	}
 	return a, nil
 }
 
-func (f *fakeGitReads) queries() []code.GitQuery {
+func (f *fakeGitReads) queries() []gitlet.GitQuery {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.asked)
@@ -1154,7 +1154,7 @@ func (f *fakeGitReads) queries() []code.GitQuery {
 // id) is refused before anything is read, as is a parameter no read takes
 // and one named twice, and the answer carries the commit's content alone —
 // none of the push provenance a seat's read carries. And the Gitlet node holds
-// a read made for a check to its commit itself (code.GitQuery.Validate), so a
+// a read made for a check to its commit itself (gitlet.GitQuery.Validate), so a
 // node that built one at another commit is refused there too.
 //
 // Mutations: boxCodeQuery reading a `rev` parameter into the tree read — the
@@ -1167,8 +1167,8 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 	base := strings.Repeat("cd", 20)
 	session := statelog.FloorAt(statelog.ReadSession,
 		statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9})
-	admitted := host.CheckAdmitted{Attempt: code.CheckRow{CheckKey: ref.Attempt, State: code.CheckStateRunning,
-		Base: base}, Repo: code.RepoRef{ID: ref.Attempt.RepoID, Name: "web"}, Fresh: session}
+	admitted := host.CheckAdmitted{Attempt: gitlet.CheckRow{CheckKey: ref.Attempt, State: gitlet.CheckStateRunning,
+		Base: base}, Repo: gitlet.RepoRef{ID: ref.Attempt.RepoID, Name: "web"}, Fresh: session}
 	reads := &fakeGitReads{}
 	a := codeApp(t, nil, fixedCode{git: fakeGitRoutes{admitted: &admitted}, reads: &fakeCodeReads{},
 		gitReads: reads})
@@ -1192,15 +1192,15 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 	}
 	for _, read := range []struct {
 		path string
-		kind code.GitReadKind
-		rev  func(code.GitQuery) string
+		kind gitlet.GitReadKind
+		rev  func(gitlet.GitQuery) string
 	}{
-		{"/box/gitlet/web/tree?path=cmd&recursive=true", code.GitTree,
-			func(q code.GitQuery) string { return q.Tree.Rev }},
-		{"/box/gitlet/web/blob?path=go.mod&start_line=2&end_line=9", code.GitBlob,
-			func(q code.GitQuery) string { return q.Blob.Rev }},
-		{"/box/gitlet/web/diff?paths=cmd&paths=go.mod&renames=true", code.GitDiff,
-			func(q code.GitQuery) string { return q.Diff.Head }},
+		{"/box/gitlet/web/tree?path=cmd&recursive=true", gitlet.GitTree,
+			func(q gitlet.GitQuery) string { return q.Tree.Rev }},
+		{"/box/gitlet/web/blob?path=go.mod&start_line=2&end_line=9", gitlet.GitBlob,
+			func(q gitlet.GitQuery) string { return q.Blob.Rev }},
+		{"/box/gitlet/web/diff?paths=cmd&paths=go.mod&renames=true", gitlet.GitDiff,
+			func(q gitlet.GitQuery) string { return q.Diff.Head }},
 	} {
 		before := len(reads.queries())
 		rec := ask(t, a, http.MethodGet, read.path, false)
@@ -1216,12 +1216,12 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 		case q.Kind != read.kind || read.rev(q) != ref.Attempt.OID || q.RepoID != ref.Attempt.RepoID:
 			t.Errorf("GET %s asked %+v, want a %s read of %s at %s", read.path, q, read.kind,
 				ref.Attempt.RepoID, ref.Attempt.OID)
-		case q.Check == nil || *q.Check != ref.Attempt || q.Asker != (code.Principal{}) || q.CeilingSeat != "":
+		case q.Check == nil || *q.Check != ref.Attempt || q.Asker != (gitlet.Principal{}) || q.CeilingSeat != "":
 			t.Errorf("GET %s asked as %+v for %+v, want the engine's own read made for %+v", read.path,
 				q.Asker, q.Check, ref.Attempt)
 		case !reflect.DeepEqual(q.Fresh, session):
 			t.Errorf("GET %s read at %+v, want the check's session %+v", read.path, q.Fresh, session)
-		case q.Kind == code.GitDiff &&
+		case q.Kind == gitlet.GitDiff &&
 			(q.Diff.Base != base || !slices.Equal(q.Diff.Paths, []string{"cmd", "go.mod"})):
 			t.Errorf("GET %s asked the diff %+v, want from the attempt's base %s over its paths", read.path,
 				q.Diff, base)
@@ -1240,18 +1240,18 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 
 	// THE GITLET NODE'S OWN HOLD: a read made for the check at any other commit
 	// is refused as it is validated, whoever built it.
-	at := func(rev string) []code.GitQuery {
+	at := func(rev string) []gitlet.GitQuery {
 		check := ref.Attempt
-		return []code.GitQuery{
-			{Kind: code.GitTree, RepoID: check.RepoID, Check: &check, Tree: &code.TreeQuery{Rev: rev}},
-			{Kind: code.GitBlob, RepoID: check.RepoID, Check: &check,
-				Blob: &code.BlobQuery{Rev: rev, Path: "go.mod"}},
-			{Kind: code.GitDiff, RepoID: check.RepoID, Check: &check,
-				Diff: &code.DiffQuery{Base: base, Head: rev}},
+		return []gitlet.GitQuery{
+			{Kind: gitlet.GitTree, RepoID: check.RepoID, Check: &check, Tree: &gitlet.TreeQuery{Rev: rev}},
+			{Kind: gitlet.GitBlob, RepoID: check.RepoID, Check: &check,
+				Blob: &gitlet.BlobQuery{Rev: rev, Path: "go.mod"}},
+			{Kind: gitlet.GitDiff, RepoID: check.RepoID, Check: &check,
+				Diff: &gitlet.DiffQuery{Base: base, Head: rev}},
 		}
 	}
 	for _, q := range at(other) {
-		if err := q.Validate(); !errors.Is(err, code.ErrInvalid) {
+		if err := q.Validate(); !errors.Is(err, gitlet.ErrInvalid) {
 			t.Errorf("a %s read made for the check at another commit validated: %v", q.Kind, err)
 		}
 	}
@@ -1261,8 +1261,8 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 		}
 	}
 	asked := at(ref.Attempt.OID)[0]
-	asked.Asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ops", Seat: "ceo"}
-	if err := asked.Validate(); !errors.Is(err, code.ErrInvalid) {
+	asked.Asker = gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:ops", Seat: "ceo"}
+	if err := asked.Validate(); !errors.Is(err, gitlet.ErrInvalid) {
 		t.Errorf("a read made for the check naming an asker validated: %v", err)
 	}
 }
@@ -1287,21 +1287,21 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 	// said is the reader's sentence as the envelope writes a detail.
 	said := httpjson.Sentence(shutOut)
 	refused := map[string]error{
-		"secret": fmt.Errorf("%w: %s", code.ErrNotPermitted, shutOut),
+		"secret": fmt.Errorf("%w: %s", gitlet.ErrNotPermitted, shutOut),
 		"routed": fmt.Errorf("estate: data node n2 answered: %w",
-			fmt.Errorf("%w: %s", code.ErrNotPermitted, shutOut)),
-		"web":     code.ErrRepoNotFound,
-		"level":   fmt.Errorf("%w: a session read names the position it must include", code.ErrBadLevel),
-		"cursor":  fmt.Errorf("%w: phase %q", code.ErrBadCursor, "x"),
+			fmt.Errorf("%w: %s", gitlet.ErrNotPermitted, shutOut)),
+		"web":     gitlet.ErrRepoNotFound,
+		"level":   fmt.Errorf("%w: a session read names the position it must include", gitlet.ErrBadLevel),
+		"cursor":  fmt.Errorf("%w: phase %q", gitlet.ErrBadCursor, "x"),
 		"behind":  &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadLinearizable, RetryAfter: 7 * time.Second},
 		"nobody":  &estate.ErrUnserved{Detail: "no data node answered"},
 		"evicted": &statelog.Refused{Code: statelog.RefuseEvicted, Level: statelog.ReadStale},
 	}
-	reads := &fakeCodeReads{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+	reads := &fakeCodeReads{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 		if err, ok := refused[q.Repo]; ok {
-			return code.ReadAnswer{}, err
+			return gitlet.ReadAnswer{}, err
 		}
-		return code.ReadAnswer{Level: q.Fresh.Level}, nil
+		return gitlet.ReadAnswer{Level: q.Fresh.Level}, nil
 	}}
 	a := codeApp(t, nil, fixedCode{reads: reads})
 	for _, tc := range []struct {
@@ -1354,20 +1354,20 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 	// through the one grammar.
 	for _, tc := range []struct {
 		path string
-		want code.ReadQuery
+		want gitlet.ReadQuery
 	}{
 		{"/gitlet/repos?status=active,archived&limit=7&cursor=c1&read_level=linearizable",
-			code.ReadQuery{Kind: code.ReadRepos, Status: []code.RepoStatus{code.RepoStatusActive,
-				code.RepoStatusArchived}, Limit: 7, Cursor: "c1",
+			gitlet.ReadQuery{Kind: gitlet.ReadRepos, Status: []gitlet.RepoStatus{gitlet.RepoStatusActive,
+				gitlet.RepoStatusArchived}, Limit: 7, Cursor: "c1",
 				Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}},
-		{"/gitlet/repos/site", code.ReadQuery{Kind: code.ReadRepo, Repo: "site",
+		{"/gitlet/repos/site", gitlet.ReadQuery{Kind: gitlet.ReadRepo, Repo: "site",
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
-		{"/gitlet/repos/site/pushes?limit=0", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
+		{"/gitlet/repos/site/pushes?limit=0", gitlet.ReadQuery{Kind: gitlet.ReadPushes, Repo: "site",
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
-		{"/gitlet/repos/site/pushes?brief=true", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
+		{"/gitlet/repos/site/pushes?brief=true", gitlet.ReadQuery{Kind: gitlet.ReadPushes, Repo: "site",
 			Brief: true, Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
 		{"/gitlet/repos/site/pushes?push=0192f4c8-0000-7000-8000-000000000001&brief=false",
-			code.ReadQuery{Kind: code.ReadPushes, Repo: "site", Push: "0192f4c8-0000-7000-8000-000000000001",
+			gitlet.ReadQuery{Kind: gitlet.ReadPushes, Repo: "site", Push: "0192f4c8-0000-7000-8000-000000000001",
 				Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
 	} {
 		before := len(reads.queries())
@@ -1388,7 +1388,7 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		}
 		// A token the directory binds to no seat asks as itself, under
 		// the login the guard composes it with.
-		if want := (code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("founder")}); got.Asker != want {
+		if want := (gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: iam.TokenLogin("founder")}); got.Asker != want {
 			t.Errorf("GET %s asked as %+v, want %+v", tc.path, got.Asker, want)
 		}
 	}
@@ -1401,9 +1401,9 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 // domain's — so the two are held equal here.
 func TestNotPermittedIsTheDomainsOwnWord(t *testing.T) {
 	t.Parallel()
-	if string(httpjson.CodeNotPermitted) != string(code.RefusalNotPermitted) {
+	if string(httpjson.CodeNotPermitted) != string(gitlet.RefusalNotPermitted) {
 		t.Errorf("the envelope says %q and a refused push %q", httpjson.CodeNotPermitted,
-			code.RefusalNotPermitted)
+			gitlet.RefusalNotPermitted)
 	}
 }
 
@@ -1427,7 +1427,7 @@ func TestACodeReadAsksAsTheRequestsPerson(t *testing.T) {
 	seats := map[string]string{iam.TokenLogin("founder"): "jane-founder"}
 	a := newApp(t, api.Options{Bootstrap: &b, Code: fixedCode{reads: reads},
 		SeatBindings: auth.SeatBindings{Directory: inboxBindings(seats), Chart: inboxChart(seats)}})
-	asked := func(token string) code.Principal {
+	asked := func(token string) gitlet.Principal {
 		t.Helper()
 		rec := ask(t, bearing(a, token), http.MethodGet, "/gitlet/repos", false)
 		if rec.Code != http.StatusOK {
@@ -1436,10 +1436,10 @@ func TestACodeReadAsksAsTheRequestsPerson(t *testing.T) {
 		q := reads.queries()
 		return q[len(q)-1].Asker
 	}
-	for token, want := range map[string]code.Principal{
-		"secret": {Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("founder"),
+	for token, want := range map[string]gitlet.Principal{
+		"secret": {Kind: gitlet.PrincipalOperator, OperatorID: iam.TokenLogin("founder"),
 			Seat: "jane-founder"},
-		"ci-secret": {Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("ci")},
+		"ci-secret": {Kind: gitlet.PrincipalOperator, OperatorID: iam.TokenLogin("ci")},
 	} {
 		if got := asked(token); got != want {
 			t.Errorf("the token %q asked as %+v, want %+v", token, got, want)
@@ -1582,7 +1582,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 				return host.Verification{ID: quick.ID, Repo: "quick", State: host.VerifyRunning,
 					Started: quick.Started}, nil
 			case "gone":
-				return host.Verification{}, code.ErrRepoNotFound
+				return host.Verification{}, gitlet.ErrRepoNotFound
 			case "elsewhere":
 				return host.Verification{}, fmt.Errorf("cache: verify r3: %w", cache.ErrNotHeld)
 			case "racing":
@@ -1590,7 +1590,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 			case "stopping":
 				return host.Verification{}, host.ErrStopping
 			case "astray":
-				return host.Verification{}, fmt.Errorf("%w: a verify's floor is on another log", code.ErrInvalid)
+				return host.Verification{}, fmt.Errorf("%w: a verify's floor is on another log", gitlet.ErrInvalid)
 			case "busy":
 				return host.Verification{}, fmt.Errorf("cache: verify busy: %w — run it again", gitproc.ErrBusy)
 			case "nobody":

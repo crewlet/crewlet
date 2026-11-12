@@ -64,6 +64,13 @@ type agentLauncher struct {
 	// recorded it.
 	told *toldTurn
 
+	// notes is the resumed segment's notes on its run's record, nil on a
+	// dispatched segment's launcher, whose brief's notes are its box's: a
+	// note a relaunch's brief was handed by the settle of a take whose answer
+	// was lost is sealed naming that take, whose read the launch's write takes
+	// over ([rowSource.lostTakes]).
+	notes *rowSource
+
 	// run is the launch past the turn's fence, nil for [agentLauncher.launch]:
 	// a case's stand-in for the sandbox.
 	run func(context.Context, runner.AgentRunRequest) (runner.Launched, error)
@@ -388,9 +395,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 
 	// THE TURN'S NOTES, sealed for the record the launch opens: the seat a
 	// person's authority is decided on, and what the brief carries, read by
-	// the job the write names — see runsteer.go.
+	// the job the write names — a note a lost take's settle handed the brief
+	// among them, in that take's place — see runsteer.go.
 	ref := l.runTurnRef(ctx)
-	brief, err := e.runSteers.briefNotes(l.turn.RunID, req.Round, req.Notes)
+	brief, err := e.runSteers.briefNotes(l.turn.RunID, req.Round, req.Notes, l.notes)
 	if err != nil {
 		return runner.Launched{}, err
 	}
@@ -495,9 +503,12 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// alone freezes on the record it creates and records on the executor
 		// log, whatever this launch then takes up: a relaunch of a turn that
 		// keeps nothing of its own continues it.
-		Base:        l.conversation.frozen(),
-		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
-		BriefNotes:  brief,
+		Base:       l.conversation.frozen(),
+		SteerSeat:  e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
+		BriefNotes: brief,
+		// AND THE NOTES ITS BRIEF TELLS AGAIN, whose reads the record marked
+		// unanswered: recorded read by the job, at their takes' own places.
+		RetoldNotes: retoldNotes(req.Round, req.Retold),
 		HandedNotes: handed,
 		CodeHolds:   holds.ids,
 		CodeFloor:   grants.CodeFloor,
@@ -750,6 +761,12 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 // continuing one that asked a person after the asking job's, so the round's
 // calls keep the one order its collection reads them in.
 //
+// AND READS EACH CALL'S ID UNDER THE KEY THE JOB NAMES
+// ([sandbox.OpenedJob.CallIDMeta]): the one the runner starting the job's box
+// declares its harness sends it under, for the launch, and this node's runner
+// of the job's harness, for a run taken over while it works — each set here,
+// on the session the bridge opens, never on the launch's own literal.
+//
 // The inbox is bound once the session is open, never before: a session that
 // does not open serves no notes, and the caller closes the inbox.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
@@ -757,7 +774,10 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 ) (_ sandbox.Opening, err error) {
 	defer origin.Stamp(&err)
 	ledger.bind(job)
-	s.Launch, s.LastSeq = job.LaunchID, job.LastSeq
+	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
+	// names it: what a collection on any node reads this process's liveness by.
+	ledger.runner = e.callRunner()
+	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
@@ -785,6 +805,19 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 		opening.Fresh = &other
 	}
 	return opening, nil
+}
+
+// callRunner is the incarnation every bridged call this process runs names as
+// its runner ([sandbox.BridgeCall.Runner]): the one its sandbox coordinator
+// holds its taker lease under ([sandbox.CoordinatorOptions.Incarnation]), where
+// it holds one — a lease store wired and a runtime built — and "" where it
+// holds none, whose calls a collection waits for by their bound alone rather
+// than read as stopped the moment it finds no lease.
+func (e *Engine) callRunner() string {
+	if e.backends == nil || e.backends.Coord == nil || e.sandbox.Load() == nil {
+		return ""
+	}
+	return e.incarnation
 }
 
 // bridgeOpening is what a job's box is given at endpoint, one of its bridge
@@ -1002,8 +1035,10 @@ func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duratio
 // conversation is what the turn's dispatch read of its conversation, which a
 // dispatched segment's one launch — the turn's first — continues and freezes;
 // nil for a resumed segment's, whose relaunches read what that launch froze.
+// notes is a resumed segment's notes on its run's record, which its relaunches'
+// briefs are sealed from ([agentLauncher.notes]); nil for a dispatched one's.
 func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
-	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn,
+	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn, notes *rowSource,
 ) runner.AgentLauncher {
 	if t == nil || company == nil || company.Models == nil {
 		return nil
@@ -1013,7 +1048,7 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
 		return nil
 	}
 	return &agentLauncher{engine: e, turn: t, seat: seat, company: company, ask: ask,
-		conversation: conversation, told: told}
+		conversation: conversation, told: told, notes: notes}
 }
 
 // agentPlacement is the cell an executor entry runs in: its own `run_in`, then

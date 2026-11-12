@@ -3,10 +3,10 @@
 -- A pack a compaction merges into a larger one leaves code_packs, and its
 -- object cannot leave the store with it: a cache that has not yet synced past
 -- the compaction may still be fetching it, and a clone of the largest bundle a
--- row can name may read it for objstore.ReadBudget(code.MaxPackBytes), 21 h 21
+-- row can name may read it for objstore.ReadBudget(gitlet.MaxPackBytes), 21 h 21
 -- min. So the row moves here, into a RETIRED reference (ADR-0081: a retired
 -- reference keeps its object for a grace), which keeps the object from the
--- collector for code.RetireGrace (24 h) and does nothing else — the audit never
+-- collector for gitlet.RetireGrace (24 h) and does nothing else — the audit never
 -- asks after it and no backup carries it. A retire_sweep record of the
 -- code-retention duty removes a repository's rows past the grace, oldest first,
 -- and the collector's next pass deletes their objects as it deletes anything no

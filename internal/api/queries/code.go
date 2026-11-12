@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
@@ -18,7 +18,7 @@ import (
 // may read, a page at a time; `code_repo`, one repository in detail; and
 // `code_pushes`, one repository's push history. Each is decided PER
 // REPOSITORY, by the grant the serving node derives from its chart
-// (code.GrantOf, ADR-0088) — a listing leaves out what the asker may not read,
+// (gitlet.GrantOf, ADR-0088) — a listing leaves out what the asker may not read,
 // and a read of one such repository is refused [NotPermitted] — BEHIND THE
 // GITLET APP: each is registered [Requires] [iam.GrantGitlet], which the
 // registry asks of every caller before an answer runs, so a principal without
@@ -101,18 +101,18 @@ func RepoNotDeclared(name string) string {
 // read of a repository's content by object id, asked of its home Gitlet node;
 // estate.CodeSeam satisfies it.
 type CodeReads interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 	// ResolveRef is the refs a question names by name, read in one
 	// transaction at the level the query names (codegit.go).
-	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
-	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	ResolveRef(ctx context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error)
+	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 	// MergePreview is what merging one commit into another would do, asked
 	// of the repository's home Gitlet node by the merge its mergeability is
 	// recorded by (code.merge_preview): a comparison's preview.
-	MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error)
+	MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error)
 	// FloorOf is this node's own floor on a repository — the furthest of
 	// its writes to it — which a read by object id is floored at beside the
-	// records that moved what it reads (code.ObjectFloor).
+	// records that moved what it reads (gitlet.ObjectFloor).
 	FloorOf(repoID string) statelog.Position
 }
 
@@ -152,7 +152,7 @@ type CodeSource interface {
 // request named; then the request, refused [ErrBadParams] naming what is not
 // a parameter this read takes; then the read, asked AS THE CALLER and
 // answered in this surface's vocabulary ([codeRefusal]).
-func (s Sources) codeRead(kind code.ReadKind, what string) Answer {
+func (s Sources) codeRead(kind gitlet.ReadKind, what string) Answer {
 	return func(ctx context.Context, p Params) (any, error) {
 		reads, err := s.Code.CodeReads()
 		if err != nil {
@@ -191,7 +191,7 @@ func (s Sources) codeRead(kind code.ReadKind, what string) Answer {
 // listing; what the asker buys here is that the reader judges every
 // read by who asked it, so a seat's read cannot be answered as a person's, nor
 // a person's question and their assistant's tool call as two people.
-func codeAsker(p iam.Principal) code.Principal {
+func codeAsker(p iam.Principal) gitlet.Principal {
 	return builtin.CodeAskerOf(builtin.ActorOf(p))
 }
 
@@ -201,12 +201,12 @@ func codeAsker(p iam.Principal) code.Principal {
 // client that must not conclude "not declared" from an old copy asks for
 // linearizable, and a screen reading its own write back asks for `session`
 // beside the position the write answered with.
-func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.ReadQuery, error) {
+func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitlet.ReadQuery, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
-		return code.ReadQuery{}, err
+		return gitlet.ReadQuery{}, err
 	}
-	q := code.ReadQuery{Asker: asker, Kind: kind, Cursor: p.String("cursor"), Push: p.String("push"),
+	q := gitlet.ReadQuery{Asker: asker, Kind: kind, Cursor: p.String("cursor"), Push: p.String("push"),
 		Fresh: fresh}
 	// THE REPOSITORY IS THE PATH'S, and only the reads of one take it: a
 	// listing named no repository on its route, and a `name` beside it is
@@ -216,31 +216,31 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	// changes wait on, each the reader's to refuse — and a reviewer's
 	// reviews are listed across repositories, by the reviewer they name.
 	switch kind {
-	case code.ReadRepos:
-	case code.ReadChanges:
-		q.Repo, q.State, q.Owner = p.String("repo"), code.ChangeState(p.String("state")), p.String("owner")
-		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), code.Need(p.String("needs"))
-		q.Window = code.ChangeWindow(p.String("window"))
-	case code.ReadReviews:
+	case gitlet.ReadRepos:
+	case gitlet.ReadChanges:
+		q.Repo, q.State, q.Owner = p.String("repo"), gitlet.ChangeState(p.String("state")), p.String("owner")
+		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), gitlet.Need(p.String("needs"))
+		q.Window = gitlet.ChangeWindow(p.String("window"))
+	case gitlet.ReadReviews:
 		q.Reviewer = p.String("reviewer")
-	case code.ReadQueue:
+	case gitlet.ReadQueue:
 		// A QUEUE NAMES ITS REPOSITORY AS A FILTER, as a listing of changes
 		// does — every repository the asker reads where it names none — and
 		// one of its branches' queues beside it, in full (refs/heads/main),
 		// the reader's to refuse where it is no branch a change may name.
 		q.Repo, q.Target = p.String("repo"), strings.TrimSpace(p.String("target"))
-	case code.ReadChecks:
+	case gitlet.ReadChecks:
 		q.Repo = p.String("repo")
 		if q.Checks, err = checksListing(p); err != nil {
-			return code.ReadQuery{}, err
+			return gitlet.ReadQuery{}, err
 		}
-	case code.ReadCheck:
+	case gitlet.ReadCheck:
 		// ONE ATTEMPT IS THE PATH'S — its repository, its commit, its check
 		// and its attempt — beside the branch it was checked for, which a
 		// path cannot carry (codechecks.go).
 		q.Repo = p.String("name")
 		if q.Checks, err = checkAttempt(p); err != nil {
-			return code.ReadQuery{}, err
+			return gitlet.ReadQuery{}, err
 		}
 	default:
 		q.Repo = p.String("name")
@@ -248,55 +248,55 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	// A REFS LISTING NAMES ITS PREFIX, and a repositories listing the
 	// opening of the names it lists — a picker's typed text — each the
 	// reader's to refuse where it is none it lists under.
-	if kind == code.ReadRefs || kind == code.ReadRepos {
+	if kind == gitlet.ReadRefs || kind == gitlet.ReadRepos {
 		q.Prefix = strings.TrimSpace(p.String("prefix"))
 	}
 	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's
 	// 42 — on the reads of one change.
-	if kind == code.ReadChange || kind == code.ReadChangeRouting {
+	if kind == gitlet.ReadChange || kind == gitlet.ReadChangeRouting {
 		n, whole := p.WholeInt("change")
 		if !whole || n < 1 {
-			return code.ReadQuery{}, fmt.Errorf("%w: change %q is not a change's number: a repository numbers "+
+			return gitlet.ReadQuery{}, fmt.Errorf("%w: change %q is not a change's number: a repository numbers "+
 				"its changes from 1", ErrBadParams, p.String("change"))
 		}
 		q.Change = n
 	}
 	// WHO OWNS A REPOSITORY'S PATHS AND ITS RULES' MERGE GATES are answered
 	// to a question that ASKS for them, `path_owners=true` and `gates=true`
-	// ([code.ReadQuery.PathOwners], [code.ReadQuery.Gates]), and to no other:
+	// ([gitlet.ReadQuery.PathOwners], [gitlet.ReadQuery.Gates]), and to no other:
 	// at their bound they are a quarter and half a mebibyte of JSON, and a
 	// question of one repository is mostly asked for its row — a screen's
 	// header, polled every minute, a comparison learning its default branch.
 	// Each on a read that answers no repository's detail is the reader's to
-	// refuse, naming it. A HISTORY IN BRIEF ([code.ReadQuery.Brief]) is
+	// refuse, naming it. A HISTORY IN BRIEF ([gitlet.ReadQuery.Brief]) is
 	// asked the same way, `brief=true`: a page a screen polls is several
 	// hundred kilobytes heavier read whole, and `brief` and `push` on a read
 	// that is no push history are the reader's to refuse.
 	if q.PathOwners, err = askedFor(p, "path_owners"); err != nil {
-		return code.ReadQuery{}, err
+		return gitlet.ReadQuery{}, err
 	}
 	if q.Gates, err = askedFor(p, "gates"); err != nil {
-		return code.ReadQuery{}, err
+		return gitlet.ReadQuery{}, err
 	}
 	if q.Brief, err = askedFor(p, "brief"); err != nil {
-		return code.ReadQuery{}, err
+		return gitlet.ReadQuery{}, err
 	}
-	// THE PROTECTED REPOSITORIES ALONE ([code.ReadQuery.Protected]) are a
+	// THE PROTECTED REPOSITORIES ALONE ([gitlet.ReadQuery.Protected]) are a
 	// listing's, asked the same way, `protected=true`: the reader walks an
 	// index of those alone, so a page of them costs what they cost however
 	// many repositories no rule protects, and on any other read the filter
 	// is the reader's to refuse, naming it.
 	if q.Protected, err = askedFor(p, "protected"); err != nil {
-		return code.ReadQuery{}, err
+		return gitlet.ReadQuery{}, err
 	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {
 			continue
 		}
-		status := code.RepoStatus(v)
+		status := gitlet.RepoStatus(v)
 		if !status.Valid() {
-			return code.ReadQuery{}, fmt.Errorf("%w: the status %q is not one of %s", ErrBadParams,
-				v, words.Or(code.RepoStatuses()))
+			return gitlet.ReadQuery{}, fmt.Errorf("%w: the status %q is not one of %s", ErrBadParams,
+				v, words.Or(gitlet.RepoStatuses()))
 		}
 		q.Status = append(q.Status, status)
 	}
@@ -307,7 +307,7 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		// and a limit past a page's bound is the reader's to refuse, naming
 		// its bound.
 		if !whole || n < 0 {
-			return code.ReadQuery{}, fmt.Errorf("%w: the limit %q is not a whole number of zero or more "+
+			return gitlet.ReadQuery{}, fmt.Errorf("%w: the limit %q is not a whole number of zero or more "+
 				"(0 is the read's own page size)", ErrBadParams, p.String("limit"))
 		}
 		q.Limit = int(n)
@@ -351,23 +351,23 @@ func askedFor(p Params, key string) (bool, error) {
 // out and who does read it — is the whole of what the caller can act on.
 func codeRefusal(repo string, err error) error {
 	switch {
-	case errors.Is(err, code.ErrRepoNotFound):
+	case errors.Is(err, gitlet.ErrRepoNotFound):
 		return &NotFound{Reason: ReasonNotDeclared, Detail: RepoNotDeclared(repo)}
-	case errors.Is(err, code.ErrCheckNotFound):
-		return &NotFound{Reason: ReasonNoCheck, Detail: refusalSentence(err, code.ErrCheckNotFound)}
-	case errors.Is(err, code.ErrChangeNotFound):
+	case errors.Is(err, gitlet.ErrCheckNotFound):
+		return &NotFound{Reason: ReasonNoCheck, Detail: refusalSentence(err, gitlet.ErrCheckNotFound)}
+	case errors.Is(err, gitlet.ErrChangeNotFound):
 		return &NotFound{Reason: ReasonNoChange, Detail: fmt.Sprintf("repository %q holds no change %s", repo,
-			refusalSentence(err, code.ErrChangeNotFound))}
-	case errors.Is(err, code.ErrNotPermitted):
-		return &NotPermitted{Detail: refusalSentence(err, code.ErrNotPermitted)}
-	case errors.Is(err, code.ErrRefNotFound):
-		return &NotFound{Reason: ReasonNoRef, Detail: refusalSentence(err, code.ErrRefNotFound)}
-	case errors.Is(err, code.ErrObjectNotFound), errors.Is(err, code.ErrNotATree), errors.Is(err, code.ErrNotABlob):
+			refusalSentence(err, gitlet.ErrChangeNotFound))}
+	case errors.Is(err, gitlet.ErrNotPermitted):
+		return &NotPermitted{Detail: refusalSentence(err, gitlet.ErrNotPermitted)}
+	case errors.Is(err, gitlet.ErrRefNotFound):
+		return &NotFound{Reason: ReasonNoRef, Detail: refusalSentence(err, gitlet.ErrRefNotFound)}
+	case errors.Is(err, gitlet.ErrObjectNotFound), errors.Is(err, gitlet.ErrNotATree), errors.Is(err, gitlet.ErrNotABlob):
 		return &NotFound{Reason: ReasonNoObject, Detail: objectSentence(err)}
-	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
-		errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrSliceTooLarge):
+	case errors.Is(err, gitlet.ErrBadLevel), errors.Is(err, gitlet.ErrBadCursor),
+		errors.Is(err, gitlet.ErrInvalid), errors.Is(err, gitlet.ErrSliceTooLarge):
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
-	case errors.As(err, new(*code.ErrGitUnready)), errors.Is(err, code.ErrNotServing):
+	case errors.As(err, new(*gitlet.ErrGitUnready)), errors.Is(err, gitlet.ErrNotServing):
 		// NO GITLET NODE COULD ANSWER NOW — none holding the repository in
 		// time, every one behind its configuration or stopping — which is
 		// never an answer about the repository: a wait clears it.
@@ -380,7 +380,7 @@ func codeRefusal(repo string, err error) error {
 // an object id the repository holds no object of, or a path its revision
 // holds no such directory or file at.
 func objectSentence(err error) string {
-	for _, sentinel := range []error{code.ErrObjectNotFound, code.ErrNotATree, code.ErrNotABlob} {
+	for _, sentinel := range []error{gitlet.ErrObjectNotFound, gitlet.ErrNotATree, gitlet.ErrNotABlob} {
 		if said, ok := builtin.RefusalSentence(err, sentinel); ok {
 			return said
 		}
@@ -462,27 +462,27 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 // codesearch.go's for a search of its lines, for what each answers and why
 // each is asked under the posture it is.
 func registerCode(r *Registry, s Sources) {
-	gitlet := Requires(iam.GrantGitlet)
-	r.Register("code_repos", gitlet, s.codeRead(code.ReadRepos, "code_repos"))
-	r.Register("code_repo", gitlet, s.codeRead(code.ReadRepo, "code_repo"))
-	r.Register("code_pushes", gitlet, s.codeRead(code.ReadPushes, "code_pushes"))
+	gated := Requires(iam.GrantGitlet)
+	r.Register("code_repos", gated, s.codeRead(gitlet.ReadRepos, "code_repos"))
+	r.Register("code_repo", gated, s.codeRead(gitlet.ReadRepo, "code_repo"))
+	r.Register("code_pushes", gated, s.codeRead(gitlet.ReadPushes, "code_pushes"))
 	r.Register("code_repo_readers", DecidedBy(authz.ActionCodeRepoReaders), s.codeRepoReaders)
-	r.Register("code_changes", gitlet, s.codeRead(code.ReadChanges, "code_changes"))
-	r.Register("code_change", gitlet, s.codeChange)
-	r.Register("code_change_routing", gitlet,
-		s.codeRead(code.ReadChangeRouting, "code_change_routing"))
-	r.Register("code_reviews", gitlet, s.codeRead(code.ReadReviews, "code_reviews"))
-	r.Register("code_refs", gitlet, s.codeRead(code.ReadRefs, "code_refs"))
-	r.Register("code_tree", gitlet, s.codeTree)
-	r.Register("code_blob", gitlet, s.codeBlob)
-	r.Register("code_log", gitlet, s.codeLog)
-	r.Register("code_blame", gitlet, s.codeBlame)
-	r.Register("code_diff", gitlet, s.codeDiff)
-	r.Register("code_compare", gitlet, s.codeCompare)
-	r.Register("code_commit", gitlet, s.codeCommit)
-	r.Register("code_queue", gitlet, s.codeRead(code.ReadQueue, "code_queue"))
-	r.Register("code_checks", gitlet, s.codeRead(code.ReadChecks, "code_checks"))
-	r.Register("code_check", gitlet, s.codeRead(code.ReadCheck, "code_check"))
-	r.Register("code_check_log", gitlet, s.codeCheckLog)
-	r.Register("code_search", gitlet, s.codeSearch)
+	r.Register("code_changes", gated, s.codeRead(gitlet.ReadChanges, "code_changes"))
+	r.Register("code_change", gated, s.codeChange)
+	r.Register("code_change_routing", gated,
+		s.codeRead(gitlet.ReadChangeRouting, "code_change_routing"))
+	r.Register("code_reviews", gated, s.codeRead(gitlet.ReadReviews, "code_reviews"))
+	r.Register("code_refs", gated, s.codeRead(gitlet.ReadRefs, "code_refs"))
+	r.Register("code_tree", gated, s.codeTree)
+	r.Register("code_blob", gated, s.codeBlob)
+	r.Register("code_log", gated, s.codeLog)
+	r.Register("code_blame", gated, s.codeBlame)
+	r.Register("code_diff", gated, s.codeDiff)
+	r.Register("code_compare", gated, s.codeCompare)
+	r.Register("code_commit", gated, s.codeCommit)
+	r.Register("code_queue", gated, s.codeRead(gitlet.ReadQueue, "code_queue"))
+	r.Register("code_checks", gated, s.codeRead(gitlet.ReadChecks, "code_checks"))
+	r.Register("code_check", gated, s.codeRead(gitlet.ReadCheck, "code_check"))
+	r.Register("code_check_log", gated, s.codeCheckLog)
+	r.Register("code_search", gated, s.codeSearch)
 }

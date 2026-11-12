@@ -152,7 +152,13 @@ holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat; and, where the company hosts its code, `code_repo_readers`, who
 read a `visibility: unit` repository, an administrator's audit, and
 `code_mark_inbox`, a person's marks over their own code notices, served beside
-the code writes (a seat is woken, never shown an inbox). That set
+the code writes (a seat is woken, never shown an inbox).
+Eleven more change the company's atlas, each a claim in the person's own name
+and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
+`atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
+`atlas_restore`, `atlas_merge`, `atlas_split` and `atlas_purge`, the last an
+administrator's after a fresh sign-in
+([Changing the atlas](../concepts/atlas.md#changing-the-atlas)). That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
 dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
@@ -749,6 +755,39 @@ without it woke is answered nothing by `code_status`. The repositories
 grant, and in a turn a colleague seat woke to that colleague's too
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)).
 See [The health tools](fleet.md#the-health-tools).
+
+### The company's atlas
+
+Three read-only tools read the company's [atlas](../concepts/atlas.md):
+`atlas_search` finds entries by part of a name or key, or by id;
+`atlas_get` reads one entry in full, named by its `id` or by its exact name or
+key, with `used_by`, what relies on it; and `atlas_trace` walks from one entry
+`up` to what depends on it (the default) or `down` to what it depends on, at
+most six hops (`depth`) and fifty entries, and every relation rather than only
+those a request travels through with `all`. They are one list on both
+surfaces: a person's assistant holds them on the `atlas` permission, and every
+agent seat holds them, as it holds every app
+([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)).
+In a turn somebody woke, a seat reads the atlas only if they hold `atlas` too,
+and its repositories only if they hold `gitlet`
+([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
+
+**An agent reads an internal address only within its own reach.** A private IP
+address, or a host name on a private network, is shown to an agent only on an
+entry its own access reaches: a server its SSH access names, a tool server it
+is granted, a model it calls, a repository it may read, or an account it holds
+at a vendor. Any other entry keeps its name and loses its private values, an
+entry whose key is itself a private address is left out with every relation to
+it, and the answer counts what it left out as `private_withheld`. A person
+holding `atlas` reads every address.
+
+**Every answer is fenced as text somebody else wrote**, labelled at the least
+trust any writer of what it carries earns: the settings, the engine's records
+and a person read as a colleague's, and a vendor's listing as an outside
+party's. A turn whose ask names an entry exactly is also handed a few lines
+about it before it starts
+([Systems in this work](../concepts/agent-runtime.md#systems-in-this-work)).
+
 ### Groups, and who may call each one
 
 Holding a tool is not being allowed to call it. Every call to a built-in is
@@ -766,6 +805,7 @@ group, and names the **gate** its authority row decides:
 | Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
 | Code | `code` | The company's repositories on Gitlet: their files and history, branches, changes, reviews and checks ([The company's code](#the-companys-code)); and `ask_to_merge` and `ask_to_deploy`, which hold a merge or a deploy for approval ([Delegated Decisions](delegated-decisions.md#asking-to-merge-and-to-deploy)) |
 | Health | `health` | The deployment's health: `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
+| Atlas | `atlas` | The company's atlas: `atlas_search`, `atlas_get` and `atlas_trace` ([The company's atlas](#the-companys-atlas)) |
 | Servers | `servers` | The company's servers over SSH: `ssh_read`, `ssh_operate` and `ask_to_operate` ([SSH](../integrations/ssh.md#the-agents-tools)) |
 | Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns and sessions, and skills |
@@ -782,6 +822,7 @@ group, and names the **gate** its authority row decides:
 | `chatlet` | An agent that uses Chatlet |
 | `artifacts` | An agent that authors artifacts |
 | `gitlet` | An agent that uses Gitlet: every Code tool. What it may do to a repository is then its grant there |
+| `atlas` | An agent that uses the atlas: every Atlas tool. It reads a private address only within its own reach |
 | `artifact_viewer` | Anybody the artifact is shared with, as a viewer or more |
 | `artifact_editor` | The artifact's editors who also author artifacts |
 | `artifact_owner` | The artifact's owner |

@@ -1,0 +1,187 @@
+# Atlas
+
+The atlas is the map and catalogue of everything a company runs on: its vendor accounts, domains and host names, servers, databases, repositories, pipelines, monitoring, tool servers and models, and how they depend on each other. The engine fills it from what it already knows, and every fact in it says where it came from, when it was seen, and how far it can be trusted.
+
+This page describes the model: what the atlas holds, where each fact comes from, how one thing seen by several sources becomes one entry, and what the atlas never holds. The decision behind it is [ADR-0126](../../adr/0126-the-atlas-computes-what-the-engine-knows-and-records-what-it-is-told.md).
+
+## What the atlas holds
+
+An **entry** is one thing the company runs on. Its kind is one of a closed set, and each kind sits in one lane of the map, read left to right the way a request travels, with the code, monitoring, tools and models in a band beneath.
+
+| Kind | On screen | Lane | Example |
+|---|---|---|---|
+| `domain` | Domain | Entry | `acme.example` |
+| `hostname` | Hostname | Entry | `api.acme.example` |
+| `endpoint` | Endpoint | Entry | `https://api.acme.example/v1` |
+| `service` | Service | Services | `checkout-api` |
+| `host` | Server | Runtime | `web-1` |
+| `datastore` | Database | Data | `orders-db` |
+| `queue` | Queue | Data | `orders` |
+| `bucket` | Bucket | Data | `acme-assets` |
+| `vendor_account` | Account | Platforms | the Cloudflare account, the GitHub organisation |
+| `repository` | Repository | Code and delivery | `acme/api` |
+| `pipeline` | Pipeline | Code and delivery | a repository's `deploy` check |
+| `monitor` | Monitor | Observability | "API 5xx" |
+| `tool_server` | Tool server | Tools and models | an MCP server |
+| `model_provider` | Model | Tools and models | a model entry and its vendor |
+
+What a vendor does for the company (chat, tracking, code hosting, CI, monitoring, DNS, CDN, compute, a model API) is an account's **capabilities**, not a kind per product, so "which CDN do we use" is answered by the account that carries the `cdn` capability. A vendor the engine does not know yet is an account with the vendor `other` and a name.
+
+**Relations** always point from the thing that relies to the thing relied on, so "what depends on X" is one walk against the arrows: `runs_on`, `depends_on`, `exposes`, `resolves_to`, `in_zone` and `fronted_by` are drawn on the map at rest; `served_by`, `built_from`, `deployed_by`, `monitored_by`, `belongs_to`, `documented_in` (a Doclet page) and `owned_by` (a seat or a unit) appear when an entry is selected.
+
+**Facts** are a closed list per kind, each with a value type: a host name, an IP address, an address without credentials, a port, a version, a region, an account's own id, a branch, a short label, a word from a closed set. Facts of **meaning** (purpose, environment, importance, and the owner) are decided only by people and the settings; an integration or an agent can only suggest them.
+
+## Where each fact comes from
+
+Every fact is a claim from one source, and the atlas is one fold over all of them.
+
+```mermaid
+flowchart LR
+    S["Company settings<br/>(the redacted copy)"] --> C["Claims, computed<br/>when the atlas is read"]
+    R["The engine's own records<br/>(Gitlet's repositories and checks)"] --> C
+    P["People, agents and<br/>integration reads"] --> L["Claims, recorded<br/>on the atlas's own log"]
+    C --> F["One fold"]
+    L --> F
+    F --> V["The atlas: entries, facts,<br/>relations, sources"]
+```
+
+What the engine **already keeps** is computed every time the atlas is read and never stored: it cannot drift from where it lives, and it needs nothing written. What only **somebody can tell** the engine (a person's correction, an agent's observation, an integration's read beyond what the engine keeps) is recorded on the atlas's own log.
+
+Each claim carries a confidence the engine derives from its source and the evidence it checked. Nobody, and no model, chooses it.
+
+| Where the fact came from | Shown as |
+|---|---|
+| The company settings, or the engine's own records | Confirmed |
+| A person | Confirmed |
+| An integration's read with the company's credential | Confirmed |
+| An agent, backed by a server or vendor tool call in the same turn | Likely |
+| An agent, backed by a repository file, a page or a work item | Likely |
+| An agent, with nothing the engine can check | Unconfirmed |
+
+An agent's fact that nothing else supports is shown as stale after 30 days and no longer counts after 180.
+
+### What the settings and Gitlet show
+
+The settings are read only through the same redacting copy the configuration surface serves, so a credential cannot reach the atlas even by mistake.
+
+| From | Entries |
+|---|---|
+| Each connected integration | its account, keyed by the account's own id where the settings carry one (the Cloudflare account id, the AWS account, the GitHub organisation), with its capabilities and whether the integration is on. Jira and Confluence on one site are one account |
+| Cloudflare | each declared zone as a domain, served by and belonging to the account |
+| GitHub and GitLab | each repository the settings name, belonging to the account |
+| SSH | each declared server, with its address (marked internal where no public network routes to it), its port and whether it runs containers |
+| `api.external_url` and `api.public.external_url` | the host name the deployment answers at, in its zone where the settings declare that zone |
+| `providers.llm` and `providers.embeddings` | each model entry, its vendor, harness, model, sign-in mode and place in the fallback chain |
+| `mcp_servers` | each enabled tool server, its transport, its address or the base name of its command (never its arguments) |
+| `providers.sandbox` | the E2B account, where the sandbox runs boxes there |
+| Gitlet | each repository the reader may read, with its default branch, visibility, status and owner, the hosts it mirrors from and to, and each check its default branch runs, with its latest result |
+
+Gitlet's repositories are read as the person reading the atlas, so a repository only its unit may read appears only to that unit. A value the atlas would refuse (a label shaped like a token, an address with credentials in it, a `${VAR}` reference it does not resolve) is left out, and the read says where it sat and why, never what it was.
+
+### What the engine's records add
+
+The engine already keeps a record of what agents and integrations use. The atlas reads it at every read and stores none of it.
+
+| Record | What it adds |
+|---|---|
+| Each integration's standing | the base address its registration at the vendor points at, on the integration's account; and, for administrators only, whether it waits on a person or its last pass failed |
+| The ledger of agents' accounts | on each integration's account, the agents holding an account there: which seat, on which lane, at which level, and whether it is on |
+| What each node's tool servers listed | each tool server's own name, version and number of tools; its instructions and its tools' descriptions are a vendor's text and are never read |
+| Each tool server's sign-in | who issued it and when it lapses; a sign-in that lapsed or failed to refresh is a signal, and one lapsing within a week a warning |
+| Each node's last beat | a tool server with a failed or waiting instance, and a model entry sitting out a spent plan or whose last call failed with no answer since |
+| Connection tests | a server whose last test against its current settings failed, for administrators only; a test of an address or a key since changed says nothing |
+| The access log | each server's use: commands agents ran there in the last week and month, the last one, and which seats |
+| The usage history | each tool server's calls and each model entry's calls over the week and the month, and which seats made them |
+| Gitlet | each repository's last push |
+
+An entry whose use the engine records (a server, a tool server, a model entry, a repository) that nothing used for 30 days is marked **not used recently**: a fact about use, never about existence. It is said only when that use was read in full; when the usage history cannot be read, the use is unknown rather than zero.
+
+A **signal** is something on an entry that needs attention now. It is read from the record that holds it on every read, never copied, so it cannot disagree with its source, and each says who may read it: what only administrators see elsewhere (an integration's standing, a connection test), they alone see here.
+
+Records are read as closed projections: the fields a map needs and nothing else. An email address is never read, whether it is a vendor account's name, the account an agent's lane observed, who signed a tool server in, who ran a test or a model plan's sign-in account; ownership and use name seats.
+
+Every read says which of these sources it read in full and why not where it did not. A source that fails leaves the rest of the atlas answering. A company that keeps no code in Gitlet has nothing there to read, so its Gitlet is read in full for every reader, and no repository of its own is judged by pushes Gitlet never saw.
+
+## Reading the atlas
+
+People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through five questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, and the counts a filter menu offers ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
+
+An entry only an agent reported, with nothing the engine could check behind it, is **unconfirmed**, and a read leaves it out unless it asks for it: it stays hidden until a person confirms it.
+
+Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
+
+## One thing, one entry
+
+An entry's identity is its kind and its natural key, and its id is derived from the two, so every source that meets the same zone names the same entry. Two entries of one kind that share an **exact** key are one entry when the atlas is read:
+
+- a repository and a Gitlet repository that mirrors it, by the forge address;
+- two accounts named by the same account id;
+- two servers at the same public address, seen by different sources.
+
+A key one source carries on two entries (two servers behind one load balancer, two copies of one mirror) is a shared address, not an identity, and merges nothing. A private address never merges two servers, which may sit on two networks. An agent's report never merges anything. A person may join two entries no key joins (a declared server and the cloud instance it is) by saying they are the same, and may keep two entries apart by saying they are not; a person's "not the same" always wins, and similar names never merge: they only suggest.
+
+## When sources disagree
+
+For each fact, a source's newest claim stands for it, and across sources the most trusted wins, then the newest. A person's value is shown over every inference. When a newer report from an integration, an agent or the engine contradicts a person, the fact is **contested**; when two sources the engine trusts alike disagree with no person to settle it, it is **disputed**. Either way both values are shown, and the entry waits for a person; nothing is settled in silence.
+
+## Changing the atlas
+
+A person who holds Atlas changes it with eleven tools of the operator catalogue, the same catalogue the dashboard writes through ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)) and your own assistant reaches over `/operator/mcp`. Each records a claim in the person's own name, which outranks every integration and agent until they report a change, when both values are shown for review:
+
+| Tool | What it records |
+|---|---|
+| `atlas_add_entry` | an entry no source reports, by its `kind` and `key`, with a `name` where the key is not one |
+| `atlas_correct` | one fact's `value` as the person knows it (for a fact that holds many, one more value), or with `wrong`, that a value shown is wrong |
+| `atlas_confirm` | what the atlas shows, as the person's own: the entry, one fact (or another value a source reports for it) or one relation |
+| `atlas_relate`, `atlas_unrelate` | a relation between two entries, drawn or recorded as not there |
+| `atlas_set_owner` | the owning `seat` (by handle) or `unit` (by key) of the chart, in place of the owner a person named before; `clear` removes it. Never free text |
+| `atlas_retire`, `atlas_restore` | an entry taken off the map, kept in its history, and brought back |
+| `atlas_merge`, `atlas_split` | two entries of one kind said to be the same thing, or not the same |
+| `atlas_purge` | an entry or a value erased everywhere ([below](#the-atlass-own-log)) |
+
+**A write is decided on what the person reads.** Each reads the atlas as its caller does, Gitlet only for a holder of `gitlet` and what people recorded at the person's own level, after reading the version of every entry it names; every claim is recorded on that version, so a change somebody made in between refuses the write rather than being written over. A caller who decided from an earlier read names the version it read as `if_match`, and every write answers the entry's new `version`. A write that asks for what already holds records nothing and answers `applied` with `unchanged`. A write that records several claims (an owner replaced, a merge that withdraws a "not the same") records them in an order that leaves the atlas honest if it stops part of the way, and the same call made again finishes it.
+
+**What is declared elsewhere is changed there.** A fact the company's settings, Gitlet or the engine's own records declare is never written over in the atlas: a server the SSH settings declare is not retired here, nor its address corrected, and a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the engine names, are not added by hand. A Gitlet repository is changed only by a holder of `gitlet` who can read it, since the atlas is never a way round another permission. What the settings leave unsaid (a server's importance, a service's owner) is a person's to say.
+
+**Values go through the vocabulary's typed grammar, keys included.** A key or a value shaped like a credential is refused, never stored masked, and the refusal never repeats it.
+
+**"The same" and "not the same".** A merge joins two entries no exact key joins, and withdraws a "not the same" a person recorded between them first. A split keeps two entries apart whatever key they share, and always wins over a merge nobody made.
+
+**A purge is an administrator's**, after a fresh sign-in, and never an agent's. It names an entry, or a value exactly as the atlas holds it; a value the settings or the engine's records declare is removed there first. The value is never repeated in an answer, and only its digest leaves the node the purge was asked of.
+
+**A node without data writes too**, through a data node that publishes, as it reads. Every write is audited as every operator call is, and **no agent changes the atlas through these tools**: the authority table refuses every one of them to an agent whatever it holds, and no seat's registry holds them. Each is made as the seat its person holds, so a credential bound to no seat records nothing in a person's rank.
+
+## The atlas's own log
+
+What people record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG`, applied identically on every data node, so whichever node a person reaches answers the same atlas, and every read of the atlas folds it beside what the engine computes. A node that holds no data, such as one that only runs agents, reads and writes it through a data node. Each entry is one subject on it: an edit names the version of the entry it was decided from, and is refused if somebody else changed the entry since. A claim is never overwritten: a newer claim from the same person on the same fact replaces the older one in the view, and the older one stays as the entry's history.
+
+**History** is kept for the company's `atlas.retention_days`, 400 days unless it says otherwise (90 to 3650): a replaced value, and an entry a person retired that nothing has reported since, go once they are older than it. What the atlas holds now never expires.
+
+**A purge** is for a value that must not be kept: an internal name recorded by mistake, or a value a newer check recognises as a credential. It erases an entry (every claim on it and every claim naming it), or a value (every claim carrying it, and every entry it is the key of), on every node and from the history, and it leaves a mark that keeps anybody, and any later report, from recording it again. The log names a purged value by its digest and never writes the value itself. The log's own records age out with its trim, and a backup taken before the purge keeps what it copied until the backup's own retention. Only an administrator purges, never an agent.
+
+## What the atlas never holds
+
+Secrets, tokens, passwords, private keys, signed addresses, connection strings, environment values, command lines, command output, file contents and raw vendor answers have no value type to go in, and a value shaped like a credential is refused rather than masked. A person's contact details are never read: ownership names a seat or a unit. Addresses on private networks are kept, because they are the company's own map, and marked as internal.
+
+## Who reads it
+
+Reading the atlas takes the **Atlas** permission (`atlas`), the one app a person is given only on purpose: an invitation and a person's create leave it unticked, and an administrator holds it as every app ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md), [Atlas is given on purpose](identity-and-access.md#atlas-is-given-on-purpose)). A person holding it reads every entry, private addresses included. The atlas is never a way round another permission: its repositories are read as the reader, so a holder who does not use Gitlet is shown none, and the answer says Gitlet was not read and why.
+
+A person reads it with three tools on the operator surface (`/operator/mcp`), the ones an agent holds: `atlas_search` for every entry, or those a `query` or a `kind` names; `atlas_get` for one entry in full, by its id or its exact name or key, with what relies on it; and `atlas_trace` for what depends on one entry, or what it depends on. Each answers beside which sources were read in full and how many values were left out for being shaped like a credential, which are counted and never shown ([The company's atlas](../guides/tools-and-mcp.md#the-companys-atlas)).
+
+## Agents read the atlas
+
+An agent seat holds the Atlas permission as it holds every app, and the same three tools, and in a turn somebody woke it reads the atlas only if they hold it too ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)). Two things differ from a person's read:
+
+- **An internal address only within its own reach.** An agent is shown a private address, or a host name on a private network, only on an entry its own access reaches: a server its SSH access names, a tool server it is granted, a model it calls, a repository it may read, or an account it holds. Any other entry keeps its name and loses its private values, an entry whose key is itself a private address is left out with every relation to it, and the answer counts what it left out as `private_withheld`. The atlas tells an agent nothing about the inside of the network that its own access does not already reach.
+- **Text somebody else wrote.** Every answer carries who wrote what it holds, and is read at the least trust any of them earns: the settings, the engine's records, a person and an agent as a colleague's, and a vendor's listing, which names no writer, as an outside party's.
+
+A turn whose ask names an entry exactly is also handed a few lines about it before it starts, so a seat asked about `orders-db` reads what the company knows before it probes a server ([Systems in this work](agent-runtime.md#systems-in-this-work)).
+
+## Every piece of state, and who has to agree on it
+
+| State | Who has to agree | Where it lives |
+|---|---|---|
+| What the engine already keeps: the settings, Gitlet's rows, integration standings, agents' accounts, tool server listings and sign-ins, node beats, connection tests, the access log and the usage history | already agreed where it lives | not stored: computed when the atlas is read |
+| Entry states, merges on exact keys, contested and disputed facts, signals, use and "not used recently" | nobody: computed on every read | the read itself |
+| What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |

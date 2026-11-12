@@ -11,10 +11,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -99,15 +99,15 @@ func TestBoxRunsJudgesLiveness(t *testing.T) {
 			t.Errorf("a %s row (ended %v) reads live %v, want %v", tc.status, tc.ended, got.Live, tc.live)
 		}
 		want := host.BoxRun{Ref: host.BoxRunRef{TurnID: turn, LaunchID: launch}, Live: tc.live, Status: tc.status,
-			Seat: "alice", Provenance: code.RunProvenance{TurnID: turn, RunID: launch, WorkBackend: "native",
+			Seat: "alice", Provenance: gitlet.RunProvenance{TurnID: turn, RunID: launch, WorkBackend: "native",
 				WorkID: "0190d8f0-9999-7000-8000-0123456789ab", WorkKey: "ENG-1", WorkProject: "ENG", Model: "m",
 				Harness: "claude-code"},
 			Repos: []host.BoxGrant{
-				{RepoID: row.Repos[0].RepoID, Name: "web", Access: code.AccessWrite, Branch: "refs/heads/seats/alice/x"},
-				{RepoID: row.Repos[1].RepoID, Name: "api", Access: code.AccessRead, Branch: "refs/heads/"},
+				{RepoID: row.Repos[0].RepoID, Name: "web", Access: gitlet.AccessWrite, Branch: "refs/heads/seats/alice/x"},
+				{RepoID: row.Repos[1].RepoID, Name: "api", Access: gitlet.AccessRead, Branch: "refs/heads/"},
 			}}
 		if got.Ref != want.Ref || got.Seat != want.Seat || got.Provenance != want.Provenance ||
-			len(got.Repos) != 2 || got.Repos[0] != want.Repos[0] || got.Repos[1].Access != code.AccessRead {
+			len(got.Repos) != 2 || got.Repos[0] != want.Repos[0] || got.Repos[1].Access != gitlet.AccessRead {
 			t.Errorf("a %s row reads %+v, want %+v", tc.status, got, want)
 		}
 	}
@@ -313,7 +313,7 @@ func TestBoxRunsHoldsOnTheRow(t *testing.T) {
 		return out
 	}
 	repo := uuid.NewString()
-	keys := []string{code.RefHoldKey(repo, "refs/heads/seats/swe/a"), code.RefHoldKey(repo, "refs/heads/seats/swe/b")}
+	keys := []string{gitlet.RefHoldKey(repo, "refs/heads/seats/swe/a"), gitlet.RefHoldKey(repo, "refs/heads/seats/swe/b")}
 	if err := b.Hold(ctx, host.BoxRunRef{TurnID: turn, LaunchID: launch}, keys); err != nil {
 		t.Fatalf("a hold on a live row: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestBoxRunsHoldsOnTheRow(t *testing.T) {
 	}
 	full := make([]string, sandbox.MaxCodeHolds)
 	for i := range full {
-		full[i] = code.RefHoldKey(repo, fmt.Sprintf("refs/heads/seats/swe/%d", i))
+		full[i] = gitlet.RefHoldKey(repo, fmt.Sprintf("refs/heads/seats/swe/%d", i))
 	}
 	if err := b.Hold(ctx, host.BoxRunRef{TurnID: turn, LaunchID: launch}, full); !errors.Is(err,
 		sandbox.ErrCodeHoldsFull) {

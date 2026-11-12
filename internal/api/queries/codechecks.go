@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -38,12 +38,12 @@ import (
 // from its chart by the reader — a listing leaves out what the asker may not
 // read, a read of one repository it may not is refused [NotPermitted]. A
 // narrowing is the reader's statement's, never a filter of a page it read
-// ([code.CheckQuery.State]), and the grant is tested on what it found, never
+// ([gitlet.CheckQuery.State]), and the grant is tested on what it found, never
 // in place of it, so no narrowing widens what a page may hold.
 //
 // # Where the spec's paths moved
 //
-// An attempt's key holds the branch it was checked for (code.CheckKey): one
+// An attempt's key holds the branch it was checked for (gitlet.CheckKey): one
 // commit is checked for every branch a change heading it merges into, so
 // /checks/{oid}/{check}/{attempt} names one attempt per such branch. The
 // branch is a ref — `refs/heads/release/1.x` — whose slashes a path segment
@@ -57,7 +57,7 @@ import (
 //
 //   - ReasonNoCheck — the repository holds no such attempt: never queued, or
 //     past the thirty days an ended attempt's rows are kept
-//     ([code.CheckHistory]);
+//     ([gitlet.CheckHistory]);
 //   - ReasonNoLog — the attempt holds no log, or no longer the one asked
 //     for: only a failed run keeps one, and an ending a later one replaced
 //     (a runner declared lost that was only slow) keeps the log of the
@@ -69,7 +69,7 @@ const (
 
 // CheckLogPageBytes is the most of a check's log one `code_check_log` answer
 // carries, and what it carries where the request names no `limit`: 256 KiB.
-// A failed run keeps at most [code.MaxCheckLogBytes] (64 MiB), so the whole
+// A failed run keeps at most [gitlet.MaxCheckLogBytes] (64 MiB), so the whole
 // of the largest is 256 pages, and its tail — where a failure is printed — is
 // one read from `size` back; a page is some 3,300 lines of 80 columns, which a
 // screen draws as one block, and the object store reads it inside the budget
@@ -111,8 +111,8 @@ type CheckLogPage struct {
 // check's name and a state — nil where it names none, the repository's or the
 // window's whole listing. Which of them stand beside which is the reader's
 // to refuse, naming the field.
-func checksListing(p Params) (*code.CheckQuery, error) {
-	var c code.CheckQuery
+func checksListing(p Params) (*gitlet.CheckQuery, error) {
+	var c gitlet.CheckQuery
 	if p.Has("change") {
 		n, whole := p.WholeInt("change")
 		if !whole || n < 1 {
@@ -132,10 +132,10 @@ func checksListing(p Params) (*code.CheckQuery, error) {
 		c.Latest = latest
 	}
 	if state := strings.TrimSpace(p.String("state")); state != "" {
-		c.State = code.CheckState(state)
+		c.State = gitlet.CheckState(state)
 		if !c.State.Valid() {
 			return nil, fmt.Errorf("%w: the state %q is not one of %s", ErrBadParams, state,
-				words.Or(code.CheckStates()))
+				words.Or(gitlet.CheckStates()))
 		}
 	}
 	if since := strings.TrimSpace(p.String("since")); since != "" {
@@ -152,7 +152,7 @@ func checksListing(p Params) (*code.CheckQuery, error) {
 		}
 		c.Until = at.UTC()
 	}
-	if c == (code.CheckQuery{}) {
+	if c == (gitlet.CheckQuery{}) {
 		return nil, nil
 	}
 	return &c, nil
@@ -163,13 +163,13 @@ func checksListing(p Params) (*code.CheckQuery, error) {
 // (`oid`) and its check (`check`) off the path, its attempt (`attempt`), a
 // whole number from 1, and the branch it was checked for (`target`), in
 // full. Whether each spells one is the reader's to refuse, naming it.
-func checkAttempt(p Params) (*code.CheckQuery, error) {
+func checkAttempt(p Params) (*gitlet.CheckQuery, error) {
 	n, whole := p.WholeInt("attempt")
 	if !whole || n < 1 {
 		return nil, fmt.Errorf("%w: attempt %q is not an attempt's number: a check's attempts are numbered from 1",
 			ErrBadParams, p.String("attempt"))
 	}
-	c := &code.CheckQuery{OID: strings.TrimSpace(p.String("oid")), Name: strings.TrimSpace(p.String("check")),
+	c := &gitlet.CheckQuery{OID: strings.TrimSpace(p.String("oid")), Name: strings.TrimSpace(p.String("check")),
 		Target: strings.TrimSpace(p.String("target")), Attempt: int(n)}
 	if c.Target == "" {
 		return nil, fmt.Errorf("%w: target: an attempt is named beside the branch it was checked for, in full "+
@@ -188,7 +188,7 @@ func checkAttempt(p Params) (*code.CheckQuery, error) {
 //
 // IMMUTABLE WHERE THE REQUEST NAMES THE OBJECT (`object`, the key
 // `code_check` answers as `log.object`), and bare otherwise: the attempt is
-// NOT the bytes. A check's ending is a join (code.endsBefore) — a measurement
+// NOT the bytes. A check's ending is a join (gitlet.endsBefore) — a measurement
 // replaces an errored ending a runner's sweep recorded, and of two failed
 // endings across a writer's failover the earlier stands — and each ending
 // keeps its own log, under a key of its own. An answer cached by the attempt
@@ -215,7 +215,7 @@ func (s Sources) codeCheckLog(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	q, err := codeReadQuery(code.ReadCheck, codeAsker(principal), p)
+	q, err := codeReadQuery(gitlet.ReadCheck, codeAsker(principal), p)
 	if err != nil {
 		return nil, err
 	}

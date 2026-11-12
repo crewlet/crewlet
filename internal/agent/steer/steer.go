@@ -229,14 +229,46 @@ func (e *TooLongError) Error() string {
 // accounts for from one made after it (sandbox.SessionCapture.NoteCursor) —
 // and zero for a read this segment made, which the record places after every
 // session its run was saved with before the segment began.
+//
+// Unanswered says the record marks the read as one whose take's answer was
+// lost (sandbox.NoteRead.Unanswered): the executor's harness named by Launch
+// was never handed the note at that step, though the turn carries it as read —
+// so no session of that job holds it from there, and a launch that continues
+// one is told it again.
 type Reading struct {
-	Phase     types.Phase
-	Iteration int
-	Round     int
-	Boundary  types.SteerBoundary
-	Launch    string
-	At        time.Time
-	Order     int
+	Phase      types.Phase
+	Iteration  int
+	Round      int
+	Boundary   types.SteerBoundary
+	Launch     string
+	At         time.Time
+	Order      int
+	Unanswered bool
+}
+
+// Briefing is what a launch's brief takes of a turn's notes: Notes, the ones it
+// is the first to read, which the launch's write records read, and Unanswered,
+// every note the turn has read whose read its record marks unanswered as the
+// brief read them, by id (sandbox.NoteRead.Unanswered).
+//
+// THE MARKS BESIDE THE NOTES, read off the same record: a mark is made off the
+// path of the take it settles, and can land after the segment that launches
+// read the record it resumed from — so a launch counts the record's marks as
+// they stand when it briefs, never only as its segment found them.
+//
+// Orders is the place among the record's reads (Reading.Order) of every note
+// the segment's source handed it from the record, and of every note of Notes
+// read already by the record's word — a lost take's, whose settle handed it to
+// this brief — by id; nil from a source that keeps no record. A brief tells
+// the notes the turn has read in the order the record numbered their reads, and
+// the reads a segment makes reach it before the record has numbered them (Order
+// zero), so the source that recorded them says where they are: a note a lost
+// take recorded is then told at its take's place, never after a note a later
+// take read — a correction of it among them.
+type Briefing struct {
+	Notes      []Note
+	Unanswered []string
+	Orders     map[string]int
 }
 
 // Read is a note the turn has read, and where: what a turn carries into every
@@ -251,14 +283,47 @@ type Turn struct {
 	Agent, AgentHandle, Role, TurnID, WorkKey string
 }
 
-// Record is the agent_turn_steered record of note: delivered where read says,
-// or expired where read is nil.
+// End is what became of a note ([types.SteerOutcome]) and the step it came
+// to: the step that read a delivered note, the one that took a missed note,
+// the job an unconfirmed note was handed to. An expiry names none: nothing read
+// the note.
+//
+// MADE BY Delivered, Retold, Missed, Unconfirmed and Expired ALONE, each with
+// the step its outcome names or none, so no record can state an outcome without
+// the step it came to, or an expiry that names one. The zero End is an expiry.
+type End struct {
+	outcome types.SteerOutcome
+	at      *Reading
+	// retold is a delivered note read in a brief that told it again
+	// ([types.AgentTurnSteered.Retold]).
+	retold bool
+}
+
+// Delivered is a note read where at says.
+func Delivered(at Reading) End { return End{outcome: types.SteerDelivered, at: &at} }
+
+// Retold is a note delivered in the launch's brief at says, which told it
+// again after a step that took it never handed it over.
+func Retold(at Reading) End { return End{outcome: types.SteerDelivered, at: &at, retold: true} }
+
+// Missed is a note the step at says took for its reader, which never had it.
+func Missed(at Reading) End { return End{outcome: types.SteerMissed, at: &at} }
+
+// Unconfirmed is a note handed to the executor's job at says, which never
+// confirmed reading it.
+func Unconfirmed(at Reading) End { return End{outcome: types.SteerUnconfirmed, at: &at} }
+
+// Expired is a note nothing read before the turn ended.
+func Expired() End { return End{outcome: types.SteerExpired} }
+
+// Record is the agent_turn_steered record of what became of note: end's
+// outcome, at the step end names.
 //
 // THE ONE CONSTRUCTOR of the record, which every publisher calls — the runner,
 // the bridge's run inbox and an ending — so no two of them build it differently:
-// a delivery always says where, an expiry never names a step, and the send time
-// is always UTC.
-func Record(turn Turn, note Note, read *Reading) types.AgentTurnSteered {
+// every outcome but an expiry says where, an expiry never names a step, and the
+// send time is always UTC.
+func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 	ev := types.AgentTurnSteered{
 		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role,
 		TurnID: turn.TurnID, WorkKey: turn.WorkKey,
@@ -269,10 +334,11 @@ func Record(turn Turn, note Note, read *Reading) types.AgentTurnSteered {
 	if !ev.SentAt.IsZero() {
 		ev.SentAt = ev.SentAt.UTC()
 	}
-	if read != nil {
-		ev.Outcome = types.SteerDelivered
-		ev.Phase, ev.Iteration, ev.Round = read.Phase, read.Iteration, read.Round
-		ev.Boundary, ev.LaunchID = read.Boundary, read.Launch
+	if end.at != nil {
+		ev.Outcome = end.outcome
+		ev.Phase, ev.Iteration, ev.Round = end.at.Phase, end.at.Iteration, end.at.Round
+		ev.Boundary, ev.LaunchID = end.at.Boundary, end.at.Launch
+		ev.Retold = end.retold
 	}
 	return ev
 }
@@ -365,8 +431,8 @@ func (b *Box) Take(_ context.Context, _ Reading) []Note { return b.Drain() }
 
 // Brief is [Box.Drain] as an executor's brief reads it: the notes the launch
 // takes, which are the box's no longer — see [Box.Return] for a launch that
-// fails.
-func (b *Box) Brief(context.Context) []Note { return b.Drain() }
+// fails. A box holds no read a take recorded, so it says none is unanswered.
+func (b *Box) Brief(context.Context) Briefing { return Briefing{Notes: b.Drain()} }
 
 // Return puts back notes a step took and could not deliver — a launch that
 // failed before it wrote its run's record — AT THE FRONT, in their order, so

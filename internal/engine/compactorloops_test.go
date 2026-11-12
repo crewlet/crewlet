@@ -8,21 +8,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	gitletcompact "github.com/crewlet/crewlet/internal/gitlet/compact"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 )
 
 // listings is a Gitlet node's compactor's code seam, counting the due listings
 // each of its loops reads through it.
 type listings struct {
-	codecompact.Estate
+	gitletcompact.Estate
 	mu    sync.Mutex
-	kinds map[code.ReadKind]int
+	kinds map[gitlet.ReadKind]int
 }
 
-func (l *listings) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (l *listings) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	l.mu.Lock()
 	l.kinds[q.Kind]++
 	l.mu.Unlock()
@@ -30,7 +30,7 @@ func (l *listings) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer,
 }
 
 // listed reports whether a loop has read the listing of kind k.
-func (l *listings) listed(k code.ReadKind) bool {
+func (l *listings) listed(k gitlet.ReadKind) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.kinds[k] > 0
@@ -45,7 +45,7 @@ func compactorLoops() int {
 	for {
 		n := runtime.Stack(buf, true)
 		if n < len(buf) {
-			return bytes.Count(buf[:n], []byte("internal/code/compact.(*Compactor).loop("))
+			return bytes.Count(buf[:n], []byte("internal/gitlet/compact.(*Compactor).loop("))
 		}
 		buf = make([]byte, 2*len(buf))
 	}
@@ -72,12 +72,12 @@ func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 	b := gitletNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, gitCompany))
 	before := compactorLoops()
-	seam := &listings{kinds: map[code.ReadKind]int{}}
+	seam := &listings{kinds: map[gitlet.ReadKind]int{}}
 	e, err := engine.New(t.Context(), engine.WithCompactorEstate(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, gitCompany),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-		GitHook:     codetest.HookCommand(t),
-	}, func(inner codecompact.Estate) codecompact.Estate {
+		GitHook:     gitlettest.HookCommand(t),
+	}, func(inner gitletcompact.Estate) gitletcompact.Estate {
 		seam.Estate = inner
 		return seam
 	}))
@@ -94,8 +94,8 @@ func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 	// BUILT, NOT STARTED: all three loops run, and for two of their
 	// rechecks none lists.
 	waitFor(t, "the compactor's three loops to run", func() bool { return compactorLoops()-before == 3 })
-	time.Sleep(2 * codecompact.ListedRecheck)
-	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue, code.ReadExpungeDue} {
+	time.Sleep(2 * gitletcompact.ListedRecheck)
+	for _, kind := range []gitlet.ReadKind{gitlet.ReadCompactionDue, gitlet.ReadPublicationDue, gitlet.ReadExpungeDue} {
 		if seam.listed(kind) {
 			t.Errorf("a Gitlet node built and not started read the %s listing, want its loops waiting to be "+
 				"listed among the Gitlet nodes", kind)
@@ -106,8 +106,8 @@ func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	waitFor(t, "each of the compactor's loops to list once", func() bool {
-		return seam.listed(code.ReadCompactionDue) && seam.listed(code.ReadPublicationDue) &&
-			seam.listed(code.ReadExpungeDue)
+		return seam.listed(gitlet.ReadCompactionDue) && seam.listed(gitlet.ReadPublicationDue) &&
+			seam.listed(gitlet.ReadExpungeDue)
 	})
 	if got := compactorLoops() - before; got != 3 {
 		t.Errorf("a running Gitlet node runs %d of its compactor's loops, want 3: the compaction, the "+

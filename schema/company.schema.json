@@ -241,6 +241,24 @@
         "null"
       ]
     },
+    "Atlas": {
+      "additionalProperties": false,
+      "properties": {
+        "retention_days": {
+          "description": "How long the atlas keeps its history: a value somebody replaced, and an entry a person retired that nothing has reported since (default 400, 90..3650). What the atlas holds now never expires.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Atlassian": {
       "additionalProperties": false,
       "properties": {
@@ -1470,6 +1488,53 @@
         "null"
       ]
     },
+    "DelegatedRequiredChecks": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "description": "The branch a merge targets, or a deploy's changes merged into, as GitHub names it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "checks": {
+          "description": "The checks' names exactly as GitHub shows their check runs (a workflow job's name). At least one, at most 32, each at most 128 bytes.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "repo": {
+          "description": "The repository on the company's GitHub, as owner/name.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo",
+        "branch",
+        "checks"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "DelegatedRule": {
       "additionalProperties": false,
       "properties": {
@@ -1527,6 +1592,16 @@
               "boolean",
               "null"
             ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "required_checks": {
+          "description": "Checks a GitHub repository's branch requires before a delegate's merge into it or deploy from it stands, beside any its branch protection or rulesets require: each passes only as a check run that completed with success on exactly the commit decided, reported by an app that is not one of the company's agents. Only for a rule of pr_merge or deploy. At most 64 entries, one per repository and branch.",
+          "items": {
+            "$ref": "#/$defs/DelegatedRequiredChecks"
           },
           "type": [
             "array",
@@ -6375,6 +6450,9 @@
     },
     "assistant": {
       "$ref": "#/$defs/Assistant"
+    },
+    "atlas": {
+      "$ref": "#/$defs/Atlas"
     },
     "chat": {
       "$ref": "#/$defs/Chat"

@@ -121,7 +121,7 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 		calls := turnctx.NewCallLog()
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 			buildOpts{calls: calls, register: register})
-		if _, err := r.ReopenAgentRun(context.Background(), state, bridged, dropped, nil, runner.Bridged{},
+		if _, err := r.ReopenAgentRun(context.Background(), state, bridged, nil, dropped, nil, runner.Bridged{},
 			false); err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
 		}
@@ -137,7 +137,7 @@ func TestAResumePastADroppedCallAndACutOneDerivesTheIdsOfARunThatNeverParked(t *
 		closed.Round = 2
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 			buildOpts{calls: calls, register: register})
-		if _, err := r.ReopenAgentRun(context.Background(), closed, nil, nil, nil, runner.Bridged{},
+		if _, err := r.ReopenAgentRun(context.Background(), closed, nil, nil, nil, nil, runner.Bridged{},
 			false); err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
 		}
@@ -162,7 +162,7 @@ func reopenedLog(t *testing.T, bridged []runner.BridgedCall, elided, absorbed []
 		}})
 	state := execstate.State{Version: execstate.Version, Round: len(closed) + 1,
 		ActiveTools: []string{"set_status"}, Iterations: closed}
-	if _, err := r.ReopenAgentRun(context.Background(), state, bridged, elided, absorbed, runner.Bridged{},
+	if _, err := r.ReopenAgentRun(context.Background(), state, bridged, nil, elided, absorbed, runner.Bridged{},
 		false); err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestALiveSubmissionPastWhatTheLogKeepsIsRefused(t *testing.T) {
 	t.Parallel()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{})
 	reopened, err := r.ReopenAgentRun(context.Background(), execstate.State{Version: execstate.Version, Round: 1},
-		nil, nil, nil, runner.Bridged{}, false)
+		nil, nil, nil, nil, runner.Bridged{}, false)
 	if err != nil {
 		t.Fatalf("ReopenAgentRun: %v", err)
 	}

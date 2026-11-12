@@ -9,9 +9,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/changefeed"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -296,11 +296,12 @@ type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 
 // register is every domain this build runs, in a FIXED order.
 //
-// THE ARTIFACTS DOMAINS, THE ASSISTANT'S, CHAT, THE EXECUTOR LOG, GITLET AND
-// THE ACCESS LOG ARE APPENDED LAST, in the order they joined, from entries
-// declared beside their wiring (artifactsregister.go, artifactdataregister.go,
-// assistantregister.go, chatregister.go, executorregister.go and
-// accessregister.go; Gitlet's below) so each domain's entry is written where the rest of its engine
+// THE ARTIFACTS DOMAINS, THE ASSISTANT'S, CHAT, THE EXECUTOR LOG, GITLET, THE
+// ACCESS LOG AND THE ATLAS LOG ARE APPENDED LAST, in the order they joined,
+// from entries declared beside their wiring (artifactsregister.go,
+// artifactdataregister.go, assistantregister.go, chatregister.go,
+// executorregister.go, accessregister.go and atlasregister.go; Gitlet's below)
+// so each domain's entry is written where the rest of its engine
 // wiring lives. Appending keeps every existing
 // domain's position, which is the order every operator surface already
 // reports in.
@@ -621,7 +622,8 @@ func register() []registration {
 			},
 		},
 	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations(),
-		chatRegistrations(), executorRegistrations(), codeRegistrations(), accessRegistrations())
+		chatRegistrations(), executorRegistrations(), codeRegistrations(), accessRegistrations(),
+		atlasRegistrations())
 }
 
 // codeRegistrations is Gitlet's entry in the register: the company's
@@ -636,7 +638,7 @@ func codeRegistrations() []registration {
 			// and its ninth strict, identity-claiming one — settings,
 			// protections, refs, packs and pushes as rows only its applier
 			// writes, a pack's bytes one object a push in the object store.
-			Domain: code.Domain{},
+			Domain: gitlet.Domain{},
 			// A CHANGE'S NEWS IS A PERSON'S TOO: a review asked of them, a
 			// change of theirs merged or ready. The applier writes a notice
 			// per recipient (code_notifications) and says, after each
@@ -644,35 +646,35 @@ func codeRegistrations() []registration {
 			// for the mark, one source of the relay's each.
 			Inbox: true,
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				return code.NewApplier(s.inboxFor(code.Domain{})), nil
+				return gitlet.NewApplier(s.inboxFor(gitlet.Domain{})), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := code.NewRows(s.estate().Reader(), spec)
+				rows, err := gitlet.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := code.NewFence(s.estate().Reader(), s.nodeID)
-				name := code.Domain{}.Name()
+				fence := gitlet.NewFence(s.estate().Reader(), s.nodeID)
+				name := gitlet.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: code.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
+					Gates: gitlet.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
-			Barrier: code.EncodeBarrier,
-			Trimmed: code.EncodeTrimmed,
+			Barrier: gitlet.EncodeBarrier,
+			Trimmed: gitlet.EncodeTrimmed,
 			// THE REFERENCE COMPANY'S WHOLE RATE, for the tracker's reason: a
 			// seat's code tools read at `linearizable` too. The git clients'
 			// reads are not a seat's, and are the term the log's own sizing
 			// declares beside this one ([clientBarriers]).
 			Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
-			Generation: code.GenerationRecord{},
+			Generation: gitlet.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
-				host, err := code.NewStore(code.StoreOptions{Publisher: publisher,
+				host, err := gitlet.NewStore(gitlet.StoreOptions{Publisher: publisher,
 					DB: s.estate().Reader(), NodeID: s.nodeID})
 				if err != nil {
 					return nil, err
@@ -690,7 +692,7 @@ func codeRegistrations() []registration {
 					if operator == "" {
 						operator = a.Name
 					}
-					actor := code.Actor{ID: a.Name, Kind: code.ActorOperator, OperatorID: operator}
+					actor := gitlet.Actor{ID: a.Name, Kind: gitlet.ActorOperator, OperatorID: operator}
 					if readmit {
 						return host.ReadmitNode(ctx, actor, opID, node)
 					}
@@ -704,7 +706,7 @@ func codeRegistrations() []registration {
 			// (ADR-0012). A person hears from the notice rows its applier
 			// writes, never from here.
 			Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
-				return code.NewTranslator(), code.FeedSource{Log: records}
+				return gitlet.NewTranslator(), gitlet.FeedSource{Log: records}
 			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {

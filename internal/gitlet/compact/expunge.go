@@ -1,0 +1,1526 @@
+package compact
+
+import (
+	"bufio"
+	"bytes"
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// ExpungePoll is the interval between two passes of the EXPUNGE loop: one
+// listing a Gitlet node a minute, so a person's purge is taken up within a minute
+// of its request by the repository's maintainer, and an expunge a crash left
+// open is finished from its rows within a minute of the node's return. The
+// listing is two arms. Its OPEN arm walks the partial index that holds only
+// the repositories with an expunge open or a purge requested
+// (code_repos_expunging_idx): a handful in a fleet of any size. Its WEEKLY arm
+// seeks code_repos_expunge_due_idx for every other repository not JUDGED
+// within gitlet.ExpungeInterval — neither expunged nor scanned clean, a scan
+// that finds one not due being a record of its own (gitlet.ExpungeScan) — so a
+// steady fleet's listing holds only the repositories owed a scan, about one
+// in every ExpungeInterval's worth of minutes of them (config.CodeMaxRepos
+// projects and the seats' scratch repositories), on every Gitlet node, after a
+// restart, a rolling upgrade or a Gitlet node joining or leaving as much as
+// before it: a repository's history is walked at most once an ExpungeInterval
+// whichever node maintains it ([Compactor.judgedClean]).
+const ExpungePoll = time.Minute
+
+// ExpungeInputByteCap is the most PACK bytes one expunge's begin rewrites at a
+// cut of cut: gitlet.MaxExpungeOutputs/2 cuts — 16 GiB at the nominal cut
+// (gitlet.CompactPackBytes) — [InputByteCap]'s half, for its reason: the
+// builds' own count is the authority on how many outputs they wrote, any two
+// consecutive outputs of one build sum past a cut, and a build that wrote
+// more than one record takes is refused before any upload and halves the
+// repository's next cycle ([Compactor.expungeCapFailed]). A repository whose
+// packs to rewrite pass it is expunged in as many cycles as it takes, each a
+// begin and a commit of its own.
+func ExpungeInputByteCap(cut int64) int64 { return gitlet.MaxExpungeOutputs / 2 * cut }
+
+// ExpungeReport is what one pass of the expunge loop did: how many
+// repositories its listing named, how many of them this node maintains, and
+// how many of those expunged, were refused or failed.
+type ExpungeReport struct {
+	Listed, Maintained, Expunged, Refused, Failed int
+}
+
+// The stages of crewlet.code.expunge.duration.
+const (
+	stageScan   = "scan"
+	stageBuild  = "build"
+	stageUpload = "upload"
+	stageBegin  = "begin"
+	stageRescue = "rescue"
+	stageCommit = "commit"
+)
+
+// The reasons an expunge's line gives beside the committer's refusals and the
+// compaction's own (reasonMemory, reasonStoreFull, reasonOutputs,
+// reasonBundleTooLarge): the repository's drop epoch moved past the begin a
+// cycle made, and a copy whose objects/ still holds a begin's inputs.
+const (
+	reasonEpoch  = "epoch"
+	reasonInputs = "inputs_leaving"
+)
+
+// errNothingKept is a build whose inputs' every object the rest holds and
+// whose fallback, which keeps nothing, wrote nothing either: an input set no
+// pack holds a byte of, which no correct copy is.
+var errNothingKept = errors.New("compact: the expunge's inputs hold no object to keep or drop")
+
+// ExpungePass is one pass of the EXPUNGE loop:
+//
+//  1. LIST every repository with an expunge open or a purge requested, then
+//     every other active or archived repository last judged — expunged, or
+//     scanned and found clean — gitlet.ExpungeInterval ago or never, least
+//     recently judged first — the
+//     `expunge_due` read's two arms, every page, at STALE for the compaction
+//     listing's reason (the router carries this node's own writes as a floor
+//     on every code read it sends), each with its live objects;
+//  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
+//     Gitlet node advertises, by its MAINTENANCE'S charge ([Compactor.PlacedBy])
+//     — the charge the other two loops are placed by, so every writer of a repository's packs runs
+//     on one node — a placement this node cannot read expunging nothing that
+//     pass, logged once;
+//  3. THE STORE'S ROOM, read once a pass, and only while a repository is held
+//     back for a full store ([Compactor.releaseHeld]);
+//  4. every listed repository this node maintains, in the listing's order,
+//     until the next tick would begin: one held back for a full store skipped
+//     until the room is there, and every other EXPUNGED ([Compactor.Expunge])
+//     — one cycle each, one at a time; a repository of the weekly arm whose
+//     scan finds it not due recorded so ([Compactor.judgedClean]), which
+//     takes it out of every node's listing for gitlet.ExpungeInterval.
+//
+// A listing that fails is the pass's error. The pass is logged
+// code_expunge_pass, at DEBUG unless it expunged, refused or failed something.
+func (c *Compactor) ExpungePass(ctx context.Context) (ExpungeReport, error) {
+	began := c.now()
+	var report ExpungeReport
+	listed, err := c.listExpunges(ctx, began.Add(-gitlet.ExpungeInterval))
+	if err != nil {
+		return report, err
+	}
+	report.Listed = len(listed)
+	c.forgetExpunges(listed)
+	maintained, unknown := c.maintainedOfExpunges(listed)
+	var released map[string]bool
+	if unknown != nil {
+		c.log.Warn("code_expunge_maintainer_unknown", "listed", len(listed), "error", unknown,
+			"detail", "who maintains the listed repositories could not be read, so this pass expunges nothing")
+	} else if released, err = c.releaseHeld(ctx, expungeLoop); err != nil {
+		c.log.Warn("code_expunge_store_unread", "error", err,
+			"detail", "the object store's room could not be read, so every repository held back for a full "+
+				"store waits for the next pass")
+	}
+	until := began.Add(ExpungePoll)
+	for _, cand := range listed {
+		if unknown != nil || ctx.Err() != nil || !c.now().Before(until) {
+			break
+		}
+		if (c.isHeld(expungeLoop, cand.ID) && !released[cand.ID]) || !maintained[cand.ID] {
+			continue
+		}
+		report.Maintained++
+		switch out, _ := c.Expunge(ctx, cand); out {
+		case OutcomeApplied, OutcomePending, OutcomeUnknown:
+			report.Expunged++
+		case OutcomeRefused:
+			report.Refused++
+		case OutcomeFailed:
+			report.Failed++
+		}
+	}
+	log := c.log.Debug
+	if report.Expunged+report.Refused+report.Failed > 0 {
+		log = c.log.Info
+	}
+	log("code_expunge_pass", "listed", report.Listed, "maintained", report.Maintained,
+		"expunged", report.Expunged, "refused", report.Refused, "failed", report.Failed,
+		"took", c.now().Sub(began))
+	return report, nil
+}
+
+// listExpunges is every repository the `expunge_due` listing names, every
+// page: its open arm, and its weekly arm of the repositories last judged at
+// or before before.
+func (c *Compactor) listExpunges(ctx context.Context, before time.Time) ([]gitlet.ExpungeCandidate, error) {
+	q := gitlet.ReadQuery{Kind: gitlet.ReadExpungeDue, ScannedBefore: before,
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	var out []gitlet.ExpungeCandidate
+	for {
+		a, err := c.o.Estate.Read(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("compact: list the repositories an expunge is owed in: %w", err)
+		}
+		out = append(out, a.Expunge...)
+		if a.Next == "" {
+			return out, nil
+		}
+		q.Cursor = a.Next
+	}
+}
+
+// forgetExpunges drops the expunge loop's hold for a full store of a
+// repository the listing no longer names — its purge served, judged within
+// the week, or itself deleted — so it is bounded by the repositories listed.
+// A halved cap is kept for the compactor's life, as a compaction's is: it is
+// a fact about what the repository's packs make of a build.
+func (c *Compactor) forgetExpunges(listed []gitlet.ExpungeCandidate) {
+	named := make(map[string]bool, len(listed))
+	for _, cand := range listed {
+		named[cand.ID] = true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id := range c.held[expungeLoop].repos {
+		if !named[id] {
+			delete(c.held[expungeLoop].repos, id)
+		}
+	}
+}
+
+// judgedClean records that cand's scan on the maintainer's own schedule,
+// which read the repository at seen, found NO expunge due: ONE RECORD on the
+// repository's subject (gitlet.ExpungeScan), proposed to its committer, whose
+// apply moves the repository's expunge_scanned_at to the record's instant, so
+// the weekly arm leaves the repository out for gitlet.ExpungeInterval on every
+// node — this one after a restart, and whichever node maintains it next.
+//
+// SHARED FLEET STATE, NEVER THIS PROCESS'S MEMORY: a verdict kept here was
+// lost to every restart, rolling upgrade and maintainer reshuffle, so a
+// fleet-wide deploy downloaded and walked every repository again whatever its
+// last scan; and since a clean scan wrote nothing, every Gitlet node listed
+// nearly every repository through the estate every minute for the few scans
+// a week of work. BY THE RECORD'S INSTANT, NEVER BY THE ROW'S VERSION: a
+// version that moved — a push — would rescan a hot repository at every pass,
+// and one that did not says nothing of what has become unreachable since,
+// because a drop's grace and a pack's run out by the clock (gitlet.PruneGrace)
+// with no record written.
+//
+// Whatever becomes of the record, the cycle is not due: a record refused,
+// pending or not known applied leaves the repository listed, and the next
+// pass scans it again — the cost of a code log that is not taking writes, the
+// same a begin it refused costs.
+func (c *Compactor) judgedClean(ctx context.Context, cand gitlet.ExpungeCandidate, seen statelog.Position) {
+	scan := gitlet.ExpungeScan{RepoID: cand.ID, ScanID: statelog.NewOpID(c.now(), ""), Node: c.o.NodeID, Seen: seen}
+	res, err := c.o.Estate.Expunge(ctx, gitlet.ExpungeProposal{Scan: &scan})
+	switch {
+	case err != nil:
+		c.log.Warn("code_expunge_scan_unrecorded", "repo", cand.Name, "scan", scan.ScanID, "error", err,
+			"detail", "the clean scan's record could not be appended, so the repository stays listed and the "+
+				"next pass scans it again")
+	case res.Outcome == "":
+		c.log.Debug("code_expunge_scan_unrecorded", "repo", cand.Name, "scan", scan.ScanID,
+			"reason", string(res.Refusal), "detail", res.Detail)
+	}
+}
+
+// maintainedOfExpunges is which listed repositories this node maintains, off
+// ONE LISTING of who serves git, each by the charge it is placed by
+// ([Compactor.PlacedBy]) — an error is UNKNOWN for every one of them, never
+// "maintains none".
+func (c *Compactor) maintainedOfExpunges(listed []gitlet.ExpungeCandidate) (map[string]bool, error) {
+	if len(listed) == 0 {
+		return nil, nil
+	}
+	ask := make(map[string]int64, len(listed))
+	for _, cand := range listed {
+		ask[cand.ID] = c.PlacedBy(cand.LiveObjects)
+	}
+	return c.o.Maintainers.MaintainerOf(ask)
+}
+
+// Expunge runs ONE CYCLE of an expunge of cand — a repository this node
+// maintains, as the `expunge_due` listing named it — and answers what became
+// of it: the unit a suite drives, and what every pass runs one at a time.
+// Nothing is retried inside it; its error is the one that failed or refused
+// it, nil for every other outcome.
+//
+// AN EXPUNGE OPEN IS FINISHED FIRST, from its rows ([Compactor.finish]): the
+// listing names its id, the cache's copy at or past the begin holds its
+// dropping packs, and the rescue is valid at any position at or after the
+// begin — so whatever stopped the cycle that began it, a crash included, the
+// next pass on whichever node maintains the repository commits it. A PURGE
+// REQUESTED begins a cycle ([Compactor.cycle]) and carries it through its
+// commit; and so does a repository of the WEEKLY ARM, once its scan finds
+// it due, keeping what a drop left and every pack that arrived within
+// gitlet.PruneGrace.
+//
+// NEVER BESIDE A PUBLICATION OF THE SAME REPOSITORY on this node, which could
+// plan over a pack the begin retires or a layer it drops, and never planned
+// beside a running compaction of it, which could retire a pack the plan
+// chooses ([Compactor.claimExpunge]); but its compactions go on beside it
+// once it has planned, leaving out every input it chose, and as though it
+// were not running once its rescue has synced past its begin
+// ([expungeClaim]), since a hot repository climbs to gitlet.MaxPacksPerRepo in
+// minutes.
+//
+// THE COMPACTOR'S LIFETIME BOUNDS IT, whoever asked, as it bounds a
+// compaction: [Compactor.Stop] ends the cycle in flight.
+func (c *Compactor) Expunge(ctx context.Context, cand gitlet.ExpungeCandidate) (Outcome, error) {
+	c.expunging.Lock()
+	defer c.expunging.Unlock()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	//nolint:contextcheck // c.life only cancels ctx, which stays the caller's: Stop must end the cycle however long the caller's ctx lives.
+	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
+	if !c.claimExpunge(cand.ID) {
+		c.log.Debug("code_expunge_busy", "repo", cand.Name,
+			"detail", "a compaction, a publication or an expunge of the repository is running on this node")
+		c.countedExpunge(OutcomeBusy)
+		return OutcomeBusy, errClaimed
+	}
+	defer c.unclaimExpunge(cand.ID)
+	var (
+		out Outcome
+		err error
+	)
+	switch grace := expungeGrace(cand); {
+	case cand.Open != "":
+		out, err = c.finish(ctx, cand, openExpunge{id: cand.Open, request: cand.Request, grace: grace,
+			floor: cand.Version})
+	default:
+		out, err = c.cycle(ctx, cand, grace)
+	}
+	c.countedExpunge(out)
+	return out, err
+}
+
+// expungeGrace is how long before its scan a cycle of cand keeps what a ref's
+// drop left: none serving a purge — a person asked for what a force-push left
+// to go at once (gitlet.ExpungeBegin.Grace) — and gitlet.PruneGrace for an
+// expunge on its maintainer's own schedule, which an open expunge with no
+// request is.
+//
+// AN OPEN EXPUNGE IS RESCUED BY WHAT IS OWED NOW: a request asked while an
+// expunge on the maintainer's own schedule was open asks for what that
+// expunge's grace would keep to go too, so its rescue keeps none of it, and
+// the request's own cycle judges the rest.
+func expungeGrace(cand gitlet.ExpungeCandidate) time.Duration {
+	if cand.Request != "" {
+		return 0
+	}
+	return gitlet.PruneGrace
+}
+
+// openExpunge is an expunge whose begin has applied, as its rescue and commit
+// read it: its id, the epoch its begin moved the repository to (0 where only
+// the rows say it — a cycle resumed), the request it serves, the grace its
+// rescue keeps a ref drop's object for, the floor its rescue's sync reads at,
+// and the tips its scan kept what they reach of — none where only the rows say
+// what the scan was, which costs the rescue a walk of the whole history rather
+// than of what moved since.
+type openExpunge struct {
+	id       string
+	epoch    int64
+	request  string
+	grace    time.Duration
+	floor    statelog.Position
+	scanTips []string
+}
+
+// cycle runs one expunge of cand — serving its purge, or on the maintainer's
+// own schedule — from its scan to its commit:
+//
+//  1. SCAN: sync at session, floored at the version the listing read, as a
+//     compaction does — the committer holds every input to its own snapshot
+//     and refuses a plan from an older one — and read the live packs it
+//     holds, once. A PURGE then PLANS the cycle's inputs ([planExpunge]): the
+//     live packs whose content dates from before the request
+//     (gitlet.PackRow.Content), oldest first. THE SCHEDULE first takes the live
+//     packs whose newest content ARRIVED gitlet.PruneGrace or longer ago
+//     (gitlet.PackRow.Arrived, [scheduled]), the only packs a cycle may take,
+//     so a pack younger than the grace is kept whole — a repository with none
+//     is judged clean ([Compactor.judgedClean]) with no walk. Then
+//     RESERVE ([Compactor.reserveExpunge]): a purge its inputs, the schedule
+//     every eligible pack, since its walk reads their indexes and its plan
+//     chooses among them; until here — the sync and a pure plan, seconds — a
+//     compaction of the repository on this node answered busy, and from here
+//     it merges beside the cycle, leaving them out. Then read the drops the
+//     grace keeps (the `expunge_tips` read, at the scan's floor, since its
+//     instant less the grace — none of a drop's for a purge, whose instant is
+//     now), and what rows hold in flight, which a purge keeps too
+//     ([keptTips]). ON THE SCHEDULE, judge whether the expunge is due at all
+//     ([Compactor.due]): a walk of what the refs and those tips reach,
+//     weighing what each eligible pack would drop — recording a repository
+//     found not due for gitlet.ExpungeInterval — then plan its inputs, the
+//     eligible packs that would drop a byte, densest first, and narrow the
+//     reservation to them. Either plan is capped at
+//     gitlet.MaxExpungeInputs rows and [ExpungeInputByteCap] of the cut — FULL
+//     packs and packs a published layer names among them, since what an
+//     expunge drops may lie in any pack; the layers over them are the begin's
+//     to drop (gitlet.LayersOver, the decide's own reading).
+//  2. ADMIT the builds to the maintenance lane (cache.Cache.AdmitExpunge).
+//  3. BUILD in a scratch of the inputs leaning on a store of every other live
+//     pack, its refs linked from the copy (cache.Cache.StageExpunge): the KEPT
+//     packs, `pack-objects --revs --local` from every tip — the copy's refs and
+//     the drops the grace keeps that the scratch holds — which packs what a tip
+//     reaches of the inputs and of no other pack; then the DROPPING packs,
+//     `pack-objects --stdin-packs` over the inputs less the kept packs and less
+//     the rest, which packs what nothing reaches. Every object of the inputs is
+//     in the kept, the dropping or the rest packs, so the begin keeps every
+//     object: a merge, to every reader. Held to the builds' own count and to
+//     the bundle rule, rebuilt ONCE at the densest offender's ratio, as a
+//     compaction's build is, and the begin to every rule its committer will
+//     (gitlet.ExpungeProposal.ValidateUnstored) — then the admission is released.
+//  4. UPLOAD every output at once ([uploadAll]); a store with no room holds the
+//     repository back until it has the room, as a compaction is held.
+//  5. BEGIN, proposed to the repository's committer, which moves its drop
+//     epoch: applied, every output is adopted into this node's cache from the
+//     build's scratch — the kept packs live, the dropping packs into the
+//     copy's dropping view — so the node that built them downloads none, and
+//     only then is the scratch removed; and the cycle FINISHES
+//     ([Compactor.finish]) with the tips its scan kept, which bound its
+//     rescue's walk.
+func (c *Compactor) cycle(ctx context.Context, cand gitlet.ExpungeCandidate, grace time.Duration) (Outcome, error) {
+	began := c.now()
+	if cand.Request == "" && cand.LiveBytes < c.bounds.expungeMin {
+		// NEVER DUE, FROM ITS ROW ALONE: what no tip reaches is at most its
+		// live pack bytes, which its live bytes bound — so it is judged with
+		// no sync, no admission and no walk, and recorded so, at the version
+		// the listing read. A small project, a seat's scratch repository or
+		// an archived one no cache holds is never downloaded to learn it.
+		c.judgedClean(ctx, cand, cand.Version)
+		c.log.Debug("code_expunge_not_due", "repo", cand.Name, "live_bytes", cand.LiveBytes,
+			"detail", "its live bytes are under the least an expunge frees")
+		return OutcomeNotDue, nil
+	}
+	s, err := c.o.Cache.Sync(ctx, cand.ID, statelog.FloorAt(statelog.ReadSession, cand.Version))
+	if err != nil {
+		return c.expungeFailed(cand, "sync", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			s.Release()
+		}
+	}()
+	cap := c.expungeCapFor(cand.ID)
+	// THE LIVE PACKS, READ ONCE, at the scan's sync: the plan chooses its
+	// inputs among them and the due judgment weighs them, while the
+	// repository's merges go on beside the cycle from its first reservation
+	// on — each merge's round swapping the copy, which leaves the one s pins
+	// no live set to read again. A swap between the sync and this read leaves
+	// none to read even once, which the cache refuses rather than answer as a
+	// repository holding no pack (cache.ErrSuperseded): judged clean from
+	// that, the repository would be listed again only a week later, its
+	// unreachable bytes never weighed. The pass is busy, and the next syncs
+	// past it.
+	live, err := c.o.Cache.Packs(s)
+	switch {
+	case errors.Is(err, cache.ErrSuperseded):
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "reason", reasonSuperseded, "error", err)
+		return OutcomeBusy, err
+	case err != nil:
+		return c.expungeFailed(cand, "packs", err)
+	}
+	// planCapped caps a plan at the bytes of its cut and RESERVES its inputs
+	// ([expungeClaim]): from here the repository's compactions on this node
+	// merge beside the rest of the cycle — its reads, its walk, its build, its
+	// upload and its begin — leaving out every input the plan chose.
+	var cut int64
+	planCapped := func(q planned) planned {
+		cut = c.bounds.cutFor(q)
+		if at := ExpungeInputByteCap(cut); at < cap {
+			q, cap = q.recapExpunge(at), at
+		}
+		c.reserveExpunge(cand.ID, q)
+		return q
+	}
+	var (
+		p        planned
+		eligible []pack
+	)
+	by := c.now().Add(-gitlet.PruneGrace)
+	if cand.Request != "" {
+		p = planExpunge(live, requestedBefore(cand.Requested), cap)
+		if len(p.inputs) == 0 {
+			// THE REQUEST IS SERVED, or about to be: no live pack dates from
+			// before it, so the listing that named it read a row a commit has
+			// since moved.
+			c.log.Debug("code_expunge_not_due", "repo", cand.Name, "request", cand.Request,
+				"detail", "no live pack dates from before the request")
+			return OutcomeNotDue, nil
+		}
+		p = planCapped(p)
+	} else {
+		eligible = scheduled(live, by)
+		if len(eligible) == 0 {
+			c.judgedClean(ctx, cand, s.Position)
+			c.log.Debug("code_expunge_not_due", "repo", cand.Name,
+				"detail", "every live pack arrived within the grace, which keeps it whole")
+			return OutcomeNotDue, nil
+		}
+		// EVERY ELIGIBLE PACK RESERVED through the walk: it reads each one's
+		// index from the copy s pins, and the plan after it chooses among
+		// them, so a merge beside it that retired one would leave the walk an
+		// index gone and the begin an input no longer live. The young packs a
+		// hot repository's pushes add, the ones its merges are for, stay free.
+		c.reserveExpunge(cand.ID, planned{inputs: eligible})
+	}
+	drops, err := c.keptTips(ctx, cand.ID, s.Position, c.now().Add(-grace))
+	if err != nil {
+		return c.expungeFailed(cand, "scan", err)
+	}
+	limits := c.o.Limits()
+	if cand.Request == "" {
+		freed, out, err := c.due(ctx, cand, s, live, eligible, drops) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		if out != "" {
+			return out, err
+		}
+		p = planExpunge(live, arrivedBy(by, freed), cap)
+		if len(p.inputs) == 0 {
+			// EVERY FILE THAT WOULD FREE A BYTE IS PAST WHAT ONE BEGIN NAMES
+			// (gitlet.MaxExpungeInputs rows): none a cycle can take.
+			c.judgedClean(ctx, cand, s.Position)
+			c.log.Debug("code_expunge_not_due", "repo", cand.Name,
+				"detail", "no pack holding what no tip reaches is one a single begin can name")
+			return OutcomeNotDue, nil
+		}
+		// NARROWED to the plan's inputs: every other eligible pack is free to
+		// merge again for the rest of the cycle.
+		p = planCapped(p)
+	}
+	c.observeStage(stageScan, began)
+
+	buildBegan := c.now()
+	adm, err := c.o.Cache.AdmitExpunge(s, p.objects(), limits)
+	switch {
+	case errors.Is(err, gitproc.ErrBusy):
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "error", err)
+		return OutcomeBusy, err
+	case errors.Is(err, cache.ErrNoMemory):
+		// NEVER REMEMBERED: the node's budget is read again at every pass,
+		// and the next pass asks whether this node is still the maintainer.
+		// The cache logged it once for the incarnation.
+		c.log.Warn("code_expunge_refused", "repo", cand.Name, "reason", reasonMemory, "error", err)
+		return OutcomeRefused, err
+	case err != nil:
+		return c.expungeFailed(cand, "admit", err)
+	}
+	defer adm.Release()
+	b, out, err := c.buildExpunge(ctx, cand, s, adm, p, cut, cap, grace, drops, limits)
+	if err != nil {
+		return out, err
+	}
+	defer b.sc.Remove()
+	adm.Release()
+	c.observeStage(stageBuild, buildBegan)
+	if err = c.fault(ctx, gitletfault.ExpungeAfterBuild, 0); err != nil {
+		return c.expungeFailed(cand, "build", err)
+	}
+
+	uploadBegan := c.now()
+	outs := slices.Concat(b.kept, b.dropping)
+	if out, err = c.uploadExpunge(ctx, cand, b.begin.ExpungeID, outs, p.size()); err != nil {
+		return out, err
+	}
+	// THE STORED REFS, each now naming its object: the kept first, then the
+	// dropping, as the build laid them out and the begin names them.
+	b.kept, b.dropping = outs[:len(b.kept)], outs[len(b.kept):]
+	b.begin.Add, b.begin.Dropping = refs(b.kept), refs(b.dropping)
+	c.observeStage(stageUpload, uploadBegan)
+
+	beginBegan := c.now()
+	res, err := c.o.Estate.Expunge(ctx, gitlet.ExpungeProposal{Begin: &b.begin})
+	if err != nil {
+		return c.expungeFailed(cand, "begin", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		return c.expungeAnswered(cand, b.begin.ExpungeID, "begin", res)
+	}
+	// EVERY OUTPUT IS PRESENT AT ONCE, linked from the scratch, which goes only
+	// after: the kept packs live, as a compaction's outputs are, and the
+	// dropping packs into the copy's dropping view, as their rows place them
+	// — never objects/pack, where a push could rely on one — so the rescue's
+	// sync finds every pack the begin added installed and downloads none: up
+	// to ExpungeInputByteCap of GETs a cycle otherwise, of the cruft this
+	// node's disk held a moment before, which the commit retires minutes
+	// later. Every other Gitlet node installs both from the store by its next
+	// round. An adoption that fails costs that round the GETs, never the
+	// cycle.
+	if len(b.kept) > 0 {
+		if err := c.o.Cache.Adopt(ctx, cand.ID, b.sc, refs(b.kept)...); err != nil {
+			c.log.Warn("code_expunge_adopt_failed", "repo", cand.Name, "expunge", b.begin.ExpungeID, "error", err)
+		}
+	}
+	if len(b.dropping) > 0 {
+		if err := c.o.Cache.AdoptDropping(ctx, cand.ID, b.sc, refs(b.dropping)...); err != nil {
+			c.log.Warn("code_expunge_adopt_failed", "repo", cand.Name, "expunge", b.begin.ExpungeID, "error", err)
+		}
+	}
+	c.log.Info("code_expunge_begun", "repo", cand.Name, "expunge", b.begin.ExpungeID, "request", cand.Request,
+		"inputs", len(p.inputs), "kept", len(b.kept), "dropping", len(b.dropping),
+		"dropped_layers", len(b.begin.DropLayers), "epoch", b.begin.DropEpoch, "position", res.Position.String())
+	c.observeStage(stageBegin, beginBegan)
+	if err := c.fault(ctx, gitletfault.ExpungeAfterBegin, 0); err != nil {
+		return c.expungeFailed(cand, "rescue", err)
+	}
+	b.sc.Remove()
+	s.Release()
+	released = true
+	return c.finish(ctx, cand, openExpunge{id: b.begin.ExpungeID, epoch: b.begin.DropEpoch,
+		request: cand.Request, grace: grace, floor: res.Position, scanTips: b.tips})
+}
+
+// expungeBuilt is one build of an expunge's begin, laid out and checked: the
+// scratch that holds its outputs, its kept and its dropping packs, the tips
+// it kept what they reach of, and the begin that names them.
+type expungeBuilt struct {
+	sc             *cache.Scratch
+	kept, dropping []output
+	tips           []string
+	begin          gitlet.ExpungeBegin
+}
+
+// buildExpunge builds p at cut ([Compactor.sortExpunge]) and holds the result
+// to the builds' own count and to the bundle rule — rebuilding ONCE, in a
+// scratch of its own under an expunge id of its own, at the densest
+// offender's ratio, the inputs capped again at that cut's
+// [ExpungeInputByteCap] — and then to every rule of the begin. cap is the pack
+// bytes p was capped at, which a failure halves. On an error the scratch is
+// gone, and the outcome is the expunge's.
+func (c *Compactor) buildExpunge(ctx context.Context, cand gitlet.ExpungeCandidate, s cache.Synced,
+	adm *cache.Admission, p planned, cut, cap int64, grace time.Duration, drops []string,
+	limits gitlet.Limits) (expungeBuilt, Outcome, error) {
+
+	b, err := c.sortExpunge(ctx, s, adm, p, cut, drops, limits)
+	if err != nil {
+		return expungeBuilt{}, c.expungeFailedOnly(cand, "build", err), err
+	}
+	if out, holdErr := c.expungeCountHolds(cand, b, p, cap); holdErr != nil {
+		return expungeBuilt{}, out, holdErr
+	}
+	if ratio := pastBound(slices.Concat(b.kept, b.dropping), c.bounds.maxBundle); ratio > 0 {
+		b.sc.Remove()
+		cut = int64(float64(c.bounds.cut) / ratio)
+		if at := ExpungeInputByteCap(cut); at < cap {
+			p, cap = p.recapExpunge(at), at
+		}
+		if b, err = c.sortExpunge(ctx, s, adm, p, cut, drops, limits); err != nil {
+			return expungeBuilt{}, c.expungeFailedOnly(cand, "build", err), err
+		}
+		if out, holdErr := c.expungeCountHolds(cand, b, p, cap); holdErr != nil {
+			return expungeBuilt{}, out, holdErr
+		}
+		if pastBound(slices.Concat(b.kept, b.dropping), c.bounds.maxBundle) > 0 {
+			b.sc.Remove()
+			c.expungeCapFailed(cand, p, cap, reasonBundleTooLarge, len(b.kept)+len(b.dropping))
+			return expungeBuilt{}, OutcomeFailed, errBundleTooLarge
+		}
+	}
+	retiring := make(map[string]bool, len(p.inputs))
+	for _, in := range p.inputs {
+		retiring[in.checksum] = true
+	}
+	b.begin = gitlet.ExpungeBegin{RepoID: cand.ID, ExpungeID: b.begin.ExpungeID, RequestID: cand.Request,
+		Node: c.o.NodeID, Seen: s.Position, DropEpoch: s.Repo.DropEpoch + 1, Grace: grace, Retire: p.ids(),
+		Add: refs(b.kept), Dropping: refs(b.dropping),
+		DropLayers: gitlet.LayersOver(c.o.Cache.Chain(s).Rows, retiring)}
+	if err := (gitlet.ExpungeProposal{Begin: &b.begin}).ValidateUnstored(); err != nil {
+		// THE BUILDER'S OWN BUG — every rule above passed and one of its
+		// committer's did not — refused before any byte is stored.
+		b.sc.Remove()
+		c.log.Error("code_expunge_invalid", "repo", cand.Name, "expunge", b.begin.ExpungeID, "error", err)
+		return expungeBuilt{}, OutcomeFailed, err
+	}
+	return b, "", nil
+}
+
+// sortExpunge is one build of p's begin at cut, in a scratch made for it
+// under an expunge id minted for it: its tips — the copy's refs as the
+// scratch linked them, and every drop of drops the scratch holds — its kept
+// packs and its dropping packs, laid out in that order under the id's
+// derivation, the kept first. On an error the scratch is removed.
+//
+// AN INPUT SET THE REST HOLDS WHOLE writes neither kept nor dropping packs —
+// every object of the inputs lies in another live pack too — and a begin
+// writes at least one output: so the dropping build is made again over the
+// inputs less the kept packs alone, every object of it held live by the rest
+// as well, which the commit then retires and nothing reaches past it.
+func (c *Compactor) sortExpunge(ctx context.Context, s cache.Synced, adm *cache.Admission, p planned, cut int64,
+	drops []string, limits gitlet.Limits) (expungeBuilt, error) {
+
+	xid := statelog.NewOpID(c.now(), "")
+	sc, err := c.o.Cache.StageExpunge(ctx, s, xid, p.checksums())
+	if err != nil {
+		return expungeBuilt{}, err
+	}
+	b, err := c.sortIn(ctx, s, sc, xid, adm, p, cut, drops, limits)
+	if err != nil {
+		sc.Remove()
+		return expungeBuilt{}, err
+	}
+	return b, nil
+}
+
+// sortIn is sortExpunge's build in sc.
+func (c *Compactor) sortIn(ctx context.Context, s cache.Synced, sc *cache.Scratch, xid string,
+	adm *cache.Admission, p planned, cut int64, drops []string, limits gitlet.Limits) (expungeBuilt, error) {
+
+	refTips, err := sc.RefTips()
+	if err != nil {
+		return expungeBuilt{}, err
+	}
+	held, err := c.present(ctx, adm, sc, drops)
+	if err != nil {
+		return expungeBuilt{}, err
+	}
+	tips := union(refTips, held)
+	var keep strings.Builder
+	for _, oid := range tips {
+		keep.WriteString(oid + "\n")
+	}
+	kept, err := c.packOut(ctx, adm, gitproc.Cmd{
+		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassMaintenance,
+		Args: []string{"pack-objects", "--revs", "--local", "--non-empty",
+			"--max-pack-size=" + strconv.FormatInt(cut, 10), "--delta-base-offset", "--quiet", "objects/pack/pack"},
+		Stdin:  strings.NewReader(keep.String()),
+		Config: PackConfig(limits.MaxBlobBytes),
+		// THE WALK FROM EVERY TIP reads the repository's whole history,
+		// whatever few packs the inputs are: a deadline sized by them alone
+		// would cut a large repository's walk short.
+		Deadline: gitproc.PackWorkDeadline(p.packBytes()) + gitproc.HistoryWalk(s.Repo.LiveObjects),
+	})
+	if err != nil {
+		return expungeBuilt{}, fmt.Errorf("compact: pack what a ref reaches of %d packs: %w", len(p.inputs), err)
+	}
+	rest, err := sc.StorePacks()
+	if err != nil {
+		return expungeBuilt{}, err
+	}
+	dropping, err := c.packDropping(ctx, adm, sc, p, kept, rest, cut, limits)
+	if err != nil {
+		return expungeBuilt{}, err
+	}
+	if len(kept)+len(dropping) == 0 {
+		if dropping, err = c.packDropping(ctx, adm, sc, p, nil, nil, cut, limits); err != nil {
+			return expungeBuilt{}, err
+		}
+		if len(dropping) == 0 {
+			return expungeBuilt{}, errNothingKept
+		}
+	}
+	b := expungeBuilt{sc: sc, tips: tips, begin: gitlet.ExpungeBegin{ExpungeID: xid}}
+	if b.kept, err = layOutputs(sc, xid, 0, kept); err != nil {
+		return expungeBuilt{}, err
+	}
+	if b.dropping, err = layOutputs(sc, xid, len(kept), dropping); err != nil {
+		return expungeBuilt{}, err
+	}
+	return b, nil
+}
+
+// packDropping packs p's inputs less the packs excluded — the kept packs and
+// the rest, both excluded, so the name-hash walk `--stdin-packs` makes stops
+// at their objects rather than running the history (doc.go's NOTHING BUT THE
+// INPUTS IN REACH) — and answers what it printed.
+func (c *Compactor) packDropping(ctx context.Context, adm *cache.Admission, sc *cache.Scratch, p planned,
+	kept, rest []string, cut int64, limits gitlet.Limits) ([]string, error) {
+
+	var list strings.Builder
+	for _, in := range p.inputs {
+		list.WriteString("pack-" + in.checksum + ".pack\n")
+	}
+	for _, cs := range slices.Concat(kept, rest) {
+		list.WriteString("^pack-" + cs + ".pack\n")
+	}
+	printed, err := c.packOut(ctx, adm, gitproc.Cmd{
+		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassMaintenance,
+		Args: []string{"pack-objects", "--stdin-packs", "--non-empty",
+			"--max-pack-size=" + strconv.FormatInt(cut, 10), "--delta-base-offset", "--quiet", "objects/pack/pack"},
+		Stdin:    strings.NewReader(list.String()),
+		Config:   PackConfig(limits.MaxBlobBytes),
+		Deadline: gitproc.PackWorkDeadline(p.packBytes()),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compact: pack what no ref reaches of %d packs: %w", len(p.inputs), err)
+	}
+	return printed, nil
+}
+
+// packOut runs one pack-objects of an expunge in the admission's reserved slot
+// and answers the checksums it printed, one an output, in the order it wrote
+// them — none where `--non-empty` found nothing to pack.
+func (c *Compactor) packOut(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) ([]string, error) {
+	res, err := adm.Run(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	var printed []string
+	lines := bufio.NewScanner(bytes.NewReader(res.Stdout))
+	for lines.Scan() {
+		cs := strings.TrimSpace(lines.Text())
+		if !gitref.ValidOID(cs) {
+			return nil, fmt.Errorf("compact: pack-objects printed %q where it names a pack it wrote", cs)
+		}
+		printed = append(printed, cs)
+	}
+	return printed, lines.Err()
+}
+
+// present is every one of oids the scratch holds, in their order: ONE
+// `cat-file --batch-check` over them. A drop's object a purge has already
+// taken out of the repository is no tip — a walk from it would refuse the
+// whole build — and nothing else it reached is either: what it reached that a
+// ref still reaches, the ref keeps.
+func (c *Compactor) present(ctx context.Context, adm *cache.Admission, sc *cache.Scratch,
+	oids []string) ([]string, error) {
+
+	if len(oids) == 0 {
+		return nil, nil
+	}
+	var in strings.Builder
+	for _, oid := range oids {
+		in.WriteString(oid + "\n")
+	}
+	res, err := adm.Run(ctx, gitproc.Cmd{
+		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassMaintenance,
+		Args:     []string{"cat-file", "--batch-check=%(objectname)"},
+		Stdin:    strings.NewReader(in.String()),
+		Deadline: gitproc.ReadDeadline + gitproc.HistoryWalk(int64(len(oids))),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compact: read which of %d dropped objects the copy holds: %w", len(oids), err)
+	}
+	var out []string
+	lines := bufio.NewScanner(bytes.NewReader(res.Stdout))
+	for lines.Scan() {
+		line := lines.Text()
+		if oid, missing := strings.CutSuffix(line, " missing"); missing {
+			if !gitref.ValidOID(oid) {
+				return nil, fmt.Errorf("compact: cat-file answered %q for a dropped object", line)
+			}
+			continue
+		}
+		if !gitref.ValidOID(line) {
+			return nil, fmt.Errorf("compact: cat-file answered %q for a dropped object", line)
+		}
+		out = append(out, line)
+	}
+	return out, lines.Err()
+}
+
+// layOutputs lays out the packs a build printed, in the order it printed them,
+// under the rewrite id's derived ids from the from-th on: each output's
+// sections' sizes from its files and its object count from its index
+// (gitlet.LayBundle). Every one it printed must be a pack the scratch holds.
+func layOutputs(sc *cache.Scratch, id string, from int, printed []string) ([]output, error) {
+	outs := make([]output, len(printed))
+	for n, cs := range printed {
+		path := filepath.Join(sc.Dir, "objects", "pack", "pack-"+cs+".pack")
+		ref, err := gitlet.LayBundle(gitlet.DeriveOutputPackID(id, from+n), path, cs)
+		if err != nil {
+			return nil, fmt.Errorf("compact: lay out output %d: %w", from+n, err)
+		}
+		outs[n] = output{path: path, ref: *ref}
+	}
+	return outs, nil
+}
+
+// expungeCountHolds holds a begin's build to its own count — the kept and
+// dropping packs together at most what one begin records
+// (gitlet.MaxExpungeOutputs) — and past it nothing is uploaded, the scratch is
+// removed and the repository's cap is halved.
+func (c *Compactor) expungeCountHolds(cand gitlet.ExpungeCandidate, b expungeBuilt, p planned,
+	cap int64) (Outcome, error) {
+
+	n := len(b.kept) + len(b.dropping)
+	if n <= gitlet.MaxExpungeOutputs {
+		return "", nil
+	}
+	b.sc.Remove()
+	c.expungeCapFailed(cand, p, cap, reasonOutputs, n)
+	return OutcomeFailed, errOutputs
+}
+
+// expungeCapFor is the pack bytes repoID's next cycle is capped at: its
+// halved cap where a build of it wrote too many outputs or too large a bundle,
+// else [ExpungeInputByteCap] of the nominal cut.
+func (c *Compactor) expungeCapFor(repoID string) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cap, ok := c.expungeCaps[repoID]; ok {
+		return cap
+	}
+	return ExpungeInputByteCap(c.bounds.cut)
+}
+
+// expungeCapFailed halves cand's cap after a build of p, capped at cap, failed
+// for reason — half what the build rewrote, floored at its lightest input,
+// since one pack is a cycle — and logs it.
+func (c *Compactor) expungeCapFailed(cand gitlet.ExpungeCandidate, p planned, cap int64, reason string,
+	outputs int) {
+
+	floor := p.inputs[0].packBytes
+	was := min(cap, p.packBytes())
+	c.mu.Lock()
+	c.expungeCaps[cand.ID] = max(was/2, floor)
+	next := c.expungeCaps[cand.ID]
+	c.mu.Unlock()
+	c.log.Warn("code_expunge_failed", "repo", cand.Name, "step", "build", "reason", reason,
+		"inputs", len(p.inputs), "outputs", outputs, "most_outputs", gitlet.MaxExpungeOutputs,
+		"input_bytes", p.packBytes(), "next_cap", next, "at_floor", was <= floor)
+}
+
+// uploadExpunge stores every output of a build at once, as a compaction's are
+// stored. A store with no room holds the repository back until it has room —
+// estimate the bytes the build would store — and refuses the expunge; any
+// other failure is the next pass's.
+func (c *Compactor) uploadExpunge(ctx context.Context, cand gitlet.ExpungeCandidate, id string, outs []output,
+	estimate int64) (Outcome, error) {
+
+	uploads := make([]func(context.Context) error, len(outs))
+	for i := range outs {
+		o := &outs[i]
+		uploads[i] = func(ctx context.Context) error { return gitlet.StoreBundle(ctx, c.o.Objects, o.path, &o.ref, nil) }
+	}
+	err := uploadAll(ctx, uploads)
+	if full, ok := storeFull(err); ok {
+		c.holdFull(expungeLoop, cand.ID, estimate)
+		c.log.Warn("code_expunge_refused", "repo", cand.Name, "expunge", id, "reason", reasonStoreFull,
+			"bytes", estimate, "error", err,
+			"detail", fmt.Sprintf("the object store has no room for this expunge's packs; it is built again "+
+				"once %s", full.Remedy))
+		return OutcomeRefused, err
+	}
+	if err != nil {
+		var bad *gitlet.BadBundle
+		if errors.As(err, &bad) {
+			c.log.Error("code_expunge_rejected", "repo", cand.Name, "expunge", id, "object", bad.Object.String(),
+				"error", bad.Err)
+		}
+		return c.expungeFailed(cand, "upload", err)
+	}
+	c.stored(ctx, expungeLoop, cand.ID)
+	return "", nil
+}
+
+// finish rescues and commits the expunge open on cand's repository, from the
+// rows alone where the cycle that began it is not the one asking:
+//
+//  1. SYNC at session, floored at the begin's position — or at the version
+//     the listing read where the expunge was found open — so the copy holds
+//     every dropping pack the begin left: refused busy where the copy's
+//     objects/ still holds the begin's inputs, which would hide from the
+//     rescue every object it must save (cache.ErrInputsLeaving).
+//  2. RESCUE, where any pack is dropping, in a scratch of the dropping packs
+//     leaning on the copy's live packs, its refs linked from the copy
+//     (cache.Cache.StageRescue): `pack-objects --revs --local` from every ref
+//     and every drop the grace keeps and what rows hold in flight
+//     ([keptTips]), `--not` the tips the scan kept where the
+//     cycle still holds them — what a tip reaches of the dropping packs alone,
+//     which only a push landed between the scan and the begin can reach.
+//     VALID AT ANY POSITION AT OR AFTER THE BEGIN: a push checked after the
+//     begin relies on no dropping object — its receiver's view leaves them
+//     out — and one checked before it is refused `expunging` (the drop
+//     epoch), so nothing that lands after the begin reaches a dropping object
+//     the refs at the rescue's sync did not; and so a crash anywhere resumes
+//     from the rows, the scan's tips unknown and the walk the whole history's.
+//  3. COMMIT, proposed to the repository's committer: the dropping packs, every
+//     one, retired into code_packs_retired for gitlet.RetireGrace, the rescue
+//     added live — its one precondition its expunge, open at its epoch, so no
+//     push starves it — and, applied, the rescue adopted.
+func (c *Compactor) finish(ctx context.Context, cand gitlet.ExpungeCandidate, open openExpunge) (Outcome, error) {
+	began := c.now()
+	s, err := c.o.Cache.Sync(ctx, cand.ID, statelog.FloorAt(statelog.ReadSession, open.floor))
+	if err != nil {
+		return c.expungeFailed(cand, "sync", err)
+	}
+	defer s.Release()
+	epoch := s.Repo.DropEpoch
+	switch {
+	case open.epoch != 0 && epoch != open.epoch:
+		c.log.Debug("code_expunge_stale", "repo", cand.Name, "expunge", open.id, "reason", reasonEpoch,
+			"epoch", epoch, "want", open.epoch)
+		return OutcomeStale, fmt.Errorf("compact: %s is at drop epoch %d and expunge %s began %d", cand.Name,
+			epoch, open.id, open.epoch)
+	case s.DropEpoch != epoch:
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "expunge", open.id, "reason", reasonInputs,
+			"detail", "the copy's objects/ still holds the inputs of the begin; the next pass syncs again")
+		return OutcomeBusy, cache.ErrInputsLeaving
+	}
+	dropping, err := c.o.Cache.DroppingPacks(s)
+	switch {
+	case errors.Is(err, cache.ErrSuperseded):
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "expunge", open.id, "reason", reasonSuperseded,
+			"error", err)
+		return OutcomeBusy, err
+	case err != nil:
+		return c.expungeFailed(cand, "dropping packs", err)
+	}
+	// BEGUN FROM HERE: this node's copy is past the begin, which retired
+	// every input, and the dropping packs are read, so the repository's
+	// compactions here build beside the rescue and the commit as though no
+	// expunge ran — a compaction never takes a dropping pack, and the commit's
+	// one precondition is its expunge open at its epoch ([expungeClaim]).
+	c.beganExpunge(cand.ID)
+	commit := gitlet.ExpungeCommit{RepoID: cand.ID, ExpungeID: open.id, CommitID: statelog.NewOpID(c.now(), ""),
+		RequestID: open.request, Node: c.o.NodeID, Seen: s.Position, DropEpoch: epoch}
+	var droppedBytes, droppingObjects int64
+	for _, p := range dropping {
+		commit.Retire = append(commit.Retire, p.PackID)
+		droppedBytes += p.Size
+		droppingObjects += p.Objects
+	}
+	rescue, sc, out, err := c.rescue(ctx, cand, s, open, commit.CommitID, droppingObjects, dropping)
+	if err != nil {
+		return out, err
+	}
+	if sc != nil {
+		defer sc.Remove()
+	}
+	commit.Add = refs(rescue)
+	if err = (gitlet.ExpungeProposal{Commit: &commit}).ValidateUnstored(); err != nil {
+		c.log.Error("code_expunge_invalid", "repo", cand.Name, "expunge", open.id, "commit", commit.CommitID,
+			"error", err)
+		return OutcomeFailed, err
+	}
+	if out, err = c.uploadExpunge(ctx, cand, open.id, rescue, outputBytes(rescue)); err != nil {
+		return out, err
+	}
+	for i, o := range rescue {
+		commit.Add[i] = o.ref
+	}
+	if err = c.fault(ctx, gitletfault.ExpungeAfterRescueUpload, 0); err != nil {
+		return c.expungeFailed(cand, "commit", err)
+	}
+	c.observeStage(stageRescue, began)
+
+	commitBegan := c.now()
+	res, err := c.o.Estate.Expunge(ctx, gitlet.ExpungeProposal{Commit: &commit})
+	if err != nil {
+		return c.expungeFailed(cand, "commit", err)
+	}
+	if err := c.fault(ctx, gitletfault.ExpungeAfterCommit, 0); err != nil {
+		return c.expungeFailed(cand, "adopt", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		return c.expungeAnswered(cand, open.id, "commit", res)
+	}
+	if len(rescue) > 0 {
+		if err := c.o.Cache.Adopt(ctx, cand.ID, sc, commit.Add...); err != nil {
+			c.log.Warn("code_expunge_adopt_failed", "repo", cand.Name, "expunge", open.id, "error", err)
+		}
+	}
+	dropped := max(droppedBytes-outputBytes(rescue), 0)
+	if c.o.Metrics != nil {
+		c.o.Metrics.Add(metrics.CodeExpungeDroppedBytes, uint64(dropped), nil)
+	}
+	c.observeStage(stageCommit, commitBegan)
+	c.log.Info("code_expunge_committed", "repo", cand.Name, "expunge", open.id, "request", open.request,
+		"retired", len(commit.Retire), "rescued", len(rescue), "dropped_bytes", dropped,
+		"position", res.Position.String(), "resumed", open.scanTips == nil)
+	c.announceExpunged(ctx, types.CodeExpunged{RepoID: cand.ID, RepoName: s.Repo.Name, Request: open.request,
+		Expunge: open.id, DroppedObjects: max(droppingObjects-outputObjects(rescue), 0), DroppedBytes: dropped,
+		Position: res.Position.String(), StoreUntil: storeUntil(c.now())})
+	return OutcomeApplied, nil
+}
+
+// storeUntil is the latest the object store keeps the packs an expunge
+// committed at committed retired, on a healthy fleet: gitlet.RetireGrace, the
+// retired rows' grace that lets a clone already reading one finish; then up
+// to gitlet.RetentionInterval, the code-retention duty's cadence, for its
+// retire_sweep to remove their rows; then up to collect.CollectInterval for
+// the collector's next pass to delete what no row names. The collector's own
+// grace for an object nothing names (collect.PendingGrace) adds nothing: it
+// runs from the object's key minted and its upload, and every dropping pack
+// was minted and stored by the expunge's build before its begin, so before
+// the commit — by the time the retired grace has passed after the commit, the
+// pending one, which is no longer, has passed too.
+func storeUntil(committed time.Time) time.Time {
+	return committed.UTC().Add(gitlet.RetireGrace + gitlet.RetentionInterval + collect.CollectInterval)
+}
+
+// The collector's pending grace is never past the retired rows' grace, which
+// [storeUntil] relies on to leave it out: were collect.PendingGrace ever
+// longer than gitlet.RetireGrace this constant would overflow, and the build
+// fail.
+const _ = uint64(gitlet.RetireGrace - collect.PendingGrace)
+
+// announceExpunged publishes an applied expunge commit's account
+// (code_expunged) on this node's event stream, bounded by [eventBudget]; a
+// stream that does not take it is logged, and the commit stands.
+func (c *Compactor) announceExpunged(ctx context.Context, ev types.CodeExpunged) {
+	if c.o.Events == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), eventBudget)
+	defer cancel()
+	e := events.New(ev, events.TraceContext{})
+	e.Source = c.o.NodeID
+	if err := c.o.Events.Publish(ctx, topics.Event(e.Type), e); err != nil {
+		c.log.Warn("code_expunged_unpublished", "repo", ev.RepoName, "expunge", ev.Expunge, "error", err.Error(),
+			"detail", "the event log does not hold this expunge; the repository's detail names it as its latest")
+	}
+}
+
+// rescue builds the rescue of the expunge open on s's repository, where any
+// pack is dropping ([Compactor.finish], step 2), and answers its outputs and
+// the scratch that holds them — none of either where nothing is dropping, or
+// where nothing dropping is reached. On an error the scratch is gone, and the
+// outcome is the expunge's.
+func (c *Compactor) rescue(ctx context.Context, cand gitlet.ExpungeCandidate, s cache.Synced, open openExpunge,
+	cid string, objects int64, dropping []gitlet.PackRow) ([]output, *cache.Scratch, Outcome, error) {
+
+	if len(dropping) == 0 {
+		return nil, nil, "", nil
+	}
+	drops, err := c.keptTips(ctx, cand.ID, s.Position, c.now().Add(-open.grace))
+	if err != nil {
+		return nil, nil, c.expungeFailedOnly(cand, "rescue", err), err
+	}
+	limits := c.o.Limits()
+	adm, err := c.o.Cache.AdmitExpunge(s, objects, limits)
+	switch {
+	case errors.Is(err, gitproc.ErrBusy):
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "error", err)
+		return nil, nil, OutcomeBusy, err
+	case errors.Is(err, cache.ErrNoMemory):
+		c.log.Warn("code_expunge_refused", "repo", cand.Name, "reason", reasonMemory, "error", err)
+		return nil, nil, OutcomeRefused, err
+	case err != nil:
+		return nil, nil, c.expungeFailedOnly(cand, "admit", err), err
+	}
+	defer adm.Release()
+	sc, err := c.o.Cache.StageRescue(ctx, s, cid)
+	if errors.Is(err, cache.ErrInputsLeaving) {
+		return nil, nil, OutcomeBusy, err
+	}
+	if err != nil {
+		return nil, nil, c.expungeFailedOnly(cand, "rescue", err), err
+	}
+	var packBytes int64
+	for _, p := range dropping {
+		packBytes += p.Ref().PackBytes()
+	}
+	cut := c.bounds.cutFor(planned{inputs: rescueInputs(dropping)})
+	outs, err := c.rescueIn(ctx, s, sc, adm, open, cid, cut, packBytes, drops, limits)
+	if err == nil && pastBound(outs, c.bounds.maxBundle) > 0 {
+		// ONE REBUILD, at the densest offender's ratio, in a scratch of its
+		// own: the first's outputs are its files.
+		ratio := pastBound(outs, c.bounds.maxBundle)
+		sc.Remove()
+		if sc, err = c.o.Cache.StageRescue(ctx, s, cid); err == nil {
+			outs, err = c.rescueIn(ctx, s, sc, adm, open, cid, int64(float64(c.bounds.cut)/ratio), packBytes, drops,
+				limits)
+		}
+		if err == nil && pastBound(outs, c.bounds.maxBundle) > 0 {
+			err = errBundleTooLarge
+		}
+	}
+	if err == nil && len(outs) > gitlet.MaxExpungeOutputs {
+		err = errOutputs
+	}
+	if err != nil {
+		if sc != nil {
+			sc.Remove()
+		}
+		return nil, nil, c.expungeFailedOnly(cand, "rescue", err), err
+	}
+	adm.Release()
+	return outs, sc, "", nil
+}
+
+// rescueIn is one build of a rescue in sc at cut: its tips — the copy's refs
+// as the scratch linked them and every drop of drops the copy holds — `--not`
+// the scan's tips where the cycle holds them, laid out under cid's
+// derivation.
+func (c *Compactor) rescueIn(ctx context.Context, s cache.Synced, sc *cache.Scratch, adm *cache.Admission,
+	open openExpunge, cid string, cut, packBytes int64, drops []string, limits gitlet.Limits) ([]output, error) {
+
+	refTips, err := sc.RefTips()
+	if err != nil {
+		return nil, err
+	}
+	// THE SCAN'S TIPS ARE HELD TO THE SCRATCH TOO: each is in a live pack —
+	// what a scan kept is — but a `--not` naming an object the scratch lacks
+	// would refuse the build, and an existence check costs a lookup a tip.
+	held, err := c.present(ctx, adm, sc, slices.Concat(drops, open.scanTips))
+	if err != nil {
+		return nil, err
+	}
+	scanned := map[string]bool{}
+	for _, oid := range open.scanTips {
+		scanned[oid] = true
+	}
+	var tips, not []string
+	for _, oid := range held {
+		if scanned[oid] {
+			not = append(not, oid)
+		} else {
+			tips = append(tips, oid)
+		}
+	}
+	var in strings.Builder
+	for _, oid := range union(refTips, tips) {
+		in.WriteString(oid + "\n")
+	}
+	if len(not) > 0 {
+		in.WriteString("--not\n")
+		for _, oid := range union(nil, not) {
+			in.WriteString(oid + "\n")
+		}
+	}
+	printed, err := c.packOut(ctx, adm, gitproc.Cmd{
+		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassMaintenance,
+		Args: []string{"pack-objects", "--revs", "--local", "--non-empty",
+			"--max-pack-size=" + strconv.FormatInt(cut, 10), "--delta-base-offset", "--quiet", "objects/pack/pack"},
+		Stdin:  strings.NewReader(in.String()),
+		Config: PackConfig(limits.MaxBlobBytes),
+		// THE WALK IS THE WHOLE HISTORY's where the scan's tips are not
+		// known — a cycle resumed — and what moved since the scan otherwise.
+		Deadline: gitproc.PackWorkDeadline(packBytes) + gitproc.HistoryWalk(s.Repo.LiveObjects),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compact: pack what a ref reaches of the dropping packs: %w", err)
+	}
+	return layOutputs(sc, cid, 0, printed)
+}
+
+// rescueInputs is the dropping rows as a plan's packs: what the rescue's cut
+// is scaled by, as a build's is by its inputs ([bounds.cutFor]).
+func rescueInputs(dropping []gitlet.PackRow) []pack {
+	out := make([]pack, len(dropping))
+	for i, p := range dropping {
+		out[i] = pack{checksum: p.GitChecksum, ids: []string{p.PackID}, objects: p.Objects,
+			packBytes: p.Ref().PackBytes(), size: p.Size}
+	}
+	return out
+}
+
+// keptTips is every object an expunge of repoID keeps beside its refs — the
+// `expunge_tips` read, every page, at session floored at at, so the rows of
+// every record the copy it is read beside holds are in it — each once: what a
+// ref drop left since since, and, whatever since is, what rows hold in flight
+// (M6-D2) — every revision head of a draft or open change, every live queue
+// entry's head, every candidate's tip and every green row. So a purge, whose
+// since keeps no drop, still keeps an open change's force-pushed revisions and
+// the commit a pending landing moves its target onto.
+func (c *Compactor) keptTips(ctx context.Context, repoID string, at statelog.Position,
+	since time.Time) ([]string, error) {
+
+	q := gitlet.ReadQuery{Kind: gitlet.ReadExpungeTips, ExpungeTips: &gitlet.ExpungeTipsQuery{RepoID: repoID, Since: since},
+		Fresh: statelog.FloorAt(statelog.ReadSession, at)}
+	var out []string
+	for {
+		a, err := c.o.Estate.Read(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("compact: read the objects %s's ref drops left: %w", repoID, err)
+		}
+		out = append(out, a.Tips...)
+		if a.Next == "" {
+			return union(nil, out), nil
+		}
+		q.Cursor = a.Next
+	}
+}
+
+// due judges whether an expunge of cand on the maintainer's own schedule is
+// due, over the live packs its scan read (live) and the eligible files among
+// them — those a cycle may take ([scheduled]) — and the drops and rows in
+// flight its scan keeps (drops): by checksum, what each eligible file would
+// drop, and "" where the expunge is due — the cycle goes on — or the cycle's
+// outcome where it is not. The live bytes are the scan's reading, never a
+// second read of s: the repository's merges run beside the walk, and the swap
+// of a merge's round leaves the copy s pins no live set, which would read as
+// nothing live.
+//
+// DUE once the bytes of the ELIGIBLE files no tip reaches are MORE than
+// 1/gitlet.ExpungeShare of the repository's live pack bytes and at least the
+// bounds' expungeMin (gitlet.ExpungeMinBytes) — [expungeDue] — never what the
+// whole repository holds unreachable: garbage in a pack younger than the
+// grace is no byte any cycle now could free ([Compactor.unreachableIn]). What
+// a tip reaches is ONE WALK from every ref of the copy and every drop and row
+// in flight the scan keeps, run in the maintenance lane under an admission of
+// its own (cache.Cache.AdmitExpungeScan) — room for a walk of the whole
+// history, as the build's walk is charged, and the indexes it holds
+// ([indexBytes]), never the build's charge, since it sorts nothing — and
+// released before the build is admitted.
+//
+// Found NOT DUE, the repository is recorded judged ([Compactor.judgedClean]),
+// so a repository with little garbage is walked at most weekly.
+func (c *Compactor) due(ctx context.Context, cand gitlet.ExpungeCandidate, s cache.Synced, live []gitlet.PackRow,
+	eligible []pack, drops []string) (map[string]int64, Outcome, error) {
+
+	adm, err := c.o.Cache.AdmitExpungeScan(s, indexBytes(eligible))
+	switch {
+	case errors.Is(err, gitproc.ErrBusy):
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "error", err)
+		return nil, OutcomeBusy, err
+	case errors.Is(err, cache.ErrNoMemory):
+		c.log.Warn("code_expunge_refused", "repo", cand.Name, "reason", reasonMemory, "error", err)
+		return nil, OutcomeRefused, err
+	case err != nil:
+		return nil, c.expungeFailedOnly(cand, "admit", err), err
+	}
+	freed, err := c.unreachableIn(ctx, adm, s, eligible, drops)
+	adm.Release()
+	if err != nil {
+		return nil, c.expungeFailedOnly(cand, "scan", err), err
+	}
+	seen := map[string]bool{}
+	var liveBytes, unreachable int64
+	for _, row := range live {
+		if !seen[row.GitChecksum] {
+			seen[row.GitChecksum] = true
+			liveBytes += row.Ref().PackBytes()
+		}
+	}
+	for _, n := range freed {
+		unreachable += n
+	}
+	if !expungeDue(unreachable, liveBytes, c.bounds.expungeMin) {
+		c.judgedClean(ctx, cand, s.Position)
+		c.log.Debug("code_expunge_not_due", "repo", cand.Name, "live_bytes", liveBytes,
+			"unreachable_bytes", unreachable, "eligible", len(eligible),
+			"detail", "what no tip reaches of the packs older than the grace is under a quarter of the live "+
+				"bytes, or under the least an expunge frees; the repository is scanned again in a week")
+		return nil, OutcomeNotDue, nil
+	}
+	c.log.Info("code_expunge_due", "repo", cand.Name, "live_bytes", liveBytes, "unreachable_bytes", unreachable,
+		"eligible", len(eligible))
+	return freed, "", nil
+}
+
+// expungeDue reports whether unreachable bytes of a repository of live pack
+// bytes make an expunge on the maintainer's own schedule due: more than
+// 1/gitlet.ExpungeShare of them, and at least least.
+func expungeDue(unreachable, live, least int64) bool {
+	return unreachable >= least && unreachable*gitlet.ExpungeShare > live
+}
+
+// union is every object id of a and b, each once, sorted.
+func union(a, b []string) []string {
+	out := slices.Concat(a, b)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// expungeAnswered is what the committer's answer makes of a begin or a commit
+// that did not apply.
+func (c *Compactor) expungeAnswered(cand gitlet.ExpungeCandidate, id, record string,
+	res gitlet.ExpungeResult) (Outcome, error) {
+
+	switch res.Outcome {
+	case statelog.OutcomePending:
+		// The next pass's listing reads the rows as they are: a begin that
+		// applies is an expunge open, which the next pass finishes.
+		return OutcomePending, nil
+	case statelog.OutcomeUnknown:
+		return OutcomeUnknown, nil
+	}
+	refusal := fmt.Errorf("compact: the %s of expunge %s of %s refused %s: %s", record, id, cand.Name,
+		res.Refusal, res.Detail)
+	switch res.Refusal {
+	case gitlet.RefusalStale:
+		c.log.Debug("code_expunge_stale", "repo", cand.Name, "expunge", id, "record", record, "detail", res.Detail)
+		return OutcomeStale, refusal
+	case gitlet.RefusalBusy:
+		c.log.Debug("code_expunge_busy", "repo", cand.Name, "expunge", id, "record", record, "detail", res.Detail)
+		return OutcomeBusy, refusal
+	case gitlet.RefusalUnavailable:
+		return c.expungeFailed(cand, record, refusal)
+	}
+	c.log.Warn("code_expunge_refused", "repo", cand.Name, "expunge", id, "record", record,
+		"reason", string(res.Refusal), "detail", res.Detail)
+	return OutcomeRefused, refusal
+}
+
+// expungeFailed logs an expunge that failed at step and answers it failed.
+func (c *Compactor) expungeFailed(cand gitlet.ExpungeCandidate, step string, err error) (Outcome, error) {
+	return c.expungeFailedOnly(cand, step, err), err
+}
+
+// expungeFailedOnly logs an expunge that failed at step: failed.
+func (c *Compactor) expungeFailedOnly(cand gitlet.ExpungeCandidate, step string, err error) Outcome {
+	c.log.Warn("code_expunge_failed", "repo", cand.Name, "step", step, "error", err)
+	return OutcomeFailed
+}
+
+// countedExpunge records one expunge's outcome.
+func (c *Compactor) countedExpunge(o Outcome) {
+	if c.o.Metrics != nil {
+		c.o.Metrics.Add(metrics.CodeExpungeRuns, 1, metrics.Attrs{"outcome": string(o)})
+	}
+}
+
+// observeStage records how long one stage of an expunge took, from began.
+func (c *Compactor) observeStage(stage string, began time.Time) {
+	if c.o.Metrics != nil {
+		c.o.Metrics.Observe(metrics.CodeExpungeDuration, c.now().Sub(began), metrics.Attrs{"stage": stage})
+	}
+}
+
+// owed is which live packs one cycle of an expunge takes: a purge's, those
+// whose content dates from before the position its request landed at; or, on
+// the maintainer's own schedule, those whose newest content arrived at or
+// before an instant — its clock less gitlet.PruneGrace — and that hold bytes no
+// tip reaches, freed by checksum as its scan weighed them
+// ([Compactor.unreachableIn]).
+type owed struct {
+	schedule  bool
+	requested statelog.Position
+	arrivedBy time.Time
+	freed     map[string]int64
+}
+
+// requestedBefore is a purge's [owed]: the packs dated before its request.
+func requestedBefore(requested statelog.Position) owed { return owed{requested: requested} }
+
+// arrivedBy is the schedule's [owed]: the packs that arrived at or before at
+// and free something, by freed.
+func arrivedBy(at time.Time, freed map[string]int64) owed {
+	return owed{schedule: true, arrivedBy: at, freed: freed}
+}
+
+// file is one pack FILE of a repository's live rows — a checksum, all of its
+// rows together, as a compaction's plan weighs one — with the oldest of its
+// rows' content and the newest of their arrivals, unknown where one of its
+// rows' arrival is not known (zero: a pack a cache adopted before a round
+// served its row).
+type file struct {
+	pack
+	content, arrived int64
+	unknown          bool
+}
+
+// filesOf is live's files, in the order their first rows come, each with its
+// row ids sorted.
+func filesOf(live []gitlet.PackRow) []*file {
+	files := map[string]*file{}
+	var order []*file
+	for _, row := range live {
+		f := files[row.GitChecksum]
+		if f == nil {
+			f = &file{pack: pack{checksum: row.GitChecksum, objects: row.Objects, packBytes: row.Ref().PackBytes(),
+				size: row.Size}, content: row.Content.Packed()}
+			files[row.GitChecksum] = f
+			order = append(order, f)
+		}
+		f.ids = append(f.ids, row.PackID)
+		f.content = min(f.content, row.Content.Packed())
+		if row.Arrived.IsZero() {
+			f.unknown = true
+		} else {
+			f.arrived = max(f.arrived, row.Arrived.UnixNano())
+		}
+	}
+	for _, f := range order {
+		slices.Sort(f.ids)
+	}
+	return order
+}
+
+// ripe reports whether the schedule may take f at by: every row's arrival
+// known, and the newest at or before by — a file one of whose rows' arrival
+// is not known is passed over, the side the grace keeps whole.
+func (f *file) ripe(by time.Time) bool { return !f.unknown && f.arrived <= by.UnixNano() }
+
+// scheduled is every file of live the maintainer's own schedule may take at
+// by ([file.ripe]), earliest arrival first, the lowest row id breaking a tie:
+// the files its scan weighs ([Compactor.due]). PURE in its inputs.
+func scheduled(live []gitlet.PackRow, by time.Time) []pack {
+	var ripe []*file
+	for _, f := range filesOf(live) {
+		if f.ripe(by) {
+			ripe = append(ripe, f)
+		}
+	}
+	slices.SortFunc(ripe, func(a, b *file) int {
+		return cmp.Or(cmp.Compare(a.arrived, b.arrived), strings.Compare(a.ids[0], b.ids[0]))
+	})
+	out := make([]pack, len(ripe))
+	for i, f := range ripe {
+		out[i] = f.pack
+	}
+	return out
+}
+
+// planExpunge plans one cycle of an expunge over a repository whose live rows
+// are live, taking what o owes, its inputs capped at byteCap pack bytes —
+// PURE in those: every FILE ([file]) o owes, capped at gitlet.MaxExpungeInputs
+// row ids and at byteCap pack bytes — never below one file, since one pack
+// rewritten is a cycle. A FULL pack and a pack a published layer names are
+// inputs like any other: what an expunge drops may lie in any pack, and an
+// expunge is the one rewrite that takes them.
+//
+// A PURGE'S: every file one of whose rows dates its content from before the
+// request (gitlet.PackRow.Content: zero, a pack this node adopted whose row no
+// round has served yet, is read as older than every request, so a pack whose
+// date is not known is rewritten rather than passed over), oldest content
+// first. THE SCHEDULE'S: every file the schedule may take ([file.ripe]) that
+// frees a byte (o.freed), DENSEST FIRST — the most it frees for each byte it
+// rewrites, which every Gitlet node holding the repository downloads again —
+// then earliest arrival: a file that frees nothing is never rewritten,
+// however old. The lowest row id breaks a tie.
+func planExpunge(live []gitlet.PackRow, o owed, byteCap int64) planned {
+	var due []*file
+	for _, f := range filesOf(live) {
+		switch {
+		case !o.schedule && f.content < o.requested.Packed():
+			due = append(due, f)
+		case o.schedule && f.ripe(o.arrivedBy) && o.freed[f.checksum] > 0:
+			due = append(due, f)
+		}
+	}
+	density := func(f *file) float64 { return float64(o.freed[f.checksum]) / float64(max(f.packBytes, 1)) }
+	slices.SortFunc(due, func(a, b *file) int {
+		if o.schedule {
+			return cmp.Or(cmp.Compare(density(b), density(a)), cmp.Compare(a.arrived, b.arrived),
+				strings.Compare(a.ids[0], b.ids[0]))
+		}
+		return cmp.Or(cmp.Compare(a.content, b.content), strings.Compare(a.ids[0], b.ids[0]))
+	})
+	var out planned
+	var ids int
+	var packBytes int64
+	for _, f := range due {
+		if ids+len(f.ids) > gitlet.MaxExpungeInputs {
+			continue
+		}
+		if len(out.inputs) >= 1 && packBytes+f.packBytes > byteCap {
+			break
+		}
+		out.inputs = append(out.inputs, f.pack)
+		ids += len(f.ids)
+		packBytes += f.packBytes
+	}
+	out.due = len(out.inputs) > 0
+	return out
+}
+
+// recapExpunge is p's inputs capped again at maxBytes pack bytes, in their
+// order and never below the first — what a build cut smaller than the nominal
+// cut rewrites ([ExpungeInputByteCap] of that cut).
+func (p planned) recapExpunge(maxBytes int64) planned {
+	var out planned
+	var packBytes int64
+	for _, in := range p.inputs {
+		if len(out.inputs) >= 1 && packBytes+in.packBytes > maxBytes {
+			break
+		}
+		out.inputs = append(out.inputs, in)
+		packBytes += in.packBytes
+	}
+	out.due = len(out.inputs) > 0
+	return out
+}

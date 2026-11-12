@@ -208,11 +208,6 @@ func assistantRetentionOf(c *Company) time.Duration {
 	return c.Config.Assistant.Retention()
 }
 
-// assistantActor is the author of every assistant record the engine writes on
-// nobody's behalf: a retention purge and an erasure. The reaper's own name, so
-// an operator who finds a purge in the log finds the duty that made it.
-var assistantActor = iam.Actor{Name: trashreap.Name, Kind: iam.ActorSystem}
-
 // ownerItem prefixes the reaper's id of a person whose conversations their
 // erasure takes, beside a conversation's own id. A conversation's id is a uuid
 // and never begins with it.
@@ -304,7 +299,7 @@ func (a assistantTrash) PurgeTrashed(ctx context.Context, id string, cutoff time
 			return fmt.Errorf("%w: the reaper listed %q: %w", trashreap.ErrNotEligible, id, err)
 		}
 		res, err := a.writer.EraseOwner(ctx, assistantdomain.Call{
-			Owner: parsed, By: assistantActor, OpID: opID,
+			Owner: parsed, By: reaperActor, OpID: opID,
 		})
 		return reapAnswer(res, err)
 	}
@@ -312,7 +307,7 @@ func (a assistantTrash) PurgeTrashed(ctx context.Context, id string, cutoff time
 	if err != nil {
 		return fmt.Errorf("%w: the reaper listed %q: %w", trashreap.ErrNotEligible, id, err)
 	}
-	res, err := a.writer.PurgeInactive(ctx, assistantActor, opID, parsed, cutoff)
+	res, err := a.writer.PurgeInactive(ctx, reaperActor, opID, parsed, cutoff)
 	return reapAnswer(res, err, assistantdomain.ErrNotDue, assistantdomain.ErrNotFound,
 		assistantdomain.ErrPurged)
 }
@@ -391,7 +386,7 @@ func (e *Engine) runAssistantErasure(ctx context.Context) {
 				continue
 			}
 			if _, err := src.writer.EraseOwner(ctx, assistantdomain.Call{
-				Owner: parsed, By: assistantActor,
+				Owner: parsed, By: reaperActor,
 				OpID: statelog.NewOpID(time.Now(), "assistant-erasure"),
 			}); err != nil && ctx.Err() == nil {
 				log.WarnContext(ctx, "assistant_erasure_failed", "owner", owner,

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // A MERGE HOLDS THE FIRST LIMIT LINES, EACH ONCE: folded answer by answer, in
@@ -26,7 +26,7 @@ func TestAMergeHoldsTheFirstLimitLinesOnce(t *testing.T) {
 	for r := range 40 {
 		var hits []Hit
 		for l := range 12 {
-			hits = append(hits, Hit{Repo: fmt.Sprintf("r%02d", rng.IntN(40)), SearchHit: code.SearchHit{
+			hits = append(hits, Hit{Repo: fmt.Sprintf("r%02d", rng.IntN(40)), SearchHit: gitlet.SearchHit{
 				Path: fmt.Sprintf("p%d", rng.IntN(5)), Line: l + r}})
 		}
 		answers = append(answers, hits)
@@ -52,8 +52,8 @@ func TestAMergeHoldsTheFirstLimitLinesOnce(t *testing.T) {
 		}
 	}
 	m := newMerge(2)
-	one := Hit{Repo: "a", SearchHit: code.SearchHit{Path: "p", Line: 1}}
-	two := Hit{Repo: "a", SearchHit: code.SearchHit{Path: "p", Line: 2}}
+	one := Hit{Repo: "a", SearchHit: gitlet.SearchHit{Path: "p", Line: 1}}
+	two := Hit{Repo: "a", SearchHit: gitlet.SearchHit{Path: "p", Line: 2}}
 	m.fold([]Hit{one, two})
 	m.fold([]Hit{two})
 	if _, cut := m.lines(); cut {

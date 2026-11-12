@@ -53,7 +53,7 @@ func ClonePurposes() []ClonePurpose {
 func (p ClonePurpose) Valid() bool { return slices.Contains(ClonePurposes(), p) }
 
 // ClientGitFloor is the oldest git a box may reach Gitlet with:
-// Gitlet's CLIENT floor, internal/code/gitproc's ClientMinVersion, as
+// Gitlet's CLIENT floor, internal/gitlet/gitproc's ClientMinVersion, as
 // text. Spelled here because this package imports nothing of Gitlet,
 // and held equal to the floor by TestTheSandboxClientFloorIsGitprocs, so the
 // two cannot drift. That test is this package's rather than gitproc's: it
@@ -132,9 +132,9 @@ func CodingSteps(p Placement, repos []RunRepo) ([]SetupStep, error) {
 
 // monitorGitFloor is the oldest git whose file-system monitor [MonitorStep]
 // turns on: 2.55.0, the oldest git Gitlet runs on its own nodes
-// (internal/code/gitproc's NodeMinVersion), whose monitor watches a Linux
+// (internal/gitlet/gitproc's NodeMinVersion), whose monitor watches a Linux
 // checkout through inotify as the node pin's does — the git the engine's
-// measurements read it on (2.56.0, internal/code/host's
+// measurements read it on (2.56.0, internal/gitlet/host's
 // BenchmarkBoxWorktree). A box's git below it keeps git's default.
 const monitorGitFloor = "2.55.0"
 
@@ -172,7 +172,7 @@ const (
 // refuses it a watch DIES, after which every git command starts it again,
 // walks the tree adding watches until the kernel refuses one, and falls back
 // to reading the tree: worse than no monitor at every command, and taking
-// the user's whole remaining budget each time (internal/code/host's
+// the user's whole remaining budget each time (internal/gitlet/host's
 // BenchmarkBoxWorktree, its fsmonitor=starved arm, measured in
 // docs/concepts/code-sandbox.md's "What a clone costs"). The other half is
 // what the tree may grow by, and what the box's other watchers — its
@@ -243,7 +243,7 @@ END { exit !(seen && ok) }`
 // whole bundle even for a filtered clone. No `--reference --dissociate`: a
 // coding box holds no cache to borrow from, and a remote one never can — and a
 // copy borrowed and dissociated costs the box a repack of the whole history,
-// 47.8 s against the recipe's 13.0 at a gigabyte (internal/code/host's
+// 47.8 s against the recipe's 13.0 at a gigabyte (internal/gitlet/host's
 // BenchmarkBoxDissociate). A check's box on a Gitlet node fetches its one commit
 // as a remote box does ([CloneSingleSHA]): a borrow read in place for a
 // check's run is unbuilt (crewlet/crewlet#496), its benchmark to come first.
@@ -348,9 +348,9 @@ func wordsOf(r RunRepo) cloneWords {
 //
 // ONE BRANCH (--single-branch), BECAUSE A REPOSITORY'S BRANCHES ARE MOSTLY
 // OTHER SEATS' WORK. Every full_access seat that reads a repository pushes
-// its work there under refs/heads/seats/<its handle>/ (code.SeatNamespace),
+// its work there under refs/heads/seats/<its handle>/ (gitlet.SeatNamespace),
 // a branch for each work item it is given, and Gitlet advertises
-// every ref it holds, up to code.MaxRefsPerRepo live ones. git's default
+// every ref it holds, up to gitlet.MaxRefsPerRepo live ones. git's default
 // clone wants every branch and tag it is shown, so a box would be sent the
 // commits and trees of every seat's branch on top of its base's history,
 // keep each as a remote-tracking ref, and carry a fetch refspec that pulls
@@ -366,7 +366,7 @@ func wordsOf(r RunRepo) cloneWords {
 // (protocol v2's ls-refs, by the prefixes refs/heads/ and refs/tags/), about
 // eighty bytes a ref, once a clone — and no object of a branch it does not
 // want: beside ten thousand seats' branches the clone receives the objects
-// it receives beside none, and 0.8 MB more of listing (internal/code/host's
+// it receives beside none, and 0.8 MB more of listing (internal/gitlet/host's
 // BenchmarkBoxClone, its seats arms). A repository whose HEAD names a branch nobody has pushed yet —
 // one that holds only seats' branches — gives the clone no branch at all,
 // and the base, a seat's tip, arrives by its id like any base off the

@@ -6,9 +6,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -84,12 +84,12 @@ var (
 	_ worklet.DomainConsumer = domainFeed{}
 	_ doclet.DomainConsumer  = domainFeed{}
 	_ chatlet.DomainConsumer = domainFeed{}
-	_ code.DomainConsumer    = domainFeed{}
+	_ gitlet.DomainConsumer  = domainFeed{}
 )
 
 // Consume implements each feed-declaring domain's DomainConsumer —
 // [worklet.DomainConsumer], [doclet.DomainConsumer], [chatlet.DomainConsumer]
-// and [code.DomainConsumer].
+// and [gitlet.DomainConsumer].
 //
 // A GROUP THIS OPEN CREATES starts after the fleet's recorded floor
 // ([feedPosition.start]), and every open records the floor as it advances

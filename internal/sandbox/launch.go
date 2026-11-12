@@ -309,13 +309,17 @@ type LaunchRequest struct {
 	// person's authority to send the turn a note is decided on
 	// ([RunSteer.Seat]) — and BriefNotes the notes the job's brief carries,
 	// each sealed, which the write that opens the job records read by it
-	// ([PendingRun.BriefNotes]). HandedNotes are the notes the turn's first
-	// segment's box still held unread as the launch began, each sealed, which
-	// the same write files WAITING after them ([PendingRun.HandedNotes]). All
-	// written onto the record the launch opens, never anywhere else. Empty
-	// writes no anchor and files nothing.
+	// ([PendingRun.BriefNotes]). RetoldNotes are the notes the turn has read
+	// whose read the record marked unanswered, which the brief tells again,
+	// by ID: the same write records each read by the job, told again, where
+	// the record still marks it ([PendingRun.RetoldNotes]). HandedNotes are
+	// the notes the turn's first segment's box still held unread as the
+	// launch began, each sealed, which the same write files WAITING after them
+	// ([PendingRun.HandedNotes]). All written onto the record the launch
+	// opens, never anywhere else. Empty writes no anchor and files nothing.
 	SteerSeat   []byte
 	BriefNotes  []RunNote
+	RetoldNotes []RunNote
 	HandedNotes []RunNote
 
 	// Recorded is told the job's name the moment the store has written the
@@ -324,7 +328,7 @@ type LaunchRequest struct {
 	// that write the record holds the turn's notes, the brief's and the
 	// box's ([LaunchRequest.HandedNotes]), and a launch that fails after it
 	// ENDS the record, whose ending reports every one of them no job ran
-	// with ([PendingRun.UnreadNotes]); a launch that fails before it wrote
+	// with ([PendingRun.EndedNotes]); a launch that fails before it wrote
 	// nothing, and its notes are the caller's still. Nil tells nobody.
 	Recorded func(launchID string)
 
@@ -429,15 +433,34 @@ type OpenedJob struct {
 	// which reads the round's calls in that order: its record, the log its
 	// reviewer reads, and its submissions, where the last one made wins.
 	LastSeq int
+
+	// CallIDMeta is the `_meta` key the job's harness sends each of its calls'
+	// own ids under, as the runner that starts the job's box declares it
+	// ([CallIdentifier], [Manager.CallIDMeta]): what serves the box records
+	// each call's id by ([BridgeCall.CallID]), and "" where the runner
+	// declares none, which records every call with none.
+	//
+	// THE RUNNER'S, NEVER THE ROW'S: the key is a fact of the harness and of
+	// the build that reads its calls, so the launch names the one its own
+	// manager's runner declares, the one the job is started on, and a node that
+	// serves the job again after taking its seat over names its own runner's
+	// (internal/engine's reopenAgentRun) — each through the job's one
+	// constructor, which takes it ([PendingRun.NamedJob]). Nothing records it,
+	// and a build that does not know it serves the job reading no id.
+	CallIDMeta string
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
-// ([OpenedJob]), its calls numbered after lastSeq: the job and the round it
-// works in, off the one row. ONE CONSTRUCTOR for the launch that opens the job
-// and for a node that serves it again after taking its seat over
-// (internal/engine's reopenAgentRun), so neither names a job without its round.
-func (r PendingRun) NamedJob(lastSeq int) OpenedJob {
-	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq}
+// ([OpenedJob]), its calls numbered after lastSeq and each call's id read
+// under callIDMeta, the key the runner of the job's box declares
+// ([OpenedJob.CallIDMeta], "" for none): the job and the round it works in,
+// off the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
+// node that serves it again after taking its seat over (internal/engine's
+// reopenAgentRun), so neither names a job without its round, nor without the
+// key its calls' ids are read by — a job named without it would have every
+// call's id dropped without a word.
+func (r PendingRun) NamedJob(lastSeq int, callIDMeta string) OpenedJob {
+	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -647,11 +670,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
 			SignInID: req.SignInID, FollowUp: followUpOf(req.Continue)},
-		// THE TURN'S NOTES: the seat anchor, the brief's notes, read by the
-		// job this write opens, and the box's, waiting after them — see
-		// [PendingStore.BeginLaunch].
+		// THE TURN'S NOTES: the seat anchor, the brief's notes and the ones it
+		// tells again, read by the job this write opens, and the box's,
+		// waiting after them. See [PendingStore.BeginLaunch].
 		Steer:       RunSteer{Seat: req.SteerSeat},
 		BriefNotes:  req.BriefNotes,
+		RetoldNotes: req.RetoldNotes,
 		HandedNotes: req.HandedNotes,
 		// WHAT THE TURN HOLDS FROM GITLET'S EXPIRY, on the row before
 		// any box exists: once the turn parks, the row is the only place
@@ -715,7 +739,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [Opening.Fresh] — nil where what named the job answered none.
 	var fresh *Wiring
 	if req.Opened != nil {
-		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter))
+		// AND HOW ITS HARNESS NAMES ITS CALLS, as the runner the job is
+		// started on declares it: m's, which the spec was built with and
+		// which starts the box.
+		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness)))
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)

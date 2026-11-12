@@ -1100,7 +1100,7 @@ func TestAnExposedPanicSendsItsSiteAlone(t *testing.T) {
 		"a site in a webhook receiver": {panics.Panic{Frames: []panics.Frame{
 			at("internal/api/webhooks", "parse", 1), at("internal/tools", "run", 2)}}, false},
 		"a frame in the relay":             {panics.Panic{Frames: plain(at("internal/httprelay", "serve", 3))}, false},
-		"a package beneath an exposed one": {panics.Panic{Frames: plain(at("internal/code/host/receive", "pack", 3))}, false},
+		"a package beneath an exposed one": {panics.Panic{Frames: plain(at("internal/gitlet/host/receive", "pack", 3))}, false},
 		"an exposed frame past the sent ones": {panics.Panic{Frames: plain(at("internal/tools", "a", 3),
 			at("internal/tools", "b", 4), at("internal/tools", "c", 5), at("internal/httprelay", "serve", 6))}, true},
 	} {

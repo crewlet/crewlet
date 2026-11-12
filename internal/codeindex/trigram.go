@@ -78,7 +78,7 @@ const BinaryProbeBytes = 8000
 // is not read.
 //
 // The ONE copy of the rule: the index skips a binary blob by it, `git grep
-// -I` skips the same one, and code/query answers a file read of one by its
+// -I` skips the same one, and gitlet/query answers a file read of one by its
 // size alone. A gitattributes `binary` or `-diff` is git's other half of the
 // rule, which a reader holding only the blob cannot see.
 func Binary(head []byte) bool {

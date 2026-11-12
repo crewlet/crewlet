@@ -279,7 +279,8 @@ var nodeEstatePlacements = []placement{
 	{
 		Table: "memory_change_sequence",
 		Why: "The counter this node stamps its own memory rows from, so its " +
-			"memory sync can carry what changed since its last cycle. It " +
+			"memory sync can carry what changed since the last row the " +
+			"changelog acknowledged. It " +
 			"orders THIS node's writes for THIS node's exports, and a peer " +
 			"stamps the rows it hydrates from its own — a shared value would " +
 			"order nothing either node exports.",

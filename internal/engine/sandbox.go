@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
@@ -1360,7 +1361,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			return &sandbox.TurnRefused{Refusal: refusal}
 		}
 	}
-	input, tel, err := e.parkedTurnRunner(ctx, company, in)
+	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
+	// taken there, pinned to the claim — the job it collects, the resumed
+	// status and the lease the claim stamped — and carried from there, every
+	// note the turn read before this segment included. A note sent while the
+	// run worked or waited on its question was held there for exactly this.
+	// Closed on every way out: each return below is a retry, and the view
+	// it follows the record by must not outlive the attempt. Before the
+	// runner's input, whose launcher seals a relaunch's brief from it. See
+	// runsteer.go.
+	source := e.runSteers.source(ctx, in.Run,
+		sandbox.Fence{Owner: in.Run.Owner, Epoch: in.Run.OwnerEpoch})
+	defer source.Close(ctx)
+	input, tel, err := e.parkedTurnRunner(ctx, company, in, source)
 	if err != nil {
 		// A RETRY, like every early return here: nothing ran, and the
 		// coordinator hands its claim back so the next attempt judges the
@@ -1368,16 +1381,6 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return err
 	}
 	resumedReply := input.Reply
-	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
-	// taken there, pinned to the claim — the job it collects, the resumed
-	// status and the lease the claim stamped — and carried from there, every
-	// note the turn read before this segment included. A note sent while the
-	// run worked or waited on its question was held there for exactly this.
-	// Closed on every way out: each return below is a retry, and the view
-	// it follows the record by must not outlive the attempt. See runsteer.go.
-	source := e.runSteers.source(ctx, in.Run,
-		sandbox.Fence{Owner: in.Run.Owner, Epoch: in.Run.OwnerEpoch})
-	defer source.Close()
 	if source != nil {
 		input.Steer = source
 	}
@@ -1666,7 +1669,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 // building a RunnerInput: every literal of one is held to carrying the seat's
 // fence (internal/seat's TestEveryConfigThatCanCarryTheSeatFenceDoes). Every
 // error is a RETRY: nothing has run.
-func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput,
+//
+// notes is the segment's notes on the run's record, which the launcher of the
+// turn's later iterations seals their briefs from ([agentLauncher.notes]); nil
+// where the segment takes none — a reopened run's surface launches nothing.
+func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput, notes *rowSource,
 ) (input RunnerInput, tel turnTelemetry, err error) {
 	resumedReply, err := resumeReply(in.Run)
 	if err != nil {
@@ -1706,7 +1713,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
 		// whichever member of the pinned chain can take it then.
-		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil),
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil, notes),
 		Budget:   tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives
@@ -1781,6 +1788,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// them over the bridge, possibly in another process, so this list is
 		// the only record of what the phase did, its submission included.
 		Bridged: bridgedCalls(in.Bridged.Calls),
+		// AND THE CALLS IT HELD IN FLIGHT AS IT WAS READ, each its identity
+		// and an outcome not known: counted by the turn's call log, listed in
+		// the round's record and told to a run that carries the round on
+		// ([runner.Resume.Unfinished]).
+		Unfinished: unfinishedCalls(in.Bridged.InFlight),
 		// AND WHAT THE LOG COUNTS WITHOUT LISTING, by identity, which the
 		// turn's call log is seeded with beside them: the round's calls it
 		// dropped, and the calls the log absorbed from their own work.
@@ -1809,6 +1821,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on: the briefs', the run's own and earlier reviews'.
 		Steered: steered,
+		// AND EVERY NOTE ITS BRIDGE SERVED A HARNESS, read since or waiting
+		// still: a continued session may show one the record says it had not
+		// read ([servedNotes]). Final for the segment: no poll serves a run
+		// once its claim has moved it on.
+		Served: servedNotes(in.Run),
 	}
 }
 
@@ -2014,11 +2031,42 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // A turn that suspended again owes nothing: it has not finished, so there is
 // no end to tell. The end that eventually lands comes back through this same
 // frame and is owed then.
+//
+// A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call of
+// the turn's run has an outcome nobody knows — its entry still in flight as
+// the round's calls were read ([sandbox.BridgeLog.InFlight]), or a closed
+// round's record holding one so read ([ledger.Call.Unfinished]): that call may
+// be the reply, so the end says its delivery is unknown, never that the turn
+// did not reply.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
-		e.oweExecutorEnd(ctx, in.Run, endingOf(res, reply, answered))
+		e.oweExecutorEnd(ctx, in.Run, resumedEnding(in, res, reply, answered))
 	}
+}
+
+// resumedEnding is how a finished resumed turn ended ([endingOf]), its delivery
+// read as unknown where the record shows no reply beside a call whose outcome
+// nobody knows ([unfinishedIn]).
+func resumedEnding(in resumeInput, res turn.Result, reply turn.Reply, answered colleagueAnswer,
+) executorkeep.Ending {
+	ending := endingOf(res, reply, answered)
+	if !ending.Delivered && unfinishedIn(in) {
+		ending.DeliveryUnknown = true
+	}
+	return ending
+}
+
+// unfinishedIn reports whether a call of in's turn has an outcome nobody knows:
+// one the log it resumes from held in flight as it was read, or one a closed
+// round's record lists so ([ledger.Call.Unfinished]).
+func unfinishedIn(in resumeInput) bool {
+	if len(in.Bridged.InFlight) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(in.State.Iterations, func(it ledger.Iteration) bool {
+		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished })
+	})
 }
 
 // resumeTask is the brief the resumed turn re-enters with.
@@ -2887,20 +2935,16 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
-		// AND CARRIES ITS JOB'S OWED CALLS into the run's log, with their
-		// spend onto the job's record, before the resume reads the log —
-		// see [sandbox.CoordinatorOptions.Settle] and bridge.go's
-		// [bridgeLedger.Settle].
-		Settle: e.bridge.Settle,
 		// AND IS SERVED AGAIN wherever the run is taken over while its box
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
 		Recovered:   e.reopenAgentRun,
 		Unresumable: e.parkedRunUnresumable,
-		// AND EVERY NOTE A PERSON SENT THE TURN THAT IS STILL WAITING ON
-		// THE RUN'S RECORD is recorded expired by the ending, before the
-		// record goes — see runsteer.go.
-		SteersExpired: e.runSteers.expired,
+		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
+		// READING is recorded by the ending, as the run's record knows it
+		// (delivered where a later launch told it again, unconfirmed, missed
+		// or expired), before the record goes. See runsteer.go.
+		SteersEnded: e.runSteers.ended,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -4024,22 +4068,33 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// the flush below.
 	e.detachSeatReflection(ctx, seat)
 
-	// A LAST PUBLISH, then forget the seat. The publish is what makes a
-	// graceful handoff lossless: whatever this node learned since its last
-	// cycle reaches the changelog before the successor hydrates. Forgetting
-	// the watermarks is what makes a LATER re-acquisition correct — resuming
-	// from the old marks would skip exactly the memory the other node made
-	// in between.
+	// A LAST PUBLISH, then forget the seat. The publish carries what the
+	// cycles have not, from the marks they left, before the successor
+	// hydrates: for [memoryFlushTimeout], one broker round trip a row, and
+	// what it does not reach is lost to the successor as a crash loses it.
+	// That is more than the last cycle's writes while the backlog an
+	// acquisition or a restart left is still being carried back
+	// (crewlet/crewlet#1039), when the seat's profiles and skills, sent
+	// whole, outlast the bound (crewlet/crewlet#1040), behind a burst larger
+	// than the bound carries (crewlet/crewlet#1041), and behind a row larger
+	// than the broker takes, at which every publish of the seat fails
+	// (crewlet/crewlet#349); and what it does carry of those whole tables
+	// can still be replaced by an older copy published after it
+	// (crewlet/crewlet#511). Forgetting the watermarks
+	// makes the seat's next holding here carry again everything this node
+	// holds for it, as a restart does, which is what puts this node's rows
+	// back on a changelog an operator accepted after a recreation, or one
+	// restored while the node ran.
 	//
 	// Best effort, and it must be: this runs on the release path, where the
-	// seat is already gone. A failure here costs the successor whatever was
-	// written since the last cycle, which is the same bounded loss a crash
-	// costs — and refusing to release would strand the seat for a full TTL.
+	// seat is already gone. A failure here costs the successor what the
+	// changelog has not acknowledged, as a crash does — and refusing to
+	// release would strand the seat for a full TTL.
 	if e.memory != nil {
 		// BOUNDED, because this runs on the release path — including a
-		// drain, where every seat passes through here in turn. A broker
-		// that has stopped answering must cost the drain a few seconds
-		// per seat, not the whole shutdown.
+		// drain, where every seat passes through here at once
+		// (seat.Host.ReleaseAll). A broker that has stopped answering must
+		// cost the drain a few seconds, not the whole shutdown.
 		flushCtx, stopFlush := context.WithTimeout(
 			context.WithoutCancel(ctx), memoryFlushTimeout)
 		if _, err := e.memory.Publish(flushCtx, handle); err != nil {

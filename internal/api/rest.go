@@ -288,12 +288,20 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
 	// GITLET'S ROWS: the repositories, one repository in detail, and
 	// one repository's push history, each decided per repository by the grant
-	// the serving node derives (code.GrantOf, ADR-0088) — and who read a
+	// the serving node derives (gitlet.GrantOf, ADR-0088) — and who read a
 	// unit's repository, an admin's, decided by its own verb. ON THESE PATHS
 	// ALONE: they were Gitlet's own routes, mounted beside git
 	// (code.go), and a question answered there too would be the second
 	// implementation this table exists to prevent. The verify and its read
 	// stay there: they are operations on THIS node's copy, not questions.
+	// THE ATLAS (ADR-0126): the literal segments beside the wildcard, which
+	// net/http resolves as the more specific patterns, so /atlas/map is never
+	// read as an entry whose id is "map".
+	{method: "GET", pattern: "/atlas", what: "atlas_entries"},
+	{method: "GET", pattern: "/atlas/map", what: "atlas_map"},
+	{method: "GET", pattern: "/atlas/facets", what: "atlas_facets"},
+	{method: "GET", pattern: "/atlas/{id}", what: "atlas_entry", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/atlas/{id}/trace", what: "atlas_trace", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/gitlet/repos", what: "code_repos"},
 	{method: "GET", pattern: "/gitlet/repos/{name}", what: "code_repo", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/pushes", what: "code_pushes", path: map[string]string{"name": "name"}},

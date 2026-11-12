@@ -189,6 +189,20 @@ A refusal names the step that failed, Datadog's own reason, what to do about
 it and who does it, with a link to the organization's user administration.
 The step is retried on every pass and on **Retry**.
 
+### When Datadog limits the engine's calls
+
+Datadog answers a call past one of its rate limits with `429` and says when
+the limit resets (`X-RateLimit-Reset`, in seconds) and which limit it is
+(`X-RateLimit-Name`). Every call the engine makes to Datadog waits that out
+before sending it again: up to 30 seconds at a time, up to 3 times, and never
+past the deadline of the pass or the test that made the call. A longer wait is
+left to the next pass, and the step reports which limit is spent and when it
+resets. A rate limit is never reported as a refused key.
+
+Datadog sets its limits per endpoint, and its support raises them on request.
+The same headers on any answer show the limit that applies and how much of it
+is left.
+
 ### Disconnecting
 
 Disconnecting **disables** the accounts this engine created when you tick

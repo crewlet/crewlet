@@ -2,7 +2,7 @@
 --
 -- An expunge on its maintainer's own schedule — weekly, once a quarter of a
 -- repository's live bytes is unreachable — keeps every pack whose content
--- arrived within code.PruneGrace WHOLE, as git keeps an object younger than
+-- arrived within gitlet.PruneGrace WHOLE, as git keeps an object younger than
 -- gc.pruneExpire: what reached the repository in the last fortnight stays,
 -- reachable or not, and only the packs older than that are its inputs. Nothing
 -- on a pack's row said when it arrived. added_position is a place on the log,
@@ -26,7 +26,7 @@
 --     first), whose outputs then claim nothing older than the record itself.
 --
 -- An expunge on the schedule takes as inputs only packs whose arrived_at is
--- at least PruneGrace before its maintainer's clock (internal/code/compact);
+-- at least PruneGrace before its maintainer's clock (internal/gitlet/compact);
 -- a purge, which keeps no grace, reads content_position as before.
 --
 -- code_packs_retired carries the column too, so a retired row is the row
@@ -34,7 +34,7 @@
 --
 -- Every date is derived from the records alone, so a node replaying the log
 -- writes every one again. And every node writes it from the first record it
--- applies, under the code domain's stated condition (internal/code's
+-- applies, under the code domain's stated condition (internal/gitlet's
 -- record.go): no build that carries the domain has run without this column —
 -- none of it is on main — so no node holds rows an older build applied while
 -- another holds their dates.

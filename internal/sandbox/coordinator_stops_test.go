@@ -283,7 +283,7 @@ var coordinatorEntries = map[string][]entryDrive{
 	"RetireSeat": {{
 		name: "the runs of a seat that left the company",
 		call: func(t *testing.T, rig *coordRig) {
-			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
+			if _, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
 				t.Logf("RetireSeat: %v", err)
 			}
 		},
@@ -1007,6 +1007,13 @@ func (s *refusingStore) AddHanded(ctx context.Context, run PendingRun,
 	return s.inner.AddHanded(ctx, run, add)
 }
 
+func (s *refusingStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	if s.called("WatchLog") {
+		return nil, errRefusedCall
+	}
+	return s.inner.WatchLog(ctx, turnID)
+}
+
 func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if s.called("AppendBridgeCall") {
 		return false, errRefusedCall
@@ -1174,6 +1181,20 @@ func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteT
 		return nil, errRefusedCall
 	}
 	return s.inner.TakeNotes(ctx, turnID, take)
+}
+
+func (s *refusingStore) ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error) {
+	if s.called("ServeNotes") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ServeNotes(ctx, turnID, serve)
+}
+
+func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error) {
+	if s.called("SettleTake") {
+		return nil, errRefusedCall
+	}
+	return s.inner.SettleTake(ctx, turnID, settle)
 }
 
 func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {

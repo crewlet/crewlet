@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -29,11 +29,11 @@ func inboxSources(t *testing.T) (queries.Sources, *stubWork, *stubCode) {
 		LogStream: "CREWLET_TRACKER_LOG", LogGeneration: 1, LogSeq: 4, At: at.Add(10 * time.Minute),
 		Reason: worklet.ReasonMention, Kind: worklet.ChangeKind("comment"), SubjectID: "task-1",
 		SubjectKey: "ENG-1"}}}}
-	host := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
-		return code.ReadAnswer{Level: q.Fresh.Level, Inbox: &code.InboxPage{Handle: q.Inbox.Handle,
-			Notices: []code.InboxNotice{{RecordID: "c-1", LogStream: "CREWLET_CODE_LOG", LogGeneration: 1,
-				LogSeq: 9, At: at.Add(20 * time.Minute), Reason: code.ReasonReviewRequested, Repo: "web",
-				ChangeID: "change-1", ChangeRef: "web!1", Change: &code.NoticeChange{Title: "Retry once"}}}}}, nil
+	host := &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		return gitlet.ReadAnswer{Level: q.Fresh.Level, Inbox: &gitlet.InboxPage{Handle: q.Inbox.Handle,
+			Notices: []gitlet.InboxNotice{{RecordID: "c-1", LogStream: "CREWLET_CODE_LOG", LogGeneration: 1,
+				LogSeq: 9, At: at.Add(20 * time.Minute), Reason: gitlet.ReasonReviewRequested, Repo: "web",
+				ChangeID: "change-1", ChangeRef: "web!1", Change: &gitlet.NoticeChange{Title: "Retry once"}}}}}, nil
 	}}
 	s := viewerSources(t, work)
 	s.Code = host
@@ -168,28 +168,28 @@ func TestGitletIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
 	page := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9}
-	notice := func(record, change, ref string, minute int) code.InboxNotice {
-		return code.InboxNotice{RecordID: record, LogStream: topics.CodeLogStream, LogGeneration: 1,
+	notice := func(record, change, ref string, minute int) gitlet.InboxNotice {
+		return gitlet.InboxNotice{RecordID: record, LogStream: topics.CodeLogStream, LogGeneration: 1,
 			LogSeq: uint64(minute), At: at.Add(time.Duration(minute) * time.Minute),
-			Reason: code.ReasonReviewRequested, Repo: "web", ChangeID: change, ChangeRef: ref,
-			Change: &code.NoticeChange{Title: "bare " + ref}}
+			Reason: gitlet.ReasonReviewRequested, Repo: "web", ChangeID: change, ChangeRef: ref,
+			Change: &gitlet.NoticeChange{Title: "bare " + ref}}
 	}
 	read := func(params map[string]any) (inbox.Page, *stubCode) {
 		t.Helper()
-		host := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+		host := &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 			switch q.Kind {
-			case code.ReadInbox:
-				return code.ReadAnswer{Level: q.Fresh.Level, Position: page, Inbox: &code.InboxPage{
-					Handle: q.Inbox.Handle, Notices: []code.InboxNotice{notice("c-3", "change-1", "web!1", 3),
+			case gitlet.ReadInbox:
+				return gitlet.ReadAnswer{Level: q.Fresh.Level, Position: page, Inbox: &gitlet.InboxPage{
+					Handle: q.Inbox.Handle, Notices: []gitlet.InboxNotice{notice("c-3", "change-1", "web!1", 3),
 						notice("c-2", "change-2", "web!2", 2), notice("c-1", "change-1", "web!1", 1)}}}, nil
-			case code.ReadNoticeCards:
-				cards := map[string]*code.NoticeChange{}
+			case gitlet.ReadNoticeCards:
+				cards := map[string]*gitlet.NoticeChange{}
 				for _, id := range q.NoticeCards {
-					cards[id] = &code.NoticeChange{Title: "card " + id, Body: "why " + id}
+					cards[id] = &gitlet.NoticeChange{Title: "card " + id, Body: "why " + id}
 				}
-				return code.ReadAnswer{Level: q.Fresh.Level, Position: page, NoticeCards: cards}, nil
+				return gitlet.ReadAnswer{Level: q.Fresh.Level, Position: page, NoticeCards: cards}, nil
 			}
-			return code.ReadAnswer{}, nil
+			return gitlet.ReadAnswer{}, nil
 		}}
 		s := viewerSources(t, &stubWork{})
 		s.Code = host
@@ -205,11 +205,11 @@ func TestGitletIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 	}
 
 	composed, host := read(map[string]any{"cards": true})
-	var kinds []code.ReadKind
+	var kinds []gitlet.ReadKind
 	for _, q := range host.asked {
 		kinds = append(kinds, q.Kind)
 	}
-	if want := []code.ReadKind{code.ReadInbox, code.ReadNoticeCards}; !slices.Equal(kinds, want) {
+	if want := []gitlet.ReadKind{gitlet.ReadInbox, gitlet.ReadNoticeCards}; !slices.Equal(kinds, want) {
 		t.Fatalf("a read drawing cards asked Gitlet %v, want %v", kinds, want)
 	}
 	cards := host.asked[1]
@@ -219,7 +219,7 @@ func TestGitletIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 			"page at %s", cards, page)
 	}
 	for _, n := range composed.Notices {
-		said, ok := n.Extra.(code.InboxNotice)
+		said, ok := n.Extra.(gitlet.InboxNotice)
 		if !ok || said.Change == nil || said.Change.Body != "why "+said.ChangeID ||
 			n.Subject.Title != "card "+said.ChangeID {
 			t.Errorf("the notice %s carries %+v titled %q, want its change's card", n.RecordID, n.Extra,
@@ -228,11 +228,11 @@ func TestGitletIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 	}
 
 	composed, host = read(nil)
-	if len(host.asked) != 1 || host.asked[0].Kind != code.ReadInbox {
+	if len(host.asked) != 1 || host.asked[0].Kind != gitlet.ReadInbox {
 		t.Errorf("a read drawing no cards asked Gitlet %+v, want its inbox alone", host.asked)
 	}
 	for _, n := range composed.Notices {
-		said, ok := n.Extra.(code.InboxNotice)
+		said, ok := n.Extra.(gitlet.InboxNotice)
 		if !ok || said.Change == nil || said.Change.Body != "" || n.Subject.Title != "bare "+said.ChangeRef {
 			t.Errorf("the notice %s of a read drawing no cards carries %+v, want what its page said", n.RecordID,
 				n.Extra)

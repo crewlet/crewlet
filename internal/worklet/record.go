@@ -336,6 +336,19 @@ type ChangeSettlement struct {
 	Source string    `json:"source,omitempty"`
 }
 
+// DeadWait is a change (a pull request) a task waits on that nothing is moving
+// at its head, as the engine read it on its host: open, with no reviewer asked,
+// no review of that head and no merge asked (ADR-0128).
+type DeadWait struct {
+	Ref  string `json:"ref"`
+	Head string `json:"head"`
+	// Author is who opened it: a seat's handle where a seat's app did, else
+	// the host's login.
+	Author string    `json:"author,omitempty"`
+	Draft  bool      `json:"draft,omitempty"`
+	At     time.Time `json:"at"`
+}
+
 // IsChangeRef reports whether a relation names a change by its URL rather
 // than a task, which a task id or key never spells.
 func IsChangeRef(other string) bool { return strings.Contains(other, "://") }
@@ -485,6 +498,10 @@ type Task struct {
 	// Changes are the changes (pull requests) the task waits on that their
 	// host reported merged or closed, by canonical URL.
 	Changes map[string]ChangeSettlement `json:"changes,omitempty"`
+
+	// DeadWaits are the open changes the task waits on that nothing is moving,
+	// by canonical URL: dropped when one moves, settles or is no longer waited on.
+	DeadWaits map[string]DeadWait `json:"dead_waits,omitempty"`
 
 	EstimateMinutes int     `json:"estimate_minutes,omitempty"`
 	Points          float64 `json:"points,omitempty"`
@@ -815,6 +832,11 @@ type TaskPatch struct {
 
 	// ChangeSettled is a change the task waits on merging or closing.
 	ChangeSettled *ChangeSettlement `json:"change_settled,omitempty"`
+
+	// DeadWait records a change the task waits on as moved by nothing, and
+	// DeadWaitEnded drops that record for the change it names.
+	DeadWait      *DeadWait `json:"dead_wait,omitempty"`
+	DeadWaitEnded *string   `json:"dead_wait_ended,omitempty"`
 
 	EstimateMinutes *int     `json:"estimate_minutes,omitempty"`
 	Points          *float64 `json:"points,omitempty"`

@@ -45,10 +45,14 @@
 // the routes, the git transport, the read and write tools, the review and
 // merge verbs, a check's report, an import, a purge and the inbox's code
 // marks — so a principal without it is refused here before any repository is
-// read, and the repository's grant (code.GrantOf, ADR-0088) decides among the
+// read, and the repository's grant (gitlet.GrantOf, ADR-0088) decides among the
 // holders; who read a repository and the Gitlet nodes' caches stay admin's.
 // A repository and a change are Gitlet's kinds ([AppFor]), so a cross-app
 // answer shows neither to a reader without the app.
+//
+// READING THE ATLAS TAKES THE ATLAS PERMISSION: ADR-0127, whose authority this
+// package is too. Every atlas verb names [iam.GrantAtlas], refused here before
+// an entry is read, and an atlas entry is the app's kind ([AppFor]).
 //
 // # What it replaces, and what each of those got wrong
 //
@@ -356,7 +360,7 @@ const (
 	// KindRepository is one of the company's repositories on Gitlet, and
 	// everything read as it: its refs, its files and history, its pushes, its
 	// merge queues and its checks. WHICH repository is the grant the serving
-	// node derives (code.GrantOf, ADR-0088), never this table's; the kind is
+	// node derives (gitlet.GrantOf, ADR-0088), never this table's; the kind is
 	// here so an answer that mixes apps holds a repository's rows to Gitlet
 	// ([AppFor]).
 	KindRepository ObjectKind = "repository"
@@ -365,13 +369,17 @@ const (
 	// its repository is: a turn a change woke names it as its origin, and a
 	// reader without the app is shown no such origin.
 	KindChange ObjectKind = "change"
+	// KindAtlasEntry is one entry of the company's atlas, with its facts and
+	// relations: Atlas's, so an answer that mixes apps shows none to a reader
+	// without the app ([AppFor]).
+	KindAtlasEntry ObjectKind = "atlas_entry"
 )
 
 // ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
 	KindView, KindCompany, KindArtifact, KindArtifactFolder, KindChannel, KindMessage,
-	KindRepository, KindChange,
+	KindRepository, KindChange, KindAtlasEntry,
 }
 
 // Valid reports whether a kind is one this build knows.

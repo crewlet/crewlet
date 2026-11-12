@@ -897,9 +897,13 @@ func (s *CoordStore) ClearEnd(ctx context.Context, turnID string, owed json.RawM
 // a set is bounded by the seat's catalogue rather than by how many calls a
 // turn makes — and held to [MaxPriorCalls] all the same, past which it says
 // its record is incomplete rather than grow.
+//
+// AND A CALL STILL IN FLIGHT MAKES IT INCOMPLETE ([BridgeLog.InFlight]): its
+// outcome is not known, so no reader of the fold may say from it that the
+// round did not reply.
 func foldPriorCalls(l BridgeLog) ([]string, bool) {
 	names := slices.Clone(l.PriorCalls)
-	incomplete := l.PriorCallsElided || !l.ElisionKnown()
+	incomplete := l.PriorCallsElided || !l.ElisionKnown() || len(l.InFlight) > 0
 	add := func(name string) {
 		switch {
 		case name == "" || slices.Contains(names, name):
@@ -1423,11 +1427,14 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // takes it ([BridgeLog.withApproved]), and a call the store appends for its
 // own round is never late ([BridgeCall.Late]) — nor one nobody waited for
 // ([BridgeCall.Abandoned]), which the bridge alone marks: the resume made this
-// one on the engine host, and no harness gave it up.
+// one on the engine host, and no harness gave it up. NOR DOES IT CARRY AN ID
+// OF A HARNESS'S ([BridgeCall.CallID]), which the bridge gives the calls a box
+// makes: no harness named this one, and what the box's session holds is the
+// HELD call's, under the held call's own id.
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
 	made.Args, made.Output, made.Held, made.Seq, made.Appended, made.Digest = "", "", false, 0, 0, ""
-	made.Late, made.Abandoned = false, false
+	made.Late, made.Abandoned, made.CallID = false, false, ""
 	return keptCall(made, MaxBridgeArgsBytes)
 }
 
@@ -2032,34 +2039,42 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 	return err
 }
 
-// AppendBridgeCall records one tool call a bridged run made.
+// AppendBridgeCall makes one step of a tool call a bridged run made: the
+// call's entry written ahead of its run, its one update as it finishes, or the
+// withdrawal of an entry whose call was then not run ([AppendStep]).
 //
 // NO FENCE, and that is deliberate. Every other mutation here is an ownership
 // decision — a claim, a status flip, a pause — and a node whose lease has
-// moved must not make one. This is a LOG APPEND: the call already ran and its
-// effect already happened, and refusing to record it because the seat moved
-// mid-run would lose evidence of something that is true either way. The log's
+// moved must not make one. This is a LOG APPEND: a record's call already ran
+// and its effect already happened, and refusing to record it because the seat
+// moved mid-run would lose evidence of something that is true either way; a
+// begin records a call its opening admitted under the seat's fence. The log's
 // own version still guards the write, so two concurrent appends serialise
 // rather than clobbering each other.
 //
 // ON THE LOG ALONE: the condition — the log is open for the call's job, or
-// for its round — is the log's own field, so the call is one compare-and-swap
+// for its round — is the log's own field, so each step is one compare-and-swap
 // of one key, and the run's record is neither read nor written for it. The
-// job's spend is the one fact the record keeps of an append, written after the
-// call is in the log, only for the log's own job and only where the total
-// moved: a call answered by a builtin costs the engine nothing, and its append
+// job's spend is the one fact the record keeps of an append, written after a
+// record is in the log, only for the log's own job and only where the total
+// moved: a call answered by a builtin costs the engine nothing, and its record
 // leaves the record alone, and so does a late call of the round, whose spend
-// is dropped with its job ([BridgeLog.take]).
+// is dropped with its job, and every begin and withdrawal ([BridgeLog.take]).
+// THE ONE WRITER of a call's steps and of its spend, so the job check and the
+// spend stay in one place whichever step a call is at.
 //
 // A run whose log is gone is not an error: the run ended while a late call was
 // in flight, which is the ordinary shape of a box shutting down. Nor is a call
 // of a round the log has moved on from, or an append naming no job at all (see
 // the pin on [PendingStore]). The append is simply dropped, and the caller —
-// which must not fail the box's call over telemetry — goes on as it would
-// have. A late call of the round is answered recorded, beside
-// [ErrJobReplaced]: its spend can reach no record.
+// which must not fail the box's call over a record, and runs no call whose
+// begin was dropped — goes on as it would have. A late call of the round is
+// answered recorded, beside [ErrJobReplaced]: its spend can reach no record.
 func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
-	if a.Launch == "" {
+	if !a.Step.Valid() {
+		return false, fmt.Errorf("sandbox: %q is no step of a bridged call", a.Step)
+	}
+	if a.Launch == "" || a.Call.Name == "" {
 		return false, nil
 	}
 	stamped := func(call BridgeCall) BridgeCall {
@@ -2081,19 +2096,25 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		if err := json.Unmarshal(current.Value, &logged); err != nil {
 			return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
 		}
-		if taken, wrote = logged.take(a, stamped); !wrote {
-			return nil, nil
+		var refused error
+		if taken, wrote, refused = logged.take(a, stamped); refused != nil || !wrote {
+			return nil, refused
 		}
 		return json.Marshal(logged)
 	})
 	switch {
 	case err != nil:
+		// A BEGIN THE LOG HAS NO ROOM FOR among them, as it is
+		// ([ErrCallsInFlight]): nothing was written.
 		return false, err
 	case taken == takeNone, wrote && !won:
 		// NO LOG OPEN FOR THE JOB OR ITS ROUND, or one the run's end removed
 		// under the write that landed in it, which the store undid: a run
 		// that is gone, or a round that is over.
 		return false, nil
+	case a.Step != AppendRecord:
+		// A BEGIN OR A WITHDRAWAL: no spend rides it.
+		return true, nil
 	case taken != takeOwn:
 		// A LATE CALL OF THE ROUND, in the log and paid by nobody: the row
 		// holds a later job, whose resume would pay it as its own. Said, so a
@@ -2146,10 +2167,11 @@ const (
 // take decides what l does with one bridged append, a, and does it: THE ONE
 // DECISION an append is taken on, made once per ask of the append's
 // compare-and-swap ([CoordStore.AppendBridgeCall]) on the log as that ask read
-// it — whether the log takes the append at all, whether the calls it lists are
+// it — whether the log takes the append at all, whether the call it lists is
 // marked late, and whether the append's spend is the job's to write
-// ([logTake]) — answered with whether it listed anything, which an append
-// asked again does not. stamp dates a call its caller did not.
+// ([logTake]) — answered with whether it wrote anything, which an append
+// asked again does not, and the refusal of a begin the log has no room for
+// ([ErrCallsInFlight]). stamp dates a call its caller did not.
 //
 // BY THE LOG'S OWN FIELDS: the job it is open for, and the round it holds,
 // which an opening for a later job of the same round keeps and one of another
@@ -2157,21 +2179,31 @@ const (
 // carried its round on is listed in the round it was made in, and one of a
 // round a send-back replaced is not: the new round numbers its own calls. An
 // append that names no round ([BridgeAppend.Round]) is taken by its own job's
-// log alone.
+// log alone. A BEGIN IS TAKEN AS A RECORD IS: a call a replaced job's box makes
+// while its opening still serves it — the relaunch that replaced the job opens
+// its own session a moment after it moved the log on — is a call of the round,
+// whose update the log marks late.
 //
-// WHAT THE SESSION OWED FIRST, in the order it was owed: each call the log does
-// not list yet, listed with what its own work absorbed — and one it lists
-// already, which landed after all and lost its answer, skipped with what it
-// absorbed, which landed beside it. Then the call itself, where the append
-// names one and the log does not list it already: an append ASKED AGAIN — one
-// that landed and whose answer was lost, which its session tries again —
-// lists nothing, the call and what it carried being in the log once. Each call
-// is held to the log's budget ([BridgeLog.appendCall]), and is MARKED LATE
-// exactly where the append is late: the mark is the log's to give, as a call's
-// number is, and replaces whatever a caller handed in.
-func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (logTake, bool) {
-	if a.Launch == "" {
-		return takeNone, false
+// BY THE STEP ([AppendStep]):
+//
+//   - A BEGIN writes the call's entry in flight ([keptEntry]): once, an entry
+//     the log holds already, or a call it lists, writing nothing — a begin
+//     asked again after its answer was lost — and none past
+//     [MaxCallsInFlight].
+//   - A RECORD is the call's ONE UPDATE: its entry, found by its identity
+//     ([BridgeLog.inFlightAt]), taken out, and the finished call listed in
+//     the same write — where the log does not list it already: a record
+//     ASKED AGAIN, one that landed and whose answer was lost, lists nothing,
+//     the call and what it carried being in the log once. A call with no
+//     entry, one answered without running, is listed as it is. Each call is
+//     held to the log's budget ([BridgeLog.appendCall]), and is MARKED LATE
+//     exactly where the append is late: the mark is the log's to give, as a
+//     call's number is, and replaces whatever a caller handed in.
+//   - A WITHDRAWAL takes the entry of a call that was then not run out, and
+//     lists nothing.
+func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (logTake, bool, error) {
+	if a.Launch == "" || a.Call.Name == "" {
+		return takeNone, false, nil
 	}
 	var taken logTake
 	switch {
@@ -2180,24 +2212,115 @@ func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (log
 	case a.Round != "" && a.Round == l.Round:
 		taken = takeLate
 	default:
-		return takeNone, false
+		return takeNone, false, nil
 	}
-	listed := false
-	list := func(call BridgeCall, absorbed []ElidedCall) {
-		if l.lists(call) {
+	at := l.inFlightAt(a.Call)
+	switch a.Step {
+	case AppendBegin:
+		if at >= 0 || l.lists(a.Call) {
+			return taken, false, nil
+		}
+		if len(l.InFlight) >= MaxCallsInFlight {
+			return taken, false, ErrCallsInFlight
+		}
+		l.InFlight = append(slices.Clip(l.InFlight), stamp(keptEntry(a.Call)))
+		return taken, true, nil
+	case AppendWithdraw:
+		if at < 0 {
+			return taken, false, nil
+		}
+		l.InFlight = slices.Delete(slices.Clone(l.InFlight), at, at+1)
+		return taken, true, nil
+	}
+	listed := l.lists(a.Call)
+	if at < 0 && listed {
+		return taken, false, nil
+	}
+	if at >= 0 {
+		l.InFlight = slices.Delete(slices.Clone(l.InFlight), at, at+1)
+	}
+	if !listed {
+		call := a.Call
+		call.Late = taken == takeLate
+		// A FINISHED CALL IS NOBODY'S TO WAIT FOR: it carries neither.
+		call.Runner, call.Until = "", time.Time{}
+		l.appendCall(stamp(call), a.Absorbed)
+	}
+	return taken, true, nil
+}
+
+// WatchLog follows the bridged tool log beside run turnID's record. See the
+// contract on [PendingStore].
+//
+// THE WATCH'S FIRST STATE IS A READ FROM THE STREAM'S LEADER
+// ([coord.SandboxRuns.SandboxRunPart]), made once the part's watch is open, in
+// place of the watch's own certified first state, which may lag the newest
+// write by a replica's lag: everything the store took before the read is in
+// it, and everything after it reaches the watch, which then delivers only a
+// state newer than one already delivered, or the log gone.
+//
+// THE PART'S WATCH IS THIS CALL'S OWN, under a context it cancels: on a read
+// that fails, and once its goroutine ends — the caller's context done, or the
+// part's watch closed — so nothing it started outlives it.
+func (s *CoordStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	ctx, stop := context.WithCancel(ctx)
+	updates, err := s.runs.WatchSandboxRunPart(ctx, turnID, coord.RunLog)
+	if err != nil {
+		stop()
+		return nil, fmt.Errorf("sandbox: watch the log of run %s: %w", turnID, err)
+	}
+	read, found, err := s.runs.SandboxRunPart(ctx, turnID, coord.RunLog)
+	if err != nil {
+		stop()
+		return nil, fmt.Errorf("sandbox: read the log of run %s: %w", turnID, err)
+	}
+	out := make(chan LogView, 1)
+	go func() {
+		defer stop()
+		defer close(out)
+		var last uint64
+		deliver := func(u coord.SandboxRunUpdate) bool {
+			if u.Found && u.Record.Version <= last {
+				return true
+			}
+			view := LogView{Found: u.Found, Version: u.Record.Version}
+			if u.Found {
+				if err := json.Unmarshal(u.Record.Value, &view.Log); err != nil {
+					// A STATE THIS BUILD CANNOT READ is passed over, never
+					// delivered as an empty log.
+					log.WarnContext(ctx, "sandbox_log_view_unread", "turn_id", turnID, "error", err.Error())
+					return true
+				}
+				last = u.Record.Version
+			}
+			// THE NEWEST STATE WINS, as the notes' watch has it ([CoordStore.WatchNotes]).
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- view:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		if !deliver(coord.SandboxRunUpdate{Found: found, Record: read}) {
 			return
 		}
-		call.Late = taken == takeLate
-		l.appendCall(stamp(call), absorbed)
-		listed = true
-	}
-	for _, owed := range a.Owed {
-		list(owed.Call, owed.Absorbed)
-	}
-	if a.Call.Name != "" {
-		list(a.Call, a.Absorbed)
-	}
-	return taken, listed
+		first := true
+		for u := range updates {
+			if first {
+				// THE WATCH'S OWN FIRST STATE, which the read above stands in for.
+				first = false
+				continue
+			}
+			if !deliver(u) {
+				return
+			}
+		}
+	}()
+	return out, nil
 }
 
 // BridgeLog reads the bridged tool log of run's job. See the contract on

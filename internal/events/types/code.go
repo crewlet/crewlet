@@ -35,7 +35,7 @@ import (
 //
 // # One record per reader per flush
 //
-// The node that served the reads keeps them in a ledger (internal/code/readaudit)
+// The node that served the reads keeps them in a ledger (internal/gitlet/readaudit)
 // and publishes, every fifteen seconds, ONE record for each reader's reads of
 // one repository by one way — of one kind, for a server-side read — in one
 // company day, counting them ([CodeFetched.Reads]) and summing what they were
@@ -95,9 +95,9 @@ func CodeFetchedVias() []CodeFetchedVia { return []CodeFetchedVia{FetchedViaGit,
 func (v CodeFetchedVia) Valid() bool { return slices.Contains(CodeFetchedVias(), v) }
 
 // CodeReaderKind is what kind of principal read a repository: Gitlet's
-// own spelling of a principal kind (code.PrincipalKind), held equal to it by
-// internal/code's TestEveryPrincipalKindIsAReaderTheAuditRecords. Declared
-// here rather than read from internal/code because the usage domain that keeps
+// own spelling of a principal kind (gitlet.PrincipalKind), held equal to it by
+// internal/gitlet's TestEveryPrincipalKindIsAReaderTheAuditRecords. Declared
+// here rather than read from internal/gitlet because the usage domain that keeps
 // these records is beneath the code domain in the import graph, and the record
 // is where the closed set is read.
 type CodeReaderKind string
@@ -145,9 +145,9 @@ type CodeFetched struct {
 	Seat string `json:"seat,omitempty"`
 
 	// Via is how it was read; Kind, for a server-side read, is which read
-	// (code.GitReadKind: tree, blob, diff, compare, landed_in, log and blame,
+	// (gitlet.GitReadKind: tree, blob, diff, compare, landed_in, log and blame,
 	// and a change's revision_facts, reanchor and interdiff; or merge_preview,
-	// a comparison's merge of two commits, internal/code/home's
+	// a comparison's merge of two commits, internal/gitlet/home's
 	// PreviewReadKind), and empty for a fetch.
 	Via  CodeFetchedVia `json:"via"`
 	Kind string         `json:"kind,omitempty"`
@@ -197,7 +197,7 @@ func (e CodeFetched) SummaryFor(actor string) string {
 // CodeCheckFinished records that one attempt of a check of a commit ENDED —
 // passed, failed, errored, cancelled, or skipped at its dispatch — as the
 // attempt's row on the code log keeps the ending: published ONCE, by the data
-// node whose checks writer published the record that set it (internal/code's
+// node whose checks writer published the record that set it (internal/gitlet's
 // ChecksWriter), on that record's apply — never by an applier, which every
 // data node runs. An ending the row did not keep — a later infrastructure
 // ending beside a measurement, an ending asked again — is announced by none.
@@ -249,7 +249,7 @@ type CodeCheckFinished struct {
 	Name    string `json:"name"`
 	Attempt int    `json:"attempt"`
 
-	// Purpose is what the attempt was for (internal/code's CheckPurpose:
+	// Purpose is what the attempt was for (internal/gitlet's CheckPurpose:
 	// head, candidate, tip, bisect; empty for a check a person's CI
 	// reported); ChangeID a head check's change, or the change a reported
 	// failure fails the head of (Owner, below), and Target the branch the
@@ -258,7 +258,7 @@ type CodeCheckFinished struct {
 	ChangeID string `json:"change_id,omitempty"`
 	Target   string `json:"target"`
 
-	// State is the ending (internal/code's CheckState) and Reason why
+	// State is the ending (internal/gitlet's CheckState) and Reason why
 	// (CheckReason); Placement is where it ran — container, e2b or external
 	// — and empty for an attempt no runner claimed.
 	State     string `json:"state"`
@@ -278,9 +278,9 @@ type CodeCheckFinished struct {
 
 	// Owner is the owner of the change whose head the attempt measured, on
 	// an ending that FAILS that head — failed, or errored past the home's own
-	// requeue (internal/code's checks_failed wake) — and empty on every
+	// requeue (internal/gitlet's checks_failed wake) — and empty on every
 	// other: a seat by its handle, or a person by the human seat they hold,
-	// OwnerKind which (internal/code's PartyKind: agent, person). A head check
+	// OwnerKind which (internal/gitlet's PartyKind: agent, person). A head check
 	// the engine ran names the change it was queued for; one a person's CI
 	// reported (Placement external) names no change of its own, so its
 	// failure names — in ChangeID too — the live change into Target whose
@@ -336,7 +336,7 @@ func (e CodeCheckFinished) SummaryFor(actor string) string {
 	return lead(actor, what)
 }
 
-// ChangeMerged records that a change MERGED by a merge record (internal/code's
+// ChangeMerged records that a change MERGED by a merge record (internal/gitlet's
 // Merge): its target moved onto the commit its merge built, by a record whose
 // decide held the change to its target's merge gate from one snapshot — or
 // recorded a person's override of it (ADR-0096). Published ONCE, by the data
@@ -366,13 +366,13 @@ type ChangeMerged struct {
 	Number   int64  `json:"number"`
 	Target   string `json:"target"`
 
-	// Method is how it merged (internal/code's MergeMethod: merge, squash,
+	// Method is how it merged (internal/gitlet's MergeMethod: merge, squash,
 	// fast_forward) and Commit the commit its target moved to.
 	Method string `json:"method"`
 	Commit string `json:"commit"`
 
 	// MergedBy is who merged it — a seat by its handle, or a person by the
-	// human seat they hold — and MergedByKind which (internal/code's
+	// human seat they hold — and MergedByKind which (internal/gitlet's
 	// PartyKind: agent, person).
 	MergedBy     string `json:"merged_by"`
 	MergedByKind string `json:"merged_by_kind"`
@@ -400,7 +400,7 @@ func (e ChangeMerged) SummaryFor(actor string) string {
 	return lead(actor, what)
 }
 
-// ChangeOpened records that a change was OPENED (internal/code's change_open,
+// ChangeOpened records that a change was OPENED (internal/gitlet's change_open,
 // or a push whose options asked for one): its row written, numbered and owned
 // by whoever opened it. Published ONCE, by the data node whose committer
 // landed the record that opened it, on that record's apply — never by an
@@ -440,7 +440,7 @@ type ChangeOpened struct {
 	Title    string `json:"title"`
 
 	// Owner is who opened it — a seat by its handle, or a person by the
-	// human seat they hold — and OwnerKind which (internal/code's PartyKind:
+	// human seat they hold — and OwnerKind which (internal/gitlet's PartyKind:
 	// agent, person).
 	Owner     string `json:"owner"`
 	OwnerKind string `json:"owner_kind"`
@@ -475,7 +475,7 @@ func (e ChangeOpened) SummaryFor(actor string) string {
 	return lead(actor, what)
 }
 
-// ReviewSubmitted records that a REVIEW of a change was given (internal/code's
+// ReviewSubmitted records that a REVIEW of a change was given (internal/gitlet's
 // review): its verdict on one revision and the findings it raised. Published
 // ONCE, by the data node whose change writer landed the record, on that
 // record's apply — never by an applier, and never for a retry its operation
@@ -514,7 +514,7 @@ type ReviewSubmitted struct {
 	ReviewerKind string `json:"reviewer_kind"`
 	Agent        string `json:"agent_id"`
 
-	// Verdict is the review's (internal/code's Verdict: approve,
+	// Verdict is the review's (internal/gitlet's Verdict: approve,
 	// request_changes, comment) and Findings how many findings it raised.
 	Verdict  string `json:"verdict"`
 	Findings int64  `json:"findings"`
@@ -552,7 +552,7 @@ func (e ReviewSubmitted) SummaryFor(actor string) string {
 	return lead(actor, what)
 }
 
-// CodeQueueEjected records that a merge queue put an entry OUT (internal/code's
+// CodeQueueEjected records that a merge queue put an entry OUT (internal/gitlet's
 // Eject): the change it held will not land through this enqueue — a required
 // check failed on what it was tested in, its merge onto what was before it
 // conflicted, its merge gate no longer holds with its enqueuer as the merger,
@@ -585,7 +585,7 @@ type CodeQueueEjected struct {
 	Number   int64  `json:"number"`
 	Target   string `json:"target"`
 
-	// Reason is why (internal/code's EjectReasons: check_failed, conflict,
+	// Reason is why (internal/gitlet's EjectReasons: check_failed, conflict,
 	// gate_unmet, head_moved, not_fast_forward, repo_mirrored); Checks the
 	// required checks
 	// that failed, for check_failed, and Paths the conflicted paths, for
@@ -595,7 +595,7 @@ type CodeQueueEjected struct {
 	Paths  []string `json:"paths,omitempty"`
 
 	// EnqueuedBy is who enqueued it — a seat by its handle, or a person by
-	// the human seat they hold — and EnqueuedByKind which (internal/code's
+	// the human seat they hold — and EnqueuedByKind which (internal/gitlet's
 	// PartyKind: agent, person).
 	EnqueuedBy     string `json:"enqueued_by"`
 	EnqueuedByKind string `json:"enqueued_by_kind"`
@@ -630,7 +630,7 @@ func (e CodeQueueEjected) SummaryFor(actor string) string {
 }
 
 // CodeTargetBroken records that a protected branch's tip checks found the
-// FIRST landing they failed on (internal/code's Broken, ADR-0098): a red tip
+// FIRST landing they failed on (internal/gitlet's Broken, ADR-0098): a red tip
 // bisected over the branch's landing rows down to the landing whose commit the
 // named required checks failed on, the landing before it having passed them.
 // Published ONCE a landing, by the data node whose committer landed the broken
@@ -651,7 +651,7 @@ type CodeTargetBroken struct {
 	RepoName string `json:"repo_name"`
 
 	// Target is the protected branch, Commit the landing's commit, and Kind
-	// how it landed (internal/code's LandingKinds: queue, direct, push).
+	// how it landed (internal/gitlet's LandingKinds: queue, direct, push).
 	Target string `json:"target"`
 	Commit string `json:"commit"`
 	Kind   string `json:"kind"`
@@ -672,7 +672,7 @@ type CodeTargetBroken struct {
 func (CodeTargetBroken) EventType() string { return "code_target_broken" }
 
 // CodeMirrorPushed records that a repository's home pushed it to its PUSH
-// MIRROR (internal/code/mirror, M6-D16): which refs it set at the other host
+// MIRROR (internal/gitlet/mirror, M6-D16): which refs it set at the other host
 // and onto what, which it deleted there, and which protected branches it held
 // back, each still waiting for a commit its required checks passed
 // (code_green). Published once a push that moved something, by the home Gitlet
@@ -715,7 +715,7 @@ type CodeMirrorPushed struct {
 // CodeMirrorPushedRefs is the most refs each list of a [CodeMirrorPushed]
 // names: SIXTEEN, the first in ref order, beside the count of the whole list.
 // A first push of a repository sets every ref it covers, up to
-// code.MaxRefsPerRepo (100 000), and an account naming them all — some 60
+// gitlet.MaxRefsPerRepo (100 000), and an account naming them all — some 60
 // bytes a ref — is megabytes on every data node's event log, and past some 45
 // bytes a ref name over queue.MaxPayloadBytes (8 MiB): refused at its publish
 // and lost, the very push the audit most needs. Sixteen keeps the worst case —
@@ -753,10 +753,10 @@ func (e CodeMirrorPushed) SummaryFor(actor string) string {
 	return lead(actor, what)
 }
 
-// CodeImported records that a repository's IMPORT ended (internal/code/mirror,
+// CodeImported records that a repository's IMPORT ended (internal/gitlet/mirror,
 // M6-D19): its home filled it from another host — a person's import
 // (code_import_repo, `crewlet gitlet import`), a declared `code.repos[].import`,
-// or a pull mirror's first fill — and its end (code.ImportDone) applied,
+// or a pull mirror's first fill — and its end (gitlet.ImportDone) applied,
 // whole or short of its source. Published ONCE an import, by the home Gitlet
 // node that proposed the end and heard it applied. The repository's row keeps
 // only its LATEST import state, and the push rows its chunks wrote (`via
@@ -847,7 +847,7 @@ func (e CodeTargetBroken) SummaryFor(actor string) string {
 }
 
 // CodeExpunged records that a repository's unreachable objects were dropped:
-// an expunge's COMMIT applied (internal/code/compact, ADR-0099), retiring the
+// an expunge's COMMIT applied (internal/gitlet/compact, ADR-0099), retiring the
 // packs its begin made dropping and keeping live, as its rescue, whatever of
 // them a push made reachable again. Published ONCE a commit, by the
 // maintainer whose compactor proposed it and heard it applied — a person's

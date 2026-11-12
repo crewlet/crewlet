@@ -2,7 +2,7 @@
 --
 -- `code_fetched` was ONE read of a `visibility: unit` repository's contents,
 -- published as the read was answered. The node now files each read in a
--- ledger (internal/code/readaudit) and publishes one record a flush for each
+-- ledger (internal/gitlet/readaudit) and publishes one record a flush for each
 -- reader's reads of one repository by one way, counting them in its `reads`
 -- field, so the usage day sums that count where it counted rows
 -- (store.DB.usageRepoReads) — in a column beside node/0061's six, filled when

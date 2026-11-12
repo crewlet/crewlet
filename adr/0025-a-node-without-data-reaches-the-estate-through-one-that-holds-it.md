@@ -205,7 +205,7 @@ deadline, what a node asked before already paid for — which is the routers' ow
 protocol: every build reads it as it always has, and a later build adds there
 only what an earlier one may ignore. And a data node answering its own seats
 from its own copy, in process, reads nothing off the wire. Nor is a value a
-caller hands back as it took it: a `code.CheckKey` a check runner reports
+caller hands back as it took it: a `gitlet.CheckKey` a check runner reports
 under, a `statelog.Position` a later read floors at, a credential's actor. A
 write's answer, which carries a position, is never refused once the write has
 run, and a member a later build adds to one of these changes what it names,

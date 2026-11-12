@@ -118,3 +118,11 @@ Since [ADR-0110](0110-reaching-a-repository-takes-the-gitlet-permission.md) ther
 `gitlet` uses Gitlet, the engine's own git host, and was appended after `chatlet`, as `chatlet` was
 after `artifacts`, so no stored row moved. "Everything else is everybody's" no longer includes the
 company's code: reaching a repository takes the app, as reading a work item takes `worklet`.
+
+## Amendment: Atlas is the sixth app, and the first given on purpose
+
+Since [ADR-0127](0127-reading-the-atlas-takes-the-atlas-permission.md) there are seven permissions.
+`atlas` reads the company's atlas, the map of everything it runs on, and was appended after `gitlet`,
+so no stored row moved. It is the one app an invitation and a person's create do not carry when nothing
+names their access (`iam.OptInApps`, `iam.DefaultApps`): somebody ticks it on purpose, and admin
+includes it as it includes every app.

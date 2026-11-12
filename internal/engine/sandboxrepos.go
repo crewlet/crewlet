@@ -7,7 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -91,8 +91,8 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 			"access: %s is not set on %s (the base a box dials for /box/git/, a Gitlet node's public listener); "+
 			"nothing was checked out", sandbox.BoxGitURLVar, node))
 	}
-	resolved, err := deps.ResolveRunRepos(ctx, t, reqs, func(asker code.Principal, repo code.RepoRef) code.Grant {
-		return code.GrantOf(asker, repo, e.codeRoster())
+	resolved, err := deps.ResolveRunRepos(ctx, t, reqs, func(asker gitlet.Principal, repo gitlet.RepoRef) gitlet.Grant {
+		return gitlet.GrantOf(asker, repo, e.codeRoster())
 	})
 	if err != nil {
 		return launchRepos{}, err

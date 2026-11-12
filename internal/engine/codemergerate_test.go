@@ -10,11 +10,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -28,7 +28,7 @@ import (
 // while its queue is asked past what any round of seconds can land. Every
 // other read and write passes to the node's own seam.
 type behindQueue struct {
-	codehome.Estate
+	gitlethome.Estate
 
 	mu sync.Mutex
 	// train is the train the worker recorded, "" before; recorded counts
@@ -49,36 +49,36 @@ const (
 
 var rateRepo = uuid.NewSHA1(uuid.NameSpaceOID, []byte(rateRepoName)).String()
 
-func (q *behindQueue) Read(ctx context.Context, rq code.ReadQuery) (code.ReadAnswer, error) {
-	if rq.Kind != code.ReadQueueDue {
+func (q *behindQueue) Read(ctx context.Context, rq gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	if rq.Kind != gitlet.ReadQueueDue {
 		return q.Estate.Read(ctx, rq)
 	}
 	at := statelog.Position{Stream: topics.CodeLogStream, Seq: 1}
 	if rq.QueueDue == nil || rq.QueueDue.RepoID == "" {
-		return code.ReadAnswer{DueRepos: []string{rateRepo}, Position: at}, nil
+		return gitlet.ReadAnswer{DueRepos: []string{rateRepo}, Position: at}, nil
 	}
 	if rq.QueueDue.RepoID != rateRepo {
-		return code.ReadAnswer{Position: at}, nil
+		return gitlet.ReadAnswer{Position: at}, nil
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	entry := code.QueueWorkEntry{EntryID: "entry-1", State: code.QueueWaiting, HeadOID: rateHead,
-		Method: code.MergeMethodMerge, EnqueuedBy: code.Principal{Kind: code.PrincipalAgent, Seat: "swe"}}
-	due := code.QueueDue{TargetRef: "refs/heads/main", Repo: rateRepoName, Tip: rateTip,
+	entry := gitlet.QueueWorkEntry{EntryID: "entry-1", State: gitlet.QueueWaiting, HeadOID: rateHead,
+		Method: gitlet.MergeMethodMerge, EnqueuedBy: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}}
+	due := gitlet.QueueDue{TargetRef: "refs/heads/main", Repo: rateRepoName, Tip: rateTip,
 		Depth: rateDepth, Batch: rateBatch, Required: []string{"unit"},
-		Enqueued: code.MergeRateScan}
+		Enqueued: gitlet.MergeRateScan}
 	if q.train != "" {
-		entry.State, entry.Train = code.QueueTesting, q.train
-		entry.CandidateID = code.QueueCandidateID(q.train, 1)
-		due.Train = []code.QueueWorkCandidate{{CandidateID: entry.CandidateID, Train: q.train, Ordinal: 1,
+		entry.State, entry.Train = gitlet.QueueTesting, q.train
+		entry.CandidateID = gitlet.QueueCandidateID(q.train, 1)
+		due.Train = []gitlet.QueueWorkCandidate{{CandidateID: entry.CandidateID, Train: q.train, Ordinal: 1,
 			BaseOID: rateTip, TipOID: rateCommit,
-			Commits: []code.QueueWorkCommit{{EntryID: entry.EntryID, Commit: rateCommit}}}}
+			Commits: []gitlet.QueueWorkCommit{{EntryID: entry.EntryID, Commit: rateCommit}}}}
 	}
-	due.Entries = []code.QueueWorkEntry{entry}
-	return code.ReadAnswer{DueQueue: &due, Position: at}, nil
+	due.Entries = []gitlet.QueueWorkEntry{entry}
+	return gitlet.ReadAnswer{DueQueue: &due, Position: at}, nil
 }
 
-func (q *behindQueue) Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error) {
+func (q *behindQueue) Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error) {
 	if p.Candidate == nil || p.Candidate.RepoID != rateRepo {
 		return q.Estate.Queue(ctx, p)
 	}
@@ -86,15 +86,15 @@ func (q *behindQueue) Queue(ctx context.Context, p code.QueueProposal) (code.Que
 	defer q.mu.Unlock()
 	q.train = p.Candidate.Train
 	q.recorded++
-	return code.QueueResult{Outcome: statelog.OutcomeApplied}, nil
+	return gitlet.QueueResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 // BuildChain builds the train's one commit, as Gitlet's chain builder
 // answers a merge it built: the queue's candidate is recorded from it.
-func (q *behindQueue) BuildChain(_ context.Context, b code.ChainBuild) (code.ChainResult, error) {
-	out := code.ChainResult{Tip: rateCommit, Settle: func(context.Context, bool) error { return nil }}
+func (q *behindQueue) BuildChain(_ context.Context, b gitlet.ChainBuild) (gitlet.ChainResult, error) {
+	out := gitlet.ChainResult{Tip: rateCommit, Settle: func(context.Context, bool) error { return nil }}
 	for _, e := range b.Entries {
-		out.Commits = append(out.Commits, code.ChainCommit{EntryID: e.EntryID, Commit: rateCommit})
+		out.Commits = append(out.Commits, gitlet.ChainCommit{EntryID: e.EntryID, Commit: rateCommit})
 	}
 	return out, nil
 }
@@ -112,7 +112,7 @@ func (q *behindQueue) trainRecorded() (string, int) {
 // repository, whose queue worker builds a train onto a merge queue at depth
 // rateDepth and batch rateBatch and times it standing — so its reading prices
 // the queue at exactly config.LandingCapacity of those figures at the round it
-// timed, over code.MergeRateWindow, and names the queue's MergeRateScan
+// timed, over gitlet.MergeRateWindow, and names the queue's MergeRateScan
 // enqueues against it — which the retention loop's reading carries into the
 // alarm table, so code_merge_rate_over_capacity stands on that node naming the
 // branch. The threshold is the queue's own: no figure the alarm holds.
@@ -129,8 +129,8 @@ func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 	e, err := engine.New(t.Context(), engine.WithHomeSeams(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, gitCompany),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-		GitHook:     codetest.HookCommand(t),
-	}, func(inner codehome.Estate, _ codehome.Chains) (codehome.Estate, codehome.Chains) {
+		GitHook:     gitlettest.HookCommand(t),
+	}, func(inner gitlethome.Estate, _ gitlethome.Chains) (gitlethome.Estate, gitlethome.Chains) {
 		queue.Estate = inner
 		return queue, queue
 	}))
@@ -144,11 +144,11 @@ func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 
 	// THE HOME'S READING, read until it names the queue: the worker's first
 	// turn — once this node is listed as the repository's home — builds the
-	// train, and a later one, a codehome.Backstop after at the latest, finds
+	// train, and a later one, a gitlethome.Backstop after at the latest, finds
 	// it standing and prices the queue at its age. The deadline is three
 	// passes — the loop's first, at Start, may find this node not yet
 	// listed — and room for a loaded machine.
-	deadline := time.Now().Add(3*codehome.Backstop + time.Minute)
+	deadline := time.Now().Add(3*gitlethome.Backstop + time.Minute)
 	var reading statelog.Reading
 	for {
 		reading = engine.CodeReadingForTest(t.Context(), e)
@@ -170,17 +170,17 @@ func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 	case reading.CodeMergeRateOver != 1 || reading.CodeMergeRateOverTarget != named:
 		t.Fatalf("the reading counts %d queue(s) over, the furthest %q; want the one queue, %q",
 			reading.CodeMergeRateOver, reading.CodeMergeRateOverTarget, named)
-	case reading.CodeMergeRateOverAsked != code.MergeRateScan:
+	case reading.CodeMergeRateOverAsked != gitlet.MergeRateScan:
 		t.Errorf("the reading counts %d enqueue(s), want the queue's %d", reading.CodeMergeRateOverAsked,
-			code.MergeRateScan)
-	case reading.CodeMergeRateWindow != code.MergeRateWindow:
-		t.Errorf("the reading's window is %s, want code.MergeRateWindow", reading.CodeMergeRateWindow)
+			gitlet.MergeRateScan)
+	case reading.CodeMergeRateWindow != gitlet.MergeRateWindow:
+		t.Errorf("the reading's window is %s, want gitlet.MergeRateWindow", reading.CodeMergeRateWindow)
 	case reading.CodeMergeRateOverRound <= 0:
 		t.Errorf("the reading prices the queue at a round of %s, want the age of the train it timed",
 			reading.CodeMergeRateOverRound)
 	}
 	if want := config.LandingCapacity(rateDepth, rateBatch, reading.CodeMergeRateOverRound,
-		code.MergeRateWindow); reading.CodeMergeRateOverCapacity != want {
+		gitlet.MergeRateWindow); reading.CodeMergeRateOverCapacity != want {
 		t.Errorf("the reading's capacity is %d at a round of %s, want LandingCapacity's %d at the queue's "+
 			"depth %d and batch %d", reading.CodeMergeRateOverCapacity, reading.CodeMergeRateOverRound, want,
 			rateDepth, rateBatch)

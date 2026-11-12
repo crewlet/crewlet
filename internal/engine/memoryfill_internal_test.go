@@ -309,7 +309,7 @@ func TestATickOfRefusedRequestsThatNamedNoRowSaysSo(t *testing.T) {
 		t.Fatalf("the fixture did not make a silent tick: concluded %v, %d refused alone, %d filled",
 			report.pass.Concluded, len(report.pass.RefusedAlone), report.filled["diary"])
 	}
-	var isolating *fillLine
+	var isolating *reportLine
 	lines := report.lines(fake)
 	for i := range lines {
 		if lines[i].msg == "memory_fill_refusals_isolating" {

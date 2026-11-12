@@ -133,6 +133,9 @@ func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 			[]advisor.Class{advisor.ClassPickupStillWaiting}},
 		"1 of 10 pickups said words": {[]usage.TurnLedgerRow{started("app", pickup, "words", 1),
 			started("qa", pickup, "moved", 9)}, nil},
+		"2 of 10 pickups said words, one a hand-back": {[]usage.TurnLedgerRow{
+			started("app", "work_item:dead_wait", "words", 1), started("qa", pickup, "words", 1),
+			started("qa", pickup, "moved", 8)}, []advisor.Class{advisor.ClassPickupStillWaiting}},
 		"9 pickups, all words":     {[]usage.TurnLedgerRow{started("app", pickup, "words", 9), held}, nil},
 		"words under another wake": {[]usage.TurnLedgerRow{started("app", "chat:message", "words", 10)}, nil},
 		"more than 15% auxiliary of a million": {[]usage.TurnLedgerRow{spent("sre", 849_999, 150_001)},

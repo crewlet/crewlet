@@ -295,6 +295,9 @@ export type FramedScreen =
   | { screen: "seat"; handle: string }
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
+  /** The atlas, drawn as its map or its list (`shape=`), and one entry's page by its id. */
+  | { screen: "atlas" }
+  | { screen: "atlas-entry"; id: string }
   | { screen: "budgets" }
   /**
    * A room by its id, or neither: the bare `#/chatlet`, which the screen
@@ -564,7 +567,7 @@ function gitlet(rest: string[], screen: Make, under: Under): Route {
 /**
  * Company's rows, each under `#/company`: Principles, at its own address and
  * at the bare one, which is the Company landing, then Brand, the Org chart,
- * Schedules, Integrations and Budgets.
+ * Schedules, Integrations, Atlas and Budgets.
  */
 function company(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
@@ -592,6 +595,14 @@ function company(rest: string[], screen: Make, under: Under): Route {
       return screen(
         tail[0] ? { screen: "integrations", kind: tail[0] } : { screen: "integrations" },
       );
+    case "atlas":
+      // AN ENTRY BY ITS ID, the one segment under it: a uuid, which no word
+      // the atlas may reserve later can be.
+      if (tail.length === 0) return screen({ screen: "atlas" });
+      if (tail.length === 1 && ID_SHAPE.test(tail[0]!)) {
+        return screen({ screen: "atlas-entry", id: tail[0]! });
+      }
+      return missing("atlas", under("Atlas"), "an entry is opened from the atlas");
     case "budgets":
       return tail.length ? none("budgets", "Budgets") : screen({ screen: "budgets" });
     default:

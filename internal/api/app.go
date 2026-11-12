@@ -23,9 +23,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -963,6 +963,10 @@ func New(opts Options) (*App, error) {
 	if d, ok := opts.Runtime.(delegatedRuntime); ok {
 		sources.Delegated = d.DelegatedReads()
 	}
+	// And the company's atlas, where the runtime reads one (ADR-0126).
+	if a, ok := opts.Runtime.(atlasRuntime); ok {
+		sources.Atlas = a.AtlasReads()
+	}
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()
@@ -1676,7 +1680,7 @@ func inboxApp(source string) iam.Grant {
 	switch source {
 	case worklet.Domain{}.Name():
 		return iam.GrantWorklet
-	case code.Domain{}.Name():
+	case gitlet.Domain{}.Name():
 		return iam.GrantGitlet
 	}
 	return ""

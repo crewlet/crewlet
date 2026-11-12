@@ -16,8 +16,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -32,14 +32,14 @@ type fakeGit struct {
 	name string
 
 	mu    sync.Mutex
-	asked []code.GitQuery
+	asked []gitlet.GitQuery
 	// deadlines is, for every read asked, its context's deadline; the zero
 	// time where it had none.
 	deadlines []time.Time
-	// unready answers every read code.ErrGitUnready for this reason, where
+	// unready answers every read gitlet.ErrGitUnready for this reason, where
 	// set — a SEAT'S read alone where seatsOnly is, as a node behind its
 	// configuration judges no seat and serves a person.
-	unready   code.UnreadyReason
+	unready   gitlet.UnreadyReason
 	seatsOnly bool
 	// held is the repositories it holds a copy of, where it is set — a read
 	// not stamped home of any other is not_held, as the query server answers
@@ -48,15 +48,15 @@ type fakeGit struct {
 	// share, where set, is the node's seat git-work share, a unit of which
 	// every read takes before it answers — and a read the context's end
 	// stops waiting for one answers as the query server does: unready, at
-	// its share, where its answer fell due (code.AnswerDue), and the
+	// its share, where its answer fell due (gitlet.AnswerDue), and the
 	// context's own error where its caller went away.
-	share *code.GitShare
+	share *gitlet.GitShare
 
 	// written is every engine write it was asked, stamped home or not, with
 	// its context's deadline; and ranNothing,
 	// where set, is what it refuses every write with about itself —
 	// Gitlet stopping, or holding no epoch to sign by — having run
-	// nothing (code.ErrNotServing). A write is otherwise answered as a read
+	// nothing (gitlet.ErrNotServing). A write is otherwise answered as a read
 	// is: unready where the node is told to be, not_held where it holds no
 	// copy and is not the walk's home, and else applied, the node's name its
 	// commit.
@@ -67,29 +67,29 @@ type fakeGit struct {
 	// each answered as a read is: unready where the node is told to be,
 	// not_held where it holds no copy and is not the walk's home, and else
 	// a clean merge of the two commits asked.
-	previewed []code.MergePreviewQuery
+	previewed []gitlet.MergePreviewQuery
 }
 
-func (g *fakeGit) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+func (g *fakeGit) MergePreview(_ context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.previewed = append(g.previewed, q)
 	switch {
-	case g.unready != "" && (!g.seatsOnly || q.Asker.Kind == code.PrincipalAgent):
-		return code.MergePreviewAnswer{}, &code.ErrGitUnready{Reason: g.unready,
+	case g.unready != "" && (!g.seatsOnly || q.Asker.Kind == gitlet.PrincipalAgent):
+		return gitlet.MergePreviewAnswer{}, &gitlet.ErrGitUnready{Reason: g.unready,
 			Detail: fmt.Sprintf("%s is %s for repository %s", g.name, g.unready, q.RepoID)}
 	case g.held != nil && !g.held[q.RepoID] && !q.Home:
-		return code.MergePreviewAnswer{}, &code.ErrGitUnready{Reason: code.UnreadyNotHeld,
+		return gitlet.MergePreviewAnswer{}, &gitlet.ErrGitUnready{Reason: gitlet.UnreadyNotHeld,
 			Detail: fmt.Sprintf("%s holds no copy of repository %s", g.name, q.RepoID)}
 	}
 	if g.held != nil {
 		g.held[q.RepoID] = true
 	}
-	return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeClean}, nil
+	return gitlet.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: gitlet.MergeClean}, nil
 }
 
 // previews is every merge preview the half was asked, in order.
-func (g *fakeGit) previews() []code.MergePreviewQuery {
+func (g *fakeGit) previews() []gitlet.MergePreviewQuery {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.previewed)
@@ -98,29 +98,29 @@ func (g *fakeGit) previews() []code.MergePreviewQuery {
 // askedWrite is one engine write a fakeGit was asked, and its context's
 // deadline (the zero time where it had none).
 type askedWrite struct {
-	w        code.EngineWrite
+	w        gitlet.EngineWrite
 	deadline time.Time
 }
 
-func (g *fakeGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+func (g *fakeGit) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.written = append(g.written, askedWrite{w: w, deadline: deadlineOf(ctx)})
 	switch {
 	case g.ranNothing != nil:
-		return code.EngineWriteResult{}, g.ranNothing
-	case g.unready != "" && (!g.seatsOnly || w.Principal.Kind == code.PrincipalAgent):
-		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: g.unready,
+		return gitlet.EngineWriteResult{}, g.ranNothing
+	case g.unready != "" && (!g.seatsOnly || w.Principal.Kind == gitlet.PrincipalAgent):
+		return gitlet.EngineWriteResult{}, &gitlet.ErrGitUnready{Reason: g.unready,
 			Detail: fmt.Sprintf("%s is %s for repository %s", g.name, g.unready, w.RepoID)}
 	case g.held != nil && !g.held[w.RepoID] && !w.Home:
-		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: code.UnreadyNotHeld,
+		return gitlet.EngineWriteResult{}, &gitlet.ErrGitUnready{Reason: gitlet.UnreadyNotHeld,
 			Detail: fmt.Sprintf("%s holds no copy of repository %s", g.name, w.RepoID)}
 	}
 	if g.held != nil {
 		g.held[w.RepoID] = true
 	}
-	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: g.name, PushID: code.WritePushID(w.OpID),
-		Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, Result: code.ResultOK}}, nil
+	return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: g.name, PushID: gitlet.WritePushID(w.OpID),
+		Command: gitlet.Command{Ref: w.Ref, Old: w.ExpectedHead, Result: gitlet.ResultOK}}, nil
 }
 
 // writes is every engine write the half was asked, in order.
@@ -131,7 +131,7 @@ func (g *fakeGit) writes() []askedWrite {
 }
 
 // servedAnAttempt reports whether deadline — what a git half was served
-// until — is a reply's margin (code.ReplyMargin) before the end of an attempt
+// until — is a reply's margin (gitlet.ReplyMargin) before the end of an attempt
 // of whole that the router began between before and after.
 //
 // READ OFF THE DEADLINE THE REQUEST CARRIED, never off the time left when the
@@ -147,41 +147,41 @@ func servedAnAttempt(deadline, before, after time.Time, whole time.Duration) boo
 	if deadline.IsZero() {
 		return false
 	}
-	end := deadline.Round(0).Add(code.ReplyMargin)
+	end := deadline.Round(0).Add(gitlet.ReplyMargin)
 	return !end.Before(before.Round(0).Add(whole)) && !end.After(after.Round(0).Add(whole))
 }
 
-func (g *fakeGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (g *fakeGit) Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	g.mu.Lock()
 	g.asked = append(g.asked, q)
 	g.deadlines = append(g.deadlines, deadlineOf(ctx))
 	share := g.share
 	g.mu.Unlock()
 	if share != nil {
-		release, err := share.Take(ctx, code.SeatWorkRead)
+		release, err := share.Take(ctx, gitlet.SeatWorkRead)
 		if err != nil {
-			if code.AnswerDue(ctx) {
-				return code.GitAnswer{}, &code.ErrGitUnready{Reason: code.UnreadyShare,
+			if gitlet.AnswerDue(ctx) {
+				return gitlet.GitAnswer{}, &gitlet.ErrGitUnready{Reason: gitlet.UnreadyShare,
 					Detail: g.name + "'s seat git work held its whole share until the read's answer fell due"}
 			}
-			return code.GitAnswer{}, err
+			return gitlet.GitAnswer{}, err
 		}
 		release()
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	switch {
-	case g.unready != "" && (!g.seatsOnly || q.Asker.Kind == code.PrincipalAgent):
-		return code.GitAnswer{}, &code.ErrGitUnready{Reason: g.unready,
+	case g.unready != "" && (!g.seatsOnly || q.Asker.Kind == gitlet.PrincipalAgent):
+		return gitlet.GitAnswer{}, &gitlet.ErrGitUnready{Reason: g.unready,
 			Detail: fmt.Sprintf("%s is %s for repository %s", g.name, g.unready, q.RepoID)}
 	case g.held != nil && !g.held[q.RepoID] && !q.Home:
-		return code.GitAnswer{}, &code.ErrGitUnready{Reason: code.UnreadyNotHeld,
+		return gitlet.GitAnswer{}, &gitlet.ErrGitUnready{Reason: gitlet.UnreadyNotHeld,
 			Detail: fmt.Sprintf("%s holds no copy of repository %s", g.name, q.RepoID)}
 	}
 	if g.held != nil {
 		g.held[q.RepoID] = true
 	}
-	return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Rev: g.name}, nil
+	return gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Rev: g.name}, nil
 }
 
 func (g *fakeGit) set(change func(*fakeGit)) {
@@ -191,7 +191,7 @@ func (g *fakeGit) set(change func(*fakeGit)) {
 }
 
 // reads is every read the half was asked, in order.
-func (g *fakeGit) reads() []code.GitQuery {
+func (g *fakeGit) reads() []gitlet.GitQuery {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.asked)
@@ -259,10 +259,10 @@ func (f *fleet) gitRouter(t *testing.T, self string, local LocalGit) *Router {
 func repoID(i int) string { return fmt.Sprintf("019a0c2e-0000-7000-8000-%012x", i) }
 
 // treeOf is a person's read of repo's root at a commit.
-func treeOf(repo string) code.GitQuery {
-	return code.GitQuery{Kind: code.GitTree, RepoID: repo,
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
-		Tree:  &code.TreeQuery{Rev: "1111111111111111111111111111111111111111"}}
+func treeOf(repo string) gitlet.GitQuery {
+	return gitlet.GitQuery{Kind: gitlet.GitTree, RepoID: repo,
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+		Tree:  &gitlet.TreeQuery{Rev: "1111111111111111111111111111111111111111"}}
 }
 
 // asks is how many reads each half has been asked, by node.
@@ -276,23 +276,23 @@ func asks(halves map[string]*fakeGit) map[string]int {
 
 // writeOf is a person's commit of one file onto repo's main, as a tool asks
 // one: under an operation of its own, valid by the one rule every party to a
-// write holds it to (code.EngineWrite.Validate).
-func writeOf(repo string) code.EngineWrite {
+// write holds it to (gitlet.EngineWrite.Validate).
+func writeOf(repo string) gitlet.EngineWrite {
 	text := "one\n"
-	return code.EngineWrite{Kind: code.WriteCommitFiles, RepoID: repo,
-		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+	return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repo,
+		Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
 		OpID:      statelog.NewOpID(time.Now(), ""), Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 		Ref: "refs/heads/main", ExpectedHead: "1111111111111111111111111111111111111111", Message: "one",
-		Files: []code.FileOp{{Op: code.FileOpPut, Path: "README.md", Content: &text}}}
+		Files: []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "README.md", Content: &text}}}
 }
 
 // seatWriteOf is a seat's commit onto its own branch of repo: one a node behind
 // the company's configuration judges no grant for, naming the turn that made
 // it.
-func seatWriteOf(repo string) code.EngineWrite {
+func seatWriteOf(repo string) gitlet.EngineWrite {
 	w := writeOf(repo)
-	w.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "dev",
-		Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+	w.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev",
+		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
 	w.Ref, w.ExpectedHead, w.Base = "refs/heads/seats/dev/a", "", "1111111111111111111111111111111111111111"
 	return w
 }
@@ -308,9 +308,9 @@ func writesAsked(halves map[string]*fakeGit) map[string]int {
 
 // previewOf is a person's merge preview of one commit of repo into another, as
 // a comparison asks one.
-func previewOf(repo string) code.MergePreviewQuery {
-	return code.MergePreviewQuery{RepoID: repo,
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+func previewOf(repo string) gitlet.MergePreviewQuery {
+	return gitlet.MergePreviewQuery{RepoID: repo,
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
 		Base:  "1111111111111111111111111111111111111111", Head: "2222222222222222222222222222222222222222"}
 }
 
@@ -394,7 +394,7 @@ func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 
 			before = previewsAsked(halves)
 			p, err := r.Code().MergePreview(t.Context(), previewOf(repo))
-			if err != nil || p.State != code.MergeClean || p.RepoID != repo {
+			if err != nil || p.State != gitlet.MergeClean || p.RepoID != repo {
 				t.Fatalf("%s: the preview of %s = (%+v, %v), want it answered clean", name, repo, p, err)
 			}
 			after = previewsAsked(halves)
@@ -1049,7 +1049,7 @@ func TestAGitletNodeThatIsSyncingSendsTheAskerToTheRunnerUp(t *testing.T) {
 	repo := repoID(7)
 	order := rendezvous.Order(repo, holders)
 	home, runnerUp := halves[order[0]], halves[order[1]]
-	home.set(func(g *fakeGit) { g.unready = code.UnreadySyncing })
+	home.set(func(g *fakeGit) { g.unready = gitlet.UnreadySyncing })
 
 	a, err := f.client.Code().GitRead(t.Context(), treeOf(repo))
 	if err != nil || a.Rev != order[1] {
@@ -1091,7 +1091,7 @@ func TestOnlyTheEffectiveHomeIsAskedToFill(t *testing.T) {
 	repo := repoID(11)
 	order := rendezvous.Order(repo, holders)
 	for _, n := range order[:3] {
-		halves[n].set(func(g *fakeGit) { g.unready = code.UnreadySyncing })
+		halves[n].set(func(g *fakeGit) { g.unready = gitlet.UnreadySyncing })
 	}
 	if a, err := f.client.Code().GitRead(t.Context(), treeOf(repo)); err != nil || a.Rev != order[3] {
 		t.Fatalf("a read three nodes could not answer = (%s, %v), want the fourth's answer", a.Rev, err)
@@ -1143,9 +1143,9 @@ func TestOnlyTheEffectiveHomeIsAskedToFill(t *testing.T) {
 
 // seatTreeOf is a seat's read of repo's root at a commit: one a node behind
 // the company's configuration judges no grant for.
-func seatTreeOf(repo string) code.GitQuery {
+func seatTreeOf(repo string) gitlet.GitQuery {
 	q := treeOf(repo)
-	q.Asker = code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}
+	q.Asker = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
 	return q
 }
 
@@ -1153,7 +1153,7 @@ func seatTreeOf(repo string) code.GitQuery {
 func stamped(halves map[string]*fakeGit) []string {
 	var out []string
 	for name, g := range halves {
-		if slices.ContainsFunc(g.reads(), func(q code.GitQuery) bool { return q.Home }) {
+		if slices.ContainsFunc(g.reads(), func(q gitlet.GitQuery) bool { return q.Home }) {
 			out = append(out, name)
 		}
 	}
@@ -1185,7 +1185,7 @@ func TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp(t *testing.T) {
 	repo := repoID(23)
 	order := rendezvous.Order(repo, holders)
 	home, runnerUp, third := halves[order[0]], halves[order[1]], halves[order[2]]
-	home.set(func(g *fakeGit) { g.unready, g.seatsOnly = code.UnreadyBehindConfig, true })
+	home.set(func(g *fakeGit) { g.unready, g.seatsOnly = gitlet.UnreadyBehindConfig, true })
 	for _, g := range []*fakeGit{runnerUp, third} {
 		g.set(func(g *fakeGit) { g.held = map[string]bool{} })
 	}
@@ -1238,8 +1238,8 @@ func TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp(t *testing.T) {
 // past a home without Gitlet — that row unserved, red.
 func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
 	t.Parallel()
-	cases := map[string]code.UnreadyReason{"without Gitlet": "", "an unknown reason": "drowsy"}
-	for _, why := range code.UnreadyReasons() {
+	cases := map[string]gitlet.UnreadyReason{"without Gitlet": "", "an unknown reason": "drowsy"}
+	for _, why := range gitlet.UnreadyReasons() {
 		cases[string(why)] = why
 	}
 	for name, why := range cases {
@@ -1394,8 +1394,8 @@ func TestAGitReadIsNeverAskedOnTheSharedLane(t *testing.T) {
 // inside its budget answers `behind`, naming why in the reply's detail and
 // carrying no error — so the asker reads it as a node that ran nothing, moves
 // on without demoting it, and a walk nobody served is ErrUnserved, never a
-// code.ErrGitUnready a caller could take for the repository's own answer. The
-// error type is registered all the same, as every error of the code package
+// gitlet.ErrGitUnready a caller could take for the repository's own answer. The
+// error type is registered all the same, as every error of the gitlet package
 // is, for the reason the list is complete at all. What crosses is its REASON,
 // beside the `behind` (reply.Unready), which the walk reads to know who may
 // fill a copy; and a seat's read refused for the node's configuration says so
@@ -1404,7 +1404,7 @@ func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	halves := f.gitletNodes(t, []string{"git-a"})
-	halves["git-a"].set(func(g *fakeGit) { g.unready = code.UnreadySyncing })
+	halves["git-a"].set(func(g *fakeGit) { g.unready = gitlet.UnreadySyncing })
 	args, err := json.Marshal(treeOf(repoID(2)))
 	if err != nil {
 		t.Fatal(err)
@@ -1412,17 +1412,17 @@ func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 	rep := askSignedOn(t, f.start(t), laneGitReads.subject("git-a"),
 		request{Op: opCodeGitRead.spec.name, Args: args, From: "agent-9"})
 	if rep.Unserved != unservedBehind || rep.Err != nil || !strings.Contains(rep.Detail, "git-a is syncing") ||
-		rep.Unready != code.UnreadySyncing {
+		rep.Unready != gitlet.UnreadySyncing {
 		t.Fatalf("a Gitlet node whose copy is syncing answered %+v, want `behind` naming why, its reason beside "+
 			"it, and no error", rep)
 	}
-	halves["git-a"].set(func(g *fakeGit) { g.unready = code.UnreadyBehindConfig })
+	halves["git-a"].set(func(g *fakeGit) { g.unready = gitlet.UnreadyBehindConfig })
 	rep = askSignedOn(t, f.start(t), laneGitReads.subject("git-a"),
 		request{Op: opCodeGitRead.spec.name, Args: args, From: "agent-9"})
-	if rep.Unserved != unservedBehindConfig || rep.Err != nil || rep.Unready != code.UnreadyBehindConfig {
+	if rep.Unserved != unservedBehindConfig || rep.Err != nil || rep.Unready != gitlet.UnreadyBehindConfig {
 		t.Fatalf("a Gitlet node behind its configuration answered %+v, want `behind_config` with its reason", rep)
 	}
-	halves["git-a"].set(func(g *fakeGit) { g.unready = code.UnreadySyncing })
+	halves["git-a"].set(func(g *fakeGit) { g.unready = gitlet.UnreadySyncing })
 	for name, r := range map[string]*Router{
 		"a node that holds nothing":   f.client,
 		"the Gitlet node, in process": f.gitRouter(t, "git-a", gitHalf{node: halves["git-a"]}),
@@ -1430,7 +1430,7 @@ func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 		_, err := r.Code().GitRead(t.Context(), treeOf(repoID(2)))
 		var (
 			unserved *ErrUnserved
-			unready  *code.ErrGitUnready
+			unready  *gitlet.ErrGitUnready
 		)
 		if !errors.As(err, &unserved) || errors.As(err, &unready) || !strings.Contains(unserved.Detail, "syncing") {
 			t.Errorf("%s: a read only a syncing node was asked = %v, want ErrUnserved naming why and no "+
@@ -1466,8 +1466,8 @@ func TestAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 func testAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 	f := newFleet(t)
 	halves := f.gitletNodes(t, []string{"git-a"})
-	share := code.NewGitShare("git-a", 2, nil)
-	unit, err := share.Take(t.Context(), code.SeatWorkRead)
+	share := gitlet.NewGitShare("git-a", 2, nil)
+	unit, err := share.Take(t.Context(), gitlet.SeatWorkRead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1475,7 +1475,7 @@ func testAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 	halves["git-a"].set(func(g *fakeGit) { g.share = share })
 	timing := Production()
 	timing.GitReadAttempt = minReadAttempt + 500*time.Millisecond
-	if timing.GitReadAttempt >= code.GitShareWait+code.ReplyMargin {
+	if timing.GitReadAttempt >= gitlet.GitShareWait+gitlet.ReplyMargin {
 		t.Fatalf("the premise: a %v attempt must end before the share's own wait and the margin would",
 			timing.GitReadAttempt)
 	}
@@ -1563,23 +1563,23 @@ func TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs(t *testing.T) {
 // Mutations: drop the hard arm — the seat's read runs on the node behind, red;
 // let the last resort skip it (a request told to answer anyway judged with no
 // posture) — the asked-last seat read runs, red; drop the committer's gate
-// (code.CommitterOptions.Current) — the asked-last seat's push reaches the
+// (gitlet.CommitterOptions.Current) — the asked-last seat's push reaches the
 // log of the committer behind, red.
 func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	seat := code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}
-	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	person := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}
 	for _, tc := range []struct {
 		op  string
-		run func(r *Router, asker code.Principal) error
+		run func(r *Router, asker gitlet.Principal) error
 	}{
-		{opCodeRead.spec.name, func(r *Router, asker code.Principal) error {
-			_, err := r.Code().Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadRepos})
+		{opCodeRead.spec.name, func(r *Router, asker gitlet.Principal) error {
+			_, err := r.Code().Read(ctx, gitlet.ReadQuery{Asker: asker, Kind: gitlet.ReadRepos})
 			return err
 		}},
-		{opCodeResolveRef.spec.name, func(r *Router, asker code.Principal) error {
-			_, err := r.Code().ResolveRef(ctx, code.RefQuery{Repo: "app", Refs: []string{"main"}, Asker: asker})
+		{opCodeResolveRef.spec.name, func(r *Router, asker gitlet.Principal) error {
+			_, err := r.Code().ResolveRef(ctx, gitlet.RefQuery{Repo: "app", Refs: []string{"main"}, Asker: asker})
 			return err
 		}},
 	} {
@@ -1631,7 +1631,7 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 	// committer — first in the key's order — is behind the configuration.
 	const repo = "019a0c2e-0000-7000-8000-0000000000b1"
 	pushes := 0
-	push := func(asker code.Principal, ref string) code.Proposal {
+	push := func(asker gitlet.Principal, ref string) gitlet.Proposal {
 		pushes++
 		p := proposalTo(repo, fmt.Sprintf("019a0c2e-0000-7000-8000-%012x", pushes))
 		p.Principal, p.Commands[0].Ref = asker, ref
@@ -1639,8 +1639,8 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 	}
 	// A seat's push git receives is its coding box's, naming the executor
 	// run that pushed and its harness beside the turn that launched it.
-	seatPush := code.Principal{Kind: code.PrincipalAgent, Seat: "dev",
-		Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d",
+	seatPush := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev",
+		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d",
 			RunID: "019a0c2e-0000-7000-8000-00000000b0c5", Harness: "claude-code"}}
 	f := newFleet(t, "data-a", "data-b")
 	o := rendezvous.Order(repo, []string{"data-a", "data-b"})
@@ -1667,7 +1667,7 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 			"its log untouched, asked as the last resort", err, log.appends(), anyway)
 	}
 	if got, err := f.client.Code().Propose(ctx, push(person, "refs/heads/main")); err != nil ||
-		got.Answer.Refused != code.RefusalBusy || log.appends() != 1 {
+		got.Answer.Refused != gitlet.RefusalBusy || log.appends() != 1 {
 		t.Fatalf("a person's push to the same committer = (%+v, %v), its log asked %d times; want it "+
 			"decided there as the last resort — its log asked once, and busy, the answer of a log that "+
 			"takes no record", got, err, log.appends())
@@ -1682,7 +1682,7 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 			"asked %d times; want it unserved and the log untouched", err, ownLog.appends())
 	}
 	if got, err := own.Code().Propose(ctx, push(person, "refs/heads/main")); err != nil ||
-		got.Answer.Refused != code.RefusalBusy || ownLog.appends() != 1 {
+		got.Answer.Refused != gitlet.RefusalBusy || ownLog.appends() != 1 {
 		t.Errorf("this node's own committer behind the configuration, its person's push = (%+v, %v), its "+
 			"log asked %d times; want it decided there", got, err, ownLog.appends())
 	}
@@ -1697,12 +1697,12 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 func gatedCommitter(t *testing.T, n *fakeNode) *refusingLog {
 	t.Helper()
 	log := &refusingLog{}
-	c, err := code.NewCommitter(code.CommitterOptions{
+	c, err := gitlet.NewCommitter(gitlet.CommitterOptions{
 		Publisher: log, DB: codeRows(t, statelog.Position{Stream: codeStream, Generation: 1, Seq: 1}).Reader(),
-		NodeID: n.name, Limits: code.DefaultLimits,
-		Retention: func() time.Duration { return code.DefaultDeletedRetention },
-		SeatRules: func() (code.SeatRules, bool) {
-			return code.SeatRules{Roster: platform{}, Zone: time.UTC}, true
+		NodeID: n.name, Limits: gitlet.DefaultLimits,
+		Retention: func() time.Duration { return gitlet.DefaultDeletedRetention },
+		SeatRules: func() (gitlet.SeatRules, bool) {
+			return gitlet.SeatRules{Roster: platform{}, Zone: time.UTC}, true
 		},
 		Current: func() bool {
 			n.mu.Lock()
@@ -1714,7 +1714,7 @@ func gatedCommitter(t *testing.T, n *fakeNode) *refusingLog {
 		t.Fatalf("the committer of %s: %v", n.name, err)
 	}
 	t.Cleanup(func() { c.Stop(context.Background()) })
-	n.set(func(n *fakeNode) { n.codeHalf = code.Served{Committer: c} })
+	n.set(func(n *fakeNode) { n.codeHalf = gitlet.Served{Committer: c} })
 	return log
 }
 
@@ -1732,12 +1732,12 @@ func (l *refusingLog) appends() int { return int(l.asked.Load()) }
 
 // EVERY OPERATION THAT JUDGES A GRANT IS DECLARED. The hard arm is a
 // declaration rather than a list kept beside the registry: every operation on
-// a domain's copy whose arguments carry the code.Principal it judges — a
+// a domain's copy whose arguments carry the gitlet.Principal it judges — a
 // read's Asker, a lifecycle request's Actor — declares judgesGrant, so a read
 // or a write added later that a seat asks is held by the arm the day it is
 // declared — and none that names no such principal does. A git operation
 // declares none: its Gitlet node judges the grant and answers a seat itself where
-// it is behind its configuration (code.UnreadyBehindConfig), which the walk
+// it is behind its configuration (gitlet.UnreadyBehindConfig), which the walk
 // moves on from; declared, the Gitlet node would refuse persons' reads too.
 // And each READ's declaration judges a SEAT and no other asker: a person's
 // read consults no chart, and an introduced page names nobody. A lifecycle
@@ -1748,7 +1748,7 @@ func (l *refusingLog) appends() int { return int(l.asked.Load()) }
 // declare code.git_read — each red.
 func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 	t.Parallel()
-	principal := reflect.TypeFor[code.Principal]()
+	principal := reflect.TypeFor[gitlet.Principal]()
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		args := spec.args
@@ -1776,69 +1776,69 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 			t.Errorf("%s declares that it judges a grant and its arguments name no asker", name)
 		}
 	}
-	seat := code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}
-	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	person := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}
 	for _, tc := range []struct {
 		spec *opSpec
 		args any
 		want bool
 	}{
-		{opCodeRead.spec, code.ReadQuery{Asker: seat, Kind: code.ReadRepos}, true},
-		{opCodeRead.spec, code.ReadQuery{Asker: person, Kind: code.ReadRepos}, false},
-		{opCodeRead.spec, code.ReadQuery{Kind: code.ReadIntroduced}, false},
-		{opCodeRead.spec, code.ReadQuery{Kind: code.ReadRunPushes}, false},
-		{opCodeResolveRef.spec, code.RefQuery{Asker: seat}, true},
-		{opCodeResolveRef.spec, code.RefQuery{Asker: person}, false},
+		{opCodeRead.spec, gitlet.ReadQuery{Asker: seat, Kind: gitlet.ReadRepos}, true},
+		{opCodeRead.spec, gitlet.ReadQuery{Asker: person, Kind: gitlet.ReadRepos}, false},
+		{opCodeRead.spec, gitlet.ReadQuery{Kind: gitlet.ReadIntroduced}, false},
+		{opCodeRead.spec, gitlet.ReadQuery{Kind: gitlet.ReadRunPushes}, false},
+		{opCodeResolveRef.spec, gitlet.RefQuery{Asker: seat}, true},
+		{opCodeResolveRef.spec, gitlet.RefQuery{Asker: person}, false},
 		// A SEAT'S WRITE OF A CHANGE, which its grant decides whether it may
 		// make; a person's consults no chart.
-		{opCodeChange.spec, code.ChangeProposal{Asker: seat}, true},
-		{opCodeChange.spec, code.ChangeProposal{Asker: person}, false},
+		{opCodeChange.spec, gitlet.ChangeProposal{Asker: seat}, true},
+		{opCodeChange.spec, gitlet.ChangeProposal{Asker: person}, false},
 		// A LANDING, the home's own write naming no asker, judges no grant.
-		{opCodeChange.spec, code.ChangeProposal{Landed: &code.ChangeLanded{}}, false},
+		{opCodeChange.spec, gitlet.ChangeProposal{Landed: &gitlet.ChangeLanded{}}, false},
 		// EVERY ENQUEUE, whoever asks — its gate counts approvals, owners'
 		// lead chains and a seat's merge authority by the chart — and a
 		// seat's dequeue, whose grant the chart says; a person's dequeue
 		// consults none.
-		{opCodeQueue.spec, code.QueueProposal{Asker: seat, Enqueue: &code.Enqueue{}}, true},
-		{opCodeQueue.spec, code.QueueProposal{Asker: person, Enqueue: &code.Enqueue{}}, true},
-		{opCodeQueue.spec, code.QueueProposal{Asker: seat, Dequeue: &code.Dequeue{}}, true},
-		{opCodeQueue.spec, code.QueueProposal{Asker: person, Dequeue: &code.Dequeue{}}, false},
+		{opCodeQueue.spec, gitlet.QueueProposal{Asker: seat, Enqueue: &gitlet.Enqueue{}}, true},
+		{opCodeQueue.spec, gitlet.QueueProposal{Asker: person, Enqueue: &gitlet.Enqueue{}}, true},
+		{opCodeQueue.spec, gitlet.QueueProposal{Asker: seat, Dequeue: &gitlet.Dequeue{}}, true},
+		{opCodeQueue.spec, gitlet.QueueProposal{Asker: person, Dequeue: &gitlet.Dequeue{}}, false},
 		// EVERY MERGE, whoever asks: its gate counts approvals, owners' lead
 		// chains and a seat's merge authority by the chart.
-		{opCodeMerge.spec, code.MergeProposal{Asker: seat}, true},
-		{opCodeMerge.spec, code.MergeProposal{Asker: person}, true},
-		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleHold, Actor: seat}, true},
-		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleCreate, Actor: person}, true},
+		{opCodeMerge.spec, gitlet.MergeProposal{Asker: seat}, true},
+		{opCodeMerge.spec, gitlet.MergeProposal{Asker: person}, true},
+		{opCodeLifecycle.spec, gitlet.LifecycleRequest{Kind: gitlet.LifecycleHold, Actor: seat}, true},
+		{opCodeLifecycle.spec, gitlet.LifecycleRequest{Kind: gitlet.LifecycleCreate, Actor: person}, true},
 		// A WRITE OF A CHANGE'S CONVERSATION THE CHART JUDGES: a seat's, and an
 		// ask of reviewers by anybody, each reviewer judged by the chart; a
 		// person's comment, review, answer and withdrawal consult none.
-		{opCodeChecks.spec, code.ChecksRequest{Asker: seat, Rerun: &code.CheckRerun{}}, true},
-		{opCodeChecks.spec, code.ChecksRequest{Asker: person, Rerun: &code.CheckRerun{}}, false},
-		{opCodeChecks.spec, code.ChecksRequest{Asker: person, Report: &code.CheckReported{}}, false},
-		{opCodeChecks.spec, code.ChecksRequest{Queued: &code.CheckQueued{}}, false},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: seat, Comment: &code.Comment{}}, true},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Comment: &code.Comment{}}, false},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: seat, Review: &code.Review{}}, true},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Review: &code.Review{}}, false},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: seat, FindingResolve: &code.FindingResolve{}}, true},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: person, FindingResolve: &code.FindingResolve{}},
+		{opCodeChecks.spec, gitlet.ChecksRequest{Asker: seat, Rerun: &gitlet.CheckRerun{}}, true},
+		{opCodeChecks.spec, gitlet.ChecksRequest{Asker: person, Rerun: &gitlet.CheckRerun{}}, false},
+		{opCodeChecks.spec, gitlet.ChecksRequest{Asker: person, Report: &gitlet.CheckReported{}}, false},
+		{opCodeChecks.spec, gitlet.ChecksRequest{Queued: &gitlet.CheckQueued{}}, false},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: seat, Comment: &gitlet.Comment{}}, true},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: person, Comment: &gitlet.Comment{}}, false},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: seat, Review: &gitlet.Review{}}, true},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: person, Review: &gitlet.Review{}}, false},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: seat, FindingResolve: &gitlet.FindingResolve{}}, true},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: person, FindingResolve: &gitlet.FindingResolve{}},
 			false},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Reviewers: &code.ReviewerRequest{
-			Request: []code.Reviewer{{Handle: "dev"}}}}, true},
-		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Reviewers: &code.ReviewerRequest{
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: person, Reviewers: &gitlet.ReviewerRequest{
+			Request: []gitlet.Reviewer{{Handle: "dev"}}}}, true},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Asker: person, Reviewers: &gitlet.ReviewerRequest{
 			Withdraw: []string{"dev"}}}, false},
 		// A REVISION'S FACTS, the home's own write naming no asker, whose
 		// path owners the chart resolves and judges; and A MERGEABILITY, the
 		// home's own too, a merge's or a refresh's, whose readiness the chart
 		// judges — whose approvals count, who maintains the repository.
-		{opCodeConversation.spec, code.ConversationWrite{Revise: &code.Revise{}}, true},
-		{opCodeConversation.spec, code.ConversationWrite{Mergeability: &code.Mergeability{}}, true},
-		{opCodeConversation.spec, code.ConversationWrite{Mergeability: &code.Mergeability{Refresh: true}}, true},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Revise: &gitlet.Revise{}}, true},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Mergeability: &gitlet.Mergeability{}}, true},
+		{opCodeConversation.spec, gitlet.ConversationWrite{Mergeability: &gitlet.Mergeability{Refresh: true}}, true},
 		// A PERSON'S MARK OF THEIR OWN CODE INBOX, held to the handle by the
 		// principal alone: no chart, whoever asks — a seat's is refused by
 		// the writer, never judged.
-		{opCodeMark.spec, code.MarkWrite{Asker: person, Handle: "founder"}, false},
-		{opCodeMark.spec, code.MarkWrite{Asker: seat, Handle: "dev"}, false},
+		{opCodeMark.spec, gitlet.MarkWrite{Asker: person, Handle: "founder"}, false},
+		{opCodeMark.spec, gitlet.MarkWrite{Asker: seat, Handle: "dev"}, false},
 	} {
 		if tc.spec.judges == nil {
 			t.Errorf("%s declares no grant", tc.spec.name)
@@ -1861,7 +1861,7 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 // here rather than as a healthy home heard silent.
 func TestProductionsGitReadAttemptHoldsAGitReadsWaits(t *testing.T) {
 	t.Parallel()
-	waits := code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + code.ReplyMargin
+	waits := gitlet.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + gitlet.ReplyMargin
 	if got := Production().GitReadAttempt; got != waits || waits != 17*time.Second {
 		t.Errorf("production's git read attempt is %v, want the %v a git read's waits take at their whole "+
 			"budgets with the reply's margin (17s)", got, waits)
@@ -1921,7 +1921,7 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 // the very write the home was asked — the same operation, the same push:
 //
 //   - THE HOME RAN NOTHING about itself — Gitlet stopping there, no epoch to
-//     sign by (code.ErrNotServing): the runner-up is asked the write byte for
+//     sign by (gitlet.ErrNotServing): the runner-up is asked the write byte for
 //     byte, stamped home too, since a node that runs nothing brings no copy
 //     up and the fill passes; and the home is asked writes LAST for thirty
 //     seconds, so the next write of a repository it is home to is the
@@ -1934,9 +1934,9 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 //     asked the same write unstamped, and the home is not demoted — the next
 //     write asks it first again.
 //
-// Mutations: answer code.ErrNotServing as the write's answer (opCodeGitWrite
+// Mutations: answer gitlet.ErrNotServing as the write's answer (opCodeGitWrite
 // without ranNothing) — the walk ends on the home's refusal, red; answer an
-// unready home's code.ErrGitUnready as the answer (without gitUnready) — red;
+// unready home's gitlet.ErrGitUnready as the answer (without gitUnready) — red;
 // declare the write a once-write — a silent home's write ends
 // ErrOutcomeUnknown, red.
 func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
@@ -1954,7 +1954,7 @@ func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 			name: "ran nothing",
 			fail: func(_ *fleet, home *fakeGit, _ *fakeNode) {
 				home.set(func(g *fakeGit) {
-					g.ranNothing = fmt.Errorf("%w: %s's Gitlet is stopping", code.ErrNotServing, g.name)
+					g.ranNothing = fmt.Errorf("%w: %s's Gitlet is stopping", gitlet.ErrNotServing, g.name)
 				})
 			},
 			mend:    func(_ *fleet, home *fakeGit, _ *fakeNode) { home.set(func(g *fakeGit) { g.ranNothing = nil }) },
@@ -1969,7 +1969,7 @@ func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 		{
 			name: "is at its share",
 			fail: func(_ *fleet, home *fakeGit, _ *fakeNode) {
-				home.set(func(g *fakeGit) { g.unready = code.UnreadyShare })
+				home.set(func(g *fakeGit) { g.unready = gitlet.UnreadyShare })
 			},
 			mend: func(_ *fleet, home *fakeGit, _ *fakeNode) { home.set(func(g *fakeGit) { g.unready = "" }) },
 		},
@@ -1984,7 +1984,7 @@ func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 
 			w := writeOf(repo)
 			res, err := f.client.Code().GitWrite(t.Context(), w)
-			if err != nil || res.Commit != order[1] || res.PushID != code.WritePushID(w.OpID) {
+			if err != nil || res.Commit != order[1] || res.PushID != gitlet.WritePushID(w.OpID) {
 				t.Fatalf("a write whose home %s = (%+v, %v), want the runner-up %s's answer under the write's own "+
 					"push", tc.name, res, err, order[1])
 			}
@@ -2016,16 +2016,16 @@ func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 }
 
 // AN ENGINE WRITE THE ONE RULE REFUSES IS ASKED OF NO GITLET NODE: the router that
-// carries a write holds it to code.EngineWrite.Validate, as the tool that asks
+// carries a write holds it to gitlet.EngineWrite.Validate, as the tool that asks
 // it and the Gitlet node that builds it do, so a malformed write — a branch git
 // refuses, a seat's write naming no turn, a payload past its bound as the wire
 // spells it (a revert's message, which nothing else bounds, or a commit's
-// message of '<', each six bytes on the wire) — is code.ErrInvalid at once,
+// message of '<', each six bytes on the wire) — is gitlet.ErrInvalid at once,
 // naming the field, and costs no Gitlet node a round trip, a sync or a slot of
 // its lane.
 //
 // Mutations: carry the write unvalidated — the Gitlet node is asked it and builds
-// it, red; measure the message by its length (code.EngineWrite.Validate) — the
+// it, red; measure the message by its length (gitlet.EngineWrite.Validate) — the
 // '<' commit and the revert are asked of a Gitlet node, red.
 func TestAnEngineWriteTheOneRuleRefusesIsAskedOfNoNode(t *testing.T) {
 	t.Parallel()
@@ -2034,21 +2034,21 @@ func TestAnEngineWriteTheOneRuleRefusesIsAskedOfNoNode(t *testing.T) {
 	badRef := writeOf(repoID(4))
 	badRef.Ref = "refs/heads/a..b"
 	noTurn := seatWriteOf(repoID(4))
-	noTurn.Principal.Run = code.RunProvenance{}
+	noTurn.Principal.Run = gitlet.RunProvenance{}
 	longRevert := writeOf(repoID(4))
-	longRevert.Kind, longRevert.Files = code.WriteRevert, nil
+	longRevert.Kind, longRevert.Files = gitlet.WriteRevert, nil
 	longRevert.Commit = "2222222222222222222222222222222222222222"
-	longRevert.Message = strings.Repeat("x", code.MaxCommitPayloadBytes)
+	longRevert.Message = strings.Repeat("x", gitlet.MaxCommitPayloadBytes)
 	angled := writeOf(repoID(4))
-	angled.Message = strings.Repeat("<", code.MaxCommitPayloadBytes/2)
-	for name, w := range map[string]code.EngineWrite{
+	angled.Message = strings.Repeat("<", gitlet.MaxCommitPayloadBytes/2)
+	for name, w := range map[string]gitlet.EngineWrite{
 		"a branch git refuses":                        badRef,
 		"a seat's write naming no turn":               noTurn,
 		"a revert whose message is past the bound":    longRevert,
 		"a commit whose message of '<' is half of it": angled,
 	} {
-		if _, err := f.client.Code().GitWrite(t.Context(), w); !errors.Is(err, code.ErrInvalid) {
-			t.Errorf("%s = %v, want code.ErrInvalid before any Gitlet node is asked", name, err)
+		if _, err := f.client.Code().GitWrite(t.Context(), w); !errors.Is(err, gitlet.ErrInvalid) {
+			t.Errorf("%s = %v, want gitlet.ErrInvalid before any Gitlet node is asked", name, err)
 		}
 	}
 	if got := writesAsked(halves); got["git-a"] != 0 || got["git-b"] != 0 {
@@ -2118,9 +2118,9 @@ func TestAGitWriteIsNeverAnsweredOnAnotherLane(t *testing.T) {
 // healthy home heard silent.
 func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
 	t.Parallel()
-	proposal := statelog.ReadBudget + code.CommitBudget + code.ReplyMargin
-	waits := code.GitShareWait + 3*statelog.ReadBudget + code.WriteBuildDeadline + objstore.MiBPace + proposal +
-		code.ReplyMargin
+	proposal := statelog.ReadBudget + gitlet.CommitBudget + gitlet.ReplyMargin
+	waits := gitlet.GitShareWait + 3*statelog.ReadBudget + gitlet.WriteBuildDeadline + objstore.MiBPace + proposal +
+		gitlet.ReplyMargin
 	if got := Production().GitWriteAttempt; got != waits || waits != 82*time.Second {
 		t.Errorf("production's git write attempt is %v, want the %v an engine write's waits take at their whole "+
 			"budgets with the reply's margin (82s)", got, waits)
@@ -2141,7 +2141,7 @@ func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
 			Git: &fakePlacement{}, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes})
 		return err
 	}
-	bound := proposal + code.ReplyMargin
+	bound := proposal + gitlet.ReplyMargin
 	if err := build(bound); err == nil || !strings.Contains(err.Error(), "Timing.GitWriteAttempt") ||
 		!strings.Contains(err.Error(), "must hold the proposal it makes") {
 		t.Errorf("a router whose git write attempt is the proposal's own attempt and the reply's margin (%v) "+
@@ -2168,9 +2168,9 @@ func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
 	t.Parallel()
 	prod := Production()
 	r := newFleet(t).client
-	for _, kind := range code.EngineWriteKinds() {
-		want := map[code.EngineWriteKind]time.Duration{code.WriteMergeChange: 102 * time.Second,
-			code.WriteRebaseChange: 112 * time.Second}[kind]
+	for _, kind := range gitlet.EngineWriteKinds() {
+		want := map[gitlet.EngineWriteKind]time.Duration{gitlet.WriteMergeChange: 102 * time.Second,
+			gitlet.WriteRebaseChange: 112 * time.Second}[kind]
 		if want == 0 {
 			want = 82 * time.Second
 		}
@@ -2178,7 +2178,7 @@ func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
 			t.Errorf("production gives a %s %v, want %v: the git write attempt with its build term the kind's",
 				kind, got, want)
 		}
-		w := code.EngineWrite{Kind: kind, RepoID: uuid.Must(uuid.NewV7()).String()}
+		w := gitlet.EngineWrite{Kind: kind, RepoID: uuid.Must(uuid.NewV7()).String()}
 		x, err := exchangesOf(opCodeGitWrite.spec, opCodeGitWrite, nil, w, nil, w.RepoID)
 		if err != nil {
 			t.Fatal(err)
@@ -2242,7 +2242,7 @@ func TestAGitWriteIsHeldToItsOwnAttempt(t *testing.T) {
 			writes := half.writes()
 			got := writes[len(writes)-1].deadline
 			if tc.callers {
-				if want := callerDeadline.Add(-code.ReplyMargin); !got.Equal(want) {
+				if want := callerDeadline.Add(-gitlet.ReplyMargin); !got.Equal(want) {
 					t.Errorf("%s, its caller's deadline %v: the git half was served until %v, want its "+
 						"caller's deadline less the reply's margin, %v", name, tc.caller, got, want)
 				}

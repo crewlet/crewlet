@@ -146,7 +146,9 @@
 // carries the identity its run's call log admitted it under
 // ([BridgeCall.Digest]), but for one whose arguments are withheld
 // ([BridgeCall.Withheld]), so neither a cut argument nor a dropped call moves an
-// operation id a resumed segment derives. See rowbytes.go.
+// operation id a resumed segment derives; and the id its harness gave it, where
+// the box sent one the log keeps whole ([BridgeCall.CallID]), which is no part
+// of that identity. See rowbytes.go.
 //
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
 // NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
@@ -370,12 +372,12 @@ type Spec struct {
 // ONE AFTER ANOTHER, never at once, which would cut that wait to the slowest
 // clone's: a clone's index-pack keeps an entry for every commit and tree it
 // receives while it writes their index — 1.37 million of them for a gigabyte
-// of history (internal/code/host's BenchmarkBoxClone) — and eight at once
+// of history (internal/gitlet/host's BenchmarkBoxClone) — and eight at once
 // would share a box its template sized for one harness. In turn, the
 // clones cost a run with many repositories time; at once, they would cost
 // its box memory.
 //
-// NEVER PAST code.MaxRunRepos, the most a read of a run's pushes names: a run
+// NEVER PAST gitlet.MaxRunRepos, the most a read of a run's pushes names: a run
 // given more would have every collected result's "what it pushed" refused,
 // seen only as the sentence that its push record was unread. internal/engine's
 // TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
@@ -563,7 +565,7 @@ func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 //
 // EXPORTED FOR THE ONE OTHER PLACE A CONE IS WRITTEN: a repository's
 // .crewlet/checks.yaml names the cone its check's box checks out
-// (internal/code's ParseChecks), and that cone becomes a box's clone step as a
+// (internal/gitlet's ParseChecks), and that cone becomes a box's clone step as a
 // run's does, so a file is held to the rule the step is written under rather
 // than to a second reading of it — one the box would refuse at setup, after
 // the check had taken its box.
@@ -1228,6 +1230,21 @@ type Runner interface {
 	// has said nothing yet reads as nothing rather than as an error.
 	Follow(handle RunHandle) LiveReading
 }
+
+// CallIdentifier is a [Runner] whose harness hands each tool call it makes over
+// the bridge an id of its own, in the request's `_meta`: CallIDMeta is the key
+// it sends the id under, the one the bridge reads ([BridgeCall.CallID],
+// [OpenedJob.CallIDMeta]) — `claudecode/toolUseId` for Claude Code — and ""
+// for a harness that sends none.
+//
+// OPTIONAL, as [SessionTaker] is: a runner that declares no key — a harness
+// whose `_meta` carries no id of the call, OpenCode's, or a test's — has every
+// call of its runs recorded with none, each read by its place as every call an
+// older build recorded is. EXPORTED so a runner asserts it implements it, as
+// internal/sandbox/executor's does: a method renamed out from under it would
+// read as a harness that declares nothing, and every id would be dropped
+// without a word.
+type CallIdentifier interface{ CallIDMeta() string }
 
 // RunRequest is one launch's inputs.
 //

@@ -14,7 +14,7 @@
 // the buckets live here and each surface names its own rates.
 //
 // Gitlet's re-syncs at the code log's head are one more surface of a
-// Gitlet node (internal/code's NewResyncs): ONE limiter a node, which its coding
+// Gitlet node (internal/gitlet's NewResyncs): ONE limiter a node, which its coding
 // boxes (a run on its seat), its checks' boxes (an attempt on its
 // repository's checks) and its seats' code tools (a turn on its seat) all
 // draw on — so a seat's boxes and its tools pay one seat bucket — each

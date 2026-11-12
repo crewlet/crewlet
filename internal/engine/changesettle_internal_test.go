@@ -118,11 +118,7 @@ func TestThePollSettlesWhatNoDeliveryDid(t *testing.T) {
 	t.Parallel()
 	e, ids := changeNode(t)
 	closed := time.Now().UTC().Add(-time.Minute)
-	ref, _, _ := github.ChangeRef("https://github.com", settledPull)
-	e.githubPulls.mu.Lock()
-	e.githubPulls.entries = map[github.PullRef]pullPreview{ref: {at: time.Now(),
-		pr: github.PullRequest{Number: 12, State: "closed", ClosedAt: &closed}}}
-	e.githubPulls.mu.Unlock()
+	stubPulls(e, map[string]pullRead{settledPull: {m: github.PullMovers{State: "closed", ClosedAt: &closed}}})
 	if pending, err := e.openChangesPending(t.Context()); err != nil || !pending {
 		t.Fatalf("the poll's gate answered %v (%v) with two tasks waiting", pending, err)
 	}
@@ -156,15 +152,31 @@ func waitAlsoOn(t *testing.T, e *Engine, id, ref string) {
 	}
 }
 
-// cachePulls stands each pull request's read in for the host's.
-func cachePulls(e *Engine, reads map[string]pullPreview) {
-	e.githubPulls.mu.Lock()
-	defer e.githubPulls.mu.Unlock()
-	e.githubPulls.entries = map[github.PullRef]pullPreview{}
+// pullRead is one pull request as the stubbed host answers it.
+type pullRead struct {
+	m   github.PullMovers
+	err error
+}
+
+// stubPulls stands each pull request's read in for the host's, any other
+// answering 404, with no merge asked.
+func stubPulls(e *Engine, reads map[string]pullRead) {
+	byRef := map[github.PullRef]pullRead{}
 	for raw, read := range reads {
 		ref, _, _ := github.ChangeRef("https://github.com", raw)
-		read.at = time.Now()
-		e.githubPulls.entries[ref] = read
+		byRef[ref] = read
+	}
+	e.changePoll.mu.Lock()
+	defer e.changePoll.mu.Unlock()
+	e.changePoll.movers = func(ref github.PullRef) (github.PullMovers, error) {
+		read, ok := byRef[ref]
+		if !ok {
+			return github.PullMovers{}, &github.APIError{Status: 404}
+		}
+		return read.m, read.err
+	}
+	if e.changePoll.asked == nil {
+		e.changePoll.asked = func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }
 	}
 }
 
@@ -183,7 +195,7 @@ func TestAPullRequestOutsideTheCompanysOwnersIsNeitherAcceptedNorRead(t *testing
 	}
 	waitAlsoOn(t, e, ids[0], foreign)
 	closed := time.Now().UTC().Add(-time.Hour)
-	cachePulls(e, map[string]pullPreview{foreign: {pr: github.PullRequest{State: "closed", ClosedAt: &closed}}})
+	stubPulls(e, map[string]pullRead{foreign: {m: github.PullMovers{State: "closed", ClosedAt: &closed}}})
 	if _, err := e.pollChanges(t.Context(), time.Now(), time.Time{}); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -211,8 +223,8 @@ func TestARateLimitedPassResumesWhereItStopped(t *testing.T) {
 	waitAlsoOn(t, e, ids[1], fourteen)
 	e.changePoll.batch = 2
 	closed := time.Now().UTC().Add(-time.Hour)
-	done := pullPreview{pr: github.PullRequest{State: "closed", ClosedAt: &closed}}
-	cachePulls(e, map[string]pullPreview{settledPull: {pr: github.PullRequest{State: "open"}},
+	done := pullRead{m: github.PullMovers{State: "closed", ClosedAt: &closed}}
+	stubPulls(e, map[string]pullRead{settledPull: {m: openPull(headA)},
 		thirteen: {err: &github.APIError{Status: 429, RateLimited: true}}, fourteen: done})
 	if _, err := e.pollChanges(t.Context(), time.Now(), time.Time{}); err != nil {
 		t.Fatalf("first pass: %v", err)
@@ -221,7 +233,7 @@ func TestARateLimitedPassResumesWhereItStopped(t *testing.T) {
 		t.Fatalf("a pass the host stopped at %s resumes after %q, want after %s", thirteen,
 			e.changePoll.after, settledPull)
 	}
-	cachePulls(e, map[string]pullPreview{settledPull: {pr: github.PullRequest{State: "open"}},
+	stubPulls(e, map[string]pullRead{settledPull: {m: openPull(headA)},
 		thirteen: done, fourteen: done})
 	if n, err := e.pollChanges(t.Context(), time.Now(), time.Time{}); err != nil || n != 2 {
 		t.Fatalf("the next pass settled %d (%v), want the two past the first batch", n, err)
@@ -234,7 +246,7 @@ func TestAnUnreadablePullRequestBacksOff(t *testing.T) {
 	t.Parallel()
 	e, _ := changeNode(t)
 	closed := time.Now().UTC().Add(-time.Hour)
-	cachePulls(e, map[string]pullPreview{settledPull: {err: &github.APIError{Status: 404}}})
+	stubPulls(e, map[string]pullRead{settledPull: {err: &github.APIError{Status: 404}}})
 	now := time.Now()
 	if _, err := e.pollChanges(t.Context(), now, time.Time{}); err != nil {
 		t.Fatalf("poll: %v", err)
@@ -242,7 +254,7 @@ func TestAnUnreadablePullRequestBacksOff(t *testing.T) {
 	if held := e.changePoll.unreadable[settledPull]; held.wait != unreadableFirst {
 		t.Fatalf("an unreadable pull request waits %v, want %v", held.wait, unreadableFirst)
 	}
-	cachePulls(e, map[string]pullPreview{settledPull: {pr: github.PullRequest{State: "closed", ClosedAt: &closed}}})
+	stubPulls(e, map[string]pullRead{settledPull: {m: github.PullMovers{State: "closed", ClosedAt: &closed}}})
 	if n, _ := e.pollChanges(t.Context(), now.Add(30*time.Minute), time.Time{}); n != 0 {
 		t.Errorf("a pass inside the back-off settled %d, want it not read", n)
 	}

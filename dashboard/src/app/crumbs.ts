@@ -523,6 +523,12 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       return where.kind
         ? [root(row, true), { label: labels[where.kind] ?? where.kind }]
         : [root(row, false)];
+    case "atlas":
+      return [root(row, false)];
+    case "atlas-entry":
+      // AN ENTRY'S NAME is its page's answer; until then the trail says
+      // "Entry", never the uuid the address bar already carries.
+      return [root(row, true), { label: labels[where.id] || "Entry" }];
     case "spend":
     case "spend-tasks":
     case "limits":

@@ -12,8 +12,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -104,8 +104,8 @@ func TestAChangeWriteDeliversToCode(t *testing.T) {
 			t.Errorf("a seat's registry holds no %s", name)
 			continue
 		}
-		if entry.Surface != code.Source {
-			t.Errorf("%s delivers to %q, want Gitlet's surface %q", name, entry.Surface, code.Source)
+		if entry.Surface != gitlet.Source {
+			t.Errorf("%s delivers to %q, want Gitlet's surface %q", name, entry.Surface, gitlet.Source)
 		}
 		if !mcp.WritesToSharedSurface(entry.Annotations) || mcp.ReadOnlyProven(entry.Annotations) {
 			t.Errorf("%s is annotated %+v, want a write to a shared surface", name, entry.Annotations)
@@ -139,7 +139,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 		t.Fatalf("the open sent %+v and %+v, want one open and one ask", changes, converses)
 	}
 	open, ask := changes[0], converses[0]
-	if open.Open.ChangeID != code.OpenChangeID(open.OpID) || open.Open.SourceRef != "refs/heads/feature" ||
+	if open.Open.ChangeID != gitlet.OpenChangeID(open.OpID) || open.Open.SourceRef != "refs/heads/feature" ||
 		open.Open.TargetRef != "refs/heads/main" || open.Open.TurnID != turn.RunID {
 		t.Errorf("the open is %+v under %s", open.Open, open.OpID)
 	}
@@ -166,8 +166,8 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 	}
 
 	// AN OPEN REFUSED ASKS NOBODY.
-	refusing := &codeWrites{change: func(code.ChangeProposal) (code.ChangeResult, error) {
-		return code.ChangeResult{Refusal: code.ChangeRefusalChangeExists,
+	refusing := &codeWrites{change: func(gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
+		return gitlet.ChangeResult{Refusal: gitlet.ChangeRefusalChangeExists,
 			Detail: "refs/heads/feature heads site!3 already"}, nil
 	}}
 	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), refusing)), writerTurn(t),
@@ -180,8 +180,8 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 	}
 
 	// AN ASK REFUSED LEAVES THE CHANGE OPEN, and says so.
-	unasked := &codeWrites{converse: func(code.ConversationWrite) (code.ConversationResult, error) {
-		return code.ConversationResult{Refusal: code.ConversationRefusalNotPermitted,
+	unasked := &codeWrites{converse: func(gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
+		return gitlet.ConversationResult{Refusal: gitlet.ConversationRefusalNotPermitted,
 			Detail: "agent-ceo reviews nothing of site"}, nil
 	}}
 	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), unasked)), writerTurn(t),
@@ -196,7 +196,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 
 // opIDsOf and opIDsOfConverse are the operations a list of writes was made
 // under.
-func opIDsOf(ps []code.ChangeProposal) []string {
+func opIDsOf(ps []gitlet.ChangeProposal) []string {
 	out := make([]string, len(ps))
 	for i, p := range ps {
 		out[i] = p.OpID
@@ -204,7 +204,7 @@ func opIDsOf(ps []code.ChangeProposal) []string {
 	return out
 }
 
-func opIDsOfConverse(ws []code.ConversationWrite) []string {
+func opIDsOfConverse(ws []gitlet.ConversationWrite) []string {
 	out := make([]string, len(ws))
 	for i, w := range ws {
 		out[i] = w.OpID
@@ -290,27 +290,27 @@ func TestAChangeWriteIsHeldToTheVersionItsCallerRead(t *testing.T) {
 		name string
 		tool string
 		args map[string]any
-		is   func(p code.ChangeProposal) bool
+		is   func(p gitlet.ChangeProposal) bool
 	}{
 		{name: "an edit", tool: builtin.CodeUpdateChangeTool,
 			args: map[string]any{"change": "site!7", "expected_version": 4, "title": "Retry twice", "body": ""},
-			is: func(p code.ChangeProposal) bool {
+			is: func(p gitlet.ChangeProposal) bool {
 				return p.Edit != nil && *p.Edit.Title == "Retry twice" && p.Edit.Body != nil && *p.Edit.Body == ""
 			}},
 		{name: "a draft's state", tool: builtin.CodeUpdateChangeTool,
 			args: map[string]any{"repo": "site", "change": 7.0, "expected_version": 4, "draft": false},
-			is:   func(p code.ChangeProposal) bool { return p.Draft != nil && !p.Draft.Draft }},
+			is:   func(p gitlet.ChangeProposal) bool { return p.Draft != nil && !p.Draft.Draft }},
 		{name: "a retarget", tool: builtin.CodeUpdateChangeTool,
 			args: map[string]any{"change": "site!7", "expected_version": 4, "target": "release"},
-			is: func(p code.ChangeProposal) bool {
+			is: func(p gitlet.ChangeProposal) bool {
 				return p.Retarget != nil && p.Retarget.TargetRef == "refs/heads/release"
 			}},
 		{name: "a close", tool: builtin.CodeCloseChangeTool,
 			args: map[string]any{"change": "site!7", "expected_version": 4, "reason": "superseded by site!8"},
-			is:   func(p code.ChangeProposal) bool { return p.Close != nil && p.Close.Reason == "superseded by site!8" }},
+			is:   func(p gitlet.ChangeProposal) bool { return p.Close != nil && p.Close.Reason == "superseded by site!8" }},
 		{name: "a reopen", tool: builtin.CodeCloseChangeTool,
 			args: map[string]any{"change": "site!7", "expected_version": 4, "reopen": true},
-			is:   func(p code.ChangeProposal) bool { return p.Reopen != nil }},
+			is:   func(p gitlet.ChangeProposal) bool { return p.Reopen != nil }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -416,18 +416,18 @@ func TestAnUpdateAskingTwoThingsReadsNoItem(t *testing.T) {
 // again, as a rule → red.
 func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
-	want := map[code.ChangeRefusal]tools.Refusal{
-		code.ChangeRefusalNotPermitted: tools.RefusalForbidden, code.ChangeRefusalRepoArchived: tools.RefusalConflict,
-		code.ChangeRefusalStale: tools.RefusalStaleVersion, code.ChangeRefusalChangeExists: tools.RefusalExists,
-		code.ChangeRefusalNoSource: tools.RefusalInvalid, code.ChangeRefusalNoDifference: tools.RefusalInvalid,
-		code.ChangeRefusalChangeClosed: tools.RefusalConflict, code.ChangeRefusalChangeMerged: tools.RefusalConflict,
-		code.ChangeRefusalRepoDeleted: tools.RefusalNotFound, code.ChangeRefusalChangeNotFound: tools.RefusalNotFound,
-		code.ChangeRefusalBusy: tools.RefusalUnavailable, code.ChangeRefusalUnavailable: tools.RefusalUnavailable,
-		code.ChangeRefusalRepoMirrored: tools.RefusalConflict, code.ChangeRefusalRepoImporting: tools.RefusalUnavailable,
+	want := map[gitlet.ChangeRefusal]tools.Refusal{
+		gitlet.ChangeRefusalNotPermitted: tools.RefusalForbidden, gitlet.ChangeRefusalRepoArchived: tools.RefusalConflict,
+		gitlet.ChangeRefusalStale: tools.RefusalStaleVersion, gitlet.ChangeRefusalChangeExists: tools.RefusalExists,
+		gitlet.ChangeRefusalNoSource: tools.RefusalInvalid, gitlet.ChangeRefusalNoDifference: tools.RefusalInvalid,
+		gitlet.ChangeRefusalChangeClosed: tools.RefusalConflict, gitlet.ChangeRefusalChangeMerged: tools.RefusalConflict,
+		gitlet.ChangeRefusalRepoDeleted: tools.RefusalNotFound, gitlet.ChangeRefusalChangeNotFound: tools.RefusalNotFound,
+		gitlet.ChangeRefusalBusy: tools.RefusalUnavailable, gitlet.ChangeRefusalUnavailable: tools.RefusalUnavailable,
+		gitlet.ChangeRefusalRepoMirrored: tools.RefusalConflict, gitlet.ChangeRefusalRepoImporting: tools.RefusalUnavailable,
 	}
-	for _, refusal := range code.ChangeRefusals() {
-		writer := &codeWrites{change: func(code.ChangeProposal) (code.ChangeResult, error) {
-			return code.ChangeResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
+	for _, refusal := range gitlet.ChangeRefusals() {
+		writer := &codeWrites{change: func(gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
+			return gitlet.ChangeResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
 		}}
 		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeOpenChangeTool, map[string]any{"repo": "site", "branch": "feature", "title": "t"})
@@ -471,7 +471,7 @@ func TestAnUnboundTokenCannotOpenAChange(t *testing.T) {
 		args["repo"] = "site"
 		got, err := operatorToolOver(t, operator, name).CallForTurn(asUnboundToken(), nil, args)
 		if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
-			!strings.Contains(got.Output, code.UnboundDetail) {
+			!strings.Contains(got.Output, gitlet.UnboundDetail) {
 			t.Errorf("%s by a token bound to nobody answered %v %q", name, err, got.Output)
 		}
 	}
@@ -489,7 +489,7 @@ func TestAnUnboundTokenCannotOpenAChange(t *testing.T) {
 	got, err = operatorToolOver(t, operator, builtin.CodeOpenChangeTool).CallForTurn(asBoundPerson(), nil,
 		map[string]any{"repo": "site", "branch": "feature", "title": "Retry the upload"})
 	changes, _ = writer.changesAsked()
-	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:jane-laptop", Seat: "founder"}
+	person := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "pat:jane-laptop", Seat: "founder"}
 	if err != nil || got.Failed || len(changes) != 1 || changes[0].Asker != person ||
 		statelog.CheckCallerOpID(changes[0].OpID) != nil {
 		t.Fatalf("the person's open answered %v %q, sending %+v", err, got.Output, changes)

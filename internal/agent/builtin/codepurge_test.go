@@ -12,7 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -48,7 +48,7 @@ func purgeTool(t *testing.T, host *gitletHost, writer *codeWrites) tools.SeatCal
 // ONLY A PERSON PURGES, with a fresh proof of who they are: the authority
 // table's row is human-only and asks a step-up, so a seat — whatever it holds
 // — is refused by the table before anything is read; a token bound to nobody
-// is refused as every code write is (code.UnboundDetail), and a person whose
+// is refused as every code write is (gitlet.UnboundDetail), and a person whose
 // proof is older than their step-up window is told to prove it again; nothing
 // is sent for any of them. A person bound to a seat, proved, records one
 // request of the repository, as themselves, and is answered with it: where
@@ -80,7 +80,7 @@ func TestOnlyAPersonPurges(t *testing.T) {
 	tool := purgeTool(t, host, writer)
 	got, err := tool.CallForTurn(asUnboundToken(), nil, args())
 	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
-		!strings.Contains(got.Output, code.UnboundDetail) {
+		!strings.Contains(got.Output, gitlet.UnboundDetail) {
 		t.Errorf("a token bound to nobody's purge answered %v %q", err, got.Output)
 	}
 	got, err = tool.CallForTurn(asBoundPerson(), nil, args())
@@ -100,7 +100,7 @@ func TestOnlyAPersonPurges(t *testing.T) {
 		t.Fatalf("a person's purge sent %+v, want one request", writer.expunges)
 	}
 	r := writer.expunges[0].Request
-	if r.RepoID != siteID || r.By.Kind != code.PrincipalOperator || r.By.Seat != "founder" ||
+	if r.RepoID != siteID || r.By.Kind != gitlet.PrincipalOperator || r.By.Seat != "founder" ||
 		statelog.CheckCallerOpID(r.RequestID) != nil {
 		t.Errorf("a person's purge sent %+v, want site's, by founder, under an operation id", r)
 	}

@@ -255,6 +255,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 	company := &org.Organization{Name: "Acme"}
 	orgOf := func() *org.Organization { return company }
 	answers := newAnswerRig()
+	ledger := seededAtlasLedger()
 	return builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Search: trk, Inbox: trk,
@@ -286,6 +287,12 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Knowledge:    full.Knowledge,
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
+		// THE ATLAS, over the settings acme runs: the app's one person-facing
+		// tool, without which holding atlas would open nothing here.
+		Atlas: builtin.AtlasDeps{Settings: runsAcme, Records: atlasLogOnly(ledger)},
+		// AND ITS WRITES, over the same log and the chart an owner is named
+		// from.
+		AtlasWrite: builtin.AtlasWriteDeps{Log: ledger, Actor: builtin.PrincipalActor, Org: orgOf},
 		// THE CODE TOOLS, over the seams the seat's registry is built with —
 		// Gitlet, its writes, and the requester ceiling's halves —
 		// read as the request's principal as the surface reads them.

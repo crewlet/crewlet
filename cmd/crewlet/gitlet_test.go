@@ -26,11 +26,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -183,7 +183,7 @@ func (h gitletHost) declare(t *testing.T, d codeDeclaration) {
 // refspecs as the founder, failing the case unless every ref landed.
 func (h gitletHost) push(t *testing.T, repo string, files map[string]string, refspecs ...string) string {
 	t.Helper()
-	person := codetest.PersonWithToken(t, h.token)
+	person := gitlettest.PersonWithToken(t, h.token)
 	dir := person.Clone(h.base + "/git/" + repo + ".git")
 	commit := person.Commit(dir, files, "a commit of "+strings.Join(slices.Sorted(mapKeys(files)), ","))
 	pushed := person.Push(t.Context(), dir, h.base+"/git/"+repo+".git", refspecs...)
@@ -607,7 +607,7 @@ func (g operatorGit) runInput(t *testing.T, stdin string, args ...string) (strin
 // ---- status -----------------------------------------------------------------
 
 // A CODE READ'S ANSWER IS READ BY THE READER'S OWN BOUND. The reader ends a page
-// on the row that crosses code.MaxPageBytes and keeps it, so an answer carries
+// on the row that crosses gitlet.MaxPageBytes and keeps it, so an answer carries
 // up to that budget, one row more and its envelope; the CLI reads code answers
 // up to codeAnswerBytes, which must hold the largest. Built here from the
 // bounds that make a row large AT THEIR WORST ENCODING — every byte of every
@@ -633,54 +633,54 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 	stamp := time.Date(2026, 10, 14, 23, 59, 59, 999999999, time.UTC)
 
 	// A SEAT'S RUN AT ITS BOUND beside the longest way: every field of it
-	// code.MaxProvenanceBytes of `<`, which a stamp carries as it is — but a
+	// gitlet.MaxProvenanceBytes of `<`, which a stamp carries as it is — but a
 	// coding box's run id, a launch's UUID, the one spelling a run id has.
-	runField := strings.Repeat("<", code.MaxProvenanceBytes)
-	if code.FitProvenance(runField) != runField {
+	runField := strings.Repeat("<", gitlet.MaxProvenanceBytes)
+	if gitlet.FitProvenance(runField) != runField {
 		t.Fatalf("a run field of %d `<` is no longer carried as it is: build the widest run from what "+
-			"code.FitProvenance admits", len(runField))
+			"gitlet.FitProvenance admits", len(runField))
 	}
-	var via code.PushVia
-	for _, v := range code.PushVias() {
+	var via gitlet.PushVia
+	for _, v := range gitlet.PushVias() {
 		if len(v) > len(via) {
 			via = v
 		}
 	}
-	push := code.PushRow{PushID: strings.Repeat("p", 36), RepoID: strings.Repeat("r", 36), Position: pos,
+	push := gitlet.PushRow{PushID: strings.Repeat("p", 36), RepoID: strings.Repeat("r", 36), Position: pos,
 		At: stamp, Actor: strings.Repeat("a", 128), ActorKind: "operator", ActorSeat: strings.Repeat("s", 64),
 		Via: via,
-		Run: code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField,
+		Run: gitlet.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField,
 			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", Harness: runField},
 		Node: strings.Repeat("n", 128), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: 1 << 40,
 		IntroducedCount: 1 << 30, ReceivedAt: stamp}
-	var longest code.Refusal
-	for _, r := range code.Refusals() {
+	var longest gitlet.Refusal
+	for _, r := range gitlet.Refusals() {
 		if len(r) > len(longest) {
 			longest = r
 		}
 	}
-	for range code.MaxCommandsPerPush {
-		push.Commands = append(push.Commands, code.Command{Ref: ref, Old: oid, New: oid, Forced: true,
-			Result: code.ResultNG, Reason: longest})
+	for range gitlet.MaxCommandsPerPush {
+		push.Commands = append(push.Commands, gitlet.Command{Ref: ref, Old: oid, New: oid, Forced: true,
+			Result: gitlet.ResultNG, Reason: longest})
 	}
-	for range code.MaxIntroduced {
+	for range gitlet.MaxIntroduced {
 		push.Introduced = append(push.Introduced, oid)
 	}
-	repo := code.RepoSummary{RepoRef: code.RepoRef{ID: strings.Repeat("r", 36),
-		Name: strings.Repeat("n", gitref.MaxRepoNameBytes), Status: code.RepoStatusArchived,
-		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: strings.Repeat("u", 128)},
+	repo := gitlet.RepoSummary{RepoRef: gitlet.RepoRef{ID: strings.Repeat("r", 36),
+		Name: strings.Repeat("n", gitref.MaxRepoNameBytes), Status: gitlet.RepoStatusArchived,
+		ManagedBy: gitlet.ManagedConfig, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: strings.Repeat("u", 128)},
 		DefaultBranch: branch, Description: strings.Repeat("<", config.CodeMaxDescriptionBytes), DeletedAt: stamp,
 		Refs: 1 << 40, LivePacks: 1 << 40, LiveBytes: 1 << 50, LiveObjects: 1 << 40, Position: pos},
 		Head: oid, Pushes: 1 << 40, LastPushAt: stamp}
 	for range config.CodeMaxProtections {
-		repo.Protections = append(repo.Protections, code.PushRule{Pattern: ref, AllowForce: true,
-			AllowDelete: true, DirectPush: code.DirectPersons})
+		repo.Protections = append(repo.Protections, gitlet.PushRule{Pattern: ref, AllowForce: true,
+			AllowDelete: true, DirectPush: gitlet.DirectPersons})
 	}
 
 	// encoded is the length of a page of rows rows that add appends, with the
 	// longest cursor a page carries.
-	encoded := func(rows int, add func(*code.ReadAnswer)) int {
-		page := code.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable}
+	encoded := func(rows int, add func(*gitlet.ReadAnswer)) int {
+		page := gitlet.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable}
 		for range rows {
 			add(&page)
 		}
@@ -694,13 +694,13 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 		name    string
 		row     any
 		perPage int
-		add     func(*code.ReadAnswer)
-		tiny    func(*code.ReadAnswer)
+		add     func(*gitlet.ReadAnswer)
+		tiny    func(*gitlet.ReadAnswer)
 	}{
-		{"pushes", push, code.MaxPushesPerPage, func(a *code.ReadAnswer) { a.Pushes = append(a.Pushes, push) },
-			func(a *code.ReadAnswer) { a.Pushes = append(a.Pushes, code.PushRow{}) }},
-		{"repositories", repo, code.MaxReposPerPage, func(a *code.ReadAnswer) { a.Repos = append(a.Repos, repo) },
-			func(a *code.ReadAnswer) { a.Repos = append(a.Repos, code.RepoSummary{}) }},
+		{"pushes", push, gitlet.MaxPushesPerPage, func(a *gitlet.ReadAnswer) { a.Pushes = append(a.Pushes, push) },
+			func(a *gitlet.ReadAnswer) { a.Pushes = append(a.Pushes, gitlet.PushRow{}) }},
+		{"repositories", repo, gitlet.MaxReposPerPage, func(a *gitlet.ReadAnswer) { a.Repos = append(a.Repos, repo) },
+			func(a *gitlet.ReadAnswer) { a.Repos = append(a.Repos, gitlet.RepoSummary{}) }},
 	} {
 		raw, err := json.Marshal(kind.row)
 		if err != nil {
@@ -714,22 +714,22 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 		// THE WORST ANSWER: rows one byte short of the page's budget, the row
 		// that crosses it at its largest, and the envelope of the most rows
 		// a page carries — its commas, cursor, position and level.
-		tinyRow, err := json.Marshal(code.PushRow{})
+		tinyRow, err := json.Marshal(gitlet.PushRow{})
 		if kind.name == "repositories" {
-			tinyRow, err = json.Marshal(code.RepoSummary{})
+			tinyRow, err = json.Marshal(gitlet.RepoSummary{})
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
 		env := encoded(kind.perPage, kind.tiny) - kind.perPage*len(tinyRow)
-		if worst := code.MaxPageBytes - 1 + row + env; worst > codeAnswerBytes {
+		if worst := gitlet.MaxPageBytes - 1 + row + env; worst > codeAnswerBytes {
 			t.Errorf("the largest answer of %s can carry %d bytes, past the %d the code reads are read to",
 				kind.name, worst, codeAnswerBytes)
 		}
 		// AND A PAGE THE READER SERVES: maximal rows until one crosses the
 		// budget, as page.add closes it.
-		page := code.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable}
-		for filled := 0; filled < code.MaxPageBytes; filled += row {
+		page := gitlet.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable}
+		for filled := 0; filled < gitlet.MaxPageBytes; filled += row {
 			kind.add(&page)
 		}
 		served, err := json.Marshal(page)
@@ -746,7 +746,7 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 				maxNodeResponseBytes)
 		}
 		t.Logf("%s: the largest row %d bytes, its envelope %d, a page the reader serves %d, the worst answer "+
-			"%d of the %d read", kind.name, row, env, len(served), code.MaxPageBytes-1+row+env, codeAnswerBytes)
+			"%d of the %d read", kind.name, row, env, len(served), gitlet.MaxPageBytes-1+row+env, codeAnswerBytes)
 	}
 }
 
@@ -1543,7 +1543,7 @@ func TestACodeReadPaysOneBarrier(t *testing.T) {
 	}
 	var pushes int
 	if _, _, err := codePages(t.Context(), client, "/gitlet/repos/web/pushes", floorAt(first), 2,
-		code.MaxPushesPerPage, func(_ json.RawMessage, page codeReadView) bool {
+		gitlet.MaxPushesPerPage, func(_ json.RawMessage, page codeReadView) bool {
 			pushes += len(page.Pushes)
 			return true
 		}); err != nil || pushes != 2 {
@@ -1623,7 +1623,7 @@ func (r *recordedRequests) requests() []*http.Request {
 func TestAnExportRestoresAsAClone(t *testing.T) {
 	t.Parallel()
 	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n")
-	person := codetest.PersonWithToken(t, h.token)
+	person := gitlettest.PersonWithToken(t, h.token)
 	repo := h.base + "/git/web.git"
 	dir := person.Clone(repo)
 	person.Commit(dir, map[string]string{"a.txt": "a\n"}, "one")

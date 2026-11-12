@@ -74,9 +74,9 @@ func TestAFilledVectorReachesAPeerHoldingTheVectorlessNote(t *testing.T) {
 	}
 
 	// THE FIRST CARRY: the peer holds the note, with no vector.
-	first, mark, err := export(ctx, holder.SQL(), diary, seat, 0)
-	if err != nil || len(first) != 1 {
-		t.Fatalf("first export = %d rows, %v", len(first), err)
+	first, mark := exportAll(t, holder, diary, 0)
+	if len(first) != 1 {
+		t.Fatalf("first export = %d rows", len(first))
 	}
 	carryRows(t, peer, diary, first)
 	// The peer's own bookkeeping on its copy, which the fill must not touch.
@@ -94,10 +94,7 @@ func TestAFilledVectorReachesAPeerHoldingTheVectorlessNote(t *testing.T) {
 	}
 
 	// THE NEXT CARRY sees it, past the mark the first one left.
-	again, _, err := export(ctx, holder.SQL(), diary, seat, mark)
-	if err != nil {
-		t.Fatalf("second export: %v", err)
-	}
+	again, _ := exportAll(t, holder, diary, mark)
 	if len(again) != 1 {
 		t.Fatalf("the filled note was not carried again: %d rows past the watermark", len(again))
 	}
@@ -139,9 +136,9 @@ func TestAReembeddedNoteReplacesAPeersCopyFromTheOldModel(t *testing.T) {
 		t.Fatalf("write the note: %v", err)
 	}
 	diary := tables[0]
-	first, mark, err := export(ctx, holder.SQL(), diary, seat, 0)
-	if err != nil || len(first) != 1 {
-		t.Fatalf("first export = %d rows, %v", len(first), err)
+	first, mark := exportAll(t, holder, diary, 0)
+	if len(first) != 1 {
+		t.Fatalf("first export = %d rows", len(first))
 	}
 	carryRows(t, peer, diary, first)
 
@@ -150,9 +147,9 @@ func TestAReembeddedNoteReplacesAPeersCopyFromTheOldModel(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("re-embed: %v", err)
 	}
-	again, _, err := export(ctx, holder.SQL(), diary, seat, mark)
-	if err != nil || len(again) != 1 {
-		t.Fatalf("the re-embedded note was not carried: %d rows, %v", len(again), err)
+	again, _ := exportAll(t, holder, diary, mark)
+	if len(again) != 1 {
+		t.Fatalf("the re-embedded note was not carried: %d rows", len(again))
 	}
 	carryRows(t, peer, diary, again)
 	if _, model := diaryVector(t, peer, "d1"); model != "model-b" {
@@ -177,9 +174,9 @@ func TestARefillAtANewWidthReplacesAPeersCopyAtTheOld(t *testing.T) {
 		t.Fatalf("write the note: %v", err)
 	}
 	diary := tables[0]
-	first, mark, err := export(ctx, holder.SQL(), diary, seat, 0)
-	if err != nil || len(first) != 1 {
-		t.Fatalf("first export = %d rows, %v", len(first), err)
+	first, mark := exportAll(t, holder, diary, 0)
+	if len(first) != 1 {
+		t.Fatalf("first export = %d rows", len(first))
 	}
 	carryRows(t, peer, diary, first)
 
@@ -188,9 +185,9 @@ func TestARefillAtANewWidthReplacesAPeersCopyAtTheOld(t *testing.T) {
 	}}); err != nil || filled != 1 {
 		t.Fatalf("re-fill at the new width = %d, %v; want the note", filled, err)
 	}
-	again, _, err := export(ctx, holder.SQL(), diary, seat, mark)
-	if err != nil || len(again) != 1 {
-		t.Fatalf("the re-filled note was not carried: %d rows, %v", len(again), err)
+	again, _ := exportAll(t, holder, diary, mark)
+	if len(again) != 1 {
+		t.Fatalf("the re-filled note was not carried: %d rows", len(again))
 	}
 	carryRows(t, peer, diary, again)
 	if blob, _ := diaryVector(t, peer, "d1"); len(blob) != 16 {
@@ -221,9 +218,9 @@ func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) 
 	if episodes.name != "episodes" || !episodes.fillsVector {
 		t.Fatalf("fixture drifted: tables[1] is %s, fills %v", episodes.name, episodes.fillsVector)
 	}
-	first, mark, err := export(ctx, holder.SQL(), episodes, seat, 0)
-	if err != nil || len(first) != 1 {
-		t.Fatalf("first export = %d rows, %v", len(first), err)
+	first, mark := exportAll(t, holder, episodes, 0)
+	if len(first) != 1 {
+		t.Fatalf("first export = %d rows", len(first))
 	}
 	carryRows(t, peer, episodes, first)
 	var ask string
@@ -247,9 +244,9 @@ func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) 
 	}}); err != nil || filled != 1 {
 		t.Fatalf("FillEmbeddings = %d, %v; want the episode", filled, err)
 	}
-	again, _, err := export(ctx, holder.SQL(), episodes, seat, mark)
-	if err != nil || len(again) != 1 {
-		t.Fatalf("the filled episode was not carried: %d rows, %v", len(again), err)
+	again, _ := exportAll(t, holder, episodes, mark)
+	if len(again) != 1 {
+		t.Fatalf("the filled episode was not carried: %d rows", len(again))
 	}
 	carryRows(t, peer, episodes, again)
 	var (

@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -41,6 +44,9 @@ var noteCases = []struct {
 	{"ALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob",
 		testALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob},
 	{"AResetKeepsTheTurnsNotesAndClearsPulled", testAResetKeepsTheTurnsNotesAndClearsPulled},
+	{"ALaunchTakesOverTheReadOfTheLostTakeItsBriefNames",
+		testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames},
+	{"ALaunchRecordsTheMarkedNotesItsBriefTellsAgain", testALaunchRecordsTheMarkedNotesItsBriefTellsAgain},
 	{"ALaunchFilesTheBoxsNotesWaitingAfterItsBrief", testALaunchFilesTheBoxsNotesWaitingAfterItsBrief},
 	{"EveryWriteThatRecordsAReadTakesTheNextPlace", testEveryWriteThatRecordsAReadTakesTheNextPlace},
 	{"APullIsRecordedOnceAndOnlyForItsJob", testAPullIsRecordedOnceAndOnlyForItsJob},
@@ -48,6 +54,8 @@ var noteCases = []struct {
 		testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox},
 	{"NotesRideABridgedCallStorm", testNotesRideABridgedCallStorm},
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
+	{"ATakeWhoseAnswerWasLostIsSettledByItsIdentity", testATakeWhoseAnswerWasLostIsSettledByItsIdentity},
+	{"ANoteIsServedOnlyToItsJobWhileItWaits", testANoteIsServedOnlyToItsJobWhileItWaits},
 }
 
 // noteRawCases are the note cases that read the raw record.
@@ -59,6 +67,7 @@ var noteRawCases = []struct {
 	{"AKeyALaterBuildAddsInsideASectionSurvivesEveryWrite",
 		testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite},
 	{"AStateTheNoteViewCannotReadIsPassedOver", testAStateTheNoteViewCannotReadIsPassedOver},
+	{"ASettleOfATakeThatRecordedNothingFencesItsWrite", testASettleOfATakeThatRecordedNothingFencesItsWrite},
 }
 
 // The turn's bounds every filing here is held to: internal/agent/steer's,
@@ -99,6 +108,14 @@ func bridgeTake(launch string, ids ...string) sandbox.NoteTake {
 		Read: sandbox.NoteRead{Phase: "execute", Iteration: 1, Round: 1,
 			Boundary: "tool_batch", Launch: launch},
 	}
+}
+
+// namedTake is [bridgeTake] under the identity take, which a settle finds its
+// reads by.
+func namedTake(launch, take string, ids ...string) sandbox.NoteTake {
+	t := bridgeTake(launch, ids...)
+	t.Read.Take = take
+	return t
 }
 
 // waitingIDs is the ids of the notes on turnID's record nothing has read.
@@ -477,6 +494,179 @@ func testAResetKeepsTheTurnsNotesAndClearsPulled(t *testing.T, s sandbox.Pending
 	}
 }
 
+// A LAUNCH TAKES OVER THE READ OF THE LOST TAKE ITS BRIEF NAMES. A take whose
+// write landed and whose answer was lost left its notes read by the record's
+// word, and its settle can hand them to a relaunch's brief instead — the first
+// step to tell them, the take's reader never having had them. So a brief's note
+// naming that take (sandbox.RunNote.LostTake) is recorded read by the job the
+// write opens, in the take's place — and at the take's own place among the
+// reads, never the write's: a note filed after it and read by a later take, a
+// correction of it, stays after it in the order every reader tells the turn's
+// notes in — and the ending of that job, should it never start, reports it with
+// the rest of its brief. A note another take read is left as that take read it,
+// whatever take the brief names, and a waiting note the brief reads takes the
+// write's place.
+//
+// Mutation: leave every note the record holds read as it was, take over its
+// read whatever take recorded it, or number the read taken over at the write's
+// place, and the case goes red.
+func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-lost-brief"))
+	for _, id := range []string{"n-1", "n-2", "n-3"} {
+		mustFile(t, s, "t-lost-brief", id)
+	}
+	lost, err := s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "lost", "n-1"))
+	if err != nil || len(lost) != 1 {
+		t.Fatalf("the lost take took %d (%v), want n-1", len(lost), err)
+	}
+	if _, err = s.TakeNotes(ctx, "t-lost-brief", namedTake(launch, "answered", "n-2")); err != nil {
+		t.Fatal(err)
+	}
+	mustClaim(t, s, "t-lost-brief")
+
+	again := run("t-lost-brief")
+	brief := &sandbox.NoteRead{Phase: "execute", Iteration: 2, Round: 1, Boundary: "brief"}
+	again.BriefNotes = []sandbox.RunNote{
+		{ID: "n-1", Read: brief, LostTake: "lost"},
+		{ID: "n-2", Read: brief, LostTake: "lost"},
+		{ID: "n-3", Read: brief},
+	}
+	relaunched, err := s.BeginLaunch(ctx, again, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	row := mustGet(t, s, "t-lost-brief")
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range row.Steer.Notes {
+		byID[n.ID] = n
+	}
+	for id, place := range map[string]int{"n-1": lost[0].Read.Order, "n-3": row.Steer.Reads} {
+		if read := byID[id].Read; read == nil || read.Launch != relaunched.LaunchID || read.Boundary != "brief" ||
+			read.Iteration != 2 || read.Take != "" || read.Order != place {
+			t.Errorf("note %s is read %+v, want it read by job %s's brief, at place %d among the reads",
+				id, read, relaunched.LaunchID, place)
+		}
+	}
+	if read := byID["n-2"].Read; read == nil || read.Take != "answered" || read.Launch != launch {
+		t.Errorf("a note another take read is read %+v, want it left as take answered read it", read)
+	}
+	if n1, n2 := byID["n-1"].Read, byID["n-2"].Read; n1 == nil || n2 == nil || n1.Order >= n2.Order {
+		t.Errorf("n-1 is read at %+v and n-2, read by a later take, at %+v: the note taken over is no longer "+
+			"ahead of it", n1, n2)
+	}
+	var expired []string
+	for _, n := range row.EndedNotes() {
+		if n.Outcome == types.SteerExpired {
+			expired = append(expired, n.Note.ID)
+		}
+	}
+	if !slices.Equal(expired, []string{"n-1", "n-3"}) {
+		t.Errorf("the ending of the job that never started reports %v expired, want every note its brief took",
+			expired)
+	}
+}
+
+// A LAUNCH RECORDS THE MARKED NOTES ITS BRIEF TELLS AGAIN. A take whose write
+// landed and whose answer never reached its reader is marked unanswered, and
+// the brief of every later launch tells its notes again; so the launch's write
+// records each note its brief names as told again (sandbox.PendingRun
+// .RetoldNotes) read by the job it opens, told again, in the marked take's
+// place and at that take's own place among the reads, never the write's — a
+// note a later take read stays after it, and the write moves the record's
+// count of reads only for the notes it is the first to read — and keeps the
+// take's read beside the telling (sandbox.NoteRead.Retold). A note it names
+// that the record holds read and unmarked is left as it was read, and one the
+// record does not hold is never added. The job's ending reports the note told
+// again missed at that take where the job never started, the brief having
+// handed nothing over, and delivered at the brief where it did.
+//
+// Mutation: leave a marked read as it was, record the telling at the write's
+// place, leave the read marked or under its take, drop the take's read or keep
+// it unmarked, record a note the record holds unmarked as told again, or add
+// one it does not hold, and the case goes red.
+func testALaunchRecordsTheMarkedNotesItsBriefTellsAgain(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-retold"))
+	for _, id := range []string{"n-1", "n-2", "n-3"} {
+		mustFile(t, s, "t-retold", id)
+	}
+	lost, err := s.TakeNotes(ctx, "t-retold", namedTake(launch, "lost", "n-1"))
+	if err != nil || len(lost) != 1 {
+		t.Fatalf("the lost take took %d (%v), want n-1", len(lost), err)
+	}
+	if _, err = s.SettleTake(ctx, "t-retold", sandbox.NoteSettle{Take: "lost", Unanswered: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.TakeNotes(ctx, "t-retold", namedTake(launch, "answered", "n-2")); err != nil {
+		t.Fatal(err)
+	}
+	mustClaim(t, s, "t-retold")
+
+	again := run("t-retold")
+	brief := &sandbox.NoteRead{Phase: "execute", Iteration: 2, Round: 1, Boundary: "brief"}
+	again.BriefNotes = []sandbox.RunNote{{ID: "n-3", Read: brief}}
+	again.RetoldNotes = []sandbox.RunNote{{ID: "n-1", Read: brief}, {ID: "n-2", Read: brief},
+		{ID: "absent", Read: brief}}
+	relaunched, err := s.BeginLaunch(ctx, again, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	row := mustGet(t, s, "t-retold")
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range row.Steer.Notes {
+		byID[n.ID] = n
+	}
+	if read := byID["n-1"].Read; read == nil || read.Retold == nil || read.Unanswered || read.Take != "" ||
+		read.Launch != relaunched.LaunchID || read.Boundary != "brief" || read.Iteration != 2 ||
+		read.Order != lost[0].Read.Order {
+		t.Errorf("the marked note is read %+v, want it told again by job %s's brief, at its take's place %d",
+			read, relaunched.LaunchID, lost[0].Read.Order)
+	} else if kept := read.Retold; !kept.Unanswered || kept.Take != "lost" || kept.Launch != launch ||
+		kept.Boundary != lost[0].Read.Boundary || kept.Order != lost[0].Read.Order {
+		t.Errorf("the telling kept the take's read as %+v, want the lost take's read by job %s, marked", kept,
+			launch)
+	}
+	if read := byID["n-2"].Read; read == nil || read.Retold != nil || read.Take != "answered" || read.Launch != launch {
+		t.Errorf("a note an answered take read is read %+v, want it left as that take read it", read)
+	}
+	if n1, n2, n3 := byID["n-1"].Read, byID["n-2"].Read, byID["n-3"].Read; n1 == nil || n2 == nil || n3 == nil ||
+		n1.Order >= n2.Order || n2.Order >= n3.Order || n3.Order != row.Steer.Reads {
+		t.Errorf("the reads are placed n-1 %+v, n-2 %+v, n-3 %+v (of %d), want the note told again ahead of "+
+			"the later take's and the brief's own note last", n1, n2, n3, row.Steer.Reads)
+	}
+	if _, added := byID["absent"]; added || len(row.Steer.Notes) != 3 {
+		t.Errorf("the write added a note it was told to tell again: %+v", row.Steer.Notes)
+	}
+	// THE JOB EACH OUTCOME OF THE NOTE TOLD AGAIN IS AT: the lost take's,
+	// missed, and the brief's that told it, delivered.
+	reportedBy := map[types.SteerOutcome]string{types.SteerMissed: launch,
+		types.SteerDelivered: relaunched.LaunchID}
+	ends := func() map[string]types.SteerOutcome {
+		out := map[string]types.SteerOutcome{}
+		for _, n := range mustGet(t, s, "t-retold").EndedNotes() {
+			out[n.Note.ID] = n.Outcome
+			if n.Note.ID == "n-1" && (n.Read == nil || n.Read.Launch != reportedBy[n.Outcome]) {
+				t.Errorf("the note told again is reported %s at %+v, want it at the take it was missed at, or "+
+					"at the brief that told it where its job started", n.Outcome, n.Read)
+			}
+		}
+		return out
+	}
+	if got := ends(); !maps.Equal(got, map[string]types.SteerOutcome{"n-1": types.SteerMissed,
+		"n-3": types.SteerExpired}) {
+		t.Errorf("the ending of the job that never started reports %v, want the note it told again missed and "+
+			"the one it was the first to tell expired", got)
+	}
+	if err = s.AttachSandbox(ctx, "t-retold", sandbox.BoxRef{SandboxID: "box-retold", CommandID: "cmd-1",
+		Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	if got := ends(); !maps.Equal(got, map[string]types.SteerOutcome{"n-1": types.SteerDelivered}) {
+		t.Errorf("the ending of the job that started reports %v, want the note told again delivered", got)
+	}
+}
+
 // A LAUNCH FILES THE BOX'S NOTES WAITING AFTER ITS BRIEF, in the write that
 // creates the record: the brief's notes read by the job it opens, then every
 // note the turn's box still held, waiting, numbered after them — ahead of
@@ -609,8 +799,8 @@ func testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox(t *testing
 	}
 	unread := func(turnID string) []string {
 		var out []string
-		for _, n := range mustGet(t, s, turnID).UnreadNotes() {
-			out = append(out, n.ID)
+		for _, n := range mustGet(t, s, turnID).EndedNotes() {
+			out = append(out, n.Note.ID)
 		}
 		return out
 	}
@@ -1187,5 +1377,349 @@ func testAStateTheNoteViewCannotReadIsPassedOver(t *testing.T, s sandbox.Pending
 		case len(view.Steer.Notes) == 2:
 			return
 		}
+	}
+}
+
+// A TAKE WHOSE ANSWER WAS LOST IS SETTLED BY ITS IDENTITY. A take's write can
+// land and its answer not reach the harness that asked — a hook given five
+// seconds, a store that answered after them — and the record then says the note
+// was read by a job whose harness never had it. The settle answers exactly the
+// notes that take's write recorded, found by the identity its read named, and
+// where its reader never had them marks each unanswered, keeping where it was
+// read: never another take's read, never a note still waiting. Asked again, it
+// answers the same notes and marks nothing twice. A take that recorded nothing
+// is answered nothing, a run with no record is answered nothing, a settle that
+// names no take is refused, and a run whose ending is decided is settled all the
+// same: what a take recorded is a fact about the take.
+//
+// Mutation: mark every read of the take's job rather than the take's own, mark
+// the reads of a settle that does not ask it, clear the read rather than mark
+// it, refuse a run whose ending is decided, or answer a settle naming no take,
+// and a check goes red.
+func testATakeWhoseAnswerWasLostIsSettledByItsIdentity(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-settle"))
+	for _, id := range []string{"n-1", "n-2", "n-3", "n-4"} {
+		mustFile(t, s, "t-settle", id)
+	}
+	if _, err := s.TakeNotes(ctx, "t-settle", namedTake(launch, "answered", "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	// THE TAKE WHOSE ANSWER WAS LOST, its write landed: two notes.
+	lost, takeErr := s.TakeNotes(ctx, "t-settle", namedTake(launch, "lost", "n-2", "n-3"))
+	if takeErr != nil || len(lost) != 2 {
+		t.Fatalf("the lost take took %d (%v), want two", len(lost), takeErr)
+	}
+	// AS THEY STAND, for a reader that hands them over itself: nothing marked.
+	stand, standErr := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Take: "lost"})
+	if standErr != nil || len(stand) != 2 || stand[0].Read.Unanswered || stand[1].Read.Unanswered {
+		t.Fatalf("a settle answering the take's reads as they stand = %+v, %v, want both, unmarked", stand,
+			standErr)
+	}
+	for range 2 {
+		settled, settleErr := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Take: "lost", Unanswered: true})
+		if settleErr != nil || len(settled) != 2 {
+			t.Fatalf("the settle answered %d (%v), want the two notes the take recorded", len(settled), settleErr)
+		}
+		for _, n := range settled {
+			if n.Read == nil || !n.Read.Unanswered || n.Read.Take != "lost" {
+				t.Errorf("the settle answered %s read %+v, want it marked unanswered", n.ID, n.Read)
+			}
+		}
+	}
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range mustGet(t, s, "t-settle").Steer.Notes {
+		byID[n.ID] = n
+	}
+	for _, id := range []string{"n-2", "n-3"} {
+		read := byID[id].Read
+		if read == nil || !read.Unanswered || read.Order != lost[0].Read.Order || read.Launch != launch ||
+			read.Boundary != "tool_batch" {
+			t.Errorf("note %s is read %+v on the record, want the lost take's read, kept and marked unanswered",
+				id, read)
+		}
+	}
+	if read := byID["n-1"].Read; read == nil || read.Unanswered {
+		t.Errorf("the answered take's read is %+v, want it read and unmarked", read)
+	}
+	if !byID["n-4"].Waiting() {
+		t.Errorf("a note no take recorded is read %+v, want it waiting", byID["n-4"].Read)
+	}
+	if none, err := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Take: "never-landed",
+		Unanswered: true}); err != nil || len(none) != 0 {
+		t.Errorf("a settle of a take that recorded nothing = %+v, %v, want nothing", none, err)
+	}
+	if none, err := s.SettleTake(ctx, "t-settle-gone", sandbox.NoteSettle{Take: "lost",
+		Unanswered: true}); err != nil || len(none) != 0 {
+		t.Errorf("a settle of a run with no record = %+v, %v, want nothing", none, err)
+	}
+	if _, err := s.SettleTake(ctx, "t-settle", sandbox.NoteSettle{Unanswered: true}); err == nil {
+		t.Error("a settle that names no take was answered")
+	}
+
+	// A RUN WHOSE ENDING IS DECIDED is settled all the same.
+	ending := mustLaunched(t, s, run("t-settle-ending"))
+	mustFile(t, s, "t-settle-ending", "n-1")
+	if _, err := s.TakeNotes(ctx, "t-settle-ending", namedTake(ending, "lost", "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	decide(t, s, "t-settle-ending", everyJob(sandbox.Fence{}, sandbox.Active))
+	settled, endingErr := s.SettleTake(ctx, "t-settle-ending", sandbox.NoteSettle{Take: "lost", Unanswered: true})
+	if endingErr != nil || len(settled) != 1 || !settled[0].Read.Unanswered {
+		t.Errorf("a settle of a run whose ending is decided = %+v, %v, want its note marked", settled, endingErr)
+	}
+}
+
+// A SETTLE OF A TAKE THAT RECORDED NOTHING FENCES ITS WRITE, IN EITHER MODE. A
+// take whose caller gave up on its answer can still have its write in flight —
+// sent, and taken by the store only after the settle read the record — and that
+// write records the note read by a take nobody answered. So a settle that finds
+// no read of the take writes the record all the same, whether it marks what it
+// finds or answers it as it stands, and the take's write, conditioned on the
+// version it read, cannot land after it: decided again on the record the settle
+// wrote, the take is a lost race, and the note still waits. A settle that finds
+// the take's reads — marked already, where it marks — writes nothing, nothing
+// of the take being left in flight.
+//
+// Mutation: write nothing where the take recorded nothing, in either mode, and
+// the take's write lands after the settle with its note read; or write where
+// the reads are there and need nothing, and the record moves for nothing.
+func testASettleOfATakeThatRecordedNothingFencesItsWrite(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	for name, unanswered := range map[string]bool{"marking": true, "answering": false} {
+		turnID := "t-fence-" + name
+		launch := mustLaunched(t, s, run(turnID))
+		mustFile(t, s, turnID, "n-1")
+		// THE TAKE'S WRITE, as the store makes it: its decision on the record
+		// it read, conditioned on that version — and between its read and its
+		// write, THE SETTLE, made by a caller that gave up on the take's
+		// answer.
+		attempts := 0
+		_, wrote, raceErr := runs.MutateSandboxRun(ctx, turnID, func(read coord.Record) (coord.SandboxRunChange, error) {
+			attempts++
+			if attempts > 1 {
+				// DECIDED AGAIN on the record the settle wrote: the take's
+				// caller is gone, and its write is no more.
+				return coord.SandboxRunChange{}, nil
+			}
+			settled, settleErr := s.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: "in-flight",
+				Unanswered: unanswered})
+			if settleErr != nil || len(settled) != 0 {
+				return coord.SandboxRunChange{}, fmt.Errorf("the settle beside the take's write = %+v, %v, "+
+					"want nothing recorded", settled, settleErr)
+			}
+			var row sandbox.PendingRun
+			if decodeErr := json.Unmarshal(read.Value, &row); decodeErr != nil {
+				return coord.SandboxRunChange{}, decodeErr
+			}
+			row.Steer.Reads++
+			row.Steer.Notes[0].Read = &sandbox.NoteRead{At: base, Order: row.Steer.Reads, Phase: "execute",
+				Boundary: "tool_batch", Launch: launch, Take: "in-flight"}
+			raw, encodeErr := json.Marshal(row)
+			return coord.SandboxRunChange{Put: raw}, encodeErr
+		})
+		if raceErr != nil {
+			t.Fatal(raceErr)
+		}
+		if wrote || attempts != 2 {
+			t.Errorf("%s, the take's write landed (%v) in %d attempt(s), want it lost to the settle's write",
+				name, wrote, attempts)
+		}
+		if got := waitingIDs(t, s, turnID); !slices.Equal(got, []string{"n-1"}) {
+			t.Errorf("%s, the notes waiting after the settle are %v, want n-1: the take's write landed", name, got)
+		}
+
+		// THE TAKE'S READS THERE, marked already where the settle marks:
+		// nothing is left in flight, and nothing is written.
+		if _, err := s.TakeNotes(ctx, turnID, namedTake(launch, "lost", "n-1")); err != nil {
+			t.Fatal(err)
+		}
+		if _, settleErr := s.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: "lost",
+			Unanswered: unanswered}); settleErr != nil {
+			t.Fatal(settleErr)
+		}
+		before, _, beforeErr := runs.SandboxRun(ctx, turnID)
+		if beforeErr != nil {
+			t.Fatal(beforeErr)
+		}
+		if _, settleErr := s.SettleTake(ctx, turnID, sandbox.NoteSettle{Take: "lost",
+			Unanswered: unanswered}); settleErr != nil {
+			t.Fatal(settleErr)
+		}
+		after, _, afterErr := runs.SandboxRun(ctx, turnID)
+		if afterErr != nil {
+			t.Fatal(afterErr)
+		}
+		if after.Version != before.Version {
+			t.Errorf("%s, a settle of reads that need nothing wrote the record (version %d to %d)", name,
+				before.Version, after.Version)
+		}
+	}
+}
+
+// noteStagedCases are the note cases whose subject is a write another party
+// lands under one of the store's own decisions, which only the records it is
+// built on can stage ([vanishingRuns]).
+var noteStagedCases = []struct {
+	name string
+	fn   func(*testing.T, *vanishingRuns, sandbox.PendingStore)
+}{
+	{"ASettleOfARecordRemovedUnderItAnswersNothing", testASettleOfARecordRemovedUnderItAnswersNothing},
+}
+
+// vanishingRuns is a coordination store's run records that, once armed, remove
+// a run's record between one decision of the store's and its write — the
+// run's ending deleting it under a write it lost to.
+type vanishingRuns struct {
+	records
+	armed atomic.Bool
+}
+
+// MutateSandboxRun makes the read-decide-write as the records would, the
+// record removed under the first decision once armed.
+func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
+	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
+
+	return r.records.MutateSandboxRun(ctx, turnID, func(read coord.Record) (coord.SandboxRunChange, error) {
+		change, err := decide(read)
+		if r.armed.CompareAndSwap(true, false) {
+			if _, _, removeErr := r.records.MutateSandboxRun(ctx, turnID,
+				func(coord.Record) (coord.SandboxRunChange, error) {
+					return coord.SandboxRunChange{Delete: true}, nil
+				}); removeErr != nil {
+				return coord.SandboxRunChange{}, removeErr
+			}
+		}
+		return change, err
+	})
+}
+
+// A SETTLE OF A RECORD REMOVED UNDER IT ANSWERS NOTHING. A settle that marks
+// decides to write: its attempt finds the take's reads, and can then lose its
+// race to the record's removal — the run's ending deleting it — and the store
+// asks again and finds no record. That attempt's decision recorded nothing, so
+// it is no answer, as a record gone before the settle is none. (A settle that
+// answers as the reads stand writes nothing where it finds them, so it races
+// nobody: what it read is its answer.)
+//
+// Mutation: answer what an earlier attempt decided where the last found no
+// record, and the settle answers notes marked by a write that never landed.
+func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *vanishingRuns, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-vanish"))
+	mustFile(t, s, "t-vanish", "n-1")
+	if _, err := s.TakeNotes(ctx, "t-vanish", namedTake(launch, "lost", "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	runs.armed.Store(true)
+	settled, err := s.SettleTake(ctx, "t-vanish", sandbox.NoteSettle{Take: "lost", Unanswered: true})
+	if err != nil || len(settled) != 0 {
+		t.Errorf("a settle of a record removed under it = %+v, %v, want nothing", settled, err)
+	}
+	if _, found, getErr := s.Get(ctx, "t-vanish"); getErr != nil || found {
+		t.Errorf("the record is found (%v, %v) after its removal", found, getErr)
+	}
+}
+
+// A NOTE IS SERVED ONLY TO ITS JOB, WHILE IT WAITS, AND STAYS SERVED. A harness
+// that polls for its notes is handed one only once the record says it was
+// served to the job, and the note is read only once the harness confirms
+// delivering it: so the mark is what tells a continuation a session may hold a
+// note the record says waits. A serve marks only the notes it names that wait,
+// on its own job's record in a status it names, and answers every one of them
+// served to that job, an earlier serve's included; a note served stays served
+// once a take reads it and through the next launch, and the latest job served
+// it is the one named. A serve for another job, in a status it does not name,
+// on a record whose ending is decided or one that is gone serves nothing, and
+// one naming no job is refused.
+//
+// Mutation: serve a note no longer waiting, serve for another job or in
+// another status, answer only what this call marked, drop the mark when the
+// note is read, or answer a serve naming no job, and a check goes red.
+func testANoteIsServedOnlyToItsJobWhileItWaits(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-serve"))
+	for _, id := range []string{"n-1", "n-2", "n-3"} {
+		mustFile(t, s, "t-serve", id)
+	}
+	if _, err := s.TakeNotes(ctx, "t-serve", bridgeTake(launch, "n-3")); err != nil {
+		t.Fatal(err)
+	}
+	serve := func(job string, ids ...string) sandbox.NoteServe {
+		return sandbox.NoteServe{IDs: ids, Launch: job,
+			Statuses: []string{sandbox.StatusLaunching, sandbox.StatusRunning}}
+	}
+	served, serveErr := s.ServeNotes(ctx, "t-serve", serve(launch, "n-1", "n-3"))
+	if serveErr != nil || len(served) != 1 || served[0].ID != "n-1" || served[0].Served != launch {
+		t.Fatalf("serving a waiting note and a read one = %+v, %v, want the waiting one served", served, serveErr)
+	}
+	// AN EARLIER SERVE'S MARK IS ANSWERED BESIDE THIS ONE'S.
+	served, serveErr = s.ServeNotes(ctx, "t-serve", serve(launch, "n-1", "n-2"))
+	if serveErr != nil || len(served) != 2 || served[0].ID != "n-1" || served[1].ID != "n-2" {
+		t.Fatalf("a second serve = %+v, %v, want both notes it names, in the record's order", served, serveErr)
+	}
+	if none, err := s.ServeNotes(ctx, "t-serve", serve("another-job", "n-1")); err != nil || len(none) != 0 {
+		t.Errorf("a serve for a job the record does not hold = %+v, %v, want nothing", none, err)
+	}
+	if none, err := s.ServeNotes(ctx, "t-serve", sandbox.NoteServe{IDs: []string{"n-1"}, Launch: launch,
+		Statuses: []string{sandbox.StatusResumed}}); err != nil || len(none) != 0 {
+		t.Errorf("a serve in a status the record is not in = %+v, %v, want nothing", none, err)
+	}
+	if _, err := s.ServeNotes(ctx, "t-serve", sandbox.NoteServe{IDs: []string{"n-1"}}); err == nil {
+		t.Error("a serve that names no job was answered")
+	}
+	byID := map[string]sandbox.RunNote{}
+	for _, n := range mustGet(t, s, "t-serve").Steer.Notes {
+		byID[n.ID] = n
+	}
+	if n := byID["n-1"]; n.Served != launch || !n.Waiting() {
+		t.Errorf("n-1 is %+v, want it waiting, served to the job", n)
+	}
+	if n := byID["n-3"]; n.Served != "" {
+		t.Errorf("a note read before the serve was served: %+v", n)
+	}
+	// READ ONCE ITS HARNESS CONFIRMS IT, AND STILL SERVED.
+	if _, err := s.TakeNotes(ctx, "t-serve", bridgeTake(launch, "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range mustGet(t, s, "t-serve").Steer.Notes {
+		if n.ID == "n-1" && (n.Served != launch || n.Waiting()) {
+			t.Errorf("n-1 is %+v once its harness confirmed it, want it read and still served", n)
+		}
+	}
+	// THROUGH THE NEXT LAUNCH, which reads the served note in its brief, and
+	// the latest job served it named where a note waits through to it.
+	mustClaim(t, s, "t-serve")
+	again := run("t-serve")
+	again.BriefNotes = []sandbox.RunNote{{ID: "n-2", Sealed: []byte("sealed:n-2"),
+		Read: &sandbox.NoteRead{Phase: "execute", Boundary: "brief"}}}
+	relaunched, launchErr := s.BeginLaunch(ctx, again, sandbox.Fence{})
+	if launchErr != nil {
+		t.Fatalf("relaunch: %v", launchErr)
+	}
+	mustFile(t, s, "t-serve", "n-4")
+	if _, err := s.ServeNotes(ctx, "t-serve", serve(launch, "n-4")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ServeNotes(ctx, "t-serve", serve(relaunched.LaunchID, "n-4")); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range mustGet(t, s, "t-serve").Steer.Notes {
+		switch {
+		case n.ID == "n-2" && (n.Served != launch || n.Waiting()):
+			t.Errorf("the brief's note is %+v, want it read by the relaunch and still served to the job before", n)
+		case n.ID == "n-4" && n.Served != relaunched.LaunchID:
+			t.Errorf("a note served to the relaunch is %+v, want it served to the relaunch's job", n)
+		}
+	}
+	// A RUN WHOSE ENDING IS DECIDED, AND ONE WITH NO RECORD, SERVE NOTHING.
+	ending := mustLaunched(t, s, run("t-serve-ending"))
+	mustFile(t, s, "t-serve-ending", "n-1")
+	decide(t, s, "t-serve-ending", everyJob(sandbox.Fence{}, sandbox.Active))
+	if none, err := s.ServeNotes(ctx, "t-serve-ending", serve(ending, "n-1")); err != nil || len(none) != 0 {
+		t.Errorf("a serve on a run whose ending is decided = %+v, %v, want nothing", none, err)
+	}
+	if none, err := s.ServeNotes(ctx, "t-serve-gone", serve(ending, "n-1")); err != nil || len(none) != 0 {
+		t.Errorf("a serve on a run with no record = %+v, %v, want nothing", none, err)
 	}
 }

@@ -68,8 +68,9 @@ type PullFacts struct {
 	Approvals []string `json:"approvals"`
 
 	// Required is every check the base branch requires
-	// ([Client.RequiredChecks]), and Checks how each stands on HeadSHA, in
-	// the same order.
+	// ([Client.RequiredChecks]) and every one the company declared for it
+	// ([WithDeclared]), and Checks how each stands on HeadSHA, in the same
+	// order.
 	Required []RequiredCheck `json:"required"`
 	Checks   []CheckResult   `json:"checks"`
 }
@@ -108,9 +109,10 @@ type reviewWire struct {
 }
 
 // PullFacts reads one pull request, its reviews, its base branch's required
-// checks and how each stands on its head, counting no report untrusted made.
+// checks beside those declared names for it (nil for none), and how each
+// stands on its head, counting no report untrusted made.
 func (c *Client) PullFacts(ctx context.Context, owner, repo string, number int,
-	untrusted Reporters) (PullFacts, error) {
+	declared func(base string) []string, untrusted Reporters) (PullFacts, error) {
 	if number <= 0 {
 		return PullFacts{}, fmt.Errorf("github: %d is not a pull request number", number)
 	}
@@ -147,6 +149,9 @@ func (c *Client) PullFacts(ctx context.Context, owner, repo string, number int,
 
 	if facts.Required, err = c.RequiredChecks(ctx, owner, repo, facts.BaseRef); err != nil {
 		return PullFacts{}, err
+	}
+	if declared != nil {
+		facts.Required = WithDeclared(facts.Required, declared(facts.BaseRef))
 	}
 	if facts.Checks, err = c.CommitChecks(ctx, owner, repo, facts.HeadSHA, facts.Required, untrusted); err != nil {
 		return PullFacts{}, err

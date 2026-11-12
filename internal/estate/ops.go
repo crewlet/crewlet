@@ -10,12 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -404,7 +405,7 @@ type Backend struct {
 	ChatSearch ChatSearcher
 
 	// Code is this node's code half — its committer and its reader
-	// ([code.Served]) — or nil where the company hosts no code: every code
+	// ([gitlet.Served]) — or nil where the company hosts no code: every code
 	// operation is then answered "no backend here".
 	Code CodeServer
 
@@ -439,6 +440,10 @@ type Backend struct {
 	// Access is the access log, which every data node runs from boot, on the
 	// executor log's terms ([AccessHalf]).
 	Access AccessHalf
+
+	// Atlas is the atlas log, which every data node runs from boot
+	// ([AtlasHalf]).
+	Atlas AtlasHalf
 
 	// Reached waits until this node's applier of the floor's log has reached
 	// a position — the floor every request carries, the node's own included:
@@ -588,13 +593,13 @@ const SeatCopy = ""
 // declaration. An operation's floor is on its OWN domain's log and no other:
 // see [ready].
 //
-// THE TEN DOMAINS AN OPERATION READS OR WRITES, and not the other two the
+// THE ELEVEN DOMAINS AN OPERATION READS OR WRITES, and not the other two the
 // estate carries: the vectors are written by a fleet duty, never through an
 // operation, and no operation reads their rows at a position — the searches
 // that rank by them read them as an index, which carries no floor at all — and
 // the Dashboard Assistant's conversations are read and written only where the
 // API runs, on a data node, from that node's own copy, so no request carries
-// them across the router. The executor and access logs are among the ten
+// them across the router. The executor and access logs are among the eleven
 // though no surface writes either: the engine records a seat's executor
 // session and what it told the seat wherever the seat runs, a node without
 // `data` included, and only a data node publishes ([originEngine],
@@ -603,25 +608,27 @@ var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
 	usageDomain        = usage.Domain{}.Name()
-	codeDomain         = code.Domain{}.Name()
+	codeDomain         = gitlet.Domain{}.Name()
 	identityDomain     = iamdomain.Domain{}.Name()
 	artifactsDomain    = artifactsdomain.Domain{}.Name()
 	artifactDataDomain = artifactdata.Domain{}.Name()
 	chatDomain         = chatlet.Domain{}.Name()
 	executorDomain     = executordomain.Domain{}.Name()
 	accessDomain       = accessdomain.Domain{}.Name()
+	atlasDomain        = atlasdomain.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain:      worklet.Domain{}.Stream().Name,
 		pagesDomain:        doclet.Domain{}.Stream().Name,
 		usageDomain:        usage.Domain{}.Stream().Name,
-		codeDomain:         code.Domain{}.Stream().Name,
+		codeDomain:         gitlet.Domain{}.Stream().Name,
 		identityDomain:     iamdomain.Domain{}.Stream().Name,
 		artifactsDomain:    artifactsdomain.Domain{}.Stream().Name,
 		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
 		chatDomain:         chatlet.Domain{}.Stream().Name,
 		executorDomain:     executordomain.Domain{}.Stream().Name,
 		accessDomain:       accessdomain.Domain{}.Stream().Name,
+		atlasDomain:        atlasdomain.Domain{}.Stream().Name,
 	}
 )
 

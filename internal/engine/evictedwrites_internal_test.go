@@ -16,12 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -267,7 +269,7 @@ var evictedWriters = map[string]evictedWriter{
 			return chatlet.NewGates(db)
 		},
 	},
-	code.Domain{}.Name(): {
+	gitlet.Domain{}.Name(): {
 		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
 			statelog.Position, statelog.Outcome, error) {
 			t.Helper()
@@ -278,25 +280,25 @@ var evictedWriters = map[string]evictedWriter{
 			// The write is an operator's eviction of ANOTHER node, which an
 			// evicted node's gate drops like any record it wrote.
 			s := e.core.Load().log
-			store, err := code.NewStore(code.StoreOptions{
-				Publisher: s.Domain(code.Domain{}.Name()).publisher,
+			store, err := gitlet.NewStore(gitlet.StoreOptions{
+				Publisher: s.Domain(gitlet.Domain{}.Name()).publisher,
 				DB:        s.estate().Reader(), NodeID: s.nodeID})
 			if err != nil {
 				t.Fatalf("build the code log's store: %v", err)
 			}
 			res, err := store.EvictNode(ctx,
-				code.Actor{ID: "ops-1", Kind: code.ActorOperator, OperatorID: "ops-1"},
+				gitlet.Actor{ID: "ops-1", Kind: gitlet.ActorOperator, OperatorID: "ops-1"},
 				statelog.NewOpID(time.Now(), "evict-"+tag), "node-other-"+tag)
 			return res.Position, res.Outcome, err
 		},
 		applied: func(t *testing.T, back *Backends, tag string) bool {
 			return rowExists(t, back, "code_evictions", "node_id", "node-other-"+tag)
 		},
-		evictionSubject: func(node string) string { return code.EvictionSubject(node).String() },
+		evictionSubject: func(node string) string { return gitlet.EvictionSubject(node).String() },
 		eviction:        codeEviction,
 		evictions:       "code_evictions",
 		gates: func(db store.ReplicatedReader) statelog.Gates {
-			return code.NewGates(db)
+			return gitlet.NewGates(db)
 		},
 	},
 	artifactsdomain.Domain{}.Name(): {
@@ -425,6 +427,35 @@ var evictedWriters = map[string]evictedWriter{
 		evictions: "access_evictions",
 		gates: func(db store.ReplicatedReader) statelog.Gates {
 			return accessdomain.NewGates(db)
+		},
+	},
+	atlasdomain.Domain{}.Name(): {
+		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
+			statelog.Position, statelog.Outcome, error) {
+			t.Helper()
+			// A PERSON'S PURPOSE FOR A SERVICE, through the writer every
+			// person's claim is written with.
+			claim, err := atlas.Says(atlas.MustRef(atlas.KindService, "evicted"), atlas.FactPurpose,
+				"evicted "+tag, atlas.PersonSource("ceo"), time.Now())
+			if err != nil {
+				t.Fatalf("build the claim: %v", err)
+			}
+			res, err := e.core.Load().atlasWriter.Record(ctx, atlasdomain.Call{
+				By:   iam.Actor{Name: "ceo", Kind: iam.ActorHuman},
+				OpID: statelog.NewOpID(time.Now(), "claim-"+tag),
+			}, claim, atlasdomain.NoIfMatch)
+			return res.Position, res.Outcome, err
+		},
+		applied: func(t *testing.T, back *Backends, tag string) bool {
+			return rowExists(t, back, "atlas_claims", "value_text", "evicted "+tag)
+		},
+		evictionSubject: func(node string) string {
+			return atlasdomain.EvictionSubject(node).String()
+		},
+		eviction:  atlasEviction,
+		evictions: "atlas_evictions",
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return atlasdomain.NewGates(db)
 		},
 	},
 }
@@ -613,19 +644,19 @@ func chatEviction(t *testing.T, node string) []byte {
 func codeEviction(t *testing.T, node string) []byte {
 	t.Helper()
 	at := time.Now().UTC()
-	body, err := json.Marshal(code.Eviction{
-		V: code.GateRecordVersion, NodeID: node, EvictedBy: "operator", EvictedAt: at,
+	body, err := json.Marshal(gitlet.Eviction{
+		V: gitlet.GateRecordVersion, NodeID: node, EvictedBy: "operator", EvictedAt: at,
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction: %v", err)
 	}
-	payload, err := code.Encode(code.MutationRecord{
-		RecordEnvelope: code.RecordEnvelope{
-			OpID: "op-evict-" + node, Subject: code.EvictionSubject(node),
-			Op: code.OpEviction, CreatedAt: at, Writer: "node-peer",
-			Scope: code.Scope{code.DomainPath()},
+	payload, err := gitlet.Encode(gitlet.MutationRecord{
+		RecordEnvelope: gitlet.RecordEnvelope{
+			OpID: "op-evict-" + node, Subject: gitlet.EvictionSubject(node),
+			Op: gitlet.OpEviction, CreatedAt: at, Writer: "node-peer",
+			Scope: gitlet.Scope{gitlet.DomainPath()},
 		},
-		Mutation: body, Actor: "operator", ActorKind: code.ActorOperator,
+		Mutation: body, Actor: "operator", ActorKind: gitlet.ActorOperator,
 		OperatorID: "operator",
 	})
 	if err != nil {
@@ -729,6 +760,32 @@ func accessEviction(t *testing.T, node string) []byte {
 			Subject: accessdomain.EvictionSubject(node), Op: accessdomain.OpEviction,
 			Writer: "node-peer", CreatedAt: time.Now().UTC(),
 			Scope: accessdomain.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
+		OperatorID: "operator",
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction record: %v", err)
+	}
+	return payload
+}
+
+// atlasEviction is the same for the atlas log.
+func atlasEviction(t *testing.T, node string) []byte {
+	t.Helper()
+	body, err := json.Marshal(atlasdomain.Eviction{
+		V: atlasdomain.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		EvictedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction: %v", err)
+	}
+	payload, err := atlasdomain.Encode(atlasdomain.MutationRecord{
+		RecordEnvelope: atlasdomain.RecordEnvelope{
+			V: atlasdomain.GateRecordVersion, OpID: "op-evict-" + node,
+			Subject: atlasdomain.EvictionSubject(node), Op: atlasdomain.OpEviction,
+			Writer: "node-peer", CreatedAt: time.Now().UTC(),
+			Scope: atlasdomain.ScopeSet{Subject: true},
 		},
 		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
 		OperatorID: "operator",

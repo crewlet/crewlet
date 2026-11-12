@@ -15,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -43,12 +43,12 @@ func revBase(n int64) string { return strings.Repeat(string(rune('a'+n)), 40) }
 // each page resuming after the row its cursor names.
 type changeFixture struct {
 	repo      string
-	detail    code.ChangeDetail
-	revisions []code.RevisionRow
-	findings  []code.FindingRow
-	reviews   []code.ReviewRow
-	comments  []code.CommentRow
-	listing   []code.ChangeSummary
+	detail    gitlet.ChangeDetail
+	revisions []gitlet.RevisionRow
+	findings  []gitlet.FindingRow
+	reviews   []gitlet.ReviewRow
+	comments  []gitlet.CommentRow
+	listing   []gitlet.ChangeSummary
 	at        statelog.Position
 }
 
@@ -59,39 +59,39 @@ func siteChange() *changeFixture {
 	f := &changeFixture{repo: "site", at: codeAt(40)}
 	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
 	for n := int64(1); n <= 3; n++ {
-		f.revisions = append(f.revisions, code.RevisionRow{N: n, Head: revHead(n), Pusher: "agent-ceo",
-			PusherKind: code.PartyAgent, Position: codeAt(20 + uint64(n)), At: at.Add(time.Duration(n) * time.Hour),
-			Facts: &code.RevisionFactsRow{TargetRef: "refs/heads/main", TargetOID: mainOID,
+		f.revisions = append(f.revisions, gitlet.RevisionRow{N: n, Head: revHead(n), Pusher: "agent-ceo",
+			PusherKind: gitlet.PartyAgent, Position: codeAt(20 + uint64(n)), At: at.Add(time.Duration(n) * time.Hour),
+			Facts: &gitlet.RevisionFactsRow{TargetRef: "refs/heads/main", TargetOID: mainOID,
 				TargetPosition: codeAt(10 + uint64(n)), BaseOID: revBase(n), PatchID: revBase(n),
 				Touched: []string{"a.txt", fmt.Sprintf("r%d.txt", n)}, Node: "n1", Position: codeAt(30 + uint64(n))}})
 	}
-	row := code.ChangeRow{ID: siteChangeID, RepoID: siteID, Number: 7, Title: "Retry the upload",
-		State: code.ChangeStateOpen, SourceRef: "refs/heads/feature", TargetRef: "refs/heads/main", Head: revHead(3),
-		Revision: 3, Owner: "agent-ceo", OwnerKind: code.PartyAgent, OpenedAt: at, OpenedPosition: codeAt(21),
+	row := gitlet.ChangeRow{ID: siteChangeID, RepoID: siteID, Number: 7, Title: "Retry the upload",
+		State: gitlet.ChangeStateOpen, SourceRef: "refs/heads/feature", TargetRef: "refs/heads/main", Head: revHead(3),
+		Revision: 3, Owner: "agent-ceo", OwnerKind: gitlet.PartyAgent, OpenedAt: at, OpenedPosition: codeAt(21),
 		Version: 1, Position: codeAt(23)}
-	f.detail = code.ChangeDetail{
-		ChangeSummary: code.ChangeSummary{ChangeRow: row, Repo: "site", Ref: "site!7", Access: "read",
-			Readiness: &code.Readiness{Met: 3, Total: 5, First: "no approval counts on revision 3",
-				Preconditions: []code.Precondition{{Kind: code.PreconditionApproval, State: code.PreconditionUnmet,
+	f.detail = gitlet.ChangeDetail{
+		ChangeSummary: gitlet.ChangeSummary{ChangeRow: row, Repo: "site", Ref: "site!7", Access: "read",
+			Readiness: &gitlet.Readiness{Met: 3, Total: 5, First: "no approval counts on revision 3",
+				Preconditions: []gitlet.Precondition{{Kind: gitlet.PreconditionApproval, State: gitlet.PreconditionUnmet,
 					Detail: "no approval counts on revision 3"}}}},
 		Body:    "Retries the upload once a minute.",
-		Authors: []code.ChangeAuthor{{Author: "agent-ceo", Kind: code.PartyAgent, FirstRevision: 1}},
-		Conversation: &code.ConversationRow{Comments: 1, Reviews: 1, OpenFindings: 2, OpenBlockers: 1,
+		Authors: []gitlet.ChangeAuthor{{Author: "agent-ceo", Kind: gitlet.PartyAgent, FirstRevision: 1}},
+		Conversation: &gitlet.ConversationRow{Comments: 1, Reviews: 1, OpenFindings: 2, OpenBlockers: 1,
 			Version: 3, Position: codeAt(39)},
-		Mergeability: &code.MergeabilityRow{Revision: 3, TargetRef: "refs/heads/main", TargetOID: mainOID,
-			State: code.MergeConflict, Conflicts: []string{"a.txt"}, At: at},
+		Mergeability: &gitlet.MergeabilityRow{Revision: 3, TargetRef: "refs/heads/main", TargetOID: mainOID,
+			State: gitlet.MergeConflict, Conflicts: []string{"a.txt"}, At: at},
 	}
-	f.listing = []code.ChangeSummary{f.detail.ChangeSummary}
+	f.listing = []gitlet.ChangeSummary{f.detail.ChangeSummary}
 	return f
 }
 
 // queued is f's change in its target's queue, waiting at place 2: its
 // readiness's queue precondition names its live entry, siteEntryID, the entry
-// a dequeue takes out (code.Precondition.Queue).
+// a dequeue takes out (gitlet.Precondition.Queue).
 func (f *changeFixture) queued() *changeFixture {
-	f.detail.Readiness.Preconditions = append(f.detail.Readiness.Preconditions, code.Precondition{
-		Kind: code.PreconditionQueue, State: code.PreconditionComputing, Detail: "site!7 waits at place 2",
-		Queue: &code.QueuedFacts{EntryID: siteEntryID, TargetRef: "refs/heads/main", State: code.QueueWaiting,
+	f.detail.Readiness.Preconditions = append(f.detail.Readiness.Preconditions, gitlet.Precondition{
+		Kind: gitlet.PreconditionQueue, State: gitlet.PreconditionComputing, Detail: "site!7 waits at place 2",
+		Queue: &gitlet.QueuedFacts{EntryID: siteEntryID, TargetRef: "refs/heads/main", State: gitlet.QueueWaiting,
 			Place: 2}})
 	return f
 }
@@ -107,20 +107,20 @@ func newChangeHost(f *changeFixture) *gitletHost {
 // repository's changes newest first by number, a page after the number its
 // cursor names; and one change's revisions — with its detail on a first page
 // — newest first after the revision a cursor names, its detail alone for a
-// read asking it alone (code.ReadQuery.DetailOnly, a write tool's), or a part
+// read asking it alone (gitlet.ReadQuery.DetailOnly, a write tool's), or a part
 // of its conversation after the row a cursor names.
-func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
-	out := code.ReadAnswer{Position: f.at, Level: q.Fresh.Level}
+func (f *changeFixture) read(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	out := gitlet.ReadAnswer{Position: f.at, Level: q.Fresh.Level}
 	if q.Repo != "" && q.Repo != f.repo {
-		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, q.Repo)
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound, q.Repo)
 	}
 	limit := q.Limit
-	if q.Kind == code.ReadChanges {
+	if q.Kind == gitlet.ReadChanges {
 		after := int64(math.MaxInt64)
 		if q.Cursor != "" {
 			n, err := strconv.ParseInt(q.Cursor, 10, 64)
 			if err != nil {
-				return code.ReadAnswer{}, fmt.Errorf("%w: %q", code.ErrBadCursor, q.Cursor)
+				return gitlet.ReadAnswer{}, fmt.Errorf("%w: %q", gitlet.ErrBadCursor, q.Cursor)
 			}
 			after = n
 		}
@@ -135,12 +135,12 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 		return out, nil
 	}
 	if q.Change != f.detail.Number {
-		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrChangeNotFound, code.ChangeRef(f.repo, q.Change))
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrChangeNotFound, gitlet.ChangeRef(f.repo, q.Change))
 	}
 	switch q.Part {
-	case code.PartFindings:
+	case gitlet.PartFindings:
 		if len(q.FindingIDs) == 0 {
-			out.Findings, out.Next = pageAfter(f.findings, code.FindingRow.Cursor, q.Cursor, limit)
+			out.Findings, out.Next = pageAfter(f.findings, gitlet.FindingRow.Cursor, q.Cursor, limit)
 			break
 		}
 		// NARROWED TO THE FINDINGS NAMED, as the reader serves them: those
@@ -150,17 +150,17 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 				out.Findings = append(out.Findings, row)
 			}
 		}
-		slices.SortFunc(out.Findings, func(a, b code.FindingRow) int { return strings.Compare(a.ID, b.ID) })
-	case code.PartReviews:
-		out.Reviews, out.Next = pageAfter(f.reviews, code.ReviewRow.Cursor, q.Cursor, limit)
-	case code.PartComments:
-		out.Comments, out.Next = pageAfter(f.comments, code.CommentRow.Cursor, q.Cursor, limit)
+		slices.SortFunc(out.Findings, func(a, b gitlet.FindingRow) int { return strings.Compare(a.ID, b.ID) })
+	case gitlet.PartReviews:
+		out.Reviews, out.Next = pageAfter(f.reviews, gitlet.ReviewRow.Cursor, q.Cursor, limit)
+	case gitlet.PartComments:
+		out.Comments, out.Next = pageAfter(f.comments, gitlet.CommentRow.Cursor, q.Cursor, limit)
 	default:
 		after := int64(math.MaxInt64)
 		switch {
 		case q.Brief:
 			// IN BRIEF, as the reader answers it: the change's row alone,
-			// no readiness judged (code.ReadQuery.Brief).
+			// no readiness judged (gitlet.ReadQuery.Brief).
 			brief := f.detail.ChangeSummary
 			brief.Readiness = nil
 			out.ChangeBrief = &brief
@@ -175,7 +175,7 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 		default:
 			n, err := strconv.ParseInt(q.Cursor, 10, 64)
 			if err != nil {
-				return code.ReadAnswer{}, fmt.Errorf("%w: %q", code.ErrBadCursor, q.Cursor)
+				return gitlet.ReadAnswer{}, fmt.Errorf("%w: %q", gitlet.ErrBadCursor, q.Cursor)
 			}
 			after = n
 		}
@@ -184,7 +184,7 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 				out.Revisions = append(out.Revisions, r)
 			}
 		}
-		// A DETAIL ALONE pages no revision (code.ReadQuery.DetailOnly), so a
+		// A DETAIL ALONE pages no revision (gitlet.ReadQuery.DetailOnly), so a
 		// page of none offers no next.
 		if last := len(out.Revisions); last > 0 && last == limit && out.Revisions[last-1].N > 1 {
 			out.Next = out.Revisions[last-1].Cursor()
@@ -303,9 +303,9 @@ func everyChangeQuestion(t *testing.T, host *gitletHost, turn *turnctx.Turn) {
 func changeQuestionsFor(t *testing.T, host *gitletHost, ceiling string) {
 	t.Helper()
 	reads, _, gits := host.asked()
-	if readsOf(reads, code.ReadChange) == 0 || readsOf(reads, code.ReadChanges) == 0 || len(gits) == 0 {
+	if readsOf(reads, gitlet.ReadChange) == 0 || readsOf(reads, gitlet.ReadChanges) == 0 || len(gits) == 0 {
 		t.Fatalf("the calls asked %d change reads, %d listings and %d git reads, want each kind",
-			readsOf(reads, code.ReadChange), readsOf(reads, code.ReadChanges), len(gits))
+			readsOf(reads, gitlet.ReadChange), readsOf(reads, gitlet.ReadChanges), len(gits))
 	}
 	for _, q := range reads {
 		if q.CeilingSeat != ceiling {
@@ -393,17 +393,17 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 		"state": "open", "owner": "agent-ceo", "work": "jira:10042", "reviewer": "agent-cto", "needs": "review",
 		"limit": 5})
 	reads, _, _ := host.asked()
-	var listing *code.ReadQuery
+	var listing *gitlet.ReadQuery
 	for i := range reads {
-		if reads[i].Kind == code.ReadChanges {
+		if reads[i].Kind == gitlet.ReadChanges {
 			listing = &reads[i]
 		}
 	}
 	if listing == nil {
 		t.Fatal("no listing was read")
 	}
-	if listing.Repo != "site" || listing.State != code.ChangeStateOpen || listing.Owner != "agent-ceo" ||
-		listing.Work != "jira:10042" || listing.Reviewer != "agent-cto" || listing.Needs != code.NeedReview ||
+	if listing.Repo != "site" || listing.State != gitlet.ChangeStateOpen || listing.Owner != "agent-ceo" ||
+		listing.Work != "jira:10042" || listing.Reviewer != "agent-cto" || listing.Needs != gitlet.NeedReview ||
 		listing.Limit != 5 || listing.Fresh.Level != statelog.ReadLinearizable {
 		t.Errorf("the listing was read as %+v", *listing)
 	}
@@ -503,7 +503,7 @@ func TestAListingNamesAWorkItemAsTheChangeWritesDo(t *testing.T) {
 					t.Fatalf("the listing answered %q", got.Output)
 				}
 				reads, _, _ := host.asked()
-				if len(reads) != 1 || reads[0].Kind != code.ReadChanges || reads[0].Work != c.want {
+				if len(reads) != 1 || reads[0].Kind != gitlet.ReadChanges || reads[0].Work != c.want {
 					t.Errorf("the listing read %+v, want the changes of %s", reads, c.want)
 				}
 			}
@@ -603,24 +603,24 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 	if len(gits) != 3 {
 		t.Fatalf("the three calls asked %d git reads, want 3", len(gits))
 	}
-	floor := func(q code.GitQuery) statelog.Position { return q.Fresh.Floor(f.at.Stream) }
-	if q := gits[0]; q.Kind != code.GitDiff || q.Diff.Base != revBase(3) || q.Diff.Head != revHead(3) ||
+	floor := func(q gitlet.GitQuery) statelog.Position { return q.Fresh.Floor(f.at.Stream) }
+	if q := gits[0]; q.Kind != gitlet.GitDiff || q.Diff.Base != revBase(3) || q.Diff.Head != revHead(3) ||
 		q.Diff.File != "" || floor(q) != codeAt(23) || q.RepoID != siteID {
 		t.Errorf("the head's files were read as %+v at %v, want its base to its head at its push", q.Diff, floor(q))
 	}
-	if q := gits[1]; q.Kind != code.GitDiff || q.Diff.Base != revBase(2) || q.Diff.Head != revHead(2) ||
+	if q := gits[1]; q.Kind != gitlet.GitDiff || q.Diff.Base != revBase(2) || q.Diff.Head != revHead(2) ||
 		q.Diff.File != "a.txt" || floor(q) != codeAt(22) {
 		t.Errorf("revision 2's patch was read as %+v at %v", q.Diff, floor(q))
 	}
-	if q := gits[2]; q.Kind != code.GitInterdiff || q.Interdiff.FromBase != revBase(1) ||
+	if q := gits[2]; q.Kind != gitlet.GitInterdiff || q.Interdiff.FromBase != revBase(1) ||
 		q.Interdiff.FromHead != revHead(1) || q.Interdiff.ToBase != revBase(3) || q.Interdiff.ToHead != revHead(3) ||
 		!slices.Equal(q.Interdiff.FromTouched, []string{"a.txt", "r1.txt"}) ||
 		!slices.Equal(q.Interdiff.ToTouched, []string{"a.txt", "r3.txt"}) || floor(q) != codeAt(23) {
 		t.Errorf("what changed since revision 1 was read as %+v at %v", q.Interdiff, floor(q))
 	}
-	var second *code.ReadQuery
+	var second *gitlet.ReadQuery
 	for i := range reads {
-		if reads[i].Kind == code.ReadChange && reads[i].Cursor == "3" {
+		if reads[i].Kind == gitlet.ReadChange && reads[i].Cursor == "3" {
 			second = &reads[i]
 		}
 	}
@@ -640,7 +640,7 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 		"a live change's revision with no facts yet": {func(f *changeFixture) { f.revisions[2].Facts = nil },
 			map[string]any{"part": "files"}, tools.RefusalUnavailable, "Try again shortly"},
 		"a merged change's revision with no facts": {func(f *changeFixture) {
-			f.revisions[2].Facts, f.detail.State = nil, code.ChangeStateMerged
+			f.revisions[2].Facts, f.detail.State = nil, gitlet.ChangeStateMerged
 		}, map[string]any{"part": "diff", "file": "a.txt"}, tools.RefusalNotFound, builtin.CodeLogTool},
 		"a revision sharing no history with its target": {func(f *changeFixture) { f.revisions[2].Facts.BaseOID = "" },
 			map[string]any{"part": "files"}, tools.RefusalNotFound, "shares no history"},
@@ -677,7 +677,7 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 // revision 1 of a change whose head is 3 reads the head, then the two
 // revisions beside each other — neither needs the other's row — so a node
 // reading the estate through another pays one round trip for the two, as the
-// API's change question does (code.ChangeRevisions).
+// API's change question does (gitlet.ChangeRevisions).
 //
 // Mutation: read the two revisions one after the other → each is read
 // alone, red.
@@ -689,7 +689,7 @@ func TestADiffReadsItsTwoRevisionsAtOnce(t *testing.T) {
 	both := make(chan struct{})
 	var rows, met atomic.Int32
 	host.before = func(what string) {
-		if what != "read:"+string(code.ReadChange) {
+		if what != "read:"+string(gitlet.ReadChange) {
 			return
 		}
 		switch rows.Add(1) {
@@ -734,29 +734,29 @@ func TestADiffReadsItsTwoRevisionsAtOnce(t *testing.T) {
 // at the asked revision alone; a refused re-anchoring told as a fault → red.
 func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 	t.Parallel()
-	raised := func(id string, revision int64, side code.Side, start, end int) code.FindingRow {
-		return code.FindingRow{ID: id, ReviewID: "rv-" + id, Raiser: "agent-cto", RaiserKind: code.PartyAgent,
+	raised := func(id string, revision int64, side gitlet.Side, start, end int) gitlet.FindingRow {
+		return gitlet.FindingRow{ID: id, ReviewID: "rv-" + id, Raiser: "agent-cto", RaiserKind: gitlet.PartyAgent,
 			Revision: revision, CommitOID: revHead(revision), Path: "a.txt", BlobOID: blobOID, Side: side,
-			LineStart: start, LineEnd: end, Severity: code.SeverityMajor, Category: code.CategoryCorrectness,
-			Title: "Off by one", Body: "The loop stops a line early.", State: code.FindingOpen}
+			LineStart: start, LineEnd: end, Severity: gitlet.SeverityMajor, Category: gitlet.CategoryCorrectness,
+			Title: "Off by one", Body: "The loop stops a line early.", State: gitlet.FindingOpen}
 	}
 	ids := []string{"0192f6c1-0000-7000-8000-000000000001", "0192f6c1-0000-7000-8000-000000000002",
 		"0192f6c1-0000-7000-8000-000000000003", "0192f6c1-0000-7000-8000-000000000004"}
 	fixture := func() *changeFixture {
 		f := siteChange()
-		f.findings = []code.FindingRow{
-			raised(ids[0], 1, code.SideNew, 10, 12),
-			raised(ids[1], 2, code.SideNew, 20, 20),
-			raised(ids[2], 3, code.SideNew, 30, 31),
-			raised(ids[3], 1, code.SideOld, 5, 5),
+		f.findings = []gitlet.FindingRow{
+			raised(ids[0], 1, gitlet.SideNew, 10, 12),
+			raised(ids[1], 2, gitlet.SideNew, 20, 20),
+			raised(ids[2], 3, gitlet.SideNew, 30, 31),
+			raised(ids[3], 1, gitlet.SideOld, 5, 5),
 		}
 		return f
 	}
-	placedBy := func(host *gitletHost) func(q code.GitQuery) code.GitAnswer {
-		return func(q code.GitQuery) code.GitAnswer {
-			out := code.GitAnswer{Kind: code.GitReanchor, RepoID: q.RepoID, Reanchor: &code.ReanchorAnswer{}}
+	placedBy := func(host *gitletHost) func(q gitlet.GitQuery) gitlet.GitAnswer {
+		return func(q gitlet.GitQuery) gitlet.GitAnswer {
+			out := gitlet.GitAnswer{Kind: gitlet.GitReanchor, RepoID: q.RepoID, Reanchor: &gitlet.ReanchorAnswer{}}
 			for i, a := range q.Reanchor.Anchors {
-				out.Reanchor.Anchors = append(out.Reanchor.Anchors, code.Reanchored{ID: a.ID, Start: a.Start + 100,
+				out.Reanchor.Anchors = append(out.Reanchor.Anchors, gitlet.Reanchored{ID: a.ID, Start: a.Start + 100,
 					End: a.End + 100, Outdated: i == 0})
 			}
 			return out
@@ -789,7 +789,7 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 				t.Errorf("anchor %s names %s in %s", a.ID, a.Path, a.BlobOID)
 			}
 		}
-		if q.Kind != code.GitReanchor || q.Reanchor.Head != revHead(3) || q.Reanchor.Base != revBase(3) ||
+		if q.Kind != gitlet.GitReanchor || q.Reanchor.Head != revHead(3) || q.Reanchor.Base != revBase(3) ||
 			!slices.Equal(anchored, []string{ids[0], ids[1], ids[3]}) || q.Fresh.Floor(codeAt(1).Stream) != codeAt(23) {
 			t.Errorf("the findings were placed by %+v (%v) at %v, want revision 3's head and base, the three raised "+
 				"elsewhere, at the head's push", q.Reanchor, anchored, q.Fresh)
@@ -851,7 +851,7 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 	t.Run("a re-anchoring refused", func(t *testing.T) {
 		t.Parallel()
 		host := newChangeHost(fixture())
-		host.gitErr = &code.ErrGitUnready{Reason: code.UnreadyNoChart, Detail: "n1 holds no chart yet"}
+		host.gitErr = &gitlet.ErrGitUnready{Reason: gitlet.UnreadyNoChart, Detail: "n1 holds no chart yet"}
 		got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), builtin.CodeGetChangeTool,
 			map[string]any{"change": "site!7", "part": "findings"})
 		if tools.RefusalOf(got) != tools.RefusalUnavailable {
@@ -863,7 +863,7 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 	t.Run("all raised on the asked revision", func(t *testing.T) {
 		t.Parallel()
 		f := siteChange()
-		f.findings = []code.FindingRow{raised(ids[2], 3, code.SideNew, 30, 31)}
+		f.findings = []gitlet.FindingRow{raised(ids[2], 3, gitlet.SideNew, 30, 31)}
 		host := newChangeHost(f)
 		changeCall(t, host, codeTurn(t), builtin.CodeGetChangeTool, map[string]any{"change": "site!7",
 			"part": "findings"})
@@ -897,28 +897,28 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 		const line = "The upload retries once a minute, five times, and then gives up. "
 		return strings.Repeat(line, n/len(line)+1)[:n]
 	}
-	wide := strings.Repeat(`"`, code.MaxRefNameBytes-len("refs/heads/"))
+	wide := strings.Repeat(`"`, gitlet.MaxRefNameBytes-len("refs/heads/"))
 	f := siteChange()
-	f.detail.Body = prose(code.MaxChangeBodyBytes)
+	f.detail.Body = prose(gitlet.MaxChangeBodyBytes)
 	f.revisions = nil
 	for n := int64(1); n <= 60; n++ {
-		f.revisions = append(f.revisions, code.RevisionRow{N: n, Head: revHead(1 + n%9), Pusher: "agent-ceo",
-			PusherKind: code.PartyAgent, Position: codeAt(uint64(n)), Facts: &code.RevisionFactsRow{
+		f.revisions = append(f.revisions, gitlet.RevisionRow{N: n, Head: revHead(1 + n%9), Pusher: "agent-ceo",
+			PusherKind: gitlet.PartyAgent, Position: codeAt(uint64(n)), Facts: &gitlet.RevisionFactsRow{
 				TargetRef: "refs/heads/" + wide, TargetOID: mainOID, BaseOID: revBase(1), Touched: []string{"a"}}})
 	}
 	f.detail.Revision, f.detail.Head = 60, revHead(1+60%9)
-	suggestion := prose(code.MaxSuggestionBytes)
+	suggestion := prose(gitlet.MaxSuggestionBytes)
 	for i := range 40 {
-		f.findings = append(f.findings, code.FindingRow{ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", i),
-			Raiser: "agent-cto", RaiserKind: code.PartyAgent, Revision: 60, CommitOID: mainOID, Path: "a.txt",
-			BlobOID: blobOID, Side: code.SideNew, LineStart: 1, LineEnd: 2, Severity: code.SeverityMinor,
-			Category: code.CategoryStyle, Title: prose(code.MaxFindingTitleBytes), Body: prose(code.MaxFindingBodyBytes),
-			Suggestion: &suggestion, State: code.FindingOpen})
-		f.reviews = append(f.reviews, code.ReviewRow{ID: fmt.Sprintf("rv-%d", i), Revision: 60,
-			Reviewer: "agent-cto", ReviewerKind: code.PartyAgent, Verdict: code.VerdictComment,
-			Summary: prose(code.MaxReviewSummaryBytes), Position: codeAt(uint64(100 + i))})
-		f.comments = append(f.comments, code.CommentRow{ID: fmt.Sprintf("cm-%d", i), ThreadID: fmt.Sprintf("cm-%d", i),
-			Author: "agent-cto", AuthorKind: code.PartyAgent, Body: prose(code.MaxCommentBytes),
+		f.findings = append(f.findings, gitlet.FindingRow{ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", i),
+			Raiser: "agent-cto", RaiserKind: gitlet.PartyAgent, Revision: 60, CommitOID: mainOID, Path: "a.txt",
+			BlobOID: blobOID, Side: gitlet.SideNew, LineStart: 1, LineEnd: 2, Severity: gitlet.SeverityMinor,
+			Category: gitlet.CategoryStyle, Title: prose(gitlet.MaxFindingTitleBytes), Body: prose(gitlet.MaxFindingBodyBytes),
+			Suggestion: &suggestion, State: gitlet.FindingOpen})
+		f.reviews = append(f.reviews, gitlet.ReviewRow{ID: fmt.Sprintf("rv-%d", i), Revision: 60,
+			Reviewer: "agent-cto", ReviewerKind: gitlet.PartyAgent, Verdict: gitlet.VerdictComment,
+			Summary: prose(gitlet.MaxReviewSummaryBytes), Position: codeAt(uint64(100 + i))})
+		f.comments = append(f.comments, gitlet.CommentRow{ID: fmt.Sprintf("cm-%d", i), ThreadID: fmt.Sprintf("cm-%d", i),
+			Author: "agent-cto", AuthorKind: gitlet.PartyAgent, Body: prose(gitlet.MaxCommentBytes),
 			Position: codeAt(uint64(200 + i))})
 	}
 	conflicts := make([]string, 100)
@@ -991,11 +991,11 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 		g.repo, g.detail.Number = name, math.MaxInt64
 		host := newChangeHost(g)
 		host.detail.Name = name
-		host.git = func(q code.GitQuery) code.GitAnswer {
-			return atTheBound(t, code.GitAnswer{Kind: code.GitInterdiff, RepoID: q.RepoID},
-				func(a code.GitAnswer, n int) code.GitAnswer {
-					a.Diff = &code.DiffAnswer{Base: mainOID, Head: mainOID,
-						Files: []code.DiffFile{{Path: "f", Status: "M", Added: 1, Deleted: 1}}, Total: math.MaxInt,
+		host.git = func(q gitlet.GitQuery) gitlet.GitAnswer {
+			return atTheBound(t, gitlet.GitAnswer{Kind: gitlet.GitInterdiff, RepoID: q.RepoID},
+				func(a gitlet.GitAnswer, n int) gitlet.GitAnswer {
+					a.Diff = &gitlet.DiffAnswer{Base: mainOID, Head: mainOID,
+						Files: []gitlet.DiffFile{{Path: "f", Status: "M", Added: 1, Deleted: 1}}, Total: math.MaxInt,
 						Added: math.MaxInt, Deleted: math.MaxInt, Patch: strings.Repeat("x", n)}
 					return a
 				})
@@ -1012,10 +1012,10 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 	t.Run("a row past one answer", func(t *testing.T) {
 		t.Parallel()
 		g := siteChange()
-		huge := strings.Repeat(`"`, code.MaxCommentBytes)
-		g.comments = []code.CommentRow{{ID: "cm-1", ThreadID: "cm-1", Author: "agent-cto",
-			AuthorKind: code.PartyAgent, Body: huge}}
-		g.detail.Body = strings.Repeat(`"`, code.MaxChangeBodyBytes)
+		huge := strings.Repeat(`"`, gitlet.MaxCommentBytes)
+		g.comments = []gitlet.CommentRow{{ID: "cm-1", ThreadID: "cm-1", Author: "agent-cto",
+			AuthorKind: gitlet.PartyAgent, Body: huge}}
+		g.detail.Body = strings.Repeat(`"`, gitlet.MaxChangeBodyBytes)
 		for part, says := range map[string]string{"comments": "the next comment of site!7 alone is past one answer",
 			"summary": "description and authors alone are past one answer"} {
 			got := refusedCode(t, codeRegistry(t, codeDeps(newChangeHost(g))), codeTurn(t), builtin.CodeGetChangeTool,
@@ -1032,13 +1032,13 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 // detailRead reports a read of a change's DETAIL: a first page of its
 // revisions read in full, or its detail alone — what judges its readiness
 // and reads its description, authors, conversation and mergeability.
-func detailRead(q code.ReadQuery) bool {
-	return q.Kind == code.ReadChange && q.Part == "" && q.Cursor == "" && !q.Brief
+func detailRead(q gitlet.ReadQuery) bool {
+	return q.Kind == gitlet.ReadChange && q.Part == "" && q.Cursor == "" && !q.Brief
 }
 
 // linearizable counts the questions asked of the code log at the seat's
 // level — each one a barrier the log appends and waits a quorum for.
-func linearizable(reads []code.ReadQuery, resolves []code.RefQuery) int {
+func linearizable(reads []gitlet.ReadQuery, resolves []gitlet.RefQuery) int {
 	n := 0
 	for _, q := range reads {
 		if q.Fresh.Level == statelog.ReadLinearizable {
@@ -1054,7 +1054,7 @@ func linearizable(reads []code.ReadQuery, resolves []code.RefQuery) int {
 }
 
 // A CHANGE IS READ IN DETAIL ONLY WHERE ITS DETAIL IS READ: a revision's files,
-// a file's patch and the findings read the change IN BRIEF (code.ReadQuery.
+// a file's patch and the findings read the change IN BRIEF (gitlet.ReadQuery.
 // Brief) — its row and its head revision — and never its detail, which judges
 // its readiness and reads its description, authors, conversation and
 // mergeability for nothing; and so does a write of its conversation. The
@@ -1099,7 +1099,7 @@ func TestAChangeIsReadInDetailOnlyWhereItsDetailIsRead(t *testing.T) {
 			switch {
 			case detailRead(q):
 				detailed++
-			case q.Kind == code.ReadChange && q.Brief:
+			case q.Kind == gitlet.ReadChange && q.Brief:
 				brief++
 			}
 		}
@@ -1117,7 +1117,7 @@ func TestAChangeIsReadInDetailOnlyWhereItsDetailIsRead(t *testing.T) {
 // A CHANGE TOOL'S CALL IS ONE LINEARIZABLE READ where nothing resolved its
 // repository before it: the call's first read of the change — or of its
 // checks, or a listing of the repository's changes — is the repository's
-// resolution too (code.ReadQuery.Resolve), so a call costs the code log ONE
+// resolution too (gitlet.ReadQuery.Resolve), so a call costs the code log ONE
 // barrier, not a `repo` read's and then its own, one after the other. On the
 // operator surface, which has no turn and resolves on every call, every call;
 // in a turn, its first call naming the repository, and every later call reads
@@ -1153,9 +1153,9 @@ func TestAChangeToolCallIsOneLinearizableRead(t *testing.T) {
 			}
 		}
 		reads, resolves, _ := host.asked()
-		if n := linearizable(reads, resolves); n != 2 || readsOf(reads, code.ReadRepo) != 0 {
+		if n := linearizable(reads, resolves); n != 2 || readsOf(reads, gitlet.ReadRepo) != 0 {
 			t.Errorf("two operator calls of %s %v asked %d linearizable questions (%d repo reads), want one "+
-				"a call and no repo read: %+v", call.tool, call.args, n, readsOf(reads, code.ReadRepo), reads)
+				"a call and no repo read: %+v", call.tool, call.args, n, readsOf(reads, gitlet.ReadRepo), reads)
 		}
 	}
 	// A TURN: its first call resolves, and each later call is one read too.
@@ -1165,13 +1165,13 @@ func TestAChangeToolCallIsOneLinearizableRead(t *testing.T) {
 	for i, call := range calls {
 		callCode(t, reg, turn, call.tool, call.args)
 		reads, resolves, _ := host.asked()
-		if n := linearizable(reads, resolves); n != i+1 || readsOf(reads, code.ReadRepo) != 0 {
+		if n := linearizable(reads, resolves); n != i+1 || readsOf(reads, gitlet.ReadRepo) != 0 {
 			t.Errorf("a turn's %d calls, the last %s %v, asked %d linearizable questions (%d repo reads), "+
-				"want one a call", i+1, call.tool, call.args, n, readsOf(reads, code.ReadRepo))
+				"want one a call", i+1, call.tool, call.args, n, readsOf(reads, gitlet.ReadRepo))
 		}
 	}
 	if reads, _, _ := host.asked(); !reads[0].Resolve || slices.ContainsFunc(reads[1:],
-		func(q code.ReadQuery) bool { return q.Resolve }) {
+		func(q gitlet.ReadQuery) bool { return q.Resolve }) {
 		t.Errorf("the turn resolved the repository on reads %+v, want on its first read alone", reads)
 	}
 	// A WRITE OF AN EXISTING CHANGE: its one read of the change resolves too.
@@ -1189,9 +1189,9 @@ func TestAChangeToolCallIsOneLinearizableRead(t *testing.T) {
 			t.Fatalf("%s answered %q", call.tool, got.Output)
 		}
 		reads, resolves, _ := host.asked()
-		if n := linearizable(reads, resolves); n != 1 || readsOf(reads, code.ReadRepo) != 0 {
+		if n := linearizable(reads, resolves); n != 1 || readsOf(reads, gitlet.ReadRepo) != 0 {
 			t.Errorf("%s asked %d linearizable questions (%d repo reads), want its one read of the change",
-				call.tool, n, readsOf(reads, code.ReadRepo))
+				call.tool, n, readsOf(reads, gitlet.ReadRepo))
 		}
 	}
 }

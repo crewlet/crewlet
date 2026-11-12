@@ -240,10 +240,6 @@ func executorRetentionOf(c *Company) time.Duration {
 	return time.Duration(days) * 24 * time.Hour
 }
 
-// executorReaper is the author of every retention delete: the reaper's own
-// name, so an operator who finds one in the log finds the duty that made it.
-var executorReaper = iam.Actor{Name: trashreap.Name, Kind: iam.ActorSystem}
-
 // seatRetirement is the author of every removed seat's delete: the
 // maintenance duty the mailbox retirement runs under.
 var seatRetirement = iam.Actor{Name: maintenanceDutyName, Kind: iam.ActorSystem}
@@ -358,7 +354,7 @@ func (x executorTrash) TrashedBefore(ctx context.Context, cutoff time.Time,
 func (x executorTrash) PurgeTrashed(ctx context.Context, id string, cutoff time.Time,
 	opID string) error {
 
-	call := executordomain.Call{By: executorReaper, OpID: opID}
+	call := executordomain.Call{By: reaperActor, OpID: opID}
 	if handle, ok := strings.CutPrefix(id, removalItem); ok {
 		res, err := x.writer.ExpireRemoval(ctx, call, handle, cutoff)
 		return reapAnswer(res, err, executordomain.ErrNotDue)

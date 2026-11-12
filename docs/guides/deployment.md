@@ -144,10 +144,11 @@ alarm across the nodes.
 
 ### The room the stream's volume needs
 
-The engine keeps twelve ordered logs on the stream: the tracker's mutation
+The engine keeps thirteen ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the executor log, Gitlet's
 log, the identity estate's log, the usage log, the artifacts log, the
-artifact datastore's log, Ask Crewlet's log, the chat log and the access log.
+artifact datastore's log, Ask Crewlet's log, the chat log, the access log and
+the atlas log.
 Each log's byte ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses to
 create the stream at all. Its limit is `stream.store_max_bytes` where you set
@@ -179,14 +180,15 @@ With nothing set, a node starting on an empty stream directory reserves:
 | Ask Crewlet's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
 | The executor log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.executor_log_max_bytes` |
 | The access log (128 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.access_log_max_bytes` |
-| **The twelve logs together** | **8.69 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.90 GiB at the minimum | `store.objects.nats_max_bytes` |
+| The atlas log (128 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.atlas_log_max_bytes` |
+| **The thirteen logs together** | **8.75 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.92 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **11.58 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **15.44 GiB
-free** on the volume holding `stream.store_dir` (about 16.6 GB). With the
+So the broker needs a limit of at least **11.67 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **15.56 GiB
+free** on the volume holding `stream.store_dir` (about 16.7 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 8.69 GiB alone needs 11.58 GiB free. These are the least that **boots**:
+logs' 8.75 GiB alone needs 11.67 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -199,7 +201,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **9.69 GiB**, which three quarters of **12.92 GiB free** reaches.
+  limit of **9.75 GiB**, which three quarters of **13.00 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
@@ -210,12 +212,13 @@ configuration reserves, split into the logs and the bucket.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes`,
 `stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes`,
-`stream.executor_log_max_bytes` and `stream.access_log_max_bytes` accept 64 MiB.
+`stream.executor_log_max_bytes`, `stream.access_log_max_bytes` and
+`stream.atlas_log_max_bytes` accept 64 MiB.
 The other seven fields accept no less than 1 GiB, so setting them only moves the
 figure up.
 - **A floor is per log, not universal.** The identity estate's, the usage
-  log's, Ask Crewlet's, the executor log's and the access log's fields go down
-  to 64 MiB, far
+  log's, Ask Crewlet's, the executor log's, the access log's and the atlas
+  log's fields go down to 64 MiB, far
   below the others, because the identity log grows with headcount and
   sign-ins, Ask Crewlet's with how many people ask it (a month of a ten-person
   company's questions fits in 64 MiB), the executor log with the turns the
@@ -227,7 +230,9 @@ figure up.
   scaling moves, or gives the broker the room for the default; the
   `log_ceiling_short` alarm names the log that is short), the access log with
   what seats are told and the SSH they use (about a month of the reference
-  company's records fit in 64 MiB), and the usage log
+  company's records fit in 64 MiB), the atlas log with what people record
+  about what the company runs on (months of the reference company's edits fit
+  in 64 MiB), and the usage log
   is a census of node-days (about 18 MB for a ten-seat node's 181 days), and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.
@@ -250,15 +255,15 @@ figure up.
   share — five eighths of what the broker's limit leaves once the `nats`
   bucket has taken its quarter of it, about 35 % of the free space on a first
   boot — which is every volume with less than about 653 GiB free (with the
-  mutation log at its 64 GiB clamp the twelve ask for 229.3 GiB: 64 + 64 +
-  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½ + 0.1); from there up each log gets what it
+  mutation log at its 64 GiB clamp the thirteen ask for 229.4 GiB: 64 + 64 +
+  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½ + 0.1 + 0.1); from there up each log gets what it
   asked for. With the objects in S3 no bucket is reserved and the share is
   five eighths of three quarters of the broker's limit, about 47 % of the free
   space, so from about 490 GiB free.
 - **The code log's ask is paid whether or not anything pushes.** Below about
   653 GiB free it comes out of the other logs' share: at 100 GiB free the
-  mutation log and the vector changelog are created at 9.1 GiB each rather
-  than 11.1, at 256 GiB at 24.9 rather than 30.6 — windows about a fifth
+  mutation log and the vector changelog are created at 9.0 GiB each rather
+  than 11.0, at 256 GiB at 24.8 rather than 30.6 — windows about a fifth
   shorter for a blocked trim — and the knowledge base's, the artifacts and
   the artifact datastore's logs by the same proportion. A company that hosts
   no code and is short of room sets `stream.code_log_max_bytes: 1073741824`
@@ -852,11 +857,11 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the twelve state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the thirteen state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ARTIFACTS_LOG`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
-`CREWLET_EXECUTOR_LOG`, `CREWLET_ACCESS_LOG`), a stream per extra subject namespace a company
+`CREWLET_EXECUTOR_LOG`, `CREWLET_ACCESS_LOG`, `CREWLET_ATLAS_LOG`), a stream per extra subject namespace a company
 publishes under, two durable consumers per seat mailbox (the inbox and its
 priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -2139,7 +2144,7 @@ cache on its own disk. What such a node needs from its host:
   whole copies the multi-pack-index keeps — 8.5–9% more over a history of
   pushes that add files and 48–57% more over one of pushes that edit them, for
   more of the node's CPU too (measured over copies the cache made,
-  `internal/code/cache`'s `BenchmarkPackReuse`; the spread is which copy of
+  `internal/gitlet/cache`'s `BenchmarkPackReuse`; the spread is which copy of
   each edited object a copy's index happened to keep).
 - **A volume for `gitlet.cache_dir`.** The cache holds every repository the node
   serves, whole, and a cold sync writes everything it downloads at the speed

@@ -13,9 +13,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -24,7 +24,7 @@ import (
 )
 
 // THE LIVE TURNS' HOLDS ARE READ FROM EVERY ROW AND EVERY SEAT HOLDER — the
-// code-retention pass's [code.Retention.Holds], over a running node: a key a
+// code-retention pass's [gitlet.Retention.Holds], over a running node: a key a
 // run row holds, whatever the row's status (a newer build's included), a key a
 // running turn of a seat holder holds in its memory, and nothing else. And
 // never an answer on an unknown: a seat holder that does not answer inside the
@@ -64,9 +64,9 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 	// build wrote at a status this build does not know, holding C — each of a
 	// seat this company does not place, so no recovery of this node's seats
 	// reads them. A key is opaque to the reader: a seat branch's
-	// (code.RefHoldKey) is read as a repository's is.
-	refA := code.RefHoldKey("0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e", "refs/heads/seats/elsewhere/a")
-	refB := code.RefHoldKey("0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e", "refs/heads/seats/elsewhere/b")
+	// (gitlet.RefHoldKey) is read as a repository's is.
+	refA := gitlet.RefHoldKey("0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e", "refs/heads/seats/elsewhere/a")
+	refB := gitlet.RefHoldKey("0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e", "refs/heads/seats/elsewhere/b")
 	for _, row := range []sandbox.PendingRun{
 		{TurnID: "run-a", AgentHandle: "elsewhere", Status: sandbox.StatusAwaiting,
 			CodeHolds: []string{"repo-a", refA}},
@@ -377,8 +377,8 @@ func TestATurnHoldsWhatItsRowMay(t *testing.T) {
 // goes red.
 func TestARunsChangeTitleIsBoundAsGitletBoundsIt(t *testing.T) {
 	t.Parallel()
-	if sandbox.MaxChangeTitleBytes != code.MaxChangeTitleBytes {
+	if sandbox.MaxChangeTitleBytes != gitlet.MaxChangeTitleBytes {
 		t.Fatalf("a run's row holds a change title to %d bytes and Gitlet to %d",
-			sandbox.MaxChangeTitleBytes, code.MaxChangeTitleBytes)
+			sandbox.MaxChangeTitleBytes, gitlet.MaxChangeTitleBytes)
 	}
 }
