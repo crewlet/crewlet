@@ -1075,13 +1075,14 @@ func ctRaw(v json.RawMessage) string {
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (its own
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
-// own toolUseResult), a hook's attachment, an origin, a message
-// (its content, its stop_reason, its id, its model and its usage), a
-// message's blocks, its usage's counts, its report of the context edits
-// applied, and each edit the report lists. So a line hands out exactly what
-// it hands out without the other key, through every accessor. 2.1.322
-// already spells a call's id `toolUseId` (a subagent's metadata names the
-// call that started it so), a key away from a hook's firing.
+// own toolUseResult), a hook's attachment, an origin, a message (its content,
+// its stop_reason, its id, its model and its usage), a message's blocks, its
+// usage's counts and iterations, each iteration's type and counts, its report
+// of the context edits applied, and each edit the report lists. So a line
+// hands out exactly what it hands out without the other key, through every
+// accessor. 2.1.322 already spells a call's id `toolUseId` (a subagent's
+// metadata names the call that started it so), a key away from a hook's
+// firing.
 //
 // Mutation: take a key that differs only in case for the layer's own, as
 // encoding/json's decode into a struct does (the last written winning), and
@@ -1100,6 +1101,11 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	other := "toolu_test_other"
 	retyped := ctReplace(t, brief, `"type":"user"`, `"type":"attachment"`)
 	cleared := ctReported(t, ctEdits(ctClearing))
+	// listing is the model's call whose usage lists entries as its iterations.
+	listing := func(entries ...string) string {
+		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
+			strings.Join(entries, ",")+`]}`)
+	}
 	for name, tc := range map[string]struct {
 		record, from, to string
 	}{
@@ -1191,6 +1197,20 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			from: `"output_tokens":20`, to: `"Cache_Read_Input_Tokens":7,"output_tokens":20`},
 		"an output_tokens, then OUTPUT_TOKENS": {record: call, from: `"output_tokens":20`,
 			to: `"output_tokens":20,"OUTPUT_TOKENS":7`},
+		"an iterations, then Iterations": {record: listing(ctIteration("message", 100)),
+			from: `"iterations":[` + ctIteration("message", 100) + `]`,
+			to: `"iterations":[` + ctIteration("message", 100) + `],"Iterations":[` +
+				ctIteration("message", 7) + `]`},
+		"Iterations alone": {record: call, from: `"output_tokens":20`,
+			to: `"output_tokens":20,"Iterations":[` + ctIteration("message", 7) + `]`},
+		// A usage's iterations.
+		"an iteration's type, then Type": {record: listing(ctIteration("message", 7)),
+			from: `"type":"message","input_tokens":7`, to: `"type":"message","Type":"user","input_tokens":7`},
+		"a passed-over iteration's type, then Type": {
+			record: listing(ctIteration("message", 7), ctIteration("advisor_message", 9)),
+			from:   `"type":"advisor_message"`, to: `"type":"advisor_message","Type":"message"`},
+		"an iteration's input_tokens, then Input_Tokens": {record: listing(ctIteration("message", 100)),
+			from: `"type":"message","input_tokens":100`, to: `"type":"message","input_tokens":100,"Input_Tokens":7`},
 		// A message's blocks.
 		"a tool_use's type, then Type": {record: call, from: `"type":"tool_use"`, to: `"type":"tool_use","Type":"text"`},
 		"a tool_use's id, then ID": {record: call, from: `"id":"` + ctCall + `"`,
@@ -1849,6 +1869,13 @@ func TestAReplySaysWhyItStopped(t *testing.T) {
 const ctUsage = `"usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,` +
 	`"output_tokens":20}`
 
+// ctIteration is an entry of a usage's iterations of type kind whose input is
+// input, its other counts ctUsage's.
+func ctIteration(kind string, input int) string {
+	return fmt.Sprintf(`{"type":%q,"input_tokens":%d,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,`+
+		`"output_tokens":20}`, kind, input)
+}
+
 // A REPLY SAYS WHAT ITS REQUEST TOOK: an assistant record's message's id, its
 // model and its usage's four counts, each as written, ok saying the usage is
 // there. A count the usage does not name reads 0, the others as written. A
@@ -2016,6 +2043,145 @@ func TestAReplysCountsAreHeldToWhatJSONParseReadsExactly(t *testing.T) {
 			t.Errorf("%s says its request took %+v (%t), want an error: past 2^53 - 1, JSON.parse may read another "+
 				"number than the one written", name, usage, ok)
 		}
+	}
+}
+
+// A REPLY'S USAGE IS WHAT CLAUDE CODE COUNTS IT BY, OR AN ERROR: where the
+// usage lists iterations, Claude Code counts the list's last entry that is no
+// advisor's or compaction's in the usage's place, where that entry is whole
+// (of type message or fallback_message, four counts each a finite number at
+// or above zero, its input side above zero), and Usage, which hands the
+// usage's own counts, is an error where that entry holds other counts, never
+// Message's error. Where Claude Code counts the usage's own counts, Usage
+// hands them: no iterations, null ones, ones that are no list, an empty list,
+// an advisor's or a compaction's entry alone, a counted entry equal to the
+// usage (written with fractions among it), a last entry that is not whole
+// (of another type, a count that is a string, negative or past a double's
+// range, an input side of zero, or no object), and a usage whose own input
+// side is zero, whatever its entries say.
+//
+// Mutation: leave the list unread, and a reply whose counted entry holds more
+// reads by its usage alone; count an advisor's or a compaction's entry, and
+// the one before it is never compared; count the first entry, not the last,
+// and an equal entry hides the one after it; read the list where the usage's
+// input side is zero, or count an entry whose own is, or one of another type,
+// or with a negative count, and a reply Claude Code counts by its usage is an
+// error; count no fallback_message entry, and one that differs reads by the
+// usage alone.
+func TestAReplysUsageIsWhatClaudeCodeCountsItByOrAnError(t *testing.T) {
+	t.Parallel()
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	const (
+		every = `"input_tokens":3,"cache_creation_input_tokens":1500,"cache_read_input_tokens":41250,` +
+			`"output_tokens":812`
+		same = `{"type":"message",` + every + `}`
+		more = `{"type":"message","input_tokens":4,"cache_creation_input_tokens":1500,` +
+			`"cache_read_input_tokens":41250,"output_tokens":812}`
+		advisor = `{"type":"advisor_message","input_tokens":9000,"cache_creation_input_tokens":0,` +
+			`"cache_read_input_tokens":0,"output_tokens":90}`
+		compaction = `{"type":"compaction","input_tokens":9000,"cache_creation_input_tokens":0,` +
+			`"cache_read_input_tokens":0,"output_tokens":90}`
+		flat = `{"type":"message","input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,` +
+			`"output_tokens":9000}`
+	)
+	// listed is the reply whose usage holds every count and lists iterations,
+	// as written; listing, the one whose usage lists entries as its iterations.
+	listed := func(iterations string) string {
+		return ctReplace(t, reply, ctUsage, `"usage":{`+every+`,"iterations":`+iterations+`}`)
+	}
+	listing := func(entries ...string) string { return listed("[" + strings.Join(entries, ",") + "]") }
+	// as is entry with from, which it holds once, written as to.
+	as := func(entry, from, to string) string { return ctReplace(t, entry, from, to) }
+	whole := threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5", Input: 3, CacheWrite: 1500, CacheRead: 41250,
+		Output: 812}
+	for name, record := range map[string]string{
+		"a usage with no iterations":                    ctReplace(t, reply, ctUsage, `"usage":{`+every+`}`),
+		"null iterations":                               listed(`null`),
+		"iterations that are an object":                 listed(more),
+		"an empty list":                                 listing(),
+		"an advisor's entry alone":                      listing(advisor),
+		"a compaction's entry alone":                    listing(compaction),
+		"a counted entry equal to the usage":            listing(same),
+		"an equal entry, then an advisor's":             listing(same, advisor),
+		"a fallback entry equal to the usage":           listing(as(same, `"message"`, `"fallback_message"`)),
+		"an equal entry written with fractions":         listing(as(same, `:3,`, `:3.0,`)),
+		"a differing entry, then an equal one":          listing(more, same),
+		"a differing entry of another type":             listing(as(more, `"message"`, `"user"`)),
+		"a differing entry whose type is no string":     listing(as(more, `"message"`, `7`)),
+		"a differing entry whose count is a string":     listing(as(more, `:4,`, `:"4",`)),
+		"a differing entry with a negative count":       listing(as(more, `:812`, `:-812`)),
+		"a differing entry with a count past a double":  listing(as(more, `:812`, `:1e400`)),
+		"a differing entry with no output count":        listing(as(more, `,"output_tokens":812`, ``)),
+		"a differing entry whose input side is zero":    listing(flat),
+		"a differing entry, then one that is no object": listing(more, `7`),
+	} {
+		if usage, ok, err := ctLine(t, record).Usage(); usage != whole || !ok || err != nil {
+			t.Errorf("%s says its request took %+v (%t), %v; want %+v, the usage's own counts", name, usage, ok, err,
+				whole)
+		}
+	}
+	unanchored := ctReplace(t, reply, ctUsage, `"usage":{"input_tokens":0,"cache_creation_input_tokens":0,`+
+		`"cache_read_input_tokens":0,"output_tokens":20,"iterations":[`+more+`]}`)
+	if usage, ok, err := ctLine(t, unanchored).Usage(); !ok || err != nil || usage.Output != 20 || usage.Input != 0 {
+		t.Errorf("a usage whose input side is zero, listing a differing entry, says its request took %+v (%t), %v; "+
+			"want its own counts", usage, ok, err)
+	}
+
+	for name, record := range map[string]string{
+		"a counted entry that differs":             listing(more),
+		"a fallback entry that differs":            listing(as(more, `"message"`, `"fallback_message"`)),
+		"a differing entry, then an advisor's":     listing(more, advisor),
+		"a differing entry, then a compaction's":   listing(more, compaction),
+		"an equal entry, then a differing one":     listing(same, more),
+		"an entry that differs in its output":      listing(as(same, `:812`, `:813`)),
+		"an entry that counts less than the usage": listing(as(same, `:41250`, `:41249`)),
+	} {
+		line := ctLine(t, record)
+		if usage, ok, err := line.Usage(); err == nil {
+			t.Errorf("%s says its request took %+v (%t), want an error: Claude Code counts the entry", name, usage, ok)
+		}
+		if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall {
+			t.Errorf("%s reads the calls %+v, %v; want its call", name, m.Calls(), err)
+		}
+	}
+}
+
+// A REPLY'S ITERATIONS COST ITS USAGE AN ENTRY AT A TIME: Usage reads a
+// usage's iterations an entry at a time and keeps a copy of one entry, the
+// last it may count, so a list of listBytes of entries none of which it
+// counts costs it no more allocations than a list of one, and no more bytes
+// than a few copies of the line, which its decodes of the message and the
+// usage make.
+//
+// Not parallel: the counts are the process's, and a parallel test's
+// allocations would be counted with this one's.
+//
+// Mutation: decode the list whole, or collect its entries, before its last is
+// found, and a long list costs an allocation or more for every entry.
+func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
+	const (
+		head = `{"type":"assistant","message":{"role":"assistant","content":[],"usage":{"input_tokens":3,` +
+			`"iterations":[`
+		tail = `]}}}`
+	)
+	usage := func(l threadLine) func() { return func() { _, _, _ = l.Usage() } }
+	one := ctLine(t, head+"1"+tail)
+	long := ctLine(t, ctListRecord(t, head, "1", tail, listBytes))
+	for name, l := range map[string]threadLine{"a list of one": one, "a long list": long} {
+		if u, ok, err := l.Usage(); !ok || err != nil || u.Input != 3 {
+			t.Fatalf("%s of entries no harness counts says its request took %+v (%t), %v; want its usage's own", name,
+				u, ok, err)
+		}
+	}
+	fewObjects, fewBytes := allocationsOf(usage(one))
+	manyObjects, manyBytes := allocationsOf(usage(long))
+	if manyObjects > fewObjects+listSlack {
+		t.Errorf("a usage listing %d bytes of iterations costs %d allocations, and one listing one entry %d",
+			len(long.Raw), manyObjects, fewObjects)
+	}
+	if manyBytes > fewBytes+listCopies*uint64(len(long.Raw)) {
+		t.Errorf("a usage listing %d bytes of iterations costs %d bytes, and one listing one entry %d: more than %d "+
+			"copies of the line", len(long.Raw), manyBytes, fewBytes, listCopies)
 	}
 }
 

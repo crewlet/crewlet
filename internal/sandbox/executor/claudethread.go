@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -657,13 +658,13 @@ func wireDecode(raw []byte, v any) error {
 // engine host a header and a copy for every element, hundreds of MiB, before
 // anything refused the first. Its readers: a message's content
 // ([threadLine.Message]), a reply's applied context edits
-// ([threadLine.ToolResultsCleared]), the lists a run's event stream and a
-// person's transcript of a session decode (a message's blocks,
-// [eachClaudeBlock]; a tool's answer, [toolAnswer]; an OpenCode step's items,
-// [eachOpenCodeItem]; a run's result's errors, [claudeResult.errorsSaid]),
-// and a call's result content, which the reader that tells a relaunch which
-// of its calls a kept session holds (exact telling) reads no further than its
-// second element.
+// ([threadLine.ToolResultsCleared]) and its usage's iterations
+// ([threadLine.Usage]), the lists a run's event stream and a person's
+// transcript of a session decode (a message's blocks, [eachClaudeBlock]; a
+// tool's answer, [toolAnswer]; an OpenCode step's items, [eachOpenCodeItem];
+// a run's result's errors, [claudeResult.errorsSaid]), and a call's result
+// content, which the reader that tells a relaunch which of its calls a kept
+// session holds (exact telling) reads no further than its second element.
 func eachElement(list json.RawMessage, each func(element json.RawMessage) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
@@ -1419,9 +1420,21 @@ type threadUsage struct {
 // which it tells, where one read as 0 would anchor it on a count nobody
 // measured.
 //
-// THE USAGE'S OWN FOUR COUNTS: its `iterations`, whose last entry Claude Code
-// counts in their place where that entry is whole, are not read here, and
-// which of the two a reader counts is its own to judge.
+// THE COUNTS CLAUDE CODE COUNTS THE REPLY BY, OR AN ERROR. Usage hands the
+// usage's own four counts, and Claude Code counts a reply by them but where
+// the usage lists `iterations`: there it counts the list's last entry that is
+// no advisor's or compaction's in their place, where that entry is whole
+// ([usageCounted] has the rule). So Usage reads the list, an entry at a time,
+// and is an error where the entry Claude Code counts holds other counts than
+// the usage's own: a reader that counts what Usage hands counts what the
+// harness counts, or has no reading. A FORWARD GUARD, in the direction it
+// tells: every reply measured that lists iterations lists none (1,865 of
+// 1,865, and 26 more carry null), so it refuses nothing measured, but 2.1.322
+// ships a server-side advisor, turned on by a setting, whose replies list an
+// advisor_message entry beside the reply's own, and read by its usage alone,
+// a reply whose counted entry holds more would read short, and a session its
+// harness compacts at its first request would read as one that holds its
+// history.
 //
 // ITS READERS. The resumed count reads it on every main-thread reply, to
 // bound what a continued session's harness counts before its first request,
@@ -1474,6 +1487,7 @@ func (l threadLine) Usage() (threadUsage, bool, error) {
 		CacheWrite json.RawMessage `json:"cache_creation_input_tokens"`
 		CacheRead  json.RawMessage `json:"cache_read_input_tokens"`
 		Output     json.RawMessage `json:"output_tokens"`
+		Iterations json.RawMessage `json:"iterations"`
 	}
 	if err = wireDecode(message.Usage, &counts); err != nil {
 		return threadUsage{}, false, fmt.Errorf("usage: %w", err)
@@ -1492,7 +1506,124 @@ func (l threadLine) Usage() (threadUsage, bool, error) {
 			return threadUsage{}, false, err
 		}
 	}
+	if err = usageCounted(u, counts.Iterations); err != nil {
+		return threadUsage{}, false, err
+	}
 	return u, true, nil
+}
+
+// The kinds of entry a usage's `iterations` lists that [usageCounted] reads:
+// those Claude Code passes over to the entry it counts, and those it counts.
+const (
+	iterationAdvisor    = "advisor_message"
+	iterationCompaction = "compaction"
+	iterationMessage    = "message"
+	iterationFallback   = "fallback_message"
+)
+
+// usageCounted is nil where Claude Code counts a reply by u, its usage's own
+// four counts, and an error where it counts an entry of the usage's
+// `iterations`, raw, whose counts are other than u's ([threadLine.Usage]).
+//
+// CLAUDE CODE'S RULE, read in the shipped code of 2.1.310 and 2.1.322, the
+// one each anchors its count on: where the usage's input side is above zero
+// and its iterations a list, the list's LAST entry that is no object of type
+// advisor_message or compaction is counted in the usage's place, where it is
+// a WHOLE entry (an object of type message or fallback_message, each of its
+// four counts a finite number at or above zero, its input side above zero).
+// Anywhere else the usage's own counts are: an input side of zero, iterations
+// absent, null or no list, an empty list, one with no such entry, and a last
+// such entry that is not whole.
+//
+// AN ENTRY AT A TIME ([eachElement]), never the whole list first and never
+// collected: what it keeps of the list is a copy of one entry, the last it
+// may count, made into the room the one before it left, and an object's type
+// is read and let go of as the walk meets it. So a list costs what its
+// entries' types cost one at a time, never a slice of them, and a list of
+// entries that are no objects costs no allocation more than a list of one.
+func usageCounted(u threadUsage, iterations json.RawMessage) error {
+	if u.Input+u.CacheWrite+u.CacheRead == 0 || len(iterations) == 0 || iterations[0] != '[' {
+		return nil
+	}
+	var last []byte
+	if err := eachElement(iterations, func(entry json.RawMessage) error {
+		passed, err := iterationPassedOver(entry)
+		if err == nil && !passed {
+			last = append(last[:0], entry...)
+		}
+		return err
+	}); err != nil {
+		return fmt.Errorf("usage.iterations: %w", err)
+	}
+	counted, whole := wholeIteration(last)
+	if !whole {
+		return nil
+	}
+	if own := [...]float64{float64(u.Input), float64(u.CacheWrite), float64(u.CacheRead),
+		float64(u.Output)}; counted != own {
+		return fmt.Errorf("usage.iterations: Claude Code counts an entry of %g input, %g cache write, %g cache read "+
+			"and %g output tokens in place of the usage's own %d, %d, %d and %d", counted[0], counted[1], counted[2],
+			counted[3], u.Input, u.CacheWrite, u.CacheRead, u.Output)
+	}
+	return nil
+}
+
+// iterationPassedOver reports whether entry, one of a usage's iterations, is
+// one Claude Code passes over to the entry it counts: an object whose type is
+// advisor_message or compaction ([usageCounted]).
+func iterationPassedOver(entry json.RawMessage) (bool, error) {
+	if !wireObject(entry) {
+		return false, nil
+	}
+	var it struct {
+		Type json.RawMessage `json:"type"`
+	}
+	if err := wireDecode(entry, &it); err != nil {
+		return false, err
+	}
+	if len(it.Type) == 0 || it.Type[0] != '"' {
+		return false, nil
+	}
+	var kind string
+	if err := wireDecode(it.Type, &kind); err != nil {
+		return false, err
+	}
+	return kind == iterationAdvisor || kind == iterationCompaction, nil
+}
+
+// wholeIteration is the four counts of entry, one of a usage's iterations, in
+// the order [threadUsage] holds them, and whether it is whole: an object of
+// type message or fallback_message, each of its four counts a finite number
+// at or above zero, and its input side above zero, as Claude Code requires of
+// the entry it counts ([usageCounted]). A number past a double's range, which
+// JSON.parse reads as Infinity, is no finite one.
+func wholeIteration(entry []byte) ([4]float64, bool) {
+	if !wireObject(entry) {
+		return [4]float64{}, false
+	}
+	var it struct {
+		Type       json.RawMessage `json:"type"`
+		Input      json.RawMessage `json:"input_tokens"`
+		CacheWrite json.RawMessage `json:"cache_creation_input_tokens"`
+		CacheRead  json.RawMessage `json:"cache_read_input_tokens"`
+		Output     json.RawMessage `json:"output_tokens"`
+	}
+	if wireDecode(entry, &it) != nil {
+		return [4]float64{}, false
+	}
+	if kind, err := wireRequiredString("type", it.Type); err != nil ||
+		(kind != iterationMessage && kind != iterationFallback) {
+		return [4]float64{}, false
+	}
+	var counts [4]float64
+	for i, raw := range [...]json.RawMessage{it.Input, it.CacheWrite, it.CacheRead, it.Output} {
+		n, err := wireNumber("", raw)
+		if err != nil || n < 0 || math.IsInf(n, 0) {
+			return [4]float64{}, false
+		}
+		counts[i] = n
+	}
+	return counts, counts[0]+counts[1]+counts[2] > 0
 }
 
 // ToolResultsCleared reports whether the record says the server CLEARED THE
