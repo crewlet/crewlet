@@ -520,16 +520,33 @@ func (r *Resolver) atlasEntry(ctx context.Context, path, value string) (string, 
 	if _, err := uuid.Parse(value); err == nil && len(value) == 36 {
 		return value, nil
 	}
-	if r.read == nil {
+	hits, named, readable := r.atlasHits(ctx, value)
+	switch {
+	case !readable:
 		return value, nil
+	case len(named) == 1:
+		return named[0].Key, nil
+	case len(named) > 1:
+		return "", &nameFault{path: path, value: value, dir: DirAtlasEntry, named: named}
+	case !strings.ContainsFunc(value, unicode.IsSpace):
+		return value, nil
+	}
+	return "", &nameFault{path: path, value: value, dir: DirAtlasEntry, choices: hits}
+}
+
+// atlasHits are the entries the atlas's own search for value answers the
+// person, each by its id and its name with its kind, and among them the ones
+// whose name or key is value; false where the atlas could not be read.
+func (r *Resolver) atlasHits(ctx context.Context, value string) (hits, named []Entry, readable bool) {
+	if r.read == nil {
+		return nil, nil, false
 	}
 	doc, err := readGet(ctx, r.read, atlasSearchRoute, nil,
 		url.Values{"q": {value}, "limit": {strconv.Itoa(atlas.PageMax)}})
 	if err != nil {
-		return value, nil
+		return nil, nil, false
 	}
 	rows, _ := cards.Lookup(doc, "rows").([]any)
-	var hits, named []Entry
 	for _, row := range rows {
 		id, name, key := cards.Text(cards.Lookup(row, "id")), cards.Text(cards.Lookup(row, "name")),
 			cards.Text(cards.Lookup(row, "key"))
@@ -546,15 +563,7 @@ func (r *Resolver) atlasEntry(ctx context.Context, path, value string) (string, 
 			named = append(named, shown)
 		}
 	}
-	switch {
-	case len(named) == 1:
-		return named[0].Key, nil
-	case len(named) > 1:
-		return "", &nameFault{path: path, value: value, dir: DirAtlasEntry, named: named}
-	case !strings.ContainsFunc(value, unicode.IsSpace):
-		return value, nil
-	}
-	return "", &nameFault{path: path, value: value, dir: DirAtlasEntry, choices: hits}
+	return hits, named, true
 }
 
 // nameFault is one value a call names that its directory cannot place: one
