@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,15 +135,34 @@ func (s Sources) atlasGitlet(p iam.Principal) (gather.GitletReads, string) {
 
 // atlasQuery is the filters a question names.
 func atlasQuery(p Params) (atlas.Query, error) {
+	unconfirmed, err := atlasFlag(p, "unconfirmed")
+	if err != nil {
+		return atlas.Query{}, err
+	}
 	q := atlas.Query{
 		Text: p.String("q"), Kind: atlas.Kind(p.String("kind")), Lane: atlas.Lane(p.String("lane")),
 		Vendor: atlas.Vendor(p.String("vendor")), Word: atlas.Word(p.String("confidence")),
 		Health: atlas.Health(p.String("health")), Show: atlas.Show(p.String("show")),
+		Unconfirmed: unconfirmed,
 	}
 	if err := q.Validate(); err != nil {
 		return atlas.Query{}, badAtlas(err)
 	}
 	return q, nil
+}
+
+// atlasFlag is a yes or no parameter, false where it is absent. Anything but
+// true or false is refused rather than read as no, so a misspelt flag never
+// hides what it asked to show.
+func atlasFlag(p Params, key string) (bool, error) {
+	if !p.Has(key) {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(p.String(key)))
+	if err != nil {
+		return false, fmt.Errorf("%w: `%s` is true or false", ErrBadParams, key)
+	}
+	return b, nil
 }
 
 // badAtlas is an atlas read's refusal of its parameters, in this surface's

@@ -189,6 +189,7 @@ func TestAnAtlasQuestionRefusesWhatItCannotAnswer(t *testing.T) {
 		"atlas_map":     {"health": "fine"},
 		"atlas_trace":   {"id": entryID(atlas.KindHost, "ssh/web-1"), "depth": 7},
 		"atlas_entry":   {"id": "web-1"},
+		"atlas_facets":  {"unconfirmed": "maybe"},
 	} {
 		if _, err := r.Answer(ctx, what, params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s %v: %v, want bad params", what, params, err)
