@@ -78,7 +78,7 @@ operator's, as docs/concepts/code-sandbox.md's "Security model" says.
 ## Amendment: a box's pushes carry whom its run works for, and a credential's run pushes only its seat's own work
 
 A box's push, and the change its run's collection opens, are the run's turn's writes made late. Since
-crewlet#798's piece 4c the run's checkout composes whom that turn works for as the turn's own code tools state it
+crewlet#798's piece 4c-i the run's checkout composes whom that turn works for as the turn's own code tools state it
 ([ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)), and the row keeps it beside the
 colleague's ceiling: one requester a job, a later checkout made for anybody else a conflict, and one made for the
 same credential holding fewer apps narrowing it, never widening it. Every push the box makes, and the open, state
@@ -97,4 +97,10 @@ guess at: a node of a newer build judges it, and the harness's push again reache
 
 A run launched by a build before the carrier carries nobody, and a credential's box keeps the seat's bound alone,
 until the run ends; a Gitlet node of such a build admits a newer run's box by its colleague's ceiling and ignores
-the credential until it upgrades.
+the credential until it upgrades. Such a run's grants were taken for nobody, and nobody is one requester too, so a
+run granted for nobody is never used for somebody, whichever build wrote its row: once a node of the newer build
+carries it on in a turn that works for somebody, every checkout the run asks is refused as a conflict, of a
+repository it holds already as much as of another, and the seat is told that a turn working for somebody starts a
+new run. The refusal fails closed, since the run keeps what it was given and pushes it for nobody, and it is kept
+rather than worked around: an arm adopting the first carrier a checkout names, or a mark of the build that wrote a
+row, would be code for a build no tag shipped (ADR-0109's roll windows).

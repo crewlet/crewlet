@@ -775,16 +775,20 @@ for ever: a version whose field is gone is **retired** and stays empty rather
 than being given to the next field. The conformance suite every domain passes
 holds each table to the records its encoder actually writes.
 
-Every domain's table but the usage log's is **empty today**: version 1 is
-everything this build writes on them, so each of their records is stamped 1.
-The usage log's holds one change: a `visibility: unit` repository's readers
-(the `repo_read` kind, the repository it names and its readers' fields —
-[Who read it](../concepts/gitlet.md#who-read-it)) arrived at version 2, so
-an older node retains every node's day of who read a unit repository until it
-is upgraded, and applies every other usage record — a seat's, a schedule's or
-a person's day is stamped 1 still. The first release that adds a field to a
-record of any other domain gives it version 2, and from then on an older node
-holds back exactly the records carrying it — except a gate record, which an older node stops on
+A domain's table starts **empty**, version 1 being everything its first build
+writes, and gains a row for each field its records gain from then on, so what a
+table holds is that domain's history rather than anything this page lists. The
+code log's first row shows what one costs a roll: whom an agent's write was
+made for ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md))
+arrived at version 2, which only an agent's write made in a turn somebody woke
+carries. So until it is upgraded an older node retains every code record
+carrying it, and with it every later record whose scope meets one — the same
+repository's or change's — and applies the rest, stamped 1 still: a person's
+push, a change's mergeability and a seat's own work, wherever no such record
+came before them. A release that adds a field to a record gives it the next
+version of its domain's table, and from then on an older node holds back the
+records carrying it and every later record whose scope meets one — except a
+gate record, which an older node stops on
 rather than retains, so a row that adds a field to one is marked as a gate's
 and its writer waits for the fleet's census of the versions its nodes read
 before publishing it.

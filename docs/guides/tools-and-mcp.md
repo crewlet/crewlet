@@ -239,8 +239,8 @@ and can message the agent may ask it to edit, as with all other agent work;
 reading and sharing are never exempt. A turn woken by somebody the company
 does not know opens no artifact at all, and authors none. The bound is the turn's, not the agent's, and it
 follows the turn's work: a colleague it asks, the turn the answer wakes, and a
-colleague its writes on Worklet, Doclet or Chatlet wake all read for the same
-somebody, and what the agent already knows is no read
+colleague its writes on Worklet, Doclet, Chatlet or Gitlet wake all read for
+the same somebody, and what the agent already knows is no read
 ([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own
@@ -642,6 +642,9 @@ same way: a colleague must hold the access the write needs on the repository
 write), and a stranger or a person without the permission has a seat write
 nothing of a change
 ([Writes made for somebody else](../concepts/gitlet.md#writes-made-for-somebody-else)).
+And a write made in such a turn carries them on, so a colleague it wakes works
+for them too ([An agent uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
 Every call names one
 operation — derived from the turn or a request's own key, or on the operator
 catalogue the `op_id` the call was answered — so the same call made again,

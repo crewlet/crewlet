@@ -419,7 +419,7 @@ each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 `code_merge_change` merges one only as it allows, a change into a branch
 whose gate requires a check queued rather than merged ([The merge
 queue](#the-merge-queue)), and so does an approved `ask_to_merge`, which merges
-as the agent that asked ([Delegated
+as the agent that asked, for whom its run works ([Delegated
 Decisions](../guides/delegated-decisions.md#asking-to-merge-and-to-deploy)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
 where it asks for them (`GET /gitlet/repos/{name}?gates=true`'s `gates`, and
@@ -4962,7 +4962,8 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 |---|---|
 | nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
 | a person of the company holding the Gitlet permission | what its own grant allows: such a person maintains every repository, so they bound nothing |
-| a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
+| a colleague seat working for nobody but itself | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
+| a colleague seat's ask, the answer to the seat's own ask, or what that colleague wrote on Worklet, Doclet, Chatlet or Gitlet, from a turn it worked for somebody | what this table allows for that somebody, carried through every ask, answer and write |
 | a person of the company or a credential acting as no seat without the Gitlet permission, or a person on a human seat no person in the directory holds | nothing: they could read no repository themselves, so every code tool is refused for them before anything is read, and the seat is told an administrator can give them Gitlet |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
 | a credential acting as no seat that holds the Gitlet permission, such as an automation's change on a work item or a page | what its own grant allows: such a credential reads every repository itself |
@@ -4972,8 +4973,10 @@ A change on a work item or a page names who made it by the kind its record
 holds, never by how the name is spelled: a seat's change, or a person's made
 as the seat they hold, is that seat's, and the engine's own is nobody's. A
 record about a repository's change names who made it in the routing its
-writer stamped, a person by the human seat they hold, and its home's own
-records name nobody — but a revision's facts, which its home records and
+writer stamped, a person by the human seat they hold, and, beside an agent
+seat that made it in a turn it worked for somebody, whom it was made for, so
+the turn it wakes works for them ([How a seat is woken](#how-a-seat-is-woken));
+its home's own records name nobody — but a revision's facts, which its home records and
 which ask a path owner to review or a reviewer to look again: a revision is
 somebody's push, the opener's for the first and whoever moved the head for
 every later one, so the facts name that pusher, and a seat asked to review a
@@ -5057,16 +5060,27 @@ a revocation since the ask applies and a credential is narrowed again, never
 widened. The answer wakes the asking seat in a turn worked for them too, and a
 chain of asks carries them end to end
 ([ADR-0109](https://github.com/crewlet/crewlet/blob/main/adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
-**So does what a seat writes on Worklet, Doclet and Chatlet**: a work item it
-files or assigns, a comment, a page or a comment on one, and a Chatlet message
+**So does what a seat writes on Worklet, Doclet, Chatlet and Gitlet**: a work
+item it files or assigns, a comment, a page or a comment on one, a Chatlet
+message, and a change it opens, edits, closes or reopens, an ask for a review,
+a review, a comment on a change, an answer to a finding, a push, a merge or an
+enqueue — what its executor pushes, and the change its run opens, included —
 each wake their seat in a turn worked for whoever the writing turn worked for
 ([An agent uses only the apps of the person it works
-for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
-**What Gitlet records does not carry them yet**: a change, a review, a comment
-on a change and the merge queue's close of a landed change's work item each
-wake their seat in a turn worked for the seat that wrote them, until
-crewlet#798's piece 4c carries the requester on code's records; nor does what
-a seat writes on a vendor's surface. Nor does the ceiling reach what a seat
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)):
+a code record carries them on each routing that may wake a seat, beside the
+seat that made the write ([How a seat is woken](#how-a-seat-is-woken)).
+**What the engine records about a seat's earlier write does not carry them
+yet**, until crewlet#798's piece 4c-ii reads whom that write was made for back
+from the rows that keep it: a revision's facts, a failed check of a change's
+head, a landing its home found and the merge queue's landing each wake their
+seat in a turn worked for the seat that made the write, the queue's removal of
+a change and a close it could not make wake the seats they tell in turns worked
+for those seats, and the merge queue's close of a landed change's work item is
+written for nobody, so the turn it wakes works for the enqueuer's seat. The
+home's own records that name no earlier write — a conflict, a change ready to
+merge — stay nobody's, as the table above says; nor does what a seat writes on
+a vendor's surface carry anybody. Nor does the ceiling reach what a seat
 already holds: its memory, or what it read in a turn nobody woke. What a seat
 was refused for somebody can therefore still reach them through such a write
 or the seat's own memory: the ceiling decides what a turn reads for somebody,
@@ -5086,7 +5100,8 @@ or its protections — exactly as they would be decided asking it themselves.
 |---|---|
 | nobody, or the outcome of its own act | what its own grant allows |
 | a person of the company holding the Gitlet permission | what its own grant allows: such a person maintains every repository |
-| a colleague seat | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
+| a colleague seat working for nobody but itself | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
+| a colleague seat's ask, the answer to the seat's own ask, or what that colleague wrote on Worklet, Doclet, Chatlet or Gitlet, from a turn it worked for somebody | what this table allows for that somebody, carried through every ask, answer and write |
 | a credential acting as no seat that holds the Gitlet permission, such as a pipeline's token (which pushes to no repository itself) | its own work, and nothing else — what its executor pushes, and the change its run opens, included |
 | a person without the Gitlet permission or on a human seat no person in the directory holds, a person who may not act in the company now, a credential without the Gitlet permission, or somebody the company does not know | **nothing**, its own work included |
 
@@ -7183,13 +7198,17 @@ stops after its record committed loses no wake.
   branch its landing broke are all work on the item the change implements. A
   change carries no spend of its own — what a turn spent is on the turn and
   its item, never summed on the change.
-- **Who wrote it bounds what the seat reads**: a review a colleague seat
-  asked for is that colleague's errand, and a code read in the turn is
-  decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
+- **Who wrote it, and for whom, bounds what the seat reads**: a review a
+  colleague seat asked for is that colleague's errand, and a code read in the
+  turn is decided for both grants — unless the colleague asked it in a turn it
+  worked for somebody, whom the record's routing carries beside it: then it is
+  that somebody's errand, and the turn works for them
+  ([Reads made for somebody else](#reads-made-for-somebody-else));
   the home's own records — a conflict, a change ready to merge — are nobody's,
   a revision's facts are whoever pushed the revision, and a change it found
   landed whoever made the push that brought the change's head into its
-  target.
+  target, each the pusher's alone until crewlet#798's piece 4c-ii carries
+  whom the push was made for.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a

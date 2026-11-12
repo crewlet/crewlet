@@ -919,6 +919,13 @@ unknown outcome, never a refusal — a refusal says nothing ran.
   `fleet_builds_differ`**, a condition no wait clears until an administrator
   finishes the upgrade: "This node and the company's other nodes run different
   versions of Crewlet".
+- **A coding run's collection opens no change.** The change a run asked to
+  open is opened when it is collected, a write made for whom the run's turn
+  works for; refused this way, it is not asked again, since the collection
+  holds the run's seat until the turn resumes. The run comes back with its
+  commits pushed and its change not opened, its report saying that nothing of
+  the open ran, and the seat opens it again with `code_open_change`
+  ([A run's changes](code-sandbox.md#a-runs-changes)).
 - **The data node that refused logs `estate_request_refused`** at `WARN`, once
   per request it refuses, as it logs a request under a key it does not hold or
   one past its window — with `disposition=unknown_keys`, the operation, the
