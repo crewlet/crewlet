@@ -19,10 +19,22 @@ export function andList(
   items: readonly string[],
   { serialComma = false }: { serialComma?: boolean } = {},
 ): string {
+  return joined(items, "and", serialComma);
+}
+
+/** The same list as a choice among its items, "a", "a or b", "a, b or c", by [andList]'s rule. */
+export function orList(
+  items: readonly string[],
+  { serialComma = false }: { serialComma?: boolean } = {},
+): string {
+  return joined(items, "or", serialComma);
+}
+
+function joined(items: readonly string[], word: "and" | "or", serialComma: boolean): string {
   if (items.length <= 1) return items[0] ?? "";
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  if (items.length === 2) return `${items[0]} ${word} ${items[1]}`;
   const head = items.slice(0, -1).join(", ");
-  return `${head}${serialComma ? "," : ""} and ${items.at(-1) ?? ""}`;
+  return `${head}${serialComma ? "," : ""} ${word} ${items.at(-1) ?? ""}`;
 }
 
 /**

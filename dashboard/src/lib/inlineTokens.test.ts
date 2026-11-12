@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, test } from "vitest";
+import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
 import type { LinkHost } from "~/contract/integrations.ts";
 import { LINEAR_BOUND, growth } from "../test/growth.ts";
 import {
@@ -144,7 +145,33 @@ describe("keys and mentions", () => {
       "mention:@backend-engineer",
     ]);
   });
+
+  // A MENTION IS EXACTLY A SEAT'S HANDLE, as the engine holds one
+  // (`SEAT_HANDLE` and `MAX_LOGIN`, held to `iam.ValidSeatHandle`): a handle
+  // the engine takes is never left as words, and nothing it refuses is drawn
+  // as a seat.
+  test("a mention is a handle by the engine's grammar and width", () => {
+    const handle = new RegExp(SEAT_HANDLE);
+    for (const name of HANDLES) {
+      const engine = handle.test(name) && name.length <= MAX_LOGIN;
+      expect(said(`ask @${name} now`), name).toEqual(engine ? [`mention:@${name}`] : []);
+    }
+  });
 });
+
+/** Names on both sides of a handle's grammar and width. */
+const HANDLES = [
+  "qa",
+  "3d-artist",
+  "a",
+  "0",
+  "vp-eng-",
+  "sre_bot",
+  "launch_v2",
+  "x".repeat(MAX_LOGIN - 1),
+  "x".repeat(MAX_LOGIN),
+  "x".repeat(MAX_LOGIN + 1),
+];
 
 describe("what an address is", () => {
   test("a code host's pull request, issue, commit and repository read as their references", () => {

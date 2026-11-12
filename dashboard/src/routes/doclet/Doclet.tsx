@@ -70,7 +70,13 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
-import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
+import {
+  choiceKey,
+  urlAction,
+  type UrlActionKey,
+  type UrlKeyGrammar,
+} from "~/app/assistant/urlAction.ts";
+import { CONTAINER_KEY_MAX, CONTAINER_KEY_PATTERN } from "~/contract/config.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -168,6 +174,41 @@ const RESULT_GROUPINGS = [
 
 const encoder = new TextEncoder();
 
+/** A space's key, as a key past what an enum may list declares one. */
+const SPACE_GRAMMAR: UrlKeyGrammar = {
+  pattern: CONTAINER_KEY_PATTERN,
+  maxLength: CONTAINER_KEY_MAX,
+  words: "A space's key",
+};
+
+/**
+ * What Ask Crewlet may set on Doclet's search, as the box, the mode picker,
+ * the grouping and the space filter write it: a phrase held to the bound the
+ * engine refuses a longer one at rather than cut, and a space this company has
+ * (past what an enum may list, by a space key's grammar).
+ */
+export function knowledgeSearchKeys(
+  spaces: readonly { key: string; name?: string }[],
+): Readonly<Record<string, UrlActionKey>> {
+  return {
+    q: {
+      label: "Search",
+      history: "filter",
+      check: (v) =>
+        encoder.encode(v).length <= SEARCH_QUERY_MAX ? null : "That search is too long.",
+    },
+    mode: choiceKey("Mode", SEARCH_MODES, "filter"),
+    by: choiceKey("Show the results", RESULT_GROUPINGS, "filter", "space"),
+    space: choiceKey(
+      "Space",
+      spaces.map((c) => ({ value: c.key, label: c.name || c.key })),
+      "filter",
+      undefined,
+      SPACE_GRAMMAR,
+    ),
+  };
+}
+
 export function Doclet() {
   const [q] = useParam("q", "");
   const phrase = q.trim();
@@ -180,21 +221,7 @@ export function Doclet() {
   useAssistantContext({
     actions: urlAction("knowledge.search.set", {
       scope: "What Doclet searches for and how it shows it (view only)",
-      keys: {
-        q: {
-          label: "Search",
-          history: "filter",
-          check: (v) =>
-            encoder.encode(v).length <= SEARCH_QUERY_MAX ? null : "That search is too long.",
-        },
-        mode: choiceKey("Mode", SEARCH_MODES, "filter"),
-        by: choiceKey("Show the results", RESULT_GROUPINGS, "filter", "space"),
-        space: choiceKey(
-          "Space",
-          spaces.map((c) => ({ value: c.key, label: c.name || c.key })),
-          "filter",
-        ),
-      },
+      keys: knowledgeSearchKeys(spaces),
       nav,
     }),
   });

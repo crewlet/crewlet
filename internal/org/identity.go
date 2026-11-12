@@ -44,7 +44,16 @@ import (
 // all of them at once.
 var agentIDNamespace = uuid.MustParse("c1ea9c6e-3f5d-4c9c-9e9f-1d2c3b4a5e6f")
 
-var nonSlugRunes = regexp.MustCompile(`[^a-z0-9]+`)
+// NonSlugPattern is the run of a lowercased name [Slugify] replaces with one
+// hyphen: anything but an ASCII lowercase letter or a digit.
+//
+// EXPORTED FOR THE DASHBOARD's copy: the org builder offers a new seat the
+// handle its name slugs to (`NON_SLUG_PATTERN`, held equal by
+// TestTheOrgBuilderSlugsANameAsTheEngineDoes). Written with no flag and no
+// escape, so the dashboard compiles the same text.
+const NonSlugPattern = `[^a-z0-9]+`
+
+var nonSlugRunes = regexp.MustCompile(NonSlugPattern)
 
 // Slugify converts a role name to a URL- and email-safe handle.
 //

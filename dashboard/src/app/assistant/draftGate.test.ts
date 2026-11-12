@@ -126,6 +126,19 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "a finding written on picked lines and each finding's reply box, fields of the change page's one draft",
   },
+  // MODAL, AND STILL THE TAB'S: every change made in these dialogs lands in
+  // the Agents tab's draft and outlives the dialog, until the tab's Review.
+  "routes/settings/integrations/access/Dialogs.tsx": {
+    screen: ["routes/settings/integrations/access/AgentsAccess.tsx"],
+    why: "an agent's permissions and scope, set in their dialogs into the Agents tab's draft, which the tab declares",
+  },
+  // A SHEET, AND STILL THE BOARD'S: each change made in a widget's settings is
+  // written into the board being arranged as it is made, through Home's own
+  // setter, and Done keeps it there (Cancel takes it back).
+  "routes/home/board/settings.tsx": {
+    screen: ["routes/home/Home.tsx"],
+    why: "a widget's settings, written into the board being arranged as they are made, which Home declares",
+  },
 };
 
 /** A module with editing marks and no draft the assistant could be asked about, and why. */
@@ -150,8 +163,6 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
   "routes/settings/AccessDialogs.tsx": "modal: an access change, in its dialog",
-  "routes/settings/integrations/access/Dialogs.tsx":
-    "modal: an agent's permissions or scope, in their dialogs; the page holds the change",
   "routes/settings/integrations/access/HandoffSheet.tsx":
     "modal: an agent's robot token pasted in its sheet, a credential and never a draft",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",
@@ -173,7 +184,6 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "not an editor: one configuration field; every host is a modal or the create-company form, which declares",
   "routes/artifacts/DashboardView.tsx":
     "not an editor: its select filters what a published board shows, and changes nothing",
-  "routes/home/board/settings.tsx": "modal: a widget's settings, in a sheet over the board",
   "routes/org/builder/NodeEditor.tsx": "modal: a unit or seat, in a side sheet over the builder",
   "routes/org/builder/dialogParts.tsx": "modal: the fields of the builder's dialogs",
   "routes/signin/SignIn.tsx": "signed out: there is no assistant before a sign-in",

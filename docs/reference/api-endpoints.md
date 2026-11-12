@@ -548,7 +548,7 @@ every other route.
 | `GET` | `/gitlet/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-gitletreposnameverifyid)) |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Ask Crewlet proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with `"outcome": "unknown"` and the `op_id` to retry under for a decision nobody can confirm, and `503 unavailable` without `outcome` for a condition of the node, which recorded nothing: its `detail` says what happened in a sentence for you, with a `Retry-After` exactly where waiting clears it. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and Ask Crewlet is told. `200` with the proposal's state |
-| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which Ask Crewlet reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
+| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which Ask Crewlet reads as client-reported; its `revision`, `reason` and `receipt` are each one short line, at most 256 bytes, and a longer one is `400 invalid_body`. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
 | `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's Ask Crewlet conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never Ask Crewlet). `{"protocol_version": 1, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
 | `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, on the same verb and with the same body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#ask-crewlet). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
@@ -9382,19 +9382,32 @@ context fenced as somebody else's words: it is a hint and never an authority.
 Beside `accepts`, the page context carries `action_args`: what each accepted
 page action takes on that screen now, by action id, as a closed subset of JSON
 Schema (`type`, `description`, `enum`, `const`, `minLength`, `maxLength`,
-`minItems`, `maxItems`, `items`, `properties`, `required`,
+`pattern`, `minItems`, `maxItems`, `items`, `properties`, `required`,
 `patternProperties`, `additionalProperties`, `oneOf`, and top-level
-`examples`). The screen builds it from the same declaration its parser reads
-(the address keys a view change writes, the seats and windows a screen draws,
-the org builder's operations), so the model is told the members to send rather
-than guessing them. Every accepted action declares it (`draft.set` may go
-without, since the draft's editable fields declare what it takes). The engine
-reads it strictly: an unknown keyword, a pattern RE2 cannot compile, a schema
-past 6 KiB, 8 levels or 160 parts, or an example its own schema refuses is
-`400 invalid_body`. Before a `propose_page_change` call is previewed or
-recorded, its `args` are held to that schema, and one that does not match is
-the model's refused step, naming the members the screen takes, never a card.
-An action the screen declares no arguments for is never proposed.
+`examples`). A `pattern` is RE2 matched as written, so one that anchors
+itself with `^` and `$` holds the whole value. The screen builds it from the
+same declaration its parser reads (the address keys a view change writes, the
+seats and windows a screen draws, the org builder's operations), so the model
+is told the members to send rather than guessing them. Every accepted action
+declares it (`draft.set` may go without, since the draft's editable fields
+declare what it takes). The engine reads it strictly: an unknown keyword, a
+pattern RE2 cannot compile, a schema past 6 KiB, 8 levels or 160 parts, an
+object of more than 32 members (by name and by pattern), more than 64 values,
+16 shapes or 4 examples, a pattern past 128 bytes, a description past 300
+characters, or an example its own schema refuses is `400 invalid_body`, and so
+is the whole page context declaring it. Each size is the bytes the engine's own
+JSON encoding writes, which escapes `<`, `>` and `&` (six bytes each). So the
+dashboard holds every action's arguments to the bounds a screen's data can push
+them past (the bytes, the members, the values an enum lists and each value, a
+description) before it sends a page context: `draft.set` past them is offered
+with no arguments, any other action past them is left out of `accepts` and said
+once to the browser's console, and a page context over its 16 KiB drops
+`draft.set`'s arguments first. A screen whose list outgrows an enum declares a
+`pattern` instead: past 64 seats, the Budgets ceiling's seat is a handle by
+its grammar. Before a `propose_page_change` call is previewed or recorded, its
+`args` are held to that schema, and one that does not match is the model's
+refused step, naming the members the screen takes, never a card. An action the
+screen declares no arguments for is never proposed.
 
 `selection` is the one record the person has open, or `null`: `{kind, id,
 noun?}`, the row a screen has open beside its list, else the peeked row, else
@@ -9425,7 +9438,9 @@ are counted in `more`. A field whose path names a credential (a `password`,
 key) must arrive `redacted` with an empty value, and is refused `400` otherwise;
 every other value passes the engine's secret redaction before a model reads it.
 The page action `draft.set` (`{"values": {"<path>": "<value>"}}`) changes the
-editable fields through the screen's own setters, after the person approves.
+editable fields through the screen's own setters, in the order the screen lists
+its fields rather than the order the values are named in, after the person
+approves.
 The engine holds it to the turn's draft before any card is drawn: a path the
 draft does not list as editable, or a value not of its field's kind, is
 refused. A `file` field takes a file, never markup: the model names it by its

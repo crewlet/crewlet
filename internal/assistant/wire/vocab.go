@@ -48,6 +48,15 @@ const (
 	// draft: what the assistant can and cannot do there, in a few sentences.
 	PageDraftHelpMaxRunes = 600
 
+	// PageDraftLabelMaxRunes is the longest label a draft field carries, in
+	// Unicode code points: a page title's bound, since a label names a field
+	// as a title names a page.
+	PageDraftLabelMaxRunes = PageTitleMaxRunes
+
+	// PageDraftHintMaxRunes is the longest hint a draft field carries: what
+	// a value must be, in a few words, or the values a choice takes.
+	PageDraftHintMaxRunes = 200
+
 	// AuditReasonMaxRunes is the longest reason an administrator gives for a
 	// compliance read of somebody else's conversation (D06).
 	AuditReasonMaxRunes = 500
