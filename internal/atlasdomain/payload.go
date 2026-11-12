@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -124,6 +126,37 @@ func (c Claim) vocabulary(observed time.Time, position uint64) atlas.Claim {
 	return out
 }
 
+// Read is one integration's read of one entry, as the collect duty records it
+// (ADR-0129): every claim the read holds on the entry that is new or changed,
+// each the voice's newest on its slot, and the slots of the voice's earlier
+// claims the read no longer holds, which the applier withdraws. An entry the
+// read stopped seeing is retired by a read carrying one denied exists claim
+// and withdrawing every other slot. A read that holds exactly what the log
+// already holds is never recorded.
+type Read struct {
+	V int `json:"v"`
+
+	// Source is the integration every claim is from and every withdrawal is
+	// of: the one voice a read speaks in.
+	Source Source `json:"source"`
+
+	// ObservedAt is when the read saw what it records.
+	ObservedAt time.Time `json:"observed_at"`
+
+	Claims    []Claim  `json:"claims,omitempty"`
+	Withdrawn []string `json:"withdrawn,omitempty"`
+}
+
+// readClaimNamespace is the name space a read's claim ids are derived in,
+// fixed for good as [claimNamespace] is.
+var readClaimNamespace = uuid.MustParse("c2a7e1f4-3d58-4b06-9e2f-7a41c0d8e5b3")
+
+// ReadClaimID is the id of the claim a read under opID records on slot: one
+// claim a slot an operation, so a retry names the same claims.
+func ReadClaimID(opID, slot string) string {
+	return uuid.NewSHA1(readClaimNamespace, []byte(opID+"\x00"+slot)).String()
+}
+
 // Purge erases its subject everywhere: an entry with every claim on it and
 // every claim naming it, or a value with every claim carrying it and every
 // entry it is the key of. It carries nothing else: the subject names what is
@@ -170,6 +203,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 	switch {
 	case k == KindEntry && op == OpClaim:
 		return decodePayload[Claim](rec)
+	case k == KindEntry && op == OpRead:
+		return decodePayload[Read](rec)
 	case (k == KindEntry || k == KindValue) && op == OpPurge:
 		return decodePayload[Purge](rec)
 	case k == KindExpiry && op == OpExpire:

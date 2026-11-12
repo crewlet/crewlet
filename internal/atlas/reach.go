@@ -26,7 +26,7 @@ func (r Ref) Private() bool {
 		v, err := parseURL(r.Key)
 		return err == nil && v.Private
 	case KindHost:
-		if address, ok := strings.CutPrefix(r.Key, "addr/"); ok {
+		if address, ok := strings.CutPrefix(r.Key, HostAddrPrefix+"/"); ok {
 			return config.MCPPrivateHost(address)
 		}
 	}

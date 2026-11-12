@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/atlas"
 )
 
 // NAMES A PERSON SAYS, KEYS A ROUTE TAKES. A person asks about "the QA
@@ -61,10 +66,22 @@ const (
 	// refused here, for the route, or a write's preview, which reads the
 	// room itself, to decide in its own words.
 	DirRoom Directory = "room"
+	// DirAtlasEntry is the company's atlas, by an entry's id, its exact name
+	// or its key. NOT A LIST: the atlas may hold thousands of entries, so a
+	// name is read through the atlas's own search for it, as the person
+	// ([Resolver.atlasEntry]), and the one entry whose name or key it is,
+	// compared without case, is sent by its id. A name several share is
+	// refused naming them, for the model to pick one by its id; one nothing
+	// answers to is held to the read's rule: refused listing the entries the
+	// search found where it can only be a name (it has a space in it), and
+	// sent as written where it is spelled as a key is, for the route to
+	// decide. An id is sent as written and reads nothing.
+	DirAtlasEntry Directory = "atlas_entry"
 )
 
-// Directories are the six, in declaration order.
-var Directories = []Directory{DirSeat, DirMember, DirUnit, DirProject, DirSpace, DirRoom}
+// Directories are the seven, in declaration order.
+var Directories = []Directory{DirSeat, DirMember, DirUnit, DirProject, DirSpace, DirRoom,
+	DirAtlasEntry}
 
 // Valid reports whether d is a directory this build knows.
 func (d Directory) Valid() bool { return slices.Contains(Directories, d) }
@@ -83,7 +100,14 @@ var directoryRead = map[Directory]struct {
 	DirUnit:    {"GET /org", "units", unitEntries},
 	DirProject: {"GET /worklet/projects", "projects", listEntries("projects", "key", "name")},
 	DirSpace:   {"GET /containers", "spaces", listEntries("containers", "key", "name")},
+	// READ PER VALUE, through the search ([Resolver.atlasEntry]): the route
+	// here names the read and the plural names the records in a refusal; the
+	// whole list is never read.
+	DirAtlasEntry: {atlasSearchRoute, "atlas entries", listEntries("rows", "id", "name")},
 }
+
+// atlasSearchRoute is where an entry's name is looked up.
+const atlasSearchRoute = "GET /atlas"
 
 // Entry is one record of a directory: the key a route takes and the name a
 // person says.
@@ -444,6 +468,9 @@ func (r *Resolver) resolve(ctx context.Context, t Tool, arg, path, raw string) (
 		return raw, nil
 	}
 	dir := t.Names[arg]
+	if dir == DirAtlasEntry {
+		return r.atlasEntry(ctx, path, value)
+	}
 	if dir == DirRoom {
 		// A ROOM IS READ BY THE NAME THE CALL WROTE, and its id is what its
 		// read answered; a room named by its id, or one its read cannot
@@ -480,6 +507,63 @@ func (r *Resolver) resolve(ctx context.Context, t Tool, arg, path, raw string) (
 		return raw, nil
 	}
 	return "", &nameFault{path: path, value: value, dir: dir, choices: entries}
+}
+
+// atlasEntry is the atlas entry value names, by its id: value itself where it
+// is an id (the route decides it), else the id of the one current entry whose
+// name or key is value, compared without case, among what the atlas's own
+// search for value answers the person. The search is read as the person, so
+// a name resolves only to an entry they may read; one that could not be read
+// at all sends the value as written, for the route to decide in its words, as
+// does a value spelled like a key that the search cannot place ([DirAtlasEntry]).
+func (r *Resolver) atlasEntry(ctx context.Context, path, value string) (string, *nameFault) {
+	if _, err := uuid.Parse(value); err == nil && len(value) == 36 {
+		return value, nil
+	}
+	hits, named, readable := r.atlasHits(ctx, value)
+	switch {
+	case !readable:
+		return value, nil
+	case len(named) == 1:
+		return named[0].Key, nil
+	case len(named) > 1:
+		return "", &nameFault{path: path, value: value, dir: DirAtlasEntry, named: named}
+	case !strings.ContainsFunc(value, unicode.IsSpace):
+		return value, nil
+	}
+	return "", &nameFault{path: path, value: value, dir: DirAtlasEntry, choices: hits}
+}
+
+// atlasHits are the entries the atlas's own search for value answers the
+// person, each by its id and its name with its kind, and among them the ones
+// whose name or key is value; false where the atlas could not be read.
+func (r *Resolver) atlasHits(ctx context.Context, value string) (hits, named []Entry, readable bool) {
+	if r.read == nil {
+		return nil, nil, false
+	}
+	doc, err := readGet(ctx, r.read, atlasSearchRoute, nil,
+		url.Values{"q": {value}, "limit": {strconv.Itoa(atlas.PageMax)}})
+	if err != nil {
+		return nil, nil, false
+	}
+	rows, _ := cards.Lookup(doc, "rows").([]any)
+	for _, row := range rows {
+		id, name, key := cards.Text(cards.Lookup(row, "id")), cards.Text(cards.Lookup(row, "name")),
+			cards.Text(cards.Lookup(row, "key"))
+		if id == "" {
+			continue
+		}
+		// NAMED WITH ITS KIND, so two entries of one name (a server and
+		// the service on it) read apart in a refusal.
+		shown := Entry{Key: id, Name: name + ", " +
+			strings.ReplaceAll(cards.Text(cards.Lookup(row, "kind")), "_", " ")}
+		hits = append(hits, shown)
+		if strings.EqualFold(name, value) || strings.EqualFold(key, value) ||
+			spoken(DirAtlasEntry, name) == spoken(DirAtlasEntry, value) {
+			named = append(named, shown)
+		}
+	}
+	return hits, named, true
 }
 
 // nameFault is one value a call names that its directory cannot place: one
@@ -593,6 +677,10 @@ var directoryNouns = map[Directory][]string{
 	DirUnit:    {"unit", "team"},
 	DirProject: {"project"},
 	DirSpace:   {"space"},
+	// AN ENTRY IS SAID BY WHAT IT IS ("the orders database", "the web-1
+	// server"), in the words the screens call each kind.
+	DirAtlasEntry: {"entry", "account", "domain", "hostname", "endpoint", "service", "server",
+		"database", "queue", "bucket", "repository", "pipeline", "monitor", "model", "tool"},
 }
 
 // choices is the sentence a refusal lists the records in.

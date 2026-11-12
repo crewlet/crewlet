@@ -34,6 +34,7 @@ export const KINDS: Readonly<Record<AtlasKind, { word: string; glyph: GlyphName 
   domain: { word: "Domain", glyph: "globe" },
   hostname: { word: "Hostname", glyph: "globe" },
   endpoint: { word: "Endpoint", glyph: "waypoints" },
+  certificate: { word: "Certificate", glyph: "badge-check" },
   service: { word: "Service", glyph: "layers" },
   host: { word: "Server", glyph: "server" },
   datastore: { word: "Database", glyph: "database" },
@@ -64,7 +65,7 @@ export const LANES: Readonly<
   entry: {
     label: "Entry",
     empty:
-      "Domains appear from the zones the Cloudflare integration declares, and host names from the addresses this engine answers at.",
+      "Domains, host names and certificates appear from the zones, DNS records and certificate packs the Cloudflare integration reads, and host names from the addresses this engine answers at.",
     link: {
       label: "Open Cloudflare",
       path: ["company", "integrations", "cloudflare"],
@@ -165,6 +166,7 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   vendor: "Vendor",
   capability: "Capabilities",
   account_ref: "Account id",
+  account_name: "Account name",
   site: "Site",
   region: "Region",
   integration: "Integration",
@@ -196,6 +198,11 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   tool_count: "Tools",
   oauth_issuer: "Sign-in issuer",
   sign_in_expires: "Sign-in lapses",
+  covers: "Covers",
+  expires: "Expires",
+  issuer: "Issuer",
+  validity: "Validity",
+  certificate_type: "Type",
 };
 
 /** The facts of meaning, which only people and the settings decide. */
@@ -213,6 +220,7 @@ export const RELATIONS: Readonly<Record<AtlasRelation, string>> = {
   built_from: "Built from",
   deployed_by: "Deployed by",
   monitored_by: "Monitored by",
+  secured_by: "Secured by",
   belongs_to: "Belongs to",
   documented_in: "Documented in",
   owned_by: "Owned by",

@@ -97,6 +97,18 @@ test("a seat is matched by its name, whole and in its own case", () => {
   expect(mark("A QAT or qa run, @qa", reads).named.size).toBe(0);
 });
 
+test("an atlas entry is matched by its name, as the map calls it", () => {
+  const entry = event({
+    type: "entity",
+    entity: { kind: "atlas_entry", id: "e1", title: "orders-db", subtitle: "orders-db" },
+  });
+  const { reads } = readsOf([entry]);
+  expect(mark("checkout-api depends on orders-db.", reads).text).toBe(
+    "checkout-api depends on [atlas_entry:e1|orders-db].",
+  );
+  expect(mark("The orders-db-replica is separate.", reads).named.size).toBe(0);
+});
+
 test("a chat room is matched by its name with its #, which is its key", () => {
   // THE ENGINE KEYS A ROOM BY ITS NAME (`#launch`), so the rule is the key's:
   // exact, at the edges of its token, and never inside a longer name.

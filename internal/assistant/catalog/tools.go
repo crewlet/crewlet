@@ -13,7 +13,7 @@ import (
 // all is the catalogue, built and checked once.
 var all = sync.OnceValues(func() ([]Tool, error) {
 	var out []Tool
-	for _, t := range slices.Concat(readTools(), chatReads()) {
+	for _, t := range slices.Concat(readTools(), chatReads(), atlasReads()) {
 		// EVERY READ IS A ROUTE'S OWN ANSWER, labelled as one, and read by
 		// the one rule for a surface the engine hosts unless the tool says
 		// its text comes from outside the company (Trust or TrustOf): the

@@ -355,8 +355,9 @@ func checked(c Claim) (Claim, error) {
 // Validate refuses a claim no writer may make: an entry or a target outside
 // its kind's grammar, a fact or a relation its kind does not take, a value its
 // fact's grammar does not read back to itself, a source that names itself
-// wrongly, a denial or a "not the same" from anybody but a person, and a fact
-// of meaning or an owner from an agent.
+// wrongly, a denial from anybody but a person (an integration's read may deny
+// the entry itself alone), a "not the same" from anybody but a person, and a
+// fact of meaning or an owner from an agent.
 func (c Claim) Validate() error {
 	if err := c.validate(); err != nil {
 		return fmt.Errorf("atlas: claim on %s: %w", c.Subject, err)
@@ -400,8 +401,12 @@ func (c Claim) validate() error {
 	if c.ObservedAt.IsZero() {
 		return errors.New("a claim says when it was seen")
 	}
-	if c.Denied && c.Source.Kind != SourcePerson {
-		return errors.New("only a person denies a claim")
+	if c.Denied && c.Source.Kind != SourcePerson &&
+		(c.Source.Kind != SourceIntegration || c.Facet.Kind != FacetExists) {
+		// A PERSON DENIES ANY CLAIM. An integration's read denies only the
+		// entry itself: its retirement, once two complete reads missed it.
+		// It never denies a fact or a relation, which it withdraws instead.
+		return errors.New("only a person denies a claim, and an integration only the entry itself")
 	}
 	if c.Facet.Kind != FacetFact && !c.Value.Equal(Value{}) {
 		return errors.New("only a fact carries a value")

@@ -126,10 +126,11 @@ const (
 
 	// RoleWorkers runs the company-wide singleton duties behind
 	// worker:{duty} leases — the scheduler tick, the maintenance sweep, the
-	// sandbox waiter, the integration reconcile, the learning passes, the
-	// state logs' trim, the embedding duty, the identity sweep, the object
-	// store's collector, the trash reaper, Chatlet's message horizon, the
-	// code-retention duty and the delegated decisions sweep.
+	// sandbox waiter, the integration reconcile, the atlas collect duty,
+	// the learning passes, the state logs' trim, the embedding duty, the
+	// identity sweep, the object store's collector, the trash reaper,
+	// Chatlet's message horizon, the code-retention duty and the
+	// delegated decisions sweep.
 	// Exactly one node does each at a time; a fleet with none of these does
 	// none of them.
 	RoleWorkers NodeRole = "workers"

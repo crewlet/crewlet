@@ -108,9 +108,17 @@ export function useShape(): [Shape, (shape: Shape) => void] {
   return [shape === "list" ? "list" : "map", setShape as (shape: Shape) => void];
 }
 
+/** The address key the map's trace lives at: what a link lit along a trace carries. */
+export const TRACE_KEY = "trace";
+
+/** Whether `value` is a way the trace can light. */
+export function isTraceChoice(value: string): value is Exclude<TraceChoice, ""> {
+  return value === "up" || value === "down" || value === "both";
+}
+
 /** The map's trace, off unless the address says which way. */
 export function useTrace(): [TraceChoice, (trace: TraceChoice) => void] {
-  const [trace, setTrace] = useParam("trace", "", "filter");
-  const valid: TraceChoice = trace === "up" || trace === "down" || trace === "both" ? trace : "";
+  const [trace, setTrace] = useParam(TRACE_KEY, "", "filter");
+  const valid: TraceChoice = isTraceChoice(trace) ? trace : "";
   return [valid, setTrace as (trace: TraceChoice) => void];
 }

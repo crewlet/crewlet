@@ -34,8 +34,9 @@ const (
 	// StateStale is a discovered entry only agents report, none of them for
 	// [StaleAfter].
 	StateStale State = "stale"
-	// StateRetired is an entry a person retired. It leaves the map and stays
-	// in history.
+	// StateRetired is an entry a person retired, or one an integration's read
+	// stopped seeing that nobody else stands behind. It leaves the map and
+	// stays in history.
 	StateRetired State = "retired"
 )
 
