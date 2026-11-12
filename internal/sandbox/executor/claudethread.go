@@ -747,10 +747,11 @@ const (
 	blockToolResult = "tool_result"
 )
 
-// Message is a user or assistant record's `message`, decoded once on top of its
-// line; the zero message for every other record, whatever `message` it
-// carries: an api-request-blob repeats what a request sent, and a call in it
-// is no call the thread made.
+// Message is a user or assistant record's `message`, decoded from the line's
+// raw `message` on each call: nothing keeps it, so a reader that asks twice
+// pays for two decodes. It is the zero message for every other record,
+// whatever `message` it carries: an api-request-blob repeats what a request
+// sent, and a call in it is no call the thread made.
 //
 // AN ERROR WHERE IT DOES NOT DECODE, and never a message with half a call in
 // it: `message` an object; its `content` a string or a list of objects, each
