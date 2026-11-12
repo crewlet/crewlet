@@ -229,7 +229,7 @@ func validLabel(s string) bool {
 //
 // It reads the bytes of a line as it reads a string, because the one rule is
 // also asked of every line of a file — a cache's packed-refs, merged after
-// every push, up to code.MaxRefsPerRepo lines — where a string made of each
+// every push, up to gitlet.MaxRefsPerRepo lines — where a string made of each
 // id only to ask it would be an allocation a line, and a second copy of the
 // rule the cheaper way round.
 func ValidOID[S ~string | ~[]byte](oid S) bool {

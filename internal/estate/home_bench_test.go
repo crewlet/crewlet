@@ -15,7 +15,7 @@ import (
 // one read of the placement included, and home, the repositories it is home
 // to. It is what each listed repository this node is NOT home to costs a
 // pass, since every Gitlet node lists the same rows and only a repository's home
-// works them (internal/code/home's Backstop).
+// works them (internal/gitlet/home's Backstop).
 func BenchmarkHomeOf(b *testing.B) {
 	for _, n := range []int{8, 16} {
 		b.Run(fmt.Sprintf("repos=10000/gitlet-nodes=%d", n), func(b *testing.B) {

@@ -11,18 +11,18 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/operator"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/checkrun"
-	codecompact "github.com/crewlet/crewlet/internal/code/compact"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/code/mirror"
-	"github.com/crewlet/crewlet/internal/code/query"
-	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
+	gitletcompact "github.com/crewlet/crewlet/internal/gitlet/compact"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/gitlet/mirror"
+	"github.com/crewlet/crewlet/internal/gitlet/query"
+	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -162,7 +162,7 @@ func (e *Engine) auditGit(ctx context.Context, r types.OperatorActed) {
 
 // recordCodeRead files one read of a `visibility: unit` repository — a fetch
 // Gitlet served, a read the git reads answered — in this node's reads
-// ledger ([Engine.codeReads], internal/code/readaudit), stamped with the
+// ledger ([Engine.codeReads], internal/gitlet/readaudit), stamped with the
 // instant it was answered, the company day that falls in on the CURRENT
 // epoch's clock ([Engine.Zone]) and the trace it was served under, and
 // returns. The ledger publishes every reader's reads of a flush as one
@@ -310,7 +310,7 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 	// through the router, and its indexes' backfill paced by the fleet's
 	// live git and data nodes as the router's placements count them. Its
 	// code indexes are kept for the repositories this node is among the
-	// first code.IndexHolders of, in the router's git order (M6-D12).
+	// first gitlet.IndexHolders of, in the router's git order (M6-D12).
 	seam := e.router.Code()
 	c, err := cache.Open(ctx, cache.Options{
 		Layout: layout, MaxBytes: size.budget, Git: pool, Objects: objects, Fetch: seam, Fleet: e.codeFleet,
@@ -336,11 +336,11 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 	// re-judgement there each pay its turn's bucket on its seat, a coding
 	// box's re-syncs its run's on the same seat, and a check's box its
 	// attempt's whether its transfer or its /box/gitlet/ read asks
-	// (code.NewResyncs). One set, because the census gives a seat one term on
+	// (gitlet.NewResyncs). One set, because the census gives a seat one term on
 	// the log: a seat cannot spend it through one server, or through its
 	// boxes, while another surface's buckets stay full.
-	share := code.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics)
-	resyncs := code.NewResyncs(time.Now, e.metrics)
+	share := gitlet.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics)
+	resyncs := gitlet.NewResyncs(time.Now, e.metrics)
 	reads, err := query.New(query.Options{
 		NodeID: nodeID, Cache: c, Git: pool, Share: share, Resyncs: resyncs,
 		Roster: e.codeRoster, Current: e.admits, Fetched: e.recordCodeRead,
@@ -349,13 +349,13 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 		c.Stop(context.WithoutCancel(ctx))
 		return gitletHostParts{}, fmt.Errorf("engine: build the git reads: %w", err)
 	}
-	// AND ITS MERGE PREVIEWS beside them (internal/code/home's Previews): a
+	// AND ITS MERGE PREVIEWS beside them (internal/gitlet/home's Previews): a
 	// comparison's preview of merging one commit into another, answered by
 	// the merge a repository's home records a change's mergeability by — a
 	// principal's read, judged, shared and recorded as the git reads are,
 	// over the same cache, pool and share, its merge written into a scratch
 	// of its own. No goroutine of its own either.
-	previews, err := codehome.NewPreviews(codehome.PreviewOptions{
+	previews, err := gitlethome.NewPreviews(gitlethome.PreviewOptions{
 		NodeID: nodeID, Cache: c, Git: pool, Share: share,
 		Roster: e.codeRoster, Current: e.admits, Fetched: e.recordCodeRead, Metrics: e.metrics,
 	})
@@ -422,11 +422,11 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 	// bounded stop ([native.stopGitletHost]); a stop of one never started ends
 	// nothing. The cache's installer of what is published runs under the
 	// host's own Start.
-	var compactions codecompact.Estate = seam
+	var compactions gitletcompact.Estate = seam
 	if e.compactorEstate != nil {
 		compactions = e.compactorEstate(compactions)
 	}
-	compactor, err := codecompact.New(codecompact.Options{
+	compactor, err := gitletcompact.New(gitletcompact.Options{
 		Cache: c, Objects: objects, Estate: compactions, Maintainers: e.router, NodeID: nodeID,
 		Limits: e.codeLimits, Events: e.codeEvents(), Metrics: e.metrics,
 	})
@@ -435,7 +435,7 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 		return gitletHostParts{}, fmt.Errorf("engine: build the compactor: %w", err)
 	}
 
-	// 10. THE HOME'S CHANGE WORK (internal/code/home): every live change's
+	// 10. THE HOME'S CHANGE WORK (internal/gitlet/home): every live change's
 	// facts read and recorded, its merge into its target recorded, or the
 	// change landed, and its head's checks queued from its target's checks
 	// file, and its merge queue's trains built (on the host itself, h),
@@ -455,13 +455,13 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 	// ([native.stopGitletHost]): its facts reads are answered by this node's git
 	// reads, and its merges read the cache, which that stop ends after it.
 	var (
-		homeEstate codehome.Estate = seam
-		chains     codehome.Chains = h
+		homeEstate gitlethome.Estate = seam
+		chains     gitlethome.Chains = h
 	)
 	if e.homeSeams != nil {
 		homeEstate, chains = e.homeSeams(homeEstate, chains)
 	}
-	homeLoop, err := codehome.New(codehome.Options{
+	homeLoop, err := gitlethome.New(gitlethome.Options{
 		Estate: homeEstate, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
 		Cache: c, Git: pool, Chains: chains, Tasks: e.queueTasks(), Share: share, NodeID: nodeID,
 		Chart: e.codeChartEpoch, Metrics: e.metrics,
@@ -471,7 +471,7 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 		return gitletHostParts{}, fmt.Errorf("engine: build the home's change work: %w", err)
 	}
 
-	// 10b. THE IMPORTS AND PULL MIRRORS (internal/code/mirror), a worker of
+	// 10b. THE IMPORTS AND PULL MIRRORS (internal/gitlet/mirror), a worker of
 	// the loop just built (codemirrors.go): a repository's home fetching it
 	// from the host its rows name, its chunks and syncs landed through its
 	// committer. Started by the loop's turns, stopped after the loop in the
@@ -482,7 +482,7 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 		return gitletHostParts{}, fmt.Errorf("engine: build the imports and mirrors: %w", err)
 	}
 
-	// 11. THE CHECKS (internal/code/checkrun): this node's runner of the
+	// 11. THE CHECKS (internal/gitlet/checkrun): this node's runner of the
 	// company's queued checks, and its home's sweep of the checks whose
 	// runner is gone, a worker of the loop just built (codechecks.go). BUILT
 	// here and STARTED with the home's loop, by the native half's duties, for
@@ -525,7 +525,7 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 }
 
 // codeNudges is this node's own code log as the home's change work watches it
-// (codehome.Nudges): the log's watch (jetstream.DomainLog.Watch), each
+// (gitlethome.Nudges): the log's watch (jetstream.DomainLog.Watch), each
 // record's sequence — and a gap's — a position on the code log in the
 // generation this node's applier last committed in. A sequence the watch
 // tells is the broker's, before any applier has applied it; read at the
@@ -540,7 +540,7 @@ type codeNudges struct {
 }
 
 // Watch begins the watch, its handler's sequences turned into positions.
-func (n codeNudges) Watch(ctx context.Context, filter string, h codehome.Nudged) (codehome.Watching, error) {
+func (n codeNudges) Watch(ctx context.Context, filter string, h gitlethome.Nudged) (gitlethome.Watching, error) {
 	at := func(seq uint64) statelog.Position {
 		return statelog.Position{Stream: topics.CodeLogStream, Generation: n.runner.Committed().Generation, Seq: seq}
 	}
@@ -583,22 +583,22 @@ func (e *Engine) codeFleet() (int, int, error) {
 type gitHalf struct {
 	reads    *query.Server
 	writes   *host.Server
-	previews *codehome.Previews
+	previews *gitlethome.Previews
 }
 
 // Read is the query server's read by object id.
-func (g gitHalf) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (g gitHalf) Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	return g.reads.Read(ctx, q)
 }
 
 // Write is Gitlet's engine write (ADR-0092).
-func (g gitHalf) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+func (g gitHalf) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	return g.writes.Write(ctx, w)
 }
 
 // MergePreview is the home's merge of one commit into another, a comparison's
 // preview.
-func (g gitHalf) MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+func (g gitHalf) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
 	return g.previews.MergePreview(ctx, q)
 }
 
@@ -616,11 +616,11 @@ func (g gitHalf) MergePreview(ctx context.Context, q code.MergePreviewQuery) (co
 type gitletHostParts struct {
 	host           *host.Server
 	reads          *query.Server
-	previews       *codehome.Previews
+	previews       *gitlethome.Previews
 	cache          *cache.Cache
 	size           codeCacheSize
-	compactor      *codecompact.Compactor
-	home           *codehome.Loop
+	compactor      *gitletcompact.Compactor
+	home           *gitlethome.Loop
 	mirrors        *mirror.Mirrors
 	checks         *checkrun.Runner
 	withdrawStatus queue.Unsubscribe
@@ -632,14 +632,14 @@ type gitletHostParts struct {
 // code_commit_busy stands for, the repository with the most of them — named
 // by this node's own rows, else by its id — how many met the node's whole
 // bound, and how many waited in a queue until their asker could wait no
-// longer ([code.Committer.AlarmReading]). And from this node's git cache: how
+// longer ([gitlet.Committer.AlarmReading]). And from this node's git cache: how
 // many repositories it cannot write a bitmap of for memory — its own, or the
 // one a publication of a repository it maintains writes — the largest of those
 // charges and the budget they are past ([cache.Cache.AlarmReading]), which
 // raise code_maintenance_refused — and from its compactor: how many
 // repositories this node maintains sit at the pack bound, every push carrying
 // objects into them refused until a compaction lands
-// ([codecompact.Compactor.AlarmReading]), which raise code_compaction_behind on
+// ([gitletcompact.Compactor.AlarmReading]), which raise code_compaction_behind on
 // the node that compacts them — and from its mirrors: how many mirrors of the
 // repositories this node is home to have not been brought level within their
 // own refresh promise, and the one failing longest
@@ -1065,7 +1065,7 @@ func (e *Engine) stopGitletHost(ctx context.Context) { e.native.Load().stopGitle
 // the teardown orders after this stop. Each stop refuses every read after it,
 // cuts the reads in flight — each answered unready, about this node, so its
 // walk asks the next Gitlet node — and waits for them, before the host and the
-// cache they read stop ([query.Server.Stop], [codehome.Previews.Stop]). A
+// cache they read stop ([query.Server.Stop], [gitlethome.Previews.Stop]). A
 // peer's ENGINE WRITE, answered on the git writes' lane, needs no step of its
 // own: the host counts it among its requests, so the host's stop refuses
 // every write after it, cuts the writes in flight — one cut before its

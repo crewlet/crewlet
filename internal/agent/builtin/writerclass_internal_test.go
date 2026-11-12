@@ -25,9 +25,9 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -327,53 +327,53 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a document version this build cannot read, a fault of the copy"},
 		"InvalidError": {err: &chatlet.InvalidError{}, means: malformed},
 	},
-	code.Domain{}.Name(): {
-		"ErrRepoNotFound":   {err: code.ErrRepoNotFound, means: absent},
-		"ErrRefNotFound":    {err: code.ErrRefNotFound, means: absent},
-		"ErrChangeNotFound": {err: code.ErrChangeNotFound, means: absent},
-		"ErrCheckNotFound":  {err: code.ErrCheckNotFound, means: absent},
-		"ErrObjectNotFound": {err: code.ErrObjectNotFound, means: absent},
-		"ErrNotATree":       {err: code.ErrNotATree, means: absent},
-		"ErrNotABlob":       {err: code.ErrNotABlob, means: absent},
+	gitlet.Domain{}.Name(): {
+		"ErrRepoNotFound":   {err: gitlet.ErrRepoNotFound, means: absent},
+		"ErrRefNotFound":    {err: gitlet.ErrRefNotFound, means: absent},
+		"ErrChangeNotFound": {err: gitlet.ErrChangeNotFound, means: absent},
+		"ErrCheckNotFound":  {err: gitlet.ErrCheckNotFound, means: absent},
+		"ErrObjectNotFound": {err: gitlet.ErrObjectNotFound, means: absent},
+		"ErrNotATree":       {err: gitlet.ErrNotATree, means: absent},
+		"ErrNotABlob":       {err: gitlet.ErrNotABlob, means: absent},
 		// A REPOSITORY BEING PURGED, within its deleted retention, not
 		// deleted or managed by its configuration refuses by what it is
 		// now: the same request lands once somebody changes that, as an
 		// artifact in the trash does.
-		"ErrPurging":       {err: code.ErrPurging, means: objectState},
-		"ErrNotYet":        {err: code.ErrNotYet, means: objectState},
-		"ErrNotDeleted":    {err: code.ErrNotDeleted, means: objectState},
-		"ErrConfigManaged": {err: code.ErrConfigManaged, means: objectState},
-		"ErrSnapshotMoved": {err: code.ErrSnapshotMoved, means: staleRead},
-		"ErrNotPermitted":  {err: code.ErrNotPermitted, means: notPermitted},
+		"ErrPurging":       {err: gitlet.ErrPurging, means: objectState},
+		"ErrNotYet":        {err: gitlet.ErrNotYet, means: objectState},
+		"ErrNotDeleted":    {err: gitlet.ErrNotDeleted, means: objectState},
+		"ErrConfigManaged": {err: gitlet.ErrConfigManaged, means: objectState},
+		"ErrSnapshotMoved": {err: gitlet.ErrSnapshotMoved, means: staleRead},
+		"ErrNotPermitted":  {err: gitlet.ErrNotPermitted, means: notPermitted},
 		// THE SEAT A TURN READS FOR, not the asker: a decision about whom
 		// the call is made for, which the same turn cannot change.
-		"ErrAboveCeiling":  {err: code.ErrAboveCeiling, means: notPermitted},
-		"ErrInvalid":       {err: code.ErrInvalid, means: malformed},
-		"ErrBadCursor":     {err: code.ErrBadCursor, means: malformed},
-		"ErrBadLevel":      {err: code.ErrBadLevel, means: malformed},
-		"ErrSliceTooLarge": {err: code.ErrSliceTooLarge, means: malformed},
-		"ErrRecordCap":     {err: code.ErrRecordCap, means: malformed},
+		"ErrAboveCeiling":  {err: gitlet.ErrAboveCeiling, means: notPermitted},
+		"ErrInvalid":       {err: gitlet.ErrInvalid, means: malformed},
+		"ErrBadCursor":     {err: gitlet.ErrBadCursor, means: malformed},
+		"ErrBadLevel":      {err: gitlet.ErrBadLevel, means: malformed},
+		"ErrSliceTooLarge": {err: gitlet.ErrSliceTooLarge, means: malformed},
+		"ErrRecordCap":     {err: gitlet.ErrRecordCap, means: malformed},
 		// THIS NODE'S CONDITION: another node, or this one a moment later,
 		// answers the same call.
-		"ErrNotServing": {err: code.ErrNotServing, means: nodeCondition},
-		"ErrAnswerDue":  {err: code.ErrAnswerDue, means: nodeCondition},
-		"ErrGitUnready": {err: &code.ErrGitUnready{}, means: nodeCondition},
+		"ErrNotServing": {err: gitlet.ErrNotServing, means: nodeCondition},
+		"ErrAnswerDue":  {err: gitlet.ErrAnswerDue, means: nodeCondition},
+		"ErrGitUnready": {err: &gitlet.ErrGitUnready{}, means: nodeCondition},
 
-		"ErrNoActivation":     {err: code.ErrNoActivation, why: "a configuration apply's wiring, never a caller's request"},
-		"ErrSuperseded":       {err: code.ErrSuperseded, why: "a configuration reconcile a later activation fenced off, never a caller's request"},
-		"ErrNotConfigManaged": {err: code.ErrNotConfigManaged, why: "a configuration reconcile reaching a repository it does not manage, never a caller's request"},
-		"ErrInvalidProposal": {err: code.ErrInvalidProposal,
+		"ErrNoActivation":     {err: gitlet.ErrNoActivation, why: "a configuration apply's wiring, never a caller's request"},
+		"ErrSuperseded":       {err: gitlet.ErrSuperseded, why: "a configuration reconcile a later activation fenced off, never a caller's request"},
+		"ErrNotConfigManaged": {err: gitlet.ErrNotConfigManaged, why: "a configuration reconcile reaching a repository it does not manage, never a caller's request"},
+		"ErrInvalidProposal": {err: gitlet.ErrInvalidProposal,
 			why: "a proposal the domain's own committer built wrong, decided by the applier as a fault"},
-		"TooWideError": {err: &code.TooWideError{},
+		"TooWideError": {err: &gitlet.TooWideError{},
 			why: "a push too wide for one entry, which the client pushes in parts and a committer never builds"},
-		"ErrInvalidLayer": {err: code.ErrInvalidLayer, why: "a published layer a Gitlet node built wrong, the cache's fault"},
-		"ErrBadLayer":     {err: code.ErrBadLayer, why: "a stored layer that is not what its row says, a fault of the store"},
-		"ErrBadBundle":    {err: code.ErrBadBundle, why: "a stored pack that is not what its row says, a fault of the store"},
-		"BadBundle":       {err: &code.BadBundle{Err: code.ErrBadBundle}, why: "a stored pack that is not what its row says, a fault of the store"},
-		"ErrMisplaced": {err: code.ErrMisplaced,
+		"ErrInvalidLayer": {err: gitlet.ErrInvalidLayer, why: "a published layer a Gitlet node built wrong, the cache's fault"},
+		"ErrBadLayer":     {err: gitlet.ErrBadLayer, why: "a stored layer that is not what its row says, a fault of the store"},
+		"ErrBadBundle":    {err: gitlet.ErrBadBundle, why: "a stored pack that is not what its row says, a fault of the store"},
+		"BadBundle":       {err: &gitlet.BadBundle{Err: gitlet.ErrBadBundle}, why: "a stored pack that is not what its row says, a fault of the store"},
+		"ErrMisplaced": {err: gitlet.ErrMisplaced,
 			why: "a re-anchoring answer placing another set than its anchors, which no Gitlet node of this build " +
 				"gives: the asking node's own fault, never a caller's request"},
-		"ErrFutureVersion": {err: &code.ErrFutureVersion{},
+		"ErrFutureVersion": {err: &gitlet.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 	},
 }
@@ -501,7 +501,7 @@ func TestEveryDomainRefusalIsClassed(t *testing.T) {
 // drop the prefix strip from worklet.Sentence, and a row goes red.
 func TestNoDomainRefusalReadsAsAGoError(t *testing.T) {
 	t.Parallel()
-	prefixes := []string{"worklet: ", "doclet: ", "chatlet: ", "code: ", "statelog: ", "artifactsdomain: ",
+	prefixes := []string{"worklet: ", "doclet: ", "chatlet: ", "gitlet: ", "statelog: ", "artifactsdomain: ",
 		"artifactdata: ", "artifacts: ", "%!"}
 	leaks := func(text string) string {
 		for _, p := range prefixes {
@@ -803,7 +803,7 @@ func domainPackages() map[string]string {
 	internal := path.Dir(reflect.TypeFor[statelog.Position]().PkgPath())
 	out := map[string]string{}
 	for _, d := range []statelog.Domain{worklet.Domain{}, doclet.Domain{}, chatlet.Domain{},
-		artifactsdomain.Domain{}, artifactdata.Domain{}, code.Domain{}} {
+		artifactsdomain.Domain{}, artifactdata.Domain{}, gitlet.Domain{}} {
 		out[d.Name()] = strings.TrimPrefix(reflect.TypeOf(d).PkgPath(), internal+"/")
 	}
 	return out

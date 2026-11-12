@@ -35,7 +35,7 @@ import (
 func TestTheSandboxLinksNoGitletConfigurationOrStateLog(t *testing.T) {
 	t.Parallel()
 	const module = "github.com/crewlet/crewlet/internal/"
-	refused := []string{"code", "config", "statelog"}
+	refused := []string{"gitlet", "config", "statelog"}
 	under := func(pkg, root string) bool {
 		return pkg == module+root || strings.HasPrefix(pkg, module+root+"/")
 	}

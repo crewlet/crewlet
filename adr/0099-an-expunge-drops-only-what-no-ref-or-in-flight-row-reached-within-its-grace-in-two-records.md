@@ -1,9 +1,9 @@
 # ADR-0099: An expunge drops only what no ref or in-flight row reached within its grace, in two records
 
 - **Status:** accepted
-- **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestAPushCheckedBeforeABeginIsRefusedExpunging`; `internal/code/cache.TestOnlyAnExpungeDropsTheCommitGraph`; `internal/code/cache.TestEveryInterleavingOfAnExpungeKeepsWhatARefReaches` (every interleaving of a push, a begin, a rescue and a commit over two copies, each copy held to real `git fsck`); `internal/code/host.TestTheHostPassesTheSuite` (its cases `F48_ExpungeVsAPushCheckedBeforeIt`, `F49_ExpungeUnderAPushEvery100ms` and `F50_ExpungeRetiredPackOutlivesItsLongestRead`), held able to fail by `internal/code/codetest.TestTheSuiteCatchesAnExpungeThatDeletesWhatItDrops`; `internal/code.TestAnExpungeBeginKeepsEveryObjectOfItsInputs`; `internal/code.TestAnExpungeCommitNeedsOnlyItsDroppingPacks`; `internal/code/compact.TestAnOpenChangesOldRevisionSurvivesAPurge`; `internal/code/compact.TestAnObjectYoungerThanTheGraceIsKept`
-- **Measured:** `BenchmarkApplyACompaction`'s expunge arms, one bounded run on two E-cores (internal/code's doc, # Measured): 75 ms for the widest begin — 1 024 inputs into 32 outputs, a chain of 32 layers dropped against 2 048 live packs, 2 625 rows, the widest record the code domain forms — under the third of `statelog.ApplyTxTimeBudget` a compaction's apply is held to; 13.5 ms for the widest commit, 97 rows
+- **Authority:** `internal/gitlet`
+- **Enforced-by:** `internal/gitlet.TestAPushCheckedBeforeABeginIsRefusedExpunging`; `internal/gitlet/cache.TestOnlyAnExpungeDropsTheCommitGraph`; `internal/gitlet/cache.TestEveryInterleavingOfAnExpungeKeepsWhatARefReaches` (every interleaving of a push, a begin, a rescue and a commit over two copies, each copy held to real `git fsck`); `internal/gitlet/host.TestTheHostPassesTheSuite` (its cases `F48_ExpungeVsAPushCheckedBeforeIt`, `F49_ExpungeUnderAPushEvery100ms` and `F50_ExpungeRetiredPackOutlivesItsLongestRead`), held able to fail by `internal/gitlet/gitlettest.TestTheSuiteCatchesAnExpungeThatDeletesWhatItDrops`; `internal/gitlet.TestAnExpungeBeginKeepsEveryObjectOfItsInputs`; `internal/gitlet.TestAnExpungeCommitNeedsOnlyItsDroppingPacks`; `internal/gitlet/compact.TestAnOpenChangesOldRevisionSurvivesAPurge`; `internal/gitlet/compact.TestAnObjectYoungerThanTheGraceIsKept`
+- **Measured:** `BenchmarkApplyACompaction`'s expunge arms, one bounded run on two E-cores (internal/gitlet's doc, # Measured): 75 ms for the widest begin — 1 024 inputs into 32 outputs, a chain of 32 layers dropped against 2 048 live packs, 2 625 rows, the widest record the code domain forms — under the third of `statelog.ApplyTxTimeBudget` a compaction's apply is held to; 13.5 ms for the widest commit, 97 rows
 - **Cost-when-tried:** Gitlet's first build dropped nothing: a force-push or a deletion left its history in the repository's packs for the repository's life, fetchable by its id from every Gitlet node, a leaked secret included, and counted against `code.limits.repo_max_bytes`, which a push is refused `repo_size` on — so a busy repository, a seat's scratch one most of all, walked towards its quota on bytes no ref reached
 - **Tag-status:** unreleased
 
@@ -53,7 +53,7 @@ live pack bytes (`ExpungeShare`) and at least `ExpungeMinBytes`; and NONE for a
 person's PURGE (`code_purge_unreachable`, an `expunge_request` record answered
 at once), whose cycles take only the packs whose content dates from before the
 request. The rows in flight are kept by both. The repository's MAINTAINER
-runs it, in `internal/code/compact`'s third loop beside compaction and
+runs it, in `internal/gitlet/compact`'s third loop beside compaction and
 publication, one rewrite of a repository at a time.
 
 When the commit applies, each Gitlet node's copy drops the dropping packs by its
@@ -104,7 +104,7 @@ How a deleted repository is purged whole — the `code-retention` duty's steps.
 What a backup taken before a purge keeps: nothing rewrites a backup, so a
 secret that was ever pushed is a secret to rotate, and the purge is tidiness
 after the rotation. `ExpungeMinBytes` is PROVISIONAL until
-`BenchmarkExpunge` decides it (internal/code's limits).
+`BenchmarkExpunge` decides it (internal/gitlet's limits).
 
 ## Amendments to earlier records
 

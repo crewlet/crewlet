@@ -101,7 +101,7 @@
 // repository-day: every credential and seat that read a `visibility: unit`
 // repository's contents on the node that served them — a git fetch that
 // carried a pack, a code tool's answer, which that node records a reader's
-// reads of a flush at a time (types.CodeFetched, internal/code/readaudit) —
+// reads of a flush at a time (types.CodeFetched, internal/gitlet/readaudit) —
 // with how often and how many bytes, capped at [ReadersPerRepoDay] with the
 // remainder counted
 // ([KindRepoRead], record version 4: the one kind a build below version 4

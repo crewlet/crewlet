@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -112,9 +112,9 @@ var nativeDomains = map[string]nativeDomain{
 		// names them is the object a failed send_dm or open_dm points at.
 		objects: []string{"channel", "message_id", "to"},
 	},
-	code.Domain{}.Name(): {
+	gitlet.Domain{}.Name(): {
 		class:    codeClass,
-		sentence: code.Sentence,
+		sentence: gitlet.Sentence,
 		// A repository is named by `repo` — its name, which a rename
 		// redirects — on every code write but the create, and a change by
 		// `change`, its number within that repository. code_create_repo

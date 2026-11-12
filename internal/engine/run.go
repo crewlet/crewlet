@@ -29,12 +29,6 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	awsint "github.com/crewlet/crewlet/internal/aws"
-	"github.com/crewlet/crewlet/internal/code"
-	codecompact "github.com/crewlet/crewlet/internal/code/compact"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/code/mirror"
-	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -44,6 +38,12 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	gitletcompact "github.com/crewlet/crewlet/internal/gitlet/compact"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/gitlet/mirror"
+	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
@@ -568,20 +568,20 @@ type Engine struct {
 	// compactorEstate is Options.compactorEstate, kept for the same reason:
 	// nil — every engine New builds outside this package's tests — hands the
 	// compactor the router's code seam as it is ([Engine.buildGitletHost]).
-	compactorEstate func(codecompact.Estate) codecompact.Estate
+	compactorEstate func(gitletcompact.Estate) gitletcompact.Estate
 
 	// homeSeams is Options.homeSeams, kept for the same reason: nil — every
 	// engine New builds outside this package's tests — hands the home's
 	// change work the router's code seam and Gitlet's chain builder
 	// as they are ([Engine.buildGitletHost]).
-	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
+	homeSeams func(gitlethome.Estate, gitlethome.Chains) (gitlethome.Estate, gitlethome.Chains)
 
 	// committerPublisher is Options.committerPublisher, kept because a
 	// runtime the first apply that hosts code starts builds its committer
 	// too: nil — every engine New builds outside this package's tests —
 	// hands the committer the code log's write authority as it is
 	// ([Engine.startNative]).
-	committerPublisher func(code.Publisher) code.Publisher
+	committerPublisher func(gitlet.Publisher) gitlet.Publisher
 	// plans is the node's registry of harness sign-ins
 	// ([harness.Plans]), made once at boot under a key derived from the
 	// keyring and handed to every revision's build, so a sit-out outlives
@@ -1264,7 +1264,7 @@ type Engine struct {
 	// codeReads is this node's reads ledger: every read of a `visibility:
 	// unit` repository Gitlet's git surface and git reads answer, coalesced per
 	// reader and published as `code_fetched` — see [Engine.recordCodeRead]
-	// and internal/code/readaudit.
+	// and internal/gitlet/readaudit.
 	//
 	// On the engine for auxSpend's reason: a bucket is reads already
 	// answered, and Gitlet, whose reads it records, is built at an apply after
@@ -1429,7 +1429,7 @@ type Options struct {
 	// host.HookCommand names it, `crewlet gitlet hook proc-receive`, its path
 	// resolved through os.Executable and its symbolic links. A test binary is
 	// not crewlet, so a suite that pushes for real names one
-	// (codetest.HookCommand).
+	// (gitlettest.HookCommand).
 	GitHook []string
 
 	// Environment is what a company's `${VAR}` references fall back to
@@ -1510,33 +1510,33 @@ type Options struct {
 
 	// compactorEstate stands between the Gitlet node's compactor and the
 	// router's code seam it lists and proposes through
-	// ([codecompact.Options.Estate]), nil for none. UNEXPORTED for cacheDisk's
+	// ([gitletcompact.Options.Estate]), nil for none. UNEXPORTED for cacheDisk's
 	// reason (export_test.go): the knob exists only so a case whose subject
 	// is the compaction-behind alarm a running node raises can show the
 	// compactor a repository at the pack bound without pushing two thousand
 	// packs into it.
-	compactorEstate func(codecompact.Estate) codecompact.Estate
+	compactorEstate func(gitletcompact.Estate) gitletcompact.Estate
 
 	// homeSeams stands between a Gitlet node's home change work and the
 	// router's code seam it reads and records through and Gitlet's
-	// chain builder it builds its trains with ([codehome.Options.Estate],
-	// [codehome.Options.Chains]), nil for none. UNEXPORTED for cacheDisk's
+	// chain builder it builds its trains with ([gitlethome.Options.Estate],
+	// [gitlethome.Options.Chains]), nil for none. UNEXPORTED for cacheDisk's
 	// reason (export_test.go): the knob exists only so a case whose subject is
 	// the merge-rate alarm a running node raises can show the queue worker a
 	// queue asked past its capacity, and record its train, without the
 	// changes, the passed checks and the hour of rounds a real queue needs to
 	// fall behind.
-	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
+	homeSeams func(gitlethome.Estate, gitlethome.Chains) (gitlethome.Estate, gitlethome.Chains)
 
 	// committerPublisher stands between a data node's committer and the code
 	// log's write authority it publishes through
-	// ([code.CommitterOptions.Publisher]), nil for none. UNEXPORTED for
+	// ([gitlet.CommitterOptions.Publisher]), nil for none. UNEXPORTED for
 	// cacheDisk's reason (export_test.go): the knob exists only so a case
 	// whose subject is the busy alarm a running node raises can hold the
 	// committer's first batch at its publish, and so fill a repository's
 	// queue, rather than race a burst against batches a healthy committer
 	// lands in milliseconds.
-	committerPublisher func(code.Publisher) code.Publisher
+	committerPublisher func(gitlet.Publisher) gitlet.Publisher
 	// resumeGate wraps the gate the sandbox coordinator resumes through
 	// ([Engine.turnGate]), nil for the node's admission as it stands.
 	// UNEXPORTED for the reason usageEvery is: the admission is the node's

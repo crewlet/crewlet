@@ -615,7 +615,7 @@ type AcquireOptions struct {
 	// (internal/schedule), which keep running on whichever build takes them
 	// — and for the same reason a duty lease holds no claim back
 	// ([ProtocolGateCounts]); a server's OAuth renewal lease
-	// (internal/engine) and a check run's remote slot (internal/code/checkrun);
+	// (internal/engine) and a check run's remote slot (internal/gitlet/checkrun);
 	// and an engine process's taker lease ([ClassTaker]), whose captures are
 	// kept through a rolling upgrade as at any other time.
 	//

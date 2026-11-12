@@ -2,28 +2,28 @@
  * How a change merges, and why a merge is refused, in the engine's words —
  * what a change page's merge controls offer and answer in.
  *
- * Each is a COPY of a closed set `internal/code` owns, HELD BOTH WAYS, in
- * order, by `internal/code`'s dashboard tests: a method the engine grew that
+ * Each is a COPY of a closed set `internal/gitlet` owns, HELD BOTH WAYS, in
+ * order, by `internal/gitlet`'s dashboard tests: a method the engine grew that
  * this lacks is one nobody here can choose, a refusal it grew is answered only
  * in its class's general words, and a value kept here that the engine dropped
  * is a choice refused on every press or a sentence nobody will ever read.
  */
 
 /**
- * How a change merges into its target (`code.MergeMethods`), the engine's
+ * How a change merges into its target (`gitlet.MergeMethods`), the engine's
  * default first: a merge commit, one squashed commit, or a fast-forward of the
  * target to the change's head. Held by
- * `internal/code.TestTheDashboardOffersEveryMergeMethod`.
+ * `internal/gitlet.TestTheDashboardOffersEveryMergeMethod`.
  */
 export const MERGE_METHODS = ["merge", "squash", "fast_forward"] as const;
 
 /**
- * Why a merge, an enqueue or an override decided nothing (`code.MergeRefusals`),
+ * Why a merge, an enqueue or an override decided nothing (`gitlet.MergeRefusals`),
  * in the order the engine's decides reach them. The act route names the word
  * beside the refusal's class (`refusal`), because several share one class — a
  * head that moved and a train whose base moved are both `stale_version` — and
  * the merge controls answer each in its own words. Held by
- * `internal/code.TestTheDashboardKnowsEveryMergeRefusal`.
+ * `internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal`.
  */
 export const MERGE_REFUSALS = [
   "repo_deleted",
@@ -61,7 +61,7 @@ export const MERGE_REFUSALS = [
 
 /**
  * The word a merge's BUILD answers when the change does not merge cleanly
- * onto its target's tip (`code.WriteConflict`): not a decide's refusal but
+ * onto its target's tip (`gitlet.WriteConflict`): not a decide's refusal but
  * the Gitlet node's, naming the conflicting paths. Held with [MERGE_REFUSALS].
  */
 export const MERGE_CONFLICT = "conflict";

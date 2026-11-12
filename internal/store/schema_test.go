@@ -12,9 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -50,7 +50,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 		assistantdomain.Domain{},
 		chatlet.Domain{},
 		executordomain.Domain{},
-		code.Domain{},
+		gitlet.Domain{},
 		accessdomain.Domain{},
 		atlasdomain.Domain{},
 	} {
@@ -110,7 +110,7 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		{"assistant_", assistantdomain.Domain{}},
 		{"chat_", chatlet.Domain{}},
 		{"executor_", executordomain.Domain{}},
-		{"code_", code.Domain{}},
+		{"code_", gitlet.Domain{}},
 		{"access_", accessdomain.Domain{}},
 		{"atlas_", atlasdomain.Domain{}},
 	} {

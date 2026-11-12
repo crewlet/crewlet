@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore`
-- **Enforced-by:** `internal/objstore/references.TestEveryDeclarationStatesItsStanding`, `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`, `internal/backup.TestABackupCarriesNoDerivedObject`, `internal/code/cache.TestALayerIsInstalledOnlyOverItsOwnPacks`, `internal/code/cache.TestTheCanaryRefusesAChainOverTheWrongBase`, `internal/code/compact.TestAPublicationIsBuiltInAScratchNamingExactlyItsBase`, `internal/code/compact.TestAPublicationIsNeverBuiltOverABaseTheStoreLost`, `internal/code/host.TestTheHostPassesTheSuite` (its `LY1_ALayerIsInstalled`, `LY2_ALayerTheStoreLostFallsBack` and `LY3_ACorruptLayerFallsBack`), `internal/code/codetest.TestTheSuiteCatchesALayerOverAPackTheNodeLacks`
+- **Enforced-by:** `internal/objstore/references.TestEveryDeclarationStatesItsStanding`, `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`, `internal/backup.TestABackupCarriesNoDerivedObject`, `internal/gitlet/cache.TestALayerIsInstalledOnlyOverItsOwnPacks`, `internal/gitlet/cache.TestTheCanaryRefusesAChainOverTheWrongBase`, `internal/gitlet/compact.TestAPublicationIsBuiltInAScratchNamingExactlyItsBase`, `internal/gitlet/compact.TestAPublicationIsNeverBuiltOverABaseTheStoreLost`, `internal/gitlet/host.TestTheHostPassesTheSuite` (its `LY1_ALayerIsInstalled`, `LY2_ALayerTheStoreLostFallsBack` and `LY3_ACorruptLayerFallsBack`), `internal/gitlet/gitlettest.TestTheSuiteCatchesALayerOverAPackTheNodeLacks`
 - **Measured:** on git 2.56.0, 219 679 objects in 64 packs, four vCPUs: a whole multi-pack-index and bitmap 1.43 s and 167.8 MiB; a bitmapped incremental tip over one sixty-fourth of the objects 1.89 s and 127.5 MiB, over an eighth 1.52 s and 131.6 MiB — a tip costs the history, not its new objects; a tip without a bitmap 0.042 s, and no bitmap read beneath it afterwards; a layer over the full packs of a cut refused for closure; an installed layer read with its bitmap in 0.158 s on a node that never wrote it; a layer written over a chain file naming only its base 1.03 s, against 196–200 s with layers above that base still named, and for `multi-pack-index compact` of two non-root layers with one above them
 - **Cost-when-tried:** M2 gave every Gitlet node its own whole multi-pack-index and bitmap of every repository it serves: O(history) memory and minutes on every node at every duty cycle, refused outright on any node whose memory could not hold the largest repository's bitmap — so the default repo_max_bytes was served without a bitmap on every node of ordinary size. The first replacement designed, node-local bitmapped tips over a published base of full packs, was measured unbuildable on the pin before a line of it was written: the tips cost the history and the full-pack base fails git's closure check
 - **Tag-status:** unreleased
@@ -40,7 +40,7 @@ layer, decided by the repository's committer:
 is installed only:
 
 - over packs the node holds byte for byte;
-- with its files matching its row (`code.CheckLayer`: the multi-pack-index's
+- with its files matching its row (`gitlet.CheckLayer`: the multi-pack-index's
   trailer, its pack names, the bitmap's owner, the graph's base);
 - in the rows' chain order, the order being the only thing that names a
   layer's base;

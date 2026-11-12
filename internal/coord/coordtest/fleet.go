@@ -291,7 +291,7 @@ var valveCases = []fleetCase{{
 	},
 }, {
 	// The remote check cells' box-time cap counts box-minutes in a DAY'S
-	// window (internal/code/checkrun). A backend that kept a window only
+	// window (internal/gitlet/checkrun). A backend that kept a window only
 	// as long as the valve's seconds would forget the day's count between
 	// two charges an hour apart and hand the day back its whole allowance.
 	// The window is the UTC day: midnight to midnight.

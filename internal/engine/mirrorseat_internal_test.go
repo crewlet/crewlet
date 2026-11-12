@@ -5,15 +5,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // A DECLARED PUSH MIRROR'S SEAT READS WHAT THE DOMAIN GRANTS IT: validation
 // refuses a code.repos push mirror whose `as` seat does not read the
 // repository by config's reading of the grant (CodeRepo.mirrorSeatReads, which
 // cannot import the domain), and a person's create or settings change is
-// refused by the domain's own (code.MirrorSeatRefusal over the chart's
+// refused by the domain's own (gitlet.MirrorSeatRefusal over the chart's
 // roster). The two are one rule: for every seat of a chart with every relation
 // a grant reads — a root seat, a human seat, a led unit with a led child and a
 // child inheriting its lead, a unit with no lead above it, a unit led from
@@ -36,24 +36,24 @@ func TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt(t *testing.T) {
 		t.Fatal("the premise: rosterChart's Sales unit is not where this test gives it the lead ceo")
 	}
 	roster, o := rosterOfChart(t, chart)
-	sales := code.RepoRef{ID: "web", Name: "web", Owner: code.Owner{Kind: code.OwnerUnit, Ref: "Sales"},
-		Visibility: code.VisibilityUnit}
-	if why := code.MirrorSeatRefusal("ceo", sales, roster, false); why != "" {
+	sales := gitlet.RepoRef{ID: "web", Name: "web", Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Sales"},
+		Visibility: gitlet.VisibilityUnit}
+	if why := gitlet.MirrorSeatRefusal("ceo", sales, roster, false); why != "" {
 		t.Fatalf("the premise: ceo leads Sales and reads what it keeps to itself, but the domain says %s", why)
 	}
 	owners := []struct {
 		yaml  string
-		owner code.Owner
+		owner gitlet.Owner
 	}{
-		{"{unit: eng}", code.Owner{Kind: code.OwnerUnit, Ref: "eng"}},
-		{"{unit: Platform}", code.Owner{Kind: code.OwnerUnit, Ref: "Platform"}},
-		{"{unit: Infra}", code.Owner{Kind: code.OwnerUnit, Ref: "Infra"}},
-		{"{unit: Tools}", code.Owner{Kind: code.OwnerUnit, Ref: "Tools"}},
-		{"{unit: Sales}", code.Owner{Kind: code.OwnerUnit, Ref: "Sales"}},
-		{"{seat: dev}", code.Owner{Kind: code.OwnerSeat, Ref: "dev"}},
-		{"{seat: toolsmith}", code.Owner{Kind: code.OwnerSeat, Ref: "toolsmith"}},
-		{"{seat: rep}", code.Owner{Kind: code.OwnerSeat, Ref: "rep"}},
-		{"{seat: ceo}", code.Owner{Kind: code.OwnerSeat, Ref: "ceo"}},
+		{"{unit: eng}", gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "eng"}},
+		{"{unit: Platform}", gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"}},
+		{"{unit: Infra}", gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Infra"}},
+		{"{unit: Tools}", gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Tools"}},
+		{"{unit: Sales}", gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Sales"}},
+		{"{seat: dev}", gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "dev"}},
+		{"{seat: toolsmith}", gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "toolsmith"}},
+		{"{seat: rep}", gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "rep"}},
+		{"{seat: ceo}", gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "ceo"}},
 	}
 	var refused, admitted int
 	for r := range o.AllRoles() {
@@ -62,7 +62,7 @@ func TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt(t *testing.T) {
 			continue
 		}
 		for _, owner := range owners {
-			for _, visibility := range []code.Visibility{code.VisibilityUnit, code.VisibilityCompany} {
+			for _, visibility := range []gitlet.Visibility{gitlet.VisibilityUnit, gitlet.VisibilityCompany} {
 				doc := chart + fmt.Sprintf(`code:
   backend: gitlet
   remote_credentials:
@@ -83,11 +83,11 @@ func TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt(t *testing.T) {
 					}
 					configRefuses = true
 				}
-				repo := code.RepoRef{ID: "web", Name: "web", Owner: owner.owner, Visibility: visibility}
+				repo := gitlet.RepoRef{ID: "web", Name: "web", Owner: owner.owner, Visibility: visibility}
 				// THE CHART ALONE, as the configuration reads it: no identity
 				// directory answers a Tier B validation, so a person's app is the
-				// push's to judge (code.MirrorSeatRefusal's noGitlet).
-				domainRefuses := code.MirrorSeatRefusal(as, repo, roster, false) != ""
+				// push's to judge (gitlet.MirrorSeatRefusal's noGitlet).
+				domainRefuses := gitlet.MirrorSeatRefusal(as, repo, roster, false) != ""
 				if configRefuses != domainRefuses {
 					t.Errorf("a push mirror of a repository owned by %s at visibility %s, as %s: validation "+
 						"refuses=%v, the domain refuses=%v", owner.yaml, visibility, as, configRefuses,

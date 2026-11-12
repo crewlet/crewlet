@@ -34,7 +34,7 @@
 --
 -- THE TABLES ARE CREATED AGAIN, EMPTY, RATHER THAN ALTERED: a primary key is
 -- no column ALTER TABLE adds. No release carries the code domain (the
--- domain's stated condition, code.RecordVersion), so no store anywhere holds a
+-- domain's stated condition, gitlet.RecordVersion), so no store anywhere holds a
 -- row of 0103 outside a development branch, and no build of this one reads a
 -- row keyed by the commit alone. 0103 and 0111 ARE NOT EDITED:
 -- `schema_migrations` keys on the filename, so a store that applied them

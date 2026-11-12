@@ -73,8 +73,8 @@ func TestEveryAlarmReadingFieldHasAProducer(t *testing.T) {
 	// function-valued field and a method on another package's type, so a walk
 	// that stopped following either would pass this by following something
 	// else.
-	for _, must := range []string{"code/cache.Cache.AlarmReading", "code/compact.Compactor.AlarmReading",
-		"code/mirror.Mirrors.AlarmReading"} {
+	for _, must := range []string{"gitlet/cache.Cache.AlarmReading", "gitlet/compact.Compactor.AlarmReading",
+		"gitlet/mirror.Mirrors.AlarmReading"} {
 		if !slices.Contains(walk.reached, must) {
 			t.Errorf("the walk did not reach %s through retention.code — the field-valued call or the "+
 				"cross-package method is no longer followed", must)
@@ -120,7 +120,7 @@ func TestTheReadingWalkJudgesAKnownTree(t *testing.T) {
 			t.Errorf("the walk missed the write of %s", field)
 		}
 	}
-	if !slices.Contains(walk.reached, "code/cache.Cache.Fill") {
+	if !slices.Contains(walk.reached, "gitlet/cache.Cache.Fill") {
 		t.Errorf("the walk reached %v, want the other package's method behind the field", walk.reached)
 	}
 }
@@ -523,7 +523,7 @@ type Reading struct {
 	Uncalled, Detached, Nowhere                                          int
 }
 `,
-	"internal/code/cache/cache.go": `package cache
+	"internal/gitlet/cache/cache.go": `package cache
 
 import "github.com/crewlet/crewlet/internal/statelog"
 
@@ -534,7 +534,7 @@ func (c *Cache) Fill(out *statelog.Reading) { out.OtherPackage = 1 }
 	"internal/engine/retention.go": `package engine
 
 import (
-	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 

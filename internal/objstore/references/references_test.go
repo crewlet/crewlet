@@ -12,9 +12,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -366,7 +366,7 @@ const twoClocks = 2 * objstore.AssumedClockSkew
 
 // A HOLD RECORD COVERS EVERY PASS IN FLIGHT (M3-decisions M3-O61). A turn that
 // takes its hold on a seat's scratch repository RECORDS it on the repository's
-// subject only where the repository has been idle code.HoldRecordAfter or more,
+// subject only where the repository has been idle gitlet.HoldRecordAfter or more,
 // by the holding node's clock read after the hold; under that it keeps the hold
 // in memory, or on its run row, alone — which the code-retention pass reads only
 // AFTER it has fixed its cutoff. That is safe only while a repository idle less
@@ -378,8 +378,8 @@ const twoClocks = 2 * objstore.AssumedClockSkew
 //
 // A SEAT'S BRANCH BY THE SAME ARGUMENT (M3-decisions M3-O61, M3-O64): a hold on
 // one is recorded only where the branch has gone unset
-// code.RefHoldRecordAfter or more, so the threshold and two clocks'
-// disagreement must not reach code.RefExpiry, the idle window it is defined
+// gitlet.RefHoldRecordAfter or more, so the threshold and two clocks'
+// disagreement must not reach gitlet.RefExpiry, the idle window it is defined
 // from.
 //
 // Mutations: HoldRecordAfter at 23 h — red; RefHoldRecordAfter at RefExpiry
@@ -387,17 +387,17 @@ const twoClocks = 2 * objstore.AssumedClockSkew
 func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 	t.Parallel()
 	shortest := 24 * time.Hour * time.Duration(config.CodeScratchIdleDaysFloor)
-	if reach := code.HoldRecordAfter + twoClocks; reach > shortest {
-		t.Errorf("an unrecorded hold may be taken on a repository idle up to %v (code.HoldRecordAfter) by a "+
+	if reach := gitlet.HoldRecordAfter + twoClocks; reach > shortest {
+		t.Errorf("an unrecorded hold may be taken on a repository idle up to %v (gitlet.HoldRecordAfter) by a "+
 			"clock up to %v (twice objstore.AssumedClockSkew) off the pass's, %v in all, past the shortest "+
 			"idle time a pass expires at (%v): a pass in flight could expire a repository a turn holds",
-			code.HoldRecordAfter, twoClocks, reach, shortest)
+			gitlet.HoldRecordAfter, twoClocks, reach, shortest)
 	}
-	if reach := code.RefHoldRecordAfter + twoClocks; reach > code.RefExpiry {
-		t.Errorf("an unrecorded hold may be taken on a seat's branch unset up to %v (code.RefHoldRecordAfter) "+
+	if reach := gitlet.RefHoldRecordAfter + twoClocks; reach > gitlet.RefExpiry {
+		t.Errorf("an unrecorded hold may be taken on a seat's branch unset up to %v (gitlet.RefHoldRecordAfter) "+
 			"by a clock up to %v (twice objstore.AssumedClockSkew) off the pass's, %v in all, past the idle "+
-			"window it is defined from (code.RefExpiry, %v): a deletion listed in flight could take a branch a "+
-			"turn holds", code.RefHoldRecordAfter, twoClocks, reach, code.RefExpiry)
+			"window it is defined from (gitlet.RefExpiry, %v): a deletion listed in flight could take a branch a "+
+			"turn holds", gitlet.RefHoldRecordAfter, twoClocks, reach, gitlet.RefExpiry)
 	}
 }
 
@@ -413,9 +413,9 @@ func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 // nobody's — and two nodes may disagree by twice objstore.AssumedClockSkew
 // while neither raises `clock_skew`. And the bound itself has to outlast the
 // slowest upload the engine accepts — the largest object any declaring domain
-// stores (a file of worklet.MaxFileBytes, a pack bundle of code.MaxPackBytes,
-// a part of a published layer of code.LayerPartBytes, a failed check's log of
-// code.MaxCheckLogBytes, an artifact's file or asset of
+// stores (a file of worklet.MaxFileBytes, a pack bundle of gitlet.MaxPackBytes,
+// a part of a published layer of gitlet.LayerPartBytes, a failed check's log of
+// gitlet.MaxCheckLogBytes, an artifact's file or asset of
 // artifacts.MaxTextFileBytes, an assistant conversation's file of
 // wire.FileMaxBytes, a sealed executor session of
 // executorkeep.SealedMaxBytes) at the objstore.MiBPace floor — or a legal
@@ -447,9 +447,9 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 		bytes int64
 	}{
 		{"worklet.MaxFileBytes", worklet.MaxFileBytes},
-		{"code.MaxPackBytes", code.MaxPackBytes},
-		{"code.LayerPartBytes", code.LayerPartBytes},
-		{"code.MaxCheckLogBytes", code.MaxCheckLogBytes},
+		{"gitlet.MaxPackBytes", gitlet.MaxPackBytes},
+		{"gitlet.LayerPartBytes", gitlet.LayerPartBytes},
+		{"gitlet.MaxCheckLogBytes", gitlet.MaxCheckLogBytes},
 		{"artifacts.MaxTextFileBytes", artifacts.MaxTextFileBytes},
 		{"wire.FileMaxBytes", wire.FileMaxBytes},
 		// A SESSION ON ITS SEALED BYTES: what a capture uploads is the
@@ -517,8 +517,8 @@ var retirements = map[string]retirement{
 	// the largest bundle a row can name may read it (ADR-0090), removed by
 	// the code-retention duty's retire_sweep records and held to that by
 	// internal/engine.TestARetirementIsSweptByARecordTheEngineRuns.
-	code.RetiredPackReferences.Table: {grace: code.RetireGrace, largest: code.MaxPackBytes,
-		sweep: "the code-retention duty's retire_sweep records (code.Store.RetireSweep)"},
+	gitlet.RetiredPackReferences.Table: {grace: gitlet.RetireGrace, largest: gitlet.MaxPackBytes,
+		sweep: "the code-retention duty's retire_sweep records (gitlet.Store.RetireSweep)"},
 }
 
 // retirementFaults is everything wrong with how declared's RETIRED tables are
@@ -588,7 +588,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 // the longest read of its object ends deletes the object under that read.
 //
 // GITLET'S RETIRED PACKS ARE THE FIRST, and their entry is measured
-// here: code.RetireGrace (24 h) against objstore.ReadBudget(code.MaxPackBytes)
+// here: gitlet.RetireGrace (24 h) against objstore.ReadBudget(gitlet.MaxPackBytes)
 // (21 h 21 min) plus the two hours the stamping broker and the sweeping node
 // may disagree by (twice objstore.AssumedClockSkew), which leaves 39 min. The
 // controls below show the gate fires on a retired declaration that lands

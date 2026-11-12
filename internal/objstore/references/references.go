@@ -100,8 +100,8 @@ package references
 import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -115,10 +115,10 @@ import (
 // sealed sessions a seat's executor runs continue from.
 var All = []objstore.ReferenceTable{
 	worklet.FileObjectReferences,
-	code.PackReferences,
-	code.RetiredPackReferences,
-	code.LayerReferences,
-	code.CheckLogReferences,
+	gitlet.PackReferences,
+	gitlet.RetiredPackReferences,
+	gitlet.LayerReferences,
+	gitlet.CheckLogReferences,
 	artifactsdomain.ObjectReferences,
 	artifactsdomain.AssetReferences,
 	artifactsdomain.BrandFileReferences,

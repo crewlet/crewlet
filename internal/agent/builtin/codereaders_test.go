@@ -11,8 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -172,7 +172,7 @@ func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 func TestTheReadersToolAnswersWhoReadAUnitRepository(t *testing.T) {
 	t.Parallel()
 	host := newGitletHost()
-	host.detail.Visibility = code.VisibilityUnit
+	host.detail.Visibility = gitlet.VisibilityUnit
 	elided := int64(3)
 	last := usage.RepoReader{PrincipalKind: "operator", Principal: "pat:jane-laptop", Seat: "founder", Via: "git",
 		Reads: 2, Bytes: 1 << 20}
@@ -200,8 +200,8 @@ func TestTheReadersToolAnswersWhoReadAUnitRepository(t *testing.T) {
 		t.Errorf("the answer is %+v, want the domain's page over the thirty days ending today", answer)
 	}
 	reads, _, _ := host.asked()
-	if len(reads) != 1 || reads[0].Kind != code.ReadRepo || reads[0].Fresh.Level != statelog.ReadLinearizable ||
-		reads[0].Asker != (code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:jane-laptop",
+	if len(reads) != 1 || reads[0].Kind != gitlet.ReadRepo || reads[0].Fresh.Level != statelog.ReadLinearizable ||
+		reads[0].Asker != (gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "pat:jane-laptop",
 			Seat: "founder"}) {
 		t.Errorf("the repository was read %+v, want once, by name, at linearizable, as the caller", reads)
 	}
@@ -240,7 +240,7 @@ func TestTheReadersToolAnswersWhoReadAUnitRepository(t *testing.T) {
 		}
 	}
 
-	host.detail.Visibility = code.VisibilityCompany
+	host.detail.Visibility = gitlet.VisibilityCompany
 	before := len(readers.asks())
 	got, err = tool.Call(asAdmin(), map[string]any{"repo": "site"})
 	if err != nil || got.Failed {

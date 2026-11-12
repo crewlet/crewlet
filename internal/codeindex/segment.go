@@ -113,7 +113,7 @@ var ErrMalformed = errors.New("codeindex: a file this build does not write; drop
 // the segment — and its writing; then each merge's tables; and beside them,
 // for its whole length, the tip's listing. Every segment it has written it
 // reads back through a MAPPING of its file and holds none of (the cache's
-// build, internal/code/cache), the segment itself streamed to its file
+// build, internal/gitlet/cache), the segment itself streamed to its file
 // (WriteSegment's writer buffers 64 KiB): the bound is the WHOLE build's
 // peak, at most 256 MiB (M6's sizing).
 //

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -239,10 +239,10 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	// listening. Run to the deadline itself, a wait's honest `behind`
 	// reached the asker after it had given up on this node, which then heard
 	// a lagging node as a wedged one: asked it last for suspectFor and told
-	// the placement it went unanswered. code.ReplyMargin is the one margin a
+	// the placement it went unanswered. gitlet.ReplyMargin is the one margin a
 	// serving node leaves, the committer's between a batch and its asker's
 	// deadline included.
-	ctx = statelog.WithReplyMargin(ctx, code.ReplyMargin)
+	ctx = statelog.WithReplyMargin(ctx, gitlet.ReplyMargin)
 	b, wrong, unserved := unservedCopy(ctx, s.local, spec)
 	if unserved {
 		// NOTHING RAN, so every class moves on — a page write

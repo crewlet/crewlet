@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -33,8 +33,8 @@ code:
 // THE CODE-RETENTION DUTY EXPIRES A SEAT'S IDLE BRANCH THROUGH THE ROUTER, AND
 // KEEPS ONE A PARKED RUN'S ROW HOLDS — the ref lifecycle as a node wires it:
 // the duty's pass proposes each deletion to the repository's committer through
-// the estate router (code.Retention.Propose) under the core's node id
-// (code.Retention.Node), and asks the engine's own reader of the live turns'
+// the estate router (gitlet.Retention.Propose) under the core's node id
+// (gitlet.Retention.Node), and asks the engine's own reader of the live turns'
 // holds — every run row whatever its status — which branches to keep
 // ([Engine.codeHolds]).
 //
@@ -53,19 +53,19 @@ func TestTheRetentionDutyExpiresAnIdleSeatBranchNoRunHolds(t *testing.T) {
 	)
 	// THE SEAT'S TWO BRANCHES, each an engine-built write of its turn.
 	for i, ref := range []string{idle, held} {
-		push := code.Proposal{PushID: uuid.Must(uuid.NewV7()).String(), RepoID: web.ID,
-			Principal: code.Principal{Kind: code.PrincipalAgent, Seat: "swe",
-				Run: code.RunProvenance{TurnID: "turn-1"}},
-			Via: code.ViaEngine, Node: e.id, ReceivedAt: time.Now().UTC(),
-			Commands: []code.Command{{Ref: ref, Old: code.ZeroOID, New: oidAt(i)}}}
+		push := gitlet.Proposal{PushID: uuid.Must(uuid.NewV7()).String(), RepoID: web.ID,
+			Principal: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
+				Run: gitlet.RunProvenance{TurnID: "turn-1"}},
+			Via: gitlet.ViaEngine, Node: e.id, ReceivedAt: time.Now().UTC(),
+			Commands: []gitlet.Command{{Ref: ref, Old: gitlet.ZeroOID, New: oidAt(i)}}}
 		res, err := e.router.Code().Propose(t.Context(), push)
-		if err != nil || res.Outcome != statelog.OutcomeApplied || res.Answer.Commands[0].Result != code.ResultOK {
+		if err != nil || res.Outcome != statelog.OutcomeApplied || res.Answer.Commands[0].Result != gitlet.ResultOK {
 			t.Fatalf("the seat's write of %s = %+v, %v", ref, res, err)
 		}
 	}
 	// A PARKED RUN'S ROW HOLDS ONE OF THEM.
 	row := sandbox.PendingRun{TurnID: "run-parked", AgentHandle: "elsewhere", Status: sandbox.StatusAwaiting,
-		CodeHolds: []string{code.RefHoldKey(web.ID, held)}}
+		CodeHolds: []string{gitlet.RefHoldKey(web.ID, held)}}
 	raw, err := json.Marshal(row)
 	if err != nil {
 		t.Fatal(err)
@@ -80,14 +80,14 @@ func TestTheRetentionDutyExpiresAnIdleSeatBranchNoRunHolds(t *testing.T) {
 	}
 	// A FORTNIGHT AND AN HOUR ON, by the pass's clock alone: the branches'
 	// broker instants cannot be moved.
-	d.pass.Now = func() time.Time { return time.Now().Add(code.RefExpiry + time.Hour) }
+	d.pass.Now = func() time.Time { return time.Now().Add(gitlet.RefExpiry + time.Hour) }
 	report, err := d.pass.Pass(t.Context())
 	if err != nil || report.RefsExpired != 1 || report.RefsHeld != 1 || len(report.ExpiryFailed) != 0 {
 		t.Fatalf("the pass = %+v, %v; want one branch expired and the held one kept", report, err)
 	}
-	answer, err := e.router.Code().ResolveRef(t.Context(), code.RefQuery{Repo: "web", Refs: []string{idle, held},
+	answer, err := e.router.Code().ResolveRef(t.Context(), gitlet.RefQuery{Repo: "web", Refs: []string{idle, held},
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}})
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}})
 	if err != nil || len(answer.Refs) != 2 {
 		t.Fatalf("resolve the seat's branches: %+v, %v", answer, err)
 	}

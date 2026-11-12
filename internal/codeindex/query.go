@@ -265,7 +265,7 @@ func wordRune(r rune) bool {
 }
 
 // PathFilter is a search's path: filters, matched against a file's path from
-// the repository's root as git names it ("internal/code/doc.go"). Its zero
+// the repository's root as git names it ("internal/gitlet/doc.go"). Its zero
 // value matches every path. A pattern reads as a .gitignore line does,
 // without its negation, escapes and classes:
 //
@@ -273,7 +273,7 @@ func wordRune(r rune) bool {
 //     and ? one character, neither ever a /; every other character is itself;
 //   - ** as a whole component is any number of components, none included;
 //   - a pattern that matches a directory matches every file below it, so
-//     internal/code is that directory's every file (and a file of that name);
+//     internal/gitlet is that directory's every file (and a file of that name);
 //   - a pattern with no / but at its end matches at any depth: *.go is every
 //     Go file, testdata every file under any directory of that name;
 //   - a leading / anchors such a pattern at the root (/Makefile), and any /

@@ -92,7 +92,7 @@ func TestAnUnknownCodeReadVia(t *testing.T) {
 
 // A MIRROR PUSH'S ACCOUNT IS BOUNDED, AND COUNTS THE WHOLE PUSH: a push
 // setting far more refs than an account names — a first push sets every ref
-// a mirror covers, up to code.MaxRefsPerRepo — each a name at
+// a mirror covers, up to gitlet.MaxRefsPerRepo — each a name at
 // gitref.MaxRefNameBytes made of the byte JSON escapes longest, beside as
 // many deletions and branches held back, announces the first
 // CodeMirrorPushedRefs of each list in ref order and every one in its count,

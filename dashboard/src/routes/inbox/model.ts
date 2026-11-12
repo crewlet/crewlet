@@ -582,7 +582,7 @@ export interface FindingCount {
  *
  * DRAWN FROM THE NOTICE ALONE, with no question per card: the engine reads
  * all of it with the inbox page, in the page's one snapshot
- * (`code.NoticeChange`), so a page of fifty cards is one read and a card
+ * (`gitlet.NoticeChange`), so a page of fifty cards is one read and a card
  * never says something the row beside it contradicts.
  */
 export interface ChangeCard {

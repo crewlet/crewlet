@@ -249,7 +249,7 @@ storage it already runs, takes the S3 backend.
 bytes grow with what its refs reach: a compaction merges its packs and keeps
 every object, and only an [expunge](gitlet.md#expunge) drops anything —
 what neither a ref, nor a ref's old tip force-pushed away or deleted within
-`code.PruneGrace` (two weeks), nor a row of work in flight reaches — weekly,
+`gitlet.PruneGrace` (two weeks), nor a row of work in flight reaches — weekly,
 once more than a quarter of the repository's live bytes and at least 64 MiB
 is unreachable, or at once on a person's purge, which keeps no grace; a
 deleted repository's own purge removes the rest. So a company's repositories

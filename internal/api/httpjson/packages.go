@@ -24,7 +24,7 @@ var goPackages = map[string]bool{
 	"backup": true, "backuptest": true, "brandformat": true, "brokertest": true, "builtin": true, "cache": true, "chain": true, "changefeed": true,
 	"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "chatlet": true, "checkrun": true, "edits": true,
 	"harness": true, "clientsource": true, "clocktest": true, "cloudflare": true,
-	"harnessprofile": true, "executor": true, "coalesce": true, "code": true, "codecluster": true, "codefault": true, "codeindex": true, "codesearch": true, "codetest": true, "colleague": true, "collect": true,
+	"harnessprofile": true, "executor": true, "coalesce": true, "gitlet": true, "gitletcluster": true, "gitletfault": true, "codeindex": true, "codesearch": true, "gitlettest": true, "colleague": true, "collect": true,
 	"compact": true, "config": true, "configapi": true, "configplane": true, "crewlet": true,
 	"confluence": true, "coord": true,
 	"coordtest": true, "costlimit": true, "credential": true, "cron": true,

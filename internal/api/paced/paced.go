@@ -33,7 +33,7 @@
 // git requests and responses — so two surfaces cannot hold one client to two
 // paces, and two copies of the rule cannot drift (ADR-0008).
 // TestOnePacingImplementation refuses a deadline set on a client's connection
-// anywhere else under internal/api or internal/code/host, the two places a
+// anywhere else under internal/api or internal/gitlet/host, the two places a
 // client's connection is served. The one other such deadline there is
 // httpjson.ReadBody's, which bounds a small body as a whole and is not a pace.
 //

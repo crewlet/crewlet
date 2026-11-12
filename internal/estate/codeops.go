@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // Gitlet's operations: a push's proposal, a compaction's, an expunge
@@ -25,31 +25,31 @@ import (
 // none of it.
 
 // CodeServer is the code half a data node serves, declared here by its
-// consumer with exactly the methods the operations below call. [code.Served]
+// consumer with exactly the methods the operations below call. [gitlet.Served]
 // satisfies it.
 type CodeServer interface {
-	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
-	ProposeCompaction(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
-	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
-	ProposeImport(ctx context.Context, p code.ImportProposal) (code.SyncResult, error)
-	ProposeMirrorSync(ctx context.Context, p code.MirrorSyncProposal) (code.SyncResult, error)
-	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
-	ProposeQueue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
-	ProposeMerge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error)
-	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
-	Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error)
-	PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
-	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
-	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
-	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
-	TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error)
-	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
-	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
+	Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error)
+	ProposeCompaction(ctx context.Context, p gitlet.CompactionProposal) (gitlet.CompactResult, error)
+	ProposeExpunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error)
+	ProposeImport(ctx context.Context, p gitlet.ImportProposal) (gitlet.SyncResult, error)
+	ProposeMirrorSync(ctx context.Context, p gitlet.MirrorSyncProposal) (gitlet.SyncResult, error)
+	ProposeChange(ctx context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error)
+	ProposeQueue(ctx context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error)
+	ProposeMerge(ctx context.Context, p gitlet.MergeProposal) (gitlet.MergeResult, error)
+	Converse(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error)
+	Mark(ctx context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error)
+	PublishChecks(ctx context.Context, r gitlet.ChecksRequest) (gitlet.ChecksResult, error)
+	Resolve(ctx context.Context, q gitlet.ResolveQuery) (gitlet.RepoRef, error)
+	Snapshot(ctx context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error)
+	PushOutcome(ctx context.Context, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	TurnsMovedCode(ctx context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error)
+	ResolveRef(ctx context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error)
+	Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
 }
 
 // ranNothing is a code half's error as the walk reads it: a half that refused
-// before anything was appended ([code.ErrNotServing] — a committer stopping, a
+// before anything was appended ([gitlet.ErrNotServing] — a committer stopping, a
 // node that publishes nothing, a refusal about THIS node: evicted, behind, a
 // record it cannot decode, below its floor, a log whose usage it could not
 // read — or a half with no reader) RAN
@@ -58,7 +58,7 @@ type CodeServer interface {
 // with no backend for the operation, its cause kept for the walk's account.
 // Every other error is the operation's answer.
 func ranNothing(err error) error {
-	if errors.Is(err, code.ErrNotServing) {
+	if errors.Is(err, gitlet.ErrNotServing) {
 		return declined{cause: err}
 	}
 	return err
@@ -72,13 +72,13 @@ func ranNothing(err error) error {
 // on the node that decides. Its caller is the host's receiver, once a push's
 // bundle is stored.
 var opCodePropose = define("code.propose", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.Proposal) (code.ProposeResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.Proposal) (gitlet.ProposeResult, error) {
 		if b.Code == nil {
-			return code.ProposeResult{}, errNoHalf
+			return gitlet.ProposeResult{}, errNoHalf
 		}
 		res, err := b.Code.Propose(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(func(p code.Proposal) string { return p.RepoID }).answeredOn(laneProposals)
+	}).keyedBy(func(p gitlet.Proposal) string { return p.RepoID }).answeredOn(laneProposals)
 
 // opCodeCompact is a compaction's proposal, asked of the repository's
 // COMMITTER exactly as a push's is — an IDEMPOTENT write keyed by its
@@ -89,13 +89,13 @@ var opCodePropose = define("code.propose", opIdempotentWrite, codeDomain, false,
 // its answer slot as a push's proposal does. No actor: a compaction is the
 // engine's own, recorded as the deciding node's system work.
 var opCodeCompact = define("code.compact", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.CompactionProposal) (code.CompactResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.CompactionProposal) (gitlet.CompactResult, error) {
 		if b.Code == nil {
-			return code.CompactResult{}, errNoHalf
+			return gitlet.CompactResult{}, errNoHalf
 		}
 		res, err := b.Code.ProposeCompaction(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(func(p code.CompactionProposal) string { return p.Compaction.RepoID }).answeredOn(laneProposals)
+	}).keyedBy(func(p gitlet.CompactionProposal) string { return p.Compaction.RepoID }).answeredOn(laneProposals)
 
 // opCodeExpunge is an expunge record's proposal — a person's purge request, or
 // the begin or the commit a repository's maintainer built — asked of the
@@ -109,13 +109,13 @@ var opCodeCompact = define("code.compact", opIdempotentWrite, codeDomain, false,
 // begin and a commit are the engine's own, recorded as the deciding node's
 // system work.
 var opCodeExpunge = define("code.expunge", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 		if b.Code == nil {
-			return code.ExpungeResult{}, errNoHalf
+			return gitlet.ExpungeResult{}, errNoHalf
 		}
 		res, err := b.Code.ProposeExpunge(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(code.ExpungeProposal.RepoID).answeredOn(laneProposals)
+	}).keyedBy(gitlet.ExpungeProposal.RepoID).answeredOn(laneProposals)
 
 // opCodeImport is one step of a repository's import — a chunk its home
 // fetched, or the import's end — asked of the repository's COMMITTER exactly
@@ -126,26 +126,26 @@ var opCodeExpunge = define("code.expunge", opIdempotentWrite, codeDomain, false,
 // repository's one queue beside its pushes. No actor: an import is the
 // engine's own, recorded as the deciding node's system work.
 var opCodeImport = define("code.import", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.ImportProposal) (code.SyncResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.ImportProposal) (gitlet.SyncResult, error) {
 		if b.Code == nil {
-			return code.SyncResult{}, errNoHalf
+			return gitlet.SyncResult{}, errNoHalf
 		}
 		res, err := b.Code.ProposeImport(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(code.ImportProposal.RepoID).answeredOn(laneProposals)
+	}).keyedBy(gitlet.ImportProposal.RepoID).answeredOn(laneProposals)
 
 // opCodeMirrorSync is one sync of a pull mirror its home fetched, asked of the
 // repository's COMMITTER as an import's step is: idempotent by its commands'
 // old values, which a sync landed falsifies, so its second asking is answered
 // stale. No actor: a sync is the engine's own.
 var opCodeMirrorSync = define("code.mirror_sync", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.MirrorSyncProposal) (code.SyncResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.MirrorSyncProposal) (gitlet.SyncResult, error) {
 		if b.Code == nil {
-			return code.SyncResult{}, errNoHalf
+			return gitlet.SyncResult{}, errNoHalf
 		}
 		res, err := b.Code.ProposeMirrorSync(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(code.MirrorSyncProposal.RepoID).answeredOn(laneProposals)
+	}).keyedBy(gitlet.MirrorSyncProposal.RepoID).answeredOn(laneProposals)
 
 // opCodeChange is a write of a change's lifecycle — an open, an edit, a draft's
 // state, a retarget, a close or a reopen — asked of the repository's COMMITTER
@@ -162,19 +162,19 @@ var opCodeMirrorSync = define("code.mirror_sync", opIdempotentWrite, codeDomain,
 // may push the branch an open is from, whether it maintains the repository a
 // change it does not own is on — and a write that mentions somebody holds the
 // mentions to it, so a node behind the company's configuration answers none of
-// either ([op.judgesGrant], code.ChangeProposal.JudgesChart, the committer's
+// either ([op.judgesGrant], gitlet.ChangeProposal.JudgesChart, the committer's
 // own rule), even asked last; a person's that mentions nobody consults no
 // chart. The committer holds the same line itself, as it does for a seat's
-// push (code.CommitterOptions.Current).
+// push (gitlet.CommitterOptions.Current).
 var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.ChangeProposal) (code.ChangeResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
 		if b.Code == nil {
-			return code.ChangeResult{}, errNoHalf
+			return gitlet.ChangeResult{}, errNoHalf
 		}
 		res, err := b.Code.ProposeChange(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(code.ChangeProposal.RepoID).answeredOn(laneProposals).
-	judgesGrant(code.ChangeProposal.JudgesChart)
+	}).keyedBy(gitlet.ChangeProposal.RepoID).answeredOn(laneProposals).
+	judgesGrant(gitlet.ChangeProposal.JudgesChart)
 
 // opCodeQueue is a write of a target's MERGE QUEUE — an enqueue of a change,
 // decided by its merge gate, or a dequeue of an entry, and the queue's own
@@ -195,19 +195,19 @@ var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 // since the merge gate each judges counts each approval by who may approve
 // the change, each owner's by the lead chain above it and a seat's merge
 // authority by its grant; and a seat's dequeue, whose grant says whether it
-// may take an entry out — is declared so (code.QueueProposal.JudgesChart, the
+// may take an entry out — is declared so (gitlet.QueueProposal.JudgesChart, the
 // committer's own rule), and a node behind the company's configuration
 // answers none of it ([op.judgesGrant]), even asked last; a person's dequeue
 // and the queue's other records consult no chart.
 var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.QueueProposal) (code.QueueResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.QueueProposal) (gitlet.QueueResult, error) {
 		if b.Code == nil {
-			return code.QueueResult{}, errNoHalf
+			return gitlet.QueueResult{}, errNoHalf
 		}
 		res, err := b.Code.ProposeQueue(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(code.QueueProposal.RepoID).answeredOn(laneProposals).
-	judgesGrant(code.QueueProposal.JudgesChart)
+	}).keyedBy(gitlet.QueueProposal.RepoID).answeredOn(laneProposals).
+	judgesGrant(gitlet.QueueProposal.JudgesChart)
 
 // opCodeMerge is a change's MERGE — one record that merges the change and
 // moves its target onto the commit its merge built, decided by its merge gate
@@ -223,23 +223,23 @@ var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
 // A WRITE THE CHART JUDGES, whoever asks — its merge gate counts each approval
 // by who may approve the change, each owner's by the lead chain above it and a
 // seat's merge authority by its grant — so it is declared so
-// (code.MergeProposal.JudgesChart, the committer's own rule), and a node
+// (gitlet.MergeProposal.JudgesChart, the committer's own rule), and a node
 // behind the company's configuration answers none of it ([op.judgesGrant]),
 // even asked last.
 var opCodeMerge = define("code.merge", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, p code.MergeProposal) (code.MergeResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, p gitlet.MergeProposal) (gitlet.MergeResult, error) {
 		if b.Code == nil {
-			return code.MergeResult{}, errNoHalf
+			return gitlet.MergeResult{}, errNoHalf
 		}
 		res, err := b.Code.ProposeMerge(ctx, p)
 		return res, ranNothing(err)
-	}).keyedBy(code.MergeProposal.RepoID).answeredOn(laneProposals).
-	judgesGrant(code.MergeProposal.JudgesChart)
+	}).keyedBy(gitlet.MergeProposal.RepoID).answeredOn(laneProposals).
+	judgesGrant(gitlet.MergeProposal.JudgesChart)
 
 // opCodeConversation is a write of a change's CONVERSATION — an ask for review,
 // a comment or a thread's resolution — asked of the repository's COMMITTING
 // data node, keyed by the repository as a change's lifecycle is, and answered
-// there by its change writer (code.ChangeWriter), which publishes it on the
+// there by its change writer (gitlet.ChangeWriter), which publishes it on the
 // change's own subject, never in the committer's queue: an IDEMPOTENT write
 // keyed by its operation id, which its asker minted once and the domain's
 // operation ledger collapses (a comment's id is derived from it, so no retry
@@ -255,23 +255,23 @@ var opCodeMerge = define("code.merge", opIdempotentWrite, codeDomain, false,
 // each reviewer is judged by the chart, and the home's own record of a
 // revision's facts or a change's mergeability, whose path owners and whose
 // readiness the chart judges — is declared so
-// (code.ConversationWrite.JudgesChart, the writer's own rule), and a node
+// (gitlet.ConversationWrite.JudgesChart, the writer's own rule), and a node
 // behind the company's configuration answers none of it, even asked last; a
 // person's comment consults no chart.
 var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, w code.ConversationWrite) (code.ConversationResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
 		if b.Code == nil {
-			return code.ConversationResult{}, errNoHalf
+			return gitlet.ConversationResult{}, errNoHalf
 		}
 		res, err := b.Code.Converse(ctx, w)
 		return res, ranNothing(err)
-	}).keyedBy(code.ConversationWrite.RepoID).answeredOn(laneProposals).
-	judgesGrant(code.ConversationWrite.JudgesChart)
+	}).keyedBy(gitlet.ConversationWrite.RepoID).answeredOn(laneProposals).
+	judgesGrant(gitlet.ConversationWrite.JudgesChart)
 
 // opCodeMark is a person's gesture over their own code notices — a notice
 // read, unread, snoozed or unsnoozed, their position on the code log read
 // through, their primary reasons — published on the person's own subject by
-// WHICHEVER DATA NODE IT IS ASKED OF (code.Marks): UNKEYED, since a mark
+// WHICHEVER DATA NODE IT IS ASKED OF (gitlet.Marks): UNKEYED, since a mark
 // contends with nothing but the same person's other marks, which the broker
 // arbitrates on that subject, and no repository's committer has a reason to
 // decide it. An IDEMPOTENT write keyed by its operation id, which its asker
@@ -285,19 +285,19 @@ var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDoma
 // current one would, and refusing it there would only send a person's
 // gesture round the walk for nothing.
 var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, w code.MarkWrite) (code.MarkResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 		if b.Code == nil {
-			return code.MarkResult{}, errNoHalf
+			return gitlet.MarkResult{}, errNoHalf
 		}
 		res, err := b.Code.Mark(ctx, w)
 		return res, ranNothing(err)
-	}).judgesGrant(func(code.MarkWrite) bool { return false })
+	}).judgesGrant(func(gitlet.MarkWrite) bool { return false })
 
 // opCodeChecks is a write of a repository's CHECKS — an attempt queued by the
 // repository's home, a claim of one by the Gitlet node that runs it, its holder's
 // naming of the box it made, an attempt's ending — asked of the repository's
 // COMMITTING data node, keyed by the repository as a push is, and answered
-// there by its checks writer (code.ChecksWriter), which publishes it on the
+// there by its checks writer (gitlet.ChecksWriter), which publishes it on the
 // repository's checks subject, never in the committer's queue, one write of a
 // repository's checks at a time: so a second claim of an attempt is refused
 // before it appends, and a Gitlet node never publishes a check's record. An
@@ -314,34 +314,34 @@ var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 // A SEAT'S RERUN JUDGES ITS GRANT from the deciding node's chart — whether it
 // may write the repository or wrote the change the check judges, and
 // whoever its turn works for — so it is declared so
-// (code.ChecksRequest.JudgesChart, the writer's own rule), and a node behind
+// (gitlet.ChecksRequest.JudgesChart, the writer's own rule), and a node behind
 // the company's configuration answers none of it ([op.judgesGrant]), even
 // asked last; a person's rerun and report, and the engine's own records,
 // consult no chart.
 var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, r code.ChecksRequest) (code.ChecksResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, r gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
 		if b.Code == nil {
-			return code.ChecksResult{}, errNoHalf
+			return gitlet.ChecksResult{}, errNoHalf
 		}
 		res, err := b.Code.PublishChecks(ctx, r)
 		return res, ranNothing(err)
-	}).keyedBy(code.ChecksRequest.RepoID).answeredOn(laneProposals).
-	judgesGrant(code.ChecksRequest.JudgesChart)
+	}).keyedBy(gitlet.ChecksRequest.RepoID).answeredOn(laneProposals).
+	judgesGrant(gitlet.ChecksRequest.JudgesChart)
 
 // proposalAnswers is how many proposals a data node answers at once, on the
 // lane they have to themselves ([laneProposals]): 3 136, EVERY ANSWER THE
 // NODE'S CODE HALF HOLDS AT ONCE, summed over the three that answer on it —
 // what its committer holds across every repository
-// (code.CommitterNodeProposals: one repository's full queue and the batch in
+// (gitlet.CommitterNodeProposals: one repository's full queue and the batch in
 // flight ahead of it, 1 088), what its change writer holds across every change
-// (code.ChangeWriterNodeWrites, 1 024) and what its checks writer holds across
-// every repository (code.ChecksWriterNodeWrites, 1 024). A request holds its
+// (gitlet.ChangeWriterNodeWrites, 1 024) and what its checks writer holds across
+// every repository (gitlet.ChecksWriterNodeWrites, 1 024). A request holds its
 // slot for as long as its component holds it — a push while it waits in its
 // repository's queue and its batch runs, a write of a change's conversation or
 // of a repository's checks while it waits for its key's turn and its publish
 // runs — so each component refuses busy AT ONCE past its own node-wide count,
-// and past its bytes (code.CommitterNodeBytes, code.ChangeWriterNodeBytes,
-// code.ChecksWriterNodeBytes) and its per-key bounds before that, and a slot is
+// and past its bytes (gitlet.CommitterNodeBytes, gitlet.ChangeWriterNodeBytes,
+// gitlet.ChecksWriterNodeBytes) and its per-key bounds before that, and a slot is
 // held for long only by a write its component is deciding or will decide
 // inside its asker's attempt. With the lane as wide as the three counts
 // together, the bound a burst meets is always its component's own, answered at
@@ -359,23 +359,23 @@ var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
 // What a slot costs is a goroutine and the request it carries, a kilobyte or
 // two for an ordinary push or comment: a full lane of them is some tens of
 // megabytes of stacks. The largest push the code domain admits weighs about a
-// mebibyte (code.EntryRoom: some six hundred commands at the longest ref JSON
+// mebibyte (gitlet.EntryRoom: some six hundred commands at the longest ref JSON
 // spells six times over — a thousand at the longest plain ref, and a full list
 // of the commits it introduced, weigh about 440 KiB), and so does the largest
-// write of a conversation (code.MaxConversationBytes, a review with its
+// write of a conversation (gitlet.MaxConversationBytes, a review with its
 // findings), and those their components bound by their bytes, so a full lane
 // of large ones holds what each component's node bytes admit and answers the
 // rest busy at once. And every proposal is a push some receiving node's
 // receive-pack holds open while it waits, so what reaches the lane at once is
 // bounded by the fleet's transfer lanes as well.
-const proposalAnswers = code.CommitterNodeProposals + code.ChangeWriterNodeWrites + code.ChecksWriterNodeWrites
+const proposalAnswers = gitlet.CommitterNodeProposals + gitlet.ChangeWriterNodeWrites + gitlet.ChecksWriterNodeWrites
 
 // opCodeResolve is a repository by its name: the host's admission of every git
 // request.
 var opCodeResolve = define("code.resolve", opRead, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.ResolveQuery) (code.RepoRef, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.ResolveQuery) (gitlet.RepoRef, error) {
 		if b.Code == nil {
-			return code.RepoRef{}, errNoHalf
+			return gitlet.RepoRef{}, errNoHalf
 		}
 		ref, err := b.Code.Resolve(ctx, q)
 		return ref, ranNothing(err)
@@ -383,14 +383,14 @@ var opCodeResolve = define("code.resolve", opRead, codeDomain, false,
 
 // opCodeRepoState is one page of a repository's snapshot — its packs and refs,
 // whole or since a position: a Gitlet node's cache sync. ANSWERED WHOLE
-// ([op.answeredWhole]), because a page's cursor (code.RepoSnapshot.Next) is the
+// ([op.answeredWhole]), because a page's cursor (gitlet.RepoSnapshot.Next) is the
 // next page's request: a member a newer data node put in it and this build
 // would drop is a snapshot paged on by a cursor that no longer says where it
 // stands, so it is refused rather than paged on.
 var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.StateQuery) (code.RepoSnapshot, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.StateQuery) (gitlet.RepoSnapshot, error) {
 		if b.Code == nil {
-			return code.RepoSnapshot{}, errNoHalf
+			return gitlet.RepoSnapshot{}, errNoHalf
 		}
 		snap, err := b.Code.Snapshot(ctx, q)
 		return snap, ranNothing(err)
@@ -399,15 +399,15 @@ var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 // opCodePushOutcome is what became of one push: the receiver's wait on a push
 // whose record resolved pending or unknown.
 var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.OutcomeQuery) (code.PushOutcome, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error) {
 		if b.Code == nil {
-			return code.PushOutcome{}, errNoHalf
+			return gitlet.PushOutcome{}, errNoHalf
 		}
 		out, err := b.Code.PushOutcome(ctx, q)
 		return out, ranNothing(err)
 	})
 
-// opCodeRead is a read of Gitlet by its kind (code.ReadKinds): the REST
+// opCodeRead is a read of Gitlet by its kind (gitlet.ReadKinds): the REST
 // routes' repository listing, one repository's detail and its push history,
 // which the operator's CLI reads too; an executor run's pushes, which the
 // engine reads when it collects the run; a repository's refs; a listing of
@@ -424,7 +424,7 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // every readable repository's since a moment — and one attempt whole, each held
 // to the grant on its repository; one attempt by its key (check_box), the read
 // a check's box's admission makes on every request the box sends to /box/git/
-// or /box/gitlet/ (internal/code/host's checkadmit.go); the attempts waiting for
+// or /box/gitlet/ (internal/gitlet/host's checkadmit.go); the attempts waiting for
 // a runner in one cell, oldest queued first (checks_queued), and those runners
 // hold (checks_running); the change heads a repository's home owes a dispatch
 // of their checks (checks_due); the live entries of a repository's merge queues
@@ -434,13 +434,13 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // one repository's entries, which its home's queue works from (queue_due); and
 // a repository's push mirror with the green rows it publishes, read in one
 // snapshot by the home that pushes it (mirror_push). A seat's read on a node
-// that holds no chart is that node's code.ErrNotServing — it ran nothing — so
+// that holds no chart is that node's gitlet.ErrNotServing — it ran nothing — so
 // the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
-// repositories it lists, and whether it reads one: code.JudgeRead) — and the
+// repositories it lists, and whether it reads one: gitlet.JudgeRead) — and the
 // grant of the seat it reads for, which rides only beside a seat's asker
-// (code.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
+// (gitlet.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
 // person's or a token's consults no chart, and the engine's own reads name no
 // asker at all — a `run_pushes` page, an `introduced` page, a `branch_changes`
@@ -452,20 +452,20 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // them, which a node behind the company's configuration may therefore answer,
 // since the attempt's row it reads is the box's authority and no chart judges
 // it. A push mirror's read is the home's, which judges the seat it pushes as
-// itself (code.MirrorSeatRefusal).
+// itself (gitlet.MirrorSeatRefusal).
 var opCodeRead = define("code.read", opRead, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 		if b.Code == nil {
-			return code.ReadAnswer{}, errNoHalf
+			return gitlet.ReadAnswer{}, errNoHalf
 		}
 		answer, err := b.Code.Read(ctx, q)
 		return answer, ranNothing(err)
-	}).judgesGrant(func(q code.ReadQuery) bool { return q.Asker.Kind == code.PrincipalAgent })
+	}).judgesGrant(func(q gitlet.ReadQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
 
 // opCodeTurnsMoved is which of a set of turns pushed, opened a change or gave
 // a review: the advisor's read, which names no asker.
 var opCodeTurnsMoved = define("code.turns_moved", opRead, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.TurnsMovedQuery) (map[string]bool, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.TurnsMovedQuery) (map[string]bool, error) {
 		if b.Code == nil {
 			return nil, errNoHalf
 		}
@@ -479,20 +479,20 @@ var opCodeTurnsMoved = define("code.turns_moved", opRead, codeDomain, false,
 // seat's resolve judges its grant on the repository as a read of it does, so
 // it is declared to ([op.judgesGrant]).
 var opCodeResolveRef = define("code.resolve_ref", opRead, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.RefQuery) (code.RefAnswer, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 		if b.Code == nil {
-			return code.RefAnswer{}, errNoHalf
+			return gitlet.RefAnswer{}, errNoHalf
 		}
 		answer, err := b.Code.ResolveRef(ctx, q)
 		return answer, ranNothing(err)
-	}).judgesGrant(func(q code.RefQuery) bool { return q.Asker.Kind == code.PrincipalAgent })
+	}).judgesGrant(func(q gitlet.RefQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
 
 // opCodeLifecycle is one repository-lifecycle request — a tool's create,
 // rename, settings change, archive, unarchive, delete, restore or protection,
 // or a live turn's hold — decided by any data node whose code copy serves.
 // IDEMPOTENT BY THE REQUEST'S OP ID: the domain's operation ledger vouches for
 // a repeat, and a create derives its repository's id from it
-// (code.RepoIDOf), so an unanswered request is asked again of the next node
+// (gitlet.RepoIDOf), so an unanswered request is asked again of the next node
 // under the same id. No actor of the estate's own: the asker travels INSIDE
 // the request, checked by its Validate on the node that decides.
 //
@@ -501,51 +501,51 @@ var opCodeResolveRef = define("code.resolve_ref", opRead, codeDomain, false,
 // company's configuration answers none of it, asked first or asked last
 // ([op.judgesGrant], a predicate true of every request): the revision it
 // failed to apply may be the one that took the grant away. The lifecycle
-// store's own code.StoreOptions.Current holds the in-process call to the same
+// store's own gitlet.StoreOptions.Current holds the in-process call to the same
 // rule.
 var opCodeLifecycle = define("code.lifecycle", opIdempotentWrite, codeDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, r code.LifecycleRequest) (code.LifecycleResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 		if b.Code == nil {
-			return code.LifecycleResult{}, errNoHalf
+			return gitlet.LifecycleResult{}, errNoHalf
 		}
 		res, err := b.Code.Lifecycle(ctx, r)
 		return res, ranNothing(err)
-	}).judgesGrant(func(code.LifecycleRequest) bool { return true })
+	}).judgesGrant(func(gitlet.LifecycleRequest) bool { return true })
 
 // opCodeGitRead is one server-side read of a repository by object id — a tree,
 // a file's lines, a diff, a comparison — asked of the repository's HOME Gitlet
 // node first, then its runner-up (ADR-0089), on the git lane, each attempt
 // stamped with whether the node asked is the walk's effective home
-// (code.GitQuery.Home), the one node a walk lets fill a copy. A Gitlet node that
-// cannot answer for a reason about itself (code.ErrGitUnready) ran nothing
+// (gitlet.GitQuery.Home), the one node a walk lets fill a copy. A Gitlet node that
+// cannot answer for a reason about itself (gitlet.ErrGitUnready) ran nothing
 // about the repository's content, and the walk asks the next without demoting
 // it ([gitUnready]). The Gitlet node judges a seat's grant itself, and refuses a
 // seat where it is behind its configuration, so the operation declares no
 // grant here.
 var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.GitQuery) (code.GitAnswer, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 		if b.Git == nil {
-			return code.GitAnswer{}, errNoHalf
+			return gitlet.GitAnswer{}, errNoHalf
 		}
 		answer, err := b.Git.Read(ctx, q)
 		return answer, gitUnready(err)
-	}).keyedOnGit(func(q code.GitQuery) string { return q.RepoID },
-	func(q code.GitQuery, home bool) code.GitQuery {
+	}).keyedOnGit(func(q gitlet.GitQuery) string { return q.RepoID },
+	func(q gitlet.GitQuery, home bool) gitlet.GitQuery {
 		q.Home = home
 		return q
 	}).answeredOn(laneGitReads)
 
 // opCodeMergePreview is one MERGE PREVIEW — what merging one commit of a
 // repository into another would do, a comparison's preview
-// (code.MergePreviewQuery) — asked as a read by object id is: of the
+// (gitlet.MergePreviewQuery) — asked as a read by object id is: of the
 // repository's HOME Gitlet node first, then its runner-up (ADR-0089), on the git
 // reads' lane, each attempt stamped with whether the node asked is the walk's
-// effective home (code.MergePreviewQuery.Home), the one node a walk lets fill
+// effective home (gitlet.MergePreviewQuery.Home), the one node a walk lets fill
 // a copy. The Gitlet node answers it by THE merge a repository's home records a
-// change's mergeability by (internal/code/home's Previews), written into a
+// change's mergeability by (internal/gitlet/home's Previews), written into a
 // scratch of its own and never its cache, so a preview and the change it would
 // open say one thing. A Gitlet node that cannot answer for a reason about itself
-// (code.ErrGitUnready) ran nothing about the repository's content, and the walk
+// (gitlet.ErrGitUnready) ran nothing about the repository's content, and the walk
 // asks the next without demoting it ([gitUnready]). The Gitlet node judges a
 // seat's grant itself, and refuses a seat where it is behind its
 // configuration, so the operation declares no grant here, as a read's
@@ -555,14 +555,14 @@ var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
 // takes no versionedFields row; the envelope evolves as every operation's
 // does, additive only.
 var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
-	func(ctx context.Context, b Backend, _ *Actor, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
 		if b.Git == nil {
-			return code.MergePreviewAnswer{}, errNoHalf
+			return gitlet.MergePreviewAnswer{}, errNoHalf
 		}
 		answer, err := b.Git.MergePreview(ctx, q)
 		return answer, gitUnready(err)
-	}).keyedOnGit(func(q code.MergePreviewQuery) string { return q.RepoID },
-	func(q code.MergePreviewQuery, home bool) code.MergePreviewQuery {
+	}).keyedOnGit(func(q gitlet.MergePreviewQuery) string { return q.RepoID },
+	func(q gitlet.MergePreviewQuery, home bool) gitlet.MergePreviewQuery {
 		q.Home = home
 		return q
 	}).answeredOn(laneGitReads)
@@ -574,14 +574,14 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // runner-up (ADR-0089): the home's copy is the one the repository's reads keep
 // warm, so a write is built where its objects already are. Each attempt is
 // stamped with whether the node asked is the walk's effective home
-// (code.EngineWrite.Home), the one node a walk lets fill a copy, as a read's
+// (gitlet.EngineWrite.Home), the one node a walk lets fill a copy, as a read's
 // is; on a lane of its own ([laneGitWrites]); held to [GitWriteAttempt] — or,
 // for a kind whose build is given longer, its kind's attempt
 // ([Timing.GitWriteAttemptFor]: a merge_change's, which lands as ONE MERGE
 // RECORD rather than a push, the merge's own build budget in place of a
 // push's).
 //
-// IDEMPOTENT BY ITS PUSH ID (code.WritePushID of the write's operation): a
+// IDEMPOTENT BY ITS PUSH ID (gitlet.WritePushID of the write's operation): a
 // home that went silent may have landed it, and the runner-up asked the same
 // write builds the same push — the same commit, byte for byte — and is
 // answered from the row the silent node's landing wrote, or, racing it,
@@ -589,9 +589,9 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // [opIdempotentWrite], asked of the next Gitlet node after one that went silent
 // as after one that ran nothing. A Gitlet node that RAN NOTHING about this node's
 // own state — Gitlet stopping there, or holding no epoch or no seat to sign
-// the commit by (code.ErrNotServing) — is declined ([ranNothing]) and asked
+// the commit by (gitlet.ErrNotServing) — is declined ([ranNothing]) and asked
 // last for it for [suspectFor]; one that could not build it inside its budget
-// for a reason about itself (code.ErrGitUnready) is moved on from without
+// for a reason about itself (gitlet.ErrGitUnready) is moved on from without
 // demotion ([gitUnready]). Every other answer, a refusal of the change or of
 // the push among them, is the write's. The Gitlet node judges a seat's grant
 // itself, and answers a seat `behind_config` where it is behind its
@@ -603,16 +603,16 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // own — so this operation takes no versionedFields row; the envelope evolves
 // as every operation's does, additive only.
 var opCodeGitWrite = define("code.git_write", opIdempotentWrite, GitCopy, false,
-	func(ctx context.Context, b Backend, _ *Actor, w code.EngineWrite) (code.EngineWriteResult, error) {
+	func(ctx context.Context, b Backend, _ *Actor, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 		if b.Git == nil {
-			return code.EngineWriteResult{}, errNoHalf
+			return gitlet.EngineWriteResult{}, errNoHalf
 		}
 		res, err := b.Git.Write(ctx, w)
 		return res, gitUnready(ranNothing(err))
-	}).keyedOnGit(func(w code.EngineWrite) string { return w.RepoID },
-	func(w code.EngineWrite, home bool) code.EngineWrite {
+	}).keyedOnGit(func(w gitlet.EngineWrite) string { return w.RepoID },
+	func(w gitlet.EngineWrite, home bool) gitlet.EngineWrite {
 		w.Home = home
 		return w
-	}).attemptBy(func(w code.EngineWrite, t Timing) time.Duration {
+	}).attemptBy(func(w gitlet.EngineWrite, t Timing) time.Duration {
 	return t.GitWriteAttemptFor(w.Kind)
 }).answeredOn(laneGitWrites)

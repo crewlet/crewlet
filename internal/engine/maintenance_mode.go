@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -550,11 +550,11 @@ type writeSides struct {
 	tracker   *worklet.Writer
 	pages     *doclet.Store
 	chat      *chatlet.Store
-	committer *code.Committer
-	changes   *code.ChangeWriter
-	checks    *code.ChecksWriter
-	marks     *code.Marks
-	code      *code.Store
+	committer *gitlet.Committer
+	changes   *gitlet.ChangeWriter
+	checks    *gitlet.ChecksWriter
+	marks     *gitlet.Marks
+	code      *gitlet.Store
 }
 
 // writeSide is this node's own write authorities, each nil where the runtime

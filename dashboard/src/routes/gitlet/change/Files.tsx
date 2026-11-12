@@ -10,7 +10,7 @@
  * (`code_change` parts `files`, `diff` and `findings`): the diff from the base
  * the revision's facts record — or, with `since=`, what changed since an
  * earlier revision — and each finding placed by the engine's one rule
- * (`code.PlaceFindings`), which a seat's own `code_get_change` reads by too.
+ * (`gitlet.PlaceFindings`), which a seat's own `code_get_change` reads by too.
  * So a seat and a screen are shown one diff and one finding on one line; the
  * page compares and moves nothing itself.
  *

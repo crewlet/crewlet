@@ -3,7 +3,7 @@
 -- A landing on a protected branch (code_landings, 0110) lies above its
 -- target's green row until a check of a tip proves it — a merge a person's
 -- override landed, a person's own push — and the repository's home owes the
--- target its TIP WORK until then (internal/code's tipwork.go, ADR-0098): a
+-- target its TIP WORK until then (internal/gitlet's tipwork.go, ADR-0098): a
 -- check of the newest landing, the green row moved onto it, or a bisect of a
 -- red tip over the landings down to the first one its checks failed on. 0110
 -- left the landings to their key alone, which answers ONE target's landings

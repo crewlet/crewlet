@@ -68,7 +68,7 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 
 // compactAnswer is [jsonAnswer] for an answer that is a PAGE something below
 // this package cut by its own encoded bytes — a Gitlet node's read by object id,
-// at most code.MaxGitAnswerBytes of compact JSON — and every answer of the
+// at most gitlet.MaxGitAnswerBytes of compact JSON — and every answer of the
 // family such pages belong to (the code tools).
 //
 // COMPACT, BECAUSE THAT IS WHAT THE PAGE WAS MEASURED IN. Indenting grows an
@@ -77,7 +77,7 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 // half again, and a page cut to fit the tool answer at the Gitlet node arrives
 // here past it and is refused for its indentation. Compact, the page is the
 // bytes the Gitlet node counted plus what the tool wraps round it, which is the
-// bound code.MaxGitAnswerBytes leaves room for.
+// bound gitlet.MaxGitAnswerBytes leaves room for.
 func compactAnswer(v any, narrowWith string) (tools.Result, error) {
 	// HELD TO THE SAME DECLARATION AS [jsonAnswer]: a compact page is still a
 	// tool's answer, and a record declaring a field somebody else wrote goes

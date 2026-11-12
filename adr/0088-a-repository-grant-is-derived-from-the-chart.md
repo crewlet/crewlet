@@ -1,8 +1,8 @@
 # ADR-0088: A repository grant is derived from the chart
 
 - **Status:** accepted
-- **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitletNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, `internal/code.TestAnAgentCannotLoosenAGate`, `internal/code.TestAnAgentMayTightenAGate`, `internal/code.TestEveryGateFieldIsJudged`, `internal/code.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/code.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/code.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/code.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, and the Gitlet fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
+- **Authority:** `internal/gitlet`
+- **Enforced-by:** `internal/gitlet.TestGrantsFollowTheChart`, `internal/gitlet.TestAPersonsGrantAsksNoRoster`, `internal/gitlet.TestRefRuleTable`, `internal/gitlet.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/gitlet/host.TestAnUnboundTokenCannotPush`, `internal/gitlet/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/gitlet/query.TestAGitletNodeBehindItsConfigurationServesNoSeat`, `internal/gitlet.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/gitlet.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/gitlet/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/gitlet.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/gitlet.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/gitlet.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/gitlet.TestAnAgentCannotLoosenAProtection`, `internal/gitlet.TestEveryProtectionControlIsJudged`, `internal/gitlet.TestAnAgentCannotLoosenAGate`, `internal/gitlet.TestAnAgentMayTightenAGate`, `internal/gitlet.TestEveryGateFieldIsJudged`, `internal/gitlet.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/gitlet.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/gitlet.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/gitlet/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/gitlet.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/gitlet.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, and the Gitlet fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -22,16 +22,16 @@ beside a directory of its own name (`ref_conflict`: no clone can hold a file and
 branch named `seats` would block every seat's namespace and one named `seats/<x>` the namespace of the seat `x`.
 Both shapes are `gitref`'s (`SeatsRoot`, `ReservedSeatBranch`), the one grammar the decide and the configuration
 read (ADR-0008). The grant is judged by the node that answers or decides, from ITS epoch's chart, through one
-function (`code.GrantOf`); M2's protection rules are judged after it and are never skipped for a grant. A seat's
+function (`gitlet.GrantOf`); M2's protection rules are judged after it and are never skipped for a grant. A seat's
 PUSH is held to it at the decide, by the repository's committer from its own chart, command by command before
 anything about the ref is read (`not_permitted`, recorded like every verdict on a command); and a seat outside a
 repository's owning unit — its relation below write, so it pushes only into its own namespace there — may fill
-at most half of the repository's refs and bytes (`code.OutsideSeatShare`), so its owners always keep half. A node
+at most half of the repository's refs and bytes (`gitlet.OutsideSeatShare`), so its owners always keep half. A node
 CONFIRMED behind the company's configuration — shed or stuck, never lag alone — judges no seat's grant at all,
 even as the last node left to ask, since the revision it failed to apply may be the one that revoked it: a data
 node answers such a read `behind_config` (the estate's `judgesGrant` declaration, on every operation whose asker
 is a seat), a Gitlet node answers it unready and a committer hands a seat's push to the repository's next committer
-(`code.CommitterOptions.Current`), so a current node answers instead, or nobody does, while a person's read and
+(`gitlet.CommitterOptions.Current`), so a current node answers instead, or nobody does, while a person's read and
 push consult no chart and are answered there as before. The window in which a stale chart can still judge is the
 control plane's confirmation of the lag: about a minute after an activation at worst.
 
@@ -39,29 +39,29 @@ A protection binds every seat, a unit's lead included: removing or loosening one
 maintains a repository a tool made may add a protection rule to it or tighten one; a seat's request that removes
 the rule a pattern holds, or opens any control of it — `direct_push` made to admit more (`none` → `persons`),
 `allow_force` or `allow_delete` turned on, its merge gate removed or loosened, and every control a later field of
-the rule adds — is refused `not_permitted` whatever its grant (`code.loosenings`, which weighs a gate field by
-field through `code.MergeGate.LoosenedBy`, so a seat adds a gate to a rule that has none and raises any field of
+the rule adds — is refused `not_permitted` whatever its grant (`gitlet.loosenings`, which weighs a gate field by
+field through `gitlet.MergeGate.LoosenedBy`, so a seat adds a gate to a rule that has none and raises any field of
 one, and only a person lowers one), judged against the rule the repository's rows hold for the pattern inside the
 lifecycle decide's one snapshot, so two requests cannot loosen a rule between them. Where a rule's gate sets
 `owners_approve`, the repository's path owners are whom a merge waits for, so a seat's settings change that takes a
-glob from one, or an owner whole, is a loosening too (`code.gatingOwnersTaken`). A person's request is unaffected,
+glob from one, or an owner whole, is a loosening too (`gitlet.gatingOwnersTaken`). A person's request is unaffected,
 and a repository `code.repos` declares takes no tool's request at all.
 
 A seat's read made inside a turn somebody woke is decided AGAIN for whoever woke it — the requester ceiling
 (`authz.DecideWithin`) on a repository's grant. The tool's own row is asked for the requester first, so a turn a
 stranger woke, or a person who may not act in the company now, reads nothing, and a person, who maintains
-everywhere, bounds nothing; a colleague SEAT rides on every read the turn makes (`code.ReadQuery.CeilingSeat`
+everywhere, bounds nothing; a colleague SEAT rides on every read the turn makes (`gitlet.ReadQuery.CeilingSeat`
 and its siblings on the resolve and the read by object id) and is judged by the node that answers, from the same
-chart and row, through one function (`code.JudgeRead`): served only what both seats may read, and refused
+chart and row, through one function (`gitlet.JudgeRead`): served only what both seats may read, and refused
 `ErrAboveCeiling`, never `ErrNotPermitted`, where the colleague may not. Never judged where the turn runs: a
 ceiling judged once a turn would keep reading for a colleague an activation had shut out. A tool that reads
 repositories beside a view of its own — `code_status`, the health grant's — holds those reads to the same
 ceiling, its requester decided on Gitlet's read verb (`code.read`) rather than on its own row, which
 grants a view of the deployment that the ceiling does not bound.
 
-A seat's WRITE made inside a turn somebody woke is decided again for them too (`code.WriteCeiling`), on the
+A seat's WRITE made inside a turn somebody woke is decided again for them too (`gitlet.WriteCeiling`), on the
 repository's grant at the relation the write needs, by the node that decides the write and from the same chart
-and row: an engine write by its Gitlet node, the seat's grant held to the requester's (`code.Grant.Under`), and a
+and row: an engine write by its Gitlet node, the seat's grant held to the requester's (`gitlet.Grant.Under`), and a
 lifecycle request by its data node, asked again as the colleague asking it itself. The tool's own row is decided
 for the requester first, and a requester it refuses — a stranger, a person who may not act now — is a ceiling of
 NOBODY rather than a refusal there, because the seat's OWN WORK stays steerable by whoever woke it, as

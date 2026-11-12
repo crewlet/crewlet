@@ -355,10 +355,10 @@
 // # Measuring a real bucket
 //
 // BenchmarkBackend's `bucket=real` arm — and every Gitlet benchmark's arm
-// over the bucket: internal/code/cache's BenchmarkColdSync, a Gitlet node's first
-// sync of a repository from it; internal/code/host's BenchmarkPushSmall and
+// over the bucket: internal/gitlet/cache's BenchmarkColdSync, a Gitlet node's first
+// sync of a repository from it; internal/gitlet/host's BenchmarkPushSmall and
 // BenchmarkCloneCold, a push stored in it and a first clone on a node that
-// reads it cold; and internal/code/query's BenchmarkCodeRead, a seat's first
+// reads it cold; and internal/gitlet/query's BenchmarkCodeRead, a seat's first
 // read on such a node — runs only when CREWLET_BENCH_S3_BUCKET names a bucket,
 // and otherwise skips, saying so under `go test -v` (which `make bench`
 // passes).

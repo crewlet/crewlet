@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/solo"
@@ -31,7 +31,7 @@ import (
 // `go doc ./internal/solo`.
 //
 // THE HOOK FIRST, before the sink is installed. Every node here that hosts
-// code execs THIS binary as its proc-receive hook ([codetest.HookCommand],
+// code execs THIS binary as its proc-receive hook ([gitlettest.HookCommand],
 // handed to the engine as engine.Options.GitHook), because the test binary is
 // not `crewlet`; started that way it is a push's hook and not a test run, and
 // it answers exactly as `crewlet gitlet hook` does — main()'s reason for asking
@@ -52,7 +52,7 @@ import (
 //   - the scripted model's harness ([scriptedHarnessEnv]).
 //   - the executor's harness in its box ([harnessEnv]).
 func TestMain(m *testing.M) {
-	if status, ok := codetest.RunHookIfAsked(); ok {
+	if status, ok := gitlettest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
 	mcprelay.DispatchIfRelay()

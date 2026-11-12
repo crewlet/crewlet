@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -31,29 +31,29 @@ func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, record sandbox.
 // pagedReader is Gitlet's read answering a scripted page per call, and
 // recording every query it was asked.
 type pagedReader struct {
-	pages []code.ReadAnswer
+	pages []gitlet.ReadAnswer
 	err   error
-	asked []code.ReadQuery
+	asked []gitlet.ReadQuery
 }
 
-func (r *pagedReader) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (r *pagedReader) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	r.asked = append(r.asked, q)
 	if r.err != nil {
-		return code.ReadAnswer{}, r.err
+		return gitlet.ReadAnswer{}, r.err
 	}
 	if len(r.asked) > len(r.pages) {
-		return code.ReadAnswer{}, fmt.Errorf("asked for page %d of %d", len(r.asked), len(r.pages))
+		return gitlet.ReadAnswer{}, fmt.Errorf("asked for page %d of %d", len(r.asked), len(r.pages))
 	}
 	return r.pages[len(r.asked)-1], nil
 }
 
 // Change and GitRead are no question the push record's reader asks.
-func (r *pagedReader) Change(context.Context, code.ChangeProposal) (code.ChangeResult, error) {
-	return code.ChangeResult{}, errors.New("the push record's reader asked for a change write")
+func (r *pagedReader) Change(context.Context, gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
+	return gitlet.ChangeResult{}, errors.New("the push record's reader asked for a change write")
 }
 
-func (r *pagedReader) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, errors.New("the push record's reader asked for a read by object id")
+func (r *pagedReader) GitRead(context.Context, gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return gitlet.GitAnswer{}, errors.New("the push record's reader asked for a read by object id")
 }
 
 // readerOf is a runPushes over r.
@@ -91,24 +91,24 @@ func pushedRun() sandbox.PendingRun {
 }
 
 // pushRow is a push row of repo whose commands are cmds.
-func pushRow(id, repo string, cmds ...code.Command) code.PushRow {
-	return code.PushRow{PushID: id, RepoID: repo, Commands: cmds}
+func pushRow(id, repo string, cmds ...gitlet.Command) gitlet.PushRow {
+	return gitlet.PushRow{PushID: id, RepoID: repo, Commands: cmds}
 }
 
 // cmdOK is a command the decide took, moving ref from one object to another;
 // cmdNG one it refused.
-func cmdOK(ref, from, to string) code.Command {
-	return code.Command{Ref: ref, Old: from, New: to, Result: code.ResultOK}
+func cmdOK(ref, from, to string) gitlet.Command {
+	return gitlet.Command{Ref: ref, Old: from, New: to, Result: gitlet.ResultOK}
 }
 
-func cmdNG(ref, from, to string) code.Command {
-	return code.Command{Ref: ref, Old: from, New: to, Result: code.ResultNG, Reason: "stale"}
+func cmdNG(ref, from, to string) gitlet.Command {
+	return gitlet.Command{Ref: ref, Old: from, New: to, Result: gitlet.ResultNG, Reason: "stale"}
 }
 
 // A RUN GIVEN ITS MOST REPOSITORIES HAS ITS PUSHES READ WHOLE: the bound a
 // run's repositories are admitted to — the job's `code_checkout` grants
 // on its row, sandbox.MaxRunRepos — never passes the bound a `run_pushes` read may
-// name, code.MaxRunRepos, which Gitlet refuses a read past. The two are
+// name, gitlet.MaxRunRepos, which Gitlet refuses a read past. The two are
 // spelled in two packages that do not import each other, and a raise of the
 // first alone would refuse the "what it pushed" read of every collected run
 // given more, surfacing only as the sentence that its push record was unread.
@@ -117,10 +117,10 @@ func cmdNG(ref, from, to string) code.Command {
 // Mutation: sandbox.MaxRunRepos raised to 9 → red.
 func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
 	t.Parallel()
-	if sandbox.MaxRunRepos > code.MaxRunRepos {
+	if sandbox.MaxRunRepos > gitlet.MaxRunRepos {
 		t.Errorf("a run may be given %d repositories (sandbox.MaxRunRepos) and a read of its pushes may name "+
-			"at most %d (code.MaxRunRepos): a run given its most would have its pushes refused",
-			sandbox.MaxRunRepos, code.MaxRunRepos)
+			"at most %d (gitlet.MaxRunRepos): a run given its most would have its pushes refused",
+			sandbox.MaxRunRepos, gitlet.MaxRunRepos)
 	}
 	// AND THE READ THE COORDINATOR MAKES FOR SUCH A RUN NAMES THEM ALL: every
 	// repository it may push to, none dropped to fit.
@@ -131,7 +131,7 @@ func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
 			RepoID: fmt.Sprintf("0190d8f0-0000-7000-8000-0000000001%02x", i), Branch: "seats/swe/ENG-42",
 			Access: sandbox.RepoWrite})
 	}
-	reader := &pagedReader{pages: []code.ReadAnswer{{Position: firstPageAt}}}
+	reader := &pagedReader{pages: []gitlet.ReadAnswer{{Position: firstPageAt}}}
 	if _, err := readerOf(reader).Pushed(t.Context(), run); err != nil {
 		t.Fatalf("read the pushes of a run given %d repositories: %v", len(run.Repos), err)
 	}
@@ -159,19 +159,19 @@ func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
 func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
-	reader := &pagedReader{pages: []code.ReadAnswer{
+	reader := &pagedReader{pages: []gitlet.ReadAnswer{
 		{
-			Pushes: []code.PushRow{
-				pushRow("p1", runWebID, cmdOK(branch, code.ZeroOID, oidOf("1")), cmdNG("refs/heads/main", oidOf("a"), oidOf("b"))),
-				pushRow("p2", runWebID, cmdOK(branch, oidOf("1"), oidOf("2")), cmdOK("refs/heads/seats/swe/spike", code.ZeroOID,
+			Pushes: []gitlet.PushRow{
+				pushRow("p1", runWebID, cmdOK(branch, gitlet.ZeroOID, oidOf("1")), cmdNG("refs/heads/main", oidOf("a"), oidOf("b"))),
+				pushRow("p2", runWebID, cmdOK(branch, oidOf("1"), oidOf("2")), cmdOK("refs/heads/seats/swe/spike", gitlet.ZeroOID,
 					oidOf("9"))),
 				pushRow("p3", runWebID, cmdOK(branch, oidOf("2"), oidOf("3"))),
 			},
 			Next: "0/91/p3", Position: firstPageAt, Level: statelog.ReadLinearizable,
 		},
 		{
-			Pushes: []code.PushRow{
-				pushRow("p4", runAPIID, cmdOK("refs/heads/seats/swe/old", oidOf("4"), code.ZeroOID)),
+			Pushes: []gitlet.PushRow{
+				pushRow("p4", runAPIID, cmdOK("refs/heads/seats/swe/old", oidOf("4"), gitlet.ZeroOID)),
 			},
 			// A later page answered past the first: the record is still
 			// the first page's, where its barrier put it.
@@ -184,9 +184,9 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 		t.Fatalf("Pushed: %v", err)
 	}
 	want := []sandbox.PushedRef{
-		{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("3"), Pushes: 3},
-		{Repo: "web", Ref: "refs/heads/seats/swe/spike", Old: code.ZeroOID, New: oidOf("9"), Pushes: 1},
-		{Repo: "api", Ref: "refs/heads/seats/swe/old", Old: oidOf("4"), New: code.ZeroOID, Pushes: 1},
+		{Repo: "web", Ref: branch, Old: gitlet.ZeroOID, New: oidOf("3"), Pushes: 3},
+		{Repo: "web", Ref: "refs/heads/seats/swe/spike", Old: gitlet.ZeroOID, New: oidOf("9"), Pushes: 1},
+		{Repo: "api", Ref: "refs/heads/seats/swe/old", Old: oidOf("4"), New: gitlet.ZeroOID, Pushes: 1},
 	}
 	if !slices.Equal(record.Refs, want) || record.More != 0 {
 		t.Errorf("read %+v and %d more, want %+v", record.Refs, record.More, want)
@@ -200,9 +200,9 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 		t.Fatalf("asked %d pages, want the two Gitlet answered", len(reader.asked))
 	}
 	first, second := reader.asked[0], reader.asked[1]
-	wantQuery := code.RunPushesQuery{Run: runLaunch, Repos: []string{runWebID, runAPIID}, After: runLaunchAt}
+	wantQuery := gitlet.RunPushesQuery{Run: runLaunch, Repos: []string{runWebID, runAPIID}, After: runLaunchAt}
 	for i, q := range reader.asked {
-		if q.Kind != code.ReadRunPushes || q.RunPushes == nil || q.RunPushes.Run != wantQuery.Run ||
+		if q.Kind != gitlet.ReadRunPushes || q.RunPushes == nil || q.RunPushes.Run != wantQuery.Run ||
 			!slices.Equal(q.RunPushes.Repos, wantQuery.Repos) || q.RunPushes.After != wantQuery.After {
 			t.Errorf("page %d asked %s %+v, want run_pushes %+v — the repositories the run may push to, "+
 				"in its order, above its launch", i+1, q.Kind, q.RunPushes, wantQuery)
@@ -239,12 +239,12 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 // Mutation: drop the cap — every ref held, red.
 func TestRunPushesHoldsAtMostTheRefsAResultCanList(t *testing.T) {
 	t.Parallel()
-	var cmds []code.Command
+	var cmds []gitlet.Command
 	for i := range sandbox.MaxPushedRefs + 5 {
-		cmds = append(cmds, cmdOK(fmt.Sprintf("refs/heads/seats/swe/%d", i), code.ZeroOID, oidOf("1")))
+		cmds = append(cmds, cmdOK(fmt.Sprintf("refs/heads/seats/swe/%d", i), gitlet.ZeroOID, oidOf("1")))
 	}
-	reader := &pagedReader{pages: []code.ReadAnswer{{
-		Pushes: []code.PushRow{
+	reader := &pagedReader{pages: []gitlet.ReadAnswer{{
+		Pushes: []gitlet.PushRow{
 			pushRow("p1", runWebID, cmds...),
 			// A held ref moved again, and a counted one moved again.
 			pushRow("p2", runWebID, cmdOK("refs/heads/seats/swe/0", oidOf("1"), oidOf("2")),
@@ -277,7 +277,7 @@ func TestRunPushesHoldsAtMostTheRefsAResultCanList(t *testing.T) {
 // the whole record at no position, red.
 func TestRunPushesRefusesWhatItCannotRead(t *testing.T) {
 	t.Parallel()
-	page := func(a code.ReadAnswer) []code.ReadAnswer { return []code.ReadAnswer{a, a} }
+	page := func(a gitlet.ReadAnswer) []gitlet.ReadAnswer { return []gitlet.ReadAnswer{a, a} }
 	for name, tc := range map[string]struct {
 		run    func(*sandbox.PendingRun)
 		reader *pagedReader
@@ -287,17 +287,17 @@ func TestRunPushesRefusesWhatItCannotRead(t *testing.T) {
 			reader: &pagedReader{}, want: "launch position"},
 		"a launch on another log": {run: func(r *sandbox.PendingRun) { r.CodeLaunch = "CREWLET_PAGES_LOG@1:4" },
 			reader: &pagedReader{}, want: "another log"},
-		"a refused read": {reader: &pagedReader{err: code.ErrNotServing}, want: "not serving"},
-		"a page that does not move": {reader: &pagedReader{pages: page(code.ReadAnswer{Next: "0/91/p3",
+		"a refused read": {reader: &pagedReader{err: gitlet.ErrNotServing}, want: "not serving"},
+		"a page that does not move": {reader: &pagedReader{pages: page(gitlet.ReadAnswer{Next: "0/91/p3",
 			Position: firstPageAt})}, want: "again"},
-		"a first page at no position": {reader: &pagedReader{pages: page(code.ReadAnswer{Next: "0/91/p3"})},
+		"a first page at no position": {reader: &pagedReader{pages: page(gitlet.ReadAnswer{Next: "0/91/p3"})},
 			want: "no position of the code log"},
 		// THE LAST PAGE TOO, where it is the first: its position is the
 		// record's, which the changes are read at.
-		"a whole record at no position": {reader: &pagedReader{pages: page(code.ReadAnswer{})},
+		"a whole record at no position": {reader: &pagedReader{pages: page(gitlet.ReadAnswer{})},
 			want: "no position of the code log"},
-		"another repository's row": {reader: &pagedReader{pages: page(code.ReadAnswer{Position: firstPageAt,
-			Pushes: []code.PushRow{pushRow("p1", runDocsID, cmdOK("refs/heads/x", code.ZeroOID, oidOf("1")))}})},
+		"another repository's row": {reader: &pagedReader{pages: page(gitlet.ReadAnswer{Position: firstPageAt,
+			Pushes: []gitlet.PushRow{pushRow("p1", runDocsID, cmdOK("refs/heads/x", gitlet.ZeroOID, oidOf("1")))}})},
 			want: "not given"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -330,13 +330,13 @@ func TestAResumedRecordCarriesTheRunsWholeAccount(t *testing.T) {
 	t.Parallel()
 	run := pushedRun()
 	run.Harness, run.SandboxID = "claude-code", "box-1"
-	pushed := []sandbox.PushedRef{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-42", Old: code.ZeroOID,
+	pushed := []sandbox.PushedRef{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-42", Old: gitlet.ZeroOID,
 		New: oidOf("3"), Pushes: 3}}
 	got := runRecordOf(run, accountOf(sandbox.ResumeRequest{
 		Run: run, DeliveredRefs: []string{"https://example.com/pr/9"}, DeliveredRefsElided: 1,
 		Pushed: pushed, PushedElided: 2, PushedUnread: "",
 	}))
-	want := []types.PushedRefRecord{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-42", Old: code.ZeroOID,
+	want := []types.PushedRefRecord{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-42", Old: gitlet.ZeroOID,
 		New: oidOf("3"), Pushes: 3}}
 	if got.Harness != "claude-code" || got.SandboxID != "box-1" || got.LaunchID != runLaunch ||
 		!slices.Equal(got.DeliveredRefs, []string{"https://example.com/pr/9"}) || got.RefsElided != 1 ||
