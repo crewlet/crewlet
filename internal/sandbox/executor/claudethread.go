@@ -381,6 +381,12 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 // ToolUseResult. A reader that keeps any of them past that copies it, since
 // the layer may hand out a line's own bytes rather than a copy of them.
 //
+// AND IT HANDS THEM OUT RAW ON PURPOSE: each has one reader, which holds it to
+// the shape that reader reads (a SendMessage's `input.to`, a result's text, a
+// hook's answer) under the layer's own options ([threadDecoding]) and walk
+// ([eachElement]), so a release that reshapes one costs that reader alone, as
+// a key one reader reads does.
+//
 // A KEY ONLY ONE READER READS IS HELD TO ITS TYPE IN THAT READER'S ACCESSOR,
 // never in the head: a release that reshapes it is that accessor's error and
 // costs the reader that asks, so a reshaped attachment never blinds a reader
@@ -713,6 +719,11 @@ func (l threadLine) OriginKind() (string, error) {
 // every other record, valid until the reader's next [threadReader.Next]
 // ([threadLine]). Never an id: a call's id leaves this layer only through
 // [threadMessage.Calls].
+//
+// IT IS THE RECORD'S, NEVER A CALL'S, handed out raw on purpose for its one
+// reader to hold: a reader takes it for a call's only where the record's
+// message holds that call's one tool_result and nothing else, as every record
+// measured that carries one does.
 func (l threadLine) ToolUseResult() json.RawMessage {
 	if l.Head.Type != recordUser {
 		return nil
