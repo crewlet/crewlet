@@ -331,6 +331,7 @@ type threadWire struct {
 	ParentUUID    json.RawMessage `json:"parentUuid"`
 	IsSidechain   json.RawMessage `json:"isSidechain"`
 	AgentID       json.RawMessage `json:"agentId"`
+	ReplacesSpan  json.RawMessage `json:"replacesSpan"`
 	Message       json.RawMessage `json:"message"`
 	Attachment    json.RawMessage `json:"attachment"`
 	Origin        json.RawMessage `json:"origin"`
@@ -367,10 +368,10 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 }
 
 // head holds the head's keys to their types: `type`, `subtype` and `agentId`
-// strings, `parentUuid` null or a string, `isSidechain` a boolean, each where
-// present. ANOTHER TYPE IS NO RECORD: a newer Claude Code that changes one
-// fails toward no reading, which every reader takes for "not confirmed",
-// never for a fact.
+// strings, `parentUuid` null or a string, `isSidechain` and `replacesSpan`
+// booleans, each where present. ANOTHER TYPE IS NO RECORD: a newer Claude
+// Code that changes one fails toward no reading, which every reader takes for
+// "not confirmed", never for a fact.
 func (w threadWire) head() (threadHead, error) {
 	var (
 		h   threadHead
@@ -396,6 +397,11 @@ func (w threadWire) head() (threadHead, error) {
 		}
 		h.Sidechain = &side
 	}
+	if w.ReplacesSpan != nil {
+		if h.ReplacesSpan, err = wireBool("replacesSpan", w.ReplacesSpan); err != nil {
+			return threadHead{}, err
+		}
+	}
 	return h, nil
 }
 
@@ -411,17 +417,23 @@ type threadHead struct {
 	// ABSENT IS NOT NULL. Every record outside the chain, the harness's own
 	// bookkeeping, carries no `parentUuid` at all (queue-operation,
 	// atis-latch, api-request-shape, api-request-blob, api-request,
-	// last-prompt, cost-state and tools-used: 874 records of 61 main threads
-	// measured; and mode beside them), and only a record that roots a chain
-	// carries null. Read as one, a thread's bookkeeping before its brief would
-	// root chains of its own, the brief would be no thread's first chained
-	// record, and every thread would read as restarted ([threadRestarts]).
+	// last-prompt, cost-state, and tools-used, which 2.1.322 alone writes,
+	// naming the tools the session has used whenever that set grows: 874
+	// records of 61 main threads measured; and mode beside them), and only a
+	// record that roots a chain carries null. Read as one, a thread's
+	// bookkeeping before its brief would root chains of its own, the brief
+	// would be no thread's first chained record, and every thread would read
+	// as restarted ([threadRestarts]).
 	Parent json.RawMessage
 	// Sidechain is `isSidechain`; nil where absent.
 	Sidechain *bool
 	// AgentID is `agentId`, the subagent whose thread holds the record; ""
 	// where absent.
 	AgentID string
+	// ReplacesSpan is `replacesSpan`: true where the record says so with a
+	// JSON true, false where it is absent or false. A user record that says
+	// so is a restart ([threadRestarts.See]).
+	ReplacesSpan bool
 }
 
 // Chained reports whether the record is in a chain: `parentUuid` present,
@@ -496,6 +508,19 @@ func wireBool(key string, raw json.RawMessage) (bool, error) {
 	return b, nil
 }
 
+// wireNumber is raw, a key named key, held to a number that is there: checked
+// by its first byte, for [wireRequiredString]'s reason.
+func wireNumber(key string, raw json.RawMessage) (float64, error) {
+	if len(raw) == 0 || (raw[0] != '-' && (raw[0] < '0' || raw[0] > '9')) {
+		return 0, fmt.Errorf("%s is %s, not a number", key, wireKind(raw))
+	}
+	var n float64
+	if err := wireDecode(raw, &n); err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return n, nil
+}
+
 // wireKind says what raw is: "absent" where its key is not there, else the
 // kind of JSON value it holds.
 func wireKind(raw json.RawMessage) string {
@@ -558,9 +583,16 @@ const (
 
 	// subtypeCompactBoundary is a compaction's boundary ([threadRestarts]).
 	subtypeCompactBoundary = "compact_boundary"
+	// subtypeMicrocompactBoundary is a microcompaction's boundary, which no
+	// release measured writes ([threadRestarts.See]).
+	subtypeMicrocompactBoundary = "microcompact_boundary"
 	// hookStopSummary is the summary a Stop firing ends with: a system record
 	// of this subtype, and the [threadHook.Record] it is read as.
 	hookStopSummary = "stop_hook_summary"
+
+	// editClearToolUses is the server's context edit that clears the content
+	// of old tool results ([threadLine.ToolResultsCleared]).
+	editClearToolUses = "clear_tool_uses_20250919"
 )
 
 // The hook attachments [threadLine.Hook] reads: what a hook's firing records.
@@ -877,6 +909,122 @@ func (m threadMessage) Kinds() []string { return m.kinds }
 // ([threadHook.Firing]).
 func (m threadMessage) Calls() []threadCall { return m.calls }
 
+// ToolResultsCleared reports whether the record says the server CLEARED THE
+// CONTENT OF OLD TOOL RESULTS from what the model was shown: an assistant
+// record whose `message.context_management.applied_edits` holds an edit of
+// type clear_tool_uses_20250919 whose `cleared_tool_uses` is above zero, the
+// test Claude Code itself makes of its records as it plans its next request.
+// False for every other record, whatever its `message` carries, and for an
+// assistant record that reports no such edit: one with no
+// `context_management` (every assistant record measured), one whose
+// `context_management` is null (the reply a resume writes for a turn it found
+// unanswered), one with no `applied_edits`, and one whose edits are others.
+// Which thread's record counts is its reader's to judge, by the head.
+//
+// AN ERROR, never a report read as none, where the record's `message` is no
+// object, its `context_management` neither an object nor null, its
+// `applied_edits` no list, an edit no object or its type no string, or that
+// edit's count no number: every edit is held so, wherever it falls in the
+// list.
+//
+// THE EDIT. Claude Code asks the server for it on a request that follows an
+// idle return (a prompt more than 3,900 s after the conversation's last
+// message) in a session holding at least 30 clearable tool uses, once a flag
+// Anthropic's servers serve turns it on, as they may for an engine's box on a
+// first-party login; and a resume asks for it again. The server then clears
+// the content of the results of the clearable tools (Read, the shell tools,
+// Grep, Glob, WebSearch, WebFetch, Edit and Write, and those names served by
+// an MCP server named `container`) older than the last ones it is asked to
+// keep, twelve or more, and of no other tool. The thread keeps every result
+// whole: this report alone says the model was shown less.
+//
+// COARSE: it counts what was cleared and names none of it, and the server
+// keeps the last results and those of every tool it excludes, so a result
+// before such a record may still have been shown. Read as cleared, it errs
+// toward telling a note again.
+//
+// ITS READERS. The one that confirms a hook's note reached the model (the
+// receipt fix's M1) reads it for a BATCH's note alone: on claude-sonnet-4-5 a
+// batch's note rides its batch's last tool result into the request
+// (measured), so it is cleared with that result, where a Stop's note is a
+// user turn of its own, which the edit never clears. The one that tells a
+// relaunch which of its calls a kept session holds (exact telling) reads it
+// only to decline a reading, never for a call: in a cleared state Claude Code
+// counts the cleared tokens back into the count it compacts by, which no line
+// of the thread states.
+//
+// Read off the line's one decode, its raw `message`, never a second read of
+// the line.
+func (l threadLine) ToolResultsCleared() (bool, error) {
+	if l.Head.Type != recordAssistant {
+		return false, nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a message that reports no edit.
+	if !wireObject(l.message) {
+		return false, fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		ContextManagement json.RawMessage `json:"context_management"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return false, fmt.Errorf("an assistant record's message: %w", err)
+	}
+	report := message.ContextManagement
+	switch {
+	case report == nil || bytes.Equal(report, jsonNull):
+		return false, nil
+	case !wireObject(report):
+		return false, fmt.Errorf("context_management is %s, neither an object nor null", wireKind(report))
+	}
+	var applied struct {
+		Edits json.RawMessage `json:"applied_edits"`
+	}
+	if err := wireDecode(report, &applied); err != nil {
+		return false, fmt.Errorf("context_management: %w", err)
+	}
+	switch {
+	case applied.Edits == nil:
+		return false, nil
+	case len(applied.Edits) == 0 || applied.Edits[0] != '[':
+		return false, fmt.Errorf("context_management.applied_edits is %s, not a list", wireKind(applied.Edits))
+	}
+	var edits []json.RawMessage
+	if err := wireDecode(applied.Edits, &edits); err != nil {
+		return false, fmt.Errorf("context_management.applied_edits: %w", err)
+	}
+	cleared := false
+	for i, raw := range edits {
+		uses, err := clearedToolUses(raw)
+		if err != nil {
+			return false, fmt.Errorf("context_management.applied_edits entry %d: %w", i+1, err)
+		}
+		cleared = cleared || uses > 0
+	}
+	return cleared, nil
+}
+
+// clearedToolUses is how many tool uses one applied edit, raw, says the server
+// cleared: the clear_tool_uses edit's count, and none for every other edit,
+// whose count is never read.
+func clearedToolUses(raw json.RawMessage) (float64, error) {
+	if !wireObject(raw) {
+		return 0, fmt.Errorf("is %s, not an object", wireKind(raw))
+	}
+	var edit struct {
+		Type            json.RawMessage `json:"type"`
+		ClearedToolUses json.RawMessage `json:"cleared_tool_uses"`
+	}
+	if err := wireDecode(raw, &edit); err != nil {
+		return 0, err
+	}
+	kind, err := wireRequiredString("type", edit.Type)
+	if err != nil || kind != editClearToolUses {
+		return 0, err
+	}
+	return wireNumber("cleared_tool_uses", edit.ClearedToolUses)
+}
+
 // threadRestarts follows one thread's heads in order and says where its chain
 // RESTARTS: where what a resumed session is handed starts over, so what lies
 // before may be gone from it (a compaction summarised it, a trim dropped it,
@@ -887,9 +1035,11 @@ type threadRestarts struct {
 }
 
 // See reports whether the record with head h, the thread's next, is a
-// RESTART: a record of subtype compact_boundary; one rooting a chain
-// (`parentUuid` literally null) that is not the thread's first chained
-// record; or the thread's first chained record where it roots no chain.
+// RESTART: a record of subtype compact_boundary; a system record of subtype
+// microcompact_boundary; a user record whose `replacesSpan` is true; one
+// rooting a chain (`parentUuid` literally null) that is not the thread's
+// first chained record; or the thread's first chained record where it roots
+// no chain.
 //
 // THE FIRST CHAINED RECORD, never the first record or the first root: a
 // thread's bookkeeping before its brief is no chain's, and its brief roots the
@@ -902,6 +1052,25 @@ type threadRestarts struct {
 // thread that lost its start and never rooted again would restart nowhere,
 // and its reader would take what the lost head held for what never happened.
 //
+// A MICROCOMPACTION'S BOUNDARY AND A SPAN REPLACED ARE RESTARTS THOUGH NO
+// RELEASE WRITES ONE. Neither 2.1.310 nor 2.1.322 has code that writes
+// either record, yet each release's own readers stop at both as at a
+// compaction: at a system record of either boundary's subtype, and at a user
+// record whose replacesSpan is true as at a compaction's summary. A later
+// release that writes one hands a resumed session less than lies before it,
+// where a reader that read on would count what lies before as held; counted
+// a restart, what lies before is told again, the safe direction for every
+// reader. Each is read on its own record's type alone, as the harness reads
+// it.
+//
+// The keep-recent clearing, which puts "[Old tool result content cleared]"
+// in place of an old tool result, needs no rule: it never runs under
+// `claude -p`, it writes nothing to the thread, and it never clears a batch's
+// note, which is an attachment record of its own. Nor is the server's
+// clearing of old tool results a restart: it clears the results of some tools
+// alone, never a Stop's note, so each reader it concerns asks
+// [threadLine.ToolResultsCleared] of the records it reads.
+//
 // A thread with no chained record restarts nowhere: it holds no chain to
 // start over, and what that means is its reader's to say.
 func (r *threadRestarts) See(h threadHead) bool {
@@ -909,6 +1078,10 @@ func (r *threadRestarts) See(h threadHead) bool {
 	r.chained = r.chained || h.Chained()
 	switch {
 	case h.Subtype == subtypeCompactBoundary:
+		return true
+	case h.Type == recordSystem && h.Subtype == subtypeMicrocompactBoundary:
+		return true
+	case h.Type == recordUser && h.ReplacesSpan:
 		return true
 	case first:
 		return !h.Root()

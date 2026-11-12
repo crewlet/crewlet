@@ -82,6 +82,8 @@ var (
 		`"totalAPIDurationWithoutRetries":110,"totalToolDuration":61,"totalLinesAdded":0,"totalLinesRemoved":0,` +
 		`"totalDuration":21173,"startTime":1767323045000,"modelUsage":{"claude-sonnet-4-5":{"inputTokens":600,` +
 		`"outputTokens":120,"costUSD":0.0036}},"hasUnknownModelCost":false}`
+	// ctToolsUsed names the tools a session has used, written again whenever
+	// that set grows: 2.1.322 writes it, 2.1.310 never does.
 	ctToolsUsed = `{"type":"tools-used","tools":["Bash"],"sessionId":"` + ctSession + `"}`
 	ctMode      = `{"type":"mode","mode":"normal","sessionId":"` + ctSession + `"}`
 )
@@ -287,6 +289,70 @@ func ctCompactSummary(boundary, uuid string) string {
 		`out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nthe summary"},` +
 		`"isVisibleInTranscriptOnly":true,"isCompactSummary":true,"uuid":"` + uuid + `","timestamp":"` + ctStamp +
 		`","turnPosition":{"promptIndex":0,"turnIndex":1},` + ctTail("2.1.310") + `,"slug":"` + ctSlug + `"}`
+}
+
+// ctMicrocompactBoundary is a microcompaction's boundary, chained to parent so
+// that only its kind can make it a restart. Neither 2.1.310 nor 2.1.322 writes
+// one: its type and subtype are what both releases' readers know it by, and
+// its other keys are a compaction boundary's.
+func ctMicrocompactBoundary(parent, uuid string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"type":"system","subtype":"microcompact_boundary",` +
+		`"isMeta":false,"timestamp":"` + ctStamp + `","uuid":"` + uuid + `","level":"info",` + ctTail("2.1.322") + `}`
+}
+
+// ctSpan is a user record chained to parent whose replacesSpan is replaces, a
+// JSON value, or that carries none where replaces is "". Claude Code's
+// user-message factory takes the key, and no caller of it in 2.1.310 or
+// 2.1.322 passes it: its other keys are a user record's as they write one.
+func ctSpan(parent, uuid, replaces string) string {
+	span := ""
+	if replaces != "" {
+		span = `,"replacesSpan":` + replaces
+	}
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"promptId":"` + ctPrompt + `","type":"user",` +
+		`"message":{"role":"user","content":"a summary of the span"}` + span + `,"uuid":"` + uuid + `","timestamp":"` +
+		ctStamp + `",` + ctTail("2.1.322") + `}`
+}
+
+// ctSynthetic is the reply a resume writes for a turn it found unanswered, as
+// 2.1.310 writes it: a model of its own, and a message whose report of the
+// context edits applied is null.
+func ctSynthetic(parent, uuid string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"type":"assistant","uuid":"` + uuid + `","timestamp":"` +
+		ctStamp + `","message":{"diagnostics":null,"id":"` + ctUUID(902) + `","container":null,"model":"<synthetic>",` +
+		`"role":"assistant","stop_details":null,"stop_reason":"stop_sequence","stop_sequence":"","type":"message",` +
+		`"usage":{"output_tokens_details":null,"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,` +
+		`"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},` +
+		`"service_tier":null,"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},` +
+		`"inference_geo":null,"iterations":null,"speed":null,"fallback_credit":null},"content":[{"type":"text",` +
+		`"text":"No response requested."}],"context_management":null},"isApiErrorMessage":false,` +
+		ctTail("2.1.310") + `}`
+}
+
+// Two entries of the edits the server reports it applied to a request, as the
+// API writes them: the clearing of old tool results, and that of a model's
+// thinking.
+const (
+	ctClearing = `{"type":"clear_tool_uses_20250919","cleared_tool_uses":18,"cleared_input_tokens":41250}`
+	ctThinking = `{"type":"clear_thinking_20251015","cleared_thinking_turns":2,"cleared_input_tokens":3000}`
+)
+
+// ctEdits is the report of edits a reply's message carries where Claude Code
+// asked for the clearing: the response's own list, beside the counts it asked
+// the server for.
+func ctEdits(edits ...string) string {
+	return `{"applied_edits":[` + strings.Join(edits, ",") + `],"client_sent_trigger_tool_uses":27,` +
+		`"client_sent_keep_tool_uses":12}`
+}
+
+// ctReported is a model's reply whose message carries report as its report of
+// the context edits applied, as 2.1.322 writes it. No run reached the clearing,
+// which waits on a flag only Anthropic's servers set: where the report sits
+// and what it holds are read from that release's code.
+func ctReported(t *testing.T, report string) string {
+	t.Helper()
+	return ctReplace(t, ctAssistant(ctUUID(30), ctUUID(31), `[{"type":"text","text":"back."}]`),
+		`"output_tokens":20}}`, `"output_tokens":20},"context_management":`+report+`}`)
 }
 
 // ctThread is lines as a thread's file holds them, each ended by its break.
@@ -517,15 +583,17 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 // that is not one record (two values, one cut short, a value that is no
 // object, a string of bytes that are no UTF-8, which Claude Code never
 // writes) or one whose head key is of the wrong type (`type`, `subtype` and
-// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean)
-// is a *threadLineError naming its line, whatever keywords it holds, and the
-// reader reads on to the next line; and a whole record's head is what it
-// says. None of these lines holds a key a reader of hooks or calls looks for.
+// `agentId` strings, `parentUuid` null or a string, `isSidechain` and
+// `replacesSpan` booleans) is a *threadLineError naming its line, whatever
+// keywords it holds, and the reader reads on to the next line; and a whole
+// record's head is what it says. None of these lines holds a key a reader of
+// hooks or calls looks for.
 //
 // Mutation: decode only the lines that name a hook or a call, and every
 // broken line here reads as a record, and the records' heads as nothing;
 // take bytes that are no UTF-8 as encoding/json does, for the replacement
-// character, and the line holding them reads as a record.
+// character, and the line holding them reads as a record; read replacesSpan
+// by its text alone, and one that is a string or null reads as a record.
 func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -539,6 +607,8 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		"a null type":                            strings.Replace(ctDequeue, `"type":"queue-operation"`, `"type":null`, 1),
 		"a string isSidechain":                   strings.Replace(brief, `"isSidechain":false`, `"isSidechain":"false"`, 1),
 		"a null isSidechain":                     strings.Replace(brief, `"isSidechain":false`, `"isSidechain":null`, 1),
+		"a string replacesSpan":                  strings.Replace(brief, `"isSidechain":false`, `"isSidechain":false,"replacesSpan":"true"`, 1),
+		"a null replacesSpan":                    strings.Replace(brief, `"isSidechain":false`, `"isSidechain":false,"replacesSpan":null`, 1),
 		"a numeric parentUuid":                   strings.Replace(brief, `"parentUuid":null`, `"parentUuid":7`, 1),
 		"a parentUuid that is an object":         strings.Replace(brief, `"parentUuid":null`, `"parentUuid":{}`, 1),
 		"a boolean subtype":                      strings.Replace(summary, `"subtype":"stop_hook_summary"`, `"subtype":true`, 1),
@@ -756,8 +826,9 @@ func ctReplace(t *testing.T, record, from, to string) string {
 }
 
 // ctAll is everything a line hands out through every accessor, as text: its
-// head, its hook, its message and its calls, its origin's kind and its own
-// toolUseResult, each beside the error it answered.
+// head, its hook, its message and its calls, its origin's kind, its own
+// toolUseResult and whether it says tool results were cleared, each beside
+// the error it answered.
 func ctAll(l threadLine) string {
 	var b strings.Builder
 	h := l.Head
@@ -765,8 +836,8 @@ func ctAll(l threadLine) string {
 	if h.Sidechain != nil {
 		side = strconv.FormatBool(*h.Sidechain)
 	}
-	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q\n", h.Type, h.Subtype, h.Parent, side,
-		h.AgentID)
+	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q, replaces a span %t\n", h.Type,
+		h.Subtype, h.Parent, side, h.AgentID, h.ReplacesSpan)
 	hook, isHook, err := l.Hook()
 	fmt.Fprintf(&b, "hook %t: record %q, event %q, firing %q, command %q, content %s, stdout %s; %v\n", isHook,
 		hook.Record, hook.Event, hook.Firing, hook.Command, hook.Content, hook.Stdout, err)
@@ -784,6 +855,8 @@ func ctAll(l threadLine) string {
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
 	fmt.Fprintf(&b, "toolUseResult: %s\n", l.ToolUseResult())
+	cleared, err := l.ToolResultsCleared()
+	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
 	return b.String()
 }
 
@@ -793,8 +866,9 @@ func ctAll(l threadLine) string {
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (a
 // message, an attachment, an origin, a firing at the top, a record's own
-// toolUseResult), a hook's attachment, an origin, a message, and a message's
-// blocks. So a line hands out exactly what it hands out without the other key,
+// toolUseResult), a hook's attachment, an origin, a message, a message's
+// blocks, its report of the context edits applied, and each edit the report
+// lists. So a line hands out exactly what it hands out without the other key,
 // through every accessor. 2.1.322 already spells a call's id `toolUseId` (a
 // subagent's metadata names the call that started it so), a key away from a
 // hook's firing.
@@ -815,6 +889,7 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	unfired := ctReplace(t, hook, firing+",", "")
 	other := "toolu_test_other"
 	retyped := ctReplace(t, brief, `"type":"user"`, `"type":"attachment"`)
+	cleared := ctReported(t, ctEdits(ctClearing))
 	for name, tc := range map[string]struct {
 		record, from, to string
 	}{
@@ -836,6 +911,9 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 		"agentID alone": {record: brief, from: `"isSidechain":false`, to: `"isSidechain":false,"agentID":"` + ctAgent + `"`},
 		"an agentId, then AgentId": {record: prompt, from: `"agentId":"` + ctAgent + `"`,
 			to: `"agentId":"` + ctAgent + `","AgentId":"a0000000000000000"`},
+		"a replacesSpan, then ReplacesSpan": {record: ctSpan(ctUUID(3), ctUUID(4), "false"),
+			from: `"replacesSpan":false`, to: `"replacesSpan":false,"ReplacesSpan":true`},
+		"ReplacesSpan alone": {record: brief, from: `"isSidechain":false`, to: `"isSidechain":false,"ReplacesSpan":true`},
 		// The keys only one reader reads.
 		"a message, then Message": {record: result, from: `"uuid":"` + ctUUID(5) + `"`,
 			to: `"Message":{"role":"user","content":[{"tool_use_id":"` + other + `","type":"tool_result",` +
@@ -885,6 +963,16 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"is_error":false,"Is_Error":true`},
 		"a tool_result's content, then Content": {record: result, from: `"content":"b1"`,
 			to: `"content":"b1","Content":"other"`},
+		// A message's report of the context edits applied, and its edits.
+		"a context_management, then Context_Management": {record: cleared,
+			from: `"context_management":` + ctEdits(ctClearing),
+			to:   `"context_management":` + ctEdits(ctClearing) + `,"Context_Management":null`},
+		"an applied_edits, then Applied_Edits": {record: cleared, from: `"applied_edits":[` + ctClearing + `]`,
+			to: `"applied_edits":[` + ctClearing + `],"Applied_Edits":[]`},
+		"an edit's type, then Type": {record: cleared, from: `"type":"clear_tool_uses_20250919"`,
+			to: `"type":"clear_tool_uses_20250919","Type":"clear_thinking_20251015"`},
+		"an edit's cleared_tool_uses, then Cleared_Tool_Uses": {record: cleared, from: `"cleared_tool_uses":18`,
+			to: `"cleared_tool_uses":18,"Cleared_Tool_Uses":0`},
 		// A key written twice.
 		"a type written twice": {record: retyped, from: `"type":"attachment"`, to: `"type":"user","type":"attachment"`},
 		"an attachment's firing written twice": {record: hook, from: firing,
@@ -897,10 +985,13 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	}
 }
 
-// ABSENT IS NOT NULL: a record outside the chain (every kind of the harness's
-// bookkeeping) carries no parentUuid and is neither chained nor a root, the
-// brief's null roots the chain, and a chained record's parent is its quoted
-// uuid, each handed over as written.
+// ABSENT IS NOT NULL: a record outside the chain carries no parentUuid and is
+// neither chained nor a root, the brief's null roots the chain, and a chained
+// record's parent is its quoted uuid, each handed over as written. Every kind
+// of the harness's bookkeeping measured is outside the chain, the nine of
+// them: queue-operation, atis-latch, api-request-shape, api-request-blob,
+// api-request, last-prompt, cost-state, mode, and tools-used, which 2.1.322
+// writes whenever the tools a session has used grow, and 2.1.310 never does.
 //
 // Mutation: read an absent parentUuid as null, and the bookkeeping before the
 // brief, and every kind of it, reads as chained, and as roots.
@@ -939,17 +1030,34 @@ func TestAnAbsentParentIsNotANullOne(t *testing.T) {
 // restarts nowhere, and a thread with no chained record at all restarts
 // nowhere either: it holds no chain to start over.
 //
+// So are the two records 2.1.310's and 2.1.322's own readers stop at as at a
+// compaction, though neither release writes one: a system record of subtype
+// microcompact_boundary and a user record whose replacesSpan is true, each a
+// restart where it is chained to the record before it, roots nothing and
+// follows the brief. A replacesSpan that is false or absent replaces nothing,
+// and each kind is read on its own record's type alone, as the harness reads
+// it: the subtype on an attachment, and replacesSpan true on a model's reply,
+// restart nothing.
+//
 // Mutation: count every root, and the brief restarts every thread; count every
 // root but the first one seen, and the first root of a thread whose start is
 // gone is none; read a thread whose start is gone as whole, and one that never
 // roots again restarts nowhere; take the first record for the first chained
 // one, and the bookkeeping before a brief restarts the thread; drop the
-// boundary, and one that opens a thread is none.
+// boundary, and one that opens a thread is none; drop the microcompaction's
+// boundary or the replaced span, and its record restarts nothing; read
+// replacesSpan by its presence, and one that is false restarts the thread;
+// read either kind off any record's type, and the attachment or the reply
+// restarts it.
 func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 	t.Parallel()
 	brief, again := ctBrief(ctUUID(1)), ctBrief(ctUUID(4))
 	tokens := ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered)
 	reply := ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`)
+	// The thread as measured up to its first reply: what each record below
+	// follows, chained to that reply.
+	head := []string{ctEnqueue, brief, tokens, reply}
+	after := func(record string) []string { return append(slices.Clone(head), record) }
 	boundary, summary := ctBoundary(ctUUID(5), ctUUID(6), ctUUID(3)), ctCompactSummary(ctUUID(5), ctUUID(6))
 	// The file a trim after a compaction leaves, as 2.1.310 and 2.1.322 wrote it:
 	// the reply the compaction kept, chained to ctUUID(30), which the trim took;
@@ -979,6 +1087,17 @@ func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 		"a thread whose start is gone, that never roots again": {lines: []string{ctEnqueue, tokens, reply},
 			restarts: []int{2}},
 		"a thread with no chained record": {lines: []string{ctEnqueue, ctDequeue, ctAtisLatch, ctCostState}},
+		"a microcompaction's boundary": {lines: after(ctMicrocompactBoundary(ctUUID(3), ctUUID(7))),
+			restarts: []int{5}},
+		"a user record that replaces a span":        {lines: after(ctSpan(ctUUID(3), ctUUID(7), "true")), restarts: []int{5}},
+		"a user record whose replacesSpan is false": {lines: after(ctSpan(ctUUID(3), ctUUID(7), "false"))},
+		"a user record with no replacesSpan":        {lines: after(ctSpan(ctUUID(3), ctUUID(7), ""))},
+		"a microcompaction's subtype on an attachment": {lines: after(ctReplace(t,
+			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"type":"attachment"`,
+			`"type":"attachment","subtype":"microcompact_boundary"`))},
+		"replacesSpan true on a model's reply": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"type":"assistant"`,
+			`"type":"assistant","replacesSpan":true`))},
 	} {
 		got := ctRead(ctThread(tc.lines...), threadPlainMax)
 		if len(got.lines) != len(tc.lines) {
@@ -1218,6 +1337,94 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 			(tc.kinds == nil) != (m.Kinds() == nil) {
 			t.Errorf("%s reads as the text %q (%t) and the blocks %q, want %q and %q", name, text, isText,
 				strings.Join(m.Kinds(), " "), tc.text, strings.Join(tc.kinds, " "))
+		}
+	}
+}
+
+// A SERVER'S CLEARING IS WHAT AN ASSISTANT RECORD SAYS IT APPLIED: a model's
+// reply whose message reports, among the context edits the server applied to
+// the request it answers, the clearing of old tool results with a count above
+// none. Nothing else is one: that edit with a count of none, another edit
+// (even one carrying the clearing's count), no edit, a report that lists none,
+// the null report of the reply a resume writes, a reply as measured, which
+// carries no report at all; nor the clearing reported on a record that is no
+// model's reply, which answered no request. A report of the wrong shape (a
+// report neither an object nor null, edits that are no list, an edit that is
+// no object or whose type is no string, the clearing's count no number) is an
+// error, wherever its bad edit falls, never a report read as none, and it
+// costs this accessor alone: the record's message still reads. So is a reply
+// whose message is no object, a null one among them.
+//
+// Mutation: count a count of none, or read the count off every edit, and a
+// report that cleared nothing reads as cleared; answer for every record's
+// type, and a result carrying the clearing reads as cleared; refuse a null
+// report, and the reply a resume writes is an error; let a null message
+// through, and it reads as one that reports nothing; stop at the first
+// clearing, and an edit after it of the wrong shape passes; hold the report in
+// Message, and a record whose report is of the wrong shape reads no message.
+func TestAServerClearingIsWhatAnAssistantRecordSaysItApplied(t *testing.T) {
+	t.Parallel()
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	carrying := func(record, report string) string {
+		return ctReplace(t, record, `"role":"user",`, `"role":"user","context_management":`+report+`,`)
+	}
+	for name, tc := range map[string]struct {
+		record  string
+		cleared bool
+	}{
+		"the clearing, with a count":      {record: ctReported(t, ctEdits(ctClearing)), cleared: true},
+		"the clearing after another edit": {record: ctReported(t, ctEdits(ctThinking, ctClearing)), cleared: true},
+		"the clearing with a count of none": {record: ctReported(t, ctEdits(ctReplace(t, ctClearing,
+			`"cleared_tool_uses":18`, `"cleared_tool_uses":0`)))},
+		"another edit, with a count of its own": {record: ctReported(t, `{"applied_edits":[`+ctThinking+`]}`)},
+		"another edit, carrying the clearing's count": {record: ctReported(t,
+			ctEdits(`{"type":"clear_thinking_20251015","cleared_tool_uses":18}`))},
+		"no edit applied":                            {record: ctReported(t, ctEdits())},
+		"a report that lists no edits":               {record: ctReported(t, `{"client_sent_keep_tool_uses":12}`)},
+		"the reply a resume writes, its report null": {record: ctSynthetic(ctUUID(30), ctUUID(31))},
+		"a reply as measured, with no report": {
+			record: ctAssistant(ctUUID(30), ctUUID(31), `[{"type":"text","text":"back."}]`)},
+		"a result carrying the clearing":         {record: carrying(result, ctEdits(ctClearing))},
+		"a result carrying a report of no shape": {record: carrying(result, `"cleared"`)},
+		"a request blob carrying the clearing":   {record: carrying(ctRequestBlob, ctEdits(ctClearing))},
+	} {
+		if cleared, err := ctLine(t, tc.record).ToolResultsCleared(); cleared != tc.cleared || err != nil {
+			t.Errorf("%s reads as cleared %t, %v; want %t", name, cleared, err, tc.cleared)
+		}
+	}
+
+	count := func(to string) string { return ctReplace(t, ctClearing, `"cleared_tool_uses":18,`, to) }
+	for name, report := range map[string]string{
+		"a report that is a string":         `"clear_tool_uses_20250919"`,
+		"a report that is a list":           `[` + ctClearing + `]`,
+		"edits that are an object":          `{"applied_edits":` + ctClearing + `}`,
+		"edits that are null":               `{"applied_edits":null}`,
+		"an edit that is no object":         ctEdits(`"clear_tool_uses_20250919"`),
+		"an edit of no type":                ctEdits(`{"cleared_tool_uses":18}`),
+		"an edit whose type is a number":    ctEdits(`{"type":7,"cleared_tool_uses":18}`),
+		"the clearing, its count a string":  ctEdits(count(`"cleared_tool_uses":"18",`)),
+		"the clearing, its count null":      ctEdits(count(`"cleared_tool_uses":null,`)),
+		"the clearing with no count":        ctEdits(count("")),
+		"the clearing, then a null edit":    ctEdits(ctClearing, "null"),
+		"another edit, then a numeric edit": ctEdits(ctThinking, "7"),
+	} {
+		line := ctLine(t, ctReported(t, report))
+		if cleared, err := line.ToolResultsCleared(); err == nil {
+			t.Errorf("%s reads as cleared %t, want an error", name, cleared)
+		}
+		if m, err := line.Message(); err != nil || !slices.Equal(m.Kinds(), []string{"text"}) {
+			t.Errorf("%s reads its message as the blocks %q, %v; want it whole", name, strings.Join(m.Kinds(), " "), err)
+		}
+	}
+
+	for name, message := range map[string]string{
+		"a reply whose message is null": `"message":null,`,
+		"a reply with no message":       "",
+	} {
+		record := `{"parentUuid":"` + ctUUID(30) + `","isSidechain":false,` + message + `"type":"assistant","uuid":"` +
+			ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
+		if cleared, err := ctLine(t, record).ToolResultsCleared(); err == nil {
+			t.Errorf("%s reads as cleared %t, want an error", name, cleared)
 		}
 	}
 }
