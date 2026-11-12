@@ -1,17 +1,17 @@
 -- A live ref is found past the tombstones.
 --
 -- The push decide refuses a create beside a directory of its own name
--- (code.RefusalRefConflict): refs/heads/feature beside refs/heads/feature/x,
+-- (gitlet.RefusalRefConflict): refs/heads/feature beside refs/heads/feature/x,
 -- which no client can hold both of. For each create it asks whether a LIVE ref
 -- lies under it — the first live row of code_refs keyed between ref + '/' and
 -- ref + '0' — and stops at the first. Over the primary key, that range holds
 -- every TOMBSTONE under the ref as well (a row with an empty target, kept
--- code.RefTombstoneHorizon so a delta learns of a deletion), and the target is
+-- gitlet.RefTombstoneHorizon so a delta learns of a deletion), and the target is
 -- not in the key, so the seek stepped over each one with a lookup of its row
 -- before it could stop. Each tombstone was stepped over once for every create
 -- above it: a push of the 118 nested creates refs/heads/a, refs/heads/a/a, …
--- over code.MaxTombstonesPerRepo tombstones under the deepest of them cost
--- 7.7–9.9 s a round (internal/code's BenchmarkDecideABatch, buried arm, on
+-- over gitlet.MaxTombstonesPerRepo tombstones under the deepest of them cost
+-- 7.7–9.9 s a round (internal/gitlet's BenchmarkDecideABatch, buried arm, on
 -- four vCPUs under a load average of 3–7), and 7–15 ms read through this
 -- index — a round the repository's one committer runs again on every
 -- compare-and-set retry, holding a reader of the replicated estate, inside a
@@ -33,7 +33,7 @@
 -- What it costs is the push apply's: every live ref a record writes is one
 -- entry more, and a deletion or a creation moves a ref out of it or into it —
 -- about 5 µs a created ref, 20 ms on the record of the most creations one
--- carries, measured interleaved with the build before it. internal/code's doc
+-- carries, measured interleaved with the build before it. internal/gitlet's doc
 -- (# Measured) records both sides.
 --
 -- Class: code_refs is unchanged; an index carries no rows of its own.

@@ -3,7 +3,7 @@
 // embedded broker's stream directory
 // ([github.com/crewlet/crewlet/internal/queue/jetstream]), a harness's
 // shared login ([github.com/crewlet/crewlet/internal/hostbox]) and a Gitlet node's
-// cache directory ([github.com/crewlet/crewlet/internal/code/cache]), whose
+// cache directory ([github.com/crewlet/crewlet/internal/gitlet/cache]), whose
 // boot empties directories only the process that filled them may be using.
 //
 // # One implementation, because the subtleties are not obvious

@@ -123,7 +123,7 @@ func keyOf(id *ast.Ident) paramKey { return paramKey{id.Obj.Decl, id.Name} }
 // A generic method's receiver parameter nothing binds is a parameter too,
 // found by the method that declares it ([receiverParam]): taken for a name of
 // the package's scope, a value of it was a type the walk could not resolve
-// — a gate refusing what it cannot type refused it (code/cache's writers
+// — a gate refusing what it cannot type refused it (gitlet/cache's writers
 // gate, over `func (c ListChange[T]) …`) — or, where the package declares a
 // type of that name too, that type, which the receiver's name shadows.
 func paramOf(id *ast.Ident, t Type) (bound Type, isBound, isParam bool) {

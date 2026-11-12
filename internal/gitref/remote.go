@@ -15,7 +15,7 @@ import (
 // to — read one way and written back that way ([ParseRemoteURL]).
 //
 // HERE, BELOW EVERY READER, because three judge one URL: the git process
-// wrapper (internal/code/gitproc) before it hands git a URL to dial, the code
+// wrapper (internal/gitlet/gitproc) before it hands git a URL to dial, the code
 // domain before it records a repository's mirror or import, and the
 // configuration validating code.repos at `crewlet validate`. Each read it its
 // own way once, and a URL the document admitted — a user before the host, a

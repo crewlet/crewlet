@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -35,20 +35,20 @@ import (
 // in order (events).
 type codeWriteHost struct {
 	mu    sync.Mutex
-	repos map[string]code.RepoRef
+	repos map[string]gitlet.RepoRef
 	// refs are a repository's refs by its name, each whole ref's oid: a
 	// resolve answers one set an hour ago, by the seat whose namespace holds
 	// it.
 	refs       map[string]map[string]string
-	writes     []code.EngineWrite
-	lifecycles []code.LifecycleRequest
+	writes     []gitlet.EngineWrite
+	lifecycles []gitlet.LifecycleRequest
 	// events is every question asked — resolve_ref, git_write, lifecycle —
 	// in the order it came.
 	events []string
 }
 
-func newCodeWriteHost(repos ...code.RepoRef) *codeWriteHost {
-	h := &codeWriteHost{repos: map[string]code.RepoRef{}, refs: map[string]map[string]string{}}
+func newCodeWriteHost(repos ...gitlet.RepoRef) *codeWriteHost {
+	h := &codeWriteHost{repos: map[string]gitlet.RepoRef{}, refs: map[string]map[string]string{}}
 	for _, r := range repos {
 		h.repos[r.Name] = r
 	}
@@ -62,26 +62,26 @@ func (h *codeWriteHost) asked() []string {
 	return slices.Clone(h.events)
 }
 
-func (h *codeWriteHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (h *codeWriteHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	repo, ok := h.repos[q.Repo]
 	if !ok {
-		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, q.Repo)
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound, q.Repo)
 	}
-	return code.ReadAnswer{Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: repo}},
+	return gitlet.ReadAnswer{Repo: &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{RepoRef: repo}},
 		Position: repo.Position, Level: q.Fresh.Level}, nil
 }
 
-func (h *codeWriteHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+func (h *codeWriteHost) ResolveRef(_ context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, "resolve_ref")
 	repo, ok := h.repos[q.Repo]
 	if !ok {
-		return code.RefAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, q.Repo)
+		return gitlet.RefAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound, q.Repo)
 	}
-	out := code.RefAnswer{Repo: repo, Position: codeLogAt(10)}
+	out := gitlet.RefAnswer{Repo: repo, Position: codeLogAt(10)}
 	for _, asked := range q.Refs {
 		whole := asked
 		if !strings.HasPrefix(whole, "refs/") {
@@ -89,73 +89,73 @@ func (h *codeWriteHost) ResolveRef(_ context.Context, q code.RefQuery) (code.Ref
 		}
 		oid, ok := h.refs[q.Repo][whole]
 		if !ok {
-			out.Refs = append(out.Refs, code.ResolvedRef{Name: asked, Missing: "no live " + whole})
+			out.Refs = append(out.Refs, gitlet.ResolvedRef{Name: asked, Missing: "no live " + whole})
 			continue
 		}
-		seat, _, _ := strings.Cut(strings.TrimPrefix(whole, code.SeatNamespaceRoot), "/")
-		out.Refs = append(out.Refs, code.ResolvedRef{Name: asked, Ref: whole, OID: oid, Moved: codeLogAt(8),
+		seat, _, _ := strings.Cut(strings.TrimPrefix(whole, gitlet.SeatNamespaceRoot), "/")
+		out.Refs = append(out.Refs, gitlet.ResolvedRef{Name: asked, Ref: whole, OID: oid, Moved: codeLogAt(8),
 			At: time.Now().Add(-time.Hour), Seat: seat})
 	}
 	return out, nil
 }
 
-func (h *codeWriteHost) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, code.ErrObjectNotFound
+func (h *codeWriteHost) GitRead(context.Context, gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return gitlet.GitAnswer{}, gitlet.ErrObjectNotFound
 }
 
 func (h *codeWriteHost) FloorOf(string) statelog.Position { return statelog.Position{} }
 
-func (h *codeWriteHost) GitWrite(_ context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+func (h *codeWriteHost) GitWrite(_ context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.writes = append(h.writes, w)
 	h.events = append(h.events, "git_write")
 	commit := strings.Repeat("d", 40)
-	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: commit, PushID: code.WritePushID(w.OpID),
-		Position: codeLogAt(20), Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: commit,
-			Result: code.ResultOK}}, nil
+	return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: commit, PushID: gitlet.WritePushID(w.OpID),
+		Position: codeLogAt(20), Command: gitlet.Command{Ref: w.Ref, Old: w.ExpectedHead, New: commit,
+			Result: gitlet.ResultOK}}, nil
 }
 
-func (h *codeWriteHost) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+func (h *codeWriteHost) Lifecycle(_ context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.lifecycles = append(h.lifecycles, r)
 	h.events = append(h.events, "lifecycle:"+string(r.Kind))
-	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(21)}, nil
+	return gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(21)}, nil
 }
 
 // Change and Converse answer a change's writes as decided — no case here
 // writes one: the code writes these cases make are engine writes and
 // lifecycle requests, and the change tools ride the same list.
-func (h *codeWriteHost) Change(context.Context, code.ChangeProposal) (code.ChangeResult, error) {
-	return code.ChangeResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(22)}, nil
+func (h *codeWriteHost) Change(context.Context, gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
+	return gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(22)}, nil
 }
 
-func (h *codeWriteHost) Converse(context.Context, code.ConversationWrite) (code.ConversationResult, error) {
-	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(23)}, nil
+func (h *codeWriteHost) Converse(context.Context, gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
+	return gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(23)}, nil
 }
 
-func (h *codeWriteHost) Mark(context.Context, code.MarkWrite) (code.MarkResult, error) {
-	return code.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(24)}, nil
+func (h *codeWriteHost) Mark(context.Context, gitlet.MarkWrite) (gitlet.MarkResult, error) {
+	return gitlet.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(24)}, nil
 }
 
-func (h *codeWriteHost) Checks(context.Context, code.ChecksRequest) (code.ChecksResult, error) {
-	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(25)}, nil
+func (h *codeWriteHost) Checks(context.Context, gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
+	return gitlet.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(25)}, nil
 }
 
 // Queue answers a queue's write as decided: no case here dequeues a change.
-func (h *codeWriteHost) Queue(context.Context, code.QueueProposal) (code.QueueResult, error) {
-	return code.QueueResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(26)}, nil
+func (h *codeWriteHost) Queue(context.Context, gitlet.QueueProposal) (gitlet.QueueResult, error) {
+	return gitlet.QueueResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(26)}, nil
 }
 
 // Expunge answers a purge request as recorded: no case here purges.
-func (h *codeWriteHost) Expunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
-	return code.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(27),
+func (h *codeWriteHost) Expunge(_ context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
+	return gitlet.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(27),
 		Request: p.Request.RequestID}, nil
 }
 
 // writesAsked is the engine writes the host was asked, copied under its lock.
-func (h *codeWriteHost) writesAsked() []code.EngineWrite {
+func (h *codeWriteHost) writesAsked() []gitlet.EngineWrite {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.writes)
@@ -194,10 +194,10 @@ func codeTool(t *testing.T, host *codeWriteHost, name string) tools.Callable {
 
 // scratchOf is seat's scratch repository named name, last active an hour ago:
 // held by a turn that names it, and recorded by none.
-func scratchOf(seat *org.Role, name string) code.RepoRef {
-	return code.RepoRef{ID: uuid.NewString(), Name: seat.Handle() + "." + name, Status: code.RepoStatusActive,
-		ManagedBy: code.ManagedTools, Kind: code.RepoScratch, Owner: code.Owner{Kind: code.OwnerSeat,
-			Ref: seat.Handle()}, Visibility: code.VisibilityCompany, DefaultBranch: "main",
+func scratchOf(seat *org.Role, name string) gitlet.RepoRef {
+	return gitlet.RepoRef{ID: uuid.NewString(), Name: seat.Handle() + "." + name, Status: gitlet.RepoStatusActive,
+		ManagedBy: gitlet.ManagedTools, Kind: gitlet.RepoScratch, Owner: gitlet.Owner{Kind: gitlet.OwnerSeat,
+			Ref: seat.Handle()}, Visibility: gitlet.VisibilityCompany, DefaultBranch: "main",
 		LastActivityAt: time.Now().Add(-time.Hour), Position: codeLogAt(9)}
 }
 
@@ -265,9 +265,9 @@ func TestABridgedCodeWriteNamesItsLaunchsModel(t *testing.T) {
 		{named, namedSeat, "claude-golden"},
 		{modelless, modellessSeat, ""},
 	} {
-		host := newCodeWriteHost(code.RepoRef{ID: uuid.NewString(), Name: "site", Status: code.RepoStatusActive,
-			ManagedBy: code.ManagedConfig, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit,
-				Ref: "eng"}, Visibility: code.VisibilityCompany, DefaultBranch: "main", Position: codeLogAt(9)})
+		host := newCodeWriteHost(gitlet.RepoRef{ID: uuid.NewString(), Name: "site", Status: gitlet.RepoStatusActive,
+			ManagedBy: gitlet.ManagedConfig, Kind: gitlet.RepoProject, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit,
+				Ref: "eng"}, Visibility: gitlet.VisibilityCompany, DefaultBranch: "main", Position: codeLogAt(9)})
 		turn := &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: c.seat,
 			Lookups: turnctx.NewLookups(), Holds: turnctx.NewHolds(nil)}
 		run := launchBridgedOn(t, c.company, turn, codeTool(t, host, builtin.CodeCommitFilesTool))
@@ -316,10 +316,10 @@ func TestABridgedRunHoldsTheScratchRepositoryItWrote(t *testing.T) {
 
 // webOf is the project repository web, the engineering unit's, its default
 // branch main.
-func webOf() code.RepoRef {
-	return code.RepoRef{ID: uuid.NewString(), Name: "web", Status: code.RepoStatusActive,
-		ManagedBy: code.ManagedConfig, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit,
-			Ref: "eng"}, Visibility: code.VisibilityCompany, DefaultBranch: "main", Position: codeLogAt(9)}
+func webOf() gitlet.RepoRef {
+	return gitlet.RepoRef{ID: uuid.NewString(), Name: "web", Status: gitlet.RepoStatusActive,
+		ManagedBy: gitlet.ManagedConfig, Kind: gitlet.RepoProject, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit,
+			Ref: "eng"}, Visibility: gitlet.VisibilityCompany, DefaultBranch: "main", Position: codeLogAt(9)}
 }
 
 // commitOn is a commit of one file onto repo's branch — at head where head is
@@ -350,9 +350,9 @@ func TestABridgedRunsBranchHoldOutlivesItsNode(t *testing.T) {
 	turn := &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: seat,
 		Lookups: turnctx.NewLookups(), Holds: turnctx.NewHolds(nil)}
 	run := launchBridgedOn(t, c, turn, codeTool(t, host, builtin.CodeCommitFilesTool))
-	branch := code.SeatNamespace(seat.Handle()) + "notes"
+	branch := gitlet.SeatNamespace(seat.Handle()) + "notes"
 	run.bridgedCall(t, builtin.CodeCommitFilesTool, commitOn(web.Name, strings.TrimPrefix(branch, "refs/heads/"), ""))
-	key := code.RefHoldKey(web.ID, branch)
+	key := gitlet.RefHoldKey(web.ID, branch)
 	if row := run.row(t, turn.RunID); !slices.Contains(row.CodeHolds, key) {
 		t.Fatalf("the run's row holds %v, want %s's key %s, which its bridged write created", row.CodeHolds, branch,
 			key)
@@ -377,7 +377,7 @@ func TestAResumedTurnResolvesItsBranchAgain(t *testing.T) {
 	c, seat := executorCompany(t)
 	web := webOf()
 	host := newCodeWriteHost(web)
-	branch := code.SeatNamespace(seat.Handle()) + "x"
+	branch := gitlet.SeatNamespace(seat.Handle()) + "x"
 	head := strings.Repeat("d", 40)
 	host.refs[web.Name] = map[string]string{branch: head}
 	args := commitOn(web.Name, strings.TrimPrefix(branch, "refs/heads/"), head)
@@ -392,7 +392,7 @@ func TestAResumedTurnResolvesItsBranchAgain(t *testing.T) {
 		t.Fatalf("the run's two writes asked %v, want one resolve, before the first", got)
 	}
 	row := run.row(t, turn.RunID)
-	if !slices.Contains(row.CodeHolds, code.RefHoldKey(web.ID, branch)) {
+	if !slices.Contains(row.CodeHolds, gitlet.RefHoldKey(web.ID, branch)) {
 		t.Fatalf("the launched run's row holds %v, want %s's key", row.CodeHolds, branch)
 	}
 	resumed := &turnctx.Turn{RunID: turn.RunID, Seat: seat, Org: c.Org, Lookups: turnctx.NewLookups(),
@@ -415,7 +415,7 @@ func TestAResumedTurnResolvesItsBranchAgain(t *testing.T) {
 type suspendedRun struct {
 	pending       sandbox.PendingStore
 	turnID        string
-	first, second code.RepoRef
+	first, second gitlet.RepoRef
 	turns         *runningTurns
 	done          func()
 }

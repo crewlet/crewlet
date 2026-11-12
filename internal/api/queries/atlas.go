@@ -19,17 +19,17 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // AtlasReads is the atlas as this node reads it for one asker: the settings
-// it runs, the engine's records, and Gitlet as asker where gitlet is set or
+// it runs, the engine's records, and Gitlet as asker where reads is set or
 // why it is not read for them (unread); false where it runs no company yet.
 // builtin.AtlasDeps serves it, as it serves the atlas tools.
 type AtlasReads interface {
-	AtlasRead(ctx context.Context, gitlet gather.GitletReads, unread string, asker code.Principal,
+	AtlasRead(ctx context.Context, reads gather.GitletReads, unread string, asker gitlet.Principal,
 		fresh statelog.Freshness, now time.Time) (gather.Answer, bool)
 }
 
@@ -101,8 +101,8 @@ func (s Sources) atlasView(ctx context.Context, what string) (atlas.View, AtlasR
 	if err != nil {
 		return atlas.View{}, AtlasRead{}, err
 	}
-	gitlet, why := s.atlasGitlet(principal)
-	answer, running := s.Atlas.AtlasRead(ctx, gitlet, why, codeAsker(principal), atlasFresh, s.clock())
+	reads, why := s.atlasGitlet(principal)
+	answer, running := s.Atlas.AtlasRead(ctx, reads, why, codeAsker(principal), atlasFresh, s.clock())
 	if !running {
 		return atlas.View{}, AtlasRead{}, fmt.Errorf("%w: this node runs no company yet, so there is no "+
 			"atlas to read", ErrUnavailable)

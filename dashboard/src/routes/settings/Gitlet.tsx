@@ -62,7 +62,7 @@ import type {
 import { FLEET_POLL_MS } from "./Fleet.tsx";
 import { LogRow, useRetentionReport } from "./Retention.tsx";
 
-/** The state log Gitlet keeps its rows on (`code.Domain`). */
+/** The state log Gitlet keeps its rows on (`gitlet.Domain`). */
 export const CODE_DOMAIN = "code";
 
 export function GitletSettings() {

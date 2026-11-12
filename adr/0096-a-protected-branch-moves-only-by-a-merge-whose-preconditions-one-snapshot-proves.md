@@ -1,19 +1,19 @@
 # ADR-0096: A protected branch moves only by a merge whose preconditions one snapshot proves
 
 - **Status:** accepted
-- **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestAMergeIsDecidedFromOneSnapshot`, `internal/code.TestAMergeMovesTargetDeletesSourceInOneRecord`, `internal/code.TestAnOverrideIsAPersons`, `internal/code.TestAProtectedRefMovesOnlyByAGatedRecord`, `internal/code.TestTheGateReadsNoDecision`
+- **Authority:** `internal/gitlet`
+- **Enforced-by:** `internal/gitlet.TestAMergeIsDecidedFromOneSnapshot`, `internal/gitlet.TestAMergeMovesTargetDeletesSourceInOneRecord`, `internal/gitlet.TestAnOverrideIsAPersons`, `internal/gitlet.TestAProtectedRefMovesOnlyByAGatedRecord`, `internal/gitlet.TestTheGateReadsNoDecision`
 - **Tag-status:** unreleased
 
 ## The decision
 
 A change merges into its target by ONE MERGE RECORD on its repository's own
-subject, decided by the repository's committer alone (`code.Merge`,
+subject, decided by the repository's committer alone (`gitlet.Merge`,
 `Committer.ProposeMerge`). Its decide reads one snapshot and proves every
 precondition in it: the repository active; the change open, not a draft, into
 the target and at the head the merge was built from; the target at the tip the
 merge was built onto, read from the snapshot's refs and never from the
-proposal; and the change's merge gate (`code.JudgeGate`) met with the record's
+proposal; and the change's merge gate (`gitlet.JudgeGate`) met with the record's
 principal as the merger — every precondition but `mergeable`, which the merge's
 own build proved against that tip. The record then does everything a merge is,
 in one apply: the change marked merged first, the target moved onto the merge's

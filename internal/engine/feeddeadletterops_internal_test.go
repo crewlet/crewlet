@@ -14,9 +14,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -137,7 +137,7 @@ var (
 	workFeed = changefeed.Source{Name: worklet.Source, Group: worklet.FeedGroup}
 	pageFeed = changefeed.Source{Name: doclet.Source, Group: doclet.FeedGroup}
 	chatFeed = changefeed.Source{Name: chatlet.Source, Group: chatlet.FeedGroup}
-	codeFeed = changefeed.Source{Name: code.Source, Group: code.FeedGroup}
+	codeFeed = changefeed.Source{Name: gitlet.Source, Group: gitlet.FeedGroup}
 )
 
 // letterBytes is d as the header its entry is kept under.

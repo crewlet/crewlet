@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
@@ -1787,6 +1788,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// them over the bridge, possibly in another process, so this list is
 		// the only record of what the phase did, its submission included.
 		Bridged: bridgedCalls(in.Bridged.Calls),
+		// AND THE CALLS IT HELD IN FLIGHT AS IT WAS READ, each its identity
+		// and an outcome not known: counted by the turn's call log, listed in
+		// the round's record and told to a run that carries the round on
+		// ([runner.Resume.Unfinished]).
+		Unfinished: unfinishedCalls(in.Bridged.InFlight),
 		// AND WHAT THE LOG COUNTS WITHOUT LISTING, by identity, which the
 		// turn's call log is seeded with beside them: the round's calls it
 		// dropped, and the calls the log absorbed from their own work.
@@ -2025,11 +2031,42 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // A turn that suspended again owes nothing: it has not finished, so there is
 // no end to tell. The end that eventually lands comes back through this same
 // frame and is owed then.
+//
+// A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call of
+// the turn's run has an outcome nobody knows — its entry still in flight as
+// the round's calls were read ([sandbox.BridgeLog.InFlight]), or a closed
+// round's record holding one so read ([ledger.Call.Unfinished]): that call may
+// be the reply, so the end says its delivery is unknown, never that the turn
+// did not reply.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
-		e.oweExecutorEnd(ctx, in.Run, endingOf(res, reply, answered))
+		e.oweExecutorEnd(ctx, in.Run, resumedEnding(in, res, reply, answered))
 	}
+}
+
+// resumedEnding is how a finished resumed turn ended ([endingOf]), its delivery
+// read as unknown where the record shows no reply beside a call whose outcome
+// nobody knows ([unfinishedIn]).
+func resumedEnding(in resumeInput, res turn.Result, reply turn.Reply, answered colleagueAnswer,
+) executorkeep.Ending {
+	ending := endingOf(res, reply, answered)
+	if !ending.Delivered && unfinishedIn(in) {
+		ending.DeliveryUnknown = true
+	}
+	return ending
+}
+
+// unfinishedIn reports whether a call of in's turn has an outcome nobody knows:
+// one the log it resumes from held in flight as it was read, or one a closed
+// round's record lists so ([ledger.Call.Unfinished]).
+func unfinishedIn(in resumeInput) bool {
+	if len(in.Bridged.InFlight) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(in.State.Iterations, func(it ledger.Iteration) bool {
+		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished })
+	})
 }
 
 // resumeTask is the brief the resumed turn re-enters with.
@@ -2898,11 +2935,6 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
-		// AND CARRIES ITS JOB'S OWED CALLS into the run's log, with their
-		// spend onto the job's record, before the resume reads the log —
-		// see [sandbox.CoordinatorOptions.Settle] and bridge.go's
-		// [bridgeLedger.Settle].
-		Settle: e.bridge.Settle,
 		// AND IS SERVED AGAIN wherever the run is taken over while its box
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].

@@ -80,7 +80,7 @@ func (o OpenChange) problem(branch string) string {
 
 // MaxChangeTitleBytes bounds the title an executor asks a change to open with
 // ([OpenChange.Title]): Gitlet's own bound on a change's title
-// (internal/code's MaxChangeTitleBytes), which the launch resolving the ask
+// (internal/gitlet's MaxChangeTitleBytes), which the launch resolving the ask
 // holds it to and this package imports nothing of — the engine's
 // TestARunsChangeTitleIsBoundAsGitletBoundsIt holds the two equal. HERE
 // TOO, because the title rides the run's row in each of its repositories

@@ -229,59 +229,61 @@ func TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			store := newTakerStore()
-			rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-			if own := heldBy(t, store, thisProcess); own == nil || kept.Taker != thisProcess ||
-				kept.TakerEpoch != own.Epoch {
-				t.Fatalf("the premise: the collection's capture names %s at %d, want this process's own "+
-					"taker lease, %+v", kept.Taker, kept.TakerEpoch, own)
-			}
-			lease := claimTaker(t, store, takingProcess)
-			begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
-			var row executorkeep.TurnRow
-			if c.landed {
-				row = landedRow(t, begun)
-				onTheLog(restore, row)
-			}
-			if c.released {
-				if ok, err := store.Release(t.Context(), coord.TakerResource(takingProcess), takingProcess,
-					lease.Epoch); err != nil || !ok {
-					t.Fatalf("give node-a's taker lease back = %v, %v", ok, err)
+			inBubble(t, func(t *testing.T) {
+				store := newTakerStore()
+				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+				if own := heldBy(t, store, thisProcess); own == nil || kept.Taker != thisProcess ||
+					kept.TakerEpoch != own.Epoch {
+					t.Fatalf("the premise: the collection's capture names %s at %d, want this process's own "+
+						"taker lease, %+v", kept.Taker, kept.TakerEpoch, own)
 				}
-			} else {
-				lapse(store)
-			}
-			settled, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1"))
-			if !found {
-				t.Fatal("the run's row was read as gone")
-			}
-			got := rig.get("t1")
-			if got.Capture == nil || !got.Capture.sameTake(begun) || settled.Capture == nil ||
-				settled.Capture.State != got.Capture.State {
-				t.Fatalf("the row holds %+v (answered %+v), want the begun take settled", got.Capture,
-					settled.Capture)
-			}
-			if !c.landed {
-				if got.Capture.State != CaptureRefused ||
-					!strings.Contains(got.Capture.Reason, "its taker node-a stopped before it was kept") {
-					t.Errorf("the capture stands %s (%q), want it refused for its stopped taker",
-						got.Capture.State, got.Capture.Reason)
+				lease := claimTaker(t, store, takingProcess)
+				begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+				var row executorkeep.TurnRow
+				if c.landed {
+					row = landedRow(t, begun)
+					onTheLog(restore, row)
 				}
-				if got.Kept == nil || !got.Kept.samePlace(kept) {
-					t.Errorf("the row keeps %+v, want the turn's kept capture left as it was", got.Kept)
+				if c.released {
+					if ok, err := store.Release(t.Context(), coord.TakerResource(takingProcess), takingProcess,
+						lease.Epoch); err != nil || !ok {
+						t.Fatalf("give node-a's taker lease back = %v, %v", ok, err)
+					}
+				} else {
+					lapse(store)
 				}
-				return
-			}
-			if got.Capture.State != CaptureLanded || got.Capture.Object != row.Object.Key.String() ||
-				got.Capture.ObjectSize != row.Object.Size || got.Capture.ContentKey != "k2" ||
-				got.Capture.ContextTokens != 42_000 || got.Capture.Taker != takingProcess ||
-				got.Capture.TakerEpoch != lease.Epoch {
-				t.Errorf("the capture stands %+v, want it landed as the log's row names it, its taker kept",
-					got.Capture)
-			}
-			if got.Kept == nil || !got.Kept.samePlace(begun) || got.Kept.State != CaptureLanded {
-				t.Errorf("the row keeps %+v, want the landed capture kept as the turn's", got.Kept)
-			}
+				settled, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1"))
+				if !found {
+					t.Fatal("the run's row was read as gone")
+				}
+				got := rig.get("t1")
+				if got.Capture == nil || !got.Capture.sameTake(begun) || settled.Capture == nil ||
+					settled.Capture.State != got.Capture.State {
+					t.Fatalf("the row holds %+v (answered %+v), want the begun take settled", got.Capture,
+						settled.Capture)
+				}
+				if !c.landed {
+					if got.Capture.State != CaptureRefused ||
+						!strings.Contains(got.Capture.Reason, "its taker node-a stopped before it was kept") {
+						t.Errorf("the capture stands %s (%q), want it refused for its stopped taker",
+							got.Capture.State, got.Capture.Reason)
+					}
+					if got.Kept == nil || !got.Kept.samePlace(kept) {
+						t.Errorf("the row keeps %+v, want the turn's kept capture left as it was", got.Kept)
+					}
+					return
+				}
+				if got.Capture.State != CaptureLanded || got.Capture.Object != row.Object.Key.String() ||
+					got.Capture.ObjectSize != row.Object.Size || got.Capture.ContentKey != "k2" ||
+					got.Capture.ContextTokens != 42_000 || got.Capture.Taker != takingProcess ||
+					got.Capture.TakerEpoch != lease.Epoch {
+					t.Errorf("the capture stands %+v, want it landed as the log's row names it, its taker kept",
+						got.Capture)
+				}
+				if got.Kept == nil || !got.Kept.samePlace(begun) || got.Kept.State != CaptureLanded {
+					t.Errorf("the row keeps %+v, want the landed capture kept as the turn's", got.Kept)
+				}
+			})
 		})
 	}
 }
@@ -304,7 +306,7 @@ func TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 // finished.
 func TestAnEndDoesNotWaitOutACaptureWhoseTakersLeaseLapsed(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		store := newTakerStore()
 		rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
 		rig.coordinator.captureTick = time.Second
@@ -374,7 +376,7 @@ func TestAnEndDoesNotWaitOutACaptureWhoseTakersLeaseLapsed(t *testing.T) {
 // a keep still uploading.
 func TestADrainingTakersCaptureIsNotSettledUnderIt(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		ctx := t.Context()
 		store := newTakerStore()
 		rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
@@ -446,33 +448,35 @@ func TestADrainingTakersCaptureIsNotSettledUnderIt(t *testing.T) {
 // tenure's capture is left begun under the new one.
 func TestATakerLeaseHeldAtAnotherEpochIsGone(t *testing.T) {
 	t.Parallel()
-	store := newTakerStore()
-	rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-	first := claimTaker(t, store, takingProcess)
-	begun := takenBy(t, rig, kept, takingProcess, first.Epoch)
-	lapse(store)
-	again := claimTaker(t, store, takingProcess)
-	if again.Epoch <= first.Epoch {
-		t.Fatalf("the premise: node-a's taker claimed again at %d, want above its lapsed %d", again.Epoch,
-			first.Epoch)
-	}
-	current := begun
-	current.TakerEpoch = again.Epoch
-	if gone, err := rig.coordinator.takerGone(t.Context(), current); err != nil || gone {
-		t.Errorf("a capture under the epoch node-a's lease holds now reads gone = %v, %v; want it kept for", gone,
-			err)
-	}
-	if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
-		t.Fatal("the run's row was read as gone")
-	}
-	got := rig.get("t1")
-	if got.Capture == nil || !got.Capture.sameTake(begun) || got.Capture.State != CaptureRefused ||
-		!strings.Contains(got.Capture.Reason, "its taker node-a stopped before it was kept") {
-		t.Errorf("the row holds %+v, want the lapsed tenure's capture refused for its stopped taker", got.Capture)
-	}
-	if read := restore.askedFor(); len(read) != 1 {
-		t.Errorf("the turn's row was read %v, want once to settle the capture", read)
-	}
+	inBubble(t, func(t *testing.T) {
+		store := newTakerStore()
+		rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+		first := claimTaker(t, store, takingProcess)
+		begun := takenBy(t, rig, kept, takingProcess, first.Epoch)
+		lapse(store)
+		again := claimTaker(t, store, takingProcess)
+		if again.Epoch <= first.Epoch {
+			t.Fatalf("the premise: node-a's taker claimed again at %d, want above its lapsed %d", again.Epoch,
+				first.Epoch)
+		}
+		current := begun
+		current.TakerEpoch = again.Epoch
+		if gone, err := rig.coordinator.takerGone(t.Context(), current); err != nil || gone {
+			t.Errorf("a capture under the epoch node-a's lease holds now reads gone = %v, %v; want it kept for", gone,
+				err)
+		}
+		if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
+			t.Fatal("the run's row was read as gone")
+		}
+		got := rig.get("t1")
+		if got.Capture == nil || !got.Capture.sameTake(begun) || got.Capture.State != CaptureRefused ||
+			!strings.Contains(got.Capture.Reason, "its taker node-a stopped before it was kept") {
+			t.Errorf("the row holds %+v, want the lapsed tenure's capture refused for its stopped taker", got.Capture)
+		}
+		if read := restore.askedFor(); len(read) != 1 {
+			t.Errorf("the turn's row was read %v, want once to settle the capture", read)
+		}
+	})
 }
 
 // A STORE THAT CANNOT ANSWER NEVER READS A TAKER AS GONE. Whether a taker's
@@ -485,31 +489,33 @@ func TestATakerLeaseHeldAtAnotherEpochIsGone(t *testing.T) {
 // while its taker may still be keeping it.
 func TestAStoreThatCannotAnswerNeverReadsATakerAsGone(t *testing.T) {
 	t.Parallel()
-	store := newTakerStore()
-	rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-	lease := claimTaker(t, store, takingProcess)
-	begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
-	lapse(store)
-	store.setDown(errors.New("coord: the lease store did not answer"))
-	if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
-		t.Fatal("the run's row was read as gone")
-	}
-	if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
-		t.Fatalf("the row holds %+v while the store could not answer, want the capture left begun", got)
-	}
-	if read := restore.askedFor(); len(read) != 0 {
-		t.Fatalf("the turn's row was read %v while the store could not say whether the taker was gone", read)
-	}
-	store.setDown(nil)
-	if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
-		t.Fatal("the run's row was read as gone")
-	}
-	if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureRefused {
-		t.Errorf("the row holds %+v once the store answered the lease lapsed, want the capture refused", got)
-	}
-	if reads := store.readsOf(takingProcess); reads != 2 {
-		t.Errorf("node-a's taker lease was read %d times, want once a pass", reads)
-	}
+	inBubble(t, func(t *testing.T) {
+		store := newTakerStore()
+		rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+		lease := claimTaker(t, store, takingProcess)
+		begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+		lapse(store)
+		store.setDown(errors.New("coord: the lease store did not answer"))
+		if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
+			t.Fatal("the run's row was read as gone")
+		}
+		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
+			t.Fatalf("the row holds %+v while the store could not answer, want the capture left begun", got)
+		}
+		if read := restore.askedFor(); len(read) != 0 {
+			t.Fatalf("the turn's row was read %v while the store could not say whether the taker was gone", read)
+		}
+		store.setDown(nil)
+		if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
+			t.Fatal("the run's row was read as gone")
+		}
+		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureRefused {
+			t.Errorf("the row holds %+v once the store answered the lease lapsed, want the capture refused", got)
+		}
+		if reads := store.readsOf(takingProcess); reads != 2 {
+			t.Errorf("node-a's taker lease was read %d times, want once a pass", reads)
+		}
+	})
 }
 
 // A GONE TAKER'S CAPTURE IS SETTLED ONLY BY AN ANSWER FROM THE LOG. A capture
@@ -528,65 +534,97 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 	t.Parallel()
 	t.Run("the log could not be read", func(t *testing.T) {
 		t.Parallel()
-		store := newTakerStore()
-		rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-		lease := claimTaker(t, store, takingProcess)
-		begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
-		onTheLog(restore, landedRow(t, begun))
-		lapse(store)
-		restore.mu.Lock()
-		restore.unreadRows = errors.New("estate: no data node answered the read")
-		restore.mu.Unlock()
-		settled, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1"))
-		if !found || settled.Capture == nil || !settled.Capture.sameTake(begun) ||
-			settled.Capture.State != CaptureBegun {
-			t.Fatalf("a read that failed answered %+v (found %v), want the capture left begun", settled.Capture,
-				found)
-		}
-		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
-			t.Fatalf("the row holds %+v after a read that failed, want the capture left begun", got)
-		}
-		// THE NEXT PASS, once the log answers.
-		restore.mu.Lock()
-		restore.unreadRows = nil
-		restore.mu.Unlock()
-		if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
-			t.Fatal("the run's row was read as gone")
-		}
-		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureLanded {
-			t.Errorf("the row holds %+v once the log answered, want the capture its row names landed", got)
-		}
-		if read := restore.askedFor(); len(read) != 2 {
-			t.Errorf("the log was read %v, want once at each pass", read)
-		}
+		inBubble(t, func(t *testing.T) {
+			store := newTakerStore()
+			rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+			lease := claimTaker(t, store, takingProcess)
+			begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+			onTheLog(restore, landedRow(t, begun))
+			lapse(store)
+			restore.mu.Lock()
+			restore.unreadRows = errors.New("estate: no data node answered the read")
+			restore.mu.Unlock()
+			settled, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1"))
+			if !found || settled.Capture == nil || !settled.Capture.sameTake(begun) ||
+				settled.Capture.State != CaptureBegun {
+				t.Fatalf("a read that failed answered %+v (found %v), want the capture left begun", settled.Capture,
+					found)
+			}
+			if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
+				t.Fatalf("the row holds %+v after a read that failed, want the capture left begun", got)
+			}
+			// THE NEXT PASS, once the log answers.
+			restore.mu.Lock()
+			restore.unreadRows = nil
+			restore.mu.Unlock()
+			if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
+				t.Fatal("the run's row was read as gone")
+			}
+			if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureLanded {
+				t.Errorf("the row holds %+v once the log answered, want the capture its row names landed", got)
+			}
+			if read := restore.askedFor(); len(read) != 2 {
+				t.Errorf("the log was read %v, want once at each pass", read)
+			}
+		})
 	})
 	t.Run("the log holds no row for the turn", func(t *testing.T) {
 		t.Parallel()
-		store := newTakerStore()
-		rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
-		run := rig.launchKept(t, "t1")
-		lease := claimTaker(t, store, takingProcess)
-		begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
-			State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
-			TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
-		if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
-			t.Fatalf("stamping the begun capture = %v, %v", took, err)
-		}
-		lapse(store)
-		restore := &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
-		rig.coordinator.restore = restore
-		if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
-			t.Fatal("the run's row was read as gone")
-		}
-		got := rig.get("t1").Capture
-		if got == nil || !got.sameTake(begun) || got.State != CaptureRefused ||
-			!strings.Contains(got.Reason, "its taker node-a stopped before it was kept") {
-			t.Errorf("the row holds %+v, want the capture refused for its stopped taker", got)
-		}
-		if read := restore.askedFor(); len(read) != 1 {
-			t.Errorf("the log was read %v, want once", read)
-		}
+		inBubble(t, func(t *testing.T) {
+			store := newTakerStore()
+			rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
+			run := rig.launchKept(t, "t1")
+			lease := claimTaker(t, store, takingProcess)
+			begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+				State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
+				TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+			if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+				t.Fatalf("stamping the begun capture = %v, %v", took, err)
+			}
+			lapse(store)
+			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
+			rig.coordinator.restore = restore
+			if _, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, rig.get("t1")); !found {
+				t.Fatal("the run's row was read as gone")
+			}
+			got := rig.get("t1").Capture
+			if got == nil || !got.sameTake(begun) || got.State != CaptureRefused ||
+				!strings.Contains(got.Reason, "its taker node-a stopped before it was kept") {
+				t.Errorf("the row holds %+v, want the capture refused for its stopped taker", got)
+			}
+			if read := restore.askedFor(); len(read) != 1 {
+				t.Errorf("the log was read %v, want once", read)
+			}
+		})
 	})
+}
+
+// relaunchAfterTaker relaunches the job of a kept turn whose newest capture
+// another process took and began, its taker lease lapsed where gone and the
+// capture's record on the log where landed, the relaunch waiting at most wait
+// for it: the rig, the begun capture, and what the relaunch continues and why
+// it continues none.
+//
+// Built on [keepingRig], and so only in a bubble ([inBubble]).
+//
+//fixedwait:bubble
+func relaunchAfterTaker(t *testing.T, gone, landed bool,
+	wait time.Duration) (*coordRig, SessionCapture, ContinuedSession, string) {
+
+	t.Helper()
+	store := newTakerStore()
+	rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+	rig.coordinator.relaunchWait = wait
+	lease := claimTaker(t, store, takingProcess)
+	begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+	if landed {
+		onTheLog(restore, landedRow(t, begun))
+	}
+	if gone {
+		lapse(store)
+	}
+	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+	return rig, begun, continued, why
 }
 
 // A RELAUNCH SETTLES A CAPTURE WHOSE TAKER IS GONE BEFORE IT DECIDES. A job lost
@@ -605,57 +643,45 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 // still holds, and the third is decided under a keep still under way.
 func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 	t.Parallel()
-	relaunch := func(t *testing.T, gone, landed bool,
-		wait time.Duration) (*coordRig, SessionCapture, ContinuedSession, string) {
-
-		t.Helper()
-		store := newTakerStore()
-		rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-		rig.coordinator.relaunchWait = wait
-		lease := claimTaker(t, store, takingProcess)
-		begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
-		if landed {
-			onTheLog(restore, landedRow(t, begun))
-		}
-		if gone {
-			lapse(store)
-		}
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
-		return rig, begun, continued, why
-	}
 	t.Run("its record landed", func(t *testing.T) {
 		t.Parallel()
-		rig, begun, continued, why := relaunch(t, true, true, 2*time.Second)
-		if why != "" || !continued.Capture.samePlace(begun) || continued.Capture.State != CaptureLanded ||
-			continued.Context != 42_000 {
-			t.Fatalf("the relaunch continues %+v (%q), want the capture the stopped process landed, of "+
-				"42000 tokens", continued, why)
-		}
-		if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(begun) {
-			t.Errorf("the row keeps %+v, want the capture the relaunch continued", kept)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, begun, continued, why := relaunchAfterTaker(t, true, true, 2*time.Second)
+			if why != "" || !continued.Capture.samePlace(begun) || continued.Capture.State != CaptureLanded ||
+				continued.Context != 42_000 {
+				t.Fatalf("the relaunch continues %+v (%q), want the capture the stopped process landed, of "+
+					"42000 tokens", continued, why)
+			}
+			if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(begun) {
+				t.Errorf("the row keeps %+v, want the capture the relaunch continued", kept)
+			}
+		})
 	})
 	t.Run("its record never landed", func(t *testing.T) {
 		t.Parallel()
-		rig, begun, continued, why := relaunch(t, true, false, 2*time.Second)
-		if !strings.Contains(why, "its taker node-a stopped before it was kept") ||
-			strings.Contains(why, "still being kept") || continued.Capture.CaptureSeq != 0 {
-			t.Fatalf("the relaunch continues %+v (%q), want none, said: its taker stopped", continued, why)
-		}
-		if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureRefused {
-			t.Errorf("the row holds %+v, want the begun capture refused", c)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, begun, continued, why := relaunchAfterTaker(t, true, false, 2*time.Second)
+			if !strings.Contains(why, "its taker node-a stopped before it was kept") ||
+				strings.Contains(why, "still being kept") || continued.Capture.CaptureSeq != 0 {
+				t.Fatalf("the relaunch continues %+v (%q), want none, said: its taker stopped", continued, why)
+			}
+			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureRefused {
+				t.Errorf("the row holds %+v, want the begun capture refused", c)
+			}
+		})
 	})
 	t.Run("its taker's lease still holds", func(t *testing.T) {
 		t.Parallel()
-		rig, begun, _, why := relaunch(t, false, true, 50*time.Millisecond)
-		if !strings.Contains(why, "still being kept") {
-			t.Fatalf("the relaunch answered %q, want the capture of a taker still holding its lease waited for",
-				why)
-		}
-		if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureBegun {
-			t.Errorf("the row holds %+v, want the live taker's capture left begun", c)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, begun, _, why := relaunchAfterTaker(t, false, true, 50*time.Millisecond)
+			if !strings.Contains(why, "still being kept") {
+				t.Fatalf("the relaunch answered %q, want the capture of a taker still holding its lease waited for",
+					why)
+			}
+			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureBegun {
+				t.Errorf("the row holds %+v, want the live taker's capture left begun", c)
+			}
+		})
 	})
 }
 
@@ -670,37 +696,39 @@ func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 // and it says the capture's record was never answered and continues nothing.
 func TestAnUnresolvedCaptureIsAskedAgainBeforeARelaunchDecides(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	rig.runner.Carries = true
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
-	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
-		Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-	unresolved := rig.get("t1").Capture
-	if unresolved == nil || unresolved.State != CaptureUnresolved {
-		t.Fatalf("the premise: the row holds %+v, want its capture unresolved", unresolved)
-	}
-	writes.answer(nil)
-	rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *unresolved)}}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		rig.runner.Carries = true
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		unresolved := rig.get("t1").Capture
+		if unresolved == nil || unresolved.State != CaptureUnresolved {
+			t.Fatalf("the premise: the row holds %+v, want its capture unresolved", unresolved)
+		}
+		writes.answer(nil)
+		rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *unresolved)}}
 
-	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
-	if why != "" || !continued.Capture.samePlace(*unresolved) || continued.Capture.State != CaptureLanded {
-		t.Fatalf("the relaunch continues %+v (%q), want the capture its ask landed", continued, why)
-	}
-	if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(*unresolved) || kept.State != CaptureLanded {
-		t.Errorf("the row keeps %+v, want the capture the relaunch's ask landed", kept)
-	}
-	captures := writes.captured()
-	if len(captures) < 2 {
-		t.Fatalf("the log was asked %d times, want the collection's attempts and the relaunch's ask", len(captures))
-	}
-	last := captures[len(captures)-1]
-	if last.err != nil || last.operation() != captures[0].operation() {
-		t.Errorf("the log was last asked %+v, want the capture asked again under its own operation and landed",
-			last)
-	}
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		if why != "" || !continued.Capture.samePlace(*unresolved) || continued.Capture.State != CaptureLanded {
+			t.Fatalf("the relaunch continues %+v (%q), want the capture its ask landed", continued, why)
+		}
+		if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(*unresolved) || kept.State != CaptureLanded {
+			t.Errorf("the row keeps %+v, want the capture the relaunch's ask landed", kept)
+		}
+		captures := writes.captured()
+		if len(captures) < 2 {
+			t.Fatalf("the log was asked %d times, want the collection's attempts and the relaunch's ask", len(captures))
+		}
+		last := captures[len(captures)-1]
+		if last.err != nil || last.operation() != captures[0].operation() {
+			t.Errorf("the log was last asked %+v, want the capture asked again under its own operation and landed",
+				last)
+		}
+	})
 }
 
 // A CAPTURE A RELAUNCH'S ASK LANDS IS THE TURN'S OWN TO READ, CONTINUED OR NOT.
@@ -715,36 +743,38 @@ func TestAnUnresolvedCaptureIsAskedAgainBeforeARelaunchDecides(t *testing.T) {
 // and the relaunch names its run no session to read.
 func TestACaptureARelaunchsAskLandsIsTheTurnsOwnToRead(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	rig.runner.Carries = true
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
-	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
-		Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-	run := rig.get("t1")
-	unresolved := run.Capture
-	if unresolved == nil || unresolved.State != CaptureUnresolved || run.Kept != nil {
-		t.Fatalf("the premise: the row holds %+v and keeps %+v, want its one capture unresolved and none kept",
-			unresolved, run.Kept)
-	}
-	writes.answer(nil)
-	rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *unresolved)}}
-	refusing := fakeRestorer{why: "no runner of this member takes a claude-code session up"}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		rig.runner.Carries = true
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		run := rig.get("t1")
+		unresolved := run.Capture
+		if unresolved == nil || unresolved.State != CaptureUnresolved || run.Kept != nil {
+			t.Fatalf("the premise: the row holds %+v and keeps %+v, want its one capture unresolved and none kept",
+				unresolved, run.Kept)
+		}
+		writes.answer(nil)
+		rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *unresolved)}}
+		refusing := fakeRestorer{why: "no runner of this member takes a claude-code session up"}
 
-	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", refusing)
-	if why != refusing.why || continued.Capture.CaptureSeq != 0 {
-		t.Fatalf("the relaunch continues %+v (%q), want none, said: its runner takes the session up no more",
-			continued, why)
-	}
-	if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(*unresolved) {
-		t.Fatalf("the premise: the row keeps %+v, want the capture the relaunch's ask landed", kept)
-	}
-	if continued.KeptTurn != "t1" {
-		t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose capture "+
-			"its ask landed", continued.KeptTurn)
-	}
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", refusing)
+		if why != refusing.why || continued.Capture.CaptureSeq != 0 {
+			t.Fatalf("the relaunch continues %+v (%q), want none, said: its runner takes the session up no more",
+				continued, why)
+		}
+		if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(*unresolved) {
+			t.Fatalf("the premise: the row keeps %+v, want the capture the relaunch's ask landed", kept)
+		}
+		if continued.KeptTurn != "t1" {
+			t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose capture "+
+				"its ask landed", continued.KeptTurn)
+		}
+	})
 }
 
 // A RELAUNCH'S ASK OF AN UNANSWERED RECORD ENDS WITHIN THE RELAUNCH'S OWN WAIT.
@@ -761,7 +791,7 @@ func TestACaptureARelaunchsAskLandsIsTheTurnsOwnToRead(t *testing.T) {
 // hour here.
 func TestARelaunchsAskOfAnUnansweredRecordEndsWithinItsWait(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		rig, writes, _ := keepingRig(t)
 		rig.runner.Carries = true
 		rig.launchKept(t, "t1")
@@ -836,7 +866,7 @@ func TestAFencedKeepUploadsAndRecordsNothing(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			synctest.Test(t, func(t *testing.T) {
+			inBubble(t, func(t *testing.T) {
 				store := newTakerStore()
 				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
 				// THE RECORD'S ATTEMPTS AT THEIR CEILING'S SPACING, eight seconds
@@ -907,7 +937,7 @@ func TestAFencedKeepUploadsAndRecordsNothing(t *testing.T) {
 // does.
 func TestATakerLeaseOutlastsTheDrainAndIsReleasedAfterTheLastKeep(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		ctx := t.Context()
 		store := newTakerStore()
 		rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
@@ -994,7 +1024,7 @@ func TestATakeWithNoTakerLeaseBeginsNoCapture(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			synctest.Test(t, func(t *testing.T) {
+			inBubble(t, func(t *testing.T) {
 				store := newTakerStore()
 				down := errors.New("coord: the lease store did not answer")
 				if !c.claimed {
@@ -1054,24 +1084,26 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			store := newTakerStore()
-			rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-			rig.coordinator.relaunchWait = 50 * time.Millisecond
-			begun := takenBy(t, rig, kept, "", 0)
-			rig.now = rig.now.Add(c.age)
-			if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
-				c.why) {
-				t.Fatalf("the relaunch answered %q, want %q", why, c.why)
-			}
-			if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
-				t.Errorf("the row holds %+v, want the older build's capture left begun", got)
-			}
-			if reads := store.readsAll(); reads != 0 {
-				t.Errorf("a lease was read %d times, want none for a stamp that names no taker", reads)
-			}
-			if asked := restore.askedFor(); len(asked) != 0 {
-				t.Errorf("the log was read %v, want nothing read for a stamp that names no taker", asked)
-			}
+			inBubble(t, func(t *testing.T) {
+				store := newTakerStore()
+				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+				rig.coordinator.relaunchWait = 50 * time.Millisecond
+				begun := takenBy(t, rig, kept, "", 0)
+				rig.now = rig.now.Add(c.age)
+				if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
+					c.why) {
+					t.Fatalf("the relaunch answered %q, want %q", why, c.why)
+				}
+				if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
+					t.Errorf("the row holds %+v, want the older build's capture left begun", got)
+				}
+				if reads := store.readsAll(); reads != 0 {
+					t.Errorf("a lease was read %d times, want none for a stamp that names no taker", reads)
+				}
+				if asked := restore.askedFor(); len(asked) != 0 {
+					t.Errorf("the log was read %v, want nothing read for a stamp that names no taker", asked)
+				}
+			})
 		})
 	}
 }
@@ -1109,7 +1141,7 @@ func TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			synctest.Test(t, func(t *testing.T) {
+			inBubble(t, func(t *testing.T) {
 				store := newTakerStore()
 				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
 				rig.runner.Carries = true
@@ -1182,7 +1214,7 @@ func TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt(t *testing.T) {
 // the capture refused.
 func TestATakeStampsTheTenureItReservesItsPlaceUnder(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		store := newTakerStore()
 		rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
 		first := heldBy(t, store, thisProcess)
@@ -1264,7 +1296,7 @@ func (s *scrubGate) Handed(ctx context.Context, run PendingRun) (string, error) 
 // the keep's own budget, minutes past the window.
 func TestAnAttemptAtAKeepsRecordEndsWithTheWindowItWasSentIn(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		store := newTakerStore()
 		rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
 		rig.coordinator.recordBudget = time.Hour
@@ -1311,31 +1343,33 @@ func TestAnAttemptAtAKeepsRecordEndsWithTheWindowItWasSentIn(t *testing.T) {
 // refused.
 func TestASettleLeavesWhatItsTakerStampedSince(t *testing.T) {
 	t.Parallel()
-	store := newTakerStore()
-	rig, _, kept := keptTurnBy(t, taking(thisProcess, store))
-	lease := claimTaker(t, store, takingProcess)
-	begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
-	asRead := rig.get("t1")
-	// THE TAKER'S OWN KEEP, its record sent and not answered, stamped after the
-	// waiting node read the row.
-	unresolved := begun
-	unresolved.State, unresolved.Reason = CaptureUnresolved, "its record was sent and not answered"
-	unresolved.Object, unresolved.ObjectHash, unresolved.ObjectSize = objstore.KeyAt(begun.At).String(), "h2", 2048
-	if took, err := rig.pending.StampCapture(t.Context(), "t1", unresolved); err != nil || !took {
-		t.Fatalf("stamping the taker's unresolved capture = %v, %v", took, err)
-	}
-	lapse(store)
+	inBubble(t, func(t *testing.T) {
+		store := newTakerStore()
+		rig, _, kept := keptTurnBy(t, taking(thisProcess, store))
+		lease := claimTaker(t, store, takingProcess)
+		begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+		asRead := rig.get("t1")
+		// THE TAKER'S OWN KEEP, its record sent and not answered, stamped after the
+		// waiting node read the row.
+		unresolved := begun
+		unresolved.State, unresolved.Reason = CaptureUnresolved, "its record was sent and not answered"
+		unresolved.Object, unresolved.ObjectHash, unresolved.ObjectSize = objstore.KeyAt(begun.At).String(), "h2", 2048
+		if took, err := rig.pending.StampCapture(t.Context(), "t1", unresolved); err != nil || !took {
+			t.Fatalf("stamping the taker's unresolved capture = %v, %v", took, err)
+		}
+		lapse(store)
 
-	settled, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, asRead)
-	if !found {
-		t.Fatal("the run's row was read as gone")
-	}
-	if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureUnresolved {
-		t.Errorf("the row holds %+v, want the taker's unresolved stamp left as it stood", got)
-	}
-	if settled.Capture == nil || settled.Capture.State != CaptureUnresolved {
-		t.Errorf("the settle answered %+v, want the row as it stands, unresolved", settled.Capture)
-	}
+		settled, found := rig.coordinator.settleGoneTaker(t.Context(), time.Time{}, asRead)
+		if !found {
+			t.Fatal("the run's row was read as gone")
+		}
+		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureUnresolved {
+			t.Errorf("the row holds %+v, want the taker's unresolved stamp left as it stood", got)
+		}
+		if settled.Capture == nil || settled.Capture.State != CaptureUnresolved {
+			t.Errorf("the settle answered %+v, want the row as it stands, unresolved", settled.Capture)
+		}
+	})
 }
 
 // A TAKER LEASE IS NEVER ASKED FOR LONGER THAN THE STORE KEEPS ONE. The lease

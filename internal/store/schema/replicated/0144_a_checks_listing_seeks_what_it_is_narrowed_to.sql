@@ -1,12 +1,12 @@
 -- A checks listing seeks what it is narrowed to.
 --
 -- A `checks` read narrows a repository's listing and the window by a check's
--- name and a state (code.CheckQuery), and both were tested on the rows a page
+-- name and a state (gitlet.CheckQuery), and both were tested on the rows a page
 -- had READ: a repository's walk of code_checks_finished_idx, or the window's of
 -- code_checks_recent_idx, each in the order the listing answers. So a narrowed
 -- page was the rows its walk read, and the walk held the history: a
 -- repository's attempts still running sort after every attempt that ended in
--- the thirty days its rows are kept (code.CheckHistory), and `state=running`
+-- the thirty days its rows are kept (gitlet.CheckHistory), and `state=running`
 -- answered empty pages, each with a cursor, until the walk had passed all of
 -- them — some 2,400 requests at the default page for a repository ending
 -- 4,000 attempts a day — and the window narrowed to a failed check, or to one
@@ -24,7 +24,7 @@
 -- code_checks_name_idx is a repository's attempts of one check in one state,
 -- in the same order. A listing narrowed by a name and a state is one seek of
 -- it; by a name alone, one seek a state, their places merged
--- (code.narrowedPlaces): seven seeks of at most a page's places each, which
+-- (gitlet.narrowedPlaces): seven seeks of at most a page's places each, which
 -- spares a third index ordered by the name alone.
 --
 -- code_checks_state_recent_idx and code_checks_name_recent_idx are the

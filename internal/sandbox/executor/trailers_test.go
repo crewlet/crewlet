@@ -16,8 +16,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -498,7 +498,7 @@ func TestNoTrailerValueCanInject(t *testing.T) {
 // ignores them, is outside it. Every non-test Go file of a listed directory is
 // read, whatever its build constraints.
 //
-// Mutation: a file of internal/code/host reading `Crewlet-Run:` from a pushed
+// Mutation: a file of internal/gitlet/host reading `Crewlet-Run:` from a pushed
 // commit — red.
 func TestNothingButTheAttributionSpellsATrailerKey(t *testing.T) {
 	t.Parallel()

@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -66,7 +66,7 @@ func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, err
 		Seat:    run.AgentHandle,
 		Ceiling: run.CodeCeiling,
 		Floor:   b.floorOf(run),
-		Provenance: code.RunProvenance{TurnID: run.TurnID, RunID: run.LaunchID, Model: run.Launch.Model,
+		Provenance: gitlet.RunProvenance{TurnID: run.TurnID, RunID: run.LaunchID, Model: run.Launch.Model,
 			Harness: run.Harness},
 		Holds: make(map[string]bool, len(run.CodeHolds)),
 	}
@@ -76,7 +76,7 @@ func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, err
 	if run.WorkItem != nil {
 		// THE ITEM'S IDENTITY AND PROJECT BESIDE ITS LABEL: a change the
 		// box's push opens from its options carries its item by its id and
-		// in its project (code.RunProvenance.WorkID, .WorkProject), as the
+		// in its project (gitlet.RunProvenance.WorkID, .WorkProject), as the
 		// turn's own code_open_change and the engine's open at the run's
 		// collection do, while the push's row keeps the tracker and the key.
 		out.Provenance.WorkBackend, out.Provenance.WorkKey = string(run.WorkItem.Backend), run.WorkItem.Key
@@ -98,11 +98,11 @@ func boxLive(run sandbox.PendingRun) bool {
 // the launch recorded, and — for a value a newer build wrote that this one
 // does not know — READ, never more: a grant this build cannot read is held
 // to the narrow direction, as an unknown tier caps at nothing.
-func boxAccess(a sandbox.RepoAccess) code.Access {
+func boxAccess(a sandbox.RepoAccess) gitlet.Access {
 	if a == sandbox.RepoWrite {
-		return code.AccessWrite
+		return gitlet.AccessWrite
 	}
-	return code.AccessRead
+	return gitlet.AccessRead
 }
 
 // floorOf is run's code floor as a position on the code log: ZERO for a row

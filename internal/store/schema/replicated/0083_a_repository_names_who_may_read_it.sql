@@ -1,7 +1,7 @@
 -- A repository names who may read it.
 --
 -- code_repos.visibility is who reads the repository besides persons and the
--- tokens of Tier A (internal/code, ADR-0088): `company`, every seat; `unit`,
+-- tokens of Tier A (internal/gitlet, ADR-0088): `company`, every seat; `unit`,
 -- the seats of the owning unit's subtree, the leads above it and the owning
 -- seat, and no other seat. A person's standing never depends on it — a
 -- credential presented by a person, or a token bound to nobody, reads every
@@ -10,7 +10,7 @@
 --
 -- A SETTING LIKE EVERY OTHER: carried whole by every create, settings and
 -- restore record, written by the applier from the record, compared by the
--- reconcile with the declaration's (code.RepoSettings.equal), so a revision
+-- reconcile with the declaration's (gitlet.RepoSettings.equal), so a revision
 -- that changes only a repository's visibility writes one settings record.
 --
 -- The default exists because SQLite requires one for a NOT NULL column added

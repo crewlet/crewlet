@@ -169,12 +169,16 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 					"is not charged; its round is carried on all the same")
 		}
 	}
-	// WHAT ITS SESSION STILL OWED THE JOB'S LOG, carried before the round is
-	// carried on from it ([CoordinatorOptions.Settle]), with what those calls
-	// cost on the job's record: the next job's launch is what ends that
-	// session, by which time the log and the record hold the next job and
-	// take nothing of this one's.
-	if c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID) {
+	// ITS CALLS STILL IN FLIGHT, waited for on the run's log before the round
+	// is carried on from what the job did ([Coordinator.drainCalls]): a lost
+	// job's process may be gone, which its runner's lease says, and a call it
+	// left running elsewhere is recorded, with what it cost, before the resume
+	// reads it. A wait this node cancelled hands the claim back uncounted.
+	drained, err := c.drainCalls(ctx, run)
+	if err != nil {
+		return nil, c.collectFailed(ctx, run, err)
+	}
+	if drained {
 		run = c.rereadSpend(ctx, run)
 	}
 	// WHAT IT PUSHED, read whether or not its box answered: the push record
@@ -183,7 +187,7 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 	// rather than that nothing was recorded ([Coordinator.readPushes]). A
 	// lost job did not finish, so no change it asked to open is opened. Held
 	// to the record's bound with the rest of the result ([Coordinator.fitText]).
-	result, err := c.readPushes(ctx, run, cutOff(result, loss.Cause))
+	result, err = c.readPushes(ctx, run, cutOff(result, loss.Cause))
 	if err != nil {
 		return nil, c.collectFailed(ctx, run, err)
 	}

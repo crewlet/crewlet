@@ -60,16 +60,16 @@ type probeLedger struct {
 	calls []mcpbridge.Call
 }
 
-func (l *probeLedger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
+// Begin takes every call's entry, and Withdraw every withdrawal.
+func (l *probeLedger) Begin(context.Context, string, mcpbridge.Begun) error    { return nil }
+func (l *probeLedger) Withdraw(context.Context, string, mcpbridge.Begun) error { return nil }
+
+func (l *probeLedger) Record(_ context.Context, _ string, c mcpbridge.Call) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.calls = append(l.calls, c)
 	return nil
 }
-
-// Settle owes nothing: every append above lands.
-func (l *probeLedger) Settle(context.Context, string) bool { return false }
-func (l *probeLedger) End(context.Context, string) bool    { return false }
 
 // probeBridge serves a real tool bridge over HTTP with one run's session open,
 // its inbox inbox, and answers the run's endpoint.

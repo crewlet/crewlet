@@ -23,8 +23,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -62,7 +62,7 @@ import (
 // --fix-thin) by appending every such base WHOLE: the stored pack is larger
 // than the one sent, by an amount the client never sees. The node holds what
 // it STORES to two limits — a push's bundle (the pack, its .idx and its .rev)
-// to code.MaxPackBytes, refused pack_too_large, and the repository's packs to
+// to gitlet.MaxPackBytes, refused pack_too_large, and the repository's packs to
 // code.limits.repo_max_bytes, refused repo_size — so a plan that measured the
 // thin pack could not keep either: measured on this repository's own history
 // cut into eleven steps, the thin packs sent 40.1 MB and the node stored
@@ -76,13 +76,13 @@ import (
 // appended are uploaded instead (68.5 MB sent against 40.1 MB), and the node
 // no longer spends its own cores compressing them. And a step stores at most
 // what it may send — the limit — where a thin step sent under the limit
-// could store up to code.MaxPackBytes: whole steps are smaller and more of
+// could store up to gitlet.MaxPackBytes: whole steps are smaller and more of
 // them, fewest with code.limits.max_push_bytes at its ceiling, which an import
 // of a large history should run under. A JUDGEMENT for whole steps: exact
 // rather than approximate accounting — a thin step's completion appends
 // objects compressed by the node's zlib, which the operator's need not be —
 // and no base stored twice, against the steps a thin plan saves between the
-// limit and code.MaxPackBytes, a quarter of a gibibyte at the ceiling.
+// limit and gitlet.MaxPackBytes, a quarter of a gibibyte at the ceiling.
 //
 // A STEPPED HISTORY STORES MORE THAN ONE PACK OF IT, whatever the steps send:
 // every step keeps whole what its deltas cannot reach in the steps before it,
@@ -344,7 +344,7 @@ func (call importCall) importer(ctx context.Context, stdout, stderr io.Writer) (
 		return nil, err
 	}
 	imp := &importer{g: g, client: call.client, source: call.source, name: call.name, repo: repo,
-		principal: principal, budget: repo.Limits.MaxPushBytes, maxStored: code.MaxPackBytes,
+		principal: principal, budget: repo.Limits.MaxPushBytes, maxStored: gitlet.MaxPackBytes,
 		stdout: stdout, stderr: stderr}
 	if isTerminal(stderr) {
 		imp.live = stderr
@@ -400,15 +400,15 @@ func gitletImportTarget(ctx context.Context, client *nodeClient, name string) (c
 // push's record holds ([importer.recordHolds]); neither a token's id nor a
 // handle has a length bound of its own, so nothing short of asking says how
 // much of the record it takes.
-func gitletImportPrincipal(ctx context.Context, client *nodeClient) (code.Principal, error) {
+func gitletImportPrincipal(ctx context.Context, client *nodeClient) (gitlet.Principal, error) {
 	var viewer struct {
 		OperatorID string `json:"operator_id"`
 		Handle     string `json:"handle"`
 	}
 	if err := client.get(ctx, "/viewer", &viewer); err != nil {
-		return code.Principal{}, fmt.Errorf("ask the node who this token is: %w", err)
+		return gitlet.Principal{}, fmt.Errorf("ask the node who this token is: %w", err)
 	}
-	return code.Principal{Kind: code.PrincipalOperator, OperatorID: viewer.OperatorID, Seat: viewer.Handle}, nil
+	return gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: viewer.OperatorID, Seat: viewer.Handle}, nil
 }
 
 // importer is one run of `crewlet gitlet import`.
@@ -420,12 +420,12 @@ type importer struct {
 	repo   codeRepoView
 	// principal is who the node records each step's push as
 	// ([gitletImportPrincipal]).
-	principal code.Principal
+	principal gitlet.Principal
 	// budget is the most one step's pack carries: code.limits.max_push_bytes,
 	// past which the node's receive.maxInputSize refuses a push.
 	budget int64
 	// maxStored is the most one push may STORE — its pack, .idx and .rev
-	// together: code.MaxPackBytes, past which the node refuses the push
+	// together: gitlet.MaxPackBytes, past which the node refuses the push
 	// pack_too_large.
 	maxStored int64
 	// work is the import's working directory, and clone the source's bare
@@ -525,18 +525,18 @@ func (imp *importer) run(ctx context.Context, dryRun bool) error {
 // since the domain refuses it as reserved_ref; one inside them that is no ref
 // at all is BAD, the domain's bad_ref; and a branch the domain reserves for
 // its seats — refs/heads/seats, or refs/heads/seats/<name> as a branch itself
-// (code.SeatNamespaceRoot) — is RESERVED, refused like a bad one but named for
+// (gitlet.SeatNamespaceRoot) — is RESERVED, refused like a bad one but named for
 // what it is, since check-ref-format has nothing against it. Asked of the
-// domain's own rule (code.StatelessRefusal), so the import keeps exactly what
+// domain's own rule (gitlet.StatelessRefusal), so the import keeps exactly what
 // a push may carry.
 func importKindOf(ref string) importKind {
-	refusal := code.StatelessRefusal(code.Command{Ref: ref, Old: code.ZeroOID, New: strings.Repeat("1", oidHexLen)})
+	refusal := gitlet.StatelessRefusal(gitlet.Command{Ref: ref, Old: gitlet.ZeroOID, New: strings.Repeat("1", oidHexLen)})
 	switch {
 	case refusal == "":
 		return importKept
 	case !strings.HasPrefix(ref, "refs/heads/") && !strings.HasPrefix(ref, "refs/tags/"):
 		return importSkipped
-	case refusal == code.RefusalReservedRef:
+	case refusal == gitlet.RefusalReservedRef:
 		return importReserved
 	default:
 		return importBad
@@ -583,14 +583,14 @@ func (n *importNotHeld) findings() []string {
 	if n.badCount > 0 {
 		out = append(out, fmt.Sprintf("%s Gitlet takes no push of (git's check-ref-format "+
 			"rules, at most %d bytes of UTF-8): %s. Rename them in the source", counted(n.badCount, "ref", "refs"),
-			code.MaxRefNameBytes, listed(n.bad, n.badCount)))
+			gitlet.MaxRefNameBytes, listed(n.bad, n.badCount)))
 	}
 	if n.reservedCount > 0 {
 		out = append(out, fmt.Sprintf("%s Gitlet keeps for its seats' own branches, which live under "+
 			"%s<handle>/ (%s, and %s<name> as a branch itself, would block them, since no ref is created "+
 			"beside a directory of its name): %s. Rename them in the source",
-			counted(n.reservedCount, "branch", "branches"), code.SeatNamespaceRoot,
-			strings.TrimSuffix(code.SeatNamespaceRoot, "/"), code.SeatNamespaceRoot,
+			counted(n.reservedCount, "branch", "branches"), gitlet.SeatNamespaceRoot,
+			strings.TrimSuffix(gitlet.SeatNamespaceRoot, "/"), gitlet.SeatNamespaceRoot,
 			listed(n.reserved, n.reservedCount)))
 	}
 	return out
@@ -650,9 +650,9 @@ func (imp *importer) listSource(ctx context.Context) error {
 		return err
 	}
 	findings := notHeld.findings()
-	if kept > code.MaxRefsPerRepo {
+	if kept > gitlet.MaxRefsPerRepo {
 		findings = append(findings, fmt.Sprintf("the source holds %d branches and tags, past the %d one repository "+
-			"holds", kept, code.MaxRefsPerRepo))
+			"holds", kept, gitlet.MaxRefsPerRepo))
 	}
 	if len(findings) > 0 {
 		return refuseImport(findings)
@@ -867,9 +867,9 @@ func (imp *importer) inspect(ctx context.Context) (importSource, error) {
 		return importSource{}, err
 	}
 	findings = append(findings, notHeld.findings()...)
-	if n := len(src.refs); n > code.MaxRefsPerRepo {
+	if n := len(src.refs); n > gitlet.MaxRefsPerRepo {
 		findings = append(findings, fmt.Sprintf("the source holds %d branches and tags, past the %d one repository "+
-			"holds", n, code.MaxRefsPerRepo))
+			"holds", n, gitlet.MaxRefsPerRepo))
 	}
 	if len(src.refs) == 0 {
 		return importSource{}, fmt.Errorf("%s holds no branch and no tag once cloned, so there is nothing to "+
@@ -1205,10 +1205,10 @@ func (imp *importer) resume(ctx context.Context, src importSource) ([]queuedRef,
 		}
 	}
 	slices.Sort(theirsOnly)
-	if n := len(src.refs) + len(theirsOnly); n > code.MaxRefsPerRepo {
+	if n := len(src.refs) + len(theirsOnly); n > gitlet.MaxRefsPerRepo {
 		return nil, nil, refuseImport([]string{fmt.Sprintf("%s would hold %d refs (the source's %d and %d of its "+
 			"own), past the %d one repository holds", imp.name, n, len(src.refs), len(theirsOnly),
-			code.MaxRefsPerRepo)})
+			gitlet.MaxRefsPerRepo)})
 	}
 	if already > 0 {
 		fmt.Fprintf(imp.stdout, "already on %s: %d of the source's refs, at the source's values\n", imp.name,
@@ -1295,7 +1295,7 @@ func (imp *importer) held(ctx context.Context, oids map[string]bool) (map[string
 // ASKED BOUNDED IN PARALLEL: git has no form that asks merge-base
 // --is-ancestor of many pairs at once, and an import run again to bring over
 // what a source still in use has gained finds every branch somebody pushed to
-// at an earlier value — up to code.MaxRefsPerRepo of them, which one process
+// at an earlier value — up to gitlet.MaxRefsPerRepo of them, which one process
 // after another at 5–10 ms each made most of a minute before the first
 // estimate. Each question reads the clone alone, so they are independent:
 // GOMAXPROCS at a time, the cores this command may use. A ref found not to
@@ -1407,14 +1407,14 @@ func (s *importStep) sized() string {
 // stored is what the node keeps for the step: the pack it is sent — whole
 // (--no-thin), so receive-pack's index-pack appends nothing to it — then the
 // .idx and the .rev receive-pack writes beside it, whose sizes follow from
-// the pack's object count (code.IndexBytesFor, code.ReverseBytesFor). That
-// bundle is what the node holds to code.MaxPackBytes and adds to the
+// the pack's object count (gitlet.IndexBytesFor, gitlet.ReverseBytesFor). That
+// bundle is what the node holds to gitlet.MaxPackBytes and adds to the
 // repository's bytes. In a dry run, the estimate.
 func (s *importStep) stored() int64 {
 	if !s.exact {
 		return s.size
 	}
-	return s.size + code.IndexBytesFor(s.objects) + code.ReverseBytesFor(s.objects)
+	return s.size + gitlet.IndexBytesFor(s.objects) + gitlet.ReverseBytesFor(s.objects)
 }
 
 // news is the values the step moves its refs to, as pack-objects --revs reads
@@ -1851,7 +1851,7 @@ func (p *importPlanner) bringIn(ctx context.Context, step *importStep) (bool, []
 // source still in use has gained finds every branch at an earlier value, and
 // every branch since that merged main back reaches the parent while the
 // repository holds it at a commit from before the merge — up to
-// code.MaxRefsPerRepo questions ahead of the first that can carry it, at
+// gitlet.MaxRefsPerRepo questions ahead of the first that can carry it, at
 // 5–10 ms each one after another. An eligible candidate stops every question
 // about a candidate after it, those before it are still answered, since one
 // of them may be the first, and nothing is left running on return.
@@ -1946,11 +1946,11 @@ func (p *importPlanner) mergeTooLarge(ctx context.Context, step *importStep, lac
 }
 
 // batchStep is the next batch of the queue: as many of its refs, in order, at
-// most code.MaxCommandsPerPush and no more than one push's record holds
+// most gitlet.MaxCommandsPerPush and no more than one push's record holds
 // ([importer.recordHolds]), as the step can carry. A branch that alone is past
 // the limit is advanced along its first-parent history instead.
 func (p *importPlanner) batchStep(ctx context.Context) (*importStep, error) {
-	candidates := p.queue[:min(len(p.queue), code.MaxCommandsPerPush)]
+	candidates := p.queue[:min(len(p.queue), gitlet.MaxCommandsPerPush)]
 	held, err := p.imp.recordHolds(candidates)
 	if err != nil {
 		return nil, err
@@ -2029,8 +2029,8 @@ var importWidestNode = strings.Repeat("n", 64)
 // record has for them: at least one, and up to all of them.
 //
 // THE NODE HOLDS A PUSH'S REF UPDATES TO ITS RECORD before anything of the push
-// runs (code.Proposal.ValidateCommands): one push's entry in the code log's
-// record takes at most code.EntryRoom, about 1 MiB, with every field the
+// runs (gitlet.Proposal.ValidateCommands): one push's entry in the code log's
+// record takes at most gitlet.EntryRoom, about 1 MiB, with every field the
 // push's work could add at its largest, and a push past it is refused whole —
 // "push them in parts". A thousand plain refs of the longest take under half
 // of that, but a ref whose characters the log spells in six bytes each (`&`,
@@ -2043,7 +2043,7 @@ var importWidestNode = strings.Repeat("n", 64)
 // command is asked as a create of its value; the rule takes every command
 // forced and refused at its widest, so what the node decides of it never
 // widens it past what this answered. Every step is a push git sends, so it is
-// asked as one (code.ViaGit), which its record's entry names too.
+// asked as one (gitlet.ViaGit), which its record's entry names too.
 //
 // None fitting is no ref's fault: one update of the longest ref a push may
 // carry takes under two kibibytes, so the person's own id or handle fills the
@@ -2051,13 +2051,13 @@ var importWidestNode = strings.Repeat("n", 64)
 func (imp *importer) recordHolds(refs []queuedRef) (int, error) {
 	var refusal error
 	fits := func(n int) (bool, error) {
-		cmds := make([]code.Command, n)
+		cmds := make([]gitlet.Command, n)
 		for i, r := range refs[:n] {
-			cmds[i] = code.Command{Ref: code.RecordedRef(r.ref), Old: code.ZeroOID, New: r.oid}
+			cmds[i] = gitlet.Command{Ref: gitlet.RecordedRef(r.ref), Old: gitlet.ZeroOID, New: r.oid}
 		}
-		err := code.Proposal{Principal: imp.principal, Via: code.ViaGit, Node: importWidestNode,
+		err := gitlet.Proposal{Principal: imp.principal, Via: gitlet.ViaGit, Node: importWidestNode,
 			Commands: cmds}.ValidateCommands()
-		var wide *code.TooWideError
+		var wide *gitlet.TooWideError
 		switch {
 		case err == nil:
 			return true, nil
@@ -2084,7 +2084,7 @@ func (imp *importer) recordHolds(refs []queuedRef) (int, error) {
 
 // principalName is the person a principal is, as the import names it: the
 // seat's handle and the token's id.
-func principalName(p code.Principal) string {
+func principalName(p gitlet.Principal) string {
 	if p.Seat == "" {
 		return "token " + p.OperatorID
 	}
@@ -2204,7 +2204,7 @@ func (p *importPlanner) tooLarge(step *importStep, commit bool) error {
 	if !step.past && step.size <= p.budget {
 		// Its pack fits the limit and what it stores does not: a step of
 		// a great many small objects, whose indexes take it past
-		// code.MaxPackBytes. No setting raises that.
+		// gitlet.MaxPackBytes. No setting raises that.
 		return fmt.Errorf("%s (%s) alone stores %s with its indexes (%s objects), past the %s one push may store, "+
 			"and cannot be pushed in smaller steps", c.ref, c.oid, humanBytes(step.stored()),
 			strconv.FormatInt(step.objects, 10), humanBytes(p.imp.maxStored))
@@ -2675,8 +2675,8 @@ func (imp *importer) execute(ctx context.Context, p *importPlanner) (importDone,
 //
 // --atomic so a step lands whole or not at all, which is what lets a re-run
 // read the repository and resume. The refspecs are on the command line: at
-// most code.MaxCommandsPerPush of at most 296 bytes each (an id, a colon, a
-// ref of code.MaxRefNameBytes) is under 300 KB, inside the argument limit of
+// most gitlet.MaxCommandsPerPush of at most 296 bytes each (an id, a colon, a
+// ref of gitlet.MaxRefNameBytes) is under 300 KB, inside the argument limit of
 // both platforms this binary is built for (1 MiB on darwin, 2 MiB on linux).
 //
 // A LINE FOR A REF THE STEP DID NOT NAME is a push that carried more than its
@@ -2773,7 +2773,7 @@ func (imp *importer) stopped(landed int, out stepOutcome) error {
 	why := out.err.Error()
 	hint := ""
 	for _, l := range out.rejected {
-		if strings.Contains(l, string(code.RefusalProtectedDirect)) {
+		if strings.Contains(l, string(gitlet.RefusalProtectedDirect)) {
 			hint = "\na branch whose code.repos rule says direct_push: none takes no push, an import's included: " +
 				"lift the rule for the import and restore it after"
 			break

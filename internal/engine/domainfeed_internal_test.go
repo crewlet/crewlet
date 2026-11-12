@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
@@ -257,20 +257,20 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 // runs; declare no group → it refuses the feed nobody declared.
 func TestTheCodeFeedIsDeclaredWithItsTranslator(t *testing.T) {
 	t.Parallel()
-	if group := (code.Domain{}).FeedGroup(); group != code.FeedGroup {
-		t.Fatalf("the code log declares the wake feed %q, want %q", group, code.FeedGroup)
+	if group := (gitlet.Domain{}).FeedGroup(); group != gitlet.FeedGroup {
+		t.Fatalf("the code log declares the wake feed %q, want %q", group, gitlet.FeedGroup)
 	}
-	translator, opener, err := (&Engine{}).feedFor(&runningLog{domain: code.Domain{}})
+	translator, opener, err := (&Engine{}).feedFor(&runningLog{domain: gitlet.Domain{}})
 	if err != nil || translator == nil || opener == nil {
 		t.Fatalf("feedFor(code) = (%v, %v, %v), want the code feed", translator, opener, err)
 	}
-	if _, ok := translator.(*code.Translator); !ok {
+	if _, ok := translator.(*gitlet.Translator); !ok {
 		t.Errorf("the code log's feed translates with %T, want the code translator", translator)
 	}
-	if src := translator.Source(); src.Name != code.Source || src.Group != code.FeedGroup {
-		t.Errorf("the code feed runs as %+v, want source %q under %q", src, code.Source, code.FeedGroup)
+	if src := translator.Source(); src.Name != gitlet.Source || src.Group != gitlet.FeedGroup {
+		t.Errorf("the code feed runs as %+v, want source %q under %q", src, gitlet.Source, gitlet.FeedGroup)
 	}
-	group, ok := fleetGroupNamed(code.FeedGroup)
+	group, ok := fleetGroupNamed(gitlet.FeedGroup)
 	if !ok || !group.Data {
 		t.Errorf("the code feed's group is declared %+v (%v), want a group only a data node joins — "+
 			"the feed reads the log a data node applies", group, ok)

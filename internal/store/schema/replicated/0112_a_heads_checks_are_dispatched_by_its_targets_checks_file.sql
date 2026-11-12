@@ -4,7 +4,7 @@
 -- .crewlet/checks.yaml, read at the target's tip, and then records that it did
 -- — a check_dispatched record on the repository's checks subject naming the
 -- target, the tip it read, the blob it found (none, where the tip holds no
--- checks file) and the heads it dispatched under it (internal/code's
+-- checks file) and the heads it dispatched under it (internal/gitlet's
 -- checksdispatch.go). These two tables keep what those records say, so the
 -- home's due listing (checks_due) is a function of the rows alone: a live
 -- change's head is due while no dispatch of it for its target names the

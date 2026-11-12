@@ -178,7 +178,7 @@ const (
 	// EXPORTED because it is also the most pages the smallest data node
 	// scans at once — every read the estate serves is one transaction on
 	// one of these connections — and a Gitlet node holds its full reads of
-	// repositories' rows to it (code/cache.MaxFullRounds), so a change here
+	// repositories' rows to it (gitlet/cache.MaxFullRounds), so a change here
 	// moves that cap.
 	MinReaderConns = 8
 

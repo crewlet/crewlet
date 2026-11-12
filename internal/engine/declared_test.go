@@ -10,10 +10,10 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
@@ -69,7 +69,7 @@ func TestATestsGitletIsSizedByItsCase(t *testing.T) {
 			e, err := engine.New(ctx, engine.Options{
 				Bootstrap: b, Company: parsedCompany(t, tc.doc),
 				ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
-				GitHook:     codetest.HookCommand(t),
+				GitHook:     gitlettest.HookCommand(t),
 			})
 			if err == nil {
 				t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })

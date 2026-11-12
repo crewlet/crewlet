@@ -429,7 +429,7 @@ func TestARunTakenOverIsHeldToTheSessionItsBoxSaysItStarted(t *testing.T) {
 			}, []BridgedCall{
 				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
 					Result: "Always thread your reply."}, Seq: 1},
-			}, nil, nil, Bridged{}, false)
+			}, nil, nil, nil, Bridged{}, false)
 			if err != nil {
 				t.Fatalf("ReopenAgentRun: %v", err)
 			}

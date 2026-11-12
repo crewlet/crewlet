@@ -773,10 +773,17 @@ flowchart TD
    without waiting for a tool call still running on them, so no lease is held
    for one: the box is answered that the call is still running, and the call
    runs on here. Once every seat is given back, the drain waits for each such
-   call to finish and be recorded, logging `mcp_bridge_calls_draining` with
-   how many and whose runs, then `mcp_bridge_calls_drained`. That wait has no
+   call to finish and be recorded — an update the coordination store refused
+   asked for again until it lands or the call's own bound passes — logging
+   `mcp_bridge_calls_draining` with how many and whose runs, then
+   `mcp_bridge_calls_drained`. That wait has no
    bound of its own, as the wait for turns has none: the supervisor's grace is
-   the bound, and a call it cuts is on no record.
+   the bound, and a call it cuts never makes its update — its entry, written
+   on its run's record before it ran, stays there, the call counted by its
+   identity and its outcome unknown. The node holds its taker lease until that
+   wait is over, so a collection of such a run on the seat's next holder waits
+   for the call to be recorded, up to the call's own bound, rather than read
+   it as one whose process stopped.
 7. **Finish the git requests, then close the HTTP listener**, and not
    before: until now the probes are what the orchestrator reads, and they
    read the stream and the coordination store the next steps close. First the

@@ -1,7 +1,7 @@
 -- A change is listed by its state in its repository and by its work item.
 --
 -- A listing of changes walks ONE index, the one its filters lead (internal/
--- code's changes read): a repository's changes, a work item's, an owner's in a
+-- gitlet's changes read): a repository's changes, a work item's, an owner's in a
 -- state, or the company's in a state — newest first, a page of rows at a time,
 -- keyset after the last row the page read. 0086 gave the company's and an
 -- owner's their indexes (code_changes_state_idx, code_changes_owner_idx) and a

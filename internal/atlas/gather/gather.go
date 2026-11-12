@@ -22,8 +22,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -31,7 +31,7 @@ import (
 // (estate.CodeSeam satisfies it): the reader's own repositories, narrowed by
 // Gitlet to what the reader may read.
 type GitletReads interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 }
 
 // Sources is where the atlas reads what the engine keeps. A nil source is
@@ -57,7 +57,7 @@ type Request struct {
 	// Deployment is the addresses the deployment answers at.
 	Deployment derive.Deployment
 	// Asker is who reads. Gitlet lists only the repositories they may read.
-	Asker code.Principal
+	Asker gitlet.Principal
 	// GitletUnread is why Gitlet is not read for this asker ("" where it is):
 	// said on its coverage only where the company hosts code there.
 	GitletUnread string
@@ -132,9 +132,9 @@ func Read(ctx context.Context, src Sources, req Request) Answer {
 	take(settings.Claims(req.Now))
 	answer.Coverage = append(answer.Coverage, Coverage{Source: SourceSettings, Complete: true})
 
-	repos, checks, gitlet := readGitlet(ctx, src.Gitlet, settings, req)
+	repos, checks, gitletCovered := readGitlet(ctx, src.Gitlet, settings, req)
 	take(settings.Gitlet(repos, checks, req.Now))
-	answer.Coverage = append(answer.Coverage, gitlet)
+	answer.Coverage = append(answer.Coverage, gitletCovered)
 
 	pushes := make([]derive.RepoPush, 0, len(repos))
 	for _, r := range repos {
@@ -142,7 +142,7 @@ func Read(ctx context.Context, src Sources, req Request) Answer {
 	}
 	// PUSHES ARE KNOWN ONLY FROM A LISTING READ IN FULL: a company hosting no
 	// code in Gitlet has a complete read with nothing in it, and no push use.
-	records, covered := readRecords(ctx, src, settings, req, pushes, gitlet.Complete && hostsCode(req.Company))
+	records, covered := readRecords(ctx, src, settings, req, pushes, gitletCovered.Complete && hostsCode(req.Company))
 	answer.Coverage = append(answer.Coverage, covered...)
 	recorded, joined := settings.Records(records, req.Now)
 	take(recorded)
@@ -178,9 +178,9 @@ func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req R
 		cov.Reason = ErrNoSource.Error()
 		return nil, nil, cov
 	}
-	var summaries []code.RepoSummary
+	var summaries []gitlet.RepoSummary
 	for cursor := ""; ; {
-		page, err := reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepos, Asker: req.Asker, Fresh: req.Fresh,
+		page, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepos, Asker: req.Asker, Fresh: req.Fresh,
 			Cursor: cursor, Limit: maxRepoPage})
 		if err != nil {
 			cov.Reason = fmt.Sprintf("listing repositories: %v", err)
@@ -224,7 +224,7 @@ func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req R
 // remotes fills a repository's other hosts from its detail. The credential
 // beside each is a reference the domain holds, and is never read.
 func remotes(ctx context.Context, reads GitletReads, req Request, repo *derive.GitletRepo) error {
-	a, err := reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: req.Asker, Fresh: req.Fresh, Repo: repo.Name})
+	a, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepo, Asker: req.Asker, Fresh: req.Fresh, Repo: repo.Name})
 	if err != nil {
 		return err
 	}
@@ -244,9 +244,9 @@ func remotes(ctx context.Context, reads GitletReads, req Request, repo *derive.G
 }
 
 // headChecks is each check's latest attempt on the default branch's head.
-func headChecks(ctx context.Context, reads GitletReads, req Request, r code.RepoSummary) ([]derive.GitletCheck, error) {
-	a, err := reads.Read(ctx, code.ReadQuery{Kind: code.ReadChecks, Asker: req.Asker, Fresh: req.Fresh, Repo: r.Name,
-		Checks: &code.CheckQuery{OID: r.Head, Target: "refs/heads/" + r.DefaultBranch, Latest: true}})
+func headChecks(ctx context.Context, reads GitletReads, req Request, r gitlet.RepoSummary) ([]derive.GitletCheck, error) {
+	a, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadChecks, Asker: req.Asker, Fresh: req.Fresh, Repo: r.Name,
+		Checks: &gitlet.CheckQuery{OID: r.Head, Target: "refs/heads/" + r.DefaultBranch, Latest: true}})
 	if err != nil {
 		return nil, err
 	}

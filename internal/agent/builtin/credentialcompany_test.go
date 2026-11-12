@@ -9,12 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -96,7 +96,7 @@ func TestATurnACredentialWokeReadsNoFleetHealthAndNoServer(t *testing.T) {
 		asker := &statusAsker{report: builtin.CodeStatusReport{Statuses: []host.CodeStatus{{Node: "node-a",
 			Hot: []host.RepoStatus{{RepoHeat: cache.RepoHeat{ID: siteID, Name: "site",
 				Hour: cache.Use{Fetches: 1}, Day: cache.Use{Fetches: 1}}}}}}}}
-		repos := &grantHost{repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}}}
+		repos := &grantHost{repos: map[string]gitlet.RepoRef{"site": {ID: siteID, Name: "site"}}}
 		tool := seatHealthTools(t, builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)},
 			chart)[builtin.CodeStatusTool].(tools.SeatCallable)
 		turnOf := func() *turnctx.Turn {

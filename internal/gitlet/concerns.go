@@ -1,0 +1,1136 @@
+package gitlet
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/routing"
+)
+
+// WHOM A CHANGE RECORD CONCERNS: every record about a change — a write of its
+// lifecycle on the repository's subject, a push that merges or opens one, every
+// write of its conversation on the change's own — carries a ROUTING SNAPSHOT
+// ([ChangeRouting]): who made it, and the handles each reason it routes under
+// reaches, as the deciding snapshot and chart held them. The writer stamps it,
+// through ONE function ([routingFor]) whichever writer decides the record — the
+// committer for the repository's records, the change writer for the change's —
+// and everything that tells somebody about the record afterwards reads the
+// snapshot and nothing else: [Concerns] is pure over it, through the one
+// precedence rule every native domain routes by (internal/routing).
+//
+// # Why a snapshot, and not the rows
+//
+// Who a record concerns is a fact of the moment it was decided. The rows move
+// on — a reviewer is withdrawn, an author joins by pushing, a thread grows —
+// and a reader that derived the audience from the rows minutes later, on
+// another node, would tell different people about the same record than the
+// node that applied it. The record carries the answer, so every reader of it
+// agrees: the applier that writes a notice row per recipient, and the change
+// feed that wakes the seats among them.
+//
+// # One role per reason, filled for the reasons the op routes by
+//
+// A record fills only the roles its op routes by — a close its watchers, a
+// review its authors and its mentions, a revise the path owners and the
+// reviewers it asks to look again — never every role of the change on every
+// record: a comment that carried the change's sixty-four watchers beside its
+// own audience would pay for a fan-out nobody reads, on every node's log.
+//
+//   - mention: the handles the write's text names, held to the deciding chart
+//     (an open, an edit, a review, a comment; a push's options).
+//   - review_requested: the reviewers an ask names that were not asked
+//     already, and the path owners a revision's facts ask.
+//   - changes_requested, review_submitted: the change's authors, by the
+//     review's verdict.
+//   - checks_failed: the authors and the record's actor — the pusher of the
+//     head the check measured, or the person whose CI reported it — on the
+//     ending of a check of the change's current head that failed, or errored
+//     past the home's own requeue, whether the engine ran it or a person's
+//     CI reported it onto the same rows: the one reason that is news to its
+//     actor too ([Reason.WakesActor]), since a pusher learns that their
+//     commit fails its checks only from this.
+//   - target_broken: the authors and the effective lead of the repository's
+//     owner, on the broken record naming the landing that merged the change
+//     — never an enqueuer, since only a landing ahead of its checks, which
+//     no queue made, can be broken.
+//   - conflicted: the authors, on the mergeability that TURNED the change's
+//     merge into a conflict — not on every recheck that finds it still one —
+//     and on a queue's ejection of it for a conflicting merge.
+//   - dequeued: the authors and the enqueuer, on a record that put the
+//     change's entry out of its target's queue — an ejection, or a dequeue
+//     somebody asked.
+//   - finding_replied: the raiser of the finding a comment replies to, and of
+//     every finding an answer answers.
+//   - ready_to_merge: the change's authors who may merge it into its target
+//     ([PreconditionMergeAuthority] judged for each), else the effective
+//     lead of the repository's owner, on the mergeability whose stored
+//     answer goes from not ready to ready (below).
+//   - merged: the authors, on the push that set the target to the change's
+//     head and on its home's landing, on the merge record that merged it and
+//     on the queue's landing of it — each but who merged it: on the home's
+//     landing, whoever made the push its home found bringing the head into
+//     the target, never whoever moved the target last.
+//   - re_review: the reviewers whose standing verdict asks for changes on an
+//     earlier revision, on a revision's first facts.
+//   - thread: the participants of the thread a comment is said in.
+//   - watcher: the change's participants, on a close, a reopen, a retarget
+//     and a draft's state.
+//   - lead_fallback: the lead of the repository's owner, on a change's first
+//     facts where nobody who may review it is asked.
+//
+// A push that moves no change concerns nobody: a head move, a close by a
+// deleted source branch and a push to a ref no change uses are bookkeeping —
+// what a change's page says, never what a wake is for.
+//
+// # A record with no audience carries no routing
+//
+// The snapshot is stamped only where some role the record's op routes by is
+// filled ([routingFor] answers nil otherwise): a comment nobody is mentioned
+// in, said outside any thread, a thread's resolution, a revision's facts that
+// ask nobody, and a mergeability that turns nothing tell nobody, and the
+// change's context — its reference, its repository, its title, its owner and
+// its work item, about three hundred bytes a record at the reference
+// company's — would ride every such record on every node's log for a fan-out
+// of none. A record without a routing takes the path an empty audience took:
+// [RoutingsOf] names none for it, so the applier writes no notice and the
+// feed acknowledges it without a wake. Where there IS an audience the routing
+// stays whole, context included, because the feed's node routes a record
+// without reading a row it may lag on.
+//
+// # ready_to_merge is announced by ONE record, and why it is that one
+//
+// Whether a change may merge is judged from one snapshot of the change's rows
+// ([ReadinessOf]), and the inputs live on TWO subjects: a draft's state and a
+// revision on the repository's, an approval and a blocker's answer on the
+// change's. A record on either that computed readiness from its own snapshot
+// would miss the other: an approval and an undraft decided at once each see
+// the other not yet applied, each finds the change not ready, and the
+// transition both complete is announced by neither — write skew across two
+// subjects. So the transition is the stored answer's: a mergeability record —
+// the home's merge or its refresh, which follows any readiness input that
+// moved — stores the change's readiness, and the record whose decide finds
+// the stored `ready` going false to true is the one that announces it.
+//
+// # The actor
+//
+// Every record of this domain names the deciding NODE as its actor
+// ([ActorSystem]): the principal is in its payload. So the routing names who
+// acted ([ChangeRouting.Actor]) — the asker, the pusher of a push's entry, the
+// enqueuer of an entry a queue landed, the pusher of the head a check
+// measured and of the revision whose facts the home records, the pusher of
+// the push the home found bringing a change's head into its target
+// ([landingPusher]) — the move after which the target held the head through
+// to the tip it found, which merged the change though only the home's git
+// could see so, and never the push that moved the target last, which may be
+// somebody's push on top — and nobody for the home's other records — and a
+// code reason is news to whoever made the
+// change only where [Reason.WakesActor] says so: a reviewer is not told of
+// their own review, a pusher of their own merge, whether their push set the
+// target to the head or moved it past, and a pusher IS told that the head
+// they pushed fails its checks.
+//
+// # Who hears what the gate does
+//
+// The gate's records — a merge, a dequeue, a queue's ejection and landing, a
+// broken landing and a head check's ending — carry a routing as every other
+// record about a change does, each stamped by the record's own writer through
+// [routingFor]: the committer for the repository's, the checks writer for an
+// ending. A record of several changes (an ejection, a landing) carries one a
+// change, KEPT WITHIN THE RECORD'S ROOM ([keptRoutings]) as a push's are: the
+// record must land, and a change past the room is told to nobody. A landing
+// no change made — a person's push onto a protected branch — concerns no
+// change's audience, and its broken record carries no routing: the
+// `code_target_broken` event on the activity feed is what reports it.
+//
+// # The record format
+//
+// Under the code domain's stated condition (no build that carries the domain
+// has run without these fields — none of it is on main): every routing field
+// below rides the one field each payload gains, and takes no row of its own.
+// Once a build without them has run, each op's payload takes {Name:
+// "<Payload>.Routing", Since: 2, Op: "<op>", Path: []string{"mutation",
+// "routing"}} in versionedFields — a push's {Name: "PushEntry.Routing", Since:
+// 2, Op: "push", Path: []string{"mutation", "pushes", "routing"}} — while an
+// open's, an edit's, a review's and a comment's mentions ride the routing
+// alone (withRouting takes the asker's off the record) and take no row of
+// their own; with RecordVersion at 2, its line under "What each version
+// added" and a Carrying record in the statelogtest candidate: such a build
+// would apply the record and tell nobody, where it must retain it.
+
+// Reason is why one handle hears about a change (code_notifications.reason) —
+// a closed set, in precedence order ([Reasons]).
+type Reason string
+
+// The reasons, IN PRECEDENCE ORDER: the declarations are the order, and
+// [Reasons] lists them as written.
+const (
+	ReasonMention          Reason = "mention"
+	ReasonReviewRequested  Reason = "review_requested"
+	ReasonChangesRequested Reason = "changes_requested"
+	ReasonChecksFailed     Reason = "checks_failed"
+	ReasonTargetBroken     Reason = "target_broken"
+	ReasonConflicted       Reason = "conflicted"
+	ReasonDequeued         Reason = "dequeued"
+	ReasonFindingReplied   Reason = "finding_replied"
+	ReasonReadyToMerge     Reason = "ready_to_merge"
+	ReasonMerged           Reason = "merged"
+	ReasonReviewSubmitted  Reason = "review_submitted"
+	ReasonReReview         Reason = "re_review"
+	ReasonThread           Reason = "thread"
+	ReasonWatcher          Reason = "watcher"
+	ReasonLeadFallback     Reason = "lead_fallback"
+)
+
+// Reasons is the fifteen, IN PRECEDENCE ORDER: the first reason that names a
+// handle is the one that handle hears under, and [Concerns] OFFERS them in
+// exactly this order — the list is the offer order, so the precedence is
+// written once. WHAT THIS RECORD DID TO YOU OUTRANKS THE ROLE YOU HOLD: being
+// named comes first, then being asked, then the change's state turning under
+// you, then what you hold (a review you gave, a thread you are in, a change you
+// watch), and the lead's copy last.
+//
+// The gate's own sit among them by the same rule: a failed check of your head
+// right after a request for changes — both say your change must change — and a
+// target your landing broke right after it, before a conflict, since a broken
+// branch stops everybody merging into it; a removal from the queue after a
+// conflict, which says why the change left it.
+//
+// BASE FORMAT, AS A STATED CONDITION: a notice row's reason is read back by
+// [Reason.Valid], and checks_failed, target_broken and dequeued are values an
+// older reader of code_notifications does not know. None of the code domain is
+// on main, so no build that carries it has run without them; once one has,
+// each record that produces one takes its routing's versionedFields row
+// (this file's head), which keeps such a build from applying the record.
+func Reasons() []Reason {
+	return []Reason{ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed,
+		ReasonTargetBroken, ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge,
+		ReasonMerged, ReasonReviewSubmitted, ReasonReReview, ReasonThread, ReasonWatcher, ReasonLeadFallback}
+}
+
+// Valid reports a reason this build knows.
+func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
+
+// Addressed reports whether a notice under r ASKS its recipient something — a
+// turn that must answer rather than absorb: being named, being asked to
+// review, a request for changes, a failed check of your head, a target your
+// landing broke, a conflict, a removal from the queue, a reply to a finding
+// raised, a change ready to merge, and a request to look again. Everything
+// after them is news to absorb. For which reasons lead a PERSON's inbox, see
+// [DefaultPrimaryReasons].
+func (r Reason) Addressed() bool {
+	switch r {
+	case ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed, ReasonTargetBroken,
+		ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge, ReasonReReview:
+		return true
+	}
+	return false
+}
+
+// WakesActor reports whether a notice under r reaches the record's own actor
+// too: only checks_failed. A pushed head that fails its checks is news to its
+// pusher above all — nothing else they did tells them — as a failed pipeline
+// is to whoever pushed on GitHub and GitLab (their prompts' WakesActor).
+// Every other reason is about something the actor did and knows.
+func (r Reason) WakesActor() bool { return r == ReasonChecksFailed }
+
+// DefaultPrimaryReasons is the code reasons that lead the inbox of a person who
+// has expressed no preference.
+//
+// THE ADDRESSED ONES PLUS WHAT HAPPENED TO YOUR OWN CHANGE: a change of yours
+// merged, or reviewed, changes what you do next as surely as an ask does, and
+// asks nothing. A thread you are in, a change you watch and a lead's copy are
+// context, and context that competes with action turns an inbox into a feed
+// nobody reads. Deliberately NOT [Reason.Addressed]'s set — the two questions
+// differ, as the tracker's own two lists do.
+var DefaultPrimaryReasons = []Reason{
+	ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed, ReasonTargetBroken,
+	ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge, ReasonMerged,
+	ReasonReviewSubmitted, ReasonReReview,
+}
+
+// ChangeRouting is whom one record about a change concerns, as the writer's
+// snapshot and chart held them — see this file's head. A handle is a seat's,
+// or the human seat a person holds; [ChangeRouting.Persons] says which.
+type ChangeRouting struct {
+	// ChangeID is the change, and ChangeRef its name as the snapshot held it
+	// (web!42) — an open's, the number its apply will give.
+	ChangeID  string `json:"change_id"`
+	ChangeRef string `json:"change_ref"`
+	// RepoName and Title are the repository's name and the change's title as
+	// the record leaves them.
+	RepoName string `json:"repo_name"`
+	Title    string `json:"title" untrusted:"name"`
+	// Actor is who made the change the record records — its asker, a push
+	// entry's pusher, and for the home's records of a revision's facts and of
+	// a landing, whoever pushed the revision and whoever made the push the
+	// home found bringing the change's head into its target — and "" for the
+	// home's other records, which no principal's act made. Nobody hears of a
+	// change they made.
+	Actor string `json:"actor,omitempty"`
+	// Owner is the change's owner, and OwnerKind what it is.
+	Owner     string    `json:"owner,omitempty"`
+	OwnerKind PartyKind `json:"owner_kind,omitempty"`
+	// WorkItem is the work item the change carries, nil for none: what a wake
+	// names, so its turn is charged to the work it serves.
+	WorkItem *types.WorkItem `json:"work_item,omitempty"`
+
+	// Mentions is the handles the write's text names that the deciding chart
+	// holds, at most [MaxMentions].
+	Mentions []string `json:"mentions,omitempty"`
+	// Requested is the reviewers an ask names that the change did not ask
+	// already, and PathOwners the seats a revision's facts ask for its path
+	// owners — each at most [MaxReviewersPerChange].
+	Requested  []string `json:"requested,omitempty"`
+	PathOwners []string `json:"path_owners,omitempty"`
+	// Authors is the change's authors — its owner and everybody who moved its
+	// head — at most [MaxRoutedParticipants], on the records that tell them:
+	// a review, a merge, a conflict.
+	Authors []string `json:"authors,omitempty"`
+	// Verdict is the verdict a review gave, which tells its authors changes
+	// were requested or that it was reviewed.
+	Verdict Verdict `json:"verdict,omitempty"`
+	// Conflicted is a mergeability that turned the change's merge into a
+	// conflict, or a queue's ejection of it for one; Merged a record that
+	// merged the change.
+	Conflicted bool `json:"conflicted,omitempty"`
+	Merged     bool `json:"merged,omitempty"`
+	// NotClosed is, on a close_settled's routing of a change whose close
+	// ended not_closed, why the merged change's work item was not closed
+	// (M5-D27): its authors and its Enqueuer hear it under `merged`, the
+	// sentence beside — the excerpt of their notice, each change its own.
+	// Under the condition this file's head states, it rides
+	// CloseSettled.Routing's row.
+	NotClosed string `json:"not_closed,omitempty"`
+	// ChecksFailed is a check of the change's head that failed, or errored
+	// past the home's own requeue: its authors and its actor hear.
+	ChecksFailed bool `json:"checks_failed,omitempty"`
+	// Broken is a broken record naming the landing that merged the change:
+	// its authors and Lead hear. Dequeued is a record that put the
+	// change's entry out of its queue: its authors and Enqueuer hear.
+	Broken   bool `json:"broken,omitempty"`
+	Dequeued bool `json:"dequeued,omitempty"`
+	// Enqueuer is who put the change in its target's queue, on the records
+	// about its entry; "" for none.
+	Enqueuer string `json:"enqueuer,omitempty"`
+	// Lead is the effective lead of the repository's owner, on a broken
+	// record; "" for none.
+	Lead string `json:"lead,omitempty"`
+	// Raisers is the raisers of the findings a write replies to or answers,
+	// at most [MaxRoutedParticipants].
+	Raisers []string `json:"raisers,omitempty"`
+	// ReadyFor is who a change that became ready to merge is announced to:
+	// its authors who may merge it into its target, else the effective lead
+	// of the repository's owner.
+	ReadyFor []string `json:"ready_for,omitempty"`
+	// ReReview is the reviewers a revision's first facts ask to look again,
+	// at most [MaxReReviewers].
+	ReReview []string `json:"re_review,omitempty"`
+	// ThreadParticipants is everybody who said something in the thread a
+	// comment is said in, at most [MaxRoutedParticipants].
+	ThreadParticipants []string `json:"thread_participants,omitempty"`
+	// Watchers is the change's participants — everybody asked, who reviewed,
+	// commented or was mentioned in its conversation — at most
+	// [MaxRoutedParticipants].
+	Watchers []string `json:"watchers,omitempty"`
+	// LeadFallback is the lead a change nobody who may review it is asked
+	// reaches, "" for none.
+	LeadFallback string `json:"lead_fallback,omitempty"`
+	// Persons is which of the handles named above are persons — the actor
+	// among them — sorted: what a notice row's recipient kind and its horizon
+	// are read from, what keeps a person from ever being queue-woken, and
+	// what tells a wake whether a person or a seat wrote what it announces.
+	Persons []string `json:"persons,omitempty"`
+}
+
+// heard is who in r hears under reason, as its record's op filled it.
+func (r *ChangeRouting) heard(reason Reason) []string {
+	switch reason {
+	case ReasonMention:
+		return r.Mentions
+	case ReasonReviewRequested:
+		return slices.Concat(r.Requested, r.PathOwners)
+	case ReasonChangesRequested:
+		if r.Verdict == VerdictRequestChanges {
+			return r.Authors
+		}
+	case ReasonChecksFailed:
+		if r.ChecksFailed {
+			return withOnce(r.Authors, r.Actor)
+		}
+	case ReasonTargetBroken:
+		if r.Broken {
+			return withOnce(r.Authors, r.Lead)
+		}
+	case ReasonConflicted:
+		if r.Conflicted {
+			return r.Authors
+		}
+	case ReasonDequeued:
+		if r.Dequeued {
+			return withOnce(r.Authors, r.Enqueuer)
+		}
+	case ReasonFindingReplied:
+		return r.Raisers
+	case ReasonReadyToMerge:
+		return r.ReadyFor
+	case ReasonMerged:
+		switch {
+		case r.Merged && r.NotClosed != "":
+			// THE ENQUEUER TOO: the close was asked in their name, so the
+			// item left open is theirs to close.
+			return withOnce(r.Authors, r.Enqueuer)
+		case r.Merged:
+			return r.Authors
+		}
+	case ReasonReviewSubmitted:
+		if r.Verdict == VerdictApprove || r.Verdict == VerdictComment {
+			return r.Authors
+		}
+	case ReasonReReview:
+		return r.ReReview
+	case ReasonThread:
+		return r.ThreadParticipants
+	case ReasonWatcher:
+		return r.Watchers
+	case ReasonLeadFallback:
+		if r.LeadFallback != "" {
+			return []string{r.LeadFallback}
+		}
+	}
+	return nil
+}
+
+// withOnce is list with each of more after it that it does not hold yet, and
+// no "".
+func withOnce(list []string, more ...string) []string {
+	out := slices.Clip(list)
+	for _, h := range more {
+		if h != "" && !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// reviewer is p as the parties a routing names.
+func (p Party) reviewer() Reviewer { return Reviewer(p) }
+
+// Person reports whether handle is a person's, as r names it.
+func (r *ChangeRouting) Person(handle string) bool {
+	_, found := slices.BinarySearch(r.Persons, handle)
+	return found
+}
+
+// Concern is one handle a record concerns: the candidate the routing rule
+// keeps — its reason, whether it is addressed, its place in the fallback — and
+// the change it hears about.
+type Concern struct {
+	routing.Candidate[Reason]
+	// Change is the routing the candidate was offered from: the change it
+	// hears about, and who made it.
+	Change *ChangeRouting
+}
+
+// Concerns is every handle routings concern, change by change in the order
+// they first appear, each change's in precedence order — one record's
+// routings, which a push record carries one of for every change it merges or
+// opens, a queue's landing or ejection one for every entry it lands or puts
+// out, and every other record one of. PURE OVER THE ROUTINGS: it reads no row,
+// no chart and no clock, so the applier that writes a notice row per concern
+// and the feed that wakes the seats among them, on any node and at any time,
+// derive one set.
+//
+// THE ADD-ONCE RULE IS PER CHANGE: a handle one change's routings name under
+// two reasons hears under the stronger (internal/routing's Builder, offered
+// in [Reasons]' order), and a handle two changes of one record name hears
+// about each. The record's identity alone cannot be the notice's: the
+// committer folds up to [MaxPushesPerRecord] pushes from unrelated clients
+// into one record, so a seat mentioned by two of them, or the author of two
+// changes one landing merges, would hear about whichever routing came first
+// and nothing of the other — the busier the repository, the more news lost. So
+// a notice is keyed on the record, the change and the recipient ([NoticeID],
+// replicated 0133), and a wake's id is derived from the same three.
+// Routings that name one change twice — a push that opens a change and a
+// later push of the same record that merges it — share one builder, so a
+// handle hears about that change once.
+func Concerns(routings []*ChangeRouting) []Concern {
+	var (
+		order  []string
+		byID   = map[string][]*ChangeRouting{}
+		out    []Concern
+		reason = Reasons()
+	)
+	for _, r := range routings {
+		if r == nil {
+			continue
+		}
+		if _, seen := byID[r.ChangeID]; !seen {
+			order = append(order, r.ChangeID)
+		}
+		byID[r.ChangeID] = append(byID[r.ChangeID], r)
+	}
+	for _, id := range order {
+		var b routing.Builder[Reason]
+		for _, why := range reason {
+			for _, r := range byID[id] {
+				handles := r.heard(why)
+				if len(handles) == 0 {
+					continue
+				}
+				before := len(b.Candidates())
+				if why == ReasonLeadFallback {
+					b.Fallback(why, handles...)
+				} else {
+					b.AddAll(handles, why, why.Addressed())
+				}
+				for _, c := range b.Candidates()[before:] {
+					out = append(out, Concern{Candidate: c, Change: r})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// NoticeID is one notice's identity among its recipient's: the record that
+// reached them ([RecordID]) and the change it told them about. It is what a
+// person's mark names and an inbox notice carries as its record_id, and what a
+// wake's id is derived from ([changefeed.WakeID] over it and the seat), so a
+// record that tells one handle about two changes — a batched push, a landing
+// of two entries — leaves two notices and two wakes, and a redelivery of the
+// record still collapses into the ones it made. Separated by "/", which no
+// change id holds (a change's id is a bare UUID: [OpenChangeID], [PushChangeID]), so
+// [splitNoticeID] reads it back at the last one.
+func NoticeID(recordID, changeID string) string { return recordID + "/" + changeID }
+
+// splitNoticeID is id's record and change ([NoticeID]), and false for an id
+// that names no change.
+func splitNoticeID(id string) (record, change string, ok bool) {
+	i := strings.LastIndexByte(id, '/')
+	if i <= 0 || i == len(id)-1 {
+		return "", "", false
+	}
+	return id[:i], id[i+1:], true
+}
+
+// Hears reports whether c is told: everybody but who made the change, except
+// under the one reason that is news to its own actor ([Reason.WakesActor]).
+func (c Concern) Hears() bool { return c.Candidate.Hears(c.Change.Actor, Reason.WakesActor) }
+
+// changeNotices is how many handles one record tells about one change: the
+// notices its apply may write about it, a (change, handle) each.
+type changeNotices struct {
+	changeID string
+	notices  int
+}
+
+// noticesByChange is, for every change routings tell anybody about, how many
+// handles hear of it ([Concern.Hears]), in the order each change's first
+// hearer comes in [Concerns]. [Concerns] keeps a handle once a CHANGE, so a
+// handle two of a record's changes concern counts once under each. PURE OVER
+// THE ROUTINGS, as [Concerns] is: the count a change's notices column takes
+// from a record (code_changes.notices, replicated 0130) is the same on every
+// node, whatever the horizon let each write.
+func noticesByChange(routings ...*ChangeRouting) []changeNotices {
+	var out []changeNotices
+	for _, c := range Concerns(routings) {
+		if !c.Hears() {
+			continue
+		}
+		i := slices.IndexFunc(out, func(n changeNotices) bool { return n.changeID == c.Change.ChangeID })
+		if i < 0 {
+			out = append(out, changeNotices{changeID: c.Change.ChangeID})
+			i = len(out) - 1
+		}
+		out[i].notices++
+	}
+	return out
+}
+
+// noticeWrites is the rows a record's apply writes for whom routings tell —
+// a notice a (change, handle) ([Applier.writeNotices]) and, for each change
+// they tell anybody about, the one row its count is kept on — which every
+// decide counts with the record's rows. A push decide counts each entry's
+// routings apart, so a change two of a record's entries route is counted
+// twice and written once: an over-count, which only ever carries an entry to
+// the next record early.
+func noticeWrites(routings ...*ChangeRouting) int {
+	by := noticesByChange(routings...)
+	n := len(by)
+	for _, c := range by {
+		n += c.notices
+	}
+	return n
+}
+
+// Candidates is every handle rec concerns ([Concerns] over its routings) — none
+// for a record of no change.
+func Candidates(rec MutationRecord) ([]Concern, error) {
+	payload, err := DecodeMutation(rec)
+	if err != nil {
+		return nil, err
+	}
+	return Concerns(RoutingsOf(payload)), nil
+}
+
+// RoutingsOf is the routings a decoded payload carries — one for a record about
+// a change, one for each change a push record merges or opens — and none for
+// any other.
+func RoutingsOf(payload any) []*ChangeRouting {
+	var r *ChangeRouting
+	switch p := payload.(type) {
+	case PushBatch:
+		return pushRoutings(p)
+	case ChangeOpen:
+		r = p.Routing
+	case ChangeEdit:
+		r = p.Routing
+	case ChangeDraft:
+		r = p.Routing
+	case ChangeRetarget:
+		r = p.Routing
+	case ChangeClose:
+		r = p.Routing
+	case ChangeReopen:
+		r = p.Routing
+	case ChangeLanded:
+		r = p.Routing
+	case ReviewerRequest:
+		r = p.Routing
+	case Comment:
+		r = p.Routing
+	case ThreadResolve:
+		r = p.Routing
+	case Review:
+		r = p.Routing
+	case FindingResolve:
+		r = p.Routing
+	case Revise:
+		r = p.Routing
+	case Mergeability:
+		r = p.Routing
+	case Merge:
+		r = p.Routing
+	case Dequeue:
+		r = p.Routing
+	case Broken:
+		r = p.Routing
+	case CheckFinished:
+		r = p.Routing
+	case CloseSettled:
+		return pointersTo(p.Routing)
+	case Eject:
+		return pointersTo(p.Routing)
+	case Land:
+		return pointersTo(p.Routing)
+	}
+	if r == nil {
+		return nil
+	}
+	return []*ChangeRouting{r}
+}
+
+// pointersTo is routings as the pointers [Concerns] reads, each into the
+// record's own list.
+func pointersTo(routings []ChangeRouting) []*ChangeRouting {
+	var out []*ChangeRouting
+	for i := range routings {
+		out = append(out, &routings[i])
+	}
+	return out
+}
+
+// pushRoutings is the routings a push record carries, one for each change its
+// entries merge or open, each pointing into the record's own entries. A
+// function of its own so the batch is a typed parameter where its routings
+// are handed to append: inline, a type switch's variable is a value
+// internal/sourcetree/decltype cannot type, and the code cache's writers gate
+// (TestNothingButSyncWritesACache) refuses one handed to a call it cannot type
+// either, append among them, since it cannot tell it from a gitproc.Cmd.
+func pushRoutings(b PushBatch) []*ChangeRouting {
+	var out []*ChangeRouting
+	for i := range b.Pushes {
+		for j := range b.Pushes[i].Routing {
+			out = append(out, &b.Pushes[i].Routing[j])
+		}
+	}
+	return out
+}
+
+// routingNoticeRows is the most notice rows ONE routing of the gate's records
+// makes its apply write, which each such record's rows are charged with: the
+// change's authors ([MaxRoutedParticipants]) and the two the gate names beside
+// them — an enqueuer and a lead, or an actor.
+const routingNoticeRows = MaxRoutedParticipants + 2
+
+// routingRoomBeside is the bytes a record whose payload is payload leaves its
+// routings: what [MaxRecordBytes] leaves past the record's own overhead and the
+// payload as it stands.
+func routingRoomBeside(payload any) (int, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("gitlet: measure a record's payload: %w", err)
+	}
+	return MaxRecordBytes - recordOverheadBytes - len(encoded), nil
+}
+
+// keptRoutings is routings, in their order, as many as fit within room bytes
+// of their record and rows notice rows — this file's head: a record of
+// several changes lands whatever it would tell, and a change past the room is
+// told to nobody, as a push's leading entry keeps what fits ([routingRoom]).
+func keptRoutings(routings []ChangeRouting, room, rows int) ([]ChangeRouting, error) {
+	for len(routings) > 0 {
+		size, err := routingBytes(routings)
+		if err != nil {
+			return nil, err
+		}
+		if size <= room && noticeRows(routings) <= rows {
+			return routings, nil
+		}
+		routings = routings[:len(routings)-1]
+	}
+	return nil, nil
+}
+
+// withRouting is payload with r stamped on it — every payload of a change's
+// records takes one ([RoutingsOf]), nil where the record concerns nobody.
+//
+// AND THE ASKER'S MENTIONS TAKEN OFF an open, an edit, a comment and a review:
+// what the asker named is the request, which [routingFor] holds to the
+// deciding chart into the routing's mentions — every one the chart holds,
+// each marked a person or a seat — and the routing's are the copy every
+// reader reads (the applier's participants and notices, the feed's wakes).
+// Recorded beside them they would be a second copy nobody reads, of a list
+// that may name handles the chart does not hold, on every node's log.
+func withRouting(payload any, r *ChangeRouting) any {
+	switch p := payload.(type) {
+	case ChangeOpen:
+		p.Routing, p.Mentions = r, nil
+		return p
+	case ChangeEdit:
+		p.Routing, p.Mentions = r, nil
+		return p
+	case ChangeDraft:
+		p.Routing = r
+		return p
+	case ChangeRetarget:
+		p.Routing = r
+		return p
+	case ChangeClose:
+		p.Routing = r
+		return p
+	case ChangeReopen:
+		p.Routing = r
+		return p
+	case ChangeLanded:
+		p.Routing = r
+		return p
+	case ReviewerRequest:
+		p.Routing = r
+		return p
+	case Comment:
+		p.Routing, p.Mentions = r, nil
+		return p
+	case ThreadResolve:
+		p.Routing = r
+		return p
+	case Review:
+		p.Routing, p.Mentions = r, nil
+		return p
+	case FindingResolve:
+		p.Routing = r
+		return p
+	case Revise:
+		p.Routing = r
+		return p
+	case Mergeability:
+		p.Routing = r
+		return p
+	case Merge:
+		p.Routing = r
+		return p
+	case Dequeue:
+		p.Routing = r
+		return p
+	case Broken:
+		p.Routing = r
+		return p
+	case CheckFinished:
+		p.Routing = r
+		return p
+	}
+	panic(fmt.Sprintf("gitlet: a %T carries no routing — every record about a change does (RoutingsOf)", payload))
+}
+
+// concerning is what a record's decide hands [routingFor]: the change as the
+// record leaves it, who made it, and the facts of the record's own op — each
+// role filled only where the op routes by it (this file's head).
+type concerning struct {
+	repoName string
+	// change is the change's row as the record leaves it: its id, number,
+	// title, owner and work item.
+	change changeRow
+	// actor is who made the change — for a revision's facts, its pusher, and
+	// for a landing, the pusher of the push the home found merging it — ""
+	// for the home's other records, and actorKind what it is: a person's
+	// actor is named among the routing's persons, so a wake says a person
+	// wrote what it announces.
+	actor     string
+	actorKind PartyKind
+	// roster is the deciding chart: what a mention is held to and what says
+	// whether a handle is a person's. Nil only for a record that names no
+	// mention.
+	roster Roster
+	// mentions is the handles the write names — held to roster, at most
+	// MaxMentions — and mentionText text a push's options name them in,
+	// which the committer reads them out of.
+	mentions    []string
+	mentionText []string
+	// requested, pathOwners, reReview, raisers and readyFor are the parties
+	// the op names under their reasons; lead the lead's copy, a zero Reviewer
+	// for none.
+	requested, pathOwners, reReview, raisers, readyFor []Reviewer
+	lead                                               Reviewer
+	// verdict is a review's; conflicted, merged, checksFailed, broken and
+	// dequeued the op's facts.
+	verdict                                            Verdict
+	conflicted, merged, checksFailed, broken, dequeued bool
+	// notClosed is a close_settled's not_closed detail.
+	notClosed string
+	// enqueuer is who put the change in its queue, and ownerLead the
+	// effective lead of the repository's owner, each a zero Reviewer for
+	// none.
+	enqueuer, ownerLead Reviewer
+	// authors reads the change's authors, beside addedAuthors — the authors
+	// a push record's earlier entries added, which no row holds yet; watchers
+	// its participants; thread the participants of that thread, "" for none.
+	authors      bool
+	addedAuthors []Reviewer
+	watchers     bool
+	thread       string
+}
+
+// routingFor is the routing of one record about a change — nil for a record
+// whose op fills no role, which carries none (this file's head) — read in the deciding
+// snapshot tx — THE ONE FUNCTION every writer of a change's records stamps its
+// routing by, so the committer and the change writer never disagree about whom
+// a record concerns. Each role is read in its key's order and bounded
+// ([MaxRoutedParticipants]); the result is held to [MaxRoutingBytes], which
+// those bounds keep it far inside — past it is a writer's bug, never a
+// refusal.
+func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, error) {
+	row := c.change
+	r := &ChangeRouting{ChangeID: row.id, ChangeRef: ChangeRef(c.repoName, row.number), RepoName: c.repoName,
+		Title: row.title, Actor: c.actor, Owner: row.owner, OwnerKind: row.ownerKind, Verdict: c.verdict,
+		Conflicted: c.conflicted, Merged: c.merged, ChecksFailed: c.checksFailed, Broken: c.broken,
+		Dequeued: c.dequeued, NotClosed: c.notClosed}
+	if row.work != (types.WorkItem{}) {
+		work := row.work
+		r.WorkItem = &work
+	}
+	persons := map[string]bool{}
+	note := func(handle string, kind PartyKind) string {
+		if kind == PartyPerson {
+			persons[handle] = true
+		}
+		return handle
+	}
+	if row.owner != "" {
+		note(row.owner, row.ownerKind)
+	}
+	if c.actor != "" {
+		note(c.actor, c.actorKind)
+	}
+	mentions := c.mentions
+	for _, text := range c.mentionText {
+		mentions = append(mentions, notify.Mentions(text)...)
+	}
+	for _, m := range mentions {
+		if c.roster == nil || slices.Contains(r.Mentions, m) || len(r.Mentions) >= MaxMentions {
+			continue
+		}
+		// HELD TO THE DECIDING CHART: a name nobody holds is no seat to
+		// tell, and a mention past the chart would be a notice nobody can
+		// receive.
+		seat, ok := c.roster.Seat(m)
+		if !ok {
+			continue
+		}
+		kind := PartyAgent
+		if seat.Human {
+			kind = PartyPerson
+		}
+		r.Mentions = append(r.Mentions, note(m, kind))
+	}
+	parties := func(list []Reviewer) []string {
+		var out []string
+		for _, p := range list {
+			if p.Handle != "" && !slices.Contains(out, p.Handle) {
+				out = append(out, note(p.Handle, p.Kind))
+			}
+		}
+		return out
+	}
+	r.Requested, r.PathOwners, r.ReReview = parties(c.requested), parties(c.pathOwners), parties(c.reReview)
+	r.Raisers, r.ReadyFor = parties(c.raisers), parties(c.readyFor)
+	if c.lead.Handle != "" {
+		r.LeadFallback = note(c.lead.Handle, c.lead.Kind)
+	}
+	if c.enqueuer.Handle != "" {
+		r.Enqueuer = note(c.enqueuer.Handle, c.enqueuer.Kind)
+	}
+	if c.ownerLead.Handle != "" {
+		r.Lead = note(c.ownerLead.Handle, c.ownerLead.Kind)
+	}
+	if c.authors {
+		authors, err := partiesOf(ctx, tx, routingAuthorsSQL, row.id)
+		if err != nil {
+			return nil, fmt.Errorf("gitlet: read change %s's authors: %w", row.id, err)
+		}
+		for _, a := range c.addedAuthors {
+			if len(authors) < MaxRoutedParticipants && !slices.ContainsFunc(authors, func(p Reviewer) bool {
+				return p.Handle == a.Handle
+			}) {
+				authors = append(authors, a)
+			}
+		}
+		r.Authors = parties(authors)
+	}
+	if c.watchers {
+		watchers, err := partiesOf(ctx, tx, routingWatchersSQL, row.id)
+		if err != nil {
+			return nil, fmt.Errorf("gitlet: read change %s's participants: %w", row.id, err)
+		}
+		r.Watchers = parties(watchers)
+	}
+	if c.thread != "" {
+		said, err := threadParticipants(ctx, tx, row.id, c.thread)
+		if err != nil {
+			return nil, err
+		}
+		r.ThreadParticipants = parties(said)
+	}
+	if len(Concerns([]*ChangeRouting{r})) == 0 {
+		// NOBODY TO TELL: no role the record's op routes by is filled, so the
+		// record carries no routing at all (this file's head) — never the
+		// change's context for a fan-out of none.
+		return nil, nil
+	}
+	for handle := range persons {
+		r.Persons = append(r.Persons, handle)
+	}
+	slices.Sort(r.Persons)
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: encode change %s's routing: %w", row.id, err)
+	}
+	if len(encoded) > MaxRoutingBytes {
+		return nil, fmt.Errorf("gitlet: change %s's routing is %d bytes, past MaxRoutingBytes (%d) — the bounds of "+
+			"its roles keep it from forming", row.id, len(encoded), MaxRoutingBytes)
+	}
+	return r, nil
+}
+
+// partiesOf is the parties one routing statement answers for a change — at
+// most MaxRoutedParticipants, read in its key's order.
+func partiesOf(ctx context.Context, tx *sql.Tx, query, changeID string) ([]Reviewer, error) {
+	rows, err := tx.QueryContext(ctx, query, changeID, MaxRoutedParticipants)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Reviewer
+	for rows.Next() {
+		var p Reviewer
+		var kind string
+		if err := rows.Scan(&p.Handle, &kind); err != nil {
+			return nil, err
+		}
+		p.Kind = PartyKind(kind)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// threadParticipants is everybody who said something in thread on changeID —
+// its root's author first, then the authors of its newest comments, each
+// once, at most MaxRoutedParticipants. THE NEWEST, read back from the end of
+// the thread by its index, at most [threadParticipantRows] of them: a thread
+// that ran to thousands of comments is read no deeper than the people who
+// still talk in it, so a comment's decide costs what its audience is, never
+// what its thread's history is.
+func threadParticipants(ctx context.Context, tx *sql.Tx, changeID, thread string) ([]Reviewer, error) {
+	var out []Reviewer
+	add := func(p Reviewer) {
+		if len(out) < MaxRoutedParticipants && !slices.ContainsFunc(out, func(q Reviewer) bool {
+			return q.Handle == p.Handle
+		}) {
+			out = append(out, p)
+		}
+	}
+	root, found, err := commentIn(ctx, tx, thread)
+	if err != nil {
+		return nil, err
+	}
+	if found && root.changeID == changeID {
+		add(Reviewer{Handle: root.author, Kind: root.authorKind})
+	}
+	rows, err := tx.QueryContext(ctx, threadParticipantsSQL, changeID, thread, threadParticipantRows)
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: read who talks in thread %s of %s: %w", thread, changeID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var p Reviewer
+		var kind string
+		if err := rows.Scan(&p.Handle, &kind); err != nil {
+			return nil, fmt.Errorf("gitlet: read who talks in thread %s of %s: %w", thread, changeID, err)
+		}
+		p.Kind = PartyKind(kind)
+		add(p)
+	}
+	return out, rows.Err()
+}
+
+// threadParticipantRows is how many of a thread's newest comments name who
+// takes part in it: FOUR PER PARTICIPANT a routing names
+// ([MaxRoutedParticipants]), so a thread of sixty-four people each answering
+// in turn names them all, and a thread two people ran to thousands of
+// comments costs a comment's decide 256 index entries rather than its history.
+const threadParticipantRows = 4 * MaxRoutedParticipants
+
+// mentionsProblem is why mentions is no list a write may name, or "": at most
+// [MaxMentions] handles, each a seat's handle, each once.
+func mentionsProblem(mentions []string) string {
+	if len(mentions) > MaxMentions {
+		return fmt.Sprintf("%d handles, past the %d one write names (MaxMentions)", len(mentions), MaxMentions)
+	}
+	for i, m := range mentions {
+		if why := handleProblem(m); why != "" {
+			return fmt.Sprintf("[%d]: %s", i, why)
+		}
+		if slices.Contains(mentions[:i], m) {
+			return fmt.Sprintf("[%d]: %q is named twice", i, m)
+		}
+	}
+	return ""
+}
+
+// stampedRouting refuses a routing an asker set: the deciding node stamps it
+// from its own snapshot and chart.
+func stampedRouting(what string, r *ChangeRouting) error {
+	if r != nil {
+		return badField(what+".routing", "the deciding node stamps whom a record concerns from its snapshot and "+
+			"its chart, and an asker sends none")
+	}
+	return nil
+}
+
+// revisionPusher is who pushed revision n of changeID, as a routing's actor
+// names them — the opener for revision 1, whoever moved the head for every
+// later one — and "" where tx holds no such revision.
+func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (string, PartyKind, error) {
+	var pusher, kind string
+	switch err := tx.QueryRowContext(ctx, headPusherSQL, changeID, n).Scan(&pusher, &kind); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("gitlet: read who pushed revision %d of %s: %w", n, changeID, err)
+	}
+	return pusher, PartyKind(kind), nil
+}
+
+// landingPusher is who merged change changeID of repoID that its home found
+// landed (l), as a routing's actor names them: the principal of the push l
+// names, where that push's row holds an applied command setting l's target to
+// a commit and lies where a merge of the change's head revision can — at or
+// after the record of that revision, before which no move brought its head in
+// as this change's, and at or before moved, the record the target's row says
+// last moved it, past which nothing has. "" where l names no push (its home's
+// walk found none), where the push is none of that, where its row is gone
+// (past the history's horizon, or purged), and where its principal names no
+// party (a token bound to nobody, the engine's own expiry).
+//
+// WHY THE PUSH THE HOME NAMES, AND NEVER THE ONE AT THE TARGET'S POSITION:
+// the record that last moved the target holds whoever moved it LAST, and the
+// target may move again after the merge — somebody's push on top, in the same
+// group-commit record (up to [MaxPushesPerRecord] pushes share one) or in a
+// later one landed before the home's pass read it, a race whose odds grow
+// with how many seats push to the target. That pusher merged nothing: the
+// head was already in the target before their push. The push that merged is
+// the move after which the target held the head through to the tip, and
+// telling it takes git (one commit holding another), which the home runs and
+// a committer's decide never does; so the home walks the target's moves and
+// names it, and the decide holds the name to the rows — a seek of the
+// revisions' key and one of the pushes' — as it holds the tip the home names
+// to the target's row.
+func landingPusher(ctx context.Context, tx *sql.Tx, repoID, changeID string, l ChangeLanded, moved int64) (string,
+	PartyKind, error) {
+
+	pushed := l.PushPosition.Packed()
+	if l.PushID == "" || pushed > moved {
+		return "", "", nil
+	}
+	var revised int64
+	switch err := tx.QueryRowContext(ctx, revisionPositionSQL, changeID, l.Revision).Scan(&revised); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("gitlet: read where revision %d of %s was pushed: %w", l.Revision, changeID, err)
+	}
+	if pushed < revised {
+		return "", "", nil
+	}
+	var actorKind, seat, encoded string
+	switch err := tx.QueryRowContext(ctx, landingPushSQL, l.PushID, repoID, pushed).Scan(&actorKind, &seat,
+		&encoded); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("gitlet: read push %s of repository %s, which merged %s: %w", l.PushID, repoID,
+			changeID, err)
+	}
+	var cmds []Command
+	if err := json.Unmarshal([]byte(encoded), &cmds); err != nil {
+		return "", "", fmt.Errorf("gitlet: decode push %s's commands of repository %s: %w", l.PushID, repoID, err)
+	}
+	if !slices.ContainsFunc(cmds, func(c Command) bool {
+		return c.Ref == l.TargetRef && c.Result == ResultOK && c.New != ZeroOID
+	}) {
+		return "", "", nil
+	}
+	who, kind := Principal{Kind: PrincipalKind(actorKind), Seat: seat}.party()
+	return who, kind, nil
+}
+
+// The routing's reads, each registered in plan_test.go: a change's authors and
+// its participants, a range of each key in its order; and a thread's newest
+// comments, a range of code_comments_thread_idx read back from its end.
+const (
+	routingAuthorsSQL = `SELECT author, author_kind FROM code_change_authors WHERE change_id = ?
+		ORDER BY author LIMIT ?`
+	routingWatchersSQL = `SELECT handle, kind FROM code_participants WHERE change_id = ?
+		ORDER BY handle LIMIT ?`
+	// headPusherSQL is who pushed a change's revision — the actor of a failed
+	// check of its head and of the revision's facts ([revisionPusher]) — one
+	// seek of the revisions' key.
+	headPusherSQL = `SELECT pusher, pusher_kind FROM code_revisions WHERE change_id = ? AND n = ?`
+	// revisionPositionSQL is where a change's revision was pushed — the
+	// oldest record a push that merged it can be in ([landingPusher]) — one
+	// seek of the revisions' key; landingPushSQL is the push a landing names
+	// as its merger, with its commands, one seek of the pushes' key — held to
+	// the repository and the position named, so a push of another record or
+	// another repository is no push of this landing's.
+	revisionPositionSQL = `SELECT position FROM code_revisions WHERE change_id = ? AND n = ?`
+	landingPushSQL      = `SELECT actor_kind, actor_seat, commands FROM code_pushes
+		WHERE push_id = ? AND repo_id = ? AND position = ?`
+	threadParticipantsSQL = `SELECT author, author_kind FROM code_comments INDEXED BY code_comments_thread_idx
+		WHERE change_id = ? AND thread_id = ? ORDER BY position DESC LIMIT ?`
+)

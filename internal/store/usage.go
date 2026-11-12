@@ -1405,7 +1405,7 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 //
 // EACH OPENING AND EACH REVIEW ONCE, by its change's or its review's id, each
 // failed check once by its attempt and each ejection once by its entry: its
-// landing is announced once (internal/code's announce.go), and counting the
+// landing is announced once (internal/gitlet's announce.go), and counting the
 // thing rather than its rows is what keeps a second announcement of it — none
 // is published, but nothing here has to trust that — from counting twice. A
 // correction of an attempt's ending (types.CodeCheckFinished.Replaces) is the

@@ -303,7 +303,7 @@ func TestAnUnreadPushRecordIsSaidNotHidden(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)
 	rig.launchWith("t1", withNative)
-	rig.pushes.answer(nil, 0, errors.New("code: this node is not serving Gitlet"))
+	rig.pushes.answer(nil, 0, errors.New("gitlet: this node is not serving Gitlet"))
 
 	if err := completeRun(t, rig, Result{Success: true, Text: "done"}); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -312,7 +312,7 @@ func TestAnUnreadPushRecordIsSaidNotHidden(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("resumed %d times, want the collection resumed whatever the record said", len(calls))
 	}
-	want := "Pushed to Gitlet: unknown — its push record could not be read (code: this " +
+	want := "Pushed to Gitlet: unknown — its push record could not be read (gitlet: this " +
 		"node is not serving Gitlet); the branches it worked on are web: seats/swe/ENG-1; api: " +
 		"seats/swe/ENG-1."
 	if !strings.Contains(calls[0].Answer, want) {

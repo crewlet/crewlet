@@ -1,0 +1,502 @@
+package gitlet_test
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// publishCheck appends one record on repo's checks subject as its writer does
+// — ADDITIVE, no expectation — and drains it.
+func (n *node) publishCheck(repo string, op gitlet.OpKind, payload any) (statelog.Result, error) {
+	n.t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return statelog.Result{}, err
+	}
+	subject, scope := gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	opID := statelog.NewOpID(time.Now(), "code_"+string(op))
+	res, err := n.pub.Publish(n.t.Context(), statelog.Request{
+		Subject: statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
+		Scope:   scope.Set(), OpID: opID, Pattern: statelog.PatternAdditive,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			encoded, err := gitlet.Encode(gitlet.MutationRecord{
+				RecordEnvelope: gitlet.RecordEnvelope{
+					OpID: opID, Subject: subject, Op: op, CreatedAt: harnessAt,
+					Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
+				},
+				Mutation: body, Actor: "harness", ActorKind: gitlet.ActorSystem,
+			})
+			return statelog.Decision{Payload: encoded}, err
+		},
+	})
+	if err == nil && n.waiter.running() {
+		n.drain()
+	}
+	return res, err
+}
+
+// seedEnded writes count check rows of repoID straight into a node's estate,
+// each ended at the instant at and keyed by it — rows a case needs past or
+// inside the history, which no record of this build can end at an instant it
+// chooses.
+func (n *node) seedEnded(repoID string, at time.Time, count int) {
+	n.t.Helper()
+	for i := range count {
+		n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose,
+			change_id, revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds,
+			reason, runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
+			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
+			url, summary, def, failures, tail)
+			VALUES (?, ?, 'refs/heads/main', ?, 1, 'passed', 'tip', '', 0, '', '', '', '', 0, '', 600, 'exit',
+				'node-a', 'container', '', '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
+			repoID, oidOf(fmt.Sprint(repoID, at.UnixNano(), i)), fmt.Sprintf("check-%d", i), store.EncodeTime(at),
+			store.EncodeTime(at), store.EncodeTime(at), store.EncodeTime(at.Add(600*time.Second)))
+	}
+}
+
+// checksOf counts repoID's check rows.
+func (n *node) checksOf(repoID string) int {
+	n.t.Helper()
+	return n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repoID)
+}
+
+// AN IDLE REPOSITORY'S CHECKS ARE SWEPT (M5-D34): a repository whose checks
+// keep ending removes its own history with each ending, and one whose checks
+// stopped ending has nothing of its own that ever would — so the retention
+// pass lists the repositories holding a check row that ended before its clock
+// less CheckHistory less CheckSweepGrace, and publishes a checks_sweep on
+// each one's checks subject which removes EVERY row of it past the history,
+// the ones inside the grace too: a swept repository is swept whole. A
+// repository whose rows are past the history but inside the grace — its next
+// ending may yet come — is not listed and keeps them, and nor is one whose
+// rows are inside the history.
+//
+// Mutation: leave the checks step out of the pass, and the idle repository
+// keeps its rows — red; sweep to the listing's cutoff rather than the
+// history, and it keeps the two inside the grace — red; list at the history
+// itself, and the recent repository is swept too — red.
+func TestAnIdleRepositorysChecksAreSwept(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("idle", described("idle"), t1)
+	n.ensure("recent", described("recent"), t1)
+	n.ensure("busy", described("busy"), t1)
+	idle, recent, busy := n.mustID("idle"), n.mustID("recent"), n.mustID("busy")
+	n.seedEnded(idle, harnessAt.Add(-gitlet.CheckHistory-gitlet.CheckSweepGrace-time.Hour), 3)
+	n.seedEnded(idle, harnessAt.Add(-gitlet.CheckHistory-time.Hour), 2)
+	n.seedEnded(recent, harnessAt.Add(-gitlet.CheckHistory-time.Hour), 1)
+	n.seedEnded(busy, harnessAt.Add(-24*time.Hour), 2)
+	// THE BROKER'S INSTANT IS THE PASS'S CLOCK, so the sweep's cutoff — the
+	// pass's clock less the history — falls before the record's own.
+	n.storedAt = func(uint64, time.Time) time.Time { return harnessAt }
+	before := n.end()
+
+	var p purged
+	report, err := passOver(n.store, n.reader, &p).Pass(t.Context())
+	if err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	if report.ChecksSweeps != 1 || report.ChecksSweptRows != 5 || len(report.Failed) != 0 || report.Remain {
+		t.Fatalf("the pass reported %+v; want one checks sweep of the idle repository's five rows", report)
+	}
+	want := []string{fmt.Sprintf("%s %s", gitlet.OpChecksSweep, gitlet.ChecksSubject(idle))}
+	if got := n.opsAfter(before); !slices.Equal(got, want) {
+		t.Fatalf("the pass appended %v, want %v", got, want)
+	}
+	if left := n.checksOf(idle); left != 0 {
+		t.Fatalf("the idle repository keeps %d check rows past the history", left)
+	}
+	if kept := n.checksOf(recent); kept != 1 {
+		t.Fatalf("the recent repository keeps %d of its 1 row inside the grace", kept)
+	}
+	if kept := n.checksOf(busy); kept != 2 {
+		t.Fatalf("the busy repository keeps %d of its 2 rows inside the history", kept)
+	}
+	again, err := passOver(n.store, n.reader, &p).Pass(t.Context())
+	if err != nil || again.ChecksSweeps != 0 {
+		t.Fatalf("a second pass swept again (%+v, %v): nothing is past the history by the grace now", again, err)
+	}
+}
+
+// AN ACTIVE REPOSITORY'S CHECKS ARE LEFT TO ITS ENDINGS: a repository whose
+// checks keep ending removes its history with each ending, so a row that
+// crossed the history since its last ending — here half a minute before the
+// pass, its last ending a minute before — is its next ending's to remove. The
+// pass appends nothing for it: a sweep would be a record that ending makes
+// anyway, applied by every data node, ahead of the purges on the pass's one
+// budget — at Gitlet's design point, thousands of them a pass. Its
+// next ending removes the row.
+//
+// Mutation: list the repositories holding rows past the history itself, with
+// no grace, and the pass sweeps the active repository — red.
+func TestAnActiveRepositorysChecksAreLeftToItsEndings(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("active", described("active"), t1)
+	repo := n.mustID("active")
+	crossed := harnessAt.Add(-gitlet.CheckHistory - 30*time.Second)
+	n.seedEnded(repo, crossed, 1)
+	// end publishes one attempt of a check, queued and ended at the broker
+	// instant at, as its runner's records are.
+	end := func(name string, at time.Time) {
+		t.Helper()
+		n.storedAt = func(uint64, time.Time) time.Time { return at }
+		key := gitlet.CheckKey{RepoID: repo, OID: oidOf(name), Target: mainRef, Name: name, Attempt: 1}
+		exit := 0
+		if _, err := n.publishCheck(repo, gitlet.OpCheckQueued, gitlet.CheckQueued{CheckKey: key,
+			Purpose: gitlet.PurposeTip, Reason: gitlet.QueueDispatch,
+			Def: &gitlet.CheckDef{Name: name, Run: "make test", TimeoutSeconds: 600}, QueuedAt: at}); err != nil {
+			t.Fatalf("queue %s: %v", name, err)
+		}
+		if _, err := n.publishCheck(repo, gitlet.OpCheckFinished, gitlet.CheckFinished{CheckKey: key,
+			State: gitlet.CheckStatePassed, Reason: gitlet.CheckReasonExit, ExitCode: &exit,
+			FinishedAt: at}); err != nil {
+			t.Fatalf("end %s: %v", name, err)
+		}
+	}
+	end("unit", harnessAt.Add(-time.Minute))
+	if held := n.checksOf(repo); held != 2 {
+		t.Fatalf("the premise: the repository holds %d rows, want the one that crossed the history after its "+
+			"last ending's cutoff, and that ending's own", held)
+	}
+	n.storedAt = func(uint64, time.Time) time.Time { return harnessAt }
+	before := n.end()
+	var p purged
+	report, err := passOver(n.store, n.reader, &p).Pass(t.Context())
+	if err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	if report.ChecksSweeps != 0 || len(report.Failed) != 0 {
+		t.Fatalf("the pass reported %+v; want no checks sweep of a repository whose checks keep ending", report)
+	}
+	if got := n.opsAfter(before); len(got) != 0 {
+		t.Fatalf("the pass appended %v, want nothing: the repository's next ending removes its row", got)
+	}
+	end("lint", harnessAt.Add(time.Minute))
+	if left := n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ? AND finished_at = ?`, repo,
+		store.EncodeTime(crossed)); left != 0 || n.checksOf(repo) != 2 {
+		t.Fatalf("the repository's next ending left the row that crossed the history (%d of %d rows)", left,
+			n.checksOf(repo))
+	}
+}
+
+// A PURGED REPOSITORY'S CHECK WRITES NOTHING: a repository's purge removes
+// its checks and their logs with the rest of it, and a check record about it
+// that lands after the purge — a runner that ended a check its repository's
+// purge outran — is dropped by the deletion gate on every node, which reads
+// the repository off the checks subject itself, record body or none.
+//
+// Mutation: leave the checks subject out of the deletion gate (gatedRepo) and
+// the late ending writes a row for a purged repository — red.
+func TestAPurgedRepositorysCheckWritesNothing(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("web", described("web"), t1)
+	repo := n.mustID("web")
+	key := gitlet.CheckKey{RepoID: repo, OID: oidOf("head"), Target: mainRef, Name: "unit", Attempt: 1}
+	def := &gitlet.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600}
+	if _, err := n.publishCheck(repo, gitlet.OpCheckQueued, gitlet.CheckQueued{CheckKey: key,
+		Purpose: gitlet.PurposeTip, Reason: gitlet.QueueDispatch, Def: def,
+		QueuedAt: harnessAt}); err != nil {
+		t.Fatalf("queue a check: %v", err)
+	}
+	exit := 1
+	failed := gitlet.CheckFinished{CheckKey: key, State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonExit,
+		ExitCode: &exit, Tail: "FAIL", FinishedAt: harnessAt,
+		Log: &gitlet.CheckLog{Object: keyOf("log"), Hash: objstore.HashOf([]byte("log")), Size: 3}}
+	if err := failed.Validate(); err != nil {
+		t.Fatalf("the premise: the ending is not one a writer forms: %v", err)
+	}
+	if _, err := n.publishCheck(repo, gitlet.OpCheckFinished, failed); err != nil {
+		t.Fatalf("end the check: %v", err)
+	}
+	if n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repo) != 1 ||
+		n.count(`SELECT COUNT(*) FROM code_check_logs WHERE repo_id = ?`, repo) != 1 {
+		t.Fatal("the premise: the repository holds its check and its log")
+	}
+	n.deleteAt(repo, harnessAt.Add(-2*keep))
+	for {
+		res, err := n.store.PurgeStep(t.Context(), repo, keep)
+		if err != nil {
+			t.Fatalf("PurgeStep: %v", err)
+		}
+		if res.Done {
+			break
+		}
+	}
+	if got := n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repo) +
+		n.count(`SELECT COUNT(*) FROM code_check_logs WHERE repo_id = ?`, repo); got != 0 {
+		t.Fatalf("the purge left %d rows of the repository's checks", got)
+	}
+
+	late := failed
+	late.Attempt = 2
+	_, err := n.publishCheck(repo, gitlet.OpCheckFinished, late)
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonDeleted {
+		t.Fatalf("an ending of a purged repository's check published %v, want it dropped by the deletion gate",
+			err)
+	}
+	if got := n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repo); got != 0 {
+		t.Fatalf("an ending of a purged repository's check wrote %d rows", got)
+	}
+	if got := n.count(`SELECT rejects FROM code_deletions WHERE repo_id = ?`, repo); got != 1 {
+		t.Fatalf("the deletion marker counts %d records dropped, want the one ending", got)
+	}
+	gates := gitlet.NewGates(n.db.Reader())
+	subject := statelog.Subject{Kind: string(gitlet.KindChecks), ID: repo}
+	at := statelog.Position{Stream: gitlet.Domain{}.Stream().Name, Seq: n.end() + 1}
+	if reason, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, nil); err != nil || !gated ||
+		reason != statelog.ReasonDeleted {
+		t.Fatalf("the gate reader judged a record on the purged repository's checks %q, %v, %v; want deleted — "+
+			"its subject names the repository", reason, gated, err)
+	}
+}
+
+// A CHECK'S LOG IS NAMED BY THE ENDING THAT KEEPS ONE (ADR-0082's contract for
+// a Required table): an ending carrying a log names the attempt's
+// code_check_logs row and its object, spelled as the walk spells the row; an
+// ending carrying none names NOTHING — never a removal, since the join may keep
+// another ending's log, and a removal read where the row stands would lose
+// that log to a backup; every other record names none; and a record this build
+// cannot read that may reach a repository's checks refuses, while one whose
+// writer scoped it to a repository's own rows does not.
+//
+// Mutation: answer an ending with no log as a removal of the row, and the
+// ending-with-no-log case goes red; read a newer record scoped to checks as
+// naming none, and the unreadable case does.
+func TestACheckLogIsNamedByTheEndingThatKeepsOne(t *testing.T) {
+	t.Parallel()
+	records := gitlet.CheckLogReferences.Records
+	const repo = "0190f3c4-0000-7000-8000-0000000000c1"
+	key := gitlet.CheckKey{RepoID: repo, OID: oidOf("head"), Target: mainRef, Name: "unit", Attempt: 2}
+	log := &gitlet.CheckLog{Object: keyOf("log"), Hash: objstore.HashOf([]byte("log")), Size: 3}
+	exit := 1
+	ending := func(l *gitlet.CheckLog) []byte {
+		body, err := json.Marshal(gitlet.CheckFinished{CheckKey: key, State: gitlet.CheckStateFailed,
+			Reason: gitlet.CheckReasonExit, ExitCode: &exit, FinishedAt: harnessAt, Log: l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return mustEncode(t, gitlet.MutationRecord{RecordEnvelope: gitlet.RecordEnvelope{
+			OpID: "op-end", Subject: gitlet.ChecksSubject(repo), Op: gitlet.OpCheckFinished, Gen: 1,
+			Scope: gitlet.Scope{gitlet.ChecksPath(repo)},
+		}, Mutation: body})
+	}
+	got, err := records(ending(log))
+	want := []objstore.RecordReference{{NamedBy: objstore.JoinOwner(repo, key.OID, key.Target, "unit", "2"),
+		Object: log.Content(), Names: true}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("an ending keeping a log names %+v, %v; want its attempt's row naming the log: %+v", got, err, want)
+	}
+	if got, err := records(ending(nil)); err != nil || len(got) != 0 {
+		t.Fatalf("an ending keeping no log names %+v, %v; want nothing — never a removal", got, err)
+	}
+	for _, kind := range []gitlet.ObjectKind{gitlet.KindName, gitlet.KindRepo, gitlet.KindChecks} {
+		body, err := encodeSuiteRecord(string(kind), repo, "op-1", gitlet.RecordVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := records(body); err != nil || len(got) != 0 {
+			t.Errorf("a %s record's log references = %+v, %v; want none", kind, got, err)
+		}
+	}
+	future, err := encodeSuiteRecord(string(gitlet.KindChecks), repo, "op-2", gitlet.RecordVersion+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records(future); !errors.Is(err, objstore.ErrRecordUnreadable) {
+		t.Fatalf("a newer check record = %v, want ErrRecordUnreadable", err)
+	}
+	pushOnly := mustEncode(t, gitlet.MutationRecord{RecordEnvelope: gitlet.RecordEnvelope{
+		V: gitlet.RecordVersion + 1, OpID: "op-3", Subject: gitlet.RepoSubject(repo), Op: gitlet.OpPush, Gen: 1,
+		Scope: gitlet.Scope{gitlet.RepoPath(repo)},
+	}, Mutation: json.RawMessage(`{"novel":1}`)})
+	if got, err := records(pushOnly); err != nil || len(got) != 0 {
+		t.Fatalf("a newer record scoped to a repository's own rows = %+v, %v; want none", got, err)
+	}
+	// AND THE PACKS' READER, the other way round: a newer record scoped to a
+	// repository's checks alone writes no pack row.
+	if got, err := gitlet.PackReferences.Records(future); err != nil || len(got) != 0 {
+		t.Fatalf("the packs' reader answered a newer check record %+v, %v; want none", got, err)
+	}
+}
+
+// THE LARGEST CHECK RECORDS FIT A RECORD: a queued attempt carrying the
+// widest definition a file can hold — every list at its bound, every text at
+// its bytes in the character JSON spells in six — and an ending carrying every
+// field at its bound each validate, and encode with the longest node id and
+// widest generation under MaxRecordBytes, so no check a writer forms is one
+// the committer's log refuses — the ending too once its writer has stamped
+// whom a failed head concerns, its routing at the bounds of the roles it
+// fills, and with the whole of MaxRoutingBytes to spare beside it, the most
+// any routing may take; and one record's apply — its row, its log dropped and
+// written, its horizon's check rows with theirs, and the notice rows its
+// routing writes — stays inside MaxRecordRows.
+//
+// Mutation: keep more room for a routing (MaxRoutingBytes past what the
+// widest ending leaves) — red; charge a routing more notice rows than a
+// record leaves (routingNoticeRows) — red.
+func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
+	t.Parallel()
+	const repo = "0190f3c4-0000-7000-8000-00000000b0b0"
+	wide := func(n int) string { return strings.Repeat("&", n) }
+	glob := func(i int) string {
+		head := fmt.Sprintf("%02d/", i)
+		return head + wide(128-len(head))
+	}
+	// A REPORT'S PATH AT ITS BOUND: sixteen components of the 255 bytes a
+	// file name takes, under gitlet.MaxTreePathBytes whole.
+	report := func(lead string) string { return lead + strings.Repeat("/"+wide(254), 15) + "/x" }
+	def := gitlet.CheckDef{Name: strings.Repeat("c", gitlet.MaxCheckNameBytes), Run: wide(gitlet.MaxCheckRunBytes),
+		TimeoutSeconds: int(gitlet.CheckTimeoutCeiling / time.Second),
+		Report:         gitlet.CheckReport{JUnit: report(wide(254)), SARIF: report("s" + wide(253))},
+		RunIn:          gitlet.CellE2B}
+	for i := range gitlet.MaxCheckPaths {
+		def.Paths = append(def.Paths, glob(i))
+	}
+	for i := range 64 {
+		def.Checkout.Cone = append(def.Checkout.Cone, fmt.Sprintf("%02d", i)+wide(253))
+	}
+	for i := range gitlet.MaxCheckEnv {
+		def.Env = append(def.Env, fmt.Sprintf("V%02d_", i)+strings.Repeat("A", gitlet.MaxCheckEnvNameBytes-4))
+	}
+	// THE LONGEST TARGET a ref may be, in the key every record of the
+	// attempt carries.
+	key := gitlet.CheckKey{RepoID: repo, OID: oidOf("head"),
+		Target: "refs/heads/" + strings.Repeat("b", gitlet.MaxRefNameBytes-len("refs/heads/")), Name: def.Name,
+		Attempt: gitlet.MaxCheckAttempts}
+	person := &gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: strings.Repeat("o", 64),
+		Seat: strings.Repeat("s", 64)}
+	queued := gitlet.CheckQueued{CheckKey: key, Purpose: gitlet.PurposeHead,
+		ChangeID: "0190f3c4-0000-7000-8000-00000000c0c0", Revision: 1 << 30,
+		CandidateID: wide(gitlet.MaxProvenanceBytes), EntryID: wide(gitlet.MaxProvenanceBytes),
+		Base: oidOf("base"), DefsOID: oidOf("defs"), Def: &def, Required: true, Reason: gitlet.QueueRerun,
+		By: person, QueuedAt: harnessAt}
+	exit := 1
+	var failures []gitlet.CheckFailure
+	for i := 0; ; i++ {
+		f := gitlet.CheckFailure{Path: "p", Line: i, TestID: "t", Message: wide(100)}
+		encoded, _ := json.Marshal(append(failures, f))
+		if len(failures) == gitlet.MaxCheckFailures || len(encoded) > gitlet.MaxCheckFailureBytes {
+			break
+		}
+		failures = append(failures, f)
+	}
+	finished := gitlet.CheckFinished{CheckKey: key, State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonReported,
+		ExitCode: &exit, DurationMs: 1 << 40, Summary: wide(gitlet.CheckSummaryBytes),
+		Tail: wide(gitlet.CheckTailBytes), Failures: failures, FailuresOmitted: 1 << 30,
+		Log:      &gitlet.CheckLog{Object: keyOf("log"), Hash: objstore.HashOf([]byte("log")), Size: gitlet.MaxCheckLogBytes},
+		Reporter: person, URL: "https://ci.example.com/" + wide(gitlet.MaxCheckURLBytes-len("https://ci.example.com/")),
+		FinishedAt: harnessAt}
+	// WHOM A FAILED HEAD CONCERNS, as routeFailedHead stamps it on the ending
+	// its decide validated: the change's authors at MaxRoutedParticipants and
+	// the head's pusher, each a person at a login's whole width, the change's
+	// title in the character JSON spells in six, and a work item — whose
+	// fields no bound of their own holds; the routing's room does.
+	handle := func(i int) string { return fmt.Sprintf("%02d", i) + strings.Repeat("h", iam.MaxLogin-2) }
+	routing := &gitlet.ChangeRouting{ChangeID: queued.ChangeID,
+		ChangeRef: gitlet.ChangeRef(strings.Repeat("r", gitref.MaxRepoNameBytes), 1<<40),
+		RepoName:  strings.Repeat("r", gitref.MaxRepoNameBytes), Title: wide(gitlet.MaxChangeTitleBytes),
+		Actor: handle(gitlet.MaxRoutedParticipants), Owner: handle(0), OwnerKind: gitlet.PartyPerson,
+		WorkItem:     &types.WorkItem{Backend: types.WorkJira, ID: wide(256), Key: wide(256), Project: wide(256)},
+		ChecksFailed: true}
+	for i := range gitlet.MaxRoutedParticipants {
+		routing.Authors = append(routing.Authors, handle(i))
+	}
+	routing.Persons = slices.Sorted(slices.Values(append(slices.Clone(routing.Authors), routing.Actor)))
+	if encoded, err := json.Marshal(routing); err != nil || len(encoded) > gitlet.MaxRoutingBytes {
+		t.Fatalf("the widest failed head's routing is %d bytes (%v), past MaxRoutingBytes (%d): no decide "+
+			"forms it", len(encoded), err, gitlet.MaxRoutingBytes)
+	}
+	heard := 0
+	for _, c := range gitlet.Concerns([]*gitlet.ChangeRouting{routing}) {
+		if c.Hears() {
+			heard++
+		}
+	}
+	if heard > gitlet.RoutingNoticeRows {
+		t.Fatalf("the widest failed head's routing tells %d, past the %d notice rows a routing is charged",
+			heard, gitlet.RoutingNoticeRows)
+	}
+	routed := finished
+	routed.Routing = routing
+
+	nodeID := strings.Repeat("n", 64)
+	widest := map[string]int{}
+	for _, tc := range []struct {
+		what    string
+		op      gitlet.OpKind
+		payload interface{ Validate() error }
+		stamped any
+	}{{"queued attempt", gitlet.OpCheckQueued, queued, queued}, {"ending", gitlet.OpCheckFinished, finished, finished},
+		{"failed head's ending", gitlet.OpCheckFinished, finished, routed}} {
+		if err := tc.payload.Validate(); err != nil {
+			t.Fatalf("the widest %s is not one a writer forms: %v", tc.what, err)
+		}
+		body, err := json.Marshal(tc.stamped)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := gitlet.Encode(gitlet.MutationRecord{
+			RecordEnvelope: gitlet.RecordEnvelope{
+				OpID: statelog.NewOpID(harnessAt, "code_checks"), Subject: gitlet.ChecksSubject(repo), Op: tc.op,
+				CreatedAt: harnessAt, Gen: 1<<32 - 1, Writer: nodeID, Scope: gitlet.Scope{gitlet.ChecksPath(repo)},
+			},
+			Mutation: body, Actor: nodeID, ActorKind: gitlet.ActorSystem,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(record) > gitlet.MaxRecordBytes {
+			t.Errorf("the widest %s record is %d bytes, past MaxRecordBytes (%d)", tc.what, len(record),
+				gitlet.MaxRecordBytes)
+		}
+		widest[tc.what] = len(record)
+		t.Logf("the widest %s record is %d bytes of %d", tc.what, len(record), gitlet.MaxRecordBytes)
+	}
+	// ANY ROUTING A DECIDE FORMS FITS BESIDE THE WIDEST ENDING: routingFor
+	// refuses one past MaxRoutingBytes, so a role a later op adds to a
+	// routing never takes a failed head's ending past its record.
+	if bytes := widest["ending"] + gitlet.MaxRoutingBytes; bytes > gitlet.MaxRecordBytes {
+		t.Errorf("the widest ending and the most a routing may take are %d bytes, past MaxRecordBytes (%d)",
+			bytes, gitlet.MaxRecordBytes)
+	}
+	// ITS ROW, ITS LOG'S TWO, ITS HORIZON'S ROWS EACH WITH ITS LOG, AND ITS
+	// ROUTING'S NOTICES.
+	if rows := 1 + 2 + 2*gitlet.CheckHorizonRows + gitlet.RoutingNoticeRows; rows > gitlet.MaxRecordRows {
+		t.Errorf("one check record's apply touches up to %d rows, past MaxRecordRows (%d)", rows,
+			gitlet.MaxRecordRows)
+	}
+}
+
+// A CHECK AT THE COMPANY'S DEFAULT TIMEOUT FITS THE SHORTEST REMOTE SESSION: an
+// unset code.checks.max_timeout_seconds and the time a check's box is given
+// past its timeout for its setup (CheckBoxGrace) sum to the hour a box on
+// E2B's smallest plan lives — the one figure config's default is derived from,
+// which config cannot read here, since the grace is the sandbox's.
+//
+// Mutation: raise config.CodeDefaultCheckMaxTimeout to an hour — red.
+func TestTheDefaultCheckTimeoutFitsTheShortestRemoteSession(t *testing.T) {
+	t.Parallel()
+	const shortestSession = time.Hour
+	if got := config.CodeDefaultCheckMaxTimeout + gitlet.CheckBoxGrace; got != shortestSession {
+		t.Errorf("a check at the default timeout holds its box %s with its setup, want %s: the hour a box "+
+			"on E2B's smallest plan lives", got, shortestSession)
+	}
+}

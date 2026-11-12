@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -26,7 +26,7 @@ import (
 
 // requestBeside is what an engine write's request holds beside its payload at
 // the longest the engine stamps every other field of it: the run's work item
-// and model at code.MaxProvenanceBytes of a character JSON spells in six
+// and model at gitlet.MaxProvenanceBytes of a character JSON spells in six
 // bytes, a branch at the 255 bytes a ref may be of the same, a seat's handle
 // at iam.MaxLogin, an operation id at statelog.MaxCallerOpIDBytes, the field
 // names, the request's own fields and its signed frame — some 6.8 KiB as
@@ -67,17 +67,17 @@ func (s *sizer) sent(subject string) []int {
 }
 
 // largestWrite is the largest engine write of kind — a commit_files or a
-// revert — that code.EngineWrite.Validate admits: its payload's message of
+// revert — that gitlet.EngineWrite.Validate admits: its payload's message of
 // '<', which JSON spells in six bytes, filled to the bound exactly, and every
 // other field at the longest the engine stamps it. The rule is the judge of
 // "largest": the write is admitted, and the same write one '<' longer is
 // refused.
-func largestWrite(t *testing.T, kind code.EngineWriteKind) code.EngineWrite {
+func largestWrite(t *testing.T, kind gitlet.EngineWriteKind) gitlet.EngineWrite {
 	t.Helper()
-	widest := strings.Repeat("&", code.MaxProvenanceBytes)
-	w := code.EngineWrite{Kind: kind, RepoID: repoID(7),
-		Principal: code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", iam.MaxLogin),
-			Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d", WorkBackend: widest,
+	widest := strings.Repeat("&", gitlet.MaxProvenanceBytes)
+	w := gitlet.EngineWrite{Kind: kind, RepoID: repoID(7),
+		Principal: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: strings.Repeat("s", iam.MaxLogin),
+			Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d", WorkBackend: widest,
 				WorkKey: widest, Model: widest}},
 		OpID: statelog.NewOpID(time.Now(), strings.Repeat("n", statelog.MaxCallerOpIDBytes-37)),
 		Fresh: statelog.Freshness{Level: statelog.ReadSession,
@@ -85,17 +85,17 @@ func largestWrite(t *testing.T, kind code.EngineWriteKind) code.EngineWrite {
 		Ref:          "refs/heads/" + strings.Repeat("&", gitref.MaxRefNameBytes-len("refs/heads/")),
 		ExpectedHead: "1111111111111111111111111111111111111111",
 	}
-	room := code.MaxCommitPayloadBytes
+	room := gitlet.MaxCommitPayloadBytes
 	switch kind {
-	case code.WriteCommitFiles:
+	case gitlet.WriteCommitFiles:
 		one := "one\n"
-		w.Files = []code.FileOp{{Op: code.FileOpPut, Path: "README.md", Content: &one}}
+		w.Files = []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "README.md", Content: &one}}
 		encoded, err := json.Marshal(w.Files)
 		if err != nil {
 			t.Fatal(err)
 		}
 		room -= len(encoded)
-	case code.WriteRevert:
+	case gitlet.WriteRevert:
 		w.Commit = "2222222222222222222222222222222222222222"
 	default:
 		t.Fatalf("no largest %s", kind)
@@ -109,8 +109,8 @@ func largestWrite(t *testing.T, kind code.EngineWriteKind) code.EngineWrite {
 	}
 	past := w
 	past.Message = "<" + w.Message
-	if err := past.Validate(); !errors.Is(err, code.ErrInvalid) {
-		t.Fatalf("the %s one '<' past the payload's bound as JSON spells it: %v, want code.ErrInvalid — "+
+	if err := past.Validate(); !errors.Is(err, gitlet.ErrInvalid) {
+		t.Fatalf("the %s one '<' past the payload's bound as JSON spells it: %v, want gitlet.ErrInvalid — "+
 			"the rule measures what crosses the wire", kind, err)
 	}
 	return w
@@ -118,18 +118,18 @@ func largestWrite(t *testing.T, kind code.EngineWriteKind) code.EngineWrite {
 
 // AN ENGINE WRITE THE ONE RULE ADMITS CROSSES THE WIRE, ITS REQUEST THE
 // PAYLOAD'S BOUND AND A FEW KIBIBYTES BESIDE IT: the largest write
-// code.EngineWrite.Validate admits — a commit_files' or a revert's, its
+// gitlet.EngineWrite.Validate admits — a commit_files' or a revert's, its
 // message of '<', which JSON spells in six bytes, filled to the bound and one
 // '<' more refused, every other field at the longest the engine stamps — is
 // carried to a peer Gitlet node and built, its request as that node's broker
 // client holds it under queue.MaxPayloadBytes and within requestBeside of
-// code.MaxCommitPayloadBytes: what a slot of a Gitlet node's writes' lane is
+// gitlet.MaxCommitPayloadBytes: what a slot of a Gitlet node's writes' lane is
 // sized by. Measured by its length, a commit_files' message admitted at the
 // bound crossed at six times it, and a revert's message at whatever the
 // transport would carry — past it, refused to every peer by the transport
 // while the home's own seat had it built in process.
 //
-// Mutation: measure the message by its length (code.EngineWrite.Validate) —
+// Mutation: measure the message by its length (gitlet.EngineWrite.Validate) —
 // the one-'<'-past writes are admitted, red.
 func TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound(t *testing.T) {
 	t.Parallel()
@@ -146,7 +146,7 @@ func TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound(t *testing.T) {
 	f.git.set(func(p *fakePlacement) { p.nodes = []string{"git-a"} })
 
 	writes := laneGitWrites.subject("git-a")
-	for _, kind := range []code.EngineWriteKind{code.WriteCommitFiles, code.WriteRevert} {
+	for _, kind := range []gitlet.EngineWriteKind{gitlet.WriteCommitFiles, gitlet.WriteRevert} {
 		res, err := f.client.Code().GitWrite(t.Context(), largestWrite(t, kind))
 		if err != nil || res.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the largest %s the rule admits, asked of a peer Gitlet node = (%+v, %v), want it built", kind,
@@ -158,10 +158,10 @@ func TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound(t *testing.T) {
 		}
 		size := sent[len(sent)-1]
 		t.Logf("the largest %s's request is %d bytes: %d beside its payload", kind, size,
-			size-code.MaxCommitPayloadBytes)
-		if size > queue.MaxPayloadBytes || size > code.MaxCommitPayloadBytes+requestBeside {
+			size-gitlet.MaxCommitPayloadBytes)
+		if size > queue.MaxPayloadBytes || size > gitlet.MaxCommitPayloadBytes+requestBeside {
 			t.Errorf("the largest %s's request is %d bytes, want at most the payload's %d and %d beside it, "+
-				"under the transport's %d", kind, size, code.MaxCommitPayloadBytes, requestBeside,
+				"under the transport's %d", kind, size, gitlet.MaxCommitPayloadBytes, requestBeside,
 				queue.MaxPayloadBytes)
 		}
 	}
@@ -179,29 +179,29 @@ type heldGit struct {
 
 func (g *heldGit) Git() (GitServer, bool) { return g, true }
 
-func (g *heldGit) Read(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, errors.New("this git half answers no read")
+func (g *heldGit) Read(context.Context, gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return gitlet.GitAnswer{}, errors.New("this git half answers no read")
 }
 
-func (g *heldGit) MergePreview(context.Context, code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
-	return code.MergePreviewAnswer{}, errors.New("this git half answers no merge preview")
+func (g *heldGit) MergePreview(context.Context, gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
+	return gitlet.MergePreviewAnswer{}, errors.New("this git half answers no merge preview")
 }
 
-func (g *heldGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+func (g *heldGit) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	g.asked.Add(1)
 	g.holding.Add(1)
 	defer g.holding.Add(-1)
 	select {
 	case <-g.release:
 	case <-ctx.Done():
-		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: code.UnreadyShare,
+		return gitlet.EngineWriteResult{}, &gitlet.ErrGitUnready{Reason: gitlet.UnreadyShare,
 			Detail: "a held write's answer fell due before it was released"}
 	}
 	// THE DECODED WRITE, READ AFTER THE WAIT, is live through it — as
 	// Gitlet's pipeline keeps it.
-	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, PushID: code.WritePushID(w.OpID),
+	return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, PushID: gitlet.WritePushID(w.OpID),
 		Commit:  fmt.Sprintf("%d operations, a message of %d bytes", len(w.Files), len(w.Message)),
-		Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, Result: code.ResultOK}}, nil
+		Command: gitlet.Command{Ref: w.Ref, Old: w.ExpectedHead, Result: gitlet.ResultOK}}, nil
 }
 
 // serveHeldGit serves git-a — a data node, as every Gitlet node is in this
@@ -220,7 +220,7 @@ func serveHeldGit(t *testing.T, f *fleet, half *heldGit) {
 
 // sealWrite is w as a peer asks it of a Gitlet node's writes' lane, signed: its
 // request's id and its sealed bytes, and nothing else of it kept.
-func sealWrite(w code.EngineWrite) (string, []byte, error) {
+func sealWrite(w gitlet.EngineWrite) (string, []byte, error) {
 	args, err := json.Marshal(w)
 	if err != nil {
 		return "", nil, err
@@ -255,7 +255,7 @@ func askSealed(ctx context.Context, q *memory.Queue, subject, id string, sealed 
 // its own, held by half — waiting until it holds every one — and answers what
 // each asker heard, once it is released, on the channel it returns, closed
 // when every one has.
-func holdWrites(t *testing.T, q *memory.Queue, half *heldGit, n int, write func(i int) code.EngineWrite) <-chan error {
+func holdWrites(t *testing.T, q *memory.Queue, half *heldGit, n int, write func(i int) gitlet.EngineWrite) <-chan error {
 	t.Helper()
 	subject := laneGitWrites.subject("git-a")
 	heard := make(chan error, n)
@@ -316,10 +316,10 @@ func TestAGitWritePastTheOnesANodeHoldsIsAnsweredAtOnce(t *testing.T) {
 	serveHeldGit(t, f, half)
 	t.Cleanup(release)
 	q := f.start(t)
-	heard := holdWrites(t, q, half, gitWritesHeld, func(i int) code.EngineWrite { return writeOf(repoID(i)) })
+	heard := holdWrites(t, q, half, gitWritesHeld, func(i int) gitlet.EngineWrite { return writeOf(repoID(i)) })
 
 	asked := half.asked.Load()
-	id, sealed, err := sealWrite(largestWrite(t, code.WriteCommitFiles))
+	id, sealed, err := sealWrite(largestWrite(t, gitlet.WriteCommitFiles))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestAGitWritePastTheOnesANodeHoldsIsAnsweredAtOnce(t *testing.T) {
 		t.Fatalf("with every write git-a holds held, the next = %v, want it answered at once", err)
 	}
 	t.Logf("the largest write past the held ones was answered in %v", took)
-	if rep.Unserved != unservedBehind || rep.Unready != code.UnreadyShare ||
+	if rep.Unserved != unservedBehind || rep.Unready != gitlet.UnreadyShare ||
 		!strings.Contains(rep.Detail, "gitWritesHeld") {
 		t.Errorf("the write past the held ones was answered %+v, want behind, at its share, naming the bound", rep)
 	}
@@ -416,7 +416,7 @@ func TestWhatAHeldGitWriteHolds(t *testing.T) {
 	// files and its message, in plain bytes.
 	empty := ""
 	base := writeOf(repoID(0))
-	base.Files = []code.FileOp{{Op: code.FileOpPut, Path: "README.md", Content: &empty}}
+	base.Files = []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "README.md", Content: &empty}}
 	files, err := json.Marshal(base.Files)
 	if err != nil {
 		t.Fatal(err)
@@ -425,11 +425,11 @@ func TestWhatAHeldGitWriteHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fill := code.MaxCommitPayloadBytes - len(files) - len(message)
-	plain := func(i int) code.EngineWrite {
+	fill := gitlet.MaxCommitPayloadBytes - len(files) - len(message)
+	plain := func(i int) gitlet.EngineWrite {
 		w := writeOf(repoID(i))
 		content := strings.Repeat("x", fill)
-		w.Files = []code.FileOp{{Op: code.FileOpPut, Path: "README.md", Content: &content}}
+		w.Files = []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "README.md", Content: &content}}
 		return w
 	}
 	if err := plain(0).Validate(); err != nil {
@@ -446,8 +446,8 @@ func TestWhatAHeldGitWriteHolds(t *testing.T) {
 
 	slot := (after - before) / slots
 	t.Logf("a held write at the payload's bound holds %d bytes of the heap, %.2f payloads", slot,
-		float64(slot)/code.MaxCommitPayloadBytes)
-	if limit := int64(3*code.MaxCommitPayloadBytes + heldBeside); slot > limit {
+		float64(slot)/gitlet.MaxCommitPayloadBytes)
+	if limit := int64(3*gitlet.MaxCommitPayloadBytes + heldBeside); slot > limit {
 		t.Errorf("a held write at the payload's bound holds %d bytes of the heap, past the %d of three payloads "+
 			"— its request as delivered, as admitted, and decoded — and heldBeside beside them", slot, limit)
 	}

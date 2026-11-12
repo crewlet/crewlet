@@ -288,12 +288,15 @@ func TestALostTurnEndsAsLostOnTheExecutorLog(t *testing.T) {
 // whose log the ending could not read, is not known to have — never "did not
 // reply" off half a log, or none. Unless the log kept the dropped calls'
 // identities: a reply among them replied, and a tally of other tools is a
-// turn known not to have.
+// turn known not to have. And a log holding a call still in flight, its outcome
+// unknown, is a turn not known to have replied either: that call may be the
+// reply.
 //
 // Mutation: read the current round's calls alone, answer an elided log with a
 // definite no, or read an unread log as an empty one, and the turn's end says
 // a reply that went out did not; ignore the identities, and a reply from the
-// middle of a long run is unknown.
+// middle of a long run is unknown; ignore the calls in flight, and a reply
+// still running is said not to have gone.
 func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	t.Parallel()
 	e, _ := loggingEngine(t)
@@ -335,6 +338,11 @@ func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 		ElidedCalls: []sandbox.ElidedCall{{Name: "read_file", Digest: "a", Calls: 4}}}}, colleagueAnswer{})
 	if reads.Delivered || reads.DeliveryUnknown {
 		t.Fatalf("a log whose dropped calls are all reads ended %+v, want it known not to have replied", reads)
+	}
+	inFlight := e.runEnding(t.Context(), company, run, sandbox.RunCalls{Log: sandbox.BridgeLog{Calls: round,
+		InFlight: []sandbox.BridgeCall{{Name: "vendor_post", Seq: 2}}}}, colleagueAnswer{})
+	if inFlight.Delivered || !inFlight.DeliveryUnknown {
+		t.Fatalf("a log holding a call still in flight ended %+v, want whether it replied not known", inFlight)
 	}
 }
 

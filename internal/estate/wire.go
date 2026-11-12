@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -99,7 +99,7 @@ const (
 	// [gitWritesHeld] writes at once, and answers the next at once. What
 	// bounds the git a node's writes run is the seat git-work share, never
 	// this lane: BenchmarkEngineWrite's sixty-four writes at once
-	// (internal/code/host) were all in flight with none queued for a slot,
+	// (internal/gitlet/host) were all in flight with none queued for a slot,
 	// every write past the share's wait answered unready rather than held —
 	// so a write waits on the share or nothing.
 	laneGitWrites lane = "git-writes"
@@ -109,14 +109,14 @@ const (
 // peers on its writes' lane ([laneGitWrites]), each through every wait it
 // makes, up to [GitWriteAttempt]; a write a peer asks past them is answered AT
 // ONCE, before its arguments are decoded or its git half asked: `behind`, at
-// its share (code.UnreadyShare), which its walk moves on from without demoting
+// its share (gitlet.UnreadyShare), which its walk moves on from without demoting
 // the node — the next Gitlet node holding a copy builds it, or the walk ends
 // unserved, saying why ([Router.routeGit]).
 //
 // SIXTY-FOUR, queue.ConcurrentAnswers, the lane's width before it answered at
 // once: what a held write waits on is mostly no git at all — its upload, its
 // proposal, its push's row — while its build takes a unit of the node's seat
-// git-work share (code.SeatWorkWrite) and gives it back before it lands, so
+// git-work share (gitlet.SeatWorkWrite) and gives it back before it lands, so
 // the share, never this bound, bounds the git a node's writes run, and this
 // bounds what they hold ([lane.answers] states the figure, measured).
 //
@@ -126,7 +126,7 @@ const (
 // ([queue.EventQueue.Serve]): nats.go holds a subscription's pending messages
 // to 64 MiB (its DefaultSubPendingBytesLimit) and drops the rest as a slow
 // consumer, which the node logs naming no subject. A write is up to a
-// mebibyte as the wire spells it (code.MaxCommitPayloadBytes), so some
+// mebibyte as the wire spells it (gitlet.MaxCommitPayloadBytes), so some
 // sixty-four waiting behind a full lane — 128 large writes in flight against
 // one Gitlet node — overflowed it, and the asker of a dropped one heard
 // nothing for its whole attempt, then took the healthy node for a gone one:
@@ -168,7 +168,7 @@ func (l lane) subject(node string) string {
 // The git reads' lane is as wide as the shared one, queue.ConcurrentAnswers:
 // the lane SEPARATES git reads from the slots the node answers its replicated
 // reads and pushes' resolves through, and what bounds the git work RUNNING is
-// the node's seat git-work share (code.GitShare, half its read lane), which
+// the node's seat git-work share (gitlet.GitShare, half its read lane), which
 // holds this node's own seats' in-process reads too — a lane bound would hold
 // only the remote askers, and a narrower one would only leave reads waiting
 // unseen in the broker's buffer where the share answers them `share` at once.
@@ -183,14 +183,14 @@ func (l lane) subject(node string) string {
 // What a full writes' lane holds is MEASURED (TestWhatAHeldGitWriteHolds,
 // TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound): a held write's
 // slot holds its request as the broker delivered it — the payload, at most
-// code.MaxCommitPayloadBytes as JSON spells it, and some 7 KiB beside it at
+// gitlet.MaxCommitPayloadBytes as JSON spells it, and some 7 KiB beside it at
 // the longest the engine stamps the rest — the request as admitted, its
 // arguments copied out of it, and the write decoded, which the git half holds
 // to its end: about 3 MiB a slot at the bound, three payloads and what is
 // beside them (3.02 payloads measured), so about 200 MiB for the
 // sixty-four; an at-once answer holds the first two, some 2 MiB, for the
 // milliseconds its admission takes — 31 ms measured, under -race on two
-// cores; and a held write's staged pack, at most code.MaxWritePackBytes, is
+// cores; and a held write's staged pack, at most gitlet.MaxWritePackBytes, is
 // on the cache's volume rather than in memory. Past both, a request waits in
 // the broker client's buffer only behind the at-once answers ahead of it,
 // each a few milliseconds' work, so the buffer fills only under some
@@ -430,7 +430,7 @@ const (
 	// unservedNoBackend: this node runs no native backend for the op's
 	// half — the company is on a vendor for it, or the runtime is not up —
 	// OR a half it does run DECLINED before it ran anything ([declined],
-	// [ranNothing]): a code half refusing code.ErrNotServing — a
+	// [ranNothing]): a code half refusing gitlet.ErrNotServing — a
 	// committer stopping, a node in a maintenance mode that publishes
 	// nothing, a refusal about this node, a half with no reader — or an
 	// identity directory asked to MAC a machine token's answer under a key
@@ -474,7 +474,7 @@ const (
 	// then says it decides no grant ([decidesNoGrant]) — so the last resort
 	// meets the refusal again and the walk ends unserved. So is a SEAT'S git
 	// read on such a Gitlet node, whose git half judges no seat
-	// (code.UnreadyBehindConfig, [reply.Unready]): the posture is the
+	// (gitlet.UnreadyBehindConfig, [reply.Unready]): the posture is the
 	// node's, so every asker remembers it for the node's data operations as
 	// well, while the git walk, which takes no lag gate, moves on from it as
 	// from any Gitlet node that ran nothing — and lets the next one fill a copy
@@ -484,7 +484,7 @@ const (
 	// unservedBehind: this node could not reach the caller's floor within
 	// the read budget — or, for a git read ([GitCopy]), its git half could
 	// not answer inside its budget for a reason about the node
-	// (code.ErrGitUnready: its copy still syncing, its share full, no chart
+	// (gitlet.ErrGitUnready: its copy still syncing, its share full, no chart
 	// to judge a seat by, a failure of its own, or no copy held and no fill
 	// asked of it), which another Gitlet node may answer; the reply's
 	// [reply.Unready] then says which.
@@ -538,14 +538,14 @@ type reply struct {
 	Detail   string         `json:"detail,omitempty"`
 
 	// Unready is, for a GIT operation the node's git half could not answer
-	// (code.ErrGitUnready, answered `behind`, or `behind_config` for that
+	// (gitlet.ErrGitUnready, answered `behind`, or `behind_config` for that
 	// reason), the reason it gave — which the walk reads to know whether
 	// the one node it lets fill a copy is still that one
-	// (code.UnreadyReason.PassesFill), since `behind` alone says the node
+	// (gitlet.UnreadyReason.PassesFill), since `behind` alone says the node
 	// ran nothing and not whether a copy is coming there. Empty on every
 	// other reply, and from a build that sends none: the walk then keeps its
 	// filler, as it did before the reason crossed ([Router.routeGit]).
-	Unready code.UnreadyReason `json:"unready,omitempty"`
+	Unready gitlet.UnreadyReason `json:"unready,omitempty"`
 
 	// Result is the operation's answer, and Err its failure. At most one.
 	Result json.RawMessage `json:"result,omitempty"`
@@ -1059,7 +1059,7 @@ func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
 //
 // The operation must be defined on [GitCopy], which it reads instead of a
 // domain's copy: no copy verdict holds it back, no floor is waited for at
-// dispatch — its floor travels in its arguments, as code.GitQuery.Fresh, and
+// dispatch — its floor travels in its arguments, as gitlet.GitQuery.Fresh, and
 // is the Gitlet node's cache's sync level — and no lag gate applies, since a Gitlet
 // node syncs its copy through the router from whichever data node serves.
 // Package-level, at init, before [op.answeredOn] names its lane.
@@ -1089,10 +1089,10 @@ func (o op[A, R]) keyedOnGit(key func(A) string, home func(A, bool) A) op[A, R] 
 // judging by a revoked grant.
 //
 // A DECLARATION, NOT A LIST: every operation on a domain's copy whose
-// arguments carry a code.Principal named Asker must declare whether it judges
+// arguments carry a gitlet.Principal named Asker must declare whether it judges
 // one, which TestEveryOperationThatJudgesAGrantIsDeclared holds over the
 // registry. A git operation is outside it: its node judges the grant and
-// refuses a seat itself when behind its configuration (code.ErrGitUnready,
+// refuses a seat itself when behind its configuration (gitlet.ErrGitUnready,
 // `behind_config`), and the walk moves on from that as from any node that ran
 // nothing.
 func (o op[A, R]) judgesGrant(pred func(A) bool) op[A, R] {

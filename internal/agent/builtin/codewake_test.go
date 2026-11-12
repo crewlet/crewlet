@@ -5,19 +5,19 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
 // A CODE WAKE NAMES ONLY CODE TOOLS THIS BUILD REGISTERS — and the merge
 // gate's wakes offer the gate's own tools.
 //
-// The code prompt (internal/code's Prompt) names the tools a woken seat
+// The code prompt (internal/gitlet's Prompt) names the tools a woken seat
 // answers with — they ship with this build, under names this build chose —
 // and a seat acts on what it is shown, so a name that drifted from the
 // registered one is a seat told to call something that is not there. The
 // names are literals in the prompt because this package, which registers
-// them, imports internal/code; this is the one place the two are held
+// them, imports internal/gitlet; this is the one place the two are held
 // together.
 //
 // Mutations: walk a broken landing's seat through code_create_branch,
@@ -34,14 +34,14 @@ func TestThePromptNamesOnlyRegisteredChangeTools(t *testing.T) {
 	}
 	tool := regexp.MustCompile("`(code_[a-z]+(?:_[a-z]+)*)`")
 	named := map[string]bool{}
-	byReason := map[code.Reason]map[string]bool{}
-	for _, reason := range code.Reasons() {
+	byReason := map[gitlet.Reason]map[string]bool{}
+	for _, reason := range gitlet.Reasons() {
 		byReason[reason] = map[string]bool{}
-		text := (code.Prompt{}).Build(notify.Inbound{
-			Source: code.Source, EventType: string(code.OpComment), Subject: "web!42: Retry the upload",
+		text := (gitlet.Prompt{}).Build(notify.Inbound{
+			Source: gitlet.Source, EventType: string(gitlet.OpComment), Subject: "web!42: Retry the upload",
 			Body: "Is the retry bounded?",
-			Metadata: map[string]string{code.MetaVia: string(reason), code.MetaChangeRef: "web!42",
-				code.MetaChangeID: "c-1"},
+			Metadata: map[string]string{gitlet.MetaVia: string(reason), gitlet.MetaChangeRef: "web!42",
+				gitlet.MetaChangeID: "c-1"},
 		}, nil)
 		for _, m := range tool.FindAllStringSubmatch(text, -1) {
 			named[m[1]], byReason[reason][m[1]] = true, true
@@ -65,10 +65,10 @@ func TestThePromptNamesOnlyRegisteredChangeTools(t *testing.T) {
 	// queue the merge that queues it again. A wake that stops offering one
 	// tells its seat to rebuild by hand what one tool does, or to tell
 	// somebody else to do what it may do itself.
-	for reason, want := range map[code.Reason]string{
-		code.ReasonTargetBroken: builtin.CodeRevertChangeTool,
-		code.ReasonReadyToMerge: builtin.CodeMergeChangeTool,
-		code.ReasonDequeued:     builtin.CodeMergeChangeTool,
+	for reason, want := range map[gitlet.Reason]string{
+		gitlet.ReasonTargetBroken: builtin.CodeRevertChangeTool,
+		gitlet.ReasonReadyToMerge: builtin.CodeMergeChangeTool,
+		gitlet.ReasonDequeued:     builtin.CodeMergeChangeTool,
 	} {
 		if !byReason[reason][want] {
 			t.Errorf("a wake under %s does not offer `%s`", reason, want)

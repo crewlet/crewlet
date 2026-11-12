@@ -64,20 +64,42 @@ const callFloor = crewletmcp.DefaultRequestTimeout
 // callMargin is what a call's answer can take beyond its tool's own bound:
 // the opening's first request held behind the record of which session the
 // job's box started (internal/engine's sessionStartRecordBudget, five
-// seconds), the append of the call to the run's log and its retries (its
+// seconds), the write of the call's entry ahead of it (its beginBudget, five
+// seconds), the update of that entry once it returns and its retries (its
 // appendRetryWaits, 1.75 seconds in all, and four attempts), an activation's
 // answer held for the box's re-list (internal/toolsession's relistWait, two
 // seconds), a relayed answer's frame (internal/httprelay's pushWait, five
 // seconds), and after `delegate`'s cap its workers' harnesses ending within
 // their grace (internal/providers/llm/harness's termGrace, five seconds). About
-// nineteen seconds of fixed waits, which a minute covers three times over, ON A
-// COORDINATION STORE THAT ANSWERS: each of the append's four attempts is a
+// twenty-four seconds of fixed waits, which a minute covers twice over, ON A
+// COORDINATION STORE THAT ANSWERS: each of the update's four attempts is a
 // compare-and-swap no clock here bounds, and a store in an outage holds the
 // call's answer for as long as it takes, which no margin would cover. NOTHING
-// HOLDS THE SUM TO THE MARGIN: the five live in four other packages, two of
+// HOLDS THE SUM TO THE MARGIN: the six live in four other packages, two of
 // them the engine's, which this one cannot import, so moving any of them is
 // reading this margin again.
+//
+// AND IT IS PART OF EVERY CALL'S OWN BOUND ([callBound]): the instant its entry
+// says nobody need wait for it past ([Begun.Until]).
 const callMargin = time.Minute
+
+// callBound is the longest one call of the tool named runs on surface: the
+// bound the tool declares ([bounded]), never under [callFloor] — what a
+// collection of the run, on any node, reads off the call's entry, added to the
+// instant the bridge took it and [callMargin], as the most it waits for the
+// call to be recorded ([Begun.Until]). A tool the surface does not hold, and a
+// surface that is not a seat's, hold the floor.
+func callBound(surface Surface, name string) time.Duration {
+	longest := callFloor
+	if seat := seatOf(surface); seat != nil {
+		if entry, ok := seat.Universe().Lookup(name); ok {
+			if tool, ok := entry.Tool.(bounded); ok {
+				longest = max(longest, tool.CallBound())
+			}
+		}
+	}
+	return longest
+}
 
 // CallTimeout is how long the harness in a box waits for one call to any server
 // of an opening of surface before it gives the call up and cancels it: the

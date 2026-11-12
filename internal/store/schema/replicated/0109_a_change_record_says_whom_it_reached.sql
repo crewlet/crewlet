@@ -1,10 +1,10 @@
 -- A change record says whom it reached.
 --
 -- Every record about a change carries the snapshot of whom it concerns
--- (code.ChangeRouting): who made it, and the handles each reason it routes
+-- (gitlet.ChangeRouting): who made it, and the handles each reason it routes
 -- under reaches, as the deciding node's rows and chart held them. The applier
 -- writes that answer down as ONE ROW PER (record, recipient) it reached — every
--- handle the routing's precedence keeps (code.Concerns) but the record's own
+-- handle the routing's precedence keeps (gitlet.Concerns) but the record's own
 -- actor, who is told nothing they did — the way tracker_notifications is
 -- written by the tracker's task and person records (0002). No two records
 -- write one row: the key is the record and the recipient, and a record reaches

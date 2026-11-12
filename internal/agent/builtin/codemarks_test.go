@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -54,7 +54,7 @@ func TestACodeMarkIsAPersonsOwnFromTheirAssistant(t *testing.T) {
 	marks := writes.marks
 	writes.mu.Unlock()
 	if len(marks) != 1 || marks[0].Handle != "founder" || marks[0].Asker.Seat != "founder" ||
-		marks[0].Asker.Kind != code.PrincipalOperator || len(marks[0].Gesture.Read) != 1 ||
+		marks[0].Asker.Kind != gitlet.PrincipalOperator || len(marks[0].Gesture.Read) != 1 ||
 		marks[0].Gesture.Read[0] != "r-1" || marks[0].OpID == "" {
 		t.Fatalf("Gitlet was asked %+v, want one mark of r-1 on founder's own record", marks)
 	}

@@ -9,7 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -66,9 +66,9 @@ func TestAHomeThatCannotReadARequestWholePassesTheFill(t *testing.T) {
 				t.Errorf("%s was answered by %s, want the runner-up %s", name, answered, order[1])
 			}
 			runnerUp := halves[order[1]]
-			home := slices.ContainsFunc(runnerUp.reads(), func(q code.GitQuery) bool { return q.Home }) ||
+			home := slices.ContainsFunc(runnerUp.reads(), func(q gitlet.GitQuery) bool { return q.Home }) ||
 				slices.ContainsFunc(runnerUp.writes(), func(w askedWrite) bool { return w.w.Home }) ||
-				slices.ContainsFunc(runnerUp.previews(), func(q code.MergePreviewQuery) bool { return q.Home })
+				slices.ContainsFunc(runnerUp.previews(), func(q gitlet.MergePreviewQuery) bool { return q.Home })
 			if !home {
 				t.Errorf("the runner-up %s was not stamped home for %s: no copy was coming on the home", order[1], name)
 			}
@@ -114,7 +114,7 @@ func TestARefusalMovesOnlyTheRequestsCarryingWhatItRefused(t *testing.T) {
 		}
 	}
 	f.nodes[home].set(func(n *fakeNode) { n.undeclared = []string{"args.tree.recursive"} })
-	recursive := func(repo string) code.GitQuery {
+	recursive := func(repo string) gitlet.GitQuery {
 		q := treeOf(repo)
 		q.Tree.Recursive = true
 		return q

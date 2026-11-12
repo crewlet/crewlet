@@ -6,7 +6,7 @@
 -- verdict lived in the scanning node's memory alone, so a restart, a rolling
 -- upgrade or a git node joining or leaving had every repository it maintained
 -- downloaded and walked again. A clean scan is now a record of its own
--- (code.ExpungeScan, op expunge_scan), and the weekly arm keys on when the
+-- (gitlet.ExpungeScan, op expunge_scan), and the weekly arm keys on when the
 -- repository was last JUDGED: expunge_scanned_at, the broker instant of its
 -- last clean scan's record or of its last expunge's commit, whichever is
 -- later — both write it.

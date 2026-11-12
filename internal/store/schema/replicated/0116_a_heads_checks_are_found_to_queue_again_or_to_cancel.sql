@@ -1,11 +1,11 @@
 -- A head's checks are found to queue again or to cancel.
 --
 -- A repository's home git node owes a live change's head more than its
--- dispatch (internal/code's checksdispatch.go): the NEXT attempt of a check
+-- dispatch (internal/gitlet's checksdispatch.go): the NEXT attempt of a check
 -- whose latest attempt at the head, for the change's target, its
 -- infrastructure ended — the runner lost, the box or its setup failed
--- (code.CheckReason.Requeued) — while that attempt is below
--- code.AutoRequeueAttempts; and, when it dispatches a head, the CANCELLATION
+-- (gitlet.CheckReason.Requeued) — while that attempt is below
+-- gitlet.AutoRequeueAttempts; and, when it dispatches a head, the CANCELLATION
 -- of the change's attempts still queued or running at a head it moved on
 -- from, or for a target it was retargeted from, which nobody merges.
 --

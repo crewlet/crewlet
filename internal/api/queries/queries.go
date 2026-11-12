@@ -226,7 +226,7 @@ func (r *Refusal) Unwrap() error { return ErrUnauthorized }
 
 // NotPermitted is a question refused by a GRANT ITS OWN DOMAIN DERIVES for the
 // record it named — Gitlet's on a repository, from the chart
-// (code.GrantOf, ADR-0088) — rather than by the authority table, which
+// (gitlet.GrantOf, ADR-0088) — rather than by the authority table, which
 // admitted the question and decides nothing a repository's grant does. It is
 // [ErrUnauthorized] to [errors.Is].
 //

@@ -24,7 +24,6 @@ var lateCases = []struct {
 	fn   func(*testing.T, sandbox.PendingStore)
 }{
 	{"ALateCallOfTheRoundIsListedMarkedAndPaidByNoJob", testALateCallOfTheRoundIsListedMarkedAndPaidByNoJob},
-	{"ALateCallCarriesWhatItsSessionOwed", testALateCallCarriesWhatItsSessionOwed},
 	{"ALateCallAskedAgainIsListedOnce", testALateCallAskedAgainIsListedOnce},
 	{"ALateCallKeepsItsMarkThroughEveryWriteOfItsRound", testALateCallKeepsItsMarkThroughEveryWriteOfItsRound},
 	{"ALateSubmissionNeverTakesTheRoundsWholeShare", testALateSubmissionNeverTakesTheRoundsWholeShare},
@@ -169,47 +168,6 @@ func testALateCallOfTheRoundIsListedMarkedAndPaidByNoJob(t *testing.T, s sandbox
 	if got.Launch.Bridged != bridged(1) {
 		t.Errorf("the next job's record holds a bridged spend of %+v, want its own %+v: a late call's "+
 			"spend is no job's", got.Launch.Bridged, bridged(1))
-	}
-}
-
-// A LATE CALL CARRIES WHAT ITS SESSION OWED. A session whose earlier append did
-// not land owes it whole, and its next append carries it. Where that append is
-// a late one — its job replaced meanwhile by a relaunch that carried the round
-// on — or the carry its session makes as it ends, the owed calls are calls of
-// the round as much as the call carrying them: each listed, in the order it was
-// made and before the call that carries it, marked late, with what its own
-// work absorbed counted once.
-//
-// Mutation: drop a late append's owed calls, or list them unmarked, and this
-// goes red.
-func testALateCallCarriesWhatItsSessionOwed(t *testing.T, s sandbox.PendingStore) {
-	const turn = "t-late-owed"
-	first := mustLaunched(t, s, run(turn))
-	round := mustGet(t, s, turn).Round
-	carryRoundOn(t, s, turn)
-
-	worker := []sandbox.ElidedCall{{Name: "worker_search", Digest: "d1", Calls: 1}}
-	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
-		Owed: []sandbox.OwedAppend{{Call: madeAt("jira_create", 1, 1), Absorbed: worker}},
-		Call: madeAt("slack_post", 2, 2)}) {
-		t.Fatal("a late call carrying what its session owed was not recorded")
-	}
-	// AND THE CARRY ITS SESSION MAKES AS IT ENDS, which names no call of its
-	// own.
-	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
-		Owed: []sandbox.OwedAppend{{Call: madeAt("read_file", 3, 3)}}}) {
-		t.Fatal("the late carry of the session's end was not recorded")
-	}
-
-	got := mustLogged(t, s, turn)
-	listsExactly(t, got.Log.Calls, []wantCall{
-		{"jira_create", 1, 1, true},
-		{"slack_post", 2, 2, true},
-		{"read_file", 3, 3, true},
-	})
-	absorbed := got.Log.Absorbed()
-	if len(absorbed) != 1 || absorbed[0].Name != "worker_search" || absorbed[0].Calls != 1 {
-		t.Errorf("the owed call's own work is counted %+v, want worker_search once", absorbed)
 	}
 }
 
@@ -483,32 +441,38 @@ func testTheCallAPersonApprovedIsNeverLate(t *testing.T, s sandbox.PendingStore)
 // — given up on, or still running as its opening ended
 // ([sandbox.BridgeCall.Abandoned]) — whose effect happened while the session of
 // the job that made it holds no outcome of it, so no save point may hold it.
-// The mark is the bridge's, and the log keeps it as handed: on a call of the
-// log's own job, whose spend is written to the job's record as any of its
-// calls' is; on one its session owed and a later append carried; and on a call
+// The mark is the bridge's, and the log keeps it as handed, in the call's ONE
+// UPDATE of the entry written ahead of it: on a call of the log's own job, whose
+// spend is written to the job's record as any of its calls' is; and on a call
 // of the job that lands after a relaunch carried the round on, which the log
-// marks late beside it. A call the bridge did not mark is listed unmarked.
+// marks late beside it in the same write. A call the bridge did not mark is
+// listed unmarked, and no entry is left in flight.
 //
 // Mutation: drop the mark as the log takes a call, and this goes red.
 func testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-abandoned-kept"
 	first := mustLaunched(t, s, run(turn))
 	round := mustGet(t, s, turn).Round
-	gaveUp, owed, outlived := madeAt("delegate", 1, 1), madeAt("slack_post", 2, 2), madeAt("delegate", 4, 4)
-	gaveUp.Abandoned, owed.Abandoned, outlived.Abandoned = true, true, true
+	gaveUp, ended, outlived := madeAt("delegate", 1, 1), madeAt("slack_post", 2, 2), madeAt("delegate", 4, 4)
+	gaveUp.Abandoned, ended.Abandoned, outlived.Abandoned = true, true, true
 	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: gaveUp,
 		Spent: bridged(1)}) {
 		t.Fatal("the job's call nobody waited for was not recorded")
 	}
-	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
-		Owed: []sandbox.OwedAppend{{Call: sandbox.CarriedCall(owed)}}, Call: madeAt("read_file", 3, 3),
+	beginCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: madeAt("slack_post", 2, 2)})
+	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: ended,
 		Spent: bridged(2)}) {
-		t.Fatal("the job's call carrying what its session owed was not recorded")
+		t.Fatal("the update of the job's call its opening's end answered was not recorded")
+	}
+	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: madeAt("read_file", 3, 3),
+		Spent: bridged(2)}) {
+		t.Fatal("the job's ordinary call was not recorded")
 	}
 	if got := mustGet(t, s, turn).Launch.Bridged; got != bridged(2) {
 		t.Errorf("the job's bridged spend = %+v, want its newest total %+v: a call nobody waited for is "+
 			"its job's", got, bridged(2))
 	}
+	beginCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: madeAt("delegate", 4, 4)})
 	carryRoundOn(t, s, turn)
 	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: outlived}) {
 		t.Fatal("the job's call that outlived its opening was not recorded")
@@ -526,6 +490,10 @@ func testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob(t *testing.T, s sandb
 			t.Errorf("call %d, %s, is listed abandoned %v, want %v, as its bridge handed it", i+1, c.Name,
 				c.Abandoned, want)
 		}
+	}
+	if len(got.Log.InFlight) != 0 {
+		t.Errorf("the log holds %d entries in flight once every call's update landed: %+v",
+			len(got.Log.InFlight), got.Log.InFlight)
 	}
 }
 

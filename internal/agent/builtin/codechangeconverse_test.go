@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -33,11 +33,11 @@ var (
 
 // diffOf answers a revision's diff with files — those of them its paths name
 // — and every other read by object id as the host does.
-func diffOf(files ...code.DiffFile) func(q code.GitQuery) code.GitAnswer {
-	return func(q code.GitQuery) code.GitAnswer {
-		out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Position: codeAt(12)}
-		if q.Kind == code.GitDiff {
-			out.Diff = &code.DiffAnswer{Base: q.Diff.Base, Head: q.Diff.Head, Files: []code.DiffFile{}}
+func diffOf(files ...gitlet.DiffFile) func(q gitlet.GitQuery) gitlet.GitAnswer {
+	return func(q gitlet.GitQuery) gitlet.GitAnswer {
+		out := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Position: codeAt(12)}
+		if q.Kind == gitlet.GitDiff {
+			out.Diff = &gitlet.DiffAnswer{Base: q.Diff.Base, Head: q.Diff.Head, Files: []gitlet.DiffFile{}}
 			for _, f := range files {
 				if slices.Contains(q.Diff.Paths, f.Path) {
 					out.Diff.Files = append(out.Diff.Files, f)
@@ -49,8 +49,8 @@ func diffOf(files ...code.DiffFile) func(q code.GitQuery) code.GitAnswer {
 }
 
 // siteChangeFiles is the files every revision of site!7 changes.
-func siteChangeFiles() []code.DiffFile {
-	return []code.DiffFile{{Path: "a.txt", Status: "M", OldOID: aOld, NewOID: aNew},
+func siteChangeFiles() []gitlet.DiffFile {
+	return []gitlet.DiffFile{{Path: "a.txt", Status: "M", OldOID: aOld, NewOID: aNew},
 		{Path: "r3.txt", Status: "A", NewOID: r3New}}
 }
 
@@ -94,8 +94,8 @@ func reviewArgsOf() map[string]any {
 func TestReviewChangeIsOneRecord(t *testing.T) {
 	t.Parallel()
 	host := reviewHost()
-	writer := &codeWrites{converse: func(w code.ConversationWrite) (code.ConversationResult, error) {
-		return code.ConversationResult{Outcome: statelog.OutcomeApplied, ID: reviewedID,
+	writer := &codeWrites{converse: func(w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
+		return gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, ID: reviewedID,
 			FindingIDs: []string{"f-1", "f-2", "f-3"}, Position: codeAt(41)}, nil
 	}}
 	turn := writerTurn(t)
@@ -107,19 +107,19 @@ func TestReviewChangeIsOneRecord(t *testing.T) {
 	}
 	w := converses[0]
 	r := w.Review
-	if r.ChangeID != siteChangeID || r.RepoID != siteID || r.Revision != 3 || r.Verdict != code.VerdictRequestChanges ||
+	if r.ChangeID != siteChangeID || r.RepoID != siteID || r.Revision != 3 || r.Verdict != gitlet.VerdictRequestChanges ||
 		r.Summary != "Two problems." || !slices.Equal(r.Carries, []string{standingFinding}) ||
 		r.TurnID != turn.RunID || r.Model != "claude-house" || w.Seen != codeAt(40) {
 		t.Errorf("the review is %+v at %s, want site!7's revision 3 as the call named it, at the call's read",
 			r, w.Seen)
 	}
 	want := []struct {
-		side         code.Side
+		side         gitlet.Side
 		commit, blob string
 		start, end   int
 	}{
-		{code.SideNew, revHead(3), aNew, 3, 3}, {code.SideOld, revBase(3), aOld, 2, 4},
-		{code.SideNew, revHead(3), r3New, 1, 1},
+		{gitlet.SideNew, revHead(3), aNew, 3, 3}, {gitlet.SideOld, revBase(3), aOld, 2, 4},
+		{gitlet.SideNew, revHead(3), r3New, 1, 1},
 	}
 	if len(r.Findings) != len(want) {
 		t.Fatalf("the review carries %d findings, want %d", len(r.Findings), len(want))
@@ -135,7 +135,7 @@ func TestReviewChangeIsOneRecord(t *testing.T) {
 		t.Errorf("the blocker's suggestion is %v", s)
 	}
 	_, _, gits := host.asked()
-	if len(gits) != 1 || gits[0].Kind != code.GitDiff || gits[0].Diff.Base != revBase(3) ||
+	if len(gits) != 1 || gits[0].Kind != gitlet.GitDiff || gits[0].Diff.Base != revBase(3) ||
 		gits[0].Diff.Head != revHead(3) || !slices.Equal(gits[0].Diff.Paths, []string{"a.txt", "r3.txt"}) ||
 		gits[0].Fresh.Floor(codeAt(1).Stream) != codeAt(23) {
 		t.Errorf("the review read %+v, want ONE diff of revision 3 kept to its findings' files at the floor of "+
@@ -209,22 +209,22 @@ func TestAReviewNamesTheFindingsItCarries(t *testing.T) {
 // forbidden again → red.
 func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
-	want := map[code.ConversationRefusal]tools.Refusal{
-		code.ConversationRefusalNotPermitted:    tools.RefusalForbidden,
-		code.ConversationRefusalNotRaiser:       tools.RefusalForbidden,
-		code.ConversationRefusalNotAuthor:       tools.RefusalForbidden,
-		code.ConversationRefusalUnknownRevision: tools.RefusalStaleVersion,
-		code.ConversationRefusalChangeClosed:    tools.RefusalConflict,
-		code.ConversationRefusalRepoArchived:    tools.RefusalConflict,
-		code.ConversationRefusalFindingGone:     tools.RefusalNotFound,
-		code.ConversationRefusalThreadGone:      tools.RefusalNotFound,
-		code.ConversationRefusalNoReviewer:      tools.RefusalInvalid,
-		code.ConversationRefusalBusy:            tools.RefusalUnavailable,
-		code.ConversationRefusalSuperseded:      tools.RefusalInternalError,
+	want := map[gitlet.ConversationRefusal]tools.Refusal{
+		gitlet.ConversationRefusalNotPermitted:    tools.RefusalForbidden,
+		gitlet.ConversationRefusalNotRaiser:       tools.RefusalForbidden,
+		gitlet.ConversationRefusalNotAuthor:       tools.RefusalForbidden,
+		gitlet.ConversationRefusalUnknownRevision: tools.RefusalStaleVersion,
+		gitlet.ConversationRefusalChangeClosed:    tools.RefusalConflict,
+		gitlet.ConversationRefusalRepoArchived:    tools.RefusalConflict,
+		gitlet.ConversationRefusalFindingGone:     tools.RefusalNotFound,
+		gitlet.ConversationRefusalThreadGone:      tools.RefusalNotFound,
+		gitlet.ConversationRefusalNoReviewer:      tools.RefusalInvalid,
+		gitlet.ConversationRefusalBusy:            tools.RefusalUnavailable,
+		gitlet.ConversationRefusalSuperseded:      tools.RefusalInternalError,
 	}
-	for _, refusal := range code.ConversationRefusals() {
-		writer := &codeWrites{converse: func(code.ConversationWrite) (code.ConversationResult, error) {
-			return code.ConversationResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
+	for _, refusal := range gitlet.ConversationRefusals() {
+		writer := &codeWrites{converse: func(gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
+			return gitlet.ConversationResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
 		}}
 		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 			writerTurn(t), builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."})
@@ -232,7 +232,7 @@ func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 		switch {
 		case !got.Failed || class == "":
 			t.Errorf("a write refused %s answered %q as %q", refusal, got.Output, class)
-		case refusal != code.ConversationRefusalSuperseded && class == tools.RefusalInternalError:
+		case refusal != gitlet.ConversationRefusalSuperseded && class == tools.RefusalInternalError:
 			t.Errorf("a write refused %s is answered as the engine's own fault", refusal)
 		case want[refusal] != "" && class != want[refusal]:
 			t.Errorf("a write refused %s is answered %s, want %s", refusal, class, want[refusal])
@@ -296,7 +296,7 @@ func TestACommentSetsItsThreadAsASecondWrite(t *testing.T) {
 			"anchor": map[string]any{"path": "a.txt", "line": 7}})
 	_, sent := anchoredWriter.changesAsked()
 	if len(sent) != 1 || sent[0].Comment == nil || sent[0].Comment.Anchor == nil ||
-		*sent[0].Comment.Anchor != (code.CommentAnchor{Revision: 3, Path: "a.txt", Side: code.SideNew, Line: 7,
+		*sent[0].Comment.Anchor != (gitlet.CommentAnchor{Revision: 3, Path: "a.txt", Side: gitlet.SideNew, Line: 7,
 			BlobOID: aNew}) {
 		t.Errorf("an anchored comment sent %+v, want line 7 of a.txt's new side at revision 3", sent)
 	}
@@ -383,7 +383,7 @@ func TestAMentionIsResolvedAtWrite(t *testing.T) {
 
 	// PAST THE BOUND, nothing is written.
 	var many []string
-	for i := range code.MaxMentions + 1 {
+	for i := range gitlet.MaxMentions + 1 {
 		many = append(many, fmt.Sprintf("agent-%d", i))
 	}
 	crowd, crowded := &codeWrites{}, reviewHost()
@@ -393,10 +393,10 @@ func TestAMentionIsResolvedAtWrite(t *testing.T) {
 		map[string]any{"change": "site!7", "body": "@" + strings.Join(many, " @")})
 	reads, _, _ := crowded.asked()
 	if _, sent := crowd.changesAsked(); !got.Failed || len(sent) != 0 || len(reads) != 0 ||
-		!strings.Contains(got.Output, fmt.Sprint(code.MaxMentions)) {
+		!strings.Contains(got.Output, fmt.Sprint(gitlet.MaxMentions)) {
 		t.Errorf("a comment naming %d seats answered %q, reading %d and sending %d writes, want it refused "+
 			"naming the bound of %d before anything is read", len(many), got.Output, len(reads), len(sent),
-			code.MaxMentions)
+			gitlet.MaxMentions)
 	}
 }
 
@@ -419,8 +419,8 @@ func TestAnAnswerToFindingsNamesEveryFindingOnce(t *testing.T) {
 		t.Fatalf("the answer answered %q, sending %+v", got.Output, converses)
 	}
 	for i, id := range []string{standingFinding, other} {
-		if f := converses[0].FindingResolve.Findings[i]; f != (code.FindingResolution{FindingID: id,
-			Resolution: code.FindingResolved, Note: "Bounded now.", Commit: mainOID}) {
+		if f := converses[0].FindingResolve.Findings[i]; f != (gitlet.FindingResolution{FindingID: id,
+			Resolution: gitlet.FindingResolved, Note: "Bounded now.", Commit: mainOID}) {
 			t.Errorf("finding %d is answered %+v", i, f)
 		}
 	}

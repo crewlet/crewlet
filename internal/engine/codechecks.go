@@ -7,16 +7,16 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/checkrun"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A GITLET NODE'S CHECKS (internal/code/checkrun): its runner, which claims and
+// A GITLET NODE'S CHECKS (internal/gitlet/checkrun): its runner, which claims and
 // runs the company's queued checks in boxes of this node's sandbox catalogue
 // — on every Gitlet node, ranked per repository by its git order — and its share
 // of the HOMES' sweep of the checks whose runner is gone, a worker of the
@@ -39,7 +39,7 @@ import (
 // it. Said once, at build; its sweep is registered all the same, since the
 // home's sweep needs no box of its own. An error is the build's, which fails
 // Gitlet's.
-func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codehome.Loop,
+func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *gitlethome.Loop,
 	codeLog *runningLog) (*checkrun.Runner, error) {
 
 	seam := e.router.Code()
@@ -120,7 +120,7 @@ func (e *Engine) checkCompany() (checkrun.Company, bool) {
 type checkTokens struct{ tokens *host.CheckTokens }
 
 // Mint is the attempt's token for the repository named repo.
-func (t checkTokens) Mint(attempt code.CheckKey, repo string, timeout time.Duration) string {
+func (t checkTokens) Mint(attempt gitlet.CheckKey, repo string, timeout time.Duration) string {
 	if t.tokens == nil {
 		return ""
 	}
@@ -134,7 +134,7 @@ type checkNudges struct{ nudges codeNudges }
 
 // Watch begins the watch.
 func (n checkNudges) Watch(ctx context.Context, filter string, nudge func()) (func(), error) {
-	w, err := n.nudges.Watch(ctx, filter, codehome.Nudged{
+	w, err := n.nudges.Watch(ctx, filter, gitlethome.Nudged{
 		Subject: func(string, statelog.Position) { nudge() },
 		Gap:     func(statelog.Position) { nudge() },
 	})

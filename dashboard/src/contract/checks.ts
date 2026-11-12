@@ -4,8 +4,8 @@
  * and how a gated branch's queue lands a change. The Queue and Checks sections,
  * a change's and a repository's checks tabs and the Inbox card key on these.
  *
- * Each is a COPY of a closed set `internal/code` owns, HELD BOTH WAYS, in
- * order, by `internal/code`'s dashboard tests: a value the engine grew that a
+ * Each is a COPY of a closed set `internal/gitlet` owns, HELD BOTH WAYS, in
+ * order, by `internal/gitlet`'s dashboard tests: a value the engine grew that a
  * list here lacks is a row drawn under no word of its own (and so, by this
  * dashboard's rule, never mistaken for a known one: the screens name an
  * unknown value as the engine sent it), and one kept here that the engine
@@ -13,12 +13,12 @@
  */
 
 /**
- * Where one attempt of a check stands (`code.CheckStates`), in the order a row
+ * Where one attempt of a check stands (`gitlet.CheckStates`), in the order a row
  * moves through it: waiting for a runner, claimed, then one of five endings.
  * `passed` and `failed` MEASURED the commit; `errored` and `cancelled` are the
  * infrastructure's or a person's stop and measured nothing; `skipped` never
  * ran, its change touching none of its paths. Held by
- * `internal/code.TestTheDashboardKnowsEveryStateOfACheck`.
+ * `internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck`.
  */
 export const CHECK_STATES = [
   "queued",
@@ -31,7 +31,7 @@ export const CHECK_STATES = [
 ] as const;
 
 /**
- * The five endings of [CHECK_STATES] (`code.CheckState.Ended`), in its order:
+ * The five endings of [CHECK_STATES] (`gitlet.CheckState.Ended`), in its order:
  * every state the Checks section's window holds an attempt in, and so every
  * state it narrows to — the window lists the attempts that ENDED, and the
  * engine refuses it narrowed to `queued` or `running` (a repository's listing
@@ -40,16 +40,16 @@ export const CHECK_STATES = [
 export const CHECK_ENDED_STATES = ["passed", "failed", "errored", "cancelled", "skipped"] as const;
 
 /**
- * What an attempt of a check was checking (`code.CheckPurposes`): a change's
+ * What an attempt of a check was checking (`gitlet.CheckPurposes`): a change's
  * head revision, a merge queue's candidate, a protected branch's tip, or a
  * landing between a green tip and a red one. Held with [CHECK_STATES].
  */
 export const CHECK_PURPOSES = ["head", "candidate", "tip", "bisect"] as const;
 
 /**
- * Where a merge queue's entry stands (`code.QueueStates`), the live ones
+ * Where a merge queue's entry stands (`gitlet.QueueStates`), the live ones
  * first: waiting for a candidate, being tested by one — and then landed,
  * ejected by the queue, or taken out by somebody. Held by
- * `internal/code.TestTheDashboardKnowsEveryStateOfAQueue`.
+ * `internal/gitlet.TestTheDashboardKnowsEveryStateOfAQueue`.
  */
 export const QUEUE_STATES = ["waiting", "testing", "landed", "ejected", "dequeued"] as const;

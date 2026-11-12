@@ -173,7 +173,7 @@ function loadedNote(more: boolean, n: number, what: string): string | undefined 
 
 /**
  * The address of the change a review judged. A `code_reviews` listing names
- * the change on every row it serves (`code.ReviewRow.Change`); a row whose
+ * the change on every row it serves (`gitlet.ReviewRow.Change`); a row whose
  * reference this build cannot read opens the Changes listing rather than
  * nothing, so every row of the grid goes somewhere.
  */

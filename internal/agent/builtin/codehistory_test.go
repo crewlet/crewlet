@@ -12,11 +12,11 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/query"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -39,8 +39,8 @@ type historyNode struct {
 func (n historyNode) host(t *testing.T) builtin.CodeReader {
 	t.Helper()
 	s, err := query.New(query.Options{NodeID: "git-node", Cache: historyCopy{}, Git: n,
-		Share: code.NewGitShare("git-node", 4, nil), Resyncs: code.NewResyncs(nil, nil),
-		Roster:  func() code.Roster { return nil },
+		Share: gitlet.NewGitShare("git-node", 4, nil), Resyncs: gitlet.NewResyncs(nil, nil),
+		Roster:  func() gitlet.Roster { return nil },
 		Fetched: func(context.Context, types.CodeFetched) {}})
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ type queryHost struct {
 	s *query.Server
 }
 
-func (h queryHost) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (h queryHost) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	return h.s.Read(ctx, q)
 }
 

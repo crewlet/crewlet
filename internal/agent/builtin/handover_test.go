@@ -25,8 +25,8 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codesearch"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -645,53 +645,53 @@ func sweepGitletHost(t *testing.T, words string) *gitletHost {
 	for i := range change.findings {
 		change.findings[i].Body = words
 	}
-	change.reviews = []code.ReviewRow{{ID: "rv-1", Revision: 3, Reviewer: "founder", ReviewerKind: code.PartyPerson,
-		Verdict: code.VerdictRequestChanges, Summary: words}}
-	change.comments = []code.CommentRow{{ID: "cm-1", ThreadID: "cm-1", Author: "agent-ceo",
-		AuthorKind: code.PartyAgent, Body: words}}
+	change.reviews = []gitlet.ReviewRow{{ID: "rv-1", Revision: 3, Reviewer: "founder", ReviewerKind: gitlet.PartyPerson,
+		Verdict: gitlet.VerdictRequestChanges, Summary: words}}
+	change.comments = []gitlet.CommentRow{{ID: "cm-1", ThreadID: "cm-1", Author: "agent-ceo",
+		AuthorKind: gitlet.PartyAgent, Body: words}}
 	poison(t, reflect.ValueOf(&change.detail).Elem(), words)
 	poison(t, reflect.ValueOf(&change.findings).Elem(), words)
 	poison(t, reflect.ValueOf(&change.reviews).Elem(), words)
 	poison(t, reflect.ValueOf(&change.comments).Elem(), words)
-	change.listing = []code.ChangeSummary{change.detail.ChangeSummary}
+	change.listing = []gitlet.ChangeSummary{change.detail.ChangeSummary}
 	host.changes = change.read
 	// A CHECK OF main THAT FAILED, which the change's head is checked by too:
 	// its summary, the tail of its output and its failure's message are what
 	// the commit's tests printed, as its kept log is ([checkLogs]).
-	host.checks = []code.CheckDetail{failedCheck(words, words, words, "a.go", len(words))}
+	host.checks = []gitlet.CheckDetail{failedCheck(words, words, words, "a.go", len(words))}
 	poison(t, reflect.ValueOf(&host.checks).Elem(), words)
 	lines := strings.Count(words, "\n") + 1
-	host.git = func(q code.GitQuery) code.GitAnswer {
-		out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Position: codeAt(12)}
+	host.git = func(q gitlet.GitQuery) gitlet.GitAnswer {
+		out := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Position: codeAt(12)}
 		switch q.Kind {
-		case code.GitBlob:
+		case gitlet.GitBlob:
 			out.Rev = blobOID
-			out.Blob = &code.BlobAnswer{Path: q.Blob.Path, OID: blobOID, Size: int64(len(words)), Lines: lines,
+			out.Blob = &gitlet.BlobAnswer{Path: q.Blob.Path, OID: blobOID, Size: int64(len(words)), Lines: lines,
 				StartLine: 1, EndLine: lines, Text: words}
-		case code.GitTree:
+		case gitlet.GitTree:
 			out.Rev = mainOID
-			out.Tree = &code.TreeAnswer{Tree: blobOID, Entries: []code.TreeEntry{}}
-		case code.GitDiff:
+			out.Tree = &gitlet.TreeAnswer{Tree: blobOID, Entries: []gitlet.TreeEntry{}}
+		case gitlet.GitDiff:
 			// A PATCH IS ONE FILE'S, read by naming it; a stat names none.
-			out.Diff = &code.DiffAnswer{Base: q.Diff.Base, Head: q.Diff.Head, Files: []code.DiffFile{}}
+			out.Diff = &gitlet.DiffAnswer{Base: q.Diff.Base, Head: q.Diff.Head, Files: []gitlet.DiffFile{}}
 			if q.Diff.File != "" {
-				out.Diff.Files = []code.DiffFile{{Path: q.Diff.File, Status: "M"}}
+				out.Diff.Files = []gitlet.DiffFile{{Path: q.Diff.File, Status: "M"}}
 				out.Diff.Patch = words
 			}
-		case code.GitCompare:
-			out.Compare = &code.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head, Files: []code.DiffFile{}}
-		case code.GitLandedIn:
-			out.LandedIn = &code.LandedInAnswer{Commit: q.LandedIn.Commit, Target: q.LandedIn.Target,
+		case gitlet.GitCompare:
+			out.Compare = &gitlet.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head, Files: []gitlet.DiffFile{}}
+		case gitlet.GitLandedIn:
+			out.LandedIn = &gitlet.LandedInAnswer{Commit: q.LandedIn.Commit, Target: q.LandedIn.Target,
 				TargetOID: q.LandedIn.TargetOID, At: q.LandedIn.At, Landed: true}
-		case code.GitLog:
+		case gitlet.GitLog:
 			out.Rev = q.Log.Rev
-			out.Log = &code.LogAnswer{Path: q.Log.Path, Scanned: 1, Commits: []code.LogCommit{
+			out.Log = &gitlet.LogAnswer{Path: q.Log.Path, Scanned: 1, Commits: []gitlet.LogCommit{
 				{OID: mainOID, Author: "Ana", Subject: words}}}
-		case code.GitBlame:
+		case gitlet.GitBlame:
 			out.Rev = q.Blame.Rev
-			out.Blame = &code.BlameAnswer{Path: q.Blame.Path, StartLine: 1, EndLine: 1, Lines: []code.BlameLine{
+			out.Blame = &gitlet.BlameAnswer{Path: q.Blame.Path, StartLine: 1, EndLine: 1, Lines: []gitlet.BlameLine{
 				{Line: 1, Commit: mainOID, OrigLine: 1, Text: words}},
-				Commits: map[string]code.BlameCommit{mainOID: {Author: "Ana", Subject: words}}}
+				Commits: map[string]gitlet.BlameCommit{mainOID: {Author: "Ana", Subject: words}}}
 		}
 		return out
 	}
@@ -702,16 +702,16 @@ func sweepGitletHost(t *testing.T, words string) *gitletHost {
 // or a pick onto [sweepConflicted], which git answers a conflict: the start of
 // the file as it marked it, the sweep's words.
 func sweepCodeWrites(words string) *codeWrites {
-	return &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
-		if (w.Kind == code.WriteRevert || w.Kind == code.WriteCherryPick) &&
+	return &codeWrites{write: func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		if (w.Kind == gitlet.WriteRevert || w.Kind == gitlet.WriteCherryPick) &&
 			strings.HasSuffix(w.Ref, "/"+sweepConflicted) {
-			return code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "a.txt conflicts",
-				Conflicts: []code.Conflict{{Path: "a.txt", Kind: "CONFLICT (contents)", Base: blobOID,
+			return gitlet.EngineWriteResult{Refusal: gitlet.WriteConflict, Detail: "a.txt conflicts",
+				Conflicts: []gitlet.Conflict{{Path: "a.txt", Kind: "CONFLICT (contents)", Base: blobOID,
 					Ours: mainOID, Theirs: featureOID, Marked: words}}}, nil
 		}
-		return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
-			PushID: code.WritePushID(w.OpID), Position: codeAt(13),
-			Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID, Result: code.ResultOK}}, nil
+		return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
+			PushID: gitlet.WritePushID(w.OpID), Position: codeAt(13),
+			Command: gitlet.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID, Result: gitlet.ResultOK}}, nil
 	}}
 }
 

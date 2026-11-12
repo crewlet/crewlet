@@ -2,7 +2,7 @@
 --
 -- Whether a change's head revision merges cleanly into the tip of the branch
 -- it targets is a function of two commits alone, which the repository's HOME
--- git node merges in a scratch of its own (internal/code/home's
+-- git node merges in a scratch of its own (internal/gitlet/home's
 -- `git merge-tree --write-tree`) and records on the change: a `mergeability`
 -- record on the change's own subject (0100), which the repository's
 -- committing data node publishes for it, as it publishes a revision's facts
@@ -20,7 +20,7 @@
 --     merge its home could not decide within its deadline, read again at the
 --     home's refresh as a moved target is.
 --   - conflicts_count and conflicts are the conflicted paths the record
---     names, at most code.MaxConflictPaths and code.MaxConflictBytes as JSON,
+--     names, at most gitlet.MaxConflictPaths and gitlet.MaxConflictBytes as JSON,
 --     NUL-separated (no path of a tree holds a NUL); conflicts_omitted is how
 --     many more the merge left conflicted.
 --   - node is the git node that merged: the repository's home as it took
@@ -30,8 +30,8 @@
 --     wide row it keeps.
 --   - position is the record that wrote the row, and at its broker instant —
 --     what the home's recheck of a moved target, or of an undecided merge, is
---     paced by: due again once the row is code/home's MergeabilityRefresh old
---     (code.ReadChangesDue).
+--     paced by: due again once the row is gitlet/home's MergeabilityRefresh old
+--     (gitlet.ReadChangesDue).
 --
 -- THE WIDE COLUMN IS DECLARED LAST: a list of paths does not always fit a leaf
 -- page, and a row read for a column before it stops there (0094's

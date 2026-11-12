@@ -1,7 +1,7 @@
 -- An inbox card counts only the open agent findings.
 --
 -- A code notice carries the agent findings standing open on its change, by
--- severity (internal/code's inboxread.go, noticeFindingsSQL), for every
+-- severity (internal/gitlet's inboxread.go, noticeFindingsSQL), for every
 -- change of the page — and the composed inbox is read on every badge poll and
 -- every Inbox screen. The read had only code_findings_raiser_idx (0101),
 -- (change_id, raiser, state, revision, id), so it sought each change on its
@@ -16,7 +16,7 @@
 -- carrying the severity, so the read is one covering seek a change that
 -- touches nothing else — 0106's code_findings_blockers_idx is the same
 -- answer to the same cost for a change's readiness. Its reader spells the
--- predicate as the index declares it (internal/code's openAgentFindings),
+-- predicate as the index declares it (internal/gitlet's openAgentFindings),
 -- since the pinned planner takes a partial index only for a statement that
 -- repeats its terms; and a finding leaves it when it is resolved,
 -- dismissed or superseded, so it is no wider than what stands open. The
