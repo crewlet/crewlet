@@ -109,6 +109,17 @@ var previews = map[string]func(t Tool) proposal.Previewer{
 	"update_chat_room":          chatRoomPreview,
 	"set_chat_room_members":     chatMembersPreview,
 	"leave_chat_room":           chatLeavePreview,
+	addAtlasEntryTool:           addAtlasPreview,
+	correctAtlasFactTool:        correctAtlasPreview,
+	confirmAtlasEntryTool:       confirmAtlasPreview,
+	relateAtlasEntriesTool:      relateAtlasPreview(false),
+	unrelateAtlasEntriesTool:    relateAtlasPreview(true),
+	setAtlasOwnerTool:           ownerAtlasPreview,
+	retireAtlasEntryTool:        retireAtlasPreview(true),
+	restoreAtlasEntryTool:       retireAtlasPreview(false),
+	mergeAtlasEntriesTool:       pairAtlasPreview(true),
+	splitAtlasEntriesTool:       pairAtlasPreview(false),
+	purgeAtlasEntryTool:         purgeAtlasPreview,
 }
 
 // withHome is args with arg named: as the call names it, else the person's own
@@ -992,6 +1003,9 @@ var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, 
 	case proposal.RevisionRoom, proposal.RevisionMessage:
 		// A CHAT ROOM OR MESSAGE, re-read through the route its preview read.
 		return chatRevision(ctx, read, r)
+	case proposal.RevisionAtlasEntry:
+		// AN ATLAS ENTRY, re-read as the card showed it.
+		return atlasEntryRevision(ctx, read, r)
 	}
 	var req exec.Request
 	path, versionAt, idAt := "", "", ""
