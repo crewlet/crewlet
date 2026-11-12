@@ -558,7 +558,12 @@ func (r *hostRig) startedWaiter(drives Drives, node string) *Waiter {
 	return w
 }
 
-// waitAnnounced waits for a completion to be announced for turn.
+// waitAnnounced waits for a completion to be announced for turn, for as long
+// as within on the bubble's clock, which moves only once every goroutine of
+// the case is blocked: the bound is the nudge schedule's own time, never how
+// late a loaded runner woke the case.
+//
+//fixedwait:bubble
 func (r *hostRig) waitAnnounced(t *testing.T, turn string, within time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -573,58 +578,68 @@ func (r *hostRig) waitAnnounced(t *testing.T, turn string, within time.Duration)
 
 // A RUN THAT SUBMITTED ITS WORK IS POLLED AT ONCE by the waiter that drives
 // it, and again on a short schedule while its harness exits — so its completion is
-// found within seconds of its exit, not up to a poll interval later.
+// found within seconds of its exit, not up to a poll interval later. In a
+// bubble, where the schedule keeps its own seconds.
 //
 // Mutation: make a nudge do nothing, and the completion waits the hour.
 func TestASubmittedRunIsPolledAtOnceAndAgainWhileItExits(t *testing.T) {
 	t.Parallel()
-	rig := newHostRig(t)
-	run := rig.launchIn("t-submitted", Direct, "node-a")
-	// THE HARNESS IS STILL EXITING at the first poll, and done at the next.
-	var polls sync.WaitGroup
-	polls.Add(1)
-	var once sync.Once
-	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
-		first := false
-		once.Do(func() { first = true; polls.Done() })
-		if first {
-			return JobRunning, nil
+	inBubble(t, func(t *testing.T) {
+		rig := newHostRig(t)
+		run := rig.launchIn("t-submitted", Direct, "node-a")
+		// THE HARNESS IS STILL EXITING at the first poll, and done at the next.
+		var polls sync.WaitGroup
+		polls.Add(1)
+		var once sync.Once
+		rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+			first := false
+			once.Do(func() { first = true; polls.Done() })
+			if first {
+				return JobRunning, nil
+			}
+			return JobEnded, nil
 		}
-		return JobEnded, nil
-	}
-	w := rig.startedWaiter(DrivesLocal, "node-a")
-	w.Nudge(Nudge{TurnID: "t-submitted", LaunchID: run.LaunchID, Why: NudgeSubmitted})
-	if !rig.waitAnnounced(t, "t-submitted", 10*time.Second) {
-		t.Fatal("a nudged run's completion was not announced within the nudge's schedule")
-	}
+		w := rig.startedWaiter(DrivesLocal, "node-a")
+		w.Nudge(Nudge{TurnID: "t-submitted", LaunchID: run.LaunchID, Why: NudgeSubmitted})
+		if !rig.waitAnnounced(t, "t-submitted", 10*time.Second) {
+			t.Fatal("a nudged run's completion was not announced within the nudge's schedule")
+		}
+	})
 }
 
 // A NUDGE IS FOR THE WAITER THAT DRIVES THE RUN, and for the job it names: a
 // waiter that cannot reach the box, a job the row moved on from, and a run
 // whose ending is decided are polled for nobody.
 //
+// READ ONCE EVERY NUDGE IS DONE WITH, never over a quiet window: every task
+// the waiter started has returned (what [Waiter.Stop] waits for), each having
+// let its run be or polled it, and a poll of a finished job announces it
+// before its task returns. In a bubble, so a task that followed its run on
+// the schedule would cost the wait no time.
+//
 // Mutation: poll whatever a nudge names, and each of these is announced.
 func TestANudgePollsOnlyWhatItsWaiterDrives(t *testing.T) {
 	t.Parallel()
-	rig := newHostRig(t)
-	other := rig.launchIn("t-other-host", Direct, "node-b")
-	stale := rig.launchIn("t-stale-job", Direct, "node-a")
-	ending := rig.launchIn("t-ending", Direct, "node-a")
-	if _, _, err := rig.pending.DecideEnding(t.Context(), "t-ending", Decision{
-		License: License{WhileIn: Active, Launch: EveryLaunch}, Reason: "x", Detail: "x",
-	}); err != nil {
-		t.Fatalf("DecideEnding: %v", err)
-	}
-	rig.runner.Finish(Result{Success: true})
-	w := rig.startedWaiter(DrivesLocal, "node-a")
-	w.Nudge(Nudge{TurnID: "t-other-host", LaunchID: other.LaunchID, Why: NudgeSubmitted})
-	w.Nudge(Nudge{TurnID: "t-stale-job", LaunchID: "not-" + stale.LaunchID, Why: NudgeSubmitted})
-	w.Nudge(Nudge{TurnID: "t-ending", LaunchID: ending.LaunchID, Why: NudgeSubmitted})
-	if rig.waitAnnounced(t, "t-other-host", 300*time.Millisecond) ||
-		rig.waitAnnounced(t, "t-stale-job", 10*time.Millisecond) ||
-		rig.waitAnnounced(t, "t-ending", 10*time.Millisecond) {
-		t.Errorf("a nudge polled a run its waiter does not drive: %v", rig.announced())
-	}
+	inBubble(t, func(t *testing.T) {
+		rig := newHostRig(t)
+		other := rig.launchIn("t-other-host", Direct, "node-b")
+		stale := rig.launchIn("t-stale-job", Direct, "node-a")
+		ending := rig.launchIn("t-ending", Direct, "node-a")
+		if _, _, err := rig.pending.DecideEnding(t.Context(), "t-ending", Decision{
+			License: License{WhileIn: Active, Launch: EveryLaunch}, Reason: "x", Detail: "x",
+		}); err != nil {
+			t.Fatalf("DecideEnding: %v", err)
+		}
+		rig.runner.Finish(Result{Success: true})
+		w := rig.startedWaiter(DrivesLocal, "node-a")
+		w.Nudge(Nudge{TurnID: "t-other-host", LaunchID: other.LaunchID, Why: NudgeSubmitted})
+		w.Nudge(Nudge{TurnID: "t-stale-job", LaunchID: "not-" + stale.LaunchID, Why: NudgeSubmitted})
+		w.Nudge(Nudge{TurnID: "t-ending", LaunchID: ending.LaunchID, Why: NudgeSubmitted})
+		w.tasks.Wait()
+		if got := rig.announced(); len(got) != 0 {
+			t.Errorf("a nudge polled a run its waiter does not drive: %v", got)
+		}
+	})
 }
 
 // A BOX LEFT TO ITS HOST IS RECLAIMED THE MOMENT THE HOST IS TOLD, not at its

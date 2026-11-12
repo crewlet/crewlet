@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -703,28 +704,37 @@ func (c *stepClock) advance(d time.Duration) {
 // returns — and a second Stop, which a node's teardown and a case's cleanup can
 // both make, returns too.
 //
+// GONE IS READ, NOT WAITED OUT, in a bubble: once Stop has returned and every
+// goroutine of the case is blocked, a sweep still running waits on its ticks,
+// and a tick offered without waiting reaches it. A quiet window after Stop saw
+// only a sweep quick enough to take its tick inside it.
+//
 // Mutation: leave the sweep running past the readings' end, and Stop never
-// returns.
+// returns; return from Stop without waiting for it as well, and the sweep
+// takes the tick.
 func TestStopEndsTheSweep(t *testing.T) {
 	t.Parallel()
-	ticks := make(chan time.Time)
-	feeds := startLiveFeeds(t.Context(), LiveFeedsOptions{}, ticks)
-	stopped := make(chan struct{})
-	go func() {
-		feeds.Stop()
-		feeds.Stop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Stop did not return: the sweep did not end")
-	}
-	select {
-	case ticks <- time.Now():
-		t.Fatal("a stopped node's sweep took a tick")
-	case <-time.After(50 * time.Millisecond):
-	}
+	inBubble(t, func(t *testing.T) {
+		ticks := make(chan time.Time)
+		feeds := startLiveFeeds(t.Context(), LiveFeedsOptions{}, ticks)
+		stopped := make(chan struct{})
+		go func() {
+			feeds.Stop()
+			feeds.Stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Stop did not return: the sweep did not end")
+		}
+		synctest.Wait()
+		select {
+		case ticks <- time.Now():
+			t.Fatal("a stopped node's sweep took a tick")
+		default:
+		}
+	})
 }
 
 // A NODE THAT STOPPED READS NO BOX. Its readings end before its seats are
@@ -955,42 +965,52 @@ func TestAViewerTooFarBehindIsReset(t *testing.T) {
 // arriving together now share the one read in flight, and requests inside
 // [LiveReuse] of it share its answer.
 //
-// Mutation: read the box per request, and the count is the viewers'.
+// EVERY VIEWER WAITS ON THE ONE READ before it is let through, as the bubble
+// says: Wait returns once every goroutine of the case is blocked, so each
+// viewer's request has reached the owner and waits on the read in flight. A
+// nap for a head start let a late viewer ride the reuse window instead, and
+// left the sharing of a read in flight untested.
+//
+// Mutation: read the box per request, or start a read for a request that
+// finds one in flight, and the count is the viewers'.
 func TestManyViewersCostOneReadOfTheBox(t *testing.T) {
 	t.Parallel()
-	rig := newTailRig(t)
-	rig.runner.Say(SourceTranscript, "busy\n")
-	gate := make(chan struct{})
-	rig.runner.LiveGate = gate
-	rig.serve(t, boxOwner)
-	reader := rig.reader(t)
+	inBubble(t, func(t *testing.T) {
+		rig := newTailRig(t)
+		rig.runner.Say(SourceTranscript, "busy\n")
+		gate := make(chan struct{})
+		rig.runner.LiveGate = gate
+		rig.serve(t, boxOwner)
+		reader := rig.reader(t)
 
-	const viewers = 8
-	var wg sync.WaitGroup
-	answers := make(chan TailAnswer, viewers)
-	for range viewers {
-		wg.Go(func() {
-			got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch, Cursor: TailCursor{}})
-			if err != nil {
-				t.Errorf("Tail: %v", err)
-			}
-			answers <- got
-		})
-	}
-	// Every viewer is waiting on the one read before it is let through.
-	eventually(t, func() bool { return rig.runner.Waiting() > 0 }, "no read began")
-	time.Sleep(50 * time.Millisecond)
-	close(gate)
-	wg.Wait()
-	close(answers)
-	for got := range answers {
-		if got.Output == nil || got.Output.Text != "busy\n" {
-			t.Errorf("a viewer was answered %+v; want the shared read", got.Output)
+		const viewers = 8
+		var wg sync.WaitGroup
+		answers := make(chan TailAnswer, viewers)
+		for range viewers {
+			wg.Go(func() {
+				got, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch, Cursor: TailCursor{}})
+				if err != nil {
+					t.Errorf("Tail: %v", err)
+				}
+				answers <- got
+			})
 		}
-	}
-	if reads := rig.runner.Reads(); reads != 1 {
-		t.Errorf("%d viewers cost %d reads of the box; want one", viewers, reads)
-	}
+		synctest.Wait()
+		if began := rig.runner.Waiting(); began != 1 {
+			t.Errorf("%d waiting viewers began %d reads of the box; want the one they share", viewers, began)
+		}
+		close(gate)
+		wg.Wait()
+		close(answers)
+		for got := range answers {
+			if got.Output == nil || got.Output.Text != "busy\n" {
+				t.Errorf("a viewer was answered %+v; want the shared read", got.Output)
+			}
+		}
+		if reads := rig.runner.Reads(); reads != 1 {
+			t.Errorf("%d viewers cost %d reads of the box; want one", viewers, reads)
+		}
+	})
 }
 
 // AN ABANDONED REQUEST FREES ITS ANSWER SLOT. The owner's answer waits for the
