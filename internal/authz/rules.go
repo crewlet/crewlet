@@ -237,6 +237,23 @@ const (
 	// ActionAtlasTrace is the tool `atlas_trace`: what depends on one entry,
 	// or what it depends on.
 	ActionAtlasTrace Action = "atlas_trace"
+	// The tools a person changes the atlas with, each one claim on the atlas's
+	// log in the person's own name: an entry added, a fact set or confirmed, a
+	// relation drawn or removed, an owner named, an entry retired or restored,
+	// and two entries joined ("the same") or kept apart ("not the same").
+	ActionAtlasAddEntry Action = "atlas_add_entry"
+	ActionAtlasCorrect  Action = "atlas_correct"
+	ActionAtlasConfirm  Action = "atlas_confirm"
+	ActionAtlasRelate   Action = "atlas_relate"
+	ActionAtlasUnrelate Action = "atlas_unrelate"
+	ActionAtlasSetOwner Action = "atlas_set_owner"
+	ActionAtlasRetire   Action = "atlas_retire"
+	ActionAtlasRestore  Action = "atlas_restore"
+	ActionAtlasMerge    Action = "atlas_merge"
+	ActionAtlasSplit    Action = "atlas_split"
+	// ActionAtlasPurge is the tool `atlas_purge`: an entry or a value erased
+	// everywhere, its history included, and kept from coming back.
+	ActionAtlasPurge Action = "atlas_purge"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -1368,6 +1385,45 @@ var rules = map[Action]rule{
 		assist: AssistRead},
 	ActionAtlasTrace: {class: ClassApp, app: iam.GrantAtlas, recency: iam.RecencyAny,
 		assist: AssistRead},
+
+	// --- changing the atlas ------------------------------------------ //
+	//
+	// THE APP, AND A PERSON'S. Every holder corrects every entry (ADR-0127),
+	// each write a claim in their own name that outranks every inference and
+	// keeps the one it replaced as history, so none of them needs a recent
+	// proof: a retire is undone by a restore and a claim by the next one. NEVER
+	// AN AGENT'S, whatever its seat holds: an agent records only what a call
+	// of its own turn showed it, through a tool of its own, and never retires
+	// anything or names an owner, so a model steered by what it read cannot
+	// decide what the company's map says.
+	// AND MADE AS A SEAT: a claim names the person who made it by the seat
+	// they hold, so a credential acting as no seat (a Tier A token, a service
+	// account bound to none) records no claim in a person's rank.
+	ActionAtlasAddEntry: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasCorrect: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasConfirm: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasRelate: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasUnrelate: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasSetOwner: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasRetire: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasRestore: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasMerge: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAtlasSplit: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// A PURGE IS ADMIN'S, A PERSON'S AND A RECENT PROOF'S, as every purge is
+	// ([ActionWorkPurge]): it erases what every holder reads, its history
+	// included, and nothing brings it back (ADR-0127).
+	ActionAtlasPurge: {class: ClassAdmin, humanOnly: true, seated: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label

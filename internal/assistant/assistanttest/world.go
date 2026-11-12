@@ -14,6 +14,28 @@ import (
 // built from [ExampleArgs] or [ProposalArgs] reads a record World holds.
 const RecordID = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 
+// The atlas entries [World] holds: a service a person confirmed, a second
+// service somebody retired, and the server the first runs on.
+const (
+	AtlasServiceID = "0b6e1a52-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+	AtlasTwinID    = "1c7f2b63-4d5e-4f60-9b0c-1d2e3f4a5b6c"
+	AtlasHostID    = "2d803c74-5e6f-4071-8c1d-2e3f4a5b6c7d"
+)
+
+// atlasEntry is one atlas entry as `GET /atlas/{id}` answers it.
+func atlasEntry(id, kind, key, name, state string, facts, relations, sources []any) map[string]any {
+	return map[string]any{"revision": "r1", "coverage": []any{}, "withheld": 0, "used_by": []any{},
+		"entry": map[string]any{"id": id, "ref": map[string]any{"kind": kind, "key": key}, "name": name,
+			"members": []any{map[string]any{"kind": kind, "key": key}}, "state": state,
+			"facts": facts, "relations": relations, "sources": sources}}
+}
+
+// person and github are the two sources the atlas entries cite.
+var (
+	byPerson = map[string]any{"kind": "person", "name": "pm"}
+	byGitHub = map[string]any{"kind": "integration", "name": "github"}
+)
+
 // World is a small company as the routes a write's preview reads answer it,
 // by request path and in each route's own shape: a task with a decision on its
 // thread, a person's priorities, an agent, a parked executor, a page, an
@@ -56,6 +78,23 @@ func World() map[string]any {
 			"title": "Runbook", "body": "Step one.", "version": 2}},
 		"/artifacts/" + RecordID: map[string]any{"id": RecordID, "title": "Q3 deck",
 			"head_number": 5},
+		// THE ATLAS: checkout-api, which a person confirmed, runs on web-2 and
+		// is owned by pm; checkout, which somebody retired; and web-2.
+		"/atlas/" + AtlasServiceID: atlasEntry(AtlasServiceID, "service", "checkout-api", "Checkout API",
+			"confirmed", []any{
+				map[string]any{"fact": "name", "value": map[string]any{"type": "label", "text": "Checkout API"},
+					"source": byGitHub, "word": "confirmed", "standing": "settled"},
+				map[string]any{"fact": "environment", "value": map[string]any{"type": "word", "text": "production"},
+					"source": byPerson, "word": "confirmed", "standing": "settled"}},
+			[]any{map[string]any{"relation": "runs_on", "to": AtlasHostID, "source": byPerson,
+				"word": "confirmed", "standing": "settled"},
+				map[string]any{"relation": "owned_by", "external": "seat", "name": "pm", "source": byPerson,
+					"word": "confirmed", "standing": "settled"}},
+			[]any{byGitHub, byPerson}),
+		"/atlas/" + AtlasTwinID: atlasEntry(AtlasTwinID, "service", "checkout", "checkout", "retired",
+			[]any{}, []any{}, []any{byPerson}),
+		"/atlas/" + AtlasHostID: atlasEntry(AtlasHostID, "host", "addr/web-2.acme.example", "web-2",
+			"confirmed", []any{}, []any{}, []any{byPerson}),
 		"/config/charter": Charter(WorldMission, "Settling up takes seconds.",
 			"Morgan is the final authority.", "Money is an integer number of cents."),
 		// A PRIVATE ROOM pm follows whole and ada is in, and the message pm
@@ -160,6 +199,17 @@ var ProposalArgs = map[string]map[string]any{
 	"set_token_budget": {"seat": "qa", "window": "day", "tokens": float64(1500000)},
 	"set_seat_access": {"handle": "qa", "integration": "datadog", "enabled": true,
 		"access": "Datadog Read Only Role"},
+	"add_atlas_entry":        {"kind": "service", "key": "billing", "name": "Billing"},
+	"correct_atlas_fact":     {"atlas_entry": AtlasServiceID, "fact": "environment", "value": "staging"},
+	"confirm_atlas_entry":    {"atlas_entry": AtlasServiceID, "fact": "name"},
+	"relate_atlas_entries":   {"atlas_entry": AtlasServiceID, "relation": "depends_on", "to": AtlasTwinID},
+	"unrelate_atlas_entries": {"atlas_entry": AtlasServiceID, "relation": "runs_on", "to": AtlasHostID},
+	"set_atlas_owner":        {"atlas_entry": AtlasServiceID, "seat": "qa"},
+	"retire_atlas_entry":     {"atlas_entry": AtlasServiceID},
+	"restore_atlas_entry":    {"atlas_entry": AtlasTwinID},
+	"merge_atlas_entries":    {"atlas_entry": AtlasServiceID, "other": AtlasTwinID},
+	"split_atlas_entries":    {"atlas_entry": AtlasServiceID, "other": AtlasTwinID},
+	"purge_atlas_entry":      {"atlas_entry": AtlasTwinID},
 }
 
 // Answer is what a route answers world's record at r's path: 200 with it, or

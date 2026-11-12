@@ -62,9 +62,15 @@ func (c Call) person() error {
 	return invalid("the engine records nothing as a person: what it knows is computed when the atlas is read")
 }
 
-// NoIfMatch is a person's write conditioned on no version of its entry: a new
-// entry, or an edit whose caller read nothing first.
+// NoIfMatch is a person's write conditioned on no version of its entry: an
+// edit whose caller read nothing first.
 const NoIfMatch uint64 = 0
+
+// IfNoRecord is a person's write conditioned on its entry holding no record
+// yet: decided from a read that found none, so a write somebody made since
+// refuses it as [ErrStaleVersion] rather than landing beside it unseen. No
+// version is this value: a version is a log position, which stays far below.
+const IfNoRecord uint64 = 1<<64 - 1
 
 // claimNamespace is the name space a claim's id is derived in. Fixed for good:
 // a different namespace is a different id for every claim a retry recorded.
@@ -148,7 +154,7 @@ func publish(ctx context.Context, publisher *statelog.Publisher,
 	case errors.Is(err, statelog.ErrConflict):
 		return res, fmt.Errorf("%w: %s: %w", ErrConflict, req.Subject, err)
 	case errors.Is(err, statelog.ErrExists):
-		return res, fmt.Errorf("%w: %s", ErrExists, req.Subject)
+		return res, fmt.Errorf("%w: %s: %w", ErrExists, req.Subject, err)
 	}
 	return res, err
 }
@@ -184,11 +190,12 @@ func versionOf(ctx context.Context, tx *sql.Tx, entry string) (int64, error) {
 // restore, a fact they set, correct or deny, a relation they draw or remove, an
 // owner they name, or two entries they join or keep apart. The claim's source
 // is the caller, whatever the claim says; its value is judged by the
-// vocabulary's grammar and refused if it is shaped like a credential.
+// vocabulary's grammar, and its value and every key it names are refused if
+// shaped like a credential.
 //
 // ifMatch is the entry's version the person decided from ([EntryRow.Version]),
-// or [NoIfMatch]: an edit over a record they did not see answers
-// [ErrStaleVersion]. A claim on, naming or carrying anything purged answers
+// [IfNoRecord] for a decision made where the entry held none, or [NoIfMatch]:
+// an edit over a record they did not see answers [ErrStaleVersion]. A claim on, naming or carrying anything purged answers
 // [ErrPurged].
 func (w *Writer) Record(ctx context.Context, c Call, claim atlas.Claim, ifMatch uint64) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
@@ -198,6 +205,11 @@ func (w *Writer) Record(ctx context.Context, c Call, claim atlas.Claim, ifMatch 
 		return statelog.Result{}, err
 	}
 	claim.Source, claim.Position, claim.ObservedAt = atlas.PersonSource(c.By.Name), 0, w.now()
+	// THE KEYS FIRST: a refusal of the claim's grammar names its entry, and a
+	// key shaped like a credential is refused before anything repeats it.
+	if err := claim.Recordable(); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if err := claim.Validate(); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
@@ -213,7 +225,12 @@ func (w *Writer) Record(ctx context.Context, c Call, claim atlas.Claim, ifMatch 
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if ifMatch != NoIfMatch && uint64(version) != ifMatch {
+			switch {
+			case ifMatch == IfNoRecord && version != 0:
+				return statelog.Decision{}, fmt.Errorf("%w: %s is at version %d and the edit was "+
+					"decided where it held no record; read it again and decide", ErrStaleVersion,
+					claim.Subject, version)
+			case ifMatch != NoIfMatch && ifMatch != IfNoRecord && uint64(version) != ifMatch:
 				return statelog.Decision{}, fmt.Errorf("%w: %s is at version %d and the edit was "+
 					"decided from %d; read it again and decide", ErrStaleVersion, claim.Subject,
 					version, ifMatch)

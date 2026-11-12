@@ -6875,6 +6875,34 @@ asked for the work. And who read a unit's code is an audit of the people who
 read it — an admin's, which no other person is answered either: a seat that
 could ask would be a model watching the people it works for.
 
+### Changing the atlas
+
+And the atlas's **eleven writes**, each a claim in the person's own name on the
+atlas's log ([Changing the atlas](../concepts/atlas.md#changing-the-atlas)):
+every one takes `atlas` but the purge, which is `admin`'s with a proof inside
+`step_up`, and every one is a person's, made as the seat they hold: refused to an
+agent whatever it holds, and to a credential bound to no seat (`unseated`).
+An entry is named by `atlas_entry` (and `to` or `other` where a write names a
+second one): its `id`, or `kind:key` (`host:ssh/web-1`). Every write takes an optional
+`if_match`, the entry's `version` it was decided from, and is refused
+`stale_version` when the entry moved since; it answers `entry`, the entry's id, its
+new `version`, what it recorded (`change`, and the fact, relation, value or
+owner) and the `outcome` and `position` every write carries, or `unchanged`
+where what it asked for already held and nothing was recorded. Over MCP each
+also takes back the `op_id` its answer carried, as the tracker's writes do.
+
+| Tool | Arguments |
+|---|---|
+| `atlas_add_entry` | `kind`, `key` in its kind's grammar, and an optional `name`. An entry the atlas holds already is refused `exists` (a retired one is brought back with `atlas_restore`); a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the settings or Gitlet name, are refused `conflict` |
+| `atlas_correct` | `atlas_entry`, `fact` (one its kind carries), and `value` in the fact's grammar, which a fact holding many values gains as one more; or `wrong: true`, saying the `value` shown (the one value of a fact of one) is wrong. A fact the settings, Gitlet or the engine's own records declare is refused `conflict` |
+| `atlas_confirm` | `atlas_entry`, and either `fact` (with `value` for a fact holding many, or to confirm another value a source reports) or `relation` and `to`; neither confirms the entry itself |
+| `atlas_relate` | `atlas_entry`, `relation` (any but `owned_by` and `documented_in`), `to` |
+| `atlas_unrelate` | `atlas_entry`, `relation`, `to`: a relation the settings declare is refused `conflict` |
+| `atlas_set_owner` | `atlas_entry`, and one of `seat` (a handle of the chart), `unit` (a unit's key) or `clear: true`. The owner a person named before is withdrawn; an owner Gitlet declares is refused `conflict` |
+| `atlas_retire`, `atlas_restore` | `atlas_entry`. An entry the settings declare is refused `conflict` |
+| `atlas_merge`, `atlas_split` | `atlas_entry` and `other`, of one kind. A merge withdraws a "not the same" that stands between them first |
+| `atlas_purge` | `atlas_entry`, or `value` exactly as the atlas holds it, never both. Nothing undoes it; the answer never repeats the value, and only its digest leaves the node it was asked of |
+
 ### The chat gestures only a person makes
 
 Where the company runs Chatlet, the dashboard's chat screen makes every

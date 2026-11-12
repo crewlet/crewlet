@@ -123,15 +123,10 @@ func (r atlasReader) read(ctx context.Context, turn *turnctx.Turn, tool string) 
 		settings, running = r.deps.Settings(ctx)
 	}
 	if !running {
-		res := failed(fmt.Sprintf("%s: this node runs no company yet, so there is no atlas to read. "+
-			"Try again once its settings are applied.", tool))
+		res := failed(fmt.Sprintf("%s: %s", tool, noAtlas))
 		return atlasRead{}, &res
 	}
-	reads, asker, why := r.gitlet(ctx, turn, tool)
-	answer, _ := r.deps.AtlasRead(ctx, reads, asker, seatRead, time.Now().UTC())
-	if why != "" {
-		answer = answer.Unread(gather.SourceGitlet, why)
-	}
+	answer, _, _ := r.atlas(ctx, turn, tool, seatRead, time.Now().UTC())
 	principal, _ := iam.From(ctx)
 	out := atlasRead{view: atlas.For(answer.View, atlas.Reader{Admin: principal.Can(iam.GrantAdmin)}),
 		coverage: answer.Coverage, withheld: len(answer.Withheld)}
@@ -140,6 +135,28 @@ func (r atlasReader) read(ctx context.Context, turn *turnctx.Turn, tool string) 
 	}
 	out.read = newForeignRead(turn, iam.ActorFor(principal).Name)
 	return out, nil
+}
+
+// noAtlas is why a node that runs no company yet answers no atlas.
+const noAtlas = "this node runs no company yet, so there is no atlas to read. " +
+	"Try again once its settings are applied."
+
+// atlas is the atlas as this call's caller reads it, at fresh: every source
+// this node reaches, what people recorded among them, and Gitlet as the caller
+// and only where they may read code (gitlet says whether it was read).
+// missing says why there is no atlas at all: a node that runs no company yet.
+func (r atlasReader) atlas(ctx context.Context, turn *turnctx.Turn, tool string, fresh statelog.Freshness,
+	now time.Time) (answer gather.Answer, gitlet bool, missing string) {
+
+	reads, asker, why := r.gitlet(ctx, turn, tool)
+	answer, running := r.deps.AtlasRead(ctx, reads, asker, fresh, now)
+	if !running {
+		return gather.Answer{}, false, noAtlas
+	}
+	if why != "" {
+		answer = answer.Unread(gather.SourceGitlet, why)
+	}
+	return answer, reads != nil, ""
 }
 
 // attribute names who wrote what entries carry on the answer's envelope: a

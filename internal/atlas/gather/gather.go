@@ -22,6 +22,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -34,9 +35,16 @@ type GitletReads interface {
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 }
 
-// Sources is where the atlas reads what the engine keeps. A nil source is
-// one this node does not serve, or the reader may not read.
+// Log is the atlas's own log: what people told the engine (atlasdomain.Reader,
+// or the estate router's reads of one).
+type Log interface {
+	Live(ctx context.Context, fresh statelog.Freshness) (atlasdomain.Live, error)
+}
+
+// Sources is where the atlas reads what the engine keeps, and what it was told.
+// A nil source is one this node does not serve, or the reader may not read.
 type Sources struct {
+	Log          Log
 	Gitlet       GitletReads
 	Integrations IntegrationStates
 	SeatAccess   SeatAccess
@@ -70,6 +78,7 @@ type SourceName string
 // The places the atlas reads.
 const (
 	SourceSettings     SourceName = "settings"
+	SourceLog          SourceName = "log"
 	SourceGitlet       SourceName = "gitlet"
 	SourceIntegrations SourceName = "integrations"
 	SourceSeatAccess   SourceName = "seat_access"
@@ -84,8 +93,8 @@ const (
 // SourceNames is every place the atlas reads, in the order an answer's
 // coverage lists them.
 var SourceNames = []SourceName{
-	SourceAccessLog, SourceAlarms, SourceGitlet, SourceIntegrations, SourceNodes, SourceSeatAccess,
-	SourceServerTests, SourceSettings, SourceToolServers, SourceUsage,
+	SourceAccessLog, SourceAlarms, SourceGitlet, SourceIntegrations, SourceLog, SourceNodes,
+	SourceSeatAccess, SourceServerTests, SourceSettings, SourceToolServers, SourceUsage,
 }
 
 // Coverage is one source's part in a read: whether it was read in full, and
@@ -102,6 +111,19 @@ type Answer struct {
 	Revision string            `json:"revision"`
 	Coverage []Coverage        `json:"coverage"`
 	Withheld []derive.Withheld `json:"withheld,omitempty"`
+
+	// Recorded is every live claim the log answered, folded into View, for a
+	// caller that decides on one the view does not show (a person's "not the
+	// same"), and RecordedAt where that answer is current through. Never
+	// sent anywhere: the view is the answer.
+	Recorded   []atlas.Claim     `json:"-"`
+	RecordedAt statelog.Position `json:"-"`
+}
+
+// Complete reports whether name was read in full.
+func (a Answer) Complete(name SourceName) bool {
+	i := slices.IndexFunc(a.Coverage, func(c Coverage) bool { return c.Source == name })
+	return i >= 0 && a.Coverage[i].Complete
 }
 
 // Unread is a with the source name marked as not read in full, for why: a
@@ -148,17 +170,44 @@ func Read(ctx context.Context, src Sources, req Request) Answer {
 	recorded, joined := settings.Records(records, req.Now)
 	take(recorded)
 
+	told, cov := readLog(ctx, src.Log, req)
+	answer.Recorded, answer.RecordedAt = told.Claims, told.Position
+	answer.Coverage = append(answer.Coverage, cov)
+
 	total := 0
 	for _, d := range derived {
 		total += len(d.Claims)
 	}
-	claims := make([]atlas.Claim, 0, total)
+	claims := make([]atlas.Claim, 0, total+len(told.Claims))
 	for _, d := range derived {
 		claims = append(claims, d.Claims...)
 	}
+	claims = append(claims, told.Claims...)
 	answer.View = atlas.Join(atlas.Fold(claims, req.Now), joined, req.Now)
 	slices.SortFunc(answer.Coverage, func(a, b Coverage) int { return cmp.Compare(a.Source, b.Source) })
 	return answer
+}
+
+// readLog reads every live claim the atlas's log holds, at the read's level. A
+// log this node cannot answer from, or holding a record this build cannot
+// decode, is reported as read in part, and its claims still fold.
+func readLog(ctx context.Context, log Log, req Request) (atlasdomain.Live, Coverage) {
+	cov := Coverage{Source: SourceLog}
+	if log == nil {
+		cov.Reason = ErrNoSource.Error()
+		return atlasdomain.Live{}, cov
+	}
+	live, err := log.Live(ctx, req.Fresh)
+	switch {
+	case err != nil:
+		cov.Reason = fmt.Sprintf("reading what people recorded: %v", err)
+		return atlasdomain.Live{}, cov
+	case !live.Complete:
+		cov.Reason = "this node holds a record of the atlas's log a newer build wrote, which it cannot read yet"
+	default:
+		cov.Complete = true
+	}
+	return live, cov
 }
 
 // readGitlet lists every repository the asker may read, the other hosts of

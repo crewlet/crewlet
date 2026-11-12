@@ -491,6 +491,9 @@ func annotationsFor(name string) tools.Annotations {
 	if a, ok := releaseAnnotations(name); ok {
 		return a
 	}
+	if a, ok := atlasAnnotations(name); ok {
+		return a
+	}
 	if name == ReviewDelegatedTool {
 		return reviewAnnotations()
 	}

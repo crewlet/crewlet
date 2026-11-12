@@ -205,6 +205,11 @@ type Halves struct {
 	// no company yet. Its tools read Gitlet through Code, as the caller.
 	Atlas builtin.AtlasDeps
 
+	// AtlasWrite is the atlas's write tools' half, or the zero value on a
+	// node that reaches no copy of its log. Who writes and the chart an
+	// owner is named from are set per call.
+	AtlasWrite builtin.AtlasWriteDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -415,13 +420,15 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	// THE CALL'S OWN OPERATION, where its transport names one: an artifact
 	// write's records derive from it, as a page write's do.
 	arts.CallerKey = keyFrom
+	atlasWrite := halves.AtlasWrite
+	atlasWrite.Actor, atlasWrite.Org = workActor, s.org
 	runs, pauses, steer, answer := s.runs, s.pauses, s.steer, s.answer
 	runs.Actor, pauses.Actor, steer.Actor, answer.Actor =
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
 		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
-		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, Org: s.org,
+		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, AtlasWrite: atlasWrite, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

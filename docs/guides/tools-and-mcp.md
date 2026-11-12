@@ -152,7 +152,13 @@ holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat; and, where the company hosts its code, `code_repo_readers`, who
 read a `visibility: unit` repository, an administrator's audit, and
 `code_mark_inbox`, a person's marks over their own code notices, served beside
-the code writes (a seat is woken, never shown an inbox). That set
+the code writes (a seat is woken, never shown an inbox).
+Eleven more change the company's atlas, each a claim in the person's own name
+and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
+`atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
+`atlas_restore`, `atlas_merge`, `atlas_split` and `atlas_purge`, the last an
+administrator's after a fresh sign-in
+([Changing the atlas](../concepts/atlas.md#changing-the-atlas)). That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
 dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)

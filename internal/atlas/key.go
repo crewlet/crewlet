@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // Namespace is the one name space every entry id is minted under. Fixed for
@@ -62,6 +63,59 @@ func NewRef(k Kind, key string) (Ref, error) {
 		return Ref{}, fmt.Errorf("%s key: %w: at most %d bytes", k, ErrInvalid, MaxKeyBytes)
 	}
 	return Ref{Kind: k, Key: canonical}, nil
+}
+
+// RecordedRef is [NewRef] for an entry somebody tells the engine about: a key
+// shaped like a credential is REFUSED ([ErrCredential]), as it was written and
+// in its canonical form, since the canonical form of a host name is lowercase
+// and a token's shape can live in its case. A key's grammar admits a vendor's
+// own identifiers, and some share a token's alphabet; the keys the engine
+// computes are read from the redacting copy, so [NewRef] stays the fold's check.
+func RecordedRef(k Kind, key string) (Ref, error) {
+	if redact.Contains(key) {
+		return Ref{}, fmt.Errorf("%s key: %w", k, ErrCredential)
+	}
+	r, err := NewRef(k, key)
+	if err != nil {
+		return Ref{}, err
+	}
+	if err := r.Recordable(); err != nil {
+		return Ref{}, err
+	}
+	return r, nil
+}
+
+// Recordable refuses a ref whose canonical key is shaped like a credential
+// ([ErrCredential]), naming its kind and never the key.
+func (r Ref) Recordable() error {
+	if redact.Contains(r.Key) {
+		return fmt.Errorf("%s key: %w", r.Kind, ErrCredential)
+	}
+	return nil
+}
+
+// OnGitlet reports an entry Gitlet names: its own account, a repository keyed
+// gitlet/, or one of its checks.
+func (r Ref) OnGitlet() bool {
+	if r.Kind == KindAccount {
+		return r.Key == string(VendorGitlet)
+	}
+	return (r.Kind == KindRepository || r.Kind == KindPipeline) && strings.HasPrefix(r.Key, GitletPrefix+"/")
+}
+
+// EngineNamed is where an entry the engine itself names is declared, and false
+// for one a person may add by hand: a model and a tool server are declared in
+// the settings, a server keyed ssh/ in the SSH settings, and a repository or a
+// check keyed gitlet/ in Gitlet. Such an entry enters the atlas from there.
+func (r Ref) EngineNamed() (Source, bool) {
+	switch {
+	case r.Kind == KindModel, r.Kind == KindToolServer,
+		r.Kind == KindHost && strings.HasPrefix(r.Key, HostSSHPrefix+"/"):
+		return Source{Kind: SourceSettings}, true
+	case r.OnGitlet():
+		return RecordSource(RecordGitlet), true
+	}
+	return Source{}, false
 }
 
 // MustRef is [NewRef] for a key the caller built from values already parsed.

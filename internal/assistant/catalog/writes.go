@@ -193,6 +193,7 @@ func writeTools() []Tool {
 				"message":      text("One line on what changed and why.", lineBytes),
 			})),
 	}
+	out = append(out, atlasWrites()...)
 	// AN ANSWER UNBLOCKS SOMEBODY ELSE: the agent that asked resumes on
 	// it, so it is R3 above the comment verb's own derivation.
 	for i := range out {
@@ -217,6 +218,7 @@ var writeNames = map[string]map[string]Directory{
 	"pause_agent":       {"handle": DirSeat},
 	"resume_agent":      {"handle": DirSeat},
 	"create_page":       {"container": DirSpace},
+	setAtlasOwnerTool:   {"seat": DirSeat, "unit": DirUnit},
 }
 
 // The artifacts surface's share routes (internal/api/artifactsapi), the ones
