@@ -6,22 +6,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
 // ONE TIER VOCABULARY, WRITTEN TWICE, WHICH MUST NOT DRIFT.
 //
 // role.code.access is the tier Gitlet caps a seat's grant
-// by (internal/code's Tier, ADR-0088). config owns the vocabulary, since it is
-// where a person writes and the validator reads it, and internal/code spells
+// by (internal/gitlet's Tier, ADR-0088). config owns the vocabulary, since it is
+// where a person writes and the validator reads it, and internal/gitlet spells
 // its tiers as config's constants; it is held here all the same, element by
 // element, because a tier added on one side and not the other would validate
 // here and be read as read-only there, or be refused here and be perfectly
 // good there. A GitHub App reads no tier: its access is its own permissions.
 func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 	t.Parallel()
-	if tiers := code.Tiers(); len(tiers) != len(config.CodeAccessTiers) {
+	if tiers := gitlet.Tiers(); len(tiers) != len(config.CodeAccessTiers) {
 		t.Errorf("config knows %v, Gitlet %v", config.CodeAccessTiers, tiers)
 	} else {
 		for i, tier := range config.CodeAccessTiers {
@@ -36,7 +36,7 @@ func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 			got, config.TierReadOnly)
 	}
 	// Gitlet reads an unset tier as the default tier's cap.
-	if unset, def := code.Tier("").Cap(), code.Tier(silent.AccessOrDefault()).Cap(); unset != def {
+	if unset, def := gitlet.Tier("").Cap(), gitlet.Tier(silent.AccessOrDefault()).Cap(); unset != def {
 		t.Errorf("an unset tier caps a seat at %s, and the default tier at %s", unset, def)
 	}
 }

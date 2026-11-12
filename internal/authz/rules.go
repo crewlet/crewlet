@@ -94,7 +94,7 @@ const (
 	// any repository is read, with the app's own refusal (ADR-0110). Who
 	// among the holders may read a repository, fetch from it or push to it
 	// is a GRANT the serving node derives from the chart for the repository
-	// a request names (code.GrantOf, ADR-0088): a person maintains every
+	// a request names (gitlet.GrantOf, ADR-0088): a person maintains every
 	// repository, and a seat holds the least of its code tier and its
 	// relation to the repository's owner — a question the route cannot ask
 	// before the repository is read, and that this table has no chart arm
@@ -160,7 +160,7 @@ const (
 	// engine write by the grant's ref rule and the protections on the Gitlet
 	// node that builds it and again at the repository's committer, a
 	// repository's lifecycle by the one lifecycle rule on the data node that
-	// decides it (code.GrantOf and the lifecycle's refusal, ADR-0088). Five
+	// decides it (gitlet.GrantOf and the lifecycle's refusal, ADR-0088). Five
 	// change a branch — files committed, a commit reverted or picked, a
 	// branch created or deleted — and five a repository: made, changed
 	// (settings, archive, rename), deleted, restored, or a branch protected.

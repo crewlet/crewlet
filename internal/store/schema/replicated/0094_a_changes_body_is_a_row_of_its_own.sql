@@ -1,6 +1,6 @@
 -- A change's body is a row of its own, and its change weighs it.
 --
--- 0086 kept a change's body — its description, up to code.MaxChangeBodyBytes,
+-- 0086 kept a change's body — its description, up to gitlet.MaxChangeBodyBytes,
 -- 32 KiB — in code_changes, declared before every column a head move reads
 -- and rewrites, and a purge counted the row as it counts a ref. Both cost the
 -- same thing: a row that does not fit its page keeps its start in the leaf and
@@ -18,7 +18,7 @@
 --     description, on every data node, and on every row a listing reads.
 --   - A PURGE PART NEVER WEIGHED IT. A part took a repository's changes by
 --     their rows alone, about a thousand of them — 32 MB of bodies at the
---     bound — on top of push rows just short of code.PurgePartBytes: 112 ms
+--     bound — on top of push rows just short of gitlet.PurgePartBytes: 112 ms
 --     of the write lane in the same review's run of BenchmarkApplyAPurgePart,
 --     against 64 ms for the same rows without bodies, where that bound sizes
 --     the most a part takes to a third of the 250 ms a record may hold the
@@ -40,7 +40,7 @@
 -- a width read off the body's own row would walk the body's overflow pages to
 -- learn what deleting them costs. A purge part takes whole changes only while
 -- what its wide rows weigh — the push rows by their row_bytes, then the
--- changes by their body_bytes — is under code.PurgePartBytes, at most one
+-- changes by their body_bytes — is under gitlet.PurgePartBytes, at most one
 -- change past it, and the final purge is formed only once both fit. NO
 -- DEFAULT, as code_pushes.row_bytes has none: a writer states the width of
 -- every change it stores, so no change reads as free by omission.

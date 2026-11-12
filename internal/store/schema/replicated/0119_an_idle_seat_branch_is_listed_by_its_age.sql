@@ -1,8 +1,8 @@
 -- An idle seat branch is listed by its age.
 --
--- The ref lifecycle (code.RefExpiry, the code-retention pass's last step)
+-- The ref lifecycle (gitlet.RefExpiry, the code-retention pass's last step)
 -- deletes a branch a seat set in its own namespace and nobody has set for two
--- weeks, through a push on the engine's own account (code.ViaExpiry). Its
+-- weeks, through a push on the engine's own account (gitlet.ViaExpiry). Its
 -- listing reads only such refs — code_refs.seat (replicated 0115) is set
 -- exactly where a seat's push set the ref inside its own namespace, so a tag,
 -- a person's branch, a release branch and a seat's branch a person pushed last
@@ -15,10 +15,10 @@
 -- for the predicate its WHERE names (as replicated 0111 found for its own), so
 -- the listing's target is read from that row and a column carried for it
 -- would be read twice. An expiry deletes what it lists unless its decide keeps
--- it (code.ExpiryRule): a ref held by a live turn since its page, set again
+-- it (gitlet.ExpiryRule): a ref held by a live turn since its page, set again
 -- since, set last by somebody else, its repository's default branch, or a live
 -- change's source or target.
 --
--- Class: code_refs stays reproducible (code.ReproducibleTables): an index
+-- Class: code_refs stays reproducible (gitlet.ReproducibleTables): an index
 -- carries no rows of its own.
 CREATE INDEX code_refs_expiry_idx ON code_refs (at, repo_id, ref) WHERE seat != '';    -- the ref lifecycle's idle listing, oldest first

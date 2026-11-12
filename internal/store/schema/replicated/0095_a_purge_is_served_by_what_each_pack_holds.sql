@@ -39,7 +39,7 @@
 --
 -- Every date is derived from the records alone, so a node replaying the log
 -- writes every one again. And every node writes it from the first record it
--- applies, under the code domain's stated condition (internal/code's
+-- applies, under the code domain's stated condition (internal/gitlet's
 -- record.go): no build that carries the domain has run without this column —
 -- none of it is on main — so no node holds rows an older build applied while
 -- another holds their dates, which an expunge's apply would judge a request by

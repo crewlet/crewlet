@@ -21,8 +21,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -126,7 +126,7 @@ func heap() int64 {
 }
 
 // built is one build of the benchmark's tip AS THE CACHE BUILDS ONE
-// (internal/code/cache's indexBuild): each segment streamed straight into a
+// (internal/gitlet/cache's indexBuild): each segment streamed straight into a
 // file of its own and opened over a read-only mapping of it, never over the
 // bytes written; merged as codeindex.MergeNewest says after each segment, a
 // merge's inputs unmapped and removed once it is placed.
@@ -260,7 +260,7 @@ func buildPeak(b *testing.B, corpus []corpusFile, ids []codeindex.OID, order []i
 }
 
 // listing is the heap the cache's build holds for the tip's LISTING beside
-// the build, for the whole of it (internal/code/cache's segments and
+// the build, for the whole of it (internal/gitlet/cache's segments and
 // listTip): every file's path, blob and size; the tip's blobs, by id, which a
 // merge keeps; each fresh blob's size, by id; and the ids read and written,
 // sorted — modelled here by the same shapes over the benchmark's tip.
@@ -316,7 +316,7 @@ func listing(corpus []corpusFile, ids []codeindex.OID) int64 {
 //     object, a byte of source — the least a copy holding the tip takes,
 //     against which CodeIndexShare weighs the index;
 //   - query-p50-ms and query-p99-ms: a search's lookups over every segment
-//     and its confirmation of the candidates' lines, up to code.MaxSearchHits,
+//     and its confirmation of the candidates' lines, up to gitlet.MaxSearchHits,
 //     for benchQueries literals of the tree's own identifiers, one in four
 //     folding case. The cat-file that reads a candidate in production is not
 //     timed: a blob is made in memory here.
@@ -460,11 +460,11 @@ func queryTimes(b *testing.B, corpus []corpusFile, segs []*codeindex.Segment,
 				buf = blob(corpus, byID[id], buf)
 				if _, err := plan.Confirm(b.Context(), buf, func(codeindex.Hit) bool {
 					hits++
-					return hits < code.MaxSearchHits
+					return hits < gitlet.MaxSearchHits
 				}); err != nil {
 					b.Fatal(err)
 				}
-				if hits >= code.MaxSearchHits {
+				if hits >= gitlet.MaxSearchHits {
 					break segments
 				}
 			}

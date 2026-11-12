@@ -25,7 +25,7 @@
 -- else seeks it. replicated 0113 IS NOT EDITED: `schema_migrations` keys on
 -- the filename, so a store that applied it would never see the change.
 --
--- Class: code_checks stays reproducible (code.ReproducibleTables): an index
+-- Class: code_checks stays reproducible (gitlet.ReproducibleTables): an index
 -- carries no rows of its own.
 DROP INDEX code_checks_queued_idx;
 

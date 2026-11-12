@@ -22,9 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -45,21 +45,21 @@ var writtenOID = strings.Repeat("d", 40)
 // before it is answered, so a case can read what the asking turn held then.
 type codeWrites struct {
 	mu         sync.Mutex
-	writes     []code.EngineWrite
-	lifecycles []code.LifecycleRequest
-	changes    []code.ChangeProposal
-	converses  []code.ConversationWrite
-	marks      []code.MarkWrite
-	checks     []code.ChecksRequest
-	check      func(r code.ChecksRequest) (code.ChecksResult, error)
-	write      func(w code.EngineWrite) (code.EngineWriteResult, error)
-	life       func(r code.LifecycleRequest) (code.LifecycleResult, error)
-	change     func(p code.ChangeProposal) (code.ChangeResult, error)
-	converse   func(w code.ConversationWrite) (code.ConversationResult, error)
-	queues     []code.QueueProposal
-	queue      func(p code.QueueProposal) (code.QueueResult, error)
-	expunges   []code.ExpungeProposal
-	expunge    func(p code.ExpungeProposal) (code.ExpungeResult, error)
+	writes     []gitlet.EngineWrite
+	lifecycles []gitlet.LifecycleRequest
+	changes    []gitlet.ChangeProposal
+	converses  []gitlet.ConversationWrite
+	marks      []gitlet.MarkWrite
+	checks     []gitlet.ChecksRequest
+	check      func(r gitlet.ChecksRequest) (gitlet.ChecksResult, error)
+	write      func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error)
+	life       func(r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
+	change     func(p gitlet.ChangeProposal) (gitlet.ChangeResult, error)
+	converse   func(w gitlet.ConversationWrite) (gitlet.ConversationResult, error)
+	queues     []gitlet.QueueProposal
+	queue      func(p gitlet.QueueProposal) (gitlet.QueueResult, error)
+	expunges   []gitlet.ExpungeProposal
+	expunge    func(p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error)
 	before     func(what, repoID string)
 }
 
@@ -67,7 +67,7 @@ type codeWrites struct {
 // repository's open request its own id — and asked again under an id it
 // already holds, the SAME request at the same position, as the operation
 // ledger collapses it — unless a case answers otherwise.
-func (c *codeWrites) Expunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+func (c *codeWrites) Expunge(_ context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 	c.mu.Lock()
 	c.expunges = append(c.expunges, p)
 	answer, before := c.expunge, c.before
@@ -85,13 +85,13 @@ func (c *codeWrites) Expunge(_ context.Context, p code.ExpungeProposal) (code.Ex
 	if answer != nil {
 		return answer(p)
 	}
-	return code.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: codeAt(uint64(40 + at)),
+	return gitlet.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: codeAt(uint64(40 + at)),
 		Request: p.Request.RequestID}, nil
 }
 
 // Queue answers a write of a target's queue — a dequeue — as applied, unless
 // a case answers otherwise.
-func (c *codeWrites) Queue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+func (c *codeWrites) Queue(_ context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error) {
 	c.mu.Lock()
 	c.queues = append(c.queues, p)
 	answer, before := c.queue, c.before
@@ -102,11 +102,11 @@ func (c *codeWrites) Queue(_ context.Context, p code.QueueProposal) (code.QueueR
 	if answer != nil {
 		return answer(p)
 	}
-	return code.QueueResult{Outcome: statelog.OutcomeApplied, State: code.QueueDequeued, Position: codeAt(17)}, nil
+	return gitlet.QueueResult{Outcome: statelog.OutcomeApplied, State: gitlet.QueueDequeued, Position: codeAt(17)}, nil
 }
 
 // queuesAsked is the queue writes the fake was asked, copied under its lock.
-func (c *codeWrites) queuesAsked() []code.QueueProposal {
+func (c *codeWrites) queuesAsked() []gitlet.QueueProposal {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.queues)
@@ -117,7 +117,7 @@ var (
 	_ builtin.CodeHolder = (*codeWrites)(nil)
 )
 
-func (c *codeWrites) GitWrite(_ context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+func (c *codeWrites) GitWrite(_ context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	c.mu.Lock()
 	c.writes = append(c.writes, w)
 	answer, before := c.write, c.before
@@ -128,20 +128,20 @@ func (c *codeWrites) GitWrite(_ context.Context, w code.EngineWrite) (code.Engin
 	if answer != nil {
 		return answer(w)
 	}
-	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
-		PushID: code.WritePushID(w.OpID), Position: codeAt(13),
-		Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID, Result: code.ResultOK}}, nil
+	return gitlet.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
+		PushID: gitlet.WritePushID(w.OpID), Position: codeAt(13),
+		Command: gitlet.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID, Result: gitlet.ResultOK}}, nil
 }
 
-func (c *codeWrites) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+func (c *codeWrites) Lifecycle(_ context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 	c.mu.Lock()
 	c.lifecycles = append(c.lifecycles, r)
 	answer, before := c.life, c.before
 	c.mu.Unlock()
 	if before != nil {
 		id := r.RepoID
-		if r.Kind == code.LifecycleCreate {
-			id, _ = code.RepoIDOf(r.OpID)
+		if r.Kind == gitlet.LifecycleCreate {
+			id, _ = gitlet.RepoIDOf(r.OpID)
 		}
 		before("lifecycle:"+string(r.Kind), id)
 	}
@@ -149,26 +149,26 @@ func (c *codeWrites) Lifecycle(_ context.Context, r code.LifecycleRequest) (code
 		return answer(r)
 	}
 	repo := siteDetail().RepoRef
-	if r.Kind == code.LifecycleCreate {
-		id, _ := code.RepoIDOf(r.OpID)
+	if r.Kind == gitlet.LifecycleCreate {
+		id, _ := gitlet.RepoIDOf(r.OpID)
 		// A CREATE THAT IMPORTS — its own import, or a pull mirror's first
 		// fetch — makes its repository importing, as the applier does.
-		status := code.RepoStatusActive
+		status := gitlet.RepoStatusActive
 		if r.Import != nil || r.Create.MirrorFrom != nil {
-			status = code.RepoStatusImporting
+			status = gitlet.RepoStatusImporting
 		}
-		repo = code.RepoRef{ID: id, Name: r.Name, Status: status, Kind: r.Create.Kind,
+		repo = gitlet.RepoRef{ID: id, Name: r.Name, Status: status, Kind: r.Create.Kind,
 			Owner: r.Create.Owner, Visibility: r.Create.Visibility, Search: r.Create.Search,
 			DefaultBranch: r.Create.DefaultBranch}
 	}
-	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
+	return gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
 }
 
 // Change answers a change's lifecycle as applied — an open as change site!7 at
 // version 1, opened under the change id its operation derives; any other write
 // as the change it names, one version past the one it expected — unless a case
 // answers otherwise.
-func (c *codeWrites) Change(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+func (c *codeWrites) Change(_ context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error) {
 	c.mu.Lock()
 	c.changes = append(c.changes, p)
 	answer, before := c.change, c.before
@@ -179,14 +179,14 @@ func (c *codeWrites) Change(_ context.Context, p code.ChangeProposal) (code.Chan
 	if answer != nil {
 		return answer(p)
 	}
-	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 7,
+	return gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 7,
 		Version: p.ExpectedVersion + 1, Position: codeAt(15)}, nil
 }
 
 // Checks answers a write of a repository's checks as applied, the attempt it
 // names queued — or running, or ended, as a report says — unless a case
 // answers otherwise.
-func (c *codeWrites) Checks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+func (c *codeWrites) Checks(_ context.Context, r gitlet.ChecksRequest) (gitlet.ChecksResult, error) {
 	c.mu.Lock()
 	c.checks = append(c.checks, r)
 	answer, before := c.check, c.before
@@ -197,31 +197,31 @@ func (c *codeWrites) Checks(_ context.Context, r code.ChecksRequest) (code.Check
 	if answer != nil {
 		return answer(r)
 	}
-	row := &code.CheckRow{CheckKey: r.Key(), State: code.CheckStateQueued}
+	row := &gitlet.CheckRow{CheckKey: r.Key(), State: gitlet.CheckStateQueued}
 	if r.Report != nil {
 		row.State = r.Report.State
 	}
-	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: row}, nil
+	return gitlet.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: row}, nil
 }
 
 // checksAsked is every write of a repository's checks the case sent.
-func (c *codeWrites) checksAsked() []code.ChecksRequest {
+func (c *codeWrites) checksAsked() []gitlet.ChecksRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.checks)
 }
 
 // Mark answers a person's mark as applied.
-func (c *codeWrites) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, error) {
+func (c *codeWrites) Mark(_ context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 	c.mu.Lock()
 	c.marks = append(c.marks, w)
 	c.mu.Unlock()
-	return code.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeAt(17)}, nil
+	return gitlet.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeAt(17)}, nil
 }
 
 // Converse answers a write of a change's conversation as applied, unless a
 // case answers otherwise.
-func (c *codeWrites) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+func (c *codeWrites) Converse(_ context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
 	c.mu.Lock()
 	c.converses = append(c.converses, w)
 	answer, before := c.converse, c.before
@@ -232,11 +232,11 @@ func (c *codeWrites) Converse(_ context.Context, w code.ConversationWrite) (code
 	if answer != nil {
 		return answer(w)
 	}
-	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeAt(16)}, nil
+	return gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeAt(16)}, nil
 }
 
 // asked is what the fake was asked, copied under its lock.
-func (c *codeWrites) asked() ([]code.EngineWrite, []code.LifecycleRequest) {
+func (c *codeWrites) asked() ([]gitlet.EngineWrite, []gitlet.LifecycleRequest) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.writes), slices.Clone(c.lifecycles)
@@ -244,7 +244,7 @@ func (c *codeWrites) asked() ([]code.EngineWrite, []code.LifecycleRequest) {
 
 // changesAsked is the writes of changes the fake was asked, copied under its
 // lock: their lifecycles, then their conversations.
-func (c *codeWrites) changesAsked() ([]code.ChangeProposal, []code.ConversationWrite) {
+func (c *codeWrites) changesAsked() ([]gitlet.ChangeProposal, []gitlet.ConversationWrite) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.changes), slices.Clone(c.converses)
@@ -315,8 +315,8 @@ func TestEveryCodeWriteDeliversToTheCodeSurface(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", name)
 		}
-		if entry.Surface != code.Source {
-			t.Errorf("%s delivers to %q, want Gitlet's surface %q", name, entry.Surface, code.Source)
+		if entry.Surface != gitlet.Source {
+			t.Errorf("%s delivers to %q, want Gitlet's surface %q", name, entry.Surface, gitlet.Source)
 		}
 		// ADDITIVE WRITES ARE NOT IDEMPOTENT: two reviews or two comments
 		// saying the same are two; every other write is held to what its
@@ -365,10 +365,10 @@ func TestNoWorkerIsGivenACodeWrite(t *testing.T) {
 // `u`: the highest relation the chart can give a seat on a repository — the
 // effective lead of the unit owning it, or the owner of its own scratch
 // repository — so a grant it does not reach is reached by no seat at tier.
-type tierRoster struct{ tier code.Tier }
+type tierRoster struct{ tier gitlet.Tier }
 
-func (r tierRoster) Seat(handle string) (code.RosterSeat, bool) {
-	return code.RosterSeat{Handle: "s", Tier: r.tier, Unit: "u"}, handle == "s"
+func (r tierRoster) Seat(handle string) (gitlet.RosterSeat, bool) {
+	return gitlet.RosterSeat{Handle: "s", Tier: r.tier, Unit: "u"}, handle == "s"
 }
 
 func (tierRoster) Lead(unit string) string {
@@ -391,7 +391,7 @@ func (tierRoster) Within(unit, ancestor string) bool { return unit == ancestor &
 // tier, a write is offered where the grant the seat holds at the highest
 // relation the chart can give it — on a project its unit owns and leads, and
 // on its own scratch repository — admits it on one of them, and withheld
-// where it admits it on neither, held to code.GrantOf both ways. A write that
+// where it admits it on neither, held to gitlet.GrantOf both ways. A write that
 // moves a ref or makes a repository, and a change's lifecycle, needs a grant
 // that pushes and maintains (every lifecycle request a tool sends needs
 // maintain, a scratch repository's create full_access, and a change's owner
@@ -409,31 +409,31 @@ func (tierRoster) Within(unit, ancestor string) bool { return unit == ancestor &
 // review at read → read_only is offered it, red.
 func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	t.Parallel()
-	agent := code.Principal{Kind: code.PrincipalAgent, Seat: "s"}
-	repos := []code.RepoRef{
-		{ID: siteID, Name: "site", Status: code.RepoStatusActive, Kind: code.RepoProject,
-			Owner: code.Owner{Kind: code.OwnerUnit, Ref: "u"}, Visibility: code.VisibilityCompany},
-		{ID: "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9f", Name: "s.lab", Status: code.RepoStatusActive,
-			Kind:  code.RepoScratch,
-			Owner: code.Owner{Kind: code.OwnerSeat, Ref: "s"}, Visibility: code.VisibilityCompany},
+	agent := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "s"}
+	repos := []gitlet.RepoRef{
+		{ID: siteID, Name: "site", Status: gitlet.RepoStatusActive, Kind: gitlet.RepoProject,
+			Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "u"}, Visibility: gitlet.VisibilityCompany},
+		{ID: "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9f", Name: "s.lab", Status: gitlet.RepoStatusActive,
+			Kind:  gitlet.RepoScratch,
+			Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "s"}, Visibility: gitlet.VisibilityCompany},
 	}
 	// RULE D21's access for a change's conversation, of a principal that
 	// wrote none of the change.
-	converse := map[string]code.Access{
-		builtin.CodeCommentOnChangeTool: code.AccessRead,
-		builtin.CodeRequestReviewTool:   code.AccessReview,
-		builtin.CodeReviewChangeTool:    code.AccessReview,
-		builtin.CodeResolveFindingTool:  code.AccessReview,
+	converse := map[string]gitlet.Access{
+		builtin.CodeCommentOnChangeTool: gitlet.AccessRead,
+		builtin.CodeRequestReviewTool:   gitlet.AccessReview,
+		builtin.CodeReviewChangeTool:    gitlet.AccessReview,
+		builtin.CodeResolveFindingTool:  gitlet.AccessReview,
 	}
-	admits := func(g code.Grant, name string) bool {
+	admits := func(g gitlet.Grant, name string) bool {
 		if need, ok := converse[name]; ok {
 			return g.Access >= need
 		}
-		return g.MayPush() && g.Access >= code.AccessMaintain
+		return g.MayPush() && g.Access >= gitlet.AccessMaintain
 	}
 	// EVERY TIER A ROLE CAN CARRY, an unset one and one no build writes among
 	// them.
-	for _, tier := range append(code.Tiers(), "", "admin") {
+	for _, tier := range append(gitlet.Tiers(), "", "admin") {
 		withheld := builtin.CodeWritesWithheld(tier)
 		for _, name := range withheld {
 			if !slices.Contains(builtin.CodeWrites(), name) {
@@ -444,7 +444,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 			offered := !slices.Contains(withheld, name)
 			admitted := false
 			for _, repo := range repos {
-				admitted = admitted || admits(code.GrantOf(agent, repo, tierRoster{tier: tier}), name)
+				admitted = admitted || admits(gitlet.GrantOf(agent, repo, tierRoster{tier: tier}), name)
 			}
 			if offered != admitted {
 				t.Errorf("tier %q is offered %s: %v, and a grant at it admits it: %v", tier, name, offered, admitted)
@@ -453,11 +453,11 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	}
 	// AND BY NAME, the tiers the conversation's writes are for.
 	for _, c := range []struct {
-		tier    code.Tier
+		tier    gitlet.Tier
 		offered []string
 	}{
-		{code.TierReadOnly, []string{builtin.CodeCommentOnChangeTool}},
-		{code.TierReview, []string{builtin.CodeRequestReviewTool, builtin.CodeReviewChangeTool,
+		{gitlet.TierReadOnly, []string{builtin.CodeCommentOnChangeTool}},
+		{gitlet.TierReview, []string{builtin.CodeRequestReviewTool, builtin.CodeReviewChangeTool,
 			builtin.CodeCommentOnChangeTool, builtin.CodeResolveFindingTool}},
 	} {
 		withheld := builtin.CodeWritesWithheld(c.tier)
@@ -468,7 +468,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 			}
 		}
 	}
-	if withheld := builtin.CodeWritesWithheld(code.TierFullAccess); len(withheld) != 0 {
+	if withheld := builtin.CodeWritesWithheld(gitlet.TierFullAccess); len(withheld) != 0 {
 		t.Errorf("a full_access seat is left %v, want every code write offered", withheld)
 	}
 }
@@ -537,7 +537,7 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 		t.Fatalf("%d writes were sent, want 1", len(writes))
 	}
 	w := writes[0]
-	want := code.Principal{Kind: code.PrincipalAgent, Seat: "agent-cto", Run: code.RunProvenance{
+	want := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "agent-cto", Run: gitlet.RunProvenance{
 		TurnID: turn.RunID, WorkBackend: "native", WorkKey: "ENG-7", Model: "claude-house"}}
 	if w.Principal != want {
 		t.Errorf("the write is made by %+v, want %+v", w.Principal, want)
@@ -546,7 +546,7 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 		t.Errorf("a seat's write is built at %+v, want its session floored at the turn's read of the "+
 			"repository (%s, past this node's own writes at %s)", w.Fresh, codeAt(7), host.floor)
 	}
-	if w.Kind != code.WriteCommitFiles || w.RepoID != siteID || w.Ref != "refs/heads/seats/agent-cto/fix" ||
+	if w.Kind != gitlet.WriteCommitFiles || w.RepoID != siteID || w.Ref != "refs/heads/seats/agent-cto/fix" ||
 		w.ExpectedHead != mainOID || len(w.Files) != 1 || w.Files[0].Content == nil ||
 		*w.Files[0].Content != "hello" {
 		t.Errorf("the write asks %+v", w)
@@ -565,7 +565,7 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 	if len(writes) != 1 {
 		t.Fatalf("%d writes were sent for the person, want 1", len(writes))
 	}
-	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:jane-laptop", Seat: "founder"}
+	person := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "pat:jane-laptop", Seat: "founder"}
 	if writes[0].Principal != person || writes[0].Fresh.Level != statelog.ReadLinearizable {
 		t.Errorf("the person's write is %+v at %+v, want %+v at the log's head", writes[0].Principal,
 			writes[0].Fresh, person)
@@ -602,14 +602,14 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	speaker := func(handle string) []types.CanonicalIdentity {
 		return []types.CanonicalIdentity{{Handle: handle}}
 	}
-	seat := &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "agent-ceo"}
-	nobody := &code.WriteCeiling{Kind: code.WriteCeilingNobody}
+	seat := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: "agent-ceo"}
+	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
 	token := []types.CanonicalIdentity{{ExternalID: "token:ci", Platform: "worklet", Login: "token:ci"}}
 	for _, c := range []struct {
 		name      string
 		requester string
 		senders   []types.CanonicalIdentity
-		ceiling   *code.WriteCeiling
+		ceiling   *gitlet.WriteCeiling
 		reads     string
 		// login is the credential acting as no seat whose write woke the
 		// turn, carrying every app.
@@ -757,7 +757,7 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 // same, red.
 func TestASeatsWriteIsFlooredAtTheRefsItsTurnRead(t *testing.T) {
 	t.Parallel()
-	floorOf := func(w code.EngineWrite) statelog.Position { return w.Fresh.Floor(codeAt(1).Stream) }
+	floorOf := func(w gitlet.EngineWrite) statelog.Position { return w.Fresh.Floor(codeAt(1).Stream) }
 
 	// A REVERT OF A COMMIT NAMED BY ITS BRANCH: feature last moved at 11,
 	// past the turn's read of the repository at 7 and this node's own writes
@@ -828,7 +828,7 @@ func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 	if len(writes) != 5 {
 		t.Fatalf("%d writes were sent, want 5", len(writes))
 	}
-	push := func(i int) string { return code.WritePushID(writes[i].OpID) }
+	push := func(i int) string { return gitlet.WritePushID(writes[i].OpID) }
 	if push(0) != push(1) {
 		t.Errorf("the same call made twice is two pushes, %s and %s", push(0), push(1))
 	}
@@ -875,18 +875,18 @@ func TestAProtectCallSendsOnlyThePushControlsItNames(t *testing.T) {
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
-	none, persons, on, off := code.DirectNone, code.DirectPersons, true, false
+	none, persons, on, off := gitlet.DirectNone, gitlet.DirectPersons, true, false
 	for _, c := range []struct {
 		args map[string]any
-		want code.ProtectChange
+		want gitlet.ProtectChange
 	}{
-		{map[string]any{}, code.ProtectChange{}},
-		{map[string]any{"checks": map[string]any{"add": []any{"unit"}}}, code.ProtectChange{
-			Gate: &code.GateChange{Checks: &code.ListChange[string]{Add: []string{"unit"}}}}},
-		{map[string]any{"direct_push": "none"}, code.ProtectChange{DirectPush: &none}},
-		{map[string]any{"direct_push": "persons", "allow_force": true}, code.ProtectChange{DirectPush: &persons,
+		{map[string]any{}, gitlet.ProtectChange{}},
+		{map[string]any{"checks": map[string]any{"add": []any{"unit"}}}, gitlet.ProtectChange{
+			Gate: &gitlet.GateChange{Checks: &gitlet.ListChange[string]{Add: []string{"unit"}}}}},
+		{map[string]any{"direct_push": "none"}, gitlet.ProtectChange{DirectPush: &none}},
+		{map[string]any{"direct_push": "persons", "allow_force": true}, gitlet.ProtectChange{DirectPush: &persons,
 			AllowForce: &on}},
-		{map[string]any{"allow_delete": false}, code.ProtectChange{AllowDelete: &off}},
+		{map[string]any{"allow_delete": false}, gitlet.ProtectChange{AllowDelete: &off}},
 	} {
 		args := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
 		maps.Copy(args, c.args)
@@ -930,22 +930,22 @@ func TestAProtectCallSendsOnlyThePushControlsItNames(t *testing.T) {
 // refused as asking nothing, red.
 func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) {
 	t.Parallel()
-	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
+	writer := &codeWrites{life: func(r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 		repo := siteDetail().RepoRef
-		if r.Kind == code.LifecycleCreate {
-			id, _ := code.RepoIDOf(r.OpID)
-			repo = code.RepoRef{ID: id, Name: r.Name, Status: code.RepoStatusActive, Kind: r.Create.Kind,
+		if r.Kind == gitlet.LifecycleCreate {
+			id, _ := gitlet.RepoIDOf(r.OpID)
+			repo = gitlet.RepoRef{ID: id, Name: r.Name, Status: gitlet.RepoStatusActive, Kind: r.Create.Kind,
 				Owner: r.Create.Owner, Visibility: r.Create.Visibility, Search: r.Create.Search,
 				DefaultBranch: r.Create.DefaultBranch}
 		} else if r.Change != nil && r.Change.Search != nil {
 			repo.Search = *r.Change.Search
 		}
-		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
+		return gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
 	}}
 	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
 	// call makes one call and answers it with the requests it sent.
-	call := func(tool string, args map[string]any) (tools.Result, []code.LifecycleRequest) {
+	call := func(tool string, args map[string]any) (tools.Result, []gitlet.LifecycleRequest) {
 		_, before := writer.asked()
 		got := callWrite(everyGrant(), t, reg, turn, tool, args)
 		_, after := writer.asked()
@@ -956,7 +956,7 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 		{"name": "agent-cto.lab"},
 	} {
 		got, sent := call(builtin.CodeCreateRepoTool, args)
-		if got.Failed || len(sent) != 1 || sent[0].Create == nil || sent[0].Create.Search != code.SearchGrep {
+		if got.Failed || len(sent) != 1 || sent[0].Create == nil || sent[0].Create.Search != gitlet.SearchGrep {
 			t.Errorf("creating %v answered %q and sent %+v, want one create searched with grep", args["name"],
 				got.Output, sent)
 		}
@@ -966,20 +966,20 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 	if got.Failed || len(sent) != 1 {
 		t.Fatalf("setting site's search answered %q and sent %d requests, want one", got.Output, len(sent))
 	}
-	if want := (code.RepoChange{Search: new(code.SearchGrep)}); sent[0].Kind != code.LifecycleSettings ||
+	if want := (gitlet.RepoChange{Search: new(gitlet.SearchGrep)}); sent[0].Kind != gitlet.LifecycleSettings ||
 		sent[0].Change == nil || !reflect.DeepEqual(*sent[0].Change, want) {
 		t.Errorf("setting site's search sent %s %+v, want a settings change naming the mode alone", sent[0].Kind,
 			sent[0].Change)
 	}
 	var answer struct {
 		Repository struct {
-			Search code.SearchMode `json:"search"`
+			Search gitlet.SearchMode `json:"search"`
 		} `json:"repository"`
 	}
 	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
 		t.Fatalf("the answer %q: %v", got.Output, err)
 	}
-	if answer.Repository.Search != code.SearchGrep {
+	if answer.Repository.Search != gitlet.SearchGrep {
 		t.Errorf("setting site's search answered %q, want the repository's mode as it now stands", got.Output)
 	}
 
@@ -1007,7 +1007,7 @@ func TestAMirrorIsOneSettingsChangeSetWholeOrRemoved(t *testing.T) {
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 	turn := writerTurn(t)
-	call := func(args map[string]any) (tools.Result, []code.LifecycleRequest) {
+	call := func(args map[string]any) (tools.Result, []gitlet.LifecycleRequest) {
 		_, before := writer.asked()
 		got := callWrite(everyGrant(), t, reg, turn, builtin.CodeUpdateRepoTool, args)
 		_, after := writer.asked()
@@ -1016,22 +1016,22 @@ func TestAMirrorIsOneSettingsChangeSetWholeOrRemoved(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		args map[string]any
-		want code.RepoChange
+		want gitlet.RepoChange
 	}{
 		{"a pull mirror set", map[string]any{"repo": "site", "mirror_from": map[string]any{
 			"url": "https://forge.example.com/up/site.git", "credential": "${SITE_UPSTREAM_TOKEN}"}},
-			code.RepoChange{MirrorFrom: &code.MirrorSource{URL: "https://forge.example.com/up/site.git",
+			gitlet.RepoChange{MirrorFrom: &gitlet.MirrorSource{URL: "https://forge.example.com/up/site.git",
 				Credential: "${SITE_UPSTREAM_TOKEN}"}}},
 		{"a push mirror set", map[string]any{"repo": "site", "mirror_to": map[string]any{
 			"url": "https://forge.example.com/out/site.git", "credential": "${SITE_MIRROR_TOKEN}",
 			"as": "agent-cto", "refs": []any{"refs/heads/main"}}},
-			code.RepoChange{MirrorTo: &code.MirrorTarget{URL: "https://forge.example.com/out/site.git",
+			gitlet.RepoChange{MirrorTo: &gitlet.MirrorTarget{URL: "https://forge.example.com/out/site.git",
 				Credential: "${SITE_MIRROR_TOKEN}", As: "agent-cto", Refs: []string{"refs/heads/main"}}}},
 		{"a push mirror removed", map[string]any{"repo": "site", "mirror_to": map[string]any{}},
-			code.RepoChange{MirrorTo: &code.MirrorTarget{}}},
+			gitlet.RepoChange{MirrorTo: &gitlet.MirrorTarget{}}},
 	} {
 		got, sent := call(c.args)
-		if got.Failed || len(sent) != 1 || sent[0].Kind != code.LifecycleSettings || sent[0].Change == nil ||
+		if got.Failed || len(sent) != 1 || sent[0].Kind != gitlet.LifecycleSettings || sent[0].Change == nil ||
 			!reflect.DeepEqual(*sent[0].Change, c.want) {
 			t.Errorf("%s answered %q and sent %+v, want one settings change naming that mirror alone", c.name,
 				got.Output, sent)
@@ -1069,19 +1069,19 @@ func TestAMirrorIsOneSettingsChangeSetWholeOrRemoved(t *testing.T) {
 // the rest defaulted — and the sent change names more than the call did, red.
 func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	t.Parallel()
-	gate := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
-		Checks: []string{"lint", "unit"}, Landing: code.Landing{Depth: 2, Batch: 4},
-		DeleteSource: code.DeleteSeats}
-	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
+	gate := gitlet.MergeGate{MergeBy: gitlet.MergeByPersons, Approvals: gitlet.ApprovalsOne,
+		Checks: []string{"lint", "unit"}, Landing: gitlet.Landing{Depth: 2, Batch: 4},
+		DeleteSource: gitlet.DeleteSeats}
+	writer := &codeWrites{life: func(r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 		// THE ROW AS GITLET ANSWERS IT, each rule as a push is held to
 		// it, and the protected pattern's rule whole beside it.
 		repo := siteDetail().RepoRef
-		repo.Protections = []code.PushRule{
-			{Pattern: "refs/heads/main", DirectPush: code.DirectNone},
-			{Pattern: "refs/heads/release/*", DirectPush: code.DirectPersons},
+		repo.Protections = []gitlet.PushRule{
+			{Pattern: "refs/heads/main", DirectPush: gitlet.DirectNone},
+			{Pattern: "refs/heads/release/*", DirectPush: gitlet.DirectPersons},
 		}
-		rule := code.Protection{PushRule: repo.Protections[0], Gate: &gate}
-		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Rule: &rule,
+		rule := gitlet.Protection{PushRule: repo.Protections[0], Gate: &gate}
+		return gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Rule: &rule,
 			Position: codeAt(14)}, nil
 	}}
 	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
@@ -1091,12 +1091,12 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 		t.Fatalf("%s is not registered", builtin.CodeProtectBranchTool)
 	}
 	props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
-	for _, field := range append(code.GateChangeFields(), "remove_gate") {
+	for _, field := range append(gitlet.GateChangeFields(), "remove_gate") {
 		if _, ok := props[field]; !ok {
 			t.Errorf("%s's schema takes no %s", builtin.CodeProtectBranchTool, field)
 		}
 	}
-	sent := func() *code.ProtectChange {
+	sent := func() *gitlet.ProtectChange {
 		t.Helper()
 		_, lifecycles := writer.asked()
 		if len(lifecycles) == 0 {
@@ -1113,18 +1113,18 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("a protection changing four gate fields answered %q", got.Output)
 	}
-	persons, depth, off := code.MergeByPersons, 2, false
-	want := &code.GateChange{MergeBy: &persons,
-		Checks:  &code.ListChange[string]{Add: []string{"unit"}, Remove: []string{"e2e"}},
-		Landing: &code.LandingChange{Depth: &depth}, OwnersApprove: &off}
+	persons, depth, off := gitlet.MergeByPersons, 2, false
+	want := &gitlet.GateChange{MergeBy: &persons,
+		Checks:  &gitlet.ListChange[string]{Add: []string{"unit"}, Remove: []string{"e2e"}},
+		Landing: &gitlet.LandingChange{Depth: &depth}, OwnersApprove: &off}
 	if change := sent(); change == nil || !reflect.DeepEqual(change.Gate, want) ||
-		change.DirectPush == nil || *change.DirectPush != code.DirectNone {
+		change.DirectPush == nil || *change.DirectPush != gitlet.DirectNone {
 		t.Errorf("a protection changing four gate fields sent %+v, want direct_push none and the change %+v",
 			change, want)
 	}
 	var answer struct {
-		Repository map[string]any   `json:"repository"`
-		Rule       *code.Protection `json:"rule"`
+		Repository map[string]any     `json:"repository"`
+		Rule       *gitlet.Protection `json:"rule"`
 	}
 	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
 		t.Fatalf("the answer %q: %v", got.Output, err)
@@ -1144,7 +1144,7 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	}
 	if callWrite(everyGrant(), t, reg, turn, builtin.CodeProtectBranchTool, map[string]any{"repo": "site",
 		"pattern": "refs/heads/main", "remove_gate": true}).Failed ||
-		!reflect.DeepEqual(sent().Gate, &code.GateChange{Remove: true}) {
+		!reflect.DeepEqual(sent().Gate, &gitlet.GateChange{Remove: true}) {
 		t.Errorf("a protection removing its gate sent the gate change %+v, want its removal", sent().Gate)
 	}
 
@@ -1182,7 +1182,7 @@ func TestAnUnboundTokenWritesNothing(t *testing.T) {
 		tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)}, name)
 		args, _ := holdingCall(name)
 		got, err := tool.CallForTurn(asUnboundToken(), nil, args)
-		if err != nil || !got.Failed || !strings.Contains(got.Output, code.UnboundDetail) ||
+		if err != nil || !got.Failed || !strings.Contains(got.Output, gitlet.UnboundDetail) ||
 			tools.RefusalOf(got) != tools.RefusalForbidden {
 			t.Errorf("%s by a token bound to nobody answered %v %q", name, err, got.Output)
 		}
@@ -1241,28 +1241,28 @@ func TestTheWriteToolsFollowARename(t *testing.T) {
 // repository → red.
 func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
-	unreachable := []code.Refusal{code.RefusalAtomic, code.RefusalTagMoved, code.RefusalTooManyChanges,
-		code.RefusalForgedCommitter, code.RefusalUnknown, code.RefusalPending}
-	want := map[code.Refusal]tools.Refusal{
-		code.RefusalStale: tools.RefusalStaleVersion, code.RefusalPushQuota: tools.RefusalForbidden,
-		code.RefusalRepoArchived: tools.RefusalConflict, code.RefusalReservedRef: tools.RefusalInvalid,
-		code.RefusalBadRef: tools.RefusalInvalid, code.RefusalPackTooLarge: tools.RefusalInvalid,
-		code.RefusalBlobTooLarge: tools.RefusalInvalid, code.RefusalRefConflict: tools.RefusalExists,
-		code.RefusalRepoSize: tools.RefusalQuotaExceeded, code.RefusalRepoRefs: tools.RefusalQuotaExceeded,
-		code.RefusalRepoDeleted: tools.RefusalNotFound, code.RefusalBusy: tools.RefusalUnavailable,
-		code.RefusalUnavailable: tools.RefusalUnavailable, code.RefusalNotApplied: tools.RefusalUnavailable,
-		code.RefusalStoreFull: tools.RefusalStoreFull, code.RefusalNotPermitted: tools.RefusalForbidden,
-		code.RefusalProtectedForce: tools.RefusalForbidden, code.RefusalProtectedDelete: tools.RefusalForbidden,
-		code.RefusalProtectedDirect: tools.RefusalForbidden,
+	unreachable := []gitlet.Refusal{gitlet.RefusalAtomic, gitlet.RefusalTagMoved, gitlet.RefusalTooManyChanges,
+		gitlet.RefusalForgedCommitter, gitlet.RefusalUnknown, gitlet.RefusalPending}
+	want := map[gitlet.Refusal]tools.Refusal{
+		gitlet.RefusalStale: tools.RefusalStaleVersion, gitlet.RefusalPushQuota: tools.RefusalForbidden,
+		gitlet.RefusalRepoArchived: tools.RefusalConflict, gitlet.RefusalReservedRef: tools.RefusalInvalid,
+		gitlet.RefusalBadRef: tools.RefusalInvalid, gitlet.RefusalPackTooLarge: tools.RefusalInvalid,
+		gitlet.RefusalBlobTooLarge: tools.RefusalInvalid, gitlet.RefusalRefConflict: tools.RefusalExists,
+		gitlet.RefusalRepoSize: tools.RefusalQuotaExceeded, gitlet.RefusalRepoRefs: tools.RefusalQuotaExceeded,
+		gitlet.RefusalRepoDeleted: tools.RefusalNotFound, gitlet.RefusalBusy: tools.RefusalUnavailable,
+		gitlet.RefusalUnavailable: tools.RefusalUnavailable, gitlet.RefusalNotApplied: tools.RefusalUnavailable,
+		gitlet.RefusalStoreFull: tools.RefusalStoreFull, gitlet.RefusalNotPermitted: tools.RefusalForbidden,
+		gitlet.RefusalProtectedForce: tools.RefusalForbidden, gitlet.RefusalProtectedDelete: tools.RefusalForbidden,
+		gitlet.RefusalProtectedDirect: tools.RefusalForbidden,
 		// A PULL MIRROR is the repository's state, as an archive is, which a
 		// person changes; an IMPORT clears with waiting, as a busy repository
 		// does.
-		code.RefusalRepoMirrored: tools.RefusalConflict, code.RefusalRepoImporting: tools.RefusalUnavailable,
+		gitlet.RefusalRepoMirrored: tools.RefusalConflict, gitlet.RefusalRepoImporting: tools.RefusalUnavailable,
 	}
-	for _, refusal := range code.Refusals() {
-		writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
-			return code.EngineWriteResult{Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID,
-				Result: code.ResultNG, Reason: refusal, Detail: "the " + string(refusal) + " sentence"}}, nil
+	for _, refusal := range gitlet.Refusals() {
+		writer := &codeWrites{write: func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+			return gitlet.EngineWriteResult{Command: gitlet.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID,
+				Result: gitlet.ResultNG, Reason: refusal, Detail: "the " + string(refusal) + " sentence"}}, nil
 		}}
 		reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
 		got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCommitFilesTool, commitArgs("x"))
@@ -1282,12 +1282,12 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 			t.Errorf("a push refused %s answered %q without its sentence", refusal, got.Output)
 		}
 	}
-	for _, refusal := range code.WriteRefusals() {
-		if refusal == code.WriteConflict {
+	for _, refusal := range gitlet.WriteRefusals() {
+		if refusal == gitlet.WriteConflict {
 			continue
 		}
-		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
-			return code.EngineWriteResult{Refusal: refusal, Detail: "the change's sentence"}, nil
+		writer := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+			return gitlet.EngineWriteResult{Refusal: refusal, Detail: "the change's sentence"}, nil
 		}}
 		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeCommitFilesTool, commitArgs("x"))
@@ -1295,15 +1295,15 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 			t.Errorf("a change refused %s answered %q as %s, want invalid", refusal, got.Output, tools.RefusalOf(got))
 		}
 	}
-	lifeWant := map[code.LifecycleRefusal]tools.Refusal{
-		code.LifecycleNotPermitted: tools.RefusalForbidden, code.LifecycleConfigManaged: tools.RefusalForbidden,
-		code.LifecycleNameTaken: tools.RefusalExists, code.LifecycleScratchLimit: tools.RefusalQuotaExceeded,
-		code.LifecycleRepoLimit: tools.RefusalQuotaExceeded, code.LifecycleRepoDeleted: tools.RefusalNotFound,
-		code.LifecycleStale: tools.RefusalStaleVersion, code.LifecycleRefDeleted: tools.RefusalNotFound,
+	lifeWant := map[gitlet.LifecycleRefusal]tools.Refusal{
+		gitlet.LifecycleNotPermitted: tools.RefusalForbidden, gitlet.LifecycleConfigManaged: tools.RefusalForbidden,
+		gitlet.LifecycleNameTaken: tools.RefusalExists, gitlet.LifecycleScratchLimit: tools.RefusalQuotaExceeded,
+		gitlet.LifecycleRepoLimit: tools.RefusalQuotaExceeded, gitlet.LifecycleRepoDeleted: tools.RefusalNotFound,
+		gitlet.LifecycleStale: tools.RefusalStaleVersion, gitlet.LifecycleRefDeleted: tools.RefusalNotFound,
 	}
-	for _, refusal := range code.LifecycleRefusals() {
-		writer := &codeWrites{life: func(code.LifecycleRequest) (code.LifecycleResult, error) {
-			return code.LifecycleResult{Refusal: refusal, Detail: "the request's sentence"}, nil
+	for _, refusal := range gitlet.LifecycleRefusals() {
+		writer := &codeWrites{life: func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+			return gitlet.LifecycleResult{Refusal: refusal, Detail: "the request's sentence"}, nil
 		}}
 		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeDeleteRepoTool, map[string]any{"repo": "site"})
@@ -1333,8 +1333,8 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 		{"the write was never answered", estate.ErrOutcomeUnknown, true},
 		{"no node ran it", &estate.ErrUnserved{Git: true}, false},
 	} {
-		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
-			return code.EngineWriteResult{}, c.err
+		writer := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+			return gitlet.EngineWriteResult{}, c.err
 		}}
 		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 			builtin.CodeCommitFilesTool, commitArgs("x"))
@@ -1343,9 +1343,9 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 				got.Output, tools.UnknownOf(got), c.unknown)
 		}
 	}
-	writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
-		return code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Command: code.Command{Ref: w.Ref,
-			Result: code.ResultNG, Reason: code.RefusalUnknown}}, nil
+	writer := &codeWrites{write: func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		return gitlet.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Command: gitlet.Command{Ref: w.Ref,
+			Result: gitlet.ResultNG, Reason: gitlet.RefusalUnknown}}, nil
 	}}
 	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newGitletHost(), writer)), writerTurn(t),
 		builtin.CodeCommitFilesTool, commitArgs("x"))
@@ -1365,8 +1365,8 @@ const scratchID = siteID
 // act on, a dequeue among them.
 func scratchHost(lastActive time.Duration) *gitletHost {
 	host := newGitletHost()
-	host.detail.Name, host.detail.Kind = "agent-cto.lab", code.RepoScratch
-	host.detail.ManagedBy, host.detail.Owner = code.ManagedTools, code.Owner{Kind: code.OwnerSeat, Ref: "agent-cto"}
+	host.detail.Name, host.detail.Kind = "agent-cto.lab", gitlet.RepoScratch
+	host.detail.ManagedBy, host.detail.Owner = gitlet.ManagedTools, gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "agent-cto"}
 	host.detail.LastActivityAt = time.Now().Add(-lastActive)
 	change := suggestedChange().queued()
 	change.repo = host.detail.Name
@@ -1494,7 +1494,7 @@ func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 			}
 			if name == builtin.CodeCreateRepoTool {
 				_, lifecycles := writer.asked()
-				id, _ := code.RepoIDOf(lifecycles[len(lifecycles)-1].OpID)
+				id, _ := gitlet.RepoIDOf(lifecycles[len(lifecycles)-1].OpID)
 				if !slices.Contains(turn.Holds.IDs(), id) {
 					t.Errorf("the create's repository %s is not held", id)
 				}
@@ -1519,7 +1519,7 @@ func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 }
 
 // A HOLD OF AN IDLE SCRATCH REPOSITORY IS RECORDED FIRST: a repository idle
-// code.HoldRecordAfter or more is held with a record on its subject before the
+// gitlet.HoldRecordAfter or more is held with a record on its subject before the
 // tool's own request, decided at the turn's read of it; one idle less is held
 // with none. A hold Gitlet answers deleted is the repository's
 // deletion, answered in its own words, and a hold whose record could not be
@@ -1532,23 +1532,23 @@ func TestAHoldOfAnIdleScratchRepositoryIsRecordedFirst(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		idle     time.Duration
-		answer   func(code.LifecycleRequest) (code.LifecycleResult, error)
+		answer   func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
 		recorded bool
 		sent     bool
 		class    tools.Refusal
 	}{
-		{name: "idle past the threshold", idle: code.HoldRecordAfter + time.Hour, recorded: true, sent: true},
-		{name: "idle under it", idle: code.HoldRecordAfter - time.Hour, sent: true},
-		{name: "answered deleted", idle: code.HoldRecordAfter + time.Hour, recorded: true,
+		{name: "idle past the threshold", idle: gitlet.HoldRecordAfter + time.Hour, recorded: true, sent: true},
+		{name: "idle under it", idle: gitlet.HoldRecordAfter - time.Hour, sent: true},
+		{name: "answered deleted", idle: gitlet.HoldRecordAfter + time.Hour, recorded: true,
 			class: tools.RefusalNotFound,
-			answer: func(code.LifecycleRequest) (code.LifecycleResult, error) {
-				return code.LifecycleResult{Refusal: code.LifecycleRepoDeleted,
+			answer: func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+				return gitlet.LifecycleResult{Refusal: gitlet.LifecycleRepoDeleted,
 					Detail: "agent-cto.lab was deleted by the idle expiry"}, nil
 			}},
-		{name: "unconfirmed", idle: code.HoldRecordAfter + time.Hour, recorded: true,
+		{name: "unconfirmed", idle: gitlet.HoldRecordAfter + time.Hour, recorded: true,
 			class: tools.RefusalUnavailable,
-			answer: func(code.LifecycleRequest) (code.LifecycleResult, error) {
-				return code.LifecycleResult{Outcome: statelog.OutcomeUnknown}, nil
+			answer: func(gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
+				return gitlet.LifecycleResult{Outcome: statelog.OutcomeUnknown}, nil
 			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1560,11 +1560,11 @@ func TestAHoldOfAnIdleScratchRepositoryIsRecordedFirst(t *testing.T) {
 					"expected_head": mainOID, "message": "m",
 					"files": []any{map[string]any{"op": "delete", "path": "a"}}})
 			writes, lifecycles := writer.asked()
-			if recorded := len(lifecycles) == 1 && lifecycles[0].Kind == code.LifecycleHold; recorded != c.recorded {
+			if recorded := len(lifecycles) == 1 && lifecycles[0].Kind == gitlet.LifecycleHold; recorded != c.recorded {
 				t.Fatalf("hold records sent: %+v, want recorded %v", lifecycles, c.recorded)
 			}
 			if c.recorded && (lifecycles[0].TurnID != turn.RunID || lifecycles[0].Seen != codeAt(7) ||
-				lifecycles[0].Actor != (code.Principal{Kind: code.PrincipalAgent, Seat: "agent-cto"})) {
+				lifecycles[0].Actor != (gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "agent-cto"})) {
 				t.Errorf("the hold record is %+v, want the turn's, decided at its read of the repository",
 					lifecycles[0])
 			}
@@ -1609,12 +1609,12 @@ func TestAHoldIsRecordedWhereALedgerCanVouchForIt(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
+			writer := &codeWrites{life: func(r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error) {
 				if minted, _ := statelog.OpMintedAt(r.OpID); minted.Before(lostBefore) {
-					return code.LifecycleResult{Outcome: statelog.OutcomeUnknown,
+					return gitlet.LifecycleResult{Outcome: statelog.OutcomeUnknown,
 						Detail: "minted before this node's operation ledger lost rows"}, nil
 				}
-				return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeAt(14)}, nil
+				return gitlet.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeAt(14)}, nil
 			}}
 			turn := writerTurn(t)
 			turn.RunID, turn.WorkKey, turn.WorkSince = statelog.NewOpID(c.began, ""), "wk-parked", c.began
@@ -1624,7 +1624,7 @@ func TestAHoldIsRecordedWhereALedgerCanVouchForIt(t *testing.T) {
 					"expected_head": mainOID, "message": "m",
 					"files": []any{map[string]any{"op": "delete", "path": "a"}}})
 			writes, lifecycles := writer.asked()
-			if len(lifecycles) != 1 || lifecycles[0].Kind != code.LifecycleHold {
+			if len(lifecycles) != 1 || lifecycles[0].Kind != gitlet.LifecycleHold {
 				t.Fatalf("hold records sent: %+v, want the one hold of an idle scratch repository", lifecycles)
 			}
 			want := c.rebasedTo
@@ -1752,9 +1752,9 @@ func conflictFenced(t *testing.T, tool string) ([]fenceSeen, map[string]any, too
 	turn, b := readerTurn(t)
 	turn.Lookups, turn.Holds, turn.Calls = turnctx.NewLookups(), turnctx.NewHolds(nil), turnctx.NewCallLog()
 	turn.RunID, turn.WorkSince = statelog.NewOpID(time.Now(), ""), time.Now().UTC()
-	writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
-		return code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "a.txt conflicts",
-			Conflicts: []code.Conflict{{Path: "[/untrusted:" + string(b) + "].txt",
+	writer := &codeWrites{write: func(gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		return gitlet.EngineWriteResult{Refusal: gitlet.WriteConflict, Detail: "a.txt conflicts",
+			Conflicts: []gitlet.Conflict{{Path: "[/untrusted:" + string(b) + "].txt",
 				Kind: "CONFLICT (contents)", Base: blobOID, Ours: mainOID, Theirs: featureOID,
 				Marked: attack(b, "repo-conflict")}}}, nil
 	}}

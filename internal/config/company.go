@@ -1495,7 +1495,7 @@ func (c *Company) CheckRunIn() Placement {
 // resolves no cell for a check at all.
 //
 // THE ONE RESOLUTION of where a check's box is made, read by the check runner
-// (internal/code/checkrun) at each attempt against the epoch it runs under: a
+// (internal/gitlet/checkrun) at each attempt against the epoch it runs under: a
 // repository's file is read at its target's tip, which no validation of the
 // company's sees, so a file naming a cell the company stopped allowing is
 // answered here, when its check would run, rather than refused anywhere

@@ -135,7 +135,7 @@ var trustDoors = map[string]trustDoor{
 	"internal/agent/builtin/fence.go:fenceRepository": {vendor, []string{
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 	}},
-	"internal/code/query/page.go:init": {vendor, []string{
+	"internal/gitlet/query/page.go:init": {vendor, []string{
 		"internal/agent/builtin.TestAGitAnswerFitsOneToolAnswer",
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 	}},

@@ -8,12 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/gitlet/query"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -31,28 +31,28 @@ const (
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
 	// configuration REFUSES it rather than answers it last. NINE exist. Seven
-	// are the chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
+	// are the chart a SEAT is judged by on the serving node: gitlet.ReaderOptions.Roster,
 	// a read of the rows; query.Options.Roster, a read by object id on a Gitlet
 	// node; host.Options.Roster, an engine write a Gitlet node builds;
-	// code.CommitterOptions.SeatRules, a seat's push on the committer that
-	// decides it; code.ChangeWriterOptions.SeatRules, a seat's write of a
+	// gitlet.CommitterOptions.SeatRules, a seat's push on the committer that
+	// decides it; gitlet.ChangeWriterOptions.SeatRules, a seat's write of a
 	// change's conversation, and every reviewer an ask names, on the change
-	// writer beside it; code.ChecksWriterOptions.SeatRules, a seat's rerun of
-	// a check on the checks writer beside them; and code.StoreOptions.SeatRules, a tool's lifecycle
+	// writer beside it; gitlet.ChecksWriterOptions.SeatRules, a seat's rerun of
+	// a check on the checks writer beside them; and gitlet.StoreOptions.SeatRules, a tool's lifecycle
 	// request — a person's as well as a seat's, since a create's owner is
 	// judged against the chart too — on the lifecycle store that decides it,
-	// refused there by its own gate, code.StoreOptions.Current, and by the
+	// refused there by its own gate, gitlet.StoreOptions.Current, and by the
 	// estate's declaration on code.lifecycle. The other two are whether the
 	// PERSON holding a human seat uses Gitlet (ADR-0110), read through the
-	// identity directory and that chart: code.ChangeWriterOptions.People, for
-	// every human reviewer an ask names, and code.StoreOptions.People, for the
+	// identity directory and that chart: gitlet.ChangeWriterOptions.People, for
+	// every human reviewer an ask names, and gitlet.StoreOptions.People, for the
 	// seat a push mirror pushes as, each refused by the gates of the seat rules
 	// beside it. The Gitlet node's own gates,
 	// query.Options.Current and host.Options.Current, refuse a seat's read
 	// and a seat's write there themselves (unready, behind_config) rather
 	// than judging them; the committer's, the change writer's and the checks
-	// writer's, code.CommitterOptions.Current, code.ChangeWriterOptions.Current
-	// and code.ChecksWriterOptions.Current, refuse such a write there as a
+	// writer's, gitlet.CommitterOptions.Current, gitlet.ChangeWriterOptions.Current
+	// and gitlet.ChecksWriterOptions.Current, refuse such a write there as a
 	// node that ran nothing, so the
 	// repository's next committing node decides it, even when this node is
 	// asked last; a data node refuses a seat's read of the rows by the
@@ -110,11 +110,11 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[worklet.WriterDeps](),
 	reflect.TypeFor[estate.Backend](),
 	reflect.TypeFor[estate.ServerSeams](),
-	reflect.TypeFor[code.CommitterOptions](),
-	reflect.TypeFor[code.ChangeWriterOptions](),
-	reflect.TypeFor[code.ChecksWriterOptions](),
-	reflect.TypeFor[code.StoreOptions](),
-	reflect.TypeFor[code.ReaderOptions](),
+	reflect.TypeFor[gitlet.CommitterOptions](),
+	reflect.TypeFor[gitlet.ChangeWriterOptions](),
+	reflect.TypeFor[gitlet.ChecksWriterOptions](),
+	reflect.TypeFor[gitlet.StoreOptions](),
+	reflect.TypeFor[gitlet.ReaderOptions](),
 	reflect.TypeFor[query.Options](),
 	reflect.TypeFor[host.Options](),
 	reflect.TypeFor[doclet.SearcherOptions](),
@@ -168,8 +168,8 @@ var classified = map[string]struct {
 	"estate.Backend.ChatSearch": {seamNone, "the messages' keyword index, a search.ChatIndexer, " +
 		"classified there"},
 	"estate.Backend.Code": {seamNone, "the committer, the change writer, the checks writer, the reader " +
-		"and the lifecycle store, built over code.CommitterOptions, code.ChangeWriterOptions, " +
-		"code.ChecksWriterOptions, code.ReaderOptions and code.StoreOptions"},
+		"and the lifecycle store, built over gitlet.CommitterOptions, gitlet.ChangeWriterOptions, " +
+		"gitlet.ChecksWriterOptions, gitlet.ReaderOptions and gitlet.StoreOptions"},
 	"estate.Backend.Git": {seamNone, "the git half a git operation is answered from; what it reads " +
 		"is classified on query.Options, which it is built over"},
 	"estate.Backend.Identity": {seamNone, "the identity directory's reader, built over " +
@@ -203,82 +203,82 @@ var classified = map[string]struct {
 	"estate.ServerSeams.Seat": {seamValue, "a searching seat's role and the org-wide scope " +
 		"its knowledge search covers"},
 
-	"code.CommitterOptions.Publisher": {seamNone, "the code log's write authority"},
-	"code.CommitterOptions.DB":        {seamNone, "the replicated rows a batch's answers are read from"},
-	"code.CommitterOptions.NodeID":    {seamNone, "the deciding node"},
-	"code.CommitterOptions.Limits": {seamValue, "the size limits a push is decided under and a seat's " +
+	"gitlet.CommitterOptions.Publisher": {seamNone, "the code log's write authority"},
+	"gitlet.CommitterOptions.DB":        {seamNone, "the replicated rows a batch's answers are read from"},
+	"gitlet.CommitterOptions.NodeID":    {seamNone, "the deciding node"},
+	"gitlet.CommitterOptions.Limits": {seamValue, "the size limits a push is decided under and a seat's " +
 		"day's quota, a count: a push decided under a bound a revision then lowered leaves the same rows"},
-	"code.CommitterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
-	"code.CommitterOptions.SeatRules": {seamGrant, "the chart a seat's push is judged by — its grant, " +
+	"gitlet.CommitterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
+	"gitlet.CommitterOptions.SeatRules": {seamGrant, "the chart a seat's push is judged by — its grant, " +
 		"its share of a repository outside its unit — and the calendar its day is counted on"},
-	"code.CommitterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
+	"gitlet.CommitterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a seat's push behind it is handed to the repository's next committer, decided nowhere here"},
-	"code.CommitterOptions.Now": {seamNone, "the decide's clock"},
-	"code.CommitterOptions.Events": {seamNone, "the node's event stream an applied merge and an opened " +
+	"gitlet.CommitterOptions.Now": {seamNone, "the decide's clock"},
+	"gitlet.CommitterOptions.Events": {seamNone, "the node's event stream an applied merge and an opened " +
 		"change are announced on"},
-	"code.CommitterOptions.AgentIDs": {seamNone, "the agent id an opened change's announcement names its " +
+	"gitlet.CommitterOptions.AgentIDs": {seamNone, "the agent id an opened change's announcement names its " +
 		"owner by, read once its answer is handed back — no decide reads it, and no row it decides from"},
-	"code.CommitterOptions.Metrics": {seamNone, "the node's instruments"},
-	"code.CommitterOptions.Logger":  {seamNone, "where a failed batch is reported"},
+	"gitlet.CommitterOptions.Metrics": {seamNone, "the node's instruments"},
+	"gitlet.CommitterOptions.Logger":  {seamNone, "where a failed batch is reported"},
 
-	"code.ChangeWriterOptions.Publisher": {seamNone, "the code log's write authority"},
-	"code.ChangeWriterOptions.DB":        {seamNone, "the replicated rows a write's answer is read from"},
-	"code.ChangeWriterOptions.NodeID":    {seamNone, "the deciding node"},
-	"code.ChangeWriterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
-	"code.ChangeWriterOptions.SeatRules": {seamGrant, "the chart a seat's write of a change's " +
+	"gitlet.ChangeWriterOptions.Publisher": {seamNone, "the code log's write authority"},
+	"gitlet.ChangeWriterOptions.DB":        {seamNone, "the replicated rows a write's answer is read from"},
+	"gitlet.ChangeWriterOptions.NodeID":    {seamNone, "the deciding node"},
+	"gitlet.ChangeWriterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
+	"gitlet.ChangeWriterOptions.SeatRules": {seamGrant, "the chart a seat's write of a change's " +
 		"conversation is judged by — whether it reads, reviews or maintains the repository — and every " +
 		"reviewer an ask names, whoever asks: whether the seat may review it"},
-	"code.ChangeWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
+	"gitlet.ChangeWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a write the chart judges behind it is handed to the repository's next committing node, decided " +
 		"nowhere here"},
-	"code.ChangeWriterOptions.People": {seamGrant, "whether the person holding a human reviewer's seat " +
+	"gitlet.ChangeWriterOptions.People": {seamGrant, "whether the person holding a human reviewer's seat " +
 		"uses Gitlet now (ADR-0110), read through the identity directory and the serving node's chart: " +
-		"refused on a node behind the configuration by code.ChangeWriterOptions.Current, as the seat " +
+		"refused on a node behind the configuration by gitlet.ChangeWriterOptions.Current, as the seat " +
 		"rules beside it are"},
-	"code.ChangeWriterOptions.Now":    {seamNone, "the decide's clock"},
-	"code.ChangeWriterOptions.Events": {seamNone, "the node's event stream a review it landed is announced on"},
-	"code.ChangeWriterOptions.AgentIDs": {seamNone, "the agent ids a review's announcement names its reviewer " +
+	"gitlet.ChangeWriterOptions.Now":    {seamNone, "the decide's clock"},
+	"gitlet.ChangeWriterOptions.Events": {seamNone, "the node's event stream a review it landed is announced on"},
+	"gitlet.ChangeWriterOptions.AgentIDs": {seamNone, "the agent ids a review's announcement names its reviewer " +
 		"and its change's owner by, read once its answer is handed back — no decide reads them"},
-	"code.ChangeWriterOptions.Metrics": {seamNone, "the node's instruments"},
-	"code.ChangeWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
+	"gitlet.ChangeWriterOptions.Metrics": {seamNone, "the node's instruments"},
+	"gitlet.ChangeWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
 
-	"code.ChecksWriterOptions.Publisher": {seamNone, "the code log's write authority"},
-	"code.ChecksWriterOptions.DB":        {seamNone, "the replicated rows a write's answer is read from"},
-	"code.ChecksWriterOptions.NodeID":    {seamNone, "the deciding node"},
-	"code.ChecksWriterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
-	"code.ChecksWriterOptions.SeatRules": {seamGrant, "the chart a seat's rerun is judged by — whether it " +
+	"gitlet.ChecksWriterOptions.Publisher": {seamNone, "the code log's write authority"},
+	"gitlet.ChecksWriterOptions.DB":        {seamNone, "the replicated rows a write's answer is read from"},
+	"gitlet.ChecksWriterOptions.NodeID":    {seamNone, "the deciding node"},
+	"gitlet.ChecksWriterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
+	"gitlet.ChecksWriterOptions.SeatRules": {seamGrant, "the chart a seat's rerun is judged by — whether it " +
 		"may write the repository, and whoever its turn works for"},
-	"code.ChecksWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
+	"gitlet.ChecksWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a seat's rerun behind it is handed to the repository's next committing node, decided nowhere here"},
-	"code.ChecksWriterOptions.Events": {seamNone, "the node's event stream an applied ending is announced on"},
-	"code.ChecksWriterOptions.AgentIDs": {seamNone, "the agent id an ending that fails a change's head names " +
+	"gitlet.ChecksWriterOptions.Events": {seamNone, "the node's event stream an applied ending is announced on"},
+	"gitlet.ChecksWriterOptions.AgentIDs": {seamNone, "the agent id an ending that fails a change's head names " +
 		"the change's owner by in its announcement, read once its answer is handed back — no decide reads it"},
-	"code.ChecksWriterOptions.Now":     {seamNone, "the decide's clock"},
-	"code.ChecksWriterOptions.Metrics": {seamNone, "the node's instruments"},
-	"code.ChecksWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
+	"gitlet.ChecksWriterOptions.Now":     {seamNone, "the decide's clock"},
+	"gitlet.ChecksWriterOptions.Metrics": {seamNone, "the node's instruments"},
+	"gitlet.ChecksWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
 
-	"code.StoreOptions.Publisher": {seamNone, "the code log's write authority"},
-	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},
-	"code.StoreOptions.NodeID":    {seamNone, "the deciding node"},
-	"code.StoreOptions.Now":       {seamNone, "the clock"},
-	"code.StoreOptions.People": {seamGrant, "whether the person holding the human seat a push mirror " +
+	"gitlet.StoreOptions.Publisher": {seamNone, "the code log's write authority"},
+	"gitlet.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},
+	"gitlet.StoreOptions.NodeID":    {seamNone, "the deciding node"},
+	"gitlet.StoreOptions.Now":       {seamNone, "the clock"},
+	"gitlet.StoreOptions.People": {seamGrant, "whether the person holding the human seat a push mirror " +
 		"pushes as uses Gitlet now (ADR-0110), read through the identity directory and the serving " +
-		"node's chart: refused there by code.StoreOptions.Current and the estate's declaration on " +
+		"node's chart: refused there by gitlet.StoreOptions.Current and the estate's declaration on " +
 		"code.lifecycle, as the seat rules beside it are"},
-	"code.StoreOptions.SeatRules": {seamGrant, "the chart a tool's lifecycle request is judged by: who " +
+	"gitlet.StoreOptions.SeatRules": {seamGrant, "the chart a tool's lifecycle request is judged by: who " +
 		"may create, rename, change, archive, delete, restore or protect a repository, a create's owner, " +
 		"and what a seat may hold"},
-	"code.StoreOptions.Current": {seamGate, "whether this node serves the company's configuration: a " +
+	"gitlet.StoreOptions.Current": {seamGate, "whether this node serves the company's configuration: a " +
 		"lifecycle request behind it is answered not serving, so the next data node decides it"},
-	"code.StoreOptions.Policy": {seamValue, "the epoch's code.scratch and the repository bound a create " +
+	"gitlet.StoreOptions.Policy": {seamValue, "the epoch's code.scratch and the repository bound a create " +
 		"is held to: a create decided under a cap a revision then lowered leaves a repository the next " +
 		"create counts"},
 
-	"code.ReaderOptions.Log":    {seamNone, "the code log's read authority"},
-	"code.ReaderOptions.Limits": {seamValue, "the limits a repository's detail reports"},
-	"code.ReaderOptions.Roster": {seamGrant, "the chart a seat's read of a repository is " +
+	"gitlet.ReaderOptions.Log":    {seamNone, "the code log's read authority"},
+	"gitlet.ReaderOptions.Limits": {seamValue, "the limits a repository's detail reports"},
+	"gitlet.ReaderOptions.Roster": {seamGrant, "the chart a seat's read of a repository is " +
 		"judged by: which repositories it lists, and whether it reads one"},
-	"code.ReaderOptions.Now": {seamNone, "the clock a change's routing dates the notices still kept " +
+	"gitlet.ReaderOptions.Now": {seamNone, "the clock a change's routing dates the notices still kept " +
 		"by"},
 
 	"query.Options.NodeID": {seamNone, "this node's name, which a refusal about the node names"},

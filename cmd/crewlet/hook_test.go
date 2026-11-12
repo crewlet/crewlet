@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 

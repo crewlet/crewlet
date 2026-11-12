@@ -19,10 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -121,7 +121,7 @@ func TestTheRetentionGuideStatesEveryLogsGateReserve(t *testing.T) {
 	labels := map[string]string{
 		worklet.Domain{}.Name():         "tracker",
 		doclet.Domain{}.Name():          "knowledge base",
-		code.Domain{}.Name():            "Gitlet",
+		gitlet.Domain{}.Name():          "Gitlet",
 		artifactsdomain.Domain{}.Name(): "artifacts",
 		artifactdata.Domain{}.Name():    "artifact datastore",
 		iamdomain.Domain{}.Name():       "identity estate",

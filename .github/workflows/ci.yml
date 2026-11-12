@@ -441,7 +441,7 @@ jobs:
   #
   # THE SHARD COUNTS are one line each, `RACE_SHARDS` and `SOLO_SHARDS` below,
   # and every leg, name and proof follows them. Four for the parallel half,
-  # because it cannot end before its longest package, internal/code/host
+  # because it cannot end before its longest package, internal/gitlet/host
   # (1,735 of the 8,905 seconds), and at four that package's shard carries
   # about 490 package-seconds beside it, which the runner's three other
   # workers finish in minutes. Three would put 1,233 beside it; five or six
@@ -450,10 +450,10 @@ jobs:
   # before its first test.
   #
   # Two for the solo half, whose shards run at -p 1 and so take the SUM of
-  # their packages. internal/code/codecluster alone is 738 to 861 of its 1,266
+  # their packages. internal/gitlet/gitletcluster alone is 738 to 861 of its 1,266
   # to 1,527 seconds (main's runs 41714027577 to 41745668479), so two shards
   # put it on one runner and the other nine on the other, and a third would
-  # leave codecluster's shard the floor and buy nothing. Each shard is a runner
+  # leave gitletcluster's shard the floor and buy nothing. Each shard is a runner
   # of its own, so no two of these packages ever share a machine: sharding
   # takes contention away rather than adding any (`go doc ./internal/solo`).
   #

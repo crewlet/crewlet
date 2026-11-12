@@ -13,7 +13,7 @@ import (
 
 // THE CODE SEARCH SCATTER, wired (internal/codesearch): every Gitlet node answers
 // topics.CodeSearch for the repositories a request assigns it, searching them
-// through its own git reads (internal/code/query) as the request's asker, and
+// through its own git reads (internal/gitlet/query) as the request's asker, and
 // any node asks it ([Engine.CodeSearch]).
 //
 // REGISTERED WITH THE HOST AND WITHDRAWN BEFORE IT STOPS ([Engine.buildGitletHost],

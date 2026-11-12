@@ -3,9 +3,9 @@ package engine
 import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
 )
 
 // THE CODE TOOLS' ENGINE WIRING: the same deps for a seat's registry and for
@@ -134,7 +134,7 @@ func (e *Engine) cloneURL(name string) string {
 // hold a copy.
 type codePlacement struct {
 	router *estate.Router
-	limits func() code.Limits
+	limits func() gitlet.Limits
 }
 
 func (p codePlacement) Maintainer(repoID string, liveObjects int64) (string, error) {

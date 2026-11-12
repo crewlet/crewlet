@@ -165,7 +165,7 @@ function bigFileRead(url: URL) {
 
 /**
  * A page of the big file's blame: a range of at most 500 lines (the engine's
- * code.MaxBlameLines), the default 500 from its first line, paged within it
+ * gitlet.MaxBlameLines), the default 500 from its first line, paged within it
  * BIG_BLAME_PAGE_LINES at a time — a range any wider, or a cursor outside it,
  * refused as the engine refuses them.
  */

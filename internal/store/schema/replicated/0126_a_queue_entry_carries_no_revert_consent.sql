@@ -4,7 +4,7 @@
 -- at the enqueue, to the engine reverting a landing of the change that broke
 -- its target, where the target's merge gate allowed one. Consented
 -- auto-revert is not part of the engine: nothing reverts a landing on its
--- own, a broken target wakes the people who can act (internal/code's
+-- own, a broken target wakes the people who can act (internal/gitlet's
 -- target_broken) and code_revert_change reverts a change when one of them
 -- asks. No gate field allows a consent and no enqueue carries one, so the
 -- column could only ever hold the 0 every applier wrote — a column every row

@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -224,7 +224,7 @@ func noPurge(t *testing.T, e *Engine, end uint64, why string) {
 	if writes := codeLogWrites(t, e, end); len(writes) != 0 {
 		t.Fatalf("%s: the code-retention duty appended %v to the code log, want nothing", why, writes)
 	}
-	if web := mustRepo(t, e, "web"); web.Status != code.RepoStatusDeleted {
+	if web := mustRepo(t, e, "web"); web.Status != gitlet.RepoStatusDeleted {
 		t.Fatalf("%s: web is %s, want it still deleted and restorable", why, web.Status)
 	}
 }
@@ -267,7 +267,7 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 		// applies it: web is deleted, and a day is past at once.
 		removed := activateRevision(t, e, retainedFor(1, ""))
 		tickApplies(t, e, r, removed)
-		if web := mustRepo(t, e, "web"); web.Status != code.RepoStatusDeleted {
+		if web := mustRepo(t, e, "web"); web.Status != gitlet.RepoStatusDeleted {
 			t.Fatalf("the premise: the revision removing web leaves it %s", web.Status)
 		}
 		// THEN LENGTHENS IT TO A MONTH, to save web — and this node has
@@ -287,7 +287,7 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 		// failure — what a refused apply leaves.
 		r.publish(applyProgress{applied: removed, target: saved, attempts: 1})
 		for range 2 {
-			p.declined(t, code.RetentionInterval, "a turn on a node that failed the fleet's revision")
+			p.declined(t, gitlet.RetentionInterval, "a turn on a node that failed the fleet's revision")
 		}
 		noPurge(t, e, end, "a holder behind the fleet's revision")
 		if n := p.gaveBacks.Load(); n != 3 {
@@ -307,7 +307,7 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 		// no second line.
 		r.publish(applyProgress{applied: removed, target: saved,
 			behindSince: r.now().Add(-configplane.LagGrace)})
-		p.declined(t, code.RetentionInterval, "a turn on a node behind for longer than propagation")
+		p.declined(t, gitlet.RetentionInterval, "a turn on a node behind for longer than propagation")
 		if lines := p.lines(t); len(lines) != 2 {
 			t.Fatalf("a lag confirmed by the grace rather than a failure logged %+v, want it "+
 				"read as the same reason", lines[2:])
@@ -356,7 +356,7 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 			t.Fatalf("reconcile tick: %v", err)
 		}
 		applyReconciled(t, e, retainedFor(1, ""))
-		if web := mustRepo(t, e, "web"); web.Status != code.RepoStatusDeleted {
+		if web := mustRepo(t, e, "web"); web.Status != gitlet.RepoStatusDeleted {
 			t.Fatalf("the premise: the company without web leaves it %s", web.Status)
 		}
 
@@ -413,7 +413,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 			t.Fatalf("a node restarted on the fleet's revision, with no reconciler yet, ran %v and "+
 				"purged %v, want web purged: it serves the revision the pointer names", ran, report.Purged)
 		}
-		if got := p.duty.wait(); got != code.RetentionInterval {
+		if got := p.duty.wait(); got != gitlet.RetentionInterval {
 			t.Fatalf("a turn that ran its pass asks again after %v, want the duty's tick", got)
 		}
 		if lines := p.lines(t); len(lines) != 0 {
@@ -461,7 +461,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 			t.Fatal("the turn after the reconciler's first tick ran no pass on a node serving " +
 				"the fleet's revision")
 		}
-		if got := d.wait(); got != code.RetentionInterval {
+		if got := d.wait(); got != gitlet.RetentionInterval {
 			t.Fatalf("a turn that ran its pass asks again after %v, want the duty's tick", got)
 		}
 	})
@@ -511,7 +511,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 // (TestTheEngineSweepsEveryShortHorizonTable) holds per-node deletes alone and
 // could not name this one. So the duty the engine builds is held here to it: a
 // pass on a node serving the fleet's revision removes a repository's retired
-// row past code.RetireGrace by one record on the repository's subject, keeps a
+// row past gitlet.RetireGrace by one record on the repository's subject, keeps a
 // row still inside the grace, and says what it swept at INFO.
 //
 // THE ROWS ARE SEEDED into the node's estate, a day and an hour old and an
@@ -533,7 +533,7 @@ func TestARetirementIsSweptByARecordTheEngineRuns(t *testing.T) {
 	tickApplies(t, e, fleetReconciler(t, e), epoch)
 	web := mustRepo(t, e, "web").ID
 	now := time.Now()
-	seedRetiredPack(t, e, web, 1, now.Add(-code.RetireGrace-time.Hour))
+	seedRetiredPack(t, e, web, 1, now.Add(-gitlet.RetireGrace-time.Hour))
 	seedRetiredPack(t, e, web, 2, now.Add(-time.Hour))
 
 	p := newPurgeProbe(e)
@@ -543,7 +543,7 @@ func TestARetirementIsSweptByARecordTheEngineRuns(t *testing.T) {
 		t.Fatalf("the duty's turn ran %v and reported %+v; want a pass that swept the one row past "+
 			"its grace", ran, report)
 	}
-	if writes := codeLogWrites(t, e, end); !slices.Equal(writes, []code.Subject{code.RepoSubject(web)}) {
+	if writes := codeLogWrites(t, e, end); !slices.Equal(writes, []gitlet.Subject{gitlet.RepoSubject(web)}) {
 		t.Fatalf("the pass appended %v to the code log, want one record on web's subject", writes)
 	}
 	var due, inside int

@@ -1689,7 +1689,7 @@ var sessionQuestions = []sessionQuestion{
 	// file, a history, a blame, a diff and a comparison at HEAD — what `ref`
 	// defaults to, and what these ask — each ONE resolve of its refs at it,
 	// the default branch answered from the repository's row in the same read
-	// (code.HeadRef), with no read of the repository ahead of it; and a
+	// (gitlet.HeadRef), with no read of the repository ahead of it; and a
 	// commit's changes, read first.
 	{"code_refs", []string{"code"}, map[string]any{"name": "web"},
 		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },

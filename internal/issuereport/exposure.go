@@ -23,7 +23,7 @@ var beforeAuthentication = []Component{
 	// Vendor deliveries and app landings, read to check their signatures.
 	"internal/api/webhooks",
 	// A box's git and code reads, and the receive path a push takes.
-	"internal/code/host",
+	"internal/gitlet/host",
 	// An exchange another node received and relayed here.
 	"internal/httprelay",
 	// A key set an issuer publishes.

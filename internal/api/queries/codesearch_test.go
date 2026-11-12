@@ -9,9 +9,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -103,7 +103,7 @@ func TestTheDashboardReadsWhatACodeSearchAnswers(t *testing.T) {
 	set := codesearch.RepoSet{Count: 1, Names: []string{"web"}}
 	s := &stubCode{search: func(codesearch.Query) (codesearch.Answer, error) {
 		return codesearch.Answer{
-			Hits: []codesearch.Hit{{Repo: "web", SearchHit: code.SearchHit{Path: "go.mod", PathB64: "Z28ubW9k",
+			Hits: []codesearch.Hit{{Repo: "web", SearchHit: gitlet.SearchHit{Path: "go.mod", PathB64: "Z28ubW9k",
 				Line: 1, Text: "module web", Blob: stubOID}}},
 			Tips: map[string]string{"web": stubOID},
 			Coverage: codesearch.Coverage{Searched: 1, NotIndexed: set, Building: set,
@@ -188,7 +188,7 @@ func omittedWhenEmpty(typ reflect.Type) []string {
 // a person writes it, filters first; `mode`, `ignore_case` and one `repo`,
 // `path` and `ref` ride beside it, a repo or a path widening the search once
 // however often it is named and a ref beside a different ref: refused, as two
-// ref: filters are; `limit` is held to code.MaxSearchHits; and the search is
+// ref: filters are; `limit` is held to gitlet.MaxSearchHits; and the search is
 // asked as the caller. A refusal over one repository names it: a repo:
 // nobody declared is `not_found` (`not_declared`) naming that repository.
 //
@@ -241,7 +241,7 @@ func TestCodeSearchReadsOneGrammar(t *testing.T) {
 	}
 
 	s = &stubCode{search: func(q codesearch.Query) (codesearch.Answer, error) {
-		return codesearch.Answer{}, &codesearch.RepoRefusal{Repo: "nope", Err: code.ErrRepoNotFound}
+		return codesearch.Answer{}, &codesearch.RepoRefusal{Repo: "nope", Err: gitlet.ErrRepoNotFound}
 	}}
 	_, err = askNative(t, queries.Sources{Code: s}, "code_search", map[string]any{"q": "repo:web repo:nope needle"})
 	var missing *queries.NotFound

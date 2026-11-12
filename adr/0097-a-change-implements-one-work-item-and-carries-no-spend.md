@@ -1,8 +1,8 @@
 # ADR-0097: A change implements one work item and carries no spend
 
 - **Status:** accepted
-- **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestChangesHaveNoSpendColumns`, `internal/code.TestTheCodeFeedDerivesOnlyWakes`, `internal/engine.TestACodeWakeNamesItsWorkItem`
+- **Authority:** `internal/gitlet`
+- **Enforced-by:** `internal/gitlet.TestChangesHaveNoSpendColumns`, `internal/gitlet.TestTheCodeFeedDerivesOnlyWakes`, `internal/engine.TestACodeWakeNamesItsWorkItem`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -13,10 +13,10 @@ owner named at the open or an edit set since (`code_changes.work_backend`,
 the code domain has a column for the tokens or the money a turn spent.
 
 Every wake about a change names its item. The code log's feed
-(`code.FeedGroup`, `crewlet-code-feed`) derives a seat's wake from the
+(`gitlet.FeedGroup`, `crewlet-code-feed`) derives a seat's wake from the
 committed record and the routing its writer stamped on it, the item among it
-(`code.ChangeRouting.WorkItem`), and the wake's metadata carries the item
-(`code.Prompt.WorkItem`), so the turn the wake starts is charged to that item
+(`gitlet.ChangeRouting.WorkItem`), and the wake's metadata carries the item
+(`gitlet.Prompt.WorkItem`), so the turn the wake starts is charged to that item
 by [ADR-0022](0022-a-turn-is-charged-to-one-work-item.md)'s trigger rule —
 the review a change was asked for, the fix its findings asked for, the
 answer to its conflict are all work on the item the change implements. A

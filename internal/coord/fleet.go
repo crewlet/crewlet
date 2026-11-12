@@ -124,7 +124,7 @@ const (
 
 	// MaxCounterWindow is the longest window [Counter.Allow] counts: a DAY,
 	// the window of the remote check cells' box-time cap
-	// (internal/code/checkrun), the longest any caller counts in. A backend
+	// (internal/gitlet/checkrun), the longest any caller counts in. A backend
 	// keeps a window's count until the window has closed, and a window up to
 	// a day long is kept beside the valve's seconds in a store whose age
 	// outlasts it — never in theirs, which reaps a second-wide window within

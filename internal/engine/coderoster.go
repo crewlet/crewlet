@@ -4,12 +4,12 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// codeRoster is the chart as [code.Roster] reads it — every grant a seat holds
-// on a repository is judged by it ([code.GrantOf]) — built ONCE an epoch from
+// codeRoster is the chart as [gitlet.Roster] reads it — every grant a seat holds
+// on a repository is judged by it ([gitlet.GrantOf]) — built ONCE an epoch from
 // its organization: O(units + seats) once, then O(1) a seat and O(depth) a
 // lead chain or a subtree test. Once, because a listing judges every row it
 // returns: a page of 500 repositories asked of a walk of the chart a row is
@@ -45,7 +45,7 @@ type codeRoster struct {
 	units *org.Index
 	// seats is every seat by handle, the first in the chart's walk order
 	// where two share one (the order [org.Index.SeatByHandle] answers in).
-	seats map[string]code.RosterSeat
+	seats map[string]gitlet.RosterSeat
 	// parent is each unit's parent; a top-level unit has none.
 	parent map[*org.Unit]*org.Unit
 	// lead is each unit's EFFECTIVE lead's handle ([org.Organization.EffectiveLead]:
@@ -59,7 +59,7 @@ type codeRoster struct {
 func newCodeRoster(o *org.Organization) codeRoster {
 	r := codeRoster{
 		units:  o.Index(),
-		seats:  map[string]code.RosterSeat{},
+		seats:  map[string]gitlet.RosterSeat{},
 		parent: map[*org.Unit]*org.Unit{},
 		lead:   map[*org.Unit]string{},
 	}
@@ -71,8 +71,8 @@ func newCodeRoster(o *org.Organization) codeRoster {
 		if _, taken := r.seats[handle]; taken || handle == "" {
 			return
 		}
-		r.seats[handle] = code.RosterSeat{Handle: handle, Human: role.IsHuman(),
-			Tier: code.Tier(role.CodeAccess), Unit: unit.Key()}
+		r.seats[handle] = gitlet.RosterSeat{Handle: handle, Human: role.IsHuman(),
+			Tier: gitlet.Tier(role.CodeAccess), Unit: unit.Key()}
 	}
 	// ROOT SEATS FIRST, then each unit's own seats parents before children:
 	// the order [org.Organization.AllRoles] walks, so a handle two seats
@@ -102,7 +102,7 @@ func newCodeRoster(o *org.Organization) codeRoster {
 }
 
 // Seat is the seat with this handle.
-func (r codeRoster) Seat(handle string) (code.RosterSeat, bool) {
+func (r codeRoster) Seat(handle string) (gitlet.RosterSeat, bool) {
 	s, ok := r.seats[handle]
 	return s, ok
 }
@@ -153,13 +153,13 @@ func rosterOf(c *Company) func() codeRoster {
 // from its activation on this node, with no restart — or nil where no epoch is
 // installed: NO CHART, which says nothing about the seat. Its two readers
 // refuse a seat's read on nil as a refusal about THIS NODE — the code reader
-// [code.ErrNotServing] ([code.ReaderOptions.Roster]), so the estate's walk
-// asks a data node that holds a chart, and the git reads [code.ErrGitUnready]
-// with [code.UnreadyNoChart], so another Gitlet node is asked — and never answer
+// [gitlet.ErrNotServing] ([gitlet.ReaderOptions.Roster]), so the estate's walk
+// asks a data node that holds a chart, and the git reads [gitlet.ErrGitUnready]
+// with [gitlet.UnreadyNoChart], so another Gitlet node is asked — and never answer
 // that the seat stands nowhere, which only a chart that denies it may answer,
-// nor that every seat reads. [code.GrantOf] itself still holds an agent to
+// nor that every seat reads. [gitlet.GrantOf] itself still holds an agent to
 // none on a nil roster, for a judge that asks it with no chart.
-func (e *Engine) codeRoster() code.Roster {
+func (e *Engine) codeRoster() gitlet.Roster {
 	c := e.Company()
 	if c == nil || c.roster == nil {
 		return nil

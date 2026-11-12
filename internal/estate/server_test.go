@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // askerSlack is what each request these cases send leaves the serving node
-// beyond the reply's margin (code.ReplyMargin): a wait the margin bounds ends
+// beyond the reply's margin (gitlet.ReplyMargin): a wait the margin bounds ends
 // that far in, and one it does not runs on to the deadline a whole margin
 // later — inside every budget a serving node's waits have of their own.
 const askerSlack = 400 * time.Millisecond
@@ -42,7 +42,7 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), code.ReplyMargin+askerSlack)
+	ctx, cancel := context.WithTimeout(t.Context(), gitlet.ReplyMargin+askerSlack)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
 	req, sealed := signed(t, fleetEnvelopes, request{Op: opTasks.spec.name, Args: args,
@@ -53,10 +53,10 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 		t.Fatalf("%s answered %d replies (%v) before its asker stopped listening, want one", node,
 			len(replies), err)
 	}
-	if left != code.ReplyMargin {
+	if left != gitlet.ReplyMargin {
 		t.Fatalf("%s answered %v before its asker stops listening, want the reply's %v margin to "+
 			"the nanosecond — a wait that runs to the deadline answers nobody", node, left,
-			code.ReplyMargin)
+			gitlet.ReplyMargin)
 	}
 	rep, why, err := fleetEnvelopes.openReply(replies[0], req.ID)
 	if err != nil || why != "" {
@@ -80,9 +80,9 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 // heard with all 1.4 s left, not the margin.
 func TestANodeBehindItsAskersFloorSaysSoWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
-	if code.ReplyMargin+askerSlack >= statelog.ReadBudget {
+	if gitlet.ReplyMargin+askerSlack >= statelog.ReadBudget {
 		t.Fatalf("the premise: the asker's %v must end before the floor wait's own %v would",
-			code.ReplyMargin+askerSlack, statelog.ReadBudget)
+			gitlet.ReplyMargin+askerSlack, statelog.ReadBudget)
 	}
 	inBubble(t, func(t *testing.T) {
 		f := newFleet(t, "data-a")

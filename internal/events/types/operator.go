@@ -94,7 +94,7 @@ func (o AuditOutcome) failed() bool { return o == AuditRefused || o == AuditFail
 // which is what records the call — so the transport is the ONLY thing about
 // the record that depends on which surface a person used. The fifth is a
 // person's own git client, whose every push Gitlet records
-// (internal/code/host).
+// (internal/gitlet/host).
 const (
 	// TransportAct is the dashboard's write surface, `/operator/act`.
 	TransportAct = "act"
@@ -137,7 +137,7 @@ type AssistantRef struct {
 // over MCP, the human write surface's tool-backed routes and the Dashboard
 // Assistant's approved writes call the same catalogue, and a person's git
 // client pushes through Gitlet — a person transport of its own
-// (ADR-0085), one record a push (internal/code/host). An audit that depended
+// (ADR-0085), one record a push (internal/gitlet/host). An audit that depended
 // on which one a person used would be missing whichever surface nobody
 // tested.
 //

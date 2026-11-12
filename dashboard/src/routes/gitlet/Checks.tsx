@@ -40,7 +40,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 /**
  * The windows this screen offers: a DAY first, since a check is read while
  * its change waits, and at most the thirty days an ended attempt's rows are
- * kept (`code.CheckHistory`) — a wider window would only ever be empty past
+ * kept (`gitlet.CheckHistory`) — a wider window would only ever be empty past
  * them. The hour and the day are the buckets: a minute bucket over a day is
  * 1,440 bars for a page of fifty attempts.
  */

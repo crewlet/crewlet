@@ -180,91 +180,93 @@ func (r *recordedLate) late() (*SessionCapture, LogAnswer, error) {
 // ADR-0073 declines to, and the late record is refused.
 func TestACaptureRecordedAfterItsSettleIsKeptThroughTheTurnsEnd(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	store := newTakerStore()
-	rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
-	applied := &appliedLog{log: executordomaintest.Open(t)}
-	rig.coordinator.sessions, rig.coordinator.restore = applied, applied
-	// THE SHIPPED RECORD BUDGET: every record here is applied to a real store,
-	// which a loaded runner can hold past the rig's fifth of a second.
-	rig.coordinator.recordBudget = sessionRecordBudget
-	turn := uuid.NewString()
-	run := rig.launchKept(t, turn)
+	inBubble(t, func(t *testing.T) {
+		ctx := t.Context()
+		store := newTakerStore()
+		rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
+		applied := &appliedLog{log: executordomaintest.Open(t)}
+		rig.coordinator.sessions, rig.coordinator.restore = applied, applied
+		// THE SHIPPED RECORD BUDGET: every record here is applied to a real store,
+		// which a loaded runner can hold past the rig's fifth of a second.
+		rig.coordinator.recordBudget = sessionRecordBudget
+		turn := uuid.NewString()
+		run := rig.launchKept(t, turn)
 
-	// node-a's PROCESS TOOK THE JOB'S FINAL CAPTURE under its taker lease,
-	// uploaded it and sent its record, and stopped before the log took it.
-	lease := claimTaker(t, store, takingProcess)
-	begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
-		State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
-		TakerEpoch: lease.Epoch, Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
-		ArchiveFormat: FakeArchiveFormat, Through: new(0), SeatBudget: 64 << 20}
-	if took, err := rig.pending.StampCapture(ctx, turn, begun); err != nil || !took {
-		t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
-	}
-	body := []byte("node-a's session of the job")
-	object := objstore.Object{Key: objstore.KeyAt(begun.At), Hash: objstore.HashOf(body), Size: int64(len(body))}
-	handedOn := begun
-	handedOn.Object, handedOn.ObjectHash, handedOn.ObjectSize = object.Key.String(), string(object.Hash), object.Size
-	handedOn.ContentKey = "k1"
-	late := &recordedLate{PendingStore: rig.coordinator.pending, land: func(ctx context.Context) (LogAnswer, error) {
-		return applied.Capture(ctx, CaptureRecord{Handle: run.AgentHandle, Turn: turn,
-			ConversationKey: run.ConversationKey, WorkKey: run.WorkKey, Object: object, Stamp: handedOn})
-	}}
-	rig.coordinator.pending = late
-	lapse(store)
-
-	// THE LOST TURN'S END, by the ending's own retry: its wait settles node-a's
-	// capture, the late record lands, and the end is recorded after both.
-	rig.coordinator.finish(ctx, rig.get(turn), ending{fence: fenceOf(run),
-		note: &failureNote{reason: string(LossBoxGone), detail: "the box is gone from its host"}})
-	for range 3 {
-		if rig.fireRetries() == 0 {
-			break
+		// node-a's PROCESS TOOK THE JOB'S FINAL CAPTURE under its taker lease,
+		// uploaded it and sent its record, and stopped before the log took it.
+		lease := claimTaker(t, store, takingProcess)
+		begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+			State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
+			TakerEpoch: lease.Epoch, Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
+			ArchiveFormat: FakeArchiveFormat, Through: new(0), SeatBudget: 64 << 20}
+		if took, err := rig.pending.StampCapture(ctx, turn, begun); err != nil || !took {
+			t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
 		}
-	}
+		body := []byte("node-a's session of the job")
+		object := objstore.Object{Key: objstore.KeyAt(begun.At), Hash: objstore.HashOf(body), Size: int64(len(body))}
+		handedOn := begun
+		handedOn.Object, handedOn.ObjectHash, handedOn.ObjectSize = object.Key.String(), string(object.Hash), object.Size
+		handedOn.ContentKey = "k1"
+		late := &recordedLate{PendingStore: rig.coordinator.pending, land: func(ctx context.Context) (LogAnswer, error) {
+			return applied.Capture(ctx, CaptureRecord{Handle: run.AgentHandle, Turn: turn,
+				ConversationKey: run.ConversationKey, WorkKey: run.WorkKey, Object: object, Stamp: handedOn})
+		}}
+		rig.coordinator.pending = late
+		lapse(store)
 
-	settled, landed, landErr := late.late()
-	switch {
-	case settled == nil:
-		t.Fatal("the end's wait settled nothing, so no record landed after a settle")
-	case settled.State != CaptureRefused || !settled.sameTake(begun) ||
-		!strings.Contains(settled.Reason, "its taker node-a stopped before it was kept"):
-		t.Fatalf("the settle stamped %+v, want node-a's begun take refused for its stopped taker", *settled)
-	case landErr != nil || landed != LogLanded:
-		t.Fatalf("the late record = %s, %v; want the log to take it after the settle", landed, landErr)
-	}
-	ends := applied.ended()
-	if len(ends) != 1 {
-		t.Fatalf("recorded %d ends, want the lost turn's one", len(ends))
-	}
-	unkept := ends[0].Ending.Unkept
-	if unkept == nil || unkept.LaunchSeq != begun.LaunchSeq || unkept.CaptureSeq != begun.CaptureSeq ||
-		!strings.Contains(unkept.Reason, "its taker node-a stopped before it was kept") {
-		t.Fatalf("the end names %+v unkept, want the settled stamp, at its own place", unkept)
-	}
+		// THE LOST TURN'S END, by the ending's own retry: its wait settles node-a's
+		// capture, the late record lands, and the end is recorded after both.
+		rig.coordinator.finish(ctx, rig.get(turn), ending{fence: fenceOf(run),
+			note: &failureNote{reason: string(LossBoxGone), detail: "the box is gone from its host"}})
+		for range 3 {
+			if rig.fireRetries() == 0 {
+				break
+			}
+		}
 
-	read, err := applied.log.Session(ctx, run.AgentHandle, turn)
-	if err != nil {
-		t.Fatalf("the next read of the turn's row: %v", err)
-	}
-	row := read.Session
-	switch {
-	case !row.Ended() || !row.HasObject() || row.Object.Key.String() != object.Key.String():
-		t.Fatalf("the turn's row is %+v, want it ended and naming the late capture's object", row)
-	case row.LaunchSeq != unkept.LaunchSeq || row.CaptureSeq != unkept.CaptureSeq:
-		t.Fatalf("the row keeps (launch %d, capture %d), want the place the end named unkept", row.LaunchSeq,
-			row.CaptureSeq)
-	case row.Unkept() != nil || row.NotKept() != "":
-		t.Errorf("the row tells its own kept session %+v unkept and says %q", row.Unkept(), row.NotKept())
-	case read.Head != turn:
-		t.Errorf("the row's own read names %q its conversation's head, want the turn", read.Head)
-	}
-	head, err := applied.log.Head(ctx, run.AgentHandle, run.ConversationKey)
-	if err != nil || head.Session == nil || head.Session.Turn != turn ||
-		head.Session.Object.Key.String() != object.Key.String() {
-		t.Errorf("the conversation's next turn is handed %+v (%v), want the late capture", head.Session, err)
-	}
-	if _, found, _ := rig.pending.Get(ctx, turn); found {
-		t.Error("the lost run's record outlived its end")
-	}
+		settled, landed, landErr := late.late()
+		switch {
+		case settled == nil:
+			t.Fatal("the end's wait settled nothing, so no record landed after a settle")
+		case settled.State != CaptureRefused || !settled.sameTake(begun) ||
+			!strings.Contains(settled.Reason, "its taker node-a stopped before it was kept"):
+			t.Fatalf("the settle stamped %+v, want node-a's begun take refused for its stopped taker", *settled)
+		case landErr != nil || landed != LogLanded:
+			t.Fatalf("the late record = %s, %v; want the log to take it after the settle", landed, landErr)
+		}
+		ends := applied.ended()
+		if len(ends) != 1 {
+			t.Fatalf("recorded %d ends, want the lost turn's one", len(ends))
+		}
+		unkept := ends[0].Ending.Unkept
+		if unkept == nil || unkept.LaunchSeq != begun.LaunchSeq || unkept.CaptureSeq != begun.CaptureSeq ||
+			!strings.Contains(unkept.Reason, "its taker node-a stopped before it was kept") {
+			t.Fatalf("the end names %+v unkept, want the settled stamp, at its own place", unkept)
+		}
+
+		read, err := applied.log.Session(ctx, run.AgentHandle, turn)
+		if err != nil {
+			t.Fatalf("the next read of the turn's row: %v", err)
+		}
+		row := read.Session
+		switch {
+		case !row.Ended() || !row.HasObject() || row.Object.Key.String() != object.Key.String():
+			t.Fatalf("the turn's row is %+v, want it ended and naming the late capture's object", row)
+		case row.LaunchSeq != unkept.LaunchSeq || row.CaptureSeq != unkept.CaptureSeq:
+			t.Fatalf("the row keeps (launch %d, capture %d), want the place the end named unkept", row.LaunchSeq,
+				row.CaptureSeq)
+		case row.Unkept() != nil || row.NotKept() != "":
+			t.Errorf("the row tells its own kept session %+v unkept and says %q", row.Unkept(), row.NotKept())
+		case read.Head != turn:
+			t.Errorf("the row's own read names %q its conversation's head, want the turn", read.Head)
+		}
+		head, err := applied.log.Head(ctx, run.AgentHandle, run.ConversationKey)
+		if err != nil || head.Session == nil || head.Session.Turn != turn ||
+			head.Session.Object.Key.String() != object.Key.String() {
+			t.Errorf("the conversation's next turn is handed %+v (%v), want the late capture", head.Session, err)
+		}
+		if _, found, _ := rig.pending.Get(ctx, turn); found {
+			t.Error("the lost run's record outlived its end")
+		}
+	})
 }

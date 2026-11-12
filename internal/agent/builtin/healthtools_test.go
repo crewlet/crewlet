@@ -19,14 +19,14 @@ import (
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/cache"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -126,47 +126,47 @@ func (s *statusAsker) questions() []builtin.CodeStatusAsk {
 // grantHost is Gitlet answering a read of one repository by name as
 // the repository's grant does: the repository, a refusal of the asker, a
 // refusal of the seat the read is made for, or no such repository — the asker
-// judged first, as code.JudgeRead does — and counts the reads it was asked and
+// judged first, as gitlet.JudgeRead does — and counts the reads it was asked and
 // whom each was made for.
 type grantHost struct {
 	mu      sync.Mutex
-	repos   map[string]code.RepoRef // name -> the repository it names
-	refused map[string]bool         // names whose repository the asker may not read
-	above   map[string]bool         // names whose repository a ceiling seat may not read
+	repos   map[string]gitlet.RepoRef // name -> the repository it names
+	refused map[string]bool           // names whose repository the asker may not read
+	above   map[string]bool           // names whose repository a ceiling seat may not read
 	reads   int
 	madeFor []string // each read's ceiling seat, in the order asked
 }
 
 var _ builtin.CodeReader = (*grantHost)(nil)
 
-func (h *grantHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (h *grantHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.reads++
 	h.madeFor = append(h.madeFor, q.CeilingSeat)
-	if q.Kind != code.ReadRepo {
-		return code.ReadAnswer{}, fmt.Errorf("%w: kind %s", code.ErrInvalid, q.Kind)
+	if q.Kind != gitlet.ReadRepo {
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: kind %s", gitlet.ErrInvalid, q.Kind)
 	}
 	if h.refused[q.Repo] {
-		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrNotPermitted, q.Repo)
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrNotPermitted, q.Repo)
 	}
 	if q.CeilingSeat != "" && h.above[q.Repo] {
-		return code.ReadAnswer{}, fmt.Errorf("%w: seat %q holds no access to repository %q",
-			code.ErrAboveCeiling, q.CeilingSeat, q.Repo)
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: seat %q holds no access to repository %q",
+			gitlet.ErrAboveCeiling, q.CeilingSeat, q.Repo)
 	}
 	ref, ok := h.repos[q.Repo]
 	if !ok {
-		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, q.Repo)
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound, q.Repo)
 	}
-	return code.ReadAnswer{Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: ref}}}, nil
+	return gitlet.ReadAnswer{Repo: &gitlet.RepoDetail{RepoSummary: gitlet.RepoSummary{RepoRef: ref}}}, nil
 }
 
-func (*grantHost) ResolveRef(context.Context, code.RefQuery) (code.RefAnswer, error) {
-	return code.RefAnswer{}, errors.New("grantHost resolves no ref")
+func (*grantHost) ResolveRef(context.Context, gitlet.RefQuery) (gitlet.RefAnswer, error) {
+	return gitlet.RefAnswer{}, errors.New("grantHost resolves no ref")
 }
 
-func (*grantHost) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, errors.New("grantHost reads no git")
+func (*grantHost) GitRead(context.Context, gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return gitlet.GitAnswer{}, errors.New("grantHost reads no git")
 }
 
 func (*grantHost) FloorOf(string) statelog.Position { return statelog.Position{} }
@@ -446,7 +446,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 			Hot: []host.RepoStatus{{RepoHeat: heat}}}},
 		Coverage: coverage,
 	}}
-	repos := &grantHost{repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}}}
+	repos := &grantHost{repos: map[string]gitlet.RepoRef{"site": {ID: siteID, Name: "site"}}}
 	catalogue = healthTools(builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)}, chart)
 	status2 := healthAnswer(t, callTool(asAdmin(), t, catalogue[builtin.CodeStatusTool], nil))
 	if got := keysOf(t, status2); !slices.Equal(got, []string{"coverage", "hot", "nodes"}) {
@@ -617,7 +617,7 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 		}},
 	}}}
 	repos := &grantHost{
-		repos:   map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}, "vault": {ID: vaultID, Name: "vault"}},
+		repos:   map[string]gitlet.RepoRef{"site": {ID: siteID, Name: "site"}, "vault": {ID: vaultID, Name: "vault"}},
 		refused: map[string]bool{"vault": true},
 	}
 	_, chart := healthChart(t)
@@ -667,12 +667,12 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 // with r and the day's rising — so the hottest of the hour is the first and
 // the hottest of the day the last — and the Gitlet nodes take them in turn. And
 // every repository it names, by name, for Gitlet resolving them all.
-func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.RepoRef) {
+func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]gitlet.RepoRef) {
 	report := builtin.CodeStatusReport{Statuses: make([]host.CodeStatus, nodes)}
-	repos := map[string]code.RepoRef{}
+	repos := map[string]gitlet.RepoRef{}
 	total := nodes * per
 	for r := range total {
-		ref := code.RepoRef{ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", r), Name: fmt.Sprintf("repo-%03d", r)}
+		ref := gitlet.RepoRef{ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", r), Name: fmt.Sprintf("repo-%03d", r)}
 		repos[ref.Name] = ref
 		s := &report.Statuses[r%nodes]
 		s.Node = fmt.Sprintf("git-%d", r%nodes)
@@ -693,21 +693,21 @@ type stalledGrants struct {
 
 var _ builtin.CodeReader = (*stalledGrants)(nil)
 
-func (h *stalledGrants) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+func (h *stalledGrants) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	h.reads.Add(1)
 	if q.Repo == h.failing {
-		return code.ReadAnswer{}, fmt.Errorf("%w: the chart this node judges by is behind", code.ErrNotServing)
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: the chart this node judges by is behind", gitlet.ErrNotServing)
 	}
 	<-ctx.Done()
-	return code.ReadAnswer{}, ctx.Err()
+	return gitlet.ReadAnswer{}, ctx.Err()
 }
 
-func (*stalledGrants) ResolveRef(context.Context, code.RefQuery) (code.RefAnswer, error) {
-	return code.RefAnswer{}, errors.New("stalledGrants resolves no ref")
+func (*stalledGrants) ResolveRef(context.Context, gitlet.RefQuery) (gitlet.RefAnswer, error) {
+	return gitlet.RefAnswer{}, errors.New("stalledGrants resolves no ref")
 }
 
-func (*stalledGrants) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, errors.New("stalledGrants reads no git")
+func (*stalledGrants) GitRead(context.Context, gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return gitlet.GitAnswer{}, errors.New("stalledGrants reads no git")
 }
 
 func (*stalledGrants) FloorOf(string) statelog.Position { return statelog.Position{} }
@@ -763,7 +763,7 @@ func TestACodeStatusJudgementEndsAtItsFirstFailedRead(t *testing.T) {
 		if out.err != nil {
 			t.Fatalf("code_status: %v", out.err)
 		}
-		if tools.RefusalOf(out.got) != tools.RefusalUnavailable || !errors.Is(out.got.Cause, code.ErrNotServing) {
+		if tools.RefusalOf(out.got) != tools.RefusalUnavailable || !errors.Is(out.got.Cause, gitlet.ErrNotServing) {
 			t.Errorf("answered %s %q (cause %v), want unavailable over the failed read",
 				tools.RefusalOf(out.got), out.got.Output, out.got.Cause)
 		}
@@ -946,7 +946,7 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 // and the colleague may not — counted withheld beside the one the seat itself
 // may not read — and that repository asked by name is refused as the code
 // tools refuse a read above the ceiling, forbidden with the ceiling's reason
-// over code.ErrAboveCeiling, and never asked of the Gitlet nodes. A turn nobody
+// over gitlet.ErrAboveCeiling, and never asked of the Gitlet nodes. A turn nobody
 // woke, and one a person woke, read for nobody but the seat — a person bounds
 // nothing, since every person reads every repository — and the person who
 // woke it need not hold admin: whoever woke the turn is decided on
@@ -980,7 +980,7 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 	build := func(t *testing.T, requester string, senders []types.CanonicalIdentity) setup {
 		t.Helper()
 		s := setup{asker: &statusAsker{report: report}, repos: &grantHost{
-			repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"},
+			repos: map[string]gitlet.RepoRef{"site": {ID: siteID, Name: "site"},
 				"infra": {ID: infraID, Name: "infra"}, "vault": {ID: vaultID, Name: "vault"}},
 			refused: map[string]bool{"vault": true},
 			above:   map[string]bool{"infra": true},
@@ -1055,7 +1055,7 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 		}
 		var refused *builtin.DecisionRefused
 		if !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling ||
-			!errors.Is(got.Cause, code.ErrAboveCeiling) || errors.Is(got.Cause, code.ErrNotPermitted) {
+			!errors.Is(got.Cause, gitlet.ErrAboveCeiling) || errors.Is(got.Cause, gitlet.ErrNotPermitted) {
 			t.Errorf("the refusal's cause is %v, want the ceiling's reason over ErrAboveCeiling", got.Cause)
 		}
 		if len(s.asker.asked) != 0 {
@@ -1414,7 +1414,7 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 		t.Fatalf("the fleet's report is %d bytes whole; the case needs one far past an answer", len(whole))
 	}
 	_, chart := healthChart(t)
-	repos := &grantHost{repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}}}
+	repos := &grantHost{repos: map[string]gitlet.RepoRef{"site": {ID: siteID, Name: "site"}}}
 	asker := &statusAsker{report: report}
 	tool := healthTools(builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)},
 		chart)[builtin.CodeStatusTool]

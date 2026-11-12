@@ -9,6 +9,6 @@
 -- WHO HAS TO AGREE ON IT: nobody. An index moves no row.
 CREATE INDEX tracker_history_turn_idx ON tracker_history (turn_id, kind) WHERE turn_id != ''; -- read by worklet's Reader.TurnsMoved (turnmoves.go)
 CREATE INDEX pages_history_turn_idx ON pages_history (turn_id, kind) WHERE turn_id != '';     -- read by doclet's Reader.TurnsMoved (turnmoves.go)
-CREATE INDEX code_pushes_turn_idx ON code_pushes (turn_id) WHERE turn_id != '';               -- read by code's Reader.TurnsMoved (turnmoves.go)
-CREATE INDEX code_changes_turn_idx ON code_changes (created_turn) WHERE created_turn != '';   -- read by code's Reader.TurnsMoved (turnmoves.go)
-CREATE INDEX code_reviews_turn_idx ON code_reviews (turn_id) WHERE turn_id != '';             -- read by code's Reader.TurnsMoved (turnmoves.go)
+CREATE INDEX code_pushes_turn_idx ON code_pushes (turn_id) WHERE turn_id != '';               -- read by gitlet's Reader.TurnsMoved (turnmoves.go)
+CREATE INDEX code_changes_turn_idx ON code_changes (created_turn) WHERE created_turn != '';   -- read by gitlet's Reader.TurnsMoved (turnmoves.go)
+CREATE INDEX code_reviews_turn_idx ON code_reviews (turn_id) WHERE turn_id != '';             -- read by gitlet's Reader.TurnsMoved (turnmoves.go)

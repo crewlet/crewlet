@@ -45,7 +45,7 @@
 // the routes, the git transport, the read and write tools, the review and
 // merge verbs, a check's report, an import, a purge and the inbox's code
 // marks — so a principal without it is refused here before any repository is
-// read, and the repository's grant (code.GrantOf, ADR-0088) decides among the
+// read, and the repository's grant (gitlet.GrantOf, ADR-0088) decides among the
 // holders; who read a repository and the Gitlet nodes' caches stay admin's.
 // A repository and a change are Gitlet's kinds ([AppFor]), so a cross-app
 // answer shows neither to a reader without the app.
@@ -360,7 +360,7 @@ const (
 	// KindRepository is one of the company's repositories on Gitlet, and
 	// everything read as it: its refs, its files and history, its pushes, its
 	// merge queues and its checks. WHICH repository is the grant the serving
-	// node derives (code.GrantOf, ADR-0088), never this table's; the kind is
+	// node derives (gitlet.GrantOf, ADR-0088), never this table's; the kind is
 	// here so an answer that mixes apps holds a repository's rows to Gitlet
 	// ([AppFor]).
 	KindRepository ObjectKind = "repository"

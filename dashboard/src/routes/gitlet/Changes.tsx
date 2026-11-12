@@ -23,7 +23,7 @@
  * # What a row says is the engine's judgement
  *
  * A live change's READINESS is judged by the engine on the read that answered
- * it, against its one chart (`code.ReadinessOf`): its preconditions, how many
+ * it, against its one chart (`gitlet.ReadinessOf`): its preconditions, how many
  * are met, and the sentence of the first that is not. The row's Meter counts
  * them, and its title is that sentence — never counted here from rows this
  * screen does not hold.

@@ -103,7 +103,7 @@ func (d SeatPauseDeps) wired() bool {
 // and its executor in its box at once, the box reclaimed, what it had spent
 // charged and its turn closed as stopped. An executor parked on a person's
 // question stays parked behind the pause, and until the seat is resumed every
-// Gitlet node refuses its executors' box pushes (internal/code/host's box
+// Gitlet node refuses its executors' box pushes (internal/gitlet/host's box
 // admission) and their bridge sessions refuse their calls of every tool not
 // proven read-only (internal/api/mcpbridge), both through the engine's
 // stoppedBy. The node holding the seat carries that out from its own watched

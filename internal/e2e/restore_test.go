@@ -18,11 +18,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/backup/backuptest"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -242,7 +242,7 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 	ring := fleetRing(t)
 	fakeA := s3fake.Start(t, restoreBucket)
 	a := startNode(t, nodeSpec{company: withCode(repo), boot: restoreBoot(fakeA.URL, t.TempDir(), ring)})
-	awaitRepo(t, repo, code.RepoStatusActive, a)
+	awaitRepo(t, repo, gitlet.RepoStatusActive, a)
 
 	// FOUR PUSHES, SO FOUR PACKS — one object each: three commits on main,
 	// one carrying an incompressible blob so one pack is not trivially
@@ -252,7 +252,7 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 	// bound to nobody fetches only. The restored node is only read from below,
 	// which needs no binding.
 	bindDev(t, a)
-	dev := codetest.PersonWithToken(t, e2eDevToken)
+	dev := gitlettest.PersonWithToken(t, e2eDevToken)
 	work := dev.Init()
 	push := func(refspecs ...string) {
 		t.Helper()
@@ -353,7 +353,7 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 		restoreBoot(fakeC.URL, kept, ring)(&boot)
 		e, err := engine.New(t.Context(), engine.Options{
 			Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
-			Environment: nodeEnvironment(nil), GitHook: codetest.HookCommand(t),
+			Environment: nodeEnvironment(nil), GitHook: gitlettest.HookCommand(t),
 		})
 		if err == nil {
 			e.Stop(t.Context())

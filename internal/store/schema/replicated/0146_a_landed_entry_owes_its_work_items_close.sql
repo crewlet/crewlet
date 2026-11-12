@@ -12,7 +12,7 @@
 -- close_op makes the owed close a fact of the rows, and names the operation
 -- it is made under: the land's apply sets it, on each entry it lands that
 -- asked the close of a change carrying a work item, to
--- code.CloseWorkItemOpID of the landing's own operation, and a close_settled
+-- gitlet.CloseWorkItemOpID of the landing's own operation, and a close_settled
 -- record clears it to '' once the home's close ended — closed, or
 -- definitively not, which that record names on the change. The operation is
 -- on the row because nothing else the row holds names the landing's, and the
@@ -26,7 +26,7 @@
 -- landing's few until its home's next turn: the listing and a repository's
 -- owed closes are each one seek of it, and an entry that owes nothing never
 -- enters it. An owed entry is an ENDED one, so the queue's history removes it
--- past code.QueueHistory as it removes every ended entry: a close no home
+-- past gitlet.QueueHistory as it removes every ended entry: a close no home
 -- could make in all that time is given up with the row.
 --
 -- Class: code_queue stays REPRODUCIBLE: the column and the index are written

@@ -17,8 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/clientsource"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -76,19 +76,19 @@ func atlasSources(code queries.CodeSource) queries.Sources {
 // atlasCode is Gitlet serving one repository, api, with one check on its
 // default branch.
 func atlasCode() *stubCode {
-	return &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+	return &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 		switch q.Kind {
-		case code.ReadRepos:
-			return code.ReadAnswer{Repos: []code.RepoSummary{{RepoRef: code.RepoRef{Name: "api", Status: code.RepoStatusActive,
-				DefaultBranch: "main", Visibility: code.VisibilityCompany,
-				Owner: code.Owner{Kind: code.OwnerUnit, Ref: "platform"}}, Head: stubOID}}}, nil
-		case code.ReadRepo:
-			return code.ReadAnswer{Repo: stubRepo(q.Repo)}, nil
-		case code.ReadChecks:
-			return code.ReadAnswer{Checks: []code.CheckRow{{CheckKey: code.CheckKey{Name: "test"}, Repo: q.Repo,
-				State: code.CheckStatePassed}}}, nil
+		case gitlet.ReadRepos:
+			return gitlet.ReadAnswer{Repos: []gitlet.RepoSummary{{RepoRef: gitlet.RepoRef{Name: "api", Status: gitlet.RepoStatusActive,
+				DefaultBranch: "main", Visibility: gitlet.VisibilityCompany,
+				Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "platform"}}, Head: stubOID}}}, nil
+		case gitlet.ReadRepo:
+			return gitlet.ReadAnswer{Repo: stubRepo(q.Repo)}, nil
+		case gitlet.ReadChecks:
+			return gitlet.ReadAnswer{Checks: []gitlet.CheckRow{{CheckKey: gitlet.CheckKey{Name: "test"}, Repo: q.Repo,
+				State: gitlet.CheckStatePassed}}}, nil
 		}
-		return code.ReadAnswer{}, errors.New("not asked of the atlas")
+		return gitlet.ReadAnswer{}, errors.New("not asked of the atlas")
 	}}
 }
 

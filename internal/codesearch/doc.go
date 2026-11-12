@@ -3,7 +3,7 @@
 //
 // # One repository is a read; more are one scatter
 //
-// A search naming ONE repository is a git read of it (code.GitSearch) through
+// A search naming ONE repository is a git read of it (gitlet.GitSearch) through
 // the keyed walk every read by object id takes: the repository's Gitlet nodes
 // asked in their order, the walk moving on from a node that cannot answer,
 // and the answer or the refusal of the node that does is the search's.
@@ -17,7 +17,7 @@
 // of a subject sees every request). A repository is assigned to the FIRST node
 // of its git order (estate.Router.GitOrders, one reading of who serves git for
 // the whole table): its home, and for an indexed repository the first of the
-// code.IndexHolders keeping its index. A repository its node did not answer —
+// gitlet.IndexHolders keeping its index. A repository its node did not answer —
 // silent, unready, failing, or holding no key the request is signed under — is
 // asked once more of the NEXT node of its order, in a second round: an indexed
 // repository's runner-up is the second holder, which keeps an index too. No
@@ -27,7 +27,7 @@
 // # Each node searches as the asker, so the request is signed
 //
 // A serving node carries the request out AS THE ASKER IT NAMES: each
-// repository is read through internal/code/query, which syncs the copy and
+// repository is read through internal/gitlet/query, which syncs the copy and
 // JUDGES THE ASKER'S GRANT from that node's own chart, as every read by object
 // id is judged. So the request is an instruction, and the scatter is a
 // signedask.Channel ([Channel]): an unsigned one would let any client of the
@@ -99,5 +99,5 @@
 // node's searches together read at most [ScatterReads] of its repositories at
 // once — all but one unit of its seat git-work share, which each read's git
 // takes, so a seat's ordinary read always finds one a search cannot hold —
-// each under the search's own budget (code.SearchBudget).
+// each under the search's own budget (gitlet.SearchBudget).
 package codesearch

@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -36,12 +36,12 @@ func TestARefusedOrFailedWriteIsNotMoved(t *testing.T) {
 func TestAChangeConversationWriteIsClassedByWhatItWrites(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		w    code.ConversationWrite
+		w    gitlet.ConversationWrite
 		want types.CommittedChange
 	}{
-		{code.ConversationWrite{Comment: &code.Comment{}}, types.CommittedComment},
-		{code.ConversationWrite{Review: &code.Review{}}, types.CommittedCode},
-		{code.ConversationWrite{Reviewers: &code.ReviewerRequest{}}, ""},
+		{gitlet.ConversationWrite{Comment: &gitlet.Comment{}}, types.CommittedComment},
+		{gitlet.ConversationWrite{Review: &gitlet.Review{}}, types.CommittedCode},
+		{gitlet.ConversationWrite{Reviewers: &gitlet.ReviewerRequest{}}, ""},
 	} {
 		if got := conversed(tc.w); got != tc.want {
 			t.Errorf("conversed(%+v) = %q, want %q", tc.w, got, tc.want)

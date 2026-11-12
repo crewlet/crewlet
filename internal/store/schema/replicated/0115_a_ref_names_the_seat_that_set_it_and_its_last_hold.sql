@@ -2,8 +2,8 @@
 --
 -- code_refs.seat is the seat whose push — from its coding box, or an engine
 -- write in its turn — last set the ref INSIDE THAT SEAT'S OWN NAMESPACE
--- (refs/heads/seats/<handle>/…, code.SeatNamespace), written by the push apply
--- (code.seatOf) from the principal of the entry that last set the ref in the
+-- (refs/heads/seats/<handle>/…, gitlet.SeatNamespace), written by the push apply
+-- (gitlet.seatOf) from the principal of the entry that last set the ref in the
 -- record's order, and '' after every other writer: a person's or a token's
 -- push — a person's principal names the human seat they hold, and is no seat's
 -- push for it — a deletion, and a seat's push outside its own namespace. Only
@@ -13,8 +13,8 @@
 -- apply writes the column on every row it upserts.
 --
 -- code_refs.held_position is the composed position of the last HOLD record
--- naming the ref (code.Hold with a Ref): a live turn's hold on a seat's branch
--- it read or wrote unset for code.RefHoldRecordAfter or more, recorded on the
+-- naming the ref (gitlet.Hold with a Ref): a live turn's hold on a seat's branch
+-- it read or wrote unset for gitlet.RefHoldRecordAfter or more, recorded on the
 -- one subject every push to its repository arbitrates on, so that a deletion
 -- of the branch listed before the turn's read is ordered against it PER REF.
 -- Written only by a hold's apply, and never by a push's upsert, which names

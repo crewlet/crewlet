@@ -21,7 +21,7 @@ import (
 )
 
 // fetched records a record of reads of a unit repository the way the node's
-// reads ledger publishes it (types.CodeFetched, internal/code/readaudit).
+// reads ledger publishes it (types.CodeFetched, internal/gitlet/readaudit).
 func (e *events) fetched(at time.Time, read types.CodeFetched) {
 	e.t.Helper()
 	e.seq++

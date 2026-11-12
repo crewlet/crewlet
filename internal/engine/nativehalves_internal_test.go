@@ -11,10 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -126,7 +126,7 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 				want = append(want, chatlet.Source)
 			}
 			if tc.code {
-				want = append(want, code.Source)
+				want = append(want, gitlet.Source)
 			}
 			if !slices.Equal(routed, want) || len(prompts) != len(want) {
 				t.Errorf("the inbound edge routes %v with %d prompts, want %v",
