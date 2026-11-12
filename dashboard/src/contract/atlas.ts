@@ -334,6 +334,8 @@ export interface AtlasFactView {
   /** A fact of meaning only an integration or an agent has given. */
   suggested?: boolean;
   others?: AtlasClaimed[];
+  /** The member a fact of each host is of: which host's visibility this is. */
+  of?: AtlasRef;
 }
 
 /** One relation from an entry: to another entry by `to`, or to a seat, a

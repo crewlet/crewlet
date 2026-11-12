@@ -10,6 +10,7 @@ import type { Tone } from "@crewlethq/ui";
 import type {
   AtlasCoverageSource,
   AtlasFact,
+  AtlasFactView,
   AtlasHealth,
   AtlasKind,
   AtlasLane,
@@ -207,6 +208,23 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   monitor_state: "State",
   state_since: "In this state since",
 };
+
+/** The forges a repository's key names by their host. */
+const FORGE_HOSTS: Readonly<Record<string, string>> = {
+  "github.com": "GitHub",
+  "gitlab.com": "GitLab",
+};
+
+/** What a fact is called on an entry. A fact of each host says whose it is:
+ *  "Visibility on GitHub" beside "Visibility in Gitlet", never one row with
+ *  two values. A host the atlas has no name for is named by its address. */
+export function factLabel(fact: Pick<AtlasFactView, "fact" | "of">): string {
+  const label = FACTS[fact.fact];
+  if (!fact.of) return label;
+  const host = fact.of.key.split("/", 1)[0] ?? "";
+  if (host === "gitlet") return `${label} in Gitlet`;
+  return `${label} on ${FORGE_HOSTS[host] ?? host}`;
+}
 
 /** The facts of meaning, which only people and the settings decide. */
 export const MEANING: ReadonlySet<AtlasFact> = new Set(["purpose", "environment", "importance"]);
