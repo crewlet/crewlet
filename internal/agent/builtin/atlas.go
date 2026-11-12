@@ -55,9 +55,9 @@ type AtlasDeps struct {
 }
 
 // AtlasRead is one read of the atlas for one caller: Gitlet read as asker
-// where gitlet is set, every record this node reaches, and the settings it
-// runs. False where it runs no company yet.
-func (d AtlasDeps) AtlasRead(ctx context.Context, gitlet gather.GitletReads, asker code.Principal,
+// where gitlet is set (or why it is not, unread), every record this node
+// reaches, and the settings it runs. False where it runs no company yet.
+func (d AtlasDeps) AtlasRead(ctx context.Context, gitlet gather.GitletReads, unread string, asker code.Principal,
 	fresh statelog.Freshness, now time.Time) (gather.Answer, bool) {
 	if d.Settings == nil {
 		return gather.Answer{}, false
@@ -73,7 +73,7 @@ func (d AtlasDeps) AtlasRead(ctx context.Context, gitlet gather.GitletReads, ask
 	sources.Gitlet = gitlet
 	return gather.Read(ctx, sources, gather.Request{
 		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
-		Asker: asker, Fresh: fresh, Now: now,
+		Asker: asker, GitletUnread: unread, Fresh: fresh, Now: now,
 	}), true
 }
 
@@ -153,14 +153,13 @@ func (t *atlasSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	sources, asker, why := t.gitlet(ctx, turn)
 	answer := gather.Read(ctx, sources, gather.Request{
 		Company: settings.Company, Revision: settings.Revision, Deployment: settings.Deployment,
-		Asker: asker, Fresh: seatRead, Now: time.Now().UTC(),
+		Asker: asker, GitletUnread: why, Fresh: seatRead, Now: time.Now().UTC(),
 	})
-	coverage := gitletSaid(answer.Coverage, why)
 	matched := atlasMatches(answer.View.Entries, strings.TrimSpace(argString(args, "query")), kind)
 	shown := matched[:min(limit, len(matched))]
 	rendered, err := fitPages(len(shown), func(k int) (json.RawMessage, error) {
 		return json.Marshal(atlasList{Entries: shown[:k], Total: len(matched),
-			Coverage: coverage, Withheld: len(answer.Withheld)})
+			Coverage: answer.Coverage, Withheld: len(answer.Withheld)})
 	})
 	if err != nil {
 		return labelFault(ctx, t.Name(), err), nil
@@ -190,21 +189,6 @@ func (t *atlasSearch) gitlet(ctx context.Context, turn *turnctx.Turn) (
 			"code now, so no repository was read"
 	}
 	return gather.Sources{Gitlet: atlasGitlet{code: t.code, caller: caller}}, caller.asker, ""
-}
-
-// gitletSaid puts why on the Gitlet source's coverage, where the call did not
-// read it for a reason of its own rather than the read's.
-func gitletSaid(coverage []gather.Coverage, why string) []gather.Coverage {
-	if why == "" {
-		return coverage
-	}
-	out := slices.Clone(coverage)
-	for i := range out {
-		if out[i].Source == gather.SourceGitlet {
-			out[i].Complete, out[i].Reason = false, why
-		}
-	}
-	return out
 }
 
 // atlasGitlet is Gitlet as one call reads it: every query asked as the

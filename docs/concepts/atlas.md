@@ -100,11 +100,11 @@ A **signal** is something on an entry that needs attention now. It is read from 
 
 Records are read as closed projections: the fields a map needs and nothing else. An email address is never read, whether it is a vendor account's name, the account an agent's lane observed, who signed a tool server in, who ran a test or a model plan's sign-in account; ownership and use name seats.
 
-Every read says which of these sources it read in full and why not where it did not. A source that fails leaves the rest of the atlas answering.
+Every read says which of these sources it read in full and why not where it did not. A source that fails leaves the rest of the atlas answering. A company that keeps no code in Gitlet has nothing there to read, so its Gitlet is read in full for every reader, and no repository of its own is judged by pushes Gitlet never saw.
 
 ## Reading the atlas
 
-People holding the `atlas` permission read the atlas through five questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, and the counts a filter menu offers ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
+People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through five questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, and the counts a filter menu offers ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
 
 An entry only an agent reported, with nothing the engine could check behind it, is **unconfirmed**, and a read leaves it out unless it asks for it: it stays hidden until a person confirms it.
 

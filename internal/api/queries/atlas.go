@@ -25,12 +25,12 @@ import (
 )
 
 // AtlasReads is the atlas as this node reads it for one asker: the settings
-// it runs, the engine's records, and Gitlet as asker where gitlet is set;
-// false where it runs no company yet. builtin.AtlasDeps serves it, as it
-// serves the atlas tools.
+// it runs, the engine's records, and Gitlet as asker where gitlet is set or
+// why it is not read for them (unread); false where it runs no company yet.
+// builtin.AtlasDeps serves it, as it serves the atlas tools.
 type AtlasReads interface {
-	AtlasRead(ctx context.Context, gitlet gather.GitletReads, asker code.Principal, fresh statelog.Freshness,
-		now time.Time) (gather.Answer, bool)
+	AtlasRead(ctx context.Context, gitlet gather.GitletReads, unread string, asker code.Principal,
+		fresh statelog.Freshness, now time.Time) (gather.Answer, bool)
 }
 
 // atlasFresh is the read level every atlas question reads at: the
@@ -102,13 +102,10 @@ func (s Sources) atlasView(ctx context.Context, what string) (atlas.View, AtlasR
 		return atlas.View{}, AtlasRead{}, err
 	}
 	gitlet, why := s.atlasGitlet(principal)
-	answer, running := s.Atlas.AtlasRead(ctx, gitlet, codeAsker(principal), atlasFresh, s.clock())
+	answer, running := s.Atlas.AtlasRead(ctx, gitlet, why, codeAsker(principal), atlasFresh, s.clock())
 	if !running {
 		return atlas.View{}, AtlasRead{}, fmt.Errorf("%w: this node runs no company yet, so there is no "+
 			"atlas to read", ErrUnavailable)
-	}
-	if why != "" {
-		answer = answer.Unread(gather.SourceGitlet, why)
 	}
 	read := AtlasRead{Revision: answer.Revision, Coverage: answer.Coverage, Withheld: len(answer.Withheld)}
 	return atlas.For(answer.View, atlas.Reader{Admin: principal.Can(iam.GrantAdmin)}), read, nil
