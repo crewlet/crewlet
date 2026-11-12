@@ -414,6 +414,7 @@ type threadLine struct {
 type threadWire struct {
 	Type          json.RawMessage `json:"type"`
 	Subtype       json.RawMessage `json:"subtype"`
+	UUID          json.RawMessage `json:"uuid"`
 	ParentUUID    json.RawMessage `json:"parentUuid"`
 	IsSidechain   json.RawMessage `json:"isSidechain"`
 	AgentID       json.RawMessage `json:"agentId"`
@@ -453,9 +454,10 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	}, nil
 }
 
-// head holds the head's keys to their types: `type`, `subtype` and `agentId`
-// strings, `parentUuid` null or a string, `isSidechain` a boolean, each where
-// present, and a user record's `replacesSpan` a boolean where present.
+// head holds the head's keys to their types: `type`, `subtype`, `uuid` and
+// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
+// each where present, and a user record's `replacesSpan` a boolean where
+// present.
 // ANOTHER TYPE IS NO RECORD: a newer Claude Code that changes one fails toward
 // no reading, which every reader takes for "not confirmed", never for a fact.
 //
@@ -475,6 +477,9 @@ func (w threadWire) head() (threadHead, error) {
 		return threadHead{}, err
 	}
 	if h.AgentID, err = wireString("agentId", w.AgentID); err != nil {
+		return threadHead{}, err
+	}
+	if h.UUID, err = wireString("uuid", w.UUID); err != nil {
 		return threadHead{}, err
 	}
 	if w.ParentUUID != nil && !bytes.Equal(w.ParentUUID, jsonNull) && w.ParentUUID[0] != '"' {
@@ -498,10 +503,33 @@ func (w threadWire) head() (threadHead, error) {
 
 // threadHead is what EVERY reader needs of a whole line, held to its type by
 // the line's decode: what kind of record it is and where it sits, never what
-// it says, and never an id of a model's call.
+// it says, and never an id of a model's call. Beside them sits the record's
+// own uuid, which one reader reads: it says where the record sits too, as the
+// other end of the parentUuid a record after it names it by, so a uuid that is
+// no string is the line's error, as a parentUuid neither null nor a string is.
 type threadHead struct {
 	// Type and Subtype are the record's `type` and `subtype`; "" where absent.
 	Type, Subtype string
+	// UUID is the record's own `uuid`, the id a chained record after it names
+	// as its parent: "" where the key is absent, as it is on every record
+	// outside the chain (the harness's bookkeeping, at Parent), and where it
+	// is the empty string, which the layer does not tell apart. HANDED OVER AS
+	// WRITTEN, with no rule of its length or shape: every chained record
+	// measured carries a 36-byte uuid (9,806 of 9,806, and none of the 6,003
+	// records outside the chain carries the key), and its one reader holds it
+	// to a rule of its own.
+	//
+	// ITS READER is the resumed count, which bounds what a continued
+	// session's harness counts before its first request, to judge whether it
+	// may compact there. It reads the uuid on a main compact_boundary record
+	// alone, and compares the newest such boundary's with the one the
+	// launch's basis recorded, to know whether the job appended a compaction
+	// of its own: never by counting boundaries, since the harness's trim
+	// after a compaction drops every boundary before the last
+	// ([claudeLocalGCFloor]), so a thread that compacted again can hold no
+	// more of them than it did. A uuid that is absent, empty or longer than
+	// 36 bytes is no reading to it.
+	UUID string
 	// Parent is `parentUuid` AS WRITTEN: nil where the key is absent, the
 	// literal null where the record roots a chain, else the quoted uuid.
 	//

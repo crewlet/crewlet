@@ -649,17 +649,18 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 
 // EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
 // that is not one record (two values, one cut short, a value that is no
-// object) or one whose head key is of the wrong type (`type`, `subtype` and
-// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
-// and a user record's `replacesSpan` a boolean, as the brief's here) is a
-// *threadLineError naming its line, whatever keywords it holds, and the reader
-// reads on to the next line; and a whole record's head is what it says. None
-// of these lines holds a key a reader of hooks or calls looks for.
+// object) or one whose head key is of the wrong type (`type`, `subtype`,
+// `uuid` and `agentId` strings, `parentUuid` null or a string, `isSidechain` a
+// boolean, and a user record's `replacesSpan` a boolean, as the brief's here)
+// is a *threadLineError naming its line, whatever keywords it holds, and the
+// reader reads on to the next line; and a whole record's head is what it says.
+// None of these lines holds a key a reader of hooks or calls looks for.
 //
 // Mutation: decode only the lines that name a hook or a call, and every
 // broken line here reads as a record, and the records' heads as nothing; read
 // replacesSpan by its text alone, and one that is a string or null reads as a
-// record.
+// record; read the uuid by its text alone, and one that is a number, null or
+// a list reads as a record.
 func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -677,6 +678,9 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		"a null replacesSpan":                    strings.Replace(brief, `"isSidechain":false`, `"isSidechain":false,"replacesSpan":null`, 1),
 		"a numeric parentUuid":                   strings.Replace(brief, `"parentUuid":null`, `"parentUuid":7`, 1),
 		"a parentUuid that is an object":         strings.Replace(brief, `"parentUuid":null`, `"parentUuid":{}`, 1),
+		"a numeric uuid":                         strings.Replace(brief, `"uuid":"`+ctUUID(1)+`"`, `"uuid":7`, 1),
+		"a null uuid":                            strings.Replace(brief, `"uuid":"`+ctUUID(1)+`"`, `"uuid":null`, 1),
+		"a uuid that is a list":                  strings.Replace(brief, `"uuid":"`+ctUUID(1)+`"`, `"uuid":["`+ctUUID(1)+`"]`, 1),
 		"a boolean subtype":                      strings.Replace(summary, `"subtype":"stop_hook_summary"`, `"subtype":true`, 1),
 		"a numeric agentId":                      strings.Replace(prompt, `"agentId":"`+ctAgent+`"`, `"agentId":7`, 1),
 		"null":                                   "null",
@@ -707,18 +711,20 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		t.Fatalf("%d lines read as records, want %d", len(got.lines), len(names)+3)
 	}
 	for i, line := range got.lines[:len(names)] {
-		if line.N != 2*i+1 || line.Head.Type != "queue-operation" {
-			t.Errorf("the record before broken line %d reads as line %d of type %q", 2*(i+1), line.N, line.Head.Type)
+		if line.N != 2*i+1 || line.Head.Type != "queue-operation" || line.Head.UUID != "" {
+			t.Errorf("the record before broken line %d reads as line %d of type %q and uuid %q", 2*(i+1), line.N,
+				line.Head.Type, line.Head.UUID)
 		}
 	}
 	isFalse, isTrue := false, true
 	for i, want := range []threadHead{
-		{Type: "user", Parent: jsonNull, Sidechain: &isFalse},
-		{Type: "system", Subtype: hookStopSummary, Parent: []byte(`"` + ctUUID(1) + `"`), Sidechain: &isFalse},
-		{Type: "user", Parent: jsonNull, Sidechain: &isTrue, AgentID: ctAgent},
+		{Type: "user", UUID: ctUUID(1), Parent: jsonNull, Sidechain: &isFalse},
+		{Type: "system", Subtype: hookStopSummary, UUID: ctUUID(2), Parent: []byte(`"` + ctUUID(1) + `"`),
+			Sidechain: &isFalse},
+		{Type: "user", UUID: ctUUID(3), Parent: jsonNull, Sidechain: &isTrue, AgentID: ctAgent},
 	} {
 		h := got.lines[len(names)+i].Head
-		if h.Type != want.Type || h.Subtype != want.Subtype || !bytes.Equal(h.Parent, want.Parent) ||
+		if h.Type != want.Type || h.Subtype != want.Subtype || h.UUID != want.UUID || !bytes.Equal(h.Parent, want.Parent) ||
 			h.Sidechain == nil || *h.Sidechain != *want.Sidechain || h.AgentID != want.AgentID {
 			t.Errorf("record %d's head is %+v, want %+v", len(names)+i+1, h, want)
 		}
@@ -944,8 +950,8 @@ func ctAll(l threadLine) string {
 	if h.Sidechain != nil {
 		side = strconv.FormatBool(*h.Sidechain)
 	}
-	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q, replaces a span %t\n", h.Type,
-		h.Subtype, h.Parent, side, h.AgentID, h.ReplacesSpan)
+	fmt.Fprintf(&b, "head: type %q, subtype %q, uuid %q, parent %s, sidechain %s, agent %q, replaces a span %t\n",
+		h.Type, h.Subtype, h.UUID, h.Parent, side, h.AgentID, h.ReplacesSpan)
 	hook, isHook, err := l.Hook()
 	fmt.Fprintf(&b, "hook %t: record %q, event %q, firing %q, command %q, content %s, stdout %s; %v\n", isHook,
 		hook.Record, hook.Event, hook.Firing, hook.Command, hook.Content, hook.Stdout, err)
@@ -974,14 +980,14 @@ func ctAll(l threadLine) string {
 // JSON.parse: a key that differs from one the layer reads only in case is
 // another key, after that one or before it, and alone it leaves that one
 // absent; and a key written twice holds its last value. Every object the layer
-// reads is held so: a line's head and the keys only one reader reads (a
-// message, an attachment, an origin, a firing at the top, a record's own
-// toolUseResult), a hook's attachment, an origin, a message (its content and
-// its stop_reason), a message's blocks, its report of the context edits
-// applied, and each edit the report lists. So a line hands out exactly what it hands out without the other key,
-// through every accessor. 2.1.322 already spells a call's id `toolUseId` (a
-// subagent's metadata names the call that started it so), a key away from a
-// hook's firing.
+// reads is held so: a line's head (its own uuid among it) and the keys only
+// one reader reads (a message, an attachment, an origin, a firing at the top,
+// a record's own toolUseResult), a hook's attachment, an origin, a message
+// (its content and its stop_reason), a message's blocks, its report of the
+// context edits applied, and each edit the report lists. So a line hands out
+// exactly what it hands out without the other key, through every accessor.
+// 2.1.322 already spells a call's id `toolUseId` (a subagent's metadata names
+// the call that started it so), a key away from a hook's firing.
 //
 // Mutation: take a key that differs only in case for the layer's own, as
 // encoding/json's decode into a struct does (the last written winning), and
@@ -1024,6 +1030,12 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 		"a replacesSpan, then ReplacesSpan": {record: ctSpan(ctUUID(3), ctUUID(4), "false"),
 			from: `"replacesSpan":false`, to: `"replacesSpan":false,"ReplacesSpan":true`},
 		"ReplacesSpan alone": {record: brief, from: `"isSidechain":false`, to: `"isSidechain":false,"ReplacesSpan":true`},
+		"a uuid, then UUID": {record: brief, from: `"uuid":"` + ctUUID(1) + `"`,
+			to: `"uuid":"` + ctUUID(1) + `","UUID":"` + ctUUID(9) + `"`},
+		"a Uuid, then uuid": {record: brief, from: `"uuid":"` + ctUUID(1) + `"`,
+			to: `"Uuid":"` + ctUUID(9) + `","uuid":"` + ctUUID(1) + `"`},
+		"Uuid alone": {record: ctDequeue, from: `"type":"queue-operation"`,
+			to: `"type":"queue-operation","Uuid":"` + ctUUID(9) + `"`},
 		// The keys only one reader reads.
 		"a message, then Message": {record: result, from: `"uuid":"` + ctUUID(5) + `"`,
 			to: `"Message":{"role":"user","content":[{"tool_use_id":"` + other + `","type":"tool_result",` +
@@ -1089,6 +1101,8 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"cleared_tool_uses":18,"Cleared_Tool_Uses":0`},
 		// A key written twice.
 		"a type written twice": {record: retyped, from: `"type":"attachment"`, to: `"type":"user","type":"attachment"`},
+		"a uuid written twice": {record: brief, from: `"uuid":"` + ctUUID(1) + `"`,
+			to: `"uuid":"` + ctUUID(9) + `","uuid":"` + ctUUID(1) + `"`},
 		"an attachment's firing written twice": {record: hook, from: firing,
 			to: `"toolUseID":"` + other + `",` + firing},
 	} {
@@ -1212,6 +1226,55 @@ func TestAnAbsentParentIsNotANullOne(t *testing.T) {
 	if h := got.lines[3].Head; !h.Chained() || h.Root() || string(h.Parent) != `"`+ctUUID(1)+`"` {
 		t.Errorf("a chained record reads as chained %t, a root %t, its parent %s; want chained to the brief",
 			h.Chained(), h.Root(), h.Parent)
+	}
+}
+
+// A RECORD'S OWN UUID IS HANDED OVER AS WRITTEN: a chained record's uuid as it
+// writes it, a compaction's boundary's among them, the one record its reader
+// reads it on; "" on every record outside the chain, the harness's bookkeeping
+// of every kind, which carries none, though a request names an id of its own
+// and a last prompt the uuid of a record; and a uuid of another length, the
+// empty string, a short one and one far past a uuid's 36 bytes, each as
+// written, never refused or cut, since the layer holds a uuid to a string
+// alone and its reader holds it to a rule of its own.
+//
+// Mutation: leave the uuid out of the head, and every record's reads as "";
+// require one, and every record of the bookkeeping is no record; hold it to a
+// uuid's 36 bytes, and each uuid of another length is no record.
+func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
+	t.Parallel()
+	boundary := ctBoundary(ctUUID(5), ctUUID(6), ctUUID(3))
+	uuid := `"uuid":"` + ctUUID(5) + `"`
+	long := strings.Repeat("b", 4096)
+	for name, tc := range map[string]struct {
+		record, uuid string
+	}{
+		"the brief":                      {record: ctBrief(ctUUID(1)), uuid: ctUUID(1)},
+		"a model's call":                 {record: ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), uuid: ctUUID(4)},
+		"a call's result":                {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), uuid: ctUUID(5)},
+		"a hook's record":                {record: ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), uuid: ctUUID(6)},
+		"a Stop's summary":               {record: ctSummary(ctUUID(15), ctUUID(16)), uuid: ctUUID(16)},
+		"a subagent's prompt":            {record: ctSubagentPrompt(ctUUID(3)), uuid: ctUUID(3)},
+		"a compaction's boundary":        {record: boundary, uuid: ctUUID(5)},
+		"a boundary whose uuid is empty": {record: ctReplace(t, boundary, uuid, `"uuid":""`)},
+		"a boundary whose uuid is short": {record: ctReplace(t, boundary, uuid, `"uuid":"b0"`), uuid: "b0"},
+		"a boundary whose uuid is long":  {record: ctReplace(t, boundary, uuid, `"uuid":"`+long+`"`), uuid: long},
+	} {
+		if h := ctLine(t, tc.record).Head; h.UUID != tc.uuid {
+			t.Errorf("%s reads its uuid as %.60q, want %.60q", name, h.UUID, tc.uuid)
+		}
+	}
+	bookkeeping := []string{ctEnqueue, ctDequeue, ctAtisLatch, ctRequestShape, ctRequestBlob, ctRequest, ctLastPrompt,
+		ctCostState, ctToolsUsed, ctMode}
+	got := ctRead(ctThread(bookkeeping...), threadPlainMax)
+	if len(got.lines) != len(bookkeeping) || len(got.broken) != 0 {
+		t.Fatalf("%d lines of bookkeeping read and %d broken, want %d and none", len(got.lines), len(got.broken),
+			len(bookkeeping))
+	}
+	for _, line := range got.lines {
+		if line.Head.UUID != "" {
+			t.Errorf("line %d, a %s, carries no uuid and reads one as %q", line.N, line.Head.Type, line.Head.UUID)
+		}
 	}
 }
 
