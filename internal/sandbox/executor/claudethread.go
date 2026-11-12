@@ -593,10 +593,13 @@ func wireDecode(raw []byte, v any) error {
 // engine host a header and a copy for every element, hundreds of MiB, before
 // anything refused the first. Its readers: a message's content
 // ([threadLine.Message]), a reply's applied context edits
-// ([threadLine.ToolResultsCleared]), the content lists a run's event stream and
-// a person's transcript decode (claudestream.go, transcript.go), and a call's
-// result content, which the reader that tells a relaunch which of its calls a
-// kept session holds (exact telling) reads no further than its second element.
+// ([threadLine.ToolResultsCleared]), the lists a run's event stream and a
+// person's transcript of a session decode (a message's blocks,
+// [eachClaudeBlock]; a tool's answer, [toolAnswer]; an OpenCode step's items,
+// [eachOpenCodeItem]; a run's result's errors, [claudeResult.errorsSaid]),
+// and a call's result content, which the reader that tells a relaunch which
+// of its calls a kept session holds (exact telling) reads no further than its
+// second element.
 func eachElement(list json.RawMessage, each func(element json.RawMessage) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))

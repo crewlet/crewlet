@@ -223,8 +223,14 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
 // was not, one read as more entries or as fewer, one no longer read. At 2, an
 // OpenCode export's messages are read as the kinds OpenCode 2 writes them in,
-// where a build at 1 read every one of them as no entry.
-const TranscriptVersion = 2
+// where a build at 1 read every one of them as no entry. At 3, a message's
+// blocks and a step's items are read by their keys exactly as written, as
+// JSON.parse, which both harnesses read their records with, reads them, where
+// a build at 2 matched a key by case and, of a key written twice, kept the
+// last value of its field's kind: no record a release writes reads otherwise
+// (no record the probes kept holds either), and one written so reads as more
+// entries or as fewer.
+const TranscriptVersion = 3
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -1450,10 +1456,10 @@ func (b *transcriptBuilder) claudeMessage(ctx context.Context, raw json.RawMessa
 }
 
 // claudeContent reads a message's content: a string is one entry of kind, and
-// a list of blocks ([claudeBlocks]) is an entry a block — its text as kind, a
-// tool call, a tool's result. A thinking block is the model's working and no
-// entry, and so is every block of a type this build does not know; content
-// that is neither a string nor a list is said.
+// a list of blocks, read a block at a time ([eachClaudeBlock]), is an entry a
+// block: its text as kind, a tool call, a tool's result. A thinking block is
+// the model's working and no entry, and so is every block of a type this
+// build does not know; content that is neither a string nor a list is said.
 func (b *transcriptBuilder) claudeContent(ctx context.Context, raw json.RawMessage, kind EntryKind,
 	at time.Time) error {
 
@@ -1470,28 +1476,24 @@ func (b *transcriptBuilder) claudeContent(ctx context.Context, raw json.RawMessa
 	case raw[0] != '[':
 		return b.unshaped()
 	}
-	for _, block := range claudeBlocks(raw) {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+	return eachClaudeBlock(raw, func(block claudeBlock) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		var err error
 		switch block.Type {
 		case "text":
-			err = b.prose(ctx, kind, at, block.Text)
+			return b.prose(ctx, kind, at, block.Text)
 		case "tool_use":
 			b.called(block.ID, block.Name)
-			err = b.add(TranscriptEntry{Kind: EntryToolCall, At: at, Thread: b.thread,
+			return b.add(TranscriptEntry{Kind: EntryToolCall, At: at, Thread: b.thread,
 				Tool: block.Name}, compactJSON(block.Input))
 		case "tool_result":
-			err = b.add(TranscriptEntry{Kind: EntryToolResult, At: at, Thread: b.thread,
+			return b.add(TranscriptEntry{Kind: EntryToolResult, At: at, Thread: b.thread,
 				Tool: b.answered(block.ToolUseID), Failed: block.IsError},
 				claudeResultText(block.Content))
 		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // claudeTime is a record's `timestamp`, an RFC 3339 instant, or zero where it
@@ -1648,7 +1650,8 @@ type openCodeTokens struct {
 // (`SessionMessage.AssistantContent`), told apart by `type`: `text` the model
 // wrote, its `reasoning`, or a `tool` it called — the tool's Name, the call
 // as it stands, and when OpenCode recorded it, in milliseconds since the
-// epoch: when the model began it, when it ran, when it settled.
+// epoch: when the model began it, when it ran, when it settled. Read an item
+// at a time ([eachOpenCodeItem]).
 type openCodeContent struct {
 	Type  string        `json:"type"`
 	Text  string        `json:"text"`
@@ -1671,6 +1674,79 @@ type openCodeState struct {
 	Input   json.RawMessage `json:"input"`
 	Content json.RawMessage `json:"content"`
 	Error   json.RawMessage `json:"error"`
+}
+
+// openCodeItemWire is one item of a step's content as its decode leaves it
+// ([wireDecode]): each key an [openCodeContent] holds, by its exact name and
+// raw, read into the item by [openCodeItemWire.item].
+type openCodeItemWire struct {
+	Type  json.RawMessage `json:"type"`
+	Text  json.RawMessage `json:"text"`
+	Name  json.RawMessage `json:"name"`
+	State json.RawMessage `json:"state"`
+	Time  json.RawMessage `json:"time"`
+}
+
+// item is the item w holds, DECODED LOOSELY, as the export's whole decode read
+// one: a key of another kind than its field's reads as that field's zero
+// value, a call's state or its times that are no object as none, and the rest
+// of the item as written.
+func (w openCodeItemWire) item() openCodeContent {
+	item := openCodeContent{Type: looseString(w.Type), Text: looseString(w.Text), Name: looseString(w.Name)}
+	if wireObject(w.State) {
+		var state struct {
+			Status  json.RawMessage `json:"status"`
+			Input   json.RawMessage `json:"input"`
+			Content json.RawMessage `json:"content"`
+			Error   json.RawMessage `json:"error"`
+		}
+		if wireDecode(w.State, &state) == nil {
+			item.State = openCodeState{Status: looseString(state.Status), Input: state.Input,
+				Content: state.Content, Error: state.Error}
+		}
+	}
+	if wireObject(w.Time) {
+		var times struct {
+			Created   json.RawMessage `json:"created"`
+			Ran       json.RawMessage `json:"ran"`
+			Completed json.RawMessage `json:"completed"`
+		}
+		if wireDecode(w.Time, &times) == nil {
+			item.Time.Created = looseInt(times.Created)
+			item.Time.Ran = looseInt(times.Ran)
+			item.Time.Completed = looseInt(times.Completed)
+		}
+	}
+	return item
+}
+
+// eachOpenCodeItem hands each item of a step's content to each, in order, as
+// it reads it, and returns each's first error, as it returned it, having read
+// no item after it. A content that is no list has no items, and one that
+// stops decoding part way has none after the fault, which no content of a
+// message decoded whole can have ([transcriptBuilder.openCodeNext]).
+//
+// AN ITEM AT A TIME ([eachElement]), each decoded by its keys exactly as
+// written ([threadDecoding]) and loosely by type ([openCodeItemWire.item]),
+// and never the whole list first, which held an item's 160 bytes for every
+// element the list held, however small the element, before any was looked
+// at. An element that is no object is the zero item, as the whole decode left
+// it, so each is handed every element.
+func eachOpenCodeItem(content json.RawMessage, each func(openCodeContent) error) error {
+	var (
+		wire    openCodeItemWire
+		stopped error
+	)
+	// The walk's own error is no reader's: the items before it were read.
+	_ = eachElement(content, func(element json.RawMessage) error {
+		wire = openCodeItemWire{}
+		if wireObject(element) && wireDecode(element, &wire) != nil {
+			wire = openCodeItemWire{}
+		}
+		stopped = each(wire.item())
+		return stopped
+	})
+	return stopped
 }
 
 // openCodeExport reads the export document a message at a time, its other
@@ -1781,27 +1857,6 @@ func (b *transcriptBuilder) openCodeNext(ctx context.Context, dec *json.Decoder)
 	return b.openCodeMessage(ctx, m)
 }
 
-// openCodeItems is a step's content, and false where it is there and is no
-// list. Decoded loosely, an item whose field a release retyped is kept with
-// the rest of what it says.
-func openCodeItems(raw json.RawMessage) ([]openCodeContent, bool) {
-	raw = bytes.TrimSpace(raw)
-	switch {
-	case absent(raw):
-		return nil, true
-	case raw[0] != '[':
-		return nil, false
-	}
-	var items []openCodeContent
-	if err := json.Unmarshal(raw, &items); err != nil {
-		var mismatch *json.UnmarshalTypeError
-		if !errors.As(err, &mismatch) {
-			return nil, false
-		}
-	}
-	return items, true
-}
-
 // pastHeld is how a walk of an export ended: a part of it past the bound one
 // may hold is said, and ends the read where it was; every other end is
 // returned as it came.
@@ -1871,32 +1926,31 @@ func (b *transcriptBuilder) openCodeMessage(ctx context.Context, m openCodeMessa
 	return b.unread("a message of the export of no kind this read knows was not read")
 }
 
-// openCodeStep reads an assistant step's content, an item at a time: its text
-// as the model's words, and each tool it called ([transcriptBuilder.openCodeTool]).
-// Reasoning is the model's working and no entry, as Claude Code's thinking is
-// none, and so is an item of a type this build does not know; content that is
-// no list is said.
+// openCodeStep reads an assistant step's content, an item at a time
+// ([eachOpenCodeItem]): its text as the model's words, and each tool it called
+// ([transcriptBuilder.openCodeTool]). Reasoning is the model's working and no
+// entry, as Claude Code's thinking is none, and so is an item of a type this
+// build does not know; content that is no list is said.
 func (b *transcriptBuilder) openCodeStep(ctx context.Context, content json.RawMessage, at time.Time) error {
-	items, ok := openCodeItems(content)
-	if !ok {
+	content = bytes.TrimSpace(content)
+	switch {
+	case absent(content):
+		return nil
+	case content[0] != '[':
 		return b.unread("a message of the export whose content is not a list was not read")
 	}
-	for _, item := range items {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		var err error
-		switch item.Type {
-		case "text":
-			err = b.prose(ctx, EntryModel, at, item.Text)
-		case "tool":
-			err = b.openCodeTool(item, at)
-		}
-		if err != nil {
+	return eachOpenCodeItem(content, func(item openCodeContent) error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-	}
-	return nil
+		switch item.Type {
+		case "text":
+			return b.prose(ctx, EntryModel, at, item.Text)
+		case "tool":
+			return b.openCodeTool(item, at)
+		}
+		return nil
+	})
 }
 
 // openCodeTool reads one tool the model called: the call, its input as JSON,
@@ -1934,32 +1988,21 @@ func openCodeCallInput(raw json.RawMessage) string {
 	return compactJSON(raw)
 }
 
-// openCodeAnswer is what a tool answered, the list `Tool.Content` is: each
-// text item's text, a line apart, as a Claude Code tool's result reads
-// ([claudeResultText]), and each file it answered with as the words a file
-// reads in ([openCodeFileText]).
+// openCodeAnswer is what a tool answered, the list `Tool.Content` is, read an
+// item at a time ([toolAnswer]): each text item's text, a line apart, as a
+// Claude Code tool's result reads ([claudeResultText]), and each file it
+// answered with as the words a file reads in ([openCodeFileText]). "" for an
+// answer that is no list.
 func openCodeAnswer(raw json.RawMessage) string {
-	var items []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-		Mime string `json:"mime"`
-	}
-	if err := json.Unmarshal(raw, &items); err != nil {
-		var mismatch *json.UnmarshalTypeError
-		if !errors.As(err, &mismatch) {
-			return ""
+	return toolAnswer(raw, func(kind, text, mime string) (string, bool) {
+		switch kind {
+		case "text":
+			return text, strings.TrimSpace(text) != ""
+		case "file":
+			return openCodeFileText(mime), true
 		}
-	}
-	var texts []string
-	for _, item := range items {
-		switch {
-		case item.Type == "text" && strings.TrimSpace(item.Text) != "":
-			texts = append(texts, item.Text)
-		case item.Type == "file":
-			texts = append(texts, openCodeFileText(item.Mime))
-		}
-	}
-	return strings.Join(texts, "\n")
+		return "", false
+	})
 }
 
 // openCodeFileText is what a file a tool answered with reads as in text: an

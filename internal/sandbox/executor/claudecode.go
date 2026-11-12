@@ -1704,13 +1704,17 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 // the rest still read), because a field the vendor reshapes must cost that
 // field rather than the run's whole account.
 type claudeResult struct {
-	Type         string   `json:"type"`
-	Subtype      string   `json:"subtype"`
-	IsError      bool     `json:"is_error"`
-	Result       string   `json:"result"`
-	Errors       []string `json:"errors"`
-	SessionID    string   `json:"session_id"`
-	TotalCostUSD float64  `json:"total_cost_usd"`
+	Type    string `json:"type"`
+	Subtype string `json:"subtype"`
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+	// Errors is the list of what went wrong, raw: read an error at a time
+	// ([claudeResult.errorsSaid]), never decoded whole, and only where a
+	// result that did not succeed is read, since every line of the stream is
+	// decoded into this.
+	Errors       json.RawMessage `json:"errors"`
+	SessionID    string          `json:"session_id"`
+	TotalCostUSD float64         `json:"total_cost_usd"`
 	// NumTurns is how many turns the run's agent loop took — one model
 	// call each — on every subtype, a run stopped by its turn cap included.
 	NumTurns int `json:"num_turns"`
@@ -1829,7 +1833,12 @@ func (r claudeResult) contextExhausted() bool {
 	if r.TerminalReason != "" {
 		return slices.Contains(claudeContextReasons, r.TerminalReason)
 	}
-	said := strings.Join(append([]string{r.Result}, r.Errors...), "\n")
+	// The errors' text TRIMMED reads as their whole text does: a sentence is
+	// found within a line, and none opens or closes with a blank.
+	said := r.Result
+	if errs := r.errorsSaid(); errs != "" {
+		said += "\n" + errs
+	}
 	return slices.ContainsFunc(claudeContextSentences, func(sentence string) bool {
 		return strings.Contains(said, sentence)
 	})
@@ -1856,7 +1865,7 @@ func (r claudeResult) failure() string {
 			"terminal_reason hook_stopped): a hook of the repository's, the image's or the box " +
 			"home's own settings exited 2 or returned a block; the run's own steering hooks " +
 			"never block"
-		if why := strings.TrimSpace(firstNonBlank(strings.Join(r.Errors, "\n"), r.Result)); why != "" {
+		if why := r.why(); why != "" {
 			stopped += ": " + why
 		}
 		return stopped
@@ -1865,7 +1874,7 @@ func (r claudeResult) failure() string {
 	if how == "success" {
 		how = ""
 	}
-	why := strings.TrimSpace(firstNonBlank(strings.Join(r.Errors, "\n"), r.Result))
+	why := r.why()
 	switch {
 	case how != "" && why != "":
 		return how + ": " + why
@@ -1875,6 +1884,54 @@ func (r claudeResult) failure() string {
 		return why
 	}
 	return "it reported an error and said nothing about it"
+}
+
+// why is why the run did not succeed, as its result says, trimmed: what its
+// errors say ([claudeResult.errorsSaid]), else its final text, else nothing.
+func (r claudeResult) why() string {
+	if errs := r.errorsSaid(); errs != "" {
+		return errs
+	}
+	return strings.TrimSpace(r.Result)
+}
+
+// errorsSaid is what the result's errors say, a line apart, trimmed: each
+// error that is a string as written and each of another kind as nothing, as
+// the list decoded into strings and joined read once trimmed, and "" for
+// errors that are no list.
+//
+// AN ERROR AT A TIME ([eachElement]), and never the whole list first: decoded
+// whole, the list held a string's 16 bytes for every element it listed,
+// however small the element, on every line of the stream, since every line is
+// decoded into a result. And the line apart is owed only before an error that
+// says something, so a run of errors that say nothing writes nothing at
+// either end of the text, which trimming would drop, and a line each between
+// two that say something, as their whole text did.
+func (r claudeResult) errorsSaid() string {
+	var (
+		said  strings.Builder
+		owed  int
+		first = true
+	)
+	if eachElement(r.Errors, func(element json.RawMessage) error {
+		if !first {
+			owed++
+		}
+		first = false
+		text := looseString(element)
+		if text == "" {
+			return nil
+		}
+		for ; owed > 0 && said.Len() > 0; owed-- {
+			said.WriteByte('\n')
+		}
+		owed = 0
+		said.WriteString(text)
+		return nil
+	}) != nil {
+		return ""
+	}
+	return strings.TrimSpace(said.String())
 }
 
 // decodeClaudeResult reads the result message: the one line the result file
