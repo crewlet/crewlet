@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -46,6 +47,15 @@ func openBubbled(t *testing.T, l *ledger, extra ...tools.Callable) *bubbled {
 // that answers in a way of its own, over l, which records what it takes.
 func openBubbledOn(t *testing.T, l *ledger, led mcpbridge.Ledger, extra ...tools.Callable) *bubbled {
 	t.Helper()
+	return openBubbledWith(t, l, led, nil, extra...)
+}
+
+// openBubbledWith is [openBubbledOn] whose session is readied by ready, where
+// it is not nil, before it is opened: for a case whose session carries more
+// than its tools, such as a note inbox or the skills its harness loads itself.
+func openBubbledWith(t *testing.T, l *ledger, led mcpbridge.Ledger, ready func(*mcpbridge.Session),
+	extra ...tools.Callable) *bubbled {
+	t.Helper()
 	reg := tools.NewRegistry()
 	var names []string
 	for _, tool := range extra {
@@ -66,6 +76,9 @@ func openBubbledOn(t *testing.T, l *ledger, led mcpbridge.Ledger, extra ...tools
 	b.session = &mcpbridge.Session{
 		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
 		Surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(turn), Ledger: led,
+	}
+	if ready != nil {
+		ready(b.session)
 	}
 	if b.bridge.Open(t.Context(), b.session) == "" {
 		t.Fatal("no endpoint was minted")
@@ -646,6 +659,184 @@ func TestAnOpeningsEndWaitsForTheAnswerOfACallItRefusedBeforeItCloses(t *testing
 		}
 		held.free()
 		b.bridge.AwaitCalls(t.Context())
+	})
+}
+
+// heldTake is a run's note inbox whose take is held, as one held in its store
+// write, until the case lets it go: it says so on taking, the first time, and
+// answers with the inbox's answer once let go.
+type heldTake struct {
+	*fakeInbox
+	taking  chan struct{}
+	said    sync.Once
+	letGo   chan struct{}
+	release func()
+}
+
+// newHeldTake is a [heldTake] whose take answers answer.
+func newHeldTake(answer string) *heldTake {
+	h := &heldTake{fakeInbox: newFakeInbox(), taking: make(chan struct{}), letGo: make(chan struct{})}
+	h.answer = answer
+	h.release = sync.OnceFunc(func() { close(h.letGo) })
+	return h
+}
+
+func (h *heldTake) Take(ctx context.Context, event string) string {
+	h.said.Do(func() { close(h.taking) })
+	<-h.letGo
+	return h.fakeInbox.Take(ctx, event)
+}
+
+// A HOOK'S ANSWER LEAVES BEFORE ITS OPENING CLOSES THE SESSIONS. A hook's call
+// is answered by the opening's own server in a middleware, never as a call of
+// the run's, and the SDK writes no answer on a session whose close has begun:
+// so an end holds a hook's answer as it holds a refusal's, and closes the box's
+// sessions only once that answer is out. A take of the run's notes whose write
+// landed, answered into the close, would leave its notes handed to a step that
+// never had them, with no cancel to say so; and a hook's call that fails costs
+// its run the whole bridge. So, as the opening ends, the box reads the hook's
+// answer, never the close's failure:
+//   - of a take held in its store write as the end comes, which the end waits
+//     for: the box reads its notes once it is let go, and only then are the
+//     box's sessions closed and the end returns;
+//   - of a take that reaches the opening while its end waits for another
+//     answer, which takes nothing, and whose empty answer is waited for too;
+//   - of skill_loaded, reporting a load as the end comes.
+//
+// Mutation: take steer_take's inbox without the hold (`o.inbox()` in place of
+// the opening's hold of the hook), and the box's take is failed by the close;
+// hold a hook's answer only while the opening serves (its end's test before
+// the hold), and the take that reached the ended opening is failed; hold none
+// for skill_loaded, and the reported load's hook is failed.
+func TestAHookAnswerLeavesBeforeItsOpeningClosesTheSessions(t *testing.T) {
+	t.Parallel()
+	const notes = `{"hookSpecificOutput":{"hookEventName":"PostToolBatch","additionalContext":"use staging"}}`
+	batch := map[string]any{"event": mcpbridge.SteerEventToolBatch}
+
+	t.Run("a take held in its store write as the end comes", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			inbox := newHeldTake(notes)
+			l := &ledger{}
+			b := openBubbledWith(t, l, l, func(s *mcpbridge.Session) { s.Steer = inbox })
+			box := b.connect(t, nil)
+			t.Cleanup(inbox.release)
+
+			took := callFromBox(context.WithoutCancel(t.Context()), box, mcpbridge.SteerTool, batch, "")
+			<-inbox.taking
+			ended := make(chan struct{})
+			go func() {
+				defer close(ended)
+				b.bridge.Close("run-1")
+			}()
+			synctest.Wait()
+			if closedNow(ended) {
+				t.Fatal("the end returned with a take still to answer")
+			}
+			inbox.release()
+			if res := <-took; res.IsError || text(res) != notes {
+				t.Fatalf("the box's take was answered %v %q, want its notes %q", res.IsError, text(res), notes)
+			}
+			synctest.Wait()
+			if !closedNow(ended) {
+				t.Error("the end did not return once the take's answer was out")
+			}
+			if n := b.session.Connections(); n != 0 {
+				t.Errorf("%d of the box's sessions are open after the end", n)
+			}
+		})
+	})
+
+	t.Run("a take reaching the opening as its end waits", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			held := newHeldTool("write")
+			inbox := newFakeInbox()
+			inbox.answer = notes
+			l := &ledger{}
+			b := openBubbledWith(t, l, l, func(s *mcpbridge.Session) { s.Steer = inbox }, held)
+			holds := holdAnswers(b, mcpbridge.EndedRunningNote, "")
+			box := b.connect(t, nil)
+			t.Cleanup(held.free)
+			t.Cleanup(func() { letGo(holds) })
+
+			running := callFromBox(context.WithoutCancel(t.Context()), box, "write",
+				map[string]any{"value": "hold"}, "")
+			<-held.entered
+			ended := make(chan struct{})
+			go func() {
+				defer close(ended)
+				b.bridge.Close("run-1")
+			}()
+			// THE END WAITS FOR ITS ANSWER TO THE CALL STILL RUNNING, held
+			// short of its write; and a hook's take reaches the opening then,
+			// its empty answer held short of its write too.
+			<-holds[mcpbridge.EndedRunningNote].holding
+			took := callFromBox(context.WithoutCancel(t.Context()), box, mcpbridge.SteerTool, batch, "")
+			<-holds[""].holding
+			holds[mcpbridge.EndedRunningNote].release()
+			if res := <-running; res.IsError || text(res) != mcpbridge.EndedRunningNote {
+				t.Fatalf("the call still running was answered %v %q, want %q", res.IsError, text(res),
+					mcpbridge.EndedRunningNote)
+			}
+			synctest.Wait()
+			if closedNow(ended) {
+				t.Fatal("the end returned with a hook's answer unwritten")
+			}
+			holds[""].release()
+			if res := <-took; res.IsError || text(res) != "" {
+				t.Errorf("the take that reached the ended opening was answered %v %q, want nothing, and not "+
+					"as failed", res.IsError, text(res))
+			}
+			synctest.Wait()
+			if !closedNow(ended) {
+				t.Error("the end did not return once every answer it gave was out")
+			}
+			if taken := inbox.taken(); len(taken) != 0 {
+				t.Errorf("the inbox was asked at %v after the opening ended, want never", taken)
+			}
+			held.free()
+			b.bridge.AwaitCalls(t.Context())
+		})
+	})
+
+	t.Run("skill_loaded reporting a load as the end comes", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			l := &ledger{}
+			b := openBubbledWith(t, l, l, func(s *mcpbridge.Session) { s.Skills = handed },
+				&stubTool{name: toolname.LoadToolSkill})
+			holds := holdAnswers(b, "")
+			box := b.connect(t, nil)
+			t.Cleanup(func() { letGo(holds) })
+
+			reported := callFromBox(context.WithoutCancel(t.Context()), box, mcpbridge.SkillTool,
+				map[string]any{"skill": "crewlet:mcp-github"}, "")
+			// THE HOOK'S ANSWER HAS LEFT ITS MIDDLEWARE, the load on the run's
+			// record, held short of the SDK's write as the end comes.
+			<-holds[""].holding
+			ended := make(chan struct{})
+			go func() {
+				defer close(ended)
+				b.bridge.Close("run-1")
+			}()
+			synctest.Wait()
+			if closedNow(ended) {
+				t.Fatal("the end returned with the hook's answer unwritten")
+			}
+			holds[""].release()
+			if res := <-reported; res.IsError || text(res) != "" {
+				t.Errorf("the reported load's hook was answered %v %q, want nothing, and not as failed",
+					res.IsError, text(res))
+			}
+			synctest.Wait()
+			if !closedNow(ended) {
+				t.Error("the end did not return once the hook's answer was out")
+			}
+			if n := b.session.Connections(); n != 0 {
+				t.Errorf("%d of the box's sessions are open after the end", n)
+			}
+		})
 	})
 }
 

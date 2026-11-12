@@ -114,6 +114,15 @@ func (e ending) notRun() string {
 // other packages, one of them the engine's, which this one cannot import, so
 // moving either is reading this again.
 //
+// A HOOK'S TAKE OF THE RUN'S NOTES, under way as the end comes, is waited for
+// within it too ([binding.holdHook]): a take is bounded by [steerTakeBudget],
+// the same five seconds, started as the take starts, so the answer of a take
+// begun before the end is due within this wait wherever the store answers. A
+// take whose store stalls past its budget is waited for behind the end, as any
+// answer past this bound is, and still never refused. Nothing holds the two to
+// each other either: a take's budget raised past this wait would leave more
+// ends returning with their close behind them, never an answer refused.
+//
 // Not a setting: nothing about a deployment moves what it is sized for.
 const endAnswerWait = 5 * time.Second
 
@@ -280,7 +289,8 @@ func (b *Bridge) AwaitCalls(ctx context.Context) {
 // answered without running ([binding.holdRefusalLocked]), until each one's
 // request is over ([toolsession.Call.Over]) — or until bound fires, and
 // reports whether it found none on its way. A nil bound waits as long as that
-// takes.
+// takes. A hook's call is one it answered without running
+// ([binding.holdHook]).
 //
 // EACH PASS READS THE OPENING AGAIN, under its lock, so an answer given while
 // it waited — the refusal of a call that reached the opening after its end —
@@ -347,7 +357,8 @@ func (o *binding) end(how ending) { o.endKeeping(nil, how) }
 // sessions: the SDK's close of a session waits for every request in flight on
 // it, and writes no answer once it has begun. Past that bound the sessions are
 // closed behind it ([bridgedCalls]), once those answers are out, and the end
-// returns.
+// returns. A hook's answer is one the opening gave without running a call, and
+// is waited for so ([binding.holdHook]).
 //
 // NOTHING IS OWED THE RUN'S LOG AS IT ENDS: every call the opening ran has its
 // identity there from before it ran ([Ledger.Begin]), and a call still running
@@ -443,11 +454,47 @@ func (o *binding) holdLocked(over <-chan struct{}) *bridgedCall {
 // ([binding.answersOut]), which write no answer once their close has begun —
 // so the refusal of a call that reaches the opening after its end, which
 // tells the box what the end means, reaches the box rather than the close's
-// "request terminated without response". And it lets go of every such answer
-// that is out.
+// "request terminated without response". A hook's answer is held the same way
+// ([binding.holdHook]): the opening runs no tool for a hook's call either. And
+// it lets go of every such answer that is out.
 func (o *binding) holdRefusalLocked(over <-chan struct{}) {
 	o.refusals = slices.DeleteFunc(o.refusals, gone)
 	if over != nil {
 		o.refusals = append(o.refusals, over)
 	}
+}
+
+// holdHook holds the answer of a hook's call for the opening's end until the
+// call's request is over, as the answer of a call the opening refuses is held
+// ([binding.holdRefusalLocked]), and reads the opening's note inbox under the
+// same lock: nil once the opening has ended, or where it has none. over is
+// the request's context's Done, which the SDK ends only after the answer's
+// write, as it is a call's [toolsession.Call.Over].
+//
+// A HOOK'S CALL NEVER REACHES [binding.Call], which holds every answer it
+// gives: the opening's own server answers it in a middleware of its own,
+// steer_take's ([binding.steerMiddleware]) and skill_loaded's
+// ([binding.skillMiddleware]). So an end once waited for no hook's answer,
+// and one that came after the end began to close the box's sessions was
+// refused by the SDK, which writes no answer on a session whose close has
+// begun. A take whose write had landed on the run's record answered into that
+// close: the record held its notes handed to a step that never had them, and
+// nothing said otherwise, since a box sends no cancel for an answer it never
+// got. And the hook's call failed, which Claude Code answers by dropping and
+// re-initialising the whole bridge (see steer.go's note inbox).
+//
+// THE HOLD FIRST, THE INBOX AFTER, UNDER ONE LOCK: an end either came before,
+// and the hook takes nothing from the inbox, or it finds the hold, and waits
+// for the hook's answer ([binding.answersOut]) before it closes the box's
+// sessions. HELD PAST THE END TOO, as the refusal of a call after it is: the
+// empty answer of a hook that reaches the opening while its end waits reaches
+// the box, rather than the close's failure.
+func (o *binding) holdHook(over <-chan struct{}) SteerInbox {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.holdRefusalLocked(over)
+	if o.ended {
+		return nil
+	}
+	return o.steer
 }

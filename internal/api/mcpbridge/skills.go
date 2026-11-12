@@ -42,7 +42,10 @@ import (
 //     can unlock a skill it never read; answered by the server's receiving
 //     middleware, so the hook's call never reaches the run's surface itself;
 //     and its answer is ALWAYS empty text, never an error — Claude Code
-//     answers a hook's failed call by re-initialising the whole bridge.
+//     answers a hook's failed call by re-initialising the whole bridge. The
+//     opening's end waits for that answer before it closes the box's
+//     sessions, as for a take's ([binding.holdHook]), since an answer the
+//     close refused fails the call all the same.
 //   - THE SKILL ROUTE ([SkillPattern]), which a plugin posts each load to:
 //     POST `{"skill": "<name>"}`, answered 204 — and 404 for a session
 //     handed no skills, which has no skill route at all.
@@ -104,6 +107,9 @@ func (o *binding) skillMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		if method != "tools/call" || !ok || call.Params == nil || call.Params.Name != SkillTool {
 			return next(ctx, method, req)
 		}
+		// HELD FOR THE OPENING'S END until its answer is out
+		// ([binding.holdHook]). It takes nothing from the run's notes.
+		o.holdHook(ctx.Done())
 		var load skillLoad
 		if len(call.Params.Arguments) > 0 {
 			// UNREADABLE IS NOTHING TO RECORD: the hook's input is the

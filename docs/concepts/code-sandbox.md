@@ -1191,7 +1191,10 @@ it:
     the notes it recorded are marked unanswered (read by the record's word, so
     no later take hands them over, and published delivered by nothing, since
     nothing was; the turn's ending reports each, below); and where it did not,
-    they wait for the next step.
+    they wait for the next step. A take still under way as the run's session on
+    the bridge ends is answered before that session closes, as a call still
+    running is: the end waits for a hook's answer to be written
+    ([The tool bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
   - **The notes route**, `/mcp/{token}/steer/notes?after=<seq>` and
     `/mcp/{token}/steer/read`, which a plugin inside the harness polls: a poll is
     held for up to **ten seconds** while no note waits, and answered at once

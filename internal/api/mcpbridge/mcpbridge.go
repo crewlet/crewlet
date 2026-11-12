@@ -257,6 +257,14 @@
 // refused all the same, and its box reads the close's failure in place of that
 // refusal: the SDK writes no answer once a close has begun.
 //
+// A HOOK'S ANSWER IS ONE OF THOSE: steer_take's and skill_loaded's are given
+// by the opening's own server, in a middleware rather than through a call, and
+// the ending waits for each as it waits for a refusal ([binding.holdHook]). A
+// take of the run's notes whose write is on the run's record, answered into
+// the close, would leave the notes handed to a step that never had them, with
+// no cancel to say so; and a hook's call that fails costs its run the bridge,
+// which its harness drops and re-initialises.
+//
 // PAST THAT BOUND THE ENDING DOES NOT WAIT: an answer still on its way is one a
 // box is not reading, and a box that does not read must not hold an ending. It
 // ends the opening's ledger and returns, and the bridge closes the sessions
@@ -1820,8 +1828,9 @@ type binding struct {
 	running map[*bridgedCall]struct{}
 	// refusals is the request's end of every answer the opening gave without
 	// running a call that may still be on its way
-	// ([binding.holdRefusalLocked]): what its end waits for too, before it
-	// closes the box's sessions.
+	// ([binding.holdRefusalLocked]), a hook's answer among them
+	// ([binding.holdHook]): what its end waits for too, before it closes the
+	// box's sessions.
 	refusals []<-chan struct{}
 
 	// steer is the run's note inbox, fixed when the opening opened

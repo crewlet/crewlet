@@ -31,7 +31,10 @@ import (
 //     harness asking, not the model. Its answer is ALWAYS text — empty for nothing
 //     — never an error: measured on Claude Code, a hook's call that failed made
 //     the harness drop and re-initialise the whole bridge, telling the model its
-//     tools were still connecting.
+//     tools were still connecting. And the opening's end waits for that answer
+//     before it closes the box's sessions ([binding.holdHook]): an answer the
+//     close refused would fail the call all the same, and a take's notes would
+//     be recorded handed over to a step that never had them.
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
 //     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
 //     ones waiting past the cursor, rendered, each recorded served to the run's
@@ -406,10 +409,13 @@ type steerArgs struct {
 }
 
 // takeSteer is steer_take's answer: the inbox's, for a boundary of the main
-// agent's loop, and nothing for any other.
+// agent's loop, and nothing for any other. Whatever it answers, the opening's
+// end waits for that answer to be out before it closes the box's sessions
+// ([binding.holdHook]), so a take whose write landed is never answered into
+// the close.
 func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
-	inbox := o.inbox()
-	if inbox == nil || o.over() {
+	inbox := o.holdHook(ctx.Done())
+	if inbox == nil {
 		return ""
 	}
 	var args steerArgs
