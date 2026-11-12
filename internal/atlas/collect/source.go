@@ -60,6 +60,25 @@ type Read struct {
 
 	// Calls is how many requests the read made at the vendor.
 	Calls int
+
+	// Unread is every part of the vendor the credential may not read. The
+	// read is still whole: each part's earlier claims stand as they were.
+	Unread []Unread
+}
+
+// Unread is one part of a vendor a read was refused: a listing the company's
+// credential lacks the permission for. It is a finding on the source's
+// standing, never a fault of the read.
+type Unread struct {
+	// Part names the listing, and Detail says what to grant so it is read.
+	// Both are the source's own words, never the vendor's answer.
+	Part   string
+	Detail string
+
+	// Holds reports whether a claim the voice already holds came from this
+	// part. Such a claim is carried as it stands: a refusal withdraws and
+	// retires nothing, since it says nothing about what the vendor holds.
+	Holds func(atlas.Claim) bool
 }
 
 // registry is every registered source, by kind.

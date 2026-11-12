@@ -327,7 +327,7 @@ func (w *Worker) visit(ctx context.Context, src Source, in Input, st Status, now
 	st.Completed, st.LastCompleteAt = true, now
 	log.InfoContext(ctx, "atlas_source_read", "source", kind.String(), "entries", st.Entries,
 		"calls", st.Calls, "withheld", st.Withheld, "recorded", st.Recorded, "retired", st.Retired,
-		"purged", st.Purged, "missing", len(st.Missing))
+		"purged", st.Purged, "missing", len(st.Missing), "unread", len(st.Unread))
 	w.save(ctx, st)
 }
 
