@@ -871,9 +871,9 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 				"value shown is wrong.", n.tool))
 			return atlasPlan{}, &r
 		}
-		says, refusal := n.claim(atlas.Says(ref, f, raw, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		says, bad := n.claim(atlas.Says(ref, f, raw, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		plan.said["value"] = says.Value.Text
 		now, held := factOn(m.entry, f, says.Value.Text)
@@ -943,9 +943,9 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		r := failed(fmt.Sprintf("%s: confirm a `fact` or a `relation`, one at a time.", n.tool))
 		return atlasPlan{}, &r
 	case argString(a, "fact") != "":
-		f, refusal := n.fact(a, ref)
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		f, bad := n.fact(a, ref)
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		value := argString(a, "value")
 		lookup := value
@@ -985,9 +985,9 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		plan.steps = []atlasStep{{name: "confirm", claim: says}}
 		return plan, nil
 	case argString(a, "relation") != "":
-		r, to, refusal := n.relation(a)
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		r, to, bad := n.relation(a)
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		ed, ok := edgeOn(m.entry, r, to.entry.ID)
 		if !ok {
@@ -1260,9 +1260,9 @@ func planMerge(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return plan, nil
 	}
 	if d, ok := n.apart(one.ref, other.ref); ok {
-		withdrawn, refusal := n.claim(atlas.Denial(d, n.person, n.at))
-		if refusal != nil {
-			return atlasPlan{}, refusal
+		withdrawn, bad := n.claim(atlas.Denial(d, n.person, n.at))
+		if bad != nil {
+			return atlasPlan{}, bad
 		}
 		plan.steps = append(plan.steps, atlasStep{name: "withdraw", claim: withdrawn})
 	}
