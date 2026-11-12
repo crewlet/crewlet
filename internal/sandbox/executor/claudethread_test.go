@@ -721,12 +721,19 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // A KEY ONLY ONE READER READS COSTS THAT READER ALONE: an attachment that is
 // no object leaves the record's head and its message whole and is refused by
 // Hook alone, and an origin that is no object leaves the message and the hooks
-// whole and is refused by OriginKind alone. As written, each reads: an origin's
-// kind, and a user record's own toolUseResult, raw, which no other record
-// hands out.
+// whole and is refused by OriginKind alone. A reply's stop_reason that is no
+// string, null among them, leaves its message, its report of the edits applied
+// and its hooks whole, and is refused by StopReason alone, never read as "";
+// and its report of the edits applied, of the wrong shape, leaves its message
+// and its stop_reason whole and is refused by ToolResultsCleared alone. As
+// written, each reads: an origin's kind, and a user record's own
+// toolUseResult, raw, which no other record hands out.
 //
 // Mutation: hold the attachment to an object in the head, and the record whose
-// attachment is not one is no record at all.
+// attachment is not one is no record at all; hold the stop_reason or the
+// report in Message, and a reply whose key is reshaped reads no message; read
+// a null stop_reason as none, and it reads as a reply that did not stop for
+// its calls.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
@@ -782,6 +789,43 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	} {
 		if hook, isHook, err := ctLine(t, record).Hook(); err == nil {
 			t.Errorf("%s reads as the hook %+v (%t), want an error", name, hook, isHook)
+		}
+	}
+
+	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	for name, reason := range map[string]string{
+		"null":      `null`,
+		"a number":  `7`,
+		"an object": `{"reason":"tool_use"}`,
+	} {
+		line := ctLine(t, ctReplace(t, call, `"stop_reason":"tool_use"`, `"stop_reason":`+reason))
+		if got, err := line.StopReason(); err == nil {
+			t.Errorf("a reply whose stop_reason is %s stopped for %q, want an error", name, got)
+		}
+		if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall {
+			t.Errorf("a reply whose stop_reason is %s reads the calls %+v, %v; want its call", name, m.Calls(), err)
+		}
+		if cleared, err := line.ToolResultsCleared(); cleared || err != nil {
+			t.Errorf("a reply whose stop_reason is %s reads as cleared %t, %v; want no clearing", name, cleared, err)
+		}
+		if _, isHook, err := line.Hook(); isHook || err != nil {
+			t.Errorf("a reply whose stop_reason is %s reads as a hook's record %t, %v", name, isHook, err)
+		}
+	}
+	for name, report := range map[string]string{
+		"a string": `"cleared"`,
+		"a list":   `[]`,
+		"a number": `7`,
+	} {
+		line := ctLine(t, ctReplace(t, call, `"output_tokens":20}}`, `"output_tokens":20},"context_management":`+report+`}`))
+		if cleared, err := line.ToolResultsCleared(); err == nil {
+			t.Errorf("a reply whose report of the edits applied is %s reads as cleared %t, want an error", name, cleared)
+		}
+		if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall {
+			t.Errorf("a reply whose report is %s reads the calls %+v, %v; want its call", name, m.Calls(), err)
+		}
+		if reason, err := line.StopReason(); reason != "tool_use" || err != nil {
+			t.Errorf("a reply whose report is %s stopped for %q, %v; want tool_use", name, reason, err)
 		}
 	}
 
