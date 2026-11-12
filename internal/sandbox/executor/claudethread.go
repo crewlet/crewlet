@@ -454,10 +454,15 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 }
 
 // head holds the head's keys to their types: `type`, `subtype` and `agentId`
-// strings, `parentUuid` null or a string, `isSidechain` and `replacesSpan`
-// booleans, each where present. ANOTHER TYPE IS NO RECORD: a newer Claude
-// Code that changes one fails toward no reading, which every reader takes for
-// "not confirmed", never for a fact.
+// strings, `parentUuid` null or a string, `isSidechain` a boolean, each where
+// present, and a user record's `replacesSpan` a boolean where present.
+// ANOTHER TYPE IS NO RECORD: a newer Claude Code that changes one fails toward
+// no reading, which every reader takes for "not confirmed", never for a fact.
+//
+// `replacesSpan` IS HELD ON A USER RECORD ALONE, the one record the harness
+// reads it on and the one the restart rule reads it on ([threadRestarts.See]).
+// On any other record it says nothing to any reader, so whatever it holds
+// there, null or a string among it, never costs a reader the line.
 func (w threadWire) head() (threadHead, error) {
 	var (
 		h   threadHead
@@ -483,7 +488,7 @@ func (w threadWire) head() (threadHead, error) {
 		}
 		h.Sidechain = &side
 	}
-	if w.ReplacesSpan != nil {
+	if w.ReplacesSpan != nil && h.Type == recordUser {
 		if h.ReplacesSpan, err = wireBool("replacesSpan", w.ReplacesSpan); err != nil {
 			return threadHead{}, err
 		}
@@ -519,9 +524,11 @@ type threadHead struct {
 	// reader that matches a subagent compares it with that subagent's id,
 	// which [validClaudeAgent] never lets be empty.
 	AgentID string
-	// ReplacesSpan is `replacesSpan`: true where the record says so with a
-	// JSON true, false where it is absent or false. A user record that says
-	// so is a restart ([threadRestarts.See]).
+	// ReplacesSpan is a user record's `replacesSpan`: true where it says so
+	// with a JSON true, false where it is absent or false. A user record that
+	// says so is a restart ([threadRestarts.See]). False on every other
+	// record, whatever the key holds there: it is read on a user record
+	// alone ([threadWire.head]).
 	ReplacesSpan bool
 }
 
@@ -1330,7 +1337,8 @@ type threadRestarts struct {
 // where a reader that read on would count what lies before as held; counted
 // a restart, what lies before is told again, the safe direction for every
 // reader. Each is read on its own record's type alone, as the harness reads
-// it.
+// it: the boundary's subtype here, and replacesSpan by the head, which holds
+// it on a user record alone ([threadHead.ReplacesSpan]).
 //
 // The keep-recent clearing, which puts "[Old tool result content cleared]"
 // in place of an old tool result, needs no rule: it never runs under
@@ -1350,7 +1358,7 @@ func (r *threadRestarts) See(h threadHead) bool {
 		return true
 	case h.Type == recordSystem && h.Subtype == subtypeMicrocompactBoundary:
 		return true
-	case h.Type == recordUser && h.ReplacesSpan:
+	case h.ReplacesSpan:
 		return true
 	case first:
 		return !h.Root()

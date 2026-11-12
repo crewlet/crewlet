@@ -650,11 +650,11 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 // EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
 // that is not one record (two values, one cut short, a value that is no
 // object) or one whose head key is of the wrong type (`type`, `subtype` and
-// `agentId` strings, `parentUuid` null or a string, `isSidechain` and
-// `replacesSpan` booleans) is a *threadLineError naming its line, whatever
-// keywords it holds, and the reader reads on to the next line; and a whole
-// record's head is what it says. None of these lines holds a key a reader of
-// hooks or calls looks for.
+// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
+// and a user record's `replacesSpan` a boolean, as the brief's here) is a
+// *threadLineError naming its line, whatever keywords it holds, and the reader
+// reads on to the next line; and a whole record's head is what it says. None
+// of these lines holds a key a reader of hooks or calls looks for.
 //
 // Mutation: decode only the lines that name a hook or a call, and every
 // broken line here reads as a record, and the records' heads as nothing; read
@@ -1232,7 +1232,9 @@ func TestAnAbsentParentIsNotANullOne(t *testing.T) {
 // follows the brief. A replacesSpan that is false or absent replaces nothing,
 // and each kind is read on its own record's type alone, as the harness reads
 // it: the subtype on an attachment, and replacesSpan true on a model's reply,
-// restart nothing.
+// restart nothing. Nor is a replacesSpan on a record that is no user's held to
+// its type: a model's reply whose replacesSpan is a string, and an attachment
+// whose replacesSpan is null, each read whole, and restart nothing.
 //
 // Mutation: count every root, and the brief restarts every thread; count every
 // root but the first one seen, and the first root of a thread whose start is
@@ -1243,7 +1245,8 @@ func TestAnAbsentParentIsNotANullOne(t *testing.T) {
 // boundary or the replaced span, and its record restarts nothing; read
 // replacesSpan by its presence, and one that is false restarts the thread;
 // read either kind off any record's type, and the attachment or the reply
-// restarts it.
+// restarts it; hold replacesSpan to its type on every record, and the reply
+// and the attachment that carry one of another type are no records.
 func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 	t.Parallel()
 	brief, again := ctBrief(ctUUID(1)), ctBrief(ctUUID(4))
@@ -1293,10 +1296,18 @@ func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 		"replacesSpan true on a model's reply": {lines: after(ctReplace(t,
 			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"type":"assistant"`,
 			`"type":"assistant","replacesSpan":true`))},
+		"a replacesSpan that is a string on a model's reply": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"type":"assistant"`,
+			`"type":"assistant","replacesSpan":"true"`))},
+		"a null replacesSpan on an attachment": {lines: after(ctReplace(t,
+			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"type":"attachment"`,
+			`"type":"attachment","replacesSpan":null`))},
 	} {
 		got := ctRead(ctThread(tc.lines...), threadPlainMax)
 		if len(got.lines) != len(tc.lines) {
-			t.Fatalf("%s: %d of %d lines read", name, len(got.lines), len(tc.lines))
+			t.Errorf("%s: %d of %d lines read, %d read as no record", name, len(got.lines), len(tc.lines),
+				len(got.broken))
+			continue
 		}
 		var seen threadRestarts
 		var restarts []int
