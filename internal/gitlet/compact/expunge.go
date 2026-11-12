@@ -1245,7 +1245,7 @@ func (c *Compactor) keptTips(ctx context.Context, repoID string, at statelog.Pos
 // nothing live.
 //
 // DUE once the bytes of the ELIGIBLE files no tip reaches are MORE than
-// 1/code.ExpungeShare of the repository's live pack bytes and at least the
+// 1/gitlet.ExpungeShare of the repository's live pack bytes and at least the
 // bounds' expungeMin (gitlet.ExpungeMinBytes) — [expungeDue] — never what the
 // whole repository holds unreachable: garbage in a pack younger than the
 // grace is no byte any cycle now could free ([Compactor.unreachableIn]). What
@@ -1303,7 +1303,7 @@ func (c *Compactor) due(ctx context.Context, cand gitlet.ExpungeCandidate, s cac
 
 // expungeDue reports whether unreachable bytes of a repository of live pack
 // bytes make an expunge on the maintainer's own schedule due: more than
-// 1/code.ExpungeShare of them, and at least least.
+// 1/gitlet.ExpungeShare of them, and at least least.
 func expungeDue(unreachable, live, least int64) bool {
 	return unreachable >= least && unreachable*gitlet.ExpungeShare > live
 }
