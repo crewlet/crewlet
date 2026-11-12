@@ -303,10 +303,14 @@ type observing struct {
 func (t *atlasAgentWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
+	outside := fmt.Sprintf("%s recorded nothing: only an agent records in the atlas, in a turn of its own, "+
+		"from what a call of that turn showed it.", t.Name())
 	seat, err := turn.RequireSeat()
-	if err != nil || seat.IsHuman() || strings.TrimSpace(turn.RunID) == "" {
-		return refused(tools.RefusalForbidden, fmt.Sprintf("%s recorded nothing: only an agent records in "+
-			"the atlas, in a turn of its own, from what a call of that turn showed it.", t.Name())), nil
+	if err != nil {
+		return refusedBy(tools.RefusalForbidden, err, outside), nil
+	}
+	if seat.IsHuman() || strings.TrimSpace(turn.RunID) == "" {
+		return refused(tools.RefusalForbidden, outside), nil
 	}
 	settings, running := AtlasSettings{}, false
 	if t.read.deps.Settings != nil {
@@ -350,10 +354,13 @@ func (t *atlasAgentWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"times in the atlas, and this one has. Keep the rest for a later turn.", t.Name(),
 			AtlasRecordsPerTurn)), nil
 	}
-	switch within, err := t.deps.Allow(ctx, turn.AgentID(), AtlasRecordsPerDay, o.at); {
+	within, err := t.deps.Allow(ctx, turn.AgentID(), AtlasRecordsPerDay, o.at)
+	switch {
 	case err != nil:
-		return refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s recorded nothing: today's "+
-			"allowance of atlas records could not be read right now. Try again shortly.", t.Name())), nil
+		log.WarnContext(ctx, "atlas_record_allowance_unread", "seat", seat.Handle(), "error", err.Error())
+		return refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", waits(), err), fmt.Sprintf("%s "+
+			"recorded nothing: today's allowance of atlas records could not be read right now. Try again "+
+			"shortly.", t.Name())), nil
 	case !within:
 		return refused(tools.RefusalQuotaExceeded, fmt.Sprintf("%s recorded nothing: this agent records at most "+
 			"%d times a day in the atlas, and today's are used. Do not call it again today.", t.Name(),
@@ -453,8 +460,8 @@ func (o *observing) planRecord(a map[string]any) (atlas.Ref, *tools.Result) {
 		}
 		shown, host := met(m)
 		c, err := atlas.Exists(ref, src, o.at)
-		if refusal := o.add(c, err, "the entry `atlas_entry` names", shown, host); refusal != nil {
-			return atlas.Ref{}, refusal
+		if bad := o.add(c, err, "the entry `atlas_entry` names", shown, host); bad != nil {
+			return atlas.Ref{}, bad
 		}
 	} else if mine, ok := o.own(ref, atlas.Claim{Subject: ref, Facet: atlas.Facet{Kind: atlas.FacetExists}}); ok &&
 		o.at.Sub(mine.ObservedAt) >= atlasReconfirmAfter {
@@ -462,8 +469,8 @@ func (o *observing) planRecord(a map[string]any) (atlas.Ref, *tools.Result) {
 		// only this seat reports from going stale.
 		shown, host := met(m)
 		c, err := atlas.Exists(ref, src, o.at)
-		if refusal := o.add(c, err, "the entry `atlas_entry` names", shown, host); refusal != nil {
-			return atlas.Ref{}, refusal
+		if bad := o.add(c, err, "the entry `atlas_entry` names", shown, host); bad != nil {
+			return atlas.Ref{}, bad
 		}
 	}
 	stated, refusal := o.facts(a, ref)
@@ -480,22 +487,22 @@ func (o *observing) planRecord(a map[string]any) (atlas.Ref, *tools.Result) {
 		if err == nil {
 			shown = []string{c.Value.Text}
 		}
-		if refusal := o.add(c, err, fmt.Sprintf("`%s` (%s)", f.arg, f.fact), shown, ""); refusal != nil {
-			return atlas.Ref{}, refusal
+		if bad := o.add(c, err, fmt.Sprintf("`%s` (%s)", f.arg, f.fact), shown, ""); bad != nil {
+			return atlas.Ref{}, bad
 		}
 	}
 	if strings.TrimSpace(argString(a, "relation")) != "" || strings.TrimSpace(argString(a, "to")) != "" {
-		r, to, refusal := o.related(a, agentRelations())
-		if refusal != nil {
-			return atlas.Ref{}, refusal
+		r, to, bad := o.related(a, agentRelations())
+		if bad != nil {
+			return atlas.Ref{}, bad
 		}
 		c, err := atlas.Relates(ref, r, to.entry.Ref, src, o.at)
 		if err == nil && o.holds(m, c) {
 			o.known++
 		} else {
 			shown, host := met(to)
-			if refusal := o.add(c, err, "the entry `to` names", shown, host); refusal != nil {
-				return atlas.Ref{}, refusal
+			if bad := o.add(c, err, "the entry `to` names", shown, host); bad != nil {
+				return atlas.Ref{}, bad
 			}
 		}
 	}
@@ -676,8 +683,8 @@ func (o *observing) planDispute(a map[string]any) (atlas.Ref, *tools.Result) {
 		return ref, nil
 	}
 	c, err := atlas.Dispute(disputed, src, o.at)
-	if refusal := o.add(c, err, "the entry `atlas_entry` names", shown, host); refusal != nil {
-		return atlas.Ref{}, refusal
+	if bad := o.add(c, err, "the entry `atlas_entry` names", shown, host); bad != nil {
+		return atlas.Ref{}, bad
 	}
 	return ref, nil
 }
