@@ -1040,25 +1040,56 @@ func TestAPushItsAskerCannotWaitForIsBusyAtOnce(t *testing.T) {
 // after its asker had stopped waiting and taken the silence for a dead
 // committer. It is withdrawn undecided: when the batch ahead of it ends, it is
 // neither decided nor appended.
+//
+// THE MOMENT IS THE WITHDRAWAL'S ARMED INSTANT, read off what the committer
+// arms it with (gitlet.SetCommitterWithdrawal) on its own clock, frozen where
+// the asker's deadline is reckoned from: exactly that deadline less a batch
+// (gitlet.CommitBudget) and its answer (gitlet.ReplyMargin). The case then
+// fires it. A withdrawal armed a margin late answers inside any wall-clock
+// wait the case could make, so only the instant tells it (#1027).
+//
+// Mutations: arm it at the deadline less the batch alone, or at the deadline
+// itself — the instant is off by the margin, or by the margin and the batch:
+// red.
 func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	repo := repoOn(t, n, "web")
 	gate := newGate(n.pub)
 	c, rec := committerOn(t, n, gate)
+	start := time.Now()
+	gitlet.SetCommitterClock(c, func() time.Time { return start })
+	armed, fire := make(chan time.Duration, 1), make(chan time.Time, 1)
+	gitlet.SetCommitterWithdrawal(c, func(d time.Duration) (<-chan time.Time, func()) {
+		armed <- d
+		return fire, func() {}
+	})
 	before := n.end()
 
 	lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", gitlet.ZeroOID, oidOf("L"))))
 	eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
-	ctx, cancel := context.WithTimeout(t.Context(), gitlet.CommitBudget+gitlet.ReplyMargin+200*time.Millisecond)
+	const left = 200 * time.Millisecond
+	ctx, cancel := context.WithDeadline(t.Context(), start.Add(gitlet.CommitBudget+gitlet.ReplyMargin+left))
 	defer cancel()
 	waiting := proposal(repo, update("refs/heads/waiting", gitlet.ZeroOID, oidOf("W")))
 	ch := proposeAsync(ctx, c, waiting)
+	select {
+	case d := <-armed:
+		if d != left {
+			t.Fatalf("the queued push's withdrawal was armed to fire after %s, want %s: its asker's deadline less "+
+				"a batch (%s) and its answer (%s)", d, left, gitlet.CommitBudget, gitlet.ReplyMargin)
+		}
+	case got := <-ch:
+		t.Fatalf("the queued push was answered (%+v) before its withdrawal was armed", got)
+	case <-time.After(10 * time.Second): //fixedwait:liveness
+		t.Fatal("the queued push's withdrawal was never armed")
+	}
+	fire <- start.Add(left)
 	var got answer
 	select {
 	case got = <-ch:
 	case <-time.After(10 * time.Second): //fixedwait:liveness
-		t.Fatal("the queued push was not answered while the batch ahead of it held the gate")
+		t.Fatal("the queued push was not answered once its withdrawal fired, while the batch ahead of it held the gate")
 	}
 	requireBusyUndecided(t, n, got, waiting.PushID, "stops waiting")
 	if calls := gate.calls.Load(); calls != 1 {
