@@ -1309,7 +1309,9 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // blocks and a user's tool_result blocks, each with its id and what it
 // carries raw (a call's input as written, a result's content, its is_error
 // where present), and nothing from any other record, an api-request-blob
-// repeating a result included. A message that does not decode is an error,
+// repeating a result included. A call block in the other record, which the
+// Messages API never writes, is a kind and no call: a result in a model's
+// message, a call in a user's. A message that does not decode is an error,
 // never a message with half a call in it: one that is no object, a content
 // absent, null or neither a string nor a list, a block that is no object or
 // has no string type, a tool_use's id not a string that names a call or its
@@ -1319,7 +1321,8 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // Mutation: read calls off every record's message, and the blob's result is a
 // call; decode a block loosely, and a tool_use whose id is a number is a call
 // with no id; take an id that names no call, and a block whose id is empty is
-// a call with no id.
+// a call with no id; take either kind of call block in either record, and a
+// result in a model's message, or a call in a user's, is a call.
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
 	isFalse := false
@@ -1356,6 +1359,20 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 				(c.IsError != nil && *c.IsError != *want.IsError) {
 				t.Errorf("%s hands out the call %+v, want %+v", name, c, want)
 			}
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		record string
+		kind   string
+	}{
+		"a result in a model's message": {record: ctAssistant(ctUUID(3), ctUUID(4), ctResultBody), kind: blockToolResult},
+		"a call in a user's message":    {record: ctResult(ctUUID(4), ctUUID(5), ctUseContent, ctResultOwn), kind: blockToolUse},
+	} {
+		m, err := ctLine(t, tc.record).Message()
+		if err != nil || m.Calls() != nil || !slices.Equal(m.Kinds(), []string{tc.kind}) {
+			t.Errorf("%s reads as the blocks %q and the calls %+v, %v; want a %s and no call", name,
+				strings.Join(m.Kinds(), " "), m.Calls(), err, tc.kind)
 		}
 	}
 
