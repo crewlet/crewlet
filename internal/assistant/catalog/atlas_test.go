@@ -49,6 +49,16 @@ func TestAnAtlasChangeTheToolWouldRefuseIsNeverACard(t *testing.T) {
 		{"add_atlas_entry", held, map[string]any{"kind": "service", "key": "checkout-api"}},
 		{"add_atlas_entry", world, map[string]any{"kind": "tool_server", "key": "mcp/tracker"}},
 		{"restore_atlas_entry", world, map[string]any{"atlas_entry": assistanttest.AtlasServiceID}},
+		{"confirm_atlas_entry", world, map[string]any{"atlas_entry": assistanttest.AtlasServiceID,
+			"fact": "environment"}},
+		{"confirm_atlas_entry", world, map[string]any{"atlas_entry": assistanttest.AtlasServiceID,
+			"fact": "name", "relation": "runs_on"}},
+		{"correct_atlas_fact", world, map[string]any{"atlas_entry": assistanttest.AtlasServiceID,
+			"fact": "purpose", "value": "gh" + "p_" + strings.Repeat("a", 36)}},
+		{"set_atlas_owner", world, map[string]any{"atlas_entry": assistanttest.AtlasServiceID,
+			"seat": "qa", "clear": true}},
+		{"set_atlas_owner", world, map[string]any{"atlas_entry": assistanttest.AtlasServiceID,
+			"seat": "nobody"}},
 	} {
 		tool, ok := catalog.Lookup(c.tool)
 		if !ok {
@@ -57,6 +67,11 @@ func TestAnAtlasChangeTheToolWouldRefuseIsNeverACard(t *testing.T) {
 		_, err := tool.Preview(t.Context(), reader(c.world), wednesday, c.args)
 		if !errors.Is(err, catalog.ErrInvalidArguments) && !errors.Is(err, catalog.ErrPreviewRead) {
 			t.Errorf("%s %v drew a card (%v), want it refused before one", c.tool, c.args, err)
+		}
+		// A REFUSAL NAMES AN ENTRY BY ITS KIND AND KEY, never by its name,
+		// which a source or another person wrote, nor a value it refused.
+		if err != nil && (strings.Contains(err.Error(), "Checkout API") || strings.Contains(err.Error(), "ghp_")) {
+			t.Errorf("%s's refusal repeats a name or a value: %v", c.tool, err)
 		}
 	}
 	purge, _ := catalog.Lookup("purge_atlas_entry")

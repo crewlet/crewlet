@@ -145,10 +145,13 @@ func wordsOf[S ~string](set []S) []string {
 	return out
 }
 
-// shownEntry is one entry as the atlas's read answers it.
+// shownEntry is one entry as the atlas's read answers it: label is how a card
+// names it, by its name; ref is how a refusal to the model names it, by its
+// kind and its key, which a grammar holds, NEVER BY ITS NAME, which may be a
+// source's or another person's words.
 type shownEntry struct {
-	id, label, state string
-	doc              any
+	id, label, ref, state string
+	doc                   any
 }
 
 // readAtlasEntry reads the entry id names through the grant: a read the route
@@ -164,7 +167,8 @@ func readAtlasEntry(ctx context.Context, read proposal.Read, id string) (shownEn
 	}
 	e := cards.Lookup(doc, "entry")
 	label := value(e, "name") + " (" + strings.ReplaceAll(value(e, "ref.kind"), "_", " ") + ")"
-	return shownEntry{id: value(e, "id"), label: label, state: value(e, "state"), doc: e}, nil
+	return shownEntry{id: value(e, "id"), label: label, ref: value(e, "ref.kind") + ":" + value(e, "ref.key"),
+		state: value(e, "state"), doc: e}, nil
 }
 
 // facts is the entry's facts named f, each a decoded fact view.
@@ -282,11 +286,19 @@ func addAtlasPreview(t Tool) proposal.Previewer {
 		case resp.Status != http.StatusNotFound:
 			return proposal.Preview{}, refusedRead(resp)
 		}
+		name := ""
+		if raw := a.String("name"); raw != "" {
+			v, err := atlas.FactName.Value(raw)
+			if err != nil {
+				return proposal.Preview{}, fmt.Errorf("%w: name: %w", ErrInvalidArguments, err)
+			}
+			name = v.Text
+		}
 		var c changes
 		c.fact("kind", "Kind", strings.ReplaceAll(string(ref.Kind), "_", " "))
 		c.add("key", "Key", ref.Key)
-		c.add("name", "Name", a.String("name"))
-		return proposal.Preview{Title: "Add atlas entry", Target: orDefault(a.String("name"), ref.Key),
+		c.add("name", "Name", name)
+		return proposal.Preview{Title: "Add atlas entry", Target: orDefault(name, ref.Key),
 			Note:         "The entry is shown as confirmed by you, and a source that reports it later joins it.",
 			ApproveLabel: "Approve and add", Changes: c.rows(), Request: req}, nil
 	}
@@ -303,20 +315,31 @@ func correctAtlasPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		f := atlas.Fact(a.String("fact"))
-		if !f.AppliesTo(atlas.Kind(value(s.doc, "ref.kind"))) {
-			return proposal.Preview{}, fmt.Errorf("%w: a %s carries no %s", ErrInvalidArguments,
-				value(s.doc, "ref.kind"), f)
+		f, err := shownFact(s, a.String("fact"))
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		// THE VALUE THROUGH ITS FACT'S GRAMMAR, as the tool reads it: a value
+		// it would refuse, one shaped like a credential above all, is never a
+		// card, and the refusal never repeats it.
+		var given atlas.Value
+		if raw := a.String("value"); raw != "" {
+			if given, err = f.Value(raw); err != nil {
+				return proposal.Preview{}, fmt.Errorf("%w: value: %w", ErrInvalidArguments, err)
+			}
+		} else if !a.Bool("wrong") {
+			return proposal.Preview{}, fmt.Errorf("%w: value is the value to record, or wrong says the "+
+				"value shown is wrong", ErrInvalidArguments)
 		}
 		var now any
 		for _, v := range s.facts(string(f)) {
-			if !f.Spec().Many || value(v, "value.text") == a.String("value") {
+			if !f.Spec().Many || value(v, "value.text") == given.Text {
 				now = v
 			}
 		}
 		if now != nil {
 			if where := declaredBy(now); where != "" {
-				return proposal.Preview{}, refusedDeclared(s.label+"'s "+string(f), where)
+				return proposal.Preview{}, refusedDeclared(s.ref+"'s "+string(f), where)
 			}
 		}
 		var c changes
@@ -327,21 +350,44 @@ func correctAtlasPreview(t Tool) proposal.Previewer {
 				"change, when both are shown for review."
 		switch {
 		case a.Bool("wrong"):
-			if now == nil {
-				return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no %s on %s to call wrong",
-					ErrInvalidArguments, label, s.label)
+			if now == nil || given.Text != "" && value(now, "value.text") != given.Text {
+				return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no such %s on %s to call wrong; "+
+					"only the value it shows is",
+					ErrInvalidArguments, label, s.ref)
 			}
 			c = append(c, proposal.Removed(string(f), label, shownValue(now)))
 			title, approve, note = "Mark atlas fact wrong", "Approve and mark wrong",
 				"The value is recorded as wrong in your name and leaves the entry."
 		case now != nil:
-			c.move(string(f), label, value(now, "value.text"), a.String("value"))
+			if value(now, "source.kind") == string(atlas.SourcePerson) && value(now, "value.text") == given.Text {
+				return proposal.Preview{}, fmt.Errorf("%w: a person set %s's %s to that value already",
+					ErrInvalidArguments, s.ref, label)
+			}
+			c.move(string(f), label, value(now, "value.text"), given.Text)
 		default:
-			c.add(string(f), label, a.String("value"))
+			c.add(string(f), label, given.Text)
 		}
 		return proposal.Preview{Title: title, Target: s.label, Note: note, ApproveLabel: approve,
 			Changes: c.rows(), Request: req, SourceRevision: atlasRevision(s)}, nil
 	}
+}
+
+// shownFact is the fact a call names, refused where the entry's kind carries
+// no such fact.
+func shownFact(s shownEntry, name string) (atlas.Fact, error) {
+	f := atlas.Fact(name)
+	if !f.AppliesTo(atlas.Kind(value(s.doc, "ref.kind"))) {
+		return "", fmt.Errorf("%w: a %s carries no %s", ErrInvalidArguments, value(s.doc, "ref.kind"), f)
+	}
+	return f, nil
+}
+
+// confirmedAlready is a fact or relation view a confirmation would change
+// nothing on: one a person holds, or the settings or the engine's records
+// declare.
+func confirmedAlready(view any) bool {
+	kind := atlas.SourceKind(value(view, "source.kind"))
+	return kind.Computed() || kind == atlas.SourcePerson && value(view, "suggested") != "true"
 }
 
 func confirmAtlasPreview(t Tool) proposal.Previewer {
@@ -358,31 +404,70 @@ func confirmAtlasPreview(t Tool) proposal.Previewer {
 		var c changes
 		c.fact("entry", "Entry", s.label)
 		switch {
+		case a.String("fact") != "" && a.String("relation") != "":
+			return proposal.Preview{}, fmt.Errorf("%w: confirm a fact or a relation, one at a time",
+				ErrInvalidArguments)
 		case a.String("fact") != "":
-			var now any
-			for _, v := range s.facts(a.String("fact")) {
-				if a.String("value") == "" || value(v, "value.text") == a.String("value") {
-					now = v
+			f, err := shownFact(s, a.String("fact"))
+			if err != nil {
+				return proposal.Preview{}, err
+			}
+			views := s.facts(string(f))
+			if len(views) == 0 {
+				return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no %s on %s to confirm",
+					ErrInvalidArguments, f, s.ref)
+			}
+			now, pick := views[0], value(views[0], "value.text")
+			if f.Spec().Many {
+				i := slices.IndexFunc(views, func(v any) bool { return value(v, "value.text") == a.String("value") })
+				if i < 0 {
+					return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no %s on %s with that value",
+						ErrInvalidArguments, f, s.ref)
+				}
+				now, pick = views[i], a.String("value")
+			} else if v := a.String("value"); v != "" && v != pick {
+				pick = ""
+				if others, ok := cards.Lookup(now, "others").([]any); ok && slices.ContainsFunc(others,
+					func(o any) bool { return value(o, "value.text") == v && value(o, "denied") != "true" }) {
+					pick = v
+				}
+				if pick == "" {
+					return proposal.Preview{}, fmt.Errorf("%w: no source says %s's %s is that value now",
+						ErrInvalidArguments, s.ref, f)
 				}
 			}
-			if now == nil {
-				return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no %s on %s with that value to "+
-					"confirm", ErrInvalidArguments, a.String("fact"), s.label)
+			if where := declaredBy(now); where != "" && pick != value(now, "value.text") {
+				return proposal.Preview{}, refusedDeclared(s.ref+"'s "+string(f), where)
 			}
-			c = append(c, proposal.Changed(a.String("fact"), strings.ReplaceAll(a.String("fact"), "_", " "),
-				shownValue(now), value(now, "value.text")+" (confirmed by you)"))
+			if confirmedAlready(now) && pick == value(now, "value.text") {
+				return proposal.Preview{}, fmt.Errorf("%w: %s's %s is confirmed already", ErrInvalidArguments,
+					s.ref, f)
+			}
+			c = append(c, proposal.Changed(string(f), strings.ReplaceAll(string(f), "_", " "),
+				shownValue(now), pick+" (confirmed by you)"))
 		case a.String("relation") != "":
 			to, err := readAtlasEntry(ctx, read, a.String("to"))
 			if err != nil {
 				return proposal.Preview{}, err
 			}
-			i := slices.IndexFunc(s.relations(a.String("relation")), func(v any) bool { return value(v, "to") == to.id })
+			views := s.relations(a.String("relation"))
+			i := slices.IndexFunc(views, func(v any) bool { return value(v, "to") == to.id })
 			if i < 0 {
 				return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no %s from %s to %s to confirm",
-					ErrInvalidArguments, a.String("relation"), s.label, to.label)
+					ErrInvalidArguments, a.String("relation"), s.ref, to.ref)
+			}
+			if confirmedAlready(views[i]) {
+				return proposal.Preview{}, fmt.Errorf("%w: that relation is confirmed already", ErrInvalidArguments)
 			}
 			c.fact("relation", strings.ReplaceAll(a.String("relation"), "_", " "), to.label+" (confirmed by you)")
 		default:
+			switch s.state {
+			case string(atlas.StateRetired):
+				return proposal.Preview{}, fmt.Errorf("%w: %s is retired; bring it back with %s",
+					ErrInvalidArguments, s.ref, restoreAtlasEntryTool)
+			case string(atlas.StateConfirmed):
+				return proposal.Preview{}, fmt.Errorf("%w: %s is confirmed already", ErrInvalidArguments, s.ref)
+			}
 			c = append(c, proposal.Changed("state", "State", s.state, "confirmed by you"))
 		}
 		return proposal.Preview{Title: "Confirm atlas entry", Target: s.label,
@@ -411,7 +496,7 @@ func relateAtlasPreview(remove bool) func(t Tool) proposal.Previewer {
 			r := atlas.Relation(a.String("relation"))
 			if !r.Joins(atlas.Kind(value(s.doc, "ref.kind")), atlas.Kind(value(to.doc, "ref.kind"))) {
 				return proposal.Preview{}, fmt.Errorf("%w: %s does not run from %s to %s",
-					ErrInvalidArguments, r, s.label, to.label)
+					ErrInvalidArguments, r, s.ref, to.ref)
 			}
 			var c changes
 			c.fact("entry", "Entry", s.label)
@@ -425,10 +510,10 @@ func relateAtlasPreview(remove bool) func(t Tool) proposal.Previewer {
 			}
 			if shown < 0 {
 				return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no %s from %s to %s",
-					ErrInvalidArguments, label, s.label, to.label)
+					ErrInvalidArguments, label, s.ref, to.ref)
 			}
 			if where := declaredBy(s.relations(string(r))[shown]); where != "" {
-				return proposal.Preview{}, refusedDeclared("that "+s.label+" "+label+" "+to.label, where)
+				return proposal.Preview{}, refusedDeclared("that "+s.ref+" "+label+" "+to.ref, where)
 			}
 			c = append(c, proposal.Removed("relation", label, to.label))
 			return proposal.Preview{Title: "Remove atlas relation", Target: s.label,
@@ -454,10 +539,25 @@ func ownerAtlasPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
+		given := 0
+		for _, set := range []bool{a.String("seat") != "", a.String("unit") != "", a.Bool("clear")} {
+			if set {
+				given++
+			}
+		}
+		if given != 1 {
+			return proposal.Preview{}, fmt.Errorf("%w: name the owner by exactly one of seat and unit, or "+
+				"pass clear", ErrInvalidArguments)
+		}
+		if seat := a.String("seat"); seat != "" {
+			if _, held := chart.seats[seat]; !held {
+				return proposal.Preview{}, fmt.Errorf("%w: no seat of the chart has that handle", ErrInvalidArguments)
+			}
+		}
 		var owners []string
 		for _, v := range s.relations(string(atlas.RelationOwnedBy)) {
 			if where := declaredBy(v); where != "" {
-				return proposal.Preview{}, refusedDeclared("who owns "+s.label, where)
+				return proposal.Preview{}, refusedDeclared("who owns "+s.ref, where)
 			}
 			owners = append(owners, ownerName(chart, value(v, "external"), value(v, "name")))
 		}
@@ -472,7 +572,7 @@ func ownerAtlasPreview(t Tool) proposal.Previewer {
 		c.fact("entry", "Entry", s.label)
 		c.move("owner", "Owner", strings.Join(owners, ", "), to)
 		if len(c) < 2 {
-			return proposal.Preview{}, fmt.Errorf("%w: %s is owned that way already", ErrInvalidArguments, s.label)
+			return proposal.Preview{}, fmt.Errorf("%w: %s is owned that way already", ErrInvalidArguments, s.ref)
 		}
 		return proposal.Preview{Title: "Set atlas owner", Target: s.label,
 			Note: "The owner is shown as named by you.", ApproveLabel: "Approve and set",
@@ -502,11 +602,11 @@ func retireAtlasPreview(retire bool) func(t Tool) proposal.Previewer {
 			}
 			retired := s.state == string(atlas.StateRetired)
 			if retired == retire {
-				return proposal.Preview{}, fmt.Errorf("%w: %s is %s already", ErrInvalidArguments, s.label, s.state)
+				return proposal.Preview{}, fmt.Errorf("%w: %s is %s already", ErrInvalidArguments, s.ref, s.state)
 			}
 			if sources, _ := cards.Lookup(s.doc, "sources").([]any); retire && slices.ContainsFunc(sources,
 				func(src any) bool { return atlas.SourceKind(value(src, "kind")).Computed() }) {
-				return proposal.Preview{}, refusedDeclared(s.label, "the company's settings or the engine's records")
+				return proposal.Preview{}, refusedDeclared(s.ref, "the company's settings or the engine's records")
 			}
 			var c changes
 			c.fact("entry", "Entry", s.label)
@@ -541,7 +641,7 @@ func pairAtlasPreview(merge bool) func(t Tool) proposal.Previewer {
 			}
 			if value(s.doc, "ref.kind") != value(o.doc, "ref.kind") {
 				return proposal.Preview{}, fmt.Errorf("%w: %s and %s are of two kinds and never one entry",
-					ErrInvalidArguments, s.label, o.label)
+					ErrInvalidArguments, s.ref, o.ref)
 			}
 			one := s.id == o.id
 			var c changes
@@ -582,7 +682,7 @@ func purgeAtlasPreview(t Tool) proposal.Previewer {
 		}
 		if sources, _ := cards.Lookup(s.doc, "sources").([]any); slices.ContainsFunc(sources,
 			func(src any) bool { return atlas.SourceKind(value(src, "kind")).Computed() }) {
-			return proposal.Preview{}, refusedDeclared(s.label, "the company's settings or the engine's records")
+			return proposal.Preview{}, refusedDeclared(s.ref, "the company's settings or the engine's records")
 		}
 		recency, _ := authz.RecencyOf(authz.ActionAtlasPurge)
 		var c changes

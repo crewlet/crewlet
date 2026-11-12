@@ -928,7 +928,7 @@ func pageActionPreview(t Tool) proposal.Previewer {
 		if !ok {
 			return proposal.Preview{}, fmt.Errorf("%w: no such page action", ErrInvalidArguments)
 		}
-		company, err := companyOf(ctx, read)
+		chart, err := companyOf(ctx, read)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
@@ -945,7 +945,7 @@ func pageActionPreview(t Tool) proposal.Previewer {
 			// NEVER A RAW PATH: a dotted key reads as its words, and a
 			// draft's own labels replace these where the turn's page
 			// declared them (assistant's draftRows).
-			row := proposal.Fact(k, cards.FieldLabel(k), company.valueShown(draftValueShown(payload[k])))
+			row := proposal.Fact(k, cards.FieldLabel(k), chart.valueShown(draftValueShown(payload[k])))
 			if items, ok := plainItems(payload[k]); ok {
 				row.Items = items
 			}
