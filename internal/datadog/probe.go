@@ -143,9 +143,9 @@ func atlasWarnings(ctx context.Context, client *Client, creds Credentials) []set
 	var wg sync.WaitGroup
 	for i, l := range listings {
 		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(ctx, probeCallTimeout)
+			bounded, cancel := context.WithTimeout(ctx, probeCallTimeout)
 			defer cancel()
-			refused[i] = Status(client.CanList(ctx, creds, l)) == http.StatusForbidden
+			refused[i] = Status(client.CanList(bounded, creds, l)) == http.StatusForbidden
 		})
 	}
 	wg.Wait()

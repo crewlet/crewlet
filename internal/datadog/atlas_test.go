@@ -394,6 +394,9 @@ func TestARefusedListingIsAFindingAndRetiresNothing(t *testing.T) {
 	if strings.Contains(read.Unread[0].Detail, "Forbidden") {
 		t.Errorf("the finding repeats the vendor's answer: %q", read.Unread[0].Detail)
 	}
+	if out, err := json.Marshal(read); err != nil || !strings.Contains(string(out), "hosts_read") {
+		t.Errorf("a read with a refused listing encodes as %s, %v", out, err)
+	}
 	v := view(read)
 	if e := entry(t, v, atlas.KindMonitor, "datadog/monitor/456"); fact(e, atlas.FactMonitorState) != atlas.MonitorAlert {
 		t.Errorf("the monitors were not read beside the refused hosts: %+v", e.Facts)

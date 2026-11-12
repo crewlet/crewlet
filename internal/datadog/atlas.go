@@ -342,7 +342,7 @@ func readSynthetics(b *collect.Builder, tests []SyntheticTest) {
 				continue
 			}
 			host = name
-			if endpoint, ok := b.Names(where+".url", atlas.KindEndpoint, address); ok {
+			if endpoint, named := b.Names(where+".url", atlas.KindEndpoint, address); named {
 				b.Relates(where+".url", endpoint, atlas.RelationMonitoredBy, monitor)
 			}
 		}
