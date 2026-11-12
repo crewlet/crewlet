@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
@@ -291,7 +292,13 @@ type ctReading struct {
 
 // ctRead reads text, one member, within maxBytes, to the end of the reading.
 func ctRead(text string, maxBytes int64) ctReading {
-	r := newThreadReader(strings.NewReader(text), maxBytes)
+	return ctReadFrom(strings.NewReader(text), maxBytes)
+}
+
+// ctReadFrom reads what member hands out, one member, within maxBytes, to the
+// end of the reading.
+func ctReadFrom(member io.Reader, maxBytes int64) ctReading {
+	r := newThreadReader(member, maxBytes)
 	var got ctReading
 	for {
 		line, err := r.Next()
@@ -449,6 +456,43 @@ func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	}
 }
 
+// A MEMBER'S READER THAT FAILS ENDS THE READING WITH ITS ERROR, never with the
+// member's end: an archive cut short (tar and gzip answer io.ErrUnexpectedEOF)
+// or a box's stream reset part way through a member ends the reading with that
+// error once the whole lines before it are read, the half record before it is
+// no torn piece, and asked again, the reader answers the same error. Only
+// io.EOF is the member's end: read as one, a cut stream would pass for a
+// thread whose last write tore, and what the cut took (a pair, a compaction's
+// boundary) would be neither read nor missed.
+//
+// Mutation: read a reader's error as the member's end, the half record before
+// it its torn piece, and each reading ends with io.EOF.
+func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
+	t.Parallel()
+	reset := errors.New("read: connection reset by peer")
+	whole := ctThread(ctEnqueue, ctBrief(ctUUID(1)))
+	call := ctAssistant(ctUUID(1), ctUUID(2), ctUseContent)
+	for name, tc := range map[string]struct {
+		text string
+		err  error
+	}{
+		"a reset part way through a record":        {text: whole + call[:len(call)/2], err: reset},
+		"an archive cut part way through a record": {text: whole + call[:len(call)/2], err: io.ErrUnexpectedEOF},
+		"a reset right after a break":              {text: whole, err: reset},
+		"an archive cut right after a break":       {text: whole, err: io.ErrUnexpectedEOF},
+	} {
+		got := ctReadFrom(io.MultiReader(strings.NewReader(tc.text), iotest.ErrReader(tc.err)), threadPlainMax)
+		if types := ctTypes(got.lines); len(got.broken) != 0 || !slices.Equal(types, []string{"queue-operation", "user"}) {
+			t.Errorf("%s: the lines read are of types %q, and %d broken; want the two before the failure, none broken",
+				name, strings.Join(types, " "), len(got.broken))
+		}
+		if !errors.Is(got.end, tc.err) || errors.Is(got.end, io.EOF) || got.torn || !errors.Is(got.again, tc.err) {
+			t.Errorf("%s: the reading ended with %v, torn %t, and then %v; want %v, not torn, and %v again",
+				name, got.end, got.torn, got.again, tc.err, tc.err)
+		}
+	}
+}
+
 // EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
 // that is not one record (two values, one cut short, a value that is no
 // object) or one whose head key is of the wrong type (`type`, `subtype` and
@@ -527,6 +571,38 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	}
 }
 
+// A RECORD IS THE MAIN THREAD'S ONLY WHERE IT SAYS SO: isSidechain present and
+// false, and no agentId. A record that names a subagent is no main thread's
+// whatever its isSidechain says, a sidechain's record is none though it names
+// no subagent, and a record that says neither (the harness's bookkeeping) is
+// none, so a reader of the main thread's hook records never pairs a
+// subagent's.
+//
+// Mutation: drop either half of the rule, and a record that names a subagent,
+// or a sidechain's, reads as the main thread's.
+func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
+	t.Parallel()
+	brief, prompt := ctBrief(ctUUID(1)), ctSubagentPrompt(ctUUID(3))
+	for name, tc := range map[string]struct {
+		record string
+		main   bool
+	}{
+		"the brief":           {record: brief, main: true},
+		"a hook's record":     {record: ctAttachment(ctUUID(6), ctUUID(7), ctBatchSystem, ""), main: true},
+		"a Stop's summary":    {record: ctSummary(ctUUID(15), ctUUID(16)), main: true},
+		"a subagent's prompt": {record: prompt},
+		"a record that names a subagent and says it is no sidechain's": {
+			record: strings.Replace(prompt, `"isSidechain":true`, `"isSidechain":false`, 1)},
+		"a sidechain's record that names no subagent": {
+			record: strings.Replace(brief, `"isSidechain":false`, `"isSidechain":true`, 1)},
+		"the harness's bookkeeping": {record: ctDequeue},
+	} {
+		if got := ctLine(t, tc.record).Head.Main(); got != tc.main {
+			t.Errorf("%s reads as the main thread's %t, want %t", name, got, tc.main)
+		}
+	}
+}
+
 // A KEY ONLY ONE READER READS COSTS THAT READER ALONE: an attachment that is
 // no object leaves the record's head and its message whole and is refused by
 // Hook alone, and an origin that is no object leaves the message and the hooks
@@ -566,6 +642,8 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		"a firing that names none": strings.Replace(ctBatchSystem, `"toolUseID":"`+ctBatchFire+`"`,
 			`"toolUseID":""`, 1),
 		"a firing with no event": strings.Replace(ctBatchContext, `"hookEvent":"PostToolBatch",`, "", 1),
+		"a firing whose event names none": strings.Replace(ctBatchContext, `"hookEvent":"PostToolBatch"`,
+			`"hookEvent":""`, 1),
 		"a cancellation whose command is a number": strings.Replace(ctCancelled, `"command":"crewlet/steer_take"`,
 			`"command":7`, 1),
 		"an attachment whose type is a number": strings.Replace(ctBatchSystem, `"type":"hook_system_message"`,
@@ -584,6 +662,8 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		"a summary whose firing is a number": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`"`,
 			`"toolUseID":7`, 1),
 		"a summary with no firing": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`",`, "", 1),
+		"a summary whose firing names none": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`"`,
+			`"toolUseID":""`, 1),
 	} {
 		if hook, isHook, err := ctLine(t, record).Hook(); err == nil {
 			t.Errorf("%s reads as the hook %+v (%t), want an error", name, hook, isHook)
@@ -947,10 +1027,14 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 // transcript takes for a main thread, a deeper path under the session's
 // directory, a name the caller did not clean, `agent-.jsonl` and an agent's id
 // outside the rule (1 to 64 bytes of letters, digits, `-` and `_`) name no
-// member, and an id outside its rule names none in either direction.
+// member, and an id outside its rule names none in either direction: a
+// session's id outside sandbox.ValidSessionID's shape names no member, nor
+// reads back as the session of the names its own spelling would make
+// (`projects/crewlet/a/b.jsonl` for `a/b`).
 //
 // Mutation: read a member's name through claudeThread, and another session's
-// file reads as this session's main thread.
+// file reads as this session's main thread; drop the session's check from a
+// subagent's names or from the way back, and `a/b` names a member.
 func TestMembersAreNamedExactly(t *testing.T) {
 	t.Parallel()
 	dir := "projects/" + claudeProjectDir + "/" + ctSession
@@ -1014,8 +1098,18 @@ func TestMembersAreNamedExactly(t *testing.T) {
 		if name, ok := claudeMainThread(session); ok {
 			t.Errorf("the session %q names its main thread %q", session, name)
 		}
-		if member, ok := claudeMemberOf(session, dir+".jsonl"); ok {
-			t.Errorf("the session %q reads %q as the member %+v", session, dir+".jsonl", member)
+		if name, ok := claudeSubagentThread(session, ctAgent); ok {
+			t.Errorf("the session %q names its subagent's thread %q", session, name)
+		}
+		if name, ok := claudeSubagentMeta(session, ctAgent); ok {
+			t.Errorf("the session %q names its subagent's metadata %q", session, name)
+		}
+		own := "projects/" + claudeProjectDir + "/" + session
+		for _, name := range []string{dir + ".jsonl", own + ".jsonl", own + "/subagents/agent-" + ctAgent + ".jsonl",
+			own + "/subagents/agent-" + ctAgent + ".meta.json"} {
+			if member, ok := claudeMemberOf(session, name); ok {
+				t.Errorf("the session %q reads %q as the member %+v", session, name, member)
+			}
 		}
 	}
 	for _, agent := range []string{"", "a/b", "a.b", "a\x00b", "..", longest + "a"} {
