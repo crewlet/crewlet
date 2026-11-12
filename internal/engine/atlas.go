@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
+	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -16,7 +17,42 @@ func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	if e == nil {
 		return builtin.AtlasDeps{}
 	}
-	return builtin.AtlasDeps{Settings: e.atlasSettings}
+	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords}
+}
+
+// atlasRecords is every record source of the engine's the atlas reads, as
+// this node reaches it: the replicated reads through the estate router, so a
+// node without the data role answers them too, and the coordination store's
+// directly. A source this node reaches none of is left nil, and the read
+// reports it as unread rather than empty.
+func (e *Engine) atlasRecords(ctx context.Context) gather.Sources {
+	var src gather.Sources
+	if e.backends != nil {
+		if e.backends.Fleet != nil {
+			src.ToolServers, src.ServerTests = e.backends.Fleet, e.backends.Fleet
+		}
+		if e.backends.Coord != nil {
+			src.Nodes = e.backends.Coord
+		}
+	}
+	if store, err := e.IntegrationStore(); err == nil {
+		src.Integrations = store
+	} else {
+		log.WarnContext(ctx, "atlas_integrations_unread", "error", err)
+	}
+	if ledger, err := e.SeatAccessLedger(); err == nil {
+		src.SeatAccess = ledger
+	} else {
+		log.WarnContext(ctx, "atlas_seat_access_unread", "error", err)
+	}
+	if reads, ok := e.accessReads(); ok {
+		src.AccessLog = reads
+	}
+	if e.router != nil {
+		src.Usage = e.UsageReads()
+	}
+	src.Alarms = e
+	return src
 }
 
 // atlasSettings is the settings this node runs as the atlas reads them, and

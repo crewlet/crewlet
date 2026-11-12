@@ -328,47 +328,49 @@ func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
 // and the stopped run is never finished.
 func TestAnEndingDecidedBeforeTheNextHoldersFenceIsFinishedByIt(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	launched := rig.launchKept(t, "t1")
-	store := &listsThen{PendingStore: rig.pending}
-	store.arm(func() {
-		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-			t.Errorf("the old holder's stop: %v", err)
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		launched := rig.launchKept(t, "t1")
+		store := &listsThen{PendingStore: rig.pending}
+		store.arm(func() {
+			if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+				t.Errorf("the old holder's stop: %v", err)
+			}
+			if run := rig.get("t1"); run.Ending == nil || run.OwnerEpoch != rigLease.Epoch {
+				t.Errorf("the premise: the old holder decided the stop under its own lease (ending %v, "+
+					"epoch %d)", run.Ending != nil, run.OwnerEpoch)
+			}
+		})
+		next := reaper(t.Context(), t, rig, store, 2, func(next *coordRig) {
+			// THE SAME BOXES, as a fleet's nodes reach them: the next holder
+			// reads the stopped job's box and reclaims it through the cell it
+			// is in.
+			next.coordinator.manager = rig.manager
+			next.coordinator.sessions, next.coordinator.keep = writes, keep
+			next.coordinator.closeStopped = rig.coordinator.closeStopped
+			next.coordinator.turnLost = rig.coordinator.turnLost
+			next.coordinator.sessionRetry, next.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
+			next.coordinator.captureTick = captureWaitTick
+			next.coordinator.spoolDir = t.TempDir()
+		})
+		for range 3 {
+			rig.fireRetries()
+			rig.awaitKeeps()
+			next.fireRetries()
+			next.awaitKeeps()
 		}
-		if run := rig.get("t1"); run.Ending == nil || run.OwnerEpoch != rigLease.Epoch {
-			t.Errorf("the premise: the old holder decided the stop under its own lease (ending %v, "+
-				"epoch %d)", run.Ending != nil, run.OwnerEpoch)
+		rig.finished("t1")
+		ends := writes.endedRecords()
+		if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped {
+			t.Fatalf("recorded %+v, want the stopped turn's one end", ends)
+		}
+		if !slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+			t.Fatal("the stopped job's box was never reclaimed")
+		}
+		if next.coordinator.SeatHeldBySandbox("swe") || next.coordinator.owes("t1") {
+			t.Fatal("the next holder holds its seat behind a run that is gone")
 		}
 	})
-	next := reaper(t.Context(), t, rig, store, 2, func(next *coordRig) {
-		// THE SAME BOXES, as a fleet's nodes reach them: the next holder
-		// reads the stopped job's box and reclaims it through the cell it
-		// is in.
-		next.coordinator.manager = rig.manager
-		next.coordinator.sessions, next.coordinator.keep = writes, keep
-		next.coordinator.closeStopped = rig.coordinator.closeStopped
-		next.coordinator.turnLost = rig.coordinator.turnLost
-		next.coordinator.sessionRetry, next.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
-		next.coordinator.captureTick = time.Millisecond
-		next.coordinator.spoolDir = t.TempDir()
-	})
-	for range 3 {
-		rig.fireRetries()
-		rig.awaitKeeps()
-		next.fireRetries()
-		next.awaitKeeps()
-	}
-	rig.finished("t1")
-	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped {
-		t.Fatalf("recorded %+v, want the stopped turn's one end", ends)
-	}
-	if !slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
-		t.Fatal("the stopped job's box was never reclaimed")
-	}
-	if next.coordinator.SeatHeldBySandbox("swe") || next.coordinator.owes("t1") {
-		t.Fatal("the next holder holds its seat behind a run that is gone")
-	}
 }
 
 // A RUN GONE BEFORE THE NEXT HOLDER'S FENCE IS NOT TAKEN OVER. The seat's last

@@ -620,7 +620,9 @@ func (c *Company) ReferenceWarnings() []Warning {
 // So is a seat whose executor chain holds an entry that can never run the
 // executor beside one that can ([Company.executorWarnings]), a token budget
 // a seat's ceilings leave idle ([Company.budgetWarnings]), a code setting
-// that grants or protects less than it reads as ([Company.codeWarnings]),
+// that grants or protects less than it reads as ([Company.codeWarnings]), a
+// delegation rule's required checks on a repository the company's GitHub
+// does not cover ([Company.delegatedAdvisories]),
 // and what the unit channels say about each other
 // ([Company.channelAdvisories]): one room two units claim on a vendor chat
 // surface, and a Chatlet company that gives no team a room. And the three a
@@ -651,6 +653,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.budgetWarnings()...)
 	out = append(out, c.codeWarnings()...)
 	out = append(out, c.sshAdvisories()...)
+	out = append(out, c.delegatedAdvisories()...)
 	out = append(out, c.accessAdvisories()...)
 	out = append(out, c.healthWarnings()...)
 	out = append(out, c.auxiliaryWarnings()...)

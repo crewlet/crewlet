@@ -102,6 +102,12 @@ Records are read as closed projections: the fields a map needs and nothing else.
 
 Every read says which of these sources it read in full and why not where it did not. A source that fails leaves the rest of the atlas answering.
 
+## Reading the atlas
+
+People holding the `atlas` permission read the atlas through five questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, and the counts a filter menu offers ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
+
+Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
+
 ## One thing, one entry
 
 An entry's identity is its kind and its natural key, and its id is derived from the two, so every source that meets the same zone names the same entry. Two entries of one kind that share an **exact** key are one entry when the atlas is read:

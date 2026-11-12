@@ -27,7 +27,7 @@ type releaseFacts struct {
 // GitHub, which the merge is made with. None where the allow may stand. A
 // condition the engine cannot read is unmet: a person decides.
 func (d ReleaseDeps) unmet(ctx context.Context, turn *turnctx.Turn, requester string, kind delegated.Kind,
-	args map[string]any, rulePaths []string, f releaseFacts) []delegated.Unmet {
+	args map[string]any, rule delegated.Release, f releaseFacts) []delegated.Unmet {
 
 	switch kind {
 	case delegated.KindPRMerge:
@@ -36,18 +36,18 @@ func (d ReleaseDeps) unmet(ctx context.Context, turn *turnctx.Turn, requester st
 			return []delegated.Unmet{unread("the request's arguments no longer read as a merge")}
 		}
 		if a.github {
-			return d.pullMergeUnmet(ctx, requester, a, rulePaths)
+			return d.pullMergeUnmet(ctx, requester, a, rule)
 		}
-		return d.gitletMergeUnmet(ctx, turn, requester, a, rulePaths, f)
+		return d.gitletMergeUnmet(ctx, turn, requester, a, rule.EscalatePaths, f)
 	case delegated.KindDeploy:
 		a, refusal := d.deployAskOf(ReviewDelegatedTool, args)
 		if refusal != nil {
 			return []delegated.Unmet{unread("the request's arguments no longer read as a deploy")}
 		}
 		if a.github {
-			return d.pullDeployUnmet(ctx, requester, a, rulePaths)
+			return d.pullDeployUnmet(ctx, requester, a, rule)
 		}
-		return d.gitletDeployUnmet(ctx, turn, a, rulePaths, f)
+		return d.gitletDeployUnmet(ctx, turn, a, rule.EscalatePaths, f)
 	}
 	return nil
 }
@@ -73,17 +73,21 @@ func pathsUnmet(ref string, paths []string, complete bool, rulePaths []string) [
 	return out
 }
 
-// checksUnmet is what a commit's required checks leave unmet: none required,
-// or each that did not pass.
+// checksUnmet is what a commit's required checks leave unmet: none required by
+// the code host or declared by the rule, or each that did not pass.
 func checksUnmet(what string, required []CheckFact) []delegated.Unmet {
 	if len(required) == 0 {
-		return []delegated.Unmet{{Word: delegated.UnmetNoChecks, Says: what + "'s branch requires no check, so " +
-			"nothing shows CI passed."}}
+		return []delegated.Unmet{{Word: delegated.UnmetNoChecks, Says: what + "'s branch requires no check and " +
+			"the rule declares none for it, so nothing shows CI passed."}}
 	}
 	var failing []string
 	for _, c := range required {
 		if c.Result != CheckPassed {
-			failing = append(failing, c.Name+" ("+c.Result+")")
+			by := ""
+			if c.Declared {
+				by = ", declared by the rule"
+			}
+			failing = append(failing, c.Name+" ("+c.Result+by+")")
 		}
 	}
 	if len(failing) == 0 {
@@ -98,9 +102,9 @@ func checksUnmet(what string, required []CheckFact) []delegated.Unmet {
 // pullMergeUnmet is a pull request's merge conditions, as the requester reads
 // it.
 func (d ReleaseDeps) pullMergeUnmet(ctx context.Context, requester string, a mergeAsk,
-	rulePaths []string) []delegated.Unmet {
+	rule delegated.Release) []delegated.Unmet {
 
-	f, err := d.Pulls.Facts(ctx, requester, a.pull)
+	f, err := d.Pulls.Facts(ctx, requester, a.pull, rule.RequiredChecks)
 	if err != nil {
 		log.WarnContext(ctx, "release_facts_unread", "change", a.ref, "error", err.Error())
 		return []delegated.Unmet{unread(a.ref + " from GitHub")}
@@ -137,20 +141,20 @@ func (d ReleaseDeps) pullMergeUnmet(ctx context.Context, requester string, a mer
 	if label, sensitive := delegated.SensitiveLabel(f.Labels); sensitive {
 		add(delegated.OverruledLabel, a.ref+" is labelled "+label+".")
 	}
-	return append(out, pathsUnmet(a.ref, f.Paths, f.PathsComplete, rulePaths)...)
+	return append(out, pathsUnmet(a.ref, f.Paths, f.PathsComplete, rule.EscalatePaths)...)
 }
 
 // pullDeployUnmet is a deploy's conditions on GitHub, as the requester reads
 // them.
 func (d ReleaseDeps) pullDeployUnmet(ctx context.Context, requester string, a deployAsk,
-	rulePaths []string) []delegated.Unmet {
+	rule delegated.Release) []delegated.Unmet {
 
 	var out []delegated.Unmet
 	add := func(word, says string) { out = append(out, delegated.Unmet{Word: word, Says: says}) }
 	base := ""
 	for _, n := range a.changes {
 		ref := PullRef{Owner: a.pulls.Owner, Repo: a.pulls.Repo, Number: int(n)}
-		f, err := d.Pulls.Facts(ctx, requester, ref)
+		f, err := d.Pulls.Facts(ctx, requester, ref, nil)
 		if err != nil {
 			log.WarnContext(ctx, "release_facts_unread", "change", ref.String(), "error", err.Error())
 			return append(out, unread(ref.String()+" from GitHub"))
@@ -176,7 +180,7 @@ func (d ReleaseDeps) pullDeployUnmet(ctx context.Context, requester string, a de
 		if label, sensitive := delegated.SensitiveLabel(f.Labels); sensitive {
 			add(delegated.OverruledLabel, ref.String()+" is labelled "+label+".")
 		}
-		out = append(out, pathsUnmet(ref.String(), f.Paths, f.PathsComplete, rulePaths)...)
+		out = append(out, pathsUnmet(ref.String(), f.Paths, f.PathsComplete, rule.EscalatePaths)...)
 	}
 	if base == "" {
 		return out
@@ -189,7 +193,7 @@ func (d ReleaseDeps) pullDeployUnmet(ctx context.Context, requester string, a de
 	case !onBranch:
 		add(delegated.UnmetNotContained, abbrevOID(a.commit)+" is not on "+base+".")
 	}
-	required, read, err := d.Pulls.Checks(ctx, requester, a.pulls, base, a.commit)
+	required, read, err := d.Pulls.Checks(ctx, requester, a.pulls, base, a.commit, rule.RequiredChecks)
 	if err != nil || !read {
 		return append(out, unread("which checks "+base+" requires, and their results on "+abbrevOID(a.commit)))
 	}

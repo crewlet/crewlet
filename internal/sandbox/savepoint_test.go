@@ -158,6 +158,10 @@ func TestEveryAppendedCallIsNumberedInItsRound(t *testing.T) {
 // during while the collection's take read the box — after the capture had read
 // the log to place the session — and answers the capture the row keeps and the
 // job's log as the collection left it.
+//
+// Built on [keepingRig], and so only in a bubble ([inBubble]).
+//
+//fixedwait:bubble
 func keptAfter(t *testing.T, before, during []int) (SessionCapture, BridgeLog) {
 	t.Helper()
 	rig, _, _ := keepingRig(t)
@@ -208,49 +212,55 @@ func TestACapturesSavePointIsTheAppendCountItsLogReadSaw(t *testing.T) {
 	t.Parallel()
 	t.Run("a long round, and a call answered as the box was read", func(t *testing.T) {
 		t.Parallel()
-		var before []int
-		for i := 1; i <= MaxBridgeCalls+30; i++ {
-			// EVERY OTHER PLACE, so the highest is twice the count.
-			before = append(before, 2*i)
-		}
-		kept, log := keptAfter(t, before, []int{1})
-		through, placed := kept.SavePoint()
-		if want := MaxBridgeCalls + 30; !placed || through != want {
-			t.Fatalf("the capture states save point %d (stated %v), want %d: the calls the log had taken when "+
-				"it was read, not the %d it lists nor its highest place %d", through, placed, want,
-				MaxBridgeCalls, 2*want)
-		}
-		i := slices.IndexFunc(log.Calls, func(c BridgeCall) bool { return c.Seq == 1 })
-		switch {
-		case i < 0:
-			t.Error("the log does not list the call answered as the box was read")
-		case log.Calls[i].Appended <= through:
-			t.Errorf("the call answered as the box was read is numbered %d, want past the save point %d",
-				log.Calls[i].Appended, through)
-		}
+		inBubble(t, func(t *testing.T) {
+			var before []int
+			for i := 1; i <= MaxBridgeCalls+30; i++ {
+				// EVERY OTHER PLACE, so the highest is twice the count.
+				before = append(before, 2*i)
+			}
+			kept, log := keptAfter(t, before, []int{1})
+			through, placed := kept.SavePoint()
+			if want := MaxBridgeCalls + 30; !placed || through != want {
+				t.Fatalf("the capture states save point %d (stated %v), want %d: the calls the log had taken when "+
+					"it was read, not the %d it lists nor its highest place %d", through, placed, want,
+					MaxBridgeCalls, 2*want)
+			}
+			i := slices.IndexFunc(log.Calls, func(c BridgeCall) bool { return c.Seq == 1 })
+			switch {
+			case i < 0:
+				t.Error("the log does not list the call answered as the box was read")
+			case log.Calls[i].Appended <= through:
+				t.Errorf("the call answered as the box was read is numbered %d, want past the save point %d",
+					log.Calls[i].Appended, through)
+			}
+		})
 	})
 	t.Run("a log no call reached", func(t *testing.T) {
 		t.Parallel()
-		kept, _ := keptAfter(t, nil, nil)
-		if through, placed := kept.SavePoint(); !placed || through != 0 {
-			t.Fatalf("the capture states save point %d (stated %v), want 0, stated: a session that holds none "+
-				"of the round's calls", through, placed)
-		}
+		inBubble(t, func(t *testing.T) {
+			kept, _ := keptAfter(t, nil, nil)
+			if through, placed := kept.SavePoint(); !placed || through != 0 {
+				t.Fatalf("the capture states save point %d (stated %v), want 0, stated: a session that holds none "+
+					"of the round's calls", through, placed)
+			}
+		})
 	})
 	t.Run("a refusal before the log was read", func(t *testing.T) {
 		t.Parallel()
-		rig, _, _ := keepingRig(t)
-		rig.launchKept(t, "t1")
-		rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
-		collectHeld(t, rig, "t1")
-		capture := rig.get("t1").Capture
-		if capture == nil || capture.State != CaptureRefused {
-			t.Fatalf("the row holds %+v, want the capture refused", capture)
-		}
-		if through, placed := capture.SavePoint(); placed {
-			t.Errorf("a capture refused before its log was read states save point %d, want none: not known",
-				through)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			rig.launchKept(t, "t1")
+			rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
+			collectHeld(t, rig, "t1")
+			capture := rig.get("t1").Capture
+			if capture == nil || capture.State != CaptureRefused {
+				t.Fatalf("the row holds %+v, want the capture refused", capture)
+			}
+			if through, placed := capture.SavePoint(); placed {
+				t.Errorf("a capture refused before its log was read states save point %d, want none: not known",
+					through)
+			}
+		})
 	})
 }
 
@@ -266,22 +276,24 @@ func TestACapturesSavePointIsTheAppendCountItsLogReadSaw(t *testing.T) {
 // after the take, and this goes red.
 func TestAStampStillCarriesTheArrivalSavePointForAnOlderPeer(t *testing.T) {
 	t.Parallel()
-	// THE THIRD CALL IN FLIGHT AT THE READ, answered as the box was read.
-	kept, _ := keptAfter(t, []int{1, 2, 4}, []int{3})
-	through, _ := kept.SavePoint()
-	if through != 3 || kept.BridgeSeq != 4 || !slices.Equal(kept.BridgeOpen, []int{3}) {
-		t.Fatalf("the stamp states save point %d, highest call %d and open places %v, want 3, 4 and [3]: one "+
-			"read of the log", through, kept.BridgeSeq, kept.BridgeOpen)
-	}
-	raw, err := json.Marshal(kept)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{`"bridge_seq":4`, `"bridge_open":[3]`, `"bridge_through":3`} {
-		if !strings.Contains(string(raw), key) {
-			t.Errorf("the stamp on the wire carries no %s: %s", key, raw)
+	inBubble(t, func(t *testing.T) {
+		// THE THIRD CALL IN FLIGHT AT THE READ, answered as the box was read.
+		kept, _ := keptAfter(t, []int{1, 2, 4}, []int{3})
+		through, _ := kept.SavePoint()
+		if through != 3 || kept.BridgeSeq != 4 || !slices.Equal(kept.BridgeOpen, []int{3}) {
+			t.Fatalf("the stamp states save point %d, highest call %d and open places %v, want 3, 4 and [3]: one "+
+				"read of the log", through, kept.BridgeSeq, kept.BridgeOpen)
 		}
-	}
+		raw, err := json.Marshal(kept)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{`"bridge_seq":4`, `"bridge_open":[3]`, `"bridge_through":3`} {
+			if !strings.Contains(string(raw), key) {
+				t.Errorf("the stamp on the wire carries no %s: %s", key, raw)
+			}
+		}
+	})
 }
 
 // A KEPT STAMP WITH NO SAVE POINT IS NOT CONTINUED. A build before the count
@@ -537,76 +549,78 @@ func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testin
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, _ := keepingRig(t)
-			deadline := time.Time{}
-			if tc.capped {
-				deadline = rig.now.Add(-time.Minute)
-			}
-			launched := rig.launchUntil("t1", deadline)
-			rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-			rig.coordinator.countRun("swe", StatusRunning)
-			// THREE CALLS ANSWERED before the take reads the log, any of which
-			// the harness may not have written.
-			for seq := 1; seq <= 3; seq++ {
-				if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
-					Call: BridgeCall{Name: "slack_post", Seq: seq}}); err != nil || !ok {
-					t.Fatalf("appending the call at %d: %v, %v", seq, ok, err)
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				deadline := time.Time{}
+				if tc.capped {
+					deadline = rig.now.Add(-time.Minute)
 				}
-			}
-			if tc.own {
-				own := SessionCapture{LaunchSeq: launched.LaunchSeq, CaptureSeq: 1, Launch: launched.LaunchID,
-					State: CaptureLanded, At: rig.now, Through: new(2), BridgeSeq: 2, BridgeOpen: []int{1},
-					Object: objstore.KeyAt(rig.now).String(), Harness: "claude-code", SessionID: "s-1",
-					ArchiveFormat: FakeArchiveFormat}
-				if took, err := rig.pending.StampCapture(t.Context(), "t1", own); err != nil || !took {
-					t.Fatalf("landing the launch's own capture = %v, %v", took, err)
+				launched := rig.launchUntil("t1", deadline)
+				rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+				rig.coordinator.countRun("swe", StatusRunning)
+				// THREE CALLS ANSWERED before the take reads the log, any of which
+				// the harness may not have written.
+				for seq := 1; seq <= 3; seq++ {
+					if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
+						Call: BridgeCall{Name: "slack_post", Seq: seq}}); err != nil || !ok {
+						t.Fatalf("appending the call at %d: %v, %v", seq, ok, err)
+					}
 				}
-			}
-			archive := rig.runner.Session.Archive
-			switch {
-			case tc.finished != nil:
-				rig.runner.Finish(tc.finished(&archive))
-			case tc.ended != nil:
-				rig.runner.EndsAs(tc.ended(&archive))
-			}
-			if tc.unstoppable {
-				// A SCRIPT THAT HEARS THE REQUEST AND GOES ON, and a kill past
-				// the wait that reaches nothing of the job.
-				rig.coordinator.endWait = 50 * time.Millisecond
-				rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
-					return EndAsked, nil
+				if tc.own {
+					own := SessionCapture{LaunchSeq: launched.LaunchSeq, CaptureSeq: 1, Launch: launched.LaunchID,
+						State: CaptureLanded, At: rig.now, Through: new(2), BridgeSeq: 2, BridgeOpen: []int{1},
+						Object: objstore.KeyAt(rig.now).String(), Harness: "claude-code", SessionID: "s-1",
+						ArchiveFormat: FakeArchiveFormat}
+					if took, err := rig.pending.StampCapture(t.Context(), "t1", own); err != nil || !took {
+						t.Fatalf("landing the launch's own capture = %v, %v", took, err)
+					}
 				}
-				rig.provider.Box(launched.SandboxID).KillJobFunc = func(context.Context, string) error {
-					return ErrNoJobGroup
+				archive := rig.runner.Session.Archive
+				switch {
+				case tc.finished != nil:
+					rig.runner.Finish(tc.finished(&archive))
+				case tc.ended != nil:
+					rig.runner.EndsAs(tc.ended(&archive))
 				}
-			}
-			if tc.lost {
-				spooled, _ := rig.coordinator.readLost(t.Context(), rig.get("t1"))
-				rig.coordinator.keepLater(spooled)
-			} else {
-				// COLLECTED, the resume after it refused, so the row stays for
-				// the case.
-				rig.resumer.failWith(errors.New("held for the case to read the row"))
-				payload, ev := rig.completion("t1")
-				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-					t.Logf("OnCompleted: %v", err)
+				if tc.unstoppable {
+					// A SCRIPT THAT HEARS THE REQUEST AND GOES ON, and a kill past
+					// the wait that reaches nothing of the job.
+					rig.coordinator.endWait = 50 * time.Millisecond
+					rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) {
+						return EndAsked, nil
+					}
+					rig.provider.Box(launched.SandboxID).KillJobFunc = func(context.Context, string) error {
+						return ErrNoJobGroup
+					}
 				}
-			}
-			rig.awaitKeeps()
-			kept := rig.get("t1").Kept
-			if kept == nil || kept.State != CaptureLanded || kept.CaptureSeq != nextSeq(tc.own) ||
-				kept.Final != tc.final || kept.Interrupted != tc.cutOff {
-				t.Fatalf("the row keeps %+v, want the take's capture landed, final: %v, cut off: %v", kept,
-					tc.final, tc.cutOff)
-			}
-			through, placed := kept.SavePoint()
-			if !placed || through != tc.through {
-				t.Errorf("the capture is placed at %d (stated %v), want %d", through, placed, tc.through)
-			}
-			if kept.BridgeSeq != tc.highest || !slices.Equal(kept.BridgeOpen, tc.open) {
-				t.Errorf("the capture carries %d and %v for an older build, want %d and %v: the places of the "+
-					"point it states", kept.BridgeSeq, kept.BridgeOpen, tc.highest, tc.open)
-			}
+				if tc.lost {
+					spooled, _ := rig.coordinator.readLost(t.Context(), rig.get("t1"))
+					rig.coordinator.keepLater(spooled)
+				} else {
+					// COLLECTED, the resume after it refused, so the row stays for
+					// the case.
+					rig.resumer.failWith(errors.New("held for the case to read the row"))
+					payload, ev := rig.completion("t1")
+					if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+						t.Logf("OnCompleted: %v", err)
+					}
+				}
+				rig.awaitKeeps()
+				kept := rig.get("t1").Kept
+				if kept == nil || kept.State != CaptureLanded || kept.CaptureSeq != nextSeq(tc.own) ||
+					kept.Final != tc.final || kept.Interrupted != tc.cutOff {
+					t.Fatalf("the row keeps %+v, want the take's capture landed, final: %v, cut off: %v", kept,
+						tc.final, tc.cutOff)
+				}
+				through, placed := kept.SavePoint()
+				if !placed || through != tc.through {
+					t.Errorf("the capture is placed at %d (stated %v), want %d", through, placed, tc.through)
+				}
+				if kept.BridgeSeq != tc.highest || !slices.Equal(kept.BridgeOpen, tc.open) {
+					t.Errorf("the capture carries %d and %v for an older build, want %d and %v: the places of the "+
+						"point it states", kept.BridgeSeq, kept.BridgeOpen, tc.highest, tc.open)
+				}
+			})
 		})
 	}
 }
@@ -656,43 +670,45 @@ func TestOnlyACaptureItsLogReadPlacesReadsTheLog(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, _ := keepingRig(t)
-			launched := rig.launchKept(t, "t1")
-			// THREE CALLS ANSWERED before the take, which a read would count.
-			for seq := 1; seq <= 3; seq++ {
-				if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
-					Call: BridgeCall{Name: "slack_post", Seq: seq}}); err != nil || !ok {
-					t.Fatalf("appending the call at %d: %v, %v", seq, ok, err)
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				launched := rig.launchKept(t, "t1")
+				// THREE CALLS ANSWERED before the take, which a read would count.
+				for seq := 1; seq <= 3; seq++ {
+					if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
+						Call: BridgeCall{Name: "slack_post", Seq: seq}}); err != nil || !ok {
+						t.Fatalf("appending the call at %d: %v, %v", seq, ok, err)
+					}
 				}
-			}
-			if tc.unread {
-				rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"TurnLog"}}
-			}
-			if tc.untaken {
-				rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
-			}
-			archive := rig.runner.Session.Archive
-			rig.runner.Finish(Result{Success: !tc.cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
-				Captured: &archive, HarnessCutOff: tc.cutOff})
-			// COLLECTED, the resume after it refused, so the row stays for the
-			// case.
-			rig.resumer.failWith(errors.New("held for the case to read the row"))
-			payload, ev := rig.completion("t1")
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-				t.Logf("OnCompleted: %v", err)
-			}
-			rig.awaitKeeps()
-			capture := rig.get("t1").Capture
-			if capture == nil || capture.State != tc.state || capture.Interrupted != tc.cutOff {
-				t.Fatalf("the row holds %+v, want the capture %s, cut off: %v", capture, tc.state, tc.cutOff)
-			}
-			through, placed := capture.SavePoint()
-			switch {
-			case tc.through == nil && placed:
-				t.Errorf("the capture states save point %d, want none: not known", through)
-			case tc.through != nil && (!placed || through != *tc.through):
-				t.Errorf("the capture states save point %d (stated %v), want %d", through, placed, *tc.through)
-			}
+				if tc.unread {
+					rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"TurnLog"}}
+				}
+				if tc.untaken {
+					rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
+				}
+				archive := rig.runner.Session.Archive
+				rig.runner.Finish(Result{Success: !tc.cutOff, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+					Captured: &archive, HarnessCutOff: tc.cutOff})
+				// COLLECTED, the resume after it refused, so the row stays for the
+				// case.
+				rig.resumer.failWith(errors.New("held for the case to read the row"))
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Logf("OnCompleted: %v", err)
+				}
+				rig.awaitKeeps()
+				capture := rig.get("t1").Capture
+				if capture == nil || capture.State != tc.state || capture.Interrupted != tc.cutOff {
+					t.Fatalf("the row holds %+v, want the capture %s, cut off: %v", capture, tc.state, tc.cutOff)
+				}
+				through, placed := capture.SavePoint()
+				switch {
+				case tc.through == nil && placed:
+					t.Errorf("the capture states save point %d, want none: not known", through)
+				case tc.through != nil && (!placed || through != *tc.through):
+					t.Errorf("the capture states save point %d (stated %v), want %d", through, placed, *tc.through)
+				}
+			})
 		})
 	}
 }
