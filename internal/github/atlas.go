@@ -104,7 +104,7 @@ func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read,
 		listed: map[string]bool{}, unread: map[string]map[string]bool{partWorkflows: {}, partDeployments: {}},
 	}
 	counting := *base
-	var next http.RoundTripper = httpx.Transport()
+	next := httpx.Transport()
 	if base.Transport != nil {
 		next = base.Transport
 	}
