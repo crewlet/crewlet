@@ -110,6 +110,15 @@ func (d *atlasDesk) Record(_ context.Context, c atlasdomain.Call, claim atlas.Cl
 		claim.Value.Text, ifMatch), c)
 }
 
+func (d *atlasDesk) Observe(_ context.Context, c atlasdomain.Call, claim atlas.Claim,
+	seen atlasdomain.Observation) (statelog.Result, error) {
+	if seen.Turn == "" {
+		return statelog.Result{}, fmt.Errorf("%w: no turn", atlasdomain.ErrInvalid)
+	}
+	return d.wrote(fmt.Sprintf("observe:%s:%s:%s=%s:%s:%s", claim.Subject, claim.Facet.Kind, claim.Facet.Fact,
+		claim.Value.Text, seen.Turn, seen.Evidence), c)
+}
+
 func (d *atlasDesk) PurgeEntry(_ context.Context, c atlasdomain.Call, ref atlas.Ref) (statelog.Result, error) {
 	return d.wrote("purge_entry:"+ref.String(), c)
 }
@@ -198,6 +207,51 @@ func TestAPersonsAtlasWriteFromANodeWithoutDataCrossesWhole(t *testing.T) {
 		"purge_entry:service:checkout-api" + by,
 		"purge_value:" + atlasdomain.Digest(value) + by,
 	}
+	if !slices.Equal(desk.calls, want) {
+		t.Errorf("the data node ran %v, want %v", desk.calls, want)
+	}
+}
+
+// AN AGENT'S ATLAS RECORD FROM A NODE HOLDING NO DATA IS A DATA NODE'S WRITE
+// (ADR-0132): the claim, the turn it was made in, the evidence the asking node
+// derived, the seat and the operation cross whole, and a refusal keeps its
+// identity. A seat is held wherever its lease lands, a leaf without data
+// included, and only that node holds what its turn's calls answered.
+//
+// Mutation: drop Seen from atlasObserveArgs and the record arrives naming no
+// turn, which the data node refuses.
+func TestAnAgentsAtlasRecordFromANodeWithoutDataCrossesWhole(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	desk := &atlasDesk{}
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
+	w := f.client.AtlasWrites()
+	sre := atlasdomain.Call{By: iam.Actor{Name: "sre", Kind: iam.ActorAgent},
+		OpID: statelog.NewOpID(time.Now(), "atlas")}
+	at := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	db := atlas.MustRef(atlas.KindDatastore, "web-1/orders-db")
+	claim, err := atlas.Says(db, atlas.FactEngine, "postgres", atlas.AgentSource("sre", "run-1", atlas.EvidenceNone), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := atlasdomain.Observation{Turn: "run-1", Evidence: atlas.EvidenceCall}
+	if res, err := w.Observe(t.Context(), sre, claim, seen); err != nil || res.Outcome != statelog.OutcomeApplied ||
+		res.OpID != sre.OpID {
+		t.Errorf("observe = (%+v, %v)", res, err)
+	}
+	if _, err := w.Observe(t.Context(), sre, claim, atlasdomain.Observation{}); !errors.Is(err, atlasdomain.ErrInvalid) {
+		t.Errorf("a record naming no turn crossed as %v", err)
+	}
+	desk.mu.Lock()
+	defer desk.mu.Unlock()
+	want := []string{"observe:datastore:web-1/orders-db:fact:engine=postgres:run-1:call|sre|agent|" + sre.OpID}
 	if !slices.Equal(desk.calls, want) {
 		t.Errorf("the data node ran %v, want %v", desk.calls, want)
 	}

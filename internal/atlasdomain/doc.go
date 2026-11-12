@@ -6,8 +6,7 @@
 // # Who has to agree on it
 //
 // Every data node, identically: the atlas is read from whichever node a person
-// reaches, several people (and, at later record versions, agents and the
-// integrations' reads) change it, and its history must outlive any one node's
+// reaches, several people, the agents and the integrations' reads change it, and its history must outlive any one node's
 // event store. That is the replicated estate, which only this domain's applier
 // writes. What the engine already keeps (the company settings, Gitlet, the
 // integrations' status, the access log) is never copied here: [atlas.Fold]
@@ -28,6 +27,12 @@
 //     before it was published. A claim is kept, never updated, but for being
 //     REPLACED: a voice's newer claim on the same slot ([atlas.Claim.Slot])
 //     marks its older one, which stays as the entry's history.
+//     An AGENT's claim is the same record at version 3 (ADR-0132), written by
+//     [Writer.Observe]: its source is the seat, with the turn it recorded in
+//     and the evidence the engine checked behind it, so its confidence is
+//     read off the record and chosen by nobody. It replaces only the seat's
+//     own earlier claim on the slot, is conditioned on no version, and an
+//     agent's denial is a dispute the fold never lets win.
 //   - `read` records one integration's read of the entry (ADR-0129): the
 //     claims the read holds on it that are new or changed, in the
 //     integration's voice, and the slots of its earlier claims it no longer
