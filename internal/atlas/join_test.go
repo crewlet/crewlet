@@ -138,3 +138,61 @@ func TestAMonitorsStateIsASignalOnWhatItWatches(t *testing.T) {
 		t.Errorf("a retired monitor still signals on what it watched: %+v", e.Signals)
 	}
 }
+
+// A PIPELINE WHOSE LAST RESULT IS A FAILURE IS A SIGNAL ON IT AND ON WHAT IT
+// DEPLOYS, read off the claims on every read: failed and errored are a
+// warning, since a failed run leaves what ran before it in place, every other
+// result raises nothing, and a retired pipeline raises nothing anywhere. What
+// a pipeline is only built from carries nothing.
+//
+// Mutation: drop deliver from Join, and a failed deployment leaves the name
+// it deployed quiet.
+func TestAFailingPipelineIsASignalOnWhatItDeploys(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	github := atlas.IntegrationSource("github")
+	repo := atlas.MustRef(atlas.KindRepository, "github.com/acme/api")
+	environment := atlas.MustRef(atlas.KindPipeline, "github.com/acme/api#environment:production")
+	name := atlas.MustRef(atlas.KindHostname, "api.acme.example")
+	address := atlas.MustRef(atlas.KindEndpoint, "https://api.acme.example/")
+	other := atlas.MustRef(atlas.KindHostname, "www.acme.example")
+	base := []atlas.Claim{
+		m(atlas.Exists(repo, github, now)),
+		m(atlas.Exists(environment, github, now)),
+		m(atlas.Exists(other, settings, now)),
+		m(atlas.Relates(environment, atlas.RelationBuiltFrom, repo, github, now)),
+		m(atlas.Relates(name, atlas.RelationDeployedBy, environment, github, now)),
+		m(atlas.Relates(address, atlas.RelationDeployedBy, environment, github, now)),
+	}
+	for _, result := range atlas.FactLastResult.Spec().Words {
+		failing := result == atlas.ResultFailed || result == atlas.ResultErrored
+		claims := append(slices.Clone(base), m(atlas.Says(environment, atlas.FactLastResult, result, github, now)))
+		v := atlas.Join(atlas.Fold(claims, now), atlas.Joined{}, now)
+		for _, ref := range []atlas.Ref{environment, name, address} {
+			e := entry(t, v, ref)
+			if !failing {
+				if len(e.Signals) != 0 || e.Health() != atlas.HealthQuiet {
+					t.Errorf("%s: %s carries %+v", result, ref, e.Signals)
+				}
+				continue
+			}
+			if len(e.Signals) != 1 || e.Signals[0].Kind != atlas.SignalPipelineFailing ||
+				e.Signals[0].Severity != atlas.SeverityWarning || e.Signals[0].Audience != atlas.AudienceHolders ||
+				!e.Signals[0].Since.Equal(now) || e.Health() != atlas.HealthNeedsLook {
+				t.Errorf("%s: %s carries %+v and is %s", result, ref, e.Signals, e.Health())
+			}
+		}
+		for _, ref := range []atlas.Ref{repo, other} {
+			if e := entry(t, v, ref); len(e.Signals) != 0 {
+				t.Errorf("%s: %s, which the pipeline does not deploy, carries %+v", result, ref, e.Signals)
+			}
+		}
+	}
+	failed := append(slices.Clone(base), m(atlas.Says(environment, atlas.FactLastResult, atlas.ResultFailed, github, now)))
+	gone := m(atlas.Exists(environment, github, now.Add(time.Minute)))
+	gone.Denied = true
+	v := atlas.Join(atlas.Fold(append(failed, gone), now.Add(time.Minute)), atlas.Joined{}, now.Add(time.Minute))
+	if e, ok := v.Find(name.ID()); ok && len(e.Signals) != 0 {
+		t.Errorf("a retired pipeline still signals on what it deployed: %+v", e.Signals)
+	}
+}

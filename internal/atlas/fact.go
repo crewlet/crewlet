@@ -45,6 +45,8 @@ const (
 	FactLastResult Fact = "last_result"
 	FactRunner     Fact = "runner"
 	FactRequired   Fact = "required"
+	// FactPipelineState is whether a pipeline's vendor still runs it.
+	FactPipelineState Fact = "pipeline_state"
 
 	FactHarness       Fact = "harness"
 	FactModel         Fact = "model"
@@ -94,16 +96,37 @@ var (
 		"elasticsearch", "opensearch", "clickhouse", "nats", "kafka", "rabbitmq", "other"}
 	visibilities = []string{"company", "unit", "public", "private", "internal"}
 	statuses     = []string{"importing", "active", "archived"}
-	results      = []string{"queued", "running", "passed", "failed", "errored", "cancelled", "skipped"}
+	results      = []string{ResultQueued, ResultRunning, ResultPassed, ResultFailed, ResultErrored, ResultCancelled, ResultSkipped}
 	runners      = []string{"engine", "external"}
-	signIns      = []string{"subscription", "api_key", "inherit_env", "env"}
-	transports   = []string{"stdio", "http"}
+	// A pipeline its vendor has switched off, by hand or for inactivity, is
+	// disabled: it still exists, and runs nothing until somebody enables it.
+	pipelineStates = []string{PipelineActive, PipelineDisabled}
+	signIns        = []string{"subscription", "api_key", "inherit_env", "env"}
+	transports     = []string{"stdio", "http"}
 	// A certificate's validity, as the vendor reports it folded into five
 	// words: pending covers every state on the way to active, failed every
 	// step that timed out, and inactive one deactivated, deleted or on its
 	// way out.
 	validities       = []string{"active", "pending", "failed", "expired", "inactive"}
 	certificateTypes = []string{"universal", "advanced", "custom"}
+)
+
+// A pipeline's last result: the state of its latest run or deployment. Failed
+// is one that ran and did not pass, errored one that could not run to an end.
+const (
+	ResultQueued    = "queued"
+	ResultRunning   = "running"
+	ResultPassed    = "passed"
+	ResultFailed    = "failed"
+	ResultErrored   = "errored"
+	ResultCancelled = "cancelled"
+	ResultSkipped   = "skipped"
+)
+
+// The two states of a pipeline at its vendor.
+const (
+	PipelineActive   = "active"
+	PipelineDisabled = "disabled"
 )
 
 // A monitor's state, as its vendor reports it folded into five words: unknown
@@ -161,9 +184,10 @@ var specs = sync.OnceValue(func() map[Fact]Spec {
 		FactPushMirrorTo:  {Type: TypeURL, Kinds: []Kind{KindRepository}},
 		FactImportedFrom:  {Type: TypeURL, Kinds: []Kind{KindRepository}},
 
-		FactLastResult: {Type: TypeWord, Words: results, Kinds: []Kind{KindPipeline}},
-		FactRunner:     {Type: TypeWord, Words: runners, Kinds: []Kind{KindPipeline}},
-		FactRequired:   {Type: TypeWord, Words: yesNo, Kinds: []Kind{KindPipeline}},
+		FactLastResult:    {Type: TypeWord, Words: results, Kinds: []Kind{KindPipeline}},
+		FactRunner:        {Type: TypeWord, Words: runners, Kinds: []Kind{KindPipeline}},
+		FactRequired:      {Type: TypeWord, Words: yesNo, Kinds: []Kind{KindPipeline}},
+		FactPipelineState: {Type: TypeWord, Words: pipelineStates, Kinds: []Kind{KindPipeline}},
 
 		FactHarness:       {Type: TypeLabel, Kinds: []Kind{KindModel}},
 		FactModel:         {Type: TypeLabel, Kinds: []Kind{KindModel}},
@@ -197,7 +221,7 @@ var Facts = []Fact{
 	FactURL, FactAddress, FactPort, FactContainers,
 	FactEngine, FactEngineVersion,
 	FactDefaultBranch, FactVisibility, FactStatus, FactPullMirrorOf, FactPushMirrorTo, FactImportedFrom,
-	FactLastResult, FactRunner, FactRequired,
+	FactLastResult, FactRunner, FactRequired, FactPipelineState,
 	FactHarness, FactModel, FactSignIn, FactChainPosition,
 	FactTransport, FactCommand, FactShared, FactServerName, FactServerVersion, FactToolCount,
 	FactOAuthIssuer, FactSignInExpires,

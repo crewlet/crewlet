@@ -106,8 +106,10 @@ var pairs = sync.OnceValue(func() map[Relation]pair {
 			from: []Kind{KindHostname, KindEndpoint, KindService},
 			to:   []Kind{KindAccount},
 		},
-		RelationBuiltFrom:  {from: []Kind{KindService, KindPipeline}, to: []Kind{KindRepository}},
-		RelationDeployedBy: {from: []Kind{KindService}, to: []Kind{KindPipeline}},
+		RelationBuiltFrom: {from: []Kind{KindService, KindPipeline}, to: []Kind{KindRepository}},
+		// What a pipeline deploys is the service, or the address or the name
+		// a deployment says it put its code behind.
+		RelationDeployedBy: {from: []Kind{KindService, KindEndpoint, KindHostname}, to: []Kind{KindPipeline}},
 		RelationMonitoredBy: {
 			from: []Kind{KindService, KindEndpoint, KindHostname, KindHost, KindDatastore, KindQueue},
 			to:   []Kind{KindMonitor, KindAccount},
