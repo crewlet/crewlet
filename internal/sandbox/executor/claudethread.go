@@ -372,9 +372,14 @@ func (e *threadLineError) Error() string {
 // Unwrap is what the line's decode met.
 func (e *threadLineError) Unwrap() error { return e.Err }
 
-// threadLine is one whole line of a thread: its place, its bytes (the
-// reader's until its next Next) and its head, beside the raw values of the
-// keys the accessors below read, all from the line's one decode.
+// threadLine is one whole line of a thread: its place, its bytes and its head,
+// beside the raw values of the keys the accessors below read, all from the
+// line's one decode.
+//
+// WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
+// the line's Raw, a hook's Content and Stdout, a call's Input and Content, and
+// ToolUseResult. A reader that keeps any of them past that copies it, since
+// the layer may hand out a line's own bytes rather than a copy of them.
 //
 // A KEY ONLY ONE READER READS IS HELD TO ITS TYPE IN THAT READER'S ACCESSOR,
 // never in the head: a release that reshapes it is that accessor's error and
@@ -385,8 +390,9 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 type threadLine struct {
 	// N is the line's place among the member's whole lines, from 1.
 	N int
-	// Raw is the line, its break dropped. A carriage return before the break
-	// is the line's own, which JSON reads as whitespace.
+	// Raw is the line, its break dropped, valid until the reader's next Next
+	// (above). A carriage return before the break is the line's own, which
+	// JSON reads as whitespace.
 	Raw []byte
 	// Head is what every reader needs of the line.
 	Head threadHead
@@ -704,7 +710,8 @@ func (l threadLine) OriginKind() (string, error) {
 
 // ToolUseResult is a user record's own `toolUseResult`, raw (an object, a list
 // or a string, as the tool's result had it); nil where it is absent and on
-// every other record. Never an id: a call's id leaves this layer only through
+// every other record, valid until the reader's next [threadReader.Next]
+// ([threadLine]). Never an id: a call's id leaves this layer only through
 // [threadMessage.Calls].
 func (l threadLine) ToolUseResult() json.RawMessage {
 	if l.Head.Type != recordUser {
@@ -765,9 +772,11 @@ type threadHook struct {
 	// Command is the attachment's `command`, where it has one.
 	Command string
 	// Content is the attachment's `content`, raw: a string on a success and a
-	// system message, a list on an additional context.
+	// system message, a list on an additional context. Valid until the
+	// reader's next Next ([threadLine]).
 	Content json.RawMessage
 	// Stdout is a success's `stdout`, raw: the hook's whole answer, as text.
+	// Valid until the reader's next Next ([threadLine]).
 	Stdout json.RawMessage
 }
 
@@ -906,11 +915,13 @@ type threadCall struct {
 	ID string
 	// Name is the tool a tool_use called.
 	Name string
-	// Input is a tool_use's `input`, raw.
+	// Input is a tool_use's `input`, raw, valid until the reader's next Next
+	// ([threadLine]).
 	Input json.RawMessage
 	// IsError is a tool_result's `is_error`; nil where absent.
 	IsError *bool
 	// Content is a tool_result's `content`, raw: a string or a list of blocks.
+	// Valid until the reader's next Next ([threadLine]).
 	Content json.RawMessage
 }
 
