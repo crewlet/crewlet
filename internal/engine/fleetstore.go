@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/kv"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -104,7 +105,7 @@ func OpenFleetStore(ctx context.Context, b *config.Bootstrap) (*FleetStore, erro
 	openCtx, cancel := context.WithTimeout(ctx,
 		jsprovision.Clustered(clustered).SequenceBudget())
 	defer cancel()
-	fleet, err := openFleet(openCtx, broker.JetStream(), b.Stream.Replicas, clustered, coordinationReach(b))
+	fleet, err := kv.OpenFleet(openCtx, broker.JetStream(), coordinationStoresOf(b).fleet)
 	if err != nil {
 		broker.Close()
 		return nil, fmt.Errorf("engine: open the fleet's store on %s: %w", broker.Where(), err)
