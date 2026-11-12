@@ -78,7 +78,7 @@ type Unread struct {
 	// Holds reports whether a claim the voice already holds came from this
 	// part. Such a claim is carried as it stands: a refusal withdraws and
 	// retires nothing, since it says nothing about what the vendor holds.
-	Holds func(atlas.Claim) bool
+	Holds func(atlas.Claim) bool `json:"-"`
 }
 
 // registry is every registered source, by kind.
