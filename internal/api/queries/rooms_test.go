@@ -145,7 +145,9 @@ func everySeam(t *testing.T) queries.Sources {
 		AgentAccess:  func(context.Context) ([]queries.AgentAccessRow, error) { return nil, nil },
 		// WHAT DELEGATES DECIDED, read off an access log holding nothing.
 		Delegated: emptyVerdicts{},
-		Insights:  coordmemory.NewFleet(),
+		// THE ATLAS, read off a node that runs no company yet.
+		Atlas:    builtin.AtlasDeps{},
+		Insights: coordmemory.NewFleet(),
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a
@@ -502,7 +504,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // through `inbox` and a script and a seat's tool read alone. And Gitlet ›
 // Search and ⌘K's Code scope deleted the line of a search of the
 // repositories' lines, `code_search`, which a script read alone on the
-// path api-endpoints.md prints ("GET /gitlet/search").
+// path api-endpoints.md prints ("GET /gitlet/search"). And Company › Atlas,
+// its map, list, peek and entry page, deleted the lines of the atlas's five
+// questions, which a script holding the atlas permission reads over REST too.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed

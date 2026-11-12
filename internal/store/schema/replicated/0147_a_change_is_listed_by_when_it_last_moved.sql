@@ -30,7 +30,7 @@
 -- # The indexes
 --
 -- A window walks the two in step, newest first, and lists each change once, at
--- the later of its two instants (internal/code changeread.go's window walk):
+-- the later of its two instants (internal/gitlet changeread.go's window walk):
 -- each index is sought from the window's start, a page of each, and a change
 -- whose other instant is the later is left to the walk of the other index.
 -- code_changes_updated_idx ends in the change's id, and

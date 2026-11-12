@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -37,7 +37,7 @@ type (
 		TurnsMovedPages(ctx context.Context, q doclet.TurnsMovedQuery) (map[string]bool, error)
 	}
 	codeMoves interface {
-		TurnsMovedCode(ctx context.Context, q code.TurnsMovedQuery) (map[string]bool, error)
+		TurnsMovedCode(ctx context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error)
 	}
 )
 
@@ -146,7 +146,7 @@ func (s Sources) moveReads() ([]movesOf, bool, error) {
 		return nil, false, errors.New("queries: this node reads no code for what the fires' turns wrote")
 	}
 	out = append(out, func(ctx context.Context, turns []string) (map[string]bool, error) {
-		return host.TurnsMovedCode(ctx, code.TurnsMovedQuery{Turns: turns, Level: statelog.ReadStale})
+		return host.TurnsMovedCode(ctx, gitlet.TurnsMovedQuery{Turns: turns, Level: statelog.ReadStale})
 	})
 	return out, true, nil
 }

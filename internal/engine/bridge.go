@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -25,9 +24,10 @@ import (
 // An engine phase's calls sit on a surface in memory, and the turn writes them
 // when it ends. An executor's run cannot: its calls are made by its harness,
 // a process outside the engine, over the bridge, minutes or hours apart, and
-// the run can outlive the node that started it. So each one is appended to the
+// the run can outlive the node that started it. So each one is written to the
 // run's own log in the coordination store, kept beside its row
-// ([sandbox.BridgeLog]), which is what the resume reads — and without it a
+// ([sandbox.BridgeLog]) — its identity before it runs, and what it did once it
+// returns ([bridgeLedger]) — which is what the resume reads; and without it a
 // restart mid-run leaves the reviewer judging a turn whose entire tool log is
 // gone, which the delivery check reads as a turn that acted on nothing.
 
@@ -106,6 +106,32 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	return out
 }
 
+// unfinishedCalls is a run's calls still IN FLIGHT as its log was read
+// ([sandbox.BridgeLog.InFlight]) — each begun and not finished: running still,
+// or its process gone, or its update refused by the store — in the shape the
+// resumed phase reads them: each one's identity alone, its tool, its place, its
+// start and the digest it was admitted under (none where its tool may ask a
+// person first, which the call log counts as a call of its tool whose arguments
+// are not known), MARKED AS A CALL WHOSE OUTCOME IS UNKNOWN
+// ([ledger.Call.Unfinished]): failed, so no reader takes it for a delivery, a
+// submission or a load, and answered with the words that say its effects may
+// stand ([runner.UnfinishedNote]), never as a plain failure, which a run would
+// make again.
+func unfinishedCalls(entries []sandbox.BridgeCall) []runner.BridgedCall {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]runner.BridgedCall, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, runner.BridgedCall{
+			Call: ledger.Call{Name: entry.Name, Result: runner.UnfinishedNote, Failed: true,
+				Digest: entry.Digest, Unfinished: true},
+			Seq: entry.Seq, StartedAt: entry.StartedAt,
+		})
+	}
+	return out
+}
+
 // identitiesOf is a tally a run's log keeps of calls it does not list, by
 // identity — the round's calls it dropped ([sandbox.BridgeLog.Unlisted]), or
 // the ones its call log absorbed from a bridged call's own work
@@ -133,39 +159,27 @@ func decodeBridgeArgs(raw string) map[string]any {
 	return tools.ReadArgs(raw)
 }
 
-// bridgeLedger appends a bridged run's calls to the log beside its pending-run
-// row, and with each one what the run's bridged calls have cost the engine so
-// far, which the row keeps.
+// bridgeLedger writes a bridged run's calls on the log beside its pending-run
+// row, and with each finished one what the run's bridged calls have cost the
+// engine so far, which the row keeps.
 //
-// AN APPEND THAT DOES NOT LAND IS TRIED AGAIN, and then OWED. The call has run
-// and its effect has happened, so it is never failed back to the box; but a
-// call missing from the log is one a resumed segment's call log never counts,
-// and a later call that asks for something else derives that call's operation
-// id. So the append is tried [appendAttempts] times before the call's answer
-// goes back — the box cannot end its run on a call it has no answer to, so a
-// store's blip never costs the log its last calls — and a call that still
-// did not land is owed WHOLE, as the append it was
-// ([sandbox.BridgeAppend.Owed]): the session's next append carries it, and the
-// log lists it as the call it is, once, however many appends carry it — the
-// session cannot tell an append that did not land from one whose every answer
-// was lost after it did, and the log can. An append one attempt landed is
-// never owed, whatever the attempts after it answer: they are for its spend
-// alone ([bridgeLedger.appendRetrying]).
-//
-// AND WHAT IS STILL OWED WHEN THE JOB IS OVER is carried by an append that
-// names no call of its own: the one the run's collection asks for before its
-// resume reads the job's log ([bridgeLedger.Settle]), so the log the resume
-// reads holds the job's last calls — a submission whose own append met a
-// store's blip, above all — and the one the session's end makes
-// ([bridgeLedger.End]), the last carry of the session's own. ONE AT A TIME
-// ([bridgeLedger.carrying]): a session that ends while the collection's carry
-// is still out ends once that carry is done, and its own carry takes up what
-// that one could not land. A call that none of those carried is on no record,
-// and the engine's log names it, call by call: a carry the log refused because
-// a relaunch had started a new round, or the run had ended
-// ([bridgeLedger.afterTheirJob]), whichever append made it, and one the store
-// did not take, or a call whose own record failed once the session had ended
-// ([bridgeLedger.unrecorded]).
+// EVERY CALL IS ON THE LOG BEFORE IT RUNS. Its entry — its identity, and the id
+// its harness gave it ([sandbox.BridgeCall.CallID]), which is no part of that
+// identity — is written ahead of it ([bridgeLedger.Begin],
+// [sandbox.BridgeLog.InFlight]), and the bridge runs the call only once the log
+// has taken it; then the call makes ONE UPDATE of that entry as it returns
+// ([bridgeLedger.Record]), with what it answered, cost and committed. So no
+// call runs off the record of its run: a resumed segment's call log counts
+// every call the run made, a call still running elsewhere included, and a later
+// call that asks for something else never derives an earlier call's operation
+// id. An ENTRY THE STORE DOES NOT TAKE within [beginBudget] is a call not run,
+// its box told it could not be recorded and may make it again
+// (`bridge_call_not_recorded`); an UPDATE THE STORE DOES NOT TAKE within
+// [appendAttempts] leaves the entry — the call's identity on the record — and
+// is answered [mcpbridge.ErrUnrecorded], so the call's own goroutine on the
+// bridge asks for the same update again once the call's answer is out, until it
+// lands or the call's bound passes. Nothing is carried by another write: no
+// later write of the session has anything of this one's to bring.
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB AND ITS ROUND BEFORE
 // ITS BOX EXISTS ([bridgeLedger.bind], handed to
@@ -181,7 +195,7 @@ type bridgeLedger struct {
 	store sandbox.PendingStore
 
 	// spend is the run's bridged meter, whose running total rides every
-	// append — see [runner.BridgedSpend]. Nil records the calls alone.
+	// record — see [runner.BridgedSpend]. Nil records the calls alone.
 	spend bridgedMeter
 
 	// nudge tells whichever waiter drives the run that its work is in
@@ -193,80 +207,66 @@ type bridgeLedger struct {
 	// own, unless a case hands it one it reads ([bridgeLedger.logger]).
 	log *slog.Logger
 
-	// carrying is held by each carry of what the session owes for the whole of
-	// it ([bridgeLedger.carry]), so they are made one at a time — and taken
-	// before mu, never under it. For the session's end above all: its carry
-	// is the session's last, and a carry the run's collection asked for may
-	// still be out as the session ends, holding what the session owes until
-	// the store has refused it. An end that did not wait would find nothing
-	// owed, return while the collection's carry was out — the paths that end a
-	// session go on to read the run's record, or to delete it — and leave what
-	// that carry hands back to no carry at all. Waiting, its own carry takes
-	// up what the collection's could not land.
-	carrying sync.Mutex
+	// runner is who runs the session's calls, as every entry it writes names
+	// it ([sandbox.BridgeCall.Runner]): the incarnation this process holds its
+	// taker lease under ([Engine.callRunner]), by which a collection on any
+	// node reads whether this process still runs a call — "" where it holds
+	// none, whose entries are waited for by their bound alone. Set by
+	// [Engine.openBridge] before the session opens, and read-only after.
+	runner string
 
 	mu sync.Mutex
 	// launch is the job this session's calls are recorded under, as the
 	// store opened it, and round the round that job works in
 	// ([sandbox.OpenedJob.Round]).
 	launch, round string
-	// owed are this session's appends that did not land as far as it
-	// knows, whole, in the order they were made: carried by the next append
-	// that lands, or by [bridgeLedger.Settle] or [bridgeLedger.End].
-	owed []sandbox.OwedAppend
-	// ended is set as the session's end takes what it carries
-	// ([bridgeLedger.End]) — once any carry still out has handed back what
-	// it could not land: no carry of the session's own comes after it, so
-	// what a call still in flight fails to record from then on is said to be
-	// on no record unless a later call of the session carries it, never
-	// promised a carry. Read as the calls are handed back ([bridgeLedger.owe]),
-	// never as it stood before.
-	ended bool
 }
 
-// appendRetryWaits are the waits between the attempts of one bridged call's
-// append ([bridgeLedger]): a QUARTER OF A SECOND, HALF OF ONE AND A WHOLE ONE,
-// 1.75 s in all. The append is one compare-and-swap of the run's log, and one
-// of its row where the call moved the spend, which a healthy coordination
-// store answers in milliseconds; what a retry rides over
-// is a stream's leader stepping down mid-write, whose successor the broker
-// elects within about a second (nats-server's campaign timeout is 800 ms at
-// the most). So the first waits are short, for a blip that clears at once,
-// and the last attempt comes once that second has passed, however quickly the
-// attempts before it failed: two waits of 250 and 500 ms ended the retry
-// before a re-election it was there to outlast. Every second spent here is a
-// second the box waits for its call's answer, and a store out for longer — a
-// leader lost rather than stepping down, which its followers wait four seconds
-// and more to replace — is an outage the session's later appends and its
-// carries ride over instead, carrying the call as owed.
+// appendRetryWaits are the waits between the attempts of one write of a
+// bridged call's ([bridgeLedger]): a QUARTER OF A SECOND, HALF OF ONE AND A
+// WHOLE ONE, 1.75 s in all. Each is one compare-and-swap of the run's log —
+// and, for a record that moved the spend, one of its row — which a healthy
+// coordination store answers in milliseconds; what a retry rides over is a
+// stream's leader stepping down mid-write, whose successor the broker elects
+// within about a second (nats-server's campaign timeout is 800 ms at the
+// most). So the first waits are short, for a blip that clears at once, and the
+// last attempt comes once that second has passed, however quickly the attempts
+// before it failed: two waits of 250 and 500 ms ended the retry before a
+// re-election it was there to outlast. Every second spent here is a second the
+// box waits for its call's answer. A store out for longer — a leader lost
+// rather than stepping down, which its followers wait four seconds and more to
+// replace — refuses a call's entry, so the call is not run, and leaves a
+// finished call's update unwritten for now, its entry standing: the bridge asks
+// for it again once the call's answer is out (internal/api/mcpbridge's
+// owedUpdateBase), so the box waits for none of that.
 var appendRetryWaits = [...]time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
 
-// appendAttempts is how many times one bridged call's append is tried before
-// the call is owed: once, and again after each of [appendRetryWaits].
+// appendAttempts is how many times one write of a bridged call's is tried:
+// once, and again after each of [appendRetryWaits].
 const appendAttempts = len(appendRetryWaits) + 1
 
-// settleBudget bounds one carry of what a session still owes
-// ([bridgeLedger.Settle], [bridgeLedger.End]) from its ask, its wait for a
-// carry still out and its retries included: FIVE SECONDS, as the write that
-// records a job's session start is given ([sessionStartRecordBudget]), and for
-// its reason — the carry is that same compare-and-swap of the log, tried as a
-// call's own append is ([appendRetryWaits]), which a healthy store answers in
-// milliseconds and a store that has not answered in five is in an outage the
-// rest of the bound would not see the end of. And it is waited on: by the
-// collection of the job's run before its resume reads the job's log, and by
-// whatever ends the session — a run's settle, a stop, the relaunch that
-// replaces the job, the seat leaving this node — none of which should stand
-// for longer on calls the store will not take. So a session's end that waits
-// for the collection's carry waits within its own bound, not beside it: the
-// collection asked first, and its bound ends first.
-const settleBudget = 5 * time.Second
+// beginBudget bounds the write of a call's entry ahead of it
+// ([bridgeLedger.Begin]), its retries ([appendRetryWaits]) included, and so a
+// withdrawal's: FIVE SECONDS, as the write that records a job's session start
+// is given ([sessionStartRecordBudget]), and for its reason — one
+// compare-and-swap of the run's log, which a healthy coordination store
+// answers in milliseconds (11.89 at the median and 17.04 at the 99th
+// percentile, measured: internal/coord/kv's BenchmarkABoxRequestOnItsRun, its
+// begin arm), and a store that has not answered in five is in an outage the
+// call should not wait out: past it the call is
+// not run, and its box is told it may make it again. The box waits on it with
+// nothing written on the call's response — its first progress follows the
+// write — which a harness gives a minute (Claude Code 2.1.310's first-byte
+// budget, see internal/api/mcpbridge's answerEvery). None before: the call ran
+// first, and was recorded after it.
+const beginBudget = 5 * time.Second
 
-// owedDigestPrefix is how much of a call's identity a line naming a call no
-// record holds carries ([owedCalls]): EIGHT HEX DIGITS, the four bytes of a
-// digest the log's own markers name a left-out value by (internal/kept), which
-// tells a session's calls of one tool apart in a log line without making the
-// line a second copy of the record.
-const owedDigestPrefix = 8
+// nameDigestPrefix is how much of a call's identity a line naming one carries
+// ([namedCall]): EIGHT HEX DIGITS, the four bytes of a digest the log's own
+// markers name a left-out value by (internal/kept), which tells a session's
+// calls of one tool apart in a log line without making the line a second copy
+// of the record.
+const nameDigestPrefix = 8
 
 var _ mcpbridge.Ledger = (*bridgeLedger)(nil)
 
@@ -294,41 +294,119 @@ func (l *bridgeLedger) bind(job sandbox.OpenedJob) {
 	l.mu.Unlock()
 }
 
-// Append records one call. See [mcpbridge.Ledger] for why an error here never
-// reaches the box.
+// bound is the job and round the session's calls are recorded under, and
+// whether it was bound to any: a call on a session no job was bound to cannot
+// happen through the launch, which binds before the box that makes calls
+// exists, so it is a wiring mistake — said in the log rather than filed under
+// whatever job the row holds.
+func (l *bridgeLedger) bound(ctx context.Context, runID, tool string) (launch, round string, ok bool) {
+	l.mu.Lock()
+	launch, round = l.launch, l.round
+	l.mu.Unlock()
+	if launch == "" {
+		l.logger().WarnContext(ctx, "bridge_ledger_unbound", "run_id", runID, "tool", tool,
+			"detail", "a bridged call arrived on a session no job was bound to, so it "+
+				"is recorded under none; the launch binds a session before its box exists")
+		return "", "", false
+	}
+	return launch, round, true
+}
+
+// errUnbound is a call's entry refused on a session no job was bound to
+// ([bridgeLedger.bound]): with nothing to record it under, the call is not run.
+var errUnbound = errors.New("engine: the call's bridge session is bound to no job, so its entry has nowhere to go")
+
+// Begin writes a call's entry on its run's log ahead of it
+// ([mcpbridge.Ledger.Begin]): its identity, who runs it until when
+// ([bridgeLedger.runner], [mcpbridge.Begun.Until]), and the id its harness gave
+// it ([sandbox.BridgeCall.CallID]), which the call's update carries too and
+// nothing finds the entry by. Tried again on a store's error within
+// [beginBudget], under a context of its own: the box's request is not the
+// call's, and a write cut with it would refuse a call the store would have
+// taken.
+//
+// NIL IS A CALL THE BRIDGE MAY RUN. [mcpbridge.ErrNotTaken] is a log open
+// neither for the session's job nor, by its round, for a job of its — the run
+// ended, a relaunch replaced the job, its round is over — and any other error
+// an entry not written: a store that refused every attempt, or a log holding
+// as many calls in flight as it keeps ([sandbox.ErrCallsInFlight]). Each is
+// said, at warning, naming the call (`bridge_call_not_recorded`): the call was
+// not run, and its box is told so.
+func (l *bridgeLedger) Begin(ctx context.Context, runID string, call mcpbridge.Begun) error {
+	if l == nil || l.store == nil {
+		return nil
+	}
+	launch, round, ok := l.bound(ctx, runID, call.Name)
+	if !ok {
+		return errUnbound
+	}
+	entry := sandbox.BridgeCall{Name: call.Name, Seq: call.Seq, StartedAt: call.StartedAt,
+		Digest: call.Digest, CallID: call.CallID, Runner: l.runner, Until: call.Until}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), beginBudget)
+	defer cancel()
+	taken, err := l.stepRetrying(ctx, runID, sandbox.BridgeAppend{Step: sandbox.AppendBegin,
+		Launch: launch, Round: round, Call: entry})
+	switch {
+	case err != nil:
+		l.notRecorded(ctx, runID, launch, entry, err.Error())
+		return err
+	case !taken:
+		l.notRecorded(ctx, runID, launch, entry, "the run's log takes no more calls of this job: "+
+			"the run ended, or a relaunch replaced the job")
+		return mcpbridge.ErrNotTaken
+	}
+	return nil
+}
+
+// Withdraw takes back the entry of a call that, its entry written, was then not
+// run ([mcpbridge.Ledger.Withdraw]), within [beginBudget] as its writing was. A
+// log that holds no such entry — one whose write never landed, or that moved on
+// — takes nothing, which is no error.
+func (l *bridgeLedger) Withdraw(ctx context.Context, runID string, call mcpbridge.Begun) error {
+	if l == nil || l.store == nil {
+		return nil
+	}
+	launch, round, ok := l.bound(ctx, runID, call.Name)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), beginBudget)
+	defer cancel()
+	_, err := l.stepRetrying(ctx, runID, sandbox.BridgeAppend{Step: sandbox.AppendWithdraw,
+		Launch: launch, Round: round,
+		Call: sandbox.BridgeCall{Name: call.Name, Seq: call.Seq, StartedAt: call.StartedAt}})
+	return err
+}
+
+// Record is one finished call's ONE UPDATE ([mcpbridge.Ledger.Record]): its
+// entry, found by its identity, taken out and the call listed in its place,
+// with what it answered and what it committed, and the session's running
+// spend. See [mcpbridge.Ledger] for why an error here never reaches the box.
 //
 // THE TOTAL IS READ AFTER THE CALL RAN, so it includes what the call itself
 // cost; two calls finishing together each write the total they read, and the
 // store keeps the newest of them ([sandbox.EngineSpend.Newest]). A call whose
-// append fails has its cost carried by the next one that lands, since the
+// update fails has its cost carried by the next record that lands, since the
 // total is cumulative — only the last call of a run can lose it, and then the
 // task is charged short of what the turn shows rather than past it.
 //
-// A CALL ON A SESSION NO JOB WAS BOUND TO records nothing: it cannot happen
-// through the launch, which binds before the box that makes calls exists, so it
-// is a wiring mistake — said in the log rather than filed under whatever job
-// the row holds.
-func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.Call) error {
+// AN UPDATE THAT DID NOT LAND LEAVES THE CALL'S ENTRY, its identity on the
+// record, and is answered [mcpbridge.ErrUnrecorded] beside the store's error:
+// the bridge asks for it again once the call's answer is out, and asked again
+// a record whose earlier answer was lost after it landed lands nothing twice
+// ([sandbox.PendingStore.AppendBridgeCall]). Until it lands, a resumed segment
+// reads the call as one whose outcome is not known. Said at debug, naming the
+// call: the bridge says at warning what it asks again and what it gave up on.
+func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.Call) error {
 	if l == nil || l.store == nil {
 		return nil
 	}
-	l.mu.Lock()
-	launch, round := l.launch, l.round
-	l.mu.Unlock()
-	if launch == "" {
-		l.logger().WarnContext(ctx, "bridge_ledger_unbound", "run_id", runID, "tool", call.Name,
-			"detail", "a bridged call arrived on a session no job was bound to, so it "+
-				"is recorded under none; the launch binds a session before its box exists")
+	launch, round, ok := l.bound(ctx, runID, call.Name)
+	if !ok {
 		return nil
 	}
-	// WHAT THE SESSION STILL OWES THE LOG, taken now so no other append of
-	// it carries the same calls, and handed back below if this one does not
-	// land either.
-	l.mu.Lock()
-	owed := l.owed
-	l.owed = nil
-	l.mu.Unlock()
 	a := sandbox.BridgeAppend{
+		Step: sandbox.AppendRecord,
 		// THE JOB AND ITS ROUND: the log lists the call as its job's own
 		// while it is open for the job, and as a late call of the round once
 		// a relaunch has carried the round on ([sandbox.BridgeCall.Late]).
@@ -344,7 +422,8 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			Failed: call.Failed,
 			// THE BRIDGE'S MEASUREMENT, kept for the executor's record:
 			// the one account of the order the run's calls were made in,
-			// when each ran and who answered it. See
+			// when each ran and who answered it — and, with the tool, the
+			// identity the update finds the call's entry by. See
 			// [sandbox.BridgeCall.StartedAt].
 			Seq:        call.Seq,
 			StartedAt:  call.StartedAt,
@@ -359,6 +438,10 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			// store holds them to the call's share of the log, so this is
 			// what a later segment's call log counts the call by.
 			Digest: call.Digest,
+			// AND THE ID ITS HARNESS GAVE IT, as its entry carries it: the
+			// box's word, which names the call as its harness's session
+			// does, and which nothing finds the call by.
+			CallID: call.CallID,
 			// WHAT IT COMMITTED, which the run's collection settles the
 			// turn's outcome by ([Engine.describeResume]).
 			Committed: changeNames(call.Committed),
@@ -367,57 +450,31 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			// no save point ([sandbox.BridgeCall.Abandoned]).
 			Abandoned: call.Abandoned,
 		},
-		// WHAT THIS CALL'S OWN WORK ADDED to the run's call log, and the
-		// session's earlier appends the log has not heard of, whole.
+		// WHAT THIS CALL'S OWN WORK ADDED to the run's call log.
 		Absorbed: identitiesCalled(call.Absorbed),
-		Owed:     owed,
 		Spent:    l.spent(),
 	}
 	recorded, err := l.appendRetrying(ctx, runID, a)
 	if err != nil && !recorded {
-		// OWED, WHOLE, as kept as the log would keep it: the next append of
-		// the session carries it, and the log lists it once whether this
-		// one landed or not ([sandbox.BridgeAppend.Owed]).
-		owed = append(owed, sandbox.OwedAppend{Call: sandbox.CarriedCall(a.Call), Absorbed: a.Absorbed})
-		if l.owe(owed) {
-			// THE SESSION HAS ENDED, its own last carry made: only another
-			// of its calls still in flight can carry these now, so they are
-			// said to be on no record unless one lands — not promised the
-			// carry that line would.
-			l.unrecorded(ctx, runID, launch, owed, err, true)
-			return err
-		}
-		l.logger().WarnContext(ctx, "bridge_call_owed", "run_id", runID, "launch_id", launch,
-			"tool", call.Name, "owed", l.owing(), "error", err.Error(),
-			"detail", "the call ran and its answer goes back to the box, but the run's log did not "+
-				"take it; the session's next append carries it to the log, or, once the job is over, "+
-				"the carry its collection asks for and the one its session makes as it ends")
-		return err
+		l.logger().DebugContext(ctx, "bridge_call_update_refused", "run_id", runID,
+			"launch_id", launch, "call", namedCall(a.Call), "attempts", appendAttempts, "error", err.Error())
+		return fmt.Errorf("%w: %w", mcpbridge.ErrUnrecorded, err)
 	}
 	if !recorded {
-		// THE ORDINARY END OF A ROUND for the call itself: its log is gone, or
-		// takes a new round's calls. NOT for what it carried: each call the
-		// session owed was one the log did not hold, and none of them is on
-		// any record now — said call by call, as a carry's would be. A late
-		// call of a round carried on never comes here: the log lists it,
-		// marked, and the run's record says so where a person reads its
-		// calls — `late` on the runs answer.
-		if len(owed) > 0 {
-			l.afterTheirJob(ctx, runID, launch, owed)
-		}
+		// THE ORDINARY END OF A ROUND for the call: its log is gone, or takes
+		// a new round's calls. A late call of a round carried on never comes
+		// here: the log lists it, marked, and the run's record says so where
+		// a person reads its calls — `late` on the runs answer.
 		if call.Abandoned {
 			// NOR FOR A CALL NOBODY WAITED FOR: its harness was handed its
 			// opening's end's answer, or gave up on it, so the session that
 			// made it does not hold it either, and now no record of the run
 			// does, though it ran and its effect happened. Which is what a
-			// call still running as its run's stop, cap, reclaim or settle
-			// ended its job comes to where it returns once the ending has
-			// deleted the run's record: no ending waits for it
-			// (internal/api/mcpbridge, "An opening ends without waiting for
+			// call still running as its run's ending deleted its record comes
+			// to (internal/api/mcpbridge, "An opening ends without waiting for
 			// its calls").
 			l.logger().WarnContext(ctx, "bridge_abandoned_call_after_its_job", "run_id", runID,
-				"launch_id", launch,
-				"call", owedCalls([]sandbox.OwedAppend{{Call: a.Call}})[0],
+				"launch_id", launch, "call", namedCall(a.Call),
 				"detail", "a call nobody waited for returned once the run's log no longer took the "+
 					"calls of its round: the run ended, or a new round began; it ran and its effect "+
 					"happened, and neither the session that made it nor any record of the run holds it")
@@ -444,6 +501,17 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 		l.nudge(ctx, sandbox.Nudge{TurnID: runID, LaunchID: launch, Why: sandbox.NudgeSubmitted})
 	}
 	return err
+}
+
+// notRecorded says, at warning, that call was not run because the run's log
+// did not take its entry ahead of it ([bridgeLedger.Begin]), and why.
+func (l *bridgeLedger) notRecorded(ctx context.Context, runID, launch string, call sandbox.BridgeCall,
+	why string) {
+
+	l.logger().WarnContext(ctx, "bridge_call_not_recorded", "run_id", runID, "launch_id", launch,
+		"call", namedCall(call), "why", why,
+		"detail", "the call was not run: its entry could not be written on the run's log ahead of it, "+
+			"and its box was told so")
 }
 
 // sessionStartRecordBudget bounds the write that records which session a job's
@@ -538,31 +606,31 @@ func boxStarted(ledger *bridgeLedger, runID string, continuing func() bool,
 	}
 }
 
-// appendRetrying appends a, tried again on an error — see [bridgeLedger] — and
-// answers whether ANY attempt recorded it. Asked again, an append whose earlier
-// answer was lost after it landed is answered recorded and lands nothing twice
-// ([sandbox.PendingStore.AppendBridgeCall]).
+// appendRetrying makes a call's record a, tried again on an error — see
+// [bridgeLedger] — and answers whether ANY attempt recorded it. Asked again, a
+// record whose earlier answer was lost after it landed is answered recorded and
+// lands nothing twice ([sandbox.PendingStore.AppendBridgeCall]).
 //
 // RECORDED STICKS: nothing a later attempt answers takes a call back out of the
-// log. An append writes the run's log and then, where its calls moved the
-// job's spend, the job's record, and an attempt whose first write landed and
-// whose second did not is answered recorded beside the second's error. All an
+// log. A record writes the run's log and then, where its calls moved the job's
+// spend, the job's record, and an attempt whose first write landed and whose
+// second did not is answered recorded beside the second's error. All an
 // attempt after it can still do is write that spend — the store finds the
-// calls listed, writes the log nothing and the record again — so its answer
-// says nothing of the calls: one that finds the store out of reach wrote
+// call listed, writes the log nothing and the record again — so its answer
+// says nothing of the call: one that finds the store out of reach wrote
 // nothing, and one that finds the job replaced says only that the spend can no
 // longer reach this job's record, which ends the retry. Where an attempt
 // landed, the error answered is the spend's, as the last attempt that landed
 // answered it: nil once one wrote it. Answered by its last attempt alone, a
-// call the log held was owed again, said to be on no record of the run, and
-// its submission's waiter was never told the work was in.
+// call the log held was said to be off it, and its submission's waiter was
+// never told the work was in.
 //
 // A REPLACED JOB IS ANSWERED ONE WAY, WHICHEVER RELAUNCH REPLACED IT: with the
 // spend's error of an attempt that landed before, and nil where none did. The
 // store answers a relaunch that started a new round, or the run's end, as not
 // recorded, and one that carried the round on as recorded beside
-// [sandbox.ErrJobReplaced], the calls listed in the round's log; either way
-// the job's record takes no spend after it. So a call whose first append is
+// [sandbox.ErrJobReplaced], the call listed in the round's log; either way
+// the job's record takes no spend after it. So a call whose first record is
 // late answers no error — its spend is no job's, by design, and nothing
 // failed — and one whose earlier attempt landed without its spend answers that
 // attempt's error in both cases: the write of what it cost failed while the
@@ -572,15 +640,15 @@ func boxStarted(ledger *bridgeLedger, runID string, continuing func() bool,
 func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandbox.BridgeAppend) (bool, error) {
 	landed := false
 	// spend is what the last attempt that landed answered beside it: why the
-	// spend of its calls is not on the job's record, or nil once it is.
+	// spend of its call is not on the job's record, or nil once it is.
 	var spend error
 	for attempt := 1; ; attempt++ {
 		recorded, err := l.store.AppendBridgeCall(ctx, runID, a)
 		switch {
 		case recorded && errors.Is(err, sandbox.ErrJobReplaced), landed && !recorded && err == nil:
-			// THE JOB WAS REPLACED — its round carried on, its calls in the
+			// THE JOB WAS REPLACED — its round carried on, its call in the
 			// round's log; or a new round started, or the run ended, since
-			// an attempt put them in it: the spend can no longer reach this
+			// an attempt put it in it: the spend can no longer reach this
 			// job's record, and nothing is left to try again.
 			return true, spend
 		case recorded:
@@ -596,166 +664,37 @@ func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandb
 	}
 }
 
-// owe hands appends back to what the session owes, AHEAD of whatever it came
-// to owe meanwhile, so the log hears of its calls in the order they were made;
-// and reports whether the session has ended ([bridgeLedger.ended]), past which
-// nothing of its own carries them but a call still in flight.
-func (l *bridgeLedger) owe(appends []sandbox.OwedAppend) (ended bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.owed = append(slices.Clip(appends), l.owed...)
-	return l.ended
-}
-
-// owing is how many appends the session owes.
-func (l *bridgeLedger) owing() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.owed)
-}
-
-// Settle carries into the run's log whatever this session still owes it, in
-// one append that names no call of its own, and reports whether that append
-// landed: what the run's collection asks for through the bridge before its
-// resume reads the job's log ([mcpbridge.Bridge.Settle]), so the log the
-// resume reads holds the job's last calls. See [mcpbridge.Ledger].
-//
-// UNDER A CONTEXT OF ITS OWN ([settleBudget]), never the caller's
-// cancellation: the paths that ask are the ones ending something — a settle,
-// a stop, a drain — whose own context is often already done, and a carry
-// that inherited it would carry nothing at all.
-//
-// WHEN IT CANNOT LAND, said call by call ([owedCalls]), for each of the two
-// ways:
-//
-//   - THE LOG HAS MOVED ON (`bridge_owed_calls_after_their_job`): the store
-//     answered, and the run's log is open neither for the job the calls were
-//     made in nor for its round — a relaunch started a new round before its
-//     owed calls were carried (the relaunch's opening ends this session only
-//     once the log takes the new job's calls), or the run ended and its log is
-//     gone. No record of the run will hear of them, and the session forgets
-//     them. A relaunch that CARRIED THE ROUND ON is no such case: the log
-//     lists the calls as late calls of the round ([sandbox.BridgeCall.Late]),
-//     and the carry lands.
-//   - THE STORE DID NOT TAKE THE CARRY (`bridge_owed_calls_unrecorded`):
-//     every attempt within the bound failed, the store out of reach from the
-//     calls through this carry. They stay owed, for the session's next append
-//     or its next carry — the session's end's among them, which waits for this
-//     one — or, where the session has ended, for a call of it still in
-//     flight, and are otherwise on no record.
-func (l *bridgeLedger) Settle(ctx context.Context, runID string) bool {
-	return l.carry(ctx, runID, false)
-}
-
-// End is [bridgeLedger.Settle] as the session ends — its last carry of its own
-// ([mcpbridge.Ledger.End]). It waits first for a carry still out — the run's
-// collection's, asked before the session ended — so it carries what that one
-// could not land, and returns only once both are done. And it marks the ledger
-// ended as it takes what it carries, so a call of the session still in flight
-// whose own record fails from then on is said to be on no record unless a
-// later call carries it, rather than promised the session's end's carry, which
-// has been made.
-func (l *bridgeLedger) End(ctx context.Context, runID string) bool {
-	return l.carry(ctx, runID, true)
-}
-
-// carry is [bridgeLedger.Settle], and with ending [bridgeLedger.End]: ONE AT A
-// TIME ([bridgeLedger.carrying]), within [settleBudget] of its ask, its wait
-// for the carry before it included.
-func (l *bridgeLedger) carry(ctx context.Context, runID string, ending bool) bool {
-	if l == nil || l.store == nil {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleBudget)
-	defer cancel()
-	l.carrying.Lock()
-	defer l.carrying.Unlock()
-	l.mu.Lock()
-	l.ended = l.ended || ending
-	launch, round, owed := l.launch, l.round, l.owed
-	l.owed = nil
-	l.mu.Unlock()
-	if launch == "" || len(owed) == 0 {
-		return false
-	}
-	recorded, err := l.appendRetrying(ctx, runID, sandbox.BridgeAppend{Launch: launch, Round: round,
-		Owed: owed, Spent: l.spent()})
-	switch {
-	case err != nil && !recorded:
-		// SAID AS THE SESSION STANDS once they are handed back, as an
-		// append's own failure is: whether a carry of the session's own is
-		// still to come is what the line promises or denies them.
-		l.unrecorded(ctx, runID, launch, owed, err, l.owe(owed))
-		return false
-	case !recorded:
-		l.afterTheirJob(ctx, runID, launch, owed)
-		return false
-	}
-	carried := []any{"run_id", runID, "launch_id", launch, "calls", len(owed)}
-	if err != nil {
-		// THE CALLS ARE IN THE LOG, and what they cost did not reach the
-		// row: a later append of the session that lands carries the
-		// running total, and without one the task is charged short of the
-		// turn, never past it.
-		carried = append(carried, "spend_error", err.Error())
-	}
-	l.logger().InfoContext(ctx, "bridge_owed_calls_carried", carried...)
-	return true
-}
-
-// afterTheirJob says, call by call, owed appends an append took to a log that
-// is open neither for the job they were made in nor for its round — a relaunch
-// started a new round, or the run ended and its log is gone — whether a carry
-// of the session's took them or a later call of the old job did: no record of
-// the run will hear of them, the session forgets them, and this line is all
-// that is left of them.
-func (l *bridgeLedger) afterTheirJob(ctx context.Context, runID, launch string, owed []sandbox.OwedAppend) {
-	l.logger().WarnContext(ctx, "bridge_owed_calls_after_their_job", "run_id", runID,
-		"launch_id", launch, "calls", len(owed), "owed", owedCalls(owed),
-		"detail", "the calls ran, but by the time the store took their carry the run's log no "+
-			"longer took the calls of the round they were made in: a relaunch started a new round, "+
-			"or the run ended; they are on no record of the run")
-}
-
-// unrecorded says, call by call, owed appends the store did not take within
-// the bound, and what is left to carry them: the session's next append or
-// carry, or — once the session has ended — only a call of it still in flight,
-// and otherwise nothing.
-func (l *bridgeLedger) unrecorded(ctx context.Context, runID, launch string, owed []sandbox.OwedAppend,
-	err error, ended bool) {
-
-	detail := "the calls ran and their answers went back to the box, but the run's log took neither " +
-		"their own appends nor a carry of them within its bound; they stay owed to the session's next " +
-		"append or carry"
-	if ended {
-		detail = "the calls ran and their answers went back to the box, but the run's log took none " +
-			"of them, and the session has ended, its own last carry made: only a call of it still in " +
-			"flight can carry them now, and unless one lands they are on no record of the run"
-	}
-	l.logger().WarnContext(ctx, "bridge_owed_calls_unrecorded", "run_id", runID, "launch_id", launch,
-		"calls", len(owed), "owed", owedCalls(owed), "session_ended", ended, "error", err.Error(),
-		"detail", detail)
-}
-
-// owedCalls names each owed append's call for a line that says no record holds
-// it: its tool, its place among the job's calls ([sandbox.BridgeCall.Seq]) and
-// the opening of the identity it was admitted under ([owedDigestPrefix]) —
-// what finds the call in the box's own account of its run, and tells two calls
-// of one tool apart. A call whose arguments ride sealed has no identity in the
-// clear, and one nothing admitted has none at all; each says so.
-func owedCalls(owed []sandbox.OwedAppend) []string {
-	out := make([]string, 0, len(owed))
-	for _, o := range owed {
-		identity := "no identity"
-		switch digest := o.Call.Digest; {
-		case o.Call.Withheld():
-			identity = "its arguments sealed"
-		case digest != "":
-			identity = "digest " + digest[:min(len(digest), owedDigestPrefix)]
+// stepRetrying makes a call's begin or withdrawal a, tried again on a store's
+// error after each of [appendRetryWaits] while ctx lasts, and answers whether
+// the log took it. A BEGIN THE LOG HAS NO ROOM FOR is not tried again
+// ([sandbox.ErrCallsInFlight]): room is made by calls finishing, never by
+// asking again within the moments a call's answer waits on.
+func (l *bridgeLedger) stepRetrying(ctx context.Context, runID string, a sandbox.BridgeAppend) (bool, error) {
+	for attempt := 1; ; attempt++ {
+		taken, err := l.store.AppendBridgeCall(ctx, runID, a)
+		if err == nil || errors.Is(err, sandbox.ErrCallsInFlight) || attempt >= appendAttempts ||
+			!sleepCtx(ctx, appendRetryWaits[attempt-1]) {
+			return taken, err
 		}
-		out = append(out, fmt.Sprintf("%s at place %d, %s", o.Call.Name, o.Call.Seq, identity))
 	}
-	return out
+}
+
+// namedCall names call for a line that says what became of it: its tool, its
+// place among the job's calls ([sandbox.BridgeCall.Seq]) and the opening of
+// the identity it was admitted under ([nameDigestPrefix]) — what finds the
+// call in the box's own account of its run, and tells two calls of one tool
+// apart. A call whose arguments ride sealed has no identity in the clear, and
+// one whose record carries no digest — nothing admitted it, or its entry left
+// it out for a tool that may ask a person first — says so.
+func namedCall(call sandbox.BridgeCall) string {
+	identity := "no digest kept"
+	switch digest := call.Digest; {
+	case call.Withheld():
+		identity = "its arguments sealed"
+	case digest != "":
+		identity = "digest " + digest[:min(len(digest), nameDigestPrefix)]
+	}
+	return fmt.Sprintf("%s at place %d, %s", call.Name, call.Seq, identity)
 }
 
 // logger is where the ledger says what it could not record: [bridgeLedger.log]

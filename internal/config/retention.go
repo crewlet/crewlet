@@ -370,6 +370,31 @@ const (
 	AccessLogMaxBytesFloor   int64 = 64 << 20
 	AccessLogMaxBytesCeiling int64 = 64 << 30
 
+	// DefaultAtlasLogMaxBytes is the atlas log's ceiling, where what people
+	// record about what the company runs on is kept with its history
+	// (internal/atlasdomain), and AtlasLogMaxBytesFloor and
+	// AtlasLogMaxBytesCeiling bound it.
+	//
+	// THE LOG GROWS WITH WHAT PEOPLE RECORD, NOT WITH THE DISK. At the
+	// reference company's 100 seats, about twenty edits a day of about a
+	// kibibyte each, signed, and no read barriers
+	// (atlasdomain.LinearizableReadsPerSeatDay): tens of kilobytes a day, and
+	// well under a mebibyte with the agents' and the integrations' records
+	// later versions of the log add. So 128 MiB is about four months of a
+	// COMPLETELY BLOCKED trim against a `trim_blocked` alarm raised after a
+	// day, the access log's horizon at a fraction of its rate. The history
+	// goes with the company's own `atlas.retention_days`, whatever the log
+	// holds.
+	//
+	// SCALED DOWN TO ITS FLOOR WHERE THE BROKER IS SHORT, for the assistant's
+	// reason: its register entry lets scaling take it down to this field's
+	// 64 MiB floor, all a fresh node has to find for it. THE FLOOR IS 64 MiB,
+	// by the per-log rule [IamLogMaxBytesFloor] records, about two months at
+	// the reference rate. THE CEILING IS A TYPO GUARD.
+	DefaultAtlasLogMaxBytes int64 = 128 << 20
+	AtlasLogMaxBytesFloor   int64 = 64 << 20
+	AtlasLogMaxBytesCeiling int64 = 64 << 30
+
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's ceiling.
 	//
@@ -415,7 +440,7 @@ const (
 	// SO A COMPANY WHOSE SEATS WORK THROUGH CHANGES GIVES THE CODE LOG THE
 	// RATIO ITS BYTE RATE IS, below. What each log takes a day is its
 	// records and the barriers its linearizable reads append (176 bytes
-	// each in their signed frames, code.BarrierRecordBytes), at the
+	// each in their signed frames, gitlet.BarrierRecordBytes), at the
 	// reference company:
 	//
 	//   - the mutation log about 12.1 MB a day: 9.9 MB of records,
@@ -427,7 +452,7 @@ const (
 	//   - the code log 22.4–100.2 MB a day: 3 000 pushes at 1 625 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
 	//     most a seat's push takes, at which every one of the reference
-	//     company's is priced (internal/code's BenchmarkPushLogBytes, its
+	//     company's is priced (internal/gitlet's BenchmarkPushLogBytes, its
 	//     push=box arm beside a person's; 1 481 where the engine builds the
 	//     push for a tool, its push=agent arm, and which of its seats push
 	//     from their boxes is no figure the reference company has; about
@@ -436,7 +461,7 @@ const (
 	//     push, and the code-retention duty's sweeps of what they retired,
 	//     0.13 MB at 44, both MEASURED on a repository pushed once a minute,
 	//     whose every merge takes the floor's sixteen packs and is swept by a
-	//     record of its own a day later (internal/code/compact's
+	//     record of its own a day later (internal/gitlet/compact's
 	//     BenchmarkCompact, its steady arm at that floor) — the most the
 	//     reference company's pushes cost, since a few a minute across its
 	//     repositories never leave a merge more than the floor; the
@@ -458,7 +483,7 @@ const (
 	//     change ready, which goes to whoever may merge it — and, after the
 	//     ask, the reviews and the answer, only the readiness it kept, each
 	//     record MEASURED as its writer forms it at the reference company's
-	//     text (internal/code's
+	//     text (internal/gitlet's
 	//     TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt); at the
 	//     most beside them a queue entry a change, its train, its landing and
 	//     its candidate's three checks, a recheck recording only what it
@@ -517,14 +542,14 @@ const (
 	// ask. A ceiling set in stream.code_log_max_bytes comes off the logs'
 	// share whole and is never scaled, while the derived ones are scaled
 	// together into what it leaves (the engine's fit), so on a first boot
-	// below about 622 GiB free half the mutation log's ask is more than half
+	// below about 623 GiB free half the mutation log's ask is more than half
 	// of what that log is created with beside it — at 100 GiB free, 12½ GiB
 	// beside a mutation log created at 6.9 GiB. Before the first boot the
 	// half is about 53 % of what the mutation log is created with beside a
 	// derived code log — a little more than half, because the room the code
 	// log gives back lengthens the mutation log too — and no more than
 	// 32 GiB, half its 64 GiB clamp: at 100 GiB free 4.7 GiB, beside which
-	// the mutation log is created at 9.5 GiB rather than 9.1
+	// the mutation log is created at 9.5 GiB rather than 9.0
 	// (docs/guides/replication.md, "What the code log's reservation costs",
 	// has the other volumes). Once the streams exist it is half the ceiling
 	// the mutation log's stream holds, its crewlet.statelog.log.max_bytes,
@@ -853,7 +878,7 @@ func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
 		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
 		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes + s.ChatLogMaxBytes +
-		s.ExecutorLogMaxBytes + s.CodeLogMaxBytes + s.AccessLogMaxBytes
+		s.ExecutorLogMaxBytes + s.CodeLogMaxBytes + s.AccessLogMaxBytes + s.AtlasLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
@@ -1002,6 +1027,18 @@ func (s Stream) AccessMaxBytes() (int64, bool) {
 		return s.AccessLogMaxBytes, false
 	}
 	return DefaultAccessLogMaxBytes, true
+}
+
+// AtlasMaxBytes is the atlas log's ceiling, and whether it was derived: the
+// operator's value, or the fixed default ([DefaultAtlasLogMaxBytes]), which
+// reports `true` because a value nobody wrote is one the shared-budget scaling
+// may lower. It takes no free-space argument, for [Stream.IamMaxBytes]'s
+// reason: the log grows with what people record, not with the volume.
+func (s Stream) AtlasMaxBytes() (int64, bool) {
+	if s.AtlasLogMaxBytes > 0 {
+		return s.AtlasLogMaxBytes, false
+	}
+	return DefaultAtlasLogMaxBytes, true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

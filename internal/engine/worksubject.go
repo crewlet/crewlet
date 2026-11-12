@@ -2,11 +2,11 @@ package engine
 
 import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -63,7 +63,7 @@ var workItemNamers = func() map[string]workItemNamer {
 	for _, source := range []interface {
 		workItemNamer
 		Source() string
-	}{worklet.Prompt{}, code.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
+	}{worklet.Prompt{}, gitlet.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
 		namers[source.Source()] = source
 	}
 	return namers

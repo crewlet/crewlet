@@ -3,14 +3,14 @@
     "held": [
       {
         "kind": "backup_age",
-        "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 2400 record(s) older than its 24h replay window",
+        "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1950 record(s) older than its 24h replay window",
         "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
             "domains": [
               "tracker"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 2400 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1950 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -18,7 +18,7 @@
             "domains": [
               "vectors"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1200 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1800 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -26,7 +26,7 @@
             "domains": [
               "pages"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 600 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1650 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -34,7 +34,7 @@
             "domains": [
               "iam"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 300 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1500 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -42,7 +42,7 @@
             "domains": [
               "usage"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 150 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1350 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -50,7 +50,7 @@
             "domains": [
               "artifacts"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 75 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1200 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -58,7 +58,7 @@
             "domains": [
               "artifactdata"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 37 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1050 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -66,7 +66,7 @@
             "domains": [
               "assistant"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 18 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 900 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -74,7 +74,7 @@
             "domains": [
               "chat"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 9 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 750 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -82,7 +82,7 @@
             "domains": [
               "executor"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 4 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 600 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -90,7 +90,7 @@
             "domains": [
               "code"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 2 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 450 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -98,7 +98,15 @@
             "domains": [
               "access"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 300 record(s) older than its 24h replay window",
+            "term": "backup_floor",
+            "since": "2031-03-31T05:14:00Z"
+          },
+          {
+            "domains": [
+              "atlas"
+            ],
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 150 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           }
@@ -108,14 +116,14 @@
     "held_beside_a_blocked_trim": [
       {
         "kind": "backup_age",
-        "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 2400 record(s) older than its 24h replay window",
+        "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1950 record(s) older than its 24h replay window",
         "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
             "domains": [
               "tracker"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 2400 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1950 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -123,7 +131,7 @@
             "domains": [
               "vectors"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1200 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1800 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -131,7 +139,7 @@
             "domains": [
               "iam"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 300 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1500 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -139,7 +147,7 @@
             "domains": [
               "usage"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 150 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1350 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -147,7 +155,7 @@
             "domains": [
               "artifacts"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 75 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1200 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -155,7 +163,7 @@
             "domains": [
               "artifactdata"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 37 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1050 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -163,7 +171,7 @@
             "domains": [
               "assistant"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 18 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 900 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -171,7 +179,7 @@
             "domains": [
               "chat"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 9 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 750 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -179,7 +187,7 @@
             "domains": [
               "executor"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 4 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 600 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -187,7 +195,7 @@
             "domains": [
               "code"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 2 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 450 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           },
@@ -195,7 +203,15 @@
             "domains": [
               "access"
             ],
-            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1 record(s) older than its 24h replay window",
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 300 record(s) older than its 24h replay window",
+            "term": "backup_floor",
+            "since": "2031-03-31T05:14:00Z"
+          },
+          {
+            "domains": [
+              "atlas"
+            ],
+            "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 150 record(s) older than its 24h replay window",
             "term": "backup_floor",
             "since": "2031-03-31T05:14:00Z"
           }
@@ -203,14 +219,14 @@
       },
       {
         "kind": "trim_blocked",
-        "detail": "the trim has not advanced for 46h, and the log is keeping up to 600 record(s) older than its 24h replay window",
+        "detail": "the trim has not advanced for 46h, and the log is keeping up to 1650 record(s) older than its 24h replay window",
         "remedy": "The term holding each log names what to fix, and `crewlet retention status` prints it with what it has and what it wants. Until it is fixed the log grows toward its ceiling by a day of records every day.",
         "domains": [
           {
             "domains": [
               "pages"
             ],
-            "detail": "the trim has not advanced for 46h, and the log is keeping up to 600 record(s) older than its 24h replay window",
+            "detail": "the trim has not advanced for 46h, and the log is keeping up to 1650 record(s) older than its 24h replay window",
             "term": "applied",
             "since": "2031-03-31T05:14:00Z"
           }
@@ -251,7 +267,8 @@
               "chat",
               "executor",
               "code",
-              "access"
+              "access",
+              "atlas"
             ],
             "detail": "no verified backup has been recorded, and the policy asks for one every 24h"
           }

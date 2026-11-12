@@ -191,6 +191,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, standbyCases...)
 	cases = append(cases, lateCases...)
 	cases = append(cases, briefReadCases...)
+	cases = append(cases, inFlightCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -222,6 +223,14 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			_, runs := newStore(t)
 			staged := &stagedRuns{records: runs}
 			tc.fn(t, staged, over(staged))
+		})
+	}
+	for _, tc := range noteStagedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, runs := newStore(t)
+			vanishing := &vanishingRuns{records: runs}
+			tc.fn(t, vanishing, over(vanishing))
 		})
 	}
 }

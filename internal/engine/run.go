@@ -29,12 +29,6 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	awsint "github.com/crewlet/crewlet/internal/aws"
-	"github.com/crewlet/crewlet/internal/code"
-	codecompact "github.com/crewlet/crewlet/internal/code/compact"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/code/mirror"
-	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -44,6 +38,12 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	gitletcompact "github.com/crewlet/crewlet/internal/gitlet/compact"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/gitlet/mirror"
+	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
@@ -568,20 +568,20 @@ type Engine struct {
 	// compactorEstate is Options.compactorEstate, kept for the same reason:
 	// nil — every engine New builds outside this package's tests — hands the
 	// compactor the router's code seam as it is ([Engine.buildGitletHost]).
-	compactorEstate func(codecompact.Estate) codecompact.Estate
+	compactorEstate func(gitletcompact.Estate) gitletcompact.Estate
 
 	// homeSeams is Options.homeSeams, kept for the same reason: nil — every
 	// engine New builds outside this package's tests — hands the home's
 	// change work the router's code seam and Gitlet's chain builder
 	// as they are ([Engine.buildGitletHost]).
-	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
+	homeSeams func(gitlethome.Estate, gitlethome.Chains) (gitlethome.Estate, gitlethome.Chains)
 
 	// committerPublisher is Options.committerPublisher, kept because a
 	// runtime the first apply that hosts code starts builds its committer
 	// too: nil — every engine New builds outside this package's tests —
 	// hands the committer the code log's write authority as it is
 	// ([Engine.startNative]).
-	committerPublisher func(code.Publisher) code.Publisher
+	committerPublisher func(gitlet.Publisher) gitlet.Publisher
 	// plans is the node's registry of harness sign-ins
 	// ([harness.Plans]), made once at boot under a key derived from the
 	// keyring and handed to every revision's build, so a sit-out outlives
@@ -1264,7 +1264,7 @@ type Engine struct {
 	// codeReads is this node's reads ledger: every read of a `visibility:
 	// unit` repository Gitlet's git surface and git reads answer, coalesced per
 	// reader and published as `code_fetched` — see [Engine.recordCodeRead]
-	// and internal/code/readaudit.
+	// and internal/gitlet/readaudit.
 	//
 	// On the engine for auxSpend's reason: a bucket is reads already
 	// answered, and Gitlet, whose reads it records, is built at an apply after
@@ -1429,7 +1429,7 @@ type Options struct {
 	// host.HookCommand names it, `crewlet gitlet hook proc-receive`, its path
 	// resolved through os.Executable and its symbolic links. A test binary is
 	// not crewlet, so a suite that pushes for real names one
-	// (codetest.HookCommand).
+	// (gitlettest.HookCommand).
 	GitHook []string
 
 	// Environment is what a company's `${VAR}` references fall back to
@@ -1510,33 +1510,33 @@ type Options struct {
 
 	// compactorEstate stands between the Gitlet node's compactor and the
 	// router's code seam it lists and proposes through
-	// ([codecompact.Options.Estate]), nil for none. UNEXPORTED for cacheDisk's
+	// ([gitletcompact.Options.Estate]), nil for none. UNEXPORTED for cacheDisk's
 	// reason (export_test.go): the knob exists only so a case whose subject
 	// is the compaction-behind alarm a running node raises can show the
 	// compactor a repository at the pack bound without pushing two thousand
 	// packs into it.
-	compactorEstate func(codecompact.Estate) codecompact.Estate
+	compactorEstate func(gitletcompact.Estate) gitletcompact.Estate
 
 	// homeSeams stands between a Gitlet node's home change work and the
 	// router's code seam it reads and records through and Gitlet's
-	// chain builder it builds its trains with ([codehome.Options.Estate],
-	// [codehome.Options.Chains]), nil for none. UNEXPORTED for cacheDisk's
+	// chain builder it builds its trains with ([gitlethome.Options.Estate],
+	// [gitlethome.Options.Chains]), nil for none. UNEXPORTED for cacheDisk's
 	// reason (export_test.go): the knob exists only so a case whose subject is
 	// the merge-rate alarm a running node raises can show the queue worker a
 	// queue asked past its capacity, and record its train, without the
 	// changes, the passed checks and the hour of rounds a real queue needs to
 	// fall behind.
-	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
+	homeSeams func(gitlethome.Estate, gitlethome.Chains) (gitlethome.Estate, gitlethome.Chains)
 
 	// committerPublisher stands between a data node's committer and the code
 	// log's write authority it publishes through
-	// ([code.CommitterOptions.Publisher]), nil for none. UNEXPORTED for
+	// ([gitlet.CommitterOptions.Publisher]), nil for none. UNEXPORTED for
 	// cacheDisk's reason (export_test.go): the knob exists only so a case
 	// whose subject is the busy alarm a running node raises can hold the
 	// committer's first batch at its publish, and so fill a repository's
 	// queue, rather than race a burst against batches a healthy committer
 	// lands in milliseconds.
-	committerPublisher func(code.Publisher) code.Publisher
+	committerPublisher func(gitlet.Publisher) gitlet.Publisher
 	// resumeGate wraps the gate the sandbox coordinator resumes through
 	// ([Engine.turnGate]), nil for the node's admission as it stands.
 	// UNEXPORTED for the reason usageEvery is: the admission is the node's
@@ -1911,6 +1911,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// write its launch makes to create the run's record — before any box or
 	// harness exists — and every late offer to the turn after it (steer.go).
 	steers.runs = e.runSteers
+	// AND THE SETTLES THOSE RECORDS TAKE OFF THE PATH THAT TOOK END WITH THE
+	// NODE: each asks its store until it answers, and no longer than this
+	// node's teardown, which is when its store goes — asking every take once
+	// more as it begins, in a window of its own beside the give-backs, never
+	// on the stop's allowance (runsteer.go, steerSettleStopBudget).
+	e.runSteers.stopWith(e)
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
@@ -3446,6 +3452,15 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
 	e.stopBridgeFleet(ctx)
+	// AND THE SETTLES OF TAKES WHOSE ANSWERS WERE LOST, once nothing is left
+	// to lose one — the drain ended the turns, and the sandbox's resumes and
+	// the bridge's relay are stopped above — and while the coordination store
+	// they write is still there: each loop made its last attempt in the window
+	// the teardown opened as it began, which is over within
+	// steerSettleStopBudget of that — the ledgers' flush above covers it where
+	// that flush spends its own bound — and is waited out here, having spent
+	// none of the allowance the give-backs after it are owed.
+	e.runSteers.waitSettles()
 	e.stopIssueSender()
 	// AND THEN THE CORE, whose logs are the last thing standing — see the
 	// comment above stopNative.
@@ -3875,7 +3890,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// written before a told change are marked (capability.go).
 	told := e.capabilityFor(ctx, company, req.Handle, req.RunID)
 	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told,
-		tel.workingFor)
+		tel.workingFor, e.turnReadsAtlas(ctx, company, req.Handle, tel))
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
@@ -3898,7 +3913,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
 	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told, nil)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,

@@ -17,11 +17,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -381,7 +381,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 		// `crewlet`. Handed to every node, as `crewlet run` hands its own
 		// path to every node: one whose company hosts no code builds no
 		// host and never reads it.
-		GitHook: codetest.HookCommand(t),
+		GitHook: gitlettest.HookCommand(t),
 	})
 	// ONE TEARDOWN, registered before anything can fail, so a Start or an
 	// API that fails halfway still stops what came up: the API in front of

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -56,15 +56,15 @@ var gitQuestions = []struct {
 // the copy's position, the push behind its rev, what its index covers — so a
 // case sees that a question never carries a stamp into an answer it calls
 // immutable, whoever answered it.
-func stamping(q code.GitQuery) (code.GitAnswer, error) {
-	a := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Rev: whole, Position: moved,
-		PushedBy: map[string]code.PushedBy{whole: {PushID: "p1", Position: moved}},
-		Coverage: &code.Coverage{Complete: true}}
+func stamping(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	a := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Rev: whole, Position: moved,
+		PushedBy: map[string]gitlet.PushedBy{whole: {PushID: "p1", Position: moved}},
+		Coverage: &gitlet.Coverage{Complete: true}}
 	switch q.Kind {
-	case code.GitTree:
-		a.Tree = &code.TreeAnswer{Tree: whole}
-	case code.GitCompare:
-		a.Compare = &code.CompareAnswer{Base: whole, Head: whole}
+	case gitlet.GitTree:
+		a.Tree = &gitlet.TreeAnswer{Tree: whole}
+	case gitlet.GitCompare:
+		a.Compare = &gitlet.CompareAnswer{Base: whole, Head: whole}
 	}
 	return a, nil
 }
@@ -72,7 +72,7 @@ func stamping(q code.GitQuery) (code.GitAnswer, error) {
 // AN OID QUESTION IS IMMUTABLE. A question every revision of which is a
 // whole object id is answered queries.Immutable — sent with a strong entity
 // tag and `Cache-Control: immutable` — and asks its Gitlet node for the page
-// alone (code.GitQuery.Unstamped), so the page is a function of what it names;
+// alone (gitlet.GitQuery.Unstamped), so the page is a function of what it names;
 // and what it carries is the page and nothing a node stamped — no position,
 // no push, no coverage, no repository id, no resolved ref — even from a node
 // that stamped them. Asked by a ref it is answered bare, carrying the ref it
@@ -136,8 +136,8 @@ func TestAnOidQuestionIsImmutable(t *testing.T) {
 			}
 		})
 	}
-	stub := &stubCode{git: stamping, preview: func(q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
-		return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeUnknown}, nil
+	stub := &stubCode{git: stamping, preview: func(q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
+		return gitlet.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: gitlet.MergeUnknown}, nil
 	}}
 	answer, err := askNative(t, queries.Sources{Code: stub}, "code_compare",
 		map[string]any{"name": "web", "base": whole, "head": whole})
@@ -152,7 +152,7 @@ func TestAnOidQuestionIsImmutable(t *testing.T) {
 // the repository, the caller's floor on the code log and where each ref last
 // moved — never at the resolve's own checkpoint. `HEAD` is the default branch,
 // which the resolve answers from the repository's row in its own transaction
-// (code.HeadRef): a tree at HEAD — the Repository page's commonest question —
+// (gitlet.HeadRef): a tree at HEAD — the Repository page's commonest question —
 // is ONE read of the rows, a resolve naming HEAD at the caller's freshness,
 // with no read of the repository ahead of it. A name no live ref holds is
 // not_found (`no_ref`), naming it, and nothing is read by object id.
@@ -163,11 +163,11 @@ func TestAnOidQuestionIsImmutable(t *testing.T) {
 func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 	t.Parallel()
 	caller := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 30}
-	stub := &stubCode{floor: wrote, refs: func(q code.RefQuery) (code.RefAnswer, error) {
-		a := code.RefAnswer{Repo: stubRepo("web").RepoRef,
+	stub := &stubCode{floor: wrote, refs: func(q gitlet.RefQuery) (gitlet.RefAnswer, error) {
+		a := gitlet.RefAnswer{Repo: stubRepo("web").RepoRef,
 			Position: statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 99}}
 		for i, name := range q.Refs {
-			a.Refs = append(a.Refs, code.ResolvedRef{Name: name, Ref: "refs/heads/" + name,
+			a.Refs = append(a.Refs, gitlet.ResolvedRef{Name: name, Ref: "refs/heads/" + name,
 				OID: []string{whole, other}[i], Moved: statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1,
 					Seq: moved.Seq - uint64(i)}})
 		}
@@ -195,15 +195,15 @@ func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(headed.asked) != 0 || len(headed.resolved) != 1 ||
-		!slices.Equal(headed.resolved[0].Refs, []string{code.HeadRef}) ||
+		!slices.Equal(headed.resolved[0].Refs, []string{gitlet.HeadRef}) ||
 		headed.resolved[0].Fresh.Level != statelog.ReadSession ||
 		headed.resolved[0].Fresh.Floor("CREWLET_CODE_LOG") != caller {
 		t.Errorf("a tree at HEAD read %+v and resolved %+v, want one resolve naming HEAD at the caller's "+
 			"session floored at %v and no read of the repository", headed.asked, headed.resolved, caller)
 	}
 
-	missing := &stubCode{refs: func(q code.RefQuery) (code.RefAnswer, error) {
-		return code.RefAnswer{Repo: stubRepo("web").RepoRef, Refs: []code.ResolvedRef{
+	missing := &stubCode{refs: func(q gitlet.RefQuery) (gitlet.RefAnswer, error) {
+		return gitlet.RefAnswer{Repo: stubRepo("web").RepoRef, Refs: []gitlet.ResolvedRef{
 			{Name: q.Refs[0], Missing: fmt.Sprintf("repository web has no branch or tag %q", q.Refs[0])}}}, nil
 	}}
 	_, err := askNative(t, queries.Sources{Code: missing}, "code_log", map[string]any{"name": "web", "ref": "gone"})
@@ -232,12 +232,12 @@ func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 func TestAMergePreviewIsAskedOfTheHome(t *testing.T) {
 	t.Parallel()
 	stub := &stubCode{floor: wrote,
-		git: func(q code.GitQuery) (code.GitAnswer, error) {
-			return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Compare: &code.CompareAnswer{Base: whole,
+		git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+			return gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Compare: &gitlet.CompareAnswer{Base: whole,
 				Head: other, MergeBase: forked, Ahead: 1, Behind: 2}}, nil
 		},
-		preview: func(q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
-			return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeConflict,
+		preview: func(q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
+			return gitlet.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: gitlet.MergeConflict,
 				Conflicts: []string{"go.mod"}, ConflictsOmitted: 2}, nil
 		}}
 	answer, err := askNative(t, queries.Sources{Code: stub}, "code_compare", map[string]any{"name": "web",
@@ -255,13 +255,13 @@ func TestAMergePreviewIsAskedOfTheHome(t *testing.T) {
 			other, whole, stubRepoID, wrote)
 	}
 	got, ok := answer.(queries.CodeComparison)
-	if !ok || got.Compare == nil || got.Compare.MergeBase != forked || got.Preview.State != code.MergeConflict ||
+	if !ok || got.Compare == nil || got.Compare.MergeBase != forked || got.Preview.State != gitlet.MergeConflict ||
 		!slices.Equal(got.Preview.Conflicts, []string{"go.mod"}) || got.Preview.ConflictsOmitted != 2 {
 		t.Errorf("the comparison answered %+v, want the comparison and its preview", answer)
 	}
 
-	down := &stubCode{preview: func(code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
-		return code.MergePreviewAnswer{}, &code.ErrGitUnready{Reason: code.UnreadyShare, Detail: "busy"}
+	down := &stubCode{preview: func(gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
+		return gitlet.MergePreviewAnswer{}, &gitlet.ErrGitUnready{Reason: gitlet.UnreadyShare, Detail: "busy"}
 	}}
 	if _, err := askNative(t, queries.Sources{Code: down}, "code_compare", map[string]any{"name": "web",
 		"base": whole, "head": other}); !errors.Is(err, queries.ErrUnavailable) {
@@ -283,22 +283,22 @@ func TestAnAncestralComparisonAsksNoPreview(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name     string
-		relation code.CompareAnswer
+		relation gitlet.CompareAnswer
 	}{
-		{"base inside head", code.CompareAnswer{MergeBase: whole, BaseIsAncestor: true, Ahead: 3}},
-		{"head inside base", code.CompareAnswer{MergeBase: other, HeadIsAncestor: true, Behind: 2}},
+		{"base inside head", gitlet.CompareAnswer{MergeBase: whole, BaseIsAncestor: true, Ahead: 3}},
+		{"head inside base", gitlet.CompareAnswer{MergeBase: other, HeadIsAncestor: true, Behind: 2}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			stub := &stubCode{
-				git: func(q code.GitQuery) (code.GitAnswer, error) {
+				git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 					c := tc.relation
 					c.Base, c.Head = whole, other
-					return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Compare: &c}, nil
+					return gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Compare: &c}, nil
 				},
-				preview: func(q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
-					return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head,
-						State: code.MergeConflict, Conflicts: []string{"go.mod"}}, nil
+				preview: func(q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error) {
+					return gitlet.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head,
+						State: gitlet.MergeConflict, Conflicts: []string{"go.mod"}}, nil
 				}}
 			answer, err := askNative(t, queries.Sources{Code: stub}, "code_compare", map[string]any{"name": "web",
 				"base": whole, "head": other})
@@ -314,7 +314,7 @@ func TestAnAncestralComparisonAsksNoPreview(t *testing.T) {
 				t.Fatalf("an ancestral comparison by whole ids answered %T, want it immutable", answer)
 			}
 			got, ok := fixed.Answer.(queries.CodeComparison)
-			if !ok || got.Preview.State != code.MergeClean || len(got.Preview.Conflicts) != 0 ||
+			if !ok || got.Preview.State != gitlet.MergeClean || len(got.Preview.Conflicts) != 0 ||
 				got.Preview.ConflictsOmitted != 0 {
 				t.Errorf("an ancestral comparison answered %+v, want its preview clean, no path conflicted",
 					fixed.Answer)
@@ -336,19 +336,19 @@ func TestAnAncestralComparisonAsksNoPreview(t *testing.T) {
 func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 	t.Parallel()
 	rowsAt := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 20}
-	change := code.ChangeName{Repo: "web", Ref: "web!4", Title: "Retry", State: code.ChangeStateOpen}
+	change := gitlet.ChangeName{Repo: "web", Ref: "web!4", Title: "Retry", State: gitlet.ChangeStateOpen}
 	stub := &stubCode{
-		answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
-			if q.Kind == code.ReadPushes {
-				return code.ReadAnswer{Pushes: []code.PushRow{{PushID: q.Push}}}, nil
+		answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+			if q.Kind == gitlet.ReadPushes {
+				return gitlet.ReadAnswer{Pushes: []gitlet.PushRow{{PushID: q.Push}}}, nil
 			}
-			return code.ReadAnswer{Repo: stubRepo(q.Repo), Position: rowsAt, Level: q.Fresh.Level,
-				Commit: &code.CommitChanges{Commit: q.Commit, Revisions: []code.CommitRevision{{Change: change,
+			return gitlet.ReadAnswer{Repo: stubRepo(q.Repo), Position: rowsAt, Level: q.Fresh.Level,
+				Commit: &gitlet.CommitChanges{Commit: q.Commit, Revisions: []gitlet.CommitRevision{{Change: change,
 					N: 2}}}}, nil
 		},
-		git: func(q code.GitQuery) (code.GitAnswer, error) {
-			return code.GitAnswer{Kind: q.Kind, Log: &code.LogAnswer{Commits: []code.LogCommit{{OID: q.Log.Rev,
-				Subject: "Retry the upload"}}}, PushedBy: map[string]code.PushedBy{whole: {PushID: "p7",
+		git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+			return gitlet.GitAnswer{Kind: q.Kind, Log: &gitlet.LogAnswer{Commits: []gitlet.LogCommit{{OID: q.Log.Rev,
+				Subject: "Retry the upload"}}}, PushedBy: map[string]gitlet.PushedBy{whole: {PushID: "p7",
 				Position: moved}}}, nil
 		}}
 	answer, err := askNative(t, queries.Sources{Code: stub}, "code_commit", map[string]any{"name": "web",
@@ -361,7 +361,7 @@ func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 		len(got.Revisions) != 1 || got.Revisions[0].Change != change || got.Position != rowsAt {
 		t.Fatalf("the commit answered %+v, want it, its push and its revision", answer)
 	}
-	if len(stub.asked) != 2 || stub.asked[0].Kind != code.ReadCommit || stub.asked[0].Commit != whole ||
+	if len(stub.asked) != 2 || stub.asked[0].Kind != gitlet.ReadCommit || stub.asked[0].Commit != whole ||
 		stub.asked[1].Push != "p7" || stub.asked[1].Fresh.Level != statelog.ReadSession ||
 		stub.asked[1].Fresh.Floor("CREWLET_CODE_LOG") != moved {
 		t.Errorf("the commit read %+v, want its rows and then its push at session floored at %v", stub.asked,
@@ -378,8 +378,8 @@ func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 				len(none.asked))
 		}
 	}
-	tree := &stubCode{git: func(q code.GitQuery) (code.GitAnswer, error) {
-		return code.GitAnswer{Kind: q.Kind, Log: &code.LogAnswer{Commits: []code.LogCommit{{OID: other}}}}, nil
+	tree := &stubCode{git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+		return gitlet.GitAnswer{Kind: q.Kind, Log: &gitlet.LogAnswer{Commits: []gitlet.LogCommit{{OID: other}}}}, nil
 	}}
 	if _, err := askNative(t, queries.Sources{Code: tree}, "code_commit", map[string]any{"name": "web",
 		"sha": whole}); !errors.Is(err, queries.ErrBadParams) {
@@ -403,23 +403,23 @@ func TestAReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 		err   error
 		check func(error) bool
 	}{
-		{"no object", fmt.Errorf("%w: web holds no object %s", code.ErrObjectNotFound, whole), func(err error) bool {
+		{"no object", fmt.Errorf("%w: web holds no object %s", gitlet.ErrObjectNotFound, whole), func(err error) bool {
 			var absent *queries.NotFound
 			return errors.As(err, &absent) && absent.Reason == queries.ReasonNoObject &&
 				strings.Contains(absent.Detail, "holds no object")
 		}},
-		{"no directory", fmt.Errorf("%w: go.mod is a file", code.ErrNotATree), func(err error) bool {
+		{"no directory", fmt.Errorf("%w: go.mod is a file", gitlet.ErrNotATree), func(err error) bool {
 			var absent *queries.NotFound
 			return errors.As(err, &absent) && absent.Reason == queries.ReasonNoObject
 		}},
-		{"too large", fmt.Errorf("%w: past its budget", code.ErrSliceTooLarge), func(err error) bool {
+		{"too large", fmt.Errorf("%w: past its budget", gitlet.ErrSliceTooLarge), func(err error) bool {
 			return errors.Is(err, queries.ErrBadParams)
 		}},
-		{"no Gitlet node", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling"}, func(err error) bool {
+		{"no Gitlet node", &gitlet.ErrGitUnready{Reason: gitlet.UnreadyNotHeld, Detail: "filling"}, func(err error) bool {
 			return errors.Is(err, queries.ErrUnavailable)
 		}},
 	} {
-		stub := &stubCode{git: func(code.GitQuery) (code.GitAnswer, error) { return code.GitAnswer{}, tc.err }}
+		stub := &stubCode{git: func(gitlet.GitQuery) (gitlet.GitAnswer, error) { return gitlet.GitAnswer{}, tc.err }}
 		if _, err := askNative(t, queries.Sources{Code: stub}, "code_tree", map[string]any{"name": "web",
 			"ref": whole}); !tc.check(err) {
 			t.Errorf("%s: answered %v", tc.name, err)

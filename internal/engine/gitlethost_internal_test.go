@@ -12,10 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -45,14 +45,14 @@ roles:
 
 // staleRepos is Gitlet's repository listing at the cheapest level —
 // what proves a node serves the code half at all.
-var staleRepos = code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepos, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+var staleRepos = gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: gitlet.ReadRepos, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
 
 // servesCodeReads waits until e's code half answers a listing through its own
 // router, and answers it: a node's copy serves only once it has drained its
 // log, which a test must not race.
-func servesCodeReads(t *testing.T, e *Engine) code.ReadAnswer {
+func servesCodeReads(t *testing.T, e *Engine) gitlet.ReadAnswer {
 	t.Helper()
-	var answer code.ReadAnswer
+	var answer gitlet.ReadAnswer
 	waitUntil(t, 20*time.Second, "Gitlet to answer a listing", func() bool {
 		var err error
 		answer, err = e.router.Code().Read(t.Context(), staleRepos)
@@ -88,7 +88,7 @@ func TestACompanyOnGitletServesItsOperations(t *testing.T) {
 		if len(answer.Repos) != 0 {
 			t.Errorf("a company that declared no repository lists %+v", answer.Repos)
 		}
-		if answer.Position.Stream != (code.Domain{}).Stream().Name {
+		if answer.Position.Stream != (gitlet.Domain{}).Stream().Name {
 			t.Errorf("the listing answered at %v, want a position on the code log", answer.Position)
 		}
 	})
@@ -221,11 +221,11 @@ func TestAMaintenanceModeNodeRefusesAProposal(t *testing.T) {
 		t.Fatal("the premise: the runtime built a committer, which only the gate withholds")
 	}
 	servesCodeReads(t, e)
-	push := code.Proposal{
+	push := gitlet.Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: uuid.NewString(),
-		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"},
-		Via:       code.ViaGit, Node: e.id, ReceivedAt: time.Now().UTC(),
-		Commands: []code.Command{{Ref: "refs/heads/main", Old: code.ZeroOID,
+		Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"},
+		Via:       gitlet.ViaGit, Node: e.id, ReceivedAt: time.Now().UTC(),
+		Commands: []gitlet.Command{{Ref: "refs/heads/main", Old: gitlet.ZeroOID,
 			New: "0123456789abcdef0123456789abcdef01234567"}},
 	}
 	if err := push.Validate(); err != nil {
@@ -267,13 +267,13 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 	week := 7 * 24 * time.Hour
 	census := func(holds int64) int {
 		return statelog.LinearizableReadsPerSeatDay*seats + collect.PinsPerDay +
-			code.GitReadsPerDay(holds, week)
+			gitlet.GitReadsPerDay(holds, week)
 	}
 	t.Run("through the report, at the ceiling the stream holds", func(t *testing.T) {
 		t.Parallel()
 		e, _ := aRunningNodeOf(t, gitletHostCompany)
 		s := e.core.Load().log
-		running := s.Domain(code.Domain{}.Name())
+		running := s.Domain(gitlet.Domain{}.Name())
 		// THE LOG IS RESIZED UNDER THE RUNNING NODE, as `crewlet retention
 		// set-capacity` resizes it: the stream now holds half of what this
 		// node's Tier A sized it at, and nothing re-sizes the spec.
@@ -293,7 +293,7 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 			t.Fatalf("recorder: %v", err)
 		}
 		recorder.Add(metrics.StatelogBarriersApplied, uint64(barriers),
-			metrics.Attrs{"domain": code.Domain{}.Name(), "stream": running.spec.Name})
+			metrics.Attrs{"domain": gitlet.Domain{}.Name(), "stream": running.spec.Name})
 		r := &retention{
 			metrics: recorder, state: s, fleet: e.backends.Fleet, nodeID: e.id,
 			seats: func() int { return seats }, background: e.backgroundBarriers,
@@ -328,25 +328,25 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 		if r == nil {
 			t.Fatal("a node running the state log started no trim")
 		}
-		running := e.core.Load().log.Domain(code.Domain{}.Name())
+		running := e.core.Load().log.Domain(gitlet.Domain{}.Name())
 		// AT A CEILING THE TEST KNOWS, so the census it expects is a figure
 		// rather than whatever this machine's free disk derived.
 		const holds = 1 << 30
 		if err := running.log.SetMaxBytes(t.Context(), holds); err != nil {
 			t.Fatalf("resize the code log: %v", err)
 		}
-		name := code.Domain{}.Name()
+		name := gitlet.Domain{}.Name()
 		// THE SEATS' TERM AT THE RATE THE REGISTER DECLARES for the code
 		// domain, as the report counts it: left out, the census this case
 		// expects is short the seats' reads the alarm adds, and the control
 		// below stays inside twice the report's own.
-		reads, declared := readModel(code.Domain{})
+		reads, declared := readModel(gitlet.Domain{})
 		if !declared {
 			t.Fatal("the premise: the code domain declares no read model")
 		}
 		bare := statelog.Census{Reads: reads, Seats: r.seats(), Background: e.backgroundBarriers(name)}
 		sized := bare
-		sized.Clients = code.GitReadsPerDay(holds, r.cfg.MinAge())
+		sized.Clients = gitlet.GitReadsPerDay(holds, r.cfg.MinAge())
 		censusDrift := func() (string, bool) {
 			return codeLogDrift(r.Report(t.Context()).Alarms)
 		}
@@ -396,20 +396,20 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 			if err != nil {
 				t.Fatalf("recorder: %v", err)
 			}
-			spec := code.Domain{}.Stream()
+			spec := gitlet.Domain{}.Stream()
 			// A SPEC UNLIKE THE CEILING HELD: the census reads the
 			// stream's, so this figure must change nothing.
 			spec.MaxBytes = 64 << 30
 			recorder.Add(metrics.StatelogBarriersApplied, 20_000,
-				metrics.Attrs{"domain": code.Domain{}.Name(), "stream": spec.Name})
+				metrics.Attrs{"domain": gitlet.Domain{}.Name(), "stream": spec.Name})
 			e := &Engine{objects: &objectStore{}}
-			running := &runningLog{domain: code.Domain{}, spec: spec}
+			running := &runningLog{domain: gitlet.Domain{}, spec: spec}
 			r := &retention{
 				metrics: recorder,
 				state:   runsLogs(&stateLog{}, running),
 				seats:   func() int { return seats }, background: e.backgroundBarriers,
 			}
-			c, counted := r.census([]*runningLog{running})[code.Domain{}.Name()]
+			c, counted := r.census([]*runningLog{running})[gitlet.Domain{}.Name()]
 			if !counted {
 				t.Fatal("the code log has no census half: a log a read appends to is counted")
 			}
@@ -441,7 +441,7 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 	// NO OTHER LOG declares readers beyond the seats and the engine's own
 	// passes.
 	for _, d := range registeredDomains() {
-		isCode := d.Name() == code.Domain{}.Name()
+		isCode := d.Name() == gitlet.Domain{}.Name()
 		if declares := clientBarriers(d.Name()) != nil; declares != isCode {
 			t.Errorf("the %s log's census has a client term: %v, want one on the code "+
 				"log alone", d.Name(), declares)
@@ -459,7 +459,7 @@ func codeLogDrift(alarms []statelog.Alarm) (string, bool) {
 			continue
 		}
 		for _, d := range alarm.Domains {
-			if slices.Contains(d.Domains, (code.Domain{}).Name()) {
+			if slices.Contains(d.Domains, (gitlet.Domain{}).Name()) {
 				return d.Detail, true
 			}
 		}
@@ -499,8 +499,8 @@ const gitletHostLimited = nativeCleanupCompany + `code:
 func TestTheCodeSettingsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, gitletHostLimited))
-	capped := code.Limits{MaxPushBytes: 64 << 20, MaxBlobBytes: 1 << 20, RepoMaxBytes: 2 << 30,
-		PushesPerSeatDay: 40, MergeByFloor: code.MergeByMaintainers}
+	capped := gitlet.Limits{MaxPushBytes: 64 << 20, MaxBlobBytes: 1 << 20, RepoMaxBytes: 2 << 30,
+		PushesPerSeatDay: 40, MergeByFloor: gitlet.MergeByMaintainers}
 	year := 365 * 24 * time.Hour
 	if got := e.codeLimits(); got != capped {
 		t.Fatalf("the premise: a company hosting code with limits is held to %+v, want %+v",
@@ -533,9 +533,9 @@ func TestTheCodeSettingsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
 			got, year)
 	}
 	applyOK(t, e, gitletHostCompany)
-	if got := e.codeLimits(); got != code.DefaultLimits() {
+	if got := e.codeLimits(); got != gitlet.DefaultLimits() {
 		t.Errorf("a revision hosting code again with no limits is held to %+v, want the "+
-			"defaults %+v", got, code.DefaultLimits())
+			"defaults %+v", got, gitlet.DefaultLimits())
 	}
 	if got, want := e.codeDeletedRetention(), (config.Code{}).DeletedRetention(); got != want {
 		t.Errorf("a revision hosting code again with no retention purges after %v, want the "+

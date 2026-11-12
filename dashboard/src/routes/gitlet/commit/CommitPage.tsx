@@ -46,7 +46,7 @@ import { subjectOf } from "../repo/History.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 
-/** Every way a push's commits came to be, in words (`code.PushVias`). */
+/** Every way a push's commits came to be, in words (`gitlet.PushVias`). */
 const VIA_WORDS: Readonly<Record<string, string>> = {
   git: "a git push",
   engine: "a commit the engine built from a tool's call",

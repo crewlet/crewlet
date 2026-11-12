@@ -444,8 +444,10 @@ type CoordinatorOptions struct {
 	// answer nor resume with one. See answerseal.go.
 	Answers *AnswerSeal
 
-	// Ended is called once for every run this node finishes with, whatever
-	// finished it: collected, failed, torn down or reaped.
+	// Ended is called for every run this node finishes with, whatever
+	// finished it — collected, parked on its question, failed, torn down or
+	// reaped — and before every collection's wait for its calls in flight
+	// (drain.go), so more than once for one run: it is idempotent.
 	//
 	// It exists for credentials a run HOLDS rather than for its own state.
 	// A run's box dials the engine's tool bridge with a
@@ -454,41 +456,25 @@ type CoordinatorOptions struct {
 	// expires on its own clock, so this is the difference between a
 	// credential that dies with the job and one that dies in four hours.
 	//
-	// A PARKED run is deliberately not ended: it is waiting on a person,
-	// not finished, and its box will resume into the same session.
+	// A PARKED RUN'S SESSION ENDS AT ITS PARK'S COLLECTION, as every
+	// collection's does ([Coordinator.drainCalls]): the box that asked calls
+	// nothing more, and the answer's relaunch opens a session of its own,
+	// under a job of its own, so no call of the asking job's session lands
+	// as the new job's.
 	//
 	// THE SESSION'S NOTE INBOX GOES WITH IT, and no note with it: the notes
-	// still waiting are on the run's record, which the ending publishes as
-	// expired before it deletes it ([CoordinatorOptions.SteersExpired]).
+	// still waiting are on the run's record, whose ending reports what became
+	// of each before it deletes it ([CoordinatorOptions.SteersEnded]).
 	//
-	// AND THE SESSION CARRIES WHAT IT OWES BEFORE THIS RETURNS: a call whose
-	// own append did not land, which its session carries into the run's log
-	// as it ends (internal/api/mcpbridge's Ledger.End, the session's last
-	// carry of its own, made once any carry [CoordinatorOptions.Settle] asked
-	// for is done), so the reads and the deletes that follow an ending see
-	// it. IT WAITS FOR NO CALL STILL RUNNING: the session answers each that
-	// it is still running and closes behind those answers, and the call runs
-	// on and records itself as its tool returns, which may be after this has
-	// returned — and after the reads and the delete that follow it, which then
-	// hold nothing of it (internal/api/mcpbridge, "An opening ends without
-	// waiting for its calls").
+	// IT WAITS FOR NO CALL STILL RUNNING: the session answers each that it is
+	// still running and closes behind those answers, and the call runs on and
+	// makes its one update as its tool returns, which may be after this has
+	// returned — its identity on the run's log from before it ran
+	// ([BridgeLog.InFlight]) — so every collection, which asks this first,
+	// waits for those calls on the run's log after it, never on the bridge
+	// (drain.go; internal/api/mcpbridge, "An opening ends without waiting
+	// for its calls").
 	Ended func(runID string)
-
-	// Settle asks the bridge session serving a run's job to carry into the
-	// run's log whatever calls it still owes it — ones whose own append did
-	// not land, which a later call of the session would have carried — with
-	// their spend onto the job's record, before it returns, and reports
-	// whether it carried any. Asked once the job's box has been read back and
-	// before the log is read for what the job did: a job's LAST call has no
-	// later call of its own, and a submission whose append met a store's blip
-	// would otherwise be missing from the log its resume judges the round by,
-	// though the store answered a second later. Where it carried something,
-	// the job's spend is read again ([Coordinator.collectClaimed]), and the
-	// resume reads the calls from the log after it.
-	//
-	// Nil carries nothing, which a coordinator whose runs make no bridged
-	// calls — a test's — has.
-	Settle func(ctx context.Context, runID, launchID string) bool
 
 	// Recovered is told of each run this node takes over still RUNNING in
 	// its box, as it recovers the run's seat ([Coordinator.RecoverSeat]):
@@ -655,13 +641,18 @@ type CoordinatorOptions struct {
 	// an engine (a test's).
 	TurnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
 
-	// SteersExpired publishes, as expired, every note a person sent the run's
-	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
-	// WAITING on the run's record ([RunSteer]), which nothing will read now
-	// that the turn is over, and the ones the brief of a job that never
-	// started recorded read. The engine implements it, because only the
-	// engine opens a note's seal, and this package never publishes words it
-	// cannot verify.
+	// SteersEnded publishes what became of every note a person sent the
+	// run's turn that no step reported reading ([PendingRun.EndedNotes]), as
+	// the run's record knows it: DELIVERED, the ones a later launch's brief
+	// told again after a take never handed them over, where that job started;
+	// UNCONFIRMED, the ones a job's harness was handed and never confirmed;
+	// MISSED, the ones a take whose answer was lost recorded read and no
+	// later launch whose job started told; EXPIRED, the ones still WAITING on
+	// the record ([RunSteer]), which nothing will read now that the turn is
+	// over, and the ones the brief of a job that never started was the first
+	// to read. The engine
+	// implements it, because only the engine opens a note's seal, and this
+	// package never publishes words it cannot verify.
 	//
 	// A STEP OF THE ENDING, as CloseStopped is: made before the record is
 	// deleted, once per attempt, and made again by any attempt that finishes
@@ -673,7 +664,7 @@ type CoordinatorOptions struct {
 	// the delete: a note filed once the ending is decided is refused
 	// ([PendingStore.FileNote]). Nil publishes nothing — a coordinator built
 	// without an engine (a test's).
-	SteersExpired func(ctx context.Context, run PendingRun) error
+	SteersEnded func(ctx context.Context, run PendingRun) error
 
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes is waiting on its resume — see [SeatHold]. Nil holds
@@ -980,8 +971,6 @@ type Coordinator struct {
 	// pushes is [CoordinatorOptions.Pushes].
 	pushes RunPushes
 	ended  func(runID string)
-	// settle is [CoordinatorOptions.Settle].
-	settle func(ctx context.Context, runID, launchID string) bool
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
@@ -992,8 +981,8 @@ type Coordinator struct {
 	closeStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
 	turnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
-	// steersExpired is [CoordinatorOptions.SteersExpired].
-	steersExpired func(ctx context.Context, run PendingRun) error
+	// steersEnded is [CoordinatorOptions.SteersEnded].
+	steersEnded func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -1199,54 +1188,53 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
-		answers:       opts.Answers,
-		condense:      opts.Condense,
-		ended:         opts.Ended,
-		settle:        opts.Settle,
-		recovered:     opts.Recovered,
-		unresumable:   opts.Unresumable,
-		stopped:       opts.Stopped,
-		parked:        opts.Parked,
-		closeStopped:  opts.CloseStopped,
-		turnLost:      opts.TurnLost,
-		steersExpired: opts.SteersExpired,
-		node:          opts.Node,
-		boxes:         opts.Boxes,
-		nudge:         opts.Nudge,
-		refresh:       opts.Refresh,
-		sessions:      opts.Sessions,
-		keep:          opts.Keep,
-		restore:       opts.Restore,
-		relaunchWait:  relaunchCaptureWait,
-		endWait:       JobEndWait,
-		endPoll:       jobEndPoll,
-		spoolDir:      opts.SpoolDir,
-		sessionRetry:  sessionRetryBase,
-		recordBudget:  sessionRecordBudget,
-		beginBudget:   beginRecordBudget,
-		captureTick:   captureWaitTick,
-		now:           opts.Now,
-		runs:          map[string]seatRuns{},
-		moves:         map[string]uint64{},
-		attempts:      map[answerKey]map[string]answerBudget{},
-		retries:       map[string]*answerRetry{},
-		refused:       map[string]refusedCompletion{},
-		owed:          map[string]map[string]struct{}{},
-		held:          map[string]bool{},
-		holdBusy:      map[string]bool{},
-		holdDirty:     map[string]bool{},
-		holdGen:       map[string]uint64{},
-		signals:       map[signal]uint64{},
-		launchStops:   map[string]launchStop{},
-		finishing:     map[string]bool{},
-		frames:        map[string]int{},
-		hold:          opts.Hold,
-		admit:         opts.Admit,
-		gate:          opts.Gate,
-		after:         opts.After,
-		spent:         opts.Spent,
-		wasSpent:      opts.WasSpent,
-		lease:         opts.Lease,
+		answers:      opts.Answers,
+		condense:     opts.Condense,
+		ended:        opts.Ended,
+		recovered:    opts.Recovered,
+		unresumable:  opts.Unresumable,
+		stopped:      opts.Stopped,
+		parked:       opts.Parked,
+		closeStopped: opts.CloseStopped,
+		turnLost:     opts.TurnLost,
+		steersEnded:  opts.SteersEnded,
+		node:         opts.Node,
+		boxes:        opts.Boxes,
+		nudge:        opts.Nudge,
+		refresh:      opts.Refresh,
+		sessions:     opts.Sessions,
+		keep:         opts.Keep,
+		restore:      opts.Restore,
+		relaunchWait: relaunchCaptureWait,
+		endWait:      JobEndWait,
+		endPoll:      jobEndPoll,
+		spoolDir:     opts.SpoolDir,
+		sessionRetry: sessionRetryBase,
+		recordBudget: sessionRecordBudget,
+		beginBudget:  beginRecordBudget,
+		captureTick:  captureWaitTick,
+		now:          opts.Now,
+		runs:         map[string]seatRuns{},
+		moves:        map[string]uint64{},
+		attempts:     map[answerKey]map[string]answerBudget{},
+		retries:      map[string]*answerRetry{},
+		refused:      map[string]refusedCompletion{},
+		owed:         map[string]map[string]struct{}{},
+		held:         map[string]bool{},
+		holdBusy:     map[string]bool{},
+		holdDirty:    map[string]bool{},
+		holdGen:      map[string]uint64{},
+		signals:      map[signal]uint64{},
+		launchStops:  map[string]launchStop{},
+		finishing:    map[string]bool{},
+		frames:       map[string]int{},
+		hold:         opts.Hold,
+		admit:        opts.Admit,
+		gate:         opts.Gate,
+		after:        opts.After,
+		spent:        opts.Spent,
+		wasSpent:     opts.WasSpent,
+		lease:        opts.Lease,
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -1791,17 +1779,26 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	if err != nil {
 		return run, Result{}, false, c.collectFailed(ctx, run, err)
 	}
+	// THE JOB'S CALLS STILL IN FLIGHT, waited for on the run's log before
+	// anything reads what the job did ([Coordinator.drainCalls]): its session
+	// ended to new calls first — a park's and a run's ended at its cap alike —
+	// and a call its harness left running, its own run ended around it or its
+	// seat handed on, recorded, so the resume reads what it committed. A wait
+	// its context cut — this node stopping — hands the claim back uncounted,
+	// as any collection this node cancelled ([Coordinator.collectFailed]).
+	drained, err := c.drainCalls(ctx, run)
+	if err != nil {
+		return run, Result{}, false, c.collectFailed(ctx, run, err)
+	}
 	// WHAT THE JOB'S CALLS COST AS IT STANDS ONCE IT IS OVER, read again
 	// where the claim's read cannot be the whole of it: a run ENDED AT ITS
 	// TURN'S CAP was working until the collection ended its job, and a call it
 	// made over the bridge meanwhile wrote its spend on the record and not on
-	// the claim; and a job whose session still OWED the log calls has them
-	// carried now ([CoordinatorOptions.Settle]) — its last call, a
-	// submission, whose own append met a store's blip, above all — with their
-	// spend. The calls themselves are read from the log by the resume, after
-	// this ([Coordinator.resumeAndSettle]), so the resumed turn judges the run
-	// on what it did, all of it, and is charged for all of it.
-	if settled := c.settle != nil && c.settle(ctx, run.TurnID, run.LaunchID); ended || settled {
+	// the claim; and a call the drain waited for wrote its own. The calls
+	// themselves are read from the log by the resume, after this
+	// ([Coordinator.resumeAndSettle]), so the resumed turn judges the run on
+	// what it did, all of it, and is charged for all of it.
+	if ended || drained {
 		run = c.rereadSpend(ctx, run)
 	}
 	if ended {
@@ -4961,20 +4958,29 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //  7. for a stop, the turn is closed on the record as stopped where it was
 //     parked on the run, its colleague answered and its end owed the same
 //     way ([CoordinatorOptions.CloseStopped]);
-//  8. every note a person sent the turn that no job ran with — still waiting on
-//     the record, or read by the brief of a job that never started — is
-//     published expired ([CoordinatorOptions.SteersExpired]);
+//  8. every note a person sent the turn that no step reported reading is
+//     published as the record knows it: delivered, told again by the brief of
+//     a later job that started; unconfirmed, handed to a job's harness that
+//     never confirmed it; missed, read by a take whose answer was lost and told
+//     by no later launch whose job started; expired, still waiting or read
+//     first by the brief of a job that never started
+//     ([CoordinatorOptions.SteersEnded]);
 //  9. the end the row owes — this ending's, or the one the turn's resumed
 //     frame decided — is recorded on the executor log once every capture of
 //     the turn has settled ([Coordinator.awaitCapture],
 //     [Coordinator.publishEnd]), and cleared from the row;
-//  10. the record is deleted ([PendingStore.Finish]).
+//  10. the record is deleted ([PendingStore.Finish]), every call of the round
+//     its log still holds in flight named as it goes
+//     ([Coordinator.nameDeletedInFlight]).
 //
 // # Off any frame somebody waits on
 //
 // Steps 3, 4 and 9 wait on what is not the frame's own: another node's host,
 // a job's end, a box's pack and the scrub of its session, the executor log and
-// a capture being kept. Only where mayAsk says this is the ending's own retry,
+// a capture being kept; and so does the wait for the run's calls still in
+// flight before steps 6 and 7 decide the turn's end on its log
+// ([Coordinator.drainEnding]), which a frame makes only where the log holds
+// none still waited for. Only where mayAsk says this is the ending's own retry,
 // on the coordinator's lifetime, are they made; anywhere else — the pause
 // watch, a seat's acquisition, a completion's handler — the ending stops
 // there, decided and with its session closed, and is handed to that retry at
@@ -5019,7 +5025,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 		run = current
 	}
 	var handed []string
-	reclaimed, announced, expired := false, false, false
+	reclaimed, announced, ended, named := false, false, false, false
 	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
@@ -5102,6 +5108,14 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if c.framing(run.TurnID) {
 				return errAwaitsFrame
 			}
+			// THE RUN'S CALLS STILL IN FLIGHT, waited for before the turn's end
+			// is decided on its log ([Coordinator.drainEnding]) — only by the
+			// ending's own retry, off any frame; any other attempt hands a run
+			// whose log holds one to that retry, as it hands it every other
+			// step that waits ([errAskAway]).
+			if err := c.drainEnding(ctx, run, mayAsk); err != nil {
+				return err
+			}
 			ending, owes, err := c.endingOfRun(ctx, run)
 			if err != nil {
 				return fmt.Errorf("sandbox: ending run %s, whose stopped turn could not be closed "+
@@ -5115,12 +5129,12 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 				run = owing
 			}
 		}
-		if !expired && c.steersExpired != nil && run.unreadNotes() {
-			if err := c.steersExpired(ctx, run); err != nil {
-				return fmt.Errorf("sandbox: ending run %s, whose unread notes could not be "+
-					"recorded expired: %w", run.TurnID, err)
+		if !ended && c.steersEnded != nil && run.endsNotes() {
+			if err := c.steersEnded(ctx, run); err != nil {
+				return fmt.Errorf("sandbox: ending run %s, whose notes' ends could not be "+
+					"recorded: %w", run.TurnID, err)
 			}
-			expired = true
+			ended = true
 		}
 		if len(run.OwedEnd) > 0 {
 			if !mayAsk && c.keepsSessions() {
@@ -5142,6 +5156,12 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 					"taken yet: %w", run.TurnID, err)
 			}
 			run = published
+		}
+		// AND WHAT IS STILL IN FLIGHT AS THE RECORD GOES, named: its update
+		// finds no record of the run, so this line is what is left of it.
+		if !named {
+			c.nameDeletedInFlight(ctx, run)
+			named = true
 		}
 		settled, deleted, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
 		switch {
@@ -6091,7 +6111,9 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // for as long as the caller's budget. A run this call could not end is
 // returned as an error, and the caller retries the retirement on its next
 // tick; ending the same run twice reclaims a box that is already gone and
-// finds a record that is already deleted.
+// finds a record that is already deleted. A run left waiting on a call still
+// running is answered beside the error, never as one (below), and retried the
+// same way.
 //
 // # Finished here, every step of it
 //
@@ -6106,6 +6128,20 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // within the budget is an error, which keeps the mailbox, and the retirement's
 // next tick finishes it.
 //
+// # A run whose call still runs is left for the next tick
+//
+// A run whose tool log holds a call a collection would still wait for
+// (drain.go) is not ended here: its session on the bridge is ended to new
+// calls, and it is answered as waiting ([SeatRunsWaiting]), the call named with
+// the latest instant it is waited for, which keeps the mailbox without failing
+// the retirement; the retirement's next tick ends it once the call is recorded,
+// or past the call's own bound or its process's end. Waited for in this loop,
+// one run's call held every later run's ending behind it; handed to this node's
+// retry of the ending, as an ending reached on a frame hands it, it was ended
+// by nothing — the retry is the seat's, which the release below drops. A run
+// that cannot be ended beside it is still this call's error: one answer does
+// not hide the other.
+//
 // # By the seat's id, with the handle a label
 //
 // The runs are found by seat, the id the retiring mailbox is named by
@@ -6116,10 +6152,12 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // calls the seat, possibly nothing; the runs themselves carry the handle they
 // were launched under, which is the one this node's per-seat bookkeeping
 // counted them by and so the one released at the end.
-func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64) error {
+func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64,
+) (SeatRunsWaiting, error) {
 	runs, err := c.pending.ListActiveForSeatID(ctx, seat)
 	if err != nil {
-		return fmt.Errorf("sandbox: listing the runs of retired seat %s: %w", seatLabel(seat, handle), err)
+		return SeatRunsWaiting{}, fmt.Errorf("sandbox: listing the runs of retired seat %s: %w",
+			seatLabel(seat, handle), err)
 	}
 	if handle == "" && len(runs) > 0 {
 		// ONE HANDLE PER ID: the id is derived from the handle, so every
@@ -6128,7 +6166,10 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 	}
 	label := seatLabel(seat, handle)
 	fence := Fence{Owner: owner, Epoch: epoch}
-	var errs []error
+	var (
+		errs []error
+		wait seatWait
+	)
 	for _, run := range runs {
 		if err := ctx.Err(); err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
@@ -6141,6 +6182,19 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 			// rather than killed out from under it.
 			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s is owned by a newer "+
 				"lease (epoch %d) than the retirement's (%d)", run.TurnID, label, run.OwnerEpoch, epoch))
+			continue
+		}
+		// ITS CALLS STILL RUNNING FIRST, its session ended to new ones: a run
+		// whose log holds one waits for the retirement's next tick, and one
+		// whose log could not be read was not ended.
+		waiting, _, logErr := c.callsStillRunning(ctx, run)
+		if logErr != nil {
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
+				run.TurnID, label, logErr))
+			continue
+		}
+		if len(waiting) > 0 {
+			wait.add(run, waiting)
 			continue
 		}
 		// A box that could not be reclaimed keeps its record, so the
@@ -6192,7 +6246,7 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 		// any run names: this node counted no run of it under any handle.
 		c.ReleaseSeat(handle)
 	}
-	return errors.Join(errs...)
+	return wait.answer(), errors.Join(errs...)
 }
 
 // seatLabel is what a retirement's errors call a seat: its handle, beside the

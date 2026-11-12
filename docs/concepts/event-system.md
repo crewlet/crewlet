@@ -511,14 +511,22 @@ agent_turn_steered         # what became of a person's note to this running
                            # round that first read it, the kind of step
                            # (`boundary`: round, brief, tool_batch, finish or
                            # step) and, for a read by the executor in its
-                           # box, its launch (`launch_id`) — or `expired`, the turn ended
-                           # first. Published by the node whose step read it
-                           # (the runner's, for a round or a run's brief; the
-                           # one serving the run's tool bridge, for a read
-                           # inside the run) or, for an expiry, by the node
-                           # that closed the first segment's box or finished
-                           # the run's ending, under an id derived from the
-                           # ending. Carries the note, note_id (the request's
+                           # box, its launch (`launch_id`), and `retold` where
+                           # a later launch's brief told it again after a step
+                           # that took it never handed it over; `expired`, the
+                           # turn ended first; `missed`, a step took it for a
+                           # reader that never had it and no later launch whose
+                           # job started told it, at that step; `unconfirmed`,
+                           # the executor was handed it and never confirmed it,
+                           # at its job.
+                           # Published by the node whose step read it (the
+                           # runner's, for a round or a run's brief; the one
+                           # serving the run's tool bridge, for a read inside
+                           # the run) or, for every other end, by the node that
+                           # closed the first segment's box (an expiry) or
+                           # finished the run's ending, a note told again
+                           # included, under an id derived from the ending.
+                           # Carries the note, note_id (the request's
                            # id), steered_by, steered_by_kind, operator_id and
                            # sent_at: a note crosses an ephemeral scatter or
                            # waits on a run's record that is deleted with the

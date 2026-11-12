@@ -466,6 +466,15 @@ func openNATS(ctx context.Context, b *config.Bootstrap, rec *metrics.Recorder) (
 	if err != nil {
 		return nil, err
 	}
+	// BEFORE ANYTHING IS RESERVED ON THE BROKER. The queue's own streams,
+	// made as it opened, reserve nothing; the object bucket below is the
+	// first reservation sized from the broker's limit, and the state logs
+	// follow it, so a test's node whose external broker's account states no
+	// limit is refused before it sizes either from the runner's disk
+	// ([ErrUndeclaredBrokerLimit]).
+	if err = undeclaredBrokerLimit(ctx, b, out.Queue); err != nil {
+		return nil, out.abandon(ctx, err)
+	}
 	out.rides = conn
 	out.api = cfg.API()
 	// IN THE API THE STREAM'S OWN CLIENT SPEAKS, over the connection

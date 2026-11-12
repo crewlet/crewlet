@@ -11,7 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -29,7 +29,7 @@ type RepoRequest struct {
 	// branch where it exists, else the default branch.
 	Base string
 	// Branch is the branch the run works on; "" is the seat's own branch for
-	// the turn's work item (code.SeatBranch).
+	// the turn's work item (gitlet.SeatBranch).
 	Branch string
 	// Access is "read", "write" or "" — the most the seat's grant allows on
 	// the branch.
@@ -91,7 +91,7 @@ func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 // U40 (a), its write half for an executor): in a turn a colleague seat woke,
 // the run's row names that seat ([RunRepos.Ceiling], the row's CodeCeiling),
 // and Gitlet's box admission holds the box to the colleague's own
-// grant on every request it makes ([code.Grant.Under]) — a read the colleague
+// grant on every request it makes ([gitlet.Grant.Under]) — a read the colleague
 // could not make, and a push outside the seat's own work the colleague could
 // not make, are refused, while its own work — the branches under its own
 // namespace, and every branch of a repository it owns — stays its own,
@@ -119,17 +119,17 @@ type RunRepos struct {
 	Floor statelog.Position
 	// Ceiling is the handle of the colleague seat whose ask woke the turn,
 	// whose own grant bounds the run's box on every repository it was given
-	// ([code.Grant.Under]) — the seat the resolution's reads carried as their
-	// ceiling ([code.ReadQuery.CeilingSeat]) — and "" where no colleague seat
+	// ([gitlet.Grant.Under]) — the seat the resolution's reads carried as their
+	// ceiling ([gitlet.ReadQuery.CeilingSeat]) — and "" where no colleague seat
 	// bounds the run.
 	Ceiling string
 }
 
 // GrantFunc is a seat's grant on a repository as this node's chart reads it
-// ([code.GrantOf] over the engine's roster): the checkout's PRECHECK of the
+// ([gitlet.GrantOf] over the engine's roster): the checkout's PRECHECK of the
 // access it gives a run, never its authority — every box push is judged
 // again at Gitlet's admission and at its decide.
-type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
+type GrantFunc func(asker gitlet.Principal, repo gitlet.RepoRef) gitlet.Grant
 
 // ResolveRunRepos resolves the repositories a code_checkout call names, for
 // turn's seat, into the run's grants and the code floor they were read at —
@@ -145,7 +145,7 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //     purging one is refused in Gitlet's words;
 //  2. the branch: the request's; a change's it names to work on — read
 //     LINEARIZABLE, as every seat's read is, and refused closed or merged
-//     ([CodeDeps.runChange]) — its source branch; or [code.SeatBranch] of the
+//     ([CodeDeps.runChange]) — its source branch; or [gitlet.SeatBranch] of the
 //     seat, the turn's work item's key and the turn — held to
 //     [gitref.ValidBranch]; and the branch a change it asks to open proposes
 //     into ([openTarget]): the one it names, or the default branch;
@@ -158,7 +158,7 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //  4. the access: `write` asked must pass, for the branch, the ref rule the
 //     box will be judged by — the seat's grant held to a run given write and,
 //     in a turn a colleague woke, to that colleague's grant outside the
-//     seat's own work (code.Grant.Under: its own namespace, and a repository
+//     seat's own work (gitlet.Grant.Under: its own namespace, and a repository
 //     it owns) — and the repository must not be archived; `read`
 //     is read, and none asked is write where `write` would pass, else read;
 //     a run that asks to open a change must come to write, or it could
@@ -182,7 +182,7 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 	if refusal != nil {
 		return RunRepos{}, &RefusedCheckout{Result: *refusal}
 	}
-	if c.asker.Kind != code.PrincipalAgent {
+	if c.asker.Kind != gitlet.PrincipalAgent {
 		return RunRepos{}, &RefusedCheckout{Result: refused(tools.RefusalForbidden,
 			CodeCheckoutTool+" gives repositories to a seat's executor, and this call is no seat's.")}
 	}
@@ -221,7 +221,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	grant GrantFunc) (resolvedRepo, *tools.Result) {
 
 	const tool = CodeCheckoutTool
-	if !code.ValidName(req.Repo) {
+	if !gitlet.ValidName(req.Repo) {
 		r := failed(fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, digits and "+
 			"hyphens, as %s lists it.", tool, clip(req.Repo), CodeListReposTool))
 		return resolvedRepo{}, &r
@@ -243,7 +243,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	}
 	if branch == "" {
 		var err error
-		if branch, err = code.SeatBranch(c.asker.Seat, workItemKey(turn), turn.RunID); err != nil {
+		if branch, err = gitlet.SeatBranch(c.asker.Seat, workItemKey(turn), turn.RunID); err != nil {
 			r := faulted(ctx, tool, err, fmt.Sprintf("%s could not name the branch this run works on in "+
 				"repository %q: %s.", tool, repo.Name, faultSaid))
 			return resolvedRepo{}, &r
@@ -272,7 +272,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		if defaultAt < 0 {
 			defaultAt, names = len(names), append(names, "refs/heads/"+repo.DefaultBranch)
 		}
-	case req.Base != "" && !code.ValidRev(req.Base):
+	case req.Base != "" && !gitlet.ValidRev(req.Base):
 		baseAt, names = len(names), append(names, req.Base)
 	}
 	if target != "" {
@@ -290,9 +290,9 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		current = repo
 	}
 	switch current.Status {
-	case code.RepoStatusDeleted, code.RepoStatusPurging:
-		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", code.ErrRepoNotFound, current.Name),
-			fmt.Sprintf("%s: %s; nothing was checked out.", tool, code.RepoGone{ID: current.ID, Name: current.Name,
+	case gitlet.RepoStatusDeleted, gitlet.RepoStatusPurging:
+		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound, current.Name),
+			fmt.Sprintf("%s: %s; nothing was checked out.", tool, gitlet.RepoGone{ID: current.ID, Name: current.Name,
 				Status: current.Status, DeletedAt: current.DeletedAt, ManagedBy: current.ManagedBy}.Detail()))
 		return resolvedRepo{}, &r
 	}
@@ -302,13 +302,13 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		// A LIVE CHANGE'S SOURCE IS LIVE — deleting it closes the change in
 		// the same record — so the branch was deleted between the two reads,
 		// and the change with it.
-		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", code.ErrRefNotFound, head.Missing),
+		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", gitlet.ErrRefNotFound, head.Missing),
 			fmt.Sprintf("%s: %s's branch %s was deleted as it was checked out, which closes the change; "+
 				"nothing was checked out — read it with %s.", tool, change.Ref, change.SourceRef, CodeGetChangeTool))
 		return resolvedRepo{}, &r
 	case targetAt >= 0 && answer.Refs[targetAt].Missing != "":
 		r := codeFailure(ctx, tool, repo.Name, fmt.Errorf("%w: %s — name an existing branch as "+
-			"open_change's `target`", code.ErrRefNotFound, answer.Refs[targetAt].Missing))
+			"open_change's `target`", gitlet.ErrRefNotFound, answer.Refs[targetAt].Missing))
 		return resolvedRepo{}, &r
 	}
 	if head.Missing != "" {
@@ -330,9 +330,9 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	// seat's, held to a run given write — what `write` puts on the row — and,
 	// in a turn a colleague woke, to that colleague's own grant outside the
 	// seat's namespace, as Gitlet's box admission holds it.
-	boxGrant := grant(c.asker, current).Within(code.AccessWrite)
+	boxGrant := grant(c.asker, current).Within(gitlet.AccessWrite)
 	if c.ceiling != "" {
-		boxGrant = boxGrant.Under(grant(code.Principal{Kind: code.PrincipalAgent, Seat: c.ceiling}, current))
+		boxGrant = boxGrant.Under(grant(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: c.ceiling}, current))
 	}
 	access, refusal := runAccess(req, branch, head, current, boxGrant)
 	if refusal != nil {
@@ -341,7 +341,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	if req.OpenChange != nil && access != sandbox.RepoWrite {
 		// AN ACCESS LEFT OUT came to read: the box could push nothing, so
 		// it could deliver nothing to open a change from.
-		r := refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, fmt.Sprintf("%s: repository %q's run "+
+		r := refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, fmt.Sprintf("%s: repository %q's run "+
 			"asks for open_change on %s, which it may not push, so it could deliver nothing to open a change "+
 			"from: name a `branch` it may push — leave `branch` out for your own — or leave open_change out.",
 			tool, repo.Name, branch))
@@ -350,12 +350,12 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 
 	var base string
 	switch {
-	case req.Base != "" && code.ValidRev(req.Base):
+	case req.Base != "" && gitlet.ValidRev(req.Base):
 		// AN ID, whole or abbreviated, read by object id: expanded to the
 		// commit it names, and a commit the repository does not hold is
 		// refused here rather than at the clone, inside a box.
-		got, refusal := d.gitRead(ctx, turn, tool, c, repo, code.GitQuery{Kind: code.GitTree, RepoID: repo.ID,
-			Fresh: statelog.FloorAt(statelog.ReadSession, floor), Tree: &code.TreeQuery{Rev: req.Base}})
+		got, refusal := d.gitRead(ctx, turn, tool, c, repo, gitlet.GitQuery{Kind: gitlet.GitTree, RepoID: repo.ID,
+			Fresh: statelog.FloorAt(statelog.ReadSession, floor), Tree: &gitlet.TreeQuery{Rev: req.Base}})
 		if refusal != nil {
 			if tools.RefusalOf(*refusal) == tools.RefusalNotFound {
 				r := refusedBy(tools.RefusalNotFound, refusal.Cause, fmt.Sprintf("%s: repository %q holds no "+
@@ -369,7 +369,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	case baseAt >= 0:
 		ref := answer.Refs[baseAt]
 		if ref.Missing != "" {
-			r := codeFailure(ctx, tool, repo.Name, fmt.Errorf("%w: %s", code.ErrRefNotFound, ref.Missing))
+			r := codeFailure(ctx, tool, repo.Name, fmt.Errorf("%w: %s", gitlet.ErrRefNotFound, ref.Missing))
 			return resolvedRepo{}, &r
 		}
 		base = ref.OID
@@ -426,8 +426,8 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 // is why g is the box's grant, held to a run given write, and not the seat's:
 // a branch the seat may push and its box may not (another seat's namespace,
 // which needs maintain) is a run that could never deliver.
-func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.RepoRef,
-	g code.Grant) (sandbox.RepoAccess, *tools.Result) {
+func runAccess(req RepoRequest, branch string, head gitlet.ResolvedRef, repo gitlet.RepoRef,
+	g gitlet.Grant) (sandbox.RepoAccess, *tools.Result) {
 
 	const tool = CodeCheckoutTool
 	if req.Access == string(sandbox.RepoRead) {
@@ -435,20 +435,20 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 	}
 	why := ""
 	switch {
-	case repo.Status == code.RepoStatusArchived:
-		why = code.ArchivedDetail(repo.Name, repo.ManagedBy) + "; a run may read it, not push"
-	case repo.Status == code.RepoStatusImporting:
-		why = code.ImportingDetail(repo.Name) + "; a run may read it, not push"
+	case repo.Status == gitlet.RepoStatusArchived:
+		why = gitlet.ArchivedDetail(repo.Name, repo.ManagedBy) + "; a run may read it, not push"
+	case repo.Status == gitlet.RepoStatusImporting:
+		why = gitlet.ImportingDetail(repo.Name) + "; a run may read it, not push"
 	case repo.Mirrored:
-		why = code.MirroredDetail(repo.Name, repo.ManagedBy) + "; a run may read it, not push"
+		why = gitlet.MirroredDetail(repo.Name, repo.ManagedBy) + "; a run may read it, not push"
 	default:
 		old := head.OID
 		if head.Missing != "" {
-			old = code.ZeroOID
+			old = gitlet.ZeroOID
 		}
 		// THE NEW SIDE IS ANY OBJECT: the rule reads only whether a command
 		// creates, moves or deletes a ref.
-		if refusal, sentence := g.RefRule(code.Command{Ref: "refs/heads/" + branch, Old: old,
+		if refusal, sentence := g.RefRule(gitlet.Command{Ref: "refs/heads/" + branch, Old: old,
 			New: strings.Repeat("f", gitref.OIDHexLen)}); refusal != "" {
 			why = sentence
 		}
@@ -459,7 +459,7 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 	case req.Access == "":
 		return sandbox.RepoRead, nil
 	}
-	r := refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, fmt.Sprintf("%s: a run given repository %q "+
+	r := refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, fmt.Sprintf("%s: a run given repository %q "+
 		"to write may not push %s: %s. Ask for `access: read`, or name a `branch` this run may push — "+
 		"leave `branch` out for your own.", tool, repo.Name, branch, why))
 	return "", &r
@@ -474,7 +474,7 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 // is over unless it is reopened, and a merged one's is in its target, which a
 // run starts from by naming it as `base`.
 func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCaller, req RepoRequest,
-	repo code.RepoRef) (*code.ChangeSummary, statelog.Position, *tools.Result) {
+	repo gitlet.RepoRef) (*gitlet.ChangeSummary, statelog.Position, *tools.Result) {
 
 	const tool = CodeCheckoutTool
 	if req.Change == "" {
@@ -496,7 +496,7 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 	if !ok || number < 1 {
 		r := failed(fmt.Sprintf("%s: repository %q's `change` %q is no change: name it by its number (42) or "+
 			"its reference (%s), as %s lists it.", tool, clip(req.Repo), clip(req.Change),
-			code.ChangeRef(repo.Name, 42), CodeListChangesTool))
+			gitlet.ChangeRef(repo.Name, 42), CodeListChangesTool))
 		return nil, statelog.Position{}, &r
 	}
 	change, at, refusal := (&changeRead{deps: d, turn: turn, tool: tool, c: c, name: repo.Name, repo: repo,
@@ -505,12 +505,12 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 		return nil, statelog.Position{}, refusal
 	}
 	switch change.State {
-	case code.ChangeStateClosed:
+	case gitlet.ChangeStateClosed:
 		r := refused(tools.RefusalConflict, fmt.Sprintf("%s: %s is closed, so a run delivers "+
 			"to no change on its branch; reopen it with %s, or name its branch as `branch`.", tool, change.Ref,
 			CodeCloseChangeTool))
 		return nil, statelog.Position{}, &r
-	case code.ChangeStateMerged:
+	case gitlet.ChangeStateMerged:
 		r := refused(tools.RefusalConflict, fmt.Sprintf("%s: %s is merged, its work in %s; "+
 			"name that branch as `base` to build on it.", tool, change.Ref, change.TargetRef))
 		return nil, statelog.Position{}, &r
@@ -522,9 +522,9 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 // the run's branch into — the one it names, else the repository's default
 // branch — held to the rules an open is, before anything is read; "" for a
 // request that asks for none. A title it names is held to a change's title's
-// rule here too ([code.TitleProblem]), so an ask the collection's open would
+// rule here too ([gitlet.TitleProblem]), so an ask the collection's open would
 // refuse costs no box.
-func openTarget(req RepoRequest, repo code.RepoRef, branch string) (string, *tools.Result) {
+func openTarget(req RepoRequest, repo gitlet.RepoRef, branch string) (string, *tools.Result) {
 	const tool = CodeCheckoutTool
 	ask := req.OpenChange
 	if ask == nil {
@@ -542,9 +542,9 @@ func openTarget(req RepoRequest, repo code.RepoRef, branch string) (string, *too
 		why = fmt.Sprintf("`target` %q is not a branch name git accepts", clip(target))
 	case target == branch:
 		why = fmt.Sprintf("it would propose %s into itself: name another `target`", branch)
-	case ask.Title != "" && code.TitleProblem(ask.Title) != "":
-		why = "`title` is " + code.TitleProblem(ask.Title) + " — a title is one line of at most " +
-			strconv.Itoa(code.MaxChangeTitleBytes) + " bytes"
+	case ask.Title != "" && gitlet.TitleProblem(ask.Title) != "":
+		why = "`title` is " + gitlet.TitleProblem(ask.Title) + " — a title is one line of at most " +
+			strconv.Itoa(gitlet.MaxChangeTitleBytes) + " bytes"
 	}
 	if why != "" {
 		r := failed(fmt.Sprintf("%s: repository %q's open_change: %s.", tool, repo.Name, why))

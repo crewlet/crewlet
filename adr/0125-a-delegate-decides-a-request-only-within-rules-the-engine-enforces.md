@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/delegated`
-- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`, `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`, `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`, `internal/github.TestACheckAnAgentReportedCountsForNothing`
+- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`, `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`, `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`, `internal/github.TestACheckAnAgentReportedCountsForNothing`, `internal/github.TestADeclaredCheckPassesOnlyAsASuccessfulRunOnTheHead`, `internal/github.TestAPlanWithoutProtectionRequiresNothingOfGitHub`, `internal/github.TestAFreePlanPullCarriesItsDeclaredChecksAndItsApprovals`, `internal/config.TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases`, `internal/agent/builtin.TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares`, `internal/engine.TestAFreePlanReleaseIsJudgedOnItsDeclaredChecks`
 - **Measured:** in one company over a month, the person answering one agent's requests took its recommendation on 90 of 95, and another agent's on 31 of 32 (the advisor's `approval.rubber_stamp`). Each was a merge, a deploy or a server command waiting in the Inbox.
 - **Tag-status:** unreleased
 
@@ -49,11 +49,14 @@ request shown). The engine then decides, not the model:
   documents, extended by the rule's `always_escalate_paths`); where the
   kind's own conditions, read from the code host when the verdict is given,
   do not hold (for a merge: the head asked about, open, every check its
-  target requires passed on that head, mergeable, its target's own gate
-  otherwise met, and an approving review of that head by somebody other than
-  its authors and the requester; for a deploy: every change merged into one
-  branch, the commit holding each and on that branch, and every check the
-  branch requires passed on the commit), or cannot be read; and past
+  target requires and every check the rule's `required_checks` names for
+  that repository and branch passed on that head, mergeable, its target's
+  own gate otherwise met, and an approving review of that head by somebody
+  other than its authors and the requester; for a deploy: every change
+  merged into one branch, the commit holding each and on that branch, and
+  every check the branch requires and the rule names for it passed on the
+  commit; a target that requires none and names none fails it), or cannot be
+  read; and past
   `delegated.DecisionsPerHour` allows per kind and delegate, or
   `ServerAllowsPerHour` per server, in one clock hour, counted fleet-wide and
   failing closed.
@@ -85,6 +88,21 @@ an administrator or a named approver within the step-up window. The seat's
 prompt where it matches the act byte for byte, once per decision; any
 difference asks as before.
 
+**Amended: a rule names the checks where the code host enforces none.** A
+private GitHub repository on a plan without branch protection has no required
+check, and GitHub refuses its protection and rulesets with a 403 that names
+the plan. That answer is read as "the host requires none" (`APIError.PlanLacks`),
+never as a fact the engine cannot read; any other refusal still is one. A
+`pr_merge` or `deploy` rule's `required_checks` names, per `owner/name`
+repository and branch, the checks its merges and deploys need beside whatever
+the host requires, and the engine holds each to a stricter test than GitHub's
+own: a check run, the newest of each app that reported it, that completed
+with `success` on exactly the commit decided, by an app that is not one of the
+company's agents (`github.Reporters`). Neutral, skipped, pending, missing, a
+run of another commit and a commit status never pass one; no status is read
+for it, since no agent's app is offered Commit statuses. The approval rule is
+unchanged.
+
 ## Why the obvious alternative is wrong
 
 A delegate trusted to follow a written policy is a model that reads requests
@@ -100,6 +118,13 @@ operate command is answered by a person: within a rule, a delegate allows the
 routine ones. The trade is bounded by what an allow can never reach, by the
 caps, by the spot-check and the digest, and by one setting that returns every
 request to people.
+
+Trusting the delegate to judge CI from what it reads, where the host enforces
+no check, would let the model decide the one fact a merge stands on. Reading
+a plan's refusal as unreadable kept such a company's every request with
+people, and reading it as "passed" would merge untested code; naming the
+checks in the document keeps the decision with the company and the judgement
+with the engine.
 
 A merge or a deploy that reaches a person is answered by an administrator, a
 lead of the requesting seat, or a person its rule names in `escalate_to`,

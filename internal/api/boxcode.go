@@ -11,8 +11,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
 // A CHECK'S BOX READS ITS COMMIT, through the API rather than a clone:
@@ -32,7 +32,7 @@ import (
 // names, under the name its box was given. A refusal there is the one line of
 // text the box's git is answered in, since it is the one admission. Then the
 // read is asked of the code domain's git reads — the repository's home Gitlet
-// node first — as THE ENGINE'S OWN, made for the check (code.GitQuery.Check):
+// node first — as THE ENGINE'S OWN, made for the check (gitlet.GitQuery.Check):
 // held to no grant, recorded as nobody's read, and answered at the check's
 // session, the position its attempt was queued at, so the node answering
 // holds its commit.
@@ -51,7 +51,7 @@ import (
 // lines, a diff's stat or one file's patch, each the Gitlet node's own — with the
 // repository's name, the commit, the base a diff was read from and the next
 // page's cursor: the commit's content alone, and none of the push provenance
-// a seat's read carries (code.GitAnswer.PushedBy), since a check measuring a
+// a seat's read carries (gitlet.GitAnswer.PushedBy), since a check measuring a
 // commit reads nothing of who pushed what. A read's own refusal is the read
 // surface's envelope: `not_found` for a path the commit does not hold,
 // `bad_params` for a parameter the read cannot take (its sentence names it),
@@ -60,10 +60,10 @@ import (
 // boxCodeParams are the parameters each read takes, every one optional, and
 // the one that may repeat. NO REVISION AMONG THEM: the commit, and a diff's
 // base, are the attempt's.
-var boxCodeParams = map[code.GitReadKind][]string{
-	code.GitTree: {"path", "path_b64", "recursive", "cursor"},
-	code.GitBlob: {"path", "path_b64", "start_line", "end_line", "cursor"},
-	code.GitDiff: {"paths", "file", "file_b64", "renames", "cursor"},
+var boxCodeParams = map[gitlet.GitReadKind][]string{
+	gitlet.GitTree: {"path", "path_b64", "recursive", "cursor"},
+	gitlet.GitBlob: {"path", "path_b64", "start_line", "end_line", "cursor"},
+	gitlet.GitDiff: {"paths", "file", "file_b64", "renames", "cursor"},
 }
 
 // boxCodeRepeated is the one parameter a request may name more than once:
@@ -79,10 +79,10 @@ type boxCodeAnswer struct {
 	Base   string `json:"base,omitempty"`
 	// Next is the next page's cursor, handed back as `cursor`; empty on the
 	// last page.
-	Next string           `json:"next,omitempty"`
-	Tree *code.TreeAnswer `json:"tree,omitempty"`
-	Blob *code.BlobAnswer `json:"blob,omitempty"`
-	Diff *code.DiffAnswer `json:"diff,omitempty"`
+	Next string             `json:"next,omitempty"`
+	Tree *gitlet.TreeAnswer `json:"tree,omitempty"`
+	Blob *gitlet.BlobAnswer `json:"blob,omitempty"`
+	Diff *gitlet.DiffAnswer `json:"diff,omitempty"`
 }
 
 // boxCodeRoute serves a check's box's read of kind: on a node not serving
@@ -90,7 +90,7 @@ type boxCodeAnswer struct {
 // any other is challenged, as a box's git route answers ([App.boxGitRoute]);
 // otherwise admitted (host.Server.AdmitCheck), its parameters read, and its
 // read asked of the code domain's git reads.
-func (a *App) boxCodeRoute(kind code.GitReadKind) http.Handler {
+func (a *App) boxCodeRoute(kind gitlet.GitReadKind) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, why := a.code.GitRoutes()
 		if why != nil {
@@ -122,7 +122,7 @@ func (a *App) boxCodeRoute(kind code.GitReadKind) http.Handler {
 		}
 		out := boxCodeAnswer{Repo: adm.Repo.Name, Commit: adm.Attempt.OID, Next: page.Next, Tree: page.Tree,
 			Blob: page.Blob, Diff: page.Diff}
-		if kind == code.GitDiff {
+		if kind == gitlet.GitDiff {
 			out.Base = adm.Attempt.Base
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -133,17 +133,17 @@ func (a *App) boxCodeRoute(kind code.GitReadKind) http.Handler {
 // attempt's commit and session, made for its attempt — or the parameter it
 // cannot take, as [queries.ErrBadParams] naming it: one no read of kind
 // takes, one named twice that may not be, a value that does not parse, or a
-// read the domain refuses as asked (code.GitQuery.Validate's own words).
-func boxCodeQuery(kind code.GitReadKind, adm host.CheckAdmitted, params url.Values) (code.GitQuery, error) {
+// read the domain refuses as asked (gitlet.GitQuery.Validate's own words).
+func boxCodeQuery(kind gitlet.GitReadKind, adm host.CheckAdmitted, params url.Values) (gitlet.GitQuery, error) {
 	takes := boxCodeParams[kind]
 	for name, values := range params {
 		switch {
 		case !slices.Contains(takes, name):
-			return code.GitQuery{}, fmt.Errorf("%w: %s: a %s read of a check's commit takes %s, and never "+
+			return gitlet.GitQuery{}, fmt.Errorf("%w: %s: a %s read of a check's commit takes %s, and never "+
 				"a revision: it reads the commit its check measures", queries.ErrBadParams, name, kind,
 				strings.Join(takes, ", "))
 		case len(values) > 1 && name != boxCodeRepeated:
-			return code.GitQuery{}, fmt.Errorf("%w: %s: named %d times; it is one value", queries.ErrBadParams,
+			return gitlet.GitQuery{}, fmt.Errorf("%w: %s: named %d times; it is one value", queries.ErrBadParams,
 				name, len(values))
 		}
 	}
@@ -169,42 +169,42 @@ func boxCodeQuery(kind code.GitReadKind, adm host.CheckAdmitted, params url.Valu
 		return v, nil
 	}
 	attempt := adm.Attempt.CheckKey
-	q := code.GitQuery{Kind: kind, RepoID: adm.Repo.ID, Check: &attempt, Fresh: adm.Fresh,
+	q := gitlet.GitQuery{Kind: kind, RepoID: adm.Repo.ID, Check: &attempt, Fresh: adm.Fresh,
 		Cursor: one("cursor")}
 	switch kind {
-	case code.GitTree:
+	case gitlet.GitTree:
 		recursive, err := flag("recursive")
 		if err != nil {
-			return code.GitQuery{}, err
+			return gitlet.GitQuery{}, err
 		}
-		q.Tree = &code.TreeQuery{Rev: attempt.OID, Path: one("path"), PathB64: one("path_b64"),
+		q.Tree = &gitlet.TreeQuery{Rev: attempt.OID, Path: one("path"), PathB64: one("path_b64"),
 			Recursive: recursive}
-	case code.GitBlob:
+	case gitlet.GitBlob:
 		start, err := line("start_line")
 		if err != nil {
-			return code.GitQuery{}, err
+			return gitlet.GitQuery{}, err
 		}
 		end, err := line("end_line")
 		if err != nil {
-			return code.GitQuery{}, err
+			return gitlet.GitQuery{}, err
 		}
-		q.Blob = &code.BlobQuery{Rev: attempt.OID, Path: one("path"), PathB64: one("path_b64"),
+		q.Blob = &gitlet.BlobQuery{Rev: attempt.OID, Path: one("path"), PathB64: one("path_b64"),
 			StartLine: start, EndLine: end}
-	case code.GitDiff:
+	case gitlet.GitDiff:
 		if adm.Attempt.Base == "" {
-			return code.GitQuery{}, fmt.Errorf("%w: diff: attempt %d of check %s of %s was queued with no "+
+			return gitlet.GitQuery{}, fmt.Errorf("%w: diff: attempt %d of check %s of %s was queued with no "+
 				"base to diff its commit from; read its tree and its files", queries.ErrBadParams,
 				attempt.Attempt, attempt.Name, attempt.OID)
 		}
 		renames, err := flag("renames")
 		if err != nil {
-			return code.GitQuery{}, err
+			return gitlet.GitQuery{}, err
 		}
-		q.Diff = &code.DiffQuery{Base: adm.Attempt.Base, Head: attempt.OID, Paths: params[boxCodeRepeated],
+		q.Diff = &gitlet.DiffQuery{Base: adm.Attempt.Base, Head: attempt.OID, Paths: params[boxCodeRepeated],
 			File: one("file"), FileB64: one("file_b64"), Renames: renames}
 	}
 	if err := q.Validate(); err != nil {
-		return code.GitQuery{}, fmt.Errorf("%w: %w", queries.ErrBadParams, err)
+		return gitlet.GitQuery{}, fmt.Errorf("%w: %w", queries.ErrBadParams, err)
 	}
 	return q, nil
 }
@@ -218,9 +218,9 @@ func boxCodeQuery(kind code.GitReadKind, adm host.CheckAdmitted, params url.Valu
 // read of the same names it (builtin's code tools); anything else is
 // classified as every question's failure is ([queries.ClassifyFailure]).
 func boxCodeRefusal(err error) error {
-	var unready *code.ErrGitUnready
-	for _, absent := range []error{code.ErrObjectNotFound, code.ErrNotATree, code.ErrNotABlob,
-		code.ErrRepoNotFound} {
+	var unready *gitlet.ErrGitUnready
+	for _, absent := range []error{gitlet.ErrObjectNotFound, gitlet.ErrNotATree, gitlet.ErrNotABlob,
+		gitlet.ErrRepoNotFound} {
 		if errors.Is(err, absent) {
 			said, ok := builtin.RefusalSentence(err, absent)
 			if !ok {
@@ -230,10 +230,10 @@ func boxCodeRefusal(err error) error {
 		}
 	}
 	switch {
-	case errors.Is(err, code.ErrSliceTooLarge), errors.Is(err, code.ErrInvalid),
-		errors.Is(err, code.ErrBadCursor), errors.Is(err, code.ErrBadLevel):
+	case errors.Is(err, gitlet.ErrSliceTooLarge), errors.Is(err, gitlet.ErrInvalid),
+		errors.Is(err, gitlet.ErrBadCursor), errors.Is(err, gitlet.ErrBadLevel):
 		return fmt.Errorf("%w: %w", queries.ErrBadParams, err)
-	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
+	case errors.As(err, &unready), errors.Is(err, gitlet.ErrNotServing):
 		return fmt.Errorf("%w: %w", queries.ErrUnavailable, err)
 	}
 	return queries.ClassifyFailure(err)

@@ -19,7 +19,7 @@
  * import are human-only in the authority table): a mirror and an import reach
  * another host for the company, and a purge erases what its code held. A
  * credential nobody is bound through writes nothing to Gitlet
- * (`code.UnboundDetail`), so each is held for a reader who holds no human
+ * (`gitlet.UnboundDetail`), so each is held for a reader who holds no human
  * seat.
  */
 
@@ -33,7 +33,7 @@ export const PERSON_ONLY =
 
 /**
  * Why a credential bound to nobody changes no repository: Gitlet names the
- * person who made every write (`code.UnboundDetail`).
+ * person who made every write (`gitlet.UnboundDetail`).
  */
 export const UNBOUND =
   "Only a person, signed in as the human seat they hold, changes a repository: a credential bound to nobody writes nothing to Gitlet.";
@@ -139,7 +139,7 @@ export function importHeld(viewer: Reader): string | undefined {
  * person is told BEFORE they press, since a purge is asked because something
  * must go and none of these is the purge's to empty: every keeper gitlet.md's
  * "What still holds a purged object" lists, in its words. The object store's
- * day is code.RetireGrace. The last keeper never lets go — a clone or a fetch
+ * day is gitlet.RetireGrace. The last keeper never lets go — a clone or a fetch
  * holds the object for as long as its owner keeps it, and nothing on the
  * server reaches it — which is why the sentence ends by asking for the secret
  * to be rotated rather than promising it gone.

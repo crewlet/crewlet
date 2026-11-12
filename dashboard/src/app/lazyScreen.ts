@@ -20,9 +20,10 @@
  * import of one from the frame would pull it back into the entry without a
  * sound. Which chunk draws a screen is [SCREEN_CHUNKS], keyed by the screen
  * rather than by the sidebar row it is in, because the two are different
- * questions: Company's rows draw screens from four directories (Principles
+ * questions: Company's rows draw screens from five directories (Principles
  * and Integrations are `routes/settings`, Brand `routes/brand`, the Org
- * chart and Schedules `routes/agents`, Budgets `routes/spend`), and a row
+ * chart and Schedules `routes/agents`, Atlas `routes/atlas`, Budgets
+ * `routes/spend`), and a row
  * that moves moves no
  * code. `routes/org` is the builder, bigger than any other directory,
  * so it is its own (see `routes/org/OrgEdit.tsx`). `routes/signin` is the
@@ -129,6 +130,7 @@ const LOADERS = {
   me: () => import("~/routes/me/index.ts"),
   worklet: () => import("~/routes/worklet/index.ts"),
   gitlet: () => import("~/routes/gitlet/index.ts"),
+  atlas: () => import("~/routes/atlas/index.ts"),
   agents: () => import("~/routes/agents/index.ts"),
   org: () => import("~/routes/org/index.ts"),
   chatlet: () => import("~/routes/chatlet/index.ts"),
@@ -160,6 +162,7 @@ type ScreenDir =
   | "me"
   | "worklet"
   | "gitlet"
+  | "atlas"
   | "chatlet"
   | "agents"
   | "live"
@@ -202,6 +205,8 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   seat: "agents",
   schedules: "agents",
   integrations: "settings",
+  atlas: "atlas",
+  "atlas-entry": "atlas",
   budgets: "spend",
   "worklet-projects": "worklet",
   "worklet-tasks": "worklet",
@@ -285,6 +290,7 @@ export const CHUNKS: readonly Chunk[] = [
   "settings",
   "brand",
   "agents",
+  "atlas",
   "spend",
   "worklet",
   "gitlet",
@@ -308,6 +314,7 @@ const CHUNK_LABELS: Readonly<
   me: "My work",
   worklet: "Worklet",
   gitlet: "Gitlet",
+  atlas: "Atlas",
   chatlet: "Chatlet",
   agents: "Seats and schedules",
   live: "Live",

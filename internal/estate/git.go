@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -33,7 +33,7 @@ import (
 // rows on the serving node, but its git half — its cache, synced through the
 // router like any reader's. So no copy verdict holds it back, no floor is
 // waited for at dispatch (its floor travels in its arguments, as
-// code.GitQuery.Fresh, and is the cache's sync level), and no lag gate
+// gitlet.GitQuery.Fresh, and is the cache's sync level), and no lag gate
 // applies: a Gitlet node whose own copy of the code log is out of service still
 // serves git reads, from a cache it syncs from a peer. Like [SeatCopy], no
 // data operation may name it (TestEveryOperationNamesTheCopyItReads).
@@ -53,36 +53,36 @@ type LocalGit interface {
 
 // GitServer is the git half a Gitlet node serves, declared here by its consumer
 // with exactly the methods the git operations call: its reads by object id,
-// which internal/code/query's *Server answers, its engine writes, which
-// internal/code/host's *Server builds and lands, and its merge previews, which
-// internal/code/home's *Previews answers by the merge a repository's home
+// which internal/gitlet/query's *Server answers, its engine writes, which
+// internal/gitlet/host's *Server builds and lands, and its merge previews, which
+// internal/gitlet/home's *Previews answers by the merge a repository's home
 // records a change's mergeability by. The engine hands the router the three
 // together, over one cache, one git pool and one seat git-work share.
 type GitServer interface {
 	// Read answers one read by object id. ctx ENDS WHEN THE ANSWER IS DUE —
 	// a reply's margin before its asker stops listening, remote or in
-	// process alike ([code.AnswerBy]) — and a read that ctx ends that way
-	// answers code.ErrGitUnready while the asker still listens
-	// ([code.AnswerDue]), never ctx's own error, which the walk would take
+	// process alike ([gitlet.AnswerBy]) — and a read that ctx ends that way
+	// answers gitlet.ErrGitUnready while the asker still listens
+	// ([gitlet.AnswerDue]), never ctx's own error, which the walk would take
 	// for the repository's answer.
-	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 
 	// Write builds one engine write over this node's copy and lands it as a
 	// push (ADR-0092). ctx ends when the answer is due, as a read's does: a
 	// write that ctx ends before its landing ran nothing and answers
-	// code.ErrGitUnready while the asker still listens, so the walk asks the
+	// gitlet.ErrGitUnready while the asker still listens, so the walk asks the
 	// next Gitlet node, which builds the same push; one ended inside its
 	// landing answers what the landing came to, its outcome read from the
 	// push's row — never ctx's own error, which the walk would take for the
 	// write's answer.
-	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
+	Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error)
 
 	// MergePreview answers what merging one commit into another would do —
 	// a comparison's merge preview — merged in a scratch beside this node's
 	// copy, never in it. ctx ends when the answer is due, as a read's does,
-	// and a preview that ctx ends that way answers code.ErrGitUnready while
+	// and a preview that ctx ends that way answers gitlet.ErrGitUnready while
 	// the asker still listens, never ctx's own error.
-	MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error)
+	MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) (gitlet.MergePreviewAnswer, error)
 }
 
 // GitPlacement is who serves GIT as the router reads it ([RouterOptions.Git]):
@@ -130,16 +130,16 @@ type GitListing struct {
 // SEVENTEEN SECONDS: the Gitlet node's waits at their WHOLE budgets and the
 // reply's margin, a sum of budgets as every attempt here is, never of p99s —
 //
-//	code.GitShareWait          2 s  a free unit of the node's seat git-work share
+//	gitlet.GitShareWait          2 s  a free unit of the node's seat git-work share
 //	+ statelog.ReadBudget      2 s  the node's cache synced to the asker's floor
 //	+ statelog.ReadBudget      2 s  one linearizable re-sync of an id the copy lacks
 //	+ gitproc.ReadDeadline    10 s  the read's OWN GIT: the run time every process
 //	                                of its kind shares — a listing's one, a
 //	                                comparison's three
-//	+ code.ReplyMargin         1 s  the answer's trip back
+//	+ gitlet.ReplyMargin         1 s  the answer's trip back
 //
 // The Gitlet node is served under a context that ends a reply's margin before
-// the attempt does (code.AnswerBy), and EVERY wait it makes takes that
+// the attempt does (gitlet.AnswerBy), and EVERY wait it makes takes that
 // context, so a node that cannot fit a wait answers `behind` while its asker
 // still listens: a shorter attempt only hears a slow Gitlet node give up sooner;
 // a longer one would leave a node that is gone to be waited out longer.
@@ -154,9 +154,9 @@ type GitListing struct {
 // a read they hold up past its answer's due instant is answered unready — the
 // node's capacity, `share` — and the walk asks the next Gitlet node; never late,
 // and never refused as too large, which only a read whose own git ran the
-// whole of its budget is (internal/code/query).
+// whole of its budget is (internal/gitlet/query).
 //
-// BenchmarkCodeRead (internal/code/query) confirms the TERMS — every warm
+// BenchmarkCodeRead (internal/gitlet/query) confirms the TERMS — every warm
 // kind's p99 far inside gitproc.ReadDeadline with its sync — and
 // BenchmarkBlame and BenchmarkLogPath the history reads' own git: a blame
 // and a page of a path's log over a gigabyte's 455 680 commits, each
@@ -166,7 +166,7 @@ type GitListing struct {
 // (tree=deep; git 2.56.0, 2026-10-31) — and neither sets the sum: a term one
 // misses is re-derived and the sum follows.
 // TestProductionsGitReadAttemptHoldsAGitReadsWaits holds it.
-const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + code.ReplyMargin
+const GitReadAttempt = gitlet.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + gitlet.ReplyMargin
 
 // GitWriteAttempt bounds one engine write's wait on one Gitlet node:
 // [Production]'s [Timing.GitWriteAttempt].
@@ -174,7 +174,7 @@ const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadD
 // EIGHTY-TWO SECONDS: the Gitlet node's waits for one write at their WHOLE
 // budgets, a sum of budgets as every attempt here is, never of p99s —
 //
-//	code.GitShareWait             2 s  a free unit of the node's seat git-work
+//	gitlet.GitShareWait             2 s  a free unit of the node's seat git-work
 //	                                   share, which the build holds
 //	+ 3 × statelog.ReadBudget     6 s  three different waits, at most one
 //	                                   each: the copy's sync to the caller's
@@ -182,20 +182,20 @@ const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadD
 //	                                   moved is the write's own push, and the
 //	                                   one sync at the log's head every
 //	                                   refusal is judged again at
-//	+ code.WriteBuildDeadline    10 s  the build's own git: the run time
+//	+ gitlet.WriteBuildDeadline    10 s  the build's own git: the run time
 //	                                   every process of it shares
-//	+ code.WriteUploadAllowance  30 s  the bundle's upload, a mebibyte at the
+//	+ gitlet.WriteUploadAllowance  30 s  the bundle's upload, a mebibyte at the
 //	                                   pace floor (objstore.MiBPace)
 //	+ minWriteAttempt            33 s  the proposal's own attempt, which the
 //	                                   committer answers busy with any less
-//	                                   (code.MinProposeAttempt)
-//	+ code.ReplyMargin            1 s  the answer's trip back
+//	                                   (gitlet.MinProposeAttempt)
+//	+ gitlet.ReplyMargin            1 s  the answer's trip back
 //
 // THE GITLET NODE FITS EVERY STAGE INTO IT. It is served under a context that
-// ends a reply's margin before the attempt does (code.AnswerBy), and uploads a
+// ends a reply's margin before the attempt does (gitlet.AnswerBy), and uploads a
 // write's bundle only while the upload's allowance and the proposal's attempt
 // are both still left — answering busy, nothing uploaded, where they are not
-// (internal/code/host's deadline rule) — so a write's median bundle of a few
+// (internal/gitlet/host's deadline rule) — so a write's median bundle of a few
 // kilobytes is never uploaded late, and a large one on a bucket at the floor
 // is refused before its upload rather than landed after its asker gave up.
 // So a healthy Gitlet node always answers inside the attempt, and only a WEDGED
@@ -209,11 +209,11 @@ const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadD
 // wedged home, would leave the runner-up never asked.
 //
 // MEASURED, EVERY TERM'S p99 BESIDE ITS BUDGET (M3-decisions M3-O43;
-// BenchmarkEngineWrite and BenchmarkEngineCommit, internal/code/host; two
+// BenchmarkEngineWrite and BenchmarkEngineCommit, internal/gitlet/host; two
 // cores, so a one-unit share; in-process object stores, the S3 fake up to
 // 200 ms a first byte; the repositories kept compacted between rounds, every
 // answer a write's tool gave counted, refusals included): the share's wait,
-// as code.GitShare times it, at most 0.57 s at the p99 with eight writes at
+// as gitlet.GitShare times it, at most 0.57 s at the p99 with eight writes at
 // once — what its one unit serves inside its 2 s, none refused — and its
 // whole 2 s at sixty-four, where 20–33% of the writes (40–50% beside a
 // person's pushes) waited it out and were answered unready: the one term a write reaches whole, and that is the
@@ -226,11 +226,11 @@ const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadD
 // setting it; every answer's p99 — an unready one after 2.7–3.2 s — is 3.2 s
 // at the most, about a twenty-sixth of the attempt.
 // TestProductionsGitWriteAttemptHoldsAWritesWaits holds the sum.
-const GitWriteAttempt = code.GitShareWait + 3*statelog.ReadBudget + code.WriteBuildDeadline +
-	code.WriteUploadAllowance + minWriteAttempt + code.ReplyMargin
+const GitWriteAttempt = gitlet.GitShareWait + 3*statelog.ReadBudget + gitlet.WriteBuildDeadline +
+	gitlet.WriteUploadAllowance + minWriteAttempt + gitlet.ReplyMargin
 
 // errGitUnready is a git half that could not answer a read or build a write
-// inside its budget for a reason about THE NODE (code.ErrGitUnready: its copy
+// inside its budget for a reason about THE NODE (gitlet.ErrGitUnready: its copy
 // still syncing, its share full, no chart or no configuration to judge a seat
 // by, a failure of its own, or no copy held and no fill asked of it): it ran
 // nothing about the repository's content, and another Gitlet node may answer.
@@ -241,20 +241,20 @@ const GitWriteAttempt = code.GitShareWait + 3*statelog.ReadBudget + code.WriteBu
 // reads to know whether the one node it lets fill a copy is still that one.
 var errGitUnready = errors.New("estate: this Gitlet node cannot answer now")
 
-// unreadyGit is a git half's code.ErrGitUnready as the walk reads it: errGitUnready,
+// unreadyGit is a git half's gitlet.ErrGitUnready as the walk reads it: errGitUnready,
 // its cause kept for the walk's account.
 type unreadyGit struct{ cause error }
 
 func (u unreadyGit) Error() string   { return u.cause.Error() }
 func (u unreadyGit) Unwrap() []error { return []error{errGitUnready, u.cause} }
 
-// gitUnready is a git half's error as the walk reads it: code.ErrGitUnready
+// gitUnready is a git half's error as the walk reads it: gitlet.ErrGitUnready
 // becomes [errGitUnready], and every other error is the answer — a refusal
-// about the read, the write or the repository (code.ErrNotPermitted,
-// code.ErrObjectNotFound, code.ErrInvalid, …), which every Gitlet node would give
+// about the read, the write or the repository (gitlet.ErrNotPermitted,
+// gitlet.ErrObjectNotFound, gitlet.ErrInvalid, …), which every Gitlet node would give
 // alike.
 func gitUnready(err error) error {
-	var unready *code.ErrGitUnready
+	var unready *gitlet.ErrGitUnready
 	if errors.As(err, &unready) {
 		return unreadyGit{cause: err}
 	}
@@ -264,18 +264,18 @@ func gitUnready(err error) error {
 // unreadyDetail is what a node's answer says of a git half that was not ready:
 // the half's own sentence, which names the node and what it is doing.
 func unreadyDetail(err error) string {
-	var unready *code.ErrGitUnready
+	var unready *gitlet.ErrGitUnready
 	if errors.As(err, &unready) {
 		return unready.Detail
 	}
 	return err.Error()
 }
 
-// unreadyReason is the reason a git half's code.ErrGitUnready gave, and empty
+// unreadyReason is the reason a git half's gitlet.ErrGitUnready gave, and empty
 // for an error that carries none — which passes no fill
-// (code.UnreadyReason.PassesFill).
-func unreadyReason(err error) code.UnreadyReason {
-	var unready *code.ErrGitUnready
+// (gitlet.UnreadyReason.PassesFill).
+func unreadyReason(err error) gitlet.UnreadyReason {
+	var unready *gitlet.ErrGitUnready
 	if errors.As(err, &unready) {
 		return unready.Reason
 	}
@@ -319,7 +319,7 @@ func passesFill(rep reply) bool {
 // for the operation: one that ran nothing for it at all, and one whose git
 // half said why in a reason that passes — behind its configuration, which
 // judges no seat for as long as its apply fails, or a failure of its own
-// (code.UnreadyReason.PassesFill, [passesFill]). Kept on the first node, a
+// (gitlet.UnreadyReason.PassesFill, [passesFill]). Kept on the first node, a
 // home that could not serve the read for a reason that lasts left the
 // repository unreadable through the walk: every other node holding no copy
 // answers a read not stamped home `not_held`, so a seat's read of a
@@ -330,7 +330,7 @@ func passesFill(rep reply) bool {
 // gone silent — so one walk still starts one download at a time, and a home's
 // death costs the fleet one fill rather than one a Gitlet node; nor past one at
 // its SHARE, which holds its copy and is only busy, since the share is the
-// node's and not the repository's (code.UnreadyReason.PassesFill). The home
+// node's and not the repository's (gitlet.UnreadyReason.PassesFill). The home
 // itself is not demoted for it: a person's read, which judges no chart, and
 // the next walk still ask it first.
 //
@@ -342,7 +342,7 @@ func passesFill(rep reply) bool {
 // never consults [Router.remembersBehind] and never hands a node to
 // [Router.lastResort]. A Gitlet node behind the company's configuration is no
 // worse a Gitlet node: its git half answers a seat's read or write
-// `behind_config` itself (code.UnreadyBehindConfig), which the walk reads as
+// `behind_config` itself (gitlet.UnreadyBehindConfig), which the walk reads as
 // it reads any node that ran nothing — move on, no demotion, the fill passed
 // on.
 //
@@ -503,7 +503,7 @@ func (r *Router) Home(repoID string) (string, error) {
 // none of a home's work rather than guess. No ids read nothing.
 //
 // ONE READING FOR MANY REPOSITORIES, because what reads it — the backstop pass
-// of the home's change work (internal/code/home), over every repository its
+// of the home's change work (internal/gitlet/home), over every repository its
 // workers' listings name, every minute on every Gitlet node — is a question about
 // the whole listing: asked a repository at a time, each answer read the
 // presence view again (its leases cloned under its lock, every node's profile
@@ -549,7 +549,7 @@ func (r *Router) HomeOf(repoIDs []string) (map[string]bool, error) {
 // order, WITH NO DEMOTION, the home first ([Router.Home] is its first node).
 // The order a repository's own git work is ranked by on every node alike:
 // which Gitlet node claims one of its queued checks first, and how long each
-// one after it waits (internal/code/checkrun), and which nodes hold its index
+// one after it waits (internal/gitlet/checkrun), and which nodes hold its index
 // (internal/codeindex). A node absent from it is no live Gitlet node, as the
 // presence view reads it now — what a check's running row whose runner has
 // left it is judged by.
@@ -702,7 +702,7 @@ func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 // ids read nothing.
 //
 // ONE LISTING FOR MANY REPOSITORIES, because what asks it — a maintainer's
-// passes (internal/code/compact), the compaction's and the publication's, over
+// passes (internal/gitlet/compact), the compaction's and the publication's, over
 // every repository their due listings name, every minute on every Gitlet node — is
 // a question about the whole listing: asked a repository at a time, each answer
 // read the presence view again (its leases cloned under its lock, every node's
@@ -771,7 +771,7 @@ func (r *Router) maintainerOver(listing GitListing, repoID string, charge int64)
 // answers, so a node it does not carry maintains no repository, whatever it
 // would rank: (true, nil), (false, nil), or (false, err) where the listing
 // cannot be read. A maintainer's loops wait for it before their first pass
-// (internal/code/compact): a booting node's presence is listed only once its
+// (internal/gitlet/compact): a booting node's presence is listed only once its
 // host beats, and a pass before that would find every repository placed
 // elsewhere or nowhere.
 //
@@ -796,7 +796,7 @@ func (r *Router) Listed() (bool, error) {
 //
 // HELD TO THE ATTEMPT A REMOTE ASKER GIVES IT: budget, the walk's attempt on
 // one node ([Router.budgetFor]), served until a reply's margin before it as
-// the server's git arm serves a remote one ([code.AnswerBy]). Run under the
+// the server's git arm serves a remote one ([gitlet.AnswerBy]). Run under the
 // caller's own context instead, the home's own seats' reads waited out a busy
 // read lane or a slow sync for as long as their caller allowed, and ran their
 // git for as long, while every other node's seats were answered unready at the
@@ -807,7 +807,7 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 
 	attempt, cancel := attemptContext(ctx, budget)
 	defer cancel()
-	served, stop := code.AnswerBy(attempt, deadlineOf(attempt))
+	served, stop := gitlet.AnswerBy(attempt, deadlineOf(attempt))
 	defer stop()
 	value, err = x.local(served, Backend{Git: g, ServerSeams: r.seams})
 	switch {
@@ -832,7 +832,7 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 // says it.
 //
 // SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the request's
-// deadline ([code.AnswerBy]), and no later: every wait a read or a write makes
+// deadline ([gitlet.AnswerBy]), and no later: every wait a read or a write makes
 // — its copy's sync, its unit of the share, the read lane's queue for each
 // process, each process, a write's upload and its proposal — takes that one
 // context, so a busy node's `behind` reaches its asker while it still
@@ -850,7 +850,7 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 // on without demoting it, and the asker hears so now — never left waiting for
 // a slot in the broker client's buffer, which drops a request past its bytes.
 func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out reply) []byte {
-	ctx, cancel := code.AnswerBy(ctx, req.Deadline)
+	ctx, cancel := gitlet.AnswerBy(ctx, req.Deadline)
 	defer cancel()
 	var g GitServer
 	ok := false
@@ -866,7 +866,7 @@ func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out re
 		case s.writes <- struct{}{}:
 			defer func() { <-s.writes }()
 		default:
-			out.Unserved, out.Unready = unservedBehind, code.UnreadyShare
+			out.Unserved, out.Unready = unservedBehind, gitlet.UnreadyShare
 			out.Detail = fmt.Sprintf("%s holds %d engine writes for its peers, every one its writes' lane holds "+
 				"at once (gitWritesHeld): it builds another when one of them ends", s.self, gitWritesHeld)
 			return s.encodeReply(out)
@@ -891,7 +891,7 @@ func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out re
 	case errors.Is(err, errGitUnready):
 		why := unreadyReason(err)
 		out.Unserved, out.Detail, out.Unready = unservedBehind, unreadyDetail(err), why
-		if why == code.UnreadyBehindConfig {
+		if why == gitlet.UnreadyBehindConfig {
 			// THE NODE'S POSTURE, said as every operation says it, so an
 			// asker remembers it for this node's data operations too
 			// ([Router.markBehindConfig]).

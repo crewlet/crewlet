@@ -30,10 +30,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/backoff"
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -329,7 +329,7 @@ type codeRepoView struct {
 	// and its push mirror's target, the import its create filled it from and
 	// how that ended, and the pull mirror's last sync. Every credential in it
 	// is a ${VAR} reference, never a value.
-	Remotes code.RemoteState `json:"remotes"`
+	Remotes gitlet.RemoteState `json:"remotes"`
 }
 
 // codeProtectionView is one protection rule.
@@ -379,7 +379,7 @@ type codeReadView struct {
 // What one answer of the code reads may carry, and the pages the CLI asks
 // for.
 //
-// A code read's page ends at code.MaxPageBytes of encoded rows — closed on the
+// A code read's page ends at gitlet.MaxPageBytes of encoded rows — closed on the
 // row that crosses the budget, and keeping that row — so an answer carries up
 // to MaxPageBytes, one row more and its envelope, whatever its row count says.
 // The CLI reads them by that bound (codeAnswerBytes,
@@ -390,26 +390,26 @@ type codeReadView struct {
 // of such repositories 4.20 MB.
 //
 // So a page asks for the MOST rows the reader serves of its kind
-// (code.MaxReposPerPage, code.MaxPushesPerPage) — the fewest requests, the
+// (gitlet.MaxReposPerPage, gitlet.MaxPushesPerPage) — the fewest requests, the
 // reader's byte budget bounding each — and a history asks for no more than
 // the pushes still wanted.
 const (
 	// codeRowBytes is the most one row of a code read encodes to: two
 	// mebibytes, above the largest TestTheCodePagesFitOneAnswer builds — a
-	// push of code.MaxCommandsPerPush commands at the longest ref beside
-	// code.MaxIntroduced ids and a seat's run at its bound, each byte of a ref
+	// push of gitlet.MaxCommandsPerPush commands at the longest ref beside
+	// gitlet.MaxIntroduced ids and a seat's run at its bound, each byte of a ref
 	// and of a run field but the executor's UUID one JSON writes as six, at
 	// 1 692 620 bytes (the code domain refuses a push whose record entry is
 	// that wide, so no row reaches it), and a repository at its longest
 	// description and default branch with every rule
-	// code.MaxProtectionsPerRepo allows, all of them escaped, at 107 746.
+	// gitlet.MaxProtectionsPerRepo allows, all of them escaped, at 107 746.
 	codeRowBytes = 2 << 20
 	// codeEnvelopeBytes is the most an answer carries beside its rows: a comma
-	// between rows — fewer than code.MaxReposPerPage, the most a page asks
+	// between rows — fewer than gitlet.MaxReposPerPage, the most a page asks
 	// for — the cursor, the position and the level, about 2 KB.
 	codeEnvelopeBytes = 64 << 10
 	// codeAnswerBytes is the most one answer of the code reads carries.
-	codeAnswerBytes = code.MaxPageBytes + codeRowBytes + codeEnvelopeBytes
+	codeAnswerBytes = gitlet.MaxPageBytes + codeRowBytes + codeEnvelopeBytes
 )
 
 // forCodeReads returns a client that reads an answer of up to codeAnswerBytes.
@@ -488,7 +488,7 @@ func gitletListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.
 	fmt.Fprintln(w, "NAME\tSTATUS\tOWNER\tBRANCH\tHEAD\tREFS\tPACKS\tSIZE\tLAST PUSH")
 	listed := 0
 	var printed error
-	from, to, err := codePages(ctx, client, "/gitlet/repos", url.Values{}, 0, code.MaxReposPerPage,
+	from, to, err := codePages(ctx, client, "/gitlet/repos", url.Values{}, 0, gitlet.MaxReposPerPage,
 		func(raw json.RawMessage, page codeReadView) bool {
 			if asJSON {
 				printed = printAnswer(stdout, raw)
@@ -559,7 +559,7 @@ func gitletShowRepo(ctx context.Context, client *nodeClient, name string, n int,
 		printed error
 	)
 	if n > 0 {
-		_, _, err := codePages(ctx, client, path+"/pushes", floorAt(detail.Position), n, code.MaxPushesPerPage,
+		_, _, err := codePages(ctx, client, path+"/pushes", floorAt(detail.Position), n, gitlet.MaxPushesPerPage,
 			func(raw json.RawMessage, page codeReadView) bool {
 				if asJSON {
 					printed = printAnswer(stdout, raw)
@@ -676,7 +676,7 @@ type codePushLine struct {
 func pushLine(p codePushView) codePushLine {
 	by := p.Actor
 	switch {
-	case p.ActorKind == string(code.PrincipalAgent):
+	case p.ActorKind == string(gitlet.PrincipalAgent):
 		// A SEAT IS ITS OWN ACTOR, so its seat beside it would say nothing:
 		// what its push says beside the handle is what made it.
 		by = p.ActorSeat
@@ -693,7 +693,7 @@ func pushLine(p codePushView) codePushLine {
 		if len(made) > 0 {
 			by += " (" + strings.Join(made, ", ") + ")"
 		}
-	case p.ActorKind == string(code.PrincipalSystem):
+	case p.ActorKind == string(gitlet.PrincipalSystem):
 		// THE ENGINE ON ITS OWN ACCOUNT names no actor: its one push is the
 		// ref lifecycle's deletion of seats' idle branches.
 		by = "engine (ref expiry)"
@@ -725,7 +725,7 @@ func pushLine(p codePushView) codePushLine {
 func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 	var b strings.Builder
 	switch {
-	case r.Status == "deleted" && code.ManagedBy(r.ManagedBy) == code.ManagedTools:
+	case r.Status == "deleted" && gitlet.ManagedBy(r.ManagedBy) == gitlet.ManagedTools:
 		// A TOOL MADE IT, and a configuration never adopts one: declaring
 		// its name would be refused, so the way back is the tools'.
 		fmt.Fprintf(&b, "%s: deleted on %s; a restore through the code tools brings it back until "+
@@ -819,7 +819,7 @@ func expungeLine(r codeRepoView) string {
 // how it ended, whole or short with the sentence it ended on, which is how a
 // person who ran `gitlet import` learns it is over — "" for a repository no
 // import filled.
-func importLine(i *code.ImportState) string {
+func importLine(i *gitlet.ImportState) string {
 	if i == nil {
 		return ""
 	}
@@ -836,7 +836,7 @@ func importLine(i *code.ImportState) string {
 
 // mirrorFromLine is a pull mirror as `status` prints it: the source it follows,
 // what it fetches with, and when it last synced from it.
-func mirrorFromLine(m code.MirrorSource, synced time.Time) string {
+func mirrorFromLine(m gitlet.MirrorSource, synced time.Time) string {
 	line := m.URL + ", fetched anonymously"
 	if m.Credential != "" {
 		line = m.URL + ", fetched with " + m.Credential
@@ -850,7 +850,7 @@ func mirrorFromLine(m code.MirrorSource, synced time.Time) string {
 // mirrorToLine is a push mirror as `status` prints it: the target it pushes
 // to, as which seat and with what, and which refs — its default branch and
 // tags where it names none.
-func mirrorToLine(m code.MirrorTarget) string {
+func mirrorToLine(m gitlet.MirrorTarget) string {
 	refs := "its default branch and its tags"
 	if len(m.Refs) > 0 {
 		refs = words.AndMore(m.Refs, 4)
@@ -864,16 +864,16 @@ func mirrorToLine(m code.MirrorTarget) string {
 // expiry reads. A value this build does not know is printed as the node sent
 // it.
 func managedLine(r codeRepoView) string {
-	if code.ManagedBy(r.ManagedBy) != code.ManagedTools {
-		if code.ManagedBy(r.ManagedBy) == code.ManagedConfig {
+	if gitlet.ManagedBy(r.ManagedBy) != gitlet.ManagedTools {
+		if gitlet.ManagedBy(r.ManagedBy) == gitlet.ManagedConfig {
 			return "code.repos"
 		}
 		return r.ManagedBy
 	}
-	switch code.RepoKind(r.Kind) {
-	case code.RepoProject:
+	switch gitlet.RepoKind(r.Kind) {
+	case gitlet.RepoProject:
 		return "the code tools (a project)"
-	case code.RepoScratch:
+	case gitlet.RepoScratch:
 		return "the code tools (" + r.Owner.Ref + "'s scratch repository, last active " +
 			codeTime(r.LastActivityAt) + ", deleted once idle for code.scratch.idle_days unless a live turn holds it)"
 	}
@@ -884,10 +884,10 @@ func managedLine(r codeRepoView) string {
 // seats read it, since a person reads every repository whatever it says. A
 // value this build does not know is printed as the node sent it.
 func visibilityLine(v string) string {
-	switch code.Visibility(v) {
-	case code.VisibilityCompany:
+	switch gitlet.Visibility(v) {
+	case gitlet.VisibilityCompany:
 		return v + " (every seat reads it)"
-	case code.VisibilityUnit:
+	case gitlet.VisibilityUnit:
 		return v + " (only the seats the chart relates to its owner read it)"
 	}
 	return v
@@ -896,11 +896,11 @@ func visibilityLine(v string) string {
 // searchLine is a repository's search mode as `status` prints it: what reads
 // it. A value this build does not know is printed as the node sent it.
 func searchLine(m string) string {
-	switch code.SearchMode(m) {
-	case code.SearchIndexed:
+	switch gitlet.SearchMode(m) {
+	case gitlet.SearchIndexed:
 		return m + " (read from an index of its default branch, by a search across the company's " +
 			"repositories as well as one naming it)"
-	case code.SearchGrep:
+	case gitlet.SearchGrep:
 		return m + " (read with git grep, only by a search naming it)"
 	}
 	return m
@@ -1090,7 +1090,7 @@ func gitletVerifyTargets(ctx context.Context, client *nodeClient, named []string
 		return named, floor, nil
 	}
 	var targets []string
-	floor, _, err := codePages(ctx, client, "/gitlet/repos", query, 0, code.MaxReposPerPage,
+	floor, _, err := codePages(ctx, client, "/gitlet/repos", query, 0, gitlet.MaxReposPerPage,
 		func(_ json.RawMessage, page codeReadView) bool {
 			for _, r := range page.Repos {
 				targets = append(targets, r.Name)
@@ -1487,7 +1487,7 @@ func gitletExport(environ config.Source, args []string, stdout, stderr io.Writer
 
 // maxBundleHeader bounds a bundle's header — its signature, capabilities and
 // one line a ref — as checkBundle reads it: 64 MiB, maxGitOutput's figure,
-// above the ref lines of code.MaxRefsPerRepo refs (a hundred thousand of at
+// above the ref lines of gitlet.MaxRefsPerRepo refs (a hundred thousand of at
 // most 256 bytes each with their ids, some 30 MiB), so a file whose header
 // does not end inside it is not a bundle of a repository this host serves.
 const maxBundleHeader = maxGitOutput
@@ -1500,7 +1500,7 @@ const maxBundleHeader = maxGitOutput
 // byte before it (SHA-1, or SHA-256 where the bundle names that object
 // format). A pack cut short or with a byte changed is caught by that one
 // hash, at hashing speed — git's hashfile rule, held by its one
-// implementation (code.HashTrailer, which a Gitlet node holds its own files to),
+// implementation (gitlet.HashTrailer, which a Gitlet node holds its own files to),
 // so the bytes are judged here exactly as the node that serves them judges
 // its packs.
 //
@@ -1547,7 +1547,7 @@ func checkBundle(ctx context.Context, path string) error {
 	if pack.Size() < int64(len(head)+sum.Size()) {
 		return errors.New("its pack ends before its trailer")
 	}
-	t, err := code.HashTrailer(ctx, pack, pack.Size(), sum, code.Pieces{})
+	t, err := gitlet.HashTrailer(ctx, pack, pack.Size(), sum, gitlet.Pieces{})
 	switch {
 	case err != nil:
 		// io.ErrUnexpectedEOF among them: the file shortened as it was read.
@@ -1764,7 +1764,7 @@ func (g operatorGit) atClientFloor(ctx context.Context) error {
 }
 
 // maxGitOutput bounds what one git command's stdout is captured to: an
-// ls-remote of code.MaxRefsPerRepo refs is about 6 MiB, and a
+// ls-remote of gitlet.MaxRefsPerRepo refs is about 6 MiB, and a
 // cat-file --batch-check over a large history tens of MiB. Past it the
 // command fails rather than holding an unbounded answer.
 const maxGitOutput = 64 << 20

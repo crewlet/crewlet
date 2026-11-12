@@ -16,7 +16,7 @@ import (
 // parts read into a pattern's byte offsets, which hold it.
 //
 // IT IS A GLOB'S BOUND, NOT A LIST'S: a repository names up to 2 048 globs
-// (internal/code's MaxPathOwners owners of MaxPathOwnerPaths each), and JSON
+// (internal/gitlet's MaxPathOwners owners of MaxPathOwnerPaths each), and JSON
 // may spell each byte of a glob as six (`<`, `>` and `&` are a path's like any
 // other's), so at this bound alone they would weigh about 1.6 MB — past the
 // one record of the code domain every change of a repository's settings
@@ -39,10 +39,10 @@ const MaxPathGlobBytes = 128
 // IT BOUNDS A GLOB'S COST A BYTE OF PATH, NOT A MATCH'S: a ref's 255 bytes hold
 // a pattern's costliest rule to 13 µs, and a path has no bound, so the search
 // grows with it. The costliest glob found within eight costs 3.2 ms on a path
-// of 48 KiB — every byte a revision's touched paths may take (internal/code's
+// of 48 KiB — every byte a revision's touched paths may take (internal/gitlet's
 // MaxTouchedBytes) — about 65 ns a byte, where a directory's ** costs 20 ns on
 // any path (the package doc's Measured section). So the repository's home,
-// matching its path owners' globs against a revision's paths (internal/code's
+// matching its path owners' globs against a revision's paths (internal/gitlet's
 // MatchOwners), pays at most about 6.5 s of a core a revision at
 // MaxPathOwners × MaxPathOwnerPaths globs every one of that shape, and about
 // 42 ms at as many directories' ** asked about MaxTouchedPaths paths. Fewer

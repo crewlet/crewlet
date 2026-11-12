@@ -2,20 +2,20 @@
 --
 -- A repository's purge removes its changes' notices (code_notifications,
 -- 0109) with the changes, and each purge part is one record bounded to
--- code.PurgePartRows rows: code.MaxRecordRows is what one record's apply may
+-- gitlet.PurgePartRows rows: gitlet.MaxRecordRows is what one record's apply may
 -- write or delete before it holds the shared write lane past the framework's
 -- budget, on every data node. The notices were the one thing a part deleted
 -- without counting, because the table is DIVERGENT — whether a row is written
 -- depends on the batch's instant and the epoch's horizon — and a part's count
 -- decides which REPLICATED rows go, so it must be the same on every node. A
 -- change gets one notice per (record, recipient), up to about a hundred a
--- comment (code.MaxRoutedParticipants of its thread, code.MaxMentions), kept
+-- comment (gitlet.MaxRoutedParticipants of its thread, gitlet.MaxMentions), kept
 -- a year for persons by default: a part that took its bound of whole changes
 -- could delete many times that bound again in their notices.
 --
 -- So a change counts them where every node agrees: code_changes.notices is
 -- how many notices the records about the change may write — every handle a
--- record's routing tells about the change (code.Concerns), whether or not
+-- record's routing tells about the change (gitlet.Concerns), whether or not
 -- the recipient's horizon let this node write the row — added by the apply
 -- of every record about it that applied (the same condition that writes the
 -- rows). It is a pure function of the records, so it is the same on every
@@ -27,7 +27,7 @@
 -- whole only while both fit what is left of PurgePartRows, a part that cuts
 -- a change deletes at most what is left of its notices and lowers the count
 -- by exactly that, and the final purge forms only once the rows and the
--- counts left fit one part (internal/code's purge.go, apply_purge_changes.go).
+-- counts left fit one part (internal/gitlet's purge.go, apply_purge_changes.go).
 --
 -- The count only ever over-states a node's rows — a swept notice stays
 -- counted — which makes a purge take more parts than it needs, never fewer.
@@ -35,6 +35,6 @@
 -- Class: code_changes stays reproducible: notices is written only by the
 -- applier, from the records, and lowered only by a purge part's cut, from
 -- the part's own count. Every node writes it from the first record it
--- applies, under the code domain's stated condition (internal/code's
+-- applies, under the code domain's stated condition (internal/gitlet's
 -- record.go): no build that carries the domain has run without this column.
 ALTER TABLE code_changes ADD COLUMN notices INTEGER NOT NULL DEFAULT 0;

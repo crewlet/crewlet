@@ -7,7 +7,7 @@
  * Its own file because it mocks the screen's query hook.
  */
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -74,6 +74,7 @@ const ANSWER: DelegatedDecisionsAnswer = {
       escalate_to: ["ops-lead"],
       sample_one_in: 10,
       always_escalate_paths: [],
+      required_checks: [],
     },
     {
       rule: 2,
@@ -82,12 +83,15 @@ const ANSWER: DelegatedDecisionsAnswer = {
       escalate_to: ["ops-lead"],
       sample_one_in: 5,
       always_escalate_paths: ["billing/**", "services/*/payments/**"],
+      required_checks: [{ repo: "acme/api", branch: "main", checks: ["test", "lint"] }],
     },
   ],
   limits: { deadline_minutes: 15, decisions_per_hour: 30, server_allows_per_hour: 10 },
-  day: "2026-11-09",
-  since: "2026-11-09T00:00:00Z",
-  until: "2026-11-10T00:00:00Z",
+  // TODAY, SO FAR: what the page opens on.
+  day: "2026-11-10",
+  since: "2026-11-10T00:00:00Z",
+  until: "2026-11-11T00:00:00Z",
+  complete: false,
   decided: [
     verdict({}),
     verdict({
@@ -179,7 +183,8 @@ test("a rule's own always-escalate paths are listed beside its kinds", () => {
   expect(within(release!).getByText("Deploys")).toBeTruthy();
   expect(within(release!).getByText("billing/**")).toBeTruthy();
   expect(within(release!).getByText("services/*/payments/**")).toBeTruthy();
-  expect(within(ssh!).getByText("Not for commands")).toBeTruthy();
+  // NEITHER PATHS NOR CHECKS on a command rule.
+  expect(within(ssh!).getAllByText("Not for commands")).toHaveLength(2);
 });
 
 test("a rule with more paths than its row shows counts the rest", () => {
@@ -193,6 +198,41 @@ test("a rule with more paths than its row shows counts the rest", () => {
   expect(within(rules).getByText("d/**")).toBeTruthy();
   expect(within(rules).queryByText("e/**")).toBeNull();
   expect(within(rules).getByText("2 more")).toBeTruthy();
+});
+
+// A RULE'S REQUIRED CHECKS read per repository and branch, the whole list on
+// hover, and a release rule naming none relies on what the branch requires.
+test("a rule lists the checks it requires on each repository's branch", () => {
+  answer.data = ANSWER;
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  const release = dataRows(rules)[1];
+  expect(within(release!).getByText("acme/api main")).toBeTruthy();
+  expect(within(release!).getByText("test, lint")).toBeTruthy();
+});
+
+test("a rule with more required-check entries than its row shows counts the rest", () => {
+  const required_checks = ["api", "web", "jobs"].map((name) => ({
+    repo: `acme/${name}`,
+    branch: "main",
+    checks: ["test"],
+  }));
+  answer.data = {
+    ...ANSWER,
+    rules: [{ ...ANSWER.rules[1]!, always_escalate_paths: [], required_checks }],
+  };
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  expect(within(rules).getByText("acme/web main")).toBeTruthy();
+  expect(within(rules).queryByText("acme/jobs main")).toBeNull();
+  expect(within(rules).getByText("1 more")).toBeTruthy();
+});
+
+test("a merge or deploy rule with no checks of its own says the branch decides", () => {
+  answer.data = { ...ANSWER, rules: [{ ...ANSWER.rules[1]!, required_checks: [] }] };
+  mount();
+  const rules = screen.getByRole("table", { name: "Rules" });
+  expect(within(rules).getByText("What the branch requires")).toBeTruthy();
 });
 
 test("a merge or deploy rule with no paths of its own says it keeps the built-in ones", () => {
@@ -218,7 +258,7 @@ test("a merge's verdict reads its subject and names no server", () => {
     ],
   };
   mount();
-  const digest = screen.getByRole("table", { name: "Decided yesterday" });
+  const digest = screen.getByRole("table", { name: "Decided today, so far" });
   const [row] = dataRows(digest);
   expect(within(row!).getByText(/^merge web!42 at/)).toBeTruthy();
   expect(within(row!).getByText("Not on a server")).toBeTruthy();
@@ -228,7 +268,7 @@ test("a merge's verdict reads its subject and names no server", () => {
 test("the digest lists each decision: the seat, what and where, the verdict, who and why", () => {
   answer.data = ANSWER;
   mount();
-  const digest = screen.getByRole("table", { name: "Decided yesterday" });
+  const digest = screen.getByRole("table", { name: "Decided today, so far" });
   const rows = dataRows(digest);
   expect(rows).toHaveLength(3);
   const deny = rows.find((r) => r.textContent?.includes("rm -rf /var/lib/app"))!;
@@ -248,17 +288,45 @@ test("the digest lists each decision: the seat, what and where, the verdict, who
 test("the toolbar narrows every list, and the foot counts what it shows", () => {
   answer.data = ANSWER;
   mount("#/settings/delegated-decisions?verdict=deny");
-  const digest = screen.getByRole("table", { name: "Decided yesterday" });
+  const digest = screen.getByRole("table", { name: "Decided today, so far" });
   expect(dataRows(digest)).toHaveLength(1);
   expect(screen.getByText("Showing 1 of 3. The log holds more than this page.")).toBeTruthy();
   expect(screen.getByText("Nothing matches")).toBeTruthy();
 });
 
 test("a day named in the address is the day asked for and headed", () => {
-  answer.data = { ...ANSWER, day: "2026-11-05" };
+  answer.data = { ...ANSWER, day: "2026-11-05", complete: true };
   mount("#/settings/delegated-decisions?day=2026-11-05");
   expect(answer.asked).toContainEqual({ day: "2026-11-05" });
   expect(screen.getByRole("table", { name: "Decided on 2026-11-05" })).toBeTruthy();
+  // A WHOLE DAY PAGES FORWARD, towards today.
+  fireEvent.click(screen.getByRole("button", { name: "The day after" }));
+  expect(location.hash).toContain("day=2026-11-06");
+});
+
+// THE PAGE OPENS ON TODAY, SO FAR: the running day is asked for, headed and
+// said to be still running; the pager goes back to yesterday and no further
+// forward than today.
+// Mutation: open on the engine's default, the last whole day, and a verdict
+// given this morning is not on the page until tomorrow.
+test("the page opens on today so far, and pages back but not past today", () => {
+  answer.data = ANSWER;
+  mount();
+  expect(answer.asked).toContainEqual({ day: "today" });
+  expect(screen.getByRole("table", { name: "Decided today, so far" })).toBeTruthy();
+  expect(screen.getByText(/The company day is still running/)).toBeTruthy();
+  const after = screen.getByRole("button", { name: "The day after" });
+  expect(after.hasAttribute("disabled") || after.getAttribute("aria-disabled") === "true").toBe(
+    true,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "The day before" }));
+  expect(location.hash).toContain("day=2026-11-09");
+});
+
+test("a running day nothing was decided on yet says so", () => {
+  answer.data = { ...ANSWER, decided: [], decided_more: false };
+  mount();
+  expect(screen.getByText("No request has been decided yet today.")).toBeTruthy();
 });
 
 test("off, it says every request goes to people and keeps the rules", () => {

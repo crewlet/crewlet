@@ -34,6 +34,8 @@ type AccessReader interface {
 		fresh statelog.Freshness) (accessdomain.CertificatePage, error)
 	Commands(ctx context.Context, q accessdomain.AuditQuery,
 		fresh statelog.Freshness) (accessdomain.CommandPage, error)
+	HostUse(ctx context.Context, week, month time.Time,
+		fresh statelog.Freshness) ([]accessdomain.HostUse, error)
 	SealedKeys(ctx context.Context) (accessdomain.SealedCount, error)
 }
 
@@ -124,6 +126,22 @@ var opAccessCertificates = define("access.certificates", opRead, accessDomain, f
 			return accessdomain.CertificatePage{}, err
 		}
 		return r.Certificates(ctx, a.Query, a.Fresh)
+	})
+
+type accessHostUseArgs struct {
+	Week, Month time.Time
+	Fresh       statelog.Freshness
+}
+
+// opAccessHostUse is each server's use, counted on a data node's copy: one row
+// per server and seat, never the commands themselves.
+var opAccessHostUse = define("access.host_use", opRead, accessDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a accessHostUseArgs) ([]accessdomain.HostUse, error) {
+		r, err := b.accessReader()
+		if err != nil {
+			return nil, err
+		}
+		return r.HostUse(ctx, a.Week, a.Month, a.Fresh)
 	})
 
 var opAccessCommands = define("access.commands", opRead, accessDomain, false,
@@ -247,6 +265,12 @@ func (x AccessReads) Certificates(ctx context.Context, q accessdomain.AuditQuery
 func (x AccessReads) Commands(ctx context.Context, q accessdomain.AuditQuery,
 	fresh statelog.Freshness) (accessdomain.CommandPage, error) {
 	return call(ctx, x.r, opAccessCommands, nil, accessAuditArgs{Query: q, Fresh: fresh})
+}
+
+// HostUse answers each server's use since month, the week's counted apart.
+func (x AccessReads) HostUse(ctx context.Context, week, month time.Time,
+	fresh statelog.Freshness) ([]accessdomain.HostUse, error) {
+	return call(ctx, x.r, opAccessHostUse, nil, accessHostUseArgs{Week: week, Month: month, Fresh: fresh})
 }
 
 // SealedKeys answers how many commands sit sealed under each keyring key.

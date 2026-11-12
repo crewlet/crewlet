@@ -673,7 +673,7 @@ func TestTheCodeMaintenanceAlarmFiresPastTheNodesBudget(t *testing.T) {
 
 // THE COMPACTION-BEHIND ALARM BORROWS THE PACK BOUND, never a number of its
 // own: the node's compactor counts the repositories it compacts that its
-// listing found AT the bound the push decide refuses at (code.MaxPacksPerRepo,
+// listing found AT the bound the push decide refuses at (gitlet.MaxPacksPerRepo,
 // a package this framework does not import), and the rule fires at any count —
 // so a repository the compactor did not count, whatever its live packs, raises
 // nothing here. The largest a reading carries is a figure for the detail, and
@@ -740,13 +740,13 @@ func TestTheMergeRateAlarmFiresAtTheQueuesCapacity(t *testing.T) {
 // THE BUSY ALARM FIRES AT THE COMMITTER'S BOUNDS, never at a number of its
 // own: every proposal the reading counts was refused busy by the committer at
 // a repository's queue — its count, its bytes or the time a proposal may wait
-// in it — or the node's whole bound (code.CommitterInbox, CommitterInboxBytes,
-// CommitterNodeBytes, its asker's attempt less code.CommitBudget and
+// in it — or the node's whole bound (gitlet.CommitterInbox, CommitterInboxBytes,
+// CommitterNodeBytes, its asker's attempt less gitlet.CommitBudget and
 // ReplyMargin — a package this framework does not import), so one is the
 // alarm. A repository, a node's share and the proposals that waited out their
 // time are figures for the detail — a repository named with nothing counted
 // is no backlog — and the window the detail names is the trim's tick, the
-// constant the committer borrows (code.CommitBusyWindow), never a copy.
+// constant the committer borrows (gitlet.CommitBusyWindow), never a copy.
 //
 // Mutations: fire past a count of the rule's own (ten, say), and the single
 // refusal raises nothing; fire on a named repository, and the reading that
@@ -791,7 +791,7 @@ func TestCodeCommitBusyFiresAtTheCommittersBounds(t *testing.T) {
 
 // THE REFS ALARM FIRES AT ANY REPOSITORY ITS READER COUNTED, and at none is
 // silent: the reader judged each one at the bound the push decide refuses a
-// create at and the ref lifecycle's window (internal/code's NearLimit), which
+// create at and the ref lifecycle's window (internal/gitlet's NearLimit), which
 // this framework does not import, so the rule borrows that judgement whole
 // (ADR-0015) and its detail names the figures and both decisions as the node
 // handed them in. The figures of a repository with nothing counted are no

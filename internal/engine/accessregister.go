@@ -181,10 +181,6 @@ func accessRetentionOf(c *Company) time.Duration {
 	return c.Config.AccessHistory.Retention()
 }
 
-// accessReaper is the author of every retention delete and every forgetting:
-// the reaper's own name, so an operator finds the duty that made it.
-var accessReaper = iam.Actor{Name: trashreap.Name, Kind: iam.ActorSystem}
-
 // forgetItem prefixes the reaper's id of a removed seat whose told records go,
 // beside an hour's. A seat's handle holds no colon and an hour's id begins
 // with its year.
@@ -271,7 +267,7 @@ func (a accessTrash) removedSeats(ctx context.Context) ([]string, error) {
 // PurgeTrashed forgets one removed seat's told records, decided again against
 // the fleet's revision, or expires one hour past cutoff.
 func (a accessTrash) PurgeTrashed(ctx context.Context, id string, cutoff time.Time, opID string) error {
-	call := accessdomain.Call{By: accessReaper, OpID: opID}
+	call := accessdomain.Call{By: reaperActor, OpID: opID}
 	if handle, ok := strings.CutPrefix(id, forgetItem); ok {
 		present, err := a.seats(ctx)
 		if err != nil {

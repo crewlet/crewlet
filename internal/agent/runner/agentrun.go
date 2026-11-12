@@ -125,6 +125,19 @@ type AgentRunRequest struct {
 	// never takes them again.
 	Notes []steer.Note
 
+	// Retold is every note the turn has read whose read the run's record
+	// marked unanswered as the brief was built (steer.Reading.Unanswered: a
+	// take recorded it read and its answer never reached its harness), by id
+	// ([Runner.retold]). EVERY BRIEF THE LAUNCH MAY HAND ITS RUN TELLS EACH OF
+	// THEM AGAIN: the fresh one among every note the turn has read, and a
+	// continued session's, its job's own copy's included, from the first such
+	// read on ([Runner.notesHeldBy], [Runner.inPlaceNotes]). So the launch
+	// records each read by the job it opens, told again, at its take's own
+	// place among the reads (sandbox.NoteRead.Retold), and the turn's ending
+	// says it was delivered there where the job started. None of them is
+	// among Notes.
+	Retold []string
+
 	// Surface is what the run may call, bridged; see the package rule
 	// above.
 	Surface *tools.Surface
@@ -218,8 +231,10 @@ type Continuation struct {
 	// its own run, that the session was cut off or may have been, every call
 	// of the round and every note the turn has read, any of which such a copy
 	// may lack, and where it did, the calls the round's log took late, which
-	// no copy is known to hold ([Runner.inPlaceAfter]); and the notes
-	// [AgentRunRequest.Notes] carries, which no copy has read. The floor of a
+	// no copy is known to hold ([Runner.inPlaceAfter]), and the notes from a
+	// read the record marks unanswered on; and the notes
+	// [AgentRunRequest.Notes] carries, which no copy has read — a served one
+	// told as a note it may already show ([Runner.inPlaceNotes]). The floor of a
 	// launch that continues the copy counts all of it where a capture measured
 	// the copy's context, and is the static floor where none did
 	// (internal/engine's continuedFloor).
@@ -304,8 +319,10 @@ type SessionBasis struct {
 	// session may not have been answered — and the last note read the run's
 	// record says it holds (sandbox.SessionCapture.NoteCursor), read only where
 	// its harness ended its own run: a session cut off is told every note the
-	// turn has read ([Runner.keptSession]). Zero holds none of the round's
-	// calls.
+	// turn has read ([Runner.keptSession]). The cursor stops before the first
+	// read the record marks unanswered, and is stopped there again by the
+	// turn's carried reads where that mark landed after the capture was
+	// stamped ([Runner.notesHeldBy]). Zero holds none of the round's calls.
 	Through    int
 	NoteCursor int
 
@@ -459,8 +476,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	case basis.Continues() && r.cfg.Resume != nil:
 		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
 		// middle among them: the session continued is that round's job's.
-		collected := roundCalls{bridged: r.cfg.Resume.Bridged, elided: r.cfg.Resume.Elided,
-			lateElided: r.cfg.Resume.LateElided, absorbed: r.cfg.Resume.Absorbed}
+		collected := roundCalls{bridged: r.cfg.Resume.Bridged, unfinished: r.cfg.Resume.Unfinished,
+			elided: r.cfg.Resume.Elided, lateElided: r.cfg.Resume.LateElided,
+			absorbed: r.cfg.Resume.Absorbed}
 		// A SEND-BACK'S LEAD TELLS NO HELD CALL, so every call a person
 		// approved after the save is told among the rest.
 		briefs.kept = r.keptSession(ctx, basis, collected, "", built, fresh, "").led(r.sendBackLead(notes))
@@ -521,6 +539,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		System:     system.Text,
 		Brief:      user.Text,
 		Notes:      fresh,
+		Retold:     r.retold(),
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
 		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
@@ -610,8 +629,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	round := roundCalls{bridged: bridgedCalls, elided: elided, lateElided: r.cfg.Resume.LateElided,
-		absorbed: absorbed}
+	round := roundCalls{bridged: bridgedCalls, unfinished: inAdmissionOrder(r.cfg.Resume.Unfinished),
+		elided: elided, lateElided: r.cfg.Resume.LateElided, absorbed: absorbed}
 	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, round)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -631,15 +650,19 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			StartedAt: began.UTC(), Caps: caps,
 			Failed: true, Err: refusedErr,
 		})
-		return turn.Work{Calls: logged, Elided: elided, Absorbed: absorbed}, describe(surface), refusedErr
+		// AND ITS CALLS WHOSE OUTCOME IS UNKNOWN, after its calls, as the
+		// record of every round lists them ([Resume.Unfinished]).
+		return turn.Work{Calls: append(slices.Clone(logged), bridgedLedger(round.unfinished)...),
+			Elided: elided, Absorbed: absorbed}, describe(surface), refusedErr
 	}
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
 	// a fresh run's after every note the turn read, as any brief does; the
 	// asking run's own session after the answer — and, where its harness is
 	// not known to have ended its own run, after every note the turn has
-	// read, which such a copy may lack ([Runner.inPlaceAfter]): a copy whose
-	// harness ended its own run holds every note it read, and its brief's.
+	// read, which such a copy may lack ([Runner.inPlaceNotes]): a copy whose
+	// harness ended its own run holds every note it read, and its brief's,
+	// but a read its record marks unanswered.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
@@ -722,8 +745,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	for _, part := range inPlaceAfter {
 		continued += "\n\n" + part
 	}
-	if rendered := renderedNotes(fresh); len(rendered) > 0 {
-		continued += "\n\n" + strings.Join(rendered, "\n\n")
+	// THEN THE NOTES: what the copy may lack of those the turn has read, and
+	// the ones this brief is the first to read ([Runner.inPlaceNotes]).
+	if notes := r.inPlaceNotes(carry, fresh); len(notes) > 0 {
+		continued += "\n\n" + strings.Join(notes, "\n\n")
 	}
 	// A FRESH RUN'S BRIEF is the round's own, and what became of the run
 	// before it — what it asked and was told, or how it was cut off: it
@@ -766,6 +791,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		System: system.Text,
 		Brief:  reseed.Text,
 		Notes:  fresh,
+		Retold: r.retold(),
 		Continue: &Continuation{
 			SessionID: inPlace, Brief: continued,
 			SignInReplaced: isRotated(carry),
@@ -906,8 +932,13 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // NEVER READ, exactly as the launch's is not when the run is collected in
 // another process: the collection replays submit_work from the run's durable
 // log ([Runner.resumeAgentRun]).
+//
+// AND THE CALLS ITS LOG HOLDS IN FLIGHT (unfinished, [Resume.Unfinished]), which
+// its call log counts by their identity: a call of the run still running on
+// the node it left, whose update has not landed, is a call made, and a call
+// made here that asks for something else must not derive its operation id.
 func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
-	bridged []BridgedCall, elided, absorbed []ledger.Elided, spent Bridged, continued bool,
+	bridged, unfinished []BridgedCall, elided, absorbed []ledger.Elided, spent Bridged, continued bool,
 ) (ReopenedRun, error) {
 	history := state.Iterations
 	called := append(bridgedLedger(inAdmissionOrder(bridged)), ledger.Called(elided)...)
@@ -924,7 +955,8 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 
 	meter := NewBridgedSpendFrom(spent)
 	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
-		roundCalls{bridged: inAdmissionOrder(bridged), elided: elided, absorbed: absorbed})
+		roundCalls{bridged: inAdmissionOrder(bridged), unfinished: inAdmissionOrder(unfinished),
+			elided: elided, absorbed: absorbed})
 	if err != nil {
 		return ReopenedRun{}, err
 	}
@@ -1042,6 +1074,7 @@ func frozen(blocks prefetch.Blocks, d dispatched) execstate.Frozen {
 		CounterpartyProfile: blocks.CounterpartyProfile,
 		SynthesizedSkills:   blocks.SynthesizedSkills,
 		OpenAsks:            blocks.OpenAsks,
+		Systems:             blocks.Systems,
 		Endings:             d.endings,
 		Access:              d.access,
 		CapabilityChanges:   d.changes,
@@ -1059,6 +1092,7 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, dispatched) {
 		CounterpartyProfile: f.CounterpartyProfile,
 		SynthesizedSkills:   f.SynthesizedSkills,
 		OpenAsks:            f.OpenAsks,
+		Systems:             f.Systems,
 	}, dispatched{endings: f.Endings, access: f.Access, changes: f.CapabilityChanges}
 }
 
@@ -1093,6 +1127,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	logged := bridgedLedger(bridged)
 	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
+	unfinished := inAdmissionOrder(r.cfg.Resume.Unfinished)
 
 	// THE REPLAY'S DECODER IS NOT HELD TO WHAT THE LOG KEEPS WHOLE
 	// ([keptWhole]): the submission is already made, and one a build before
@@ -1110,7 +1145,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// what it could still have discovered ([Runner.finishWork]); and the
 	// turn's call log, which starts from what the turn already called.
 	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history,
-		roundCalls{bridged: bridged, elided: elided, absorbed: absorbed})
+		roundCalls{bridged: bridged, unfinished: unfinished, elided: elided, absorbed: absorbed})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -1118,8 +1153,14 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 
 	replaySubmission(ctx, submit, sinceAnswer(bridged, r.cfg.Resume.Answered))
 
+	// THE ROUND'S RECORD LISTS ITS CALLS WHOSE OUTCOME IS UNKNOWN after its
+	// calls ([Resume.Unfinished]): the reviewer reads them, and the turn's
+	// tool log keeps them, each failed with the words that say what it may
+	// have done ([UnfinishedNote]) — and a later segment's call log counts them
+	// off the closed round's record by their identity.
+	recorded := append(slices.Clone(bridged), unfinished...)
 	run := r.cfg.Resume.Run
-	res := agentRunResult(answer, bridged, elided, run, state.LaunchedAt, began)
+	res := agentRunResult(answer, recorded, elided, run, state.LaunchedAt, began)
 	// THE NOTES THE ROUND'S RUN READ, off the record every read is written
 	// on: in its briefs, and at the boundaries of its harness's own loop — the
 	// reads of this round's jobs, at the run's one round, each with where it
@@ -1142,8 +1183,8 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// met its reviewer's usage limit before writing anything was settled
 	// for good as a turn that had written, and the run's result never
 	// reached the seat.
-	work.Calls = logged
-	work.Inherited = len(logged)
+	work.Calls = bridgedLedger(recorded)
+	work.Inherited = len(work.Calls)
 	// AND THE CALLS THE LOG DID NOT KEEP, by identity: the round's all the
 	// same, for the delivery checks, the closed round's record and the
 	// reviewer, who is told how many there were — and the ones the round's
@@ -1247,10 +1288,16 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 // that names a job is one of those jobs': a reviewer's reads are review's, the
 // first segment's name no job, and an earlier round's run has a record of its
 // own.
+//
+// NEVER A READ MARKED UNANSWERED (steer.Reading.Unanswered): its take's write
+// landed and its answer never reached the job's harness, so the job did not read
+// it, whatever the record's read says — the turn's later phases carry it, and
+// the record of the step that never handed it over does not list it.
 func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 	var out []types.PhaseSteer
 	for _, read := range reads {
-		if read.Phase != types.PhaseExecute || read.Iteration != iteration || read.Launch == "" {
+		if read.Phase != types.PhaseExecute || read.Iteration != iteration || read.Launch == "" ||
+			read.Unanswered {
 			continue
 		}
 		out = append(out, types.PhaseSteer{Round: runRound, NoteID: read.ID, Boundary: read.Boundary})

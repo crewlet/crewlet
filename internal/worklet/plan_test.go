@@ -753,7 +753,7 @@ func taskReads() map[string]indexedRead {
 		"the one-sided repair's gate": walk("tracker_relations_repair_idx",
 			pendingOneSidedStatement),
 		"a task's edges written": seek(key, store.InsertStatement(depsInsertPrefix,
-			depsInsertRow, depsInsertConflict, 1), other, task, other, 1, other, nil),
+			depsInsertRow, depsInsertConflict, 1), other, task, other, 1, other, nil, ""),
 		"a blocker's edges settled": seek(blockers, clearDependentsStatement, "done", 1, task),
 		"a key's holders flagged":   seek(keys, keyCollisionStatement, "ENG-1"),
 		"a key handed on":           seek(keys, handOnKeyStatement, "ENG-1"),
@@ -857,6 +857,9 @@ func taskReads() map[string]indexedRead {
 		// AND ITS WAITS ON A PERSON, the same seek bounded the other way.
 		"set aside (started)": {waitBlock(person, StatusInProgress, planNow), queue},
 		"set aside (waiting)": {waitBlock(person, StatusTodo, planNow), queue},
+		// AND ITS DEAD WAITS, the same seek over the items that wait.
+		"dead waits (started)": {deadBlock(person, StatusInProgress, planNow), queue},
+		"dead waits (waiting)": {deadBlock(person, StatusTodo, planNow), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
 		page, args := taskRowsStatement(set, block.query.terms)

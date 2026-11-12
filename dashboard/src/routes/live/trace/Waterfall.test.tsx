@@ -575,6 +575,94 @@ describe("a person's note", () => {
     expect(screen.queryByText(/read at round/)).toBeNull();
   });
 
+  // EVERY END THE RECORD KNOWS, said as it is and drawn at its step: a note a
+  // step took for a reader that never had it is MISSED there; one handed to the
+  // executor that never confirmed it is UNCONFIRMED at that job, its session
+  // maybe holding it; one a later launch's brief told again is DELIVERED at
+  // that brief, said as told again after a step that never handed it over;
+  // and an outcome this build cannot name is said as that, drawn nowhere,
+  // never as expired, which said the turn finished before reading a note a
+  // newer step may have read. No end says more than its record does.
+  test("a missed, an unconfirmed, a retold and an unknown end are each said as what the record knows", async () => {
+    const end = (note_id: string, ms: number, fields: Record<string, unknown>) =>
+      event("agent_turn_steered", ms, { note_id, note: `note ${note_id}`, ...fields });
+    const events = [
+      ...PARKED,
+      end("m", 1_500, {
+        outcome: "missed",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary: "tool_batch",
+        launch_id: "L1",
+      }),
+      end("mr", 2_500, {
+        outcome: "missed",
+        phase: "review",
+        iteration: 1,
+        round: 2,
+        boundary: "round",
+      }),
+      end("u", 3_000, {
+        outcome: "unconfirmed",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary: "step",
+        launch_id: "L1",
+      }),
+      end("r", 3_200, {
+        outcome: "delivered",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary: "brief",
+        launch_id: "L1",
+        retold: true,
+      }),
+      // A RETELLING NAMED ON A NOTE THAT WAS NOT DELIVERED is no retelling.
+      end("e", 3_300, { outcome: "expired", retold: true }),
+      end("x", 3_500, {
+        outcome: "forgotten",
+        phase: "execute",
+        boundary: "step",
+        launch_id: "L1",
+      }),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.outcome, m.spanId, m.retold])).toEqual([
+      ["m", "missed", "run:L1", false],
+      ["mr", "missed", "turn-1|review|1.r2", false],
+      ["u", "unconfirmed", "run:L1", false],
+      ["r", "delivered", "run:L1", true],
+      ["e", "expired", "", false],
+      ["x", "unknown", "", false],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    for (const words of [
+      "taken for the executor in Execute, after a tool batch, but never handed to it",
+      "taken at round 2 of Review but never handed over",
+      "handed to the executor in Execute, at its next step, which never confirmed reading it " +
+        "\\(its session may hold it\\)",
+      "read by the executor in Execute, in its brief, told again after a step that never handed it over",
+      "this version of the dashboard cannot say what became of it",
+    ]) {
+      expect(screen.getByText(new RegExp(words))).toBeTruthy();
+    }
+    expect(screen.queryByText(/carried it on/)).toBeNull();
+    expect(screen.getAllByText("the turn finished before it read the note")).toHaveLength(1);
+    for (const tag of ["missed", "unconfirmed", "unknown", "delivered"]) {
+      expect(screen.getAllByText(tag).length).toBeGreaterThan(0);
+    }
+    // THE LAUNCH'S BADGE SAYS EVERY END AT ITS STEPS.
+    const badge = within(screen.getByRole("button", { name: /^Launch/ })).getByText("note");
+    expect(badge.getAttribute("title")).toBe(
+      "Your note was taken here but never handed over; Your note was handed over here and never confirmed; " +
+        "Your note was read here",
+    );
+  });
+
   // NAMED BY ITS HEADING, which a screen reader announces: an `aria-label` on
   // a plain `div` is ignored, so the list had no name and no landmark.
   test("the notes are a region a screen reader can find by name", async () => {

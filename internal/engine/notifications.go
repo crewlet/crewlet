@@ -11,11 +11,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -446,7 +446,7 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 // fails nothing — its every sender reads as an outside party, so a person's
 // comment wakes a seat that will not act for them — which is why a test
 // holds every native parser's source to this list.
-var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source, code.Source}
+var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source, gitlet.Source}
 
 // partyRegistry is the ONE construction of a party registry on this node: the
 // org's seats, with the engine's own surfaces declared as the namespaces whose

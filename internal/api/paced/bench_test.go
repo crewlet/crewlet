@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/paced"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
 // taker is a response writer that takes every byte at once, and carries a

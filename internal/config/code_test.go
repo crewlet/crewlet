@@ -351,7 +351,7 @@ func TestTheCodeScratchIsTheSchemasBounds(t *testing.T) {
 
 // THE LIMITS ARE RESOLVED IN ONE PLACE: an unset field is its default, a set
 // one passes through — what config's order rules compare and what the code
-// domain holds a push to (code.LimitsOf reads this).
+// domain holds a push to (gitlet.LimitsOf reads this).
 func TestTheCodeLimitsResolveToTheirDefaults(t *testing.T) {
 	t.Parallel()
 	got := config.CodeLimits{}.Resolved()

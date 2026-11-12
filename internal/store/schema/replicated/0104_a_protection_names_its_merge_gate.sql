@@ -1,6 +1,6 @@
 -- A protection names its merge gate.
 --
--- A protection rule over branches gains its MERGE GATE (code.Protection.Gate,
+-- A protection rule over branches gains its MERGE GATE (gitlet.Protection.Gate,
 -- written in code.repos[].protect): what a merge into the branches it matches
 -- needs — who may merge (merge_by), the approvals it waits for and the paths
 -- only a person approves (approvals, approvals_unless, human_paths), the
@@ -13,23 +13,23 @@
 -- field: nothing filters on a field of a gate — a merge's decide reads a
 -- target's matching rules and judges each gate whole — and the record carries
 -- every field explicitly, its writer having resolved each default
--- (code.MergeGate), so a row holds what the record said and never a reader's
+-- (gitlet.MergeGate), so a row holds what the record said and never a reader's
 -- default. The JSON is the record's own encoding of it, in the one order every
--- node forms (code.CanonicalGate), at most code.MaxGateBytes (8 KiB): a
+-- node forms (gitlet.CanonicalGate), at most gitlet.MaxGateBytes (8 KiB): a
 -- repository's sixty-four rules hold at most 512 KiB of gates, read whole by
--- a read of the repository's detail that asks for them (code.gatesSQL), by
+-- a read of the repository's detail that asks for them (gitlet.gatesSQL), by
 -- the decides that rewrite its settings and by the reconcile, and replaced
 -- whole by every record that carries its settings. Every read of the
 -- repository's ROW — a push's decide, a git request's admission, a git
 -- node's sync, a listing — reads its rules without this column
--- (code.pushRulesSQL, code.pushRulesOfSQL): no push rule reads a gate.
+-- (gitlet.pushRulesSQL, gitlet.pushRulesOfSQL): no push rule reads a gate.
 --
 -- THE DEFAULT IS '' — no gate — because SQLite requires one for a NOT NULL
 -- column added to a table: every rule written before this migration has none,
 -- and every create, settings change and restore writes the column of each
 -- rule it writes.
 --
--- Class: code_protections stays reproducible (code.ReproducibleTables): the
+-- Class: code_protections stays reproducible (gitlet.ReproducibleTables): the
 -- column is written only by the applier, from the records that carry a
 -- repository's settings — its create, a settings change and a restore, each
 -- replacing its rules whole — and removed with the rules by the repository's

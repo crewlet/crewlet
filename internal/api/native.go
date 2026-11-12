@@ -642,6 +642,11 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		// takes: the fleet's presence and, where Gitlet is served, the
 		// Gitlet nodes' status.
 		halves.Health = engine.HealthToolDeps(e)
+		// AND THE ATLAS, read per call from the settings this node runs, its
+		// repositories through the code half above, as the caller.
+		halves.Atlas = engine.AtlasToolDeps(e)
+		// AND ITS WRITES, through the router, decided on that read.
+		halves.AtlasWrite = engine.AtlasWriteToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {
 			halves.Company = c.Config.Name
 		}

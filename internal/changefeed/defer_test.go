@@ -14,10 +14,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -553,7 +553,7 @@ func TestEveryFeedKeepsItsDeadLettersOnASubjectOfItsOwn(t *testing.T) {
 	seen := map[string]string{}
 	for _, src := range []changefeed.Source{
 		worklet.NewTranslator().Source(), doclet.NewTranslator(nil).Source(),
-		chatlet.NewTranslator(nil).Source(), code.NewTranslator().Source(),
+		chatlet.NewTranslator(nil).Source(), gitlet.NewTranslator().Source(),
 	} {
 		subject := changefeed.DeadLetterSubject(src)
 		if !strings.HasPrefix(subject, topics.DeadLetterPrefix+"changefeed."+src.Name+".") {

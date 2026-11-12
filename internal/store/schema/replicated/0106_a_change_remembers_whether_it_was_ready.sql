@@ -1,7 +1,7 @@
 -- A change remembers whether it was ready.
 --
 -- Whether a live change may merge is a judgment of the rows one snapshot holds
--- and the chart one epoch holds (code.ReadinessOf): its draft flag, its head
+-- and the chart one epoch holds (gitlet.ReadinessOf): its draft flag, its head
 -- revision's facts, a counted approval, its standing blockers and its head's
 -- mergeability. Every read of a change judges it again from its own snapshot,
 -- so no read ever trusts a stored answer. But two things read the answer
@@ -26,7 +26,7 @@
 --     answer was judged at. A change whose row or conversation has moved past
 --     them is DUE A REFRESH: its home records a `mergeability` record that
 --     merges nothing, judging the readiness again over the merge the row
---     holds (code.ReadChangesDue's third term), so the stored answer follows
+--     holds (gitlet.ReadChangesDue's third term), so the stored answer follows
 --     a review a minute later at the most, the home's backstop.
 --
 -- code_conversations gains readiness_version: a count of the records on a
@@ -44,7 +44,7 @@
 -- change_version and readiness_version of every live change on every home
 -- pass, would read each row's whole overflow chain to reach them. No release
 -- carries 0105: the code domain is on no build of main and in no image or tag
--- (the domain's stated condition, code.RecordVersion), so no store anywhere
+-- (the domain's stated condition, gitlet.RecordVersion), so no store anywhere
 -- holds a row of it outside a development branch, and a change whose row is
 -- gone is due its merge again at its home's next pass — a function of two
 -- commits, recorded again. 0105 IS NOT EDITED: `schema_migrations` keys on the

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/caveat"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -24,24 +24,24 @@ import (
 // source_refused from mergeRefusalWords, and this fails.
 func TestTheMergeRefusalsThePageLeavesToTheEngineAreWordedForAPerson(t *testing.T) {
 	t.Parallel()
-	unmet := []code.Precondition{
-		{Kind: code.PreconditionApproval, State: code.PreconditionUnmet, Detail: "needs one more approval",
-			WaitsOn: []code.Party{{Handle: "cto", Kind: code.PartyPerson}}},
-		{Kind: code.PreconditionCheck, State: code.PreconditionUnmet, Detail: "ci failed on the head",
-			WaitsOn: []code.Party{{Handle: "backend-engineer", Kind: code.PartyAgent},
-				{Handle: "cto", Kind: code.PartyPerson}}},
+	unmet := []gitlet.Precondition{
+		{Kind: gitlet.PreconditionApproval, State: gitlet.PreconditionUnmet, Detail: "needs one more approval",
+			WaitsOn: []gitlet.Party{{Handle: "cto", Kind: gitlet.PartyPerson}}},
+		{Kind: gitlet.PreconditionCheck, State: gitlet.PreconditionUnmet, Detail: "ci failed on the head",
+			WaitsOn: []gitlet.Party{{Handle: "backend-engineer", Kind: gitlet.PartyAgent},
+				{Handle: "cto", Kind: gitlet.PartyPerson}}},
 	}
 	for _, tc := range []struct {
 		tool    string
-		refusal code.MergeRefusal
+		refusal gitlet.MergeRefusal
 		says    []string
 	}{
-		{CodeMergeChangeTool, code.MergeRefusalGateUnmet, []string{"an approval of its latest revision",
+		{CodeMergeChangeTool, gitlet.MergeRefusalGateUnmet, []string{"an approval of its latest revision",
 			"its required checks to pass", "@cto and @backend-engineer can move it forward"}},
-		{CodeMergeChangeTool, code.MergeRefusalSourceRefused, []string{"Merge it keeping its branch."}},
-		{CodeMergeChangeTool, code.MergeRefusalRepoSize, []string{"past the most a repository may hold"}},
-		{CodeMergeChangeTool, code.MergeRefusalNotPermitted, []string{"asked for somebody who may not make it"}},
-		{CodeDequeueChangeTool, code.MergeRefusalNotPermitted, []string{"may take it off the queue"}},
+		{CodeMergeChangeTool, gitlet.MergeRefusalSourceRefused, []string{"Merge it keeping its branch."}},
+		{CodeMergeChangeTool, gitlet.MergeRefusalRepoSize, []string{"past the most a repository may hold"}},
+		{CodeMergeChangeTool, gitlet.MergeRefusalNotPermitted, []string{"asked for somebody who may not make it"}},
+		{CodeDequeueChangeTool, gitlet.MergeRefusalNotPermitted, []string{"may take it off the queue"}},
 	} {
 		res := mergeRefused(tc.tool, "web!42", "main", tc.refusal, "the host's sentence", unmet)
 		said := res.PersonRefusal.Person()
@@ -82,8 +82,8 @@ func TestEveryGateConditionHasAPersonsWords(t *testing.T) {
 		return caveat.MergeGateUnmet([]caveat.GateCondition{{Kind: kind}}).Person()
 	}
 	unknown := said("a kind no build judges")
-	seen := map[string]code.PreconditionKind{}
-	for _, kind := range code.PreconditionKinds() {
+	seen := map[string]gitlet.PreconditionKind{}
+	for _, kind := range gitlet.PreconditionKinds() {
 		words := said(string(kind))
 		if words == unknown {
 			t.Errorf("%s is said as a condition the catalog does not know: %q", kind, words)
@@ -106,8 +106,8 @@ func TestEveryGateConditionHasAPersonsWords(t *testing.T) {
 // fails.
 func TestAMergeRefusalCarriesTheHostsOwnWord(t *testing.T) {
 	t.Parallel()
-	for _, refusal := range []code.MergeRefusal{code.MergeRefusalHeadMoved, code.MergeRefusalTargetMoving,
-		code.MergeRefusalGateUnmet} {
+	for _, refusal := range []gitlet.MergeRefusal{gitlet.MergeRefusalHeadMoved, gitlet.MergeRefusalTargetMoving,
+		gitlet.MergeRefusalGateUnmet} {
 		res := mergeRefused(CodeMergeChangeTool, "web!42", "main", refusal, "the host's sentence", nil)
 		var host *HostRefusal
 		if !errors.As(res.Cause, &host) {
@@ -128,7 +128,7 @@ func TestAMergeRefusalCarriesTheHostsOwnWord(t *testing.T) {
 // committer busy or a compaction behind unavailable, as a push's are, since a
 // wait clears them and nobody the sentence could name changes anything; an
 // entry no queue holds, which never becomes live again by itself, not_found.
-// The table names EVERY value of code.MergeRefusals(), so a refusal the
+// The table names EVERY value of gitlet.MergeRefusals(), so a refusal the
 // domain adds fails here until somebody decides its class, rather than
 // falling into one unexamined; and each is answered in that class.
 //
@@ -136,48 +136,48 @@ func TestAMergeRefusalCarriesTheHostsOwnWord(t *testing.T) {
 // conflict again → red.
 func TestEveryMergeRefusalIsClassedByWhatClearsIt(t *testing.T) {
 	t.Parallel()
-	want := map[code.MergeRefusal]tools.Refusal{
-		code.MergeRefusalGateUnmet: tools.RefusalNotReady,
+	want := map[gitlet.MergeRefusal]tools.Refusal{
+		gitlet.MergeRefusalGateUnmet: tools.RefusalNotReady,
 
-		code.MergeRefusalStale:       tools.RefusalStaleVersion,
-		code.MergeRefusalHeadMoved:   tools.RefusalStaleVersion,
-		code.MergeRefusalTargetMoved: tools.RefusalStaleVersion,
+		gitlet.MergeRefusalStale:       tools.RefusalStaleVersion,
+		gitlet.MergeRefusalHeadMoved:   tools.RefusalStaleVersion,
+		gitlet.MergeRefusalTargetMoved: tools.RefusalStaleVersion,
 
-		code.MergeRefusalChangeNotOpen: tools.RefusalConflict,
-		code.MergeRefusalChangeDraft:   tools.RefusalConflict,
-		code.MergeRefusalRepoArchived:  tools.RefusalConflict,
-		code.MergeRefusalRepoMirrored:  tools.RefusalConflict,
-		code.MergeRefusalTargetMoving:  tools.RefusalConflict,
-		code.MergeRefusalQueueFull:     tools.RefusalConflict,
+		gitlet.MergeRefusalChangeNotOpen: tools.RefusalConflict,
+		gitlet.MergeRefusalChangeDraft:   tools.RefusalConflict,
+		gitlet.MergeRefusalRepoArchived:  tools.RefusalConflict,
+		gitlet.MergeRefusalRepoMirrored:  tools.RefusalConflict,
+		gitlet.MergeRefusalTargetMoving:  tools.RefusalConflict,
+		gitlet.MergeRefusalQueueFull:     tools.RefusalConflict,
 
-		code.MergeRefusalRepoSize: tools.RefusalQuotaExceeded,
+		gitlet.MergeRefusalRepoSize: tools.RefusalQuotaExceeded,
 
-		code.MergeRefusalBusy:             tools.RefusalUnavailable,
-		code.MergeRefusalCompactionBehind: tools.RefusalUnavailable,
-		code.MergeRefusalRepoImporting:    tools.RefusalUnavailable,
-		code.MergeRefusalExpunging:        tools.RefusalUnavailable,
-		code.MergeRefusalUploadExpired:    tools.RefusalUnavailable,
-		code.MergeRefusalUnavailable:      tools.RefusalUnavailable,
-		code.MergeRefusalNotApplied:       tools.RefusalUnavailable,
+		gitlet.MergeRefusalBusy:             tools.RefusalUnavailable,
+		gitlet.MergeRefusalCompactionBehind: tools.RefusalUnavailable,
+		gitlet.MergeRefusalRepoImporting:    tools.RefusalUnavailable,
+		gitlet.MergeRefusalExpunging:        tools.RefusalUnavailable,
+		gitlet.MergeRefusalUploadExpired:    tools.RefusalUnavailable,
+		gitlet.MergeRefusalUnavailable:      tools.RefusalUnavailable,
+		gitlet.MergeRefusalNotApplied:       tools.RefusalUnavailable,
 
-		code.MergeRefusalNotPerson:    tools.RefusalForbidden,
-		code.MergeRefusalNotPermitted: tools.RefusalForbidden,
+		gitlet.MergeRefusalNotPerson:    tools.RefusalForbidden,
+		gitlet.MergeRefusalNotPermitted: tools.RefusalForbidden,
 
-		code.MergeRefusalRepoDeleted:    tools.RefusalNotFound,
-		code.MergeRefusalChangeNotFound: tools.RefusalNotFound,
-		code.MergeRefusalNotQueued:      tools.RefusalNotFound,
+		gitlet.MergeRefusalRepoDeleted:    tools.RefusalNotFound,
+		gitlet.MergeRefusalChangeNotFound: tools.RefusalNotFound,
+		gitlet.MergeRefusalNotQueued:      tools.RefusalNotFound,
 
-		code.MergeRefusalAlreadyQueued: tools.RefusalExists,
+		gitlet.MergeRefusalAlreadyQueued: tools.RefusalExists,
 
-		code.MergeRefusalQueueTarget:   tools.RefusalInvalid,
-		code.MergeRefusalNoQueue:       tools.RefusalInvalid,
-		code.MergeRefusalSourceRefused: tools.RefusalInvalid,
-		code.MergeRefusalNotGreen:      tools.RefusalInvalid,
-		code.MergeRefusalNotRed:        tools.RefusalInvalid,
-		code.MergeRefusalNoLanding:     tools.RefusalInvalid,
-		code.MergeRefusalRecordFull:    tools.RefusalInvalid,
+		gitlet.MergeRefusalQueueTarget:   tools.RefusalInvalid,
+		gitlet.MergeRefusalNoQueue:       tools.RefusalInvalid,
+		gitlet.MergeRefusalSourceRefused: tools.RefusalInvalid,
+		gitlet.MergeRefusalNotGreen:      tools.RefusalInvalid,
+		gitlet.MergeRefusalNotRed:        tools.RefusalInvalid,
+		gitlet.MergeRefusalNoLanding:     tools.RefusalInvalid,
+		gitlet.MergeRefusalRecordFull:    tools.RefusalInvalid,
 	}
-	all := code.MergeRefusals()
+	all := gitlet.MergeRefusals()
 	if len(want) != len(all) {
 		t.Errorf("the table classes %d refusals and the domain has %d: decide each new one's class here",
 			len(want), len(all))

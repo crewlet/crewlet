@@ -379,22 +379,53 @@ func watchLog(t *testing.T, log *DomainLog) (*DomainWatch, *watchHeard) {
 	return w, heard
 }
 
-// awaitReplaced waits until w serves through a consumer other than lost, with
-// the Gap its loss owed already told.
+// awaitReplaced waits until w has SETTLED after losing its consumer lost, so
+// that what it tells next is what the case appends next:
+//   - it serves through a consumer other than lost, with the Gap its loss owed
+//     already told;
+//   - the broker as it now runs holds that consumer. A replacement made on a
+//     member as the member went down serves the watch only until the watch
+//     learns the restart took it, and a record appended meanwhile lies before
+//     where the next replacement begins, so the watch tells it as a Gap
+//     (#998);
+//   - it has read the queue's connection's reconnect count as it stands, with
+//     no Gap still owed for one. A consumer made across the reconnect leaves
+//     it to the next recheck, whose Gap reaches the log's end when it is read,
+//     past a record appended before it.
 func awaitReplaced(t *testing.T, w *DomainWatch, lost string) string {
 	t.Helper()
 	deadline := time.Now().Add(watchAwait)
 	for {
-		if name, serving := w.consumer(); name != lost && serving {
+		if name, serving := w.consumer(); name != lost && serving && held(t, w, name) && reconnectsRead(w) {
 			return name
 		}
 		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
 			name, serving := w.consumer()
-			t.Fatalf("the watch never replaced its lost consumer %s within %s "+
-				"(now %s, serving %v)", lost, watchAwait, name, serving)
+			t.Fatalf("the watch never settled on a replacement of its lost consumer %s within %s "+
+				"(now %s, serving %v, held by the broker %v, its reconnects read %v)", lost, watchAwait,
+				name, serving, held(t, w, name), reconnectsRead(w))
 		}
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
+}
+
+// held reports whether the broker as it now runs holds the consumer name on
+// w's log. A request it does not answer is not yet, and asked again.
+func held(t *testing.T, w *DomainWatch, name string) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), w.timing.attempt)
+	defer cancel()
+	_, err := w.l.js.Consumer(ctx, w.l.name, name)
+	return err == nil
+}
+
+// reconnectsRead reports whether w has read the queue's connection's
+// reconnect count as it stands, with no Gap still owed for a reconnect.
+func reconnectsRead(w *DomainWatch) bool {
+	now := w.l.js.Conn().Stats().Reconnects
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.reconnects == now && !w.gapUnread
 }
 
 // externalLog provisions the probe domain on a queue dialled to an external
@@ -613,10 +644,11 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 		got := heard.await("heard the record after its replacement",
 			func(heard []heardCall) bool { return len(heard) > 0 && heard[len(heard)-1] == second })
 		// ONE GAP AT LEAST, AND NOTHING ELSE between the two: the restart is
-		// also a reconnect, which may have said so before the loss was known.
-		// Every one of them reaches the end: the replacement began after it,
-		// a reconnect's reads it, and nothing was appended until the record
-		// after.
+		// also a reconnect, which may have said so before the loss was known,
+		// and a replacement made as the member went down is lost again. Every
+		// one of them reaches the end: each replacement began after it, a
+		// reconnect's reads it, and nothing was appended until the watch
+		// settled on a consumer the restarted member holds (awaitReplaced).
 		if len(got) < 3 || got[0] != first {
 			t.Fatalf("the watch told its handler %v, want %s, then a Gap through %d, "+
 				"then %s", got, first, end, second)

@@ -103,10 +103,16 @@ type CarryCheck struct {
 // and the record refuses it again as it is published ([collectedRecord]),
 // whatever runner, or host of another build, read the box.
 func ValidSessionID(id string) bool {
-	return id != "" && len(id) <= executorkeep.SessionIDMaxBytes &&
-		!strings.ContainsFunc(id, func(r rune) bool {
-			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
-		})
+	return id != "" && len(id) <= executorkeep.SessionIDMaxBytes && !strings.ContainsFunc(id, outsideIDCharset)
+}
+
+// outsideIDCharset reports whether r is outside the characters an id a box
+// hands the engine is held to — letters, digits, `-` and `_` — which a
+// session's id ([ValidSessionID]) and a call's ([ValidCallID]) are each held
+// to, at bounds of their own: each is the box's word, and each written as
+// itself by the store's encoder, so neither costs more than its length.
+func outsideIDCharset(r rune) bool {
+	return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 }
 
 // ValidRelease reports whether release has the shape of a harness's release as

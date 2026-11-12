@@ -31,7 +31,10 @@ import (
 // The record's shape, and the conditions every change to it is taken on: a
 // note filed while the run's ending is undecided, taken only by the job the
 // taker names and only while the run is in a status the taker names, every read
-// recorded by the write that hands the note over. What a note SAYS it never
+// recorded by the write that hands the note over — and a take whose answer was
+// lost settled by its identity, its reads answered to a reader that can still
+// hand them over or marked unanswered where its reader never had them
+// ([PendingStore.SettleTake]). What a note SAYS it never
 // reads: a note is sealed by the engine under the fleet keyring before it is
 // filed ([RunNote.Sealed]), and opened by the engine before anything of it
 // reaches a model (internal/engine, runsteer.go, and ADR-0067). The store keeps
@@ -115,6 +118,30 @@ type RunNote struct {
 	// left waiting, nor recorded read and never handed over.
 	Read *NoteRead `json:"read,omitempty"`
 
+	// Served is the job the run's bridge served the note to while it waited
+	// ([PendingStore.ServeNotes]): a harness that polls for its notes —
+	// OpenCode's plugin — is answered one only once this records it, and
+	// the note is recorded read only once the harness confirms delivering it.
+	// So a note served and not read may have been delivered all the same — its
+	// confirmation lost, or its harness cut off before it landed — and a
+	// launch that continues a session tells it as a note the session may
+	// already show (internal/agent/runner). Kept once the note is read; the
+	// latest job served it, where more than one was.
+	Served string `json:"served,omitempty"`
+
+	// LostTake is TRANSIENT, and set on a note a launch's brief carries
+	// ([PendingRun.BriefNotes]) alone: the take that recorded the note read
+	// and whose answer never reached its reader, whose settle handed the note
+	// to the brief instead ([PendingStore.SettleTake]). The record holds the
+	// note read by that take, yet the brief is the first to tell it, so the
+	// launch's write records it read by the job it opens, in the take's place
+	// and at the take's own place among the reads ([openNotes]): it is that
+	// job's as every note its brief carries is — the job's ending reports it
+	// where the job never started, and the job's execute record lists it where
+	// it did — and it stays where the record first numbered its read, ahead of
+	// every read a later take made. Never persisted.
+	LostTake string `json:"-"`
+
 	// Extra is every key of the note this build does not know — see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
@@ -123,12 +150,55 @@ type RunNote struct {
 // Waiting reports whether nothing has read the note yet.
 func (n RunNote) Waiting() bool { return n.Read == nil }
 
-// UnreadNotes is every note on the run's record that no job ran with: the ones
-// still WAITING, and the ones the BRIEF OF THE RECORD'S CURRENT JOB recorded
-// read where that job never started — the job's record never took its command
-// ([LaunchRecord.Started]), because the launch failed, or was ended, between
-// the write that opened the job and the job's start. What the run's ending
-// reports expired ([CoordinatorOptions.SteersExpired]).
+// EndedNote is a note on a run's record whose end the run's ending reports
+// ([PendingRun.EndedNotes]), what it reports it as, and where.
+type EndedNote struct {
+	Note RunNote
+
+	// Outcome is what the record knows became of the note: delivered, for a
+	// note a launch's brief told again ([NoteRead.Retold]); unconfirmed;
+	// missed; or expired.
+	Outcome types.SteerOutcome
+
+	// Read is the read the outcome is at: for a note delivered, the brief
+	// that told it again; for one missed, the take's whose answer was lost —
+	// the note's own read, or, where a brief told the note again and its job
+	// never started, the take's read that brief kept ([NoteRead.Retold]). Nil
+	// for a note unconfirmed, which is at the job it was served to
+	// ([RunNote.Served]), and for one expired, at no step.
+	Read *NoteRead
+}
+
+// EndedNotes is every note on the run's record that no step reported reading,
+// each as what the record knows became of it: what the run's ending reports
+// ([CoordinatorOptions.SteersEnded]), decided in this order of precedence.
+//
+//   - DELIVERED: read by a launch's brief that told it again ([NoteRead.Retold])
+//     after a take that recorded it read was marked unanswered, where that
+//     job started. Its harness was handed the note in its brief; the step that
+//     took it first never handed it over, and nothing reported the telling.
+//   - UNCONFIRMED: SERVED to a job's harness ([RunNote.Served]) and read by no
+//     step that handed it over: still waiting, or read only by a take marked
+//     unanswered or by the brief of a job that never started. The session it
+//     was handed into may hold it, and nothing says it does; a note that may
+//     have reached the run is never said to have reached nothing.
+//   - MISSED: read by a take marked UNANSWERED ([NoteRead.Unanswered]), and
+//     told again by no launch whose job started: the take's write landed, its
+//     answer never reached its reader, and no later write records the note
+//     handed to a harness. A launch that tells it again records the telling
+//     and clears the mark ([PendingRun.RetoldNotes]), keeping the marked
+//     take's read beside it ([NoteRead.Retold]): so a note still marked is one
+//     no launch recorded telling again, and one whose telling's job never
+//     started is missed all the same, at that take, since the brief handed
+//     nothing over.
+//   - EXPIRED: still WAITING, or read by the BRIEF OF THE RECORD'S CURRENT JOB
+//     where that job never started and that brief was the first to tell it:
+//     the job's record never took its command ([LaunchRecord.Started]),
+//     because the launch failed, or was ended, between the write that opened
+//     the job and the job's start.
+//
+// A note any other step read is none of them: that step published it delivered
+// as it read it, and the ending reports nothing of it.
 //
 // NEVER THE ROW'S COMMAND ([PendingRun.CommandID]): that is the box's, and goes
 // with the box — a park's teardown and an expired pause clear it from a job
@@ -143,15 +213,48 @@ func (n RunNote) Waiting() bool { return n.Read == nil }
 // brief took and that no job ran with it, and it reports those notes under the
 // same ids as the waiting ones: a launch that reported them itself could not
 // tell a note its own brief took from one another node's ending had already
-// reported, and published one twice.
-func (r PendingRun) UnreadNotes() []RunNote {
-	var out []RunNote
+// reported, and published one twice. And the same holds of a take whose
+// answer was lost, which reports nothing as it is lost; of a note a brief told
+// again, whose job is known to have started only once the launch has returned;
+// and of a note a harness was handed and never confirmed, which nothing else
+// sees unconfirmed.
+func (r PendingRun) EndedNotes() []EndedNote {
+	var out []EndedNote
 	for _, n := range r.Steer.Notes {
-		if n.Waiting() || r.briefNeverRan(n) {
-			out = append(out, n)
+		if end, ended := r.endOf(n); ended {
+			out = append(out, end)
 		}
 	}
 	return out
+}
+
+// endOf is what the run's ending reports n as, and where, and false for a note
+// a step reported reading: see [PendingRun.EndedNotes].
+//
+// A BRIEF WHOSE JOB NEVER STARTED HANDED NOTHING OVER, so what the record knows
+// of a note that brief read is what it knew before the brief: that nothing
+// read it, where the brief was the first to tell it, and that a take whose
+// answer was lost read it, where the brief told it again — the take's read
+// the brief kept ([NoteRead.Retold]).
+func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
+	read := n.Read
+	if r.briefNeverRan(n) {
+		read = read.Retold
+	}
+	end := EndedNote{Note: n}
+	switch {
+	case read != nil && read.Retold != nil:
+		end.Outcome, end.Read = types.SteerDelivered, read
+	case read != nil && !read.Unanswered:
+		return EndedNote{}, false
+	case n.Served != "":
+		end.Outcome = types.SteerUnconfirmed
+	case read != nil:
+		end.Outcome, end.Read = types.SteerMissed, read
+	default:
+		end.Outcome = types.SteerExpired
+	}
+	return end, true
 }
 
 // briefNeverRan reports whether n was read by the brief of the record's job
@@ -161,8 +264,8 @@ func (r PendingRun) briefNeverRan(n RunNote) bool {
 		n.Read.Launch == r.LaunchID && n.Read.Boundary == string(types.SteerBoundaryBrief)
 }
 
-// unreadNotes reports whether the run's record holds a note no job ran with.
-func (r PendingRun) unreadNotes() bool { return len(r.UnreadNotes()) > 0 }
+// endsNotes reports whether the run's record holds a note its ending reports.
+func (r PendingRun) endsNotes() bool { return len(r.EndedNotes()) > 0 }
 
 // NoteRead is where a note was read: the phase, iteration and round on the
 // phase's own scale, the kind of step (the agent layer's vocabulary, carried as
@@ -180,6 +283,39 @@ type NoteRead struct {
 	Round     int       `json:"round,omitempty"`
 	Boundary  string    `json:"boundary"`
 	Launch    string    `json:"launch,omitempty"`
+
+	// Take is the identity of the take whose write recorded the read, as its
+	// taker named it ([NoteTake]'s Read): what [PendingStore.SettleTake] finds
+	// the take's reads by once its answer was lost. Empty for a read no take
+	// recorded — a launch's brief — and for one a take that named none recorded,
+	// an older build's among them.
+	Take string `json:"take,omitempty"`
+
+	// Unanswered says the take that recorded the read never answered its
+	// reader: its write landed, and its answer did not reach the harness that
+	// asked ([PendingStore.SettleTake]). The note is still read by the record's
+	// word — no later take hands it over again, and every reader that carries
+	// the turn's read notes carries it, the review that judges the work among
+	// them — but the session of the job named does not hold it from this read,
+	// so no capture of that session counts it held (notesHeld), and every
+	// later launch tells it again, whose write then records it read by that
+	// launch's job ([NoteRead.Retold]). Marked still when the turn ends, it is
+	// reported missed ([PendingRun.EndedNotes]).
+	Unanswered bool `json:"unanswered,omitempty"`
+
+	// Retold is the read a launch's brief told the note again in place of,
+	// where this read is that brief's ([PendingRun.RetoldNotes]): a take's,
+	// marked unanswered, as the take's settle left it — its job, its step and
+	// its own place among the reads. Nil on every other read. The launch's
+	// write recorded this read in that take's place and at that place among
+	// the reads. Its job's harness was handed the note in its brief, where the
+	// job started, so the session of that job holds it from here; but no step
+	// published it delivered, as the step that reads a note does, so the
+	// run's ending reports it ([PendingRun.EndedNotes]): delivered at this
+	// brief where its job started, and missed at the take's read kept here
+	// where it never did — the brief handed nothing over, and the take's
+	// reader never had the note.
+	Retold *NoteRead `json:"retold,omitempty"`
 
 	// Extra is every key of the read this build does not know — see
 	// [RunSteer.Extra].
@@ -235,8 +371,36 @@ type NoteTake struct {
 	Statuses []string
 	Fence    Fence
 
-	// Read is where the notes are read; the store stamps its At.
+	// Read is where the notes are read; the store stamps its At and Order.
+	// Its Take names this take, fresh for every call, so a taker whose call
+	// answered an error can find what the call recorded
+	// ([PendingStore.SettleTake]).
 	Read NoteRead
+}
+
+// NoteServe is a poll of a run's notes serving them to the run's harness
+// ([PendingStore.ServeNotes]), PINNED as a take is ([NoteTake]): to the job the
+// poll serves, to the statuses it may serve in, and to an undecided ending.
+// Unlike a take it holds no lease: a poll is the bridge's, as its takes are.
+type NoteServe struct {
+	// IDs are the notes to serve, by id; one no longer waiting is skipped.
+	IDs []string
+
+	Launch   string
+	Statuses []string
+}
+
+// NoteSettle is a take settled once its answer was lost
+// ([PendingStore.SettleTake]).
+type NoteSettle struct {
+	// Take is the take's identity, as its read named it ([NoteRead.Take]).
+	Take string
+
+	// Unanswered says the take's reader never had its notes — a harness's
+	// hook answered nothing — so every read it recorded is marked so
+	// ([NoteRead.Unanswered]). Unset, they are answered as they stand, to a
+	// reader that hands them over itself.
+	Unanswered bool
 }
 
 // NotesView is what a reader following a run's notes needs of its record, and
@@ -402,6 +566,110 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 	return taken, nil
 }
 
+// ServeNotes records notes served to a job's harness, and answers every one
+// named that waits served to it. See the contract on [PendingStore].
+//
+// THROUGH THE WRITE A LIVE RUN TAKES, as a filing is ([CoordStore.FileNote]): a
+// run whose ending is decided serves nothing more, and the refusal is an answer,
+// never an error.
+func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error) {
+	if len(serve.IDs) == 0 {
+		return nil, nil
+	}
+	if serve.Launch == "" || len(serve.Statuses) == 0 {
+		return nil, fmt.Errorf("sandbox: a serve of run %s's notes names no job or no status it "+
+			"may serve in", turnID)
+	}
+	var served []RunNote
+	_, _, found, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
+		served = nil
+		if run.LaunchID != serve.Launch || !slices.Contains(serve.Statuses, run.Status) {
+			return false
+		}
+		notes := slices.Clone(run.Steer.Notes)
+		marked := false
+		for i, held := range notes {
+			if !held.Waiting() || !slices.Contains(serve.IDs, held.ID) {
+				continue
+			}
+			if held.Served != serve.Launch {
+				held.Served = serve.Launch
+				notes[i] = held
+				marked = true
+			}
+			served = append(served, held)
+		}
+		run.Steer.Notes = notes
+		// WRITTEN ONLY FOR A MARK NOT MADE YET: a poll answered again from the
+		// same view serves what an earlier one already recorded.
+		return marked
+	})
+	switch {
+	case errors.Is(err, ErrRunEnding):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case !found:
+		// NOTHING WAS DECIDED ON: the record is gone, whatever an earlier
+		// attempt decided before it lost.
+		return nil, nil
+	}
+	return served, nil
+}
+
+// errSettleUnnamed is a settle that names no take.
+var errSettleUnnamed = errors.New("sandbox: a take of a run's notes is settled by its identity, and none was given")
+
+// SettleTake settles a take whose [CoordStore.TakeNotes] answered an error. See
+// the contract on [PendingStore].
+//
+// THROUGH THE WRITE EVERY RUN TAKES, its ending decided or not: what the take
+// recorded is a fact about the take, true whoever holds the record, and the
+// take's own write is in flight whatever the run's state. And ANSWERING NOTHING
+// WHERE THE LAST ATTEMPT FOUND NO RECORD, as a filing does
+// ([CoordStore.FileNote]): an attempt that decided and then lost its race to
+// the record's removal recorded nothing, and what it decided is no answer.
+func (s *CoordStore) SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error) {
+	if settle.Take == "" {
+		return nil, errSettleUnnamed
+	}
+	var recorded []RunNote
+	_, _, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		recorded = nil
+		notes := slices.Clone(run.Steer.Notes)
+		marked := false
+		for i, held := range notes {
+			if held.Read == nil || held.Read.Take != settle.Take {
+				continue
+			}
+			if settle.Unanswered && !held.Read.Unanswered {
+				read := *held.Read
+				read.Unanswered = true
+				held.Read = &read
+				notes[i] = held
+				marked = true
+			}
+			recorded = append(recorded, held)
+		}
+		run.Steer.Notes = notes
+		// WRITTEN WHERE THE TAKE RECORDED NOTHING, its record unchanged but
+		// for the write itself: the take's own write may still be in flight —
+		// sent before its caller gave up on the answer, and taken by the store
+		// after this read — and it was conditioned on a version this write
+		// moves past, so once this lands it never can. Where the take's reads
+		// are on the record, its write landed and nothing of it is left in
+		// flight: only a mark asked for and not yet made is written.
+		return marked || len(recorded) == 0
+	})
+	switch {
+	case err != nil:
+		return nil, err
+	case !found:
+		return nil, nil
+	}
+	return recorded, nil
+}
+
 // MarkPulled records that a job's harness has asked for notes. See the
 // contract on [PendingStore].
 func (s *CoordStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
@@ -459,10 +727,21 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 //
 //   - the brief's notes ([PendingRun.BriefNotes]) are recorded READ by the job:
 //     a note the record already holds, still waiting, is recorded read; one it
-//     holds already read is left as it was read; and any other — a turn's first
-//     segment's own, which the record has never held — is added already read,
-//     numbered as if filed now. Every read this write records takes its place
-//     among the record's reads ([RunSteer.Reads]);
+//     holds read by the take the brief names as lost ([RunNote.LostTake]) is
+//     recorded read by the job in that take's place, the brief being the first
+//     to tell it, and at that take's own place among the reads, which this
+//     write leaves as it was; one it holds read otherwise is left as it was
+//     read; and any other — a turn's first segment's own, which the record has
+//     never held — is added already read, numbered as if filed now. Every
+//     other read this write records takes its place among the record's reads
+//     ([RunSteer.Reads]);
+//   - the notes the brief tells again ([PendingRun.RetoldNotes]) are recorded
+//     read by the job, told again: each one the record holds read by a take
+//     marked unanswered, in that take's place and at that take's own place
+//     among the reads, which this write leaves as it was, the take's read kept
+//     beside the telling ([NoteRead.Retold]). A note the record holds
+//     otherwise is left as it is, and one it does not hold is never added:
+//     there is nothing to tell again;
 //   - then the notes the first segment's box still held ([PendingRun.HandedNotes])
 //     are filed WAITING, numbered after them — so they are on the record from
 //     the write that creates it, ahead of every note a person files there once
@@ -486,9 +765,21 @@ func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 		}
 		read.Order = order
 		if i := slices.IndexFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID }); i >= 0 {
-			if steer.Notes[i].Waiting() {
+			switch held := steer.Notes[i]; {
+			case held.Waiting():
 				steer.Notes[i].Read = &read
 				steer.Reads = order
+			case note.LostTake != "" && held.Read.Take == note.LostTake:
+				// THE JOB IN THE LOST TAKE'S PLACE, AT THAT TAKE'S OWN PLACE
+				// AMONG THE READS: the record numbered the note's read there,
+				// before every read a later take made — a note a person sent
+				// after it, correcting it, among them — and every reader
+				// orders the turn's notes by that number. Read at this
+				// write's place, it came after them, and every later brief
+				// told the correction ahead of the note it corrects.
+				took := read
+				took.Order = held.Read.Order
+				steer.Notes[i].Read = &took
 			}
 			continue
 		}
@@ -497,6 +788,29 @@ func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 			ID: note.ID, Seq: steer.Seq, Sealed: bytes.Clone(note.Sealed), At: note.At, Read: &read,
 		})
 		steer.Reads = order
+	}
+	for _, note := range run.RetoldNotes {
+		i := slices.IndexFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID })
+		if note.ID == "" || i < 0 || steer.Notes[i].Read == nil || !steer.Notes[i].Read.Unanswered {
+			continue
+		}
+		// TOLD AGAIN BY THIS JOB'S BRIEF, AT THE MARKED TAKE'S OWN PLACE: who
+		// read the note changes, and never where it sits among the reads, as
+		// for a lost take's note above. The take's reader never had it, and
+		// this brief hands it to the job's harness where the job starts — so
+		// THE TAKE'S READ IS KEPT beside the telling: where the job never
+		// starts, the brief handed nothing over, and the ending reports the
+		// note missed at that take, where the record knew it was missed before
+		// this write.
+		marked := *steer.Notes[i].Read
+		told := NoteRead{Phase: string(types.PhaseExecute), Round: 1,
+			Boundary: string(types.SteerBoundaryBrief)}
+		if note.Read != nil {
+			told = *note.Read
+		}
+		told.At, told.Launch, told.Order = at, launch, marked.Order
+		told.Take, told.Unanswered, told.Retold = "", false, &marked
+		steer.Notes[i].Read = &told
 	}
 	for _, note := range run.HandedNotes {
 		if note.ID == "" || slices.ContainsFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID }) {

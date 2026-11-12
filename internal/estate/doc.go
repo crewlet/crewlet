@@ -336,7 +336,7 @@
 // ([reply.Unready]), and is not demoted, so its askers come back once it is
 // warm; and ONE node a walk FILLS
 // a copy at a time: the walk stamps its effective home's attempt
-// (code.GitQuery.Home, code.EngineWrite.Home), and every other Gitlet node holding
+// (gitlet.GitQuery.Home, gitlet.EngineWrite.Home), and every other Gitlet node holding
 // no copy answers at once that it holds none, so a repository nobody holds
 // costs the fleet one download rather than one a Gitlet node. The fill moves to
 // the next node of the walk only past one bringing no copy up for the
@@ -347,12 +347,12 @@
 // request is a signed estate request like any other, and every attempt — a
 // peer's, or this node's own git half in process — is held to its git attempt
 // and SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the attempt ends
-// (code.AnswerBy), so a busy Gitlet node is heard saying so rather than taken for
+// (gitlet.AnswerBy), so a busy Gitlet node is heard saying so rather than taken for
 // a gone one, and an operation is answered alike whichever node asked it
 // ([GitReadAttempt], [GitWriteAttempt]).
 //
 // AN ENGINE WRITE IS ONE PUSH WHICHEVER GITLET NODE BUILDS IT ([opCodeGitWrite]):
-// its push id is derived from its caller's operation (code.WritePushID), and
+// its push id is derived from its caller's operation (gitlet.WritePushID), and
 // its commit is a pure function of that operation and its parent, so the walk
 // asks it again of the next Gitlet node after one that ran nothing or went
 // silent, as an idempotent write — the next node builds the same push, and is
@@ -374,7 +374,7 @@
 // which of many repositories this node is the home of off ONE reading of who
 // serves git, three-valued as Home is — the set, or unknown for every one —
 // for a caller that judges many at once: the backstop pass of the home's
-// change work (internal/code/home), over every repository its workers list,
+// change work (internal/gitlet/home), over every repository its workers list,
 // which asked a repository at a time would read the presence view again for
 // each. A home that went quiet is still the home; work two nodes of a split
 // presence view both do is work its repository's writers take once.
@@ -402,7 +402,7 @@
 // answers which of many repositories, each by its own charge, this node
 // maintains, off ONE listing for them all — three-valued: the set, or the
 // listing's error for every one, on which a node does none of a maintainer's
-// work — for a caller that judges many at once: internal/code/compact's two
+// work — for a caller that judges many at once: internal/gitlet/compact's two
 // loops, the compaction of a repository's packs and the publication of its
 // layers, whose passes over their listings read the presence view again for
 // every repository they asked about one at a time. Both ask by one charge,
@@ -439,7 +439,7 @@
 // than answer from before a write this node has already been told landed. A
 // node answering ANOTHER node says so while that node is still listening:
 // every wait it makes before it answers — this one, a read's barrier and the
-// position it established, a write's own record — ends code.ReplyMargin short
+// position it established, a write's own record — ends gitlet.ReplyMargin short
 // of the asker's deadline ([statelog.WithReplyMargin]), because a `behind`
 // sent after the asker stopped waiting is heard as a node that is gone. A
 // data node's own copy is held to its floors like any other because its seats
@@ -556,7 +556,7 @@
 // request ([op.answeredWhole]) crosses under the same rule the other way, on a
 // read of its own wherever the same answer is also only shown
 // ([opArtifactVersionCarried]). A value a caller hands back as it took it
-// stays outside the rule: a [code.CheckKey] a check runner reports under, a
+// stays outside the rule: a [gitlet.CheckKey] a check runner reports under, a
 // [statelog.Position] a later read floors at, a credential's actor. A write's
 // answer, which carries a position, is never refused once the write has run,
 // and a member a later build adds to one of these changes what it names, which

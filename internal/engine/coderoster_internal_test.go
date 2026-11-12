@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -108,7 +108,7 @@ func TestTheCodeRosterIsTheChart(t *testing.T) {
 	roster, o := rosterOfChart(t, rosterChart(""))
 
 	for r := range o.AllRoles() {
-		want := code.RosterSeat{Handle: r.Handle(), Human: r.IsHuman(), Tier: code.Tier(r.CodeAccess),
+		want := gitlet.RosterSeat{Handle: r.Handle(), Human: r.IsHuman(), Tier: gitlet.Tier(r.CodeAccess),
 			Unit: o.UnitFor(r).Key()}
 		if got, ok := roster.Seat(r.Handle()); !ok || got != want {
 			t.Errorf("Seat(%q) = %+v, %v; want %+v", r.Handle(), got, ok, want)
@@ -177,24 +177,24 @@ func TestTheCodeRosterIsTheChart(t *testing.T) {
 	if s, _ := renamed.Seat("plat-lead"); s.Unit != "plat" {
 		t.Fatalf("the premise: Platform's key is not its new id: plat-lead's unit is %q", s.Unit)
 	}
-	repo := code.RepoRef{ID: "id-platform", Name: "platform", Visibility: code.VisibilityUnit,
-		Owner: code.Owner{Kind: code.OwnerUnit, Ref: "Platform"}}
+	repo := gitlet.RepoRef{ID: "id-platform", Name: "platform", Visibility: gitlet.VisibilityUnit,
+		Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"}}
 	if got := renamed.Lead("Platform"); got != "plat-lead" {
 		t.Errorf("Lead of the name Platform after it gained an id = %q, want plat-lead", got)
 	}
-	for handle, want := range map[string]code.Access{
-		"plat-lead": code.AccessMaintain, "dev": code.AccessWrite, "cto": code.AccessRead,
-		"toolsmith": code.AccessNone, "rep": code.AccessNone,
+	for handle, want := range map[string]gitlet.Access{
+		"plat-lead": gitlet.AccessMaintain, "dev": gitlet.AccessWrite, "cto": gitlet.AccessRead,
+		"toolsmith": gitlet.AccessNone, "rep": gitlet.AccessNone,
 	} {
-		if got := code.GrantOf(agent(handle), repo, renamed).Relation; got != want {
+		if got := gitlet.GrantOf(agent(handle), repo, renamed).Relation; got != want {
 			t.Errorf("%s's relation to a repository owned by Platform's old spelling = %s, want %s",
 				handle, got, want)
 		}
 	}
 }
 
-func agent(handle string) code.Principal {
-	return code.Principal{Kind: code.PrincipalAgent, Seat: handle}
+func agent(handle string) gitlet.Principal {
+	return gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: handle}
 }
 
 // THE ENGINE'S CODE READER JUDGES A SEAT BY THE CHART THE NODE SERVES NOW: the
@@ -218,17 +218,17 @@ func TestTheEnginesCodeReaderJudgesASeatByTheCurrentChart(t *testing.T) {
 	e := newSandboxNode(t, parseCompany(t, codeReposDoc(web, sales)))
 	servesCodeReads(t, e)
 	reconciled(t, e)
-	read := func(handle string) (*code.RepoDetail, error) {
+	read := func(handle string) (*gitlet.RepoDetail, error) {
 		t.Helper()
-		answer, err := e.router.Code().Read(t.Context(), code.ReadQuery{Asker: agent(handle),
-			Kind: code.ReadRepo, Repo: "web", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+		answer, err := e.router.Code().Read(t.Context(), gitlet.ReadQuery{Asker: agent(handle),
+			Kind: gitlet.ReadRepo, Repo: "web", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
 		return answer.Repo, err
 	}
-	if repo, err := read("swe"); err != nil || repo.Access != code.AccessRead.String() {
+	if repo, err := read("swe"); err != nil || repo.Access != gitlet.AccessRead.String() {
 		t.Fatalf("swe, in the owning unit at the read_only default, reads web as %+v, %v; want read", repo, err)
 	}
 	for _, outside := range []string{"rep", "ceo"} {
-		if _, err := read(outside); !errors.Is(err, code.ErrNotPermitted) {
+		if _, err := read(outside); !errors.Is(err, gitlet.ErrNotPermitted) {
 			t.Errorf("%s, outside Engineering, reads a visibility: unit repository: %v, want ErrNotPermitted",
 				outside, err)
 		}
@@ -243,7 +243,7 @@ func TestTheEnginesCodeReaderJudgesASeatByTheCurrentChart(t *testing.T) {
 		t.Fatal("the premise: the revision does not move rep from Sales into Engineering")
 	}
 	applyReconciled(t, e, moved)
-	if repo, err := read("rep"); err != nil || repo.Access != code.AccessRead.String() {
+	if repo, err := read("rep"); err != nil || repo.Access != gitlet.AccessRead.String() {
 		t.Errorf("rep, moved into Engineering by an activation, reads web as %+v, %v; want read", repo, err)
 	}
 }

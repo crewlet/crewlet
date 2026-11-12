@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/kept"
@@ -47,19 +48,27 @@ import (
 //	                                                      ---------
 //	                                  RowBytes            8,384,512
 //
-// and the log's two ways, beside it:
+// and the log's three ways, beside it, a split that closes as its figures are
+// stated (TestACallInFlightIsHeldToItsShare):
 //
 //	its calls and their tallies ..... BridgeLogBytes      3,473,408  (3.3125 MiB)
+//	its calls in flight ............. InFlightBytes       1,048,576  (1 MiB)
 //	the turn's earlier rounds' tool
 //	  names, the log's own fields,
 //	  and the room a later build
-//	  adds keys to the log in ....... the rest            4,911,104  (4.68 MiB)
+//	  adds keys to the log in ....... LogRestBytes        3,862,528  (3.68 MiB)
 //	                                                      ---------
 //	                                  RowBytes            8,384,512
 //
 // The handed set beside them ([PendingStore.Handed]) is the third value, at
 // most [MaxHandedBytes] before it is sealed: a fraction of [RowBytes], which
 // TestTheWholeRowFitsItsBudget holds it to as well.
+//
+// THE LOG'S CALLS IN FLIGHT are held by construction too: [MaxCallsInFlight]
+// entries, each its call's identity and the id its harness gave it, held to
+// [MaxCallInFlightBytes] ([keptEntry]) — measured, every one at its widest,
+// inside their share by TestTheWholeLogFitsItsBudget, with the log's calls at
+// theirs beside them.
 //
 // THE LOG'S CALLS are held by construction: [MaxBridgeCalls] calls, one of them
 // (the newest successful submission, which the collection replays) at most
@@ -97,7 +106,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,701,403  (with 2,988,475 to spare)
+//	every other field, measured ..... 1,702,523  (with 2,987,355 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
@@ -255,6 +264,21 @@ const (
 	// from a name it does not have.
 	MaxBridgeCallNameBytes = 256
 
+	// MaxBridgeCallIDBytes bounds the id a call's harness gave it, as the log
+	// keeps it ([BridgeCall.CallID], [ValidCallID]): SIXTY-FOUR BYTES of
+	// letters, digits, `-` and `_`, which the encoder writes each as itself,
+	// so what the id costs a call and an entry is its length, measured at the
+	// bound by the shares' own tests (below). A JUDGMENT CALL, and a cheap one
+	// to get wrong: no id a model minted is in this tree — the e2e's stand-in
+	// names its calls as Claude Code's record does, `toolu_` and a random
+	// tail, thirty bytes in all (internal/e2e's claudeID) — and an id past the
+	// bound costs its call no more than having none: it is kept as none, never
+	// cut, and read by its place as every call an older build recorded is,
+	// never matched wrongly. More than twice the stand-in's, and small enough
+	// that the id fits inside the share every call and every entry already
+	// had.
+	MaxBridgeCallIDBytes = 64
+
 	// MaxBridgeArgsBytes bounds what the log keeps of a call's arguments,
 	// as it holds them: a JSON string of the arguments' JSON text, escaped
 	// twice over. EIGHT KIB is what a reviewer reads verbatim and the board
@@ -274,19 +298,22 @@ const (
 	// MaxBridgeCallBytes bounds one call as the log holds it, every field at
 	// its bound: the name at its worst (256 bytes escaped six-fold, 1,538),
 	// the arguments (8,192) and the output (4,096), the digest and every
-	// other field (at most 700, measured by TestABridgedCallIsHeldToItsShare
+	// other field (at most 800, measured by TestABridgedCallIsHeldToItsShare
 	// with both its places at their widest — the place it was admitted at and
 	// the one its round's log took it at, [BridgeCall.Appended], whose 31
 	// bytes at their widest the 600 this figure was held room for — its late
 	// mark set, [BridgeCall.Late], whose 12 bytes it held room for too, the
 	// mark that nobody waited for it, [BridgeCall.Abandoned], whose 17 it held
-	// room for as well, and every kind of change a call can commit to its
-	// turn, [BridgeCall.Committed], each once, whose 61 it held no room for:
-	// 654 measured with every one of them, 593 before those kinds; 700 is
-	// that worst rounded up to the next hundred, as 600 was for the marks
-	// since, which leaves the next small mark room), and what is left — 1,858
-	// bytes — the room for keys a LATER BUILD ADDS TO A CALL
-	// ([BridgeCall.Extra]), which this build carries unread.
+	// room for as well, every kind of change a call can commit to its turn,
+	// [BridgeCall.Committed], each once, whose 61 it held no room for — 654
+	// measured with every one of them, 593 before those kinds, and 700 that
+	// worst rounded up to the next hundred — and the id its harness gave it
+	// at its widest, [BridgeCall.CallID], whose 77 bytes, its key with it,
+	// the 700 held no room for either: 731 measured with it; 800 is that
+	// worst rounded up to the next hundred, as 600 and 700 were, which leaves
+	// the next small mark room), and what is left — 1,758 bytes — the room
+	// for keys a LATER BUILD ADDS TO A CALL ([BridgeCall.Extra]), which this
+	// build carries unread.
 	MaxBridgeCallBytes = 16 << 10
 
 	// MaxSubmissionArgsBytes is what the log keeps of the arguments of the
@@ -339,6 +366,47 @@ const (
 	// row keeps their opening with the cut said. A page: what a board shows
 	// of a run's ask, and where its turn's own record keeps the whole.
 	MaxRunTitleBytes = 16 << 10
+
+	// MaxCallsInFlight bounds the calls of a round a run's log holds IN FLIGHT
+	// at once ([BridgeLog.InFlight]): begun, and not yet finished. TWO HUNDRED
+	// AND FIFTY-SIX, TIED TO THE LOG'S BYTE BUDGET: that many entries, each at
+	// its widest ([MaxCallInFlightBytes]), are a line of their own in the
+	// log's arithmetic ([InFlightBytes], one MiB of the room the log leaves
+	// beside its calls), which TestTheWholeLogFitsItsBudget measures with
+	// every one of them in the worst log. Past it a call is not begun, so not
+	// run: its harness is told it could not be recorded, failed, and may make
+	// it again ([ErrCallsInFlight]). No figure in this tree bounds how many
+	// calls a run makes at once; this bounds what its log holds of them.
+	MaxCallsInFlight = 256
+
+	// MaxCallInFlightBytes bounds one entry in flight as the log holds it
+	// ([keptEntry]): its identity — its name at its worst (256 bytes escaped
+	// six-fold, 1,538 as the encoder writes it), its digest, its place, the
+	// instants the log and the bridge took it at, its bound
+	// ([BridgeCall.Until]) and the incarnation that runs it
+	// ([BridgeCall.Runner], held to [maxIncarnationBytes], 770 at its most
+	// escaped) — and the id its harness gave it ([BridgeCall.CallID], held to
+	// [MaxBridgeCallIDBytes]): 2,616 bytes at their widest, 2,539 without that
+	// id, measured by TestACallInFlightIsHeldToItsShare. FOUR KIB is that
+	// rounded up to the next power of two: what is left is the room for the
+	// keys a later build adds to an entry, which this build carries unread
+	// ([BridgeCall.Extra]).
+	MaxCallInFlightBytes = 4 << 10
+
+	// InFlightBytes is the log's entries in flight at their most:
+	// [MaxCallsInFlight] of [MaxCallInFlightBytes] each, taken out of the room
+	// the log leaves beside its calls.
+	InFlightBytes = MaxCallsInFlight * MaxCallInFlightBytes
+
+	// LogRestBytes is the rest of the log's value beside its calls and its
+	// calls in flight: the turn's earlier rounds' tool names, the log's own
+	// fields, and the room a later build adds keys to the log in. STATED, NOT
+	// DERIVED, as the table above states it, so the log's split closes only
+	// while every line of it is the table's: a change of [BridgeLogBytes] or of
+	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
+	// TestACallInFlightIsHeldToItsShare until this figure, and the table and
+	// docs/concepts/code-sandbox.md that state it, move with it.
+	LogRestBytes = 3_862_528
 
 	// MaxPriorCalls bounds [BridgeLog.PriorCalls]: the tool names a turn's
 	// earlier rounds called with success. Five hundred and twelve is past
@@ -423,12 +491,17 @@ var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments ar
 // writer to it, and so does the row, where the call a person approved rides
 // its held call and is owed to the log ([approvedCall]).
 //
+// AND THE ID ITS HARNESS GAVE IT WHOLE OR NOT AT ALL ([keptCallID]): the bridge
+// takes none other, and the log holds every writer to the same rule, so a
+// call's share holds by construction whatever bridge, or build, handed it.
+//
 // IDEMPOTENT, so a call kept once is kept again unchanged, and a call an older
 // build recorded whole is kept within its bounds the next time this build
 // writes the log. A size already recorded is the whole's and is never replaced
 // by the size of what was already kept.
 func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	call.Name = textcut.Within(call.Name, MaxBridgeCallNameBytes)
+	call.CallID = keptCallID(call.CallID)
 	if call.Withheld() {
 		call.Args, call.ArgsBytes, call.Digest = "", 0, ""
 	}
@@ -445,6 +518,31 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 		}
 	}
 	return call
+}
+
+// ValidCallID reports whether id is one the log keeps as the id a call's
+// harness gave it ([BridgeCall.CallID]): letters, digits, `-` and `_`, at
+// most [MaxBridgeCallIDBytes] of them — the shape a session's id is held to
+// ([ValidSessionID]), at a bound of its own.
+//
+// ONE RULE, HELD WHEREVER A CALL'S ID IS WRITTEN. The id is the box's word, a
+// value of its request's `_meta` that its own agent can set as it likes: so
+// the bridge takes no other as the call arrives (internal/api/mcpbridge), and
+// the log holds every writer to it again as it keeps a call or an entry
+// ([keptCallID]), whatever bridge, or build, handed it.
+func ValidCallID(id string) bool {
+	return id != "" && len(id) <= MaxBridgeCallIDBytes && !strings.ContainsFunc(id, outsideIDCharset)
+}
+
+// keptCallID is id as the log keeps it: whole where [ValidCallID] holds it,
+// and NONE otherwise — NEVER CUT, since two ids cut alike would name two calls
+// as one, while a call with none is read as every call an older build recorded
+// is, by its place.
+func keptCallID(id string) string {
+	if !ValidCallID(id) {
+		return ""
+	}
+	return id
 }
 
 // unheld reports whether no save point holds call, whatever its number: a call
@@ -550,7 +648,9 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 // not set on a call nothing ran; and the same tool called with other arguments
 // at the same place and instant is another call, as is another tool. A call
 // with no place is never one the log holds: the bridge numbers every call it
-// records.
+// records. AND NEVER BY THE ID ITS HARNESS GAVE IT ([BridgeCall.CallID]),
+// which is the box's word: a harness that makes a call again may send the id
+// it sent before, and two calls under one id are two calls.
 func (l BridgeLog) lists(call BridgeCall) bool {
 	if call.Seq <= 0 {
 		return false
@@ -559,6 +659,42 @@ func (l BridgeLog) lists(call BridgeCall) bool {
 	return slices.ContainsFunc(l.Calls, func(c BridgeCall) bool {
 		return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
 			c.Digest == kept.Digest
+	})
+}
+
+// keptEntry is call's entry in flight as the log keeps it
+// ([BridgeLog.InFlight]): its IDENTITY, within [MaxCallInFlightBytes] — its
+// name held to [MaxBridgeCallNameBytes] as a finished call's is, the digest
+// the bridge handed (none, for a tool that may ask a person first: ADR-0077),
+// its place, the instants it was taken at, its bound and its runner, held to
+// the most an incarnation may be ([maxIncarnationBytes]) — and the id its
+// harness gave it, kept whole or not at all as a finished call's is
+// ([keptCallID]), so the entry and the call's one update name it alike; never
+// its arguments, its output or a mark, which its one update brings.
+func keptEntry(call BridgeCall) BridgeCall {
+	return BridgeCall{
+		Name: textcut.Within(call.Name, MaxBridgeCallNameBytes), Digest: call.Digest,
+		CallID: keptCallID(call.CallID), At: call.At, Seq: call.Seq, StartedAt: call.StartedAt,
+		Runner: textcut.Within(call.Runner, maxIncarnationBytes), Until: call.Until,
+	}
+}
+
+// inFlightAt is the index of call's entry in flight in l, found by its
+// IDENTITY — its place ([BridgeCall.Seq]), the instant the bridge took it and
+// its tool, as the log keeps them — or -1 where l holds none. NEVER BY ITS
+// DIGEST: an entry leaves it out for a tool that may ask a person first, and
+// the finished call may then carry one. NOR BY THE ID ITS HARNESS GAVE IT
+// ([BridgeCall.CallID]), the box's word, which a harness that makes a call
+// again may send twice: two entries under one id are two calls. Two openings
+// of a job can reuse a place, never at one instant. A call with no place,
+// which the bridge never numbered, has no entry.
+func (l BridgeLog) inFlightAt(call BridgeCall) int {
+	if call.Seq <= 0 {
+		return -1
+	}
+	name := textcut.Within(call.Name, MaxBridgeCallNameBytes)
+	return slices.IndexFunc(l.InFlight, func(entry BridgeCall) bool {
+		return entry.Seq == call.Seq && entry.StartedAt.Equal(call.StartedAt) && entry.Name == name
 	})
 }
 

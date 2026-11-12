@@ -4,7 +4,7 @@
 // matches cannot do without, and the query a person or a seat writes — so a
 // code search narrows a repository's files to the few that can match before
 // any of them is read. The cache owns the files (an incarnation's
-// crewlet/codeindex/) and code/query owns git; this package reads and writes
+// crewlet/codeindex/) and gitlet/query owns git; this package reads and writes
 // neither, so every rule here is decided on values, and a test of it needs no
 // repository.
 //
@@ -122,7 +122,7 @@
 // first BinaryProbeBytes), is SKIPPED: recorded in its segment, so its next
 // tip does not read it again, but never read for trigrams and never a
 // candidate. It is the rule `git grep -I` falls back to, so the index and the
-// grep path skip the same files, and the one code/query's file reads call a
+// grep path skip the same files, and the one gitlet/query's file reads call a
 // file binary by.
 //
 // # The files

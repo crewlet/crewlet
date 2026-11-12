@@ -301,11 +301,12 @@ type SteerSource interface {
 	// answers what it took — what a run of the engine's loop opens with.
 	Take(ctx context.Context, at steer.Reading) []steer.Note
 
-	// Brief is the notes a launch's brief takes, oldest first. They are
-	// the launch's from here: recorded read by the write that opens the
-	// run's job, or handed back with [SteerSource.Return] where the launch
-	// fails before that write.
-	Brief(ctx context.Context) []steer.Note
+	// Brief is the notes a launch's brief takes, oldest first, and every note
+	// the turn has read whose read its record marks unanswered as the brief
+	// read it ([steer.Briefing]). The notes are the launch's from here:
+	// recorded read by the write that opens the run's job, or handed back with
+	// [SteerSource.Return] where the launch fails before that write.
+	Brief(ctx context.Context) steer.Briefing
 
 	// Return hands back notes [SteerSource.Brief] gave a launch that failed
 	// BEFORE IT WROTE ITS RUN'S RECORD ([Launched.LaunchID] empty): they
@@ -364,7 +365,8 @@ type Resume struct {
 	// session there that it was cut off — that it may have been, where
 	// nothing was recorded — every call of the round and every note the turn
 	// has read, and arms none of the job's own loads ([Runner.inPlaceAfter],
-	// [Runner.sessionDecided]): the safe direction for a word that never came.
+	// [Runner.inPlaceNotes], [Runner.sessionDecided]): the safe direction for a
+	// word that never came.
 	// An own run's copy is told the calls the round's log took late alone,
 	// which it is not known to hold, and its guard counts none of their loads.
 	HarnessEnd sandbox.HarnessEnd
@@ -384,6 +386,18 @@ type Resume struct {
 	// rather than from memory: the process resuming may not be the one that
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
+
+	// Unfinished is the round's calls the log held IN FLIGHT when it was read
+	// (sandbox.BridgeLog.InFlight): begun, their identity on the record, and
+	// not finished as the collection stopped waiting for them — still running
+	// past their bound or the turn's cap, their process gone, or their update
+	// refused by the store — each a call whose outcome is unknown
+	// ([ledger.Call.Unfinished], [UnfinishedNote]), its identity alone. Seeded
+	// into the turn's call log by that identity ([seedCalls]), listed in the
+	// round's record after its calls, for the reviewer and the turn's tool
+	// log, and told to a run that carries the round on beside its late calls
+	// ([Runner.calledAfter]); never a submission, a delivery or a load.
+	Unfinished []BridgedCall
 
 	// Elided is the round's calls the log does not list, by identity
 	// (sandbox.BridgeLog.Unlisted): a long run's dropped middle. Calls of the
@@ -448,6 +462,15 @@ type Resume struct {
 	// resumed turn opens every phase with them ([Runner.steered]), and the
 	// collected run's own reads are its record's ([Runner.resumeAgentRun]).
 	Steered []steer.Read
+
+	// Served is every note, by id, the run's record says its bridge served a
+	// harness while it waited (sandbox.RunNote.Served), read since or waiting
+	// still: a harness polling for its notes is answered one only once it is
+	// recorded served, and records it read only once it confirms delivering
+	// it, so a session continued from a job served one may hold it whatever
+	// the record says of its read — and is told it as a note it may already
+	// show ([Runner.toldNotes]). A fresh run is told it as every note.
+	Served []string
 }
 
 // parked is the job's parked state as the session it ran in holds it: State,
@@ -680,6 +703,14 @@ type Runner struct {
 	// record is where every read is written. Guarded by mu.
 	steered []steer.Read
 
+	// placed is the place among the run's record's reads of every note this
+	// segment's source handed over, and of every note the launch's brief
+	// carries that the record holds read already, by id — what the last
+	// brief's source said ([steer.Briefing.Orders]), nil where it keeps no
+	// record. A brief tells the reads in that order ([Runner.inReadOrder]).
+	// Guarded by mu.
+	placed map[string]int
+
 	// sent is every record this runner publishes off the path of the request
 	// that occasioned it — the frame stating the fresh brief a run whose box
 	// started a session of its own read ([Runner.sessionStarted]) — each
@@ -853,6 +884,7 @@ func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		OpenAsks:            r.cfg.Context.OpenAsks,
+		Systems:             r.cfg.Context.Systems,
 		Workers:             r.workerCatalogue(),
 		Access:              r.cfg.Access,
 	})
@@ -877,9 +909,23 @@ func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledg
 		// corrected the turn starts from the turn as corrected — and then
 		// the notes this brief is the first to read. The run is a fresh
 		// session with no conversation of the engine's to carry them in,
-		// so its brief does. See [Runner.steered].
-		Steered: append(r.carriedSteers(), renderedNotes(fresh)...),
+		// so its brief does. See [Runner.steered]. IN THE ORDER THE RECORD
+		// READ THEM, a note a lost take recorded that this brief hands over
+		// among them ([Runner.inReadOrder]).
+		Steered: r.readFirst(fresh),
 	})
+}
+
+// readFirst is every note the turn has read, rendered, in the order its record
+// read them, and then the notes of fresh it has not read yet
+// ([Runner.inReadOrder]).
+func (r *Runner) readFirst(fresh []steer.Note) []string {
+	reads, rest := r.inReadOrder(r.readsSince(0), fresh)
+	out := make([]string, 0, len(reads)+len(rest))
+	for _, read := range reads {
+		out = append(out, prompts.SteerMessage(read.By, read.Text))
+	}
+	return append(out, renderedNotes(rest)...)
 }
 
 // renderedNotes is notes as the model reads each ([prompts.SteerMessage]).
@@ -2227,12 +2273,55 @@ func (r *Runner) carriedSteers() []string {
 }
 
 // steerBrief is the notes a launch's brief takes — none on a turn nobody
-// can steer.
+// can steer — once the reads the turn carries are marked unanswered as the
+// record marks them now ([Runner.markUnanswered]), and the places the record
+// numbered this segment's reads at are known ([Runner.placed]), which every
+// brief the launch builds after it counts.
 func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
 	if r.cfg.Steer == nil {
 		return nil
 	}
-	return r.cfg.Steer.Brief(ctx)
+	briefing := r.cfg.Steer.Brief(ctx)
+	r.markUnanswered(briefing.Unanswered)
+	r.mu.Lock()
+	r.placed = briefing.Orders
+	r.mu.Unlock()
+	return briefing.Notes
+}
+
+// markUnanswered marks unanswered every read the turn carries of a note ids
+// names: one the run's record marks unanswered (steer.Briefing.Unanswered),
+// its take's settle having landed after the record this segment resumed from
+// was read ([Resume.Steered]). A capture stamped before that settle counted the
+// note held, so the briefs a relaunch builds stop its cursor before it as the
+// record does ([Runner.notesHeldBy]).
+func (r *Runner) markUnanswered(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, read := range r.steered {
+		if slices.Contains(ids, read.ID) {
+			r.steered[i].Unanswered = true
+		}
+	}
+}
+
+// retold is every note the turn carries whose read the run's record marks
+// unanswered, by id, in the order read ([AgentRunRequest.Retold]): what every
+// brief of a launch tells again, built once the reads are marked as the record
+// marks them now ([Runner.steerBrief]).
+func (r *Runner) retold() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, read := range r.steered {
+		if read.Unanswered {
+			out = append(out, read.ID)
+		}
+	}
+	return out
 }
 
 // steerReturn hands back the notes a launch that failed took for its brief —

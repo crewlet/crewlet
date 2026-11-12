@@ -18,12 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -56,7 +57,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
 		doclet.Domain{}.Name():  {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
-		code.Domain{}.Name():    {topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard},
+		gitlet.Domain{}.Name():  {topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard},
 		iamdomain.Domain{}.Name(): {topics.IamLogStream, topics.IamLogPrefix,
 			topics.IamLogWildcard},
 		artifactsdomain.Domain{}.Name(): {topics.ArtifactsLogStream, topics.ArtifactsLogPrefix,
@@ -71,6 +72,8 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 			topics.ExecutorLogWildcard},
 		accessdomain.Domain{}.Name(): {topics.AccessLogStream, topics.AccessLogPrefix,
 			topics.AccessLogWildcard},
+		atlasdomain.Domain{}.Name(): {topics.AtlasLogStream, topics.AtlasLogPrefix,
+			topics.AtlasLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

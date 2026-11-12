@@ -101,7 +101,10 @@ concurrency:
 jobs:
   build:
     name: build + vet
-    runs-on: ubuntu-latest
+    # ONE FIXED LTS IMAGE for every Linux job here (`*linux`), never
+    # `ubuntu-latest`: GitHub moves that label to a new Ubuntu release under
+    # every job at once, and CI's environment would change with no commit.
+    runs-on: &linux ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       # go.mod's own toolchain, installed exactly, and no GOTOOLCHAIN of this
@@ -299,7 +302,7 @@ jobs:
     # and merge commit-message settings, which live in Settings and which
     # nothing in this tree can see or assert.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: *linux
     steps:
       - uses: actions/checkout@v7
         with:
@@ -344,7 +347,7 @@ jobs:
   # tree, the same way `go mod tidy -diff` and the generated schema/ are gated.
   dashboard:
     name: dashboard
-    runs-on: ubuntu-latest
+    runs-on: *linux
     steps:
       - uses: actions/checkout@v7
       # `latest` is the newest Node release, resolved by setup-node at run
@@ -438,7 +441,7 @@ jobs:
   #
   # THE SHARD COUNTS are one line each, `RACE_SHARDS` and `SOLO_SHARDS` below,
   # and every leg, name and proof follows them. Four for the parallel half,
-  # because it cannot end before its longest package, internal/code/host
+  # because it cannot end before its longest package, internal/gitlet/host
   # (1,735 of the 8,905 seconds), and at four that package's shard carries
   # about 490 package-seconds beside it, which the runner's three other
   # workers finish in minutes. Three would put 1,233 beside it; five or six
@@ -447,10 +450,10 @@ jobs:
   # before its first test.
   #
   # Two for the solo half, whose shards run at -p 1 and so take the SUM of
-  # their packages. internal/code/codecluster alone is 738 to 861 of its 1,266
+  # their packages. internal/gitlet/gitletcluster alone is 738 to 861 of its 1,266
   # to 1,527 seconds (main's runs 41714027577 to 41745668479), so two shards
   # put it on one runner and the other nine on the other, and a third would
-  # leave codecluster's shard the floor and buy nothing. Each shard is a runner
+  # leave gitletcluster's shard the floor and buy nothing. Each shard is a runner
   # of its own, so no two of these packages ever share a machine: sharding
   # takes contention away rather than adding any (`go doc ./internal/solo`).
   #
@@ -472,7 +475,7 @@ jobs:
   # change to either package still deals by real durations.
   plan:
     name: test plan
-    runs-on: ubuntu-latest
+    runs-on: *linux
     env:
       RACE_SHARDS: 4
       SOLO_SHARDS: 2
@@ -569,7 +572,7 @@ jobs:
   test:
     name: test (race) ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: *linux
     strategy:
       fail-fast: false
       matrix:
@@ -605,16 +608,22 @@ jobs:
       # three gits, about four minutes, on every run until main saves them. Only
       # these shards, `end-to-end gates` and `git recipe (macOS)` run git, so
       # only they carry the steps.
+      #
+      # AND ON THE IMAGE'S OS RELEASE (ImageOS, such as `ubuntu24`): a build
+      # links that release's libc, libcurl and zlib, so one made on a newer
+      # release is not restored on an older one.
       - &git-cache-dir
-        name: name the pinned gits' cache directory
-        run: echo "CREWLET_GIT_CACHE=$HOME/.cache/crewlet/git" >> "$GITHUB_ENV"
+        name: name the pinned gits' cache directory and OS release
+        run: |
+          echo "CREWLET_GIT_CACHE=$HOME/.cache/crewlet/git" >> "$GITHUB_ENV"
+          echo "CREWLET_GIT_CACHE_OS=${ImageOS:?the runner image sets no ImageOS}" >> "$GITHUB_ENV"
       - &git-restore
         name: restore the pinned gits main built
         id: git
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
-          key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
+          key: git-${{ runner.os }}-${{ runner.arch }}-${{ env.CREWLET_GIT_CACHE_OS }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
       # libcurl's development files are what building git's HTTPS transport
       # needs and the runner image may not carry; the C toolchain and zlib's
       # headers it does. Only a miss builds, so only a miss installs.
@@ -672,7 +681,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
-          key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
+          key: git-${{ runner.os }}-${{ runner.arch }}-${{ env.CREWLET_GIT_CACHE_OS }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
       # What this shard ran and how long each package took: the aggregate job
       # holds it against the plan, and `test weights` merges it. Only a shard
       # that passed hands one on, as only a run that passed is kept.
@@ -701,7 +710,7 @@ jobs:
     name: test (race)
     needs: [plan, test]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: *linux
     env:
       HALF: parallel
       LEGS: test
@@ -749,7 +758,7 @@ jobs:
   weights:
     name: test weights
     needs: [plan, test, gates]
-    runs-on: ubuntu-latest
+    runs-on: *linux
     steps:
       - uses: actions/checkout@v7
       - *setup-go
@@ -793,7 +802,7 @@ jobs:
   gates:
     name: end-to-end gates ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: *linux
     strategy:
       fail-fast: false
       matrix:
@@ -848,7 +857,7 @@ jobs:
     name: end-to-end gates
     needs: [plan, gates]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: *linux
     env:
       HALF: solo
       LEGS: gates
@@ -871,13 +880,14 @@ jobs:
   # skipped. Whether the job is a REQUIRED check is a repository setting.
   #
   # The pinned gits' cache steps are the race shards', whose key already
-  # carries the runner's OS and architecture, and there is no install step:
-  # Xcode's command line tools, on the image, supply the compiler, libcurl and
-  # zlib. The BUILD cache is every Go job's, under this job's own key: what it
-  # keeps is the race-instrumented standard library, gitproc's test binaries
-  # and skipgate for the runner's darwin, which no other job compiles —
-  # measured from an empty cache on four Linux vCPUs, 29–31 s for the test
-  # binaries and 10 s for skipgate, against 1.8 s warm, in an entry of 151 MB.
+  # carries the runner's OS, its release and its architecture, and there is no
+  # install step: Xcode's command line tools, on the image, supply the
+  # compiler, libcurl and zlib. The BUILD cache is every Go job's, under this
+  # job's own key: what it keeps is the race-instrumented standard library,
+  # gitproc's test binaries and skipgate for the runner's darwin, which no
+  # other job compiles. Measured from an empty cache on four Linux vCPUs:
+  # 29–31 s for the test binaries and 10 s for skipgate, against 1.8 s warm,
+  # in an entry of 151 MB.
   # The MODULE cache is not: `build + vet` saves it on Linux, a cache is
   # restored only on the OS that saved it, and an entry of this job's own would
   # hold three modules — uuid, x/sys and x/term, all gitproc's tests and
@@ -915,7 +925,7 @@ jobs:
 
   cross:
     name: cross-compile the release targets
-    runs-on: ubuntu-latest
+    runs-on: *linux
     # The release matrix is not exercised by any other job: `go build ./...`
     # above compiles for the runner and nothing else, so a change that only
     # breaks darwin — a build tag, a syscall, a platform-gated file — reaches
@@ -987,7 +997,7 @@ jobs:
 
   lint:
     name: golangci-lint
-    runs-on: ubuntu-latest
+    runs-on: *linux
     steps:
       - uses: actions/checkout@v7
       - *setup-go
@@ -1100,7 +1110,7 @@ jobs:
     name: keep main's newest caches
     needs: [build, dashboard, plan, test, weights, gates, gitrecipe-macos, lint]
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: *linux
     permissions:
       actions: write
     steps:

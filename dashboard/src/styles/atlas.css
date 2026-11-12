@@ -1,0 +1,94 @@
+/*
+ * Company › Atlas: placement only. Every surface, colour and type is a kit
+ * component's or a design token; nothing here draws a value of its own.
+ */
+
+.atlas-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+/* THE MAP FILLS THE SCREEN: the shell hands the height over (`useFillScreen`),
+   and the canvas takes what is left under the toolbar and the coverage line. */
+.atlas-screen--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.atlas-map {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 22rem;
+  min-width: 0;
+}
+.atlas-map > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.atlas-vendor,
+.atlas-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.atlas-value .mono {
+  overflow-wrap: anywhere;
+}
+
+.atlas-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.atlas-related {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.atlas-list,
+.atlas-claims,
+.atlas-hops {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.atlas-list > li,
+.atlas-hops > li {
+  overflow-wrap: anywhere;
+}
+
+/* A HOP IS ITS DISTANCE, THEN WHAT IT REACHED, on one baseline. */
+.atlas-hops > li {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  gap: var(--spacing-2);
+  align-items: baseline;
+}
+
+.atlas-claims > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.atlas-claims__value {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}

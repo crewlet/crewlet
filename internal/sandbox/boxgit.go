@@ -88,7 +88,7 @@ type BoxGit struct {
 //     settings of feature.manyFiles, without its index.skipHash, which writes
 //     an index older libgit2 builds refuse — MEASURED IN, by the rule a
 //     box-side setting is adopted by (BenchmarkBoxWorktree,
-//     internal/code/host; docs/concepts/code-sandbox.md "What a clone
+//     internal/gitlet/host; docs/concepts/code-sandbox.md "What a clone
 //     costs"): at 100 000 files a box's warm `git status` took 99 ms with
 //     them against 142 ms without, a 30 % cut past the arms' spread, and its
 //     checkout 15.6 s against 15.4 s, under the 10 % it may cost. Through the

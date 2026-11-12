@@ -129,7 +129,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	input, _, err := e.parkedTurnRunner(ctx, company, resumeInput{
 		Company: company, Run: run, State: state,
 		Turn: resumedTurn(run, seat, company.Org, e.rowHolds(run)),
-	})
+	}, nil)
 	if err != nil {
 		refuse("the run's turn could not be rebuilt here", "error", err.Error())
 		return
@@ -151,7 +151,12 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	// ITS GUARD THE SESSION'S ITS BOX STARTED, as the job's record says the box
 	// said it ([sandbox.LaunchRecord.SessionStart]): a box that has not said
 	// yet says it on its first request here, which the reopened run is told.
-	reopened, err := r.ReopenAgentRun(ctx, state, bridgedCalls(calls.Calls),
+	//
+	// AND THE CALLS STILL IN FLIGHT, each by the identity its entry carries
+	// ([sandbox.BridgeLog.InFlight]): a call the node this run is taken from
+	// still runs, whose update has not landed, is counted by the reopened
+	// call log, so no call made here derives its operation id.
+	reopened, err := r.ReopenAgentRun(ctx, state, bridgedCalls(calls.Calls), unfinishedCalls(calls.InFlight),
 		identitiesOf(calls.Unlisted()), identitiesOf(calls.Absorbed()),
 		bridgedOf(run.Launch.Bridged), run.Launch.SessionStart == sandbox.SessionStartContinued)
 	if err != nil {
@@ -161,10 +166,15 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	ledger := newBridgeLedger(rt.pending, reopened.Meter)
 	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
-	// after the last one the log records, and a resume reads them by it. And
+	// after the last one the log records, a call still in flight there among
+	// them ([sandbox.BridgeLog.LastSeq]), and a resume reads them by it. And
 	// IN ITS OWN ROUND, as the row names the job: a call still running when a
 	// relaunch carries the round on is listed in the round's log, marked late.
-	job := run.NamedJob(calls.LastSeq())
+	// AND EACH CALL'S ID READ UNDER THE KEY THIS NODE'S RUNNER OF THE JOB'S
+	// HARNESS DECLARES ([sandbox.OpenedJob.CallIDMeta]): the bridge reading
+	// the box's calls from here on is this build's, whatever the launch's
+	// was, and the row records no key.
+	job := run.NamedJob(calls.LastSeq(), rt.coordinator.Manager().CallIDMeta(run.Harness))
 	session := &mcpbridge.Session{
 		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: reopened.Surface, Ledger: ledger,

@@ -188,6 +188,18 @@ func credentialCeiling(ctx context.Context, login string, carried []iam.Grant,
 	return authz.Ceiling{Kind: authz.CeilingRequester, Principal: credential}, nil
 }
 
+// CeilingOfTurn is the requester ceiling of turn, composed as every tool
+// call of it composes its own: for a decision the engine makes for the turn
+// before any call, such as what its prompt may show it (the atlas's entries
+// its work names), held to the one composer the gate uses.
+func CeilingOfTurn(ctx context.Context, turn *turnctx.Turn, r Requesters) (authz.Ceiling, error) {
+	seat := ""
+	if turn != nil && turn.Seat != nil {
+		seat = turn.Seat.Handle()
+	}
+	return composeCeiling(ctx, turn, seat, r)
+}
+
 // composeCeiling is [ceilingOf] composed from the turn itself.
 func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requesters) (authz.Ceiling,
 	error) {

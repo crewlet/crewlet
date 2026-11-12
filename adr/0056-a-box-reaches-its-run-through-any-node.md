@@ -223,16 +223,20 @@ answers are out, at the latest when the box's connection ends.
 
 **The call runs on, and the bridge holds it.** The call's tool runs on a
 goroutine of the bridge's, under the run's context, until the call's own bound
-ends it, and the call's record is appended once its tool returns, in one step,
-as one nobody waited for, after the session's ledger has ended
+ends it, and the call's one update is made once its tool returns, in one step,
+as one nobody waited for
 ([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
-amendment on such a call). It lands only where the run's log still takes it: the
-paths that end a run go on, waiting for no call, to read the run's log and
-delete its record, so a call still running as a stop, the turn's cap, a reclaim
-or the run's settle ends its job is in no collection of the run where it returns
-after that read, and on no record of it where it returns after the delete. A
-relaunch's job takes it as a late call of the round, and a run whose box goes on
-takes it as its own while its record stands. A call that reaches an opening
+amendment on such a call). Its identity is on the run's log from before it ran
+(ADR-0073's amendment on a call's identity); what lands later is its outcome,
+and every collection of the run waits for it on the run's log before it reads,
+on whichever node collects, up to the first of its own bound, the turn's cap
+and its process gone (ADR-0073's amendment on a collection's calls in flight),
+and its update finds no record where it returns after the ending's delete. A
+relaunch's job takes it as a late call of the round, and a run whose box goes
+on takes it as its own while its record stands. A call whose entry is still
+being written as its opening ends, or that waits to be admitted behind a call
+that arrived before it, is answered that it was not run, failed, and never
+runs. A call that reaches an opening
 after its end is refused and runs nothing, as before, now in the words of how
 the opening ended: told to end its turn where the run ended, and, where the box
 goes on, that the session it reached was closing and to call again, which
@@ -245,7 +249,8 @@ for each such call to be recorded before the node tears down the store and the
 broker the record goes through, as the release used to wait for it while
 holding the lease. That wait has no bound of the engine's own, as the drain's
 wait for running turns has none: on a signal, the supervisor's grace bounds it,
-and a call still running when the process is killed is on no record.
+and a call still running when the process is killed never makes its update, on
+the record by its entry alone.
 
 **Cost-when-tried:** measured with the SDK's own client as the box, against the
 bridge on `main` at 28ce95e56c, each opening ended with a call held in its tool:

@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -67,7 +67,7 @@ func (c *Company) withheldFrom(ctx context.Context, handle string, reg *tools.Re
 	}
 	ctx = iam.WithPrincipal(ctx, turnctx.SeatPrincipal(c.Org, role))
 	withheld := builtin.Withheld(ctx, builtin.Decide(orgchart.Of(c.Org)), reg.Snapshot())
-	for _, name := range builtin.CodeWritesWithheld(code.Tier(role.CodeAccess)) {
+	for _, name := range builtin.CodeWritesWithheld(gitlet.Tier(role.CodeAccess)) {
 		if entry, ok := reg.Lookup(name); ok && entry.Origin == tools.OriginBuiltin &&
 			!slices.Contains(withheld, name) {
 			withheld = append(withheld, name)

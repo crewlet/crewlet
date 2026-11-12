@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/github"
 )
 
@@ -81,12 +82,25 @@ func (p releasePulls) client(ctx context.Context, seat string) (*github.Client, 
 
 // Facts are a pull request's facts as seat reads them, with every login a
 // seat's app wrote named as that seat.
-func (p releasePulls) Facts(ctx context.Context, seat string, ref builtin.PullRef) (builtin.PullFacts, error) {
+func (p releasePulls) Facts(ctx context.Context, seat string, ref builtin.PullRef,
+	declared []delegated.RequiredChecks) (builtin.PullFacts, error) {
+
 	c, lookup, err := p.client(ctx, seat)
 	if err != nil {
 		return builtin.PullFacts{}, err
 	}
-	f, err := c.PullFacts(ctx, ref.Owner, ref.Repo, ref.Number, agentReporters(lookup))
+	return pullFacts(ctx, c, lookup.Opts, ref, declared)
+}
+
+// pullFacts are ref's facts read through c, the checks declared for its base
+// branch among them, logins the roster's seats' apps wrote named as seats.
+func pullFacts(ctx context.Context, c *github.Client, roster github.SeatAppOptions, ref builtin.PullRef,
+	declared []delegated.RequiredChecks) (builtin.PullFacts, error) {
+
+	repo := ref.Owner + "/" + ref.Repo
+	f, err := c.PullFacts(ctx, ref.Owner, ref.Repo, ref.Number, func(base string) []string {
+		return delegated.DeclaredFor(declared, repo, base)
+	}, agentReporters(roster))
 	if err != nil {
 		return builtin.PullFacts{}, err
 	}
@@ -95,7 +109,7 @@ func (p releasePulls) Facts(ctx context.Context, seat string, ref builtin.PullRe
 		return builtin.PullFacts{}, err
 	}
 	who := func(login string) string {
-		if handle, ok := lookup.Opts.SeatOfLogin(login); ok {
+		if handle, ok := roster.SeatOfLogin(login); ok {
 			return handle
 		}
 		return login
@@ -114,9 +128,9 @@ func (p releasePulls) Facts(ctx context.Context, seat string, ref builtin.PullRe
 // agentReporters are the company's own agents' apps, whose report of a check
 // counts for nothing in a release request: an agent whose app may write
 // checks would otherwise report its own change as passing.
-func agentReporters(lookup *github.SeatLookup) github.Reporters {
+func agentReporters(roster github.SeatAppOptions) github.Reporters {
 	var out github.Reporters
-	for _, seat := range lookup.Opts.Seats {
+	for _, seat := range roster.Seats {
 		if seat.AppID != 0 {
 			out.AppIDs = append(out.AppIDs, seat.AppID)
 		}
@@ -131,7 +145,7 @@ func agentReporters(lookup *github.SeatLookup) github.Reporters {
 func checkFacts(results []github.CheckResult) []builtin.CheckFact {
 	out := make([]builtin.CheckFact, 0, len(results))
 	for _, r := range results {
-		out = append(out, builtin.CheckFact{Name: r.Context, Result: string(r.State)})
+		out = append(out, builtin.CheckFact{Name: r.Context, Result: string(r.State), Declared: r.Declared})
 	}
 	return out
 }
@@ -162,19 +176,28 @@ func (p releasePulls) OnBranch(ctx context.Context, seat string, repo builtin.Pu
 	return c.Contains(ctx, repo.Owner, repo.Repo, tip, commit)
 }
 
-// Checks are the results on commit of every check branch requires.
+// Checks are the results on commit of every check branch requires and every
+// one declared for it.
 func (p releasePulls) Checks(ctx context.Context, seat string, repo builtin.PullRef, branch,
-	commit string) ([]builtin.CheckFact, bool, error) {
+	commit string, declared []delegated.RequiredChecks) ([]builtin.CheckFact, bool, error) {
 
 	c, lookup, err := p.client(ctx, seat)
 	if err != nil {
 		return nil, false, err
 	}
+	return commitChecks(ctx, c, lookup.Opts, repo, branch, commit, declared)
+}
+
+// commitChecks are Checks read through c.
+func commitChecks(ctx context.Context, c *github.Client, roster github.SeatAppOptions, repo builtin.PullRef,
+	branch, commit string, declared []delegated.RequiredChecks) ([]builtin.CheckFact, bool, error) {
+
 	required, err := c.RequiredChecks(ctx, repo.Owner, repo.Repo, branch)
 	if err != nil {
 		return nil, false, err
 	}
-	results, err := c.CommitChecks(ctx, repo.Owner, repo.Repo, commit, required, agentReporters(lookup))
+	required = github.WithDeclared(required, delegated.DeclaredFor(declared, repo.Owner+"/"+repo.Repo, branch))
+	results, err := c.CommitChecks(ctx, repo.Owner, repo.Repo, commit, required, agentReporters(roster))
 	if err != nil {
 		return nil, false, err
 	}

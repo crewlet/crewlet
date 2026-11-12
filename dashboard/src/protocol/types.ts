@@ -60,6 +60,13 @@ import type {
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
+import type {
+  AtlasEntriesAnswer,
+  AtlasEntryAnswer,
+  AtlasFacetsAnswer,
+  AtlasMapAnswer,
+  AtlasTraceAnswer,
+} from "../contract/atlas.ts";
 import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
@@ -2944,6 +2951,9 @@ export interface WorkBlocker {
    *  different fact from "not mirrored yet", and the one that stops a reader
    *  waiting for it to settle. */
   one_sided_final?: boolean;
+  /** A pull request the task waits on that nothing moves: open, with no
+   *  reviewer asked, no review of its head and no merge asked (ADR-0128). */
+  dead?: boolean;
 }
 
 /** What an answer could NOT account for: records this node holds and cannot
@@ -5660,7 +5670,7 @@ export interface InboxPosition {
 }
 
 /** What a code notice carries of its change, read with the page
- *  (`code.NoticeChange`): its title, state and work item — and, where the
+ *  (`gitlet.NoticeChange`): its title, state and work item — and, where the
  *  read asked for `cards`, what its card draws besides, read once the page
  *  was composed for the notices it kept. */
 export interface CodeNoticeChange {
@@ -5678,7 +5688,7 @@ export interface CodeNoticeChange {
 }
 
 /** What a code notice carries of its change's readiness
- *  (`code.NoticeReadiness`): its counts and its first sentence — the first
+ *  (`gitlet.NoticeReadiness`): its counts and its first sentence — the first
  *  unmet precondition's, else the first still computing, else that it is
  *  ready. The change's own page reads every precondition. */
 export interface CodeNoticeReadiness {
@@ -5687,7 +5697,7 @@ export interface CodeNoticeReadiness {
   first: string;
 }
 
-/** One notice Gitlet routed to a person (`code.InboxNotice`). */
+/** One notice Gitlet routed to a person (`gitlet.InboxNotice`). */
 export interface CodeInboxNotice {
   record_id: string;
   log_seq: number;
@@ -7939,6 +7949,14 @@ export interface QueryMap {
   /** The rules delegates decide by, and what they decided: an administrator's
    *  and the people a rule escalates to (ADR-0125). */
   delegated_decisions: DelegatedDecisionsAnswer;
+  /** The company's atlas (ADR-0126), each read as its asker on the atlas
+   *  app: a page of its entries, the map, one entry, a trace from one, and
+   *  the counts a filter menu offers. */
+  atlas_entries: AtlasEntriesAnswer;
+  atlas_map: AtlasMapAnswer;
+  atlas_entry: AtlasEntryAnswer;
+  atlas_trace: AtlasTraceAnswer;
+  atlas_facets: AtlasFacetsAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;
@@ -8045,23 +8063,23 @@ export type QueryName = keyof QueryMap;
  * They are registry questions all the same — the one answer every transport
  * gives, read back at the tab's floor on the code log (`contract/domains.ts`'s
  * `SESSION_QUERIES.code`) — and each answer is the engine's one read answer
- * (`code.ReadAnswer`) as the question's kind fills it.
+ * (`gitlet.ReadAnswer`) as the question's kind fills it.
  */
 
 /**
  * Where a repository is in its life (`contract/code.ts`'s `REPO_STATUSES`,
- * held to `code.RepoStatuses`), or a state a newer engine names, which a row
+ * held to `gitlet.RepoStatuses`), or a state a newer engine names, which a row
  * shows as it is.
  */
 export type CodeRepoStatus = (typeof REPO_STATUSES)[number] | (string & {});
 
-/** Who owns a repository: one unit, by its key, or one seat, by its handle (`code.Owner`). */
+/** Who owns a repository: one unit, by its key, or one seat, by its handle (`gitlet.Owner`). */
 export interface CodeOwner {
   kind: "unit" | "seat" | (string & {});
   ref: string;
 }
 
-/** One protection rule over the refs a pattern matches (`code.Protection`). */
+/** One protection rule over the refs a pattern matches (`gitlet.Protection`). */
 export interface CodeProtection {
   pattern: string;
   allow_force?: boolean;
@@ -8070,7 +8088,7 @@ export interface CodeProtection {
   direct_push: "persons" | "none" | (string & {});
 }
 
-/** A repository as a listing draws it (`code.RepoSummary` over `code.RepoRef`). */
+/** A repository as a listing draws it (`gitlet.RepoSummary` over `gitlet.RepoRef`). */
 export interface CodeRepoSummary {
   id: string;
   name: string;
@@ -8091,7 +8109,7 @@ export interface CodeRepoSummary {
    */
   search: "indexed" | "grep" | (string & {});
   /**
-   * A pull mirror (`code.RepoRef.Mirrored`): it moves only by Gitlet's syncs
+   * A pull mirror (`gitlet.RepoRef.Mirrored`): it moves only by Gitlet's syncs
    * from a repository at another host, and takes no push and no change of its own.
    * Absent for one that is not.
    */
@@ -8132,7 +8150,7 @@ export interface CodeRepoSummary {
   last_push_at?: string;
 }
 
-/** One ref update a push asked for, and what became of it (`code.Command`). */
+/** One ref update a push asked for, and what became of it (`gitlet.Command`). */
 export interface CodePushCommand {
   ref: string;
   old: string;
@@ -8146,7 +8164,7 @@ export interface CodePushCommand {
 }
 
 /**
- * Commands of a push counted by what became of each (`code.CommandCounts`),
+ * Commands of a push counted by what became of each (`gitlet.CommandCounts`),
  * keyed by the outcome's word (`contract/code.ts`'s `COMMAND_OUTCOMES`) — or by
  * one a newer engine names, which a summary says as it is. Each count is
  * absent at zero.
@@ -8155,7 +8173,7 @@ export type CodePushCounts = Readonly<
   Partial<Record<(typeof COMMAND_OUTCOMES)[number], number>> & Record<string, number | undefined>
 >;
 
-/** What made a seat's push, as the engine stamped it from the call (`code.RunProvenance`). */
+/** What made a seat's push, as the engine stamped it from the call (`gitlet.RunProvenance`). */
 export interface CodePushRun {
   turn_id: string;
   /** The tracker the turn's work item is in, and its key there. */
@@ -8167,7 +8185,7 @@ export interface CodePushRun {
   harness?: string;
 }
 
-/** One push as its repository's history keeps it (`code.PushRow`). */
+/** One push as its repository's history keeps it (`gitlet.PushRow`). */
 export interface CodePushRow {
   push_id: string;
   repo_id: string;
@@ -8237,24 +8255,24 @@ export interface CodePushesAnswer extends CodePage {
 
 /**
  * Where a change is in its life (`contract/code.ts`'s `CHANGE_STATES`, held to
- * `code.ChangeStates`), or a state a newer engine names, shown as it is.
+ * `gitlet.ChangeStates`), or a state a newer engine names, shown as it is.
  */
 export type CodeChangeState = (typeof CHANGE_STATES)[number] | (string & {});
 
 /**
- * What a change's rows name a principal as (`code.PartyKind`): a seat by its
+ * What a change's rows name a principal as (`gitlet.PartyKind`): a seat by its
  * handle, or a person by the human seat they hold.
  */
 export type CodePartyKind = "agent" | "person" | (string & {});
 
-/** One principal a change's readiness names (`code.Party`). */
+/** One principal a change's readiness names (`gitlet.Party`). */
 export interface CodeParty {
   handle: string;
   kind: CodePartyKind;
 }
 
 /**
- * Who may clear one standing blocker (`code.ClearedBy`): its raiser, the seats
+ * Who may clear one standing blocker (`gitlet.ClearedBy`): its raiser, the seats
  * that maintain the repository, and — always — any person.
  */
 export interface CodeClearedBy {
@@ -8263,7 +8281,7 @@ export interface CodeClearedBy {
   persons?: boolean;
 }
 
-/** One standing blocker a readiness names (`code.Blocker`). */
+/** One standing blocker a readiness names (`gitlet.Blocker`). */
 export interface CodeBlocker {
   finding_id: string;
   /** `open`, or the answer an author gave: `resolved`, `wont_fix` or `disputed`. */
@@ -8272,7 +8290,7 @@ export interface CodeBlocker {
 }
 
 /**
- * One precondition of a change's merge, judged (`code.Precondition`): its kind
+ * One precondition of a change's merge, judged (`gitlet.Precondition`): its kind
  * (`PRECONDITION_KINDS`), where it stands (`PRECONDITION_STATES`), whom an
  * unmet one waits on, a blocker precondition's standing blockers, and the
  * engine's one sentence about it.
@@ -8287,7 +8305,7 @@ export interface CodePrecondition {
 }
 
 /**
- * Whether a live change may merge (`code.Readiness`), judged by the engine on
+ * Whether a live change may merge (`gitlet.Readiness`), judged by the engine on
  * the read that answered it: every precondition one a kind, in the engine's
  * order, how many are met of how many, and the sentence of the first that is
  * not.
@@ -8299,7 +8317,7 @@ export interface CodeReadiness {
   preconditions: CodePrecondition[];
 }
 
-/** A change as its row holds it (`code.ChangeRow`). */
+/** A change as its row holds it (`gitlet.ChangeRow`). */
 export interface CodeChangeRow {
   id: string;
   repo_id: string;
@@ -8337,7 +8355,7 @@ export interface CodeChangeRow {
   position: LogPosition;
 }
 
-/** A change as a listing draws it (`code.ChangeSummary`). */
+/** A change as a listing draws it (`gitlet.ChangeSummary`). */
 export interface CodeChangeSummary extends CodeChangeRow {
   /** Its repository's name, and its reference: `web!42`. */
   repo: string;
@@ -8371,7 +8389,7 @@ export interface CodeChangesAnswer extends CodePage {
   changes?: CodeChangeSummary[];
 }
 
-/** One author of a change (`code.ChangeAuthor`), from the revision they first wrote. */
+/** One author of a change (`gitlet.ChangeAuthor`), from the revision they first wrote. */
 export interface CodeChangeAuthor {
   author: string;
   kind: CodePartyKind;
@@ -8380,7 +8398,7 @@ export interface CodeChangeAuthor {
 }
 
 /**
- * What a change's conversation counts (`code.ConversationRow`): its comments,
+ * What a change's conversation counts (`gitlet.ConversationRow`): its comments,
  * its reviews, its findings none of its authors has answered, its standing
  * blockers, and how many reviewers' latest verdict asks for changes.
  */
@@ -8402,7 +8420,7 @@ export interface CodeConversationRow {
 
 /**
  * Whether a change's latest merged revision merges into its target, as its
- * home Gitlet node recorded it (`code.MergeabilityRow`).
+ * home Gitlet node recorded it (`gitlet.MergeabilityRow`).
  */
 export interface CodeMergeabilityRow {
   revision: number;
@@ -8415,7 +8433,7 @@ export interface CodeMergeabilityRow {
   at: string;
 }
 
-/** One change in detail (`code.ChangeDetail`): its summary, description and authors. */
+/** One change in detail (`gitlet.ChangeDetail`): its summary, description and authors. */
 export interface CodeChangeDetail extends CodeChangeSummary {
   body?: string;
   authors: CodeChangeAuthor[];
@@ -8425,7 +8443,7 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   mergeability?: CodeMergeabilityRow;
 }
 
-/** A revision's facts, as its home Gitlet node recorded them (`code.RevisionFactsRow`). */
+/** A revision's facts, as its home Gitlet node recorded them (`gitlet.RevisionFactsRow`). */
 export interface CodeRevisionFacts {
   target_ref: string;
   target_oid: string;
@@ -8441,7 +8459,7 @@ export interface CodeRevisionFacts {
 
 /**
  * Which of a revision's touched paths change only whitespace or only comments
- * (`code.RevisionClasses`): each a list of places in its facts' `touched`,
+ * (`gitlet.RevisionClasses`): each a list of places in its facts' `touched`,
  * and `complete` where every touched path was classified — a lexer read each
  * one — so a path in neither list changes code.
  */
@@ -8451,7 +8469,7 @@ export interface CodeRevisionClasses {
   complete?: boolean;
 }
 
-/** One revision of a change (`code.RevisionRow`): a move of its source branch's head. */
+/** One revision of a change (`gitlet.RevisionRow`): a move of its source branch's head. */
 export interface CodeRevisionRow {
   n: number;
   head: string;
@@ -8464,7 +8482,7 @@ export interface CodeRevisionRow {
   facts?: CodeRevisionFacts;
 }
 
-/** One reviewer a change has asked (`code.ReviewerRow`). */
+/** One reviewer a change has asked (`gitlet.ReviewerRow`). */
 export interface CodeReviewerRow {
   reviewer: string;
   kind: CodePartyKind;
@@ -8478,10 +8496,10 @@ export interface CodeReviewerRow {
   position: LogPosition;
 }
 
-/** A verdict a review gives (`code.Verdicts`). */
+/** A verdict a review gives (`gitlet.Verdicts`). */
 export type CodeVerdict = "approve" | "request_changes" | "comment" | (string & {});
 
-/** One review of a change (`code.ReviewRow`). */
+/** One review of a change (`gitlet.ReviewRow`). */
 export interface CodeReviewRow {
   id: string;
   revision: number;
@@ -8502,7 +8520,7 @@ export interface CodeReviewRow {
   change?: CodeChangeName;
 }
 
-/** Where a comment on a line points (`code.CommentAnchor`). */
+/** Where a comment on a line points (`gitlet.CommentAnchor`). */
 export interface CodeCommentAnchor {
   revision: number;
   path: string;
@@ -8511,7 +8529,7 @@ export interface CodeCommentAnchor {
   blob_oid: string;
 }
 
-/** One comment on a change (`code.CommentRow`), in thread order. */
+/** One comment on a change (`gitlet.CommentRow`), in thread order. */
 export interface CodeCommentRow {
   id: string;
   /** Its own id for a thread's first comment, the finding's for a reply to one. */
@@ -8531,7 +8549,7 @@ export interface CodeCommentRow {
   at: string;
 }
 
-/** One finding on a change (`code.FindingRow`). */
+/** One finding on a change (`gitlet.FindingRow`). */
 export interface CodeFindingRow {
   id: string;
   review_id: string;
@@ -8561,7 +8579,7 @@ export interface CodeFindingRow {
 
 /**
  * Where a finding's lines are in the revision a read asks about
- * (`code.FindingPlace`): moved by the lines changed above them; OUTDATED where
+ * (`gitlet.FindingPlace`): moved by the lines changed above them; OUTDATED where
  * its own lines changed; GONE where the revision holds no file at its path.
  */
 export interface CodeFindingPlace {
@@ -8571,10 +8589,10 @@ export interface CodeFindingPlace {
   gone?: boolean;
 }
 
-/** One file a diff changed (`code.DiffFile`). */
+/** One file a diff changed (`gitlet.DiffFile`). */
 export interface CodeDiffFile {
   path: string;
-  /** The path in base64 where it is no valid UTF-8 (`code.WirePath`). */
+  /** The path in base64 where it is no valid UTF-8 (`gitlet.WirePath`). */
   path_b64?: string;
   old_path?: string;
   /** Git's own letter: A added, D deleted, M modified, R renamed, T type changed. */
@@ -8589,7 +8607,7 @@ export interface CodeDiffFile {
   new_oid?: string;
 }
 
-/** A page of a diff's files, or of one file's patch (`code.DiffAnswer`). */
+/** A page of a diff's files, or of one file's patch (`gitlet.DiffAnswer`). */
 export interface CodeDiffAnswer {
   base: string;
   head: string;
@@ -8625,7 +8643,7 @@ export interface CodeChangeAnswer extends CodePage {
   placed?: Record<string, CodeFindingPlace>;
 }
 
-/** One handle a record about a change reached (`code.RoutedRecipient`). */
+/** One handle a record about a change reached (`gitlet.RoutedRecipient`). */
 export interface CodeRoutedRecipient {
   handle: string;
   kind: CodePartyKind;
@@ -8635,7 +8653,7 @@ export interface CodeRoutedRecipient {
   fallback_rank?: number;
 }
 
-/** One record about a change, and whom it reached (`code.RoutedRecord`). */
+/** One record about a change, and whom it reached (`gitlet.RoutedRecord`). */
 export interface CodeRoutedRecord {
   record_id: string;
   position: LogPosition;
@@ -8644,7 +8662,7 @@ export interface CodeRoutedRecord {
   recipients: CodeRoutedRecipient[];
 }
 
-/** `code_change_routing`: whom a change's records reached, newest first (`code.RoutedPage`). */
+/** `code_change_routing`: whom a change's records reached, newest first (`gitlet.RoutedPage`). */
 export interface CodeChangeRoutingAnswer extends CodePage {
   routed?: {
     change: { repo: string; ref: string; title: string; state: CodeChangeState };
@@ -8657,7 +8675,7 @@ export interface CodeChangeRoutingAnswer extends CodePage {
 }
 
 /**
- * One branch rule's merge gate (`code.MergeGate`): who may merge, how many
+ * One branch rule's merge gate (`gitlet.MergeGate`): who may merge, how many
  * approvals it waits for and what spares a change them, the paths a person
  * must approve, the checks it waits for, how many changes its queue tests at
  * once, and its switches.
@@ -8674,7 +8692,7 @@ export interface CodeMergeGate {
   agents_edit_checks?: boolean;
 }
 
-/** A rule's merge gate, named by the rule's pattern (`code.RuleGate`). */
+/** A rule's merge gate, named by the rule's pattern (`gitlet.RuleGate`). */
 export interface CodeRuleGate {
   pattern: string;
   gate: CodeMergeGate;
@@ -8682,7 +8700,7 @@ export interface CodeRuleGate {
 
 /**
  * Who set one of a repository's rules and when, named by the rule's pattern
- * (`code.RuleSource`): the decider of the record that last changed the rule —
+ * (`gitlet.RuleSource`): the decider of the record that last changed the rule —
  * a seat's handle (`agent`), a person's seat or a credential's login
  * (`operator`), nobody where the configuration set it (`config`) — and that
  * record's instant.
@@ -8694,14 +8712,14 @@ export interface CodeRuleSource {
   set_at: string;
 }
 
-/** Who owns which of a repository's paths, for review (`code.PathOwner`): globs over its tree. */
+/** Who owns which of a repository's paths, for review (`gitlet.PathOwner`): globs over its tree. */
 export interface CodePathOwner {
   owner: CodeOwner;
   paths: string[];
 }
 
 /**
- * One repository in detail (`code.RepoDetail`): its summary, how many
+ * One repository in detail (`gitlet.RepoDetail`): its summary, how many
  * branches, tags and deleted refs it holds, when it was declared, and — to
  * this question, which asks for them — who owns its paths and its rules'
  * merge gates, with who set each rule and when (asked for with the gates).
@@ -8714,13 +8732,13 @@ export interface CodeRepoDetail extends CodeRepoSummary {
   path_owners?: CodePathOwner[];
   gates?: CodeRuleGate[];
   rule_sources?: CodeRuleSource[];
-  /** Where its expunges stand (`code.ExpungeState`); absent for one never purged with none asked. */
+  /** Where its expunges stand (`gitlet.ExpungeState`); absent for one never purged with none asked. */
   expunge?: CodeExpungeState;
-  /** Where it stands with other hosts (`code.RemoteState`); absent for none. */
+  /** Where it stands with other hosts (`gitlet.RemoteState`); absent for none. */
   remotes?: CodeRemoteState;
 }
 
-/** A repository's expunges (`code.ExpungeState`): the one open, the purge asked, the last committed. */
+/** A repository's expunges (`gitlet.ExpungeState`): the one open, the purge asked, the last committed. */
 export interface CodeExpungeState {
   open?: string;
   /** The purge a person asked for that its maintainer has not served yet, by its id. */
@@ -8731,13 +8749,13 @@ export interface CodeExpungeState {
   dropped_bytes?: number;
 }
 
-/** A pull mirror's source (`code.MirrorSource`); `credential` is a `${VAR}` reference, never a token. */
+/** A pull mirror's source (`gitlet.MirrorSource`); `credential` is a `${VAR}` reference, never a token. */
 export interface CodeMirrorSource {
   url: string;
   credential?: string;
 }
 
-/** A push mirror's target (`code.MirrorTarget`): pushed as the seat `as`, the refs it names. */
+/** A push mirror's target (`gitlet.MirrorTarget`): pushed as the seat `as`, the refs it names. */
 export interface CodeMirrorTarget {
   url: string;
   credential: string;
@@ -8746,11 +8764,11 @@ export interface CodeMirrorTarget {
   refs?: string[];
 }
 
-/** A repository's other hosts (`code.RemoteState`). */
+/** A repository's other hosts (`gitlet.RemoteState`). */
 export interface CodeRemoteState {
   mirror_from?: CodeMirrorSource;
   mirror_to?: CodeMirrorTarget;
-  /** The import its create filled it from, and how far it went (`code.ImportState`). */
+  /** The import its create filled it from, and how far it went (`gitlet.ImportState`). */
   import?: {
     source: CodeMirrorSource;
     chunks: number;
@@ -8768,7 +8786,7 @@ export interface CodeRepoAnswer extends CodePage {
   repo?: CodeRepoDetail;
 }
 
-/** One live ref (`code.RefRow`): its whole name, the object it points at, and where its last move landed. */
+/** One live ref (`gitlet.RefRow`): its whole name, the object it points at, and where its last move landed. */
 export interface CodeRefRow {
   ref: string;
   oid?: string;
@@ -8781,7 +8799,7 @@ export interface CodeRefsAnswer extends CodePage {
   refs?: CodeRefRow[];
 }
 
-/** Who acts on a repository (`code.Principal`): a seat, or a credential and the seat it acts as. */
+/** Who acts on a repository (`gitlet.Principal`): a seat, or a credential and the seat it acts as. */
 export interface CodePrincipal {
   kind: "agent" | "operator" | (string & {});
   operator_id?: string;
@@ -8789,7 +8807,7 @@ export interface CodePrincipal {
   run?: CodePushRun;
 }
 
-/** The push that INTRODUCED a commit, as its Gitlet node's index holds it (`code.PushedBy`). */
+/** The push that INTRODUCED a commit, as its Gitlet node's index holds it (`gitlet.PushedBy`). */
 export interface CodePushedBy {
   push_id: string;
   position: LogPosition;
@@ -8798,7 +8816,7 @@ export interface CodePushedBy {
   via: string;
 }
 
-/** What a Gitlet node's index of pushes covers (`code.Coverage`). */
+/** What a Gitlet node's index of pushes covers (`gitlet.Coverage`). */
 export interface CodeCoverage {
   from: LogPosition;
   through: LogPosition;
@@ -8814,7 +8832,7 @@ export interface CodeResolved {
   moved?: LogPosition;
 }
 
-/** One entry of a directory's listing (`code.TreeEntry`), in git's own order. */
+/** One entry of a directory's listing (`gitlet.TreeEntry`), in git's own order. */
 export interface CodeTreeEntry {
   /** Git's: 040000 a directory, 100644 a file, 100755 an executable, 120000 a link, 160000 a submodule. */
   mode: string;
@@ -8827,7 +8845,7 @@ export interface CodeTreeEntry {
   size?: number;
 }
 
-/** One page of a directory's listing (`code.TreeAnswer`). */
+/** One page of a directory's listing (`gitlet.TreeAnswer`). */
 export interface CodeTreeAnswer {
   tree: string;
   path?: string;
@@ -8836,7 +8854,7 @@ export interface CodeTreeAnswer {
   total: number;
 }
 
-/** One page of a file's lines (`code.BlobAnswer`). */
+/** One page of a file's lines (`gitlet.BlobAnswer`). */
 export interface CodeBlobAnswer {
   path?: string;
   oid: string;
@@ -8855,7 +8873,7 @@ export interface CodeBlobAnswer {
   continues?: boolean;
 }
 
-/** One commit of a history (`code.LogCommit`), every unbounded field described past its bound. */
+/** One commit of a history (`gitlet.LogCommit`), every unbounded field described past its bound. */
 export interface CodeLogCommit {
   oid: string;
   parents?: string[];
@@ -8871,7 +8889,7 @@ export interface CodeLogCommit {
   subject_bytes?: number;
 }
 
-/** One page of a history (`code.LogAnswer`), newest first by generation. */
+/** One page of a history (`gitlet.LogAnswer`), newest first by generation. */
 export interface CodeLogAnswer {
   path?: string;
   commits: CodeLogCommit[] | null;
@@ -8879,7 +8897,7 @@ export interface CodeLogAnswer {
   complete?: boolean;
 }
 
-/** One line of a blame (`code.BlameLine`): its number, the commit that last changed it, and its text. */
+/** One line of a blame (`gitlet.BlameLine`): its number, the commit that last changed it, and its text. */
 export interface CodeBlameLine {
   line: number;
   commit: string;
@@ -8889,7 +8907,7 @@ export interface CodeBlameLine {
   text_bytes?: number;
 }
 
-/** A commit a blame's lines name (`code.BlameCommit`). */
+/** A commit a blame's lines name (`gitlet.BlameCommit`). */
 export interface CodeBlameCommit {
   author?: string;
   author_email?: string;
@@ -8899,7 +8917,7 @@ export interface CodeBlameCommit {
   subject_bytes?: number;
 }
 
-/** One page of a blame (`code.BlameAnswer`): its lines, and each commit they name once. */
+/** One page of a blame (`gitlet.BlameAnswer`): its lines, and each commit they name once. */
 export interface CodeBlameAnswer {
   path: string;
   start_line: number;
@@ -8935,7 +8953,7 @@ export interface CodeGitAnswer {
   coverage?: CodeCoverage;
 }
 
-/** How two commits relate (`code.CompareAnswer`). */
+/** How two commits relate (`gitlet.CompareAnswer`). */
 export interface CodeCompareFacts {
   /** The commits compared, whole; their best common ancestor, absent for histories that share none. */
   base: string;
@@ -8970,7 +8988,7 @@ export interface CodeComparisonAnswer extends CodeGitAnswer {
   preview: CodeMergePreview;
 }
 
-/** A change as a row about it names it (`code.ChangeName`): its repository, reference, title and state. */
+/** A change as a row about it names it (`gitlet.ChangeName`): its repository, reference, title and state. */
 export interface CodeChangeName {
   repo: string;
   ref: string;
@@ -8997,7 +9015,7 @@ export interface CodeCommitAnswer {
   level: ReadLevel;
 }
 
-/** One live entry of a branch's merge queue (`code.QueueRow`), in queue order. */
+/** One live entry of a branch's merge queue (`gitlet.QueueRow`), in queue order. */
 export interface CodeQueueRow {
   repo_id: string;
   repo: string;
@@ -9023,7 +9041,7 @@ export interface CodeQueueRow {
   enqueued_at: string;
 }
 
-/** One candidate a merge queue built (`code.CandidateRow`): a train's merge of its entries onto `base_oid`. */
+/** One candidate a merge queue built (`gitlet.CandidateRow`): a train's merge of its entries onto `base_oid`. */
 export interface CodeCandidateRow {
   repo_id: string;
   candidate_id: string;
@@ -9039,7 +9057,7 @@ export interface CodeCandidateRow {
 }
 
 /**
- * One entry a queue put out lately (`code.EjectedRow`): the change, who
+ * One entry a queue put out lately (`gitlet.EjectedRow`): the change, who
  * enqueued it, why, and the required checks that failed on what it was tested
  * in or the paths its merge conflicted on.
  */
@@ -9075,7 +9093,7 @@ export interface CodeQueueAnswer {
 
 /**
  * One attempt of one check of one commit, checked for one branch
- * (`code.CheckRow`): its key, where it stands, what it was checking, and what
+ * (`gitlet.CheckRow`): its key, where it stands, what it was checking, and what
  * its queue, its run and its ending say.
  */
 export interface CodeCheckRow {
@@ -9114,7 +9132,7 @@ export interface CodeCheckRow {
   url?: string;
 }
 
-/** One failure an ending names (`code.CheckFailure`): where, which test, and what it said. */
+/** One failure an ending names (`gitlet.CheckFailure`): where, which test, and what it said. */
 export interface CodeCheckFailure {
   path?: string;
   line?: number;
@@ -9122,7 +9140,7 @@ export interface CodeCheckFailure {
   message: string;
 }
 
-/** One attempt read whole (`code.CheckDetail`): its row, its definition, its tail, its failures and its log. */
+/** One attempt read whole (`gitlet.CheckDetail`): its row, its definition, its tail, its failures and its log. */
 export interface CodeCheckDetail extends CodeCheckRow {
   def?: { name: string; run: string; timeout_seconds: number; paths?: string[]; run_in?: string };
   tail?: string;

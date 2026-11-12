@@ -135,6 +135,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// AND THE SSH TOOLS, the same way: registered for every seat, offered
 	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
 	deps.SSH = SSHToolDeps(e)
+	// AND THE ATLAS TOOLS, on the same deps the operator catalogue builds
+	// per call: a seat reads the atlas within whoever woke its turn.
+	deps.Atlas = AtlasToolDeps(e)
 	deps.Delegated = DelegatedToolDeps(e)
 	// AND THE RELEASE REQUESTS' PULL REQUESTS, where the company runs GitHub:
 	// read and merged as the requesting seat's own app (releasepulls.go).

@@ -238,7 +238,7 @@ type codec[T any] struct {
 // writeLines coalesces this node's read-modify-writes of one bucket's keys:
 // per key, ONE compare-and-swap decides every write in flight on it.
 //
-// A GROUP COMMIT PER KEY, the code committer's shape (internal/code's
+// A GROUP COMMIT PER KEY, the code committer's shape (internal/gitlet's
 // Committer): one attempt in flight at a time, no linger, and every write
 // that queued while it was in flight in the next. An attempt reads the record
 // ONCE and decides each write IN ARRIVAL ORDER against what the ones before

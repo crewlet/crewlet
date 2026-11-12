@@ -3,7 +3,7 @@ package codesearch
 import (
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -42,7 +42,7 @@ func NewWire(ring recordseal.Keyring) (*Wire, error) {
 }
 
 // Request is one round of a scatter: the search, WHO ASKS IT — judged by
-// every answering node as a read of each repository is ([code.GitQuery]'s
+// every answering node as a read of each repository is ([gitlet.GitQuery]'s
 // Asker, CeilingSeat and Turn) — and which node answers for which
 // repository.
 type Request struct {
@@ -52,17 +52,17 @@ type Request struct {
 	ID       string    `json:"id"`
 	Deadline time.Time `json:"deadline"`
 
-	Asker       code.Principal     `json:"asker"`
+	Asker       gitlet.Principal   `json:"asker"`
 	CeilingSeat string             `json:"ceiling_seat,omitempty"`
 	Turn        string             `json:"turn,omitempty"`
 	Fresh       statelog.Freshness `json:"fresh"`
 	// Head is the code log's head as the asker's linearizable listing of
-	// the repositories read it (code.GitQuery.Head), zero where it listed
+	// the repositories read it (gitlet.GitQuery.Head), zero where it listed
 	// them at another level: each repository's one second look syncs to it
 	// rather than taking a barrier of its own, so a search naming a ref most
 	// repositories lack costs the fleet the one barrier its listing took.
-	Head   statelog.Position `json:"head,omitzero"`
-	Search code.SearchQuery  `json:"search"`
+	Head   statelog.Position  `json:"head,omitzero"`
+	Search gitlet.SearchQuery `json:"search"`
 
 	// Assign is every node asked this round and the repositories it answers
 	// for, each repository named under exactly one node.
@@ -79,9 +79,9 @@ type Assigned struct {
 	// line), so the node can keep only the first Limit of them: what no other
 	// node's hits can come before.
 	Name string `json:"name"`
-	// Home lets the node fill a copy it does not hold ([code.GitQuery].Home):
+	// Home lets the node fill a copy it does not hold ([gitlet.GitQuery].Home):
 	// set for the first node of the repository's order, and for its runner-up
-	// where that node passed the fill on ([code.UnreadyReason.PassesFill]) or
+	// where that node passed the fill on ([gitlet.UnreadyReason.PassesFill]) or
 	// did not answer at all.
 	Home bool `json:"home,omitempty"`
 	// After is the place the search continues from ([Key]), set on the one
@@ -102,12 +102,12 @@ type Assigned struct {
 type Key struct {
 	Repo string `json:"repo"`
 	Tip  string `json:"tip"`
-	code.SearchAfter
+	gitlet.SearchAfter
 }
 
 // KeyOf is h's place, h read at tip.
 func KeyOf(h Hit, tip string) Key {
-	return Key{Repo: h.Repo, Tip: tip, SearchAfter: code.SearchAfterOf(h.SearchHit)}
+	return Key{Repo: h.Repo, Tip: tip, SearchAfter: gitlet.SearchAfterOf(h.SearchHit)}
 }
 
 // of is k where repo is k's repository, and nil otherwise or where k is.
@@ -121,7 +121,7 @@ func (k *Key) of(repo string) *Key {
 // continueIn makes sq, a search of repo, the search continued after k where
 // repo is k's repository — at k's commit, past k's line — and leaves it as it
 // is otherwise.
-func (k *Key) continueIn(repo string, sq *code.SearchQuery) {
+func (k *Key) continueIn(repo string, sq *gitlet.SearchQuery) {
 	if k = k.of(repo); k == nil {
 		return
 	}
@@ -161,14 +161,14 @@ const (
 	// OutcomeSearched means the node answered its lines.
 	OutcomeSearched Outcome = "searched"
 	// OutcomeUnready means the node could not answer it now, for a reason about
-	// the node (code.ErrGitUnready); its runner-up is asked.
+	// the node (gitlet.ErrGitUnready); its runner-up is asked.
 	OutcomeUnready Outcome = "unready"
 	// OutcomeNotPermitted means the node judged the asker's grant and it does not
-	// cover the repository (code.ErrNotPermitted) — a chart that moved since
+	// cover the repository (gitlet.ErrNotPermitted) — a chart that moved since
 	// the asker's listing.
 	OutcomeNotPermitted Outcome = "not_permitted"
 	// OutcomeNoRef means the repository holds no such ref or commit
-	// (code.ErrRefNotFound, code.ErrObjectNotFound): nothing in it to search
+	// (gitlet.ErrRefNotFound, gitlet.ErrObjectNotFound): nothing in it to search
 	// at what the query names.
 	OutcomeNoRef Outcome = "no_ref"
 	// OutcomeFailed means the node refused it for any other reason — a request
@@ -193,12 +193,12 @@ type RepoResult struct {
 	RepoID  string  `json:"repo_id"`
 	Outcome Outcome `json:"outcome"`
 	// Tip, Via, SkippedFiles and Truncated are its answer's, where searched.
-	Tip          string         `json:"tip,omitempty"`
-	Via          code.SearchVia `json:"via,omitempty"`
-	SkippedFiles int            `json:"skipped_files,omitempty"`
-	Truncated    bool           `json:"truncated,omitempty"`
+	Tip          string           `json:"tip,omitempty"`
+	Via          gitlet.SearchVia `json:"via,omitempty"`
+	SkippedFiles int              `json:"skipped_files,omitempty"`
+	Truncated    bool             `json:"truncated,omitempty"`
 	// Unready is the node's reason, where unready.
-	Unready code.UnreadyReason `json:"unready,omitempty"`
+	Unready gitlet.UnreadyReason `json:"unready,omitempty"`
 	// Detail is the node's sentence, where not searched.
 	Detail string `json:"detail,omitempty"`
 }
@@ -207,5 +207,5 @@ type RepoResult struct {
 type Hit struct {
 	// Repo is the repository's name.
 	Repo string `json:"repo"`
-	code.SearchHit
+	gitlet.SearchHit
 }

@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
-	codecompact "github.com/crewlet/crewlet/internal/code/compact"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
-	codehome "github.com/crewlet/crewlet/internal/code/home"
-	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	gitletcompact "github.com/crewlet/crewlet/internal/gitlet/compact"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
+	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
+	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -47,7 +47,7 @@ func BoxGitURLOf(e *Engine) string { return e.boxGitURL }
 // GitReadForTest is a read of a repository by object id through e's own estate
 // router — the repository's home Gitlet node first, this node at its place — for
 // a test outside the package that drives the git walk through a running engine.
-func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAnswer, error) {
+func GitReadForTest(ctx context.Context, e *Engine, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	return e.router.Code().GitRead(ctx, q)
 }
 
@@ -55,7 +55,7 @@ func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAn
 // repository's home Gitlet node first, this node at its place — for a test
 // outside the package that drives the git write's walk through a running
 // engine.
-func GitWriteForTest(ctx context.Context, e *Engine, w code.EngineWrite) (code.EngineWriteResult, error) {
+func GitWriteForTest(ctx context.Context, e *Engine, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	return e.router.Code().GitWrite(ctx, w)
 }
 
@@ -72,18 +72,18 @@ func CodeReadingForTest(ctx context.Context, e *Engine) statelog.Reading {
 
 // WithCommitterPublisher is opts with wrap standing between a data node's
 // committer and the code log's write authority it publishes through
-// ([code.CommitterOptions.Publisher]), for a case outside the package whose
+// ([gitlet.CommitterOptions.Publisher]), for a case outside the package whose
 // subject is what a running node's committer raises — a repository's queue
 // filled behind a batch held at its publish, rather than by a burst raced
 // against batches a healthy committer lands in milliseconds.
-func WithCommitterPublisher(opts Options, wrap func(code.Publisher) code.Publisher) Options {
+func WithCommitterPublisher(opts Options, wrap func(gitlet.Publisher) gitlet.Publisher) Options {
 	opts.committerPublisher = wrap
 	return opts
 }
 
 // CommitterOf is the committer e's runtime decides pushes with, nil where it
 // built none, for a case outside the package that proposes to it directly.
-func CommitterOf(e *Engine) *code.Committer {
+func CommitterOf(e *Engine) *gitlet.Committer {
 	if n := e.native.Load(); n != nil {
 		return n.committer
 	}
@@ -190,22 +190,22 @@ func WithGitMemory(opts Options, memory int64) Options {
 
 // WithCompactorEstate is opts with wrap standing between a Gitlet node's
 // compactor and the router's code seam it lists and proposes through
-// ([codecompact.Options.Estate]), for a case outside the package whose subject
+// ([gitletcompact.Options.Estate]), for a case outside the package whose subject
 // is what a running node's compactor raises — a repository shown at the pack
 // bound without two thousand packs pushed into it.
-func WithCompactorEstate(opts Options, wrap func(codecompact.Estate) codecompact.Estate) Options {
+func WithCompactorEstate(opts Options, wrap func(gitletcompact.Estate) gitletcompact.Estate) Options {
 	opts.compactorEstate = wrap
 	return opts
 }
 
 // WithHomeSeams is opts with wrap standing between a Gitlet node's home change
 // work and the router's code seam and Gitlet's chain builder it works
-// through ([codehome.Options.Estate], [codehome.Options.Chains]), for a case
+// through ([gitlethome.Options.Estate], [gitlethome.Options.Chains]), for a case
 // outside the package whose subject is what a running node's queue worker
 // raises — a queue asked past its capacity, shown it without the changes, the
 // passed checks and the hour of rounds a real queue needs to fall behind.
 func WithHomeSeams(opts Options,
-	wrap func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)) Options {
+	wrap func(gitlethome.Estate, gitlethome.Chains) (gitlethome.Estate, gitlethome.Chains)) Options {
 	opts.homeSeams = wrap
 	return opts
 }

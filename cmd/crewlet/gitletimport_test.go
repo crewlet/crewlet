@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -197,7 +197,7 @@ func (h gitletHost) liveBytes(t *testing.T) int64 {
 // as a person's git lists it.
 func (h gitletHost) served(t *testing.T) map[string]string {
 	t.Helper()
-	refs := codetest.PersonWithToken(t, h.token).LsRemote(h.base+"/git/web.git", 2)
+	refs := gitlettest.PersonWithToken(t, h.token).LsRemote(h.base+"/git/web.git", 2)
 	delete(refs, "HEAD")
 	return refs
 }
@@ -291,7 +291,7 @@ func TestImportStepsALargeHistoryUnderThePushLimit(t *testing.T) {
 			t.Fatalf("the objects of push %d: %v\n%s", i+1, err, stderr)
 		}
 		objects := int64(strings.Count(listed, "\n"))
-		if bound := importLimit + code.IndexBytesFor(objects) + code.ReverseBytesFor(objects); p.PackBytes > bound {
+		if bound := importLimit + gitlet.IndexBytesFor(objects) + gitlet.ReverseBytesFor(objects); p.PackBytes > bound {
 			t.Errorf("push %d of %d stored %d bytes for %d objects, past the limit and their indexes (%d)", i+1,
 				len(pushes), p.PackBytes, objects, bound)
 		}
@@ -394,7 +394,7 @@ func TestAnImportPushesThePackEachStepWasMeasuredAs(t *testing.T) {
 		t.Errorf("web records %d pushes, want the history past one push in steps:\n%s", len(pushes), out)
 	}
 	for i, p := range pushes {
-		if p.PackBytes > importLimit+code.IndexBytesFor(512)+code.ReverseBytesFor(512) {
+		if p.PackBytes > importLimit+gitlet.IndexBytesFor(512)+gitlet.ReverseBytesFor(512) {
 			t.Errorf("push %d of %d stored %s, past the limit and the indexes of its few hundred objects", i+1,
 				len(pushes), humanBytes(p.PackBytes))
 		}
@@ -463,7 +463,7 @@ func TestAStepsMeasuredCopyIsThePackItsPushSends(t *testing.T) {
 	git.Run(t, "", "--git-dir="+node, "config", "receive.unpackLimit", "1")
 
 	imp := &importer{g: op, name: "web", clone: source, work: t.TempDir(), budget: importLimit,
-		maxStored: code.MaxPackBytes}
+		maxStored: gitlet.MaxPackBytes}
 	remote := &remoteRefs{refs: map[string]string{"refs/heads/b": oid("refs/heads/b~1")},
 		held: map[string]bool{oid("refs/heads/b~1"): true}}
 	step := &importStep{cmds: []importCmd{{oid: oid("refs/heads/a"), ref: "refs/heads/a"},
@@ -521,7 +521,7 @@ func TestAStepsBuildIsIndexedBeforeItsRepositoryBorrowsTheClone(t *testing.T) {
 		"esac\n")
 	step, remote, source := aStepOverAHeldCommit(t)
 	imp := &importer{g: operatorGit{path: operators, environ: os.Environ()}, clone: source, work: t.TempDir(),
-		budget: importLimit, maxStored: code.MaxPackBytes}
+		budget: importLimit, maxStored: gitlet.MaxPackBytes}
 	if _, _, past, err := imp.build(t.Context(), step, remote); err != nil || past {
 		t.Fatalf("the step's build: past %v, %v", past, err)
 	}
@@ -553,7 +553,7 @@ func TestAStepsRepositoryBorrowsTheCloneByItsAbsolutePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	imp := &importer{g: operatorGit{path: hermeticGit(t), environ: os.Environ()}, clone: clone, work: ".",
-		budget: importLimit, maxStored: code.MaxPackBytes}
+		budget: importLimit, maxStored: gitlet.MaxPackBytes}
 	if _, _, past, err := imp.build(t.Context(), step, remote); err != nil || past {
 		t.Fatalf("the step's build: past %v, %v", past, err)
 	}
@@ -755,7 +755,7 @@ func TestImportContinuesABranchItStoppedPartWayAlong(t *testing.T) {
 	}
 	git, url, bare := hist.load(t)
 	earlier := strings.TrimSpace(git.Run(t, "", "--git-dir="+bare, "rev-parse", "main~3"))
-	person := codetest.PersonWithToken(t, h.token)
+	person := gitlettest.PersonWithToken(t, h.token)
 	if _, stderr, err := person.Git().Try(t, "", nil, "--git-dir="+bare, "push", "-q", h.base+"/git/web.git",
 		earlier+":refs/heads/main"); err != nil {
 		t.Fatalf("the earlier step: %v\n%s", err, stderr)
@@ -902,28 +902,28 @@ func TestABatchIsCutWhereThePushsRecordRuleCutsIt(t *testing.T) {
 	if !config.ValidNodeID(importWidestNode) || config.ValidNodeID(importWidestNode+"n") {
 		t.Fatalf("importWidestNode is %d bytes, not the widest node id config admits", len(importWidestNode))
 	}
-	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 4<<10),
+	person := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: strings.Repeat("o", 4<<10),
 		Seat: strings.Repeat("s", 4<<10)}
 	imp := &importer{principal: person}
 	refs := func(fill string) []queuedRef {
-		out := make([]queuedRef, code.MaxCommandsPerPush)
+		out := make([]queuedRef, gitlet.MaxCommandsPerPush)
 		for i := range out {
 			name := fmt.Sprintf("refs/tags/%04d", i)
-			name += strings.Repeat(fill, code.MaxRefNameBytes-len(name))
+			name += strings.Repeat(fill, gitlet.MaxRefNameBytes-len(name))
 			out[i] = queuedRef{sourceRef: sourceRef{ref: name, oid: fmt.Sprintf("%040x", i+1), kind: "commit"}}
 		}
 		return out
 	}
 	asked := func(rs []queuedRef) error {
-		cmds := make([]code.Command, len(rs))
+		cmds := make([]gitlet.Command, len(rs))
 		for i, r := range rs {
-			cmds[i] = code.Command{Ref: r.ref, Old: code.ZeroOID, New: r.oid}
+			cmds[i] = gitlet.Command{Ref: r.ref, Old: gitlet.ZeroOID, New: r.oid}
 		}
-		return code.Proposal{Principal: person, Via: code.ViaGit, Node: importWidestNode,
+		return gitlet.Proposal{Principal: person, Via: gitlet.ViaGit, Node: importWidestNode,
 			Commands: cmds}.ValidateCommands()
 	}
 
-	if n, err := imp.recordHolds(refs("a")); err != nil || n != code.MaxCommandsPerPush {
+	if n, err := imp.recordHolds(refs("a")); err != nil || n != gitlet.MaxCommandsPerPush {
 		t.Errorf("a thousand plain refs of the longest: %d, %v — want one batch of all of them", n, err)
 	}
 	wide := refs("&")
@@ -931,12 +931,12 @@ func TestABatchIsCutWhereThePushsRecordRuleCutsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recordHolds of wide refs: %v", err)
 	}
-	var tooWide *code.TooWideError
+	var tooWide *gitlet.TooWideError
 	if n >= len(wide) || asked(wide[:n]) != nil || !errors.As(asked(wide[:n+1]), &tooWide) {
 		t.Errorf("recordHolds cut %d wide refs at %d, which is not where the node's rule cuts them", len(wide), n)
 	}
 
-	huge := &importer{principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 1<<20),
+	huge := &importer{principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: strings.Repeat("o", 1<<20),
 		Seat: "founder"}}
 	_, err = huge.recordHolds(wide[:1])
 	if err == nil || !errors.As(err, &tooWide) || !strings.Contains(err.Error(), "no push by this token can land") ||
@@ -1025,7 +1025,7 @@ func TestAnImportLandsTheSourcesRefs(t *testing.T) {
 		t.Fatalf("gitlet import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	wantSameRefs(t, h, git, bare)
-	person := codetest.PersonWithToken(t, h.token)
+	person := gitlettest.PersonWithToken(t, h.token)
 	clone := filepath.Join(t.TempDir(), "clone.git")
 	if _, stderr, err := person.Git().Try(t, "", nil, "clone", "-q", "--mirror", h.base+"/git/web.git",
 		clone); err != nil {
@@ -1322,7 +1322,7 @@ func (h gitletHost) runImport(t *testing.T, url, git string, tune func(*importer
 }
 
 // AN IMPORT HOLDS EACH STEP TO WHAT ONE PUSH MAY STORE. The node refuses a
-// push whose bundle — its pack, .idx and .rev — is past code.MaxPackBytes
+// push whose bundle — its pack, .idx and .rev — is past gitlet.MaxPackBytes
 // (pack_too_large), so a step whose stored bytes would pass it is cut shorter
 // before it is sent, as one whose pack passes the budget is. That bound is a
 // gibibyte and a quarter, which no case can reach, so the case lowers the
@@ -1460,7 +1460,7 @@ func TestImportContinuesABranchHeldAtASecondParentAncestor(t *testing.T) {
 	}
 	git, url, bare := hist.load(t)
 	held := strings.TrimSpace(git.Run(t, "", "--git-dir="+bare, "rev-parse", "side"))
-	person := codetest.PersonWithToken(t, h.token)
+	person := gitlettest.PersonWithToken(t, h.token)
 	if _, stderr, err := person.Git().Try(t, "", nil, "--git-dir="+bare, "push", "-q", h.base+"/git/web.git",
 		held+":refs/heads/main"); err != nil {
 		t.Fatalf("main at side's commit: %v\n%s", err, stderr)
@@ -1720,7 +1720,7 @@ func TestImportCarriesAMergesHistoryOnlyOnABranchItCanFastForward(t *testing.T) 
 			if !tc.vendor {
 				git.Run(t, "", "--git-dir="+bare, "update-ref", "-d", "refs/heads/vendor")
 			}
-			person := codetest.PersonWithToken(t, h.token)
+			person := gitlettest.PersonWithToken(t, h.token)
 			if _, stderr, err := person.Git().Try(t, "", nil, append([]string{"--git-dir=" + bare, "push", "-q",
 				h.base + "/git/web.git"}, refspecs...)...); err != nil {
 				t.Fatalf("the refs the repository holds: %v\n%s", err, stderr)
@@ -1761,7 +1761,7 @@ func TestImportCountsTheBranchCarryingAMergesHistoryInWhatIsLeft(t *testing.T) {
 	}
 	theirs.commit("refs/heads/theirs", 0, files)
 	_, _, theirsBare := theirs.load(t)
-	person := codetest.PersonWithToken(t, h.token)
+	person := gitlettest.PersonWithToken(t, h.token)
 	if _, stderr, err := person.Git().Try(t, "", nil, "--git-dir="+theirsBare, "push", "-q",
 		h.base+"/git/web.git", "refs/heads/theirs"); err != nil {
 		t.Fatalf("the repository's own ref: %v\n%s", err, stderr)
@@ -1971,8 +1971,8 @@ func TestAnImportOpensNoChange(t *testing.T) {
 	if !ok {
 		t.Fatal("the node hosts no code")
 	}
-	read, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadChanges, Repo: "web",
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "ops", Seat: "founder"},
+	read, err := seam.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadChanges, Repo: "web",
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "ops", Seat: "founder"},
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
 	if err != nil {
 		t.Fatalf("list web's changes: %v", err)
@@ -2103,7 +2103,7 @@ func TestImportRefusesTheFirstDivergedBranchInTheSourcesOrder(t *testing.T) {
 		}
 		refspecs = append(refspecs, value+":"+ref)
 	}
-	person := codetest.PersonWithToken(t, h.token)
+	person := gitlettest.PersonWithToken(t, h.token)
 	if _, stderr, err := person.Git().Try(t, "", nil, append([]string{"--git-dir=" + bare, "push", "-q",
 		h.base + "/git/web.git"}, refspecs...)...); err != nil {
 		t.Fatalf("the earlier branches: %v\n%s", err, stderr)

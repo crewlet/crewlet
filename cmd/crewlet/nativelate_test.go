@@ -13,10 +13,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/code/codetest"
-	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
@@ -206,7 +206,7 @@ code:
 
 	// THE GIT ROUTES: the founder clones the empty repository and pushes
 	// main through the API, with their own token as git's Basic password.
-	founder := codetest.PersonWithToken(t, token)
+	founder := gitlettest.PersonWithToken(t, token)
 	dir := founder.Clone(repo)
 	commit := founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
 	if pushed := founder.Push(t.Context(), dir, repo, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
