@@ -20,10 +20,10 @@ import (
 // engine drives a box's executor: a main thread's bookkeeping, its brief, its
 // model's calls and their results, the notes' hook records at a batch and at
 // Stop, a firing that timed out, a subagent's prompt, its coordinator's message
-// and the main thread's notification of its end, and a skill's text; and, as
-// 2.1.118 wrote it, a skill's PostToolUse hook. Every id in them is synthetic,
-// and long text is shortened. A compaction's boundary is the one record no
-// measured run wrote, so it is built as 2.1.310's own code builds one.
+// and the main thread's notification of its end, a skill's text, and a
+// compaction's boundary and the summary record after it; and, as 2.1.118 wrote
+// it, a skill's PostToolUse hook. Every id in them is synthetic, and long text
+// is shortened.
 
 const (
 	ctSession   = "5e55100a-0000-4000-8000-000000000001"
@@ -261,13 +261,32 @@ func ctSkillText(parent, uuid string) string {
 		ctSkillCall + `",` + ctTail("2.1.310") + `}`
 }
 
-// ctBoundary is a compaction's boundary, as 2.1.310's own code builds one and
-// its writer chains it.
-func ctBoundary(logicalParent, uuid string) string {
-	return `{"parentUuid":null,"logicalParentUuid":"` + logicalParent + `","isSidechain":false,"type":"system",` +
-		`"subtype":"compact_boundary","content":"Conversation compacted","level":"info","compactMetadata":` +
-		`{"trigger":"auto","preTokens":160000},"uuid":"` + uuid + `","timestamp":"` + ctStamp + `",` +
-		ctTail("2.1.310") + `}`
+// ctSlug is the name 2.1.310 gives a session it compacted.
+const ctSlug = "test-slug-words"
+
+// ctBoundary is a compaction's boundary, as 2.1.310 writes one: it roots a
+// chain of its own and names the last record before it as its logical parent,
+// and its metadata names the records the compaction kept, kept, and the summary
+// record that anchors them.
+func ctBoundary(uuid, summary string, kept ...string) string {
+	last, ids := kept[len(kept)-1], `"`+strings.Join(kept, `","`)+`"`
+	return `{"parentUuid":null,"logicalParentUuid":"` + last + `","isSidechain":false,"type":"system",` +
+		`"subtype":"compact_boundary","content":"Conversation compacted","isMeta":false,"timestamp":"` + ctStamp +
+		`","uuid":"` + uuid + `","level":"info","compactMetadata":{"trigger":"manual","preTokens":120,` +
+		`"durationMs":53,"preservedSegment":{"headUuid":"` + kept[0] + `","anchorUuid":"` + summary +
+		`","tailUuid":"` + last + `"},"preservedMessages":{"anchorUuid":"` + summary + `","uuids":[` + ids +
+		`],"allUuids":[` + ids + `]},"postTokens":2602,"cumulativeDroppedTokens":0},` + ctTail("2.1.310") +
+		`,"slug":"` + ctSlug + `"}`
+}
+
+// ctCompactSummary is the record a compaction hands its summary on in, chained
+// to its boundary, as 2.1.310 writes one.
+func ctCompactSummary(boundary, uuid string) string {
+	return `{"parentUuid":"` + boundary + `","isSidechain":false,"promptId":"` + ctPrompt + `","type":"user",` +
+		`"message":{"role":"user","content":"This session is being continued from a previous conversation that ran ` +
+		`out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nthe summary"},` +
+		`"isVisibleInTranscriptOnly":true,"isCompactSummary":true,"uuid":"` + uuid + `","timestamp":"` + ctStamp +
+		`","turnPosition":{"promptIndex":0,"turnIndex":1},` + ctTail("2.1.310") + `,"slug":"` + ctSlug + `"}`
 }
 
 // ctThread is lines as a thread's file holds them, each ended by its break.
@@ -910,31 +929,56 @@ func TestAnAbsentParentIsNotANullOne(t *testing.T) {
 	}
 }
 
-// A RESTART IS A COMPACTION'S BOUNDARY OR A LATER ROOT: the thread's first
-// chained record roots the chain the thread began with and is none, however
-// much bookkeeping comes before it, so a thread as measured restarts nowhere;
-// a root after it is one, and so is a boundary, wherever it falls. A thread
-// whose first chained record is no root (a trimmed file, its start gone) has
-// every root as a restart, its first included.
+// A RESTART IS WHERE WHAT CAME BEFORE MAY BE GONE from what a resume holds: a
+// compaction's boundary, wherever it falls; a root after the thread's first
+// chained record; and a first chained record that roots no chain, the start of
+// a thread whose head is gone. A trim after a compaction leaves exactly that, as
+// measured: the reply it kept, chained to a record the trim took, before the
+// boundary. The thread's first chained record that roots its chain is no
+// restart, however much bookkeeping comes before it, so a thread as measured
+// restarts nowhere, and a thread with no chained record at all restarts
+// nowhere either: it holds no chain to start over.
 //
 // Mutation: count every root, and the brief restarts every thread; count every
-// root but the first one seen, and a trimmed thread's first root is none.
-func TestARestartIsACompactBoundaryOrALaterRoot(t *testing.T) {
+// root but the first one seen, and the first root of a thread whose start is
+// gone is none; read a thread whose start is gone as whole, and one that never
+// roots again restarts nowhere; take the first record for the first chained
+// one, and the bookkeeping before a brief restarts the thread; drop the
+// boundary, and one that opens a thread is none.
+func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 	t.Parallel()
 	brief, again := ctBrief(ctUUID(1)), ctBrief(ctUUID(4))
 	tokens := ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered)
 	reply := ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`)
-	boundary := ctBoundary(ctUUID(3), ctUUID(5))
-	after := ctAssistant(ctUUID(5), ctUUID(6), `[{"type":"text","text":"done."}]`)
+	boundary, summary := ctBoundary(ctUUID(5), ctUUID(6), ctUUID(3)), ctCompactSummary(ctUUID(5), ctUUID(6))
+	// The file a trim after a compaction leaves, as 2.1.310 and 2.1.322 wrote it:
+	// the reply the compaction kept, chained to ctUUID(30), which the trim took;
+	// that reply's Stop firing and its summary; the boundary; the bookkeeping;
+	// and the summary record.
+	trimmed := []string{
+		ctAssistant(ctUUID(30), ctUUID(31), `[{"type":"text","text":"done."}]`),
+		ctAttachment(ctUUID(31), ctUUID(32), ctStopSuccess, ""),
+		ctSummary(ctUUID(32), ctUUID(33)),
+		ctBoundary(ctUUID(34), ctUUID(35), ctUUID(31), ctUUID(32), ctUUID(33)),
+		ctEnqueue, ctAtisLatch, ctCostState, ctMode,
+		ctCompactSummary(ctUUID(34), ctUUID(35)),
+	}
 	for name, tc := range map[string]struct {
 		lines    []string
 		restarts []int
 	}{
-		"a thread as measured":                            {lines: ctMain},
-		"a root after the first chained record":           {lines: []string{ctEnqueue, brief, tokens, reply, again}, restarts: []int{5}},
-		"a compaction's boundary":                         {lines: []string{ctEnqueue, brief, reply, boundary, after}, restarts: []int{4}},
-		"a boundary that opens a trimmed thread":          {lines: []string{ctEnqueue, boundary, after}, restarts: []int{2}},
-		"the first root of a thread trimmed of its start": {lines: []string{ctEnqueue, tokens, reply, again}, restarts: []int{4}},
+		"a thread as measured": {lines: ctMain},
+		"a root after the first chained record": {lines: []string{ctEnqueue, brief, tokens, reply, again},
+			restarts: []int{5}},
+		"a compaction's boundary, as measured": {lines: []string{ctEnqueue, brief, tokens, reply, ctMode, ctAtisLatch,
+			ctEnqueue, ctDequeue, boundary, summary}, restarts: []int{9}},
+		"a file a trim left, as measured": {lines: trimmed, restarts: []int{1, 4}},
+		"a boundary that opens a thread":  {lines: []string{ctEnqueue, boundary, summary}, restarts: []int{2}},
+		"a thread whose start is gone, and a root after it": {lines: []string{ctEnqueue, tokens, reply, again},
+			restarts: []int{2, 4}},
+		"a thread whose start is gone, that never roots again": {lines: []string{ctEnqueue, tokens, reply},
+			restarts: []int{2}},
+		"a thread with no chained record": {lines: []string{ctEnqueue, ctDequeue, ctAtisLatch, ctCostState}},
 	} {
 		got := ctRead(ctThread(tc.lines...), threadPlainMax)
 		if len(got.lines) != len(tc.lines) {

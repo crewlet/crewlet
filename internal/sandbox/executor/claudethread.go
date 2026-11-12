@@ -878,23 +878,39 @@ func (m threadMessage) Calls() []threadCall { return m.calls }
 
 // threadRestarts follows one thread's heads in order and says where its chain
 // RESTARTS: where what a resumed session is handed starts over, so what lies
-// before may be gone from it (a compaction summarised it, a trim dropped it).
+// before may be gone from it (a compaction summarised it, a trim dropped it,
+// the file lost it).
 type threadRestarts struct {
 	// chained is whether the thread's first chained record has been seen.
 	chained bool
 }
 
 // See reports whether the record with head h, the thread's next, is a
-// RESTART: a record of subtype compact_boundary, or one rooting a chain
-// (`parentUuid` literally null) that is not the thread's first chained record.
+// RESTART: a record of subtype compact_boundary; one rooting a chain
+// (`parentUuid` literally null) that is not the thread's first chained
+// record; or the thread's first chained record where it roots no chain.
 //
-// THE FIRST CHAINED RECORD, never the first root: a thread's bookkeeping
-// before its brief is no chain's, and its brief roots the chain the thread
-// began with, which is no restart. So a thread whose first chained record is
-// no root, a trimmed file whose start is gone, has every root as a restart,
-// its first included.
+// THE FIRST CHAINED RECORD, never the first record or the first root: a
+// thread's bookkeeping before its brief is no chain's, and its brief roots the
+// chain the thread began with, which is no restart. A first chained record
+// that roots no chain is the start of a thread whose head is gone: a trim
+// after a compaction keeps a reply chained to a record it dropped, and a file
+// can lose its start. What a resume holds of such a thread begins there, and
+// whatever lay before it, a pair or a call among it, is in no file left to
+// read, so it is a restart, and so is every root after it. Read as whole, a
+// thread that lost its start and never rooted again would restart nowhere,
+// and its reader would take what the lost head held for what never happened.
+//
+// A thread with no chained record restarts nowhere: it holds no chain to
+// start over, and what that means is its reader's to say.
 func (r *threadRestarts) See(h threadHead) bool {
-	restart := h.Subtype == subtypeCompactBoundary || (r.chained && h.Root())
+	first := h.Chained() && !r.chained
 	r.chained = r.chained || h.Chained()
-	return restart
+	switch {
+	case h.Subtype == subtypeCompactBoundary:
+		return true
+	case first:
+		return !h.Root()
+	}
+	return h.Root()
 }
