@@ -440,18 +440,23 @@ type OpenedJob struct {
 	// the build that reads its calls, so the launch names the one its own
 	// manager's runner declares, the one the job is started on, and a node that
 	// serves the job again after taking its seat over names its own runner's
-	// (internal/engine's reopenAgentRun). Nothing records it, and a build that
-	// does not know it serves the job reading no id.
+	// (internal/engine's reopenAgentRun) — each through the job's one
+	// constructor, which takes it ([PendingRun.NamedJob]). Nothing records it,
+	// and a build that does not know it serves the job reading no id.
 	CallIDMeta string
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
-// ([OpenedJob]), its calls numbered after lastSeq: the job and the round it
-// works in, off the one row. ONE CONSTRUCTOR for the launch that opens the job
-// and for a node that serves it again after taking its seat over
-// (internal/engine's reopenAgentRun), so neither names a job without its round.
-func (r PendingRun) NamedJob(lastSeq int) OpenedJob {
-	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq}
+// ([OpenedJob]), its calls numbered after lastSeq and each call's id read
+// under callIDMeta, the key the runner of the job's box declares
+// ([OpenedJob.CallIDMeta], "" for none): the job and the round it works in,
+// off the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
+// node that serves it again after taking its seat over (internal/engine's
+// reopenAgentRun), so neither names a job without its round, nor without the
+// key its calls' ids are read by — a job named without it would have every
+// call's id dropped without a word.
+func (r PendingRun) NamedJob(lastSeq int, callIDMeta string) OpenedJob {
+	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -732,9 +737,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND HOW ITS HARNESS NAMES ITS CALLS, as the runner the job is
 		// started on declares it: m's, which the spec was built with and
 		// which starts the box.
-		job := opened.NamedJob(opened.OpenedAfter)
-		job.CallIDMeta = m.CallIDMeta(req.Spec.Harness)
-		named, openErr := req.Opened(job)
+		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness)))
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)

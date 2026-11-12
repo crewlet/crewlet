@@ -46,7 +46,7 @@ func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 			// THE JOB'S SESSION'S LEDGER, bound to the job and its round as the
 			// launch binds the bridge's own.
 			l := &bridgeLedger{store: asking.pending}
-			l.bind(row.NamedJob(0))
+			l.bind(row.NamedJob(0, ""))
 			parkedOnAHeldCall(t, asking.pending, turnID, row.LaunchID)
 
 			// THE CALL ITS HARNESS GAVE UP ON LANDS DURING THE PARK, recorded as
