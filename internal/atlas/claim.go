@@ -402,7 +402,7 @@ func (c Claim) validate() error {
 		return errors.New("a claim says when it was seen")
 	}
 	if c.Denied && c.Source.Kind != SourcePerson &&
-		!(c.Source.Kind == SourceIntegration && c.Facet.Kind == FacetExists) {
+		(c.Source.Kind != SourceIntegration || c.Facet.Kind != FacetExists) {
 		// A PERSON DENIES ANY CLAIM. An integration's read denies only the
 		// entry itself: its retirement, once two complete reads missed it.
 		// It never denies a fact or a relation, which it withdraws instead.
