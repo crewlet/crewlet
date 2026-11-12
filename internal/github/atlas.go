@@ -206,6 +206,12 @@ func reads(held map[string]string, key string) bool {
 	return held[key] == string(LevelRead) || held[key] == string(LevelWrite)
 }
 
+// signs reports whether a seat's key signs an assertion for its app.
+func signs(seat SeatApp) bool {
+	_, err := AppJWT(seat.AppID, seat.Key, time.Now())
+	return err == nil
+}
+
 // open reads as one seat's installation: it reads the installation back,
 // mints the read's token and lists what the installation covers. False is an
 // installation the read cannot be made as, which is never a fault: it is not
@@ -217,7 +223,7 @@ func (r *atlasRead) open(ctx context.Context, seat SeatApp) (bool, error) {
 	}
 	// A KEY THAT DOES NOT PARSE signs nothing, which is a seat to finish
 	// setting up, never a fault of the read.
-	if _, err := AppJWT(seat.AppID, seat.Key, time.Now()); err != nil {
+	if !signs(seat) {
 		return false, nil
 	}
 	app, err := NewAppClient(seat.AppID, seat.Key, r.apiBase, nil)

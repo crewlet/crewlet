@@ -860,14 +860,14 @@ func TestNoCredentialShapeReachesTheAtlasFromGitHub(t *testing.T) {
 // recorded as a missing permission.
 func TestAListingThatFailsOrIsRateLimitedFailsTheRead(t *testing.T) {
 	t.Parallel()
-	for name, break_ := range map[string]func(*forge){
+	for name, fault := range map[string]func(*forge){
 		"a server fault":   func(f *forge) { f.refuse["/repos/Acme/API/actions/runs"] = http.StatusBadGateway },
 		"the rate limit":   func(f *forge) { f.limit = "/repos/Acme/API/deployments/30/statuses" },
 		"the repositories": func(f *forge) { f.refuse["/installation/repositories"] = http.StatusForbidden },
 		"an installation":  func(f *forge) { f.refuse["/app/installations/7"] = http.StatusInternalServerError },
 	} {
 		f := acme()
-		break_(f)
+		fault(f)
 		read, err := githubSource(t).Collect(t.Context(), f.input(t))
 		if err == nil || errors.Is(err, integration.ErrNotConfigured) || len(read.Claims) != 0 {
 			t.Errorf("%s: the read answered %d claims and %v", name, len(read.Claims), err)
