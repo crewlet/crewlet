@@ -123,7 +123,9 @@ export type AtlasFact =
   | "expires"
   | "issuer"
   | "validity"
-  | "certificate_type";
+  | "certificate_type"
+  | "monitor_state"
+  | "state_since";
 
 /** The grammar a fact's value is written in (`atlas.ValueType`). */
 type AtlasValueType =
@@ -175,7 +177,10 @@ export type AtlasSignalKind =
   | "model_sitting_out"
   | "model_failing"
   | "server_test_failed"
-  | "standing_alarm";
+  | "standing_alarm"
+  | "monitor_alerting"
+  | "monitor_warning"
+  | "monitor_no_data";
 
 /** How urgent a signal is (`atlas.Severity`). */
 type AtlasSeverity = "danger" | "warning";

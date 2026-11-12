@@ -2310,7 +2310,10 @@ const (
 	// draft to (draft.ts's mints, and every declaring screen, box and store
 	// moved onto them), merged on top of it, took it to 5841.8 KiB
 	// (5,982,024 bytes, +876, all script): 5842 KiB.
-	treeBudget = 5<<20 + 722<<10
+	// A monitor's state and since when, and the three signals a monitor
+	// raises on what it watches, named in the atlas words, took it to 5842.0
+	// KiB (5,982,209 bytes, +185, all script), one byte past it: 5843 KiB.
+	treeBudget = 5<<20 + 723<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

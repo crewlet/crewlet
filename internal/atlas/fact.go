@@ -65,6 +65,9 @@ const (
 	FactIssuer          Fact = "issuer"
 	FactValidity        Fact = "validity"
 	FactCertificateType Fact = "certificate_type"
+
+	FactMonitorState Fact = "monitor_state"
+	FactStateSince   Fact = "state_since"
 )
 
 // Spec is what one fact admits.
@@ -102,6 +105,19 @@ var (
 	validities       = []string{"active", "pending", "failed", "expired", "inactive"}
 	certificateTypes = []string{"universal", "advanced", "custom"}
 )
+
+// A monitor's state, as its vendor reports it folded into five words: unknown
+// covers every state that says nothing about what it watches (skipped,
+// ignored, not evaluated yet).
+const (
+	MonitorOK      = "ok"
+	MonitorWarn    = "warn"
+	MonitorAlert   = "alert"
+	MonitorNoData  = "no_data"
+	MonitorUnknown = "unknown"
+)
+
+var monitorStates = []string{MonitorOK, MonitorWarn, MonitorAlert, MonitorNoData, MonitorUnknown}
 
 func wordsOf[S ~string](set []S) []string {
 	out := make([]string, len(set))
@@ -168,6 +184,9 @@ var specs = sync.OnceValue(func() map[Fact]Spec {
 		FactIssuer:          {Type: TypeLabel, Kinds: []Kind{KindCertificate}},
 		FactValidity:        {Type: TypeWord, Words: validities, Kinds: []Kind{KindCertificate}},
 		FactCertificateType: {Type: TypeWord, Words: certificateTypes, Kinds: []Kind{KindCertificate}},
+
+		FactMonitorState: {Type: TypeWord, Words: monitorStates, Kinds: []Kind{KindMonitor}},
+		FactStateSince:   {Type: TypeInstant, Kinds: []Kind{KindMonitor}},
 	}
 })
 
@@ -183,6 +202,7 @@ var Facts = []Fact{
 	FactTransport, FactCommand, FactShared, FactServerName, FactServerVersion, FactToolCount,
 	FactOAuthIssuer, FactSignInExpires,
 	FactCovers, FactExpires, FactIssuer, FactValidity, FactCertificateType,
+	FactMonitorState, FactStateSince,
 }
 
 // Valid reports whether f is a member of the closed list.
