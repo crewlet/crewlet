@@ -713,6 +713,25 @@ func wireNumber(key string, raw json.RawMessage) (float64, error) {
 	return n, nil
 }
 
+// wireCount is raw, a key named key, held to a count: a whole number as JSON
+// writes one, its digits alone with no sign, fraction or exponent, that fits
+// an int64; 0 where the key is absent. Checked by its bytes before it is
+// decoded, for [wireRequiredString]'s reason: a null decodes into an int64 as
+// 0 with no error, and a sign as a negative count.
+func wireCount(key string, raw json.RawMessage) (int64, error) {
+	if raw == nil {
+		return 0, nil
+	}
+	if len(raw) == 0 || bytes.ContainsFunc(raw, func(r rune) bool { return r < '0' || r > '9' }) {
+		return 0, fmt.Errorf("%s is %s, not a count in digits alone", key, wireKind(raw))
+	}
+	var n int64
+	if err := wireDecode(raw, &n); err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return n, nil
+}
+
 // wireKind says what raw is: "absent" where its key is not there, else the
 // kind of JSON value it holds.
 func wireKind(raw json.RawMessage) string {
@@ -1215,6 +1234,123 @@ func (l threadLine) StopReason() (string, error) {
 		return "", fmt.Errorf("an assistant record's message: %w", err)
 	}
 	return wireString("stop_reason", message.StopReason)
+}
+
+// threadUsage is what a model's reply says of the request it answered
+// ([threadLine.Usage]): which reply it is, the model that wrote it, and what
+// the request took, in tokens.
+type threadUsage struct {
+	// ID is the message's `id`, which every record of one reply carries, since
+	// the harness writes a reply a record a block ([threadLine.StopReason]):
+	// "" where the key is absent and where it is the empty string, which Usage
+	// does not tell apart.
+	ID string
+	// Model is the message's `model`: the model that answered, or
+	// "<synthetic>" on a reply the harness wrote itself, as a resume writes one
+	// for a turn it found unanswered; "" where absent or empty.
+	Model string
+	// Input, CacheWrite, CacheRead and Output are the usage's `input_tokens`,
+	// `cache_creation_input_tokens`, `cache_read_input_tokens` and
+	// `output_tokens`, each as written: 0 where the usage does not name it, as
+	// the harness reads a count it does not find, and all four 0 where the
+	// record carries no usage.
+	Input, CacheWrite, CacheRead, Output int64
+}
+
+// Usage is what a model's reply says of the request it answered: an assistant
+// record's message's `id` and `model`, and its `usage`'s four counts. ok says
+// whether the message carries a `usage`: where it carries none, ID and Model
+// are handed over still, and every count is 0. Nothing, false and no error for
+// every record that is no assistant's, whatever its `message` carries: no user
+// record measured carries a usage, and an api-request-blob repeats what a
+// request sent.
+//
+// HELD TO ITS TYPES HERE, AND HERE ALONE, as a key one reader reads is: `id`
+// and `model` strings where present, `usage` an object where present, and
+// each count, where present, a whole number as JSON writes one, its digits
+// alone with no sign, fraction or exponent, that fits an int64 ([wireCount]).
+// Anything else is this accessor's error and never Message's, so a reshaped
+// usage costs only the reader that asks. A null usage, and a null count, are
+// errors too, never no usage or 0, though Claude Code itself reads them so:
+// no release measured writes either (every one of 1,891 replies measured
+// carries a string id and model and a usage of four whole counts), and a
+// figure refused costs its reader a reading, the direction in which it tells,
+// where one read as 0 would anchor it on a count nobody measured.
+//
+// THE USAGE'S OWN FOUR COUNTS: its `iterations`, whose last entry Claude Code
+// counts in their place where that entry is whole, are not read here, and
+// which of the two a reader counts is its own to judge.
+//
+// ITS READERS. The resumed count reads it on every main-thread reply, to
+// bound what a continued session's harness counts before its first request,
+// as Claude Code counts it to judge whether to compact there: from the newest
+// reply whose usage counts, its four counts' sum, OUTPUT among them, placed
+// at the first record of that reply's ID, which Claude Code takes off a
+// record that carries no usage too, so ID and Model come with every reply,
+// usage or not. The one that tells a relaunch which of its calls a kept
+// session holds (exact telling) reads ID alone, where it needs to know a
+// reply's records as one. Which reply counts, and what "<synthetic>" or an
+// empty ID means, are each reader's to judge, never this accessor's.
+//
+// Read off the line's one decode, its raw `message`, never a second read of
+// the line.
+func (l threadLine) Usage() (threadUsage, bool, error) {
+	if l.Head.Type != recordAssistant {
+		return threadUsage{}, false, nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a reply that names no usage.
+	if !wireObject(l.message) {
+		return threadUsage{}, false, fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		ID    json.RawMessage `json:"id"`
+		Model json.RawMessage `json:"model"`
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return threadUsage{}, false, fmt.Errorf("an assistant record's message: %w", err)
+	}
+	var (
+		u   threadUsage
+		err error
+	)
+	if u.ID, err = wireString("id", message.ID); err != nil {
+		return threadUsage{}, false, err
+	}
+	if u.Model, err = wireString("model", message.Model); err != nil {
+		return threadUsage{}, false, err
+	}
+	if message.Usage == nil {
+		return u, false, nil
+	}
+	if !wireObject(message.Usage) {
+		return threadUsage{}, false, fmt.Errorf("usage is %s, not an object", wireKind(message.Usage))
+	}
+	var counts struct {
+		Input      json.RawMessage `json:"input_tokens"`
+		CacheWrite json.RawMessage `json:"cache_creation_input_tokens"`
+		CacheRead  json.RawMessage `json:"cache_read_input_tokens"`
+		Output     json.RawMessage `json:"output_tokens"`
+	}
+	if err = wireDecode(message.Usage, &counts); err != nil {
+		return threadUsage{}, false, fmt.Errorf("usage: %w", err)
+	}
+	for _, c := range [...]struct {
+		key string
+		raw json.RawMessage
+		to  *int64
+	}{
+		{"usage.input_tokens", counts.Input, &u.Input},
+		{"usage.cache_creation_input_tokens", counts.CacheWrite, &u.CacheWrite},
+		{"usage.cache_read_input_tokens", counts.CacheRead, &u.CacheRead},
+		{"usage.output_tokens", counts.Output, &u.Output},
+	} {
+		if *c.to, err = wireCount(c.key, c.raw); err != nil {
+			return threadUsage{}, false, err
+		}
+	}
+	return u, true, nil
 }
 
 // ToolResultsCleared reports whether the record says the server CLEARED THE

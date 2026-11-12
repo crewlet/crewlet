@@ -772,18 +772,21 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // no object leaves the record's head and its message whole and is refused by
 // Hook alone, and an origin that is no object leaves the message and the hooks
 // whole and is refused by OriginKind alone. A reply's stop_reason that is no
-// string, null among them, leaves its message, its report of the edits applied
-// and its hooks whole, and is refused by StopReason alone, never read as "";
-// and its report of the edits applied, of the wrong shape, leaves its message
-// and its stop_reason whole and is refused by ToolResultsCleared alone. As
-// written, each reads: an origin's kind, and a user record's own
-// toolUseResult, raw, which no other record hands out.
+// string, null among them, leaves its message, its report of the edits
+// applied, its usage and its hooks whole, and is refused by StopReason alone,
+// never read as ""; its report of the edits applied, of the wrong shape,
+// leaves its message, its stop_reason and its usage whole and is refused by
+// ToolResultsCleared alone; and its usage of the wrong shape, or its id or
+// model of the wrong type, leaves its message, its stop_reason, its report and
+// its hooks whole and is refused by Usage alone. As written, each reads: an
+// origin's kind, and a user record's own toolUseResult, raw, which no other
+// record hands out.
 //
 // Mutation: hold the attachment to an object in the head, and the record whose
-// attachment is not one is no record at all; hold the stop_reason or the
-// report in Message, and a reply whose key is reshaped reads no message; read
-// a null stop_reason as none, and it reads as a reply that did not stop for
-// its calls.
+// attachment is not one is no record at all; hold the stop_reason, the report
+// or the usage in Message, and a reply whose key is reshaped reads no message;
+// read a null stop_reason as none, and it reads as a reply that did not stop
+// for its calls.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
@@ -861,6 +864,10 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		if _, isHook, err := line.Hook(); isHook || err != nil {
 			t.Errorf("a reply whose stop_reason is %s reads as a hook's record %t, %v", name, isHook, err)
 		}
+		if usage, ok, err := line.Usage(); !ok || err != nil || usage.ID != "msg_test" || usage.Input != 100 {
+			t.Errorf("a reply whose stop_reason is %s says its request took %+v (%t), %v; want its usage", name,
+				usage, ok, err)
+		}
 	}
 	for name, report := range map[string]string{
 		"a string": `"cleared"`,
@@ -876,6 +883,48 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 		if reason, err := line.StopReason(); reason != "tool_use" || err != nil {
 			t.Errorf("a reply whose report is %s stopped for %q, %v; want tool_use", name, reason, err)
+		}
+		if usage, ok, err := line.Usage(); !ok || err != nil || usage.ID != "msg_test" || usage.Input != 100 {
+			t.Errorf("a reply whose report is %s says its request took %+v (%t), %v; want its usage", name, usage,
+				ok, err)
+		}
+	}
+	for name, usage := range map[string]string{
+		"null":                    `null`,
+		"a list":                  `[100,0,0,20]`,
+		"of a count that is null": `{"input_tokens":null,"output_tokens":20}`,
+		"of a negative count":     `{"input_tokens":-100,"output_tokens":20}`,
+	} {
+		line := ctLine(t, ctReplace(t, call, ctUsage, `"usage":`+usage))
+		if got, ok, err := line.Usage(); err == nil {
+			t.Errorf("a reply whose usage is %s says its request took %+v (%t), want an error", name, got, ok)
+		}
+		if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall {
+			t.Errorf("a reply whose usage is %s reads the calls %+v, %v; want its call", name, m.Calls(), err)
+		}
+		if reason, err := line.StopReason(); reason != "tool_use" || err != nil {
+			t.Errorf("a reply whose usage is %s stopped for %q, %v; want tool_use", name, reason, err)
+		}
+		if cleared, err := line.ToolResultsCleared(); cleared || err != nil {
+			t.Errorf("a reply whose usage is %s reads as cleared %t, %v; want no clearing", name, cleared, err)
+		}
+		if _, isHook, err := line.Hook(); isHook || err != nil {
+			t.Errorf("a reply whose usage is %s reads as a hook's record %t, %v", name, isHook, err)
+		}
+	}
+	for name, tc := range map[string]struct{ from, to string }{
+		"an id that is a number": {from: `"id":"msg_test"`, to: `"id":7`},
+		"a model that is null":   {from: `"model":"claude-sonnet-4-5"`, to: `"model":null`},
+	} {
+		line := ctLine(t, ctReplace(t, call, tc.from, tc.to))
+		if got, ok, err := line.Usage(); err == nil {
+			t.Errorf("a reply whose message holds %s says its request took %+v (%t), want an error", name, got, ok)
+		}
+		if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall {
+			t.Errorf("a reply whose message holds %s reads the calls %+v, %v; want its call", name, m.Calls(), err)
+		}
+		if reason, err := line.StopReason(); reason != "tool_use" || err != nil {
+			t.Errorf("a reply whose message holds %s stopped for %q, %v; want tool_use", name, reason, err)
 		}
 	}
 
@@ -941,8 +990,8 @@ func ctReplace(t *testing.T, record, from, to string) string {
 
 // ctAll is everything a line hands out through every accessor, as text: its
 // head, its hook, its message and its calls, its origin's kind, its own
-// toolUseResult, whether it says tool results were cleared and why its reply
-// stopped, each beside the error it answered.
+// toolUseResult, whether it says tool results were cleared, why its reply
+// stopped and what its request took, each beside the error it answered.
 func ctAll(l threadLine) string {
 	var b strings.Builder
 	h := l.Head
@@ -973,6 +1022,9 @@ func ctAll(l threadLine) string {
 	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
 	reason, err := l.StopReason()
 	fmt.Fprintf(&b, "stop reason: %q; %v\n", reason, err)
+	usage, used, err := l.Usage()
+	fmt.Fprintf(&b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
+		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
 	return b.String()
 }
 
@@ -983,11 +1035,12 @@ func ctAll(l threadLine) string {
 // reads is held so: a line's head (its own uuid among it) and the keys only
 // one reader reads (a message, an attachment, an origin, a firing at the top,
 // a record's own toolUseResult), a hook's attachment, an origin, a message
-// (its content and its stop_reason), a message's blocks, its report of the
-// context edits applied, and each edit the report lists. So a line hands out
-// exactly what it hands out without the other key, through every accessor.
-// 2.1.322 already spells a call's id `toolUseId` (a subagent's metadata names
-// the call that started it so), a key away from a hook's firing.
+// (its content, its stop_reason, its id, its model and its usage), a
+// message's blocks, its usage's counts, its report of the context edits
+// applied, and each edit the report lists. So a line hands out exactly what
+// it hands out without the other key, through every accessor. 2.1.322
+// already spells a call's id `toolUseId` (a subagent's metadata names the
+// call that started it so), a key away from a hook's firing.
 //
 // Mutation: take a key that differs only in case for the layer's own, as
 // encoding/json's decode into a struct does (the last written winning), and
@@ -1076,6 +1129,23 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"stop_reason":"tool_use","Stop_Reason":"end_turn"`},
 		"a reply's Stop_Reason alone": {record: ctReplace(t, call, `"stop_reason":"tool_use",`, ""),
 			from: `"stop_sequence":null`, to: `"stop_sequence":null,"Stop_Reason":"end_turn"`},
+		"a reply's id, then Id": {record: call, from: `"id":"msg_test"`, to: `"id":"msg_test","Id":"msg_other"`},
+		"a reply's ID alone": {record: ctReplace(t, call, `"id":"msg_test",`, ""), from: `"type":"message"`,
+			to: `"ID":"msg_other","type":"message"`},
+		"a reply's model, then Model": {record: call, from: `"model":"claude-sonnet-4-5"`,
+			to: `"model":"claude-sonnet-4-5","Model":"<synthetic>"`},
+		"a reply's usage, then Usage": {record: call, from: ctUsage, to: ctUsage + `,"Usage":{"input_tokens":7}`},
+		"a reply's Usage alone": {record: ctReplace(t, call, ","+ctUsage, ""), from: `"stop_sequence":null`,
+			to: `"stop_sequence":null,"Usage":{"input_tokens":7}`},
+		// A reply's usage.
+		"an input_tokens, then Input_Tokens": {record: call, from: `"input_tokens":100`,
+			to: `"input_tokens":100,"Input_Tokens":7`},
+		"a Cache_Creation_Input_Tokens, then cache_creation_input_tokens": {record: call,
+			from: `"cache_creation_input_tokens":0`, to: `"Cache_Creation_Input_Tokens":7,"cache_creation_input_tokens":0`},
+		"Cache_Read_Input_Tokens alone": {record: ctReplace(t, call, `"cache_read_input_tokens":0,`, ""),
+			from: `"output_tokens":20`, to: `"Cache_Read_Input_Tokens":7,"output_tokens":20`},
+		"an output_tokens, then OUTPUT_TOKENS": {record: call, from: `"output_tokens":20`,
+			to: `"output_tokens":20,"OUTPUT_TOKENS":7`},
 		// A message's blocks.
 		"a tool_use's type, then Type": {record: call, from: `"type":"tool_use"`, to: `"type":"tool_use","Type":"text"`},
 		"a tool_use's id, then ID": {record: call, from: `"id":"` + ctCall + `"`,
@@ -1103,6 +1173,9 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 		"a type written twice": {record: retyped, from: `"type":"attachment"`, to: `"type":"user","type":"attachment"`},
 		"a uuid written twice": {record: brief, from: `"uuid":"` + ctUUID(1) + `"`,
 			to: `"uuid":"` + ctUUID(9) + `","uuid":"` + ctUUID(1) + `"`},
+		"a reply's usage written twice": {record: call, from: ctUsage,
+			to: `"usage":{"input_tokens":7,"output_tokens":7},` + ctUsage},
+		"a count written twice": {record: call, from: `"output_tokens":20`, to: `"output_tokens":7,"output_tokens":20`},
 		"an attachment's firing written twice": {record: hook, from: firing,
 			to: `"toolUseID":"` + other + `",` + firing},
 	} {
@@ -1723,6 +1796,130 @@ func TestAReplySaysWhyItStopped(t *testing.T) {
 			ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
 		if got, err := ctLine(t, record).StopReason(); err == nil {
 			t.Errorf("%s stopped for %q, want an error", name, got)
+		}
+	}
+}
+
+// ctUsage is the usage ctAssistant's message carries, as written.
+const ctUsage = `"usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,` +
+	`"output_tokens":20}`
+
+// A REPLY SAYS WHAT ITS REQUEST TOOK: an assistant record's message's id, its
+// model and its usage's four counts, each as written, ok saying the usage is
+// there. A count the usage does not name reads 0, the others as written. A
+// reply with no usage hands over its id and its model still, every count 0
+// and ok false, since Claude Code takes a reply's id with no usage; one with
+// no id, or no model, hands over "" for it and the rest as written; and the
+// reply a resume writes reads as the counts it writes, all 0, under a model
+// of its own. Every record that is no assistant's reads as nothing, a result
+// and a request blob whose message carries a usage among them. A usage of the
+// wrong shape is an error and never a figure: one that is no object, null
+// among it; a count that is no whole number as JSON writes one (negative,
+// fractional, in an exponent, a string, null, a boolean, an object) or past
+// an int64, whichever count it is; an id or a model that is no string, null
+// among it; and a reply whose message is no object.
+//
+// Mutation: answer for every record's type, and a result carrying a usage
+// reads as one; read a null usage as none, or a null count as 0, and each
+// reads as a figure; hold a count to a number alone, and a negative or a
+// fractional one reads as a count; hand over the id and the model only with
+// a usage, and a reply with none reads as no reply's; read two counts each
+// into the other's place, and a reply's figures read as another's; require
+// every count, and a usage that names three is an error; read the id by its
+// text alone, and a numeric id reads as one.
+func TestAReplySaysWhatItsRequestTook(t *testing.T) {
+	t.Parallel()
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	using := func(usage string) string { return ctReplace(t, reply, ctUsage, `"usage":`+usage) }
+	// every names each count with a figure of its own, so a count read into
+	// another's place reads otherwise.
+	const every = `{"input_tokens":3,"cache_creation_input_tokens":1500,"cache_read_input_tokens":41250,` +
+		`"output_tokens":812}`
+	// without is every with one count, written as count is, left out.
+	without := func(count string) string { return using(ctReplace(t, every, count, "")) }
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	carrying := func(record string) string {
+		return ctReplace(t, record, `"role":"user",`, `"role":"user",`+ctUsage+`,`)
+	}
+	measured := threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5", Input: 100, Output: 20}
+	whole := threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5", Input: 3, CacheWrite: 1500, CacheRead: 41250,
+		Output: 812}
+	for name, tc := range map[string]struct {
+		record string
+		usage  threadUsage
+		ok     bool
+	}{
+		"a reply as measured":       {record: reply, usage: measured, ok: true},
+		"a reply naming each count": {record: using(every), usage: whole, ok: true},
+		"a usage that names no input_tokens": {record: without(`"input_tokens":3,`),
+			usage: threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5", CacheWrite: 1500, CacheRead: 41250,
+				Output: 812}, ok: true},
+		"a usage that names no cache_creation_input_tokens": {record: without(`"cache_creation_input_tokens":1500,`),
+			usage: threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5", Input: 3, CacheRead: 41250, Output: 812},
+			ok:    true},
+		"a usage that names no cache_read_input_tokens": {record: without(`"cache_read_input_tokens":41250,`),
+			usage: threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5", Input: 3, CacheWrite: 1500, Output: 812},
+			ok:    true},
+		"a usage that names no output_tokens": {record: without(`,"output_tokens":812`),
+			usage: threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5", Input: 3, CacheWrite: 1500,
+				CacheRead: 41250}, ok: true},
+		"a usage that names no count": {record: using(`{"service_tier":"standard"}`),
+			usage: threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5"}, ok: true},
+		"a reply with no usage": {record: ctReplace(t, reply, ","+ctUsage, ""),
+			usage: threadUsage{ID: "msg_test", Model: "claude-sonnet-4-5"}},
+		"a reply with no id": {record: ctReplace(t, reply, `"id":"msg_test",`, ""),
+			usage: threadUsage{Model: "claude-sonnet-4-5", Input: 100, Output: 20}, ok: true},
+		"a reply with no model": {record: ctReplace(t, reply, `"model":"claude-sonnet-4-5",`, ""),
+			usage: threadUsage{ID: "msg_test", Input: 100, Output: 20}, ok: true},
+		"the reply a resume writes": {record: ctSynthetic(ctUUID(30), ctUUID(31)),
+			usage: threadUsage{ID: ctUUID(902), Model: "<synthetic>"}, ok: true},
+		"a result whose message carries one":         {record: carrying(result)},
+		"a request blob whose message carries one":   {record: carrying(ctRequestBlob)},
+		"a brief, which is no reply":                 {record: ctBrief(ctUUID(1))},
+		"a hook's record, which is no reply":         {record: ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, "")},
+		"a Stop's summary, which is no reply either": {record: ctSummary(ctUUID(15), ctUUID(16))},
+	} {
+		usage, ok, err := ctLine(t, tc.record).Usage()
+		if usage != tc.usage || ok != tc.ok || err != nil {
+			t.Errorf("%s says its request took %+v (%t), %v; want %+v (%t)", name, usage, ok, err, tc.usage, tc.ok)
+		}
+	}
+
+	for name, record := range map[string]string{
+		"a usage that is null":         using(`null`),
+		"a usage that is a string":     using(`"100"`),
+		"a usage that is a list":       using(`[100,0,0,20]`),
+		"a usage that is a number":     using(`120`),
+		"a negative count":             using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":-3`)),
+		"a fractional count":           using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":3.5`)),
+		"a count in an exponent":       using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":3e0`)),
+		"a count that is a string":     using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":"3"`)),
+		"a count that is null":         using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":null`)),
+		"a count that is a boolean":    using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":true`)),
+		"a count that is an object":    using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":{}`)),
+		"a count past an int64":        using(ctReplace(t, every, `"input_tokens":3`, `"input_tokens":9223372036854775808`)),
+		"a null cache write":           using(ctReplace(t, every, `:1500`, `:null`)),
+		"a negative cache read":        using(ctReplace(t, every, `:41250`, `:-41250`)),
+		"a fractional output":          using(ctReplace(t, every, `:812`, `:812.0`)),
+		"an id that is a number":       ctReplace(t, reply, `"id":"msg_test"`, `"id":7`),
+		"an id that is null":           ctReplace(t, reply, `"id":"msg_test"`, `"id":null`),
+		"an id that is an object":      ctReplace(t, reply, `"id":"msg_test"`, `"id":{"id":"msg_test"}`),
+		"a model that is null":         ctReplace(t, reply, `"model":"claude-sonnet-4-5"`, `"model":null`),
+		"a model that is a list":       ctReplace(t, reply, `"model":"claude-sonnet-4-5"`, `"model":["claude-sonnet-4-5"]`),
+		"an id that is null, no usage": ctReplace(t, ctReplace(t, reply, ","+ctUsage, ""), `"id":"msg_test"`, `"id":null`),
+	} {
+		if usage, ok, err := ctLine(t, record).Usage(); err == nil {
+			t.Errorf("%s says its request took %+v (%t), want an error", name, usage, ok)
+		}
+	}
+	for name, message := range map[string]string{
+		"a reply whose message is null": `"message":null,`,
+		"a reply with no message":       "",
+	} {
+		record := `{"parentUuid":"` + ctUUID(30) + `","isSidechain":false,` + message + `"type":"assistant","uuid":"` +
+			ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
+		if usage, ok, err := ctLine(t, record).Usage(); err == nil {
+			t.Errorf("%s says its request took %+v (%t), want an error", name, usage, ok)
 		}
 	}
 }
