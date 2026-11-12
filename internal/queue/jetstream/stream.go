@@ -498,9 +498,9 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// A seat's memory, one subject per row, ONE MESSAGE PER
 			// SUBJECT. That is what makes this a keyed table rather
 			// than a log: the stream holds the current value of every
-			// row, so a node acquiring a seat replays it in a single
-			// pass and gets the memory as it stands rather than every
-			// write that ever produced it.
+			// row, so a node acquiring a seat reads each row once, a
+			// table at a time, and gets the memory as it stands rather
+			// than every write that ever produced it.
 			//
 			// No maxAge. A seat's memory has no horizon here — what
 			// bounds it is the learning subsystem's own lifecycle,
@@ -508,6 +508,14 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// still remember belongs. An age bound on this stream
 			// would silently delete memory the seat still holds
 			// locally, and the two would disagree about the past.
+			//
+			// Nor a byte or a message-count limit, for the same
+			// reason and one more: the discard policy is old, so
+			// either would drop the oldest row to make room for any
+			// message, a hydration's barrier among them, where the
+			// limit of one per subject drops only the message a newer
+			// one on its own subject replaces
+			// (topics.MemoryBarrierToken).
 			name:          streamMemory,
 			subjects:      []string{topics.MemoryPrefix + ">"},
 			retention:     jetstream.LimitsPolicy,

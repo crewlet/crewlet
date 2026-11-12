@@ -1033,6 +1033,16 @@ limits of the account the engine signs in to and of its user — an account's
 account's or a user's JWT on an operator-mode deployment — so where either
 states one, raise it to 8 MiB or leave it unlimited too.
 
+**And the same limit on every node's connection.** A seat's memory rows are
+bounded by nothing but the limit of the connection that published them, and a
+node reads them in pulls no larger than its own connection's limit
+([A seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+So where one server, account or user carries more than another (16 MiB beside
+8 MiB, say), a memory row larger than the smaller limit is never sent to a node
+connected through it, and that node refuses the seat at every placement sweep,
+saying the next row is larger than a pull its connection carries and naming
+its `max_payload`.
+
 **A node refuses to start against a server that holds it to less.** A server
 below it would take every small write and refuse the first large one — a node
 that booted, reported itself healthy, served, and then refused a webhook

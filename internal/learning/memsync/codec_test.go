@@ -120,12 +120,12 @@ func carry(t *testing.T, from, to *store.DB) int {
 			if err != nil {
 				t.Fatalf("encode %s: %v", spec.name, err)
 			}
-			decoded, decodedSpec, known, err := decode(body)
-			if err != nil || !known {
-				t.Fatalf("decode %s: known=%v err=%v", spec.name, known, err)
+			decoded, err := decode(body)
+			if err != nil || decoded.Table != spec.name {
+				t.Fatalf("decode %s: a %q row (%v)", spec.name, decoded.Table, err)
 			}
 			if err := to.Tx(ctx, func(tx *sql.Tx) error {
-				return upsert(ctx, tx, decodedSpec, decoded)
+				return upsert(ctx, tx, spec, decoded)
 			}); err != nil {
 				t.Fatalf("upsert %s: %v", spec.name, err)
 			}

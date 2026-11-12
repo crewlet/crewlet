@@ -2482,10 +2482,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	//
 	// THE SEAT'S DERIVED ID, never a roster lookup, so a seat a revision
 	// removed still flushes on release ([memoryAgentID]).
-	if e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
-		func(handle string) string { return memoryAgentID(e.Company(), handle) }); err != nil {
-		return nil, fmt.Errorf("engine: seat memory: %w", err)
-	}
+	e.memory = memsync.New(backends.Store, backends.CoordinationJetStream(),
+		func(handle string) string { return memoryAgentID(e.Company(), handle) })
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
 	// the first time no watched duty is live, and the host is not live
 	// until node.Start runs it — so building it here and starting it there
