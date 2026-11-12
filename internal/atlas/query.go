@@ -123,10 +123,13 @@ const (
 	SortName Sort = "name"
 	// SortLastSeen is the most recently seen first.
 	SortLastSeen Sort = "last_seen"
+	// SortHealth is the most urgent health first, then the map's order: the
+	// order a list grouped by health reads in, so a page never splits a group.
+	SortHealth Sort = "health"
 )
 
 // Sorts is every order.
-var Sorts = []Sort{SortKey, SortName, SortLastSeen}
+var Sorts = []Sort{SortKey, SortName, SortLastSeen, SortHealth}
 
 // Query narrows a read. Its zero value is every current entry anybody can
 // vouch for: an unconfirmed one stays out until a person confirms it.
@@ -372,8 +375,10 @@ type cursor struct {
 	Sort Sort   `json:"s"`
 	Name string `json:"n,omitempty"`
 	Seen int64  `json:"t,omitempty"`
-	Kind Kind   `json:"k"`
-	Key  string `json:"key"`
+	// Health is the last row's, for the order that reads by it.
+	Health Health `json:"h,omitempty"`
+	Kind   Kind   `json:"k"`
+	Key    string `json:"key"`
 }
 
 // rowOrder is how sort compares two rows; every order ends on the map's.
@@ -388,6 +393,10 @@ func rowOrder(sort Sort) func(a, b Summary) int {
 		}
 	case SortLastSeen:
 		return func(a, b Summary) int { return cmp.Or(b.LastSeen.Compare(a.LastSeen), byKey(a, b)) }
+	case SortHealth:
+		return func(a, b Summary) int {
+			return cmp.Or(cmp.Compare(slices.Index(Healths, a.Health), slices.Index(Healths, b.Health)), byKey(a, b))
+		}
 	}
 	return byKey
 }
@@ -416,7 +425,8 @@ func List(entries []Entry, summaries Summaries, sort Sort, after string, limit i
 		if err != nil {
 			return Page{}, err
 		}
-		pivot := Summary{Name: last.Name, LastSeen: time.Unix(0, last.Seen).UTC(), Kind: last.Kind, Key: last.Key}
+		pivot := Summary{Name: last.Name, LastSeen: time.Unix(0, last.Seen).UTC(), Health: last.Health,
+			Kind: last.Kind, Key: last.Key}
 		start, _ = slices.BinarySearchFunc(rows, pivot, compare)
 		if start < len(rows) && compare(rows[start], pivot) == 0 {
 			start++
@@ -427,7 +437,7 @@ func List(entries []Entry, summaries Summaries, sort Sort, after string, limit i
 	if end < len(rows) {
 		last := rows[end-1]
 		page.Next = encodeCursor(cursor{Sort: sort, Name: last.Name, Seen: last.LastSeen.UnixNano(),
-			Kind: last.Kind, Key: last.Key})
+			Health: last.Health, Kind: last.Kind, Key: last.Key})
 	}
 	return page, nil
 }
@@ -443,7 +453,7 @@ func decodeCursor(s string, sort Sort) (cursor, error) {
 	if err == nil {
 		err = json.Unmarshal(raw, &c)
 	}
-	if err != nil || c.Sort != sort || !c.Kind.Valid() {
+	if err != nil || c.Sort != sort || !c.Kind.Valid() || (sort == SortHealth && !c.Health.Valid()) {
 		return cursor{}, fmt.Errorf("%w: `cursor` is the `next_cursor` a page of this order answered", ErrQuery)
 	}
 	return c, nil
