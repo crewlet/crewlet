@@ -184,16 +184,19 @@ func worstEntry(seq int) BridgeCall {
 // its name and its runner past their bounds in markup the encoder escapes
 // six-fold, every instant at its longest, its id at its bound — it weighs no
 // more than [MaxCallInFlightBytes], whatever the caller handed it, arguments,
-// output and an id past its bound included. And the log's split closes as its
+// output and an id past its bound included; and that id it keeps as none,
+// never cut, as a finished call keeps one. And the log's split closes as its
 // table states it: its calls, its calls in flight and the rest of it
 // ([BridgeLogBytes], [InFlightBytes], [LogRestBytes]) are [RowBytes] together,
 // so a share moved without the table fails here.
 //
 // Mutation: keep a caller's runner, or its arguments, as handed
 // (entry-keeps-its-runner-whole), or its id whatever it is (log-keeps-any-id),
-// and an entry overruns its share; hold more calls in flight than the table
-// states (more-calls-in-flight-than-the-table-says), and the log's split no
-// longer closes.
+// and an entry overruns its share; cut an entry's id to its bound rather than
+// keep it as none (entry-cuts-its-id), and the entry handed one past it keeps a
+// cut id; hold more calls in flight than the table states
+// (more-calls-in-flight-than-the-table-says), and the log's split no longer
+// closes.
 func TestACallInFlightIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
 	entry := worstEntry(0)
@@ -204,6 +207,10 @@ func TestACallInFlightIsHeldToItsShare(t *testing.T) {
 	handed := entry
 	handed.Args, handed.Output = strings.Repeat("<", 64<<10), strings.Repeat("<", 64<<10)
 	handed.Runner, handed.CallID = strings.Repeat("<", 64<<10), strings.Repeat("<", 64<<10)
+	if kept := keptEntry(handed); kept.CallID != "" {
+		t.Errorf("an entry handed an id of %d bytes is kept with one of %d, want none: an id past its bound is "+
+			"kept as none, never cut", len(handed.CallID), len(kept.CallID))
+	}
 	for name, call := range map[string]BridgeCall{"at its widest": entry, "as a caller handed it": keptEntry(handed)} {
 		raw, err := json.Marshal(call)
 		if err != nil {
