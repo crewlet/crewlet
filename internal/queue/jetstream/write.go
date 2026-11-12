@@ -43,8 +43,10 @@ func linkPaceOf(embedded *embeddedServer) time.Duration {
 // writing is the budget an acknowledged write of msg on this queue's
 // connection waits within, msg built whole as it is sent: the request term,
 // and on a connection that crosses a link the time msg takes to cross it at
-// its pace ([Queue.pace]) for every send of it ([jsapi.Budget]) — a caller's
-// own deadline kept as it is, by each send's context ([jsapi.Sends.Next]).
+// its pace ([Queue.pace]) for each of its first [jsapi.WriteSends] sends
+// ([jsapi.Budget]), a later send — an append's attempt after a leader's
+// in-flight answer — waiting in the budget as it stands; a caller's own
+// deadline kept as it is, by each send's context ([jsapi.Sends.Next]).
 //
 // THE ONE PLACE A WRITE OF THIS QUEUE IS BUDGETED, so the bytes a write is
 // given and the bytes it sends are one count: msg's own, header block and
@@ -77,7 +79,9 @@ func (q *Queue) write(ctx context.Context, msg *nats.Msg) (*jetstream.PubAck, er
 // re-send crosses again — and a context sized for one crossing ended while
 // the second was still on the link, a write the link was carrying at a pace
 // the engine allows answered as an outage. Made here, each send waits in the
-// context its budget gives it, a crossing more than the one before
+// context its budget gives it, a crossing more than the one before up to the
+// write's [jsapi.WriteSends]-th send, and the budget as it stands after that —
+// an append's later attempts make their sends here within the one budget
 // ([jsapi.Sends]). A leaf's own broker answers that nobody heard it before
 // anything crosses its link, and a member's in its own process, so there the
 // extra crossing is room nobody uses rather than a wait anybody makes.

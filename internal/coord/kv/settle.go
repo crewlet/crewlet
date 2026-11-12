@@ -229,8 +229,10 @@ func (b settledBucket) Purge(ctx context.Context, key string, opts ...jetstream.
 }
 
 // settle runs one write of key and value (none for a removal) until the
-// stream leader DECIDES it, each attempt waiting as long as its bytes take to
-// cross ([settledBucket.budget]) — see the file doc. A write that names no
+// stream leader DECIDES it, every attempt waiting in the one whole bound its
+// budget fixed at the start ([settledBucket.budget], [jsapi.Sends.Whole]): the
+// first attempt's call is given every crossing the write's sends may take, and
+// a later one nothing more — see the file doc. A write that names no
 // revision is never answered in flight, so it runs once. The op and key name
 // an undecided write in its error.
 func (b settledBucket) settle(ctx context.Context, op, key string, value []byte,

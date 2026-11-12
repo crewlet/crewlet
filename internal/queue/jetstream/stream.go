@@ -82,11 +82,13 @@
 // the dead letters' frames) and a write's request alike. So a write whose
 // caller set no deadline waits the request term (jsapi.RequestTerm, five
 // seconds) and, where its connection crosses a link, its bytes at that pace
-// for every time it is sent (Queue.writing, jsapi.Budget): a write is sent
-// again — the client's own re-sends turned off and made here, so each is a
-// send of the queue's (sendWithin) — where nobody heard it, and an append again
-// where the leader refused it while another write to its subject was in
-// flight, and each send carries the whole message across the link again. A
+// for each of its first three sends (jsapi.WriteSends; Queue.writing,
+// jsapi.Budget): a write is sent again — the client's own re-sends turned off
+// and made here, so each is a send of the queue's (sendWithin) — where nobody
+// heard it, and an append again where the leader refused it while another
+// write to its subject was in flight, and each send carries the whole message
+// across the link again; a send past the third waits in the budget as it
+// stands. A
 // caller's own deadline is kept, never extended: a caller that cannot wait for
 // a slow link says so.
 //

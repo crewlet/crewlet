@@ -121,9 +121,10 @@ func (u *Undecided) Unwrap() error { return u.Cause }
 
 // Sends is the budget a decided publish waits within across every attempt of
 // it, as the wait between two attempts needs it: the one internal/jsapi's
-// Budget starts, whose every send — each attempt's, made by the publish
-// itself through it — is given the time its bytes take to cross a link, an
-// attempt after an in-flight answer carrying the whole message again.
+// Budget starts, which gives each of a write's first WriteSends sends — each
+// attempt's, made by the publish itself through it — the time its bytes take
+// to cross a link, an attempt after an in-flight answer carrying the whole
+// message again, and a send past those the budget as it stands.
 type Sends interface {
 	// Pause waits d inside ctx and the budget as it stands, answering why
 	// it could not: the budget's end, or its caller going away.

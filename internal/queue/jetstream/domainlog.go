@@ -271,12 +271,14 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	// still in flight at the deadline is [jsinflight.Undecided], which carries
 	// no API error, so the state log reads it as the no-answer it is.
 	//
-	// AND EVERY SEND WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its
-	// caller set no deadline: the request term, and across a link the time
-	// the record and the headers it rides with take at the connection's pace
-	// for each time they are sent ([Queue.writing]) — an attempt after an
-	// in-flight answer, and a send again after nobody heard one, carry the
-	// whole record again. A record may be the transport's whole eight
+	// AND EACH OF ITS FIRST SENDS WAITED FOR AS LONG AS ITS BYTES TAKE TO
+	// CROSS, where its caller set no deadline: the request term, and across
+	// a link the time the record and the headers it rides with take at the
+	// connection's pace for each of its first [jsapi.WriteSends] sends
+	// ([Queue.writing]) — an attempt after an in-flight answer, and a send
+	// again after nobody heard one, carry the whole record again — and a send
+	// past those waits in the budget as it stands, whose end the append's
+	// start fixed. A record may be the transport's whole eight
 	// mebibytes, about four minutes at the slowest pace allowed; held to the
 	// request term alone it failed as no answer while the link was carrying
 	// it, and held to one crossing, so did the attempt after an in-flight

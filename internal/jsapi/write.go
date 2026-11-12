@@ -48,8 +48,10 @@ import (
 // SO THE WORST CASE IS LONG, AND NOT ONLY FOR THE WRITE: a write at the
 // ceiling across a link at the floor waits the request term and about four
 // minutes a send before it reads as an outage — and a write whose answer
-// decided nothing is sent up to [WriteSends] times, three, about twelve
-// minutes in all, the bound its budget is fixed at when it starts. For those
+// decided nothing is given crossings for up to [WriteSends] sends, three,
+// about twelve minutes in all, the bound its budget is fixed at when it
+// starts: a later send, an attempt after a leader's in-flight answer, waits in
+// what is left of it. For those
 // minutes everything the node sends behind it on that link waits too — its
 // lease renewals among them, which at the shipped lease lapse long before its
 // last byte is in. That is a defect of its own, crewlet/crewlet#1035, which
