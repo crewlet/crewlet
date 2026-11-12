@@ -189,6 +189,15 @@ type Broker struct {
 	deadLetters map[string][]letter
 	lastLetter  uint64
 
+	// keptIDs is every identity a keep named on a subject within the
+	// window ([queue.DeadLetterWindow]), with when its first keep's entry
+	// was stored: what makes a second keep of it come to nothing, as the
+	// broker this twin stands for collapses a repeated message id within
+	// its dead-letter stream's duplicate window. Remembered whether or not
+	// the entry is still held, as the broker's window is; let go once the
+	// window passes. See deadletter.go.
+	keptIDs map[keptID]time.Time
+
 	// now is the broker's clock, which an entry is stamped and let go
 	// by. The wall clock; only an in-package case replaces it, to reach a
 	// retention no test could wait out.
@@ -215,6 +224,7 @@ func NewBroker() *Broker {
 	return &Broker{
 		subs:        map[subKey]*subscription{},
 		deadLetters: map[string][]letter{},
+		keptIDs:     map[keptID]time.Time{},
 		now:         func() time.Time { return time.Now().UTC() },
 		maxHistory:  defaultMaxHistory,
 		idle:        idle,

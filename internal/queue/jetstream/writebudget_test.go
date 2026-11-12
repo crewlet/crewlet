@@ -78,7 +78,9 @@ func everyWrite() []aWrite {
 			return q.Publish(ctx, budgetEvents, ev(1))
 		}},
 		{"a dead letter's keep", func(ctx context.Context, q *Queue) error {
-			return q.KeepDeadLetter(ctx, budgetLetters, []byte(`{"v":1}`), make([]byte, 3<<20))
+			_, err := q.KeepDeadLetter(ctx, budgetLetters, "a budget probe", []byte(`{"v":1}`),
+				make([]byte, 3<<20))
+			return err
 		}},
 		{"the delivery budget's dead letter", func(ctx context.Context, q *Queue) error {
 			return q.deadLetter(ctx, "budget.probe", "grp", make([]byte, 5<<20))
@@ -318,9 +320,11 @@ func TestAWriteCountsWhatItSends(t *testing.T) {
 	}{
 		{"a publish", func(s string) *nats.Msg { return &nats.Msg{Subject: s, Data: []byte(`{"type":"probe"}`)} }},
 		{"a keep with its keeper's header", func(s string) *nats.Msg {
-			return letterMsg(s, "CREWLET_DLQ", []byte(`{"v":1}`), []byte("body"))
+			return letterMsg(s, "CREWLET_DLQ", "counted", []byte(`{"v":1}`), []byte("body"))
 		}},
-		{"a keep with none", func(s string) *nats.Msg { return letterMsg(s, "CREWLET_DLQ", nil, []byte("body")) }},
+		{"a keep with none", func(s string) *nats.Msg {
+			return letterMsg(s, "CREWLET_DLQ", "counted", nil, []byte("body"))
+		}},
 		{"an append with neither header", func(s string) *nats.Msg { return appendMsg(s, "", nil, []byte("{}")) }},
 		{"an append with its operation's id", func(s string) *nats.Msg { return appendMsg(s, "op-counted", nil, []byte("{}")) }},
 		{"an append with its expectation", func(s string) *nats.Msg { return appendMsg(s, "", &zero, []byte("{}")) }},
@@ -330,7 +334,7 @@ func TestAWriteCountsWhatItSends(t *testing.T) {
 	} {
 		msg := c.msg(fmt.Sprintf("%s.%d", subjects, i))
 		counted := carried(msg)
-		if err := q.write(t.Context(), msg); err != nil {
+		if _, err := q.write(t.Context(), msg); err != nil {
 			t.Fatalf("%s: the write: %v", c.name, err)
 		}
 		if got := <-crossed; got != counted {

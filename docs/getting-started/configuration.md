@@ -1415,7 +1415,12 @@ stream:
   # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the
-                                    #   life of the deployment
+                                    #   life of the deployment. Otherwise at
+                                    #   least 0.25: the dead letters are kept by
+                                    #   this age, and a second keep of one thing
+                                    #   is collapsed for fifteen minutes, which
+                                    #   the broker refuses a stream's age to be
+                                    #   shorter than
   # credentials: ""                 # path to a NATS credentials file. type: nats
                                     #   needs one of credentials, token, tls.cert
                                     #   or a credential in url, and refuses a

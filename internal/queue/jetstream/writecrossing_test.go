@@ -56,7 +56,7 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 		subject := topics.DeadLetter("slowlink.letters", "grp")
 		header := []byte(`{"v":1}`)
 		body := incompressible(t, queue.MaxPayloadBytes-queue.LetterFraming-len(header))
-		if err := q.KeepDeadLetter(t.Context(), subject, header, body); err != nil {
+		if _, err := q.KeepDeadLetter(t.Context(), subject, "at the ceiling", header, body); err != nil {
 			t.Fatalf("a dead letter at the ceiling, across a link carrying a mebibyte a "+
 				"second, was not kept: %v", err)
 		}

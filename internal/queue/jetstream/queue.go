@@ -1329,7 +1329,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// renewals among them (crewlet/crewlet#1035, which this does not fix).
 	// Classified on the CALLER's context, for the keep's reason
 	// ([Queue.KeepDeadLetter]).
-	if err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {
+	if _, err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {
 		// TRANSLATED, not passed through. "Too large" is the one publish
 		// failure a producer must not retry, and nats.ErrMaxPayload is
 		// this backend's private word for it — a caller matching on that
@@ -2029,12 +2029,22 @@ func (q *Queue) attachmentsLocked() []*attachment {
 // carries. Held to the request term alone, a large one dead-lettered across a
 // slow link was reported as failed while its bytes were still crossing to
 // land: a `dead_letter_failed` line for a message the stream went on to keep.
+//
+// IT NAMES NO IDENTITY, where a keep through the contract does
+// ([Queue.KeepDeadLetter]), because no second node is ever handed the message
+// it keeps: it is kept from the delivery that spent the subscription's budget,
+// and the broker hands a message past its MaxDeliver to nobody, however long
+// that delivery goes unacknowledged (nats-server v2.15.2,
+// server/consumer.go:2430-2457, hasMaxDeliveries, asked as the
+// acknowledgement window lapses at :6185-6191) — a window of thirty minutes
+// besides ([DefaultAckWait]), past the longest a keep waits.
 func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) error {
 	subject := topics.DeadLetter(topic, group)
 	if _, err := q.streamFor(ctx, subject); err != nil {
 		return err
 	}
-	return q.write(ctx, &nats.Msg{Subject: subject, Data: data})
+	_, err := q.write(ctx, &nats.Msg{Subject: subject, Data: data})
+	return err
 }
 
 var _ queue.EventQueue = (*Queue)(nil)

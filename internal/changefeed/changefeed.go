@@ -95,15 +95,20 @@
 // what the feed recorded of it the entry's header ([DeadLetter]), which every
 // listing reads without the frame — and only then acked, so it stops holding
 // a slot of the consumer's pending set without anybody's wake being lost.
-// While the keep waits, which across a slow link is as long as the frame takes
-// to cross it, the feed sends the delivery's progress signal so the record is
-// not handed back and kept twice ([Feed.holding]). An entry is kept for the
-// event stream's retention and then expires; the first
-// node whose feed starts able to read it replays it ([Feed.replay]) through
-// the same claim a delivery passes — the one reader of its frame — and drops
-// it; and an operator who has decided its wake can be lost discards it (the
-// engine's operator surface, `crewlet feeds discard`). ADR-0012's amendment
-// records the decision.
+// The entry is kept under the record's IDENTITY, its place in its log
+// ([keepID]), which makes a second keep of the record harmless: a keep waits
+// as long as the frame takes to cross the node's link, which can outlast the
+// delivery's thirty-second acknowledgement window, and the record is then
+// handed to another node, which keeps it too — and the queue answers that keep
+// that the entry was already kept, which acks the record and counts nothing
+// ([Feed.deadLetter]). Nothing the keeping node sends while its keep crosses
+// could stop the hand-back: it crosses the same link behind the keep's own
+// bytes. An entry is kept for the event stream's retention and then expires;
+// the first node whose feed starts able to read it replays it ([Feed.replay])
+// through the same claim a delivery passes — the one reader of its frame — and
+// drops it; and an operator who has decided its wake can be lost discards it
+// (the engine's operator surface, `crewlet feeds discard`). ADR-0012's
+// amendment records the decision.
 package changefeed
 
 import (
@@ -356,7 +361,7 @@ type Publisher interface {
 // different: kept there, an entry outlives the node that kept it and is
 // replayed by whichever node first starts able to read it.
 type DeadLetters interface {
-	KeepDeadLetter(ctx context.Context, subject string, header, frame []byte) error
+	KeepDeadLetter(ctx context.Context, subject, id string, header, frame []byte) (bool, error)
 	DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept, error)
 	DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error)
 	DropDeadLetter(ctx context.Context, subject string, seq uint64) error
@@ -915,14 +920,34 @@ var errNoDeadLetters = errors.New("changefeed: this feed keeps no dead letters "
 // and only THEN acks it: an ack before the entry is durable is a wake lost
 // between the two. A keep that fails hands the record back again with the
 // backoff, to be kept by the next delivery that gets there.
+//
+// A KEEP THE QUEUE ANSWERS ALREADY KEPT acks the record and nothing more: its
+// entry is durable — a peer's keep, or this node's own earlier one, stored it
+// under the record's identity ([keepID]) — so the record is settled, and the
+// record was dead-lettered once, which whoever stored the entry counted and
+// said. Counted again here, `feed_dead_lettered`'s reading and the count would
+// see one record let go twice.
 func (f *Feed) deadLetter(ctx context.Context, msg *Message, d *Deferral, age time.Duration) {
 	src := f.translator.Source()
 	subject := DeadLetterSubject(src)
 	err := errNoDeadLetters
+	already := false
 	if f.deadLetters != nil {
 		release := f.holding(ctx, msg)
-		err = f.keep(ctx, src, subject, msg, d)
+		already, err = f.keep(ctx, src, subject, msg, d)
 		release()
+	}
+	if err == nil && already {
+		log.InfoContext(ctx, "changefeed_dead_letter_already_kept", "source", src.Name,
+			"reason", string(d.Reason), "key", msg.Key, "position", msg.Position,
+			"stream", msg.Stream, "generation", msg.Gen, "age", age.String(),
+			"delivered", msg.Delivered, "subject", subject,
+			"detail", "the record's dead letter was kept already, under the same identity — "+
+				"by a node handed the record while a keep of it was still crossing a link, "+
+				"or by an earlier keep whose acknowledgement was lost — so nothing was kept "+
+				"again and the record is acknowledged")
+		f.ack(ctx, msg)
+		return
 	}
 	if err != nil {
 		log.WarnContext(ctx, "changefeed_dead_letter_failed", "source", src.Name,
@@ -993,13 +1018,14 @@ func (f *Feed) holding(ctx context.Context, msg *Message) (release func()) {
 	}
 }
 
-// keep writes msg's dead letter: the header the feed records of it, and its
-// frame as the entry's body.
+// keep writes msg's dead letter under the record's identity ([keepID]): the
+// header the feed records of it, and its frame as the entry's body. It answers
+// whether the queue had kept the record's entry already.
 func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Message,
-	d *Deferral) error {
+	d *Deferral) (bool, error) {
 
 	if len(msg.Frame) == 0 {
-		return errors.New("changefeed: the delivery carries no frame, so an entry " +
+		return false, errors.New("changefeed: the delivery carries no frame, so an entry " +
 			"could not be replayed")
 	}
 	header, err := EncodeDeadLetter(DeadLetter{
@@ -1009,9 +1035,28 @@ func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Messag
 		StoredAt: msg.StoredAt, Delivered: msg.Delivered, DeadLetteredAt: f.now(),
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return f.deadLetters.KeepDeadLetter(ctx, subject, header, msg.Frame)
+	return f.deadLetters.KeepDeadLetter(ctx, subject, keepID(src, msg.Record), header, msg.Frame)
+}
+
+// keepID is the identity a record's dead letter is kept under
+// ([queue.EventQueue.KeepDeadLetter]): the record's PLACE — the feed's source,
+// the log it was delivered from, the log's generation and its position there.
+//
+// WHAT IS KEPT, NEVER THE DELIVERY: every node handed the record derives the
+// same identity, whichever delivery of it reached them and however many times
+// it was delivered before, so a second keep of it — a peer's, handed the
+// record while this node's keep was still crossing its link and the delivery's
+// window lapsed, or this node's own after an acknowledgement that was lost —
+// is answered already kept rather than kept twice. A position is comparable
+// only on its log and its generation, a reanchor renumbering a log, so both
+// are in it; the generation is the one the delivery carries, zero where the
+// node that keeps it never read the envelope, which every node that cannot
+// read it reads alike. Quoted, so no source or stream name can run into
+// another's.
+func keepID(src Source, rec Record) string {
+	return fmt.Sprintf("%q %q %d %d", src.Name, rec.Stream, rec.Gen, rec.Position)
 }
 
 // replay re-derives every dead letter this feed's group holds, once a process,
@@ -1118,12 +1163,13 @@ func (f *Feed) replayOne(ctx context.Context, src Source, subject string, record
 	}
 	place := recordPlace{stream: letter.Stream, seq: letter.Seq}
 	if settled[place] {
-		// THE SAME RECORD KEPT TWICE — one node's ack lost, and the record
-		// redelivered to another past its hour — whose wake this replay has
-		// settled already: dropped with nothing derived again, and its frame
-		// never read. Asked of the claim instead, it would answer held — by
-		// this very replay — and the entry would be left as though a peer
-		// held it.
+		// THE SAME RECORD KEPT TWICE — under two identities, by a node that
+		// read its envelope's generation and one that never did ([keepID]),
+		// or by keeps further apart than the queue's window — whose wake
+		// this replay has settled already: dropped with nothing derived
+		// again, and its frame never read. Asked of the claim instead, it
+		// would answer held — by this very replay — and the entry would be
+		// left as though a peer held it.
 		return f.drop(ctx, src, subject, entry)
 	}
 	frame, held, err := f.deadLetters.DeadLetterFrame(ctx, subject, entry.Seq)

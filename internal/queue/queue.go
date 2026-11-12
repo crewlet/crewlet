@@ -44,8 +44,10 @@
 //     message: a subscription's backend when its budget runs out, or a
 //     reader that settles its own deliveries and keeps what it gives up on
 //     (KeepDeadLetter — a wake feed, which reads a state log's consumer
-//     rather than a subscription). An entry is a BODY and a one-line
-//     HEADER kept apart, so a reader that only needs to know what is kept
+//     rather than a subscription), under an IDENTITY its keeper derives
+//     from what it keeps, so a second keep of one thing within
+//     DeadLetterWindow is answered "already kept" rather than kept twice. An
+//     entry is a BODY and a one-line HEADER kept apart, so a reader that only needs to know what is kept
 //     never moves what it keeps: a subject's entries are listed by their
 //     headers alone (DeadLettersOn), one entry's body is read by its
 //     sequence (DeadLetterFrame), what a whole subtree of subjects holds is
@@ -559,8 +561,58 @@ type Marks struct {
 // A QUARTER KIBIBYTE, which a header name or a stream renamed by a later build
 // still fits in, and which costs a keeper nothing it needs: a wake feed's
 // largest entry leaves over three kibibytes of the transport between its
-// frame and the ceiling (internal/changefeed's deadLetterDetailBytes).
+// frame and the ceiling (internal/changefeed's deadLetterDetailBytes). The
+// identity a keep names rides in it too, at a fixed size whatever its length
+// (internal/queue/jetstream's letterID).
 const LetterFraming = 256
+
+// DeadLetterWindow is how long a backend remembers the identity a dead letter
+// was kept under ([EventQueue.KeepDeadLetter]): a keep of the same identity on
+// the same subject within it of the first keep's entry keeps nothing, and is
+// answered already kept.
+//
+// A CONTRACT NUMBER, so the twin collapses exactly what the broker does: the
+// JetStream backend makes it the dead-letter stream's duplicate window
+// (`CREWLET_DLQ`'s), and holds it to the longest its own keep waits with a
+// test of its own.
+//
+// FIFTEEN MINUTES: THE LONGEST A KEEP MAY TAKE, AND ROOM. The window has to
+// outlast the last copy still on its way when the first one landed — a copy
+// whose keeper was handed the same thing before the first keeper's
+// acknowledgement settled it, its own keep then crossing a slow link. A keep
+// whose caller set no deadline waits, across a link, the request term and
+// the time its bytes take at the slowest pace the engine allows a link
+// (internal/objstore's MiBPace, thirty seconds a mebibyte) for each of the
+// three sends a write may make (internal/jsapi's WriteSends): at the
+// transport's eight-mebibyte ceiling, 5 s + 3 × 240 s, about twelve minutes
+// and five seconds. The rest is room for the acknowledgement that settles the
+// thing on its way back across the link. A keep that outlasts even this
+// crosses a link slower than the floor, which no budget of the engine's
+// covers and which fails the keep itself.
+//
+// AND THE DEAD LETTERS' RETENTION MUST COVER IT: a broker refuses a stream
+// whose duplicate window outlasts its age, and the JetStream backend keeps the
+// dead letters by the event stream's (`stream.event_retention_hours`), which
+// Tier A therefore refuses below this window (internal/config).
+const DeadLetterWindow = 15 * time.Minute
+
+// LetterIdentity reports why id cannot name a dead letter's keep, or nil when
+// it can: any identity but the empty one.
+//
+// THE CONTRACT'S RULE, SHARED BY BOTH BACKENDS: an identity is what makes a
+// second keep of one thing harmless ([EventQueue.KeepDeadLetter]), and an
+// empty one names nothing — every keeper that forgot to derive one would share
+// it, and their entries would collapse into whichever was kept first. So it is
+// refused, unmarked, as the caller's mistake, and the twin refuses exactly the
+// same.
+func LetterIdentity(id string) error {
+	if id == "" {
+		return errors.New("queue: a dead letter's keep names no identity; its keeper " +
+			"derives one from what it keeps, so a second keep of the same thing is " +
+			"answered already kept")
+	}
+	return nil
+}
 
 // LetterHeader reports why header cannot be kept beside a dead letter, or nil
 // when it can: one line of printable ASCII — every byte from the space to the
@@ -966,7 +1018,8 @@ type EventQueue interface {
 	// literal subject in the dead-letter namespace (topics.DeadLetter names
 	// one; any other is refused, unmarked, as the caller's mistake), until
 	// the backend's dead-letter retention lets it go ([Kept.Expires]) or
-	// DropDeadLetter removes it.
+	// DropDeadLetter removes it — and answers whether an entry of id was
+	// ALREADY KEPT on subject, in which case it keeps nothing.
 	//
 	// FOR A READER THAT SETTLES ITS OWN DELIVERIES, never for a subscription
 	// of this contract: a subscription is dead-lettered by its backend, whose
@@ -987,7 +1040,35 @@ type EventQueue interface {
 	// a header and body the transport cannot carry together
 	// ([LetterFraming]) are refused with ErrTooLarge, which no retry
 	// changes.
-	KeepDeadLetter(ctx context.Context, subject string, header, body []byte) error
+	//
+	// ONE ENTRY FOR ONE IDENTITY. id is the entry's identity, which its
+	// keeper derives from WHAT it keeps and never from the delivery that
+	// handed it over — a wake feed names the record's place in its log,
+	// which every node handed the record derives alike — so that a second
+	// keep of one thing is harmless: a keep of id on subject within
+	// [DeadLetterWindow] of the first keep of it there keeps nothing and
+	// answers already kept, on every backend alike. A reader that settles
+	// its own deliveries is handed one record twice whenever its first keep
+	// outlasts the delivery's acknowledgement window — a keep crossing a slow
+	// link waits as long as its bytes take — and nothing it sends while the
+	// keep crosses reaches the broker ahead of the keep's own bytes, so it
+	// cannot hold the delivery: the second keep, its own or a peer's, is
+	// what has to come to nothing. One id on two subjects is two entries,
+	// and so are two ids on one. An empty id is refused, unmarked
+	// ([LetterIdentity]). What a keep of an id answers past the window, or
+	// once its entry was dropped, is not promised: a backend may still
+	// remember it, or may not.
+	//
+	// ALREADY KEPT IS AN ANSWER, NOT A FAILURE, and it is the bool beside a
+	// nil error rather than a sentinel: the entry the caller asked for is
+	// durable, which is what a nil error means, so the caller settles what
+	// it kept exactly as after a keep that stored it — and, told it was
+	// already there, does not count or report the keep a second time. As an
+	// error it would read as a failed keep to every caller that branches on
+	// one, which hands the thing back to be kept again: the very loop an
+	// identity ends. The contract's sentinels are failures a caller acts
+	// on, and this is none.
+	KeepDeadLetter(ctx context.Context, subject, id string, header, body []byte) (bool, error)
 
 	// DeadLettersOn lists every entry subject holds, oldest first —
 	// whoever kept it, a subscription's backend or a KeepDeadLetter — each

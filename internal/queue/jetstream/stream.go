@@ -280,6 +280,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -571,10 +572,22 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// Dead letters are kept by age, not by interest: nothing
 			// consumes them automatically, and an operator investigating
 			// poison needs them to still be there.
-			name:      streamDeadLetter,
-			subjects:  []string{topics.DeadLetterPrefix + ">"},
-			retention: jetstream.LimitsPolicy,
-			maxAge:    eventRetention,
+			//
+			// AND A KEEP OF ONE IDENTITY IS ONE ENTRY: a keep carries its
+			// identity as its message id (letterMsg), and this window is
+			// the contract's (queue.DeadLetterWindow, fifteen minutes) —
+			// the longest a keep waits, at the transport's ceiling across a
+			// link at the floor, is the request term and a crossing of
+			// eight mebibytes at thirty seconds a mebibyte for each of the
+			// three sends a write may make, 5 s + 3 × 240 s, about twelve
+			// minutes, so a second copy still crossing when the first
+			// landed is stored as nothing. A retention shorter than the
+			// window is refused by the broker, and by Tier A before it.
+			name:       streamDeadLetter,
+			subjects:   []string{topics.DeadLetterPrefix + ">"},
+			retention:  jetstream.LimitsPolicy,
+			maxAge:     eventRetention,
+			duplicates: queue.DeadLetterWindow,
 		},
 	}
 }

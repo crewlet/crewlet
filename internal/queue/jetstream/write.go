@@ -55,10 +55,10 @@ func (q *Queue) writing(msg *nats.Msg) *jsapi.Sends {
 
 // write sends msg, an acknowledged write that decides nothing on its own
 // behalf — no compare-and-set — within the budget [Queue.writing] gives it,
-// and answers whether its stream acknowledged it.
-func (q *Queue) write(ctx context.Context, msg *nats.Msg) error {
-	_, err := sendWithin(ctx, q.writing(msg), q.js, msg)
-	return err
+// and answers its stream's acknowledgement: a keep reads whether it was a
+// duplicate's ([Queue.KeepDeadLetter]).
+func (q *Queue) write(ctx context.Context, msg *nats.Msg) (*jetstream.PubAck, error) {
+	return sendWithin(ctx, q.writing(msg), q.js, msg)
 }
 
 // sendWithin makes the sends of one acknowledged write of msg on js, its

@@ -336,6 +336,47 @@ func TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked(t *testing.T) {
 	}
 }
 
+// A RECORD WHOSE DEAD LETTER WAS ALREADY KEPT IS ACKNOWLEDGED, AND NEITHER
+// KEPT NOR COUNTED AGAIN.
+//
+// A keep waits as long as its frame takes to cross the node's link, so it can
+// outlast the delivery's acknowledgement window, and the record is then handed
+// to a peer past its hour too — or the first keep's acknowledgement was lost
+// and the record comes back. Both keeps name the record's identity, so the
+// queue keeps one entry and answers the later keep that it was already kept:
+// the record is settled there as well, and the one record let go is counted
+// once, by the node that kept it.
+//
+// Mutation: count an already-kept answer as a keep, and the peer counts the
+// record dead-lettered a second time; name a keep by its delivery rather than
+// its record, and the store holds two entries.
+func TestARecordWhoseDeadLetterWasAlreadyKeptIsAcknowledgedAndNotCountedAgain(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	first, peer := f.join(t, true), f.join(t, true)
+	stored := first.clock.now().Add(-changefeed.DeadLetterAge - time.Minute)
+	reason := map[string]string{"source": "work", "reason": string(changefeed.DeferUnknownKey)}
+	var kept, again settled
+	first.handle(t, aRecord(stored, 120), aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &kept)
+	peer.handle(t, aRecord(stored, 121), aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &again)
+	for name, s := range map[string]*settled{"the first node": &kept, "the peer": &again} {
+		if acks, naks, _ := s.read(); acks != 1 || len(naks) != 0 {
+			t.Errorf("%s acked the record %d time(s) and handed it back %v, want it settled once",
+				name, acks, naks)
+		}
+	}
+	if entries := first.kept(t); len(entries) != 1 {
+		t.Errorf("the store holds %d entries of the one record, want one", len(entries))
+	}
+	if got := first.counted(metrics.TrackerFeedDeadLettered, reason); got != 1 {
+		t.Errorf("the node that kept the record counted it dead-lettered %d time(s), want once", got)
+	}
+	if got := peer.counted(metrics.TrackerFeedDeadLettered, reason); got != 0 {
+		t.Errorf("the peer whose keep was answered already kept counted the record dead-lettered "+
+			"%d time(s), want none: the record was let go once", got)
+	}
+}
+
 // A DEAD LETTER THAT COULD NOT BE KEPT LEAVES ITS RECORD HANDED BACK, NEVER
 // ACKED BARE.
 //
@@ -484,7 +525,8 @@ func TestADeadLettersHeaderIsOneBoundedLineOfASCII(t *testing.T) {
 	}
 	// AND THE QUEUE KEEPS IT, through the twin that refuses exactly what
 	// the broker refuses.
-	if err := newFleet(t).letters.KeepDeadLetter(t.Context(), subject, header, frame); err != nil {
+	letters := newFleet(t).letters
+	if _, err := letters.KeepDeadLetter(t.Context(), subject, "the largest", header, frame); err != nil {
 		t.Fatalf("a record at its log's ceiling was not kept: %v", err)
 	}
 	back, err := changefeed.DecodeDeadLetter(header)
@@ -590,13 +632,15 @@ func keptRecord(clk *clock) changefeed.Record {
 
 // A REPLAY DERIVES A KEPT RECORD'S WAKE ONCE, AND DROPS ITS ENTRY.
 //
-// Two nodes can each keep the same record — one's ack lost, the record
-// redelivered to the other past its hour. The feed's start publishes the first
-// entry's wake through the claim a delivery passes and drops the entry; the
-// second is the same record, whose wake this replay has just settled, so it is
-// dropped with nothing published again — never left as though the claim this
-// replay took were a peer's — and its frame never read. The wake carries the
-// record's own place, as a delivered one does.
+// Two entries can hold the same record: a node that never read its envelope
+// keeps it at generation zero, under an identity of its own beside the one a
+// node that read it keeps (keepID), and keeps further apart than the queue's
+// window are two entries whatever they name. The feed's start publishes the
+// first entry's wake through the claim a delivery passes and drops the entry;
+// the second is the same record, whose wake this replay has just settled, so it
+// is dropped with nothing published again — never left as though the claim
+// this replay took were a peer's — and its frame never read. The wake carries
+// the record's own place, as a delivered one does.
 //
 // Mutation: settle each entry alone, and the second is left as though a peer
 // held the claim this replay took; leave an entry whose wake was published,
@@ -607,7 +651,9 @@ func TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry(t *testing.T) {
 	f := newFleet(t)
 	rec := keptRecord(newClock())
 	deadLetterOf(t, f, rec)
-	deadLetterOf(t, f, rec)
+	unread := rec
+	unread.Gen = 0
+	deadLetterOf(t, f, unread)
 
 	newer := f.join(t, true)
 	if len(newer.kept(t)) != 2 {
@@ -755,7 +801,7 @@ func TestAForeignFrameInTheDeadLettersIsDroppedAndWakesNobody(t *testing.T) {
 func TestAnEntryANewerBuildKeptIsLeft(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	if err := f.letters.KeepDeadLetter(t.Context(), subject,
+	if _, err := f.letters.KeepDeadLetter(t.Context(), subject, "a newer build's record",
 		[]byte(`{"v":2,"source":"work","seq":7}`), []byte("frame")); err != nil {
 		t.Fatalf("keep: %v", err)
 	}

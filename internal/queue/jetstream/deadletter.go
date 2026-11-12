@@ -2,6 +2,8 @@ package jetstream
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -61,6 +63,24 @@ import (
 //     asked of the leader, so an entry is never reported gone because a
 //     replica had not heard of it.
 //
+// # One entry for one identity
+//
+// A keep names the identity its keeper derives from what it keeps
+// ([queue.EventQueue.KeepDeadLetter]), and the message carries it as its
+// `Nats-Msg-Id` ([letterID]): the stream's duplicate window is
+// [queue.DeadLetterWindow], so the broker stores a second keep of one identity
+// within it as nothing and acknowledges it as a duplicate, which is the
+// contract's "already kept". The window is the stream's, set where the stream
+// is declared (engineStreams), and a retention shorter than it is one the
+// broker refuses the stream for (Tier A refuses it first).
+//
+// THE DELIVERY BUDGET'S DEAD LETTER NAMES NONE ([Queue.deadLetter]): the
+// broker never hands a subscription's message past its MaxDeliver to anybody
+// (nats-server v2.15.2, server/consumer.go:2430-2457, hasMaxDeliveries,
+// asked as the acknowledgement window lapses at :6185-6191), and the budget's
+// keep is of the delivery that reached it, so no second node is ever handed
+// the message it keeps.
+//
 // A DROP ([Queue.DropDeadLetter]) asks the leader which subject the sequence
 // is on before it deletes it — the same message read, so it moves the payload
 // of the one entry it removes: the pinned server has no read of a message's
@@ -96,25 +116,29 @@ const letterQuiet = time.Second
 
 // KeepDeadLetter implements queue.EventQueue: body stored on subject in the
 // dead-letter stream with header beside it, the broker's acknowledgement the
-// proof it is durable.
-func (q *Queue) KeepDeadLetter(ctx context.Context, subject string, header, body []byte) error {
+// proof it is durable — and a duplicate's acknowledgement, of a keep of id
+// within the stream's duplicate window, the answer that it was already kept.
+func (q *Queue) KeepDeadLetter(ctx context.Context, subject, id string, header, body []byte) (bool, error) {
 	if err := deadLetterSubject(subject); err != nil {
-		return err
+		return false, err
+	}
+	if err := queue.LetterIdentity(id); err != nil {
+		return false, fmt.Errorf("jetstream: keep a dead letter on %s: %w", subject, err)
 	}
 	if err := queue.LetterHeader(header); err != nil {
-		return fmt.Errorf("jetstream: keep a dead letter on %s: %w", subject, err)
+		return false, fmt.Errorf("jetstream: keep a dead letter on %s: %w", subject, err)
 	}
 	// THE CONTRACT'S CEILING FOR A KEEP, before the transport's: the twin
 	// refuses exactly these, so the two never disagree about an entry whose
 	// header block would take it past the transport ([queue.LetterFraming]).
 	if size := len(header) + len(body); size+queue.LetterFraming > queue.MaxPayloadBytes {
-		return fmt.Errorf("keep a dead letter on %s: %d bytes of header and body exceed the "+
+		return false, fmt.Errorf("keep a dead letter on %s: %d bytes of header and body exceed the "+
 			"%d-byte limit less the %d a keep is framed in: %w", subject, size,
 			queue.MaxPayloadBytes, queue.LetterFraming, queue.ErrTooLarge)
 	}
 	stream, err := q.streamFor(ctx, subject)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
 	// deadline: the request term, and across a link the time the entry takes
@@ -127,38 +151,56 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject string, header, body
 	// its lease renewals among them (crewlet/crewlet#1035, which this does not
 	// fix). Classified on the CALLER's context, so a budget this set and the
 	// broker outlasted reads as the silence it is.
-	if err := q.write(ctx, letterMsg(subject, stream, header, body)); err != nil {
+	ack, err := q.write(ctx, letterMsg(subject, stream, id, header, body))
+	if err != nil {
 		// TRANSLATED, for Publish's reason: too large is the one refusal
 		// no retry changes, and nats.ErrMaxPayload is this backend's
 		// private word for it — met here only on a server announcing less
 		// than the contract.
 		if errors.Is(err, nats.ErrMaxPayload) {
-			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "keep a dead letter on", subject,
+			return false, fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "keep a dead letter on", subject,
 				len(header)+len(body)), queue.ErrTooLarge, err)
 		}
-		return fmt.Errorf("keep a dead letter on %s: %w", subject, q.brokerFailed(ctx, err))
+		return false, fmt.Errorf("keep a dead letter on %s: %w", subject, q.brokerFailed(ctx, err))
 	}
-	return nil
+	return ack.Duplicate, nil
 }
 
-// letterMsg is the message a keep publishes: body as its payload, header in
-// [letterHeader] where there is one, and the stream it was resolved to as the
-// one the broker must store it in.
+// letterMsg is the message a keep of id publishes: body as its payload, header
+// in [letterHeader] where there is one, the identity as its message id
+// ([letterID]), and the stream it was resolved to as the one the broker must
+// store it in.
 //
 // EXPECTED ON THE STREAM IT WAS RESOLVED TO (`Nats-Expected-Stream`, the
 // header jetstream.WithExpectStream writes), so a broker whose streams were
 // arranged differently — a namespace another stream also claims — refuses the
 // entry rather than storing it where no listing reads. Written here rather than
-// through the option so the message this returns is the whole of what crosses
-// the wire, which the framing's test measures against [queue.LetterFraming]
-// and the keep's budget counts ([carried]).
-func letterMsg(subject, stream string, header, body []byte) *nats.Msg {
+// through the options, the message id's as much as the stream's, so the
+// message this returns is the whole of what crosses the wire, which the
+// framing's test measures against [queue.LetterFraming] and the keep's budget
+// counts ([carried]).
+func letterMsg(subject, stream, id string, header, body []byte) *nats.Msg {
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.ExpectedStreamHeader, stream)
+	msg.Header.Set(jetstream.MsgIDHeader, letterID(subject, id))
 	if len(header) > 0 {
 		msg.Header.Set(letterHeader, string(header))
 	}
 	return msg
+}
+
+// letterID is the message id a keep of id on subject carries: the identity
+// SCOPED TO ITS SUBJECT, because every dead-letter subject is one stream and
+// the broker collapses a repeated id across the whole of it — two keepers'
+// things that share an identity on two subjects are two entries — and
+// DIGESTED, so the header block a keep is framed in stays inside
+// [queue.LetterFraming] whatever the identity's length, and no byte of an
+// identity reaches a header the transport would rewrite ([queue.LetterHeader]
+// says what it rewrites). A subject holds no NUL, so the pair it digests is
+// one pair.
+func letterID(subject, id string) string {
+	sum := sha256.Sum256([]byte(subject + "\x00" + id))
+	return hex.EncodeToString(sum[:])
 }
 
 // DeadLettersOn implements queue.EventQueue: every entry subject holds, oldest

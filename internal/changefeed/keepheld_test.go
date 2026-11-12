@@ -29,12 +29,12 @@ type slowKeeper struct {
 	keeps int
 }
 
-func (k *slowKeeper) KeepDeadLetter(context.Context, string, []byte, []byte) error {
+func (k *slowKeeper) KeepDeadLetter(context.Context, string, string, []byte, []byte) (bool, error) {
 	k.mu.Lock()
 	k.keeps++
 	k.mu.Unlock()
 	time.Sleep(k.takes) //fixedwait:simulated a keep waiting while its frame crosses a slow link
-	return nil
+	return false, nil
 }
 
 func (k *slowKeeper) DeadLettersOn(context.Context, string) ([]queue.Kept, error) {
@@ -201,19 +201,24 @@ const (
 	heldKeepRate  = 128 << 10
 )
 
-// A KEEP ACROSS A SLOW LINK HOLDS ITS DELIVERY, AND THE RECORD IS KEPT ONCE.
+// A KEEP ACROSS A SLOW LINK KEEPS ONE ENTRY, WHICHEVER NODE IS HANDED THE
+// RECORD.
 //
 // The real broker and the real group, whose acknowledgement window is thirty
-// seconds: a node whose link to its member carries 128 KiB a second keeps a
+// seconds: a leaf whose link to its member carries 128 KiB a second keeps a
 // record's 5 MiB frame, which takes about forty seconds to cross. The record
-// is past the age, so the feed keeps it and acks it once the keep returns, and
-// while the keep crosses the feed signals progress on the delivery: the broker
-// delivered it once — its own count — and the dead letters hold one entry.
+// is past the age, so the leaf's feed keeps it and acks it once the keep
+// returns — and meanwhile a member's node pulls the same group, as every data
+// node of a fleet does, so the record is handed to it once the leaf's window
+// lapses, and it keeps the record too. Nothing a leaf sends while its keep is
+// crossing reaches the broker before the keep's own last byte, so nothing the
+// leaf can say keeps the record from the peer: the second keep is made
+// harmless instead. Both name the record's identity, and the dead letters hold
+// ONE entry of it, and the record is settled.
 //
-// Mutation: keep without the progress signal, and the broker hands the record
-// back mid-keep, the node keeps what it is handed again, and the dead letters
-// hold two entries of one record.
-func TestAKeepAcrossASlowLinkHoldsItsDeliveryAndKeepsOneEntry(t *testing.T) {
+// Mutation: send a keep without its identity's message id, and the broker
+// keeps the peer's copy and the leaf's as two entries.
+func TestAKeepAcrossASlowLinkKeepsOneEntryWhicheverNodeIsHandedTheRecord(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	member, err := js.StartServer(ctx, js.Config{ServerName: "member",
@@ -240,8 +245,8 @@ func TestAKeepAcrossASlowLinkHoldsItsDeliveryAndKeepsOneEntry(t *testing.T) {
 	}
 	onMember, onLeaf := client(member), client(leaf)
 
-	// THE RECORD IS WRITTEN ON THE MEMBER, across nothing: only the keep
-	// crosses the slow link.
+	// THE RECORD IS WRITTEN ON THE MEMBER, across nothing: only the leaf's
+	// keep crosses the slow link.
 	spec := js.DomainStream{Name: "CREWLET_HELDKEEP_LOG", Subjects: []string{"crewlet.heldkeep.>"},
 		MaxBytes: 32 << 20, MaxMessageBytes: 8 << 20, Duplicates: time.Minute}
 	if err := onMember.EnsureDomainStream(ctx, spec); err != nil {
@@ -255,36 +260,41 @@ func TestAKeepAcrossASlowLinkHoldsItsDeliveryAndKeepsOneEntry(t *testing.T) {
 	if _, err := rand.Read(frame); err != nil {
 		t.Fatalf("random frame: %v", err)
 	}
-	if _, _, err := written.Append(ctx, "crewlet.heldkeep.item.1", "op-held", nil, frame); err != nil {
+	seq, _, err := written.Append(ctx, "crewlet.heldkeep.item.1", "op-held", nil, frame)
+	if err != nil {
 		t.Fatalf("append the record: %v", err)
 	}
 
-	read, err := onLeaf.DomainLog(ctx, spec.Name)
-	if err != nil {
-		t.Fatalf("open the log on the leaf: %v", err)
-	}
-	group, _, err := read.Group(ctx, "held", 0)
-	if err != nil {
-		t.Fatalf("open the group on the leaf: %v", err)
-	}
-	t.Cleanup(func() { _ = group.Stop() })
-	feed, err := changefeed.New(changefeed.Options{
-		Opener: newEstate(), Publisher: &capture{}, Claims: newClaims(), Translator: newProbe(),
-		DeadLetters: onLeaf,
-		// AN HOUR AND A MINUTE ON, so the record the broker stored a
-		// moment ago is past the age and kept.
-		Now: func() time.Time { return time.Now().UTC().Add(changefeed.DeadLetterAge + time.Minute) },
-	})
-	if err != nil {
-		t.Fatalf("new feed: %v", err)
-	}
-	handle := func() {
+	// A NODE'S FEED, each over its own handle on the group and keeping
+	// through its own client, as a node's does — AN HOUR AND A MINUTE ON, so
+	// the record the broker stored a moment ago is past the age and kept.
+	group := func(ctx context.Context, q *js.Queue) *js.DomainGroup {
 		t.Helper()
-		d, err := group.Next(ctx)
-		if err != nil || d == nil {
-			t.Fatalf("the group's next delivery = (%v, %v)", d, err)
+		read, err := q.DomainLog(ctx, spec.Name)
+		if err != nil {
+			t.Fatalf("open the log: %v", err)
 		}
-		changefeed.Handle(ctx, feed, &changefeed.Message{
+		g, _, err := read.Group(ctx, "held", 0)
+		if err != nil {
+			t.Fatalf("open the group: %v", err)
+		}
+		t.Cleanup(func() { _ = g.Stop() })
+		return g
+	}
+	feed := func(q *js.Queue) *changefeed.Feed {
+		t.Helper()
+		f, err := changefeed.New(changefeed.Options{
+			Opener: newEstate(), Publisher: &capture{}, Claims: newClaims(), Translator: newProbe(),
+			DeadLetters: q,
+			Now:         func() time.Time { return time.Now().UTC().Add(changefeed.DeadLetterAge + time.Minute) },
+		})
+		if err != nil {
+			t.Fatalf("new feed: %v", err)
+		}
+		return f
+	}
+	handle := func(ctx context.Context, f *changefeed.Feed, d *js.DomainDelivery) {
+		changefeed.Handle(ctx, f, &changefeed.Message{
 			Record: changefeed.Record{ID: "op-held", Key: d.Subject, Position: d.Seq,
 				Stream: spec.Name, StoredAt: d.StoredAt, Delivered: d.Delivered},
 			Frame: d.Payload,
@@ -293,11 +303,42 @@ func TestAKeepAcrossASlowLinkHoldsItsDeliveryAndKeepsOneEntry(t *testing.T) {
 			Ack: d.Ack, Nak: d.Nak, Progress: d.Progress, ProgressEvery: d.ProgressEvery,
 		})
 	}
-	handle()
 
-	// THE BROKER'S OWN COUNT of the deliveries it made, read once the keep
-	// returned: a delivery handed back mid-keep is a second one, already on
-	// its way to this node, which keeps what it is handed as a node does.
+	onTheLeaf := group(ctx, onLeaf)
+	first, err := onTheLeaf.Next(ctx)
+	if err != nil || first == nil {
+		t.Fatalf("the leaf's delivery = (%v, %v)", first, err)
+	}
+
+	// THE PEER pulls the same group for as long as the leaf keeps, and keeps
+	// what it is handed: the record, once the leaf's window lapses.
+	peerCtx, stopPeer := context.WithCancel(ctx)
+	onThePeer, peerFeed := group(peerCtx, onMember), feed(onMember)
+	var peer sync.WaitGroup
+	peer.Go(func() {
+		for {
+			d, err := onThePeer.Next(peerCtx)
+			if err != nil || d == nil {
+				return
+			}
+			handle(peerCtx, peerFeed, d)
+		}
+	})
+	handle(ctx, feed(onLeaf), first)
+	stopPeer()
+	peer.Wait()
+
+	// THE BROKER'S OWN ACCOUNT, read on the member once the leaf's keep
+	// returned: the entries the dead letters hold of the record, and the
+	// group's, which owes the record to nobody once it is settled.
+	kept, err := onMember.DeadLettersOn(ctx, changefeed.DeadLetterSubject(newProbe().Source()))
+	if err != nil {
+		t.Fatalf("list the dead letters: %v", err)
+	}
+	if len(kept) != 1 {
+		t.Errorf("a keep of about forty seconds across the link, beside a peer pulling the group: "+
+			"the dead letters hold %d entries of the record, want one", len(kept))
+	}
 	nc, err := member.Conn()
 	if err != nil {
 		t.Fatalf("connect to the member: %v", err)
@@ -307,24 +348,16 @@ func TestAKeepAcrossASlowLinkHoldsItsDeliveryAndKeepsOneEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a client of the member: %v", err)
 	}
-	consumer, err := inspect.Consumer(ctx, spec.Name, group.Name())
+	consumer, err := inspect.Consumer(ctx, spec.Name, onTheLeaf.Name())
 	if err != nil {
 		t.Fatalf("read the group's consumer: %v", err)
 	}
 	info, err := consumer.Info(ctx)
 	if err != nil {
-		t.Fatalf("read the group's deliveries: %v", err)
+		t.Fatalf("read the group's state: %v", err)
 	}
-	delivered := info.Delivered.Consumer
-	if delivered > 1 {
-		handle()
-	}
-	kept, err := onMember.DeadLettersOn(ctx, changefeed.DeadLetterSubject(newProbe().Source()))
-	if err != nil {
-		t.Fatalf("list the dead letters: %v", err)
-	}
-	if delivered != 1 || len(kept) != 1 {
-		t.Errorf("a keep of about forty seconds across the link: the broker delivered the record "+
-			"%d times and the dead letters hold %d entries of it, want one of each", delivered, len(kept))
+	if info.NumAckPending != 0 || info.AckFloor.Stream != seq {
+		t.Errorf("the group holds %d deliveries unacknowledged and is acknowledged through %d, "+
+			"want the record, %d, settled", info.NumAckPending, info.AckFloor.Stream, seq)
 	}
 }
