@@ -2357,3 +2357,67 @@ func TestMembersAreNamedExactly(t *testing.T) {
 		}
 	}
 }
+
+// A SAVED COMPACTION IS NAMED BY BOTH NAMES CLAUDE CODE READS IT BY: the one
+// it writes, in the session's directory, and the sibling beside that
+// directory, in the order it reads them, each read back as the session's
+// saved compaction, one kind for both. A name beside either (a temporary one,
+// another extension, either with no separator), either name under the
+// subagents' directory or a subagent's, either name of another session or
+// project, and a name the caller did not clean name none; and a session's id
+// outside sandbox.ValidSessionID's shape names none, nor reads back as the
+// session of the names its own spelling would make.
+//
+// Mutation: name the first alone, and the sibling is no name of the session's;
+// swap the two, and the one Claude Code reads second reads first; read back
+// either as no member, and a session holding it reads as one that holds none;
+// match a name by its last element, and the name under the subagents'
+// directory reads as one; drop the session's check, and `a/b` names one.
+func TestASavedCompactionIsNamedByBothNamesClaudeCodeReads(t *testing.T) {
+	t.Parallel()
+	dir := "projects/" + claudeProjectDir + "/" + ctSession
+	names, ok := claudePrecompact(ctSession)
+	if want := []string{dir + "/precompact.json", dir + ".precompact.json"}; !ok || !slices.Equal(names, want) {
+		t.Errorf("a session's saved compaction is named %q (%t), want %q", names, ok, want)
+	}
+	for _, name := range names {
+		if member, ok := claudeMemberOf(ctSession, name); !ok || member != (threadMember{Kind: memberPrecompact}) {
+			t.Errorf("%q reads back as %+v (%t), want the session's saved compaction", name, member, ok)
+		}
+	}
+
+	other := "projects/" + claudeProjectDir + "/" + ctOther
+	for _, name := range []string{
+		dir + "/precompact.json.tmp",
+		dir + ".precompact.json.tmp",
+		dir + "/precompact.jsonl",
+		dir + "precompact.json",
+		dir + "/precompact.json/",
+		dir + "/subagents/precompact.json",
+		dir + "/subagents/agent-" + ctAgent + "/precompact.json",
+		dir + "/subagents/agent-" + ctAgent + ".precompact.json",
+		dir + "/" + ctSession + ".precompact.json",
+		other + "/precompact.json",
+		other + ".precompact.json",
+		"projects/" + claudeProjectDir + "/./" + ctSession + "/precompact.json",
+		"/" + dir + "/precompact.json",
+		"/" + dir + ".precompact.json",
+		"projects/elsewhere/" + ctSession + "/precompact.json",
+		"precompact.json",
+	} {
+		if member, ok := claudeMemberOf(ctSession, name); ok {
+			t.Errorf("%q reads as the member %+v", name, member)
+		}
+	}
+	for _, session := range []string{"", "..", "a/b", "a.b", strings.Repeat("s", executorkeep.SessionIDMaxBytes+1)} {
+		if names, ok := claudePrecompact(session); ok || names != nil {
+			t.Errorf("the session %q names its saved compaction %q (%t)", session, names, ok)
+		}
+		own := "projects/" + claudeProjectDir + "/" + session
+		for _, name := range []string{dir + "/precompact.json", own + "/precompact.json", own + ".precompact.json"} {
+			if member, ok := claudeMemberOf(session, name); ok {
+				t.Errorf("the session %q reads %q as the member %+v", session, name, member)
+			}
+		}
+	}
+}

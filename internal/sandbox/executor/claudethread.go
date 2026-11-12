@@ -31,10 +31,10 @@ import (
 // nothing from a line it cannot read. The rules:
 //
 //   - A MEMBER IS NAMED EXACTLY ([claudeMainThread], [claudeSubagentThread],
-//     [claudeSubagentMeta], and [claudeMemberOf] the other way), never by
-//     [claudeThread], which takes any session's file for the main thread: a
-//     reader that decides something of one session must never read another
-//     session's file as it.
+//     [claudeSubagentMeta], [claudePrecompact], and [claudeMemberOf] the other
+//     way), never by [claudeThread], which takes any session's file for the
+//     main thread: a reader that decides something of one session must never
+//     read another session's file as it.
 //   - A WHOLE LINE AT A TIME, through the scrub's own [readLine] at the scrub's
 //     own bounds ([threadLineMax], [threadPlainMax]): one copy of the line
 //     primitive, so a reader never holds a line the take's scrub would have
@@ -153,6 +153,46 @@ func claudeSubagentPrefix(session string) string {
 	return claudeProjectPrefix + session + "/subagents/agent-"
 }
 
+// claudePrecompactFile is the name Claude Code saves a session's precomputed
+// compaction under ([claudePrecompact]).
+const claudePrecompactFile = "precompact.json"
+
+// claudePrecompact is the two members a session's SAVED COMPACTION is read
+// from, in the order Claude Code reads them:
+// `projects/crewlet/<session>/precompact.json`, the one it writes, and the
+// sibling `projects/crewlet/<session>.precompact.json`, which it reads only
+// where the first is absent. False for a session id outside
+// [sandbox.ValidSessionID]'s shape, which names no file.
+//
+// WHAT IT IS. Claude Code computes a compaction of a session ahead of its
+// threshold, where flags its servers serve and two settings,
+// precomputeCompactionEnabled and idleCompaction, allow it, and saves it
+// there. A resume reads it back, up to seven days old, and swaps it in for a
+// fresh summary where the threshold fires (read in 2.1.310's and 2.1.322's
+// shipped code; no run measured wrote one). So a session that holds one can
+// be handed a summary at its first request in place of the history it kept.
+// A box's pack carries the first, in the session's directory it takes whole,
+// and a restore puts it back in place.
+//
+// ONE KIND FOR BOTH ([memberPrecompact]): Claude Code reads either as the same
+// saved compaction, the second only in the first's place, and every reader
+// asks one question of either, whether the session holds one, so no reader
+// can answer it for one name and miss the other, which would read a session
+// that may be handed a summary as one that holds its history.
+//
+// ITS READER is the resumed count, which bounds what a continued session's
+// harness counts before its first request: it reads a session holding either
+// as one that may compact there, in a kept archive by its members' names
+// ([claudeMemberOf]) and in a box by a look at each name. Its presence is the
+// fact: nothing reads what it says.
+func claudePrecompact(session string) ([]string, bool) {
+	if !sandbox.ValidSessionID(session) {
+		return nil, false
+	}
+	dir := claudeProjectPrefix + session
+	return []string{dir + "/" + claudePrecompactFile, dir + "." + claudePrecompactFile}, true
+}
+
 // threadMemberKind is which of a session's members a name is.
 type threadMemberKind int
 
@@ -163,21 +203,27 @@ const (
 	memberSubagentThread
 	// memberSubagentMeta is a subagent's metadata ([claudeSubagentMeta]).
 	memberSubagentMeta
+	// memberPrecompact is the session's saved compaction, under either name
+	// [claudePrecompact] gives.
+	memberPrecompact
 )
 
 // threadMember is a member of a session, as [claudeMemberOf] reads its name.
 type threadMember struct {
 	Kind threadMemberKind
-	// Agent is the subagent's id; "" for the main thread.
+	// Agent is the subagent's id; "" for the main thread and a saved
+	// compaction.
 	Agent string
 }
 
 // claudeMemberOf is which member of session the archive member named name is:
-// the inverse of [claudeMainThread], [claudeSubagentThread] and
-// [claudeSubagentMeta], true exactly where one of them names it. Every other
-// name is false: another session's file, a deeper path under the session's
-// directory (a nested subagent's, a tool's spilled result), `agent-.jsonl`, an
-// agent id outside [validClaudeAgent]'s rule.
+// the inverse of [claudeMainThread], [claudeSubagentThread],
+// [claudeSubagentMeta] and [claudePrecompact], true exactly where one of them
+// names it. Every other name is false: another session's file, a deeper path
+// under the session's directory (a nested subagent's, a tool's spilled
+// result, a saved compaction's name under the subagents' directory), a name
+// beside one of them (`precompact.json.tmp`), `agent-.jsonl`, an agent id
+// outside [validClaudeAgent]'s rule.
 //
 // THE NAME AS THE CALLER CLEANED IT (path.Clean), compared whole and never
 // cleaned here: the caller owns the check for a member an archive holds twice
@@ -192,8 +238,12 @@ func claudeMemberOf(session, name string) (threadMember, bool) {
 	if !sandbox.ValidSessionID(session) {
 		return threadMember{}, false
 	}
-	if name == claudeProjectPrefix+session+".jsonl" {
+	switch name {
+	case claudeProjectPrefix + session + ".jsonl":
 		return threadMember{Kind: memberMainThread}, true
+	case claudeProjectPrefix + session + "/" + claudePrecompactFile,
+		claudeProjectPrefix + session + "." + claudePrecompactFile:
+		return threadMember{Kind: memberPrecompact}, true
 	}
 	rest, under := strings.CutPrefix(name, claudeSubagentPrefix(session))
 	if !under {
