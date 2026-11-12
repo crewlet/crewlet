@@ -866,7 +866,9 @@ sequenceDiagram
   answer was lost — a hook's take answered past its five seconds — hands the
   harness nothing and is settled: its notes are marked **unanswered**, read by
   the record's word, so the review still reads them and no later take hands
-  them over, while no saved session counts them held. **Claude Code** takes
+  them over, while no saved session counts them held. Every later launch tells
+  them again in its brief, and its write records each read by the job it
+  opens, at the marked take's own place among the turn's reads. **Claude Code** takes
   them through hooks the run is started with: once every tool call of a batch
   the main agent made has its result (`tool_batch`) — the model reads the note
   after those results, as context the harness adds of its own: a system message after them, or on some
@@ -958,16 +960,24 @@ sequenceDiagram
   `tool_batch`, `finish` or `step`) and, for a read by the executor in its
   box, its launch (`launch_id`); the phase's `steers[]` and the live call's say the same. A
   note a take recorded read while its answer was lost (above) has no
-  `delivered` record, and the execute phase's `steers[]` does not list it: its
-  harness was never handed it, and the review reads it carried, as it reads
-  every note the turn has read, which records nothing anew. A
-  note a first segment's box held when the segment ended without launching a
-  run is recorded `expired` as the box closes; one still waiting on a run's
-  record when the turn ends is recorded `expired` by the node that finishes the
-  run's ending, before the record is deleted, under an id derived from the
-  ending — so a retried ending records it once. A park is never an ending: a
-  question can wait days, and the segment that resumes reads what waited. A
-  note is not carried to a later turn: it is about the work in flight.
+  `delivered` record of that take, and the execute phase's `steers[]` does not
+  list it there: its harness was never handed it, and the review reads it
+  carried, as it reads every note the turn has read, which records nothing
+  anew. A note a first segment's box held when the segment ended without
+  launching a run is recorded `expired` as the box closes. Every note on a
+  run's record that no step reported reading is recorded by the node that
+  finishes the run's ending, as the record knows it, before the record is
+  deleted, under an id derived from the ending, so a retried ending records it
+  once: `delivered` with `retold` where a later launch's brief told a note a
+  take had never handed over and that launch's job started, at that brief;
+  `unconfirmed` where the run's harness was handed it and never confirmed it
+  (its session may hold it); `missed` where a take whose answer was lost
+  recorded it read and no later launch whose job started told it, at that
+  take's step, a launch that told it again and failed before its job started
+  among them; and `expired` where it still waits or was read first into the
+  brief of a job that never started. A park is never an ending: a question can wait
+  days, and the segment that resumes reads what waited. A note is not carried
+  to a later turn: it is about the work in flight.
 
 ---
 

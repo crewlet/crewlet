@@ -80,7 +80,7 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
-import { STEER_BOUNDARIES } from "~/contract/steer.ts";
+import { STEER_BOUNDARIES, STEER_OUTCOMES } from "~/contract/steer.ts";
 import {
   fraction,
   phaseLabel,
@@ -107,6 +107,31 @@ const KIND_LABEL: Record<SpanKind, string> = {
 
 /** A kind of step a note is read at (`types.SteerBoundary`). */
 type SteerBoundary = (typeof STEER_BOUNDARIES)[number];
+
+/** What became of a note (`types.SteerOutcome`). */
+type SteerOutcome = (typeof STEER_OUTCOMES)[number];
+
+/**
+ * The outcome a record names, or "unknown" for one this build cannot name: a
+ * NEWER build's, which it was given no words for. Drawn as expired, it said the
+ * turn finished before reading a note a newer step may have read.
+ */
+function outcomeOf(raw: unknown): SteerOutcome | "unknown" {
+  return typeof raw === "string" && (STEER_OUTCOMES as readonly string[]).includes(raw)
+    ? (raw as SteerOutcome)
+    : "unknown";
+}
+
+/**
+ * What the bar's badge says of each outcome that names a step: the note was
+ * read there, taken there and never handed over, or handed over there and never
+ * confirmed. An expired note names no step, so no bar carries it.
+ */
+const MARKED_AT: Record<Exclude<SteerOutcome, "expired">, string> = {
+  delivered: "Your note was read here",
+  missed: "Your note was taken here but never handed over",
+  unconfirmed: "Your note was handed over here and never confirmed",
+};
 
 /**
  * How the trace says each kind of step that read a note. A read INSIDE A LAUNCH
@@ -139,7 +164,8 @@ function boundaryOf(raw: unknown): SteerBoundary | "unknown" {
 /** A person's note, as the turn's own record says what became of it. */
 export interface SteerMark {
   noteId: string;
-  outcome: "delivered" | "expired";
+  /** What became of it; "unknown" for an outcome this build cannot name. */
+  outcome: SteerOutcome | "unknown";
   note: string;
   /** Who sent it, as the record names its author (`steered_by`, from
    *  `iam.ActorFor`): a seat's HANDLE where the sender is bound to one — which
@@ -148,27 +174,36 @@ export interface SteerMark {
   /** Whether `by` is a seat's handle: the author kind the engine recorded
    *  beside it (`steered_by_kind`) is `human` or `agent`, never `operator`. */
   bySeat: boolean;
-  /** The span that read it — a round's model call, or the launch's bar for a
-   *  read inside the launch — or "" for an expired one. */
+  /** The span of the step it came to (a round's model call, or the launch's
+   *  bar for a step inside the launch), or "" for an expired one, which no
+   *  step read, and one whose outcome this build cannot name. */
   spanId: string;
   round: number;
   phase: string;
   iteration: number;
-  /** The kind of step that read it; "unknown" for a delivered record this
-   *  build cannot name, and "" for an expired note, which nothing read. */
+  /** The kind of step it came to; "unknown" for one this build cannot
+   *  name, and "" for an expired note, which nothing read, and a note whose
+   *  outcome this build cannot name. */
   boundary: SteerBoundary | "unknown" | "";
   /** The launch that read it, for a read inside a launch. */
   launchId: string;
+  /** Whether a delivered note was read in a launch's brief that told it
+   *  again, after a step that took it never handed it over (`retold`). */
+  retold: boolean;
   at: string;
 }
 
-/** Every `agent_turn_steered` the turn recorded, placed at the round that read it. */
+/** Every `agent_turn_steered` the turn recorded, placed at the step it came to. */
 export function steerMarks(events: readonly EventRecord[], turnId: string): SteerMark[] {
   return events
     .filter((e) => e.type === "agent_turn_steered")
     .map((e) => {
       const p = (e.payload ?? {}) as Record<string, unknown>;
-      const outcome = p.outcome === "delivered" ? "delivered" : "expired";
+      const outcome = outcomeOf(p.outcome);
+      // EVERY OUTCOME BUT AN EXPIRY NAMES A STEP: where a delivered note was
+      // read, where a missed one was taken, the job an unconfirmed one was
+      // handed to. One this build cannot name is placed nowhere.
+      const atStep = outcome === "delivered" || outcome === "missed" || outcome === "unconfirmed";
       const phase = typeof p.phase === "string" ? p.phase : "";
       const iteration = typeof p.iteration === "number" ? p.iteration : 0;
       const round = typeof p.round === "number" ? p.round : 0;
@@ -178,8 +213,7 @@ export function steerMarks(events: readonly EventRecord[], turnId: string): Stee
       const by = typeof p.steered_by === "string" ? p.steered_by : "";
       const kind = typeof p.steered_by_kind === "string" ? p.steered_by_kind : "";
       const launchId = typeof p.launch_id === "string" ? p.launch_id : "";
-      // A DELIVERED NOTE NAMES ITS STEP; an expired one names none.
-      const boundary = outcome === "delivered" ? boundaryOf(p.boundary) : "";
+      const boundary = atStep ? boundaryOf(p.boundary) : "";
       // A READ INSIDE A LAUNCH is drawn on that launch's bar (`run:<launch>`,
       // the span the trace gives a launch), not on a round of the engine's
       // loop, which was parked while the executor worked. A step this build
@@ -194,21 +228,21 @@ export function steerMarks(events: readonly EventRecord[], turnId: string): Stee
         note: String(p.note ?? ""),
         by,
         bySeat: by !== "" && (kind === "human" || kind === "agent"),
-        spanId:
-          outcome !== "delivered"
-            ? ""
-            : inRun
-              ? launchId
-                ? `run:${launchId}`
-                : ""
-              : boundary !== "unknown" && phase && round
-                ? `${turnId}|${phase}|${iteration}.r${round}`
-                : "",
+        spanId: !atStep
+          ? ""
+          : inRun
+            ? launchId
+              ? `run:${launchId}`
+              : ""
+            : boundary !== "unknown" && phase && round
+              ? `${turnId}|${phase}|${iteration}.r${round}`
+              : "",
         round,
         phase,
         iteration,
         boundary,
         launchId,
+        retold: outcome === "delivered" && p.retold === true,
         at: e.timestamp,
       } satisfies SteerMark;
     });
@@ -236,7 +270,19 @@ export function Waterfall({
 }) {
   const { from, to, spans, untimed } = model;
   const open = spans.find((s) => s.id === selected) ?? null;
-  const marked = useMemo(() => new Set(marks.map((m) => m.spanId).filter(Boolean)), [marks]);
+  // EACH BAR'S BADGE SAYS WHAT BECAME OF THE NOTES AT ITS STEP: read there,
+  // taken there and never handed over, handed over there and never confirmed,
+  // every one said, where notes with different ends share a step.
+  const marked = useMemo(() => {
+    const at = new Map<string, string[]>();
+    for (const m of marks) {
+      if (!m.spanId || m.outcome === "expired" || m.outcome === "unknown") continue;
+      const said = at.get(m.spanId) ?? [];
+      if (!said.includes(MARKED_AT[m.outcome])) said.push(MARKED_AT[m.outcome]);
+      at.set(m.spanId, said);
+    }
+    return new Map([...at].map(([span, said]) => [span, said.join("; ")]));
+  }, [marks]);
   const headId = useId();
   const rowsRef = useRef<HTMLOListElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
@@ -356,7 +402,7 @@ export function Waterfall({
                       <span className="wf-name truncate">{s.label}</span>
                       {s.sub && <span className="wf-sub truncate">{s.sub}</span>}
                       {marked.has(s.id) && (
-                        <span className="wf-steer" title="Your note was read here">
+                        <span className="wf-steer" title={marked.get(s.id)}>
                           note
                         </span>
                       )}
@@ -443,7 +489,7 @@ function Notes({ marks }: { marks: readonly SteerMark[] }) {
               {m.outcome}
             </Tag>
             <span className="steer-mark-text">
-              {m.outcome === "delivered" ? readAt(m) : "the turn finished before it read the note"}
+              {endOf(m)}
               {m.by ? ` · from ${m.bySeat ? badgeOf(m.by).name : m.by}` : ""}
               {m.note && <q className="steer-mark-note">{m.note}</q>}
             </span>
@@ -455,17 +501,69 @@ function Notes({ marks }: { marks: readonly SteerMark[] }) {
 }
 
 /**
+ * What became of a note, in words, as its record says: where it was read, and
+ * that it was told again where a launch's brief told it after a step that never
+ * handed it over; that the turn finished first; where it was taken for a
+ * reader that never had it; the job it was handed to, which never confirmed
+ * it. For an outcome this build cannot name, that this version cannot say,
+ * never that the turn finished before reading it.
+ */
+function endOf(m: SteerMark): string {
+  switch (m.outcome) {
+    case "delivered":
+      return m.retold
+        ? `${readAt(m)}, told again after a step that never handed it over`
+        : readAt(m);
+    case "expired":
+      return "the turn finished before it read the note";
+    case "missed":
+      return takenAt(m);
+    case "unconfirmed":
+      return `${handedTo(m)}, which never confirmed reading it (its session may hold it)`;
+    default:
+      return "this version of the dashboard cannot say what became of it";
+  }
+}
+
+/** The phase a step was in, as the trace labels it, or "" for none. */
+function phaseOf(m: SteerMark): string {
+  return m.phase ? phaseLabel({ phase: m.phase, iteration: m.iteration }) : "";
+}
+
+/**
  * Where a delivered note was read, in words: the round of a phase, the step of
  * the executor in its phase, or — for a step this build cannot name — the turn
  * in that phase, never a round.
  */
 function readAt(m: SteerMark): string {
-  const phase = m.phase ? phaseLabel({ phase: m.phase, iteration: m.iteration }) : "";
+  const phase = phaseOf(m);
   if (m.boundary === "unknown" || m.boundary === "")
     return `read by the turn${phase ? ` in ${phase}` : ""}`;
   const of = phase ? ` of ${phase}` : "";
   if (m.boundary === "round") return `read at round ${m.round}${of}`;
   return `read by the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}`;
+}
+
+/**
+ * Where a missed note was taken, in words: at a round of a phase, for the
+ * executor at a step of its own, or, for a step this build cannot name, by the
+ * turn in that phase; and that its reader never had it.
+ */
+function takenAt(m: SteerMark): string {
+  const phase = phaseOf(m);
+  if (m.boundary === "unknown" || m.boundary === "")
+    return `taken by the turn${phase ? ` in ${phase}` : ""} but never handed over`;
+  if (m.boundary === "round")
+    return `taken at round ${m.round}${phase ? ` of ${phase}` : ""} but never handed over`;
+  return `taken for the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}, but never handed to it`;
+}
+
+/** The job an unconfirmed note was handed to, in words: the executor, at its step. */
+function handedTo(m: SteerMark): string {
+  const phase = phaseOf(m);
+  const step =
+    m.boundary === "unknown" || m.boundary === "" ? "" : `, ${READ_AT[m.boundary].words}`;
+  return `handed to the executor${phase ? ` in ${phase}` : ""}${step}`;
 }
 
 function Facts({ rows }: { rows: [string, ReactNode][] }) {

@@ -196,8 +196,8 @@ func TestAnUnsealedNoteOnARowReachesNoModel(t *testing.T) {
 		}
 	}
 	run.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Now()}
-	if err := runs.expired(t.Context(), run); err != nil {
-		t.Fatalf("expired: %v", err)
+	if err := runs.ended(t.Context(), run); err != nil {
+		t.Fatalf("ended: %v", err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for len(steered(p)) == 0 && time.Now().Before(deadline) {
@@ -709,8 +709,8 @@ func endRun(ctx context.Context, t *testing.T, store sandbox.PendingStore, runs 
 	if err != nil || !ok || decided.Ending == nil {
 		t.Fatalf("DecideEnding = %v, %v (%+v)", ok, err, decided.Ending)
 	}
-	if err := runs.expired(ctx, decided); err != nil {
-		t.Fatalf("expired: %v", err)
+	if err := runs.ended(ctx, decided); err != nil {
+		t.Fatalf("ended: %v", err)
 	}
 	if _, _, err := store.Finish(ctx, turnID, decided.Ending.ID); err != nil {
 		t.Fatalf("Finish: %v", err)

@@ -74,9 +74,12 @@ type SteerInbox interface {
 	Wait(ctx context.Context, after int) ([]SteerNote, <-chan struct{})
 
 	// Read records the notes named read at the run's next step — the harness
-	// reported putting them in front of its model. A note no longer waiting
-	// is skipped; an error is a record that could not be written, and the
-	// notes wait.
+	// reported putting them in front of its model — and reports each read
+	// there. A note no longer waiting is not recorded again, and one an
+	// earlier read of the same job recorded is reported again, as the same
+	// record; an error is a read that could not be confirmed written, and its
+	// notes wait, or, where the write landed, are reported when the harness
+	// confirms them again.
 	Read(ctx context.Context, ids []string) error
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]

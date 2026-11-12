@@ -2238,8 +2238,13 @@ const (
 	// 0.122.0 took it to 5824.7 KiB (5,964,471 bytes, +81,642: script +73,130,
 	// of which the atlas chunk, its screens and the map code, is 68,179; the
 	// sheets +8,512, the kit's GraphCanvas rules in the one sheet and the
-	// atlas screens' own 1,083): 5825 KiB.
-	treeBudget = 5<<20 + 705<<10
+	// atlas screens' own 1,083): 5825 KiB. Every end of a person's note to a
+	// running turn said in its trace as the run's record knows it (missed,
+	// unconfirmed, told again after a step that never handed it over, and an
+	// end this bundle does not know said as that, never as expired), merged on
+	// top of it, took it to 5826.0 KiB (5,965,816 bytes, +1,345, all script):
+	// 5826 KiB.
+	treeBudget = 5<<20 + 706<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
