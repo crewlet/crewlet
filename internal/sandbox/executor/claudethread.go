@@ -57,6 +57,10 @@ import (
 //     ([threadHead.Parent]).
 //   - A KEY ONLY ONE READER READS IS HELD IN THAT READER'S ACCESSOR, so a
 //     release that reshapes it costs that reader alone ([threadLine]).
+//   - A MESSAGE THAT DOES NOT DECODE IS ITS LINE'S: a reader that decides from
+//     a thread's messages asks [threadLine.Message] of every user and
+//     assistant record of that thread, and takes its error as that line's, no
+//     record, as it takes a *threadLineError, never as a line with no calls.
 //   - A HOOK'S FIRING IS NEVER A CALL'S ID: a firing leaves this layer only
 //     through [threadLine.Hook], a call's id only through
 //     [threadMessage.Calls] ([threadHook.Firing]).
@@ -933,6 +937,12 @@ func knownKind(kind string) string {
 // `name` a string; a tool_result's `tool_use_id` a string that names a call
 // and its `is_error` a boolean where present. An absent or null content is no
 // message either: every user and assistant record measured holds one.
+//
+// ITS ERROR IS ITS LINE'S. A reader that decides from a thread's messages asks
+// Message of every user and assistant record of that thread, and takes an
+// error for that line's, no record, as it takes a *threadLineError: never for
+// a message with no calls, which would read a reshaped record that held a call,
+// or a leg's start, as one that held none.
 //
 // A CONTENT LIST IS READ A BLOCK AT A TIME ([eachElement]), each block held to
 // its type as it is read, and never decoded whole before its first block is
