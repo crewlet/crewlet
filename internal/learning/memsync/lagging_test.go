@@ -130,8 +130,8 @@ func TestAReplayServedByACopyThatIsBehindIsNeverAShortHydration(t *testing.T) {
 	seedMemory(t, owner)
 	if published, err := syncerOn(t, owner, conn).Publish(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
-	} else if published != len(tables) {
-		t.Fatalf("published %d rows, want %d", published, len(tables))
+	} else if published.Rows != len(tables) {
+		t.Fatalf("published %d rows, want %d", published.Rows, len(tables))
 	}
 
 	t.Run("a copy that catches up hands over the rest", func(t *testing.T) {

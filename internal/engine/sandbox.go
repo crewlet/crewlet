@@ -4070,9 +4070,10 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last
 	// cycle reaches the changelog before the successor hydrates. Forgetting
-	// the watermarks is what makes a LATER re-acquisition correct — resuming
-	// from the old marks would skip exactly the memory the other node made
-	// in between.
+	// the watermarks makes the seat's next holding here carry again
+	// everything this node holds for it, as a restart does, which is what
+	// puts this node's rows back on a changelog an operator accepted after
+	// a recreation, or one restored while the node ran.
 	//
 	// Best effort, and it must be: this runs on the release path, where the
 	// seat is already gone. A failure here costs the successor whatever was

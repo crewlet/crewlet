@@ -311,12 +311,16 @@ owner wrote.
 
 What is new is found by that **change sequence**: one counter per node, which
 every inserted diary note, episode and skill version — and every vector set on
-a note or an episode — is stamped from, and which only ever increases. Each
-cycle carries a seat's rows past the highest value the last cycle published. It
-is not the row's rowid, because these tables are keyed on text and a rowid is
-handed out again once the newest row is deleted: after the diary's expiry or its
-trim took the newest note, the next note took the same rowid, below what had
-already been published, and was never carried while the node held the seat.
+a note or an episode — is stamped from, and which only ever increases. A seat's
+mark in each of these tables is the stamp of the last row the changelog
+acknowledged, and it moves with each one: the rows above it are read a mebibyte
+at a time and published one by one, so a cycle that runs out keeps what it
+carried of these tables, and the seat's next cycle, or its release's flush,
+resumes at the first row the changelog did not acknowledge. The mark is not the
+row's rowid, because these tables are keyed on text and a rowid is handed out
+again once the newest row is deleted: after the diary's expiry or its trim took
+the newest note, the next note took the same rowid, below what had already been
+published, and was never carried while the node held the seat.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.

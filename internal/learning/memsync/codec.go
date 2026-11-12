@@ -81,57 +81,138 @@ type Row struct {
 	Values map[string]any `json:"values"`
 }
 
-// export reads a seat's rows for one table.
+// exported is one row a page read, with its value of the table's watermark
+// column: the mark a publish moves the seat's to once the changelog has
+// acknowledged the row.
 //
-// after bounds an incremental read on the table's watermark column — see
-// table.wholeEachCycle for which tables take one and table.watermark for
-// which column it is. It returns the highest value of that column it saw, so
-// the caller can advance its watermark; a wholeEachCycle table is read whole
-// and what it returns is unused.
-func export(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64) ([]Row, int64, error) {
-	where := t.seatCol + " = ?"
-	args := []any{seat.value(t)}
-	order := "rowid"
-	if !t.wholeEachCycle {
-		order = t.watermark
-		where += " AND " + order + " > ?"
-		args = append(args, after)
-	}
-	query := "SELECT " + order + ", " + strings.Join(t.columns, ", ") +
-		" FROM " + t.name + " WHERE " + where + " ORDER BY " + order
+// THE MARK IS NOT PART OF THE ROW, so it never reaches the wire: the column
+// is this node's own (node migration 0041), and its values mean nothing on a
+// peer.
+type exported struct {
+	row  Row
+	mark int64
+}
 
-	sqlRows, err := db.QueryContext(ctx, query, args...)
+// exportPage reads one page of a seat's rows of a watermark table: the rows
+// strictly above after, in the watermark's order, until their carried values
+// hold exportPageBytes, and always at least one. It says whether the budget
+// stopped the page; a page the budget did not stop is the table's last.
+//
+// A PAGE, NOT THE BACKLOG. [Syncer.Publish] sends a page a row at a time,
+// moving the mark with each row the changelog acknowledges, and reads the next
+// page above the last, so what it holds is one page whatever lies behind it.
+// The read ends where the page does: the driver steps a statement only as its
+// rows are asked for, and the plan hands them over in the index's order as it
+// finds them, with no sort to read the rest first
+// (TestTheIncrementalExportIsARangeSeekNotASort), so closing the statement
+// leaves the rest unread.
+//
+// One of TWO READERS, rather than one taking a mark it ignores for half the
+// registry: [exportWhole] reads the tables that have no watermark.
+func exportPage(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64) ([]exported, bool, error) {
+	sqlRows, err := db.QueryContext(ctx, pageStatement(t), seat.value(t), after)
 	if err != nil {
-		return nil, after, fmt.Errorf("memsync: read %s: %w", t.name, err)
+		return nil, false, fmt.Errorf("memsync: read %s: %w", t.name, err)
 	}
 	defer func() { _ = sqlRows.Close() }()
 
-	high := after
-	var out []Row
+	var page []exported
+	held := 0
 	for sqlRows.Next() {
 		var mark int64
-		cells := make([]any, len(t.columns))
-		into := make([]any, 0, len(t.columns)+1)
-		into = append(into, &mark)
-		for i := range cells {
-			into = append(into, &cells[i])
+		values, size, err := scanRow(sqlRows, t, &mark)
+		if err != nil {
+			return nil, false, err
 		}
-		if err := sqlRows.Scan(into...); err != nil {
-			return nil, after, fmt.Errorf("memsync: scan %s: %w", t.name, err)
-		}
-		values := make(map[string]any, len(t.columns))
-		for i, column := range t.columns {
-			values[column] = encodeCell(t, column, cells[i])
-		}
-		out = append(out, Row{Table: t.name, Values: values})
-		if mark > high {
-			high = mark
+		page = append(page, exported{row: Row{Table: t.name, Values: values}, mark: mark})
+		// SPENT AFTER THE ROW IS TAKEN, so a page always holds one: a row
+		// past the budget ends the page it is read into, where a page that
+		// stopped short of it would read the same nothing for ever, and
+		// leave every row after it behind.
+		if held += size; held >= exportPageBytes {
+			return page, true, nil
 		}
 	}
 	if err := sqlRows.Err(); err != nil {
-		return nil, after, fmt.Errorf("memsync: read %s: %w", t.name, err)
+		return nil, false, fmt.Errorf("memsync: read %s: %w", t.name, err)
 	}
-	return out, high, nil
+	return page, false, nil
+}
+
+// exportWhole reads every one of a seat's rows of a wholeEachCycle table,
+// which has no watermark to read above.
+func exportWhole(ctx context.Context, db *sql.DB, t table, seat seatRef) ([]Row, error) {
+	sqlRows, err := db.QueryContext(ctx, wholeStatement(t), seat.value(t))
+	if err != nil {
+		return nil, fmt.Errorf("memsync: read %s: %w", t.name, err)
+	}
+	defer func() { _ = sqlRows.Close() }()
+
+	var out []Row
+	for sqlRows.Next() {
+		values, _, err := scanRow(sqlRows, t)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Row{Table: t.name, Values: values})
+	}
+	if err := sqlRows.Err(); err != nil {
+		return nil, fmt.Errorf("memsync: read %s: %w", t.name, err)
+	}
+	return out, nil
+}
+
+// pageStatement is what a page of a watermark table is read with: the seat's
+// rows strictly above a mark, in the watermark's order, the watermark first.
+// A function of its own, so the plan gate plans the text that runs.
+func pageStatement(t table) string {
+	return "SELECT " + t.watermark + ", " + strings.Join(t.columns, ", ") +
+		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + t.watermark + " > ?" +
+		" ORDER BY " + t.watermark
+}
+
+// wholeStatement is what a wholeEachCycle table is read with: every one of
+// the seat's rows, in the order they were written.
+func wholeStatement(t table) string {
+	return "SELECT " + strings.Join(t.columns, ", ") + " FROM " + t.name +
+		" WHERE " + t.seatCol + " = ? ORDER BY rowid"
+}
+
+// scanRow reads one row's carried columns, after the destinations lead takes
+// first, into the values the wire carries, and says how many bytes those
+// values hold ([carriedBytes]).
+func scanRow(rows *sql.Rows, t table, lead ...any) (map[string]any, int, error) {
+	cells := make([]any, len(t.columns))
+	into := make([]any, 0, len(lead)+len(t.columns))
+	into = append(into, lead...)
+	for i := range cells {
+		into = append(into, &cells[i])
+	}
+	if err := rows.Scan(into...); err != nil {
+		return nil, 0, fmt.Errorf("memsync: scan %s: %w", t.name, err)
+	}
+	values := make(map[string]any, len(t.columns))
+	size := 0
+	for i, column := range t.columns {
+		cell := encodeCell(t, column, cells[i])
+		values[column] = cell
+		size += carriedBytes(cell)
+	}
+	return values, size, nil
+}
+
+// carriedBytes is what one encoded cell holds: a text its length, a blob the
+// base64 it travels as. A number or a NULL is a few bytes at most beside a
+// row's text and its vector, and is not counted.
+func carriedBytes(cell any) int {
+	switch cell := cell.(type) {
+	case string:
+		return len(cell)
+	case map[string]any:
+		blob, _ := cell["$blob"].(string)
+		return len(blob)
+	}
+	return 0
 }
 
 // encodeCell makes one scanned value safe to carry as JSON.
@@ -228,10 +309,13 @@ func (t table) subject(seat string, values map[string]any) string {
 // took it back would keep its own stale profile and then publish it back over
 // the peer's, regressing the seat's memory for the whole fleet.
 //
-// Last writer wins is safe rather than merely convenient: a seat is held by
-// ONE node at a time, so the changelog's latest value for a subject is by
-// construction the value its current owner wrote. There is no second writer
-// to lose to.
+// Last writer wins is safe rather than merely convenient while ONE node at a
+// time publishes the seat, which is what holding it means: the changelog's
+// latest value for a subject is then the value its current owner wrote. A
+// seat's move is where that does not hold: a cycle the releasing node began
+// before the release, and a successor still taking the seat, can each publish
+// an older copy after the newer one, and the older one wins
+// (crewlet/crewlet#511).
 func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	columns := make([]string, 0, len(t.columns))
 	values := make([]any, 0, len(t.columns))
