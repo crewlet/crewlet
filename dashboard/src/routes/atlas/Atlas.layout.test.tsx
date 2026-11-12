@@ -1,8 +1,9 @@
 /**
- * THE ATLAS MAP, LAID OUT, in a real browser: every lane drawn with what
- * would fill an empty one, a large company opening with its groups closed,
- * two thousand entries drawn without mounting each, and no screen that
- * scrolls sideways, on a wide screen and on a phone.
+ * THE ATLAS PAGE, LAID OUT, in a real browser: every lane drawn with what
+ * would fill an empty one, the selection docked on the map and marked in the
+ * catalogue under it, a large company opening with its groups closed, two
+ * thousand entries drawn without mounting each, and no screen that scrolls
+ * sideways, on a wide screen and on a phone.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -13,9 +14,11 @@ import { InertWebSocket, LayoutClient, sidewaysScrollers } from "~/test/layout.t
 import { eventually } from "~/test/settle.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import {
+  activityAnswer,
   entriesAnswer,
   facetsAnswer,
   generatedCompany,
+  grownCompany,
   mapAnswer,
   sparseCompany,
   type AtlasFixture,
@@ -46,11 +49,13 @@ const FRAME: Record<string, unknown> = {
   answered_decisions: { handle: "jane", items: [] },
 };
 
+// THE ROWS OF THE MAP, read in order: what a request travels, what that
+// stands on, and what stands around it.
 const LANES = [
   "Entry",
   "Services",
-  "Runtime",
   "Data",
+  "Runtime",
   "Platforms",
   "Code and delivery",
   "Observability",
@@ -86,8 +91,10 @@ async function mount(width: number, fixture: AtlasFixture, hash = "#/company/atl
       : what === "atlas_facets"
         ? facetsAnswer(fixture)
         : what === "atlas_entries"
-          ? entriesAnswer(fixture)
-          : undefined;
+          ? entriesAnswer(fixture, 50, 0, "health")
+          : what === "atlas_activity"
+            ? activityAnswer(fixture)
+            : undefined;
   flushSync(() =>
     root!.render(
       <LayoutClient answers={FRAME} ask={ask} org={ORG}>
@@ -121,11 +128,56 @@ test.each([1440, 768, 390])(
     expect(texts(".crewlet-graph-canvas__name")).toEqual(
       expect.arrayContaining(["acme/web", "acme/api", "acme/infra"]),
     );
-    // THE MAP TAKES THE HEIGHT, and nothing scrolls sideways.
-    expect(map()!.getBoundingClientRect().height).toBeGreaterThan(300);
+    // THE MAP TAKES ITS SHARE OF THE WINDOW, the catalogue follows under it,
+    // and nothing scrolls sideways.
+    const picture = map()!.getBoundingClientRect();
+    expect(picture.height).toBeGreaterThan(300);
+    const catalogue = document.querySelector(".atlas-catalogue")!.getBoundingClientRect();
+    expect(catalogue.top).toBeGreaterThanOrEqual(picture.bottom);
     expect(sidewaysScrollers(host!)).toEqual([]);
   },
 );
+
+// ONE SELECTION, TWO SURFACES: the entry the address selects is lit on the
+// map with its dock and marked in the catalogue, and Details opens its sheet.
+// Mutation: hold the selection in the map alone and the row is never marked.
+test("a selection is docked on the map, marked in the catalogue, and opens its sheet", async () => {
+  const company = grownCompany();
+  await mount(1440, company, `#/company/atlas?sel=${company.ordersDb.id}`);
+  await eventually(() =>
+    expect(
+      texts(".crewlet-graph-canvas__card[data-state='lit'] .crewlet-graph-canvas__name"),
+    ).toContain("orders-db"),
+  );
+  // WHAT IS NOT ON ITS PATH RECEDES, and the dock says what is selected.
+  expect(drawn(".crewlet-graph-canvas__card[data-state='dim']").length).toBeGreaterThan(0);
+  expect(texts(".atlas-dock").join(" ")).toContain("orders-db");
+  await eventually(() =>
+    expect(texts(".crewlet-data-grid__row--selected").join(" ")).toContain("orders-db"),
+  );
+  const details = [...document.querySelectorAll<HTMLButtonElement>(".atlas-dock button")].find(
+    (button) => button.textContent?.trim() === "Details",
+  )!;
+  flushSync(() => details.click());
+  expect(decodeURIComponent(location.hash)).toContain(`peek=atlas:${company.ordersDb.id}`);
+  const clear = document.querySelector<HTMLButtonElement>(
+    ".atlas-dock button[aria-label='Clear the selection']",
+  )!;
+  flushSync(() => clear.click());
+  expect(location.hash).not.toContain("sel=");
+  expect(location.hash).not.toContain("peek=");
+  expect(sidewaysScrollers(host!)).toEqual([]);
+});
+
+test.each([768, 390])("a grown company's page does not scroll sideways at %ipx", async (width) => {
+  await mount(width, grownCompany());
+  await eventually(() =>
+    expect(
+      document.querySelectorAll(".crewlet-data-grid__row, [class*='data-grid'] li").length,
+    ).toBeGreaterThan(0),
+  );
+  expect(sidewaysScrollers(host!)).toEqual([]);
+});
 
 test("three hundred entries open with their groups closed, each one card saying what it holds", async () => {
   await mount(1440, generatedCompany(300));

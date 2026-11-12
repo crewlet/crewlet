@@ -1,13 +1,14 @@
 /**
- * An entry's page: what it is and what is wrong with it (Overview), what it
- * depends on and what depends on it (Relations), and what each source says
- * about it (Sources), where a disagreement between sources is shown with
- * both values and never settled on the reader's behalf.
+ * An entry's page: what it is, what is wrong with it, the entry among its
+ * neighbours, its facts and its recent changes (Overview), what it depends on
+ * and what depends on it (Relations), and what each source says about it
+ * (Sources), where a disagreement between sources is shown with both values
+ * and never settled on the reader's behalf.
  */
 
 import { useId, useMemo } from "react";
 import { Card, Link, Section, Skeleton, Stack, Tabs, Tag } from "@crewlethq/ui";
-import { ObjectHeader, SetByLine, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { SetByLine } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -25,35 +26,28 @@ import type {
   AtlasFactView,
   AtlasSource,
   AtlasStanding,
-  AtlasTraceAnswer,
 } from "~/contract/atlas.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { ATLAS_POLL_MS } from "./filters.ts";
+import { Changes } from "./Changes.tsx";
+import { ATLAS_POLL_MS, SELECT_KEY, TRACE_KEY } from "./filters.ts";
 import {
+  EntryHead,
   Facts,
   RelatedList,
   Signals,
+  Touches,
   dependsOn,
   entryPath,
+  selfOf,
   useEntryReads,
   usedBy,
+  type EntryReads,
 } from "./entry.tsx";
-import { FactValue, HealthTag, VendorLead, sourceName, sourceSetBy } from "./parts.tsx";
-import {
-  FACTS,
-  KINDS,
-  LANES,
-  RELATIONS,
-  SOURCE_KINDS,
-  STATES,
-  USES,
-  VENDORS,
-  WORDS,
-  entries,
-} from "./words.ts";
+import { FactValue, sourceName, sourceSetBy } from "./parts.tsx";
+import { FACTS, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
 
 const TABS = ["overview", "relations", "sources"] as const;
 type Tab = (typeof TABS)[number];
@@ -64,7 +58,8 @@ const TAB_LABELS: Readonly<Record<Tab, string>> = {
 };
 
 export function EntryPage({ id }: { id: string }) {
-  const { entry, next } = useEntryReads(id);
+  const reads = useEntryReads(id);
+  const { entry } = reads;
   const answer = entry.data;
   usePageLabels(answer ? { [id]: answer.entry.name } : {});
   if (entry.loading && !answer)
@@ -76,7 +71,7 @@ export function EntryPage({ id }: { id: string }) {
       </QueryState>
     );
   }
-  return <EntryReading answer={answer} next={next.data} />;
+  return <EntryReading answer={answer} reads={reads} />;
 }
 
 /** The facts and relations the sources disagree on. */
@@ -87,56 +82,18 @@ function disagreements(entry: AtlasEntry): { facts: AtlasFactView[]; relations: 
   };
 }
 
-function EntryReading({
-  answer,
-  next,
-}: {
-  answer: AtlasEntryAnswer;
-  next: AtlasTraceAnswer | null;
-}) {
+function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: EntryReads }) {
   const now = useNow();
   const panelId = useId();
   const [tab, setTab] = useTab<Tab>("tab", TABS);
   const { entry } = answer;
-  const below = dependsOn(entry, next);
+  const below = dependsOn(entry, reads.next.data);
   const above = usedBy(answer);
   const disputed = disagreements(entry);
   const conflicts = disputed.facts.length + disputed.relations.length;
-  const facts: Fact[] = [
-    ...(answer.vendor
-      ? [
-          {
-            label: "Vendor",
-            value: (
-              <span className="atlas-vendor">
-                <VendorLead vendor={answer.vendor} />
-                {VENDORS[answer.vendor].name}
-              </span>
-            ),
-          },
-        ]
-      : []),
-    { label: "Lane", value: LANES[entry.lane].label },
-    { label: "Confidence", value: WORDS[entry.word] },
-    { label: "Last seen", value: relTime(entry.last_seen, now) },
-  ];
   return (
     <div className="atlas-entry">
-      <ObjectHeader
-        kind={KINDS[entry.ref.kind].word}
-        icon={KINDS[entry.ref.kind].glyph}
-        identifier={entry.ref.key}
-        title={entry.name}
-        status={
-          <>
-            <HealthTag health={answer.health} />
-            {(entry.state === "stale" || entry.state === "retired") && (
-              <span className="muted">{STATES[entry.state]}</span>
-            )}
-          </>
-        }
-        facts={facts}
-      />
+      <EntryHead answer={answer} self={selfOf(reads)} size="page" now={now} />
       <div className="tab-detail">
         <Tabs
           variant="underline"
@@ -165,7 +122,7 @@ function EntryReading({
           }))}
         />
         <div className="tabpanel" role="tabpanel" id={panelId} tabIndex={0}>
-          {tab === "overview" && <Overview entry={entry} now={now} />}
+          {tab === "overview" && <Overview entry={entry} reads={reads} now={now} />}
           {tab === "relations" && <Relations answer={answer} below={below} above={above} />}
           {tab === "sources" && <Sources entry={entry} now={now} />}
         </div>
@@ -174,10 +131,11 @@ function EntryReading({
   );
 }
 
-function Overview({ entry, now }: { entry: AtlasEntry; now: number }) {
+function Overview({ entry, reads, now }: { entry: AtlasEntry; reads: EntryReads; now: number }) {
   return (
     <Stack gap={5}>
       <Signals entry={entry} now={now} />
+      <Touches self={selfOf(reads)} reads={reads} stacked={false} headingLevel={2} />
       <Section spacing="tight" headingLevel={2} title="Facts">
         <Facts entry={entry} now={now} />
       </Section>
@@ -198,6 +156,9 @@ function Overview({ entry, now }: { entry: AtlasEntry; now: number }) {
           </ul>
         </Section>
       )}
+      <Section spacing="tight" headingLevel={2} title="Recent changes">
+        <Changes id={entry.id} />
+      </Section>
     </Stack>
   );
 }
@@ -362,7 +323,7 @@ function Upstream({ id, name }: { id: string; name: string }) {
               ? ", and the trace stopped at its bound before walking every hop"
               : ""}
             .{" "}
-            <Link href={href(["company", "atlas"], { peek: `atlas:${id}`, trace: "up" })}>
+            <Link href={href(["company", "atlas"], { [SELECT_KEY]: id, [TRACE_KEY]: "up" })}>
               Show it on the map
             </Link>
           </p>

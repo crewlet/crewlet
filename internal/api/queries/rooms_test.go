@@ -506,7 +506,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // repositories' lines, `code_search`, which a script read alone on the
 // path api-endpoints.md prints ("GET /gitlet/search"). And Company › Atlas,
 // its map, list, peek and entry page, deleted the lines of the atlas's five
-// questions, which a script holding the atlas permission reads over REST too.
+// questions, which a script holding the atlas permission reads over REST too;
+// its band, catalogue and timeline then deleted those of the atlas's own log,
+// `atlas_log` and `atlas_activity`.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
@@ -516,13 +518,6 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
-	// THE ATLAS'S OWN LOG, as lines and as daily counts: read over REST on the
-	// paths the reference prints until a screen draws its activity and its
-	// timeline from them, which deletes these two lines.
-	"atlas_log": "a script holding the atlas permission: GET /atlas/log and GET /atlas/{id}/log, as " +
-		"docs/reference/api-endpoints.md prints them",
-	"atlas_activity": "a script holding the atlas permission: GET /atlas/activity, as " +
-		"docs/reference/api-endpoints.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
