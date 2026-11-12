@@ -96,6 +96,10 @@ atlas:                                  # optional: the atlas, the map of what t
   refresh_interval_seconds: 3600        #   how often each connected integration is read whole for
                                         #   the atlas (default 3600; the floor is 300). An unchanged
                                         #   read writes nothing; see concepts/atlas.md.
+  agent_records: true                   #   whether agents record in the atlas what a tool call of
+                                        #   their own turn showed them, and dispute what it holds
+                                        #   (default true). false stops both; see "What agents
+                                        #   record" in concepts/atlas.md.
 assistant: {...}                        # optional, Ask Crewlet; off unless enabled
                                         #   (see "Ask Crewlet" below)
 
