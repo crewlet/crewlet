@@ -210,6 +210,12 @@ integrations:
 | `provisioning.api_token` | yes | The [provisioner token](#creating-the-provisioner-token). Keep it a `${VAR}` reference into the secret store; the dashboard seals it as `CLOUDFLARE_API_TOKEN`. |
 | `provisioning.zones` | no | Set in the document only; the connect form does not ask for it in this release. The zone names agents may reach, as Cloudflare lists them (`example.com`, with no scheme or path), each once. Each must be a zone in the account. Empty, or absent, scopes every token to all zones in the account, including zones added later. |
 
+## What the atlas reads
+
+The engine reads the account for the company's [atlas](../concepts/atlas.md#what-integrations-read) with the provisioner token, under the Read groups it already holds on every zone, once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise: the account's name, every zone, every A, AAAA and CNAME record (what each name points at, and whether Cloudflare proxies it) and every certificate pack (what it covers, its type and status, who issued it and when it lapses). MX and TXT records add nothing, a TXT record's content is never decoded, and record comments and tags are never read. The read changes nothing at Cloudflare and needs no permission beyond the provisioner token's own; Workers, Pages, R2, Tunnels and load balancers would, and are not read.
+
+A read of ten thousand records in a hundred zones is about three hundred calls, a quarter of one five-minute window of the token's limit, which it shares with the reconcile loop. A read that fails part way records nothing, and a name that two complete reads at least a day apart both miss is retired from the atlas.
+
 ## Cloudflare's limits worth knowing
 
 These are Cloudflare's, not Crewlet's, and an agent meets them as a refusal from the API.
