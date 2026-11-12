@@ -192,7 +192,8 @@ func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 				continue
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "withSeatAccess" {
+				if sel, ok := n.(*ast.SelectorExpr); ok &&
+					(sel.Sel.Name == "withSeatAccess" || sel.Sel.Name == "withSeatAccessReads") {
 					wrapped[recv.Name] = true
 				}
 				return true
@@ -202,7 +203,7 @@ func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 	for pass, kind := range want {
 		if !wrapped[pass] {
 			t.Errorf("%s (%s) has per-seat access and its Run does not go through "+
-				"withSeatAccess, so its company half writes unguarded", pass, kind)
+				"withSeatAccess or withSeatAccessReads, so its company half writes unguarded", pass, kind)
 		}
 	}
 }

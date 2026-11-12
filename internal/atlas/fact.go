@@ -21,6 +21,7 @@ const (
 	FactVendor      Fact = "vendor"
 	FactCapability  Fact = "capability"
 	FactAccountRef  Fact = "account_ref"
+	FactAccountName Fact = "account_name"
 	FactSite        Fact = "site"
 	FactRegion      Fact = "region"
 	FactIntegration Fact = "integration"
@@ -58,6 +59,12 @@ const (
 	FactToolCount     Fact = "tool_count"
 	FactOAuthIssuer   Fact = "oauth_issuer"
 	FactSignInExpires Fact = "sign_in_expires"
+
+	FactCovers          Fact = "covers"
+	FactExpires         Fact = "expires"
+	FactIssuer          Fact = "issuer"
+	FactValidity        Fact = "validity"
+	FactCertificateType Fact = "certificate_type"
 )
 
 // Spec is what one fact admits.
@@ -88,6 +95,12 @@ var (
 	runners      = []string{"engine", "external"}
 	signIns      = []string{"subscription", "api_key", "inherit_env", "env"}
 	transports   = []string{"stdio", "http"}
+	// A certificate's validity, as the vendor reports it folded into five
+	// words: pending covers every state on the way to active, failed every
+	// step that timed out, and inactive one deactivated, deleted or on its
+	// way out.
+	validities       = []string{"active", "pending", "failed", "expired", "inactive"}
+	certificateTypes = []string{"universal", "advanced", "custom"}
 )
 
 func wordsOf[S ~string](set []S) []string {
@@ -111,6 +124,7 @@ var specs = sync.OnceValue(func() map[Fact]Spec {
 		FactVendor:      {Type: TypeWord, Words: wordsOf(Vendors), Kinds: []Kind{KindAccount, KindModel, KindToolServer}},
 		FactCapability:  {Type: TypeWord, Many: true, Words: wordsOf(Capabilities), Kinds: []Kind{KindAccount}},
 		FactAccountRef:  {Type: TypeAccountRef, Kinds: []Kind{KindAccount}},
+		FactAccountName: {Type: TypeLabel, Kinds: []Kind{KindAccount}},
 		FactSite:        {Type: TypeURL, Kinds: []Kind{KindAccount}},
 		FactRegion:      {Type: TypeRegion, Many: true, Kinds: []Kind{KindAccount, KindHost, KindDatastore, KindQueue, KindBucket}},
 		FactIntegration: {Type: TypeWord, Words: onOff, Kinds: []Kind{KindAccount}},
@@ -148,13 +162,19 @@ var specs = sync.OnceValue(func() map[Fact]Spec {
 		FactToolCount:     {Type: TypeInt, Kinds: []Kind{KindToolServer}},
 		FactOAuthIssuer:   {Type: TypeURL, Kinds: []Kind{KindToolServer}},
 		FactSignInExpires: {Type: TypeInstant, Kinds: []Kind{KindToolServer}},
+
+		FactCovers:          {Type: TypeHostname, Many: true, Kinds: []Kind{KindCertificate}},
+		FactExpires:         {Type: TypeInstant, Kinds: []Kind{KindCertificate}},
+		FactIssuer:          {Type: TypeLabel, Kinds: []Kind{KindCertificate}},
+		FactValidity:        {Type: TypeWord, Words: validities, Kinds: []Kind{KindCertificate}},
+		FactCertificateType: {Type: TypeWord, Words: certificateTypes, Kinds: []Kind{KindCertificate}},
 	}
 })
 
 // Facts is every fact, in the order a reader is shown them.
 var Facts = []Fact{
 	FactName, FactPurpose, FactEnvironment, FactImportance,
-	FactVendor, FactCapability, FactAccountRef, FactSite, FactRegion, FactIntegration, FactInboundURL,
+	FactVendor, FactCapability, FactAccountRef, FactAccountName, FactSite, FactRegion, FactIntegration, FactInboundURL,
 	FactURL, FactAddress, FactPort, FactContainers,
 	FactEngine, FactEngineVersion,
 	FactDefaultBranch, FactVisibility, FactStatus, FactPullMirrorOf, FactPushMirrorTo, FactImportedFrom,
@@ -162,6 +182,7 @@ var Facts = []Fact{
 	FactHarness, FactModel, FactSignIn, FactChainPosition,
 	FactTransport, FactCommand, FactShared, FactServerName, FactServerVersion, FactToolCount,
 	FactOAuthIssuer, FactSignInExpires,
+	FactCovers, FactExpires, FactIssuer, FactValidity, FactCertificateType,
 }
 
 // Valid reports whether f is a member of the closed list.

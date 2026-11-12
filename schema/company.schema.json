@@ -244,6 +244,14 @@
     "Atlas": {
       "additionalProperties": false,
       "properties": {
+        "refresh_interval_seconds": {
+          "description": "How often each connected integration is read whole for the atlas, in seconds. 0 takes the default of 3600; the floor is 300.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "retention_days": {
           "description": "How long the atlas keeps its history: a value somebody replaced, and an entry a person retired that nothing has reported since (default 400, 90..3650). What the atlas holds now never expires.",
           "maximum": 3650,

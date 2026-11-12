@@ -139,23 +139,8 @@ func (r *Reader) Live(ctx context.Context, fresh statelog.Freshness) (Live, erro
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
-			var (
-				body               string
-				observed, position int64
-				wire               Claim
-			)
-			if err := rows.Scan(&body, &observed, &position); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			if err := json.Unmarshal([]byte(body), &wire); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("the claim at %d does not decode: %w", position, err)
-			}
-			out.Claims = append(out.Claims, wire.vocabulary(store.DecodeTime(observed), uint64(position)))
-		}
-		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		out.Claims, err = scanLive(rows)
+		if err != nil {
 			return err
 		}
 		if len(out.Claims) > MaxLiveClaims {
@@ -169,6 +154,61 @@ func (r *Reader) Live(ctx context.Context, fresh statelog.Freshness) (Live, erro
 	}
 	out.Position, out.Complete = answer.Position, answer.Complete
 	return out, nil
+}
+
+// LiveOf reads every live claim one voice holds: what an integration's read is
+// diffed against before it is recorded (ADR-0129). Stale by default on the
+// duty's side, since the read decides nothing a snapshot would not decide
+// again: a claim it misses is written once more, which the applier takes once.
+func (r *Reader) LiveOf(ctx context.Context, src atlas.Source, fresh statelog.Freshness) (Live, error) {
+	var out Live
+	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out = Live{}
+		rows, err := tx.QueryContext(ctx, `
+			SELECT claim, observed_at, position FROM atlas_claims INDEXED BY atlas_claims_source_idx
+			WHERE replaced = 0 AND source_kind = ? AND source_name = ? ORDER BY position LIMIT ?`,
+			string(src.Kind), src.Name, MaxLiveClaims+1)
+		if err != nil {
+			return err
+		}
+		out.Claims, err = scanLive(rows)
+		if err != nil {
+			return err
+		}
+		if len(out.Claims) > MaxLiveClaims {
+			return fmt.Errorf("atlasdomain: %s/%s holds more than %d live claims, past what one read "+
+				"answers", src.Kind, src.Name, MaxLiveClaims)
+		}
+		return nil
+	})
+	if err != nil {
+		return Live{}, fmt.Errorf("atlasdomain: read %s/%s's live claims: %w", src.Kind, src.Name, err)
+	}
+	out.Position, out.Complete = answer.Position, answer.Complete
+	return out, nil
+}
+
+// scanLive reads live claims off rows of (claim, observed_at, position), and
+// closes them.
+func scanLive(rows *sql.Rows) ([]atlas.Claim, error) {
+	var out []atlas.Claim
+	for rows.Next() {
+		var (
+			body               string
+			observed, position int64
+			wire               Claim
+		)
+		if err := rows.Scan(&body, &observed, &position); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(body), &wire); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("the claim at %d does not decode: %w", position, err)
+		}
+		out = append(out, wire.vocabulary(store.DecodeTime(observed), uint64(position)))
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
 }
 
 // ---- one entry ---------------------------------------------------------- //

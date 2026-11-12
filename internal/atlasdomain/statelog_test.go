@@ -3,6 +3,7 @@ package atlasdomain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ func TestTheAtlasDomainIsACertifiedDomain(t *testing.T) {
 			// migration (0163).
 			Encode:        encodeSuiteRecord,
 			Fields:        atlasdomain.VersionedFields(),
+			Carrying:      carryingSuiteRecord,
 			Kinds:         kindNames(),
 			Rows:          atlasdomain.NewRows,
 			Write:         suiteWrite,
@@ -184,6 +186,30 @@ func suitePayload(kind atlasdomain.ObjectKind, id, opID string) (
 		return atlasdomain.TrimmedSubject(floor), atlasdomain.OpTrimmed, sentinel(), nil
 	}
 	return atlasdomain.Subject{Kind: kind, ID: id}, atlasdomain.OpBarrier, sentinel(), nil
+}
+
+// carryingSuiteRecord builds one valid record carrying exactly the named
+// versioned field: an integration's read of an entry for the `read` op.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	const id = "carrying"
+	switch field.Name {
+	case "Op read":
+		return rawRecord(entryOn(id), "suite-node", "suite-carrying-read", atlasdomain.OpRead, sentinel(),
+			readOf(id, "suite-carrying-read"))
+	}
+	return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+}
+
+// readOf is an integration's read of the hostname id: it exists, and the
+// voice's earlier claim on one slot is withdrawn.
+func readOf(id, opID string) atlasdomain.Read {
+	src := atlasdomain.Source{Kind: atlas.SourceIntegration, Name: "cloudflare"}
+	slot := string(atlas.FacetExists)
+	return atlasdomain.Read{V: 1, Source: src, ObservedAt: suiteStamped,
+		Claims: []atlasdomain.Claim{{V: 1, ID: atlasdomain.ReadClaimID(opID, slot),
+			Entry: atlasdomain.Ref{Kind: atlas.KindHostname, Key: id}, Slot: slot,
+			Facet: atlas.FacetExists, Source: src, ObservedAt: suiteStamped}},
+		Withdrawn: []string{"f\x00url\x00https://old.example"}}
 }
 
 // encodeSuiteGate is a node's eviction or readmission as a peer publishes it.

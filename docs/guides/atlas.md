@@ -32,7 +32,7 @@ tools ([changing the atlas](../concepts/atlas.md#changing-the-atlas)):
 
 | Lane | What fills it in this version |
 |---|---|
-| Entry | the zones the Cloudflare integration declares, and the host names the engine answers at (`api.external_url`, `api.public.external_url`) |
+| Entry | the zones the Cloudflare integration declares, the host names the engine answers at (`api.external_url`, `api.public.external_url`), and what the engine reads from the Cloudflare account: every zone, every name an A, AAAA or CNAME record gives and what it points at, and every certificate pack ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
 | Services | what people add |
 | Runtime | the servers the SSH integration declares |
 | Data | what people add: databases, queues and buckets |
@@ -43,8 +43,8 @@ tools ([changing the atlas](../concepts/atlas.md#changing-the-atlas)):
 
 An empty lane says this on the map itself, so a new company sees what it would
 take to fill each one. These screens only read: every change goes through Ask
-Crewlet's proposals, which you approve, or the operator tools. What agents and
-integrations record arrives with later versions.
+Crewlet's proposals, which you approve, or the operator tools. What agents
+record arrives with later versions.
 
 ## The map
 

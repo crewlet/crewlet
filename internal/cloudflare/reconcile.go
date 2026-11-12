@@ -70,8 +70,25 @@ type Result struct {
 	// TokensURL is where a person edits the account's tokens.
 	TokensURL string
 
+	// Inspection is the read the pass made of the token and the account,
+	// for the agents' session of the same pass to take rather than read
+	// again ([seataccess.OpenInput.Reads]).
+	Inspection *Inspection
+
 	now time.Time
 }
+
+// Inspection is one pass's read of the provisioner token and the account,
+// as the pass's company half hands it to its agents' session: the account's
+// permission groups and zones, and what the token itself holds. One vendor's
+// own, which the session checks by its account before it takes it.
+type Inspection struct {
+	account string
+	in      inspection
+}
+
+// ReadFor names the vendor, as [seataccess.PassReads] asks.
+func (*Inspection) ReadFor() integration.Kind { return integration.KindCloudflare }
 
 // Reconcile reads the provisioner token and the account and reports what an
 // operator has to act on. A refused or inactive token is an error wrapping
@@ -105,6 +122,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		InUse:     opts.InUse,
 		Orphaned:  orphanedTokens(tokens, opts.Managed, opts.Company, in.status.ID),
 		TokensURL: opts.Client.TokensURL(), now: now,
+		Inspection: &Inspection{account: opts.Client.AccountID(), in: in},
 	}, nil
 }
 
