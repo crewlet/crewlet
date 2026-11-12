@@ -182,15 +182,16 @@ type claudeHookInput struct {
 
 // claudeSteerSettings is the settings of a run whose notes are reached through
 // w: those of a run that starts a hook of the engine's, and one hook at each
-// event, calling w's tool on w's server.
-func claudeSteerSettings(w sandbox.SteerWiring) claudeNotesSettings {
+// event, calling w's tool on w's server; with env as their `env` block
+// ([newClaudeSettings]).
+func claudeSteerSettings(w sandbox.SteerWiring, env map[string]string) claudeNotesSettings {
 	hook := []claudeHookMatcher{{Hooks: []claudeHook{{
 		Type: "mcp_tool", Server: w.Server, Tool: w.Tool,
 		Input:   claudeHookInput{Event: "${hook_event_name}", Agent: "${agent_id}"},
 		Timeout: int(ClaudeHookTimeout / time.Second),
 	}}}}
 	return claudeNotesSettings{
-		claudeHooksOnSettings: newClaudeHooksOnSettings(),
+		claudeHooksOnSettings: newClaudeHooksOnSettings(env),
 		Hooks:                 map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
 	}
 }
