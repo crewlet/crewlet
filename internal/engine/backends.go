@@ -655,7 +655,7 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
 			MaxBytes: reservation, Explicit: explicit,
-			AcrossLink:     b.BrokerKind() != placement.BrokerMember,
+			AcrossLink:     acrossLink(b),
 			LeaseHeartbeat: effectiveLeaseTTL(b, out.Coord) / seat.HeartbeatRatio,
 		})
 		if err != nil {
@@ -951,7 +951,8 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 	defer cancel()
 
-	shared, err := openFleet(ctx, js, b.Stream.Replicas, clusteredStream(b))
+	stores := coordinationStoresOf(b)
+	shared, err := kv.OpenFleet(ctx, js, stores.fleet)
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)
 	}
@@ -959,20 +960,13 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 
 	var epochs *kv.Epochs
 	if b.Coordination.Type != config.CoordinationEmbeddedKV {
-		epochs, err = kv.OpenEpochs(ctx, js, kv.EpochsConfig{
-			Replicas:  b.Stream.Replicas,
-			Clustered: clusteredStream(b),
-		})
+		epochs, err = kv.OpenEpochs(ctx, js, stores.epochs)
 		if err != nil {
 			return fmt.Errorf("engine: coordination: %w", err)
 		}
 		out.Coord = &coordmem.Backend{Epochs: epochs}
 	} else {
-		leases, err := kv.Open(ctx, js, kv.Config{
-			TTL:       leaseTTL(b),
-			Replicas:  b.Stream.Replicas,
-			Clustered: clusteredStream(b),
-		})
+		leases, err := kv.Open(ctx, js, stores.leases)
 		if err != nil {
 			return fmt.Errorf("engine: coordination: %w", err)
 		}
@@ -1020,26 +1014,71 @@ func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet, 
 	return nil
 }
 
-// openFleet builds the shared-state store beside the leases.
+// coordinationStores is every configuration a node opens a coordination
+// store with: the fleet store's beside the leases, the epochs counter's where
+// the leases are local, and the lease store's where they are the KV's.
+type coordinationStores struct {
+	fleet  kv.FleetConfig
+	epochs kv.EpochsConfig
+	leases kv.Config
+}
+
+// coordinationStoresOf is every configuration a node configured as b opens its
+// coordination stores with — at boot ([attachCoordination]) and for a command
+// that wants the fleet store alone ([OpenFleetStore]).
+//
+// ONE FUNCTION, which every site that opens a store takes its configuration
+// from, so how a store reaches its buckets ([coordinationReach]) is decided
+// in one place a test drives (coordreach_internal_test.go). Stated at each
+// opening site, it was a site no test read: a store opened there as though
+// its connection crossed nothing would hold a large write across a leaf's
+// link to the request term alone, and every test would stay green.
 //
 // The retentions are supplied HERE for the same reason leaseTTL is: each one
 // is a BUCKET's age, fixed when the bucket is created, so a silent default
 // would decide it at the moment nobody was looking. Every number is the one
 // the subsystem that reads it already uses, named at its own package.
-func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered bool) (coord.Fleet, error) {
-	return kv.OpenFleet(ctx, js, kv.FleetConfig{
-		MaxRateWindow:    coord.MaxRateWindow,
-		MaxClaimTTL:      coord.MaxClaimTTL,
-		LedgerRetention:  coord.LedgerRetention,
-		FireRetention:    coord.FireRetention,
-		FollowRetention:  coord.FollowRetention,
-		RebaseRetention:  coord.RebaseRetention,
-		BudgetRetention:  coord.BudgetRetention,
-		StatusFreshness:  coord.StatusFreshness,
-		CustodyRetention: coord.CustodyRetention,
-		Replicas:         replicas,
-		Clustered:        clustered,
-	})
+func coordinationStoresOf(b *config.Bootstrap) coordinationStores {
+	reach, replicas, clustered := coordinationReach(b), b.Stream.Replicas, clusteredStream(b)
+	return coordinationStores{
+		fleet: kv.FleetConfig{
+			MaxRateWindow:    coord.MaxRateWindow,
+			MaxClaimTTL:      coord.MaxClaimTTL,
+			LedgerRetention:  coord.LedgerRetention,
+			FireRetention:    coord.FireRetention,
+			FollowRetention:  coord.FollowRetention,
+			RebaseRetention:  coord.RebaseRetention,
+			BudgetRetention:  coord.BudgetRetention,
+			StatusFreshness:  coord.StatusFreshness,
+			CustodyRetention: coord.CustodyRetention,
+			Replicas:         replicas,
+			Clustered:        clustered,
+			Reach:            reach,
+		},
+		epochs: kv.EpochsConfig{Replicas: replicas, Clustered: clustered, Reach: reach},
+		leases: kv.Config{TTL: leaseTTL(b), Replicas: replicas, Clustered: clustered, Reach: reach},
+	}
+}
+
+// acrossLink is whether a node configured as b reaches its broker's
+// JetStream across a LINK — a leaf's link to the members, or a dial to an
+// external cluster — rather than its own member in its own process: the one
+// reading of it the engine hands every store on that connection, the object
+// store's puts' window ([openObjects]) and the coordination store's writes
+// ([coordinationReach]) alike. The queue reads the same fact off how its own
+// connection was made.
+func acrossLink(b *config.Bootstrap) bool { return b.BrokerKind() != placement.BrokerMember }
+
+// coordinationReach is how a node configured as b reaches the coordination
+// store's buckets, which decides how long a write's bytes are given to cross
+// to them (internal/coord/kv's Reach): across a link wherever its connection
+// crosses one ([acrossLink]), and in its own process on a member — a member's
+// coordination connection is a second one to its own in-process server.
+func coordinationReach(b *config.Bootstrap) kv.Reach {
+	if acrossLink(b) {
+		return kv.AcrossLink
+	}
+	return kv.InProcess
 }
 
 // streamTLS carries a Tier A tls block to the queue package's own.

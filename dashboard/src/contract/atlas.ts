@@ -107,6 +107,7 @@ export type AtlasFact =
   | "last_result"
   | "runner"
   | "required"
+  | "pipeline_state"
   | "harness"
   | "model"
   | "sign_in"
@@ -123,7 +124,9 @@ export type AtlasFact =
   | "expires"
   | "issuer"
   | "validity"
-  | "certificate_type";
+  | "certificate_type"
+  | "monitor_state"
+  | "state_since";
 
 /** The grammar a fact's value is written in (`atlas.ValueType`). */
 type AtlasValueType =
@@ -175,7 +178,11 @@ export type AtlasSignalKind =
   | "model_sitting_out"
   | "model_failing"
   | "server_test_failed"
-  | "standing_alarm";
+  | "standing_alarm"
+  | "monitor_alerting"
+  | "monitor_warning"
+  | "monitor_no_data"
+  | "pipeline_failing";
 
 /** How urgent a signal is (`atlas.Severity`). */
 type AtlasSeverity = "danger" | "warning";
@@ -372,6 +379,8 @@ export interface AtlasFactView {
   /** A fact of meaning only an integration or an agent has given. */
   suggested?: boolean;
   others?: AtlasClaimed[];
+  /** The member a fact of each host is of: which host's visibility this is. */
+  of?: AtlasRef;
 }
 
 /** One relation from an entry: to another entry by `to`, or to a seat, a

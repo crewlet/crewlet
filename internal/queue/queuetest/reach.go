@@ -266,7 +266,9 @@ func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResul
 			}
 			return err
 		}},
-		{"KeepDeadLetter", func() error { return q.KeepDeadLetter(ctx, letters, []byte("reach"), []byte("reach")) }},
+		{"KeepDeadLetter", func() error {
+			return second(q.KeepDeadLetter(ctx, letters, "reach", []byte("reach"), []byte("reach")))
+		}},
 		{"DeadLettersOn", func() error { return keptErr(q.DeadLettersOn(ctx, letters)) }},
 		{"DeadLetterFrame", func() error { return frameErr(q.DeadLetterFrame(ctx, letters, absentLetter)) }},
 		{"DeadLetterMarks", func() error {

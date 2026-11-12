@@ -929,7 +929,11 @@ stream:
                                     #   states one; nats-server's default is
                                     #   1 MiB): an event, or a node's answer
                                     #   to another, may be that large, so the
-                                    #   node refuses to start naming it — see
+                                    #   node refuses to start naming it — and
+                                    #   set no `jetstream { limits {
+                                    #   duplicate_window } }` below 15 minutes,
+                                    #   the dead letters' window, which fails
+                                    #   the boot naming it too — see
                                     #   Deployment. A file's bytes cross in
                                     #   messages of 128 KiB, which a server's
                                     #   default already carries
@@ -1418,7 +1422,12 @@ stream:
   # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the
-                                    #   life of the deployment
+                                    #   life of the deployment. Otherwise at
+                                    #   least 0.25: the dead letters are kept by
+                                    #   this age, and a second keep of one thing
+                                    #   is collapsed for fifteen minutes, which
+                                    #   the broker refuses a stream's age to be
+                                    #   shorter than
   # credentials: ""                 # path to a NATS credentials file. type: nats
                                     #   needs one of credentials, token, tls.cert
                                     #   or a credential in url, and refuses a

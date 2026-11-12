@@ -23,6 +23,10 @@ var signalReasons = map[SignalKind]string{
 	SignalModelFailing:       "The model's last call failed, with no answer since",
 	SignalServerTestFailed:   "The server's last connection test failed",
 	SignalStandingAlarm:      "A standing alarm is raised",
+	SignalMonitorAlerting:    "A monitor is alerting",
+	SignalMonitorWarning:     "A monitor is warning",
+	SignalMonitorNoData:      "A monitor is receiving no data",
+	SignalPipelineFailing:    "A pipeline's last run failed",
 }
 
 // Reason is why e is not quiet, in one sentence: its most urgent open signal

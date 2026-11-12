@@ -491,7 +491,7 @@ func TestAFlushTheLeaderNeverDecidedMayHaveLanded(t *testing.T) {
 		t.Fatalf("the chat read bucket is a %T, not settled", f.chatReads)
 	}
 	pending := &inFlightForever{KeyValue: underneath.KeyValue}
-	f.chatReads = settledBucket{KeyValue: pending, timeout: 50 * time.Millisecond}
+	f.chatReads = settledBucket{KeyValue: pending, js: termed{term: 50 * time.Millisecond}}
 
 	_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
 		Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,

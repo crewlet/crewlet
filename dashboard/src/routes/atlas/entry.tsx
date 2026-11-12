@@ -33,7 +33,7 @@ import {
   sourceSetBy,
 } from "./parts.tsx";
 import {
-  FACTS,
+  factLabel,
   KINDS,
   LANES,
   MEANING,
@@ -238,7 +238,7 @@ function factProperty(
   now: number,
 ): PropertyGroup["properties"][number] {
   return {
-    label: FACTS[fact.fact],
+    label: factLabel(fact),
     value: <FactValue value={fact.value} />,
     setBy: sourceSetBy(fact, seatName, now),
     title:

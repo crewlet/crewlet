@@ -40,7 +40,7 @@ func TestContractThroughALeaf(t *testing.T) {
 	t.Parallel()
 	client := leafClient(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
-		return openStoreVia(t, client, coordtest.LongTTL)
+		return openStoreVia(t, client, AcrossLink, coordtest.LongTTL)
 	})
 }
 
@@ -68,7 +68,7 @@ func TestFleetContractThroughALeaf(t *testing.T) {
 		return func() coord.Fleet {
 			client := clients[opened%len(clients)]
 			opened++
-			return openFleetVia(t, client, prefix)
+			return openFleetVia(t, client, AcrossLink, prefix)
 		}
 	})
 }
@@ -86,8 +86,15 @@ func leafClient(t *testing.T) jetstream.JetStream {
 // with a link of its own.
 func leafClientOf(t testing.TB, port int, name string) jetstream.JetStream {
 	t.Helper()
+	return leafClientAt(t, fmt.Sprintf("127.0.0.1:%d", port), name)
+}
+
+// leafClientAt is [leafClientOf] for a leaf that dials its member's leaf
+// listener at addr — the listener itself, or a link a case put in front of it.
+func leafClientAt(t testing.TB, addr, name string) jetstream.JetStream {
+	t.Helper()
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: name,
-		LeafURLs:  []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)},
+		LeafURLs:  []string{"nats-leaf://" + addr},
 		FleetAuth: leafFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)

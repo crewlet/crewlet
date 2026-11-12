@@ -1211,6 +1211,18 @@ func Refused(err error) bool {
 	return false
 }
 
+// InvalidConfig reports a create the broker refused as an INVALID
+// CONFIGURATION: checkStreamCfg's answer (see the constants above), one of
+// [Refused]'s, asked on its own by a caller that can say what in the
+// configuration it sent a server may refuse. ONE CODE FOR EVERY SUCH
+// REFUSAL — a window above the server's limit, an age below the window, a bad
+// subject — so it says the configuration was refused and never which part of
+// it; the broker's words say which, and are no contract to match.
+func InvalidConfig(err error) bool {
+	apiErr, ok := apiError(err)
+	return ok && apiErr.ErrorCode == errCodeInvalidConfig
+}
+
 // apiError unwraps the broker's own answer out of whatever a caller wrapped it
 // in, which is how every predicate here is asked the question.
 func apiError(err error) (*jetstream.APIError, bool) {

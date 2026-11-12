@@ -47,7 +47,7 @@ import {
   type EntryReads,
 } from "./entry.tsx";
 import { FactValue, sourceName, sourceSetBy } from "./parts.tsx";
-import { FACTS, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
+import { factLabel, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
 
 const TABS = ["overview", "relations", "sources"] as const;
 type Tab = (typeof TABS)[number];
@@ -370,9 +370,9 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
   const disputed = disagreements(entry);
   const says = (source: AtlasSource) =>
     entry.facts.flatMap((fact) => {
-      if (sameSource(fact.source, source)) return [{ fact: fact.fact, value: fact.value }];
+      if (sameSource(fact.source, source)) return [{ label: factLabel(fact), value: fact.value }];
       const other = fact.others?.find((claim) => sameSource(claim.source, source));
-      return other?.value ? [{ fact: fact.fact, value: other.value }] : [];
+      return other?.value ? [{ label: factLabel(fact), value: other.value }] : [];
     });
   return (
     <Stack gap={5}>
@@ -381,8 +381,8 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
           <Stack gap={3}>
             {disputed.facts.map((fact) => (
               <Disagreement
-                key={fact.fact}
-                label={FACTS[fact.fact]}
+                key={factLabel(fact)}
+                label={factLabel(fact)}
                 standing={fact.standing}
                 shown={{
                   value: fact.value,
@@ -443,7 +443,7 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
                       groups={[
                         {
                           properties: values.map((one) => ({
-                            label: FACTS[one.fact],
+                            label: one.label,
                             value: <FactValue value={one.value} />,
                           })),
                         },

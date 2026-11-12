@@ -39,6 +39,7 @@ import { queryParams } from "./filters.ts";
 import { cardOf, lineOf } from "./graph.tsx";
 import { neighbourhood } from "./Neighbourhood.tsx";
 import { coverageLine, coverageNotes } from "./parts.tsx";
+import { factLabel } from "./words.ts";
 
 afterEach(() => {
   cleanup();
@@ -170,6 +171,23 @@ describe("the coverage line", () => {
       "Gitlet was not read in full: you do not use Gitlet, so no repository was read",
       "2 values were left out for looking like a credential",
     ]);
+  });
+});
+
+describe("a fact of each host", () => {
+  // A MIRRORED REPOSITORY HAS A VISIBILITY ON EACH HOST, and each row says
+  // whose it is: one "Visibility" row with two values would read as a
+  // disagreement, which it is not.
+  test("is named by its host", () => {
+    const of = (key: string) => ({
+      fact: "visibility" as const,
+      of: { kind: "repository" as const, key },
+    });
+    expect(factLabel(of("github.com/acme/api"))).toBe("Visibility on GitHub");
+    expect(factLabel(of("gitlet/api"))).toBe("Visibility in Gitlet");
+    expect(factLabel(of("gitlab.com/acme/api"))).toBe("Visibility on GitLab");
+    expect(factLabel(of("git.acme.example/acme/api"))).toBe("Visibility on git.acme.example");
+    expect(factLabel({ fact: "default_branch" })).toBe("Default branch");
   });
 });
 

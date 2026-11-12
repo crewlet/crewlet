@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -316,6 +318,76 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		}
 	})
 
+	// ONE ENTRY FOR ONE IDENTITY. A reader that settles its own deliveries
+	// is handed one record twice whenever its keep outlasts the delivery's
+	// window — a keep across a slow link waits as long as its bytes take —
+	// and it cannot hold the delivery meanwhile, so the second keep is what
+	// must come to nothing. A backend that kept it would hold two entries of
+	// one record; one that collapsed two identities, or one identity across
+	// two subjects, would lose an entry somebody else kept.
+	//
+	// AND A DROPPED ENTRY'S IDENTITY IS STILL KEPT for the rest of the
+	// window, the broker running: an operator who discarded the entry
+	// decided no node is to read it, so a keep of it again keeps nothing.
+	//
+	// Mutation: forget an identity when its entry is dropped (the twin's
+	// DropDeadLetter clearing the subject's identities), and the keep after
+	// the drop stores the entry again, on the memory backend.
+	t.Run("a_second_keep_of_one_identity_keeps_nothing_and_is_answered_already_kept", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := topics.DeadLetter(lettersTopic+".once", "grp")
+		elsewhere := topics.DeadLetter(lettersTopic+".elsewhere", "grp")
+		if keepAs(ctx, t, q, subject, "the record", letterOf([]byte(`"first"`), []byte("frame"))) {
+			t.Fatal("the first keep of an identity was answered already kept")
+		}
+		// THE SAME IDENTITY AGAIN, with a header of its own — a peer handed
+		// the record while the first keep was still crossing — keeps
+		// nothing, and says so.
+		if !keepAs(ctx, t, q, subject, "the record", letterOf([]byte(`"second"`), []byte("frame"))) {
+			t.Error("a second keep of the identity on its subject was not answered already kept")
+		}
+		// ANOTHER IDENTITY on the subject, and THE SAME IDENTITY on another
+		// subject, are each an entry of their own.
+		if keepAs(ctx, t, q, subject, "another record", letterOf([]byte(`"another"`), []byte("frame"))) {
+			t.Error("a keep of another identity on the subject was answered already kept")
+		}
+		if keepAs(ctx, t, q, elsewhere, "the record", letterOf([]byte(`"elsewhere"`), []byte("frame"))) {
+			t.Error("a keep of the identity on another subject was answered already kept")
+		}
+		wantCounts(t, "after four keeps of three things", marksOf(ctx, t, q, lettersUnder),
+			map[string]uint64{subject: 2, elsewhere: 1})
+		listed := listedAsMarked(ctx, t, q, lettersUnder, subject)
+		if len(listed) != 2 || string(listed[0].Header) != `"first"` || string(listed[1].Header) != `"another"` {
+			t.Fatalf("the subject lists %q, want the first keep's entry and the other identity's",
+				headersOf(listed))
+		}
+		// KEEP, DROP, KEEP: the identity outlives its entry's drop inside the
+		// window, so the keep after the drop keeps nothing, says so, and the
+		// subject lists no entry of it.
+		if err := q.DropDeadLetter(ctx, subject, listed[0].Seq); err != nil {
+			t.Fatalf("DropDeadLetter: %v", err)
+		}
+		if !keepAs(ctx, t, q, subject, "the record", letterOf([]byte(`"after the drop"`), []byte("frame"))) {
+			t.Error("a keep of a dropped entry's identity inside the window was not answered already kept")
+		}
+		wantCounts(t, "after a keep of a dropped entry's identity", marksOf(ctx, t, q, lettersUnder),
+			map[string]uint64{subject: 1, elsewhere: 1})
+		if got := listedAsMarked(ctx, t, q, lettersUnder, subject); len(got) != 1 ||
+			string(got[0].Header) != `"another"` {
+			t.Errorf("after the drop and the keep of its identity the subject lists %q, want the "+
+				"other identity's entry alone", headersOf(got))
+		}
+		// AN EMPTY IDENTITY names nothing, and a keep of it is refused as the
+		// caller's mistake, keeping nothing.
+		if _, err := q.KeepDeadLetter(ctx, subject, "", []byte(`"nameless"`), []byte("frame")); err == nil ||
+			errors.Is(err, queue.ErrTooLarge) || errors.Is(err, queue.ErrUnavailable) {
+			t.Errorf("a keep of no identity was answered %v, want it refused as the caller's mistake", err)
+		}
+		wantCounts(t, "after a keep of no identity", marksOf(ctx, t, q, lettersUnder),
+			map[string]uint64{subject: 1, elsewhere: 1})
+	})
+
 	t.Run("a_dead_letter_the_transport_cannot_carry_is_refused_as_too_large", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -324,9 +396,17 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		// AT THE CONTRACT'S CEILING FOR A KEEP the entry is kept, and a
 		// byte past it refused — on every backend at the same byte, so a
 		// twin never keeps what the broker refuses.
+		//
+		// THE KEEP AT THE CEILING WAITS FOR ITS ACKNOWLEDGEMENT for as long
+		// as an entry that size takes to reach the broker — across a leaf's
+		// link, its eight mebibytes at the slowest pace the engine allows a
+		// link (internal/jsapi's WriteBound) — since its context carries no
+		// deadline: so a slow link, or a loaded runner slowing the one a
+		// leaf's suite crosses, reads as slow and never as an outage, which
+		// is what the keep at five seconds read as (crewlet/crewlet#1005).
 		room := queue.MaxPayloadBytes - queue.LetterFraming - len(header)
 		keep(ctx, t, q, subject, letterOf(header, make([]byte, room)))
-		err := q.KeepDeadLetter(ctx, subject, header, make([]byte, room+1))
+		_, err := q.KeepDeadLetter(ctx, subject, "a byte past", header, make([]byte, room+1))
 		if !errors.Is(err, queue.ErrTooLarge) {
 			t.Errorf("an entry a byte past the ceiling answered %v, want queue.ErrTooLarge: "+
 				"a keeper that cannot tell it from an outage retries it for ever", err)
@@ -349,7 +429,7 @@ func (s *suite) runDeadLetters(t *testing.T) {
 			"line\nfeed", "carriage\rreturn", "tab\there", "caf\xc3\xa9", "del\x7f",
 			" leading", "trailing ",
 		} {
-			err := q.KeepDeadLetter(ctx, subject, []byte(header), []byte("body"))
+			_, err := q.KeepDeadLetter(ctx, subject, header, []byte(header), []byte("body"))
 			if err == nil || errors.Is(err, queue.ErrTooLarge) {
 				t.Errorf("a header %q was answered %v, want it refused as the caller's mistake",
 					header, err)
@@ -367,7 +447,7 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		// as an event nobody can decode, and a pattern names no one
 		// subject to keep on or count under.
 		for _, subject := range []string{"crewlet.events.kept", topics.DeadLetterPrefix + ">", ""} {
-			if err := q.KeepDeadLetter(ctx, subject, []byte("x"), []byte("x")); err == nil {
+			if _, err := q.KeepDeadLetter(ctx, subject, "x", []byte("x"), []byte("x")); err == nil {
 				t.Errorf("KeepDeadLetter(%q) was accepted", subject)
 			}
 			if _, err := q.DeadLettersOn(ctx, subject); err == nil {
@@ -394,12 +474,30 @@ type letter struct {
 // letterOf is an entry of header and body.
 func letterOf(header, body []byte) letter { return letter{header: header, body: body} }
 
-// keep keeps l on subject, failing the case on an error.
+// entries numbers every entry the suite keeps through [keep], each the
+// identity of its own no other keep names.
+var entries atomic.Uint64
+
+// keep keeps l on subject under an identity of its own, failing the case on an
+// error or on an answer that it was already kept.
 func keep(ctx context.Context, t *testing.T, q queue.EventQueue, subject string, l letter) {
 	t.Helper()
-	if err := q.KeepDeadLetter(ctx, subject, l.header, l.body); err != nil {
-		t.Fatalf("KeepDeadLetter(%s): %v", subject, err)
+	id := fmt.Sprintf("entry %d", entries.Add(1))
+	if already := keepAs(ctx, t, q, subject, id, l); already {
+		t.Fatalf("KeepDeadLetter(%s, %q) of an entry no keep named before answered already kept",
+			subject, id)
 	}
+}
+
+// keepAs keeps l on subject under the identity id, answering whether it was
+// already kept, and failing the case on an error.
+func keepAs(ctx context.Context, t *testing.T, q queue.EventQueue, subject, id string, l letter) bool {
+	t.Helper()
+	already, err := q.KeepDeadLetter(ctx, subject, id, l.header, l.body)
+	if err != nil {
+		t.Fatalf("KeepDeadLetter(%s, %q): %v", subject, id, err)
+	}
+	return already
 }
 
 // listed is what subject's listing answers, failing the case on an error: a

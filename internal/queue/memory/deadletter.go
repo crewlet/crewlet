@@ -30,32 +30,46 @@ type letter struct {
 	body     []byte
 }
 
+// keptID is one identity a keep named, on the subject it named it on: the
+// pair a second keep is collapsed by ([queue.EventQueue.KeepDeadLetter]).
+type keptID struct {
+	subject, id string
+}
+
 // KeepDeadLetter implements queue.EventQueue: body kept on subject under
 // header until the retention lets it go or DropDeadLetter removes it, in the
 // broker rather than in this client, so a peer lists it and a stop does not
-// lose it.
-func (q *Queue) KeepDeadLetter(_ context.Context, subject string, header, body []byte) error {
+// lose it — and nothing kept, answered already kept, where a keep of id on
+// subject stored an entry within the window ([queue.DeadLetterWindow]) on the
+// broker's own clock.
+func (q *Queue) KeepDeadLetter(_ context.Context, subject, id string, header, body []byte) (bool, error) {
 	if err := deadLetterSubject(subject); err != nil {
-		return err
+		return false, err
+	}
+	if err := queue.LetterIdentity(id); err != nil {
+		return false, fmt.Errorf("memory: keep a dead letter on %s: %w", subject, err)
 	}
 	if err := queue.LetterHeader(header); err != nil {
-		return fmt.Errorf("memory: keep a dead letter on %s: %w", subject, err)
+		return false, fmt.Errorf("memory: keep a dead letter on %s: %w", subject, err)
 	}
 	// THE CONTRACT'S CEILING FOR A KEEP, the one the broker is held to as
 	// well ([queue.LetterFraming]): an entry kept here and refused there is
 	// the one direction a twin must never be wrong in.
 	if size := len(header) + len(body) + queue.LetterFraming; size > queue.MaxPayloadBytes {
-		return fmt.Errorf("memory: keep a dead letter on %s: %d bytes of header and body exceed "+
+		return false, fmt.Errorf("memory: keep a dead letter on %s: %d bytes of header and body exceed "+
 			"the %d-byte limit less the %d a keep is framed in: %w", subject, len(header)+len(body),
 			queue.MaxPayloadBytes, queue.LetterFraming, queue.ErrTooLarge)
 	}
 	q.broker.mu.Lock()
 	defer q.broker.mu.Unlock()
 	if err := q.reachLocked(); err != nil {
-		return err
+		return false, err
+	}
+	if q.broker.keptLocked(keptID{subject: subject, id: id}) {
+		return true, nil
 	}
 	q.broker.keepLocked(subject, slices.Clone(header), slices.Clone(body))
-	return nil
+	return false, nil
 }
 
 // DeadLettersOn implements queue.EventQueue: every entry subject holds, oldest
@@ -139,7 +153,9 @@ func (q *Queue) DeadLetterMarks(_ context.Context, under string) (queue.Marks, e
 
 // DropDeadLetter implements queue.EventQueue: the entry seq removed from
 // subject, an entry already gone answered nil, and a seq that names an entry
-// of another subject refused with nothing removed.
+// of another subject refused with nothing removed. The entry's identity stays
+// in the window ([Broker.keptLocked]), so a keep of it inside the window is
+// answered already kept, as on a running broker.
 func (q *Queue) DropDeadLetter(_ context.Context, subject string, seq uint64) error {
 	if seq == 0 {
 		return fmt.Errorf("memory: drop a dead letter on %s: sequence 0 names no entry", subject)
@@ -177,6 +193,23 @@ func (q *Queue) reachLocked() error {
 		return ErrBrokerDown
 	}
 	return nil
+}
+
+// keptLocked reports whether a keep of key stored an entry within the window
+// ([queue.DeadLetterWindow]), counting from that entry's instant on the
+// broker's clock, and where none did, remembers this keep as the one that
+// does. Identities whose window has passed are let go first, as the broker's
+// own window lets a message id go.
+func (b *Broker) keptLocked(key keptID) bool {
+	now := b.now()
+	maps.DeleteFunc(b.keptIDs, func(_ keptID, at time.Time) bool {
+		return !now.Before(at.Add(queue.DeadLetterWindow))
+	})
+	if _, kept := b.keptIDs[key]; kept {
+		return true
+	}
+	b.keptIDs[key] = now
+	return false
 }
 
 // keepLocked appends body to subject under header and the next sequence,

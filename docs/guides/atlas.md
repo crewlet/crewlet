@@ -34,12 +34,12 @@ tools ([changing the atlas](../concepts/atlas.md#changing-the-atlas)):
 | Lane | What fills it in this version |
 |---|---|
 | Entry | the zones the Cloudflare integration declares, the host names the engine answers at (`api.external_url`, `api.public.external_url`), and what the engine reads from the Cloudflare account: every zone, every name an A, AAAA or CNAME record gives and what it points at, and every certificate pack ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
-| Services | what people add |
-| Runtime | the servers the SSH integration declares |
+| Services | the services of the Datadog service catalogue and the ones its monitors' `service:` tags name, and what people add |
+| Runtime | the servers the SSH integration declares, and the hosts that report to Datadog |
 | Data | what people add: databases, queues and buckets |
 | Platforms | each connected integration's account |
-| Code and delivery | Gitlet's repositories and their checks, and the repositories the GitHub and GitLab integrations name |
-| Observability | what people add |
+| Code and delivery | Gitlet's repositories and their checks, the repositories the GitHub and GitLab integrations name, and what the engine reads from the GitHub organisation: every repository the agents' apps cover, its workflows and the environments it deploys to ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
+| Observability | what the engine reads from the Datadog organisation: every monitor with its state, and what each one watches ([what integrations read](../concepts/atlas.md#what-integrations-read)), and what people add |
 | Tools and models | the tool servers of Settings › MCP & tools and the model entries of Settings › Models |
 
 An empty cluster says this on the map itself, so a new company sees what it would
@@ -85,9 +85,12 @@ Each entry is a card: its kind's glyph, its vendor's mark on the corner, and
 its name.
 
 - **A notch means something needs attention**: red with a badge for Alerting
-  (a tool server that is down, a model whose last call failed, a standing
-  alarm), amber for Needs a look. A quiet entry draws none. Each cluster's
-  title counts its entries and how many of them need attention.
+  (a tool server that is down, a model whose last call failed, an integration
+  whose last pass failed, a Datadog monitor in Alert and everything it
+  watches), amber for Needs a look (a monitor in Warn or No Data, and a
+  pipeline whose last run or deployment failed with everything it deploys,
+  among them). A quiet entry draws none. Each cluster's title counts its
+  entries and how many of them need attention.
 - **A dashed edge means unconfirmed**: an entry only an agent reported, with
   nothing the engine could check. These are hidden until somebody confirms
   them; **Show unconfirmed** under Filter shows them, and says how many it

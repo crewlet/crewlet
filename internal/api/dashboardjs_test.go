@@ -2316,12 +2316,15 @@ const (
 	// draft to (draft.ts's mints, and every declaring screen, box and store
 	// moved onto them), merged on top of it, took it to 5841.8 KiB
 	// (5,982,024 bytes, +876, all script): 5842 KiB.
-	// The one-page Company › Atlas on kit 0.123.0 took it to 5895.2 KiB
-	// (6,036,667 bytes, +54,643: script +26,543, of which the atlas chunk,
-	// the band, the catalogue, the neighbourhood diagram and the timeline, is
-	// +22,331 at 90,802, 28.8 KiB gzipped; the sheets +28,100, the kit's
-	// layered service map in the one sheet +24,572 and the atlas screens' own
-	// +3,528): 5896 KiB.
+	// A monitor's state and since when, and the three signals a monitor
+	// raises on what it watches, named in the atlas words, took it to 5842.0
+	// KiB (5,982,209 bytes, +185, all script), one byte past it: 5843 KiB.
+	// The one-page Company › Atlas on kit 0.123.0, merged on top of it, took
+	// it to 5895.6 KiB (6,037,106 bytes, +54,642: script about +26,500, of
+	// which the atlas chunk, the band, the catalogue, the neighbourhood
+	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
+	// sheets about +28,100, the kit's layered service map in the one sheet
+	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
 	treeBudget = 5<<20 + 776<<10
 )
 

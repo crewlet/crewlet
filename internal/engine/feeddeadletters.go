@@ -77,9 +77,13 @@ func newDeadLetterLedger(store deadLetterStore, claims expiryClaims) *deadLetter
 		dropped: map[letterAt]struct{}{}}
 }
 
-// KeepDeadLetter implements [changefeed.DeadLetters].
-func (l *deadLetterLedger) KeepDeadLetter(ctx context.Context, subject string, header, frame []byte) error {
-	return l.store.KeepDeadLetter(ctx, subject, header, frame)
+// KeepDeadLetter implements [changefeed.DeadLetters]: the feed's keep, under the
+// identity it names and answered as the queue answers it — already kept
+// included, which accounts for nothing here, since no entry came or went.
+func (l *deadLetterLedger) KeepDeadLetter(ctx context.Context, subject, id string, header,
+	frame []byte) (bool, error) {
+
+	return l.store.KeepDeadLetter(ctx, subject, id, header, frame)
 }
 
 // DeadLettersOn implements [changefeed.DeadLetters].

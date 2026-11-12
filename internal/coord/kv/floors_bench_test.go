@@ -42,27 +42,28 @@ var floorDomains = []string{"tracker", "pages", "code", "vectors", "usage"}
 func BenchmarkAFloorRead(b *testing.B) {
 	for _, topology := range []struct {
 		name   string
+		reach  Reach
 		client func(b *testing.B) jetstream.JetStream
 	}{
-		{"member", func(b *testing.B) jetstream.JetStream {
+		{"member", InProcess, func(b *testing.B) jetstream.JetStream {
 			_, nc := embeddedServer(b)
 			return jsOf(nc)
 		}},
-		{"leaf", func(b *testing.B) jetstream.JetStream {
+		{"leaf", AcrossLink, func(b *testing.B) jetstream.JetStream {
 			return leafClientOf(b, leafMember(b), "leaf")
 		}},
 	} {
 		for _, shape := range []string{"key", "five-keys", "listing"} {
 			b.Run(topology.name+"/"+shape, func(b *testing.B) {
-				benchmarkFloorRead(b, topology.client(b), shape)
+				benchmarkFloorRead(b, topology.client(b), topology.reach, shape)
 			})
 		}
 	}
 }
 
-func benchmarkFloorRead(b *testing.B, client jetstream.JetStream, shape string) {
+func benchmarkFloorRead(b *testing.B, client jetstream.JetStream, reach Reach, shape string) {
 	ctx := context.Background()
-	fleet := openFleetVia(b, client, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	fleet := openFleetVia(b, client, reach, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	for _, domain := range floorDomains {
 		if err := fleet.PutFloor(ctx, coord.TrimFloor{
 			Domain: domain, Generation: 1, TrimTo: 40, Floor: 40,
