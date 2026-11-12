@@ -13,6 +13,7 @@ var exampleValues = map[string]any{
 	"artifact":     RecordID,
 	"turn_id":      RecordID,
 	"id":           RecordID,
+	"entry":        RecordID,
 	"handle":       "pm",
 	"key":          "ENG",
 	"q":            "deploy runbook",

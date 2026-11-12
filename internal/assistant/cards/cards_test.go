@@ -292,6 +292,7 @@ func TestALinkHoldsEachParameterToItsGrammar(t *testing.T) {
 // fixture, of the shape the dashboard's router fixture fills them with.
 var linkSamples = map[string]string{
 	"id": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f", "key": "ENG", "handle": "pm", "unit": "platform",
+	"direction": "up",
 }
 
 // THE LINK TABLE FIXTURE is every screen the engine links to, as the engine

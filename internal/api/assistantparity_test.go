@@ -444,7 +444,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	estate := apiArtifacts{}
 	return paritySources{state: state, config: configs, Sources: queries.Sources{
 		State: state, Events: eventfan.Solo("node-a", db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
-		Company: companySource(t, company), Coord: coordmemory.New(),
+		Company: companySource(t, company), Coord: coordmemory.New(), Atlas: atlasDepsOf(company, nil),
 		Work: stubWorkReader{}, Pages: posturePages{}, WorkSearch: noWorkHits{},
 		Sandbox: noExecutors{}, Config: configs,
 		Artifacts: &queries.ArtifactsSource{Gate: artifactsGate(estate), Reads: estate},

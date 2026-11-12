@@ -288,6 +288,7 @@ var narrowingQuery = map[string]bool{
 	"kinds": true, "task": true, "unread": true, "primary_only": true, "folder": true,
 	"label": true, "title": true, "asked_of": true, "asked_by": true, "has_open_asks": true,
 	"collection": true, "field": true, "due": true, "author": true,
+	"lane": true, "vendor": true, "confidence": true, "health": true,
 }
 
 // narrowWords are the arguments a person reads by other words than their

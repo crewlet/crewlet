@@ -447,6 +447,11 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 			provenance.TrustColleague},
 		{"get_task", `{"task":{"key":"ENG-1","title":"Ship it","body":"Details."}}`,
 			provenance.TrustColleague},
+		// AN ATLAS ENTRY: a vendor's integration among its sources named it.
+		{"get_atlas_entry", `{"entry":{"id":"e","name":"API 5xx","sources":[{"kind":"integration","name":"datadog"}]}}`,
+			provenance.TrustExternal},
+		{"get_atlas_entry", `{"entry":{"id":"e","name":"orders-db","sources":[{"kind":"person","name":"pm"}]}}`,
+			provenance.TrustColleague},
 	} {
 		tool := mustTool(t, tc.tool)
 		args := assistanttest.ExampleArgs(t, tool.Parameters)

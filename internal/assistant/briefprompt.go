@@ -88,6 +88,7 @@ var briefCiteWords = map[wire.ResourceKind]string{
 	wire.ResourceTask: "a task", wire.ResourceProject: "a project",
 	wire.ResourceSeat: "an agent", wire.ResourcePage: "a page",
 	wire.ResourceArtifact: "an artifact", wire.ResourceRoom: "a chat room",
+	wire.ResourceAtlasEntry: "an atlas entry",
 }
 
 // briefCitable is the records a brief's row may cite, in words: built from
