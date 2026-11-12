@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 )
 
@@ -87,82 +86,84 @@ func TestACollectionRecordsHowItsJobsHarnessEnded(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var rig *coordRig
-			if tc.keeps {
-				rig, _, _ = keepingRig(t)
-			} else {
-				rig = newCoordRig(t)
-			}
-			if tc.lostAsking {
-				asked := whichBranch()
-				if err := askLoseAndClaim(t, rig, &asked, Result{}); err != nil {
-					t.Fatalf("OnCompleted: %v", err)
+			inBubble(t, func(t *testing.T) {
+				var rig *coordRig
+				if tc.keeps {
+					rig, _, _ = keepingRig(t)
+				} else {
+					rig = newCoordRig(t)
 				}
-				if got := rig.get("t1"); got.Status != StatusAwaiting || got.Launch.HarnessEnd != tc.want {
-					t.Fatalf("the lost job is %s and its record says %q, want it parked on its question, %q",
-						got.Status, got.Launch.HarnessEnd, tc.want)
+				if tc.lostAsking {
+					asked := whichBranch()
+					if err := askLoseAndClaim(t, rig, &asked, Result{}); err != nil {
+						t.Fatalf("OnCompleted: %v", err)
+					}
+					if got := rig.get("t1"); got.Status != StatusAwaiting || got.Launch.HarnessEnd != tc.want {
+						t.Fatalf("the lost job is %s and its record says %q, want it parked on its question, %q",
+							got.Status, got.Launch.HarnessEnd, tc.want)
+					}
+					return
 				}
-				return
-			}
-			deadline := time.Time{}
-			if tc.capped {
-				deadline = rig.now.Add(-time.Minute)
-			}
-			rig.launchUntil("t1", deadline)
-			if tc.before != "" {
-				if _, err := rig.pending.MarkHarnessEnd(t.Context(), "t1", rig.get("t1").LaunchID,
-					tc.before); err != nil {
-					t.Fatalf("MarkHarnessEnd: %v", err)
+				deadline := time.Time{}
+				if tc.capped {
+					deadline = rig.now.Add(-time.Minute)
 				}
-			}
-			rig.coordinator.countRun("swe", StatusRunning)
-			if tc.keeps {
-				rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-			}
-			switch {
-			case tc.finished != nil:
-				rig.runner.Finish(tc.finished())
-			case tc.ended != nil:
-				rig.runner.EndsAs(tc.ended())
-			}
-			// COLLECTED, and read as the resume on the claim runs: the job's
-			// record as the store holds it, and the claim the resume was handed.
-			// The resume then refuses, so a row its turn's cap has not passed
-			// stays for the case; one past its cap is ended.
-			type read struct{ stored, claimed HarnessEnd }
-			var (
-				mu    sync.Mutex
-				reads []read
-			)
-			rig.resumer.failWith(errors.New("held for the case to read the row"))
-			rig.resumer.during = func(ctx context.Context, run PendingRun) {
-				stored := rig.getIn(ctx, "t1").Launch.HarnessEnd
+				rig.launchUntil("t1", deadline)
+				if tc.before != "" {
+					if _, err := rig.pending.MarkHarnessEnd(t.Context(), "t1", rig.get("t1").LaunchID,
+						tc.before); err != nil {
+						t.Fatalf("MarkHarnessEnd: %v", err)
+					}
+				}
+				rig.coordinator.countRun("swe", StatusRunning)
+				if tc.keeps {
+					rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+				}
+				switch {
+				case tc.finished != nil:
+					rig.runner.Finish(tc.finished())
+				case tc.ended != nil:
+					rig.runner.EndsAs(tc.ended())
+				}
+				// COLLECTED, and read as the resume on the claim runs: the job's
+				// record as the store holds it, and the claim the resume was handed.
+				// The resume then refuses, so a row its turn's cap has not passed
+				// stays for the case; one past its cap is ended.
+				type read struct{ stored, claimed HarnessEnd }
+				var (
+					mu    sync.Mutex
+					reads []read
+				)
+				rig.resumer.failWith(errors.New("held for the case to read the row"))
+				rig.resumer.during = func(ctx context.Context, run PendingRun) {
+					stored := rig.getIn(ctx, "t1").Launch.HarnessEnd
+					mu.Lock()
+					defer mu.Unlock()
+					reads = append(reads, read{stored: stored, claimed: run.Launch.HarnessEnd})
+				}
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Logf("OnCompleted: %v", err)
+				}
+				rig.awaitKeeps()
 				mu.Lock()
 				defer mu.Unlock()
-				reads = append(reads, read{stored: stored, claimed: run.Launch.HarnessEnd})
-			}
-			payload, ev := rig.completion("t1")
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-				t.Logf("OnCompleted: %v", err)
-			}
-			rig.awaitKeeps()
-			mu.Lock()
-			defer mu.Unlock()
-			if len(reads) != 1 {
-				t.Fatalf("the turn was resumed %d times, want once", len(reads))
-			}
-			if reads[0].stored != tc.want {
-				t.Errorf("the job's record says its harness ended %q, want %q", reads[0].stored, tc.want)
-			}
-			if reads[0].claimed != tc.want {
-				t.Errorf("the resume on the claim read %q, want the end the collection recorded, %q",
-					reads[0].claimed, tc.want)
-			}
-			if tc.keeps {
-				if kept := rig.get("t1").Kept; kept == nil || kept.State != CaptureLanded {
-					t.Errorf("the row keeps %+v, want the collection's capture landed beside the record", kept)
+				if len(reads) != 1 {
+					t.Fatalf("the turn was resumed %d times, want once", len(reads))
 				}
-			}
+				if reads[0].stored != tc.want {
+					t.Errorf("the job's record says its harness ended %q, want %q", reads[0].stored, tc.want)
+				}
+				if reads[0].claimed != tc.want {
+					t.Errorf("the resume on the claim read %q, want the end the collection recorded, %q",
+						reads[0].claimed, tc.want)
+				}
+				if tc.keeps {
+					if kept := rig.get("t1").Kept; kept == nil || kept.State != CaptureLanded {
+						t.Errorf("the row keeps %+v, want the collection's capture landed beside the record", kept)
+					}
+				}
+			})
 		})
 	}
 }
@@ -320,7 +321,7 @@ func (h *heldMarks) asked() []heldMark {
 // that the read's room does not bound, and a check goes red.
 func TestAJobsHarnessEndIsRecordedAfterItsTakeWithinTheReadsRoom(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		var held *heldMarks
 		rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) {
 			held = &heldMarks{PendingStore: o.Pending}

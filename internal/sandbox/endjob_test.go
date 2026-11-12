@@ -100,42 +100,44 @@ func (r *coordRig) watchEnd(box *FakeSandbox) *steps {
 // capture is stamped whole.
 func TestAStopEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	stamps := rig.spyStamps()
-	launched := rig.launchKept(t, "t1")
-	seen := rig.watchEnd(rig.provider.Box(launched.SandboxID))
-	// WHAT THE ENDED JOB'S SCRIPT REPORTS: the archive it packed as its own
-	// exit does, after a harness that went within its grace.
-	rig.runner.EndsAs(Result{Text: "halfway through", SessionID: "s-1",
-		Captured: &rig.runner.Session.Archive, JobEnd: JobEndAsked})
-	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	if rig.runner.Asks() != 0 {
-		t.Fatal("the frame that decided the stop asked the job to end itself")
-	}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		stamps := rig.spyStamps()
+		launched := rig.launchKept(t, "t1")
+		seen := rig.watchEnd(rig.provider.Box(launched.SandboxID))
+		// WHAT THE ENDED JOB'S SCRIPT REPORTS: the archive it packed as its own
+		// exit does, after a harness that went within its grace.
+		rig.runner.EndsAs(Result{Text: "halfway through", SessionID: "s-1",
+			Captured: &rig.runner.Session.Archive, JobEnd: JobEndAsked})
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		if rig.runner.Asks() != 0 {
+			t.Fatal("the frame that decided the stop asked the job to end itself")
+		}
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
 
-	closed, asked := seen.first("session closed"), seen.first("asked")
-	if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
-		t.Fatalf("the stop went %v, want its session closed, its job asked to end and swept, before anything "+
-			"was taken", seen.all())
-	}
-	takes := rig.runner.Takes()
-	if len(takes) != 1 || takes[0].Pack {
-		t.Fatalf("takes %+v, want the session the job's end left", takes)
-	}
-	if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final || !begun[0].Interrupted {
-		t.Fatalf("the stop's capture was stamped %+v, want it final and interrupted", begun)
-	}
-	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
-		t.Fatalf("killed %v, want the box reclaimed after its session was taken", killed)
-	}
-	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
-		t.Fatalf("the log was written %v, want the capture before the turn's end", got)
-	}
+		closed, asked := seen.first("session closed"), seen.first("asked")
+		if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
+			t.Fatalf("the stop went %v, want its session closed, its job asked to end and swept, before anything "+
+				"was taken", seen.all())
+		}
+		takes := rig.runner.Takes()
+		if len(takes) != 1 || takes[0].Pack {
+			t.Fatalf("takes %+v, want the session the job's end left", takes)
+		}
+		if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final || !begun[0].Interrupted {
+			t.Fatalf("the stop's capture was stamped %+v, want it final and interrupted", begun)
+		}
+		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+			t.Fatalf("killed %v, want the box reclaimed after its session was taken", killed)
+		}
+		if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+			t.Fatalf("the log was written %v, want the capture before the turn's end", got)
+		}
+	})
 }
 
 // A LOSS ENDS ITS JOB BEFORE IT TAKES ITS SESSION. A launch whose engine
@@ -150,34 +152,36 @@ func TestAStopEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 // the seat through its whole take, until the reclaim closes it.
 func TestALossEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	stamps := rig.spyStamps()
-	launched := rig.launching("t1")
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-	seen := rig.watchEnd(rig.provider.Box(launched.SandboxID))
-	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		stamps := rig.spyStamps()
+		launched := rig.launching("t1")
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		seen := rig.watchEnd(rig.provider.Box(launched.SandboxID))
+		if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
+			t.Fatalf("RecoverSeat: %v", err)
+		}
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
 
-	order := seen.all()
-	closed, asked := seen.first("session closed"), seen.first("asked")
-	if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
-		t.Fatalf("the loss went %v, want its session closed, then its job asked to end and swept, before "+
-			"anything was taken", order)
-	}
-	takes := rig.runner.Takes()
-	if len(takes) != 1 || takes[0].Pack {
-		t.Fatalf("takes %+v, want the session the lost job's end left", takes)
-	}
-	if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final {
-		t.Fatalf("the loss's capture was stamped %+v, want it final", begun)
-	}
-	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
-		t.Fatalf("killed %v, want the lost job's box reclaimed after", killed)
-	}
+		order := seen.all()
+		closed, asked := seen.first("session closed"), seen.first("asked")
+		if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
+			t.Fatalf("the loss went %v, want its session closed, then its job asked to end and swept, before "+
+				"anything was taken", order)
+		}
+		takes := rig.runner.Takes()
+		if len(takes) != 1 || takes[0].Pack {
+			t.Fatalf("takes %+v, want the session the lost job's end left", takes)
+		}
+		if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final {
+			t.Fatalf("the loss's capture was stamped %+v, want it final", begun)
+		}
+		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+			t.Fatalf("killed %v, want the lost job's box reclaimed after", killed)
+		}
+	})
 }
 
 // A CAPPED JOB IS ENDED BEFORE ITS SESSION IS TAKEN. A job still working when
@@ -200,54 +204,56 @@ func TestALossEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 // its box running.
 func TestACappedJobIsEndedBeforeItsSessionIsTaken(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	stamps := rig.spyStamps()
-	launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-	rig.coordinator.countRun("swe", StatusRunning)
-	box := rig.provider.Box(launched.SandboxID)
-	seen := rig.watchEnd(box)
-	// WHAT THE ENDED JOB'S SCRIPT REPORTS: the archive it packed as its own
-	// exit does, after a harness that went within its grace.
-	rig.runner.EndsAs(Result{Text: "halfway through", SessionID: "s-1",
-		Captured: &rig.runner.Session.Archive, JobEnd: JobEndAsked})
-	// PAST ITS TURN'S CAP a resume that fails after the collection is the
-	// turn's last: the run is ended at once, and its ending reclaims the box
-	// as soon as the resume has returned.
-	rig.resumer.failWith(errors.New("held for the case to read the box"))
-	// THE BOX AS THE TURN RESUMES: after its collection, and before the
-	// ending that reclaims it.
-	var resumed int
-	var pausedAtResume, reclaimedAtResume bool
-	rig.resumer.during = func(context.Context, PendingRun) {
-		resumed++
-		pausedAtResume = box.Paused()
-		reclaimedAtResume = slices.Contains(rig.provider.KilledIDs(), launched.SandboxID)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		stamps := rig.spyStamps()
+		launched := rig.launchUntil("t1", rig.now.Add(-time.Minute))
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		rig.coordinator.countRun("swe", StatusRunning)
+		box := rig.provider.Box(launched.SandboxID)
+		seen := rig.watchEnd(box)
+		// WHAT THE ENDED JOB'S SCRIPT REPORTS: the archive it packed as its own
+		// exit does, after a harness that went within its grace.
+		rig.runner.EndsAs(Result{Text: "halfway through", SessionID: "s-1",
+			Captured: &rig.runner.Session.Archive, JobEnd: JobEndAsked})
+		// PAST ITS TURN'S CAP a resume that fails after the collection is the
+		// turn's last: the run is ended at once, and its ending reclaims the box
+		// as soon as the resume has returned.
+		rig.resumer.failWith(errors.New("held for the case to read the box"))
+		// THE BOX AS THE TURN RESUMES: after its collection, and before the
+		// ending that reclaims it.
+		var resumed int
+		var pausedAtResume, reclaimedAtResume bool
+		rig.resumer.during = func(context.Context, PendingRun) {
+			resumed++
+			pausedAtResume = box.Paused()
+			reclaimedAtResume = slices.Contains(rig.provider.KilledIDs(), launched.SandboxID)
+		}
 
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Logf("OnCompleted: %v", err)
-	}
-	rig.awaitKeeps()
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Logf("OnCompleted: %v", err)
+		}
+		rig.awaitKeeps()
 
-	closed, asked := seen.first("session closed"), seen.first("asked")
-	if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
-		t.Fatalf("the capped job's collection went %v, want its session closed, its job asked to end and "+
-			"swept, before anything was taken", seen.all())
-	}
-	takes := rig.runner.Takes()
-	if len(takes) != 1 || takes[0].Pack {
-		t.Fatalf("takes %+v, want the one session the job's end left", takes)
-	}
-	if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final || !begun[0].Interrupted {
-		t.Fatalf("the capped job's capture was stamped %+v, want it final and interrupted", begun)
-	}
-	if resumed != 1 || !pausedAtResume || reclaimedAtResume {
-		t.Fatalf("the turn resumed %d times, its box paused %v and reclaimed %v as it did; want it resumed "+
-			"once, its box paused by the collection, as every collection's is, and reclaimed only by the "+
-			"turn's ending after", resumed, pausedAtResume, reclaimedAtResume)
-	}
+		closed, asked := seen.first("session closed"), seen.first("asked")
+		if closed < 0 || asked < 0 || closed > asked || seen.first("killed after 0 takes") < asked {
+			t.Fatalf("the capped job's collection went %v, want its session closed, its job asked to end and "+
+				"swept, before anything was taken", seen.all())
+		}
+		takes := rig.runner.Takes()
+		if len(takes) != 1 || takes[0].Pack {
+			t.Fatalf("takes %+v, want the one session the job's end left", takes)
+		}
+		if begun := stamps.begun(); len(begun) != 1 || !begun[0].Final || !begun[0].Interrupted {
+			t.Fatalf("the capped job's capture was stamped %+v, want it final and interrupted", begun)
+		}
+		if resumed != 1 || !pausedAtResume || reclaimedAtResume {
+			t.Fatalf("the turn resumed %d times, its box paused %v and reclaimed %v as it did; want it resumed "+
+				"once, its box paused by the collection, as every collection's is, and reclaimed only by the "+
+				"turn's ending after", resumed, pausedAtResume, reclaimedAtResume)
+		}
+	})
 }
 
 // A JOB THAT OUTLIVES ITS END IS KILLED BEFORE ITS TAKE. A script asked to end
@@ -261,46 +267,48 @@ func TestACappedJobIsEndedBeforeItsSessionIsTaken(t *testing.T) {
 func TestAJobThatOutlivesItsEndIsKilledBeforeItsTake(t *testing.T) {
 	for name, killEnds := range map[string]bool{"a kill that ends it": true, "a kill that does not": false} {
 		t.Run(name, func(t *testing.T) {
-			logs := captureLogs(t)
-			rig, _, _ := keepingRig(t)
-			rig.coordinator.endWait = 50 * time.Millisecond
-			stamps := rig.spyStamps()
-			launched := rig.launchKept(t, "t1")
-			box := rig.provider.Box(launched.SandboxID)
-			rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) { return EndAsked, nil }
-			var kills atomic.Int32
-			box.KillJobFunc = func(context.Context, string) error {
-				kills.Add(1)
-				if killEnds {
-					rig.runner.EndJobIn(box)
+			inBubble(t, func(t *testing.T) {
+				logs := captureLogs(t)
+				rig, _, _ := keepingRig(t)
+				rig.coordinator.endWait = 50 * time.Millisecond
+				stamps := rig.spyStamps()
+				launched := rig.launchKept(t, "t1")
+				box := rig.provider.Box(launched.SandboxID)
+				rig.runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) { return EndAsked, nil }
+				var kills atomic.Int32
+				box.KillJobFunc = func(context.Context, string) error {
+					kills.Add(1)
+					if killEnds {
+						rig.runner.EndJobIn(box)
+					}
+					return nil
 				}
-				return nil
-			}
-			if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-				t.Fatalf("StopSeat: %v", err)
-			}
-			rig.fireRetries()
-			rig.awaitKeeps()
-			rig.fireRetries()
+				if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+					t.Fatalf("StopSeat: %v", err)
+				}
+				rig.fireRetries()
+				rig.awaitKeeps()
+				rig.fireRetries()
 
-			if n := kills.Load(); n != 1 {
-				t.Fatalf("the job that outlived its end was killed %d times, want once", n)
-			}
-			takes, begun := rig.runner.Takes(), stamps.begun()
-			if len(takes) != 1 || len(begun) != 1 {
-				t.Fatalf("takes %+v, stamped %+v; want one take", takes, begun)
-			}
-			if takes[0].Pack == killEnds || begun[0].Final != killEnds {
-				t.Fatalf("the take packed now %v and was stamped final %v, want final %v",
-					takes[0].Pack, begun[0].Final, killEnds)
-			}
-			if !strings.Contains(logs.String(), "sandbox_job_killed") ||
-				!strings.Contains(logs.String(), "outlived_its_end") {
-				t.Fatalf("no kill past the end's wait was said:\n%s", logs.String())
-			}
-			if unended := strings.Contains(logs.String(), "sandbox_job_unended"); unended == killEnds {
-				t.Fatalf("a job the kill ended %v was said unended %v:\n%s", killEnds, unended, logs.String())
-			}
+				if n := kills.Load(); n != 1 {
+					t.Fatalf("the job that outlived its end was killed %d times, want once", n)
+				}
+				takes, begun := rig.runner.Takes(), stamps.begun()
+				if len(takes) != 1 || len(begun) != 1 {
+					t.Fatalf("takes %+v, stamped %+v; want one take", takes, begun)
+				}
+				if takes[0].Pack == killEnds || begun[0].Final != killEnds {
+					t.Fatalf("the take packed now %v and was stamped final %v, want final %v",
+						takes[0].Pack, begun[0].Final, killEnds)
+				}
+				if !strings.Contains(logs.String(), "sandbox_job_killed") ||
+					!strings.Contains(logs.String(), "outlived_its_end") {
+					t.Fatalf("no kill past the end's wait was said:\n%s", logs.String())
+				}
+				if unended := strings.Contains(logs.String(), "sandbox_job_unended"); unended == killEnds {
+					t.Fatalf("a job the kill ended %v was said unended %v:\n%s", killEnds, unended, logs.String())
+				}
+			})
 		})
 	}
 }
@@ -327,57 +335,59 @@ func TestAJobAskedNothingIsKilledNotWaitedFor(t *testing.T) {
 		"a box that could not be asked":         {endErr: errors.New("the runtime is down"), why: "ask_failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			logs := captureLogs(t)
-			rig, _, _ := keepingRig(t)
-			launched := rig.launchKept(t, "t1")
-			box := rig.provider.Box(launched.SandboxID)
-			rig.runner.Unheard = tc.unheard
-			if tc.endErr != nil {
-				box.EndJobFunc = func(context.Context, string, int) error { return tc.endErr }
-			}
-			var mu sync.Mutex
-			polls, killed, pollsAtKill := 0, false, -1
-			rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
-				mu.Lock()
-				defer mu.Unlock()
-				polls++
-				if killed {
-					return JobEnded, nil
+			inBubble(t, func(t *testing.T) {
+				logs := captureLogs(t)
+				rig, _, _ := keepingRig(t)
+				launched := rig.launchKept(t, "t1")
+				box := rig.provider.Box(launched.SandboxID)
+				rig.runner.Unheard = tc.unheard
+				if tc.endErr != nil {
+					box.EndJobFunc = func(context.Context, string, int) error { return tc.endErr }
 				}
-				return JobRunning, nil
-			}
-			box.KillJobFunc = func(context.Context, string) error {
+				var mu sync.Mutex
+				polls, killed, pollsAtKill := 0, false, -1
+				rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					polls++
+					if killed {
+						return JobEnded, nil
+					}
+					return JobRunning, nil
+				}
+				box.KillJobFunc = func(context.Context, string) error {
+					mu.Lock()
+					defer mu.Unlock()
+					killed, pollsAtKill = true, polls
+					return nil
+				}
+				if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+					t.Fatalf("StopSeat: %v", err)
+				}
+				rig.fireRetries()
+				rig.awaitKeeps()
+				rig.fireRetries()
+
 				mu.Lock()
 				defer mu.Unlock()
-				killed, pollsAtKill = true, polls
-				return nil
-			}
-			if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-				t.Fatalf("StopSeat: %v", err)
-			}
-			rig.fireRetries()
-			rig.awaitKeeps()
-			rig.fireRetries()
-
-			mu.Lock()
-			defer mu.Unlock()
-			if pollsAtKill != 1 {
-				t.Fatalf("the job was polled %d times before it was killed, want once — whether it was over",
-					pollsAtKill)
-			}
-			if rig.runner.Asks() != 1 {
-				t.Fatalf("the job was asked to end %d times, want once", rig.runner.Asks())
-			}
-			if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
-				t.Fatalf("takes %+v, want the killed job's session taken final", takes)
-			}
-			said := logs.String()
-			if !strings.Contains(said, "msg=sandbox_job_killed") || !strings.Contains(said, "why="+tc.why) {
-				t.Fatalf("the kill was not said as why=%s:\n%s", tc.why, said)
-			}
-			if unasked := strings.Contains(said, "sandbox_job_end_unasked"); unasked != (tc.why == "ask_failed") {
-				t.Fatalf("the ask's failure was said %v, want %v:\n%s", unasked, tc.why == "ask_failed", said)
-			}
+				if pollsAtKill != 1 {
+					t.Fatalf("the job was polled %d times before it was killed, want once — whether it was over",
+						pollsAtKill)
+				}
+				if rig.runner.Asks() != 1 {
+					t.Fatalf("the job was asked to end %d times, want once", rig.runner.Asks())
+				}
+				if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].Pack {
+					t.Fatalf("takes %+v, want the killed job's session taken final", takes)
+				}
+				said := logs.String()
+				if !strings.Contains(said, "msg=sandbox_job_killed") || !strings.Contains(said, "why="+tc.why) {
+					t.Fatalf("the kill was not said as why=%s:\n%s", tc.why, said)
+				}
+				if unasked := strings.Contains(said, "sandbox_job_end_unasked"); unasked != (tc.why == "ask_failed") {
+					t.Fatalf("the ask's failure was said %v, want %v:\n%s", unasked, tc.why == "ask_failed", said)
+				}
+			})
 		})
 	}
 }
@@ -391,43 +401,45 @@ func TestAJobAskedNothingIsKilledNotWaitedFor(t *testing.T) {
 // such box — is asked to.
 func TestAStopOfABoxOnAnotherHostEndsItsJobThere(t *testing.T) {
 	t.Parallel()
-	asker, _, _ := keepingRig(t)
-	asks := &boxAsks{result: Result{}}
-	asker.onNode(t, "node-b", asks, &nudges{})
-	run := asker.launchedBy("t1", "node-a")
-	asker.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-	if err := asker.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	asker.fireRetries()
-	asker.awaitKeeps()
-	asker.fireRetries()
-	if got := asks.reads(); !slices.Contains(got, BoxReadStop) {
-		t.Fatalf("asked the host %v, want the stop's read", got)
-	}
-	if asker.runner.Asks() != 0 || len(asker.provider.Box(run.SandboxID).JobCalls()) != 0 {
-		t.Fatalf("the asker ended the job itself: %d asks, %v", asker.runner.Asks(),
-			asker.provider.Box(run.SandboxID).JobCalls())
-	}
+	inBubble(t, func(t *testing.T) {
+		asker, _, _ := keepingRig(t)
+		asks := &boxAsks{result: Result{}}
+		asker.onNode(t, "node-b", asks, &nudges{})
+		run := asker.launchedBy("t1", "node-a")
+		asker.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		if err := asker.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		asker.fireRetries()
+		asker.awaitKeeps()
+		asker.fireRetries()
+		if got := asks.reads(); !slices.Contains(got, BoxReadStop) {
+			t.Fatalf("asked the host %v, want the stop's read", got)
+		}
+		if asker.runner.Asks() != 0 || len(asker.provider.Box(run.SandboxID).JobCalls()) != 0 {
+			t.Fatalf("the asker ended the job itself: %d asks, %v", asker.runner.Asks(),
+				asker.provider.Box(run.SandboxID).JobCalls())
+		}
 
-	// AND THE HOST'S READ ENDS IT, licensed by the stop the row records.
-	host, _, _ := keepingRig(t)
-	host.onNode(t, "node-a", &boxAsks{}, &nudges{})
-	hosted := host.launchedBy("t2", "node-a")
-	host.handOver(t, "t2", HandedSecrets{Values: []string{handedToken}})
-	if err := host.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	if _, _, err := host.coordinator.ReadHostedBox(t.Context(), "t2", hosted.LaunchID, hosted.SandboxID,
-		BoxReadStop); err != nil {
-		t.Fatalf("ReadHostedBox of the stop: %v", err)
-	}
-	if host.runner.Asks() != 1 {
-		t.Fatalf("the host asked the stopped job to end %d times, want once", host.runner.Asks())
-	}
-	if calls := host.provider.Box(hosted.SandboxID).JobCalls(); !slices.Contains(calls, "kill cmd-1") {
-		t.Fatalf("the host's read made %v of the box, want its job swept", calls)
-	}
+		// AND THE HOST'S READ ENDS IT, licensed by the stop the row records.
+		host, _, _ := keepingRig(t)
+		host.onNode(t, "node-a", &boxAsks{}, &nudges{})
+		hosted := host.launchedBy("t2", "node-a")
+		host.handOver(t, "t2", HandedSecrets{Values: []string{handedToken}})
+		if err := host.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		if _, _, err := host.coordinator.ReadHostedBox(t.Context(), "t2", hosted.LaunchID, hosted.SandboxID,
+			BoxReadStop); err != nil {
+			t.Fatalf("ReadHostedBox of the stop: %v", err)
+		}
+		if host.runner.Asks() != 1 {
+			t.Fatalf("the host asked the stopped job to end %d times, want once", host.runner.Asks())
+		}
+		if calls := host.provider.Box(hosted.SandboxID).JobCalls(); !slices.Contains(calls, "kill cmd-1") {
+			t.Fatalf("the host's read made %v of the box, want its job swept", calls)
+		}
+	})
 }
 
 // A STOP WITH THE SWITCH OFF ENDS ITS JOB OFF THE FRAME. Ending a job is waiting
@@ -441,33 +453,35 @@ func TestAStopOfABoxOnAnotherHostEndsItsJobThere(t *testing.T) {
 // as a stop once was, and the pause watch waits for the job's end.
 func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.policy.Keep = false
-	launched := rig.launchKept(t, "t1")
-	box := rig.provider.Box(launched.SandboxID)
-	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
-		t.Fatalf("StopSeat: %v", err)
-	}
-	if rig.runner.Asks() != 0 || len(box.JobCalls()) != 0 || len(rig.provider.KilledIDs()) != 0 {
-		t.Fatalf("the frame that decided the stop touched the box: %d asks, %v, killed %v",
-			rig.runner.Asks(), box.JobCalls(), rig.provider.KilledIDs())
-	}
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.policy.Keep = false
+		launched := rig.launchKept(t, "t1")
+		box := rig.provider.Box(launched.SandboxID)
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		if rig.runner.Asks() != 0 || len(box.JobCalls()) != 0 || len(rig.provider.KilledIDs()) != 0 {
+			t.Fatalf("the frame that decided the stop touched the box: %d asks, %v, killed %v",
+				rig.runner.Asks(), box.JobCalls(), rig.provider.KilledIDs())
+		}
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
 
-	if rig.runner.Asks() != 1 {
-		t.Fatalf("the stop's retry asked the job to end %d times, want once", rig.runner.Asks())
-	}
-	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
-		t.Fatalf("killed %v, want the stopped job's box reclaimed", killed)
-	}
-	if takes := rig.runner.Takes(); len(takes) != 0 || len(writes.captured()) != 0 {
-		t.Fatalf("took %d sessions and recorded %d captures with the switch off", len(takes), len(writes.captured()))
-	}
-	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
-		t.Fatal("the stopped run's record was left behind")
-	}
+		if rig.runner.Asks() != 1 {
+			t.Fatalf("the stop's retry asked the job to end %d times, want once", rig.runner.Asks())
+		}
+		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+			t.Fatalf("killed %v, want the stopped job's box reclaimed", killed)
+		}
+		if takes := rig.runner.Takes(); len(takes) != 0 || len(writes.captured()) != 0 {
+			t.Fatalf("took %d sessions and recorded %d captures with the switch off", len(takes), len(writes.captured()))
+		}
+		if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+			t.Fatal("the stopped run's record was left behind")
+		}
+	})
 }
 
 // A READ THAT MAY END ITS JOB IS GIVEN THE END ON TOP OF THE TAKE: a stop's and

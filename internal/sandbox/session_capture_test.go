@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 )
 
@@ -21,23 +20,25 @@ import (
 // Mutation: gate the loss's read on the wiring alone, and the host is asked.
 func TestTheSwitchOffAsksNoHostForALostRunsSession(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	keep.policy.Keep = false
-	asks := &boxAsks{result: Result{}}
-	rig.onNode(t, "node-b", asks, &nudges{})
-	run := rig.launchedBy("t1", "node-a")
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
-	rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(run),
-		note: &failureNote{reason: "engine_restarted", detail: "the engine that ran the job restarted"}})
-	rig.fireRetries()
-	rig.awaitKeeps()
-	rig.fireRetries()
-	if got := asks.reads(); slices.Contains(got, BoxReadLoss) {
-		t.Fatalf("asked the host %v with the switch off, want no read for a session nothing keeps", got)
-	}
-	if ends := writes.endedRecords(); len(ends) != 1 {
-		t.Fatalf("recorded %d ends with the switch off, want the lost turn's one", len(ends))
-	}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		keep.policy.Keep = false
+		asks := &boxAsks{result: Result{}}
+		rig.onNode(t, "node-b", asks, &nudges{})
+		run := rig.launchedBy("t1", "node-a")
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(run),
+			note: &failureNote{reason: "engine_restarted", detail: "the engine that ran the job restarted"}})
+		rig.fireRetries()
+		rig.awaitKeeps()
+		rig.fireRetries()
+		if got := asks.reads(); slices.Contains(got, BoxReadLoss) {
+			t.Fatalf("asked the host %v with the switch off, want no read for a session nothing keeps", got)
+		}
+		if ends := writes.endedRecords(); len(ends) != 1 {
+			t.Fatalf("recorded %d ends with the switch off, want the lost turn's one", len(ends))
+		}
+	})
 }
 
 // A SPOOL A CRASH LEFT BEHIND IS SWEPT BY THE FIRST TAKE AFTER IT AGES, and by
@@ -49,38 +50,40 @@ func TestTheSwitchOffAsksNoHostForALostRunsSession(t *testing.T) {
 // directory than the coordinator's own, and a check below goes red.
 func TestASpoolACrashLeftIsSweptByTheTakesAfterItAges(t *testing.T) {
 	t.Parallel()
-	rig, _, _ := keepingRig(t)
-	plant := func(name string, age time.Duration) string {
-		file := filepath.Join(rig.coordinator.spoolDirectory(), spoolPrefix+name)
-		if err := os.WriteFile(file, []byte("sealed"), 0o600); err != nil {
-			t.Fatal(err)
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		plant := func(name string, age time.Duration) string {
+			file := filepath.Join(rig.coordinator.spoolDirectory(), spoolPrefix+name)
+			if err := os.WriteFile(file, []byte("sealed"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			at := time.Now().Add(-age)
+			if err := os.Chtimes(file, at, at); err != nil {
+				t.Fatal(err)
+			}
+			return file
 		}
-		at := time.Now().Add(-age)
-		if err := os.Chtimes(file, at, at); err != nil {
-			t.Fatal(err)
+		take := func(turnID string) {
+			rig.launchKept(t, turnID)
+			session := rig.runner.Session
+			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+			collectHeld(t, rig, turnID)
 		}
-		return file
-	}
-	take := func(turnID string) {
-		rig.launchKept(t, turnID)
-		session := rig.runner.Session
-		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-		collectHeld(t, rig, turnID)
-	}
-	crashed := plant("crashed", 3*SessionCaptureBudget)
-	young := plant("under-way", time.Minute)
-	take("t1")
-	if _, err := os.Stat(crashed); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a spool older than a capture can take was left by the take after it (%v)", err)
-	}
-	if _, err := os.Stat(young); err != nil {
-		t.Errorf("a spool younger than a capture can take was swept: %v", err)
-	}
-	later := plant("crashed-later", 3*SessionCaptureBudget)
-	take("t2")
-	if _, err := os.Stat(later); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a spool aged past the cutoff was left by a later take (%v)", err)
-	}
+		crashed := plant("crashed", 3*SessionCaptureBudget)
+		young := plant("under-way", time.Minute)
+		take("t1")
+		if _, err := os.Stat(crashed); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a spool older than a capture can take was left by the take after it (%v)", err)
+		}
+		if _, err := os.Stat(young); err != nil {
+			t.Errorf("a spool younger than a capture can take was swept: %v", err)
+		}
+		later := plant("crashed-later", 3*SessionCaptureBudget)
+		take("t2")
+		if _, err := os.Stat(later); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a spool aged past the cutoff was left by a later take (%v)", err)
+		}
+	})
 }
 
 // A SPOOL NEVER OUTLIVES ITS CAPTURE: it goes once the keep is done (the
@@ -93,36 +96,40 @@ func TestASpoolNeverOutlivesItsCapture(t *testing.T) {
 	t.Parallel()
 	t.Run("a keep a stopped node drops", func(t *testing.T) {
 		t.Parallel()
-		rig, _, _ := keepingRig(t)
-		run := rig.launchKept(t, "t1")
-		spooled, kept := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-			rig.runner, readCapture(BoxReadCollect, Result{}, true))
-		if spooled == nil {
-			t.Fatalf("the take spooled nothing: %+v", kept)
-		}
-		rig.coordinator.Stop()
-		rig.coordinator.keepLater(spooled)
-		if left := rig.spools(t); len(left) != 0 {
-			t.Errorf("a keep the stopped node dropped left its spool: %v", left)
-		}
-		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
-			t.Errorf("the dropped keep's capture stands %+v, want it refused", c)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			run := rig.launchKept(t, "t1")
+			spooled, kept := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+				rig.runner, readCapture(BoxReadCollect, Result{}, true))
+			if spooled == nil {
+				t.Fatalf("the take spooled nothing: %+v", kept)
+			}
+			rig.coordinator.Stop()
+			rig.coordinator.keepLater(spooled)
+			if left := rig.spools(t); len(left) != 0 {
+				t.Errorf("a keep the stopped node dropped left its spool: %v", left)
+			}
+			if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+				t.Errorf("the dropped keep's capture stands %+v, want it refused", c)
+			}
+		})
 	})
 	t.Run("a seal that failed", func(t *testing.T) {
 		t.Parallel()
-		rig, _, keep := keepingRig(t)
-		keep.sealErr = errors.New("the keyring would not seal")
-		rig.launchKept(t, "t1")
-		session := rig.runner.Session
-		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-		collectHeld(t, rig, "t1")
-		if left := rig.spools(t); len(left) != 0 {
-			t.Errorf("a spool whose seal failed was left: %v", left)
-		}
-		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
-			t.Errorf("the capture whose seal failed stands %+v, want it refused", c)
-		}
+		inBubble(t, func(t *testing.T) {
+			rig, _, keep := keepingRig(t)
+			keep.sealErr = errors.New("the keyring would not seal")
+			rig.launchKept(t, "t1")
+			session := rig.runner.Session
+			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+			collectHeld(t, rig, "t1")
+			if left := rig.spools(t); len(left) != 0 {
+				t.Errorf("a spool whose seal failed was left: %v", left)
+			}
+			if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+				t.Errorf("the capture whose seal failed stands %+v, want it refused", c)
+			}
+		})
 	})
 }
 
@@ -145,50 +152,52 @@ func TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded(t *testi
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, keep := keepingRig(t)
-			run := rig.launch("t1")
-			if earlier {
-				rig.handOver(t, "t1", HandedSecrets{Values: []string{"the-first-jobs-rotated-token"}})
-			}
-			var relaunch LaunchResult
-			rig.resumer.during = func(ctx context.Context, r PendingRun) {
-				req := launchReq(r.TurnID)
-				req.Secrets = []string{"the-relaunchs-own-token"}
-				res, err := rig.coordinator.Launch(ctx, rig.manager, req)
+			inBubble(t, func(t *testing.T) {
+				rig, _, keep := keepingRig(t)
+				run := rig.launch("t1")
+				if earlier {
+					rig.handOver(t, "t1", HandedSecrets{Values: []string{"the-first-jobs-rotated-token"}})
+				}
+				var relaunch LaunchResult
+				rig.resumer.during = func(ctx context.Context, r PendingRun) {
+					req := launchReq(r.TurnID)
+					req.Secrets = []string{"the-relaunchs-own-token"}
+					res, err := rig.coordinator.Launch(ctx, rig.manager, req)
+					if err != nil {
+						t.Errorf("relaunch: %v", err)
+					}
+					relaunch = res
+				}
+				rig.runner.Finish(Result{Success: true, Text: "first pass"})
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Fatalf("OnCompleted: %v", err)
+				}
+				rig.awaitKeeps()
+				if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
+					t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, run.SandboxID)
+				}
+				sealed := rig.handedOf(t, "t1")
+				if !earlier {
+					if sealed != "" {
+						t.Fatalf("sealed %q for a box whose earlier jobs' secrets are unknown, want nothing", sealed)
+					}
+					return
+				}
+				raw, err := keep.OpenHanded("t1", sealed)
 				if err != nil {
-					t.Errorf("relaunch: %v", err)
+					t.Fatalf("opening the relaunch's seal: %v", err)
 				}
-				relaunch = res
-			}
-			rig.runner.Finish(Result{Success: true, Text: "first pass"})
-			payload, ev := rig.completion("t1")
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-				t.Fatalf("OnCompleted: %v", err)
-			}
-			rig.awaitKeeps()
-			if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
-				t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, run.SandboxID)
-			}
-			sealed := rig.handedOf(t, "t1")
-			if !earlier {
-				if sealed != "" {
-					t.Fatalf("sealed %q for a box whose earlier jobs' secrets are unknown, want nothing", sealed)
+				handed, err := decodeHanded(raw)
+				if err != nil {
+					t.Fatalf("decoding the relaunch's seal: %v", err)
 				}
-				return
-			}
-			raw, err := keep.OpenHanded("t1", sealed)
-			if err != nil {
-				t.Fatalf("opening the relaunch's seal: %v", err)
-			}
-			handed, err := decodeHanded(raw)
-			if err != nil {
-				t.Fatalf("decoding the relaunch's seal: %v", err)
-			}
-			for _, want := range []string{"the-first-jobs-rotated-token", "the-relaunchs-own-token"} {
-				if !slices.Contains(handed.Values, want) {
-					t.Errorf("the relaunch's scrub holds %q, want %q among them", handed.Values, want)
+				for _, want := range []string{"the-first-jobs-rotated-token", "the-relaunchs-own-token"} {
+					if !slices.Contains(handed.Values, want) {
+						t.Errorf("the relaunch's scrub holds %q, want %q among them", handed.Values, want)
+					}
 				}
-			}
+			})
 		})
 	}
 }
@@ -203,30 +212,32 @@ func TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded(t *testi
 // Mutation: read the login again without its bound, and the session is taken.
 func TestALoginTheBoxGrewPastItsBoundRefusesTheCapture(t *testing.T) {
 	t.Parallel()
-	rig, writes, _ := keepingRig(t)
-	run := rig.launchKept(t, "t1")
-	const rel = ".claude/.credentials.json"
-	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken},
-		Logins: map[string]string{rel: filepath.Join(t.TempDir(), "absent.json")}})
-	box := rig.provider.Box(run.SandboxID)
-	grown := `["` + strings.Repeat(`abcdefgh","`, MaxHandedBytes/10) + `abcdefgh"]`
-	if err := box.WriteFile(t.Context(), path.Join(box.Home(), rel), []byte(grown)); err != nil {
-		t.Fatalf("writing the grown login: %v", err)
-	}
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		const rel = ".claude/.credentials.json"
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken},
+			Logins: map[string]string{rel: filepath.Join(t.TempDir(), "absent.json")}})
+		box := rig.provider.Box(run.SandboxID)
+		grown := `["` + strings.Repeat(`abcdefgh","`, MaxHandedBytes/10) + `abcdefgh"]`
+		if err := box.WriteFile(t.Context(), path.Join(box.Home(), rel), []byte(grown)); err != nil {
+			t.Fatalf("writing the grown login: %v", err)
+		}
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
 
-	if takes := rig.runner.Takes(); len(takes) != 0 {
-		t.Fatalf("took %d sessions scrubbed by a login past its bound", len(takes))
-	}
-	if len(writes.captured()) != 0 {
-		t.Fatal("recorded a capture scrubbed by a login past its bound")
-	}
-	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused ||
-		!strings.Contains(c.Reason, "a whole launch may hand") {
-		t.Fatalf("the record holds %+v, want the capture refused for the login's bound", c)
-	}
+		if takes := rig.runner.Takes(); len(takes) != 0 {
+			t.Fatalf("took %d sessions scrubbed by a login past its bound", len(takes))
+		}
+		if len(writes.captured()) != 0 {
+			t.Fatal("recorded a capture scrubbed by a login past its bound")
+		}
+		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused ||
+			!strings.Contains(c.Reason, "a whole launch may hand") {
+			t.Fatalf("the record holds %+v, want the capture refused for the login's bound", c)
+		}
+	})
 }
 
 // timedStamps is a run store that records the deadline every stamp of a
@@ -294,30 +305,32 @@ func readUntil(t *testing.T) (read context.Context, by time.Time) {
 // record's budget alone, and its deadline is not the read's by.
 func TestACapturesOutcomeIsStampedInTheRoomTheReadLeavesIt(t *testing.T) {
 	t.Parallel()
-	rig, _, keep := keepingRig(t)
-	keep.sealErr = errors.New("the keyring would not seal")
-	run := rig.launchKept(t, "t1")
-	stamps := &timedStamps{PendingStore: rig.coordinator.pending}
-	rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
-	read, by := readUntil(t)
-	spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-		readCapture(BoxReadCollect, Result{}, true))
-	if spooled != nil {
-		t.Fatalf("a take whose seal failed spooled %+v", spooled)
-	}
-	refused := stamps.askedUnder(CaptureRefused)
-	if len(refused) == 0 {
-		t.Fatal("the take's refusal was never stamped")
-	}
-	for _, deadline := range refused {
-		if !deadline.Equal(by) {
-			t.Errorf("the refusal was stamped under a deadline %s off the read's by, want it at by",
-				deadline.Sub(by))
+	inBubble(t, func(t *testing.T) {
+		rig, _, keep := keepingRig(t)
+		keep.sealErr = errors.New("the keyring would not seal")
+		run := rig.launchKept(t, "t1")
+		stamps := &timedStamps{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
+		read, by := readUntil(t)
+		spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+			readCapture(BoxReadCollect, Result{}, true))
+		if spooled != nil {
+			t.Fatalf("a take whose seal failed spooled %+v", spooled)
 		}
-	}
-	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
-		t.Fatalf("the capture whose seal failed stands %+v, want it refused", c)
-	}
+		refused := stamps.askedUnder(CaptureRefused)
+		if len(refused) == 0 {
+			t.Fatal("the take's refusal was never stamped")
+		}
+		for _, deadline := range refused {
+			if !deadline.Equal(by) {
+				t.Errorf("the refusal was stamped under a deadline %s off the read's by, want it at by",
+					deadline.Sub(by))
+			}
+		}
+		if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
+			t.Fatalf("the capture whose seal failed stands %+v, want it refused", c)
+		}
+	})
 }
 
 // A PLACE RESERVED AS THE TAKE'S TIME RAN OUT IS SETTLED. The coordination store
@@ -344,37 +357,39 @@ func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, _ := keepingRig(t)
-			run := rig.launchKept(t, "t1")
-			stamps := &timedStamps{PendingStore: rig.coordinator.pending, late: true, steal: steal}
-			rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
-			read, by := readUntil(t)
-			spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-				readCapture(BoxReadCollect, Result{}, true))
-			switch {
-			case !steal && spooled != nil:
-				t.Fatalf("a take whose own place was never answered spooled %+v", spooled)
-			case steal && (spooled == nil || !spooled.standby):
-				t.Fatalf("a take that found its place another read's spooled %+v, want it standing by for "+
-					"that read's capture", spooled)
-			}
-			c := rig.get("t1").Capture
-			switch {
-			case c == nil:
-				t.Fatal("the place the store took is gone from the row")
-			case steal && c.State != CaptureBegun:
-				t.Fatalf("another read's place stands %s (%q), want it begun as that read left it",
-					c.State, c.Reason)
-			case steal && !c.standsBy(spooled.stamp):
-				t.Fatalf("another read's place stands %+v, want the take named standing by for it", c)
-			case !steal && (c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out")):
-				t.Fatalf("the take's own place stands %s (%q), want it refused, saying why", c.State, c.Reason)
-			}
-			for _, deadline := range stamps.askedUnder(CaptureRefused) {
-				if deadline.After(by) {
-					t.Errorf("the place was settled under a deadline %s past the read's by", deadline.Sub(by))
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				run := rig.launchKept(t, "t1")
+				stamps := &timedStamps{PendingStore: rig.coordinator.pending, late: true, steal: steal}
+				rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
+				read, by := readUntil(t)
+				spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+					readCapture(BoxReadCollect, Result{}, true))
+				switch {
+				case !steal && spooled != nil:
+					t.Fatalf("a take whose own place was never answered spooled %+v", spooled)
+				case steal && (spooled == nil || !spooled.standby):
+					t.Fatalf("a take that found its place another read's spooled %+v, want it standing by for "+
+						"that read's capture", spooled)
 				}
-			}
+				c := rig.get("t1").Capture
+				switch {
+				case c == nil:
+					t.Fatal("the place the store took is gone from the row")
+				case steal && c.State != CaptureBegun:
+					t.Fatalf("another read's place stands %s (%q), want it begun as that read left it",
+						c.State, c.Reason)
+				case steal && !c.standsBy(spooled.stamp):
+					t.Fatalf("another read's place stands %+v, want the take named standing by for it", c)
+				case !steal && (c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out")):
+					t.Fatalf("the take's own place stands %s (%q), want it refused, saying why", c.State, c.Reason)
+				}
+				for _, deadline := range stamps.askedUnder(CaptureRefused) {
+					if deadline.After(by) {
+						t.Errorf("the place was settled under a deadline %s past the read's by", deadline.Sub(by))
+					}
+				}
+			})
 		})
 	}
 }
@@ -482,27 +497,29 @@ func TestAReservationTheStoreTakesLateIsSettledWhicheverWayItLands(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rig, _, _ := keepingRig(t)
-			run := rig.launchKept(t, "t1")
-			store.PendingStore = rig.coordinator.pending
-			rig.coordinator.pending, rig.coordinator.recordBudget = store, 10*time.Minute
-			read, _ := readUntil(t)
-			spooled, kept := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-				readCapture(BoxReadCollect, Result{}, false))
-			if spooled != nil {
-				t.Fatalf("a take whose place was never answered spooled %+v", spooled)
-			}
-			// AND ANY RESERVATION STILL ON ITS WAY, landed now.
-			store.land(t.Context(), "t1")
-			c := rig.get("t1").Capture
-			switch {
-			case c == nil:
-				t.Fatal("the row holds no capture of the take, want its place refused")
-			case c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out"):
-				t.Fatalf("the take's place stands %s (%q), want it refused, saying why", c.State, c.Reason)
-			case kept == nil || kept.NotKept == "":
-				t.Errorf("the read reports %+v of the session, want it not kept, saying why", kept)
-			}
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				run := rig.launchKept(t, "t1")
+				store.PendingStore = rig.coordinator.pending
+				rig.coordinator.pending, rig.coordinator.recordBudget = store, 10*time.Minute
+				read, _ := readUntil(t)
+				spooled, kept := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+					readCapture(BoxReadCollect, Result{}, false))
+				if spooled != nil {
+					t.Fatalf("a take whose place was never answered spooled %+v", spooled)
+				}
+				// AND ANY RESERVATION STILL ON ITS WAY, landed now.
+				store.land(t.Context(), "t1")
+				c := rig.get("t1").Capture
+				switch {
+				case c == nil:
+					t.Fatal("the row holds no capture of the take, want its place refused")
+				case c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out"):
+					t.Fatalf("the take's place stands %s (%q), want it refused, saying why", c.State, c.Reason)
+				case kept == nil || kept.NotKept == "":
+					t.Errorf("the read reports %+v of the session, want it not kept, saying why", kept)
+				}
+			})
 		})
 	}
 }
@@ -545,7 +562,7 @@ func (s *lostAnswers) StampCapture(ctx context.Context, turnID string, stamp Ses
 // take keeps nothing and leaves its place begun.
 func TestATakesOwnReservationItsAnswerLostIsItsOwn(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		rig, _, _ := keepingRig(t)
 		run := rig.launchKept(t, "t1")
 		rig.coordinator.pending = &lostAnswers{PendingStore: rig.coordinator.pending}
