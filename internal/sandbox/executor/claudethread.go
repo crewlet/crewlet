@@ -70,8 +70,8 @@ import (
 //     ToolUseResult: its reader's to parse, and to hold to a rule of its own.
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
-// as the engine drives a box's executor, and 2.1.118 for a hook that follows
-// one call (a skill's).
+// as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
+// that follows one call (a skill's).
 
 // threadLineMax is the longest whole line a Claude Code thread is read with,
 // its break included: the scrub's own piece ([scrubPieceMaxBytes]). The take's

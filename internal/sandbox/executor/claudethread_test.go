@@ -17,15 +17,17 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
-// THE RECORDS EVERY CASE BELOW READS ARE SHAPED AS CLAUDE CODE WRITES THEM, key
-// for key and type for type, as measured on 2.1.310 and 2.1.322 driven as the
-// engine drives a box's executor: a main thread's bookkeeping, its brief, its
-// model's calls and their results, the notes' hook records at a batch and at
-// Stop, a firing that timed out, a subagent's prompt, its coordinator's message
-// and the main thread's notification of its end, a skill's text, and a
-// compaction's boundary and the summary record after it; and, as 2.1.118 wrote
-// it, a skill's PostToolUse hook. Every id in them is synthetic, and long text
-// is shortened.
+// THE RECORDS EVERY CASE BELOW READS ARE SHAPED AS CLAUDE CODE WRITES THEM, their
+// keys in the order written and each of the type written, as measured on
+// 2.1.310 and 2.1.322 driven as the engine drives a box's executor: a main
+// thread's bookkeeping, its brief, its model's calls and their results, the
+// notes' hook records at a batch and at Stop, a firing that timed out, a
+// subagent's prompt, its coordinator's message and the main thread's
+// notification of its end, a skill's text, and a compaction's boundary and the
+// summary record after it; and, as 2.1.118 and 2.1.310 wrote it, a skill's
+// PostToolUse hook. Some are ABRIDGED, a key no case reads left out, and each
+// such fixture says what it leaves out. Every id in them is synthetic, and long
+// text is shortened.
 
 const (
 	ctSession   = "5e55100a-0000-4000-8000-000000000001"
@@ -74,12 +76,17 @@ var (
 	ctRequestBlob = `{"type":"api-request-blob","sessionId":"` + ctSession + `","hash":"b1b1b1b1","message":` +
 		`{"role":"user","content":[{"tool_use_id":"` + ctCall + `","type":"tool_result","content":"b1\n\n` +
 		`<system-reminder>\nPostToolBatch hook additional context: ## A note\n</system-reminder>","is_error":false}]}}`
+	// ctRequest is abridged: its params name the model and the token bound
+	// alone, where a request's carry its whole parameters but for the system,
+	// the tools and the messages.
 	ctRequest = `{"type":"api-request","sessionId":"` + ctSession + `","id":"` + ctUUID(900) + `","timestamp":"` +
 		ctStamp + `","version":"2.1.310","querySource":"sdk","shapeHash":"5a5a5a5a","params":{"model":` +
 		`"claude-sonnet-4-5","max_tokens":32000},"base":"` + ctUUID(901) + `","keep":1,"tail":["b1b1b1b1"],` +
 		`"cacheControl":[{"path":["system",0],"value":{"type":"ephemeral"}}],"requestDigest":"d1d1d1d1"}`
 	ctLastPrompt = `{"type":"last-prompt","lastPrompt":"the brief","leafUuid":"` + ctUUID(5) + `","sessionId":"` +
 		ctSession + `"}`
+	// ctCostState is abridged: its modelUsage holds three of the counts a
+	// model's carries.
 	ctCostState = `{"type":"cost-state","sessionId":"` + ctSession + `","totalCostUSD":0.0036,"totalAPIDuration":118,` +
 		`"totalAPIDurationWithoutRetries":110,"totalToolDuration":61,"totalLinesAdded":0,"totalLinesRemoved":0,` +
 		`"totalDuration":21173,"startTime":1767323045000,"modelUsage":{"claude-sonnet-4-5":{"inputTokens":600,` +
@@ -113,7 +120,9 @@ const (
 		`\n</system-reminder>"}],"renderedRole":"system",`
 )
 
-// ctAssistant is a model's message whose content is content.
+// ctAssistant is a model's message whose content is content, abridged: its
+// usage holds the four counts alone, and it carries no stop_details, which
+// 2.1.310 writes after its usage, null.
 func ctAssistant(parent, uuid, content string) string {
 	return `{"parentUuid":` + ctParent(parent) + `,"isSidechain":false,"message":{"id":"msg_test","type":"message",` +
 		`"role":"assistant","model":"claude-sonnet-4-5","content":` + content + `,"stop_reason":"tool_use",` +
@@ -124,7 +133,9 @@ func ctAssistant(parent, uuid, content string) string {
 }
 
 // ctResult is the user record answering a call: content its message's, result
-// the record's own toolUseResult.
+// the record's own toolUseResult. Abridged: it carries no record-level
+// sandboxed, which 2.1.310 writes after the toolUseResult of a shell command's
+// result.
 func ctResult(parent, uuid, content, result string) string {
 	return `{"parentUuid":` + ctParent(parent) + `,"isSidechain":false,"promptId":"` + ctPrompt + `","type":"user",` +
 		`"message":{"role":"user","content":` + content + `},"uuid":"` + uuid + `","timestamp":"` + ctStamp +
@@ -205,9 +216,12 @@ func ctSummary(parent, uuid string) string {
 		`"timestamp":"` + ctStamp + `","uuid":"` + uuid + `","toolUseID":"` + ctStopFire + `",` + ctTail("2.1.310") + `}`
 }
 
-// ctMain is a main thread as 2.1.310 writes one, line by line: a batch whose
-// hook took a note, an MCP call whose batch's hook timed out, and a Stop that
-// took one.
+// ctMain is a main thread as 2.1.310 writes one, line by line, abridged: a
+// batch whose hook took a note, an MCP call whose batch's hook timed out, and
+// a Stop that took one, which 2.1.310 follows with the request and the reply
+// that answer the Stop's note and a second Stop that takes none, left out
+// here; and at its end, the tools-used record 2.1.322 writes beside the cost
+// state, which 2.1.310 never writes.
 var ctMain = []string{
 	ctEnqueue, // 1
 	ctDequeue, // 2
@@ -275,8 +289,9 @@ const ctMeta = `{"agentType":"general-purpose","isBuiltIn":true,"description":"t
 	`"toolUseId":"toolu_test_agent","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true,` +
 	`"finished":true}`
 
-// ctSkillHook is a skill's PostToolUse hook's success, as 2.1.118 records it:
-// its firing is the id of the call it followed.
+// ctSkillHook is a skill's PostToolUse hook's success, as 2.1.118 records it,
+// and 2.1.310 with the same keys: its firing is the id of the call it
+// followed.
 func ctSkillHook(parent, uuid string) string {
 	return `{"parentUuid":"` + parent + `","isSidechain":false,"attachment":{"type":"hook_success","hookName":` +
 		`"PostToolUse:Skill","toolUseID":"` + ctSkillCall + `","hookEvent":"PostToolUse","content":` +
