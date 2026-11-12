@@ -3,6 +3,8 @@ package prompts
 import (
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // A SESSION IS TOLD WHAT CAME AFTER ITS SAVE WHERE ANYTHING DID. The section a
@@ -147,6 +149,134 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 	}
 	if !strings.Contains(lateSubmission, "does NOT stand") {
 		t.Errorf("the line under a late submission does not say it does not stand: %q", lateSubmission)
+	}
+}
+
+// AN EARLIER SUBMISSION IS SAID UNDER THE CALLS IT IS AMONG. Every call a
+// continuation lists after its save, or since the newest point a session cut
+// off is known to hold, was made before the relaunch whose brief lists it, so
+// a successful `submit_work` among them is no submission of the work: the line
+// saying so, and that the run makes its own, follows the list it speaks of,
+// once, before the count of calls dropped after that point and its tally,
+// under either heading. A list holding none is told no such line, and nor is
+// a section that lists no call, whose count and tally name no call it could
+// be among. A late submission beside it keeps its own line, in the late calls'
+// section, so each is said once, in words true of it.
+//
+// Mutation: drop the line, say it where no submission is among the calls or
+// where none is listed, put it after the count or the tally, or say it in the
+// late calls' section, and a case goes red.
+func TestAnEarlierSubmissionIsSaidUnderTheCallsItIsAmong(t *testing.T) {
+	t.Parallel()
+	const (
+		listed = "- submit_work({\"outcome\":\"delivered\"}) → success\n" +
+			"- slack_post({\"text\":\"after the save\"}) → success"
+		late  = "- submit_work({\"outcome\":\"delivered\"}) → success"
+		tally = "- (+150 further call(s) the run made, which its record did not keep: slack_post ×150)"
+	)
+	for _, interrupted := range []bool{false, true} {
+		header := calledAfterHeader
+		if interrupted {
+			header = calledSinceHeader
+		}
+		got := CalledAfter(AfterSave{Calls: listed, EarlierSubmission: true, Dropped: 40, Tally: tally,
+			Interrupted: interrupted})
+		want := header + "\n" + listed + "\n" + earlierSubmission + "\n" + droppedAfter(40, interrupted) + "\n" + tally
+		if got != want {
+			t.Errorf("a session (cut off: %v) whose calls hold a submission is told:\n%s\nwant:\n%s", interrupted,
+				got, want)
+		}
+	}
+	if got := CalledAfter(AfterSave{Calls: listed, Dropped: 40, Tally: tally}); strings.Contains(got,
+		earlierSubmission) {
+		t.Errorf("a session whose calls hold no successful submission is told one does not stand:\n%s", got)
+	}
+	if got := CalledAfter(AfterSave{EarlierSubmission: true, Dropped: 40, Tally: tally}); strings.Contains(got,
+		earlierSubmission) {
+		t.Errorf("a section that lists no call is told a submission among them does not stand:\n%s", got)
+	}
+	got := CalledAfter(AfterSave{Calls: listed, EarlierSubmission: true, Late: late, LateSubmission: true})
+	if want := calledAfterHeader + "\n" + listed + "\n" + earlierSubmission + "\n\n" + lateCallsHeader + "\n" +
+		late + "\n" + lateSubmission; got != want {
+		t.Errorf("a submission after the save beside a late one is told:\n%s\nwant:\n%s", got, want)
+	}
+	for _, said := range []string{"does NOT stand as this work's submission", "the work was carried on after it",
+		"call `" + toolname.SubmitWork + "` yourself"} {
+		if !strings.Contains(earlierSubmission, said) {
+			t.Errorf("the line under an earlier submission does not say %q: %q", said, earlierSubmission)
+		}
+	}
+	if strings.Contains(earlierSubmission, "stopped waiting") {
+		t.Errorf("the line under an earlier submission says its run stopped waiting for it, which only a late "+
+			"one's run did: %q", earlierSubmission)
+	}
+}
+
+// A HELD SUBMISSION IS SAID FIRST, WHETHER OR NOT A CALL IS LISTED. A session
+// saved past its own successful `submit_work`, or the copy in its job's box
+// whose harness ended its own run, shows the call answered and lists it
+// nowhere, and it stands no more than a listed one: the line saying so, and
+// that the run makes its own, comes before every section, in words of the
+// session above rather than of a list, once. It is said where no call is
+// listed at all, as to the copy of a job that submitted and then asked, whose
+// brief otherwise is the answer's lead alone; and beside a listed submission
+// and a late one, each keeps its own line under its own list. Without the flag
+// nothing is said of it.
+//
+// Mutation: drop the line, say it only where a call is listed, say it after
+// the sections, or say it without the flag, and a case goes red.
+func TestAHeldSubmissionIsSaidFirstWhetherOrNotACallIsListed(t *testing.T) {
+	t.Parallel()
+	const (
+		listed = "- submit_work({\"outcome\":\"delivered\"}) → success\n" +
+			"- slack_post({\"text\":\"after the save\"}) → success"
+		late  = "- submit_work({\"outcome\":\"blocked\"}) → success"
+		tally = "- (+150 further call(s) the run made, which its record did not keep: slack_post ×150)"
+	)
+	if got := CalledAfter(AfterSave{HeldSubmission: true}); got != heldSubmission {
+		t.Errorf("a session holding a submission, with no call to tell, is told:\n%s\nwant:\n%s", got,
+			heldSubmission)
+	}
+	if got, want := CalledAfter(AfterSave{HeldSubmission: true, Late: late, LateSubmission: true}),
+		heldSubmission+"\n\n"+lateCallsHeader+"\n"+late+"\n"+lateSubmission; got != want {
+		t.Errorf("a session holding a submission, told late calls alone, is told:\n%s\nwant:\n%s", got, want)
+	}
+	for _, interrupted := range []bool{false, true} {
+		header := calledAfterHeader
+		if interrupted {
+			header = calledSinceHeader
+		}
+		got := CalledAfter(AfterSave{HeldSubmission: true, Calls: listed, EarlierSubmission: true, Dropped: 40,
+			Tally: tally, Interrupted: interrupted, Late: late, LateSubmission: true})
+		want := heldSubmission + "\n\n" + header + "\n" + listed + "\n" + earlierSubmission + "\n" +
+			droppedAfter(40, interrupted) + "\n" + tally + "\n\n" + lateCallsHeader + "\n" + late + "\n" +
+			lateSubmission
+		if got != want {
+			t.Errorf("a session (cut off: %v) holding a submission beside listed and late ones is told:\n%s\n"+
+				"want:\n%s", interrupted, got, want)
+		}
+		if got, want := CalledAfter(AfterSave{HeldSubmission: true, Dropped: 40, Tally: tally,
+			Interrupted: interrupted}), heldSubmission+"\n\n"+header+"\n"+droppedAfter(40, interrupted)+"\n"+
+			tally; got != want {
+			t.Errorf("a session (cut off: %v) holding a submission, told only a count of calls, is told:\n%s\n"+
+				"want:\n%s", interrupted, got, want)
+		}
+	}
+	if got := CalledAfter(AfterSave{Calls: listed, EarlierSubmission: true, Dropped: 40, Tally: tally,
+		Late: late, LateSubmission: true}); strings.Contains(got, heldSubmission) {
+		t.Errorf("a session that holds no submission is told one it shows does not stand:\n%s", got)
+	}
+	for _, said := range []string{"the session above shows", "does NOT stand as this work's submission",
+		"the work was carried on after it", "call `" + toolname.SubmitWork + "` yourself"} {
+		if !strings.Contains(heldSubmission, said) {
+			t.Errorf("the line on a held submission does not say %q: %q", said, heldSubmission)
+		}
+	}
+	for _, unsaid := range []string{"among them", "stopped waiting"} {
+		if strings.Contains(heldSubmission, unsaid) {
+			t.Errorf("the line on a held submission says %q, words true only of a listed or a late one: %q", unsaid,
+				heldSubmission)
+		}
 	}
 }
 

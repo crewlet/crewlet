@@ -188,15 +188,73 @@ const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stan
 	" the run that made it had stopped waiting for it before it returned. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."
 
+// earlierSubmission tells a run that a successful `submit_work` among the calls
+// listed before it, under [calledAfterHeader] or [calledSinceHeader], is no
+// submission of the work it carries on. Every call a brief tells was made
+// before the relaunch whose brief tells it, and none of those is the work's
+// submission (internal/agent/runner's sinceAnswer and carriedRound): the
+// collection takes a submission only from the calls made after the round's
+// last answer, so one made before a run's question, or before an earlier
+// answer, is not the round's; a round lost, or refused on a replaced sign-in,
+// whose calls since that answer hold one is collected on it, never carried
+// on, so a brief carrying such a round on tells only one made before that
+// answer; and a send-back's continuation can tell the submission its review
+// sent back. Told as `→ success` with no such word, it read as the work's: a
+// run that took it for done could end without its own, and the work be
+// rescued as incomplete.
+const earlierSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's" +
+	" submission: the work was carried on after it. When your work is done, call `" + toolname.SubmitWork +
+	"` yourself."
+
+// heldSubmission tells a run that a successful `submit_work` of its round that
+// the session above shows, and that no list of the brief tells, is no
+// submission of the work it carries on ([AfterSave.HeldSubmission]). It stands
+// no more than a listed one ([earlierSubmission]), and for the same reason:
+// the session holding it was saved past it, or is the copy its job's own box
+// holds where that job's harness ended its own run, so it was made before the
+// relaunch whose brief continues that session. The commonest is a run that
+// submitted and then asked, which its gate allows: the copy in its box shows
+// the call answered "submitted", and the cut its answer's opening takes falls
+// past it (internal/agent/runner's sinceAnswer).
+//
+// SAID FIRST, WHETHER OR NOT A CALL IS LISTED, in words true of the session
+// rather than of a list. That copy is told no call at all, so its brief was the
+// answer's lead alone, which says to finish the task as it asks: a run that
+// read its transcript's submission as done ended without its own, and the work
+// was rescued as incomplete. Said under a list, as [earlierSubmission] is, it
+// would name a call that list does not hold.
+const heldSubmission = "A `" + toolname.SubmitWork + "` the session above shows does NOT stand as this" +
+	" work's submission: the work was carried on after it. When your work is done, call `" +
+	toolname.SubmitWork + "` yourself."
+
 // AfterSave is what a session's run did through the seat's tools after the
 // session was saved, as a run that continues the session is told it
 // ([CalledAfter]).
 type AfterSave struct {
+	// HeldSubmission says the session holds a successful `submit_work` of its
+	// round that no list tells: one its save point holds, or any but a late one
+	// or one nobody waited for in the copy its job's own box holds where that
+	// job's harness ended its own run. It is said first, whether or not a call
+	// is listed, as no submission of the work ([heldSubmission]). Set only by
+	// the round's own calls, so never by one the session holds from an earlier
+	// turn, as the session its conversation's last turn left holds that turn's;
+	// and never for one among Calls, which EarlierSubmission says, nor among
+	// Late, which LateSubmission says.
+	HeldSubmission bool
+
 	// Calls are the calls its round's record still lists that came after the
 	// save, as the prior-work ledger renders them within its budgets, under
 	// one read cap with Late's, spent on Late first (ledger.FormatCallGroups),
 	// "" for none.
 	Calls string
+
+	// EarlierSubmission says a successful `submit_work` is among Calls, which
+	// is told after them as no submission of the work ([earlierSubmission]):
+	// every call a brief tells was made before the relaunch whose brief tells
+	// it, so none is the submission of the work that relaunch carries on.
+	// Never set for one among Late, which LateSubmission says in Late's own
+	// words.
+	EarlierSubmission bool
 
 	// Dropped is how many more calls the run made after the save that its
 	// record did not keep one by one, dropped from the middle of a long run's
@@ -262,9 +320,20 @@ type AfterSave struct {
 // and then, in a section of its own, the calls that finished only after the run
 // that made them stopped waiting for them ([AfterSave.Late]), and how many more
 // such calls the record dropped ([AfterSave.LateDropped]). "" where there is
-// none of either.
+// none of either and the session holds no submission of its round.
+//
+// A SUCCESSFUL SUBMISSION AMONG EITHER LIST is said to be none of the work's,
+// right after the list it is in and in words true of that list: the calls
+// after the save ([AfterSave.EarlierSubmission]) and the late ones
+// ([AfterSave.LateSubmission]). AND ONE THE SESSION HOLDS IS SAID FIRST
+// ([AfterSave.HeldSubmission]), before either section and where neither lists
+// a call: it is in no list, and the session that shows it is the one the
+// brief continues.
 func CalledAfter(after AfterSave) string {
 	var sections []string
+	if after.HeldSubmission {
+		sections = append(sections, heldSubmission)
+	}
 	if since := calledSince(after); since != "" {
 		sections = append(sections, since)
 	}
@@ -293,6 +362,11 @@ func CalledAfter(after AfterSave) string {
 // calledSince is [CalledAfter]'s section of the calls after the save — or,
 // of a session cut off, since the newest point it is known to hold — "" where
 // the record lists none and dropped none.
+//
+// A SUCCESSFUL SUBMISSION AMONG THE CALLS IS SAID NOT TO STAND right after
+// them ([AfterSave.EarlierSubmission]), before the count of calls dropped
+// after the save and its tally, which list none: the sentence speaks of the
+// calls listed above it, as [lateSubmission] follows the late calls.
 func calledSince(after AfterSave) string {
 	calls := strings.TrimSpace(after.Calls)
 	if calls == "" && after.Dropped <= 0 {
@@ -305,6 +379,9 @@ func calledSince(after AfterSave) string {
 	parts := []string{header}
 	if calls != "" {
 		parts = append(parts, calls)
+		if after.EarlierSubmission {
+			parts = append(parts, earlierSubmission)
+		}
 	}
 	if after.Dropped > 0 {
 		parts = append(parts, droppedAfter(after.Dropped, after.Interrupted))

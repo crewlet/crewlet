@@ -368,7 +368,9 @@ type Resume struct {
 	// [Runner.inPlaceNotes], [Runner.sessionDecided]): the safe direction for a
 	// word that never came.
 	// An own run's copy is told the calls the round's log took late alone,
-	// which it is not known to hold, and its guard counts none of their loads.
+	// which it is not known to hold, and its guard counts none of their loads;
+	// and it is told first that a successful submission among the calls it
+	// does hold is none of the round's ([Runner.calledAfter]).
 	HarnessEnd sandbox.HarnessEnd
 
 	// Answer is the run's closing text: what its harness said last, which the

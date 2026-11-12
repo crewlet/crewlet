@@ -313,3 +313,49 @@ func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 		}
 	}
 }
+
+// A LATE SUBMISSION IS TOLD ONCE, UNDER ITS OWN WORDS. A `submit_work` the
+// round's log took late is told in the late calls' section with the line that
+// it does not stand because the run that made it had stopped waiting for it.
+// The calls after the save beside it hold no submission, so their section
+// carries no line of its own: the session reads one line on one submission,
+// in words true of it, never a second saying the work was carried on after a
+// call that finished only once its run was replaced.
+//
+// Mutation: say a late submission among the calls after the save as well, and
+// the case goes red.
+func TestALateSubmissionIsToldOnceUnderItsOwnWords(t *testing.T) {
+	t.Parallel()
+	const (
+		lateHeading  = "## Calls that finished after the run that made them stopped waiting for them"
+		notStanding  = "does NOT stand as this work's submission"
+		lateWords    = "the run that made it had stopped waiting for it before it returned"
+		earlierWords = "the work was carried on after it"
+	)
+	late := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
+		Args:   map[string]any{"outcome": "delivered", "summary": "the late submission"},
+		Result: "submitted"}, Seq: 3, Appended: 3, Late: true}
+	brief := afterSaveBrief(t, 1, []runner.BridgedCall{
+		numbered("slack_post", map[string]any{"text": "held by the session"}, 1, 1),
+		numbered("jira_create", map[string]any{"summary": "the call after the save"}, 2, 2),
+		late,
+	}, nil)
+	since, apart, found := strings.Cut(brief, lateHeading)
+	if !found {
+		t.Fatalf("the late submission is not told apart, under the late calls' words:\n%s", brief)
+	}
+	if !strings.Contains(since, "the call after the save") {
+		t.Fatalf("the call after the save is not told before the late calls:\n%s", brief)
+	}
+	if strings.Contains(since, earlierWords) {
+		t.Errorf("the calls after the save, which hold no submission, are told one among them does not stand:\n%s",
+			brief)
+	}
+	if !strings.Contains(apart, "the late submission") || !strings.Contains(apart, lateWords) {
+		t.Errorf("the late submission is not told under the late calls' words, with the line that it does not "+
+			"stand:\n%s", brief)
+	}
+	if n := strings.Count(brief, notStanding); n != 1 {
+		t.Errorf("the session is told %d times that a submission does not stand, want once:\n%s", n, brief)
+	}
+}
