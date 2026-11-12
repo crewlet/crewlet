@@ -48,6 +48,18 @@ func (e *carriers) note(id string, f types.WrittenFor) {
 	e.asked[id] = f
 }
 
+// carrying reports whether any request e was asked was made for w.
+func (e *carriers) carrying(w *types.WorkingFor) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, f := range e.asked {
+		if reflect.DeepEqual(f.Carrier(), w) {
+			return true
+		}
+	}
+	return false
+}
+
 // of is whom the request under id was made for, and whether one was asked.
 func (e *carriers) of(id string) (types.WrittenFor, bool) {
 	e.mu.Lock()

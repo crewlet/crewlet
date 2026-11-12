@@ -825,8 +825,10 @@ func Catalogue() []Instrument {
 				"`unavailable` — which decided nothing; `handed_on`, one this " +
 				"node decided nothing of for a reason about itself (stopping, " +
 				"no chart to judge a seat by, behind the company's " +
-				"configuration), which the estate asks the repository's " +
-				"runner-up; and `failed`, any other error. `stale` climbing is " +
+				"configuration, a build that does not know a value whom the " +
+				"write is made for names), which the estate asks the " +
+				"repository's runner-up; and `failed`, any other error. " +
+				"`stale` climbing is " +
 				"askers writing against a change pushes keep moving; " +
 				"`handed_on` on one node and `applied` on another, a node that " +
 				"cannot judge its seats.",
@@ -1086,8 +1088,10 @@ func Catalogue() []Instrument {
 				"ask — which decided nothing; `handed_on`, one this node " +
 				"decided nothing of " +
 				"for a reason about itself (stopping, no chart to judge a seat " +
-				"or a reviewer by, behind the company's configuration), which " +
-				"the estate asks the repository's runner-up; and `failed`, any " +
+				"or a reviewer by, behind the company's configuration, a build " +
+				"that does not know a value whom the write is made for names), " +
+				"which the estate asks the repository's runner-up; and " +
+				"`failed`, any " +
 				"other error. `busy` climbing is a change written faster than " +
 				"one node writes it — its writes wait their turn one at a time " +
 				"— or one the change kept moving under for every round.",

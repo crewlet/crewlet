@@ -210,7 +210,7 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	}
 	ld, err := s.land(ctx, landing{
 		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: features.atomic,
-		PushOptions: options, Principal: sess.principal, WrittenFor: boxWrittenFor(sess.principal),
+		PushOptions: options, Principal: sess.principal, WrittenFor: sess.adm.writtenFor(),
 		Via: gitlet.ViaGit, PushID: sess.pushID, ReceivedAt: sess.receivedAt, Judged: sess.judged,
 		ForcedGrant: sess.adm.grant.RefRule, EngineCommitter: committer, Progress: sess.step,
 	})
@@ -255,22 +255,6 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		_ = fw.write(frameStderr, []byte("crewlet: "+line+"\n"))
 	}
 	_ = fw.write(frameExit, []byte{0})
-}
-
-// boxWrittenFor is whom a push git received is made for
-// (gitlet.Proposal.WrittenFor), by who pushes: a SEAT'S is its coding box's —
-// a seat's own writes are tool calls, which the engine builds — and its run's
-// row holds no carrier for its code writes (the box's BoxRun names a
-// colleague's ceiling alone, never whom the run's turn works for), so the
-// box's push is stated made for nobody (types.ForTurn of nil), the seat's own
-// work; a person's push is their own, and states nothing. ONE ANSWER for the
-// push's landing and for its measure before receive-pack runs
-// (commandsRefusal), so a push is measured carrying what it will carry.
-func boxWrittenFor(p gitlet.Principal) types.WrittenFor {
-	if p.Kind == gitlet.PrincipalAgent {
-		return types.ForTurn(nil)
-	}
-	return types.WrittenFor{}
 }
 
 // procFeatures are the features of git's proc-receive version block the relay

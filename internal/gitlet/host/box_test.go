@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -513,6 +514,118 @@ func TestABoxWorksForWhoeverWokeItsTurn(t *testing.T) {
 	resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(hidden), "", "")
 	if resp.StatusCode != http.StatusForbidden || !strings.Contains(answer, `seat "eve" holds no access`) {
 		t.Errorf("alice's box fetched a unit repository of ENG for eve: %d %q", resp.StatusCode, answer)
+	}
+}
+
+// A BOX PUSH CARRIES WHOM ITS RUN WORKS FOR (ADR-0109): a coding box's push is
+// its run's turn's write made late, so the Gitlet node hands its committer the
+// push made for whom the run's row says that turn works for
+// (host.BoxRun.WorkingFor) — a colleague's seat, a person's, a credential
+// acting as no seat with its apps — and the push lands carrying it, its entry
+// at the carrier's version; a run that works for its own seat pushes made for
+// nobody, and its entry carries nothing, at the base version.
+//
+// Mutation: the git push's landing stating nobody for a box — every push
+// reaches its committer, and lands, made for nobody, red.
+func TestABoxPushCarriesWhomItsRunWorksFor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		run  func(runs *gitlettest.FixtureRuns, ref host.BoxRunRef)
+		want *types.WorkingFor
+	}{
+		{"for a colleague's ask", func(runs *gitlettest.FixtureRuns, ref host.BoxRunRef) { runs.WorkFor(ref, "eve") },
+			&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "eve"}},
+		{"for a person's ask", func(runs *gitlettest.FixtureRuns, ref host.BoxRunRef) {
+			runs.MadeFor(ref, &types.WorkingFor{Kind: types.WorkingForSeat, Seat: gitlettest.FixturePat})
+		}, &types.WorkingFor{Kind: types.WorkingForSeat, Seat: gitlettest.FixturePat}},
+		{"for a credential's write", func(runs *gitlettest.FixtureRuns, ref host.BoxRunRef) {
+			runs.MadeFor(ref, &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+				Apps: []iam.Grant{iam.GrantWorklet, iam.GrantGitlet}})
+		}, &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+			Apps: []iam.Grant{iam.GrantWorklet, iam.GrantGitlet}}},
+		{"for its own seat", func(*gitlettest.FixtureRuns, host.BoxRunRef) {}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			asked, kept := &carriers{}, &applied{}
+			c, _ := boxCase(t, gitlettest.SoloOptions{
+				Roster: func() gitlet.Roster { return eveRoster{gitlettest.FixtureRoster()} },
+				Shape:  gitlettest.Shape{WrapEstate: asked.wrap}, WrapApplier: kept.wrap})
+			ref, box := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
+			tc.run(c.Fleet.Runs(), ref)
+			clone := box.Clone(c.BoxURL(0))
+			box.Commit(clone, map[string]string{"a.txt": "a\n"}, "a")
+			own := gitlet.SeatNamespace(gitlettest.FixtureAlice) + "carried"
+			if res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+own); res.Err != nil {
+				t.Fatalf("the box could not push its seat's own branch: %s", res)
+			}
+			var entry gitlet.PushEntry
+			rec, _, landed := kept.find(func(payload any) (*types.WorkingFor, bool) {
+				if b, ok := payload.(gitlet.PushBatch); ok {
+					for _, e := range b.Pushes {
+						if e.Principal.Seat == gitlettest.FixtureAlice {
+							entry = e
+							return e.WorkingFor, true
+						}
+					}
+				}
+				return nil, false
+			})
+			if !landed {
+				t.Fatal("no push of the box's landed")
+			}
+			version := 1
+			if tc.want != nil {
+				version = gitlet.WorkingForVersion
+			}
+			if !reflect.DeepEqual(entry.WorkingFor, tc.want) || rec.v != version {
+				t.Errorf("the box's push landed carrying %+v at version %d, want %+v at %d", entry.WorkingFor, rec.v,
+					tc.want, version)
+			}
+			got, ok := asked.of(entry.PushID)
+			if !ok || !got.Stated() || !reflect.DeepEqual(got.Carrier(), tc.want) {
+				t.Errorf("the box's push reached its committer made for %+v (stated %v, asked %v), want %+v",
+					got.Carrier(), got.Stated(), ok, tc.want)
+			}
+		})
+	}
+}
+
+// A BOX PUSH FOR A CARRIER ITS BUILD DOES NOT KNOW IS ASKED OF ITS COMMITTER
+// (ADR-0109's roll; git's Q-D): a run's row another build wrote may name, in
+// whom its turn works for, an app this build does not know. The Gitlet node's
+// own check of the push before its upload is this build's, which cannot judge
+// that app, so it asks the push's committer rather than refuse it: the push
+// reaches it made for the credential as the row names it, and the estate's
+// walk takes it to a data node of the build that knows the app, or answers that
+// the fleet's builds differ (internal/estate's
+// TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild). This
+// fleet's one data node is of this build, so nothing lands.
+//
+// Mutation: the landing refusing a carrier it cannot read before it asks — the
+// push is never asked of its committer, red.
+func TestABoxPushForACarrierItsBuildDoesNotKnowIsAskedOfItsCommitter(t *testing.T) {
+	t.Parallel()
+	asked := &carriers{}
+	c, _ := boxCase(t, gitlettest.SoloOptions{Shape: gitlettest.Shape{WrapEstate: asked.wrap}})
+	ref, box := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
+	ledger := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet, "ledger"}}
+	c.Fleet.Runs().MadeFor(ref, ledger)
+	clone := box.Clone(c.BoxURL(0))
+	box.Commit(clone, map[string]string{"a.txt": "a\n"}, "a")
+	own := gitlet.SeatNamespace(gitlettest.FixtureAlice) + "carried"
+	res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+own)
+	if _, refused := res.Rejected(own); !refused {
+		t.Errorf("a box's push for a credential naming an app no node here knows: %s, want it refused", res)
+	}
+	if !asked.carrying(ledger) {
+		t.Errorf("the box's push for a credential naming an app this build does not know was never asked of its "+
+			"committer: %s", res)
+	}
+	if _, landed := c.Rows().Refs[own]; landed {
+		t.Errorf("%s landed though no node of a build that knows its carrier served it", own)
 	}
 }
 
@@ -1313,7 +1426,8 @@ func TestNothingAfterAdmissionAsksWhichAdmitterRan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accessors := []string{"admitBox", "principal", "share", "refs", "boxFloor", "holdRefs", "resyncKey"}
+	accessors := []string{"admitBox", "principal", "writtenFor", "share", "refs", "boxFloor", "holdRefs",
+		"resyncKey"}
 	fset := token.NewFileSet()
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {

@@ -2,11 +2,14 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -34,11 +37,11 @@ import (
 // AN ASK OPENS ITS CHANGE ONCE A LAUNCH ([openOpID]): from the branch the
 // run's push record says it delivered, as the seat it ran for, carrying the
 // work item the run was charged to and naming the turn and the run that
-// opened it, held to the colleague whose ask woke the launching turn as the
-// box's pushes are ([openCeiling]) — the open a code_open_change of the same
-// turn would make, decided by the repository's committer at or past the read,
-// from its own chart. Asked again by a
-// retried collection, on this node or another, the open is the same
+// opened it, made for whom the launching turn works for and held to the
+// colleague whose ask woke it, as the box's pushes are ([openCeiling]) — the
+// open a code_open_change of the same turn would make, decided by the
+// repository's committer at or past the read, from its own chart. Asked again
+// by a retried collection, on this node or another, the open is the same
 // operation: the read finds the change it opened and names it opened, or the
 // operation ledger answers the record that landed.
 func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record sandbox.PushRecord,
@@ -234,21 +237,33 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 		item = &types.WorkItem{Backend: w.Backend, ID: gitlet.FitProvenance(w.ID), Key: gitlet.FitProvenance(w.Key),
 			Project: gitlet.FitProvenance(w.Project)}
 	}
-	// WHOM THE OPEN IS MADE FOR (gitlet.ChangeProposal.WrittenFor): the run's
-	// row holds no carrier for its code writes, its code ceiling naming a
-	// colleague seat alone, so the change its collection opens is stated made
-	// for nobody, the seat's own work — a carrier its committer holds to no
-	// ceiling, whichever the row names.
+	// WHOM THE OPEN IS MADE FOR (gitlet.ChangeProposal.WrittenFor): whom the
+	// launching turn works for, as the run's checkout composed it for the
+	// turn's own code writes and the row carries it
+	// (sandbox.PendingRun.CodeWorkingFor) — the open is that turn's write,
+	// made late — and nobody, the seat's own work, for a run that works for
+	// its seat or a row a build before the field wrote. As the row holds it,
+	// a value a newer build wrote included: the committer that decides the
+	// open holds it to its rule and its ceiling, and answers one naming what
+	// its build does not know as a node of another build, which the walk
+	// moves on from. Where every node the walk asks answers so — during a
+	// roll, committers of an older build, which do not declare whom a write
+	// is made for — the open ran nowhere ([unreadByItsBuild]).
 	res, err := reader.Change(ctx, gitlet.ChangeProposal{OpID: op,
 		Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: run.AgentHandle}, Seen: at,
-		Ceiling: openCeiling(run), WrittenFor: types.ForTurn(nil),
+		Ceiling: openCeiling(run), WrittenFor: types.ForTurn(run.CodeWorkingFor),
 		Open: &gitlet.ChangeOpen{RepoID: r.RepoID, ChangeID: id, SourceRef: branchRef(r.Branch),
 			TargetRef: r.Open.Target, Title: title, Draft: r.Open.Draft, WorkItem: item, TurnID: run.TurnID,
 			RunID: run.LaunchID}})
 	// THE FACT ALONE, never an instruction: the run's report is read by the
 	// reviewer as well as the seat, and a step it names ("read it with ...")
 	// would be the engine telling a phase that holds no such tool what to do.
+	// The one act a line here names is the open made again, and it says whose
+	// that is ([unopenedUnreadable]): the seat's, which the reviewer reads as
+	// a fact about the seat and the seat as its own.
 	switch {
+	case unreadByItsBuild(err):
+		out.Unopened = unopenedUnreadable
 	case err != nil:
 		out.Unopened = fmt.Sprintf("asking Gitlet to open it failed (%v), so whether it opened is unknown", err)
 	case res.Refusal != "":
@@ -265,10 +280,59 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 		out.Unopened = "whether Gitlet opened it is unknown"
 	}
 	if out.Unopened != "" {
-		log.WarnContext(ctx, "sandbox_change_unopened", "turn_id", run.TurnID, "launch_id", run.LaunchID,
-			"repo", r.Repo, "branch", r.Branch, "detail", out.Unopened)
+		attrs := []any{"turn_id", run.TurnID, "launch_id", run.LaunchID, "repo", r.Repo, "branch", r.Branch,
+			"detail", out.Unopened}
+		if err != nil {
+			// THE FAILURE IN ITS OWN WORDS, whatever the line says of it: the
+			// line of an open no node could read leaves them out, and the keys
+			// refused and the nodes that refused them are the operator's to
+			// read, beside the estate's instruction to finish the upgrade,
+			// which neither of the report's readers can follow.
+			attrs = append(attrs, "error", err.Error())
+		}
+		log.WarnContext(ctx, "sandbox_change_unopened", attrs...)
 	}
 	return out
+}
+
+// unopenedUnreadable is what became of an ask whose open no node the
+// estate's walk asked could read ([unreadByItsBuild]). DEFINITE, where an
+// open that may have run says whether it opened is unknown: nothing of the
+// open ran, so no change is open, and the commits the run pushed stay on its
+// branch for the seat to open again — its code_open_change, from the turn the
+// collection resumes, asks the same open of the repository's committer, which
+// a node of this build decides.
+//
+// NOT ASKED AGAIN within the collection, which holds the run's seat and its
+// box until the turn resumes: asked until a node of this build answered, the
+// open would hold them for as long as the roll lasts, which the collection
+// refuses a push record Gitlet cannot read for the same reason (the sandbox's
+// readPushes). Resumed at once, the run's reviewer reads that its work was
+// not proposed, and the seat opens it once a node of this build serves.
+const unopenedUnreadable = "the node that answered runs a build that cannot read the request, so nothing " +
+	"of the open ran; the commits the run pushed are kept, and the change is the seat's to open again with " +
+	builtin.CodeOpenChangeTool + ", which a node of this build answers"
+
+// unreadByItsBuild reports whether err is an open that RAN NOWHERE because no
+// node could read it: the estate's walk asked the repository's committer and
+// each runner-up after it, and found none to run it ([estate.ErrUnserved]),
+// one of them at least refusing it for a key its build does not declare
+// ([estate.ErrUnknownKeys], which wraps that walk) and none gone silent,
+// since a node never heard from may have run it. During a roll the nodes
+// refusing it are committers of an older build, which do not declare whom a
+// write is made for (args.written_for); for a carrier a newer build wrote on
+// the run's row, they are nodes of this build, which do not know a value it
+// names.
+//
+// AND NO OTHER FAILURE. A refusal of keys that wraps no walk speaks for one
+// node: an answer this node's build could not read is one, and the node that
+// gave it ran the open. A walk refused for anything but a build — every node
+// out of service or behind — names no build. And a node asked and never heard
+// from leaves the outcome unknown ([estate.ErrOutcomeUnknown]). Each keeps
+// the failure's own words.
+func unreadByItsBuild(err error) bool {
+	var unknown *estate.ErrUnknownKeys
+	return errors.As(err, &unknown) && unknown.Unserved != nil && !unknown.Unserved.Silent()
 }
 
 // openCeiling is whom the open a run asked for is made for (gitlet.WriteCeiling):

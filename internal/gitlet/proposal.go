@@ -189,6 +189,13 @@ const maxDetailBytes = MaxRefNameBytes + 64
 // [ErrInvalidProposal] and naming the field. The receiver forms proposals, so
 // a refusal here is the receiver's bug — never a client's push refused.
 //
+// BUT FIRST, A VALUE WHOM THE PUSH IS MADE FOR NAMES THAT THIS BUILD DOES NOT
+// KNOW, which is no receiver's bug — a coding box's run's row may hold one a
+// newer build wrote — and is answered as the proposal's decoder answers it on
+// the wire, never as ErrInvalidProposal, whatever else the proposal holds
+// ([unknownToThisBuild]): this build cannot judge the push at all, and a
+// committer of a build that knows the value does.
+//
 // A PACK'S SIZES MUST LAY OUT A BUNDLE: a row whose sizes describe no bundle
 // names an object no cache can install, so it is refused here, before it is
 // published, rather than by the first fetch. The applier does not check them
@@ -392,6 +399,11 @@ func ValidPushID(id string) bool {
 
 // validFields is every rule of [Proposal.Validate] but the record budget.
 func (p Proposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// push (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	if !ValidPushID(p.PushID) {
 		return fmt.Errorf("%w: push_id: %q is not a UUIDv7 in its canonical lowercase spelling",
 			ErrInvalidProposal, p.PushID)
@@ -477,7 +489,7 @@ func (p Proposal) validFields() error {
 	// WHOM IT IS MADE FOR, held to its pusher: a seat's push states it, and
 	// nobody else's carries anybody ([writtenForInvalid]).
 	if err := writtenForInvalid(p.Principal, p.WrittenFor); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		return refusedCarrier(ErrInvalidProposal, err)
 	}
 	if err := validCommands(p.Commands); err != nil {
 		return err

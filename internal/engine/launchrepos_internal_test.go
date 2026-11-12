@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -510,6 +511,68 @@ func TestARunChecksOutForWhoeverWokeItsTurn(t *testing.T) {
 	if row.ceiling != "" || row.repos[0].Access != sandbox.RepoWrite {
 		t.Errorf("a run the founder asked for is given %+v under ceiling %q, want main to write under none",
 			row.repos, row.ceiling)
+	}
+}
+
+// A RUN'S ROW CARRIES WHOM ITS TURN WORKS FOR TO ITS BOX AND ITS NEXT ROUND
+// (ADR-0109): a checkout writes on the job's row whom the turn works for, as
+// the turn's own code tools compose it (sandbox.PendingRun.CodeWorkingFor);
+// Gitlet's box admission reads it back with the run (boxRuns.Run), and every
+// push the box makes carries it; a round carried on is launched with it beside
+// the grants it keeps, and a fresh launch with none. A colleague's ask makes it
+// the colleague's seat, a person's the seat they hold.
+//
+// Mutations: the checkout's grant leaving it off — the row works for nobody,
+// red; boxRuns.Run not copying it — the box's run works for nobody, red;
+// carriedGrants leaving it behind — the round carried on works for nobody,
+// red.
+func TestARunsRowCarriesWhomItsTurnWorksForToItsBoxAndItsNextRound(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, requester string
+		want            *types.WorkingFor
+	}{
+		{"a colleague's ask", "designer", &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "designer"}},
+		{"a person's ask", "founder", &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}},
+		{"nobody's ask", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
+			rig.requesters = colleagues{}
+			rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany),
+				map[string]string{"refs/heads/main": mainHead})
+			turn := rig.turn(t, "swe", nil)
+			turn.Requester = tc.requester
+			row, err := rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "swe",
+				AgentID: "a-1", Role: "SWE", Harness: executor.ClaudeCodeName, Placement: string(rig.placement),
+				Reply: "tool", CreatedAt: time.Now().UTC()}, sandbox.Fence{})
+			if err != nil {
+				t.Fatalf("begin the launch: %v", err)
+			}
+			desk := runCheckouts{engine: rig.e, deps: rig.deps}
+			if got, err := desk.Checkout(ctx, turn, row.LaunchID, builtin.RepoRequest{Repo: "web"}); err != nil ||
+				got.Outcome != sandbox.GrantAdded {
+				t.Fatalf("the checkout of web answered %+v, %v; want it added", got, err)
+			}
+			stored, _, err := rig.pending.Get(ctx, turn.RunID)
+			if err != nil || !reflect.DeepEqual(stored.CodeWorkingFor, tc.want) {
+				t.Errorf("the row works for %+v (%v), want %+v", stored.CodeWorkingFor, err, tc.want)
+			}
+			run, found, err := boxRuns{pending: rig.pending, log: slog.Default()}.Run(ctx, turn.RunID)
+			if err != nil || !found || !reflect.DeepEqual(run.WorkingFor, tc.want) {
+				t.Errorf("the box's run works for %+v (%v, %v), want %+v", run.WorkingFor, found, err, tc.want)
+			}
+			carried, err := carriedGrants(ctx, rig.pending, turn.RunID, true)
+			if err != nil || !reflect.DeepEqual(carried.CodeWorkingFor, tc.want) {
+				t.Errorf("a round carried on works for %+v (%v), want %+v", carried.CodeWorkingFor, err, tc.want)
+			}
+			if fresh, err := carriedGrants(ctx, rig.pending, turn.RunID, false); err != nil ||
+				fresh.CodeWorkingFor != nil {
+				t.Errorf("a fresh launch works for %+v (%v), want nobody until its checkout", fresh.CodeWorkingFor, err)
+			}
+		})
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -18,8 +19,8 @@ import (
 // (ADR-0093): its grants, the code floor they were read at, the
 // engine's steps giving the box each one — the client-floor check, then one
 // clone each, then, in a cell whose boxes own their kernel, git's file-system
-// monitor ([sandbox.CodingSteps]) — and the colleague whose grant bounds the
-// box. Empty for a request naming none.
+// monitor ([sandbox.CodingSteps]) — the colleague whose grant bounds the
+// box, and whom its turn works for. Empty for a request naming none.
 type launchRepos struct {
 	repos []sandbox.RunRepo
 	// heads are where each grant's branch stood as the resolution read it,
@@ -32,6 +33,11 @@ type launchRepos struct {
 	// bounds the box's on every repository (builtin.RunRepos.Ceiling); "" for
 	// none.
 	ceiling string
+	// workingFor is whom the turn works for, as its own code writes carry it
+	// (builtin.RunRepos.WorkingFor): what the box pushes, and the change the
+	// run's collection opens, are the turn's writes made late, and carry it
+	// too. Nil for a turn that works for its own seat.
+	workingFor *types.WorkingFor
 }
 
 // resolveRunRepos resolves the repositories an executor of turn t checks out
@@ -51,7 +57,11 @@ type launchRepos struct {
 //
 // A turn a colleague seat woke names that seat on the run's row
 // ([sandbox.RepoGrant.Ceiling]), and Gitlet's box admission holds the
-// box to its grant as well as to the seat's.
+// box to its grant as well as to the seat's. And whom the turn works for —
+// that colleague, a person, a credential acting as no seat, or nobody — goes on
+// the row beside it ([sandbox.RepoGrant.WorkingFor]), as the resolution
+// composed it for the turn's own code writes, never derived again from the
+// row: what the box pushes and the change the run's collection opens carry it.
 //
 // deps are the code tools' seams on this node — [CodeToolDeps] in a running
 // engine, read by the caller at the checkout rather than held, so a checkout
@@ -111,7 +121,7 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 		return launchRepos{}, fmt.Errorf("engine: %w", err)
 	}
 	return launchRepos{repos: resolved.Repos, heads: resolved.Heads, floor: resolved.Floor,
-		ceiling: resolved.Ceiling, clone: clone}, nil
+		ceiling: resolved.Ceiling, workingFor: resolved.WorkingFor, clone: clone}, nil
 }
 
 // runCheckouts is where `code_checkout` gives a running job a repository
@@ -173,7 +183,8 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 		return floor.String(), true
 	}
 	granted, outcome, err := rt.pending.GrantRepo(ctx, turn.RunID, launch, sandbox.RepoGrant{
-		Repo: resolved.repos[0], Floor: floor.String(), Ceiling: resolved.ceiling, Raise: raise,
+		Repo: resolved.repos[0], Floor: floor.String(), Ceiling: resolved.ceiling, WorkingFor: resolved.workingFor,
+		Raise: raise,
 	})
 	if err != nil {
 		return builtin.Checkout{}, err
@@ -218,11 +229,13 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 }
 
 // runGrants are the checkouts a launch carries onto its job's row: the
-// repositories, the floor they were read at and the colleague who bounds them.
+// repositories, the floor they were read at, the colleague who bounds them and
+// whom the turn works for, which the box's pushes carry.
 type runGrants struct {
-	Repos       []sandbox.RunRepo
-	CodeFloor   string
-	CodeCeiling string
+	Repos          []sandbox.RunRepo
+	CodeFloor      string
+	CodeCeiling    string
+	CodeWorkingFor *types.WorkingFor
 }
 
 // carriedGrants are the grants a launch of turn turnID opens its job with:
@@ -245,5 +258,6 @@ func carriedGrants(ctx context.Context, pending sandbox.PendingStore, turnID str
 	case !found || len(run.Repos) == 0:
 		return runGrants{}, nil
 	}
-	return runGrants{Repos: run.Repos, CodeFloor: run.CodeFloor, CodeCeiling: run.CodeCeiling}, nil
+	return runGrants{Repos: run.Repos, CodeFloor: run.CodeFloor, CodeCeiling: run.CodeCeiling,
+		CodeWorkingFor: run.CodeWorkingFor}, nil
 }

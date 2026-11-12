@@ -595,12 +595,12 @@ func (w *ChangeWriter) count(cw ConversationWrite, res ConversationResult, err e
 // conversationOutcome is what became of a write of a change's conversation, as
 // crewlet.code.conversation.writes names it: `handed_on` for one this node
 // decided nothing of about itself, which the router asks the repository's
-// runner-up; `failed` for any other error; the refusal's own code; `unchanged`
-// for one answered from the rows with no record; and otherwise its outcome —
-// applied, pending or unknown.
+// runner-up ([handedOn]); `failed` for any other error; the refusal's own
+// code; `unchanged` for one answered from the rows with no record; and
+// otherwise its outcome — applied, pending or unknown.
 func conversationOutcome(res ConversationResult, err error) string {
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		return "handed_on"
 	case err != nil:
 		return "failed"

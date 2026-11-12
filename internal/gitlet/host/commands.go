@@ -264,9 +264,8 @@ func commandsRefusal(adm admission, node string, sec section, pre map[string]ans
 		}
 	}
 	// MEASURED AS IT WILL BE PROPOSED: its principal, and whom it is made
-	// for, which its committer stamps on a seat's entry (boxWrittenFor).
-	principal := adm.principal()
-	err := gitlet.Proposal{Principal: principal, WrittenFor: boxWrittenFor(principal), Via: gitlet.ViaGit,
+	// for, which its committer stamps on a seat's entry (admission.writtenFor).
+	err := gitlet.Proposal{Principal: adm.principal(), WrittenFor: adm.writtenFor(), Via: gitlet.ViaGit,
 		Node: node, Commands: cmds}.ValidateCommands()
 	var wide *gitlet.TooWideError
 	switch {

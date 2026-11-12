@@ -174,8 +174,15 @@ func checkoutAnswer(req RepoRequest, got Checkout) tools.Result {
 	case sandbox.GrantAdded, sandbox.GrantHeld:
 	case sandbox.GrantConflict:
 		if r.RepoID == "" {
-			return refused(tools.RefusalConflict, fmt.Sprintf("%s: this run works for one requester, and "+
-				"its repositories were checked out for another: nothing was checked out.", tool))
+			// ONE RUN WORKS FOR ONE REQUESTER, nobody among them: a run whose
+			// grants were taken for nobody — a turn for its own seat's, or
+			// one a build before the carrier launched — is never used for
+			// somebody, so the seat is told what it can do instead.
+			return refused(tools.RefusalConflict, fmt.Sprintf("%s: this run's repositories were checked out "+
+				"for nobody, or for another requester than this turn works for, and one run works for one "+
+				"requester, so nothing was checked out, not even a repository it has already. Work on what "+
+				"its box holds, or end the run: a turn working for somebody starts a new run, whose "+
+				"checkouts are made for them.", tool))
 		}
 		return refused(tools.RefusalConflict, fmt.Sprintf("%s: this run has %s checked out already, on "+
 			"branch %s to %s: one run works on one branch of a repository. Name that branch and access, or "+

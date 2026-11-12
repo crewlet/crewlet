@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -50,6 +51,21 @@ import (
 // fleet's builds differ, with nothing written: what an older node does with a
 // request carrying written_for at all. It is never refused as malformed, which
 // would end the walk and tell a newer build's valid request it is.
+//
+// AND THE SAME IN PROCESS, where nothing decodes the request: its Validate
+// meets the carrier's values FIRST, before any other rule of the request, as
+// its decoder refuses one on the wire before any rule runs, and answers one
+// this build does not know with the same refusal — whatever else the request
+// holds, since this build cannot judge such a request at all: a node of a
+// build that knows the value gives the answer, a refusal as malformed
+// included. No node of this build classes that refusal malformed, the rule
+// itself included wherever it meets one ([writtenForInvalid],
+// [refusedCarrier]). So the estate's walk moves on from this node's own copy
+// as from a peer that refused the request unread (internal/estate's
+// unreadHere). A carrier read from a stored row — a run's, which another build
+// may have written — is in this as one off the wire: a box's push and a run's
+// open carry it as the row holds it, and reach a node of the build that wrote
+// it where one serves.
 //
 // NO ENCODER OF ITS OWN: what crosses is the plain encoding of each request's
 // fields under the caller's options, which every gate over what an operation
@@ -138,7 +154,7 @@ func (p *Proposal) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 // read or built (internal/gitlet/host), as Validate asks the rest everywhere.
 func (w EngineWrite) WrittenForOn(roster Roster) error {
 	if err := writtenForUnder(w.Principal, w.WrittenFor, w.Ceiling, roster); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
+		return refusedCarrier(ErrInvalid, err)
 	}
 	return nil
 }
@@ -152,7 +168,11 @@ func (w EngineWrite) WrittenForOn(roster Roster) error {
 //
 // THE ONE PLACE THIS BUILD DECIDES WHETHER IT KNOWS WHAT A CARRIER NAMES, its
 // kind and each app alike: every request a code write forms asks it as it
-// decodes itself, so no request and no value is answered otherwise.
+// decodes itself, and its Validate asks it again FIRST, before any other rule
+// of the request — the request handed over in process, which nothing decoded,
+// among them — as the rule every holder holds the carrier to asks it first
+// ([writtenForInvalid]), so no request and no value is answered otherwise on
+// either path, whatever else the request holds.
 //
 // THE DECODER'S OWN REFUSAL OF A NAME ITS BUILD DOES NOT DECLARE
 // (jsonv2.ErrUnknownName), which the estate's wire makes of a member, and so the
@@ -187,6 +207,51 @@ func unknownToThisBuild(at jsontext.Pointer, f types.WrittenFor) error {
 	}
 	return nil
 }
+
+// writtenForAt is where every request a code write forms holds whom it is
+// made for, from the request itself: its written_for member, where its own
+// decoder names a value of the carrier that this build does not know, and so
+// where its Validate names one in process ([writtenForInvalid]).
+var writtenForAt = jsontext.Pointer("").AppendToken("written_for")
+
+// refusedCarrier is err — why a request may not state whom it is made for
+// ([writtenForInvalid], [writtenForUnder]) — as the request's own refusal
+// answers it: wrapped in invalid, naming the field, where the carrier breaks
+// the rule, which is its sender's bug or, where the deciding chart alone
+// refuses it ([ChartRefusal], kept in the chain), a chart that moved under
+// the turn; and AS IT IS where the carrier names a value this build does not
+// know ([unknownToThisBuild]), which is no sender's bug but a newer build's
+// request, so never classed malformed: whoever holds it reads the decoder's
+// own refusal of a name the build does not declare, as off the wire, and the
+// estate's walk asks a node that knows it.
+func refusedCarrier(invalid, err error) error {
+	if IsUnknownToThisBuild(err) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", invalid, err)
+}
+
+// IsUnknownToThisBuild reports whether err is a request's refusal of a value its
+// carrier names that this build does not know ([unknownToThisBuild]) — the
+// decoder's own refusal of a name the build does not declare, by the
+// request's decoder on the wire or by its Validate in process — and so no
+// refusal of the request as malformed: a node of a build that knows the value
+// decides it. Exported for the Gitlet node's landing, whose own check of a
+// push's proposal before its upload is this build's, and which asks the
+// push's committer such a proposal rather than refuse it
+// (internal/gitlet/host's land.go).
+func IsUnknownToThisBuild(err error) bool {
+	var semantic *jsonv2.SemanticError
+	return errors.As(err, &semantic) && errors.Is(err, jsonv2.ErrUnknownName)
+}
+
+// handedOn reports whether err is a proposal this node decided nothing of for a
+// reason about itself, which the estate asks the repository's runner-up: a
+// node that does not serve it now ([ErrNotServing]), and one whose build does
+// not know a value whom it is made for names ([IsUnknownToThisBuild]) — the
+// `handed_on` its committer's and its change writer's counters say of it,
+// never `failed`.
+func handedOn(err error) bool { return errors.Is(err, ErrNotServing) || IsUnknownToThisBuild(err) }
 
 // WHOM A CODE WRITE WAS MADE FOR, AS A ROW KEEPS IT (ADR-0109, the replicated
 // migration a_code_row_keeps_whom_an_agents_write_was_made_for): a revision's

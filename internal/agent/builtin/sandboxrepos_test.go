@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -164,6 +165,51 @@ func TestARunsPushesAreDecidedForWhoeverWokeItsTurn(t *testing.T) {
 			if len(got.Repos) != 1 || got.Repos[0].Access != c.access || got.Ceiling != c.ceiling {
 				t.Errorf("the run is given %+v under ceiling %q, want %s under %q", got.Repos, got.Ceiling,
 					c.access, c.ceiling)
+			}
+		})
+	}
+}
+
+// A RUN'S CHECKOUT CARRIES WHOM ITS TURN WORKS FOR (ADR-0109): what the box
+// pushes, and the change the run's collection opens, are the turn's writes
+// made late, so the run's grants carry whom the turn works for as every code
+// write the turn's own tools make states it — the carrier composed from the
+// turn's own ceiling, never one derived again from its requester: a colleague's
+// seat for a colleague's ask, the seat a person holds for theirs, a credential
+// acting as no seat with the apps its writes carried and this node holds it
+// to, and nobody for a turn nobody woke.
+//
+// Mutation: ResolveRunRepos leaving the carrier off — every row but nobody's,
+// red.
+func TestARunsCheckoutCarriesWhomItsTurnWorksFor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		woke func(turn *turnctx.Turn)
+		want *types.WorkingFor
+	}{
+		{"a colleague's ask", func(turn *turnctx.Turn) { turn.Requester = "agent-ceo" },
+			&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "agent-ceo"}},
+		{"a person's ask", func(turn *turnctx.Turn) { turn.Requester = "founder" },
+			&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}},
+		{"a credential's write", func(turn *turnctx.Turn) {
+			turn.RequesterLogin, turn.RequesterApps = "token:ci", []iam.Grant{iam.GrantGitlet, iam.GrantWorklet}
+		}, &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+			Apps: iam.AppsOf([]iam.Grant{iam.GrantGitlet, iam.GrantWorklet})}},
+		{"nobody", func(*turnctx.Turn) {}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			turn := launchTurn(t)
+			tc.woke(turn)
+			got, err := codeDeps(newGitletHost()).ResolveRunRepos(t.Context(), turn,
+				[]builtin.RepoRequest{{Repo: "site", Access: "read"}}, maintains)
+			if err != nil {
+				t.Fatalf("ResolveRunRepos: %v", err)
+			}
+			if !reflect.DeepEqual(got.WorkingFor, tc.want) {
+				t.Errorf("a turn woken by %s checked out a run working for %+v, want %+v", tc.name, got.WorkingFor,
+					tc.want)
 			}
 		})
 	}

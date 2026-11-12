@@ -1,6 +1,7 @@
 package estate
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -1206,6 +1207,223 @@ func TestACodeWriteMovesOffANodeThatDoesNotKnowItsCarriersKind(t *testing.T) {
 		})
 }
 
+// AN IN-PROCESS COMMITTER ANSWERS A STORED CARRIER'S UNKNOWN APP AS A NODE OF
+// ANOTHER BUILD (ADR-0109's roll). A carrier read from a stored row — a run's,
+// whose box's pushes and whose collection's open carry it — is one off the
+// wire in this: another build may have written it, naming an app this build
+// does not know. Handed to this node's own committer in process, where nothing
+// decodes the request, its Validate meets the app before anything else of the
+// carrier and answers it as the request's decoder answers it off the wire: a
+// name the build does not declare, never a request malformed. So the walk
+// moves on from this node's own copy, as from a peer that refused the request
+// unread, and the repository's runner-up — of the build that knows the app —
+// decides the push and the change's write carrying it, nothing appended here;
+// and where no node knows it, the caller is told that nothing ran and that the
+// fleet's builds differ (the tool's fleet_builds_differ), naming
+// args.written_for.apps[] and both nodes.
+//
+// Mutations: the in-process Validate refusing the app as malformed — each
+// write's walk ends at this node, red; the walk taking this node's refusal of a
+// value its build does not know for its answer — likewise, red.
+func TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild(t *testing.T) {
+	t.Parallel()
+	if laterApp.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a name it does not", laterApp)
+	}
+	inProcessWalksPastWhatItDoesNotKnow(t, &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet, laterApp}}, "args.written_for.apps[]")
+}
+
+// AN IN-PROCESS COMMITTER ANSWERS A STORED CARRIER'S UNKNOWN KIND AS A NODE OF
+// ANOTHER BUILD (ADR-0109's roll): as for an app
+// (TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild), so
+// for a carrier of a kind this build does not know — one place decides both
+// (gitlet's unknownToThisBuild), on the wire and in process alike. Its
+// committer here answers it as a name the build does not declare, the walk asks
+// the runner-up, of the build that knows the kind, which decides both writes;
+// and where no node knows it, the caller is told that the fleet's builds
+// differ, naming args.written_for.kind.
+//
+// Mutation: the in-process Validate refusing the kind as malformed — each
+// write's walk ends at this node, red.
+func TestAnInProcessCommitterAnswersAStoredCarriersUnknownKindAsAnotherBuild(t *testing.T) {
+	t.Parallel()
+	if laterKind.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a kind it does not", laterKind)
+	}
+	inProcessWalksPastWhatItDoesNotKnow(t, &types.WorkingFor{Kind: laterKind, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet}}, "args.written_for.kind")
+}
+
+// A GITLET NODE ASKED IN PROCESS ANSWERS A CARRIER'S UNKNOWN APP AS A NODE OF
+// ANOTHER BUILD (ADR-0109's roll): the one rule holds on the git walk too. An
+// engine write whose carrier names an app this build does not know is carried
+// by the router that asks it rather than refused there, since a node of the
+// build that knows the app builds it; asked of the repository's home Gitlet
+// node in process, it is refused by its Validate as its decoder refuses it off
+// the wire, a name the build does not declare; the walk moves on from that
+// node — and passes the fill on, as after a peer's refusal unread — to the
+// next Gitlet node, of the build that knows the app, which builds it; and
+// where none knows it, the caller is told that the fleet's builds differ,
+// naming args.written_for.apps[] and both nodes.
+//
+// Mutations: the git walk taking its own node's in-process refusal of a value
+// its build does not know for its answer — the write ends at the home, red;
+// the router refusing that value before it asks — the write is asked of no
+// node, red.
+func TestAnInProcessGitletNodeAnswersACarriersUnknownAppAsAnotherBuild(t *testing.T) {
+	t.Parallel()
+	if laterApp.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a name it does not", laterApp)
+	}
+	w := seatWriteOf(repoID(50))
+	w.Ceiling = &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
+	w.WrittenFor = types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet, laterApp}})
+	for _, tc := range []struct {
+		name    string
+		nowhere bool
+	}{
+		{"its next Gitlet node of the build that knows it", false},
+		{"no Gitlet node of the build that knows it", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gits := []string{"git-a", "git-b"}
+			f := newFleet(t)
+			halves := f.gitletNodes(t, gits)
+			order := rendezvous.Order(w.RepoID, gits)
+			home, next := order[0], order[1]
+			if !tc.nowhere {
+				f.nodes[next].set(func(n *fakeNode) { n.olderBuild = knowsLater })
+			}
+			r := f.gitRouter(t, home, validatingHalf{halves[home]})
+			res, err := r.Code().GitWrite(t.Context(), w)
+			if len(halves[home].writes()) != 0 {
+				t.Errorf("the home, asked in process, built the write")
+			}
+			if tc.nowhere {
+				var refused *ErrUnknownKeys
+				if !errors.As(err, &refused) || !slices.Equal(refused.Keys, []string{"args.written_for.apps[]"}) ||
+					!slices.Equal(slices.Sorted(slices.Values(refused.Nodes)), gits) {
+					t.Errorf("the write no Gitlet node's build knows the carrier of answered %+v %v, want it "+
+						"refused unread, naming args.written_for.apps[] on both nodes", res, err)
+				}
+				return
+			}
+			if err != nil || res.Commit != next || len(halves[next].writes()) != 1 {
+				t.Errorf("the write answered %+v %v, built %d times by %s, want it built once by %s", res, err,
+					len(halves[next].writes()), next, next)
+			}
+		})
+	}
+}
+
+// validatingHalf is a Gitlet node's git half, asked in process, that holds
+// every engine write to its Validate before anything else, as the Gitlet
+// node's own write path does (internal/gitlet/host's Server.Write), and
+// answers the rest as node does.
+type validatingHalf struct{ node *fakeGit }
+
+func (h validatingHalf) Git() (GitServer, bool) { return validatingGit{h.node}, true }
+
+// validatingGit is [validatingHalf]'s git half.
+type validatingGit struct{ *fakeGit }
+
+func (g validatingGit) Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+	if err := w.Validate(); err != nil {
+		return gitlet.EngineWriteResult{}, err
+	}
+	return g.fakeGit.Write(ctx, w)
+}
+
+// knowsLater is a data node of the build that added laterApp and laterKind, as
+// the router meets one: what it is sent reads, to this build's decoder, with
+// atlas and a credential's kind in their places — values this build knows.
+var knowsLater = olderCarrier(func(carrier map[string]any) {
+	if carrier["kind"] == string(laterKind) {
+		carrier["kind"] = string(types.WorkingForCredential)
+	}
+	apps, _ := carrier["apps"].([]any)
+	for i, named := range apps {
+		if named == string(laterApp) {
+			apps[i] = string(iam.GrantAtlas)
+		}
+	}
+})
+
+// inProcessWalksPastWhatItDoesNotKnow holds a box's push and a change's write
+// carrying carrier — a value of which this build does not know, read from a
+// run's row as the box's landing and the collection's open read it — asked from
+// the repository's committer itself, whose REAL committer is asked in process:
+// run on the runner-up of the build that knows the value, nothing appended
+// here; and, where the runner-up does not know it either, refused naming key
+// and both nodes, nothing having run.
+func inProcessWalksPastWhatItDoesNotKnow(t *testing.T, carrier *types.WorkingFor, key string) {
+	t.Helper()
+	repo := repoID(49)
+	asker := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
+	push := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11e")
+	push.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
+		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d",
+			RunID: "019a0c2e-0000-7000-8000-00000000e00e", Harness: "claude-code"}}
+	push.WrittenFor = types.ForTurn(carrier)
+	change := gitlet.ChangeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000d0.code_close_change", Asker: asker,
+		ExpectedVersion: 3, Ceiling: &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody},
+		WrittenFor: types.ForTurn(carrier),
+		Close:      &gitlet.ChangeClose{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1"}}
+	for _, tc := range []struct {
+		name    string
+		nowhere bool
+	}{
+		{"its runner-up of the build that knows it", false},
+		{"no node of the build that knows it", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			holders := []string{"data-a", "data-b"}
+			f := newFleet(t, holders...)
+			o := rendezvous.Order(repo, holders)
+			here, runnerUp := f.nodes[o[0]], f.nodes[o[1]]
+			appended := gatedCommitter(t, here)
+			if !tc.nowhere {
+				runnerUp.set(func(n *fakeNode) { n.olderBuild = knowsLater })
+			}
+			r := f.router(t, here.name, here)
+			pushed, pushErr := r.Code().Propose(t.Context(), push)
+			_, changeErr := r.Code().Change(t.Context(), change)
+			if n := appended.asked.Load(); n != 0 {
+				t.Errorf("the committer asked in process appended %d records, want none", n)
+			}
+			if tc.nowhere {
+				for what, err := range map[string]error{"the push": pushErr, "the change's write": changeErr} {
+					var refused *ErrUnknownKeys
+					if !errors.As(err, &refused) || !slices.Equal(refused.Keys, []string{key}) ||
+						!slices.Equal(slices.Sorted(slices.Values(refused.Nodes)), holders) || refused.Unserved == nil {
+						t.Errorf("%s no node's build knows its carrier's value answered %v, want it refused unread, "+
+							"naming %s on both nodes, nothing run", what, err, key)
+					}
+				}
+				return
+			}
+			if pushErr != nil || pushed.OpID != runnerUp.name {
+				t.Errorf("the push answered %+v %v, want it decided by %s, the runner-up", pushed, pushErr,
+					runnerUp.name)
+			}
+			if changeErr != nil {
+				t.Errorf("the change's write answered %v, want it decided by %s, the runner-up", changeErr,
+					runnerUp.name)
+			}
+			runnerUp.mu.Lock()
+			proposals, changes := len(runnerUp.proposals), len(runnerUp.changes)
+			runnerUp.mu.Unlock()
+			if proposals != 1 || changes != 1 {
+				t.Errorf("the runner-up decided %d pushes and %d change writes, want one of each", proposals, changes)
+			}
+		})
+	}
+}
+
 // carrierRead is a carrier a case about decoding a code write's request
 // carries, and what becomes of the request: refused unread, naming unread; or
 // read whole, and then admitted by the rule every node holds it to (says "")
@@ -1216,12 +1434,11 @@ type carrierRead struct {
 	unread, says string
 }
 
-// readsEachCodeWrite decodes each of the six requests a code write forms on
-// repo, carrying each case's carrier — under the ceiling of nobody, where the
-// request takes a ceiling — as a serving node decodes a request's inputs, and
-// holds it to the case.
-func readsEachCodeWrite(t *testing.T, repo string, cases []carrierRead) {
-	t.Helper()
+// codeWritesOn is each of the six requests a code write forms on repo, by the
+// operation that carries it: a seat's, under the ceiling of nobody where the
+// request takes a ceiling, whole in every field but whom it is made for,
+// which a case sets ([withField]).
+func codeWritesOn(repo string) map[*opSpec]any {
 	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
 	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
 	op := "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change"
@@ -1233,7 +1450,7 @@ func readsEachCodeWrite(t *testing.T, repo string, cases []carrierRead) {
 	push.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
 		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
 	push.Via = gitlet.ViaEngine
-	requests := map[*opSpec]any{
+	return map[*opSpec]any{
 		opCodeChange.spec: gitlet.ChangeProposal{OpID: op, Asker: seat, ExpectedVersion: 3, Ceiling: nobody,
 			Close: &gitlet.ChangeClose{RepoID: repo, ChangeID: changeID}},
 		opCodeConversation.spec: gitlet.ConversationWrite{OpID: op, Asker: seat, Ceiling: nobody,
@@ -1247,13 +1464,28 @@ func readsEachCodeWrite(t *testing.T, repo string, cases []carrierRead) {
 			CommitOID: head, Node: "git-a", ReceivedAt: envelopeInstant}},
 		opCodePropose.spec: push,
 	}
+}
+
+// withField is sent, one of the requests [codeWritesOn] forms, with its field
+// named name set to value.
+func withField(sent any, name string, value any) any {
+	v := reflect.New(reflect.TypeOf(sent)).Elem()
+	v.Set(reflect.ValueOf(sent))
+	v.FieldByName(name).Set(reflect.ValueOf(value))
+	return v.Interface()
+}
+
+// readsEachCodeWrite decodes each of the six requests a code write forms on
+// repo, carrying each case's carrier — under the ceiling of nobody, where the
+// request takes a ceiling — as a serving node decodes a request's inputs, and
+// holds it to the case.
+func readsEachCodeWrite(t *testing.T, repo string, cases []carrierRead) {
+	t.Helper()
+	requests := codeWritesOn(repo)
 	for _, tc := range cases {
 		carrier := types.ForTurn(&tc.carrier)
 		for spec, sent := range requests {
-			v := reflect.New(reflect.TypeOf(sent)).Elem()
-			v.Set(reflect.ValueOf(sent))
-			v.FieldByName("WrittenFor").Set(reflect.ValueOf(carrier))
-			raw, err := encodeInput(v.Interface())
+			raw, err := encodeInput(withField(sent, "WrittenFor", carrier))
 			if err != nil {
 				t.Fatalf("encode %s: %v", spec.name, err)
 			}
@@ -1351,4 +1583,161 @@ func TestACodeWriteNamingAKindItsBuildDoesNotKnowIsRefusedUnread(t *testing.T) {
 			"stranger"},
 		{"a credential's carrier, of a kind this build knows", of(types.WorkingForCredential), "", ""},
 	})
+}
+
+// malformedElsewhere is sent, one of the requests [codeWritesOn] forms, broken
+// by a rule of its own that is no rule of whom it is made for, which its
+// Validate judged before the carrier's values until it met those first: a
+// push naming no node that received it, an engine write of no kind, and every
+// other request under an operation id this engine does not accept.
+func malformedElsewhere(spec *opSpec, sent any) any {
+	switch spec {
+	case opCodePropose.spec:
+		return withField(sent, "Node", "")
+	case opCodeGitWrite.spec:
+		return withField(sent, "Kind", gitlet.EngineWriteKind(""))
+	}
+	return withField(sent, "OpID", "not an operation id")
+}
+
+// EVERY CODE WRITE NAMING A VALUE ITS BUILD DOES NOT KNOW IS ANSWERED SO BEFORE
+// ANY OTHER RULE (ADR-0109's roll). A request whose carrier names an app, or a
+// kind, this build does not know cannot be judged here at all: only a build
+// that knows the value can tell whether the request is well formed. So each of
+// the six requests a code write forms, broken by a rule of its own as well
+// ([malformedElsewhere]), is answered alike on either path: refused unread on
+// the wire, naming the value, as a serving node decodes it; and in process,
+// where nothing decodes it, by its Validate with the same decoder's refusal,
+// never as malformed. Each is malformed indeed: made for a credential holding
+// apps this build knows, its Validate refuses it as such.
+//
+// Mutations: any of the six requests' Validates judging its other rules before
+// the carrier's values — that request is refused in process as malformed, red.
+func TestEveryCodeWriteNamingAValueItsBuildDoesNotKnowIsAnsweredSoBeforeAnyOtherRule(t *testing.T) {
+	t.Parallel()
+	if laterApp.Valid() || laterKind.Valid() {
+		t.Fatalf("this build knows %q or %q, and the case needs names it does not", laterApp, laterKind)
+	}
+	known := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet}})
+	requests := codeWritesOn(repoID(51))
+	for spec, sent := range requests {
+		err := withField(malformedElsewhere(spec, sent), "WrittenFor", known).(interface{ Validate() error }).Validate()
+		if !errors.Is(err, gitlet.ErrInvalidProposal) && !errors.Is(err, gitlet.ErrInvalid) {
+			t.Fatalf("%s broken by a rule of its own, made for a credential holding apps this build knows: %v, "+
+				"want it refused as malformed", spec.name, err)
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		carrier types.WorkingFor
+		unread  string
+	}{
+		{"a credential naming an app this build does not know", types.WorkingFor{Kind: types.WorkingForCredential,
+			Login: "token:ci", Apps: []iam.Grant{iam.GrantGitlet, laterApp}}, "args.written_for.apps[]"},
+		{"a carrier of a kind this build does not know", types.WorkingFor{Kind: laterKind, Login: "token:ci",
+			Apps: []iam.Grant{iam.GrantGitlet}}, "args.written_for.kind"},
+	} {
+		for spec, sent := range requests {
+			sent = withField(malformedElsewhere(spec, sent), "WrittenFor", types.ForTurn(&tc.carrier))
+			raw, err := encodeInput(sent)
+			if err != nil {
+				t.Fatalf("encode %s: %v", spec.name, err)
+			}
+			if _, _, refused, err := inputs(spec, request{Op: spec.name, Args: raw}); err != nil || refused == nil ||
+				!slices.Equal(refused.Keys, []string{tc.unread}) {
+				t.Errorf("%s, malformed and carrying %s, decoded off the wire as %v %v, want it refused unread, "+
+					"naming %s", spec.name, tc.name, refused, err, tc.unread)
+			}
+			err = sent.(interface{ Validate() error }).Validate()
+			if !gitlet.IsUnknownToThisBuild(err) || errors.Is(err, gitlet.ErrInvalidProposal) ||
+				errors.Is(err, gitlet.ErrInvalid) {
+				t.Errorf("%s, malformed and carrying %s, answered %v in process, want the decoder's refusal of a "+
+					"value this build does not know, as off the wire, never malformed", spec.name, tc.name, err)
+			}
+		}
+	}
+}
+
+// A CODE WRITE THIS BUILD CANNOT JUDGE ANSWERS THAT THE BUILDS DIFFER WHATEVER
+// ELSE IT BREAKS, IN PROCESS AS ON THE WIRE (ADR-0109's roll). Each write here
+// is made for a credential naming an app no node of the fleet knows, and also
+// breaks a rule of its own — a box's push naming no node that received it, a
+// close of a change under an operation id this engine does not accept, an
+// engine write of no kind — which only a node that can judge the write may
+// refuse it for. Asked of the repository's own committer, or its home Gitlet
+// node, in process, and asked of them over the wire, each answers alike: that
+// the fleet's builds differ, naming args.written_for.apps[] and both nodes,
+// nothing having run — never that the request is malformed.
+//
+// Mutations: the push's, the change's write's or the engine write's Validate
+// judging its other rules before the carrier's values — each answers in
+// process that it is malformed, red, and the engine write over the wire too,
+// where the asking router holds it to its Validate before anything is asked.
+func TestACodeWriteThisBuildCannotJudgeAnswersThatTheBuildsDifferWhateverElseItBreaks(t *testing.T) {
+	t.Parallel()
+	if laterApp.Valid() {
+		t.Fatalf("this build knows %q, and the case needs a name it does not", laterApp)
+	}
+	const key = "args.written_for.apps[]"
+	repo := repoID(52)
+	forCI := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet, laterApp}})
+	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
+	push := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11f")
+	push.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
+		Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d",
+			RunID: "019a0c2e-0000-7000-8000-00000000e00e", Harness: "claude-code"}}
+	push.WrittenFor, push.Node = forCI, ""
+	change := gitlet.ChangeProposal{OpID: "not an operation id",
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}, ExpectedVersion: 3, Ceiling: nobody,
+		WrittenFor: forCI, Close: &gitlet.ChangeClose{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1"}}
+	write := seatWriteOf(repoID(53))
+	write.Ceiling, write.WrittenFor, write.Kind = nobody, forCI, ""
+	for _, tc := range []struct {
+		name      string
+		inProcess bool
+	}{
+		{"asked in process", true},
+		{"asked over the wire", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			holders, gits := []string{"data-a", "data-b"}, []string{"git-a", "git-b"}
+			f := newFleet(t, holders...)
+			committer := f.nodes[rendezvous.Order(repo, holders)[0]]
+			appended := gatedCommitter(t, committer)
+			halves := f.gitletNodes(t, gits)
+			home := rendezvous.Order(write.RepoID, gits)[0]
+			data, git := f.client.Code(), f.client.Code()
+			if tc.inProcess {
+				data = f.router(t, committer.name, committer).Code()
+				git = f.gitRouter(t, home, validatingHalf{halves[home]}).Code()
+			}
+			_, pushErr := data.Propose(t.Context(), push)
+			_, changeErr := data.Change(t.Context(), change)
+			_, writeErr := git.GitWrite(t.Context(), write)
+			for what, answer := range map[string]struct {
+				err   error
+				nodes []string
+			}{"the push": {pushErr, holders}, "the change's write": {changeErr, holders},
+				"the engine write": {writeErr, gits}} {
+				var refused *ErrUnknownKeys
+				if !errors.As(answer.err, &refused) || !slices.Equal(refused.Keys, []string{key}) ||
+					!slices.Equal(slices.Sorted(slices.Values(refused.Nodes)), answer.nodes) ||
+					refused.Unserved == nil {
+					t.Errorf("%s %s answered %v, want that the fleet's builds differ, naming %s on %v, nothing "+
+						"run", what, tc.name, answer.err, key, answer.nodes)
+				}
+			}
+			if n := appended.appends(); n != 0 {
+				t.Errorf("the committer appended %d records, want none", n)
+			}
+			for name, half := range halves {
+				if built := len(half.writes()); built != 0 {
+					t.Errorf("%s built %d engine writes, want none", name, built)
+				}
+			}
+		})
+	}
 }

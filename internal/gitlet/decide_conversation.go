@@ -167,6 +167,12 @@ import (
 // naming the asks the writer stamps; and a record past what one write of a
 // conversation may carry ([MaxConversationBytes]). What the repository and the
 // change hold is the decide's to judge, from the rows.
+//
+// Before any of it, a value whom the write is made for names that this build
+// does not know is answered as its decoder answers it on the wire, never as
+// ErrInvalidProposal, whatever else the write holds ([unknownToThisBuild]):
+// this build cannot judge the write at all, and a writer of a build that knows
+// the value does.
 func (w ConversationWrite) Validate() error {
 	_, err := w.measure()
 	return err
@@ -329,6 +335,11 @@ func (w ConversationWrite) JudgesChart() bool {
 // validFields is every rule of [ConversationWrite.Validate] but the record's
 // bytes.
 func (w ConversationWrite) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// write (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, w.WrittenFor); err != nil {
+		return err
+	}
 	set := 0
 	for _, isSet := range []bool{w.Reviewers != nil, w.Comment != nil, w.ThreadResolve != nil, w.Review != nil,
 		w.FindingResolve != nil, w.Revise != nil, w.Mergeability != nil, w.Asks != nil} {
@@ -366,7 +377,7 @@ func (w ConversationWrite) validFields() error {
 		}
 	}
 	if err := writtenForUnder(w.Asker, w.WrittenFor, w.Ceiling, nil); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		return refusedCarrier(ErrInvalidProposal, err)
 	}
 	if !w.Seen.IsZero() {
 		switch {
@@ -708,7 +719,7 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	// does not bound is its sender's bug, and one this chart alone refuses a
 	// chart that moved under the turn ([ChartRefusal]).
 	if err := writtenForUnder(w.Asker, w.WrittenFor, w.Ceiling, seats.Roster); err != nil {
-		return conversationDecision{}, fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		return conversationDecision{}, refusedCarrier(ErrInvalidProposal, err)
 	}
 	repoID, changeID := w.RepoID(), w.ChangeID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)

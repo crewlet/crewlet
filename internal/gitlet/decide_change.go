@@ -133,6 +133,12 @@ import (
 // head or a tip that is no whole object id, or found by a node no node id
 // names; and a record past what one proposal may carry ([EntryRoom]). What the
 // repository and the change hold is the decide's to judge, from the rows.
+//
+// Before any of it, a value whom the write is made for names that this build
+// does not know is answered as its decoder answers it on the wire, never as
+// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
+// this build cannot judge the proposal at all, and a committer of a build that
+// knows the value does.
 func (p ChangeProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -299,6 +305,11 @@ func (p ChangeProposal) decidedRows() int {
 // validFields is every rule of [ChangeProposal.Validate] but the record's
 // bytes.
 func (p ChangeProposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// proposal (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	set := 0
 	for _, isSet := range []bool{p.Open != nil, p.Edit != nil, p.Draft != nil, p.Retarget != nil,
 		p.Close != nil, p.Reopen != nil, p.Landed != nil} {
@@ -333,7 +344,7 @@ func (p ChangeProposal) validFields() error {
 		}
 	}
 	if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, nil); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		return refusedCarrier(ErrInvalidProposal, err)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -582,12 +593,12 @@ func (c *Committer) countChange(p ChangeProposal, res ChangeResult, err error) {
 // changeOutcome is what became of a change proposal, as
 // crewlet.code.change.proposals names it: `handed_on` for one this node
 // decided nothing of about itself, which the router asks the repository's
-// runner-up; `failed` for any other error; the refusal's own code; `unchanged`
-// for one answered from the row with no record; and otherwise its outcome —
-// applied, pending or unknown.
+// runner-up ([handedOn]); `failed` for any other error; the refusal's own
+// code; `unchanged` for one answered from the row with no record; and
+// otherwise its outcome — applied, pending or unknown.
 func changeOutcome(res ChangeResult, err error) string {
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		return "handed_on"
 	case err != nil:
 		return "failed"
@@ -715,7 +726,7 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	// ceiling does not bound is its sender's bug, and one this chart alone
 	// refuses a chart that moved under the turn ([ChartRefusal]).
 	if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, seats.Roster); err != nil {
-		return changeDecision{}, fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		return changeDecision{}, refusedCarrier(ErrInvalidProposal, err)
 	}
 	repoID := p.RepoID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)

@@ -533,6 +533,12 @@ func (r MergeRefusal) Valid() bool { return slices.Contains(MergeRefusals(), r) 
 // a principal the asker set, which the committer stamps; each of the queue's
 // own records' rules (queuerecords.go); and a record past what one proposal
 // may carry ([EntryRoom]).
+//
+// Before any of it, a value whom the write is made for names that this build
+// does not know is answered as its decoder answers it on the wire, never as
+// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
+// this build cannot judge the proposal at all, and a committer of a build that
+// knows the value does.
 func (p QueueProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -574,6 +580,11 @@ func (p QueueProposal) measure() (int, error) {
 // validFields is every rule of [QueueProposal.Validate] but the record's
 // bytes.
 func (p QueueProposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// proposal (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	if p.writes() != 1 {
 		return fmt.Errorf("%w: a queue proposal is exactly one of an enqueue, a dequeue, a candidate, an "+
 			"eject, a land, a green, a broken and a close_settled", ErrInvalidProposal)
@@ -603,7 +614,7 @@ func (p QueueProposal) validFields() error {
 		carried = writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, nil)
 	}
 	if carried != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposal, carried)
+		return refusedCarrier(ErrInvalidProposal, carried)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -849,7 +860,7 @@ func (c *Committer) countQueue(p QueueProposal, res QueueResult, err error) {
 	op, _ := p.record()
 	outcome := string(res.Outcome)
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		outcome = "handed_on"
 	case err != nil:
 		outcome = "failed"
@@ -895,7 +906,7 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 	// refuses a chart that moved under the turn ([ChartRefusal]).
 	if p.Dequeue != nil {
 		if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, seats.Roster); err != nil {
-			return queueDecision{}, fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+			return queueDecision{}, refusedCarrier(ErrInvalidProposal, err)
 		}
 	}
 	repoID := p.RepoID()

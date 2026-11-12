@@ -239,6 +239,12 @@ type MergeResult struct {
 // asked at; a field the committer stamps (the principal, the source, Protected
 // and Green) set by the asker; and a record past what one proposal may carry
 // ([EntryRoom]).
+//
+// Before any of it, a value whom the merge is made for names that this build
+// does not know is answered as its decoder answers it on the wire, never as
+// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
+// this build cannot judge the merge at all, and a committer of a build that
+// knows the value does.
 func (p MergeProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -290,6 +296,11 @@ func (p MergeProposal) measure() (int, error) {
 
 // validFields is every rule of [MergeProposal.Validate] but the record's bytes.
 func (p MergeProposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// merge (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	if err := statelog.CheckCallerOpID(p.OpID); err != nil {
 		return badField("op_id", "%v", err)
 	}
@@ -304,7 +315,7 @@ func (p MergeProposal) validFields() error {
 			"executor")
 	}
 	if err := writtenForInvalid(p.Asker, p.WrittenFor); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		return refusedCarrier(ErrInvalidProposal, err)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -475,7 +486,7 @@ func (c *Committer) countMerge(res MergeResult, err error) {
 	}
 	outcome := string(res.Outcome)
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		outcome = "handed_on"
 	case err != nil:
 		outcome = "failed"

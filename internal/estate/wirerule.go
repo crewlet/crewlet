@@ -104,6 +104,18 @@ import (
 // refusal of the request as malformed, which would end the walk and tell a
 // newer build's valid request it is.
 //
+// AND IN PROCESS ALIKE, where nothing decodes the request: a code write's
+// request handed to this node's own copy meets the same value in its Validate,
+// through the same one place, FIRST, before any other rule of the request — as
+// the decoder meets it before any rule runs — and refuses it with the same
+// decoder's refusal (gitlet.IsUnknownToThisBuild), whatever else the request
+// holds, which the walk answers as the wire answers the same request — the
+// keys a serving node of this build refuses its encoding for, this node among
+// the nodes whose build does not declare them ([unreadHere]) — and moves on
+// from. A carrier a stored row holds, which another build may have written, is
+// such a request: a box's push and a run's open carry it as the run's row holds
+// it.
+//
 // # Not a refusal of a field this build retired
 //
 // The rule refuses what the serving build does not declare, whichever build

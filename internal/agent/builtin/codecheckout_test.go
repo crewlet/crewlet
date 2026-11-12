@@ -166,8 +166,10 @@ func TestACheckoutAsksForExactlyTheRepositoryItNames(t *testing.T) {
 // A CHECKOUT IS AN EXECUTOR'S: a call no job made has no row to grant on,
 // and the desk is never asked. What the row did with a checkout is said in
 // the run's words: held, conflict, full and not running each refused or
-// answered as what they are, and a refusal the desk composed reaches the run
-// as it was written.
+// answered as what they are — a conflict over whom the run works for naming
+// nobody among the requesters its grants may have been taken for, since a run
+// granted for nobody is never used for somebody, and what the seat can do
+// instead — and a refusal the desk composed reaches the run as it was written.
 func TestACheckoutIsAnsweredAsTheRowTookIt(t *testing.T) {
 	t.Parallel()
 	desk := &checkoutDesk{got: webCheckout(sandbox.GrantAdded)}
@@ -192,7 +194,9 @@ func TestACheckoutIsAnsweredAsTheRowTookIt(t *testing.T) {
 		{"conflict", webCheckout(sandbox.GrantConflict), true, tools.RefusalConflict,
 			"this run has web checked out already, on branch seats/swe/ENG-7"},
 		{"another requester", builtin.Checkout{Outcome: sandbox.GrantConflict}, true, tools.RefusalConflict,
-			"checked out for another"},
+			"checked out for nobody, or for another requester than this turn works for"},
+		{"another requester, what the seat can do", builtin.Checkout{Outcome: sandbox.GrantConflict}, true,
+			tools.RefusalConflict, "end the run: a turn working for somebody starts a new run"},
 		{"full", builtin.Checkout{Outcome: sandbox.GrantFull}, true, tools.RefusalConflict,
 			"the most one run is given"},
 		{"not running", builtin.Checkout{Outcome: sandbox.GrantNotRunning}, true, tools.RefusalNotRunning,

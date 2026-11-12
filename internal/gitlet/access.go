@@ -742,9 +742,17 @@ func (c WriteCeiling) invalid(asker Principal) string {
 // made for (ADR-0109), or nil: the rule every request a code write forms is
 // held to by its own Validate, and so by every node that holds the request —
 // the turn's before it asks, the router's, the node that decides it — each
-// wrapping it in its own refusal, which names written_for. A request a ceiling
-// rides on is held to that ceiling too ([writtenForUnder]).
+// wrapping it in its own refusal, which names written_for ([refusedCarrier]).
+// A request a ceiling rides on is held to that ceiling too ([writtenForUnder]).
 //
+//   - KNOWN TO THIS BUILD, FIRST: a carrier naming a kind, or an app of a
+//     credential's, that this build does not know is a newer build's —
+//     no sender composes one its own build does not know — so it is answered
+//     as the request's own decoder answers it on the wire, by the one place a
+//     build decides it ([unknownToThisBuild]), never as malformed: the
+//     estate's walk asks a node that knows it, here in process as after a
+//     refusal off the wire, and a carrier a stored row holds — which another
+//     build may have written — reaches a node of that build where one serves.
 //   - STATED, BY THE KIND OF WRITER ITS ASKER IS ([Principal.WriterKind],
 //     [types.WrittenFor.For]): an agent's request states whom it is made for —
 //     whoever its turn works for, or nobody — and one that states nothing is
@@ -757,20 +765,18 @@ func (c WriteCeiling) invalid(asker Principal) string {
 //     held to for it, each an app this build knows and none twice, so at most
 //     len(iam.Apps); and nothing beside either. So a carrier is a handle or a
 //     login of at most iam.MaxLogin bytes and those apps, at most
-//     [MaxCarrierBytes] encoded, wherever it is kept. A kind or an app this
-//     build does NOT KNOW never reaches this rule off the wire: the request's
-//     own decoder refuses it as a name its build does not declare
-//     ([unknownToThisBuild]), since only a newer build composes one, so the
-//     walk asks a node that knows it rather than calling that build's request
-//     malformed. What this rule refuses is what no build composes: the zero
-//     kind and the zero app, which name none, admin, a name this build knows
-//     as no app, and — in process alone — a kind or an app it does not know.
+//     [MaxCarrierBytes] encoded, wherever it is kept. What this rule refuses
+//     as malformed is what no build composes: the zero kind and the zero app,
+//     which name none, and admin, a name this build knows as no app.
 //   - NEVER A STRANGER'S: no code write is made for somebody the company does
 //     not know, since the turn's own gate refuses a stranger every code tool
 //     (ADR-0110); and none for a credential naming no app, which every reader
 //     of a carrier takes for a stranger (internal/agent/builtin's
 //     credentialCeiling).
 func writtenForInvalid(asker Principal, f types.WrittenFor) error {
+	if err := unknownToThisBuild(writtenForAt, f); err != nil {
+		return err
+	}
 	carrier, err := f.For(asker.WriterKind())
 	switch {
 	case err != nil:
@@ -801,7 +807,8 @@ func writtenForInvalid(asker Principal, f types.WrittenFor) error {
 		for i, app := range carrier.Apps {
 			switch {
 			case !app.IsApp():
-				return fmt.Errorf("written_for.apps: %q is not an app this build knows", app)
+				return fmt.Errorf("written_for.apps: %q is no app: a credential's carrier names the apps its "+
+					"turn was held to", app)
 			case slices.Contains(carrier.Apps[:i], app):
 				return fmt.Errorf("written_for.apps: %q is named twice", app)
 			}
@@ -811,8 +818,8 @@ func writtenForInvalid(asker Principal, f types.WrittenFor) error {
 		return errors.New("written_for: no code write is made for a stranger: the turn's own gate refuses " +
 			"every code tool to whoever the company does not know (ADR-0110)")
 	}
-	return fmt.Errorf("written_for.kind: %q is not a kind this build knows: a code write is made for a seat or "+
-		"a credential", carrier.Kind)
+	return errors.New("written_for.kind: a carrier names whom a write is made for by its kind, and this one " +
+		"names none: a code write is made for a seat or a credential")
 }
 
 // writtenForUnder is [writtenForInvalid] of a request a ceiling rides on — a

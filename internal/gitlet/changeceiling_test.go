@@ -436,20 +436,29 @@ func TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused(t *testing.T) {
 // WHOM A CODE WRITE IS MADE FOR IS A SEAT OR A CREDENTIAL, WELL FORMED
 // (ADR-0109): a seat by its handle and nothing beside it; a credential acting
 // as no seat by its coloned machine login, with the apps its turn was held to
-// — each an app this build knows, none twice, at least one, since a
-// credential naming none is a stranger's to every reader — and no seat; and
-// nothing of another kind: not the zero, which names none, nor a kind this
-// build does not know. So what a record carries of one is a handle or a login
-// and a few apps, bounded. Anything else is refused by the rule every node
-// holds a request to, naming the member. (Off the wire a kind or an app this
-// build does not know never reaches the rule: the request's decoder refuses it
-// as a name the build does not declare, so the walk asks a node that knows it
-// — internal/estate's TestACodeWriteMovesOffANodeThatDoesNotKnowItsCarriersKind
-// and TestACodeWriteForACredentialMovesOffANodeThatDoesNotKnowItsApp.)
+// — each an app, none twice, at least one, since a credential naming none is a
+// stranger's to every reader — and no seat; and nothing of another kind: not
+// the zero, which names none. So what a record carries of one is a handle or a
+// login and a few apps, bounded. Anything else is refused by the rule every
+// node holds a request to, naming the member.
 //
-// Mutations: an app this build does not know admitted — the credential naming
-// admin is made, red; the zero kind admitted as a seat's — the carrier naming
-// no kind is made, red.
+// AND A KIND OR AN APP THIS BUILD DOES NOT KNOW IS NO MALFORMED CARRIER, but a
+// newer build's: the request's Validate answers it, here in process, as its
+// decoder does off the wire — a name the build does not declare, never
+// ErrInvalidProposal — so the walk asks a node of the build that knows it
+// (internal/estate's TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild,
+// and TestACodeWriteForACredentialMovesOffANodeThatDoesNotKnowItsApp off the
+// wire). So does the rule itself, whoever holds a request to it: the chart's
+// check of an engine write (gitlet.EngineWrite.WrittenForOn) answers the same
+// value the same way, never ErrInvalid, though every holder that asks it now
+// asks the request's Validate first.
+//
+// Mutations: a name that is no app admitted — the credential naming admin is
+// made, red; the zero kind admitted as a seat's — the carrier naming no kind is
+// made, red; a value this build does not know refused as malformed — the kind
+// and the app this build does not know answered ErrInvalidProposal, red; the
+// rule's own check of such a value dropped, or its refusal wrapped as
+// malformed (refusedCarrier) — the chart's check answers ErrInvalid, red.
 func TestWhomACodeWriteIsMadeForIsWellFormed(t *testing.T) {
 	t.Parallel()
 	nobody := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
@@ -461,35 +470,53 @@ func TestWhomACodeWriteIsMadeForIsWellFormed(t *testing.T) {
 		name    string
 		ceiling *gitlet.WriteCeiling
 		carrier types.WorkingFor
-		// says is what its refusal names, "" for a carrier well formed.
-		says string
+		// says is what its refusal names, "" for a carrier well formed; and
+		// unknown a carrier answered as a value this build does not know.
+		says    string
+		unknown bool
 	}{
-		{"a colleague's seat", reader, types.WorkingFor{Kind: types.WorkingForSeat, Seat: "reader"}, ""},
-		{"a credential", nobody, credential("token:ci", iam.GrantGitlet, iam.GrantDoclet), ""},
+		{"a colleague's seat", reader, types.WorkingFor{Kind: types.WorkingForSeat, Seat: "reader"}, "", false},
+		{"a credential", nobody, credential("token:ci", iam.GrantGitlet, iam.GrantDoclet), "", false},
 		{"a seat by no handle", nil, types.WorkingFor{Kind: types.WorkingForSeat, Seat: "Reader!"},
-			"written_for.seat"},
+			"written_for.seat", false},
 		{"a seat naming a login", reader, types.WorkingFor{Kind: types.WorkingForSeat, Seat: "reader",
-			Login: "token:ci"}, "names the seat alone"},
-		{"a credential by a person's login", nobody, credential("jane.doe", iam.GrantGitlet), "written_for.login"},
+			Login: "token:ci"}, "names the seat alone", false},
+		{"a credential by a person's login", nobody, credential("jane.doe", iam.GrantGitlet), "written_for.login",
+			false},
 		{"a credential naming a seat", nobody, types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
-			Seat: "reader", Apps: []iam.Grant{iam.GrantGitlet}}, "written_for.seat"},
-		{"a credential naming no app", nobody, credential("token:ci"), "written_for.apps"},
+			Seat: "reader", Apps: []iam.Grant{iam.GrantGitlet}}, "written_for.seat", false},
+		{"a credential naming no app", nobody, credential("token:ci"), "written_for.apps", false},
 		{"a credential naming admin", nobody, credential("token:ci", iam.GrantGitlet, iam.GrantAdmin),
-			"not an app this build knows"},
+			"is no app", false},
+		{"a credential naming an app this build does not know", nobody, credential("token:ci", iam.GrantGitlet,
+			"ledger"), "", true},
 		{"a credential naming an app twice", nobody, credential("token:ci", iam.GrantGitlet, iam.GrantGitlet),
-			"named twice"},
-		{"a kind this build does not know", nil, types.WorkingFor{Kind: "colleague", Seat: "reader"},
-			"written_for.kind"},
-		{"the zero kind, which names none", nil, types.WorkingFor{Seat: "reader"}, "written_for.kind"},
+			"named twice", false},
+		{"a kind this build does not know", nil, types.WorkingFor{Kind: "colleague", Seat: "reader"}, "", true},
+		{"the zero kind, which names none", nil, types.WorkingFor{Seat: "reader"}, "written_for.kind", false},
 	} {
 		p := retitled("0190f3c4-0000-7000-8000-0000000000aa", uuid.Must(uuid.NewV7()).String(), dev, 1, tc.name)
 		p.Ceiling, p.WrittenFor = tc.ceiling, types.ForTurn(&tc.carrier)
 		err := p.Validate()
 		switch {
+		case tc.unknown && (errors.Is(err, gitlet.ErrInvalidProposal) || !gitlet.IsUnknownToThisBuild(err)):
+			t.Errorf("a write made for %s: %v, want it answered as a value this build does not know, never "+
+				"malformed", tc.name, err)
+		case tc.unknown:
 		case tc.says == "" && err != nil:
 			t.Errorf("a write made for %s: %v, want it admitted", tc.name, err)
 		case tc.says != "" && (!errors.Is(err, gitlet.ErrInvalidProposal) || !strings.Contains(err.Error(), tc.says)):
 			t.Errorf("a write made for %s: %v, want it refused naming %s", tc.name, err, tc.says)
+		}
+		if !tc.unknown {
+			continue
+		}
+		// THE RULE ITSELF, asked by the chart's check of an engine write.
+		w := aWrite()
+		w.Ceiling, w.WrittenFor = tc.ceiling, types.ForTurn(&tc.carrier)
+		if err := w.WrittenForOn(testChart()); errors.Is(err, gitlet.ErrInvalid) || !gitlet.IsUnknownToThisBuild(err) {
+			t.Errorf("an engine write made for %s, held to its chart: %v, want it answered as a value this build "+
+				"does not know, never malformed", tc.name, err)
 		}
 	}
 }

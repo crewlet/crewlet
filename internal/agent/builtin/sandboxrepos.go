@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -100,6 +101,15 @@ func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 // not push is refused at the checkout rather than at the box's first push, and an access left out is
 // write only where the box could push. A person bounds nothing, holding
 // maintain on every repository, and a stranger's turn reads nothing at all.
+//
+// AND WHOM THE TURN WORKS FOR RIDES ON THE RUN'S ROW ([RunRepos.WorkingFor],
+// the row's CodeWorkingFor, ADR-0109): what the box pushes, and the change the
+// run's collection opens, are the turn's writes made late, so each carries
+// whom the turn works for as the turn's own code writes do — the carrier the
+// resolution's caller composed from the same bound ceiling (its actor's,
+// [writtenForTurn]), never one derived again from the row's requester, which
+// would restate that composition outside it and lose this node's narrowing of a
+// credential's apps.
 
 // RunRepos is what the repositories a checkout names resolve to.
 type RunRepos struct {
@@ -123,6 +133,13 @@ type RunRepos struct {
 	// ceiling ([gitlet.ReadQuery.CeilingSeat]) — and "" where no colleague seat
 	// bounds the run.
 	Ceiling string
+	// WorkingFor is whom the turn works for, as every code write its own tools
+	// make states it (the resolution's caller's carrier, [writtenForTurn]): a
+	// colleague's seat, a person's, or a credential acting as no seat with the
+	// apps this node holds it to — and nil for a turn that works for its own
+	// seat. The run's row carries it, and the box's pushes and the change the
+	// run's collection opens state it.
+	WorkingFor *types.WorkingFor
 }
 
 // GrantFunc is a seat's grant on a repository as this node's chart reads it
@@ -186,7 +203,7 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 		return RunRepos{}, &RefusedCheckout{Result: refused(tools.RefusalForbidden,
 			CodeCheckoutTool+" gives repositories to a seat's executor, and this call is no seat's.")}
 	}
-	out := RunRepos{Ceiling: c.ceiling}
+	out := RunRepos{Ceiling: c.ceiling, WorkingFor: c.actor.WrittenFor.Carrier()}
 	byID := map[string]string{}
 	for _, req := range reqs {
 		got, refusal := d.runRepo(ctx, turn, c, req, grant)

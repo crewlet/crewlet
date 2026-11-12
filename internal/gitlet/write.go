@@ -693,8 +693,15 @@ func (w EngineWrite) Instant() time.Time {
 
 // Validate refuses a write no party to it may act on ([ErrInvalid], naming the
 // field): the one rule the tool that asks a write, the router that carries it
-// and the Gitlet node that builds it all hold it to.
+// and the Gitlet node that builds it all hold it to. Before any of it, a value
+// whom the write is made for names that this build does not know is answered
+// as its decoder answers it on the wire, never as ErrInvalid, whatever else
+// the write holds ([unknownToThisBuild]): this build cannot judge the write at
+// all, and a Gitlet node of a build that knows the value does.
 func (w EngineWrite) Validate() error {
+	if err := unknownToThisBuild(writtenForAt, w.WrittenFor); err != nil {
+		return err
+	}
 	if !w.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, w.Kind, words.Or(EngineWriteKinds()))
 	}
@@ -733,7 +740,7 @@ func (w EngineWrite) Validate() error {
 	// it ([writtenForUnder]); the half only a chart decides is the Gitlet
 	// node's that builds the write ([EngineWrite.WrittenForOn]).
 	if err := writtenForUnder(w.Principal, w.WrittenFor, w.Ceiling, nil); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
+		return refusedCarrier(ErrInvalid, err)
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		var bad *statelog.CallerOpIDError

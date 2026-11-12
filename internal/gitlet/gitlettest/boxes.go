@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -146,9 +147,24 @@ func (r *FixtureRuns) Remove(ref host.BoxRunRef) {
 
 // WorkFor has ref's run work for seat: its turn was woken by that colleague
 // seat's ask, whose own grant the box is held to beside its seat's
-// (host.BoxRun.Ceiling) — "" for a run no colleague seat bounds.
+// (host.BoxRun.Ceiling) and for whom its pushes are made
+// (host.BoxRun.WorkingFor), as a run's checkout writes both — "" for a run no
+// colleague seat bounds, which works for its own seat.
 func (r *FixtureRuns) WorkFor(ref host.BoxRunRef, seat string) {
-	r.edit(ref, func(run *host.BoxRun) { run.Ceiling = seat })
+	r.edit(ref, func(run *host.BoxRun) {
+		run.Ceiling, run.WorkingFor = seat, nil
+		if seat != "" {
+			run.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: seat}
+		}
+	})
+}
+
+// MadeFor has ref's run's pushes made for w (host.BoxRun.WorkingFor) — whom its
+// checkout composed its turn works for: a person's seat, which bounds nothing,
+// or a credential acting as no seat — and leaves its colleague's ceiling as it
+// is.
+func (r *FixtureRuns) MadeFor(ref host.BoxRunRef, w *types.WorkingFor) {
+	r.edit(ref, func(run *host.BoxRun) { run.WorkingFor = w.Clone() })
 }
 
 // SetProvenance replaces ref's run's provenance — a work item with a key a
@@ -246,6 +262,7 @@ func (r *FixtureRuns) Run(_ context.Context, turnID string) (host.BoxRun, bool, 
 	out := *run
 	out.Repos = append([]host.BoxGrant(nil), run.Repos...)
 	out.Holds = maps.Clone(run.Holds)
+	out.WorkingFor = run.WorkingFor.Clone()
 	return out, true, nil
 }
 
