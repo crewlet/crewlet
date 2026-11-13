@@ -20,7 +20,9 @@
 // own id and name, with a bot token one of the agents already holds. Its
 // eleventh reads AWS (ADR-0148), as a role of its own that the company adds
 // to its stack by choice: the Regions in use, instances, databases, load
-// balancers, queues, buckets and public DNS.
+// balancers, queues, buckets and public DNS. Google Cloud's source also
+// searches what each project runs (ADR-0149), as a service account of its
+// own, where the company asks.
 //
 // # A source may be the company's choice
 //
