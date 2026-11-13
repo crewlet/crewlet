@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
@@ -20,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // GitHub's half of the atlas (ADR-0131): the organization's repositories,
@@ -103,13 +100,7 @@ func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read,
 		b: collect.NewBuilder(integration.KindGitHub, in.Now), org: org, apiBase: apiBase,
 		listed: map[string]bool{}, unread: map[string]map[string]bool{partWorkflows: {}, partDeployments: {}},
 	}
-	counting := *base
-	next := httpx.Transport()
-	if base.Transport != nil {
-		next = base.Transport
-	}
-	counting.Transport = countedTransport{next: next, calls: &r.calls}
-	r.http = &counting
+	r.http, r.calls = collect.Counted(base)
 	web, err := url.Parse(webBase)
 	if err != nil || web.Hostname() == "" {
 		return collect.Read{}, errors.New("github: integrations.github.url is not an address with a host")
@@ -122,19 +113,8 @@ func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read,
 	if err != nil {
 		return collect.Read{}, err
 	}
-	r.b.Calls(int(r.calls.Load()))
+	r.b.Calls(r.calls())
 	return r.b.Read(), nil
-}
-
-// countedTransport counts the requests a read makes, for its standing.
-type countedTransport struct {
-	next  http.RoundTripper
-	calls *atomic.Int64
-}
-
-func (t countedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.calls.Add(1)
-	return t.next.RoundTrip(req)
 }
 
 // atlasSeats is every agent seat whose app is switched on, with its key
@@ -170,7 +150,7 @@ type atlasRead struct {
 	host    string
 	apiBase string
 	http    *http.Client
-	calls   atomic.Int64
+	calls   func() int
 
 	// installs is every installation the read is made as, in seat order.
 	installs []*atlasInstall
@@ -478,7 +458,7 @@ func (r *atlasRead) workflows(ctx context.Context, as installationReader, accoun
 	for _, w := range flows {
 		at := where + ".workflows[" + strconv.FormatInt(w.ID, 10) + "]"
 		file := strings.TrimPrefix(w.Path, workflowDir)
-		p, ok := r.pipeline(at+".path", repo, workflowKeyPrefix, file)
+		p, ok := b.Pipeline(at+".path", repo, workflowKeyPrefix, file)
 		if !ok {
 			continue
 		}
@@ -518,7 +498,7 @@ func (r *atlasRead) deployments(ctx context.Context, as installationReader, acco
 	}
 	for i, d := range latest {
 		at := where + ".deployments[" + strconv.FormatInt(d.ID, 10) + "]"
-		p, ok := r.pipeline(at+".environment", repo, environmentKeyPrefix, d.Environment)
+		p, ok := b.Pipeline(at+".environment", repo, environmentKeyPrefix, d.Environment)
 		if !ok {
 			continue
 		}
@@ -529,68 +509,9 @@ func (r *atlasRead) deployments(ctx context.Context, as installationReader, acco
 		b.Says(at+".environment", p, atlas.FactEnvironment,
 			collect.EnvironmentWord(strings.ToLower(strings.TrimSpace(d.Environment))))
 		b.Says(at+".statuses.state", p, atlas.FactLastResult, deploymentResult(statuses[i].State))
-		r.deployed(at+".statuses.environment_url", p, statuses[i].EnvironmentURL)
+		b.Deployed(at+".statuses.environment_url", p, statuses[i].EnvironmentURL)
 	}
 	return nil
-}
-
-// deployed relates what a deployment says it put its code behind to the
-// environment that deployed it: the address, and the name it is served under.
-// Both are named by their exact keys and never claimed, since neither lives at
-// GitHub: the relation shows once a source that holds the name reports it.
-func (r *atlasRead) deployed(at string, environment atlas.Ref, raw string) {
-	if strings.TrimSpace(raw) == "" {
-		return
-	}
-	b := r.b
-	address, host, err := collect.Address(raw)
-	if err != nil {
-		b.Withhold(at, err)
-		return
-	}
-	if endpoint, ok := b.Names(at, atlas.KindEndpoint, address); ok {
-		b.Relates(at, endpoint, atlas.RelationDeployedBy, environment)
-	}
-	if _, err := netip.ParseAddr(host); err == nil {
-		return
-	}
-	if name, ok := b.Names(at, atlas.KindHostname, host); ok {
-		b.Relates(at, name, atlas.RelationDeployedBy, environment)
-	}
-}
-
-// pipeline is the pipeline of repo that name names under prefix, and its
-// exists claim; false where it is withheld. A NAME SHAPED LIKE A CREDENTIAL IS
-// REFUSED BEFORE IT IS WRITTEN AS A KEY SEGMENT: the segment's escapes would
-// reshape it into text no rule knows, with the credential's body intact.
-func (r *atlasRead) pipeline(where string, repo atlas.Ref, prefix, name string) (atlas.Ref, bool) {
-	if redact.Contains(name) {
-		r.b.Withhold(where, fmt.Errorf("%s key: %w", atlas.KindPipeline, atlas.ErrCredential))
-		return atlas.Ref{}, false
-	}
-	return r.b.Ref(where, atlas.KindPipeline, repo.Key+"#"+prefix+keySegment(name))
-}
-
-// keySegment is a vendor's name as one segment of an entry's key: letters,
-// digits and . _ + - as they are, every other byte as '~' and its two hex
-// digits. Exact both ways, so two names never share a key and a name with a
-// space or a slash still has one.
-func keySegment(name string) string {
-	const hex = "0123456789abcdef"
-	var out strings.Builder
-	for i := range len(name) {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			c == '.', c == '_', c == '+', c == '-':
-			out.WriteByte(c)
-		default:
-			out.WriteByte('~')
-			out.WriteByte(hex[c>>4])
-			out.WriteByte(hex[c&0xf])
-		}
-	}
-	return out.String()
 }
 
 // workflowState folds GitHub's workflow states into the atlas's words: active
