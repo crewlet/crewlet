@@ -5506,6 +5506,15 @@
     "Scaleway": {
       "additionalProperties": false,
       "properties": {
+        "atlas": {
+          "description": "See more in Atlas: the engine makes a read-only IAM application named for Atlas, with its own policy and API key, and reads the Organization's servers, clusters, databases, load balancers, bucket names, DNS zones, containers and functions under it. Off deletes the application, its policy and its key.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "enabled": {
           "description": "Turn the integration on.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",

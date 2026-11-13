@@ -131,23 +131,14 @@ func readRecords(b *collect.Builder, where string, account, zone atlas.Ref, zone
 
 	var names []atlas.Ref
 	for _, r := range records {
-		if !slices.Contains([]string{RecordA, RecordAAAA, RecordCNAME}, r.Type) {
-			continue
-		}
 		at := where + ".dns_records[" + r.ID + "]"
-		host, ok := b.Ref(at+".name", atlas.KindHostname, r.Name)
+		host, ok := b.Name(at, zone, zones, collect.Record{Type: r.Type, Name: r.Name, Content: r.Content})
 		if !ok {
 			continue
 		}
 		names = append(names, host)
-		b.Relates(at+".name", host, atlas.RelationInZone, zone)
 		if r.Proxied {
 			b.Relates(at+".proxied", host, atlas.RelationFrontedBy, account)
-		}
-		if r.Type == RecordCNAME {
-			b.PointsAtName(at+".content", host, r.Content, zones)
-		} else {
-			b.PointsAtAddress(at+".content", host, r.Content)
 		}
 	}
 	return names

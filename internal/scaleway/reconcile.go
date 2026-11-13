@@ -33,6 +33,10 @@ type Options struct {
 	// seat handle.
 	Seats map[string]Seat
 
+	// AtlasApplicationID is the atlas application the engine recorded, ""
+	// where it made none: never an orphan, and what tells a stray one apart.
+	AtlasApplicationID string
+
 	// InUse are the levels a seat that is on holds ([seataccess.LevelsInUse]):
 	// a level the catalogue cannot grant is a problem only for one of them.
 	InUse []string
@@ -72,6 +76,10 @@ type Result struct {
 	// proof the engine made one.
 	orphaned []Application
 
+	// strays are the applications under the atlas application's name that the
+	// engine did not record: reported, never touched.
+	strays []Application
+
 	now time.Time
 }
 
@@ -102,7 +110,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res := &Result{
 		key: in.key, grants: in.grants, keysRefused: in.keysRefused(), gaps: in.gaps,
 		inUse: opts.InUse, now: now,
-		orphaned: orphanedApplications(apps, opts.Seats, opts.Company, in.app.ID),
+		orphaned: orphanedApplications(apps, opts.Seats, opts.Company, in.app.ID, opts.AtlasApplicationID),
+		strays:   strayAtlasApplications(apps, opts.Company, strings.TrimSpace(opts.AtlasApplicationID)),
 	}
 	for _, handle := range slices.Sorted(maps.Keys(opts.Seats)) {
 		seat := opts.Seats[handle]
@@ -143,8 +152,9 @@ func strangers(ctx context.Context, c *Client, company, handle string, seat Seat
 }
 
 // orphanedApplications is every application named for this company's agents
-// that is neither one the ledger records nor the provisioner's own.
-func orphanedApplications(apps []Application, seats map[string]Seat, company, provisionerID string) []Application {
+// that is neither one the ledger records, the provisioner's own nor the atlas
+// application the engine recorded.
+func orphanedApplications(apps []Application, seats map[string]Seat, company, provisionerID, atlasID string) []Application {
 	prefix := ApplicationName(company, "")
 	managed := map[string]bool{}
 	for _, s := range seats {
@@ -152,7 +162,7 @@ func orphanedApplications(apps []Application, seats map[string]Seat, company, pr
 	}
 	var out []Application
 	for _, app := range apps {
-		if app.ID == provisionerID || managed[app.ID] || !strings.HasPrefix(app.Name, prefix) {
+		if app.ID == provisionerID || app.ID == atlasID || managed[app.ID] || !strings.HasPrefix(app.Name, prefix) {
 			continue
 		}
 		out = append(out, app)
@@ -272,6 +282,21 @@ func (r *Result) Findings() []integration.Finding {
 			Title: "Agent applications with no seat",
 			Detail: "Scaleway holds " + integration.Count(len(names), "IAM application") + " named for this " +
 				"company's agents that Crewlet has no record of making",
+			Remedy:    "Delete the ones nobody uses at Scaleway. Crewlet never deletes an application it has no record of",
+			ActionURL: ApplicationsURL, Subjects: names,
+		})
+	}
+	if len(r.strays) > 0 {
+		names := make([]string, 0, len(r.strays))
+		for _, app := range r.strays {
+			names = append(names, app.Name+" ("+app.ID+")")
+		}
+		slices.Sort(names)
+		out = append(out, integration.Finding{
+			Kind: integration.FindingRegistrationOrphaned, Subject: "scaleway atlas applications",
+			Title: "Atlas applications Crewlet has no record of",
+			Detail: "Scaleway holds " + integration.Count(len(names), "IAM application") + " under the name " +
+				"Crewlet gives the Atlas application that Crewlet has no record of making",
 			Remedy:    "Delete the ones nobody uses at Scaleway. Crewlet never deletes an application it has no record of",
 			ActionURL: ApplicationsURL, Subjects: names,
 		})

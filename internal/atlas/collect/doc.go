@@ -14,7 +14,9 @@
 // project of the company's group, its pipeline and its environments.
 // Its sixth and seventh read Google Cloud and Scaleway (ADR-0137): every
 // project as an account, and what a Google Cloud project's enabled APIs say
-// it is used for. Its eighth reads Atlassian (ADR-0138): every site of the
+// it is used for; where a company asks, Scaleway's products are read too,
+// under an IAM application made for the atlas (ADR-0144). Its eighth reads
+// Atlassian (ADR-0138): every site of the
 // organization as an account, and each product as what its account does.
 // Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
 // own id and name, with a bot token one of the agents already holds. Its
