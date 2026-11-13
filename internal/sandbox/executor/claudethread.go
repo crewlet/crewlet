@@ -1364,11 +1364,13 @@ func (m threadMessage) Calls() []threadCall { return m.calls }
 // which reads as a finished leg. Only the stop_reason tells the two apart:
 // "tool_use" on every such text record measured, as on its call's, and
 // "end_turn" or "stop_sequence" on every other record of text alone. Its
-// reader takes a leg for finished on "end_turn" alone, with no API error
-// ([threadLine.APIError]), as Claude Code itself tests a reply that ended its
-// turn: every reply the harness writes itself, in place of a model's, stops
-// at "stop_sequence" (a resume's "No response requested.", a failed request's
-// error).
+// reader takes a leg for finished on "end_turn" alone, with no API error and
+// a model other than "<synthetic>" ([threadLine.APIError],
+// [threadLine.Model]), as Claude Code itself tests a reply with which its
+// model ended its turn: every reply the harness writes itself in place of a
+// model's, as 2.1.310 and 2.1.322 build one, is of the model "<synthetic>"
+// and stops at "stop_sequence" (a resume's "No response requested.", a failed
+// request's error) or, where it calls a tool, at "tool_use".
 //
 // HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // string where present. Any other type is this accessor's error, never "",
@@ -1407,8 +1409,9 @@ func (l threadLine) StopReason() (string, error) {
 // 2.1.310 and 2.1.322 write one; the harness then ends a subagent's loop on
 // it and answers the call that started the subagent as completed, its report
 // that text, though no model read what the failed request carried. Claude
-// Code's own test of a reply that ended its turn is this mark false and its
-// stop reason "end_turn" ([threadLine.StopReason]).
+// Code's own test of a reply with which its model ended its turn is this mark
+// false, its model other than "<synthetic>" ([threadLine.Model]) and its stop
+// reason "end_turn" ([threadLine.StopReason]).
 //
 // HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // boolean where present. Any other type, null among it, is this accessor's
@@ -1422,6 +1425,47 @@ func (l threadLine) APIError() (bool, error) {
 		return false, nil
 	}
 	return wireBool("isApiErrorMessage", l.apiError)
+}
+
+// Model is the model that wrote the reply an assistant record holds, its
+// message's `model` as written: "<synthetic>" where Claude Code wrote the
+// reply itself in place of a model's (a resume's "No response requested.", a
+// failed request's error); "" where the key is absent, and on every record
+// that is no assistant's, whatever its `message` carries.
+//
+// ITS READER is the one that tells a relaunch which of its calls a kept
+// session holds (exact telling), to know whether a subagent's leg ended on a
+// reply its model wrote. Claude Code's own test of a reply with which its
+// model ended its turn, as 2.1.310 and 2.1.322 make it, passes over every
+// reply marked an API error ([threadLine.APIError]) and every one of the
+// model "<synthetic>", whatever it says of its stop, and asks the rest for
+// the stop reason "end_turn" ([threadLine.StopReason]); its reader asks all
+// three, as the harness does.
+//
+// HELD TO ITS TYPE HERE, for this reader, as [threadLine.Usage] holds the
+// same key for its own: a string where present. Any other type, null among
+// it, is this accessor's error, never "", which its reader would take for a
+// model's reply, and never Message's, so a reshaped model costs only the
+// readers that ask for it.
+//
+// Decoded from the line's raw `message` on each call, as
+// [threadLine.StopReason] reads its key: nothing keeps it.
+func (l threadLine) Model() (string, error) {
+	if l.Head.Type != recordAssistant {
+		return "", nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a reply that names no model.
+	if !wireObject(l.message) {
+		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		Model json.RawMessage `json:"model"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return "", fmt.Errorf("an assistant record's message: %w", err)
+	}
+	return wireString("model", message.Model)
 }
 
 // ReplacedResults hands each, in order, the id of every tool result a

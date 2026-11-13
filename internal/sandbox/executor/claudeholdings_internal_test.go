@@ -1514,12 +1514,14 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // answered by the resume's own result (condition 3), are not. Built, each
 // otherwise reportable: a subagent whose metadata is missing, names a call of
 // another tool, or names an id a second Agent call carries; whose thread
-// restarts, holds a record of another agent's, opens on a record that roots no
-// chain, ends on an empty reply, on the text of a reply cut before its call, on
-// a reply its harness wrote itself (a failed request's error, which ends the
-// subagent and answers its call completed, or a resume's "No response
-// requested."), on one marked an API error though it ended its turn, or on one
-// cut at its token bound, or holds a skill's text, a leg the main thread holds
+// restarts, holds a record of another agent's, marks an API error or names the
+// model of a reply in no shape Claude Code writes, opens on a record that
+// roots no chain, ends on an empty reply, on the text of a reply cut before
+// its call, on a reply its harness wrote itself (a failed request's error,
+// which ends the subagent and answers its call completed, or a resume's "No
+// response requested."), on one marked an API error though it ended its turn,
+// on one of the model "<synthetic>" though it ended its turn, or on one cut
+// at its token bound, or holds a skill's text, a leg the main thread holds
 // no call of (d4's record); whose thread starts a second leg it finished, the
 // main thread holding no call of it (condition 4 alone); whose Agent call's
 // answer names another agent, is a background subagent's, is a failure, comes
@@ -1536,10 +1538,13 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // a reply of text for finished whatever it stopped for, and the cut pair's is;
 // take one for finished whatever it stopped for but a call, and the resume's
 // own reply's is; read past a reply's mark of an API error, and the marked
-// reply's is; or drop any other part of a condition (the answer's liveness,
-// its failure, its count, the metadata's one call, a Task call as a start, a
-// notification's status or agent, a record of another agent's), and the
-// subagent its case built is reported.
+// reply's is; take a reply of the model "<synthetic>" for a model's, and the
+// one of that model that ended its turn is; read past a model in no shape
+// Claude Code writes, and the reply whose model is null leaves its subagent
+// unfinished rather than not whole; or drop any other part of a condition
+// (the answer's liveness, its failure, its count, the metadata's one call, a
+// Task call as a start, a notification's status or agent, a record of another
+// agent's), and the subagent its case built is reported.
 func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T) {
 	t.Parallel()
 	with := func(base func(*testing.T) hsSession, edit func(*testing.T, *hsSession)) func(*testing.T) hsSession {
@@ -1604,6 +1609,14 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 		"its last reply's mark of an API error no boolean": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread[3] = hsSide(t, ctReplace(t, hsFinished(t, ctUUID(103), ctUUID(104)), `"type":"assistant"`,
 				`"isApiErrorMessage":"false","type":"assistant"`))
+		}), hsNotWhole},
+		"its last reply ended its turn, of the model <synthetic>": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, ctReplace(t, hsFinished(t, ctUUID(103), ctUUID(104)), `"model":"claude-sonnet-4-5"`,
+				`"model":"<synthetic>"`))
+		}), hsUnfinished},
+		"its last reply's model no string": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, ctReplace(t, hsFinished(t, ctUUID(103), ctUUID(104)), `"model":"claude-sonnet-4-5"`,
+				`"model":null`))
 		}), hsNotWhole},
 		"a skill's text in its thread (d4's record)": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread = []string{s.thread[0], s.thread[1], s.thread[2],

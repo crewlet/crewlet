@@ -143,9 +143,9 @@ import (
 //     call is exactly one counted Agent or Task call of the main thread.
 //  2. WHOLE: no line of its thread is no record; every user and assistant
 //     record is its own, its `agentId` and `isSidechain` true, and its
-//     message, its stop reason and its mark of an API error decode; no record
-//     names another agent; and its thread never restarts, so its first
-//     chained record roots its chain.
+//     message, its stop reason, its mark of an API error and the model of its
+//     reply decode; no record names another agent; and its thread never
+//     restarts, so its first chained record roots its chain.
 //  3. EVERY LEG ANSWERED, LIVE IN THE MAIN THREAD. Its legs are the call that
 //     started it, and every SendMessage call of the main thread to it, but one
 //     its own result refused (`success`, the literal false); a SendMessage
@@ -166,16 +166,19 @@ import (
 //     text among them, is one more.
 //  5. EVERY LEG FINISHED: each stretch of its thread from one leg's start to
 //     the next ends on a reply of text or thinking alone with which its model
-//     ended its turn: its stop reason "end_turn" and no API error, as Claude
-//     Code itself tests a reply that ended its turn. A reply that wrote text
-//     and then called a tool is two records, the text's first, each saying it
-//     stopped for the call: a thread cut between the two ends on text, which
-//     only the stop reason tells from a finished reply. And a request that
-//     failed for good leaves a reply the harness wrote itself, the error's
-//     text, stopped at "stop_sequence" and marked an API error
-//     ([threadLine.APIError]), on which the harness ends the subagent and
-//     answers the call that started it as completed: no model read what that
-//     request carried, a call's result among it.
+//     ended its turn: its stop reason "end_turn", no API error and a model
+//     other than "<synthetic>", Claude Code's own whole test of a reply with
+//     which its model ended its turn. A reply that wrote text and then called
+//     a tool is two records, the text's first, each saying it stopped for the
+//     call: a thread cut between the two ends on text, which only the stop
+//     reason tells from a finished reply. A request that failed for good
+//     leaves a reply the harness wrote itself, the error's text, stopped at
+//     "stop_sequence" and marked an API error ([threadLine.APIError]), on
+//     which the harness ends the subagent and answers the call that started
+//     it as completed: no model read what that request carried, a call's
+//     result among it. And every reply the harness writes itself in place of
+//     a model's is of the model "<synthetic>" ([threadLine.Model]), which its
+//     test passes over whatever it says of its stop.
 //
 // A subagent not reported says which condition failed first, in words for
 // the log ([sandbox.SubagentThread.Why]). An origin, an answer's toolUseResult
@@ -307,6 +310,10 @@ const (
 	// ended its turn ([threadLine.StopReason]), the one stop that finishes a
 	// subagent's leg ([finishedReply]).
 	claudeEndedTurn = "end_turn"
+	// claudeSyntheticModel is the model of a reply Claude Code writes itself
+	// in place of a model's ([threadLine.Model]), which finishes no
+	// subagent's leg whatever it says of its stop ([finishedReply]).
+	claudeSyntheticModel = "<synthetic>"
 )
 
 // holdingsFloor is [holdingsWriterFloor].
@@ -878,6 +885,11 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, line threadL
 		a.notWhole(fmt.Sprintf("line %d of its thread marks an API error in no shape Claude Code writes", line.N),
 			apiErr)
 	}
+	model, modelErr := line.Model()
+	if modelErr != nil {
+		a.notWhole(fmt.Sprintf("line %d of its thread names the model of its reply in no shape Claude Code writes",
+			line.N), modelErr)
+	}
 	for _, call := range message.Calls() {
 		w.count(agent, call, line.N)
 	}
@@ -886,8 +898,8 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, line threadL
 		a.legStarts++
 	}
 	a.open = true
-	a.finished = head.Type == recordAssistant && stopErr == nil && apiErr == nil &&
-		finishedReply(message.Kinds(), stop, apiError)
+	a.finished = head.Type == recordAssistant && stopErr == nil && apiErr == nil && modelErr == nil &&
+		finishedReply(message.Kinds(), stop, model, apiError)
 }
 
 // replaced files id, a call's whose result a content-replacement record says
@@ -927,10 +939,12 @@ func legStart(message threadMessage) bool {
 }
 
 // finishedReply reports whether an assistant record whose blocks are kinds,
-// its reply stopped for stop and written by its harness in place of a failed
-// request's where apiError, ends a leg: a reply with which its model ended its
-// turn, as Claude Code itself tests one (its stop reason "end_turn" and no
-// API error), of blocks of text and thinking alone, at least one.
+// whose reply stopped for stop and names model as the model that wrote it,
+// and which its harness wrote in place of a failed request's reply where
+// apiError, ends a leg: a reply with which its model ended its turn, as
+// Claude Code itself tests one (its stop reason "end_turn", no API error and
+// a model other than "<synthetic>"), of blocks of text and thinking alone, at
+// least one.
 //
 // "END_TURN" ALONE, never any stop but a call's: every reply the harness
 // writes itself stops at "stop_sequence", a failed request's error and a
@@ -938,8 +952,16 @@ func legStart(message threadMessage) bool {
 // before either; and a reply cut at its token bound ("max_tokens") or refused
 // ended no turn its model chose to end. Each leaves its leg unfinished, the
 // safe direction.
-func finishedReply(kinds []string, stop string, apiError bool) bool {
-	if len(kinds) == 0 || apiError || stop != claudeEndedTurn {
+//
+// AND A MODEL'S OWN, never a reply of the model "<synthetic>", whatever it
+// says of its stop: that is the model of every reply the harness writes in
+// place of a model's ([threadLine.Model]), and the harness's own test passes
+// over each such reply before it reads a stop. No such reply 2.1.310 or
+// 2.1.322 builds says "end_turn", so the stop alone already leaves each one's
+// leg unfinished; the test is still the harness's whole one, so a release
+// that builds one saying so finishes no leg no model ended.
+func finishedReply(kinds []string, stop, model string, apiError bool) bool {
+	if len(kinds) == 0 || apiError || stop != claudeEndedTurn || model == claudeSyntheticModel {
 		return false
 	}
 	return !slices.ContainsFunc(kinds, func(kind string) bool {
