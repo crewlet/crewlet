@@ -119,9 +119,12 @@ func (e ending) notRun() string {
 // the same five seconds, started as the take starts, so the answer of a take
 // begun before the end is due within this wait wherever the store answers. A
 // take whose store stalls past its budget is waited for behind the end, as any
-// answer past this bound is, and still never refused. Nothing holds the two to
-// each other either: a take's budget raised past this wait would leave more
-// ends returning with their close behind them, never an answer refused.
+// answer past this bound is, and is never refused while its box still waits
+// for it. A box that gave the call up, or whose connection failed, waits for
+// no answer, and its request's end lets the hold go before any write. Nothing
+// holds the two to each other either: a take's budget raised past this wait
+// would leave more ends returning with their close behind them, never an
+// answer its box waits for refused.
 //
 // Not a setting: nothing about a deployment moves what it is sized for.
 const endAnswerWait = 5 * time.Second
@@ -413,8 +416,9 @@ func (o *binding) endKeeping(keep SteerInbox, how ending) {
 		})
 		log.WarnContext(o.ctx, "mcp_bridge_close_deferred", "run_id", o.session.RunID,
 			"launch_id", o.id, "seat", o.session.Handle, "after", endAnswerWait.String(),
-			"detail", "an answer to the box was still on its way, unread; the box's sessions on "+
-				"this opening are closed once it is out, or once the box's connection ends")
+			"detail", "an answer to the box was still on its way: still being made, as a hook's take "+
+				"waiting on its store, or written and not yet read; the box's sessions on this opening "+
+				"are closed once it is out, or once the box's connection ends")
 	}
 }
 
@@ -468,8 +472,15 @@ func (o *binding) holdRefusalLocked(over <-chan struct{}) {
 // call's request is over, as the answer of a call the opening refuses is held
 // ([binding.holdRefusalLocked]), and reads the opening's note inbox under the
 // same lock: nil once the opening has ended, or where it has none. over is
-// the request's context's Done, which the SDK ends only after the answer's
-// write, as it is a call's [toolsession.Call.Over].
+// the request's context's Done, as a call's [toolsession.Call.Over] is:
+// closed once the answer's write has returned, or BEFORE ANY WRITE where the
+// box gave the call up or its connection failed. The SDK cancels the
+// request's context on the box's `notifications/cancelled` while the answer is
+// still to come, and on the connection's failure (its reader's exit, a broken
+// writer, go-sdk v1.8.0). The hold then lets go with the answer unwritten, and
+// an end may close the box's sessions under it, which loses nothing the hold
+// could keep: a box that gave the call up discards a late answer (measured on
+// Claude Code, [steerTakeBudget]), and a failed connection carries none.
 //
 // A HOOK'S CALL NEVER REACHES [binding.Call], which holds every answer it
 // gives: the opening's own server answers it in a middleware of its own,

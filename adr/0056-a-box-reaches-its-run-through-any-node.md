@@ -210,11 +210,12 @@ waits for it, as it does before any answer, so no progress follows the answer.
 **The ending waits for those answers, five seconds at most, then closes.** The
 tool session tells the dispatcher when a call's request is over on its
 transport (`toolsession.Call.Over`), which the SDK reaches only once the
-answer's write has returned. The ending waits for that on every call it
-answered; on a call whose tool returned just before it, which its own result
-answers once its record is made; and on every call the opening answered
-without running it, a call that reached it after its end among them, which is
-refused and told what the end means. Only then does it close the box's
+answer's write has returned, unless the box gave the call up first or its
+connection failed, when nobody reads the answer. The ending waits for that on
+every call it answered; on a call whose tool returned just before it, which its
+own result answers once its record is made; and on every call the opening
+answered without running it, a call that reached it after its end among them,
+which is refused and told what the end means. Only then does it close the box's
 sessions, which by then hold no request a tool is behind. A call that reaches
 the opening as that close begins is refused all the same, and its box reads the
 close's failure in place of the refusal. Five seconds covers that record's
