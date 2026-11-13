@@ -32,9 +32,10 @@ import (
 //     — never an error: measured on Claude Code, a hook's call that failed made
 //     the harness drop and re-initialise the whole bridge, telling the model its
 //     tools were still connecting. And the opening's end waits for that answer
-//     before it closes the box's sessions ([binding.holdHook]): an answer the
-//     close refused would fail the call all the same, and a take's notes would
-//     be recorded handed over to a step that never had them.
+//     before it closes the box's sessions, for as long as the box waits for it
+//     ([binding.holdHook]): an answer the close refused would fail the call all
+//     the same, and a take's notes would be recorded handed over to a step that
+//     never had them.
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
 //     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
 //     ones waiting past the cursor, rendered, each recorded served to the run's
@@ -430,7 +431,9 @@ type steerArgs struct {
 // agent's loop, and nothing for any other. Whatever it answers, the opening's
 // end waits for that answer to be out before it closes the box's sessions
 // ([binding.holdHook]), so a take whose write landed is never answered into
-// the close.
+// the close while its box still waits for it: a box that gave the call up, or
+// whose connection failed, lets the hold go before any write, and reads no
+// answer.
 func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
 	inbox := o.holdHook(ctx.Done())
 	if inbox == nil {
