@@ -144,50 +144,13 @@ func readRecords(b *collect.Builder, where string, account, zone atlas.Ref, zone
 		if r.Proxied {
 			b.Relates(at+".proxied", host, atlas.RelationFrontedBy, account)
 		}
-		switch r.Type {
-		case RecordCNAME:
-			target, ok := b.Ref(at+".content", atlas.KindHostname, r.Content)
-			if !ok {
-				continue
-			}
-			b.Relates(at+".content", host, atlas.RelationResolvesTo, target)
-			// A NAME INSIDE ONE OF THE ACCOUNT'S ZONES sits in it, whichever
-			// zone's record pointed there.
-			if owner, found := zoneOf(target, zones); found {
-				b.Relates(at+".content", target, atlas.RelationInZone, owner)
-			}
-		default:
-			key, err := atlas.AddressHostKey(r.Content)
-			if err != nil {
-				b.Withhold(at+".content", err)
-				continue
-			}
-			origin, ok := b.Ref(at+".content", atlas.KindHost, key)
-			if !ok {
-				continue
-			}
-			b.Says(at+".content", origin, atlas.FactAddress, r.Content)
-			b.Relates(at+".content", host, atlas.RelationResolvesTo, origin)
+		if r.Type == RecordCNAME {
+			b.PointsAtName(at+".content", host, r.Content, zones)
+		} else {
+			b.PointsAtAddress(at+".content", host, r.Content)
 		}
 	}
 	return names
-}
-
-// zoneOf is the zone a name sits in: the longest zone the name is under, so
-// a name in a zone that is itself under another of the account's zones sits
-// in the nearer one.
-func zoneOf(name atlas.Ref, zones []atlas.Ref) (atlas.Ref, bool) {
-	var best atlas.Ref
-	found := false
-	for _, zone := range zones {
-		if name.Key == zone.Key || !strings.HasSuffix(name.Key, "."+zone.Key) {
-			continue
-		}
-		if !found || len(zone.Key) > len(best.Key) {
-			best, found = zone, true
-		}
-	}
-	return best, found
 }
 
 // readPacks claims each certificate pack of a zone: what it covers, its type,

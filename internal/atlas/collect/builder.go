@@ -146,11 +146,22 @@ func (b *Builder) Relates(where string, from atlas.Ref, rel atlas.Relation, to a
 // REFUSED BEFORE IT IS WRITTEN AS A KEY SEGMENT: the segment's escapes would
 // reshape it into text no rule knows, with the credential's body intact.
 func (b *Builder) Pipeline(where string, repo atlas.Ref, prefix, name string) (atlas.Ref, bool) {
-	if redact.Contains(name) {
-		b.Withhold(where, fmt.Errorf("%s key: %w", atlas.KindPipeline, atlas.ErrCredential))
+	segment, ok := b.Segment(where, atlas.KindPipeline, name)
+	if !ok {
 		return atlas.Ref{}, false
 	}
-	return b.Ref(where, atlas.KindPipeline, repo.Key+"#"+prefix+KeySegment(name))
+	return b.Ref(where, atlas.KindPipeline, repo.Key+"#"+prefix+segment)
+}
+
+// Segment is a vendor's name as one segment of the key of an entry of kind k
+// ([KeySegment]); false where the name is shaped like a credential, which is
+// withheld before the segment's escapes can reshape it.
+func (b *Builder) Segment(where string, k atlas.Kind, name string) (string, bool) {
+	if redact.Contains(name) {
+		b.Withhold(where, fmt.Errorf("%s key: %w", k, atlas.ErrCredential))
+		return "", false
+	}
+	return KeySegment(name), true
 }
 
 // Deployed relates what a deployment says it put its code behind to the
@@ -176,6 +187,55 @@ func (b *Builder) Deployed(where string, pipeline atlas.Ref, raw string) {
 	if name, ok := b.Names(where, atlas.KindHostname, host); ok {
 		b.Relates(where, name, atlas.RelationDeployedBy, pipeline)
 	}
+}
+
+// PointsAtName claims that the name host resolves to the name target, as a
+// CNAME or an alias says, and that target sits in the zone of zones it is
+// under: a name inside one of the account's zones sits in it, whichever
+// zone's record pointed there.
+func (b *Builder) PointsAtName(where string, host atlas.Ref, target string, zones []atlas.Ref) {
+	to, ok := b.Ref(where, atlas.KindHostname, target)
+	if !ok {
+		return
+	}
+	b.Relates(where, host, atlas.RelationResolvesTo, to)
+	if zone, found := ZoneOf(to, zones); found {
+		b.Relates(where, to, atlas.RelationInZone, zone)
+	}
+}
+
+// PointsAtAddress claims that the name host resolves to the server at
+// address, as an A or an AAAA record says: a server known by its address
+// alone until another source names it.
+func (b *Builder) PointsAtAddress(where string, host atlas.Ref, address string) {
+	key, err := atlas.AddressHostKey(address)
+	if err != nil {
+		b.Withhold(where, err)
+		return
+	}
+	origin, ok := b.Ref(where, atlas.KindHost, key)
+	if !ok {
+		return
+	}
+	b.Says(where, origin, atlas.FactAddress, address)
+	b.Relates(where, host, atlas.RelationResolvesTo, origin)
+}
+
+// ZoneOf is the zone a name sits in: the longest zone the name is under, so
+// a name in a zone that is itself under another of the account's zones sits
+// in the nearer one.
+func ZoneOf(name atlas.Ref, zones []atlas.Ref) (atlas.Ref, bool) {
+	var best atlas.Ref
+	found := false
+	for _, zone := range zones {
+		if name.Key == zone.Key || !strings.HasSuffix(name.Key, "."+zone.Key) {
+			continue
+		}
+		if !found || len(zone.Key) > len(best.Key) {
+			best, found = zone, true
+		}
+	}
+	return best, found
 }
 
 // Unread records one part of the vendor the credential may not read.

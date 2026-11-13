@@ -5,7 +5,7 @@
 // The engine holds no AWS secret. It generates a certificate authority, seals
 // the key, and the owner registers only the certificate as an IAM Roles
 // Anywhere trust anchor, from one CloudShell paste of a stack the engine
-// renders (RenderStack). Two identities sign in through it, each on a profile
+// renders (RenderStack). Its identities sign in through it, each on a profile
 // that offers one role and a trust that admits one certificate name:
 //
 //   - the PROVISIONER (CN crewlet-<company>-provisioner) creates, changes and
@@ -16,6 +16,12 @@
 //   - the BROKER (CN crewlet-<company>-seat-*) can only assume seat roles, each
 //     of which trusts the broker alone with its source identity pinned to its
 //     own certificate name, so CloudTrail's sourceIdentity names the agent.
+//
+// A third identity is there only where the company asks for it
+// (provisioning.atlas_read): the ATLAS (CN crewlet-<company>-atlas), a role of
+// nine named listings that the atlas-collect duty signs in as, so CloudTrail
+// names the atlas behind an hourly read of the account and never an agent
+// (ADR-0148, atlas.go).
 //
 // A seat's level is one or more fixed customer managed policies; turning a
 // seat off attaches AWS's AWSDenyAll, which reaches sessions already issued,

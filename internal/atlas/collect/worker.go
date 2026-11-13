@@ -254,10 +254,11 @@ func (w *Worker) Tick(ctx context.Context) {
 		kind := src.Kind()
 		known[kind] = true
 		st, found := standings[kind]
-		if !in.Config.DeclaresIntegration(kind.String()) {
+		if !Connected(src, in.Config) {
 			// A SOURCE THE COMPANY DOES NOT CONNECT HAS NO STANDING: its
-			// row is forgotten, as an integration's status is. What it
-			// recorded stays on the log until a read or a person retires it.
+			// row is forgotten, as an integration's status is, and so is an
+			// optional one it has not asked for. What it recorded stays on
+			// the log until a read or a person retires it.
 			if found {
 				w.forget(ctx, kind)
 			}

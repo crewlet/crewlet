@@ -32,6 +32,28 @@ type Source interface {
 	Collect(ctx context.Context, in Input) (Read, error)
 }
 
+// Optional is a source a company turns on apart from its integration, because
+// it reads under an identity the company adds by choice (ADR-0148). Off, it is
+// neither read nor listed among the atlas's sources: nothing waits on it, and
+// a source nobody asked to read is not one to show as waiting for a read.
+type Optional interface {
+	Source
+
+	// On reports whether c asks for the read.
+	On(c *config.Company) bool
+}
+
+// Connected reports whether c asks for src to be read: it connects the
+// source's integration and, for an [Optional] source, asks for the read. The
+// one rule the duty reads by and the report of sources lists by.
+func Connected(src Source, c *config.Company) bool {
+	if c == nil || !c.DeclaresIntegration(src.Kind().String()) {
+		return false
+	}
+	opt, optional := src.(Optional)
+	return !optional || opt.On(c)
+}
+
 // Input is what one read is handed.
 type Input struct {
 	// Config is the live company document, whose credentials resolve through
