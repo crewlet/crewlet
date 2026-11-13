@@ -304,6 +304,8 @@ export type FramedScreen =
   | { screen: "integrations"; kind?: string }
   /** The atlas, its map over its catalogue, and one entry's page by its id. */
   | { screen: "atlas" }
+  | { screen: "atlas-changes" }
+  | { screen: "atlas-review" }
   | { screen: "atlas-entry"; id: string }
   | { screen: "budgets" }
   /**
@@ -606,6 +608,9 @@ function company(rest: string[], screen: Make, under: Under): Route {
       // AN ENTRY BY ITS ID, the one segment under it: a uuid, which no word
       // the atlas may reserve later can be.
       if (tail.length === 0) return screen({ screen: "atlas" });
+      // ITS TWO PAGES BY NAME, read before an id: no entry's id is a word.
+      if (tail.length === 1 && tail[0] === "changes") return screen({ screen: "atlas-changes" });
+      if (tail.length === 1 && tail[0] === "review") return screen({ screen: "atlas-review" });
       if (tail.length === 1 && ID_SHAPE.test(tail[0]!)) {
         return screen({ screen: "atlas-entry", id: tail[0]! });
       }

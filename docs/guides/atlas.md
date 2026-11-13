@@ -1,7 +1,8 @@
-# Reading the Atlas
+# Reading and correcting the Atlas
 
 How to open the company's atlas in the dashboard, read its map and its
-catalogue, follow what depends on what, and read where each fact came from.
+catalogue, follow what depends on what, read where each fact came from, and
+add, correct and confirm what it says.
 What the atlas
 *is* (entries, facts, relations, where each claim comes from and how one thing
 seen by several sources becomes one entry) is the [atlas](../concepts/atlas.md)
@@ -28,8 +29,9 @@ those come from.
 ## What it shows today
 
 This version of the atlas draws what the engine already knows, and what people
-holding Atlas add and correct, by asking Ask Crewlet or through the operator
-tools ([changing the atlas](../concepts/atlas.md#changing-the-atlas)):
+holding Atlas add and correct: on these screens, by asking Ask Crewlet, or
+through the operator tools
+([changing the atlas](../concepts/atlas.md#changing-the-atlas)):
 
 | Lane | What fills it in this version |
 |---|---|
@@ -43,9 +45,9 @@ tools ([changing the atlas](../concepts/atlas.md#changing-the-atlas)):
 | Tools and models | the tool servers of Settings › MCP & tools and the model entries of Settings › Models |
 
 An empty cluster says this on the map itself, so a new company sees what it would
-take to fill each one. These screens only read: every change goes through Ask
-Crewlet's proposals, which you approve, or the operator tools. What agents
-record arrives with later versions.
+take to fill each one. Anybody holding Atlas changes it from these screens
+([adding and correcting](#adding-and-correcting)); the same changes can be
+proposed by Ask Crewlet, which you approve, or made through the operator tools.
 
 ## The page
 
@@ -66,9 +68,10 @@ and one selection.
   seven days, over its lines a day for the last fourteen. It is a count of what
   people, integrations and agents recorded. What the engine reads from the
   settings and its own records at every read is not recorded, so it leaves no
-  line.
+  line. **Every change** opens [Changes](#changes).
 - **Where it comes from**: the vendors the entries come from, and how many
-  entries are Confirmed, Likely and Unconfirmed.
+  entries are Confirmed, Likely and Unconfirmed. Under it, **Review** says how
+  many things wait for a person and opens [Review](#review).
 
 Nothing in the band, or anywhere on the page, is a request rate, a latency or
 an error budget: the engine holds none. Health is the engine's word for an
@@ -161,29 +164,33 @@ page:
 - its name, key, health, owner and confidence, and the one line a person gave
   it;
 - what is wrong with it, in sentences;
-- **What it touches**: how many entries rely on it and how many it relies on,
-  over a small diagram in the map's own look of the entry among its
-  neighbours (what uses it, what it depends on, what it runs on and what
-  stands around it);
+- **What it touches**: how many entries rely on it, how many it relies on and
+  how many stand around it, counted off the small diagram under the sentence,
+  which draws the entry among its neighbours in the map's own look (what uses
+  it, what it depends on, what it runs on and what stands around it);
 - its facts, each with where it came from, how far it is trusted and when it
   was last seen ("seen by Cloudflare · confirmed · 4 min ago", "observed by sre
   · likely · turn");
 - **Recent changes**: the atlas's own log for this entry, newest first, each
   line with who recorded it.
 
-**Open** takes you to its page, which has three tabs:
+**Open** takes you to its page, which has four tabs:
 
 - **Overview**: the same, with the diagram drawn wide, how much the company
   uses it, which agents hold an account there, the keys merged into it, and
-  every change on request.
+  its latest changes.
 - **Relations**: what it depends on, what depends on it, the seats, units and
   pages it names, and everything that depends on it hop by hop, with the way to
   show the same on the map.
 - **Sources**: what each source says about it. Where two sources disagree, both
   values are shown first, with which one the atlas shows and why (a person's
   value over a newer report, or the newest of two equally trusted sources); the
-  entry then waits for a person, and nothing is settled for you. The tab is
-  marked while a disagreement stands.
+  entry then waits for a person, and nothing is settled for you. Each
+  disagreement carries its decisions as buttons: keep the value shown, or take
+  the other. The tab is marked while a disagreement stands.
+- **History**: every line the atlas's log holds for the entry, newest first,
+  with who recorded it, a page at a time. History is kept for the company's
+  `atlas.retention_days` (400 days unless the settings say otherwise).
 
 The confidence words are the engine's, never a model's: **Confirmed** (the
 company settings, the engine's own records, a person, or an integration's read
@@ -194,6 +201,73 @@ check).
 **Internal** beside an address marks one on a private network. The atlas keeps
 these, since they are the company's own map, and says so rather than hiding
 them.
+
+## Adding and correcting
+
+Every change here is recorded in your own name, on the atlas's own log. Your
+value outranks what an integration or an agent reports and never erases it: if
+a source later reports something else, both are shown and the entry waits in
+[Review](#review). Nothing settles in silence. Each control is drawn for every
+reader, and held with the reason for one who may not press it.
+
+**Add entry**, at the end of the toolbar, records something no source reports:
+its kind, its key, a name, who owns it (a seat or a unit of the chart), a
+one-line purpose and, for anything longer, the Doclet page that documents it.
+
+- An account takes its **vendor**; one the atlas does not know is **Other**,
+  with a short name. Every other kind may name the **vendor account** it
+  belongs to, whose vendor it is then shown under.
+- The key is the entry's identity, written as its kind takes it (a service's
+  slug, a host name, an address with its scheme); the form says how under the
+  field. A tool server, a model, a server keyed `ssh/` and a Gitlet repository
+  are declared in the settings or in Gitlet, and enter the atlas from there.
+- A key or a value shaped like a credential is refused, never stored masked,
+  and the engine's refusal is shown under the form in its own words.
+
+On an entry's sheet and page, under its header:
+
+| Control | What it records |
+|---|---|
+| **Confirm** | the entry as your own, so one only an integration or an agent reported is confirmed by you |
+| **Correct** | one fact's value as you know it. The dialog shows the value the atlas holds and every other value a source reports beside the field. For a fact with several values it adds one. The checkbox records that the value shown is wrong instead |
+| **More › Set owner** | one seat or one unit of the chart, or no owner |
+| **More › Add relation**, **Remove relation** | a relation to another entry, offered only where the vocabulary lets this kind draw it, or one recorded as not there |
+| **More › Link a page** | the Doclet page that documents it, found by its title |
+| **More › Merge with** | that two entries of one kind are the same thing. Before it applies, the dialog shows both side by side and every fact they hold different values of |
+| **More › Split** | that two keys are not the same thing, which always wins over a shared key and over a merge. The dialog says what will be shown apart before it applies |
+| **More › Retire**, **Restore** | the entry taken off the map, kept in its history, and brought back |
+| **More › Purge** | an administrator's alone: the entry, or one value wherever it appears, erased on every node with its history, and kept from being recorded again. Nothing undoes it, so it is typed back to confirm and the engine asks you to confirm who you are first |
+
+What the company's settings, Gitlet or the engine's own records declare is
+changed where it is declared: the engine refuses it here and says where.
+
+## Review
+
+**Review** (from the band, `#/company/atlas/review`) lists what waits for a
+person. The engine works it out on every read and stores none of it, so an item
+is gone the moment its cause is:
+
+- **Disagreements**: a fact or a relation the sources disagree on, with the
+  value shown and every other value beside it. **Keep** records the value shown
+  as yours again; **Take** records the other one as yours.
+- **Unconfirmed**: an entry only an agent reported, with nothing the engine
+  could check. It stays off the map until you **Confirm** it, or **Retire** it.
+- **Likely**: an entry an agent backed with a call or a file, that no person,
+  integration or setting stands behind yet.
+
+Pick several with their boxes to decide them together: **Accept as shown**
+confirms each entry and keeps each shown value, and **Retire** retires the
+picked entries. A bulk decision lists what it decides in a dialog and sends
+only when you press again there; what the engine refused stays picked, with
+its reason.
+
+## Changes
+
+**Changes** (`#/company/atlas/changes`) is the atlas's own log for the whole
+company, newest first: its lines a day for the last fourteen days, then each
+line with the entry it is about and who recorded it. It lists what people,
+integrations and agents recorded; what the engine reads from the settings and
+its own records at every read leaves no line.
 
 ## Asking about it
 
@@ -221,5 +295,6 @@ the atlas is a fact to read, not a place Ask Crewlet sends you.
 ## What the screens never do
 
 Nothing leaves the screen: there is no export, print or share. The screens ask
-again every thirty seconds, so a change to the settings or a tool server going
-down appears without a reload.
+again every thirty seconds, and at once after your own change, so a change to
+the settings or a tool server going down appears without a reload. A write is
+never drawn before the engine has answered it.

@@ -2325,7 +2325,12 @@ const (
 	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
 	// sheets about +28,100, the kit's layered service map in the one sheet
 	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
-	treeBudget = 5<<20 + 776<<10
+	// Adding, correcting and confirming in the atlas (Add entry, an entry's
+	// actions and their dialogs, History, Changes, Review and its bulk
+	// decision, and the vocabulary's fact and relation tables the dialogs
+	// offer from) took it to 5941.9 KiB (6,084,481 bytes, +47,375, nearly all
+	// of it the atlas chunk's script): 5942 KiB.
+	treeBudget = 5<<20 + 822<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
