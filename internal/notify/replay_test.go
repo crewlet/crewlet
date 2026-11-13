@@ -529,3 +529,44 @@ func TestAReplayedCopyASheddingNodeDefersIsKept(t *testing.T) {
 			"the copy it deferred, kept", len(left))
 	}
 }
+
+// droppedThrough is a queue's dead-letter verbs that record every drop: the
+// ledger an engine hands the service in their place.
+type droppedThrough struct {
+	queue.EventQueue
+	mu      sync.Mutex
+	dropped []uint64
+}
+
+func (d *droppedThrough) DropDeadLetter(ctx context.Context, subject string, seq uint64) error {
+	d.mu.Lock()
+	d.dropped = append(d.dropped, seq)
+	d.mu.Unlock()
+	return d.EventQueue.DropDeadLetter(ctx, subject, seq)
+}
+
+// A REPLAY DROPS A COPY THROUGH THE DEAD LETTERS IT IS GIVEN: the engine hands
+// the service the ledger its alarm reading shares, whose drop accounts for the
+// entry's going, so a copy the replay delivered is never counted as a wake the
+// retention lost. Dropped through the queue behind the ledger's back, one
+// replayed within a beat of its expiry would be.
+//
+// Mutation: drop through the service's queue rather than its dead letters, and
+// the ledger sees no drop.
+func TestAReplayDropsThroughTheDeadLettersItIsGiven(t *testing.T) {
+	var letters *droppedThrough
+	newer := newService(t, func(o *notify.Options, h *harness) {
+		o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+		letters = &droppedThrough{EventQueue: h.q}
+		o.DeadLetters = letters
+	})
+	at := staged(t, newer, "the copy replayed", relayed("2", "op-40"))
+
+	start(t, newer.svc)
+	letters.mu.Lock()
+	defer letters.mu.Unlock()
+	if len(letters.dropped) != 1 || letters.dropped[0] != at {
+		t.Fatalf("the replay dropped %v through the dead letters it was given, want the copy "+
+			"it delivered, %d", letters.dropped, at)
+	}
+}

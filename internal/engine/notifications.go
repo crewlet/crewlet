@@ -711,6 +711,14 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if !e.joins(ctx, notify.InboundGroup) {
 		return nil
 	}
+	// THE REPLAY'S DROPS THROUGH THE LEDGER THE ALARM'S READING SHARES, so a
+	// copy the replay delivered is accounted for as delivered and never
+	// counted as a wake the retention lost (feeddeadletters.go). Nil where
+	// none is wired, and the service then uses its queue's own verbs.
+	var letters notify.DeadLetters
+	if e.deadLetterLedger != nil {
+		letters = e.deadLetterLedger
+	}
 	svc, err := notify.New(notify.Options{
 		// THE NODE'S WAKE QUEUE, so a delivery routed to a seat whose
 		// mailbox is not complete yet is NAKed and redelivered rather than
@@ -728,7 +736,8 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		// before a control plane exists.
 		Admits: e.admits,
 		// AND A LINKED CHANGE'S SETTLE, which no wake carries (ADR-0121).
-		Observe: e.observeInbound,
+		Observe:     e.observeInbound,
+		DeadLetters: letters,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: notifications: %w", err)

@@ -875,7 +875,12 @@ The consequences worth stating plainly:
   restarting a node of the newer build delivers them. Waiting, each holds one
   of the group's acknowledgement slots for up to its ten minutes, out of the
   broker's 1000, so only a sustained 1.7 such wakes a second early in a roll
-  would delay the group's other mail, and none of it is lost. `crewlet feeds
+  would delay the group's other mail, and none of it is lost. While any such
+  wake waits, `inbound_dead_lettered` is raised on every data node, naming
+  how many wait and how soon the first expires: finish the roll, or restart a
+  node of the newer build if it has paused, and the start delivers them. One
+  that expires first is counted as a lost wake
+  (`crewlet.notify.inbound.dead_letter_expired`). `crewlet feeds
   dead-letters` does not list these: they are the notification service's,
   not a wake feed's. See
   [Delivery semantics](../concepts/event-system.md#delivery-semantics) and

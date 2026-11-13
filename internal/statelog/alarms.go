@@ -492,6 +492,7 @@ const (
 	KindRecordsGated        Kind = "records_gated"
 	KindFeedUnreadable      Kind = "feed_unreadable"
 	KindFeedDeadLettered    Kind = "feed_dead_lettered"
+	KindInboundDeadLettered Kind = "inbound_dead_lettered"
 	KindFeedStopped         Kind = "feed_stopped"
 	KindMaintenanceOpen     Kind = "maintenance_open"
 	KindVolumeLow           Kind = "volume_low"
@@ -734,6 +735,20 @@ type Reading struct {
 	// inside — until a node whose feed starts able to read it replays it,
 	// or the retention lets it go and the wake is lost with it.
 	FeedDeadLetters []FeedDeadLetter
+
+	// InboundDeadLetters is every delivery the notification service's
+	// inbound group never handled, kept on the group's unhandled subject
+	// (internal/notify's UnhandledSubject), as this node last read the
+	// dead-letter stream: each one's age and the time it has left, as
+	// FeedDeadLetters says each feed's. Node-wide, since the group is one
+	// for the whole fleet. Empty while it holds none.
+	//
+	// EVERY ENTRY IS A WAKE NOBODY HAS HAD: a newer record's wake the older
+	// nodes of a roll passed round until its budget was spent, or one a
+	// node that shed or stopped handed back last, kept whole until the next
+	// start of a node that reads it replays it, or the retention lets it go
+	// and the wake is lost with it.
+	InboundDeadLetters []FeedDeadLetter
 
 	// FeedsDown is every change feed on this node that holds no consumer:
 	// which feed, how long for, how many attempts to bring it back have
@@ -1089,8 +1104,9 @@ type Reading struct {
 	MCPServersAt time.Time
 }
 
-// FeedDeadLetter is one record a log's wake feed dead-lettered, as the alarm
-// reads it.
+// FeedDeadLetter is one dead letter as the alarm reads it: a record a log's wake
+// feed dead-lettered ([Reading.FeedDeadLetters]), or a delivery the inbound
+// group never handled ([Reading.InboundDeadLetters]).
 type FeedDeadLetter struct {
 	// Age is how long ago the dead-letter stream kept it.
 	Age time.Duration
@@ -1890,6 +1906,40 @@ var table = []rule{
 			"`changefeed_record_dead_lettered` log line names the record and why, " +
 			"logged by the data node that counted it: whichever node took the " +
 			"record's dead-letter claim, whichever of its keeps stored the entry.",
+	},
+	{
+		// A WAKE THE INBOUND GROUP NEVER HANDLED, KEPT RATHER THAN LOST: a
+		// newer record's wake the older nodes of a roll passed round until
+		// its 25 deliveries were spent, or one whose last delivery a node
+		// that shed or stopped handed back, kept on the group's unhandled
+		// subject until the next start of a node that reads it replays it
+		// (internal/notify), or the retention lets it go.
+		//
+		// RAISED FROM THE FIRST ENTRY, NODE-WIDE: the group is one for the
+		// whole fleet, and a single entry is a wake somebody has not had —
+		// one that nothing delivers until a node of the build that reads it
+		// STARTS, which a roll paused for good never brings. Its count of
+		// what expires within a day is the reading's, taken on every beat.
+		kind: KindInboundDeadLettered,
+		fires: func(r Reading) (string, bool) {
+			if len(r.InboundDeadLetters) == 0 {
+				return "", false
+			}
+			return deadLetterDetail(r.InboundDeadLetters, func(held, soon int) string {
+				return fmt.Sprintf("the notification service's inbound group holds %d "+
+					"delivery(ies) no node handled, wakes waiting for the next start of a "+
+					"node that reads them, %d of them expiring within a day", held, soon)
+			}), true
+		},
+		remedy: "Each entry is a wake nobody has had, which the next start of a node " +
+			"that reads it delivers, once, dropping the entry: finish the roll, or " +
+			"restart a node of the newer build if the roll is paused, since a node " +
+			"already running replays only at its start. Each start that finds entries " +
+			"logs `inbound_dead_letters_replayed`, and a line for each, named for what " +
+			"became of it. An entry no start delivers expires after " +
+			"`stream.event_retention_hours` and its wake is lost " +
+			"(`crewlet.notify.inbound.dead_letter_expired`). Each was logged as " +
+			"`dead_lettered` when its budget was spent, naming the return that spent it.",
 	},
 	{
 		// THE FEED THAT IS NOT RUNNING, beside the feed that is stuck:
@@ -2761,6 +2811,18 @@ const feedDeadLetterNamed = 5
 // entries, how many expire within a day, and the soonest to expire, each by its
 // age and the time it has left.
 func feedDeadLetterDetail(letters []FeedDeadLetter) string {
+	return deadLetterDetail(letters, func(held, soon int) string {
+		return fmt.Sprintf("this log's wake feed holds %d dead letter(s), wakes no node could "+
+			"derive within the hour their records were handed back, %d of them expiring "+
+			"within a day", held, soon)
+	})
+}
+
+// deadLetterDetail is a dead-letter alarm's measurement: what holds the
+// entries, as holds says it given how many there are and how many expire
+// within a day, and the soonest to expire, each by its age and the time it has
+// left.
+func deadLetterDetail(letters []FeedDeadLetter, holds func(held, soon int) string) string {
 	letters = slices.Clone(letters)
 	slices.SortStableFunc(letters, func(a, b FeedDeadLetter) int {
 		return cmp.Compare(a.ExpiresIn, b.ExpiresIn)
@@ -2779,9 +2841,7 @@ func feedDeadLetterDetail(letters []FeedDeadLetter) string {
 		}
 		named = append(named, fmt.Sprintf("one kept %s ago, %s", spokenSpan(l.Age), left))
 	}
-	detail := fmt.Sprintf("this log's wake feed holds %d dead letter(s), wakes no node could "+
-		"derive within the hour their records were handed back, %d of them expiring within "+
-		"a day: %s", len(letters), soon, strings.Join(named, "; "))
+	detail := holds(len(letters), soon) + ": " + strings.Join(named, "; ")
 	if more := len(letters) - len(named); more > 0 {
 		detail += fmt.Sprintf("; and %d more", more)
 	}

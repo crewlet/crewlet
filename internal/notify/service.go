@@ -203,11 +203,28 @@ type Options struct {
 	// is routed: an effect it has beyond its wakes. It never holds a
 	// delivery back, so a failure there is its own to recover from.
 	Observe func(ctx context.Context, source string, w types.RawWebhook)
+
+	// DeadLetters is what the replay of the inbound group's unhandled
+	// deliveries lists, reads and drops them through (replay.go). Nil is
+	// Queue's own verbs. The engine hands over the ledger its alarm reading
+	// shares, so a drop the replay makes is accounted for as a wake
+	// delivered, never counted as one the retention lost.
+	DeadLetters DeadLetters
+}
+
+// DeadLetters is the queue's dead-letter verbs as the replay of the inbound
+// group's unhandled deliveries calls them: the listing of the group's
+// unhandled subject, one copy's frame, and the drop of a copy it handled.
+type DeadLetters interface {
+	DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept, error)
+	DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error)
+	DropDeadLetter(ctx context.Context, subject string, seq uint64) error
 }
 
 // Service routes verified deliveries to the seats they concern.
 type Service struct {
 	queue    queue.EventQueue
+	letters  DeadLetters
 	registry func() *Registry
 	prompts  Prompts
 	parsers  map[string]Parser
@@ -263,6 +280,7 @@ func New(opts Options) (*Service, error) {
 	}
 	s := &Service{
 		queue:    opts.Queue,
+		letters:  opts.DeadLetters,
 		registry: opts.Registry,
 		prompts:  opts.Prompts,
 		parsers:  make(map[string]Parser, len(opts.Parsers)),
@@ -274,6 +292,9 @@ func New(opts Options) (*Service, error) {
 	}
 	if s.now == nil {
 		s.now = time.Now
+	}
+	if s.letters == nil {
+		s.letters = opts.Queue
 	}
 	for _, p := range opts.Parsers {
 		if p == nil || p.Source() == "" {

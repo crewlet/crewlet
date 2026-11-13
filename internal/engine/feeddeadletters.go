@@ -8,7 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -27,6 +29,17 @@ import (
 // ONLY A FEED'S REPLAY READS A FRAME. The listing and the discard read the
 // header each entry is kept under, and the alarm's reading reads even those
 // only when the broker's count of the feeds' entries has moved.
+//
+// AND THE INBOUND GROUP'S UNHANDLED DELIVERIES, BESIDE THEM. The notification
+// service's inbound group keeps a delivery no member handled on its unhandled
+// subject (internal/notify's UnhandledSubject), and a node's start replays it
+// (internal/notify's replay.go): the same kind of entry, a wake nobody has had,
+// waiting for the start of a node that reads it. So the same reading ages
+// those entries on every beat for `inbound_dead_lettered` and counts one the
+// retention let go as the wake it lost; the replay drops through the same
+// ledger ([Engine.startNotifications] hands it to the service), so its drops
+// are accounted as a feed's are. They are not a feed's: the operator's
+// listing and discard never show them.
 
 // deadLetterStore is the queue's dead-letter verbs as this node calls them: a
 // feed's ([changefeed.DeadLetters]) and the marks the alarm's reading counts the
@@ -103,11 +116,17 @@ func (l *deadLetterLedger) DropDeadLetter(ctx context.Context, subject string, s
 	return err
 }
 
-// marks is what every feed's dead-letter subject holds, as the broker counts
-// it ([changefeed.DeadLettersUnder]).
-func (l *deadLetterLedger) marks(ctx context.Context) (queue.Marks, error) {
-	return l.store.DeadLetterMarks(ctx, changefeed.DeadLettersUnder())
+// marks is what every dead-letter subject under under holds, as the broker
+// counts it: every feed's ([changefeed.DeadLettersUnder]), or the inbound
+// group's ([inboundLettersUnder]).
+func (l *deadLetterLedger) marks(ctx context.Context, under string) (queue.Marks, error) {
+	return l.store.DeadLetterMarks(ctx, under)
 }
+
+// inboundLettersUnder is the subtree the inbound group's dead-letter subjects
+// lie under, its unhandled subject among them: the inbound topic's head
+// ([topics.DeadLettersUnder]).
+var inboundLettersUnder = topics.DeadLettersUnder(topics.NotificationsInbound)
 
 // drop removes the entry seq from subject and accounts for its going,
 // reporting whether this drop is THE account of where it went: the claim was
@@ -225,15 +244,19 @@ type expiryClaims interface {
 //
 // # One count a beat, and a listing only when it moved
 //
-// Every report — every beat of every data node — asks the queue ONE question:
-// the MARKS of the subtree every feed's subject lies under
-// ([changefeed.DeadLettersUnder]), each subject's count of entries and the
-// dead-letter stream's last sequence, as the broker's leader states them in one
-// request however many entries there are. While they are the marks the cached
-// listings agree with, nothing else is read: each cached listing is aged to now
-// — every entry's age and the time it has left, so the five soonest to expire
-// and the count expiring within a day move with the beat — and that is what
-// `feed_dead_lettered` reads.
+// Every report — every beat of every data node — asks the queue ONE question
+// for each subtree it reads: the MARKS of the subtree every feed's subject lies
+// under ([changefeed.DeadLettersUnder]), and of the inbound topic's, where the
+// inbound group's unhandled subject lies ([inboundLettersUnder]) — each
+// subject's count of entries and the dead-letter stream's last sequence, as the
+// broker's leader states them in one request however many entries there are.
+// While they are the marks the cached listings agree with, nothing else is
+// read: each cached listing is aged to now — every entry's age and the time it
+// has left, so the five soonest to expire and the count expiring within a day
+// move with the beat — and that is what `feed_dead_lettered` and
+// `inbound_dead_lettered` read. Each subtree keeps the marks of its own that
+// its listings agree with ([letterTree]), since a keep on one moves the last
+// sequence the other reads too.
 //
 // When the marks MOVE, the subjects whose entries can have changed are listed
 // again — headers only, never a frame ([queue.EventQueue.DeadLettersOn]):
@@ -303,13 +326,28 @@ type deadLetterWatch struct {
 	// marks twice, nor record the marks one of them listed for as the
 	// other's.
 	mu sync.Mutex
-	// agreed is the marks every cached listing agrees with, and recorded
-	// whether any reading has recorded marks yet: before one has, every
-	// feed subject the marks count an entry on is listed.
-	agreed   queue.Marks
-	recorded bool
+	// feeds and inbound are the two subtrees the reading counts by their
+	// marks: every wake feed's subject, under the feeds' head, and the
+	// inbound group's unhandled subject, under the inbound topic's.
+	feeds, inbound letterTree
 	// seen is each subject's last listing that answered.
 	seen map[string]letterSight
+}
+
+// letterTree is what the reading knows of one subtree's marks: the marks every
+// cached listing of its subjects agrees with, and whether any reading has
+// recorded marks yet — before one has, every subject of it the marks count an
+// entry on is listed.
+type letterTree struct {
+	agreed   queue.Marks
+	recorded bool
+}
+
+// watched is one subject the reading lists, and how an entry the retention let
+// go from it is counted once this node has taken the claim on its going.
+type watched struct {
+	subject string
+	expired func(ctx context.Context, k queue.Kept)
 }
 
 // letterSight is one listing that answered: when, and what it held — each
@@ -341,14 +379,12 @@ func (w *deadLetterWatch) read(ctx context.Context, feeds map[string]changefeed.
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if marks, err := w.ledger.marks(ctx); err != nil {
-		// QUIET, because the broker that did not answer raises its own
-		// alarms, and this runs on every beat of every data node.
-		log.DebugContext(ctx, "changefeed_dead_letter_marks_unread", "error", err.Error(),
-			"detail", "the alarm reads the last listings that answered, aged to now")
-	} else {
-		w.listMoved(ctx, feeds, marks, now)
+	subjects := make([]watched, 0, len(feeds))
+	for _, src := range feeds {
+		subject := changefeed.DeadLetterSubject(src)
+		subjects = append(subjects, watched{subject: subject, expired: w.feedExpired(src, subject)})
 	}
+	w.readTree(ctx, &w.feeds, changefeed.DeadLettersUnder(), subjects, now)
 	out := make(map[string][]statelog.FeedDeadLetter, len(feeds))
 	for domain, src := range feeds {
 		if letters := lettersAt(w.seen[changefeed.DeadLetterSubject(src)].kept, now); len(letters) > 0 {
@@ -358,36 +394,71 @@ func (w *deadLetterWatch) read(ctx context.Context, feeds map[string]changefeed.
 	return out
 }
 
-// listMoved lists again every feed subject that marks says can have changed
-// since the marks the watch's listings agree with, counts what vanished from
-// each at its expiry, and records marks as agreed once every listing it took
-// agrees with them — see [deadLetterWatch].
-func (w *deadLetterWatch) listMoved(ctx context.Context, feeds map[string]changefeed.Source,
+// readInbound is the inbound group's unhandled deliveries as the alarm reads
+// them at now — the marks of its subtree read once, its subject listed again
+// where they say it can have changed, every entry that vanished at its expiry
+// counted, and each entry's age and the time it has left — for
+// `inbound_dead_lettered`. Empty while it holds none.
+func (w *deadLetterWatch) readInbound(ctx context.Context, now time.Time) []statelog.FeedDeadLetter {
+	if w == nil || w.ledger == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	subject := notify.UnhandledSubject()
+	w.readTree(ctx, &w.inbound, inboundLettersUnder,
+		[]watched{{subject: subject, expired: w.inboundExpired(subject)}}, now)
+	return lettersAt(w.seen[subject].kept, now)
+}
+
+// readTree reads the marks of the subtree under once and lists again each of
+// subjects they say can have changed since tree's agreed marks
+// ([deadLetterWatch.listMoved]). A marks read that fails keeps the last
+// listings that answered, aged to now by the caller.
+func (w *deadLetterWatch) readTree(ctx context.Context, tree *letterTree, under string,
+	subjects []watched, now time.Time) {
+
+	marks, err := w.ledger.marks(ctx, under)
+	if err != nil {
+		// QUIET, because the broker that did not answer raises its own
+		// alarms, and this runs on every beat of every data node.
+		log.DebugContext(ctx, "dead_letter_marks_unread", "under", under, "error", err.Error(),
+			"detail", "the alarm reads the last listings that answered, aged to now")
+		return
+	}
+	w.listMoved(ctx, tree, subjects, marks, now)
+}
+
+// listMoved lists again every one of subjects that marks says can have changed
+// since tree's agreed marks, counts what vanished from each at its expiry, and
+// records marks as tree's agreed once every listing it took agrees with them —
+// see [deadLetterWatch].
+func (w *deadLetterWatch) listMoved(ctx context.Context, tree *letterTree, subjects []watched,
 	marks queue.Marks, now time.Time) {
 
 	// SOMETHING WAS KEPT since the agreed marks — or none were ever
 	// agreed — so every subject that holds an entry or held one is listed.
-	stored := !w.recorded || marks.Last != w.agreed.Last
+	stored := !tree.recorded || marks.Last != tree.agreed.Last
 	agrees := true
-	for _, src := range feeds {
-		subject := changefeed.DeadLetterSubject(src)
+	for _, sub := range subjects {
+		subject := sub.subject
 		prior := w.seen[subject]
 		count := marks.Counts[subject]
 		switch {
 		case stored && (count > 0 || len(prior.kept) > 0):
-		case !stored && count != w.agreed.Counts[subject]:
+		case !stored && count != tree.agreed.Counts[subject]:
 		default:
 			continue
 		}
 		listed, err := w.ledger.DeadLettersOn(ctx, subject)
 		if err != nil {
-			log.DebugContext(ctx, "changefeed_dead_letters_unread", "source", src.Name,
-				"subject", subject, "error", err.Error(),
+			log.DebugContext(ctx, "dead_letters_unread", "subject", subject,
+				"error", err.Error(),
 				"detail", "the alarm reads the last listing that answered, aged to now")
 			agrees = false
 			continue
 		}
-		w.countExpired(ctx, src, subject, prior, listed, now)
+		w.countExpired(ctx, sub, prior, listed, now)
 		w.ledger.settle(subject, listed)
 		sight := letterSight{at: now, kept: make([]queue.Kept, len(listed))}
 		for i, k := range listed {
@@ -402,17 +473,18 @@ func (w *deadLetterWatch) listMoved(ctx context.Context, feeds map[string]change
 		}
 	}
 	if agrees {
-		w.agreed, w.recorded = marks, true
+		tree.agreed, tree.recorded = marks, true
 	}
 }
 
 // countExpired counts every entry prior held that kept does not, that this
 // node did not drop, and that was within a beat of its expiry when prior saw
 // it — once across the fleet, and never for one a replay or a discard
-// accounted for.
-func (w *deadLetterWatch) countExpired(ctx context.Context, src changefeed.Source,
-	subject string, prior letterSight, kept []queue.Kept, now time.Time) {
+// accounted for — as sub counts one.
+func (w *deadLetterWatch) countExpired(ctx context.Context, sub watched, prior letterSight,
+	kept []queue.Kept, now time.Time) {
 
+	subject := sub.subject
 	held := make(map[uint64]bool, len(kept))
 	for _, k := range kept {
 		held[k.Seq] = true
@@ -438,6 +510,14 @@ func (w *deadLetterWatch) countExpired(ctx context.Context, src changefeed.Sourc
 		if !w.firstToCount(ctx, at, now) {
 			continue
 		}
+		sub.expired(ctx, k)
+	}
+}
+
+// feedExpired counts one entry the retention let go from src's subject as the
+// wake it lost.
+func (w *deadLetterWatch) feedExpired(src changefeed.Source, subject string) func(context.Context, queue.Kept) {
+	return func(ctx context.Context, k queue.Kept) {
 		if w.metrics != nil {
 			w.metrics.Add(metrics.TrackerFeedDeadLetterExpired, 1, metrics.Attrs{"source": src.Name})
 		}
@@ -446,6 +526,21 @@ func (w *deadLetterWatch) countExpired(ctx context.Context, src changefeed.Sourc
 			"detail", "the dead-letter stream's retention let it go before any node could "+
 				"read it, and the wake it held is lost: no node replayed it within "+
 				"stream.event_retention_hours")
+	}
+}
+
+// inboundExpired counts one delivery the retention let go from the inbound
+// group's unhandled subject as the wake it lost.
+func (w *deadLetterWatch) inboundExpired(subject string) func(context.Context, queue.Kept) {
+	return func(ctx context.Context, k queue.Kept) {
+		if w.metrics != nil {
+			w.metrics.Add(metrics.NotifyInboundDeadLetterExpired, 1, nil)
+		}
+		log.WarnContext(ctx, "inbound_dead_letter_expired", "subject", subject, "seq", k.Seq,
+			"kept_at", k.StoredAt, "expired_at", k.Expires,
+			"detail", "the dead-letter stream's retention let it go before any node's start "+
+				"replayed it, and the wake it held is lost: no node of a build that reads it "+
+				"started within stream.event_retention_hours")
 	}
 }
 
@@ -458,7 +553,7 @@ func (w *deadLetterWatch) firstToCount(ctx context.Context, at letterAt, now tim
 	}
 	won, err := w.claims.Claim(ctx, goneKey(at), expiredClaimTTL, now)
 	if err != nil {
-		log.WarnContext(ctx, "changefeed_dead_letter_expiry_claim_unavailable",
+		log.WarnContext(ctx, "dead_letter_expiry_claim_unavailable",
 			"subject", at.subject, "seq", at.seq, "error", err.Error(),
 			"detail", "counted here anyway: a lost wake counted twice is read; one "+
 				"counted by nobody is not")

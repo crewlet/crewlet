@@ -543,6 +543,10 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running))
 	}
 	out.SemanticCoverage = r.semanticCoverage()
+	// THE INBOUND GROUP'S UNHANDLED DELIVERIES, beside the feeds' dead
+	// letters the domains' rows read (feeddeadletters.go): node-wide, since
+	// the group is the fleet's one.
+	out.InboundDeadLetters = r.feedLetters.readInbound(ctx, now)
 	if r.index != nil {
 		r.index(ctx, &out)
 	}

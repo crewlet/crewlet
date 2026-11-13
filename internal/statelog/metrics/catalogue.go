@@ -685,6 +685,21 @@ func Catalogue() []Instrument {
 				"pressed it.",
 		},
 
+		// ---- the notification service's inbound group ------------------
+		{
+			Name: NotifyInboundDeadLetterExpired, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Deliveries the notification service's inbound group never " +
+				"handled — a newer record's wake an older node passed until its " +
+				"budget was spent, or one a node that shed or stopped handed back " +
+				"last — that the dead-letter stream's retention " +
+				"(stream.event_retention_hours) let go before any node's start " +
+				"replayed them: wakes lost for good. Counted once across the fleet, " +
+				"by the first data node whose alarm reading saw the entry within a " +
+				"beat of its expiry and then gone, through a claim a replay that " +
+				"drops an entry takes first, so a replayed entry is never counted. " +
+				"`inbound_dead_lettered` is raised while any waits.",
+		},
+
 		// ---- the work pickup ------------------------------------------
 		{
 			Name: WorkPickups, Kind: KindCounter, Unit: UnitCount,

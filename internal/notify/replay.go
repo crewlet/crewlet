@@ -101,7 +101,7 @@ const (
 // did not reach kept: see this file's head for what becomes of each.
 func (s *Service) replay(ctx context.Context) {
 	subject := UnhandledSubject()
-	kept, err := s.queue.DeadLettersOn(ctx, subject)
+	kept, err := s.letters.DeadLettersOn(ctx, subject)
 	if err != nil {
 		log.WarnContext(ctx, "inbound_dead_letters_unread", "subject", subject,
 			"error", err.Error(),
@@ -131,7 +131,7 @@ func (s *Service) replay(ctx context.Context) {
 // handles a delivery, and answers what became of it.
 func (s *Service) replayOne(ctx context.Context, subject string, entry queue.Kept) letterFate {
 
-	frame, held, err := s.queue.DeadLetterFrame(ctx, subject, entry.Seq)
+	frame, held, err := s.letters.DeadLetterFrame(ctx, subject, entry.Seq)
 	switch {
 	case err != nil:
 		log.WarnContext(ctx, "inbound_dead_letter_frame_unread", "subject", subject,
@@ -161,7 +161,7 @@ func (s *Service) replayOne(ctx context.Context, subject string, entry queue.Kep
 	}
 	switch res.Outcome {
 	case queue.OutcomeAck:
-		if err := s.queue.DropDeadLetter(ctx, subject, entry.Seq); err != nil {
+		if err := s.letters.DropDeadLetter(ctx, subject, entry.Seq); err != nil {
 			log.WarnContext(ctx, "inbound_dead_letter_drop_failed", "subject", subject,
 				"seq", entry.Seq, "event", ev.ID, "source", ev.Source, "error", err.Error(),
 				"detail", "handled and kept: the next start handles it again, and its "+
