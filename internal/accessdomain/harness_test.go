@@ -38,7 +38,7 @@ var recordKey = recordseal.OneKey("k1", "test-material")
 // openAccessLog is the access log on a broker of its own.
 func openAccessLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)

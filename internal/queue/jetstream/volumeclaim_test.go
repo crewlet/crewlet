@@ -21,7 +21,7 @@ import (
 func TestAVolumeClaimIsWhatTheBrokerMayStillWrite(t *testing.T) {
 	t.Parallel()
 	const declared = int64(9) << 30
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	q := newQueueWith(t, Config{StoreDir: dir, StoreMaxBytes: declared})
 
 	before, found, err := q.VolumeClaim()
@@ -66,7 +66,7 @@ func TestAVolumeClaimIsWhatTheBrokerMayStillWrite(t *testing.T) {
 	}
 	// AN EXTERNAL QUEUE IS ONE WITH NO EMBEDDED SERVER, the field VolumeClaim
 	// branches on; nothing is put back, the queue being this case's own.
-	external := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	external := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	server := external.embedded
 	external.embedded = nil
 	claim, found, err := external.VolumeClaim()

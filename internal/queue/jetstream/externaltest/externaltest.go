@@ -131,7 +131,7 @@ func StartUnstated(t testing.TB, maxPayload int32, configure ...func(*server.Opt
 
 func startServer(t testing.TB, unstated bool, maxPayload int32, configure []func(*server.Options)) *Server {
 	t.Helper()
-	s := &Server{t: t, store: t.TempDir(), configure: configure, unstated: unstated}
+	s := &Server{t: t, store: brokertest.TempDir(t), configure: configure, unstated: unstated}
 	s.start(-1, maxPayload)
 	t.Cleanup(s.stop)
 	return s

@@ -19,6 +19,10 @@ import (
 // provisioner can read, as an account, and what each project's enabled APIs
 // say it is used for, read whole as the provisioner. Every call is a GET.
 //
+// Where the company asks (provisioning.atlas_read, ADR-0149), what each of
+// those projects runs is searched in Cloud Asset Inventory as the atlas's own
+// service account, by name and type alone (assets.go).
+//
 // A PROJECT'S SERVICES ARE REFUSED ON THEIR OWN: listing them takes Service
 // Usage Viewer on that project, which the provisioner holds only where the
 // Prepare a project block ran. A project Google refuses is a finding on the
@@ -58,7 +62,8 @@ func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read,
 		return collect.Read{}, err
 	}
 	r := &atlasRead{client: client, b: collect.NewBuilder(integration.KindGoogleCloud, in.Now),
-		unread: map[string]bool{}}
+		unread: map[string]bool{}, assetsUnread: map[string]bool{},
+		assets: in.Config.Integrations.GoogleCloud.Provisioning.AtlasRead}
 	if err = r.read(ctx); err != nil {
 		return collect.Read{}, err
 	}
@@ -72,6 +77,11 @@ type atlasRead struct {
 	b      *collect.Builder
 	// unread is the accounts whose services Google refused, by key.
 	unread map[string]bool
+
+	// assets is whether the company asks for each project's resources, and
+	// assetsUnread the projects whose search Google refused, by id.
+	assets       bool
+	assetsUnread map[string]bool
 }
 
 // refused reports Google refusing the provisioner a project's listing, as
@@ -102,6 +112,11 @@ func (r *atlasRead) read(ctx context.Context) error {
 	slices.SortFunc(projects, func(a, z Project) int { return cmp.Compare(a.ProjectID, z.ProjectID) })
 	for _, p := range projects {
 		if err = r.project(ctx, p); err != nil {
+			return err
+		}
+	}
+	if r.assets {
+		if err = r.readAssets(ctx, projects); err != nil {
 			return err
 		}
 	}

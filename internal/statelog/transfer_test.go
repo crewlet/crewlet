@@ -43,7 +43,7 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 // for the case about a donor that is already full.
 func newTransferHarnessWith(t *testing.T, bytes, maxTransfers int) *transferHarness {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1031,7 +1031,7 @@ func TestADonorAdmitsAtMostNTransfers(t *testing.T) {
 // a flush in microseconds, so the settle is two orders of magnitude of room.
 func openSilentFleet(t *testing.T) (*js.Queue, func()) {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1124,7 +1124,7 @@ func TestACancelledJoinerStopsCollecting(t *testing.T) {
 // message is the sentinel exactly when nothing preceded it.
 func TestAJoinerWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	t.Parallel()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1220,7 +1220,7 @@ func TestAJoinerThatCannotHearIsNotToldNobodyAnswered(t *testing.T) {
 // peer's fault.
 func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
 	t.Parallel()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1262,7 +1262,7 @@ func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
 // must be the probe this case sent after the fetch returned.
 func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	t.Parallel()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1324,7 +1324,7 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 // Mutation: wait on the context alone in Serve and the donor never returns.
 func TestADonorWhoseConnectionIsClosedUnderItReturns(t *testing.T) {
 	t.Parallel()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1387,7 +1387,7 @@ func TestADonorWhoseConnectionIsClosedUnderItReturns(t *testing.T) {
 // subscription's refusal and wait as though serving, and the case times out.
 func TestADonorHandedAClosedConnectionReportsAFailedDial(t *testing.T) {
 	t.Parallel()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

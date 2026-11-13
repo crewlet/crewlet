@@ -2310,6 +2310,15 @@
     "GoogleCloudProvisioning": {
       "additionalProperties": false,
       "properties": {
+        "atlas_read": {
+          "description": "Let the atlas list what each project the provisioner reads runs (instances, databases, Cloud Run services, functions, buckets and topics) through Cloud Asset Inventory, as the service account crewlet-atlas in the identity project, which may only search resources by name and type. Off by default. Turning it on changes the Cloud Shell block: run it again.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "federation_key": {
           "description": "The engine's ES256 private key (PKCS#8 PEM) whose public half the federation provider holds. Minted by the connect form and never shown; it can act as the provisioner, which can create service accounts in the identity project and grant the agent levels.",
           "type": [

@@ -186,7 +186,7 @@ func startCoding(t *testing.T, mode string) *codingNode {
 // needs its own store directory — one that SURVIVES a restart — can supply it.
 func bootCompany(t *testing.T, doc string, model *scriptedModel, env map[string]string) *node {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	return bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
 		filepath.Join(dir, "stream"), env, nil)
 }
@@ -712,7 +712,7 @@ func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	model := newScriptedModel(t)
 	model.callOnExecute(builtin.CodeCheckoutTool, map[string]any{"repo": "web"})
 	doc := withBoxRepo(sandboxCompany(t, model, stateDir))
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	n := &codingNode{node: bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
 		filepath.Join(dir, "stream"), env, &sameHost{addr: addr, ring: fleetRing(t)}), stateDir: stateDir}
 	repo := awaitRepo(t, "web", gitlet.RepoStatusActive, n.node)
@@ -1046,7 +1046,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 
 	// ONE store and ONE stream directory across both processes, which is
 	// what makes this a restart rather than a fresh company.
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	dbPath := filepath.Join(dir, "crewlet.db")
 	streamDir := filepath.Join(dir, "stream")
 

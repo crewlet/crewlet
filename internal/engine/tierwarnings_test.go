@@ -50,7 +50,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 	gittest.RequireNode(t) // an activation hosts code on this node
 	logs := &logBuffer{}
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Gitlet.CacheMaxBytes = config.GitletCacheMaxBytesFloor
 	})
 	stray := filepath.Join(b.Gitlet.CacheDirFor(b.Store.Path), "not-the-caches")
@@ -156,7 +156,7 @@ func TestABootedCompanysTierWarningsAreSaidOnce(t *testing.T) {
 
 	hosting := logless + "code:\n  backend: gitlet\n"
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Gitlet.CacheMaxBytes = config.GitletCacheMaxBytesFloor
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b, Company: parsedCompany(t, hosting),

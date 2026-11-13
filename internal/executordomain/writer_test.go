@@ -37,7 +37,7 @@ func openExecutorLog(t *testing.T) *js.DomainLog {
 	t.Helper()
 	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
 	// its cap from the runner's free space it takes three quarters of it.
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)

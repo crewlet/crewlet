@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -846,7 +847,7 @@ func TestTheBootPublishesWhatTheEngineBootedOn(t *testing.T) {
 // the base instead of on the offer.
 func TestTheFirstTickServesTheBootsOffer(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	boot := storedBoot(t, cfg)
 
@@ -895,7 +896,7 @@ func TestTheFirstTickServesTheBootsOffer(t *testing.T) {
 // Mutation: drop the runnable check and the revision becomes the boot row.
 func TestAnOfflineActivationOfARevisionThisBuildCannotRunIsRefused(t *testing.T) {
 	t.Parallel()
-	cfg := bootstrapForStore(t, t.TempDir())
+	cfg := bootstrapForStore(t, brokertest.TempDir(t))
 	served := serveStored(t, cfg, runnableRevisionDoc)
 	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
 	if err != nil {
@@ -938,7 +939,7 @@ func TestAnOfflineActivationOfARevisionThisBuildCannotRunIsRefused(t *testing.T)
 // Mutation: boot on the fleet's row and the node starts on R.
 func TestANodeThatRefusedTheFleetsRevisionBootsOnWhatItServed(t *testing.T) {
 	t.Parallel()
-	cfg := bootstrapForStore(t, t.TempDir())
+	cfg := bootstrapForStore(t, brokertest.TempDir(t))
 	applied := time.Date(2026, 4, 1, 9, 30, 0, 0, time.UTC)
 	served := serveStoredAt(t, cfg, runnableRevisionDoc, applied)
 	refused := seeStored(t, cfg, strings.Replace(runnableRevisionDoc, `"Nimbus"`,
@@ -981,7 +982,7 @@ func TestTheBootCarriesTheInstantItAppliedNotTheFleetsLatest(t *testing.T) {
 
 	t.Run("a refused re-activation raised activated_at past served_at", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		t1 := time.Date(2026, 4, 1, 9, 30, 0, 0, time.UTC)
 		t2 := t1.Add(2 * time.Hour)
 		served := serveStoredAt(t, cfg, runnableRevisionDoc, t1)
@@ -1027,7 +1028,7 @@ func TestTheBootCarriesTheInstantItAppliedNotTheFleetsLatest(t *testing.T) {
 
 	t.Run("an offline activation nulls served_at", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		served := serveStoredAt(t, cfg, runnableRevisionDoc, time.Now().UTC())
 
 		// `crewlet config activate` of the running revision keeps its
@@ -1070,7 +1071,7 @@ func TestAJoinerThatSawTheFleetIgnoresItsBootstrapFile(t *testing.T) {
 
 	t.Run("another file", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		fleets := seeStored(t, cfg, runnableRevisionDoc)
 		var logged bytes.Buffer
 		plan, err := bootOn(t, cfg, seedOf(file), slog.New(slog.NewTextHandler(&logged, nil)))
@@ -1091,7 +1092,7 @@ func TestAJoinerThatSawTheFleetIgnoresItsBootstrapFile(t *testing.T) {
 
 	t.Run("the fleet's own revision", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		document, err := json.Marshal(file)
 		if err != nil {
 			t.Fatal(err)
@@ -1119,7 +1120,7 @@ func TestAJoinerThatSawTheFleetIgnoresItsBootstrapFile(t *testing.T) {
 // publishes it over.
 func TestTheRevisionListSaysWhatThisNodeBootsOnAndWhatTheFleetRuns(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	served := serveStored(t, cfg, runnableRevisionDoc)
 	assertStates(t, cfg, map[string]string{served: "boots, fleet's"})

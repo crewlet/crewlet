@@ -406,7 +406,7 @@ func room(t target, made, batch int, mix *compactionMix) bool {
 // every write, and a declare of n fresh repositories on it.
 func soloChain(b *testing.B) (*gitlettest.DataNode, func(b *testing.B, n int) []string) {
 	b.Helper()
-	dir := b.TempDir()
+	dir := brokertest.TempDir(b)
 	q, err := js.Open(b.Context(), js.Config{StoreDir: filepath.Join(dir, "stream"),
 		StoreMaxBytes: brokertest.StoreMaxBytes, SyncAlways: true})
 	if err != nil {

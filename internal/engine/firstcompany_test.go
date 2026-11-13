@@ -123,7 +123,7 @@ func TestAFirstCompanysSeatsAreClaimedWithoutWaitingForTheSweep(t *testing.T) {
 	t.Parallel()
 	e, err := engine.New(t.Context(), engine.WithSweepEvery(engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		}),
 	}, time.Hour))
 	if err != nil {

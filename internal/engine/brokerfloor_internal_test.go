@@ -301,7 +301,7 @@ func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 func TestTheTestBrokerSizeHoldsAFreshNode(t *testing.T) {
 	t.Parallel()
 	boot := testBootstrap(t)
-	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&boot.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	if err := boot.Validate(); err != nil {
 		t.Fatalf("Tier A refuses the fixtures' broker size of %d bytes: %v",
 			brokertest.StoreMaxBytes, err)

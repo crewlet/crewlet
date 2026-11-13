@@ -40,6 +40,10 @@
 // and the APIs enabled on it say what it is used for, as closed words
 // (ADR-0137, atlas.go). The read takes no role beyond the provisioner's own,
 // and a read's 429 is waited out where a write's never is ([Client.do]).
+//
+// Where the company asks, what each project runs is searched as the atlas's
+// own service account, crewlet-atlas, which the federation impersonates
+// directly and which holds one permission (ADR-0149, assets.go).
 package googlecloud
 
 import "net/url"

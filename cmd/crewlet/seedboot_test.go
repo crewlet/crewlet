@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // The boot and the import of a Tier B file, through the real engine: the
@@ -115,7 +116,7 @@ func running(e *engine.Engine) (string, []string) {
 // did, and the engine starts on "Stale File" with its store at 1536.
 func TestAStaleSeedNeverBecomesTheEnginesCompany(t *testing.T) {
 	t.Parallel()
-	cfg := bootstrapForStore(t, t.TempDir())
+	cfg := bootstrapForStore(t, brokertest.TempDir(t))
 	boot := storedBoot(t, cfg)
 	serveStored(t, cfg, liveRevisionDoc)
 
@@ -155,7 +156,7 @@ func TestAStaleSeedNeverBecomesTheEnginesCompany(t *testing.T) {
 // applies it with the pointer's own instant.
 func TestAFirstBootsFileIsBuiltByTheFirstReconcile(t *testing.T) {
 	t.Parallel()
-	cfg := bootstrapForStore(t, t.TempDir())
+	cfg := bootstrapForStore(t, brokertest.TempDir(t))
 	boot := storedBoot(t, cfg)
 
 	e, plan := bootDecided(t, cfg, boot, seedOf(parse(t, companyYAML)))
@@ -186,7 +187,7 @@ func TestAFirstBootsFileIsBuiltByTheFirstReconcile(t *testing.T) {
 // file's seats while logging that the file is never imported.
 func TestAManagedNodeOnAnEmptyStoreRunsNoCompany(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := managedBootstrap(t, dir)
 	boot := storedBoot(t, cfg)
 	seed, err := managedSeed(boot, companyFile(t, dir, "company.yaml", nil), false, "")
@@ -243,7 +244,7 @@ roles:
 // pointed at the file.
 func TestAFirstBootThisNodeCannotBuildIsRefusedWithNothingWritten(t *testing.T) {
 	t.Parallel()
-	cfg := bootstrapForStore(t, t.TempDir())
+	cfg := bootstrapForStore(t, brokertest.TempDir(t))
 	boot := storedBoot(t, cfg)
 
 	e, plan := bootDecided(t, cfg, boot, seedOf(parse(t, unbuildableCompanyYAML)))

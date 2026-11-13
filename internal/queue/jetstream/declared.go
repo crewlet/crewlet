@@ -71,3 +71,51 @@ func undeclaredSize(ctx context.Context, cfg Config) error {
 		"directly — or, where the case is about that derivation, start the broker under "+
 		"jetstream.SizedByTheDisk", ErrUndeclaredSize, cfg.StoreDir)
 }
+
+// ErrStoreOutsideTempDir is the refusal of a TEST's embedded broker whose
+// store directory is not one brokertest.TempDir made, nor under one.
+//
+// A STOPPED NATS-SERVER CAN STILL WRITE ITS STORE: a consumer's last state
+// flush can land after Shutdown and WaitForShutdown have both returned
+// ([shutdownAndClean] measures it), and a removal that tries once — a
+// t.TempDir's — then fails the case on a file the case never wrote
+// (crewlet/crewlet#1079). brokertest.TempDir's removal outlasts that write. So
+// IN A TEST BINARY ([testbinary.Running]) an embedded broker whose store
+// directory lies in no directory brokertest.TempDir made REFUSES TO START,
+// naming the directory and brokertest.TempDir, before anything is written
+// there. A broker with no store directory keeps its streams in memory, its
+// metadata in a scratch directory this package makes and removes itself
+// ([removeScratch]), and is not asked; nor is a store directory a case only
+// validates, on which nothing starts.
+//
+// TOLD BY THE NAME brokertest.TempDir gives its directories
+// ([testbinary.InStoreDir]), never by a record of the directories it made:
+// a case can run its broker in a child test binary on a directory the parent
+// made and handed it (internal/engine's broker-death case), and the name
+// travels with the path.
+//
+// AT THE START OF EVERY EMBEDDED SERVER ([startEmbedded]), as
+// [ErrUndeclaredSize] is held and for its reason: every way a test reaches one
+// starts it there, so a fixture written tomorrow is held to the rule the first
+// time it runs. A server a case builds from nats-server's own options never
+// gets here, and brokertest's
+// TestEveryNATSServerATestBuildsKeepsItsStoreInATempDir holds those.
+//
+// IT GOES WITH brokertest.TempDir's RETRY, once a pinned nats-server joins a
+// consumer's flush loop in its stop rather than polling for it
+// ([shutdownAndClean]): a test's store can then live anywhere a file can.
+var ErrStoreOutsideTempDir = errors.New("jetstream: a test's broker keeps its store outside a brokertest.TempDir")
+
+// storeOutsideTempDir is [ErrStoreOutsideTempDir] for cfg, or nil: outside a
+// test binary, for a broker with no store directory, and for one whose store
+// directory is, or lies under, a directory brokertest.TempDir made.
+func storeOutsideTempDir(cfg Config) error {
+	if !testbinary.Running() || cfg.StoreDir == "" || testbinary.InStoreDir(cfg.StoreDir) {
+		return nil
+	}
+	return fmt.Errorf("%w: it stores in %s, where a stopped nats-server's last write, a "+
+		"consumer's state flush, can land after it reports it has stopped and fail the case at a "+
+		"removal that tries once (t.TempDir's among them) on a file the case never wrote "+
+		"(crewlet/crewlet#1079). Keep a test broker's store in brokertest.TempDir(t), or in a "+
+		"directory under one, whose removal outlasts that write", ErrStoreOutsideTempDir, cfg.StoreDir)
+}

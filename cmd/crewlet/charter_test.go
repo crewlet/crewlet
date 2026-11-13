@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -94,7 +95,7 @@ func TestACompanyFileWithAFaultyCharterImportsWithWarnings(t *testing.T) {
 // THE IMPORT SAYS WHAT EVERY NODE WILL WARN ABOUT, before it says it imported.
 func TestAnImportNamesTheCharterFaults(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	file := filepath.Join(dir, "company.yaml")
 	doc := cliCompanyDoc + "mission: \"" + strings.Repeat("m", config.MaxMissionChars+1) + "\"\n"
