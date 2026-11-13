@@ -22,8 +22,9 @@ first ([who reads it](../concepts/atlas.md#who-reads-it)). A person without it
 sees the row locked, with the permission it needs, never hidden.
 
 The atlas is never a way round another permission: a person who does not use
-Gitlet is shown no repository from it, and an integration's standing or a
-server's connection test is shown only to an administrator, as on the screens
+Gitlet is shown no repository from it, an integration's standing or a
+server's connection test is shown only to an administrator, and the work that
+touches an entry is shown only to a person who uses Worklet, as on the screens
 those come from.
 
 ## What it shows today
@@ -36,9 +37,9 @@ through the operator tools
 | Lane | What fills it in this version |
 |---|---|
 | Entry | the zones the Cloudflare integration declares, the host names the engine answers at (`api.external_url`, `api.public.external_url`), and what the engine reads from the Cloudflare account: every zone, every name an A, AAAA or CNAME record gives and what it points at, and every certificate pack ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
-| Services | the services of the Datadog service catalogue and the ones its monitors' `service:` tags name, the containers running on each server you [let the atlas read](#reading-inside-a-server), the services a Gitlet repository's deploy files declare, shown as likely ([what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare)), and what people add |
-| Runtime | the servers the SSH integration declares, with the open ports of each one you let the atlas read, and the hosts that report to Datadog |
-| Data | the databases, queues and buckets a Gitlet repository's compose files, manifests and charts name, shown as likely, and what people add |
+| Services | Crewlet itself, on the nodes it runs on, the services of the Datadog service catalogue and the ones its monitors' `service:` tags name, the containers running on each server you [let the atlas read](#reading-inside-a-server), the services a Gitlet repository's deploy files declare, shown as likely ([what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare)), and what people add |
+| Runtime | each node of the engine's own fleet (its address for administrators only, marked internal), the servers the SSH integration declares, with the open ports of each one you let the atlas read, and the hosts that report to Datadog |
+| Data | the engine's own event stream and object store, as its nodes say them, the databases, queues and buckets a Gitlet repository's compose files, manifests and charts name, shown as likely, and what people add |
 | Platforms | each connected integration's account, and the vendors a Gitlet repository's dependency and Terraform files name, shown as likely |
 | Code and delivery | Gitlet's repositories and their checks, the repositories the GitHub and GitLab integrations name, and what the engine reads from the GitHub organisation: every repository the agents' apps cover, its workflows and the environments it deploys to ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
 | Observability | what the engine reads from the Datadog organisation: every monitor with its state, and what each one watches ([what integrations read](../concepts/atlas.md#what-integrations-read)), and what people add |
@@ -105,6 +106,10 @@ its name.
   pipeline whose last run or deployment failed with everything it deploys,
   among them). A quiet entry draws none. Each cluster's title counts its
   entries and how many of them need attention.
+- **A blue notch means it is being worked on**: a quiet entry that an open
+  Worklet task names ([work on an entry](#work-on-an-entry)). An entry that
+  needs attention keeps its red or amber notch, and its card says how many
+  open tasks name it. The mark is drawn for a reader who uses Worklet.
 - **A dashed edge means unconfirmed**: an entry only an agent reported, with
   nothing the engine could check. These are hidden until somebody confirms
   them; **Show unconfirmed** under Filter shows them, and says how many it
@@ -165,6 +170,10 @@ last change with what it was, and its confidence. Fifty rows load at a time,
 with **Load more**; the groups stay whole because the engine reads the whole
 atlas in that order.
 
+A row whose entry an open Worklet task names says so beside its health ("2
+open tasks"), for a reader who uses Worklet, and the words open the entry's
+[Work tab](#work-on-an-entry).
+
 Pressing a row selects the entry on the map and opens it beside the page.
 
 ## An entry
@@ -182,10 +191,12 @@ page:
 - its facts, each with where it came from, how far it is trusted and when it
   was last seen ("seen by Cloudflare · confirmed · 4 min ago", "observed by sre
   · likely · turn");
+- **Work**: the open tasks that name it, the first five, with the rest on
+  its page;
 - **Recent changes**: the atlas's own log for this entry, newest first, each
   line with who recorded it.
 
-**Open** takes you to its page, which has four tabs:
+**Open** takes you to its page, which has five tabs:
 
 - **Overview**: the same, with the diagram drawn wide, how much the company
   uses it, which agents hold an account there, the keys merged into it, and
@@ -193,6 +204,7 @@ page:
 - **Relations**: what it depends on, what depends on it, the seats, units and
   pages it names, and everything that depends on it hop by hop, with the way to
   show the same on the map.
+- **Work**: the Worklet tasks that name it ([work on an entry](#work-on-an-entry)).
 - **Sources**: what each source says about it. Where two sources disagree, both
   values are shown first, with which one the atlas shows and why (a person's
   value over a newer report, or the newest of two equally trusted sources); the
@@ -212,6 +224,31 @@ file it cites, or a repository's deploy and dependency files) and
 **Internal** beside an address marks one on a private network. The atlas keeps
 these, since they are the company's own map, and says so rather than hiding
 them.
+
+## Work on an entry
+
+A task in Worklet can name the entries it touches: the server a change rolls
+out to, the database a migration runs on. The link is made on the task, under
+**Atlas entries** in its side panel (**Link an atlas entry**), or by an agent
+working on it ([the Worklet guide](worklet.md#the-atlas-entries-a-task-touches)).
+Nothing is written to the atlas, and a link never changes an entry's health or
+its confidence.
+
+- **The Work tab** of an entry lists the open tasks that name it, most
+  recently changed first, then the ones finished in the last 30 days, each
+  with its key, title and status, and opens the task. The tab counts the open
+  ones.
+- **The map and the catalogue mark an entry with open work**: a blue notch on
+  a quiet entry's card, and the count on its row.
+- **Worklet decides who sees work.** A person who holds Atlas and does not use
+  Worklet sees the Work tab locked, with the permission it needs, and no mark.
+  Where the company keeps its work outside Worklet, the tab says so.
+- **Atlas decides who sees entries.** On the task, a person who holds Atlas
+  sees each entry as a chip that opens it. A person who does not sees how many
+  entries the task names, locked with the permission it needs, and no name.
+- **An entry that left the atlas.** A task that names an entry since retired
+  still opens it; one whose entry is no longer in the atlas at all says "1
+  entry is no longer in the atlas" on the task, where the link can be removed.
 
 ## Adding and correcting
 
@@ -289,6 +326,13 @@ with both values and opens the entry's Sources tab, where you keep one. It
 leaves the Inbox as soon as somebody decides. Everything else waits in Review
 for every holder of Atlas together, so the Inbox does not fill with
 infrastructure changes.
+
+**What has waited too long reaches the Setup Advisor.** A disagreement nobody
+has decided in 7 days is listed in [Settings › Advisor](advisor.md#what-the-atlas-shows)
+with the entries it is on, beside a service nobody owns, an owner that left the
+chart, a service open to the internet that nothing watches, and a source that
+stopped reading. Each is fixed from there or from the entry's own page: both
+send the same change.
 
 ## Sources and Refresh now
 

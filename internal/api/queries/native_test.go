@@ -47,11 +47,16 @@ type stubWork struct {
 	query         worklet.Query
 	answer        worklet.Answer
 	detail        worklet.TaskDetail
-	views         worklet.ViewQuery
-	every         worklet.EveryViewQuery
-	listing       worklet.ViewListing
-	personQuery   worklet.PersonQuery
-	person        worklet.PersonState
+	// The work that names atlas entries, and how often it was read.
+	marks       worklet.EntryMarks
+	entryWork   worklet.EntryWork
+	entryQuery  worklet.EntryWorkQuery
+	entryReads  int
+	views       worklet.ViewQuery
+	every       worklet.EveryViewQuery
+	listing     worklet.ViewListing
+	personQuery worklet.PersonQuery
+	person      worklet.PersonState
 
 	projectQuery  worklet.ProjectQuery
 	projects      worklet.ProjectListing
@@ -101,6 +106,17 @@ type stubWork struct {
 
 // Thread answers the asked probe from [stubWork.asks], as the tracker's own
 // inference would: the one open ask addressed to the author, or none.
+func (s *stubWork) EntryMarks(context.Context, statelog.ReadLevel) (worklet.EntryMarks, error) {
+	s.entryReads++
+	return s.marks, s.err
+}
+
+func (s *stubWork) EntryWork(_ context.Context, q worklet.EntryWorkQuery, _ time.Time) (worklet.EntryWork, error) {
+	s.entryReads++
+	s.entryQuery = q
+	return s.entryWork, s.err
+}
+
 func (s *stubWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return s.patterns, nil
 }

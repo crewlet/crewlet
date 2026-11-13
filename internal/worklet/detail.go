@@ -276,6 +276,11 @@ type TaskDetail struct {
 	// which.
 	Links []DetailLink `json:"links,omitempty"`
 
+	// EntriesWithheld is how many atlas entries the task names that this
+	// answer left out, for a reader who may not read the atlas
+	// ([TaskDetail.WithoutEntries]).
+	EntriesWithheld int `json:"entries_withheld,omitempty"`
+
 	// Parent is the task this one is filed under, as a reader names it:
 	// its key, its title and where it stands. A task carries its parent's
 	// ID — the record — and a page that says "Part of LEAD-12 · 2.4

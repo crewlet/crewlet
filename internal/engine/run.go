@@ -2411,6 +2411,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// so a beat whose status read overran must still say it — and,
 		// from memory, nothing can overrun it ([Engine.gitBackground]).
 		GitBackground: e.gitBackground(),
+		// AND WHAT THIS NODE RUNS ON, hosts and names read once from its own
+		// file, which the atlas draws the fleet from ([NodeInfra]).
+		Infra: NodeInfra(e.boot).Meta(),
 		// WHICH ROLES THE COMPANY NEEDS, off the current epoch: git only
 		// where it hosts code, so a fleet that declared its roles without
 		// git is never told nobody serves it until it would matter.
@@ -3898,7 +3901,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// written before a told change are marked (capability.go).
 	told := e.capabilityFor(ctx, company, req.Handle, req.RunID)
 	blocks := e.prefetchFor(ctx, company, req, task, tel.askParts, tel.aux(), tel.boundary, told,
-		tel.workingFor, e.turnReadsAtlas(ctx, company, req.Handle, tel))
+		tel.workingFor, e.turnReadsAtlas(ctx, company, req.Handle, tel), tel.workItem)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.

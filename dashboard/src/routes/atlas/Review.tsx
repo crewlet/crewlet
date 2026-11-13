@@ -82,7 +82,7 @@ const idOf = (item: AtlasReviewItem) => item.id;
 const nextOf = (answer: AtlasReviewAnswer) => answer.next_cursor ?? "";
 
 /** What a waiting item is about, in a few words: the fact, the relation, or the entry itself. */
-function subjectOf(item: AtlasReviewItem): string {
+export function subjectOf(item: AtlasReviewItem): string {
   if (item.fact) return factLabel(item.fact);
   if (item.relation)
     return `${RELATIONS[item.relation.relation]} ${item.target?.name ?? ""}`.trim();

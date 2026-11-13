@@ -150,6 +150,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Artifacts.ops = operations{callerOperations: true, now: deps.Artifacts.Now}
 	deps.Code.ops = operations{callerOperations: true}
 	deps.AtlasWrite.ops = operations{callerOperations: true}
+	deps.Work.entries = atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}
 	work, pages, talk := deps.Work, deps.Pages, deps.Chat
 	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},

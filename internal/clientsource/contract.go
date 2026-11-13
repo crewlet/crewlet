@@ -960,6 +960,11 @@ var contract = []Entry{
 	{"AtlasSourceScope", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasSourceStanding", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasSourcesAnswer", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
+	// The work that touches an entry (ADR-0140).
+	{"AtlasWorkAnswer", ReadInterface, "internal/api/queries.TestTheAtlasWorkAnswersAreTheirDeclaredShapes"},
+	{"AtlasEntryWorkAnswer", ReadInterface, "internal/api/queries.TestTheAtlasWorkAnswersAreTheirDeclaredShapes"},
+	{"AtlasNamed", ReadInterface, "internal/api/queries.TestTheAtlasWorkAnswersAreTheirDeclaredShapes"},
+	{"AtlasNamedAnswer", ReadInterface, "internal/api/queries.TestTheAtlasWorkAnswersAreTheirDeclaredShapes"},
 	{"AccessManagedBy", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessRefusalField", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 

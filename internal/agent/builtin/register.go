@@ -238,6 +238,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		deps.Health.Requesters = deps.Requesters
 	}
 
+	deps.Work.entries = atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}
+
 	withdraw := deps.Withdraw
 	withdraw.Work = deps.Work
 

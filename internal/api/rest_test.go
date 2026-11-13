@@ -422,6 +422,14 @@ func (stubWorkReader) TurnPlaces(context.Context, []string,
 	return map[string]worklet.TurnPlace{}, nil
 }
 
+func (stubWorkReader) EntryMarks(context.Context, statelog.ReadLevel) (worklet.EntryMarks, error) {
+	return worklet.EntryMarks{Open: map[string]int{}}, nil
+}
+
+func (stubWorkReader) EntryWork(context.Context, worklet.EntryWorkQuery, time.Time) (worklet.EntryWork, error) {
+	return worklet.EntryWork{Open: []worklet.TaskRow{}, Recent: []worklet.TaskRow{}}, nil
+}
+
 func (stubWorkReader) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return worklet.WorkPatterns{}, nil
 }

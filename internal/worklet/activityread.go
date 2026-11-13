@@ -778,9 +778,10 @@ func appendDeltaSides(out []string, raw any) []string {
 //
 // DERIVED FROM [RelationKinds] rather than listed beside it, for the reason
 // that slice exists: a fifth kind of edge is resolved with no second edit.
-// [RelationPage] is the one exclusion and it is a fact about the type — a
-// `page` edge names a knowledge-base page, and a map that answered for one
-// would be claiming a page is a task.
+// The exclusions are a fact about the type ([RelationKind.NamesTask]): a
+// `page` edge names a knowledge-base page and an `atlas_entry` edge an entry
+// of the atlas, and a map that answered for one would be claiming it is a
+// task.
 //
 // FOUR ARE BEYOND THE EDGES, and each one names a task for its own reason:
 // `blocking` is the mirror a blocker carries, `priorities` is a person's own
@@ -795,7 +796,7 @@ func appendDeltaSides(out []string, raw any) []string {
 var counterpartyDeltaFields = func() []string {
 	out := make([]string, 0, len(RelationKinds)+4)
 	for _, kind := range RelationKinds {
-		if kind == RelationPage {
+		if !kind.NamesTask() {
 			continue
 		}
 		out = append(out, string(kind))

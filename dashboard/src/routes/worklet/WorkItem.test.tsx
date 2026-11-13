@@ -44,6 +44,7 @@ import type {
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
 import { DECISION_OPTION_MAX_BYTES, DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
+import { entriesAnswer, namedAnswer, summary, type AtlasFixture } from "~/test/atlas.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
@@ -706,6 +707,215 @@ test("a linked page points at the page by its id and reads its title", async () 
 });
 
 // ---------------------------------------------------------------------------
+// The atlas entries a task touches
+// ---------------------------------------------------------------------------
+
+const ORDERS_DB = summary("datastore", "orders-db");
+const WEB_1 = summary("host", "web-1");
+const ENTRIES: AtlasFixture = { nodes: [ORDERS_DB, WEB_1], edges: [] };
+
+/** An id shaped like an entry's that the atlas holds no entry under. */
+const GONE_ENTRY = "0198f0a0-0000-7000-8000-00000000dead";
+
+const entryLinks = (...ids: string[]) => ids.map((other) => ({ kind: "atlas_entry", other }));
+
+/** `atlas_named`, answered from the two entries above as the engine would. */
+const named = (params: Record<string, unknown>) =>
+  Promise.resolve(
+    namedAnswer(
+      ENTRIES,
+      String(params.ids ?? "")
+        .split(",")
+        .filter(Boolean),
+    ),
+  );
+
+/** A holder of Worklet who may change tasks and holds no Atlas. */
+const NO_ATLAS = { ...JANE, grants: ["worklet", "doclet"] };
+
+// AN ENTRY IS NOT A TASK. The rail drew every link that was not a page under
+// Relations, so an entry's uuid stood there as a related task with no title.
+test("the atlas entries a task touches are chips that open each entry, and no related task", async () => {
+  mount(
+    <ItemRail
+      detail={detail({ links: entryLinks(ORDERS_DB.id, WEB_1.id) })}
+      chrome={{}}
+      now={NOW}
+    />,
+    { answers: { atlas_named: named } },
+  );
+  await settle();
+  const group = screen.getByRole("region", { name: "Atlas entries" });
+  expect(within(group).getByRole("button", { name: "web-1" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Relations" })).toBeNull();
+  const asks = asked.filter((a) => a.kind === "atlas_named");
+  expect(asks.length).toBeGreaterThan(0);
+  expect(asks.every((a) => a.params.ids === `${ORDERS_DB.id},${WEB_1.id}`)).toBe(true);
+  // A READER OF THE RAIL ALONE CHANGES NOTHING: no chip is removable, and no
+  // entry can be linked.
+  expect(within(group).queryByRole("button", { name: /Unlink/ })).toBeNull();
+  expect(within(group).queryByRole("button", { name: "Link an atlas entry" })).toBeNull();
+  fireEvent.click(within(group).getByRole("button", { name: "orders-db" }));
+  expect(decodeURIComponent(location.hash)).toContain(`peek=atlas:${ORDERS_DB.id}`);
+});
+
+test("a link to an entry the atlas no longer holds is said in words", async () => {
+  mount(
+    <ItemRail
+      detail={detail({ links: entryLinks(ORDERS_DB.id, GONE_ENTRY) })}
+      chrome={{}}
+      now={NOW}
+    />,
+    { answers: { atlas_named: named } },
+  );
+  await settle();
+  const group = screen.getByRole("region", { name: "Atlas entries" });
+  expect(within(group).getByRole("button", { name: "orders-db" })).toBeTruthy();
+  expect(within(group).getByText("1 entry is no longer in the atlas.")).toBeTruthy();
+  expect(within(group).getByText("Missing entry")).toBeTruthy();
+  expect(group.textContent).not.toContain(GONE_ENTRY);
+});
+
+// THE ATLAS IS GIVEN ON PURPOSE, so a reader without it is told how many
+// entries the task names and nothing more. The fixture carries the links an
+// answer read before the access was taken away would hold, so this case goes
+// red if the gate in `EntryLinks` is removed: the atlas would be asked, and
+// the names drawn.
+test("a reader without Atlas reads only how many entries the task names, locked", async () => {
+  const { container } = mount(<WorkItemPage id="ENG-42" />, {
+    viewer: NO_ATLAS,
+    answers: {
+      work_item: detail({
+        links: entryLinks(ORDERS_DB.id, WEB_1.id, GONE_ENTRY),
+        entries_withheld: 3,
+      }),
+      atlas_named: named,
+    },
+  });
+  await settle();
+  const group = screen.getByRole("region", { name: "Atlas entries" });
+  expect(group.textContent).toContain("3 atlas entries");
+  expect(group.textContent).toContain("Needs Atlas access");
+  expect(asked.some((a) => a.kind === "atlas_named")).toBe(false);
+  expect(container.textContent).not.toContain("orders-db");
+  expect(container.textContent).not.toContain("web-1");
+  for (const id of [ORDERS_DB.id, WEB_1.id, GONE_ENTRY]) {
+    expect(container.innerHTML).not.toContain(id);
+  }
+  expect(within(group).queryAllByRole("button")).toEqual([]);
+});
+
+test("a task naming no entry draws no group for a reader without Atlas", async () => {
+  mount(<WorkItemPage id="ENG-42" />, { viewer: NO_ATLAS });
+  await settle();
+  expect(screen.queryByRole("region", { name: "Atlas entries" })).toBeNull();
+});
+
+test("a task naming no entry offers a writer the link control and nothing else", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const group = screen.getByRole("region", { name: "Atlas entries" });
+  expect(
+    within(group)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual(["Link an atlas entry"]);
+  expect(asked.some((a) => a.kind === "atlas_named")).toBe(false);
+});
+
+// THE ID THE TASK HOLDS IS WHAT A REMOVAL NAMES, and the gesture carries no
+// version: it composes with whatever else moved on the task.
+test("a chip's remove unlinks that entry from the task", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({ links: entryLinks(ORDERS_DB.id, WEB_1.id) }),
+      atlas_named: named,
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Unlink orders-db" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", linked_entries: { remove: [ORDERS_DB.id] } },
+    },
+  ]);
+});
+
+test("a link to a missing entry is removed by the id the task holds", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_item: detail({ links: entryLinks(GONE_ENTRY) }), atlas_named: named },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Unlink an entry no longer in the atlas" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", linked_entries: { remove: [GONE_ENTRY] } },
+    },
+  ]);
+});
+
+// TWO MEMBERS OF ONE MERGED ENTRY ARE ONE ENTRY: the task holds both ids, the
+// engine answers both under the entry they merged into, and one chip takes
+// both off. Mutation: remove only the first stored id and a link stays behind.
+test("two stored ids of one merged entry draw one chip, which unlinks both", async () => {
+  const member = "0198f0a0-0000-7000-8000-0000000000aa";
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({ links: entryLinks(ORDERS_DB.id, member) }),
+      atlas_named: (params: Record<string, unknown>) =>
+        Promise.resolve(
+          namedAnswer(ENTRIES, String(params.ids).split(","), { [member]: ORDERS_DB.id }),
+        ),
+    },
+  });
+  await settle();
+  const group = screen.getByRole("region", { name: "Atlas entries" });
+  expect(within(group).getAllByRole("button", { name: "orders-db" })).toHaveLength(1);
+  expect(
+    asked
+      .filter((a) => a.kind === "atlas_named")
+      .every((a) => a.params.ids === `${ORDERS_DB.id},${member}`),
+  ).toBe(true);
+  fireEvent.click(within(group).getByRole("button", { name: "Unlink orders-db" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", linked_entries: { remove: [ORDERS_DB.id, member] } },
+    },
+  ]);
+});
+
+test("Link an atlas entry picks from the atlas, less what the task names, and adds it", async () => {
+  // THE DIALOG IS THE ATLAS'S CHUNK, brought in first for the reason the
+  // peek's case below gives: a cold import is not what this holds.
+  await loadChunk("atlas");
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({ links: entryLinks(WEB_1.id) }),
+      atlas_named: named,
+      atlas_entries: entriesAnswer(ENTRIES),
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Link an atlas entry" }));
+  const dialog = await screen.findByRole("dialog", { name: /Link an atlas entry to ENG-42/ });
+  await settle();
+  fireEvent.click(within(dialog).getByLabelText(/^Entry/));
+  expect(screen.queryByRole("option", { name: /web-1/ })).toBeNull();
+  fireEvent.mouseDown(screen.getByRole("option", { name: /orders-db/ }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Link entry" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", linked_entries: { add: [ORDERS_DB.id] } } },
+  ]);
+});
+
+// ---------------------------------------------------------------------------
 // Sub-tasks
 // ---------------------------------------------------------------------------
 
@@ -1341,6 +1551,8 @@ test.each([
   // No pencil offers an edit the engine would refuse, and no pick is sent.
   expect(screen.queryByRole("button", { name: "Edit the title" })).toBeNull();
   expect(screen.queryByRole("button", { name: /Status of ENG-42/ })).toBeNull();
+  // Nor is an atlas entry offered for linking by a reader who cannot change the task.
+  expect(screen.queryByRole("button", { name: "Link an atlas entry" })).toBeNull();
   expect(posted).toEqual([]);
 });
 

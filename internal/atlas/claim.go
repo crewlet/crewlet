@@ -96,12 +96,15 @@ const (
 	RecordSSHTests     Record = "ssh_tests"
 	RecordAccessLog    Record = "access_log"
 	RecordUsage        Record = "usage"
+	// RecordFleet is the live nodes' presence rows: each node, and what it
+	// says of the broker and the object store it runs on (ADR-0142).
+	RecordFleet Record = "fleet"
 )
 
 // Records is every record family.
 var Records = []Record{
 	RecordGitlet, RecordIntegrations, RecordSeatAccess, RecordToolServers,
-	RecordSSHTests, RecordAccessLog, RecordUsage,
+	RecordSSHTests, RecordAccessLog, RecordUsage, RecordFleet,
 }
 
 // Valid reports whether r is a member of the closed set.
@@ -344,6 +347,27 @@ func Says(subject Ref, f Fact, raw string, src Source, at time.Time) (Claim, err
 	return checked(Claim{Subject: subject, Facet: Facet{Kind: FacetFact, Fact: f}, Value: v, Source: src, ObservedAt: at})
 }
 
+// FleetAddress is the fleet's claim that subject, a node or a server of its
+// broker, answers at raw. ALWAYS PRIVATE, whatever network the address is on:
+// it is where the engine's own members reach each other, so it is marked
+// internal for every reader it is shown to, merges no two entries
+// ([joinKeysOf]) and is an administrator's alone ([For]).
+func FleetAddress(subject Ref, raw string, at time.Time) (Claim, error) {
+	v, err := FactAddress.Value(raw)
+	if err != nil {
+		return Claim{}, err
+	}
+	v.Private = true
+	return checked(Claim{Subject: subject, Facet: Facet{Kind: FacetFact, Fact: FactAddress}, Value: v,
+		Source: RecordSource(RecordFleet), ObservedAt: at})
+}
+
+// fleetAddress reports whether a fact is an address the fleet's own records
+// say: a node's, or a server's of its broker.
+func fleetAddress(f Fact, src Source) bool {
+	return f == FactAddress && src.Kind == SourceRecords && src.Name == string(RecordFleet)
+}
+
 // Relates is the claim that from relies on the entry to through r.
 func Relates(from Ref, r Relation, to Ref, src Source, at time.Time) (Claim, error) {
 	return checked(Claim{Subject: from, Facet: Facet{Kind: FacetRelation, Relation: r, Target: Target{Entry: to}},
@@ -529,6 +553,11 @@ func (c Claim) validateFact() error {
 	v, err := f.Value(c.Value.Text)
 	if err != nil {
 		return err
+	}
+	if fleetAddress(f, c.Source) {
+		// THE FLEET'S OWN ADDRESS IS PRIVATE BY RULE ([FleetAddress]), so a
+		// claim of one that is not marked so is not in its canonical form.
+		v.Private = true
 	}
 	if v != c.Value {
 		return fmt.Errorf("%s: the value is not in its canonical form", f)

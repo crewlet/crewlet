@@ -1407,7 +1407,17 @@ const (
 	// pointed row, which ride it by rule while the map's code is the atlas
 	// chunk's) and the kit's shared chunks about +310. Every screen's module
 	// of it is lazy. So it moved to 407 KiB, 2.22 seconds.
-	initialBudget = 407 << 10
+	// The advisor's two sentences for an atlas it could not read, which the
+	// attention queue says to an administrator and so the entry carries,
+	// took it to 407.02 KiB (416,788 bytes), 20 bytes past it: 408 KiB,
+	// 2.23 seconds.
+	// A task's atlas entries took it to 407.1 KiB, 86 bytes gzipped in
+	// modules the entry already reads: the act row's argument and the atlas
+	// questions it refreshes, the three questions' names, and the history's
+	// wording for the count. The rail's group, the link dialog, the Work tab
+	// and the marks are the Worklet and atlas chunks'. So it moved to 408
+	// KiB, 2.23 seconds.
+	initialBudget = 408 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2353,7 +2363,18 @@ const (
 	// set added 2,322 bytes, script +2,286 and the atlas sheet +36. Built
 	// beside Sources the tree measures 5957.8 KiB (6,100,752 bytes, 6 over
 	// the sum of the two): 5958 KiB.
-	treeBudget = 5<<20 + 838<<10
+	// The setup advisor's atlas findings (the fix dialog in the atlas chunk,
+	// with its owner, monitor, decision and read-now rows, and the advisor's
+	// row, lazy mount and unread words) added 4,452 bytes, all script, and
+	// took it to 5962.1 KiB (6,105,204 bytes): 5963 KiB.
+	// The work that touches an entry (its Work tab and sheet section, the
+	// open-work notch and count, and a task's Atlas entries group with its
+	// link dialog) added 8,469 bytes, all script, and took it to 5966.0 KiB
+	// (6,109,221 bytes): 5967 KiB.
+	// Built together, the advisor's findings and the work that touches an
+	// entry measure 5970.4 KiB (6,113,724 bytes), 51 bytes over the two
+	// added to 5958 KiB's tree: 5971 KiB.
+	treeBudget = 5<<20 + 851<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

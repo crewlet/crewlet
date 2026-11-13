@@ -95,6 +95,12 @@ const (
 	MaxWaitingOn      = 64
 	MaxOtherRelations = 128
 
+	// MaxEntries bounds the atlas entries one task names, inside
+	// MaxOtherRelations: thirty-two, four times what a turn's systems block
+	// lists, past which the work is about the company at large and its
+	// project is the thing to link.
+	MaxEntries = 32
+
 	// MaxRelationNote bounds the one free-text field an edge carries.
 	//
 	// 256 BYTES, which is a sentence saying WHY this task waits on that
@@ -313,12 +319,20 @@ const (
 	// own record and the page is never touched: there is no write to the
 	// pages log at all.
 	RelationPage RelationKind = "page"
+	// RelationEntry names an entry of the company's atlas by its id, never
+	// by its name or key, so no atlas name enters this log. The edge rides
+	// the task's own record and the atlas is never written (ADR-0140).
+	RelationEntry RelationKind = "atlas_entry"
 )
 
 // RelationKinds is the closed set, in the order a refusal lists them.
 var RelationKinds = []RelationKind{
-	RelationWaitingOn, RelationLinked, RelationDuplicates, RelationPage,
+	RelationWaitingOn, RelationLinked, RelationDuplicates, RelationPage, RelationEntry,
 }
+
+// NamesTask reports whether an edge of this kind names another task: every
+// kind but a page's and an atlas entry's, whose other end is another domain's.
+func (k RelationKind) NamesTask() bool { return k != RelationPage && k != RelationEntry }
 
 // Valid reports whether this is a kind this build knows.
 //

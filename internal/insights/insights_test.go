@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/insights"
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -282,6 +283,32 @@ func TestEveryRecordFitsItsBound(t *testing.T) {
 		raw, err := json.Marshal(r)
 		if err != nil || len(raw) > insights.MaxRecordBytes {
 			t.Errorf("%s encodes to %d bytes (%v), want at most %d", r.Class(), len(raw), err, insights.MaxRecordBytes)
+		}
+	}
+}
+
+// AN ATLAS FINDING MAKES NO RECORD: what the atlas shows needs a person names
+// the company's own systems, and no class of the catalogue is one of the
+// atlas's, so nothing about an entry is ever shared (ADR-0141).
+func TestAnAtlasFindingMakesNoRecord(t *testing.T) {
+	t.Parallel()
+	ada, at := atlas.PersonSource("ada"), monday.Add(-30*24*time.Hour)
+	service, err := atlas.Exists(atlas.MustRef(atlas.KindService, "checkout-api"), ada, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := advisor.DetectAtlas(advisor.AtlasEvidence{Until: monday, Names: true, Interval: time.Hour,
+		View:    atlas.Fold([]atlas.Claim{service}, monday),
+		Sources: []advisor.AtlasSource{{Kind: "datadog", Name: "Datadog", LastCompleteAt: at}}})
+	if len(findings) == 0 {
+		t.Fatal("the atlas raised nothing to hold a record against")
+	}
+	if got := insights.Records(findings, monday, tagged); len(got) != 0 {
+		t.Errorf("atlas findings made %d records, want none: %+v", len(got), got)
+	}
+	for _, e := range insights.Catalogue() {
+		if slices.Contains(advisor.AtlasClasses(), advisor.Class(e.Class)) {
+			t.Errorf("%s is an atlas class in the catalogue of what is shared", e.Class)
 		}
 	}
 }

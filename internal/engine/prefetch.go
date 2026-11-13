@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
@@ -113,6 +115,46 @@ func (a ownAsks) OwnAsks(ctx context.Context, asker, person string, limit int) (
 		Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}, time.Now())
 }
 
+// taskReads is the tracker's read of one task, as the estate router serves it.
+type taskReads interface {
+	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+		fresh statelog.Freshness) (worklet.TaskDetail, error)
+}
+
+// linkedEntries is the atlas entries the turn's work item names (ADR-0140),
+// by id, on Worklet's tracker alone: a vendor tracker holds no such links.
+func (e *Engine) linkedEntries(ctx context.Context, company *Company, req Request, item *types.WorkItem,
+	readsAtlas bool) []uuid.UUID {
+	if e.router == nil || company.Config.TrackerBackendFor() != config.TrackerWorklet {
+		return nil
+	}
+	return linkedEntriesOf(ctx, e.router.Work(), req.Handle, item, readsAtlas)
+}
+
+// linkedEntriesOf reads item's entries from work: none for a turn that may
+// not read the atlas or is on no Worklet item, where the tracker is not read
+// at all, and none for an item that could not be read, which costs the
+// block's first lines alone and is logged.
+func linkedEntriesOf(ctx context.Context, work taskReads, seat string, item *types.WorkItem,
+	readsAtlas bool) []uuid.UUID {
+	if !readsAtlas || item == nil || item.Backend != types.WorkWorklet || item.ID == "" {
+		return nil
+	}
+	detail, err := work.Task(ctx, item.ID, worklet.DetailWants{},
+		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)})
+	if err != nil {
+		log.WarnContext(ctx, "prefetch_linked_entries_unread", "seat", seat, "item", item.ID, "error", err)
+		return nil
+	}
+	var out []uuid.UUID
+	for _, raw := range detail.Task.Entries() {
+		if id, parseErr := uuid.Parse(raw); parseErr == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // prefetchFor renders one turn's context blocks.
 //
 // The SEAT and the AGENT ID are read off the pinned epoch, like everything
@@ -120,7 +162,7 @@ func (a ownAsks) OwnAsks(ctx context.Context, asker, person string, limit int) (
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	task string, ask prefetch.Ask, aux auxspend.Use, boundary provenance.Boundary,
-	told *toldTurn, workingFor *types.WorkingFor, readsAtlas bool,
+	told *toldTurn, workingFor *types.WorkingFor, readsAtlas bool, item *types.WorkItem,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -183,6 +225,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// WHETHER IT MAY READ THE ATLAS, decided with the turn's own ceiling
 		// (turnReadsAtlas), for the entries its ask names.
 		ReadsAtlas: readsAtlas,
+		// THE ENTRIES ITS WORK ITEM NAMES, read with the item where the turn
+		// may read the atlas at all.
+		Linked: e.linkedEntries(ctx, company, req, item, readsAtlas),
 		// THE SEGMENT'S FENCE TOKEN, which its tools fence with too: the
 		// thread is somebody else's words, handed over in the prompt.
 		Boundary: boundary,

@@ -32,6 +32,14 @@ export function entries(count: number): string {
   return plural(count, "entry", "entries");
 }
 
+/** What the map's key calls an entry that open tasks name. */
+export const WORKED_ON = "Being worked on";
+
+/** How many open tasks name an entry, as a count with its noun: "2 open tasks". */
+export function openTasks(count: number): string {
+  return plural(count, "open task");
+}
+
 /** What each kind of entry is called, and the glyph drawn on its tile. */
 export const KINDS: Readonly<Record<AtlasKind, { word: string; glyph: GlyphName }>> = {
   domain: { word: "Domain", glyph: "globe" },
@@ -366,6 +374,7 @@ export const RECORDS: Readonly<Record<string, string>> = {
   ssh_tests: "connection tests",
   access_log: "the access log",
   usage: "the usage history",
+  fleet: "the engine's own nodes",
 };
 
 /** Each place an atlas read reads, named as a reader knows it. */
