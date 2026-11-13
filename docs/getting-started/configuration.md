@@ -100,6 +100,10 @@ atlas:                                  # optional: the atlas, the map of what t
                                         #   their own turn showed them, and dispute what it holds
                                         #   (default true). false stops both; see "What agents
                                         #   record" in concepts/atlas.md.
+  owner_wakes: true                     #   whether the agent seat that owns an entry is woken when
+                                        #   the entry drifts: its health turns to alerting, or its
+                                        #   sources come to disagree (default true). At most one
+                                        #   wake an entry a day; false wakes nobody.
 assistant: {...}                        # optional, Ask Crewlet; off unless enabled
                                         #   (see "Ask Crewlet" below)
 

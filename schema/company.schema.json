@@ -253,6 +253,15 @@
             "null"
           ]
         },
+        "owner_wakes": {
+          "description": "Whether the agent seat that owns an atlas entry is woken when the entry drifts: its health turns to alerting, or its sources come to disagree (default true). At most one wake an entry a day. false wakes nobody; the entry still waits in Review.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "refresh_interval_seconds": {
           "description": "How often each connected integration is read whole for the atlas, in seconds. 0 takes the default of 3600; the floor is 300.",
           "minimum": 0,
