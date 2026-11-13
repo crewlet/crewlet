@@ -1110,3 +1110,33 @@ func TestANodesAddressIsAnsweredToAnAdministratorAlone(t *testing.T) {
 		}
 	}
 }
+
+// A NODE'S PAGE DRAWS WHAT RELIES ON IT: the trace an entry's neighbourhood
+// reads answers the engine's own service and its broker one step from a
+// broker member, with the relation each stands on it by, so the fleet's
+// entries are drawn among their neighbours like every other kind's.
+func TestANodesTraceAnswersTheEngineAndItsBroker(t *testing.T) {
+	t.Parallel()
+	s := fleetSources(t)
+	node := entryID(atlas.KindHost, "crewlet/node-a")
+	trace := askAtlas(asAtlasReader(t), t, s, "atlas_trace",
+		map[string]any{"id": node, "direction": "up", "depth": 1, "relations": "all"})
+	var keys []string
+	for _, hop := range listOf(t, trace["hops"]) {
+		for _, e := range listOf(t, hop["entries"]) {
+			keys = append(keys, e["key"].(string))
+		}
+	}
+	slices.Sort(keys)
+	if !slices.Equal(keys, []string{"crewlet", "crewlet/broker"}) {
+		t.Errorf("one step up from the node = %v, want the engine and its broker", keys)
+	}
+	if edges := listOf(t, trace["edges"]); len(edges) != 2 || edges[0]["to"] != node || edges[0]["relation"] != "runs_on" {
+		t.Errorf("the trace's edges = %v, want two that run on the node", edges)
+	}
+	down := askAtlas(asAtlasReader(t), t, s, "atlas_trace", map[string]any{
+		"id": entryID(atlas.KindService, "crewlet"), "direction": "down", "depth": 1, "relations": "all"})
+	if n := len(listOf(t, listOf(t, down["hops"])[0]["entries"])); n != 4 {
+		t.Errorf("one step down from the engine holds %d entries, want its two nodes, its broker and its object store", n)
+	}
+}
