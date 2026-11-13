@@ -198,7 +198,7 @@ func TestTheFilesOfAGitLabProjectAreReadByTheClosedList(t *testing.T) {
 	h.calls = nil
 	h.mu.Unlock()
 	r.now = r.now.Add(time.Hour)
-	if fs = r.pass(); len(h.blobsAsked()) != 0 || h.sent("GET /api/v4/projects/1/repository/tree") != 0 ||
+	if r.pass(); len(h.blobsAsked()) != 0 || h.sent("GET /api/v4/projects/1/repository/tree") != 0 ||
 		h.sent("GET /api/v4/projects/1/repository/branches/main") != 1 {
 		t.Errorf("an unmoved project cost %v", h.calls)
 	}
