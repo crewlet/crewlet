@@ -897,9 +897,10 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 // THE RESTORE STREAMS THE OBJECT ITS ROW NAMES, OPENED AGAINST THAT ROW AS IT
 // STREAMS: a reading of what a kept session holds reads exactly the archive
 // the fetch and the spool's open hand a launch, every chunk of it
-// authenticated, with no spool on this node's disk; the same object named by
-// another turn's row does not open, its seal being bound to the turn its row
-// names; and a row naming no object is unreadable, as the store says of one.
+// authenticated (the store's own stream, which spools nothing, so the case
+// checks no spool); the same object named by another turn's row does not
+// open, its seal being bound to the turn its row names; and a row naming no
+// object is unreadable, as the store says of one.
 //
 // Mutation: stream the object unopened, or open it against anything but its
 // own row, and the bytes differ or the turn's own stream fails; answer a row

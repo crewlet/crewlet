@@ -75,8 +75,8 @@ import (
 //
 // A SAVED COMPACTION IS NO QUESTION OF THE READING'S ([claudePrecompact]): it
 // bears on whether a continuation's first request hands its model a summary in
-// place of the history the archive holds, which the launch that continues the
-// session judges before it asks for a reading at all.
+// place of the history the archive holds, which a reading's caller is to judge
+// before it uses a reading at all (ADR-0073's amendment on this reading).
 //
 // TWO METERS, ONE BUDGET. The archive's gzip stream is metered at
 // [threadPlainMax] by the scrub's own meter ([boundedPlain]), which also bounds
@@ -220,11 +220,15 @@ import (
 // line, and nothing can link, answer or notice a call under one. About 75 MiB
 // in all, inside the hundred or so one of the
 // process's transcript slots is sized for ([TranscriptReadsAtOnce]). MEASURED
-// on two cores (BenchmarkAReadingAtItsBounds): its worst is a line at the
-// line's bound of the smallest results a message holds, 67 MiB live, read in
-// a quarter of a second; 255 MiB of lines, the plaintext's bound, read in 2 s
-// holding 3 MiB live; 1,024 subagents in 76 ms; and an ordinary kept session,
-// 1.6 MiB sealed, in 48 ms.
+// on two cores (BenchmarkAReadingAtItsBounds): its worst in memory is a line at
+// the line's bound of the smallest results a message holds, 67 MiB live, its
+// heap peaking at 94 MiB, read in a quarter of a second; 255 MiB of ordinary
+// lines, the plaintext's bound, read in 2 s holding 3 MiB live; the slowest
+// lines measured for their size, a line at the line's bound of blocks of a
+// kind no reader names, 8 MiB in 0.37 s, so an archive of them to the
+// plaintext's bound, which gzip shrinks to almost nothing, reads in about 12 s
+// by that rate (computed, not measured whole); 1,024 subagents in 76 ms; and
+// an ordinary kept session, a 1.6 MiB archive, in 48 ms.
 
 // holdingsWriterFloor is the oldest Claude Code release whose sessions a
 // reading reads ([ClaudeCode.holdingsFloor]).
@@ -263,8 +267,8 @@ const holdingsMaxLegs = 4 * holdingsMaxAgents
 
 // holdingsMetaMaxBytes is the most of a subagent's metadata a reading reads.
 //
-// 64 KIB: every metadata the probes measured is 176 to 234 bytes (60 files,
-// 13 distinct). One past it leaves its subagent unlinked.
+// 64 KIB: every metadata the probes kept is 176 to 275 bytes (90 files of
+// probes P2 and T, 19 distinct). One past it leaves its subagent unlinked.
 const holdingsMetaMaxBytes = 64 << 10
 
 // holdingsDescriptionBytes is the most of a subagent's description a reading

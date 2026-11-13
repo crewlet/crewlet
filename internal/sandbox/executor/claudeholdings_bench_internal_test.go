@@ -26,10 +26,15 @@ import (
 // Its peak heap is read off the runtime's GC trace (GODEBUG=gctrace=1), one
 // case a process, after the forced collection each case takes once its archive
 // is written: a sampling ticker would be a clock in test code. Each case
-// reports the plaintext it reads and the archive it read it from, in MiB, its
-// lines' text made of random base64, which gzip barely shrinks, and of one
-// phrase, which it shrinks to nothing, in the measure each case's inflation
-// asks.
+// reports the plaintext it reads and the gzipped archive it read it from, in
+// MiB (nothing is sealed here), its lines' text made of random base64, which
+// gzip barely shrinks, and of one phrase, which it shrinks to nothing, in the
+// measure each case's inflation asks. The measure is near, not exact: the run
+// the figures in the docs come from wrote the ordinary archive at 1.59 MiB,
+// and those at the archive's bound and to the plaintext's at 33.7 and 35.9
+// MiB, past the 32 they are named for, inflating by 3.5 and 7.1 rather than
+// 3.7 and 8: more of gzip's work than a real archive at those bounds, so
+// their times are upper estimates.
 //
 //	go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 //
@@ -70,7 +75,7 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			file := filepath.Join(b.TempDir(), "archive.tar.gz")
-			ask, plain, sealed := benchArchive(b, file, bc.write)
+			ask, plain, gzipped := benchArchive(b, file, bc.write)
 			archive := sandbox.SessionArchive{Harness: ClaudeCodeName, SessionID: ctSession,
 				Format: claudeArchiveFormat, Version: holdingsWriterFloor}
 			// WHAT WRITING THE ARCHIVE LEFT is collected before the reading
@@ -80,7 +85,7 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 			// REPORTED ONCE THE TIMER IS RESET, which deletes every metric
 			// reported before it.
 			b.ReportMetric(float64(plain)/(1<<20), "plain-MiB")
-			b.ReportMetric(float64(sealed)/(1<<20), "sealed-MiB")
+			b.ReportMetric(float64(gzipped)/(1<<20), "archive-MiB")
 			for range b.N {
 				f, err := os.Open(file)
 				if err != nil {
@@ -102,17 +107,17 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 const benchSlack = 1 << 20
 
 // benchArchive writes the archive write makes to file, gzipped, and answers
-// what it asks and the archive's size in plaintext and sealed.
+// what it asks and the archive's size in plaintext and gzipped.
 func benchArchive(b *testing.B, file string,
-	write func(*testing.B, *tar.Writer) sandbox.HoldingsAsk) (ask sandbox.HoldingsAsk, plain, sealed int64) {
+	write func(*testing.B, *tar.Writer) sandbox.HoldingsAsk) (ask sandbox.HoldingsAsk, plain, gzipped int64) {
 
 	b.Helper()
 	f, err := os.Create(file)
 	if err != nil {
 		b.Fatal(err)
 	}
-	sealedCount := &counted{w: f}
-	zw := gzip.NewWriter(sealedCount)
+	gzippedCount := &counted{w: f}
+	zw := gzip.NewWriter(gzippedCount)
 	plainCount := &counted{w: zw}
 	tw := tar.NewWriter(plainCount)
 	ask = write(b, tw)
@@ -121,7 +126,7 @@ func benchArchive(b *testing.B, file string,
 			b.Fatal(err)
 		}
 	}
-	return ask, plainCount.n, sealedCount.n
+	return ask, plainCount.n, gzippedCount.n
 }
 
 // benchMember writes one member named name of body to tw.

@@ -282,18 +282,24 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // FIFTEEN SECONDS, the frame's patience for one operation the size of a
 // session, as the keep's is ([relaunchCaptureWait]): the relaunch's frame
 // holds the seat and a slot of the node's admission, so what it spends on a
-// kept session is thirty seconds at most, fifteen for its keep and fifteen
-// for its reading. An ordinary kept session is a mebibyte or two sealed: one
+// kept session is thirty seconds, fifteen for its keep and fifteen for its
+// reading, and the one bounded step a reading may overrun its wait by
+// (below). An ordinary kept session is a mebibyte or two sealed: one
 // object-store read, and one pass over its lines. A reader checks the wait
 // between the bounded steps of its work ([HoldingsReader]), so a reading
 // overruns it by one such step at most; a reading past it is no reading, and
 // the relaunch tells the session every call after its save point, which is
 // never wrong. MEASURED on two cores (the executor's
 // BenchmarkAReadingAtItsBounds): Claude Code's reading of an ordinary kept
-// session, 1.6 MiB sealed, takes about 50 ms, so a burst of 32 relaunches,
+// session, a 1.6 MiB archive, takes about 50 ms, so a burst of 32 relaunches,
 // whose readings take turns on the seats' one transcript slot, reads in about
-// a second and a half; and the slowest reading at its bounds, 255 MiB of
-// lines, takes 2 s, inside the wait too.
+// a second and a half; 255 MiB of ordinary lines, the plaintext's bound, read
+// in 2 s; and the slowest lines measured for their size, a line at the line's
+// bound of blocks of a kind no reader names, read 8 MiB in 0.37 s, so an
+// archive of them to the plaintext's bound, which gzip shrinks to almost
+// nothing, reads in about 12 s by that rate (computed, not measured whole):
+// inside the wait still, though on a loaded node it holds the seats' slot for
+// most of it.
 const holdingsReadWait = 15 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
