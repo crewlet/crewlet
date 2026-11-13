@@ -90,11 +90,13 @@ func TestACompleteSSHBlockValidates(t *testing.T) {
 		"    commands: {timeout_seconds: 900, max_output_bytes: 4096}\n" +
 		"    hosts:\n" +
 		fmt.Sprintf("      - {id: api-1, address: api-1.example.com, port: 2222, host_keys: [%q, %q, %q], "+
-			"users: {read: crewlet-read, operate: crewlet-ops}, description: Production API server, containers: true, "+
+			"users: {read: crewlet-read, operate: crewlet-ops}, description: Production API server, containers: true, inventory: true, "+
 			"read_allowlist: [/usr/bin/uptime, \"/usr/bin/journalctl --no-pager -u * --since=*\", \"/usr/bin/tail -n * ...\"]}\n",
 			ed25519Line(t, 1), sshKeyLine(t, &rsaKey.PublicKey), sshKeyLine(t, &ecKey.PublicKey)) +
 		fmt.Sprintf("      - {id: db-2, address: 198.51.100.4, host_keys: [%q], users: {read: crewlet-read}}\n",
-			ed25519Line(t, 2))
+			ed25519Line(t, 2)) +
+		fmt.Sprintf("      - {id: db-3, address: 198.51.100.5, host_keys: [%q], users: {read: crewlet-read}, "+
+			"inventory: true}\n", ed25519Line(t, 3))
 	for name, doc := range map[string]string{
 		"read":      sshDoc(t, full, "enabled: true, hosts: [api-1, db-2]"),
 		"operate":   sshDoc(t, full, "enabled: true, level: operate, hosts: [api-1]"),
@@ -115,6 +117,17 @@ func TestACompleteSSHBlockValidates(t *testing.T) {
 	}
 	if h, ok := b.Host("db-2"); !ok || h.PortOrDefault() != 22 {
 		t.Errorf("db-2 = %+v, %v; want port 22", h, ok)
+	}
+	// THE INVENTORY IS OFF UNLESS A SERVER SAYS SO, and lists containers
+	// only where the server lets its read user list them.
+	for id, want := range map[string][]string{
+		"api-1": {config.SSHInventoryPorts, config.SSHInventoryContainers},
+		"db-2":  nil,
+		"db-3":  {config.SSHInventoryPorts},
+	} {
+		if h, _ := b.Host(id); !slices.Equal(h.InventoryCommands(), want) {
+			t.Errorf("%s's inventory runs %q, want %q", id, h.InventoryCommands(), want)
+		}
 	}
 	if got := c.Roles[0].Integrations.SSH.LevelOrDefault(); got != config.SSHLevelRead {
 		t.Errorf("an unset level = %q, want read", got)

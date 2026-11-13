@@ -5177,6 +5177,15 @@
             "null"
           ]
         },
+        "inventory": {
+          "description": "Let the engine itself read this server for the atlas on the atlas's refresh interval: its listening ports (ss -tln) and, where containers is on, its running containers (sudo -n docker ps). Each command is recorded as an agent's is, and only the ports, the container names and their images are kept. Off by default; the server accepts it after its setup is run again.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "port": {
           "description": "The server's SSH port. Empty is 22.",
           "type": [

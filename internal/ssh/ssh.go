@@ -33,6 +33,18 @@
 // and the sudoers line names its path. [ReadCommands] renders a host's rules
 // in the form a seat types them, for its access section and a refused read.
 //
+// # The engine's own inventory (ADR-0134)
+//
+// On a server that opts in (`inventory: true`), and on no other, the engine
+// itself runs config.SSHInventoryCommands for the atlas: one certificate per
+// command, of purpose inventory, under the principal crewlet.<host
+// id>.inventory, bound to that command and valid two minutes. No seat's
+// certificate carries that principal, [Sign] signs it for no other command,
+// and the gate runs what the certificate names whatever a client asks for.
+// Each run is recorded as a seat's read is, held by accessdomain.EngineHolder.
+// [ParseOpenPorts] and [ParseContainers] keep ports, names and images and read
+// no other column, so a command line never leaves the parse ([AtlasSource]).
+//
 // # No account to make
 //
 // The integration creates nothing at a vendor: a seat's access is the document

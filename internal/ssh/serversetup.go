@@ -22,7 +22,7 @@ import (
 
 // SetupVersion is the version of the setup a script renders; the gate answers
 // its own version, which Test connection compares.
-const SetupVersion = 2
+const SetupVersion = 3
 
 // GatePath is where the setup installs the gate.
 const GatePath = "/usr/local/sbin/crewlet-gate"
@@ -64,6 +64,12 @@ func ReadAllowlist(h config.SSHHost) []string {
 	}
 	return DefaultReadAllowlist(h.Containers)
 }
+
+// inventoryHeader opens the rendered inventory allowlist file.
+const inventoryHeader = `# Crewlet inventory allowlist: the commands the engine itself runs for the
+# atlas, one per line, each named by the certificate it runs under. Written by
+# the server setup; remove the file to refuse them all.
+`
 
 // allowlistHeader opens the rendered allowlist file.
 const allowlistHeader = `# Crewlet read allowlist, one command per line. The first word is an absolute
@@ -129,6 +135,11 @@ func RenderSetup(h config.SSHHost, caLines []string) (string, error) {
 	w("find \"$DIR/principals\" -type f -delete\n")
 	w("printf 'restrict crewlet.%%s.read\\n' \"$HOST_ID\" >\"$DIR/principals/$READ_USER\"\n")
 	w("chmod 0644 \"$DIR/principals/$READ_USER\"\n")
+	if h.Inventory {
+		// THE INVENTORY'S OWN PRINCIPAL, only where the server opts in: a
+		// server whose setup was not run again refuses its certificate.
+		w("printf 'restrict crewlet.%%s.%s\\n' \"$HOST_ID\" >>\"$DIR/principals/$READ_USER\"\n", LevelInventory)
+	}
 	if ops != "" {
 		w("printf 'restrict crewlet.%%s.operate\\n' \"$HOST_ID\" >\"$DIR/principals/$OPS_USER\"\n")
 		w("chmod 0644 \"$DIR/principals/$OPS_USER\"\n")
@@ -137,6 +148,12 @@ func RenderSetup(h config.SSHHost, caLines []string) (string, error) {
 	w("cat >%s <<'CREWLET_GATE'\n%sCREWLET_GATE\nchmod 0755 %s\n", GatePath, gateScript, GatePath)
 	w("cat >\"$DIR/read-allowlist\" <<'CREWLET_ALLOW'\n%s%s\nCREWLET_ALLOW\nchmod 0644 \"$DIR/read-allowlist\"\n\n",
 		allowlistHeader, strings.Join(rules, "\n"))
+	if commands := h.InventoryCommands(); len(commands) > 0 {
+		w("cat >\"$DIR/inventory-allowlist\" <<'CREWLET_INVENTORY'\n%s%s\nCREWLET_INVENTORY\nchmod 0644 \"$DIR/inventory-allowlist\"\n\n",
+			inventoryHeader, strings.Join(commands, "\n"))
+	} else {
+		w("rm -f \"$DIR/inventory-allowlist\"\n\n")
+	}
 	w("# 5. Privileges.\n")
 	if ops != "" {
 		w("# Operate is full sudo, as decided per server; narrow it here if wanted.\n")

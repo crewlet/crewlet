@@ -97,7 +97,7 @@ interface SetupSSHTest {
 }
 
 /** One registered SSH server, its keys as fingerprints. */
-interface SetupSSHServer {
+export interface SetupSSHServer {
   id: string;
   address: string;
   port: number;
@@ -105,16 +105,29 @@ interface SetupSSHServer {
   users: { read: string; operate?: string };
   description?: string;
   containers?: boolean;
+  /** Whether the engine itself reads the server for the atlas. Off when absent. */
+  inventory?: boolean;
   /** Every agent naming it, on or off: it is not removed while one does. */
   granted_to: string[];
   last_test?: SetupSSHTest;
 }
 
+/** One command of the atlas's inventory, as the server's gate takes it. */
+export interface SetupSSHInventoryCommand {
+  command: string;
+  /** Run only on a server whose read user may list containers. */
+  containers: boolean;
+}
+
 /** The SSH integration's servers and the authority lines servers trust. */
-interface SetupSSHServers {
+export interface SetupSSHServers {
   ca_public_key?: string;
   next_ca_public_key?: string;
+  /** The lines a rotation retired, newest last. */
+  retired_ca_public_keys: string[];
   setup_version: number;
+  /** The closed set the engine runs on a server that opts in to the atlas's inventory. */
+  inventory_commands: SetupSSHInventoryCommand[];
   hosts: SetupSSHServer[];
 }
 
