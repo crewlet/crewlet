@@ -21,7 +21,7 @@ import (
 )
 
 // THE MERGE QUEUE OVER ITS ROWS: one repository's main, its live entries and
-// its live train as the `queue_due` read answers them (queueRows), each record
+// its live train as the due-queue read answers them (queueRows), each record
 // the worker asks of the repository's committer applied to those rows as the
 // code domain's applier applies it — a candidate puts its entries in its train,
 // testing; an eject takes its entries out and abandons the train it ends; a
@@ -184,25 +184,29 @@ func (r *queueRows) position() statelog.Position {
 func (r *queueRows) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	switch {
-	case q.Kind == gitlet.ReadChangesDue || q.Kind == gitlet.ReadChecksDue:
-		return gitlet.ReadAnswer{Position: r.position()}, nil
-	case q.Kind != gitlet.ReadQueueDue || q.QueueDue == nil:
-		return gitlet.ReadAnswer{}, errors.New("the queue asked a read that is not its listing")
-	case q.QueueDue.RepoID == "":
+	if q.Kind != gitlet.ReadChangesDue && q.Kind != gitlet.ReadChecksDue {
+		return gitlet.ReadAnswer{}, errors.New("the queue asked a read that is not a listing of the home's")
+	}
+	return gitlet.ReadAnswer{Position: r.position()}, nil
+}
+
+func (r *queueRows) QueueDue(_ context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if q.RepoID == "" {
 		if len(r.entries) == 0 && len(r.givenUp()) == 0 && len(r.owed) == 0 {
-			return gitlet.ReadAnswer{Position: r.position()}, nil
+			return gitlet.QueueDueAnswer{Position: r.position()}, nil
 		}
-		return gitlet.ReadAnswer{DueRepos: []string{repoA}, Position: r.position()}, nil
+		return gitlet.QueueDueAnswer{DueRepos: []string{repoA}, Position: r.position()}, nil
 	}
 	abandoned, owed := r.givenUp(), slices.Clone(r.owed)
 	if len(r.entries) == 0 {
-		return gitlet.ReadAnswer{QueueAbandoned: abandoned, QueueOwedCloses: owed, Position: r.position()}, nil
+		return gitlet.QueueDueAnswer{QueueAbandoned: abandoned, QueueOwedCloses: owed, Position: r.position()}, nil
 	}
 	d := &gitlet.QueueDue{TargetRef: queueMain, Repo: "web", Tip: r.tip, Depth: r.depth,
 		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries),
 		DropEpoch: r.epoch, Mirrored: r.mirrored}
-	if since := q.QueueDue.EnqueuedSince; !since.IsZero() {
+	if since := q.EnqueuedSince; !since.IsZero() {
 		r.since = append(r.since, since)
 		d.Enqueued = r.enqueued
 	}
@@ -218,7 +222,7 @@ func (r *queueRows) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnsw
 		}
 		d.Train = append(d.Train, c)
 	}
-	return gitlet.ReadAnswer{DueQueue: d, QueueAbandoned: abandoned, QueueOwedCloses: owed,
+	return gitlet.QueueDueAnswer{DueQueue: d, QueueAbandoned: abandoned, QueueOwedCloses: owed,
 		Position: r.position()}, nil
 }
 
@@ -1126,7 +1130,7 @@ func landsOne(t *testing.T, rows *queueRows, l *home.Loop) (gitlet.QueueWorkEntr
 // next turn reads it there and closes the item as the enqueuer, under the
 // landing's own step (gitlet.CloseWorkItemOpID), and settles it closed.
 //
-// Mutation: drop the owed closes a queue_due read's first page answers
+// Mutation: drop the owed closes a due-queue read's first page answers
 // (Work keeps no QueueOwedCloses) — the pending landing's item is never
 // closed, red.
 func TestALandAnsweredPendingClosesOnTheNextTurn(t *testing.T) {

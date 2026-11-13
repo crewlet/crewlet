@@ -161,11 +161,11 @@ func (w *queue) AlarmReading(out *statelog.Reading) {
 // Name is [WorkerQueue].
 func (w *queue) Name() string { return WorkerQueue }
 
-// Due is a page of the repositories holding a live entry: the `queue_due`
-// listing (internal/gitlet's ReadQueueDue).
+// Due is a page of the repositories owing queue work — holding a live entry, a
+// given-up train's attempt or a landed change's close — the due-queue listing
+// (internal/gitlet's QueueDueQuery naming no repository).
 func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string) ([]string, string, error) {
-	a, err := w.estate.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Cursor: cursor, Fresh: freshAt(floor),
-		QueueDue: &gitlet.QueueDueQuery{}})
+	a, err := w.estate.QueueDue(ctx, gitlet.QueueDueQuery{Cursor: cursor, Fresh: freshAt(floor)})
 	if err != nil {
 		return nil, "", err
 	}
@@ -193,9 +193,17 @@ func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string)
 // answer (M5-D27) — are closed and settled last ([queue.closeOwed]), so a
 // close no turn could make is asked again by every turn after, on whichever
 // home, until it ends.
+//
+// EVERY PAGE IS READ WHOLE OR REFUSED (gitlet.QueueDueAnswer): each entry it
+// answers is landed, ejected, closed or settled as the entry read, so a page a
+// newer data node answers with a member this build does not declare fails the
+// turn, stepping on nothing of what is left of it, and the queue waits until
+// this home runs a build that declares the member; and a data node of a build
+// that predates the read answers it unserved, so the queue waits for a data
+// node that serves it.
 func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position) error {
-	q := gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: freshAt(floor), QueueDue: &gitlet.QueueDueQuery{
-		RepoID: repoID, EnqueuedSince: w.now().Add(-gitlet.MergeRateWindow)}}
+	q := gitlet.QueueDueQuery{RepoID: repoID, EnqueuedSince: w.now().Add(-gitlet.MergeRateWindow),
+		Fresh: freshAt(floor)}
 	memo := newDefsMemo()
 	var (
 		failed    []error
@@ -206,7 +214,7 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 		built     bool
 	)
 	for {
-		a, err := w.estate.Read(ctx, q)
+		a, err := w.estate.QueueDue(ctx, q)
 		if err != nil {
 			return errors.Join(append(failed, fmt.Errorf("home: read repository %s's queue work: %w", repoID,
 				err))...)
@@ -622,7 +630,7 @@ func (w *queue) land(ctx context.Context, repoID string, d gitlet.QueueDue, gree
 }
 
 // closeOwed closes the work item each of owed — a landed entry still owing
-// its close (gitlet.ReadAnswer.QueueOwedCloses) — asked closed, AS ITS
+// its close (gitlet.QueueDueAnswer.QueueOwedCloses) — asked closed, AS ITS
 // ENQUEUER under the operation its landing named (gitlet.CloseWorkItemOpID,
 // so a close a home asked before it stopped is the same tracker write
 // asked again, which the tracker's ledger answers once), and settles every

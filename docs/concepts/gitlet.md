@@ -6668,10 +6668,22 @@ grant on the repository: `queue`, the live entries of one repository's queues
 queue order with their places, beside the trains testing a named
 repository's branches; `landings`, one protected branch's landings above its
 green row; and `green`, each protected branch's newest commit whose required
-checks passed. The repository's home reads a fourth, `queue_due` — the active
-repositories holding a live entry or a given-up train's unfinished check, and
-one repository's queue work a branch a page, its first page with those
-checks — which no person or seat may read.
+checks passed. The repository's home reads its **queue work** through a read
+of its own, `code.queue_due`, which no person or seat may read: the active
+repositories holding a live entry, a given-up train's unfinished check or a
+landed change's work item still owing its close, and one repository's queue
+work a branch a page, its first page with those checks and those closes. It
+is read **whole or not at all**, because the home lands, ejects, closes and
+settles each entry as it read it: a page a data node of a newer build answers
+with a field the home's build does not know fails the home's turn, and its
+queue waits rather than step on the rest. During a rolling upgrade a home
+reads its queue only from a data node of its own build: a data node of the
+newer build refuses an older home's read, which that build asks in its old
+form, and a data node of an older build answers a newer home's as a read it
+does not know, so the next data node is asked. Where none is left, the queue
+waits, losing nothing, until the home or the data nodes catch up. Upgrading
+the data nodes first, as crewlet-operator does, leaves only an older home's
+queue waiting, for the rest of the roll.
 
 #### What the home does with a queue
 

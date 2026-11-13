@@ -1695,7 +1695,7 @@
 // written back in one upsert and its changes read in one statement, as a push
 // record's changes are ([writeEntries], [changeRowsIn]).
 //
-// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one `queue_due` page over
+// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one due-queue page over
 // a target of [MaxCandidateEntries] live entries, each change's body at
 // [MaxChangeBodyBytes]; -benchtime 20x and one count on two E-cores of a Core
 // Ultra 7 265U): a page names the gate's depth × batch entries, their changes

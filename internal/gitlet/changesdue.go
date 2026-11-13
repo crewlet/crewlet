@@ -184,7 +184,7 @@ func (q ReadQuery) validateChangesDue() error {
 		{"expunge_tips", q.ExpungeTips != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {

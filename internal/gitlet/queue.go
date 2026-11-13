@@ -148,7 +148,7 @@ const MaxQueueEntries = 1024
 // trains took), which is what raises code_merge_rate_over_capacity.
 const MergeRateWindow = time.Hour
 
-// MergeRateScan is the most enqueues of one target a `queue_due` read counts
+// MergeRateScan is the most enqueues of one target a due-queue read counts
 // within [MergeRateWindow]: 4 096. A queue at both bounds — depth 8, batch 8
 // — lands 3 840 changes an hour at one-minute rounds, so for every round of a
 // minute or longer a count stopped at the bound is still above the capacity

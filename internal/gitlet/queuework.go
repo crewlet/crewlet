@@ -13,8 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A TARGET'S QUEUE WORK, READ FROM THE ROWS (M5-D12, M5-D13): a `queue_due`
-// read of ONE repository answers its home one target's [QueueDue] a page —
+// A TARGET'S QUEUE WORK, READ FROM THE ROWS (M5-D12, M5-D13): a due-queue
+// read of ONE repository ([Reader.QueueDue]) answers its home one target's
+// [QueueDue] a page —
 // everything the home's queue worker (internal/gitlet/home's queue) decides its
 // next step from, in ONE snapshot: the target's tip, the gate its queue lands
 // under (its depth, batch and required checks), its live entries in
@@ -61,7 +62,7 @@ import (
 // cancellation, so a turn that failed to cancel is listed again.
 
 // QueueDue is one target's queue work as one snapshot holds it
-// ([ReadAnswer.DueQueue]).
+// ([QueueDueAnswer.DueQueue]).
 type QueueDue struct {
 	TargetRef string `json:"target_ref"`
 	// Repo is the repository's name, as an operator knows it: what the
@@ -70,8 +71,9 @@ type QueueDue struct {
 	// Mirrored is the repository a PULL MIRROR ([RepoRef.Mirrored]), which
 	// nothing merges into — a candidate and a landing on it are refused
 	// repo_mirrored — so its home builds no train and puts every live entry
-	// out ([EjectRepoMirrored]): an answer between nodes, so an older
-	// reader drops it and reads the queue as it did.
+	// out ([EjectRepoMirrored]). An answer between nodes, read whole
+	// ([QueueDueAnswer]), so a home of a build that does not declare it
+	// refuses the page rather than build a train on a mirror.
 	Mirrored bool `json:"mirrored,omitempty"`
 	// Tip is the target's tip, what a train is built onto.
 	Tip string `json:"tip"`
@@ -133,10 +135,11 @@ type QueueWorkEntry struct {
 	// WorkItem is the change's work item, nil for none: what a landing
 	// closes where its entry asked it to.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
-	// CloseOp is, on an owed close ([ReadAnswer.QueueOwedCloses]), the
+	// CloseOp is, on an owed close ([QueueDueAnswer.QueueOwedCloses]), the
 	// operation its work item is closed under ([CloseWorkItemOpID] of the
-	// landing's), "" on every other entry. An answer between nodes, so an
-	// older reader drops it and leaves the close owed for a newer home.
+	// landing's), "" on every other entry. An answer between nodes, read
+	// whole ([QueueDueAnswer]), so a home of a build that does not declare
+	// it refuses the page, and the close stays owed for a home that reads it.
 	CloseOp string `json:"close_op,omitempty"`
 }
 
@@ -213,14 +216,14 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 //
 // AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. The
 // domain landed on main with it ([RecordVersion]), so every build that answers
-// a `queue_due` read answers it.
+// a due-queue read answers it.
 type AbandonedCheck struct {
 	CheckKey
 	CandidateID string      `json:"candidate_id"`
 	Reason      CheckReason `json:"reason"`
 }
 
-// MaxAbandonedChecks is the most given-up attempts one `queue_due` page
+// MaxAbandonedChecks is the most given-up attempts one due-queue page
 // answers: a whole train's at the deepest queue and the widest gate,
 // MaxQueueDepth × MaxRequiredChecks — so the attempts one giving up leaves
 // are cancelled in one turn — and the rest on the next, which each
@@ -293,7 +296,7 @@ const (
 // from it ([enqueuedSince]) where its gate requires a check. The first page
 // answers the repository's given-up attempts too ([abandonedChecksIn]),
 // whether or not a target holds a live entry.
-func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *ReadAnswer) error {
+func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *QueueDueAnswer) error {
 	if cursor == "" {
 		abandoned, err := abandonedChecksIn(ctx, tx, repoID)
 		if err != nil {
@@ -425,7 +428,7 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 	return out, nil
 }
 
-// MaxOwedCloses is the most owed closes one `queue_due` page answers:
+// MaxOwedCloses is the most owed closes one due-queue page answers:
 // [MaxLandEntries], the most one landing leaves owing — so a home settles a
 // whole landing's closes in one turn and one close_settled record (which
 // holds as many), and a repository owing more (several landings no home

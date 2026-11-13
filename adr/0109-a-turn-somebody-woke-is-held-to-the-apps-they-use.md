@@ -281,6 +281,16 @@ a roll:
   deciding node's build does not know rides its record as the row kept it, never rewritten, and a
   seat node whose build does not know the kind either composes it as a stranger's, the closed end
   (internal/gitlet's `storedCarrier`);
+- the merge queue's home reads its queue work whole or not at all, through an operation of its own
+  (internal/estate's `code.queue_due`), since it lands, ejects, closes and settles each entry as it
+  read it, and would carry an entry on without any field its build dropped. A home of an older build
+  asks that read as a kind of `code.read`, which a data node of the newer build refuses naming
+  `args.queue_due`, and a home of the newer build asks an operation an older data node does not
+  know, which that node answers unserved; either walk moves on to a data node of the asking home's
+  build, and where none is left the home's queue waits, stepping on nothing, until a home and a data
+  node of one build meet. crewlet-operator rolls the data pods first, so an older home's queue waits
+  for the rest of the roll, and only a roll that upgrades the homes first meets the newer home's
+  wait;
 - a run launched by a build before the carrier carries nobody on its row, so until the run ends its
   box's pushes and the change its run opens wake whoever they reach for the seat itself, and a
   credential's box keeps the seat's bound alone. Its grants were taken for nobody, and a run granted

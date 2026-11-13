@@ -1092,8 +1092,7 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 	owed := func(repo string) []gitlet.QueueWorkEntry {
 		t.Helper()
-		a, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-			QueueDue: &gitlet.QueueDueQuery{RepoID: repo}})
+		a, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, Fresh: stale})
 		if err != nil {
 			t.Fatalf("read %s's queue work: %v", repo, err)
 		}
@@ -1101,8 +1100,7 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 	listed := func(repo string) bool {
 		t.Helper()
-		a, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-			QueueDue: &gitlet.QueueDueQuery{}})
+		a, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{Fresh: stale})
 		if err != nil {
 			t.Fatalf("list the repositories owing queue work: %v", err)
 		}
@@ -1227,8 +1225,7 @@ func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 	stale := statelog.Freshness{Level: statelog.ReadStale}
 	owed := func(repo string) []string {
 		t.Helper()
-		a, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-			QueueDue: &gitlet.QueueDueQuery{RepoID: repo}})
+		a, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, Fresh: stale})
 		if err != nil {
 			t.Fatalf("read %s's queue work: %v", repo, err)
 		}
