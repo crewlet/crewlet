@@ -425,6 +425,19 @@ func worstRow(t *testing.T) PendingRun {
 	if keptCallOf(&widest) == nil {
 		t.Fatalf("the store keeps no call at its widest, %+v", widest)
 	}
+	// AND NONE WIDER AS WRITTEN: a call at the bound holding one byte the
+	// encoder escapes, in its session, in a quoted id or in a bare one, would
+	// be written up to six bytes a byte, which this model never measures.
+	for _, escaping := range []NoteCall{
+		{Session: plain(MaxNoteCallBytes-1) + "<", ID: "7"},
+		{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-3) + `<"`},
+		{Session: plain(MaxNoteCallBytes), ID: plain(MaxNoteCallBytes-1) + "<"},
+	} {
+		if keptCallOf(&escaping) != nil {
+			t.Fatalf("the store keeps a call holding a byte its encoder escapes, %+v: a kept call is no longer "+
+				"written as itself, so this row no longer models its calls at their widest", escaping)
+		}
+	}
 	read := func() *NoteRead {
 		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: math.MaxInt, Round: 99,
 			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true,
@@ -723,6 +736,11 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 // and the rest overruns its share; and raise maxIncarnationBytes to 700,000,
 // and the row's incarnations at that bound — its owner's, and the taker and the
 // standby's taker of each capture it holds — overrun it too.
+//
+// And hold a served call to its length alone (keptCallOf's raw-length rule
+// before the id charset), which keeps a call its encoder escapes, and the
+// worst row refuses to be built: its calls would no longer be measured at
+// their widest.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)
