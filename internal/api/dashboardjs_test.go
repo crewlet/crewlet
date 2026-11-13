@@ -2342,7 +2342,12 @@ const (
 	// atlas source, with the workload's rows in the tables the dialogs offer
 	// from, added 360. Together they took it to 5949.4 KiB (6,092,156 bytes,
 	// +52,609): 5950 KiB.
-	treeBudget = 5<<20 + 830<<10
+	// An agent's evidence in Review (each report's by-line and the call it
+	// cited, under a waiting entry and beside an agent's value), the bulk
+	// dialog's reporter and the Inbox's notice of drift on what the reader
+	// set added 2,322 bytes, script +2,286 and the atlas sheet +36, and took
+	// it to 5951.6 KiB (6,094,478 bytes): 5952 KiB.
+	treeBudget = 5<<20 + 832<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
