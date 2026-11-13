@@ -2325,7 +2325,11 @@ const (
 	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
 	// sheets about +28,100, the kit's layered service map in the one sheet
 	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
-	treeBudget = 5<<20 + 776<<10
+	// The SSH integration's Servers section (each server's "Read for Atlas"
+	// switch and the dialog that lists the commands first) and the atlas's
+	// workload kind, image and open ports, named in the atlas words, took
+	// it to 5899.1 KiB (6,040,660 bytes, +3,554, all script): 5900 KiB.
+	treeBudget = 5<<20 + 780<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
