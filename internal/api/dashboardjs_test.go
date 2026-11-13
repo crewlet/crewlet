@@ -2371,7 +2371,10 @@ const (
 	// open-work notch and count, and a task's Atlas entries group with its
 	// link dialog) added 8,469 bytes, all script, and took it to 5966.0 KiB
 	// (6,109,221 bytes): 5967 KiB.
-	treeBudget = 5<<20 + 847<<10
+	// Built together, the advisor's findings and the work that touches an
+	// entry measure 5970.4 KiB (6,113,724 bytes), 51 bytes over the two
+	// added to 5958 KiB's tree: 5971 KiB.
+	treeBudget = 5<<20 + 851<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
