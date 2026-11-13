@@ -92,6 +92,10 @@ export const KEY_HINTS: Readonly<Record<AtlasKind, { helper: string; example: st
     helper: "The name people use for it: 1 to 40 lower-case letters, digits and hyphens.",
     example: "checkout-api",
   },
+  workload: {
+    helper: "A namespace, a slash and its identifier.",
+    example: "acme/checkout-worker",
+  },
   host: { helper: "A namespace, a slash and its identifier.", example: "acme/web-2" },
   datastore: { helper: "A namespace, a slash and its identifier.", example: "acme/orders-db" },
   queue: { helper: "A namespace, a slash and its identifier.", example: "acme/orders" },

@@ -670,6 +670,8 @@ export const ATLAS_FACT_SPECS = {
   address: { type: "address", traits: ["many"], words: [], kinds: ["host"] },
   port: { type: "port", traits: [], words: [], kinds: ["host", "datastore", "queue"] },
   containers: { type: "word", traits: [], words: ["yes", "no"], kinds: ["host"] },
+  open_port: { type: "port", traits: ["many"], words: [], kinds: ["host"] },
+  image: { type: "image", traits: [], words: [], kinds: ["workload"] },
   engine: {
     type: "word",
     traits: [],
@@ -763,7 +765,7 @@ export const ATLAS_FACT_SPECS = {
  *  names instead. Held to the engine's by the same gate. */
 export const ATLAS_RELATION_PAIRS = {
   runs_on: {
-    from: ["service", "datastore", "queue"],
+    from: ["service", "workload", "datastore", "queue"],
     to: ["host", "vendor_account"],
     externals: [],
   },
@@ -821,6 +823,7 @@ export const ATLAS_RELATION_PAIRS = {
       "endpoint",
       "certificate",
       "service",
+      "workload",
       "host",
       "datastore",
       "queue",
@@ -842,6 +845,7 @@ export const ATLAS_RELATION_PAIRS = {
       "endpoint",
       "certificate",
       "service",
+      "workload",
       "host",
       "datastore",
       "queue",
