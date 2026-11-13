@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/kept"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -24,11 +24,12 @@ import (
 // row ([PendingRun]), read and written whole by every mutation (coordstore.go),
 // and beside it the parts a job can make large — the bridged call log
 // ([BridgeLog]), read and written whole by every append, and the secrets the
-// job's box was handed. One value is one broker message, held to
-// [queue.MaxPayloadBytes] with its headers, and past it every write of the
-// value is refused at the broker: for the row, a lease stamped on the run, a
-// status flip, the hold a turn takes on its next scratch repository; for the
-// log, every call's append. The bridged call log grew one call at a time with
+// job's box was handed. One value is held to what one key of the store holds,
+// [coord.MaxValueBytes] — the largest whose read a node without `data` takes
+// back across its leaf link, base64-encoded in its stream leader's reply — and
+// past it every write of the value is refused ([coord.ErrValueTooLarge]): for
+// the row, a lease stamped on the run, a status flip, the hold a turn takes on
+// its next scratch repository; for the log, every call's append. The bridged call log grew one call at a time with
 // nothing measuring it — two hundred builtin answers of 64 KiB are 12.8 MiB —
 // so a long run's log stopped taking writes, and its calls were the first
 // thing to go: the resumed turn's ledger, its delivery check and its
@@ -44,9 +45,9 @@ import (
 //
 //	the parked turn's state ......... ExecuteStateBytes   2,097,152  (2 MiB)
 //	everything else, and the room
-//	  a later build adds fields in .. RestBytes           6,287,360  (6 MiB less 4 KiB)
+//	  a later build adds fields in .. RestBytes           4,193,390  (4 MiB less 914 bytes)
 //	                                                      ---------
-//	                                  RowBytes            8,384,512
+//	                                  RowBytes            6,290,542
 //
 // and the log's three ways, beside it, a split that closes as its figures are
 // stated (TestACallInFlightIsHeldToItsShare):
@@ -56,9 +57,9 @@ import (
 //	the turn's earlier rounds' tool
 //	  names, the log's own fields,
 //	  and the room a later build
-//	  adds keys to the log in ....... LogRestBytes        3,862,528  (3.68 MiB)
+//	  adds keys to the log in ....... LogRestBytes        1,768,558  (1.69 MiB)
 //	                                                      ---------
-//	                                  RowBytes            8,384,512
+//	                                  RowBytes            6,290,542
 //
 // The handed set beside them ([PendingStore.Handed]) is the third value, at
 // most [MaxHandedBytes] before it is sealed: a fraction of [RowBytes], which
@@ -106,7 +107,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,702,523  (with 2,987,355 to spare)
+//	every other field, measured ..... 1,705,193  (with 890,715 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
@@ -137,10 +138,13 @@ import (
 const (
 	// RowBytes is what one value of a run may weigh as the coordination store
 	// holds it — its row, and each part beside it, the bridged call log
-	// first: the broker's payload bound less the room its headers take inside
-	// it — a KV update carries its expected-revision header in the same
-	// max_payload, about seventy bytes, and four KiB is that with room.
-	RowBytes = queue.MaxPayloadBytes - 4<<10
+	// first: what one key holds, the store's own bound on a value, which
+	// every backend refuses a write past ([coord.MaxValueBytes]). The
+	// transport's ceiling is not it: a value that large has a leader's read
+	// a leaf's link closes on, so the store holds a value to the largest whose
+	// read crosses, and a share budgeted to the transport would be one the
+	// store refuses every write of.
+	RowBytes = coord.MaxValueBytes
 
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
@@ -406,7 +410,7 @@ const (
 	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
 	// TestACallInFlightIsHeldToItsShare until this figure, and the table and
 	// docs/concepts/code-sandbox.md that state it, move with it.
-	LogRestBytes = 3_862_528
+	LogRestBytes = 1_768_558
 
 	// MaxPriorCalls bounds [BridgeLog.PriorCalls]: the tool names a turn's
 	// earlier rounds called with success. Five hundred and twelve is past
