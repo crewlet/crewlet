@@ -10,6 +10,12 @@
 // the inbound edge is per-seat where every other third-party app's is per-company,
 // and why provisioning here is an app-manifest problem rather than an
 // account-creation one.
+//
+// # The atlas asks which workspace this is
+//
+// The workspace's own id, name and address are said on the Slack account of
+// the atlas (ADR-0139, atlas.go), asked once a read with one agent's bot
+// token. Nobody in the workspace is read.
 package slack
 
 import (

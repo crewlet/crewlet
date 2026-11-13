@@ -16,6 +16,8 @@
 // project as an account, and what a Google Cloud project's enabled APIs say
 // it is used for. Its eighth reads Atlassian (ADR-0138): every site of the
 // organization as an account, and each product as what its account does.
+// Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
+// own id and name, with a bot token one of the agents already holds.
 //
 // # Its own duty, never the reconcile loop
 //
