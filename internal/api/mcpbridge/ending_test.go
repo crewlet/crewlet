@@ -701,13 +701,19 @@ func (h *heldTake) Take(ctx context.Context, event string) string {
 //     box's sessions closed and the end returns;
 //   - of a take that reaches the opening while its end waits for another
 //     answer, which takes nothing, and whose empty answer is waited for too;
-//   - of skill_loaded, reporting a load as the end comes.
+//   - of skill_loaded, reporting a load as the end comes;
+//   - of skill_loaded whose load is still on its way as the end comes, held in
+//     its call's fence short of the opening's lock: the end comes during the
+//     load more often than after it, since the load is most of the hook's
+//     work, so the hold comes before the load, where the end finds it.
 //
 // Mutation: take steer_take's inbox without the hold (`o.inbox()` in place of
 // the opening's hold of the hook), and the box's take is failed by the close;
 // hold a hook's answer only while the opening serves (its end's test before
 // the hold), and the take that reached the ended opening is failed; hold none
-// for skill_loaded, and the reported load's hook is failed.
+// for skill_loaded, and the reported load's hook is failed; take
+// skill_loaded's hold after its load, and a hook whose load the end came
+// during is failed.
 func TestAHookAnswerLeavesBeforeItsOpeningClosesTheSessions(t *testing.T) {
 	t.Parallel()
 	const notes = `{"hookSpecificOutput":{"hookEventName":"PostToolBatch","additionalContext":"use staging"}}`
@@ -828,6 +834,48 @@ func TestAHookAnswerLeavesBeforeItsOpeningClosesTheSessions(t *testing.T) {
 			if res := <-reported; res.IsError || text(res) != "" {
 				t.Errorf("the reported load's hook was answered %v %q, want nothing, and not as failed",
 					res.IsError, text(res))
+			}
+			synctest.Wait()
+			if !closedNow(ended) {
+				t.Error("the end did not return once the hook's answer was out")
+			}
+			if n := b.session.Connections(); n != 0 {
+				t.Errorf("%d of the box's sessions are open after the end", n)
+			}
+		})
+	})
+
+	t.Run("skill_loaded whose load is still on its way as the end comes", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			parked := newParkedFence()
+			l := &ledger{}
+			b := openBubbledWith(t, l, l, func(s *mcpbridge.Session) {
+				s.Skills = handed
+				s.Fence = parked.fence
+			}, &stubTool{name: toolname.LoadToolSkill})
+			box := b.connect(t, nil)
+			t.Cleanup(parked.letGo)
+
+			parked.arm()
+			reported := callFromBox(context.WithoutCancel(t.Context()), box, mcpbridge.SkillTool,
+				map[string]any{"skill": "crewlet:mcp-github"}, "")
+			// THE LOAD IS ON ITS WAY, held in the fence its call asks before
+			// the opening's lock, as the end comes.
+			<-parked.entered
+			ended := make(chan struct{})
+			go func() {
+				defer close(ended)
+				b.bridge.Close("run-1")
+			}()
+			synctest.Wait()
+			if closedNow(ended) {
+				t.Fatal("the end returned with the hook's answer unwritten")
+			}
+			parked.letGo()
+			if res := <-reported; res.IsError || text(res) != "" {
+				t.Errorf("the hook whose load the end came during was answered %v %q, want nothing, and not "+
+					"as failed", res.IsError, text(res))
 			}
 			synctest.Wait()
 			if !closedNow(ended) {
