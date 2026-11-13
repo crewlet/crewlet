@@ -252,7 +252,16 @@ func forge(b *builder, where string, vendor atlas.Vendor, web, group, label stri
 		if !strings.Contains(p, "/") && group != "" {
 			p = group + "/" + p
 		}
-		if r, ok := b.ref(at, atlas.KindRepository, host+"/"+p); ok {
+		// THE KEY THE FORGE'S OWN READ AND A MIRROR'S ADDRESS REDUCE TO, so a
+		// forge served under a path of its host still names one entry.
+		key, err := atlas.ForgeRepositoryKey(web, p)
+		if err != nil {
+			if !b.reference(at, p) {
+				b.withhold(at, err)
+			}
+			continue
+		}
+		if r, ok := b.ref(at, atlas.KindRepository, key); ok {
 			b.relates(at, r, atlas.RelationBelongsTo, account)
 		}
 	}
