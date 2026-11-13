@@ -699,7 +699,9 @@ var atlasVerbs = []atlasVerb{
 		description: "Add an entry to the company's atlas that no source reports: a service, a " +
 			"database, a queue, a bucket, a host, a domain or anything else the company runs on, by its " +
 			"kind and its key, with a name if its key is not one. A vendor the atlas does not know is an " +
-			"account with vendor `other`. Entries the company's settings or Gitlet declare are added there.",
+			"account with vendor `other`. Entries the company's settings or Gitlet declare are added there. " +
+			"What you know of it is recorded with it: its purpose, the account it belongs to, its owner and " +
+			"the page that documents it.",
 		params: func() map[string]any {
 			return map[string]any{
 				"kind": map[string]any{"type": "string", "enum": atlasKinds(), "description": "The entry's kind."},
@@ -708,6 +710,12 @@ var atlasVerbs = []atlasVerb{
 					"`<vendor>/<account id>` for an account."},
 				"name": map[string]any{"type": "string", "description": fmt.Sprintf("A name to show, plain "+
 					"text of at most %d characters. Omit it to show the key.", atlas.MaxLabelRunes)},
+				"purpose": map[string]any{"type": "string", "description": fmt.Sprintf("What it is for, one "+
+					"line of plain text of at most %d characters.", atlas.MaxLabelRunes)},
+				"belongs_to":  entryArg("The vendor account it belongs to"),
+				"seat":        map[string]any{"type": "string", "description": "The owning seat's handle."},
+				"unit":        map[string]any{"type": "string", "description": "The owning unit's key."},
+				"doclet_page": pageArg("The Doclet page that documents it"),
 			}
 		},
 		required: []string{"kind", "key"},
@@ -754,28 +762,32 @@ var atlasVerbs = []atlasVerb{
 		name: AtlasRelateTool,
 		description: "Draw one relation between two atlas entries, from the one that relies to the one " +
 			"relied on: a service `runs_on` a host, `depends_on` a database, a host name `resolves_to` a " +
-			"host. An owner is set with " + AtlasSetOwnerTool + ".",
+			"host. With `documented_in`, it names the Doclet page (`doclet_page`) that documents the entry instead. " +
+			"An owner is set with " + AtlasSetOwnerTool + ".",
 		params: func() map[string]any {
 			return map[string]any{
 				"atlas_entry": entryArg("The entry that relies"),
-				"relation":    map[string]any{"type": "string", "enum": atlasEntryRelations(), "description": "The relation."},
-				"to":          entryArg("The entry relied on"),
+				"relation":    map[string]any{"type": "string", "enum": atlasDrawnRelations(), "description": "The relation."},
+				"to":          entryArg("The entry relied on, for every relation but `documented_in`"),
+				"doclet_page": pageArg("With `documented_in`, the page"),
 			}
 		},
-		required: []string{"atlas_entry", "relation", "to"},
+		required: []string{"atlas_entry", "relation"},
 		plan:     planRelate(false),
 	},
 	{
-		name:        AtlasUnrelateTool,
-		description: "Remove one relation the atlas shows between two entries: it is recorded that it does not hold.",
+		name: AtlasUnrelateTool,
+		description: "Remove one relation the atlas shows between two entries, or from an entry to the " +
+			"Doclet page that documents it (`documented_in` and `doclet_page`): it is recorded that it does not hold.",
 		params: func() map[string]any {
 			return map[string]any{
 				"atlas_entry": entryArg("The entry the relation runs from"),
-				"relation":    map[string]any{"type": "string", "enum": atlasEntryRelations(), "description": "The relation."},
-				"to":          entryArg("The entry it points at"),
+				"relation":    map[string]any{"type": "string", "enum": atlasDrawnRelations(), "description": "The relation."},
+				"to":          entryArg("The entry it points at, for every relation but `documented_in`"),
+				"doclet_page": pageArg("With `documented_in`, the page"),
 			}
 		},
-		required: []string{"atlas_entry", "relation", "to"},
+		required: []string{"atlas_entry", "relation"},
 		plan:     planRelate(true),
 	},
 	{
@@ -854,8 +866,20 @@ func atlasFacts() []string {
 	return out
 }
 
+// atlasDrawnRelations is every relation a person draws or removes by name:
+// those between two entries, and the page that documents one. An owner is one
+// seat or one unit, set by its own tool.
+func atlasDrawnRelations() []string {
+	return append(atlasEntryRelations(), string(atlas.RelationDocumentedIn))
+}
+
+// pageArg describes an argument naming a Doclet page.
+func pageArg(what string) map[string]any {
+	return map[string]any{"type": "string", "description": what + ": its id, as Doclet answers it."}
+}
+
 // atlasEntryRelations is every relation between two entries, as a schema
-// names them: the owner and a page are named by their own tools.
+// names them.
 func atlasEntryRelations() []string {
 	var out []string
 	for _, r := range atlas.Relations {
@@ -883,28 +907,112 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, &r
 	}
 	plan := atlasPlan{entry: ref, said: said("added", ref)}
-	if e, found := n.view.Find(ref.ID()); found {
-		if e.State == atlas.StateRetired {
-			r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s is in the atlas, retired. "+
-				"Bring it back with %s.", n.tool, ref, AtlasRestoreTool))
-			return atlasPlan{}, &r
-		}
+	e, found := n.view.Find(ref.ID())
+	if found && e.State == atlas.StateRetired {
+		r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s is in the atlas, retired. "+
+			"Bring it back with %s.", n.tool, ref, AtlasRestoreTool))
+		return atlasPlan{}, &r
+	}
+	// AN ADD THAT STOPPED PART OF THE WAY IS FINISHED BY THE SAME CALL: where
+	// the caller's own claim already stands on the entry, what the call still
+	// says of it and the atlas does not is recorded, and an add that would
+	// record nothing is refused as the second add it is.
+	mine := found && slices.Contains(e.Sources, n.person)
+	if found && !mine {
 		r := refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s is in "+
 			"the atlas already, as entry %s.", n.tool, ref, e.ID))
 		return atlasPlan{}, &r
 	}
-	exists, refusal := n.claim(atlas.Exists(ref, n.person, n.at))
-	if refusal != nil {
-		return atlasPlan{}, refusal
+	step := func(name, key string) func(atlas.Claim, error) *tools.Result {
+		return func(c atlas.Claim, err error) *tools.Result {
+			claim, bad := n.claim(c, err)
+			if bad != nil {
+				return bad
+			}
+			plan.steps = append(plan.steps, atlasStep{name: name, key: key, claim: claim})
+			return nil
+		}
 	}
-	plan.steps = append(plan.steps, atlasStep{name: "add", claim: exists})
+	if !found {
+		if bad := step("add", "")(atlas.Exists(ref, n.person, n.at)); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	says := func(stepName string, f atlas.Fact, raw string) *tools.Result {
+		c, err := atlas.Says(ref, f, raw, n.person, n.at)
+		if err == nil {
+			plan.said[string(f)] = c.Value.Text
+			if now, held := factOn(e, ref, f, c.Value.Text); held && now.Value.Equal(c.Value) {
+				return nil
+			}
+		}
+		return step(stepName, "")(c, err)
+	}
 	if name := strings.TrimSpace(argString(a, "name")); name != "" && name != ref.Key {
-		named, bad := n.claim(atlas.Says(ref, atlas.FactName, name, n.person, n.at))
+		if bad := says("name", atlas.FactName, name); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if purpose := strings.TrimSpace(argString(a, "purpose")); purpose != "" {
+		if bad := says("purpose", atlas.FactPurpose, purpose); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if strings.TrimSpace(argString(a, "belongs_to")) != "" {
+		account, bad := n.held(a, "belongs_to")
 		if bad != nil {
 			return atlasPlan{}, bad
 		}
-		plan.steps = append(plan.steps, atlasStep{name: "name", claim: named})
-		plan.said["name"] = named.Value.Text
+		if !atlas.RelationBelongsTo.Joins(kind, account.entry.Ref.Kind) {
+			r := failed(fmt.Sprintf("%s: `belongs_to` names a vendor account, which a %s may belong to; "+
+				"a %s does not belong to a %s.", n.tool, atlas.KindService, kind, account.entry.Ref.Kind))
+			return atlasPlan{}, &r
+		}
+		plan.said["belongs_to"] = account.entry.ID.String()
+		if _, drawn := edgeOn(e, atlas.RelationBelongsTo, account.entry.ID); !drawn {
+			if bad := step("belong", "")(atlas.Relates(ref, atlas.RelationBelongsTo, account.entry.Ref, n.person,
+				n.at)); bad != nil {
+				return atlasPlan{}, bad
+			}
+		}
+	}
+	seat, unit := strings.TrimSpace(argString(a, "seat")), strings.TrimSpace(argString(a, "unit"))
+	if seat != "" && unit != "" {
+		r := failed(fmt.Sprintf("%s: an owner is one seat (`seat`) or one unit (`unit`), never both.", n.tool))
+		return atlasPlan{}, &r
+	}
+	names := func(stepName string, r atlas.Relation, external atlas.External, name string) *tools.Result {
+		if slices.ContainsFunc(e.Relations, func(ed atlas.Edge) bool {
+			return ed.Relation == r && ed.External == external && ed.Name == name
+		}) {
+			return nil
+		}
+		return step(stepName, name)(atlas.Names(ref, r, external, name, n.person, n.at))
+	}
+	owner, refusal := n.owner(seat, unit)
+	if refusal != nil {
+		return atlasPlan{}, refusal
+	}
+	if owner.External != "" {
+		plan.said["owner"] = string(owner.External) + ":" + owner.Name
+		if bad := names("own", atlas.RelationOwnedBy, owner.External, owner.Name); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if strings.TrimSpace(argString(a, "doclet_page")) != "" {
+		page, bad := n.page(a)
+		if bad != nil {
+			return atlasPlan{}, bad
+		}
+		plan.said["doclet_page"] = page
+		if bad := names("document", atlas.RelationDocumentedIn, atlas.ExternalPage, page); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if found && len(plan.steps) == 0 {
+		r := refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s is in "+
+			"the atlas already, as entry %s.", n.tool, ref, e.ID))
+		return atlasPlan{}, &r
 	}
 	return plan, nil
 }
@@ -944,7 +1052,8 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 				return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("%s's %s", ref, f), src)
 			}
 			plan.said["before"] = shown(now)
-			if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(says.Value) && !now.Suggested {
+			if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(says.Value) && !now.Suggested &&
+				now.Standing == atlas.StandingSettled {
 				return plan, nil
 			}
 		}
@@ -1041,7 +1150,10 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			}
 			return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("%s's %s", ref, f), src)
 		}
-		if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(pick) && !now.Suggested {
+		// A PERSON'S VALUE A NEWER REPORT CONTRADICTS IS SAID AGAIN: only a
+		// claim newer than the report settles what the two disagree on.
+		if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(pick) && !now.Suggested &&
+			now.Standing == atlas.StandingSettled {
 			return plan, nil
 		}
 		says, bad := n.claim(atlas.Says(ref, f, pick.Text, n.person, n.at))
@@ -1062,7 +1174,8 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			return atlasPlan{}, &res
 		}
 		plan.said["relation"], plan.said["to"] = string(r), to.entry.ID.String()
-		if ed.Source.Kind.Computed() || ed.Source.Kind == atlas.SourcePerson && !ed.Suggested {
+		if ed.Source.Kind.Computed() || ed.Source.Kind == atlas.SourcePerson && !ed.Suggested &&
+			ed.Standing == atlas.StandingSettled {
 			return plan, nil
 		}
 		claim, bad := n.claim(atlas.Relates(ref, r, to.entry.Ref, n.person, n.at))
@@ -1097,6 +1210,11 @@ func (n *atlasNow) relation(a map[string]any) (atlas.Relation, member, *tools.Re
 			words.Or(atlasEntryRelations()), AtlasSetOwnerTool))
 		return "", member{}, &res
 	}
+	if strings.TrimSpace(argString(a, "doclet_page")) != "" {
+		res := failed(fmt.Sprintf("%s: `doclet_page` goes with %s alone; %s points at an entry, named by `to`.",
+			n.tool, atlas.RelationDocumentedIn, r))
+		return "", member{}, &res
+	}
 	to, refusal := n.held(a, "to")
 	if refusal != nil {
 		return "", member{}, refusal
@@ -1109,6 +1227,9 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 		m, bad := n.held(a, "atlas_entry")
 		if bad != nil {
 			return atlasPlan{}, bad
+		}
+		if strings.TrimSpace(argString(a, "relation")) == string(atlas.RelationDocumentedIn) {
+			return planPage(n, a, m, remove)
 		}
 		r, to, bad := n.relation(a)
 		if bad != nil {
@@ -1144,7 +1265,7 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 			return atlasPlan{}, bad
 		}
 		switch {
-		case !remove && shownNow && ed.Source.Kind == atlas.SourcePerson:
+		case !remove && shownNow && ed.Source.Kind == atlas.SourcePerson && ed.Standing == atlas.StandingSettled:
 			return plan, nil
 		case remove && !shownNow:
 			return plan, nil
@@ -1158,6 +1279,89 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 		plan.steps = []atlasStep{{name: change, claim: claim}}
 		return plan, nil
 	}
+}
+
+// page reads a write's `doclet_page`: a Doclet page by its id, in its canonical
+// form. THE PAGE IS NOT READ HERE: whether it exists and who may read it is
+// Doclet's to say on every read of it, and the atlas keeps only its id, so a
+// link is never a way to learn of a page.
+func (n *atlasNow) page(a map[string]any) (string, *tools.Result) {
+	raw := strings.TrimSpace(argString(a, "doclet_page"))
+	id, err := uuid.Parse(raw)
+	if err != nil || id.String() != raw {
+		r := failed(fmt.Sprintf("%s: `doclet_page` is a Doclet page's id, as Doclet answers it.", n.tool))
+		return "", &r
+	}
+	return raw, nil
+}
+
+// planPage draws or removes the page that documents an entry.
+func planPage(n *atlasNow, a map[string]any, m member, remove bool) (atlasPlan, *tools.Result) {
+	if strings.TrimSpace(argString(a, "to")) != "" {
+		r := failed(fmt.Sprintf("%s: %s names a page by `doclet_page`, never an entry by `to`.", n.tool,
+			atlas.RelationDocumentedIn))
+		return atlasPlan{}, &r
+	}
+	page, refusal := n.page(a)
+	if refusal != nil {
+		return atlasPlan{}, refusal
+	}
+	ref := m.entry.Ref
+	change := "related"
+	if remove {
+		change = "unrelated"
+	}
+	plan := atlasPlan{entry: ref, said: said(change, ref)}
+	plan.said["relation"], plan.said["doclet_page"] = string(atlas.RelationDocumentedIn), page
+	at := slices.IndexFunc(m.entry.Relations, func(ed atlas.Edge) bool {
+		return ed.Relation == atlas.RelationDocumentedIn && ed.External == atlas.ExternalPage && ed.Name == page
+	})
+	if at >= 0 {
+		ed := m.entry.Relations[at]
+		if src, ok := declared(ed.Source, ed.Others); ok {
+			if !remove {
+				return plan, nil
+			}
+			return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("the page that documents %s", ref), src)
+		}
+		if !remove && ed.Source.Kind == atlas.SourcePerson && ed.Standing == atlas.StandingSettled {
+			return plan, nil
+		}
+	} else if remove {
+		return plan, nil
+	}
+	claim, refusal := n.claim(atlas.Names(ref, atlas.RelationDocumentedIn, atlas.ExternalPage, page, n.person, n.at))
+	if refusal != nil {
+		return atlasPlan{}, refusal
+	}
+	if remove {
+		if claim, refusal = n.claim(atlas.Denial(*claim, n.person, n.at)); refusal != nil {
+			return atlasPlan{}, refusal
+		}
+	}
+	plan.steps = []atlasStep{{name: change, key: page, claim: claim}}
+	return plan, nil
+}
+
+// owner is the seat or the unit of the chart a write names as an owner, the
+// zero edge where it names neither.
+func (n *atlasNow) owner(seat, unit string) (atlas.Edge, *tools.Result) {
+	switch {
+	case seat != "":
+		if n.chart.Role(seat) == nil {
+			r := failed(fmt.Sprintf("%s: no seat of the chart has the handle `seat` names.", n.tool))
+			return atlas.Edge{}, &r
+		}
+		return atlas.Edge{External: atlas.ExternalSeat, Name: seat}, nil
+	case unit != "":
+		u := n.chart.UnitByRef(unit)
+		if u == nil {
+			r := failed(fmt.Sprintf("%s: no unit of the chart has the key `unit` names.", n.tool))
+			return atlas.Edge{}, &r
+		}
+		return atlas.Edge{External: atlas.ExternalUnit, Name: u.Key()}, nil
+	}
+	return atlas.Edge{}, nil
 }
 
 func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
@@ -1180,27 +1384,14 @@ func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, &r
 	}
 	plan := atlasPlan{entry: ref, said: said("owner set", ref)}
-	var want atlas.Edge
-	switch {
-	case seat != "":
-		if n.chart.Role(seat) == nil {
-			r := failed(fmt.Sprintf("%s: no seat of the chart has the handle `seat` names.", n.tool))
-			return atlasPlan{}, &r
-		}
-		want = atlas.Edge{External: atlas.ExternalSeat, Name: seat}
-	case unit != "":
-		u := n.chart.UnitByRef(unit)
-		if u == nil {
-			r := failed(fmt.Sprintf("%s: no unit of the chart has the key `unit` names.", n.tool))
-			return atlasPlan{}, &r
-		}
-		want = atlas.Edge{External: atlas.ExternalUnit, Name: u.Key()}
-		plan.said["owner"] = "unit:" + u.Key()
-	default:
-		plan.said["change"] = "owner cleared"
+	want, refusal := n.owner(seat, unit)
+	if refusal != nil {
+		return atlasPlan{}, refusal
 	}
-	if want.External == atlas.ExternalSeat {
-		plan.said["owner"] = "seat:" + want.Name
+	if want.External == "" {
+		plan.said["change"] = "owner cleared"
+	} else {
+		plan.said["owner"] = string(want.External) + ":" + want.Name
 	}
 	// THE OWNER A PERSON NAMED BEFORE IS WITHDRAWN, and so is one an
 	// integration only suggested: an owner is one seat or one unit, and a
@@ -1218,7 +1409,7 @@ func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("who owns %s", ref), src)
 		}
 		if ed.External == want.External && ed.Name == want.Name {
-			kept = ed.Source.Kind == atlas.SourcePerson && !ed.Suggested
+			kept = ed.Source.Kind == atlas.SourcePerson && !ed.Suggested && ed.Standing == atlas.StandingSettled
 			continue
 		}
 		owner, bad := n.claim(atlas.Names(ref, atlas.RelationOwnedBy, ed.External, ed.Name, n.person, n.at))
