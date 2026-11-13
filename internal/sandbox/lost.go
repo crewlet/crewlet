@@ -142,8 +142,9 @@ type LostRun struct {
 // round any longer: it is carried on without the read, and the line says the
 // job's spend went with its box. A coordination store that did not answer one
 // of the read's steps is no box that did not answer: the claim is handed back
-// for as long as the store is silent, and the round never carried on without
-// the read for it ([Coordinator.collectGivenUp]).
+// for as long as the store is silent, and the round is not carried on without
+// the read for it, unless the silence is the box's host's alone and has lasted
+// the box timeout, as a silent host's would ([Coordinator.collectGivenUp]).
 //
 // IT RESUMES NOTHING ITSELF: it returns the carry for its caller, the frame
 // that claimed the completion under the node's admission
@@ -275,10 +276,23 @@ func cutOff(result Result, cause LossCause) Result {
 // run of failures behind it as the claim goes back ([Release.BoxAnswered]).
 // Given up, a lost job's round was carried on without its read
 // ([Coordinator.carryOnLost]), uncharged for what its box still held.
+//
+// BUT A HOST WHOSE STORE ALONE IS SILENT IS GIVEN UP AS A SILENT HOST IS: one
+// that has answered this node's collections of the job, for the box timeout,
+// that its store did not answer its read of the run's row, while this node's
+// own store answered the claim each collection was made under ([hostUnsettled]).
+// The box is up, but only that host can read it, and a host that cannot for
+// that long is as good as away, as the fleet takes a launch node absent for the
+// box timeout to be ([Waiter.goneAfter]). Never given up, the collection was
+// handed back for as long as the partition lasted, its seat held behind it.
+// Every other step the store did not answer is this node's own store's, and no
+// bound of a host's ends it: nothing this node writes would land.
 func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) bool {
 	switch {
 	case errors.Is(cause, ErrStoreSilent):
-		return false
+		unsettledFor, unsettled := c.hostUnsettledFor(run, cause, now)
+		m := c.mgr()
+		return unsettled && m != nil && unsettledFor >= m.BoxTimeout()
 	case errors.Is(cause, ErrBoxGone):
 		return true
 	}

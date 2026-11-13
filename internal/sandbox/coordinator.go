@@ -1075,6 +1075,10 @@ type Coordinator struct {
 	// (claimrelease.go). Under mu.
 	releases map[string]*claimRelease
 	claiming map[string]int
+	// unsettled is the clock on each job's host that answered this node's
+	// collections that its own coordination store did not answer, by turn
+	// id ([hostUnsettled]). Under mu.
+	unsettled map[string]hostUnsettled
 	// refused are the completions the node's gate refused on a condition,
 	// by turn id, kept so the condition's clearing re-fires each at once
 	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
@@ -1232,6 +1236,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		retries:      map[string]*answerRetry{},
 		releases:     map[string]*claimRelease{},
 		claiming:     map[string]int{},
+		unsettled:    map[string]hostUnsettled{},
 		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -1957,15 +1962,20 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // one whose result was lost. Its completion is NAK'd for the queue's backoff,
 // as a counted retry's is, and not acknowledged as a silent host's is: that
 // host announces it again once it is back, and here the host and the box are
-// up. It has NO GIVE-UP OF ITS OWN: it is retried as a claim the store does not
-// take is ([Coordinator.completeAdmitted]), each announcement bounded by the
-// broker's deliveries of it and the poll announcing the job again, and a store
-// silent that long holds every run where it is, the claim first, while its own
-// alarms name it. Going on without the step would read the run without what
-// the step stands for (a call still in flight, a session that ran out), and
-// giving the run up would throw away a result its box holds. A step its
-// delivery's deadline cut is the deadline's, and counted as above
-// ([storeSilent]).
+// up. Where the store is this node's own, it has NO GIVE-UP OF ITS OWN: it is
+// retried as a claim the store does not take is ([Coordinator.completeAdmitted]),
+// each announcement bounded by the broker's deliveries of it and the poll
+// announcing the job again, and a store silent that long holds every run where
+// it is, the claim first, while its own alarms name it. Going on without the
+// step would read the run without what the step stands for (a call still in
+// flight, a session that ran out), and giving the run up would throw away a
+// result its box holds. But where the silence is the box's host's alone, its
+// store not answering the host's read of the run's row while this node's
+// answers the claim, that premise fails: every write of this node's lands, and
+// the collection was asked again for as long as the partition lasted. So such
+// a host is given up after the box timeout, as a silent host is
+// ([hostUnsettled], [Coordinator.collectGivenUp]). A step its delivery's
+// deadline cut is the deadline's, and counted as above ([storeSilent]).
 //
 // EVERY HAND-BACK HERE THAT THE STORE DOES NOT ANSWER IS KEPT by this node and
 // made again once the store answers, never turned into an ending for its
@@ -2002,23 +2012,26 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		_ = c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil)
 		return nil
 	}
-	if errors.Is(cause, ErrStoreSilent) {
+	now := c.now()
+	if errors.Is(cause, ErrStoreSilent) && !c.collectGivenUp(run, cause, now) {
 		// THE COORDINATION STORE DID NOT ANSWER a step the collection cannot
 		// go on without ([ErrStoreSilent]), which says nothing about the box:
 		// handed back uncounted, and the completion NAK'd for the queue's
 		// backoff, while the poll announces the job again on its next tick.
+		// A host whose store alone has been silent for the box timeout is
+		// given up below instead ([hostUnsettled]).
 		log.WarnContext(ctx, "sandbox_collect_unsettled", "turn_id", run.TurnID,
 			"error", cause.Error(),
 			"detail", "the coordination store did not answer a step the collection cannot go on "+
 				"without; the claim is handed back uncounted and the collection is asked again "+
-				"until the store answers")
+				"until the store answers, or until the box timeout where only the box's host "+
+				"finds it silent")
 		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
 		return fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)
 	}
-	now := c.now()
 	facts := run.Launch
 	attempts := facts.CollectFailures + 1
 	since := facts.CollectFailingSince
@@ -2027,16 +2040,22 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 	}
 	gone := errors.Is(cause, ErrBoxGone)
 	if c.collectGivenUp(run, cause, now) {
+		unsettledFor, unsettled := c.hostUnsettledFor(run, cause, now)
 		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
 			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
-			"box_gone", gone, "error", cause.Error())
+			"box_gone", gone, "store_silent", unsettled, "unsettled_for_s", unsettledFor.Seconds(),
+			"error", cause.Error())
+		detail := "the executor's launch finished but its box could not be read back, so its " +
+			"result is lost; the work it pushed, if any, is on its branch"
+		if unsettled {
+			detail = collectUnsettledDetail
+		}
+		c.forgetUnsettled(run.TurnID)
 		// The job is OVER even though collection failed. Free the seat and
 		// settle the row whatever the cleanup manages: both are network
 		// calls that can fail on their own, and neither failing is a
 		// reason to leave a seat parked on a run that is finished.
-		c.settleFailed(ctx, run, types.ExecutorFailureCollect,
-			"the executor's launch finished but its box could not be read back, so its "+
-				"result is lost; the work it pushed, if any, is on its branch")
+		c.settleFailed(ctx, run, types.ExecutorFailureCollect, detail)
 		return nil
 	}
 	log.WarnContext(ctx, "sandbox_collect_retried", "turn_id", run.TurnID,
@@ -4624,6 +4643,14 @@ const (
 		"attempt, so its result is lost; the work it pushed, if any, is on its branch"
 )
 
+// collectUnsettledDetail is the sentence a collection given up on a host whose
+// coordination store alone did not answer, for the box timeout, reaches an
+// operator's board with ([hostUnsettled]): the box is up, but its host could
+// not read the run's record that licenses reading it.
+const collectUnsettledDetail = "the executor's launch finished but the node whose host its box " +
+	"is on could not read the run's record off the coordination store for the box timeout, so " +
+	"its box could not be read back and its result is lost; the work it pushed, if any, is on its branch"
+
 // resumeBrokenDetail is the sentence a run whose resume broke before its turn
 // began reaches an operator's board with: nothing of the turn ran, and trying
 // again would re-enter the same parked turn and reach the same defect, so the
@@ -6416,6 +6443,9 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 			delete(c.refused, turnID)
 		}
 	}
+	// AND THE CLOCK ON ANY HOST WHOSE STORE ALONE WAS SILENT: the
+	// successor's collections start one of their own.
+	maps.DeleteFunc(c.unsettled, func(_ string, u hostUnsettled) bool { return u.handle == handle })
 	c.mu.Unlock()
 	// AND THE SEAT'S INBOX HOLD, which the release's detach has already
 	// dropped with the attachment: forgotten, never lifted — the seat's mail

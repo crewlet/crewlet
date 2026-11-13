@@ -107,13 +107,16 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 //
 // NOT A FAILURE OF THE BOX, which answered every read, nor of its host, which
 // is up: a collection handed it gives its claim back UNCOUNTED and has its
-// completion retried ([Coordinator.collectFailed]), a lost job's round is
-// never carried on without its read for it ([Coordinator.collectGivenUp]), and
-// a stop's read of it is asked again, for as long as a silent host is where the
-// silence is the host's alone ([Coordinator.readStopped]). Counted, a
-// store silent for the give-up window settled a run whose box held its result
-// as one whose result was lost, and carried a lost job's round on uncharged
-// while its box held what the job had spent.
+// completion retried ([Coordinator.collectFailed]), a lost job's round is not
+// carried on without its read for it ([Coordinator.collectGivenUp]), and a
+// stop's read of it is asked again. Each lasts for as long as a silent host is
+// waited for where the silence is the host's alone, a collection's by the
+// clock on its host ([hostUnsettled]) and a stop's from its decision
+// ([Coordinator.readStopped]), and for as long as the silence lasts where this
+// node's own store shares it. Counted, a store silent for the give-up window
+// settled a run whose box held its result as one whose result was lost, and
+// carried a lost job's round on uncharged while its box held what the job had
+// spent.
 var ErrStoreSilent = errors.New("sandbox: the coordination store did not answer a step a collection " +
 	"cannot go on without")
 
@@ -391,7 +394,8 @@ func (c *Coordinator) hosts(run PendingRun) bool {
 
 // boxResult is the part of a read that touches the box, made where the box
 // is: by this node where it hosts the box, and asked of the node that does
-// otherwise ([BoxReader]).
+// otherwise ([BoxReader]). A collection's answer from another node's host
+// keeps the clock on a host whose store alone is silent ([hostUnsettled]).
 func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	if c.hosts(run) {
 		return c.readBox(ctx, run, read)
@@ -404,7 +408,85 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 			"node was given no way to ask that node to read it", run.TurnID,
 			c.mgr().CellOf(run), run.LaunchNode)
 	}
-	return c.boxes.ReadBox(ctx, run, read)
+	result, ended, err := c.boxes.ReadBox(ctx, run, read)
+	if read == BoxReadCollect {
+		c.noteHostStore(ctx, run, err)
+	}
+	return result, ended, err
+}
+
+// hostUnsettled is how long the host of a job's box has answered this node's
+// collections of the job that its own coordination store did not answer
+// ([BoxReadReply.Unsettled]): since the first of them, one after the other.
+//
+// A HOST WHOSE STORE ALONE IS SILENT IS BOUNDED AS A SILENT HOST IS. Only the
+// host can read a box on its host, and a host that answers its store did not
+// answer the read of the run's row, which licenses the read, never reads the
+// box. Where this node's own store answers (its claim of the job, the write
+// every collection is made under, landed), the silence is the host's alone: a
+// partition that cuts the host off from the store's leader and not this node.
+// Handed back uncounted with no give-up, as every step the store does not
+// answer is, such a collection was asked again for as long as the partition
+// lasted, its seat held behind it, while a host that did not answer at all is
+// taken for gone after the box timeout ([Waiter.goneAfter]). So it is given
+// up after that same bound, measured here ([Coordinator.collectGivenUp]).
+//
+// IN THIS NODE'S MEMORY, as the waiter's clock on an absent node is: a restart
+// or the seat's next holder starts it again, which can only make the verdict
+// later. A silence this node's own store shares gives nothing up: no claim of
+// the job lands while it lasts, so no collection is made to judge it.
+type hostUnsettled struct {
+	handle, launch string
+	since          time.Time
+}
+
+// noteHostStore keeps the clock on run's host's store ([hostUnsettled]) from
+// err, the host's answer to a collection's read of run's box: started at the
+// first answer that its store did not answer, kept through a host that did not
+// answer or stopped as it read and a read this node's own context ended, which
+// say nothing of that store, and forgotten at any other answer, which the host
+// could give only where its store answered its read of the row.
+func (c *Coordinator) noteHostStore(ctx context.Context, run PendingRun, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case errors.Is(err, ErrStoreSilent):
+		if kept, ok := c.unsettled[run.TurnID]; ok && kept.launch == run.LaunchID {
+			return
+		}
+		c.unsettled[run.TurnID] = hostUnsettled{handle: run.AgentHandle, launch: run.LaunchID, since: c.now()}
+	case errors.Is(err, ErrBoxHostSilent), ctx.Err() != nil:
+		// NO WORD OF THE HOST'S STORE: the clock stands as it is.
+	default:
+		delete(c.unsettled, run.TurnID)
+	}
+}
+
+// hostUnsettledFor is how long the host of run's box has answered this node's
+// collections of run's job that its store did not answer, where cause is the
+// host's own answer saying so ([BoxReadReply.Err]); false for every other
+// cause, a step this node's own store did not answer above all, which no
+// bound of the host's ends.
+func (c *Coordinator) hostUnsettledFor(run PendingRun, cause error, now time.Time) (time.Duration, bool) {
+	var flagged *flaggedFailure
+	if !errors.As(cause, &flagged) || !errors.Is(flagged.kind, ErrStoreSilent) {
+		return 0, false
+	}
+	c.mu.Lock()
+	kept, ok := c.unsettled[run.TurnID]
+	c.mu.Unlock()
+	if !ok || kept.launch != run.LaunchID {
+		return 0, false
+	}
+	return now.Sub(kept.since), true
+}
+
+// forgetUnsettled drops the clock on the host of turnID's box, for a
+// collection given up.
+func (c *Coordinator) forgetUnsettled(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.unsettled, turnID)
 }
 
 // ReadHostedBox makes, for the node that asked, the read of a box on this
