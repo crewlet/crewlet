@@ -481,7 +481,9 @@ var opCodeRead = define("code.read", opRead, codeDomain, false,
 // attempts its home cancels and the closes it owes — the read the home's merge
 // queue works from (internal/gitlet/home). The engine's own, as every duty
 // listing is: it names no asker and judges no grant, so a node behind the
-// company's configuration answers it as a last resort too.
+// company's configuration answers it as a last resort too. And the engine's
+// alone: its answer hands over whom each entry's enqueue was made for, so no
+// package that serves a person or a model reaches it ([CodeSeam.QueueDue]).
 //
 // ANSWERED WHOLE ([op.answeredWhole]), because the home carries what it reads
 // into the records it asks next: it lands, ejects and settles each entry as the

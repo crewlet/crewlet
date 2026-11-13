@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -77,6 +78,10 @@ type queueRows struct {
 	// pending, where set, answers a land pending: its rows applied, as the
 	// committer's would be, but not yet on the asker's.
 	pending bool
+	// madeFor is whom every entry enqueue adds was enqueued for, as the
+	// entry's row keeps it (gitlet.QueueWorkEntry.WorkingFor): nil for
+	// nobody.
+	madeFor *types.WorkingFor
 }
 
 func newQueueRows(tip string, depth, batch int) *queueRows {
@@ -100,6 +105,7 @@ func (r *queueRows) enqueue(t *testing.T, n int) []gitlet.QueueWorkEntry {
 			Seq: statelog.Position{Stream: topics.CodeLogStream, Seq: r.seq}, State: gitlet.QueueWaiting,
 			HeadOID: hexOf(fmt.Sprintf("head-%d-%d", r.seq, number)), Method: gitlet.MergeMethodMerge,
 			EnqueuedBy: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: fmt.Sprintf("dev-%d", r.seq)},
+			WorkingFor: r.madeFor.Clone(),
 			Change: gitlet.ChainChange{ID: uuid.Must(uuid.NewV7()).String(), Number: int64(r.seq),
 				Title: fmt.Sprintf("change %d", r.seq), SourceRef: fmt.Sprintf("refs/heads/c%d", r.seq),
 				Owner: "dev", Authors: []string{"dev"}}}
@@ -1319,5 +1325,57 @@ func TestANewHomeClosesWhatTheOldOneOwed(t *testing.T) {
 	}
 	if settles, owed := rows.settled(); len(settles) != 1 || settles[0].EntryID != e.EntryID || len(owed) != 0 {
 		t.Fatalf("the new home settled %+v with %d owed, want the old home's close settled", settles, len(owed))
+	}
+}
+
+// THE HOME CLOSES AN ENTRY FOR WHOM IT WAS ENQUEUED (ADR-0109, M5-D27): the
+// home hands the close of a landed change's work item whom the entry's enqueue
+// was made for, as its queue work answered it, on both of its paths — a
+// landing applied at once, closed from the entries of the page that landed it,
+// and a close the landing left owed, read on a later turn — so the tracker
+// writes the close for them and decides it within what they may use, never for
+// the enqueuing seat alone, whichever turn makes it.
+//
+// Mutation: leave the carrier off the close the home hands over — each close
+// is handed over made for nobody, red.
+func TestTheHomeClosesAnEntryForWhomItWasEnqueued(t *testing.T) {
+	t.Parallel()
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	for _, tc := range []struct {
+		name    string
+		pending bool
+	}{
+		{"closed from the entries of the page that landed it", false},
+		{"closed on a later turn, as its landing left it owed", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rows := newQueueRows(oid("a"), 1, 1)
+			rows.pending, rows.madeFor = tc.pending, founder
+			tasks := &queueTasks{}
+			l := queueLoop(t, rows, &queueChains{}, tasks)
+			e, landOp, err := landsOne(t, rows, l)
+			if err != nil {
+				t.Fatalf("the landing turn: %v", err)
+			}
+			if tc.pending {
+				if closed, _ := tasks.closes(); len(closed) != 0 {
+					t.Fatalf("a landing answered pending closed %+v, want its close left owed", closed)
+				}
+				rows.mu.Lock()
+				rows.pending = false
+				rows.mu.Unlock()
+				turn(t, l, rows)
+			}
+			closed, _ := tasks.closes()
+			if len(closed) != 1 || closed[0].OpID != gitlet.CloseWorkItemOpID(landOp, e.EntryID) ||
+				closed[0].As != e.EnqueuedBy {
+				t.Fatalf("the home closed %+v, want %s's work item closed as %+v", closed, e.EntryID, e.EnqueuedBy)
+			}
+			if !reflect.DeepEqual(closed[0].WorkingFor, founder) {
+				t.Errorf("the home handed the close over made for %+v, want founder, for whom %s was enqueued",
+					closed[0].WorkingFor, e.EntryID)
+			}
+		})
 	}
 }

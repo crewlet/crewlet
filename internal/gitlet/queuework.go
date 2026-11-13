@@ -117,18 +117,33 @@ type QueueDue struct {
 
 // QueueWorkEntry is one live entry as the home's queue reads it: its row, who
 // enqueued it — whom its merge commit names and its landing lands it as, and
-// whom its work item is closed as — and its change, as its chain commit is
-// written from. The change's Body and Authors are read only where the
-// snapshot owes a build ([QueueDue.Builds]), the one step that writes a
+// whom its work item is closed as — and for whom, and its change, as its chain
+// commit is written from. The change's Body and Authors are read only where
+// the snapshot owes a build ([QueueDue.Builds]), the one step that writes a
 // commit message from them; every other snapshot answers them empty.
 type QueueWorkEntry struct {
-	EntryID     string            `json:"entry_id"`
-	Seq         statelog.Position `json:"seq"`
-	State       QueueState        `json:"state"`
-	HeadOID     string            `json:"head_oid"`
-	Method      MergeMethod       `json:"method"`
-	CloseTask   bool              `json:"close_task,omitempty"`
-	EnqueuedBy  Principal         `json:"enqueued_by"`
+	EntryID    string            `json:"entry_id"`
+	Seq        statelog.Position `json:"seq"`
+	State      QueueState        `json:"state"`
+	HeadOID    string            `json:"head_oid"`
+	Method     MergeMethod       `json:"method"`
+	CloseTask  bool              `json:"close_task,omitempty"`
+	EnqueuedBy Principal         `json:"enqueued_by"`
+	// WorkingFor is whom the entry's enqueue was made for (ADR-0109), as its
+	// row keeps it ([storedCarrier]): nil for an enqueue made for nobody, a
+	// person's, and one applied before the carrier's build. The home closes
+	// the landed change's work item for them, decided within what they may
+	// use (internal/engine's queue close), as the enqueuing turn's own write
+	// made late.
+	//
+	// THE ONE READ ANSWER THAT CARRIES WHOM A CODE WRITE WAS MADE FOR, and
+	// only because its one caller, the repository's home, writes with it on
+	// its requester's behalf: every other read of the queue — its listings,
+	// a change's entry — builds its answer field by field and leaves the
+	// carrier out, as a reader's view of a Chatlet message does. An answer
+	// between nodes read whole ([QueueDueAnswer]), so a home of a build that
+	// would drop it refuses the page rather than close the item for nobody.
+	WorkingFor  *types.WorkingFor `json:"working_for,omitempty"`
 	Train       string            `json:"train,omitempty"`
 	CandidateID string            `json:"candidate_id,omitempty"`
 	Change      ChainChange       `json:"change"`
@@ -395,9 +410,12 @@ func enqueuedSince(ctx context.Context, tx *sql.Tx, repoID, target string, since
 const enqueuedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_enqueued_idx
 	WHERE repo_id = ? AND target_ref = ? AND enqueued_at >= ? LIMIT ?)`
 
-// workEntriesOf is entries as the home's queue reads them, their changes read
-// in ONE statement by the changes' key ([changeRowsIn]) — their descriptions
-// left to [descriptionsOf].
+// workEntriesOf is entries as the home's queue reads them, each with whom its
+// enqueue was made for as its row keeps it ([QueueWorkEntry.WorkingFor]) —
+// what the home closes a landed change's work item for, from the entries of
+// the page that landed it — their changes read in ONE statement by the
+// changes' key ([changeRowsIn]) and their descriptions left to
+// [descriptionsOf].
 func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]QueueWorkEntry, error) {
 	ids := make([]string, len(entries))
 	for i, e := range entries {
@@ -417,9 +435,10 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 				"not hold", e.EntryID, e.TargetRef, e.ChangeID)
 		}
 		out[i] = QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
-			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(), Train: e.Train,
-			CandidateID: e.CandidateID, Change: ChainChange{ID: row.id, Number: row.number, Title: row.title,
-				SourceRef: row.source, Owner: row.owner}}
+			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(),
+			WorkingFor: storedCarrier(e.WorkingFor), Train: e.Train, CandidateID: e.CandidateID,
+			Change: ChainChange{ID: row.id, Number: row.number, Title: row.title, SourceRef: row.source,
+				Owner: row.owner}}
 		if row.work.ID != "" {
 			item := row.work
 			out[i].WorkItem = &item
@@ -439,7 +458,9 @@ const MaxOwedCloses = MaxLandEntries
 // owedClosesIn is repository repoID's landed entries still owing their work
 // item's close (code_queue.close_op), at most [MaxOwedCloses] in entry id
 // order — one seek of code_queue_close_owed_idx, the operation read beside
-// each row — each with its enqueuer, its change and the change's work item.
+// each row — each with its enqueuer and whom its enqueue was made for, as the
+// home closes the item for them on a later turn as on the landing's own, its
+// change and the change's work item.
 // An entry whose change the repository holds no more is answered with its
 // change's id alone and no work item, which its home settles as not closed.
 func owedClosesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]QueueWorkEntry, error) {
@@ -458,8 +479,8 @@ func owedClosesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]QueueWorkEn
 	out := make([]QueueWorkEntry, len(owed))
 	for i, e := range owed {
 		out[i] = QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
-			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(), CloseOp: ops[i],
-			Change: ChainChange{ID: e.ChangeID}}
+			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(),
+			WorkingFor: storedCarrier(e.WorkingFor), CloseOp: ops[i], Change: ChainChange{ID: e.ChangeID}}
 		row, found := rows[e.ChangeID]
 		if !found {
 			continue

@@ -25,7 +25,9 @@ import (
 // carry a carrier — the open's, the merge's and the enqueue's payload, and the
 // routings of the ask, the reviews and the answer — carry theirs, and the
 // home's records that read it back carry it only where they wake a seat,
-// which the reference revision's facts and passing checks do not:
+// which the reference revision's facts, its passing checks and its queue's
+// landing — told to the change's authors but the seat that queued its own
+// change — do not, and a closed settle routes nobody:
 //
 //   - open: a seat's code_open_change, its title a short sentence and its
 //     description the reference text's 2 KiB, carrying the turn and its
@@ -196,8 +198,10 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	// made for them, so each record that carries a carrier — an open's, a
 	// merge's and an enqueue's payload, and the routing of an ask, a review
 	// and an answer, each of which wakes a seat — carries theirs. The home's
-	// facts of the revision read the open's back and carry it only where they
-	// wake a seat, which the reference facts, asking nobody, do not.
+	// facts of the revision read the open's back, and the queue's landing the
+	// enqueue's, and carry it only where they wake a seat, which the
+	// reference facts, asking nobody, and the reference landing, telling no
+	// seat but the one that queued its own change, do not.
 	founder := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"})
 	forFounder := func(w gitlet.ConversationWrite) gitlet.ConversationWrite {
 		w.WrittenFor = founder

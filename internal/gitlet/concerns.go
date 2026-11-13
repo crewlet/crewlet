@@ -144,27 +144,41 @@ import (
 // (writtenForInvalid, writtenForUnder), so the turn the record wakes works for
 // them, held to what they may use, never for the writing seat alone. Only
 // beside an agent's actor, and only where the routing wakes a seat
-// ([wakesASeat]): a person, a credential and the engine write for nobody but
-// themselves, and a routing that tells only persons, who read notices, wakes
-// no turn to carry it to.
+// ([wakesASeat]): a person and a credential write for nobody but themselves,
+// and so does the engine, save the one exception below; and a routing that
+// tells only persons, who read notices, wakes no turn to carry it to.
 //
 // THE ENGINE'S RECORDS THAT NAME AN EARLIER ACTOR carry whom that actor's act
-// was made for, as the row the act left keeps it (code_revisions and
-// code_pushes, the replicated migration
+// was made for, as the row the act left keeps it (code_revisions, code_pushes
+// and code_queue, the replicated migration
 // a_code_row_keeps_whom_an_agents_write_was_made_for), under the same two
 // conditions: a revision's facts and a failed check of a change's head the
 // carrier of the open or the push that made the revision ([revisionPusher]),
-// and the home's landing the carrier of the push it found merging the change
-// ([landingPusher]), each read by the statement that reads the actor, in the
+// the home's landing the carrier of the push it found merging the change
+// ([landingPusher]) — each read by the statement that reads the actor — and a
+// queue's landing the carrier of each entry's enqueue, beside the enqueuer it
+// names, off the entry's row its decide reads ([decideLand]), all in the
 // deciding snapshot. The facts ask for the review the push asked for, the
-// failure is news about the push, and the landing is that push's merge, so the
-// turn each wakes works for whom the push was made for, as the push's own wake
-// did — never for the pushing seat alone. A row that keeps nobody — a push
-// made for nobody, a person's, or one applied before the carrier's build
-// filled the column — carries nobody, and the turn works for the actor's seat,
-// as before the carrier. A queue's landing names each entry's enqueuer and
-// carries nobody yet: the merge queue reads whom its entry's enqueue was made
-// for (code_queue) from crewlet#798's piece 4c-ii on.
+// failure is news about the push, and a landing is that push's merge or that
+// enqueue's, so the turn each wakes works for whom the act was made for, as
+// the act's own wake did — never for the acting seat alone. A row that keeps
+// nobody — an act made for nobody, a person's, or one applied before the
+// carrier's build filled the column — carries nobody, and the turn works for
+// the actor's seat, as before the carrier.
+//
+// THE ONE EXCEPTION, BESIDE NO ACTOR: the merge queue's own records about an
+// entry's enqueue that no principal's act made — its ejection ([decideEject])
+// and a close of the landed change's work item it could not make, settled
+// not_closed ([decideCloseSettled]) — name no actor, and tell the entry's
+// enqueuer and its change's authors about that enqueue. So each carries whom
+// the enqueue was made for, off the entry's row ([concerning.enqueuedFor]),
+// where its routing wakes a seat, and the turn it wakes works for them, held
+// to what they may use: worked for the told seat's own, it would fix the
+// conflict and queue the change again, or close the item its requester could
+// not, with every app the seat holds (ADR-0109's amendment). Every other
+// record the engine writes about no earlier act — a mergeability, a broken
+// landing — carries nobody, and its wake states the engine alone (wake.go's
+// writerOf, which hands the engine's carrier on for these two ops alone).
 //
 // # Who hears what the gate does
 //
@@ -306,8 +320,10 @@ type ChangeRouting struct {
 	// ([wakesASeat]); nil on every other routing, and for a write made for
 	// nobody, the seat's own work. The engine's records that name an earlier
 	// actor carry whom that actor's act was made for, as the act's row keeps
-	// it, under the same two conditions (this file's head, "Whom the actor
-	// acted for").
+	// it, under the same two conditions, and the merge queue's ejection and a
+	// close it could not make carry whom the entry's enqueue was made for
+	// beside no actor, where the routing wakes a seat (this file's head, "Whom
+	// the actor acted for").
 	//
 	// VERSION 2 ([versionedFields]): a record whose routing carries it is
 	// stamped there, so a build before it retains the record rather than wake
@@ -831,18 +847,28 @@ type concerning struct {
 	// title, owner and work item.
 	change changeRow
 	// actor is who made the change — for a revision's facts and a failed
-	// check of a head, its pusher, and for a landing, the pusher of the push
-	// the home found merging it — "" for the home's other records, and
-	// actorKind what it is: a person's actor is named among the routing's
-	// persons, so a wake says a person wrote what it announces.
+	// check of a head, its pusher, for a landing, the pusher of the push the
+	// home found merging it, and for a queue's landing, the entry's enqueuer
+	// — "" for the home's other records, and actorKind what it is: a
+	// person's actor is named among the routing's persons, so a wake says a
+	// person wrote what it announces.
 	actor     string
 	actorKind PartyKind
 	// workingFor is whom actor made the change for — the carrier the asker's
 	// request stated, and for a record naming an earlier actor the carrier
-	// that actor's act left on its row ([revisionPusher], [landingPusher]);
-	// nil for nobody and for the home's other records — which [routingFor]
-	// stamps beside an agent's actor alone, on a routing that wakes a seat.
+	// that actor's act left on its row ([revisionPusher], [landingPusher],
+	// the entry's for a queue's landing); nil for nobody and for the home's
+	// other records — which [routingFor] stamps beside an agent's actor
+	// alone, on a routing that wakes a seat.
 	workingFor *types.WorkingFor
+	// enqueuedFor is whom an entry's enqueue was made for, as its row keeps it
+	// (code_queue.working_for): what the merge queue's own records about that
+	// enqueue carry beside NO actor — its ejection and a close it could not
+	// make, the two that name none and set it — which [routingFor] stamps
+	// beside no actor alone, on a routing that wakes a seat (this file's head,
+	// "Whom the actor acted for"); nil on every other record's, so no other
+	// record of the engine's ever carries a carrier beside no actor.
+	enqueuedFor *types.WorkingFor
 	// roster is the deciding chart: what a mention is held to and what says
 	// whether a handle is a person's. Nil only for a record that names no
 	// mention.
@@ -881,10 +907,11 @@ type concerning struct {
 // snapshot tx — THE ONE FUNCTION every writer of a change's records stamps its
 // routing by, so the committer and the change writer never disagree about whom
 // a record concerns. Each role is read in its key's order and bounded
-// ([MaxRoutedParticipants]); whom an agent's actor made the change for is
-// stamped where the routing wakes a seat ([ChangeRouting.WorkingFor]); the
-// result is held to [MaxRoutingBytes], which those bounds keep it far inside —
-// past it is a writer's bug, never a refusal.
+// ([MaxRoutedParticipants]); whom an agent's actor made the change for, and
+// beside no actor whom an entry's enqueue was made for, is stamped where the
+// routing wakes a seat ([ChangeRouting.WorkingFor]); the result is held to
+// [MaxRoutingBytes], which those bounds keep it far inside — past it is a
+// writer's bug, never a refusal.
 func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, error) {
 	row := c.change
 	r := &ChangeRouting{ChangeID: row.id, ChangeRef: ChangeRef(c.repoName, row.number), RepoName: c.repoName,
@@ -987,12 +1014,21 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 		r.Persons = append(r.Persons, handle)
 	}
 	slices.Sort(r.Persons)
-	// AND WHOM ITS ACTOR MADE IT FOR, beside an agent's actor alone and only
-	// where the routing wakes a seat: read once the persons are named, since
-	// a handle the routing names as a person's wakes nobody, and before the
+	// AND WHOM ITS ACTOR MADE IT FOR, beside an agent's actor alone, or
+	// beside no actor whom the entry's enqueue a queue's own record names was
+	// made for — never beside a person's or a credential's — and only where
+	// the routing wakes a seat: read once the persons are named, since a
+	// handle the routing names as a person's wakes nobody, and before the
 	// routing is measured, which counts it.
-	if c.actorKind == PartyAgent && c.workingFor != nil && wakesASeat(Concerns([]*ChangeRouting{r})) {
-		r.WorkingFor = c.workingFor.Clone()
+	carrier := c.workingFor
+	switch {
+	case c.actor == "":
+		carrier = c.enqueuedFor
+	case c.actorKind != PartyAgent:
+		carrier = nil
+	}
+	if carrier != nil && wakesASeat(Concerns([]*ChangeRouting{r})) {
+		r.WorkingFor = carrier.Clone()
 	}
 	encoded, err := json.Marshal(r)
 	if err != nil {

@@ -1435,16 +1435,21 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 
 	// THE HOME'S DUE QUEUE, each query and each page whole: the listing after
 	// a marked cursor, and one repository's page with every field of its
-	// target's queue work — an entry, a candidate with a check on its commit —
-	// a given-up train's attempt and an owed close. Dropped on the wire, the
-	// repository's id would list every repository, the cursor read a first
-	// page again, the floor read rows from before the home's own record, and
-	// an entry's member land, eject or close the entry as another.
+	// target's queue work — an entry, enqueued by a seat for a credential
+	// with the apps that credential's turn used, a candidate with a check on
+	// its commit — a given-up train's attempt and an owed close of the same
+	// entry. Dropped on the wire, the repository's id would list every
+	// repository, the cursor read a first page again, the floor read rows from
+	// before the home's own record, and an entry's member land, eject or close
+	// the entry as another — whom its enqueue was made for among them, without
+	// which its work item is closed for nobody, decided for the enqueuer alone.
 	entry := gitlet.QueueWorkEntry{EntryID: "019a0c2e-0000-7000-8000-0000000000f1", Seq: at,
 		State: gitlet.QueueTesting, HeadOID: "7777777777777777777777777777777777777777",
 		Method: gitlet.MergeMethodSquash, CloseTask: true,
-		EnqueuedBy: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
-		Train:      "019a0c2e-0000-7000-8000-0000000000f2", CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
+		EnqueuedBy: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"},
+		WorkingFor: &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+			Apps: []iam.Grant{iam.GrantWorklet, iam.GrantGitlet}},
+		Train: "019a0c2e-0000-7000-8000-0000000000f2", CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
 		Change: gitlet.ChainChange{ID: "019a0c2e-0000-7000-8000-0000000000d1", Number: 42, Title: title, Body: body,
 			SourceRef: "refs/heads/fix", Owner: "dev", Authors: []string{"dev", "founder"}},
 		WorkItem: &types.WorkItem{Backend: types.WorkWorklet, ID: "task-9", Key: "ENG-412", Project: "ENG"}}

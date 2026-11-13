@@ -129,12 +129,11 @@ too. What a seat writes on the engine's own surfaces in a turn somebody woke wak
 a turn worked for them as well: on Worklet, Doclet and Chatlet, and since crewlet#798's piece 4c-i
 on Gitlet, where a change, a review, a comment, a push, a merge and an enqueue carry them, the
 pushes of the seat's executor and the change its run opens among them, and since its piece 4c-ii
-so do the engine's records about a seat's earlier push — a revision's facts, a failed check of its
-head and a landing its home found. So a seat's read and write in a turn a colleague's ask, answer
-or write woke are decided again for whom that colleague worked for, by the rules above: for the
-colleague's grant as well as the seat's only where the colleague worked for nobody but itself, and
-otherwise for the person, the credential or, along a chain, the colleague it carried. What carries
-nobody stays outside: a vendor's surface, and, until crewlet#798's piece 4c-ii, the records Gitlet's
-merge queue writes about an earlier enqueue and its close of a landed change's work item, which wake
-their seats for a seat rather than for whom that enqueue was made for. Nothing here bounds what a
-seat already knows.
+so do the engine's records about a seat's earlier push or enqueue — a revision's facts, a failed
+check of its head, a landing its home found, and the merge queue's landing, ejection and a close it
+could not make — and the merge queue's close of a landed change's work item is decided within the
+apps of whom the enqueue was made for. So a seat's read and write in a turn a colleague's ask,
+answer or write woke are decided again for whom that colleague worked for, by the rules above: for
+the colleague's grant as well as the seat's only where the colleague worked for nobody but itself,
+and otherwise for the person, the credential or, along a chain, the colleague it carried. What
+carries nobody stays outside: a vendor's surface. Nothing here bounds what a seat already knows.

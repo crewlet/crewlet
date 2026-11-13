@@ -294,9 +294,13 @@ func handedOn(err error) bool { return errors.Is(err, ErrNotServing) || IsUnknow
 // act was made for back from its row ([storedCarrier]) in the statement that
 // reads the actor: a revision's facts and a failed check of a head the
 // revision's ([revisionPusher]), and the home's landing the push's that merged
-// the change ([landingPusher]). A queue's landing names each entry's enqueuer
-// and reads its entry's from crewlet#798's piece 4c-ii on; its own apply fills
-// the push rows it lands from its entries' rows already ([Land.pushes]).
+// the change ([landingPusher]). The merge queue's records read their entry's
+// off the entry's row its decide reads: its landing beside the enqueuer it
+// names, its ejection and a close it could not make beside no actor; and the
+// landing's own apply fills the push rows it lands from its entries' rows
+// ([Land.pushes]). The home's work on its queue answers the entry's too
+// ([QueueWorkEntry.WorkingFor]), the one read answer that does, since the
+// home's close of a landed change's item is made for them.
 //
 // FILLED FROM THE CARRIER'S FIRST BUILD ON, before most of them are read: a
 // replicated migration runs on each node when it opens, not at a log position,
@@ -343,7 +347,11 @@ func carrierColumn(f *types.WorkingFor) (sql.NullString, error) {
 // a record that reads it carries it as kept, a holder that must judge it asks
 // the one rule ([KindUnknownToThisBuild]), and the turn a record's wake starts
 // composes it on its own node: as it is where that node's build knows the
-// kind, and as a stranger's, the closed end, where it does not.
+// kind, and as a stranger's, the closed end, where it does not. The home's
+// close of a landed change's item, which must judge it, decides nothing of
+// one: it leaves the close owed for a home of the build that knows the kind
+// (internal/engine's queue close), as a record this build cannot read is
+// deferred, never dropped.
 func storedCarrier(column sql.NullString) *types.WorkingFor {
 	if !column.Valid {
 		return nil

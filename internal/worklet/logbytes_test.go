@@ -139,9 +139,13 @@ const (
 // The home's own records carry none: its facts of a revision and a failed
 // check of a head carry whom the revision was pushed for only where they wake
 // a seat, and the reference revisions' facts ask nobody and the reference
-// checks pass; a readiness is no principal's act; and the queue's landing
-// carries none in this build. Neither does the merge's routing, which tells
-// only its author, who merged it.
+// checks pass; a readiness is no principal's act; the queue's landing carries
+// whom each entry's enqueue was made for only where it wakes a seat, and the
+// reference landing wakes none, its one author being the seat that queued the
+// change, who is not told of their own act; and the queue's ejection and a
+// close it could not make carry it beside no actor, where the reference day
+// ejects nothing and its settle closed the item, which routes nobody. Neither
+// does the merge's routing, which tells only its author, who merged it.
 const (
 	codeChangeOpenBytes           = 3_160
 	codeChangeEditBytes           = 2_770
@@ -745,11 +749,13 @@ var routingReasons = map[string]string{
 		"not_closed routes, and the reference queued change's item closes",
 	"working_for": "whom an agent's write was made for, which the writer stamps beside an agent's actor " +
 		"only where the routing wakes a seat (gitlet's routingFor): a readiness is the home's own judgement, " +
-		"which no agent's act made, and the queue's landing carries none in this build — the home's records " +
-		"about a seat's earlier push carry whom the push was made for, a revision's facts, a failed check of " +
-		"its head and a landing found, and the reference ones route nobody or stay out of the day — and a " +
-		"routing that tells nobody but its actor — the reference merge's, whose author merges it — wakes no " +
-		"seat to carry it to",
+		"which no agent's act made; the home's records about a seat's earlier push or enqueue carry whom it " +
+		"was made for — a revision's facts, a failed check of its head, a landing found and the queue's " +
+		"landing beside the act's actor, the queue's ejection and a close it could not make beside none — " +
+		"and the reference ones route nobody, stay out of the day or wake no seat: the reference landing " +
+		"tells the change's authors but its enqueuer, who queued their own change, and a closed settle " +
+		"routes nobody; and a routing that tells nobody but its actor — the reference merge's, whose author " +
+		"merges it — wakes no seat to carry it to",
 }
 
 // routingAbsent is every key of a change's routing under prefix that a term's

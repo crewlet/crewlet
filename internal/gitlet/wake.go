@@ -236,12 +236,14 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		// WHO WROTE WHAT THE WAKE ANNOUNCES, by the routing's own record of
 		// it: a person as the seat they hold, a seat as itself — a revision's
 		// facts and a landing, which the home records, as whoever pushed the
-		// revision and the push the home found merging the change — and
-		// nobody, the engine, for the home's other records; a seat with whom
-		// it wrote for, where the routing carries it. The record's ACTOR is
-		// the deciding node for every code record, so the routing's actor is
-		// the writer here.
-		Writer: writerOf(r),
+		// revision and the push the home found merging the change, and a
+		// queue's landing as each entry's enqueuer — and nobody, the engine,
+		// for the home's other records; a seat with whom it wrote for, where
+		// the routing carries it, and the engine with whom an entry's enqueue
+		// was made for on the queue's two records about it that carry it. The
+		// record's ACTOR is the deciding node for every code record, so the
+		// routing's actor is the writer here.
+		Writer: writerOf(record.Op, r),
 		// WHAT STARTS THE TURN THIS WAKES: the change, as the Gitlet screens
 		// name it, under this recipient's own reason — so the turn a review
 		// request or a failed check started is found from the change
@@ -262,17 +264,25 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 //
 // AND WHOM AN AGENT WROTE FOR, as the routing carries it beside its actor
 // ([ChangeRouting.WorkingFor], ADR-0109): the turn the record wakes works for
-// them, held to what they may use. Handed for an agent's actor alone, and
-// FirstPartyWriter keeps it for nobody else: a person and the engine write
-// for nobody but themselves, so a carrier on such a routing is no request
-// this wake works for. The engine's records that name an earlier actor — a
-// revision's facts, a failed check of a head, the home's landing — carry it
-// beside that actor as the act's row kept it (concerns.go's head, "Whom the
-// actor acted for"), so the turn such a record wakes works for whom the act
-// was made for, as the act's own wake did; a queue's landing carries none
-// yet, and the turn it wakes works for the enqueuer's seat.
-func writerOf(r *ChangeRouting) *types.NotificationWriter {
+// them, held to what they may use. Handed for an agent's actor, and
+// FirstPartyWriter keeps it for nobody but an agent and the engine: a person
+// writes for nobody but themselves, so a carrier on such a routing is no
+// request this wake works for. The engine's records that name an earlier
+// actor — a revision's facts, a failed check of a head, the home's landing, a
+// queue's landing — carry it beside that actor as the act's row kept it
+// (concerns.go's head, "Whom the actor acted for"), so the turn such a record
+// wakes works for whom the act was made for, as the act's own wake did.
+//
+// AND THE ENGINE'S, ON THE QUEUE'S TWO RECORDS ABOUT AN ENQUEUE that name no
+// actor — op eject and op close_settled ([carriesAnEnqueue]) — which carry
+// whom the entry's enqueue was made for beside no actor (concerns.go's head,
+// "The one exception"): the engine writes, for them. Every other record with
+// no actor is the engine's alone, whatever its routing holds, so a carrier on
+// one is never the turn's to work for.
+func writerOf(op OpKind, r *ChangeRouting) *types.NotificationWriter {
 	switch {
+	case r.Actor == "" && carriesAnEnqueue(op):
+		return notify.FirstPartyWriter(iam.ActorSystem, "", nil, r.WorkingFor)
 	case r.Actor == "":
 		return notify.FirstPartyWriter(iam.ActorSystem, "", nil, nil)
 	case r.Person(r.Actor):
@@ -280,6 +290,13 @@ func writerOf(r *ChangeRouting) *types.NotificationWriter {
 	}
 	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor, nil, r.WorkingFor)
 }
+
+// carriesAnEnqueue reports whether op is one of the merge queue's own records
+// about an entry's enqueue that name no actor and carry whom that enqueue was
+// made for — an ejection, and a close of a landed change's item settled — the
+// two whose decides hand [routingFor] the entry's carrier beside no actor
+// ([concerning.enqueuedFor]).
+func carriesAnEnqueue(op OpKind) bool { return op == OpEject || op == OpCloseSettled }
 
 // wakeText is what a woken seat reads of what the record says about change:
 // a comment, a review's summary, an ask's note, an open's or an edit's

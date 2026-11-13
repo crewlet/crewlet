@@ -393,23 +393,29 @@ func TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames(t *testing.T) {
 	}
 }
 
-// AN AGENT'S WRITER CARRIES WHOM ITS RECORD WAS WRITTEN FOR, AND NOBODY ELSE'S
-// DOES (ADR-0109): the turn the write wakes works for them, never for the
-// writing seat. A person, a credential and the engine write for nobody but
-// themselves, so a carrier handed for one of them rides nothing. The carrier
-// is the writer's own copy, with a credential's apps held to the apps this
-// build knows, once each, in iam.Apps order, as a credential writer's own are.
+// AN AGENT'S WRITER CARRIES WHOM ITS RECORD WAS WRITTEN FOR, AND SO DOES THE
+// ENGINE'S (ADR-0109): the turn the write wakes works for them, never for the
+// writing seat; and the engine's record about an agent's earlier act made for
+// somebody — Gitlet's merge queue's ejection and a close it could not make,
+// the amendment's one exception to the engine writing for nobody but itself —
+// carries that act's carrier, so the turn it wakes works for them too. A
+// person and a credential write for nobody but themselves, so a carrier
+// handed for one of them rides nothing. The carrier is the writer's own copy,
+// with a credential's apps held to the apps this build knows, once each, in
+// iam.Apps order, as a credential writer's own are.
 //
 // Mutation: keep the carrier for every kind, and the person's writer works
 // its turn for ada; drop it for the agent, and the agent's write wakes its
-// seat for the agent.
+// seat for the agent; drop it for the engine, and the queue's ejection wakes
+// its seats for themselves.
 func TestAnAgentsWriterCarriesWhomItWroteFor(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 	for _, kind := range []iam.ActorKind{iam.ActorAgent, iam.ActorHuman, iam.ActorOperator, iam.ActorSystem} {
 		w := notify.FirstPartyWriter(kind, "cto", nil, ada)
-		if want := kind == iam.ActorAgent; (w.WorkingFor != nil) != want {
-			t.Errorf("a %s's writer carries %+v; want a carrier only on an agent's", kind, w.WorkingFor)
+		if want := kind == iam.ActorAgent || kind == iam.ActorSystem; (w.WorkingFor != nil) != want {
+			t.Errorf("a %s's writer carries %+v; want a carrier only on an agent's and the engine's", kind,
+				w.WorkingFor)
 		}
 	}
 	token := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci", Apps: []iam.Grant{

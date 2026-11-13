@@ -76,12 +76,12 @@ type Ceiling struct {
 // comment on one, a Chatlet message, a change, a review, a comment or a push
 // on Gitlet) wakes its colleague in a turn worked for them as well (ADR-0109,
 // internal/agent/builtin's workingForOf), and so does what the engine records
-// on Gitlet about the agent's earlier push. The edges are what carries no
-// requester: a vendor's surface, whose wake comes back by webhook with no
-// field of the engine's, and, until crewlet#798's piece 4c-ii, what Gitlet's
-// merge queue records about an earlier enqueue. Nor does it reach what the
-// agent already knows. It bounds what a turn does for its requester, not what
-// an agent may go on to tell them.
+// on Gitlet about the agent's earlier push or enqueue, whose close of a
+// landed change's item is decided within the same ceiling. The edge is what
+// carries no requester: a vendor's surface, whose wake comes back by webhook
+// with no field of the engine's. Nor does it reach what the agent already
+// knows. It bounds what a turn does for its requester, not what an agent may
+// go on to tell them.
 //
 // # Except the edits an agent makes to its own work
 //

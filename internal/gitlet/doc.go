@@ -320,8 +320,10 @@
 // open, a reopen, a push, a merge and an enqueue whatever they wake, kept on
 // their rows for the engine's later records, which carry it beside the actor
 // they name: a revision's facts, a failed check of a head and the home's
-// landing read it back from the push's rows, and the merge queue reads its
-// entry's from crewlet#798's piece 4c-ii on (concerns.go, writtenfor.go).
+// landing read it back from the push's rows, and the merge queue's landing
+// from its entry's row — which its ejection and a close it could not make
+// carry beside no actor, and for which its close of a landed change's item is
+// made (concerns.go, writtenfor.go).
 //
 // # A repository's checks are rows on their own subject
 //

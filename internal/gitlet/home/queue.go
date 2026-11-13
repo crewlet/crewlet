@@ -30,7 +30,10 @@ type Chains interface {
 // Tasks closes a landed change's work item AS THE ENTRY'S ENQUEUER — step 2
 // of a queued merge that asked it (M5-D27): the engine wires the company's
 // tracker, which decides the close as that principal, as it decides every
-// write of theirs. The queue never closes a work item on its own account.
+// write of theirs, and, where an agent's enqueue was made for somebody, for
+// them: written for them and decided within what they may use, as the
+// enqueuing turn's own write made late (ADR-0109). The queue never closes a
+// work item on its own account.
 //
 // CloseWorkItem answers nil for an item closed, or finished already; a
 // [*NotClosed] for a close that will not be made however often it is asked,
@@ -60,14 +63,20 @@ func (n *NotClosed) Unwrap() error { return n.Err }
 
 // TaskClose is one landed change's work item to close: the step's operation
 // id — derived from its landing's, so the step asked again is the same write,
-// which the tracker's ledger collapses — the change, its work item and who
-// closes it.
+// which the tracker's ledger collapses — the change, its work item, who closes
+// it and for whom.
 type TaskClose struct {
 	OpID     string
 	RepoID   string
 	Change   gitlet.ChainChange
 	WorkItem types.WorkItem
 	As       gitlet.Principal
+	// WorkingFor is whom As's enqueue was made for, as the entry's row keeps
+	// it (gitlet.QueueWorkEntry.WorkingFor), nil for nobody: the close is
+	// written for them and decided within what they may use, on whichever
+	// path the home closes it — the landing's own turn, from the entries it
+	// read, or a later turn's owed close.
+	WorkingFor *types.WorkingFor
 }
 
 // queue is the home's MERGE QUEUE (M5-D12, M5-D13): for each queue target of
@@ -631,15 +640,17 @@ func (w *queue) land(ctx context.Context, repoID string, d gitlet.QueueDue, gree
 
 // closeOwed closes the work item each of owed — a landed entry still owing
 // its close (gitlet.QueueDueAnswer.QueueOwedCloses) — asked closed, AS ITS
-// ENQUEUER under the operation its landing named (gitlet.CloseWorkItemOpID,
-// so a close a home asked before it stopped is the same tracker write
-// asked again, which the tracker's ledger answers once), and settles every
-// close that ENDED in ONE close_settled record: closed, or not_closed with
-// the sentence its change's authors and enqueuer read. A close whose end is
-// not known yet is left owed, for the next turn on whichever home holds the
-// repository, and is this turn's failure — as is every close this turn
-// ended whose settle did not append, each asked again under its landing's
-// operation by the next turn, which the tracker answers done.
+// ENQUEUER, for whom the enqueue was made as the entry read holds it
+// (TaskClose.WorkingFor), under the operation its landing named
+// (gitlet.CloseWorkItemOpID, so a close a home asked before it stopped is the
+// same tracker write asked again, which the tracker's ledger answers once),
+// and settles every close that ENDED in ONE close_settled record: closed, or
+// not_closed with the sentence its change's authors and enqueuer read. A
+// close whose end is not known yet is left owed, for the next turn on
+// whichever home holds the repository, and is this turn's failure — as is
+// every close this turn ended whose settle did not append, each asked again
+// under its landing's operation by the next turn, which the tracker answers
+// done.
 func (w *queue) closeOwed(ctx context.Context, repoID string, owed []gitlet.QueueWorkEntry,
 	at statelog.Position) error {
 
@@ -659,7 +670,7 @@ func (w *queue) closeOwed(ctx context.Context, repoID string, owed []gitlet.Queu
 			s.Outcome, s.Detail = gitlet.CloseNotClosed, "the change no longer names a work item to close"
 		} else {
 			err := w.tasks.CloseWorkItem(ctx, TaskClose{OpID: e.CloseOp, RepoID: repoID, Change: e.Change,
-				WorkItem: *e.WorkItem, As: e.EnqueuedBy})
+				WorkItem: *e.WorkItem, As: e.EnqueuedBy, WorkingFor: e.WorkingFor})
 			var refused *NotClosed
 			switch {
 			case errors.As(err, &refused):

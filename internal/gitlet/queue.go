@@ -197,9 +197,11 @@ type Enqueue struct {
 	// Principal; an asker sends none. nil for an enqueue made for nobody — the
 	// seat's own work — and for a person's. The apply keeps it on the entry's
 	// row (code_queue.working_for), which the entry's landing fills its push
-	// row from in its own apply ([Land.pushes]); the queue's landing and its
-	// close of the change's item read it back from crewlet#798's piece 4c-ii
-	// on.
+	// row from in its own apply ([Land.pushes]), and which the queue's later
+	// records about the entry read back — its landing beside the enqueuer it
+	// names, its ejection and a close it could not make beside no actor — as
+	// does the home's close of the landed change's item, which is written for
+	// them and decided within what they may use ([QueueWorkEntry.WorkingFor]).
 	//
 	// VERSION 2, as every payload's working_for is ([versionedFields]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
@@ -1360,10 +1362,11 @@ type queueEntry struct {
 	// it (code_queue.working_for, [carrierColumn]): read whole and written
 	// back as read. The entry's landing fills its push row from it in its own
 	// apply ([Land.pushes]), so every node lands the same rows — each filled
-	// the column from the same enqueue. NO READ ANSWERS IT: the queue's
-	// listings and the home's work on its queue build their answers field by
-	// field and leave it out, until crewlet#798's piece 4c-ii hands the
-	// home's close of a landed change's item whom it closes for.
+	// the column from the same enqueue — and the queue's records about the
+	// entry carry it on their routings ([storedCarrier]). ONE READ ANSWERS IT:
+	// the home's work on its queue ([QueueWorkEntry.WorkingFor], read whole),
+	// whose close of a landed change's item is made for them; the queue's
+	// listings build their answers field by field and leave it out.
 	WorkingFor sql.NullString
 }
 

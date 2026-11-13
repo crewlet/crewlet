@@ -4987,6 +4987,11 @@ head merged it, which the home finds by walking the target's moves back from
 the tip, since a push on top of the merge may have moved the target since; the
 landing names whoever made that push, and the change's other authors told it
 merged read for that pusher's grant too or, where the pusher made it for
+somebody, for that somebody. So with the merge queue's records: its landing
+names whoever queued the change, and its removal of a change from the queue
+and a close of the landed change's work item it could not make name nobody,
+but each carries whom the change was queued for, so a seat any of them wakes
+reads for the enqueuer's grant too or, where the enqueuer queued it for
 somebody, for that somebody. A
 credential acting as no seat is the requester by its own login: it reads every
 repository itself and pushes to none, so the turn its change wakes reads as the
@@ -5076,13 +5081,15 @@ seat that made the write ([How a seat is woken](#how-a-seat-is-woken)).
 facts, a failed check of a change's head and a landing its home found each read
 whom that push was made for back from the rows that keep it, and wake their
 seat in a turn worked for them, as the push's own wake would have.
-**What the merge queue records about a seat's enqueue does not carry them
-yet**, until crewlet#798's piece 4c-ii reads whom the enqueue was made for back
-from its entry: the merge queue's landing wakes its seat in a turn worked for
-the seat that enqueued the change, the queue's removal of a change and a close
-it could not make wake the seats they tell in turns worked for those seats,
-and the merge queue's close of a landed change's work item is written for
-nobody, so the turn it wakes works for the enqueuer's seat. The
+**So does what the merge queue records about a seat's enqueue**: its landing,
+its removal of a change from the queue and a close of the landed change's work
+item it could not make each read whom the enqueue was made for back from the
+entry's row, and wake their seats in turns worked for them — the two that name
+nobody as well, since a seat they wake for itself would queue the change again,
+or close the item its requester could not, with every app the seat holds. And
+the queue's [close of a landed change's work item](#what-the-home-does-with-a-queue) is written
+for them and decided within the apps they use, as the seat's own merge would
+be in their turn. The
 home's own records that name no earlier write — a conflict, a change ready to
 merge — stay nobody's, as the table above says; nor does what a seat writes on
 a vendor's surface carry anybody. Nor does the ceiling reach what a seat
@@ -6768,7 +6775,14 @@ holds.
   that asked it has its change's work item closed — set `done` in
   Worklet — **as its enqueuer**, decided by the authority table
   as theirs and attributed to them, under an operation id derived from the
-  landing's, so a close asked again is the same write. The close is
+  landing's, so a close asked again is the same write. A seat's enqueue made
+  in a turn it worked for somebody is that turn's write, and so is the close,
+  made late: it is written **for them** and decided **within the apps they
+  use**, composed again on the closing node — a person by the grants they hold
+  now, a credential narrowed by what that node gives it — as the seat's own
+  merge in their turn would be ([Reads made for somebody
+  else](#reads-made-for-somebody-else)), so a person without Worklet who has a
+  seat merge into a queue does not have the item closed for them. The close is
   **owed on the entry's row** from the landing's apply until its home
   settles it: the landing records the close's operation on each entry it
   lands that asked it (`code_queue.close_op`), and every home's queue work
@@ -6786,12 +6800,17 @@ holds.
   `not_closed`, for a close no asking again changes — the item is on a
   vendor's tracker, which is closed there by whoever closes it; the
   enqueuer is bound to no seat, has left the chart or may no longer update
-  it; or Worklet refuses the close for good, the item gone or its content
-  or its state (the trash, say) refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
+  it; whom the enqueue was made for has left the organisation, may not act
+  in the company now or does not use Worklet; or Worklet refuses the close
+  for good, the item gone or its content or its state (the trash, say)
+  refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
   under `merged`, why the item was left open (`Change … was merged through
-  its queue, and its work item was not closed: …`). A close no home could
-  make for `gitlet.QueueHistory` is given up with its row, which the queue's
-  history removes.
+  its queue, and its work item was not closed: …`), in turns worked for whom
+  the enqueue was made for. A close whose requester the closing home's build
+  cannot read — named by a kind only a newer build writes, during a rolling
+  upgrade — is decided not at all and stays owed for a home of that build. A
+  close no home could make for `gitlet.QueueHistory` is given up with its
+  row, which the queue's history removes.
 
 #### How fast a queue lands
 
@@ -7226,7 +7245,12 @@ stops after its record committed loses no wake.
   revision, and a change it found landed whoever made the push that brought
   the change's head into its target, each the pusher's errand or, where the
   pusher made that push in a turn it worked for somebody, that somebody's,
-  which the routing carries beside the pusher as it does beside a writer.
+  which the routing carries beside the pusher as it does beside a writer; a
+  queue's landing is whoever queued the change, and its removal of a change
+  from the queue and a close it could not make are the engine's, each the
+  enqueuer's errand or, where the enqueuer queued it in a turn it worked for
+  somebody, that somebody's, which the routing carries beside the enqueuer, or
+  beside nobody on the engine's two.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a
