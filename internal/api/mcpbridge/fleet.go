@@ -149,7 +149,7 @@ func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
 	if !ok {
 		return httprelay.Refuse
 	}
-	opened, verdict := b.holding(sub)
+	opened, verdict := b.verdict(sub)
 	if opened != nil && opened.session.Loopback {
 		return httprelay.Refuse
 	}

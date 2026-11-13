@@ -1429,7 +1429,8 @@ func (b *Bridge) heldLocked(sub subject) *binding {
 
 // verdict is what THIS NODE can do for a token's job: serve its opening, say
 // that the run is over, or say it does not hold the run's seat — not yet, or no
-// longer.
+// longer. And the job's live opening here, nil where it holds none
+// ([Bridge.held]), read in the same moment as the verdict.
 //
 // # The session is the seat holder's, and only the token is the fleet's
 //
@@ -1450,21 +1451,13 @@ func (b *Bridge) heldLocked(sub subject) *binding {
 // A PINNED SESSION IS ITS OPENER'S FOR LIFE ([route]), and the relay has
 // already held a call to the incarnation its token names, so an opening that
 // is not here is a run that is over.
-func (b *Bridge) verdict(sub subject) httprelay.Verdict {
-	_, verdict := b.holding(sub)
-	return verdict
-}
-
-// holding is this node's live opening of the job a subject names, nil where it
-// holds none ([Bridge.held]), and the node's verdict on the token
-// ([Bridge.verdict]), the two read under one lock.
 //
-// ONE MOMENT FOR BOTH: a seat leaving this node takes its readiness and its
-// openings in one step ([Bridge.ReleaseSeat]), and read apart, the readiness
-// from before that step and the opening from after it said that a run whose
-// box goes on with the seat's next holder is over, which the box's harness
-// takes for good.
-func (b *Bridge) holding(sub subject) (*binding, httprelay.Verdict) {
+// ONE MOMENT FOR THE OPENING AND THE SEAT'S READINESS, read under one lock: a
+// seat leaving this node takes its readiness and its openings in one step
+// ([Bridge.ReleaseSeat]), and read apart, the readiness from before that step
+// and the opening from after it said that a run whose box goes on with the
+// seat's next holder is over, which the box's harness takes for good.
+func (b *Bridge) verdict(sub subject) (*binding, httprelay.Verdict) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	opened := b.heldLocked(sub)
@@ -1726,7 +1719,7 @@ func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *bindin
 			b.refuse(w, r, "", "the token is forged, malformed or expired")
 			return
 		}
-		opened, verdict := b.holding(sub)
+		opened, verdict := b.verdict(sub)
 		switch {
 		case opened != nil:
 			b.serveBegun(w, r, sub, opened, serve)
