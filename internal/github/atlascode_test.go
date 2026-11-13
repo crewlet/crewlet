@@ -66,7 +66,9 @@ const (
 func withCode(f *forge) *forge {
 	api, web, old := f.repos["Acme/API"], f.repos["acme/web"], f.repos["acme/old"]
 	api.head, web.head, old.head = codeHead, codeHead, codeHead
-	api.row["pushed_at"], web.row["pushed_at"] = "2026-11-12T06:00:00Z", "2026-11-12T06:00:00Z"
+	// An older Enterprise Server's listing may not say when a repository was
+	// pushed: the second repository's does not.
+	api.row["pushed_at"] = "2026-11-12T06:00:00Z"
 	api.files = map[string]string{
 		"compose.yaml": "services:\n  web:\n    build: .\n    environment:\n      TOKEN: " + codeCanary +
 			"\n  db:\n    image: postgres:16.2\n",
@@ -159,8 +161,8 @@ const apiVoice = "github.com:acme:api"
 // are read by the object the tree lists, a Dockerfile says what it says by
 // being there, and an `.env` file, a values file, a variable file, a manifest
 // named for secrets, a workflow and a symbolic link are never asked for. An
-// archived repository is not read, and one nothing was pushed to is asked
-// nothing.
+// archived repository is not read, and one the listing says nothing was
+// pushed to is asked nothing.
 //
 // Mutation: list a symbolic link as a file, or serve every file the tree
 // holds to the parsers, and GitHub is asked for an object this test plants a
@@ -210,10 +212,12 @@ func TestTheFilesOfAGitHubRepositoryAreReadByTheClosedList(t *testing.T) {
 		t.Errorf("the pass's standing: %+v, revoked %v, calls %v", fs, f.revoked, f.calls)
 	}
 
-	// Nothing was pushed: the listing says so, and no repository is asked.
+	// Nothing was pushed: the listing says so of one repository, which is
+	// asked nothing, and says nothing of the other, which is asked where its
+	// default branch is.
 	f.forget()
 	r.now = r.now.Add(time.Hour)
-	if fs = r.pass(); len(f.asked("/repos/")) != 0 || fs.Calls != 4 {
+	if fs = r.pass(); !slices.Equal(f.asked("/repos/"), []string{"GET /repos/acme/web/git/ref/heads/main"}) || fs.Calls != 5 {
 		t.Errorf("a pass with nothing pushed asked %v", f.asked("/repos/"))
 	}
 	// A push moves the stamp and the default branch with it.
@@ -223,7 +227,7 @@ func TestTheFilesOfAGitHubRepositoryAreReadByTheClosedList(t *testing.T) {
 	f.forget()
 	r.now = r.now.Add(time.Hour)
 	r.pass()
-	if got := f.asked("/repos/"); len(got) != 3 || len(f.asked("/repos/acme/web/")) != 0 {
+	if got := f.asked("/repos/Acme/API/"); len(got) != 3 || len(f.asked("/repos/acme/web/")) != 1 {
 		t.Errorf("a push to one repository asked %v, want its ref, its tree and the changed file", got)
 	}
 	if got := r.log.Entries(atlas.CodeSource(apiVoice)); !slices.Contains(got, "vendor_account:datadog") || slices.Contains(got, "vendor_account:other/stripe") {

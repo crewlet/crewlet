@@ -86,10 +86,15 @@ func (s *codeSession) Repositories(ctx context.Context) ([]collect.CodeRepositor
 			s.readers[row.FullName] = in.reader
 			// A NAME THAT IS NO KEY is listed with none, for the pass to count.
 			key, _ := atlas.ForgeRepositoryKey(s.webBase, row.FullName)
-			out = append(out, collect.CodeRepository{Key: key, ID: row.FullName, Branch: row.DefaultBranch,
-				// A PUSH TO ANY BRANCH MOVES IT, and so does a new default
-				// branch: while neither has, the default branch is where it was.
-				Stamp: row.PushedAt + " " + row.DefaultBranch})
+			repo := collect.CodeRepository{Key: key, ID: row.FullName, Branch: row.DefaultBranch}
+			// A PUSH TO ANY BRANCH MOVES IT, and so does a new default
+			// branch: while neither has, the default branch is where it was.
+			// A listing that does not say when it was pushed gives no stamp,
+			// and the repository is asked at every pass.
+			if row.PushedAt != "" {
+				repo.Stamp = row.PushedAt + " " + row.DefaultBranch
+			}
+			out = append(out, repo)
 		}
 	}
 	return out, whole, nil
