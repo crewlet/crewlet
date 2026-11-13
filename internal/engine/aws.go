@@ -48,7 +48,10 @@ func (p *awsPass) run(ctx context.Context, _ setup.PassInput) ([]integration.Fin
 	case err != nil:
 		return nil, err
 	}
-	report, err := client.CheckStack(ctx, cfg.Provisioning.RegionsOrDefault())
+	// THE ATLAS'S ROLE IS HELD TO THE IDENTITY SPLIT AND NOTHING ELSE HERE: no
+	// agent depends on it, so what it lacks (report.Atlas) is said by the
+	// read that could not sign in as it, on the atlas's own sources.
+	report, err := client.CheckStack(ctx, cfg.Provisioning.RegionsOrDefault(), cfg.Provisioning.AtlasRead)
 	if err != nil {
 		return nil, integration.Reject(err, awsint.Status(err))
 	}

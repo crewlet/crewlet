@@ -25,6 +25,15 @@
     "AWSProvisioning": {
       "additionalProperties": false,
       "properties": {
+        "atlas_read": {
+          "description": "Add a read-only role for the atlas to the stack, so the atlas lists the account's Regions in use, instances, databases, load balancers, DNS zones, queues and bucket names. Off by default. Turning it on or off changes the CloudShell block: run it again, and paste its last line when it is on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "certificate_authority": {
           "description": "The engine's certificate authority: its P-256 private key, then its certificate, both PEM. Minted by the connect form and never shown; the stack's trust anchor holds only the certificate. It can sign in as the provisioner, which can create agent roles and attach the Crewlet levels.",
           "type": [
@@ -36,7 +45,7 @@
           "x-crewlet-secret": true
         },
         "connection": {
-          "description": "The stack's CrewletConnection output: five ARNs joined by commas, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made.",
+          "description": "The stack's CrewletConnection output: five ARNs joined by commas, or seven where the stack holds the atlas's role, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made.",
           "type": [
             "string",
             "number",
