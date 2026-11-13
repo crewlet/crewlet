@@ -229,6 +229,40 @@ func (r *reader) answersOn(where string, host atlas.Ref, raw string) {
 	}
 }
 
+// listed runs one part's listing. A scope the token lacks, proven before the
+// read or answered 403 by the listing, is a finding and reads false; any other
+// failure fails the read whole, since a listing cut short would retire what
+// it did not reach.
+func listed[T any](
+	ctx context.Context, r *reader, p part, list func(context.Context) ([]T, error),
+) ([]T, bool, error) {
+	if slices.Contains(r.lacks, p.scope) {
+		p.unread(r.b)
+		return nil, false, nil
+	}
+	rows, err := list(ctx)
+	switch {
+	case err == nil:
+		return rows, true, nil
+	case Status(err) == http.StatusForbidden:
+		p.unread(r.b)
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("digitalocean: read the team's %s: %w", p.name, reject(err))
+}
+
+// held claims one resource of the team: its entry, that it belongs to the
+// team's account, and its name.
+func (r *reader) held(where string, k atlas.Kind, key, name string) (atlas.Ref, bool) {
+	ref, ok := r.b.Ref(where+".id", k, key)
+	if !ok {
+		return atlas.Ref{}, false
+	}
+	r.b.Relates(where, ref, atlas.RelationBelongsTo, r.account)
+	r.b.Says(where+".name", ref, atlas.FactName, collect.PlainLabel(name))
+	return ref, true
+}
+
 func (r *reader) droplets(ctx context.Context) error {
 	rows, ok, err := listed(ctx, r, partDroplets, r.client.Droplets)
 	if !ok {
