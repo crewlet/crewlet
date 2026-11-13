@@ -510,6 +510,122 @@ func TestAReplayedBurstIsPacedByTheValveAndLosesNoWake(t *testing.T) {
 	})
 }
 
+// A REPLAY NEVER SPENDS A SLOT THE LIVE PATH WOULD DROP A WAKE FOR.
+//
+// The replay paces a seat's copies by the rate valve, and the live path skips
+// a wake the valve refuses. Paced in the live path's own bucket, the replay
+// took the seat's slot as each window opened, so a person's mention landing in
+// that window was refused and lost — where without the replay it would have
+// been the window's only wake — while a refusal of a replayed copy costs
+// nothing, since the copy is kept. So the replay asks in a bucket of its own,
+// at the same limit. Three copies for a seat limited to one a second are paced
+// into three windows, and a live wake in the third is delivered beside the
+// third copy. In a bubble, so the windows pass on its clock.
+//
+// Mutation: pace the replay in the live path's bucket, and the live wake is
+// skipped as rate limited.
+func TestAReplayNeverSpendsASlotTheLivePathWouldDropAWakeFor(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		newer := newService(t, func(o *notify.Options, _ *harness) {
+			o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+			o.Valve = &windowValve{counts: map[string]int{}}
+			o.Now = nil
+		})
+		newer.limit = 1
+		const copies = 3
+		for i := range copies {
+			staged(t, newer, fmt.Sprintf("copy %d", i), relayed("2", fmt.Sprintf("op-%d", i)))
+		}
+		start(t, newer.svc)
+
+		// THE THIRD WINDOW, the replay's last copy delivered in it.
+		time.Sleep(2*time.Second + 300*time.Millisecond)
+		if got := newer.svc.Handle(t.Context(), relayed("2", "op-live")); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("the live delivery was answered %+v, want an ack", got)
+		}
+		newer.settledN(t, inbox("engineering-lead"), copies+1)
+		newer.quiet(t, skipTopic)
+	})
+}
+
+// replayedRelay is relayed's delivery as a change feed's replay relays it:
+// marked replayed.
+func replayedRelay(version, change string) *events.Event {
+	ev := events.New(types.RawWebhook{
+		Body: map[string]any{"version": version, "change": change}, Headers: map[string]string{},
+		Replayed: true,
+	}, events.NewTrace())
+	ev.Source = "tracker"
+	return ev
+}
+
+// A FEED'S REPLAYED WAKES ARE PACED BY THE VALVE, NONE SKIPPED.
+//
+// A change feed's replay publishes the wakes a roll left in its dead letters
+// one after another and drops each entry once its wake is published, so the
+// live path, which skips a wake past the seat's limit, lost every one the
+// valve refused with its entry. A delivery the feed's replay relayed is marked
+// (types.RawWebhook.Replayed) and paced as the service's own replay paces its
+// copies: five for a seat limited to two a second reach it, all five, over
+// three windows, and none is recorded as skipped. In a bubble, so the windows
+// pass on its clock.
+//
+// Mutation: read the mark nowhere, and three wakes are skipped as rate limited.
+func TestAFeedsReplayedWakesArePacedNoneSkipped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		newer := newService(t, func(o *notify.Options, _ *harness) {
+			o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+			o.Valve = &windowValve{counts: map[string]int{}}
+			o.Now = nil
+		})
+		newer.limit = 2
+		start(t, newer.svc)
+		const wakes = 5
+		for i := range wakes {
+			if err := newer.q.Publish(t.Context(), topics.NotificationsInbound,
+				replayedRelay("2", fmt.Sprintf("op-%d", i))); err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+		}
+		woken := newer.settledN(t, inbox("engineering-lead"), wakes)
+		if len(woken) != wakes {
+			t.Errorf("the seat was woken %d times, want %d", len(woken), wakes)
+		}
+		newer.quiet(t, skipTopic)
+	})
+}
+
+// A FEED'S REPLAYED WAKE THE VALVE STILL REFUSES FAILS AS THE NODE'S OWN.
+//
+// Paced, a feed's replayed wake the valve refuses waits for its window to
+// reopen and is asked once more. One still refused then is never skipped — the
+// feed's replay dropped its entry once the wake was published, so a skip lost
+// it — but failed as this node's own (queue.NakNode): the group redelivers it,
+// and a budget such failures spend keeps it with the unhandled deliveries for a
+// replay, never with the poison. The valve is asked twice, before its window
+// reopens and after.
+//
+// Mutation: answer the still-refused wake as the delivery's own failure, and
+// it counts against the delivery.
+func TestAFeedsReplayedWakeTheValveStillRefusesFailsAsTheNodesOwn(t *testing.T) {
+	newer := newService(t, func(o *notify.Options, _ *harness) {
+		o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+	})
+	newer.limit = 1
+	newer.valve.allow = false
+
+	got := newer.svc.Handle(t.Context(), replayedRelay("2", "op-70"))
+	if got.Outcome != queue.OutcomeNak || !got.NodeFault {
+		t.Fatalf("Handle = %+v, want a failure of the node's own", got)
+	}
+	newer.quiet(t, inbox("engineering-lead"))
+	newer.quiet(t, skipTopic)
+	if asked := newer.valve.seen(); asked != 2 {
+		t.Errorf("the valve was asked %d time(s), want twice: once, and once its window "+
+			"had reopened", asked)
+	}
+}
+
 // A REPLAYED WAKE THE VALVE STILL REFUSES IS KEPT, NEVER SKIPPED.
 //
 // Once its window has reopened, a refusal is the seat's own live mail filling

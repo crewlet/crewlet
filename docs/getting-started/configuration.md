@@ -53,7 +53,8 @@ notification_rate_limit: 10             # optional — inbound notifications one
                                         #   webhook storms and notification loops — burst handling is
                                         #   inbox coalescing below, which batches instead of dropping.
                                         #   Fails OPEN: a valve that cannot reach its counter passes
-                                        #   the notification rather than swallowing it.
+                                        #   the notification rather than swallowing it. A replay's
+                                        #   backlog is paced, never dropped, in a count of its own.
 notification_coalesce_window_seconds: 0 # optional — inbox linger window (seconds) absorbing bursts
                                         #   before an idle agent's turn starts. 0 (default) adds no
                                         #   latency: backlog that piled up while the agent was BUSY

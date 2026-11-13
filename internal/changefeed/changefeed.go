@@ -751,7 +751,7 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		f.deferRecord(ctx, msg, msg.Deferred)
 		return
 	}
-	switch out, deferral, err := f.derive(ctx, msg.Record); out {
+	switch out, deferral, err := f.derive(ctx, msg.Record, false); out {
 	case outcomeDeferred:
 		f.deferRecord(ctx, msg, deferral)
 	case outcomeUntranslatable:
@@ -813,7 +813,14 @@ const (
 // ONE PATH FOR A DELIVERY ([Feed.handle]) AND A DEAD LETTER'S REPLAY
 // ([Feed.replay]), so a replayed wake passes the dedupe a delivered one does:
 // two nodes starting together and replaying the same entry publish it once.
-func (f *Feed) derive(ctx context.Context, rec Record) (outcome, *Deferral, error) {
+//
+// replayed says which, and the wake says it too (types.RawWebhook.Replayed):
+// a replay publishes the wakes a roll piled up one after another, a burst the
+// live path would have spread over the roll, so the notification service paces
+// each by the seat's rate valve rather than skip one the valve refuses — the
+// replay drops an entry once its wake is published, so a skipped wake was lost
+// with its entry.
+func (f *Feed) derive(ctx context.Context, rec Record, replayed bool) (outcome, *Deferral, error) {
 	body, wake, err := f.translator.Translate(ctx, rec)
 	if d, ok := deferralOf(err); ok {
 		return outcomeDeferred, d, nil
@@ -832,7 +839,7 @@ func (f *Feed) derive(ctx context.Context, rec Record) (outcome, *Deferral, erro
 		return outcomeClaimed, nil, nil
 	}
 	ev := events.New(types.RawWebhook{
-		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(rec),
+		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(rec), Replayed: replayed,
 	}, events.NewTrace())
 	ev.Source = f.translator.Source().Name
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
@@ -1255,7 +1262,7 @@ func (f *Feed) replayOne(ctx context.Context, src Source, subject string, record
 			"detail", "this node cannot read it either; it is left for a node that can")
 		return entryLeft
 	}
-	switch out, deferral, err := f.derive(ctx, msg.Record); out {
+	switch out, deferral, err := f.derive(ctx, msg.Record, true); out {
 	case outcomeHandled:
 		settled[place] = true
 		return f.drop(ctx, src, subject, entry)

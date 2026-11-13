@@ -65,6 +65,15 @@ type RawWebhook struct {
 	// state log's and a position's three fields travel as one value.
 	// Absent on a vendor's delivery, which has no floor to observe.
 	Trigger string `json:"trigger,omitempty"`
+
+	// Replayed marks a delivery a REPLAY relayed — a change feed's of its
+	// dead letters, which a node's start publishes one after another — rather
+	// than one its source made as it happened. Its wakes piled up while no
+	// node could read them and arrive in a burst the live path would have
+	// spread, so the notification service paces it by the rate valve, as it
+	// paces its own replay's copies, rather than skip a wake the valve
+	// refuses (internal/notify's Service).
+	Replayed bool `json:"replayed,omitempty"`
 }
 
 // EventType is the wire name every transport subscribes under.

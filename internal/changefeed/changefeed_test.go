@@ -260,6 +260,12 @@ func TestAWakeCarriesThePositionOfTheChangeThatCausedIt(t *testing.T) {
 	if err != nil || at != want {
 		t.Fatalf("the wake carries trigger %q (%v), want %v", w.Trigger, err, want)
 	}
+	// A DELIVERED CHANGE IS NO REPLAY, which the notification service
+	// paces rather than skips: marked, every live wake past a seat's limit
+	// would wait for the valve's window instead of being dropped.
+	if w.Replayed {
+		t.Error("a delivered change's wake is marked replayed")
+	}
 
 	writeChange(t, docs, "u2")
 	settle(t, func() bool { return pub.count() == 2 }, "the second change never became a wake")

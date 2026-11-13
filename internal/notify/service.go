@@ -157,11 +157,12 @@ type Recipient struct {
 //
 // AND IT SAYS WHEN A REFUSAL ENDS: Reopens is the end of the window containing
 // now, the first instant a bucket it refused at now is counted afresh. The live
-// path never asks it — a refused notification is dropped there, which is what a
-// safety valve is for — but the replay of the inbound group's unhandled
-// deliveries does (replay.go): its copies piled up over a roll and arrive in
-// one burst the live path would have spread, so it waits a refused seat's wake
-// out to the window's end rather than lose it.
+// path never asks it for a live wake — a refused notification is dropped there,
+// which is what a safety valve is for — but a replayed one is paced: the
+// replay of the inbound group's unhandled deliveries (replay.go), and a change
+// feed's replay of its dead letters, whose wakes piled up over a roll and
+// arrive in one burst the live path would have spread, so a refused seat's
+// wake waits out to the window's end rather than being lost.
 type Valve interface {
 	Allow(ctx context.Context, bucket string, limit int, now time.Time) (bool, error)
 	Reopens(now time.Time) time.Time
@@ -548,10 +549,15 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	return s.handle(ctx, ev, false)
 }
 
-// handle routes one delivery, as [Service.Handle] does; paced is the replay's
-// (replay.go), whose wake the rate valve refuses waits for the valve's window
-// to reopen and asks once more, rather than being dropped ([Service.deliver]).
-func (s *Service) handle(ctx context.Context, ev *events.Event, paced bool) queue.Result {
+// handle routes one delivery, as [Service.Handle] does; replaying is the
+// replay's (replay.go). A delivery the replay handles, and one a change feed's
+// replay relayed (types.RawWebhook.Replayed), is PACED: its wake is asked of
+// the rate valve in the replays' own bucket, and one the valve refuses waits
+// for the valve's window to reopen and asks once more, rather than being
+// dropped ([Service.deliver]). One the valve still refuses is kept by the
+// replay, and failed as this node's own by the live path, so the group
+// redelivers it; never skipped.
+func (s *Service) handle(ctx context.Context, ev *events.Event, replaying bool) queue.Result {
 	if s.admits != nil && !s.admits() {
 		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,
 			"event", ev.ID, "reason", "config posture is shedding")
@@ -625,6 +631,7 @@ func (s *Service) handle(ctx context.Context, ev *events.Event, paced bool) queu
 		return queue.Ack()
 	}
 
+	paced := replaying || w.Replayed
 	var errs []error
 	for _, r := range routed {
 		if err := s.deliver(ctx, prompts, reg, ev, w.Trigger, r, paced); err != nil {
@@ -657,14 +664,16 @@ func (s *Service) handle(ctx context.Context, ev *events.Event, paced bool) queu
 // nodeFault reports whether every one of errs, a delivery's failed wakes, is
 // a failure of THIS NODE's rather than of the delivery: a publish the broker
 // did not answer ([queue.ErrUnavailable]), one refused by a queue that is no
-// longer live ([queue.ErrNotLive]), or any failure under a context that has
-// ended — a stop cancelling the handler. One wake that failed for anything
-// else — a wake too large to publish, which no node's retry changes — makes
-// the delivery's failure its own.
+// longer live ([queue.ErrNotLive]), a paced wake the rate valve still refused
+// ([errValveRefused]), or any failure under a context that has ended — a stop
+// cancelling the handler. One wake that failed for anything else — a wake too
+// large to publish, which no node's retry changes — makes the delivery's
+// failure its own.
 func nodeFault(ctx context.Context, errs []error) bool {
 	for _, err := range errs {
 		switch {
-		case ctx.Err() != nil, errors.Is(err, queue.ErrUnavailable), errors.Is(err, queue.ErrNotLive):
+		case ctx.Err() != nil, errors.Is(err, queue.ErrUnavailable), errors.Is(err, queue.ErrNotLive),
+			errors.Is(err, errValveRefused):
 		default:
 			return false
 		}
@@ -721,9 +730,9 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// acked, and the fail-open below — the documented behaviour of
 	// [Valve], and the reason a safety valve is allowed to exist on this
 	// path at all — was unreachable code the whole time.
-	allowed, err := s.allow(ctx, party)
+	allowed, err := s.allow(ctx, party, paced)
 	if err == nil && !allowed && paced {
-		// A REPLAYED WAKE IS PACED, NOT DROPPED: the replay's copies piled
+		// A REPLAYED WAKE IS PACED, NOT DROPPED: the replays' wakes piled
 		// up over a roll and come in one burst, which the live path would
 		// have spread over it, so the burst waits for the valve's window
 		// to reopen and asks once more ([Service.allowReopened]).
@@ -736,9 +745,12 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		log.WarnContext(ctx, "notification_valve_unavailable", "handle", party.Handle,
 			"error", err.Error())
 	case !allowed && paced:
-		// STILL REFUSED once the window reopened: the seat's own live mail
-		// fills its limit. The copy is KEPT for a later start, its wake
-		// undelivered, never skipped as the live path skips one.
+		// STILL REFUSED once the window reopened: other replays fill the
+		// replays' bucket for the seat — another node's, or a change
+		// feed's. The wake is not delivered and never skipped as the live
+		// path skips one: the replay keeps its copy, and a delivery a
+		// feed's replay relayed fails as this node's own, for the group to
+		// redeliver ([nodeFault]).
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, errValveRefused)
 	case !allowed:
 		log.WarnContext(ctx, "notification_rate_limited", "source", r.Source, "handle", party.Handle)
@@ -951,20 +963,23 @@ func (s *Service) resolve(reg *Registry, r Routed) (Party, bool) {
 	return Party{}, false
 }
 
-// errValveRefused is a replayed wake the rate valve refused even once its
-// window had reopened ([Service.allowReopened]): the copy is kept, and its
-// wake delivered by a later start.
+// errValveRefused is a paced wake the rate valve refused even once its window
+// had reopened ([Service.allowReopened]): not delivered, and never skipped —
+// the replay keeps its copy for a later replay, and the live path fails a
+// delivery a feed's replay relayed as this node's own, for the group to
+// redeliver.
 var errValveRefused = errors.New("the notification rate limit refused the wake")
 
 // allowReopened waits for the end of the valve's window that refused party's
-// wake ([Valve.Reopens]) and asks the valve once more: a burst paced at the
-// valve's own rate. A context that ends while it waits answers refused, never
-// a failure, which fails open: a replay that stops keeps the copy.
+// paced wake ([Valve.Reopens]) and asks the valve once more, in the replays'
+// bucket: a burst paced at the valve's own rate. A context that ends while it
+// waits answers refused, never a failure, which fails open: a replay that
+// stops keeps the copy.
 //
 // ONCE, AND NOT UNTIL ADMITTED. The replay's own copies are asked one after
 // another, so the window that opens holds none of them yet, and a refusal
-// there is the seat's live mail filling its limit — the storm or the loop the
-// valve exists for, which a replay waiting it out would join, holding every
+// there is other replays filling the replays' bucket — another node's, or a
+// change feed's — which a replay waiting it out would join, holding every
 // other seat's copies behind it.
 func (s *Service) allowReopened(ctx context.Context, party Party) (bool, error) {
 	if wait := s.valve.Reopens(s.now()).Sub(s.now()); wait > 0 {
@@ -976,14 +991,25 @@ func (s *Service) allowReopened(ctx context.Context, party Party) (bool, error) 
 		case <-reopened.C:
 		}
 	}
-	return s.allow(ctx, party)
+	return s.allow(ctx, party, true)
 }
 
-// allow consults the per-seat valve.
+// allow consults the per-seat valve: in the live path's bucket, or, for a
+// paced wake, in the replays' own.
 //
 // Off by default and skipped entirely when it is off, so a company that
 // never asked for a rate limit never reads the counter.
-func (s *Service) allow(ctx context.Context, party Party) (bool, error) {
+//
+// THE REPLAYS' OWN BUCKET, at the same limit. Paced in the live path's, a
+// replay took the seat's slot as each window opened and filled the window,
+// and the live path skips and acks a wake the valve refuses: a person's
+// mention landing in that window was lost, where without the replay it would
+// have been the only wake there — while a refusal of a replayed wake costs
+// nothing, since it is kept or redelivered. So a replay never spends a slot
+// the live path would drop a wake for; the seat can be woken up to twice its
+// limit in a window while a replay runs, its live mail and the backlog of a
+// roll, and the backlog no faster than the limit.
+func (s *Service) allow(ctx context.Context, party Party, paced bool) (bool, error) {
 	if s.valve == nil || s.limit == nil {
 		return true, nil
 	}
@@ -991,8 +1017,11 @@ func (s *Service) allow(ctx context.Context, party Party) (bool, error) {
 	if limit <= 0 {
 		return true, nil
 	}
-	ok, err := s.valve.Allow(ctx, "notify:"+party.AgentID.String(), limit, s.now())
-	return ok, err
+	bucket := "notify:" + party.AgentID.String()
+	if paced {
+		bucket = "notify-replay:" + party.AgentID.String()
+	}
+	return s.valve.Allow(ctx, bucket, limit, s.now())
 }
 
 // SkipReason is why a delivery woke nobody, in the words its
