@@ -51,8 +51,9 @@ func (s *cancelledAtTheDrain) answering() {
 // AFTER ITS READ. The bound on a collection's retries is on CONSECUTIVE failures
 // of the box, and a box that answered while a later step of its collection
 // failed uncounted (a store that did not answer the drain's watch or the record
-// of the sessions its job ran out of context in, or a read of what the run
-// pushed or a drain this node cut short) is a box that answered. Handed back
+// of the sessions its job ran out of context in or whose request its provider
+// refused, or a read of what the run pushed or a drain this node cut short) is
+// a box that answered. Handed back
 // with that run left open, the failures from before were measured across every
 // read it answered, and once the store was back the first blip gave up as lost
 // a box that had answered each time: collect_unreachable, "its result is lost",
@@ -81,7 +82,7 @@ func TestABoxThatAnsweredEndsTheRunOfFailuresWhateverFailsAfterItsRead(t *testin
 	}{
 		{name: "the drain's watch the store did not answer", box: wholeAccount(),
 			arrange: silentAfterTheRead("WatchLog")},
-		{name: "the record of the sessions its job ran out of context in",
+		{name: "the record of the sessions its job ran out of context in or whose request its provider refused",
 			box:     Result{Error: "Prompt is too long", ContextExhausted: true, SessionID: "s-1"},
 			arrange: silentAfterTheRead("RetireSessions")},
 		{name: "a drain this node stopped", box: wholeAccount(), arrange: stoppedAtTheDrain},

@@ -102,7 +102,8 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 // licenses a read of its box ([Coordinator.ReadHostedBox]); the watch of the
 // run's log a collection waits on its calls in flight by
 // ([Coordinator.awaitCalls]); and the record of the sessions its job ran out of
-// context in ([PendingStore.RetireSessions]). Each wraps the store's error in
+// context in or whose request its provider refused
+// ([PendingStore.RetireSessions]). Each wraps the store's error in
 // it ([storeSilent]).
 //
 // NOT A FAILURE OF THE BOX, which answered every read, nor of its host, which

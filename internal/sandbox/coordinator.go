@@ -1957,7 +1957,7 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]) is handed
 // back WITHOUT being counted as well: the host's read of the run's row, the
 // drain's watch of its log and the record of the sessions its job ran out of
-// context in are the store's, and the box answered every read, so counted, a
+// context in or whose request its provider refused are the store's, and the box answered every read, so counted, a
 // store silent for the window settled a run whose box still held its result as
 // one whose result was lost. Its completion is NAK'd for the queue's backoff,
 // as a counted retry's is, and not acknowledged as a silent host's is: that
@@ -1968,7 +1968,7 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // announcing the job again, and a store silent that long holds every run where
 // it is, the claim first, while its own alarms name it. Going on without the
 // step would read the run without what the step stands for (a call still in
-// flight, a session that ran out), and giving the run up would throw away a
+// flight, a session that ran out or was refused), and giving the run up would throw away a
 // result its box holds. But where the silence is the box's host's alone, its
 // store not answering the host's read of the run's row while this node's
 // answers the claim, that premise fails: every write of this node's lands, and

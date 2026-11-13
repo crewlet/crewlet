@@ -437,7 +437,8 @@ func heldThroughSilence(t *testing.T, rig *coordRig) {
 // go on without: the read of the run's row that licenses a read of its box on
 // its host, the drain's watch of the run's log (and the watch made again after
 // one that stopped hearing), and the record of the sessions a job ran out of
-// context in. None of them is the box's, which answered every read. So a store
+// context in or whose request its provider refused. None of them is the box's,
+// which answered every read. So a store
 // silent for longer than the give-up window hands the claim back uncounted,
 // the completion retried, and leaves the run claimable with its result in its
 // box: the collection made once the store answers resumes the turn on it,
@@ -483,7 +484,7 @@ func TestAStoreThatDoesNotAnswerACollectionNeverCountsAgainstItsBox(t *testing.T
 			rig.coordinator.pending = store
 			return store
 		}},
-		{"the record of the session it ran out of context in", ranOut,
+		{"the record of the session it ran out of context in or whose request its provider refused", ranOut,
 			func(_ *testing.T, rig *coordRig) *silentStore {
 				rig.launch("t1")
 				store := &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"RetireSessions"}}
@@ -635,7 +636,8 @@ func (s *outlastedStore) RetireSessions(ctx context.Context, turnID string, sess
 // delivery's deadline, which bounds the host's read, and answered as the read
 // running out of time, never as the store's silence), the drain's watch of the
 // run's log and the watch made again after one that stopped hearing, and the
-// record of the sessions the job ran out of context in.
+// record of the sessions the job ran out of context in or whose request its
+// provider refused.
 //
 // Mutation: wrap any one step's error in ErrStoreSilent whatever its context
 // says, or have storeSilent wrap every step's so, and the attempt the deadline
@@ -664,10 +666,11 @@ func TestACollectionThatRanOutOfTimeIsCountedWhicheverStepItWasIn(t *testing.T) 
 			rig.launch("t1")
 			rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending, at: "WatchLog again"}
 		}},
-		{"the record of the session it ran out of context in", ranOut, func(_ *testing.T, rig *coordRig) {
-			rig.launch("t1")
-			rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending, at: "RetireSessions"}
-		}},
+		{"the record of the session it ran out of context in or whose request its provider refused", ranOut,
+			func(_ *testing.T, rig *coordRig) {
+				rig.launch("t1")
+				rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending, at: "RetireSessions"}
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
