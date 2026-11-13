@@ -968,7 +968,7 @@ func (c *cluster) AwaitElection(ctx context.Context) error {
 			}
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("member %s's broker has answered no read of the code log's state (the last: %v): %w",
+				return fmt.Errorf("member %s's broker has answered no read of the code log's state (the last: %w): %w",
 					m.id, err, ctx.Err())
 			case <-time.After(20 * time.Millisecond): //fixedwait:liveness
 			}
