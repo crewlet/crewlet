@@ -204,11 +204,13 @@ func TestAReadingTakesTheSeatsSlotInsideTheProcesssTwo(t *testing.T) {
 }
 
 // A READING IS ONLY OF A WRITER ITS RULES WERE MEASURED ON: Claude Code 2.1.310
-// and later. A writer below it, a release the run recorded none of, and one
-// that is no release are each no reading, though a person's read and the
-// carry take an unreadable release for a current one and a carried session's
-// writer may be as old as 2.1.300; and a runner whose harness has no reading,
-// OpenCode's, reads none. None of them opens the archive.
+// and later. A writer below it, a release the run recorded none of, one that
+// is no release, and one of the shape of a release whose number is past what
+// an int holds, at or past the floor as its digits read, are each no reading,
+// though a person's read and the carry take an unreadable release for a
+// current one and a carried session's writer may be as old as 2.1.300; and a
+// runner whose harness has no reading, OpenCode's, reads none. None of them
+// opens the archive.
 //
 // Mutation: hold the writer to the carry's floor, or read an unreadable
 // release as a current one, and a refused writer's session is read.
@@ -227,6 +229,10 @@ func TestAReadingIsOnlyOfAWriterItsRulesWereMeasuredOn(t *testing.T) {
 		"a writer a box can continue":   {executor.NewClaudeCode(), rhSession("2.1.300"), false},
 		"a writer the run recorded not": {executor.NewClaudeCode(), rhSession(""), false},
 		"a writer that is no release":   {executor.NewClaudeCode(), rhSession("2.1"), false},
+		"a writer whose number no int holds": {executor.NewClaudeCode(), rhSession("0.0.99999999999999999999"),
+			false},
+		"a later writer whose number no int holds": {executor.NewClaudeCode(),
+			rhSession("2.1.99999999999999999999"), false},
 		"OpenCode's runner": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
 			SessionID: "ses_s", Format: executor.OpenCodeArchiveFormat, Version: "2.2.5"}, false},
 	} {

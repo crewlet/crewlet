@@ -40,7 +40,7 @@ import (
 // what a box can continue, which is its harness's resume to do, where a
 // reading decides from the shape of what a release recorded, and is held to
 // the oldest release those shapes were measured on. A release it cannot read,
-// or none recorded, is below it ([sandbox.ValidRelease]): every release check
+// or none recorded, is below it ([readsRelease]): every other release check
 // of the package reads an unreadable release as a current one
 // ([releaseAtLeast]), which here would read a writer nobody measured.
 
@@ -84,7 +84,7 @@ func (r *Runner) ReadHoldings(ctx context.Context, archive sandbox.SessionArchiv
 	if err := h.checkHoldings(archive, ask); err != nil {
 		return sandbox.SessionHoldings{}, err
 	}
-	if floor := h.holdingsFloor(); !sandbox.ValidRelease(archive.Version) || !releaseAtLeast(archive.Version, floor) {
+	if floor := h.holdingsFloor(); !readsRelease(archive.Version, floor) {
 		return sandbox.SessionHoldings{}, fmt.Errorf("executor: the session's writer, %s %.64q, is not one "+
 			"a reading reads: its records are read as %s %s and later write them, the oldest they were "+
 			"measured on", r.harness.Name(), archive.Version, r.harness.Name(), floor)
@@ -110,6 +110,20 @@ func (r *Runner) ReadHoldings(ctx context.Context, archive sandbox.SessionArchiv
 }
 
 var _ sandbox.HoldingsReader = (*Runner)(nil)
+
+// readsRelease reports whether release, the writer a session's row records,
+// is one a reading reads: a release ([sandbox.ValidRelease]) every number of
+// which this code reads ([releaseNumbers]), at or after floor.
+//
+// A RELEASE IT CANNOT READ IS BELOW IT, never the current one [releaseAtLeast]
+// takes it for: "", a release of two numbers, and one with a number past what
+// an int holds ("0.0.99999999999999999999", which ValidRelease, holding a
+// release to its shape and its length, takes for one) would each have the
+// reading read a writer nobody measured.
+func readsRelease(release, floor string) bool {
+	_, readable := releaseNumbers(release)
+	return sandbox.ValidRelease(release) && readable && releaseAtLeast(release, floor)
+}
 
 // holdingsError is why a reading read nothing: the reading's own words, whole,
 // and what gave it, where something did, cut ([firstLine]). What gives it can
