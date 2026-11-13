@@ -10435,9 +10435,10 @@ its title, that its run is parked, and under the row what the call would send
 under **Arguments**. THE TITLE IS IN PRODUCT WORDS, read from the call's own
 arguments where the reader is shown them: *Merge pull request 88 in
 acme/web?* (or *Merge change 42 in web?* for a Gitlet change), *Deploy web to
-production?*, *Run a command on web-1?*. A reader not shown a merge's, a
-deploy's or a command's arguments reads the engine's own question for it, and
-an MCP tool's call is *Call `tool` on Server?*. One function words it for the
+production?*, *Run a command on web-1?*. A reader not shown those arguments,
+and any other call its tool asks about every time, reads the engine's own
+question for it, which that tool words, and an MCP tool's call is *Call `tool`
+on Server?*. One function words it for the
 row, the Inbox's list and its pane (`heldCallTitle`), and where the title is
 in product words the call as it was made (its tool and server) is the first
 line under **Arguments**. **Allow once**, **Always allow** and

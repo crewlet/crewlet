@@ -80,6 +80,11 @@ export function answeredWords(answer: string, by: string): string {
 export interface HeldCallSubject {
   /** What approving it does (`held_call.act`); absent for an MCP tool's call. */
   act?: string | undefined;
+  /**
+   * A call its tool asks about every time (`held_call.fixed`): an engine
+   * tool's, whose question the tool words itself.
+   */
+  fixed?: boolean | undefined;
   tool: string;
   /** The server as a person knows it. */
   server: string;
@@ -106,10 +111,11 @@ function changeWords(change: string): string {
  *
  * IN PRODUCT WORDS FROM THE CALL'S OWN ARGUMENTS where the reader is shown
  * them: a merge names its change, a deploy its repository and environment, a
- * command its server. A reader not shown them is asked in the engine's own
- * question, which names the same things. Only a call neither says (an MCP
- * tool's) is named by its tool, which is all anybody knows it by. The raw call
- * stays under Arguments ([heldCallNamed]).
+ * command its server. A reader not shown them, and any other call its tool
+ * asks about every time, is asked in the engine's own question, which that
+ * tool words. Only a call neither says (an MCP tool's) is named by its tool,
+ * which is all anybody knows it by. The raw call stays under Arguments
+ * ([heldCallNamed]).
  */
 export function heldCallTitle(call: HeldCallSubject): string {
   const request = releaseRequestOf(call.act, call.args);
@@ -117,8 +123,11 @@ export function heldCallTitle(call: HeldCallSubject): string {
   if (request?.act === "deploy") return `Deploy ${request.repo} to ${request.environment}?`;
   const host = call.act === "ssh_operate" ? call.args?.host : undefined;
   if (typeof host === "string" && host.trim()) return `Run a command on ${host.trim()}?`;
+  // THE TOOL'S OWN QUESTION, for every call its tool words: one it asks about
+  // every time, whatever its act. An MCP tool's question is only its name again.
   const question = (call.question ?? "").trim();
-  if (question && call.act && call.act !== "other") return question;
+  const worded = call.fixed === true || (call.act !== undefined && call.act !== "other");
+  if (question && worded) return question;
   return heldCallNamed(call);
 }
 
@@ -135,6 +144,7 @@ export function heldRunCall(
   if (!held) return null;
   return {
     act: held.act,
+    fixed: held.fixed,
     tool: held.tool,
     server: held.server,
     args: run.held_arguments,

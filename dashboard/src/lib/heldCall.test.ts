@@ -54,6 +54,17 @@ describe("a held call's title", () => {
     );
   });
 
+  // EVERY CALL ITS TOOL WORDS ITSELF is asked in that question: one the tool
+  // asks about every time, whatever act the engine gives it, is never named
+  // by its tool while the engine has said what it does.
+  test("a call its tool asks about every time is the engine's question, whatever its act", () => {
+    const question = "May sre run a command on api-1 as crewlet-ops?";
+    const call = { tool: "ssh_operate", server: "ssh", fixed: true, question };
+    expect(heldCallTitle(call)).toBe(question);
+    expect(heldCallTitle({ ...call, act: "other" })).toBe(question);
+    expect(heldCallTitle({ ...call, question: "" })).toBe("Call ssh_operate on ssh?");
+  });
+
   test("an MCP tool's call is named by its tool, whatever its question says", () => {
     const call = { tool: "tr_close_issue", server: "Tracker", args: { issue: 42 } };
     expect(heldCallTitle({ ...call, question: "May swe call tr_close_issue?" })).toBe(
