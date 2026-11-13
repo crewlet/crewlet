@@ -68,6 +68,7 @@ import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { leaveFullscreen } from "~/lib/fullscreen.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
@@ -1349,13 +1350,12 @@ function BuilderScreen({
     );
   }, [loaded, state, readOnlyReason, dialog, unitParam, seatParam, nav, openDialog]);
 
-  const exitFullscreen = useFullscreenExit();
   const signIn = useCallback(() => {
     // The sign-in screen is the shell's, outside the fullscreen element; the
     // move goes through the leave guard, so a draft with work is asked about.
-    exitFullscreen();
+    leaveFullscreen();
     goSignIn();
-  }, [exitFullscreen]);
+  }, []);
 
   // ---- Updating onto a newer revision -------------------------------------------
 
@@ -2634,14 +2634,6 @@ function fullscreenSupported(el: HTMLElement | null): boolean {
     typeof document !== "undefined" &&
     document.fullscreenEnabled === true
   );
-}
-
-function useFullscreenExit(): () => void {
-  return useCallback(() => {
-    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      void document.exitFullscreen().catch(() => {});
-    }
-  }, []);
 }
 
 /**

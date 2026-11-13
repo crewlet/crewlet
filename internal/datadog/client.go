@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -131,6 +132,8 @@ type Client struct {
 	site  string
 	http  *http.Client
 	limit httpx.RateLimit
+	// calls counts every request sent, a retried one each time it is sent.
+	calls atomic.Int64
 }
 
 // ClientOptions builds a client.
@@ -165,6 +168,9 @@ func NewClient(opts ClientOptions) (*Client, error) {
 
 // Site is the region this client talks to.
 func (c *Client) Site() string { return c.site }
+
+// Calls is how many requests this client has sent.
+func (c *Client) Calls() int { return int(c.calls.Load()) }
 
 // UsersURL is where a person goes to act on this organization's users.
 //
@@ -250,6 +256,7 @@ func (c *Client) once(
 		req.Header.Set("Content-Type", "application/json")
 	}
 
+	c.calls.Add(1)
 	res, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("datadog: %s %s: %w", method, path, err)

@@ -506,7 +506,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // repositories' lines, `code_search`, which a script read alone on the
 // path api-endpoints.md prints ("GET /gitlet/search"). And Company › Atlas,
 // its map, list, peek and entry page, deleted the lines of the atlas's five
-// questions, which a script holding the atlas permission reads over REST too.
+// questions, which a script holding the atlas permission reads over REST too;
+// its band, catalogue and timeline then deleted those of the atlas's own log,
+// `atlas_log` and `atlas_activity`.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed

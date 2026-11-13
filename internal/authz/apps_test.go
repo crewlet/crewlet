@@ -80,13 +80,19 @@ func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
 			object = authz.Object{Kind: authz.KindChannel, Owner: "cto", Author: "cto",
 				Container: "sre"}
 		}
-		holder := authz.Decide(t.Context(), personLeading("cto", app), a, object,
+		// AN AGENT'S OWN VERB ON THE APP (ADR-0132) is walked as a seat: a
+		// person is refused it whatever they hold.
+		caller := personLeading
+		if only, _ := authz.SeatOnlyOf(a); only {
+			caller = seat
+		}
+		holder := authz.Decide(t.Context(), caller("cto", app), a, object,
 			nimbus(), decidedAt)
 		if holder.Unknown() || !holder.Allowed {
 			t.Errorf("%s: a holder of %s with every relation decided %+v, want "+
 				"admitted", a, app, holder)
 		}
-		without := authz.Decide(t.Context(), personLeading("cto"), a, object,
+		without := authz.Decide(t.Context(), caller("cto"), a, object,
 			nimbus(), decidedAt)
 		if without.Unknown() || without.Allowed ||
 			!slices.Equal(without.Grants, []iam.Grant{app}) {

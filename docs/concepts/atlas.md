@@ -54,11 +54,11 @@ Each claim carries a confidence the engine derives from its source and the evide
 | The company settings, or the engine's own records | Confirmed |
 | A person | Confirmed |
 | An integration's read with the company's credential | Confirmed |
-| An agent, backed by a server or vendor tool call in the same turn | Likely |
-| An agent, backed by a repository file, a page or a work item | Likely |
-| An agent, with nothing the engine can check | Unconfirmed |
+| An agent, backed by a server's or a vendor's own answer to a tool call in the same turn | Likely |
+| An agent, backed by a repository file it read in the same turn | Likely |
+| An agent, backed only by text anybody could have written (a message, a page, a work item) | Unconfirmed |
 
-An agent's fact that nothing else supports is shown as stale after 30 days and no longer counts after 180.
+An agent's fact that nothing else supports is shown as stale after 30 days and no longer counts after 180 ([What agents record](#what-agents-record)).
 
 ### What the settings and Gitlet show
 
@@ -109,6 +109,8 @@ Beyond what the settings and the engine's records say, the engine reads each con
 | Integration | What its read adds |
 |---|---|
 | Cloudflare | the account's name; every zone of the account as a domain, served by and belonging to the account; every A, AAAA and CNAME record as a host name in its zone, resolving to a server known by its address (marked internal where no public network routes to it) or to the name its CNAME points at, and fronted by Cloudflare where proxied; and every certificate pack as a certificate in its zone, with the names it covers, its type, validity, issuer and expiry, securing each name of the zone it covers. MX and TXT records name nothing, and a TXT record's content, where verification tokens sit, is never decoded; comments and tags are never read |
+| Datadog | the organisation's name and id on the account; every monitor, belonging to the account, with its name, its state (`ok`, `warn`, `alert`, `no_data` or `unknown`) and, while it is not healthy, since when; every service of the service catalogue, watched by the account and built from the repositories its definition links; every host that reported in the last three hours, by its Datadog name, watched by the account, with its environment suggested from its `env` tag; and what each monitor watches: the service its `service:` tags name and the host its `host:` tags name, by those exact keys, and for a running Synthetic test the address it requests and that address's host name or server. A monitor's query and message, a test's request headers, body and credentials, a definition's contacts, every creator and every other tag are never decoded |
+| GitHub | every repository an agent's installation covers, belonging to the organisation's account, with its default branch, whether it is archived and its visibility on GitHub; every workflow a repository declares as a pipeline built from it, with its name, whether GitHub still runs it (`active` or `disabled`) and the result of its newest completed run on the default branch; and every lasting deployment environment as a pipeline built from its repository, with its name, the state of its newest deployment, an environment suggested where its name spells one, and the address and the host name that deployment put the code behind, each deployed by the environment by its exact key. It is read through the agents' own installations, under a token minted Read-only for the read and revoked after it ([what the atlas reads](../integrations/github.md#what-the-atlas-reads)). Nobody's login, name or email address, no deployment payload, description or log address, and no secret, variable or protection rule is ever decoded |
 
 The read is the `atlas-collect` duty, one node of the fleet at a time ([singleton duties](seat-ownership.md#singleton-duties)), on the company's `atlas.refresh_interval_seconds`: an hour unless the company says otherwise, and never under five minutes, since a read shares the credential's rate-limit window with the [integration reconcile loop](integration-reconcile.md). It is a duty of its own rather than part of that loop, whose contract forbids a write on a converged pass and whose cadence is tuned to catching access somebody revoked.
 
@@ -116,17 +118,51 @@ The read is the `atlas-collect` duty, one node of the fleet at a time ([singleto
 
 **Retirement takes two complete reads a day apart.** A read that does not list an entry the integration holds is one miss, never a removal: a vendor's listing can skip a row while it changes, and a vendor's view can lag. The entry is retired only by a later complete read, at least a day after the first miss, that misses it too; it then leaves the map and stays in history, and a read that lists it again restores it. A read that failed or was cut short retires nothing and forgets no miss. An integration never denies a fact or a relation and never outranks a person: a person's claim on the same fact stands, and the entry goes to Review with both values shown.
 
+**An integration says an entry exists only where the entry lives at its vendor.** A Datadog monitor lives at Datadog; the service it watches does not, so the read relates the service to the monitor without claiming the service. A monitor somebody deletes therefore takes its relations with it after the same two reads, and retires nothing: an entry only its relations named leaves the map, and one another source or a person stands behind stays as it was.
+
+**A listing the credential may not read is a finding, never a failed read.** A vendor puts each listing behind a permission of its own, and the company's credential may hold some and not others. The read completes with the listings it may read, and the source's standing names each one it was refused with the permission that restores it. What an earlier read of a refused listing recorded stays exactly as it was: nothing is withdrawn, nothing is missed and nothing is retired, however long the refusal lasts. Any other failure of a listing fails the whole read.
+
 **Nothing a vendor returns reaches the atlas as text.** Every value a read reports goes through the vocabulary's grammars, which refuse a value or a key shaped like a credential; what is refused is counted on the source, never shown. A source maps a vendor's answer into closed fields and reads no field nobody mapped.
 
-Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, and which entries it has stopped seeing since when.
+Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, which listings it was refused, and which entries it has stopped seeing since when.
+
+### What agents record
+
+Agents meet the company's systems while they work: a server over SSH, a vendor through a tool server, a repository. An agent records what it met with `atlas_record`, and says that something the atlas holds is wrong or gone with `atlas_dispute` ([ADR-0132](../../adr/0132-an-agent-records-in-the-atlas-only-what-a-call-of-its-own-turn-showed.md)). Both are on unless the company sets `atlas.agent_records: false`.
+
+**Only what a tool call of the same turn showed.** A record names, in `seen_in`, a tool the agent called in that turn, and the engine reads that call's own answer: a new entry's identifier, every fact's value and the entry a relation points at must stand in the answer, whole, or the call must have been an SSH call made on the server the relation points at. A value the cited answer does not show is refused, so an agent cannot record a host no tool returned. The engine keeps a turn's answers in memory for that turn alone, so a call of an earlier turn cannot be cited: the agent makes the read again.
+
+**The engine decides how far the record is trusted**, from the tool the cited call was made with. The agent passes no confidence.
+
+| The cited call | The record |
+|---|---|
+| `ssh_read` or `ssh_operate` on a server, or a tool of a tool server that reads the agent's own vendor credential | Likely: seen on the system itself |
+| `code_read` or `code_search` | Likely: declared in code |
+| Any other tool: a message, a page, a work item, a colleague's answer, a web read, the atlas itself | Unconfirmed, and hidden |
+
+**An unbacked record stays hidden until a person confirms it.** No agent reads it back, the one that recorded it included, and a list or the map leaves it out unless asked. A person who confirms it with `atlas_confirm` makes it their own claim.
+
+**What an agent never does.** It never removes or retires anything: a dispute stands beside what the atlas holds, never replaces it, and sends the entry to Review only where the cited call was a read of a server, a vendor or a repository. It never sets a purpose, an environment, an importance, an owner or what depends on what; those are a person's. It never says two entries are the same. It records nothing in a turn somebody outside the company woke, or a person without Atlas ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)). A value or a key shaped like a credential is refused, even where a server printed it, and the refusal never repeats it.
+
+**The caps.** A turn records at most 20 times, and an agent at most 200 times in a UTC day across its turns, counted for the whole fleet. A record of what the atlas already holds (the agent's own backed claim from the last week, or the same value from the settings, the engine's records, a person or an integration) writes nothing and counts against neither. After a week the agent's claim is written again, so a fact it keeps meeting does not go stale.
 
 ## Reading the atlas
 
-People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through five questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, and the counts a filter menu offers ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
+People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through seven questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, the counts a filter menu offers, its own log as lines, and that log counted a day at a time ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
 
-An entry only an agent reported, with nothing the engine could check behind it, is **unconfirmed**, and a read leaves it out unless it asks for it: it stays hidden until a person confirms it.
+An entry, a fact or a relation only an agent reported, with nothing the engine could check behind it, is **unconfirmed**. A list and the map leave it out unless the read asks for it (`unconfirmed`), and one entry read in full shows it marked as such: it stays hidden until a person confirms it. An agent is never shown it.
 
-Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
+Each entry carries a **health**, the one word its open signals add up to: `alerting` where something is broken now, `needs_look` where a signal asks for a person or the sources disagree, `quiet` otherwise. A monitor's state is one of those signals, read off the monitor's own facts on every read: a monitor in `alert` makes itself and every entry a `monitored_by` relation joins to it `alerting`, and one in `warn` or `no_data` makes them `needs_look`, since the instant the vendor says the state began. A monitor that recovers, is retired or stops watching an entry takes its signal with it, and every holder reads these signals, as they read the monitor. A pipeline's last result is another: a pipeline whose last result is `failed` or `errored` makes itself and every entry a `deployed_by` relation joins to it `needs_look`, never `alerting`, since a failed run or deployment leaves what ran before it in place. An entry that is not quiet says why in one sentence, its **reason**, built from the engine's own words for its signals and never from text a vendor, an agent or a person wrote. Every row also says who answers for the entry (the owner a person or the engine's records name, never one only suggested), the one line of purpose a person gave it, and how many entries it relies on and how many rely on it.
+
+Relations are drawn in three **families**: `calls`, what a request travels along (`depends_on`, `exposes`, `served_by`, `fronted_by`); `runs_on`, what an entry stands on (`runs_on`, `resolves_to`); and `around`, everything else (its zone, what builds, deploys, watches and secures it, the account it belongs to). The map answers the relations it draws at rest, or every relation between the entries it draws when asked for all. A **trace** walks against the arrows for what depends on an entry and along them for what it depends on, through the relations the map draws at rest unless asked for all.
+
+### What changed, and when
+
+The atlas's own log is also read as a question: what changed, when and in whose voice, newest first, for the company or for one entry. A **line** is one claim recorded on the log, by a person, an integration's read or an agent: an entry recorded or retired, a fact set or marked wrong, a relation or an owner recorded or removed, two entries joined or kept apart. A claim an integration's read stopped holding is a line of its own, at the read that withdrew it, so a fact that went away is as visible as one that arrived. What the engine computes at every read from the settings and its own records is never recorded, so it leaves no line: activity is a count of the log's lines, and nothing else.
+
+The same log is **counted**: its lines on each of the last 14 days, for the company and for each entry, and each entry's newest line however old. A day is a UTC day, so every node counts the same. That is the whole of what "activity" means in the atlas: there are no request rates, latencies or error budgets in it, because the engine holds none.
+
+A line is shown only to a reader who is shown its entry and the entry it names. A line on a repository or a check of Gitlet's, or naming one, is read only by a reader Gitlet lists that repository to; a line on an unconfirmed entry is left out with the entry; and the counts are of exactly the lines the reader would be shown.
 
 ## One thing, one entry
 
@@ -138,9 +174,11 @@ An entry's identity is its kind and its natural key, and its id is derived from 
 
 A key one source carries on two entries (two servers behind one load balancer, two copies of one mirror) is a shared address, not an identity, and merges nothing. A private address never merges two servers, which may sit on two networks. An agent's report never merges anything. A person may join two entries no key joins (a declared server and the cloud instance it is) by saying they are the same, and may keep two entries apart by saying they are not; a person's "not the same" always wins, and similar names never merge: they only suggest.
 
+**A merged entry still has a visibility on each host.** Most facts are the entry's: a repository has one default branch, and two sources that report two are a disagreement, shown and sent to Review. A repository's `visibility` is different: it is a fact of each host the repository lives on, in that host's own words (`public`, `private` or `internal` on a forge; `company` or `unit` on Gitlet). A repository that is private on GitHub and mirrored on Gitlet for the whole company carries both, each named for its host, and the two are never held against each other. Two voices on one host that disagree (a person who recorded `public`, GitHub now reading `private`) are still a disagreement. A value in another host's word is refused, and a person corrects a host's visibility by naming that host's repository.
+
 ## When sources disagree
 
-For each fact, a source's newest claim stands for it, and across sources the most trusted wins, then the newest. A person's value is shown over every inference. When a newer report from an integration, an agent or the engine contradicts a person, the fact is **contested**; when two sources the engine trusts alike disagree with no person to settle it, it is **disputed**. Either way both values are shown, and the entry waits for a person; nothing is settled in silence.
+For each fact, a source's newest claim stands for it, and across sources the most trusted wins, then the newest. A person's value is shown over every inference. An agent's dispute never wins: it is shown beside the value it disputes. When a newer report from an integration, an agent or the engine contradicts a person, the fact is **contested**; when two sources the engine trusts alike disagree with no person to settle it, it is **disputed**. Either way both values are shown, and the entry waits for a person; nothing is settled in silence.
 
 ## Changing the atlas
 
@@ -167,11 +205,11 @@ A person who holds Atlas changes it with eleven tools of the operator catalogue,
 
 **A purge is an administrator's**, after a fresh sign-in, and never an agent's. It names an entry, or a value exactly as the atlas holds it; a value the settings or the engine's records declare is removed there first. The value is never repeated in an answer, and only its digest leaves the node the purge was asked of.
 
-**A node without data writes too**, through a data node that publishes, as it reads. Every write is audited as every operator call is, and **no agent changes the atlas through these tools**: the authority table refuses every one of them to an agent whatever it holds, and no seat's registry holds them. Each is made as the seat its person holds, so a credential bound to no seat records nothing in a person's rank.
+**A node without data writes too**, through a data node that publishes, as it reads. Every write is audited as every operator call is, and **no agent changes the atlas through these tools**: the authority table refuses every one of them to an agent whatever it holds, and no seat's registry holds them. An agent has two tools of its own ([What agents record](#what-agents-record)). Each is made as the seat its person holds, so a credential bound to no seat records nothing in a person's rank.
 
 ## The atlas's own log
 
-What people record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG`, applied identically on every data node, so whichever node a person reaches answers the same atlas, and every read of the atlas folds it beside what the engine computes. A node that holds no data, such as one that only runs agents, reads and writes it through a data node. Each entry is one subject on it: an edit names the version of the entry it was decided from, and is refused if somebody else changed the entry since. A claim is never overwritten: a newer claim from the same person on the same fact replaces the older one in the view, and the older one stays as the entry's history. An integration's read is one record per entry it changed, in the integration's voice, carrying the claims that are new or changed and withdrawing the ones the read no longer holds into the same history ([What integrations read](#what-integrations-read)).
+What people and agents record is kept on a state log of the atlas's own, `CREWLET_ATLAS_LOG`, applied identically on every data node, so whichever node a person reaches answers the same atlas, and every read of the atlas folds it beside what the engine computes. A node that holds no data, such as one that only runs agents, reads and writes it through a data node. Each entry is one subject on it: an edit names the version of the entry it was decided from, and is refused if somebody else changed the entry since. A claim is never overwritten: a newer claim from the same person on the same fact replaces the older one in the view, and the older one stays as the entry's history. An integration's read is one record per entry it changed, in the integration's voice, carrying the claims that are new or changed and withdrawing the ones the read no longer holds into the same history ([What integrations read](#what-integrations-read)).
 
 **History** is kept for the company's `atlas.retention_days`, 400 days unless it says otherwise (90 to 3650): a replaced value, and an entry a person retired that nothing has reported since, go once they are older than it. What the atlas holds now never expires.
 
@@ -192,6 +230,7 @@ A person reads it with three tools on the operator surface (`/operator/mcp`), th
 An agent seat holds the Atlas permission as it holds every app, and the same three tools, and in a turn somebody woke it reads the atlas only if they hold it too ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)). Two things differ from a person's read:
 
 - **An internal address only within its own reach.** An agent is shown a private address, or a host name on a private network, only on an entry its own access reaches: a server its SSH access names, a tool server it is granted, a model it calls, a repository it may read, or an account it holds. Any other entry keeps its name and loses its private values, an entry whose key is itself a private address is left out with every relation to it, and the answer counts what it left out as `private_withheld`. The atlas tells an agent nothing about the inside of the network that its own access does not already reach.
+- **Nothing only an agent's unbacked report says.** An entry, a fact or a relation an agent recorded with no evidence the engine could check is left out of every agent's read, so one agent's report never reaches another as a fact.
 - **Text somebody else wrote.** Every answer carries who wrote what it holds, and is read at the least trust any of them earns: the settings, the engine's records, a person and an agent as a colleague's, and a vendor's listing, which names no writer, as an outside party's.
 
 A turn whose ask names an entry exactly is also handed a few lines about it before it starts, so a seat asked about `orders-db` reads what the company knows before it probes a server ([Systems in this work](agent-runtime.md#systems-in-this-work)).
@@ -204,6 +243,10 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | Entry states, merges on exact keys, contested and disputed facts, signals, use and "not used recently" | nobody: computed on every read | the read itself |
 | What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |
 | What an integration's read found that the log did not hold: a changed fact, a withdrawn one, a retirement | every data node identically, with history | the same log, one `read` record an entry, in the integration's voice |
-| Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
+| What agents record: an entry, a fact, a relation or a dispute, with the turn and the evidence behind it | every data node identically, with history | the same log, one `claim` record each, in the agent's voice |
+| What a turn's tool calls answered, which a record cites | the node running the turn, for that turn | the turn's own memory, never written anywhere |
+| An agent's records today, against its allowance of 200 | the whole company, now | the coordination store's shared counter, a UTC day wide |
+| The log's lines, its daily counts, an entry's last change, a row's owner, purpose, relation counts and reason, and a relation's family | nobody: computed on every read, from the log's rows and the fold | the read itself |
+| Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, the listings it was refused, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
 | Which node reads the vendors | the fleet, one holder at a time | the `worker:atlas-collect` lease |
-| How often: `atlas.refresh_interval_seconds` | the company | the company document |
+| How often: `atlas.refresh_interval_seconds`, and whether agents record: `atlas.agent_records` | the company | the company document |

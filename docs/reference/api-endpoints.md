@@ -536,10 +536,13 @@ every other route.
 | `GET` | `/box/gitlet/{repo}/blob` | A check's box's read of one file's lines of its commit — `path` (or `path_b64`), `start_line`, `end_line`, `cursor` (same) |
 | `GET` | `/box/gitlet/{repo}/diff` | A check's box's diff of its commit from the base its attempt was queued with — `paths` (repeated) for the stat of those, or `file` (or `file_b64`) for one file's patch, `renames`, `cursor` (same) |
 | `GET` | `/atlas` | The company's [atlas](../concepts/atlas.md), a page of its entries at a time. **Needs the `atlas` permission** (see [The atlas](#the-atlas)) |
-| `GET` | `/atlas/map` | The atlas drawn as its lanes: every lane, its groups, the entries of the open groups and the relations drawn at rest (same) |
+| `GET` | `/atlas/map` | The atlas drawn as its lanes: every lane, its groups, the entries of the open groups and the relations drawn at rest, or every relation between them (same) |
 | `GET` | `/atlas/facets` | How many entries each filter value leaves (same) |
+| `GET` | `/atlas/log` | The atlas's own log, newest first, a page at a time: what changed, when and in whose voice (same) |
+| `GET` | `/atlas/activity` | The log counted a day at a time over its last two weeks, for the company and for each entry, with each entry's last change (same) |
 | `GET` | `/atlas/{id}` | One entry in full: its facts with their sources, its relations, its use, the agents holding accounts at it, its open signals, and what relies on it (same) |
 | `GET` | `/atlas/{id}/trace` | What depends on one entry, or what it depends on, hop by hop (same) |
+| `GET` | `/atlas/{id}/log` | One entry's own lines of the log, newest first (same) |
 | `GET` | `/gitlet/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a credential** (see [The code reads](#the-code-reads)) |
 | `GET` | `/gitlet/repos/{name}` | One repository in detail (same) |
 | `GET` | `/gitlet/repos/{name}/pushes` | One repository's push history, newest first in the order the pushes landed, each push naming who made it — a person by their credential and seat, a seat by its handle and the turn behind its push — and how its pack was built (same) |
@@ -8061,23 +8064,55 @@ roster is everybody's overview.
 
 ## The atlas
 
-The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through five questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
+The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through seven questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
 
 | Question | Route | Parameters | Answer |
 |---|---|---|---|
-| `atlas_entries` | `GET /atlas` | the filters below; `sort` (`key`, the map's order, by default; `name`; `last_seen`); `cursor`; `limit` (50 by default, at most 500) | `rows`, one summary per entry; `next_cursor`, absent on the last page; `total` |
-| `atlas_map` | `GET /atlas/map` | the filters below; `closed`, the group keys the reader closed, comma separated | `lanes` (every lane, an empty one included), `groups`, `nodes`, `edges` (the relations drawn at rest), `collapsed` |
+| `atlas_entries` | `GET /atlas` | the filters below; `sort` (`key`, the map's order, by default; `name`; `last_seen`; `health`, the most urgent health first and the map's order inside each, the order a list grouped by health reads in); `cursor`; `limit` (50 by default, at most 500) | `rows`, one summary per entry; `next_cursor`, absent on the last page; `total` |
+| `atlas_map` | `GET /atlas/map` | the filters below; `closed`, the group keys the reader closed, comma separated; `relations` (`structural`, the relations drawn at rest, by default, or `all`) | `lanes` (every lane, an empty one included), `groups`, `nodes`, `edges` (each relation between two drawn entries, with its `family`), `collapsed` |
 | `atlas_entry` | `GET /atlas/{id}` | `id` | `entry`, in full; its `health`, what the signals its reader may read add up to; its `vendor`; `used_by`, every entry with a relation to it |
 | `atlas_trace` | `GET /atlas/{id}/trace` | `id`; `direction` (`up`, what depends on it, by default; `down`, what it depends on); `depth` (1 to 6, 6 by default); `relations` (`structural`, by default, or `all`) | `from`, `direction`, `hops` by distance, `edges`, `truncated` |
 | `atlas_facets` | `GET /atlas/facets` | the filters below | how many entries each `kinds`, `lanes`, `vendors`, `words` and `health` value leaves, each counted over every other filter, and `total` |
+| `atlas_log` | `GET /atlas/log`, `GET /atlas/{id}/log` | `id`, for one entry's lines rather than the company's; `cursor`; `limit` (50 by default, at most 200); `unconfirmed` | `lines`, newest first; `next_cursor`, absent on the last page |
+| `atlas_activity` | `GET /atlas/activity` | `unconfirmed` | `from`, the first instant of the window; `days`, the company's lines on each of its 14 UTC days, oldest first and today last; `entries`, one per entry the log holds a line of: its `id`, its own `days` (absent where it took none in the window) and `last`, its newest line however old |
 
 The filters are `q` (part of a name or a key, or an entry's id), `kind`, `lane`, `vendor`, `confidence` (`confirmed`, `likely` or `unconfirmed`), `health` (`alerting`, `needs_look` or `quiet`), `show` (`current`, every entry but the retired, by default; `retired`; `all`) and `unconfirmed` (`true` to take in the entries only an agent reported with nothing the engine could check; they are left out by default until a person confirms them, and `confidence=unconfirmed` takes them in too). The `words` facet counts the unconfirmed entries either way, so a screen can say what showing them adds. A value outside its set is refused with `bad_params`, naming the parameter and the values it takes; an `id` no entry answers to is `not_found`. An entry merged into another by an exact key is found by its own id too.
 
 Every answer also carries `revision`, the settings revision it was read from (empty where the serving node cannot tell), `coverage`, each source the read reads and whether it was read in full, with the reason where it was not, and `withheld`, how many values were left out for being shaped like a credential, counted and never shown. A source that fails leaves the rest answering.
 
+**A summary** (a row of `rows`, a node of `nodes`, an entry of a trace or of `used_by`) is what a list row or a map card shows: the entry's `id`, `kind`, `lane`, `name`, `key` and `vendor`; its `state`, its `word` and its `health`; `signals`, how many open signals its reader may read; `review`, `not_used_recently` and `last_seen`; and four members a row needs without opening the entry:
+
+| Member | What it is |
+|---|---|
+| `owner` | `{kind, name}`: the `seat` (by handle) or the `unit` (by key) a person or the engine's records name. Absent where nobody has, and never an owner an integration or an agent only suggested |
+| `purpose` | the one line a person gave the entry. Somebody's words: draw it as plain text |
+| `relations` | `{depends_on, used_by}`: how many entries it relies on and how many rely on it, through the relations the map draws at rest. Counted between current entries the read shows, so a count never tells of a retired entry or of an unconfirmed one the read leaves out |
+| `reason` | why the entry is not `quiet`, in one sentence: its most urgent open signal and how many more are open, or that its sources disagree. Absent for a quiet entry. It counts only the signals its reader may read |
+
+**Every sentence the engine writes is its own.** A `reason`, and a log line's `text`, is built from the closed words of the vocabulary and a count, never from a name, a label, a value or an alarm's text. What a vendor, an agent or a person wrote reaches a reader only in the typed members beside the sentence (`name`, `purpose`, `value`, `target`), each to be drawn as plain text.
+
+**Relations and their families.** Each edge of a map or a trace carries the `family` its relation is drawn in: `calls`, a relation a request travels along (`depends_on`, `exposes`, `served_by`, `fronted_by`); `runs_on`, a relation to what an entry stands on (`runs_on`, `resolves_to`); and `around`, every other one (`in_zone`, `built_from`, `deployed_by`, `monitored_by`, `secured_by`, `belongs_to`). A map asked for `relations=all` draws every relation between two entries it draws; a relation to a seat, a unit or a page is on the entry's own answer, since it joins no two entries.
+
+**The log.** A line is one claim recorded on the atlas's own log ([The atlas's own log](../concepts/atlas.md#the-atlass-own-log)): by a person, by an integration's read, or by an agent. What the engine computes from the settings and its own records at every read is not recorded, so it leaves no line.
+
+| Member | What it is |
+|---|---|
+| `id` | the line's own id, stable across reads |
+| `at` | when the record that wrote it was stored |
+| `entry`, `name`, `kind` | the entry the line is about, as the reader's atlas names it |
+| `change` | `recorded` (an entry a source said is there), `retired`, `fact_set`, `fact_denied` (a value a person said is wrong), `related`, `unrelated`, `joined` and `kept_apart` (two entries a person said are, or are not, the same thing), and `withdrawn` (a claim its source stopped making: what an integration's read no longer holds, or a "the same" a person took back) |
+| `text` | the change in one sentence of the engine's own words |
+| `fact`, `value` | the fact a line is about and the value recorded, where it is about one |
+| `relation`, `target` | the relation a line is about and what it names: another entry by `id` and `name`, or a seat, a unit or a page by `external` and `name` |
+| `source` | whose voice the claim is in |
+
+A line is shown only to a reader who is shown its entry and the entry it names: a line on, or naming, a repository or a check of Gitlet's is read only by a reader Gitlet lists that repository to, and a line on an entry only an agent reported is left out unless the read asks for `unconfirmed`, or asks for that entry's own log by its `id`. `atlas_activity` counts exactly the lines `atlas_log` would show its reader, and an entry whose newest record the reader is not shown carries no `last`. A page may hold fewer lines than its `limit` where many of the log's lines are not the reader's to see; `next_cursor` says whether there is more. Lines are kept for as long as the atlas keeps its history.
+
 **The atlas is never a way round another permission.** A reader without the `gitlet` permission is read no repository, and Gitlet is not asked; one with it is read the repositories Gitlet lists to them. An integration's standing and a server's connection test are signals only an administrator reads, as the screens they come from are. A standing alarm on a tool server or a model entry is every holder's.
 
-**The bounds.** A page is 50 entries and at most 500. The map draws at most 2,000 entries open: past that it closes groups, the largest first, and names them in `collapsed`, so an answer never draws a partial map as if it were whole. A trace walks at most 6 hops and stops at 200 entries, saying so in `truncated`.
+**The bounds.** A page is 50 entries and at most 500. The map draws at most 2,000 entries open: past that it closes groups, the largest first, and names them in `collapsed`, so an answer never draws a partial map as if it were whole. A trace walks at most 6 hops and stops at 200 entries, saying so in `truncated`. A page of the log is 50 lines and at most 200. The activity window is 14 days, today included: two weeks show a weekly rhythm twice, so a quiet weekend reads as a pattern rather than a gap, and a day is a UTC day, the same on every node.
+
+**What the widest answers cost.** Measured on a company at the map's bound, 2,000 entries each with an owner and a purpose (`internal/atlas.BenchmarkMapAtItsBound`, on an 8-core laptop shared with other builds): the map takes 15 ms to draw and encode, at rest or with every relation; at rest it is 1,218 KiB of JSON (136 KiB compressed) for 3,100 edges, and with every relation 1,771 KiB (191 KiB compressed) for 7,300. On the reference company's log of 20,860 lines (`internal/atlasdomain`'s benchmarks, same machine), a page of 200 lines takes 7 ms to read and the activity read 147 ms with every line inside its window, beside the 220 ms the read of every live claim takes there.
 
 ## Worklet and Doclet
 

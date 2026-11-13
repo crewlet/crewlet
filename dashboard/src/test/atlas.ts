@@ -8,15 +8,18 @@
  */
 
 import type {
+  AtlasActivityAnswer,
   AtlasEdge,
   AtlasEntry,
   AtlasEntryAnswer,
   AtlasEntriesAnswer,
   AtlasFacetsAnswer,
   AtlasFactView,
+  AtlasFamily,
   AtlasHealth,
   AtlasKind,
   AtlasLane,
+  AtlasLogAnswer,
   AtlasMapAnswer,
   AtlasMapEdge,
   AtlasRead,
@@ -89,6 +92,7 @@ export function summary(
     key: name,
     state: "confirmed",
     word: "confirmed",
+    relations: { depends_on: 0, used_by: 0 },
     health: "quiet",
     signals: 0,
     review: false,
@@ -179,15 +183,108 @@ export function facetsAnswer(
   };
 }
 
-/** One page of a fixture as a list. */
-export function entriesAnswer(fixture: AtlasFixture, page = 50, after = 0): AtlasEntriesAnswer {
-  const rows = fixture.nodes.slice(after, after + page);
+/** The healths, the most urgent first, as the engine's health order reads them. */
+const HEALTHS: readonly AtlasHealth[] = ["alerting", "needs_look", "quiet"];
+
+/**
+ * One page of a fixture as a list, in the fixture's own order or, asked by
+ * health, the most urgent first with that order inside each health.
+ */
+export function entriesAnswer(
+  fixture: AtlasFixture,
+  page = 50,
+  after = 0,
+  sort = "",
+): AtlasEntriesAnswer {
+  const ordered =
+    sort === "health"
+      ? HEALTHS.flatMap((health) => fixture.nodes.filter((node) => node.health === health))
+      : fixture.nodes;
+  const rows = ordered.slice(after, after + page);
   return {
     ...read(),
     rows,
-    ...(after + page < fixture.nodes.length ? { next_cursor: String(after + page) } : {}),
-    total: fixture.nodes.length,
+    ...(after + page < ordered.length ? { next_cursor: String(after + page) } : {}),
+    total: ordered.length,
   };
+}
+
+type Line = AtlasLogAnswer["lines"][number];
+
+/** How many days the activity read counts over. */
+const ACTIVITY_DAYS = 14;
+const DAY_MS = 86_400_000;
+
+/** The sentences a line of the log says, in the engine's own words. */
+const LINE_TEXTS: readonly [Line["change"], string][] = [
+  ["recorded", "Seen by its source"],
+  ["fact_set", "Recorded its status"],
+  ["related", "Recorded a relation: runs on"],
+];
+
+/** The lines the log holds of one entry: a few a week, the same on every run. */
+function linesOf(node: AtlasSummary, index: number): Line[] {
+  const now = Date.parse(SEEN);
+  const count = (index * 5) % 7;
+  return Array.from({ length: count }, (_, i): Line => {
+    const [change, text] = LINE_TEXTS[(index + i) % LINE_TEXTS.length]!;
+    return {
+      id: idFor(`line:${node.id}:${i}`),
+      at: new Date(now - (i * 37 + index * 3) * 3_600_000).toISOString(),
+      entry: node.id,
+      name: node.name,
+      kind: node.kind,
+      change,
+      text,
+      source: node.vendor
+        ? { kind: "integration", name: node.vendor }
+        : { kind: "person", name: "ada" },
+    };
+  });
+}
+
+/** One page of the log, newest first: the company's, or one entry's. */
+export function logAnswer(fixture: AtlasFixture, id = ""): AtlasLogAnswer {
+  const lines = fixture.nodes
+    .flatMap((node, index) => (id === "" || node.id === id ? linesOf(node, index) : []))
+    .sort((a, b) => (a.at < b.at ? 1 : -1));
+  return { ...read(), lines };
+}
+
+/** The log counted over its last fourteen days, for the company and for each entry it holds a line of. */
+export function activityAnswer(fixture: AtlasFixture): AtlasActivityAnswer {
+  const end = Math.floor(Date.parse(SEEN) / DAY_MS) * DAY_MS;
+  const from = end - (ACTIVITY_DAYS - 1) * DAY_MS;
+  const days = Array.from({ length: ACTIVITY_DAYS }, () => 0);
+  const out: AtlasActivityAnswer["entries"] = [];
+  fixture.nodes.forEach((node, index) => {
+    const lines = linesOf(node, index);
+    if (lines.length === 0) return;
+    const own = Array.from({ length: ACTIVITY_DAYS }, () => 0);
+    for (const line of lines) {
+      const day = Math.floor((Date.parse(line.at) - from) / DAY_MS);
+      if (day < 0 || day >= ACTIVITY_DAYS) continue;
+      own[day] = (own[day] ?? 0) + 1;
+      days[day] = (days[day] ?? 0) + 1;
+    }
+    out.push({ id: node.id, ...(own.some((n) => n > 0) ? { days: own } : {}), last: lines[0]! });
+  });
+  return { ...read(), from: new Date(from).toISOString(), days, entries: out };
+}
+
+/** Each entry's relation counts, read off the fixture's lines the map draws at rest. */
+export function counted(fixture: AtlasFixture): AtlasFixture {
+  const down = new Map<string, number>();
+  const up = new Map<string, number>();
+  for (const one of fixture.edges) {
+    if (one.family === "around") continue;
+    down.set(one.from, (down.get(one.from) ?? 0) + 1);
+    up.set(one.to, (up.get(one.to) ?? 0) + 1);
+  }
+  for (const node of fixture.nodes) {
+    node.relations = { depends_on: down.get(node.id) ?? 0, used_by: up.get(node.id) ?? 0 };
+  }
+  return fixture;
 }
 
 /** A fact as the atlas holds it, from the settings unless named otherwise. */
@@ -271,8 +368,26 @@ export function traceAnswer(
   return { ...read(), from, direction, hops, edges, truncated: false };
 }
 
+/** The family each relation is drawn in, as the engine's `Relation.Family`. */
+const FAMILY_OF: Record<AtlasRelation, AtlasFamily> = {
+  depends_on: "calls",
+  exposes: "calls",
+  served_by: "calls",
+  fronted_by: "calls",
+  runs_on: "runs_on",
+  resolves_to: "runs_on",
+  in_zone: "around",
+  built_from: "around",
+  deployed_by: "around",
+  monitored_by: "around",
+  secured_by: "around",
+  belongs_to: "around",
+  documented_in: "around",
+  owned_by: "around",
+};
+
 function edge(from: AtlasSummary, relation: AtlasRelation, to: AtlasSummary): AtlasMapEdge {
-  return { from: from.id, to: to.id, relation };
+  return { from: from.id, to: to.id, relation, family: FAMILY_OF[relation] };
 }
 
 /**
@@ -315,12 +430,23 @@ export function grownCompany(): GrownCompany {
     summary("hostname", `${name}.acme.example`, { vendor: "cloudflare" }),
   );
   const endpoint = summary("endpoint", "https://api.acme.example/v1", { vendor: "cloudflare" });
-  const checkout = summary("service", "checkout-api", { health: "needs_look", review: true });
+  const checkout = summary("service", "checkout-api", {
+    health: "needs_look",
+    review: true,
+    reason: "Two sources disagree, and nobody has settled it",
+    owner: { kind: "unit", name: "payments" },
+    purpose: "Takes an order from the basket to a payment",
+  });
   const services = ["orders-api", "billing-api", "search-api", "auth-api", "notify-worker"].map(
     (name) => summary("service", name),
   );
   const guess = summary("service", "legacy-reports", { word: "unconfirmed" });
-  const web1 = summary("host", "web-1", { key: "ssh/web-1", vendor: "aws", health: "needs_look" });
+  const web1 = summary("host", "web-1", {
+    key: "ssh/web-1",
+    vendor: "aws",
+    health: "needs_look",
+    reason: "Two sources disagree, and nobody has settled it",
+  });
   const servers = ["web-2", "worker-1", "worker-2", "db-1", "db-2", "bastion"].map((name) =>
     summary("host", name, { key: `ssh/${name}`, vendor: "aws" }),
   );
@@ -329,6 +455,9 @@ export function grownCompany(): GrownCompany {
     vendor: "aws",
     health: "alerting",
     signals: 1,
+    reason: "A standing alarm is raised",
+    owner: { kind: "seat", name: "sre" },
+    purpose: "Orders and their line items",
   });
   const data = [
     summary("datastore", "billing-db", { key: "on/ssh/db-2/postgres/5432", vendor: "aws" }),
@@ -348,6 +477,7 @@ export function grownCompany(): GrownCompany {
     vendor: "datadog",
     health: "alerting",
     signals: 1,
+    reason: "A standing alarm is raised",
   });
   const monitors = ["API 5xx", "checkout latency"].map((name, i) =>
     summary("monitor", name, { key: `datadog/${2000 + i}`, vendor: "datadog" }),
@@ -357,7 +487,12 @@ export function grownCompany(): GrownCompany {
   );
   const models = [
     summary("model_provider", "Claude", { key: "claude", vendor: "anthropic" }),
-    summary("model_provider", "GPT", { key: "gpt", vendor: "openai", health: "needs_look" }),
+    summary("model_provider", "GPT", {
+      key: "gpt",
+      vendor: "openai",
+      health: "needs_look",
+      reason: "The model's plan is spent, so it sits out until it resets",
+    }),
   ];
   const [api, app] = hosts;
   const [ordersApi, billingApi, searchApi, authApi, notify] = services;
@@ -406,8 +541,13 @@ export function grownCompany(): GrownCompany {
     edge(ordersDb, "runs_on", db1!),
     edge(billingDb!, "runs_on", db2!),
     edge(searchApi!, "depends_on", assets!),
+    // WHAT STANDS AROUND: drawn only for the entry a reader stands on.
+    edge(ordersDb, "monitored_by", monitor),
+    edge(zone, "belongs_to", cf),
+    edge(web1, "belongs_to", aws),
+    edge(checkout, "built_from", repos[1]!),
   ];
-  return { nodes, edges, ordersDb, checkout, web1, monitor };
+  return { ...counted({ nodes, edges }), ordersDb, checkout, web1, monitor };
 }
 
 /** The entry answer for web-1, whose address two sources disagree on and which is internal. */
@@ -559,5 +699,5 @@ export function generatedCompany(count: number): AtlasFixture {
     if (b.length === 0) continue;
     a.forEach((node, i) => edges.push(edge(node, relation, b[(i * 5) % b.length]!)));
   }
-  return { nodes, edges };
+  return counted({ nodes, edges });
 }

@@ -3,7 +3,6 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"maps"
 	"regexp"
 	"slices"
@@ -42,35 +41,81 @@ import (
 // line — the session's init, a retry, a hook's own start and end — is skipped,
 // as before.
 
-// claudeEvent is the part of one stream message this decoder reads: the
-// result message's fields, which the last line carries, and a message's
-// content, which every assistant and user line does.
-type claudeEvent struct {
-	claudeResult
-	// Content is a system line's text — an informational line's, which is
+// claudeEventWire is the part of one stream message this decoder reads, as
+// its one decode leaves it ([wireDecode]): the result message's keys, which
+// the last line carries ([claudeResultWire]), a system line's text and a
+// message, each by its exact name and raw, and each read, loosely by type,
+// only where the line's type asks for it ([claudeEvents.Line]).
+//
+// BY ITS KEYS EXACTLY AS WRITTEN, as Claude Code's own JSON.parse reads them
+// ([threadDecoding]), as a message's blocks are ([eachClaudeBlock]), so one
+// line is read by one rule: decoded by encoding/json, a line was read with a
+// key that differs from one it reads only in case taken for that one, and a
+// message written twice read as the two merged, where its blocks were read
+// exactly and the person's transcript of the same record read the last.
+type claudeEventWire struct {
+	claudeResultWire
+	// Content is a system line's text: an informational line's, which is
 	// the only one read ([claudeSteerLine]). Raw, because a system subtype
 	// this build does not know may carry anything there.
 	Content json.RawMessage `json:"content"`
-	Message struct {
-		// Content is an array of blocks on an assistant message and on a
-		// tool result's user message, and a plain string on a user
-		// message that is a prompt (a subagent's first message).
-		Content json.RawMessage `json:"content"`
-		// ID and Usage are an assistant message's, which the stream repeats
-		// on every line of the one message (a line per content block), so
-		// a message's usage is counted once, by its id.
-		ID    string      `json:"id"`
-		Usage claudeUsage `json:"usage"`
-	} `json:"message"`
+	// Message is an assistant or a user line's message ([claudeMessageWire]).
+	Message json.RawMessage `json:"message"`
+}
+
+// claudeMessageWire is one line's message as its decode leaves it, each key
+// raw: its content, an array of blocks on an assistant message and on a tool
+// result's user message, and a plain string on a user message that is a
+// prompt (a subagent's first message); and an assistant message's id and
+// usage, which the stream repeats on every line of the one message (a line
+// per content block), so a message's usage is counted once, by its id.
+type claudeMessageWire struct {
+	Content json.RawMessage `json:"content"`
+	ID      json.RawMessage `json:"id"`
+	Usage   json.RawMessage `json:"usage"`
+}
+
+// claudeMessageOf is the message raw holds, its keys raw: none where it is no
+// object, as the whole decode it replaced left a message it could not fill.
+func claudeMessageOf(raw json.RawMessage) claudeMessageWire {
+	var m claudeMessageWire
+	if !wireObject(raw) || wireDecode(raw, &m) != nil {
+		return claudeMessageWire{}
+	}
+	return m
 }
 
 // claudeUsage is one API call's tokens as the stream reports them: the
 // uncached prompt, the cache's reads and writes, and the reply.
 type claudeUsage struct {
-	Input       int `json:"input_tokens"`
-	Output      int `json:"output_tokens"`
-	CacheRead   int `json:"cache_read_input_tokens"`
-	CacheCreate int `json:"cache_creation_input_tokens"`
+	Input       int
+	Output      int
+	CacheRead   int
+	CacheCreate int
+}
+
+// claudeUsageWire is a message's usage as its decode leaves it, each count
+// raw ([looseUsage]).
+type claudeUsageWire struct {
+	Input       json.RawMessage `json:"input_tokens"`
+	Output      json.RawMessage `json:"output_tokens"`
+	CacheRead   json.RawMessage `json:"cache_read_input_tokens"`
+	CacheCreate json.RawMessage `json:"cache_creation_input_tokens"`
+}
+
+// looseUsage is the usage raw holds, DECODED LOOSELY, as the whole decode it
+// replaced read one: a count of another kind than a whole number reads as
+// none, the other counts as written, and a usage that is no object as no
+// tokens at all.
+func looseUsage(raw json.RawMessage) claudeUsage {
+	var w claudeUsageWire
+	if !wireObject(raw) || wireDecode(raw, &w) != nil {
+		return claudeUsage{}
+	}
+	return claudeUsage{
+		Input: int(looseInt(w.Input)), Output: int(looseInt(w.Output)),
+		CacheRead: int(looseInt(w.CacheRead)), CacheCreate: int(looseInt(w.CacheCreate)),
+	}
 }
 
 // total is every token of the call, the whole prompt and the reply: the
@@ -80,7 +125,7 @@ func (u claudeUsage) total() int { return u.Input + u.Output + u.CacheRead + u.C
 // claudeBlock is one content block of a message, as the stream carries it and
 // as the session's own record keeps it ([ReadTranscript]): ONE SHAPE for both,
 // because they are one format, and a second decoder of it is a second answer
-// to what a block holds.
+// to what a block holds. Read a block at a time ([eachClaudeBlock]).
 type claudeBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -100,19 +145,132 @@ type claudeBlock struct {
 	Content   json.RawMessage `json:"content"`
 }
 
+// claudeBlockWire is one content block as its decode leaves it ([wireDecode]):
+// each key a [claudeBlock] holds, by its exact name and raw, read into the
+// block by [claudeBlockWire.block].
+type claudeBlockWire struct {
+	Type      json.RawMessage `json:"type"`
+	Text      json.RawMessage `json:"text"`
+	ID        json.RawMessage `json:"id"`
+	Name      json.RawMessage `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID json.RawMessage `json:"tool_use_id"`
+	IsError   json.RawMessage `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
+}
+
+// block is the block w holds, DECODED LOOSELY, as the stream's whole decode
+// read one: a key of another kind than its field's reads as that field's zero
+// value, the rest of the block as written.
+func (w claudeBlockWire) block() claudeBlock {
+	return claudeBlock{
+		Type: looseString(w.Type), Text: looseString(w.Text),
+		ID: looseString(w.ID), Name: looseString(w.Name), Input: w.Input,
+		ToolUseID: looseString(w.ToolUseID), IsError: looseTrue(w.IsError), Content: w.Content,
+	}
+}
+
+// eachClaudeBlock hands each block of a message's content to each, in order,
+// as it reads it, and returns each's first error, as it returned it, having
+// read no block after it. A content that is no list (a prompt's plain string)
+// has no blocks, and one that stops decoding part way has none after the
+// fault, which no content of a line decoded whole can have: both the stream
+// and the transcript hold the line to JSON first.
+//
+// A BLOCK AT A TIME ([eachElement]), each decoded by its keys exactly as
+// written ([threadDecoding]: as Claude Code's own JSON.parse reads them, a
+// string's invalid UTF-8 or lone surrogate as U+FFFD) and loosely by type
+// ([claudeBlockWire.block]), and never the whole list first. Decoded whole,
+// a list held a block's 136 bytes for every element it listed, however small
+// the element, before any was looked at: at the 32 MiB a line of the stream
+// or of a session's record may hold ([maxLineBytes]), more than a GiB for one
+// line. Read a block at a time, a list costs its reader one block's decode at
+// a time and what it makes of each block. An element that is no object is
+// the zero block, as the whole decode left it, so each is handed every
+// element: a reader that checks its caller between blocks still does so
+// between every two.
+func eachClaudeBlock(content json.RawMessage, each func(claudeBlock) error) error {
+	var (
+		wire    claudeBlockWire
+		stopped error
+	)
+	// The walk's own error is no reader's: the blocks before it were read.
+	_ = eachElement(content, func(element json.RawMessage) error {
+		wire = claudeBlockWire{}
+		if wireObject(element) && wireDecode(element, &wire) != nil {
+			wire = claudeBlockWire{}
+		}
+		stopped = each(wire.block())
+		return stopped
+	})
+	return stopped
+}
+
+// looseString is raw where it is a JSON string, and "" where it is absent or
+// of another kind, null among them: a key a release retyped, read as the
+// whole decode it replaced left a string it could not fill. Its kind is read
+// off its first byte, so a value of another kind is never decoded.
+func looseString(raw json.RawMessage) string {
+	if len(raw) == 0 || raw[0] != '"' {
+		return ""
+	}
+	var s string
+	if wireDecode(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// looseTrue reports whether raw is JSON's true: false where it is false,
+// absent or of another kind, as the whole decode it replaced left a boolean
+// it could not fill.
+func looseTrue(raw json.RawMessage) bool { return string(raw) == "true" }
+
+// looseInt is raw where it is a JSON number that is a whole int64, and 0 where
+// it is absent, of another kind, a fraction or past an int64, as the whole
+// decode it replaced left an integer it could not fill. Its kind is read off
+// its first byte, so a value of another kind is never decoded.
+func looseInt(raw json.RawMessage) int64 {
+	if len(raw) == 0 || (raw[0] != '-' && (raw[0] < '0' || raw[0] > '9')) {
+		return 0
+	}
+	var n int64
+	if wireDecode(raw, &n) != nil {
+		return 0
+	}
+	return n
+}
+
+// looseFloat is raw where it is a JSON number a float64 holds, and 0 where it
+// is absent, of another kind or past a float64's range, as the whole decode it
+// replaced left a float it could not fill. Its kind is read off its first
+// byte, so a value of another kind is never decoded.
+func looseFloat(raw json.RawMessage) float64 {
+	if len(raw) == 0 || (raw[0] != '-' && (raw[0] < '0' || raw[0] > '9')) {
+		return 0
+	}
+	var f float64
+	if wireDecode(raw, &f) != nil {
+		return 0
+	}
+	return f
+}
+
 // claudeToolInput is what a transcript line names of a tool call: the field
 // each of the harness's tools takes its subject in — Bash its command, Read, Edit
 // and Write their file, NotebookEdit its notebook, Grep and Glob their
-// pattern, WebFetch its URL, WebSearch its query, Task its description.
+// pattern, WebFetch its URL, WebSearch its query, Task its description — each
+// as its decode leaves it, by its exact name and raw, read loosely
+// ([claudeToolLine]).
 type claudeToolInput struct {
-	Command      string `json:"command"`
-	FilePath     string `json:"file_path"`
-	NotebookPath string `json:"notebook_path"`
-	Pattern      string `json:"pattern"`
-	URL          string `json:"url"`
-	Query        string `json:"query"`
-	Path         string `json:"path"`
-	Description  string `json:"description"`
+	Command      json.RawMessage `json:"command"`
+	FilePath     json.RawMessage `json:"file_path"`
+	NotebookPath json.RawMessage `json:"notebook_path"`
+	Pattern      json.RawMessage `json:"pattern"`
+	URL          json.RawMessage `json:"url"`
+	Query        json.RawMessage `json:"query"`
+	Path         json.RawMessage `json:"path"`
+	Description  json.RawMessage `json:"description"`
 }
 
 // claudeEvents decodes one stream into a transcript, read whole or followed
@@ -135,10 +293,12 @@ type claudeEvents struct {
 
 	// own is the run's own spend as its results stated it, each result's
 	// per-model figures for the calls since the one before
-	// ([claudeResult.SinceLastResult]) added up, and stated whether any
-	// result carried them ([claudeEvents.runSpend]).
-	own    runSpend
-	stated bool
+	// ([claudeResult.SinceLastResult]) added up; stated whether any result
+	// carried them, and unread whether one carried them in a form they are
+	// not read in: for more models than a result is read for, or as no
+	// object ([claudeEvents.runSpend]).
+	own            runSpend
+	stated, unread bool
 }
 
 // runSpend is the run's own spend, summed over every result its stream
@@ -146,7 +306,20 @@ type claudeEvents struct {
 // A run can print several results — a person's note handed to it as it
 // finished carries its loop on to another — and each states only the calls
 // since the one before, so the sum is the whole run's.
-func (d *claudeEvents) runSpend() (runSpend, bool) { return d.own, d.stated }
+//
+// NONE ONCE ONE RESULT'S FIGURES ARE UNREAD: a result naming more models than
+// a result is read for ([claudeResultModelsMax]) is read for none of them,
+// and so is one whose figures are there and no object, null among them
+// ([claudeResult.sinceLastResult]), so the sum of the others is no run's
+// spend, and would charge the run for some of its calls and not the rest.
+// Stated by none, the run is charged by its result's figures for its
+// session, as a run on a release that states none is ([Runner.ownSpend]).
+func (d *claudeEvents) runSpend() (runSpend, bool) {
+	if d.unread {
+		return runSpend{}, false
+	}
+	return d.own, d.stated
+}
 
 // state adds one result's per-run figures, model by model in name order, so
 // the price is summed in one order on every read.
@@ -191,23 +364,21 @@ func (d *claudeEvents) Line(line []byte) {
 		d.transcript.add(string(line))
 		return
 	}
-	var ev claudeEvent
-	if err := json.Unmarshal(line, &ev); err != nil {
-		var mismatch *json.UnmarshalTypeError
-		if !errors.As(err, &mismatch) {
-			// A partial object: the stream read mid-write. The next read
-			// has it whole.
-			return
-		}
+	var ev claudeEventWire
+	if wireDecode(line, &ev) != nil {
+		// A partial object: the stream read mid-write. The next read has it
+		// whole.
+		return
 	}
-	switch ev.Type {
+	switch looseString(ev.Type) {
 	case "system":
-		if line, ok := claudeSteerLine(ev.Subtype, ev.Content); ok {
+		if line, ok := claudeSteerLine(looseString(ev.Subtype), ev.Content); ok {
 			d.transcript.add(line)
 		}
 	case "assistant":
-		d.count(ev.Message.ID, ev.Message.Usage)
-		for _, block := range claudeBlocks(ev.Message.Content) {
+		message := claudeMessageOf(ev.Message)
+		d.count(looseString(message.ID), looseUsage(message.Usage))
+		_ = eachClaudeBlock(message.Content, func(block claudeBlock) error {
 			switch block.Type {
 			case "text":
 				if text := strings.TrimSpace(block.Text); text != "" {
@@ -219,11 +390,12 @@ func (d *claudeEvents) Line(line []byte) {
 					d.tools[block.ID] = block.Name
 				}
 			}
-		}
+			return nil
+		})
 	case "user":
-		for _, block := range claudeBlocks(ev.Message.Content) {
+		_ = eachClaudeBlock(claudeMessageOf(ev.Message).Content, func(block claudeBlock) error {
 			if block.Type != "tool_result" {
-				continue
+				return nil
 			}
 			name := d.tools[block.ToolUseID]
 			delete(d.tools, block.ToolUseID)
@@ -237,18 +409,27 @@ func (d *claudeEvents) Line(line []byte) {
 				}
 				d.transcript.add(line)
 			}
-		}
+			return nil
+		})
 	case "result":
 		// A run that succeeded ends on its final text, which the stream
 		// already carried as the assistant's last message; one that did not
 		// says how, as [ClaudeCode.Parse] reads the same line.
-		if !ev.succeeded() {
-			d.transcript.add("[error] the run ended: " + firstLine(ev.failure(), transcriptDetailLimit))
+		result := ev.result()
+		if !result.succeeded() {
+			d.transcript.add("[error] the run ended: " + firstLine(result.failure(), transcriptDetailLimit))
 		}
 		// PRESENT, EVEN EMPTY, IS STATED: a result with no calls since the
-		// one before says the run spent nothing more, which is an answer.
-		if ev.SinceLastResult != nil {
-			d.state(ev.SinceLastResult)
+		// one before says the run spent nothing more, which is an answer. One
+		// whose spend is unread, as one naming more models than a result is
+		// read for is, or one whose spend is no object
+		// ([claudeResult.sinceLastResult]), leaves the run's own spend
+		// unread, and costs the line nothing else.
+		switch models, stated, err := result.sinceLastResult(); {
+		case err != nil:
+			d.unread = true
+		case stated:
+			d.state(models)
 		}
 	}
 }
@@ -300,7 +481,7 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	var content string
-	if json.Unmarshal(raw, &content) != nil {
+	if wireDecode(raw, &content) != nil {
 		return "", false
 	}
 	loc := claudeSteerPrefix.FindStringIndex(content)
@@ -310,74 +491,92 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	return content[loc[1]:], true
 }
 
-// claudeBlocks is a message's content as blocks; a plain-string content (a
-// prompt) has none.
-func claudeBlocks(raw json.RawMessage) []claudeBlock {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || raw[0] != '[' {
-		return nil
-	}
-	var blocks []claudeBlock
-	if err := json.Unmarshal(raw, &blocks); err != nil {
-		var mismatch *json.UnmarshalTypeError
-		if !errors.As(err, &mismatch) {
-			return nil
-		}
-	}
-	return blocks
-}
-
 // claudeToolLine renders one tool call for the transcript: its name and the
 // first line of its subject, bounded as OpenCode's are.
 func claudeToolLine(block claudeBlock) string {
 	name := firstNonBlank(block.Name, "tool")
 	line := "[tool] " + name
-	// DECODED LOOSELY, as the block around it is: a field a release retyped
-	// leaves the others named, and an input that is no object names no
-	// subject at all — the call's name is still its line.
+	// DECODED LOOSELY, as the block around it is, and by its keys exactly as
+	// written: a field a release retyped leaves the others named, and an input
+	// that is no object names no subject at all — the call's name is still
+	// its line.
 	var in claudeToolInput
-	_ = json.Unmarshal(block.Input, &in)
-	if detail := firstNonBlank(in.Command, in.FilePath, in.NotebookPath, in.Pattern,
-		in.URL, in.Query, in.Path, in.Description); detail != "" {
+	if wireObject(block.Input) && wireDecode(block.Input, &in) != nil {
+		in = claudeToolInput{}
+	}
+	if detail := firstNonBlank(looseString(in.Command), looseString(in.FilePath),
+		looseString(in.NotebookPath), looseString(in.Pattern), looseString(in.URL), looseString(in.Query),
+		looseString(in.Path), looseString(in.Description)); detail != "" {
 		line += ": " + firstLine(detail, transcriptDetailLimit)
 	}
 	return line
 }
 
-// claudeResultText is a tool result's text, from a string or from its blocks:
-// each text block's, a line apart, and an image named where it was — a result
-// that was a screenshot read as empty would say the tool answered nothing.
-// Decoded loosely, a block whose field a release retyped kept with the rest.
+// claudeResultText is a tool result's text, from a string or from its blocks
+// ([toolAnswer]): each text block's, a line apart, and an image named where it
+// was, since a result that was a screenshot read as empty would say the tool
+// answered nothing. "" for a content of any other kind.
 func claudeResultText(raw json.RawMessage) string {
 	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return ""
+	if len(raw) == 0 || raw[0] != '[' {
+		return looseString(raw)
 	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(raw, &parts); err != nil {
-		var mismatch *json.UnmarshalTypeError
-		if !errors.As(err, &mismatch) {
-			return ""
+	return toolAnswer(raw, func(kind, text, _ string) (string, bool) {
+		switch kind {
+		case "text":
+			return text, strings.TrimSpace(text) != ""
+		case "image":
+			return claudeImagePlaceholder, true
 		}
-	}
-	var texts []string
-	for _, part := range parts {
-		switch {
-		case part.Type == "text" && strings.TrimSpace(part.Text) != "":
-			texts = append(texts, part.Text)
-		case part.Type == "image":
-			texts = append(texts, claudeImagePlaceholder)
-		}
-	}
-	return strings.Join(texts, "\n")
+		return "", false
+	})
 }
 
 // claudeImagePlaceholder is what a tool result's image reads as in text.
 const claudeImagePlaceholder = "[an image]"
+
+// toolAnswer is what a tool answered, as text, from list, its answer's parts:
+// what said makes of each part, by its `type`, `text` and `mime` (each its
+// string, or "" where it is of another kind or the part is no object), a line
+// apart, in order, and nothing of a part said passes over. "" for a list that
+// does not decode to its end, as its whole decode answered. ONE READING of a
+// tool's answer for both harnesses: a Claude Code result's content blocks
+// ([claudeResultText]) and an OpenCode tool's content ([openCodeAnswer]).
+//
+// A PART AT A TIME ([eachElement]), each decoded by its keys exactly as
+// written ([threadDecoding]) and loosely by type, and never the whole list
+// first, which held a part for every element the list held before any was
+// looked at, however small the element. Read so, a list costs one part's
+// decode at a time, and the text it says.
+func toolAnswer(list json.RawMessage, said func(kind, text, mime string) (string, bool)) string {
+	var (
+		answer strings.Builder
+		kept   bool
+		part   struct {
+			Type json.RawMessage `json:"type"`
+			Text json.RawMessage `json:"text"`
+			Mime json.RawMessage `json:"mime"`
+		}
+	)
+	if eachElement(list, func(element json.RawMessage) error {
+		// A part that is no object is the zero part, which says nothing, as
+		// the whole decode left it.
+		part.Type, part.Text, part.Mime = nil, nil, nil
+		if wireObject(element) && wireDecode(element, &part) != nil {
+			part.Type, part.Text, part.Mime = nil, nil, nil
+		}
+		text, ok := said(looseString(part.Type), looseString(part.Text), looseString(part.Mime))
+		if !ok {
+			return nil
+		}
+		if kept {
+			answer.WriteByte('\n')
+		}
+		answer.WriteString(text)
+		kept = true
+		return nil
+	}) != nil {
+		return ""
+	}
+	return answer.String()
+}

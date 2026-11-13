@@ -19,3 +19,7 @@ func OpenAccess(
 // SetWait replaces how a client waits out a rate limit, so a test can record
 // the wait rather than spend it.
 func SetWait(c *Client, wait func(context.Context, time.Duration) error) { c.limit.Wait = wait }
+
+// ReadAtlas is the atlas read over a client a test built, so it can record a
+// rate limit's wait rather than spend it.
+var ReadAtlas = readAtlas
