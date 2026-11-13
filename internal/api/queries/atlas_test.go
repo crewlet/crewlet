@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -1024,5 +1025,118 @@ func TestTheAdvisorListsASourceThatStoppedReading(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{"Datadog " + builtin.AtlasRefreshTool + " datadog"}) {
 		t.Errorf("stale sources = %v, want Datadog alone with a read asked for", got)
+	}
+}
+
+// fleetNodes is acme's two live nodes as their presence rows say them: a
+// broker member that names its address, and a second node.
+type fleetNodes struct{}
+
+func (fleetNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
+	return []coord.Lease{
+		{Resource: coord.ClassNode.Resource("node-a"), Meta: map[string]any{"broker": "member",
+			coord.InfraKey: coord.NodeInfra{Address: "10.0.0.4", ObjectsBackend: "nats"}.Meta()}},
+		{Resource: coord.ClassNode.Resource("node-b"), Meta: map[string]any{"broker": "leaf",
+			coord.InfraKey: coord.NodeInfra{Address: "203.0.113.9", ObjectsBackend: "nats"}.Meta()}},
+	}, nil
+}
+
+// fleetSources is acme's atlas on a node that reads its fleet's presence.
+func fleetSources(t *testing.T) queries.Sources {
+	t.Helper()
+	s := atlasSources(atlasCode())
+	deps := *s.Atlas.(*builtin.AtlasDeps)
+	records := deps.Records
+	deps.Records = func(ctx context.Context) gather.Sources {
+		src := records(ctx)
+		src.Nodes = fleetNodes{}
+		return src
+	}
+	s.Atlas = &deps
+	return s
+}
+
+// THE ENGINE'S OWN NODES ARE IN THE ATLAS FOR EVERY HOLDER, AND THEIR
+// ADDRESSES FOR AN ADMINISTRATOR ALONE, marked internal whatever network
+// they are on. A holder who is no administrator reads each node, the broker
+// on its member and the object store, and no answer of the atlas sends them
+// a node's address: not the entry, not the list, not the map.
+//
+// Mutation: read the view without atlas.For's address rule, and a member's
+// atlas_entry holds 10.0.0.4.
+func TestANodesAddressIsAnsweredToAnAdministratorAlone(t *testing.T) {
+	t.Parallel()
+	s := fleetSources(t)
+	node := entryID(atlas.KindHost, "crewlet/node-a")
+	public := entryID(atlas.KindHost, "crewlet/node-b")
+	addresses := func(ctx context.Context, id string) []map[string]any {
+		t.Helper()
+		entry := asMap(t, askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": id})["entry"])
+		var out []map[string]any
+		for _, f := range listOf(t, entry["facts"]) {
+			if f["fact"] == "address" {
+				out = append(out, asMap(t, f["value"]))
+			}
+		}
+		return out
+	}
+	admin := asAtlasReader(t, iam.GrantAdmin)
+	for id, want := range map[string]string{node: "10.0.0.4", public: "203.0.113.9"} {
+		got := addresses(admin, id)
+		if len(got) != 1 || got[0]["text"] != want || got[0]["private"] != true {
+			t.Errorf("an administrator's address of %s = %v, want %s marked internal", id, got, want)
+		}
+	}
+	member := asAtlasReader(t)
+	if got := addresses(member, node); len(got) != 0 {
+		t.Errorf("a holder who is no administrator is answered a node's address: %v", got)
+	}
+	for _, what := range []string{"atlas_entry", "atlas_entries", "atlas_map", "atlas_facets"} {
+		params := map[string]any{}
+		if what == "atlas_entry" {
+			params["id"] = node
+		}
+		raw, err := json.Marshal(askAtlas(member, t, s, what, params))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, address := range []string{"10.0.0.4", "203.0.113.9"} {
+			if strings.Contains(string(raw), address) {
+				t.Errorf("%s answers a holder who is no administrator the node address %s", what, address)
+			}
+		}
+		if what == "atlas_entries" && !strings.Contains(string(raw), "crewlet/node-a") {
+			t.Errorf("%s leaves the node itself out for a holder: %s", what, raw)
+		}
+	}
+}
+
+// A NODE'S PAGE DRAWS WHAT RELIES ON IT: the trace an entry's neighbourhood
+// reads answers the engine's own service and its broker one step from a
+// broker member, with the relation each stands on it by, so the fleet's
+// entries are drawn among their neighbours like every other kind's.
+func TestANodesTraceAnswersTheEngineAndItsBroker(t *testing.T) {
+	t.Parallel()
+	s := fleetSources(t)
+	node := entryID(atlas.KindHost, "crewlet/node-a")
+	trace := askAtlas(asAtlasReader(t), t, s, "atlas_trace",
+		map[string]any{"id": node, "direction": "up", "depth": 1, "relations": "all"})
+	var keys []string
+	for _, hop := range listOf(t, trace["hops"]) {
+		for _, e := range listOf(t, hop["entries"]) {
+			keys = append(keys, e["key"].(string))
+		}
+	}
+	slices.Sort(keys)
+	if !slices.Equal(keys, []string{"crewlet", "crewlet/broker"}) {
+		t.Errorf("one step up from the node = %v, want the engine and its broker", keys)
+	}
+	if edges := listOf(t, trace["edges"]); len(edges) != 2 || edges[0]["to"] != node || edges[0]["relation"] != "runs_on" {
+		t.Errorf("the trace's edges = %v, want two that run on the node", edges)
+	}
+	down := askAtlas(asAtlasReader(t), t, s, "atlas_trace", map[string]any{
+		"id": entryID(atlas.KindService, "crewlet"), "direction": "down", "depth": 1, "relations": "all"})
+	if n := len(listOf(t, listOf(t, down["hops"])[0]["entries"])); n != 4 {
+		t.Errorf("one step down from the engine holds %d entries, want its two nodes, its broker and its object store", n)
 	}
 }

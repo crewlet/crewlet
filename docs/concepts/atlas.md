@@ -96,10 +96,15 @@ The engine already keeps a record of what agents and integrations use. The atlas
 | The access log | each server's use: commands agents ran there in the last week and month, the last one, and which seats |
 | The usage history | each tool server's calls and each model entry's calls over the week and the month, and which seats made them |
 | Gitlet | each repository's last push |
+| Each live node's presence | the engine's own infrastructure: each node as a server, the event stream as a queue on the nodes whose broker holds it (or on the servers of an external NATS cluster), the object store as a bucket (the fleet's own, or the S3 bucket by its name and region), and Crewlet itself as the service that runs on every node and depends on both. A node's address, and an external broker's server addresses, for administrators only and always marked internal |
 
 An entry whose use the engine records (a server, a tool server, a model entry, a repository) that nothing used for 30 days is marked **not used recently**: a fact about use, never about existence. It is said only when that use was read in full; when the usage history cannot be read, the use is unknown rather than zero.
 
 A **signal** is something on an entry that needs attention now. It is read from the record that holds it on every read, never copied, so it cannot disagree with its source, and each says who may read it: what only administrators see elsewhere (an integration's standing, a connection test), they alone see here.
+
+**The engine draws itself from what its nodes say.** Each node publishes, on the presence row it already renews, a short summary read once from its own node file: the host its peers reach it at (what it advertises to the cluster, else the interface it binds), the hosts of an external broker's servers, and where the company's files are kept (the backend, and for S3 the bucket, its region and the endpoint's host). Hosts and names only: every URL is reduced to its host before it leaves the node, and no key or token of the node file has a field in the summary. The entries last exactly as long as a live node says them, so a node that stops is off the map when its presence lapses. A node on a build older than the summary is still drawn, without an address. Nobody is asked who owns the engine's own service unless a person has said something of it ([ADR-0142](../../adr/0142-the-engines-own-nodes-broker-and-object-store-are-atlas-entries-read-off-each-nodes-presence.md)).
+
+**A node's address is an administrator's.** Every holder of the atlas reads the nodes, the broker and the object store and how they relate. Where each node answers is shown to administrators alone, and never to an agent, and it is marked internal whatever network it is on: it is where the engine's own members reach each other. So a node's address merges no two entries, even where a server the company declares answers at the same one.
 
 Records are read as closed projections: the fields a map needs and nothing else. An email address is never read, whether it is a vendor account's name, the account an agent's lane observed, who signed a tool server in, who ran a test or a model plan's sign-in account; ownership and use name seats.
 
@@ -298,6 +303,7 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | State | Who has to agree | Where it lives |
 |---|---|---|
 | What the engine already keeps: the settings, Gitlet's rows, integration standings, agents' accounts, tool server listings and sign-ins, node beats, connection tests, the access log and the usage history | already agreed where it lives | not stored: computed when the atlas is read |
+| What each node says of what it runs on: its address, an external broker's server hosts, the object store's backend, bucket, region and endpoint host | whichever node holds the presence lease, current value only | that node's presence row in the coordination store, written on every beat and gone when the lease lapses |
 | Entry states, merges on exact keys, contested and disputed facts, signals, use and "not used recently" | nobody: computed on every read | the read itself |
 | What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |
 | What an integration's read found that the log did not hold: a changed fact, a withdrawn one, a retirement | every data node identically, with history | the same log, one `read` record an entry, in the integration's voice |

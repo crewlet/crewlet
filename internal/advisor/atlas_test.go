@@ -292,3 +292,23 @@ func TestEveryAtlasClassIsRaised(t *testing.T) {
 		t.Errorf("raised %d classes, AtlasClasses lists %d", len(got), len(advisor.AtlasClasses()))
 	}
 }
+
+// THE ENGINE'S OWN SERVICE IS NOT ASKED FOR AN OWNER: only its nodes'
+// presence names it, so nobody put it on the map. Once a person says anything
+// of it, it is theirs and is asked like any other.
+func TestTheEnginesOwnServiceIsNotAskedForAnOwner(t *testing.T) {
+	t.Parallel()
+	engine := atlas.MustRef(atlas.KindService, atlas.EngineService)
+	own := exists(engine, atlas.RecordSource(atlas.RecordFleet), atlasAt)
+	read := func(made ...claim) []advisor.Finding {
+		return advisor.DetectAtlas(advisor.AtlasEvidence{Until: atlasAt, Names: true,
+			View: atlas.Fold(claims(t, made...), atlasAt)})
+	}
+	if got := read(own); len(got) != 0 {
+		t.Errorf("the engine's own service raises %+v", got)
+	}
+	got := read(own, says(engine, atlas.FactPurpose, "Runs the company's agents", atlas.PersonSource("ada"), atlasAt))
+	if len(got) != 1 || got[0].Class != advisor.ClassAtlasUnowned {
+		t.Errorf("a service a person described raises %+v, want it asked for an owner", got)
+	}
+}

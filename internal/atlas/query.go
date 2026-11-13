@@ -53,7 +53,9 @@ type Reader struct {
 }
 
 // For is v as r may read it: every signal r is not in the audience of left
-// out. The entries themselves are every holder's.
+// out, and every address the fleet's own records say, a node's or a server's
+// of its broker, which is an administrator's alone (ADR-0142). The entries
+// themselves are every holder's.
 func For(v View, r Reader) View {
 	v.Entries = slices.Clone(v.Entries)
 	for i := range v.Entries {
@@ -61,8 +63,30 @@ func For(v View, r Reader) View {
 		e.Signals = slices.DeleteFunc(slices.Clone(e.Signals), func(s Signal) bool {
 			return s.Audience == AudienceAdmins && !r.Admin
 		})
+		if !r.Admin {
+			e.Facts = withoutFleetAddresses(e.Facts)
+		}
 	}
 	return v
+}
+
+// withoutFleetAddresses is facts with no address the fleet's records say: not
+// as the value shown, and not beside another source's.
+func withoutFleetAddresses(facts []FactView) []FactView {
+	out := make([]FactView, 0, len(facts))
+	for _, f := range facts {
+		if fleetAddress(f.Fact, f.Source) {
+			continue
+		}
+		f.Others = slices.DeleteFunc(slices.Clone(f.Others), func(c Claimed) bool {
+			return fleetAddress(f.Fact, c.Source)
+		})
+		if len(f.Others) == 0 {
+			f.Others = nil
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // Health is the one word an entry's open signals add up to.

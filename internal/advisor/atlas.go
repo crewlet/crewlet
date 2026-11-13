@@ -290,12 +290,22 @@ func entryOf(e *atlas.Entry) AtlasEntry {
 	return AtlasEntry{ID: e.ID, Kind: e.Ref.Kind, Key: e.Ref.Key, Name: e.Name}
 }
 
-// unowned is every confirmed service with no owner.
+// enginesOwn reports an entry only the engine's own records name: the engine
+// itself, which its nodes' presence draws (ADR-0142). Nobody put it on the
+// map, so nobody is asked who answers for it.
+func enginesOwn(e *atlas.Entry) bool {
+	return len(e.Sources) > 0 && !slices.ContainsFunc(e.Sources, func(s atlas.Source) bool {
+		return s.Kind != atlas.SourceRecords
+	})
+}
+
+// unowned is every confirmed service with no owner that somebody, a person,
+// the settings or an integration, put on the map.
 func unowned(ev AtlasEvidence) []AtlasEntry {
 	var out []AtlasEntry
 	for i := range ev.View.Entries {
 		e := &ev.View.Entries[i]
-		if e.Ref.Kind == atlas.KindService && current(e) && ownerOf(e) == nil {
+		if e.Ref.Kind == atlas.KindService && current(e) && !enginesOwn(e) && ownerOf(e) == nil {
 			out = append(out, entryOf(e))
 		}
 	}

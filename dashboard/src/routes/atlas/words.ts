@@ -366,6 +366,7 @@ export const RECORDS: Readonly<Record<string, string>> = {
   ssh_tests: "connection tests",
   access_log: "the access log",
   usage: "the usage history",
+  fleet: "the engine's own nodes",
 };
 
 /** Each place an atlas read reads, named as a reader knows it. */
