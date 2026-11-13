@@ -1034,9 +1034,10 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // ctAll is everything a line hands out through every accessor, as text: its
 // head, its own uuid, its hook, its message and its calls, its origin's kind,
 // its own toolUseResult, whether it says tool results were cleared, why its
-// reply stopped, the model that wrote it and what its request took, each
-// beside the error it answered. A raw value it hands out is printed by
-// [ctRaw], so an absent one and a null one never read alike.
+// reply stopped, whether its harness wrote it for a failed request, the model
+// that wrote it, what its request took and the results it says its harness
+// replaced, each beside the error it answered. A raw value it hands out is
+// printed by [ctRaw], so an absent one and a null one never read alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1073,11 +1074,16 @@ func ctAllButUUID(l threadLine) string {
 	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
 	reason, err := l.StopReason()
 	fmt.Fprintf(&b, "stop reason: %q; %v\n", reason, err)
+	failed, err := l.APIError()
+	fmt.Fprintf(&b, "a failed request's reply: %t; %v\n", failed, err)
 	model, err := l.Model()
 	fmt.Fprintf(&b, "model: %q; %v\n", model, err)
 	usage, used, err := l.Usage()
 	fmt.Fprintf(&b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
 		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
+	var replaced []string
+	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
+	fmt.Fprintf(&b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
 	return b.String()
 }
 
@@ -1098,14 +1104,15 @@ func ctRaw(v json.RawMessage) string {
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (its own
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
-// own toolUseResult), a hook's attachment, an origin, a message (its content,
-// its stop_reason, its id, its model and its usage), a message's blocks, its
-// usage's counts and iterations, each iteration's type and counts, its report
-// of the context edits applied, and each edit the report lists. So a line
-// hands out exactly what it hands out without the other key, through every
-// accessor. 2.1.322 already spells a call's id `toolUseId` (a subagent's
-// metadata names the call that started it so), a key away from a hook's
-// firing.
+// own toolUseResult, a reply's mark of an API error, a record's replacements),
+// a hook's attachment, an origin, a message (its content, its stop_reason, its
+// id, its model and its usage), a message's blocks, its usage's counts and
+// iterations, each iteration's type and counts, its report of the context
+// edits applied, each edit the report lists, and each replacement a record
+// lists (its kind and its call's id). So a line hands out exactly what it
+// hands out without the other key, through every accessor. 2.1.322 already
+// spells a call's id `toolUseId` (a subagent's metadata names the call that
+// started it so), a key away from a hook's firing.
 //
 // Mutation: take a key that differs only in case for the layer's own, as
 // encoding/json's decode into a struct does (the last written winning), and
@@ -1124,6 +1131,8 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	other := "toolu_test_other"
 	retyped := ctReplace(t, brief, `"type":"user"`, `"type":"attachment"`)
 	cleared := ctReported(t, ctEdits(ctClearing))
+	synthetic := ctSynthetic(ctUUID(30), ctUUID(31))
+	replacing := ctReplacement("", ctReplaced(ctCall))
 	// listing is the model's call whose usage lists entries as its iterations.
 	listing := func(entries ...string) string {
 		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
@@ -1177,6 +1186,12 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"toolUseResult":` + ctResultOwn + `,"ToolUseResult":{"stdout":"other"}`},
 		"ToolUseResult null alone": {record: brief, from: `"isSidechain":false`,
 			to: `"isSidechain":false,"ToolUseResult":null`},
+		"a mark of an API error, then IsApiErrorMessage": {record: synthetic, from: `"isApiErrorMessage":false`,
+			to: `"isApiErrorMessage":false,"IsApiErrorMessage":true`},
+		"IsApiErrorMessage alone": {record: call, from: `"type":"assistant"`,
+			to: `"IsApiErrorMessage":true,"type":"assistant"`},
+		"a replacements, then Replacements": {record: replacing, from: `"replacements":[` + ctReplaced(ctCall) + `]`,
+			to: `"replacements":[` + ctReplaced(ctCall) + `],"Replacements":[` + ctReplaced(other) + `]`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -1259,6 +1274,11 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"type":"clear_tool_uses_20250919","Type":"clear_thinking_20251015"`},
 		"an edit's cleared_tool_uses, then Cleared_Tool_Uses": {record: cleared, from: `"cleared_tool_uses":18`,
 			to: `"cleared_tool_uses":18,"Cleared_Tool_Uses":0`},
+		// A record's replacements.
+		"a replacement's kind, then Kind": {record: replacing, from: `"kind":"tool-result"`,
+			to: `"kind":"tool-result","Kind":"other"`},
+		"a replacement's toolUseId, then ToolUseId": {record: replacing, from: `"toolUseId":"` + ctCall + `"`,
+			to: `"toolUseId":"` + ctCall + `","ToolUseId":"` + other + `"`},
 		// A key written twice.
 		"a type written twice": {record: retyped, from: `"type":"attachment"`, to: `"type":"user","type":"attachment"`},
 		"a uuid written twice": {record: brief, from: `"uuid":"` + ctUUID(1) + `"`,
