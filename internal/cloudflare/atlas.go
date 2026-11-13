@@ -153,7 +153,7 @@ func readRecords(b *collect.Builder, where string, account, zone atlas.Ref, zone
 			b.Relates(at+".content", host, atlas.RelationResolvesTo, target)
 			// A NAME INSIDE ONE OF THE ACCOUNT'S ZONES sits in it, whichever
 			// zone's record pointed there.
-			if owner, found := zoneOf(target, zones); found {
+			if owner, found := collect.ZoneOf(target, zones); found {
 				b.Relates(at+".content", target, atlas.RelationInZone, owner)
 			}
 		default:
@@ -171,23 +171,6 @@ func readRecords(b *collect.Builder, where string, account, zone atlas.Ref, zone
 		}
 	}
 	return names
-}
-
-// zoneOf is the zone a name sits in: the longest zone the name is under, so
-// a name in a zone that is itself under another of the account's zones sits
-// in the nearer one.
-func zoneOf(name atlas.Ref, zones []atlas.Ref) (atlas.Ref, bool) {
-	var best atlas.Ref
-	found := false
-	for _, zone := range zones {
-		if name.Key == zone.Key || !strings.HasSuffix(name.Key, "."+zone.Key) {
-			continue
-		}
-		if !found || len(zone.Key) > len(best.Key) {
-			best, found = zone, true
-		}
-	}
-	return best, found
 }
 
 // readPacks claims each certificate pack of a zone: what it covers, its type,

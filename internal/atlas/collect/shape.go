@@ -76,6 +76,22 @@ func Address(raw string) (address, host string, err error) {
 	return clean.String(), u.Hostname(), nil
 }
 
+// ZoneOf is the zone a name sits in: the longest of zones the name is under,
+// so a name in a zone that is itself under another sits in the nearer one.
+func ZoneOf(name atlas.Ref, zones []atlas.Ref) (atlas.Ref, bool) {
+	var best atlas.Ref
+	found := false
+	for _, zone := range zones {
+		if name.Key == zone.Key || !strings.HasSuffix(name.Key, "."+zone.Key) {
+			continue
+		}
+		if !found || len(zone.Key) > len(best.Key) {
+			best, found = zone, true
+		}
+	}
+	return best, found
+}
+
 // KeySegment is a vendor's name as one segment of an entry's key: letters,
 // digits and . _ + - as they are, every other byte as '~' and its two hex
 // digits. Exact both ways, so two names never share a key and a name with a
