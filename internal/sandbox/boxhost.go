@@ -109,7 +109,8 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 // is up: a collection handed it gives its claim back UNCOUNTED and has its
 // completion retried ([Coordinator.collectFailed]), a lost job's round is
 // never carried on without its read for it ([Coordinator.collectGivenUp]), and
-// a stop's read of it is asked again ([Coordinator.readStopped]). Counted, a
+// a stop's read of it is asked again, for as long as a silent host is where the
+// silence is the host's alone ([Coordinator.readStopped]). Counted, a
 // store silent for the give-up window settled a run whose box held its result
 // as one whose result was lost, and carried a lost job's round on uncharged
 // while its box held what the job had spent.

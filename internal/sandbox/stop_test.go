@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -570,52 +571,189 @@ func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
 	}
 }
 
-// A STOP WHOSE HOST'S STORE IS SILENT IS KEPT AND ASKED AGAIN, past the bound a
-// silent host is waited for. The host is up, and so is the box: only the
-// coordination store did not answer the host's read of the run's row, which
-// licenses the read. That is no verdict about the box, and its spend is not
-// written off for it: the stop is kept, its session closed, nothing charged,
-// announced or closed, and asked again for as long as the store is silent, the
-// box timeout since the stop included, which ends the wait for a host that is
-// away. Once the store answers, the host reads the box and the stop charges
-// what it read.
+// A STOP WHOSE HOST ALONE HAS A SILENT STORE WAITS FOR IT AS FOR A SILENT HOST.
+// The host is up, and so is the box: only the host's read of the run's row,
+// which licenses the read, goes unanswered, while this node's own store answers
+// every step of the stop's ending, as in a partition that cuts the host off from
+// the store's leader and not this node. That is no verdict about the box, and
+// its spend is not written off for it at once: the stop is kept, its session
+// closed, nothing charged, announced or closed, and asked again, and once the
+// store answers the host, it reads the box and the stop charges what it read.
+// But only the host can read the box, and a host that cannot for the box
+// timeout since the stop is as good as away: past it the stop is ended with
+// nothing read, as a silent host's is. Unbounded, it held the seat's mail for as
+// long as the partition lasted, while every write of the ending's would land.
 //
 // Mutation: read the store's silence as the box's failure in readStopped, and
-// the stop finishes on its first retry with its spend lost; bound it by the
-// host's wait, and it finishes past the box timeout with nothing read.
-func TestAStopWhoseHostsStoreIsSilentIsKeptAndAskedAgain(t *testing.T) {
+// the stop finishes on its first retry with its spend lost; drop the bound, and
+// it is kept past the box timeout.
+func TestAStopWhoseHostAloneHasASilentStoreWaitsForItAsForASilentHost(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// then is what happens while the stop waits, and the tokens the
+		// stop ends up charging.
+		then   func(rig *coordRig, store *silentStore)
+		tokens int
+	}{
+		{"the host's store answers", func(_ *coordRig, store *silentStore) { store.answer() }, 4000},
+		{"it does not for the box timeout", func(rig *coordRig, _ *silentStore) {
+			rig.now = rig.now.Add(DefaultBoxTimeout)
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			spies := watchStops(rig)
+			store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
+			rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, &nudges{})
+			rig.launchedBy("t1", "node-a")
+			rig.runner.Finish(Result{Text: "halfway", InputTokens: 4000})
+
+			rig.stop(t)
+			rig.fireRetries()
+			kept := rig.get("t1")
+			if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
+				t.Fatalf("the stop on a host whose store is silent reads ending %+v stop %+v; want it kept, "+
+					"unread", kept.Ending, kept.Stop)
+			}
+			if rig.accountant.asked() != 0 || len(rig.stopAnnouncements()) != 0 || len(spies.closedTurns()) != 0 {
+				t.Fatal("the stop charged, announced or closed its turn while the host's store was silent")
+			}
+			if !slices.Contains(spies.endedRuns(), "t1") {
+				t.Fatal("the kept stop left the run's session open")
+			}
+
+			tc.then(rig, store)
+			rig.fireRetries()
+			if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+				t.Fatal("the stop was not finished")
+			}
+			if got := rig.accountant.total(); got != tc.tokens {
+				t.Fatalf("charged %d tokens, want %d", got, tc.tokens)
+			}
+			if len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
+				t.Fatal("the finished stop was not announced once with its turn closed once")
+			}
+		})
+	}
+}
+
+// silentFromDecision is this node's own view of the run store, which, once
+// armed, falls silent as an ending's decision lands on it: that decision is
+// answered, and no read of a row, decision or stop's record after it, until it
+// answers again. A silence this node comes to share mid-attempt, after its
+// retry read the row and decided the ending again, so the attempt's own read of
+// the row is the first step it does not answer.
+type silentFromDecision struct {
+	PendingStore
+	mu     sync.Mutex
+	armed  bool
+	silent bool
+}
+
+func (s *silentFromDecision) arm() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.armed = true
+}
+
+func (s *silentFromDecision) answer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.armed, s.silent = false, false
+}
+
+func (s *silentFromDecision) isSilent() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.silent
+}
+
+func (s *silentFromDecision) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	if s.isSilent() {
+		return PendingRun{}, false, fmt.Errorf("sandbox: read run %s: %w", turnID, errStoreUnanswered)
+	}
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s *silentFromDecision) DecideEnding(ctx context.Context, turnID string, d Decision) (PendingRun, bool, error) {
+	if s.isSilent() {
+		return PendingRun{}, false, fmt.Errorf("sandbox: decide the end of run %s: %w", turnID, errStoreUnanswered)
+	}
+	run, ok, err := s.PendingStore.DecideEnding(ctx, turnID, d)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.silent = s.armed
+	return run, ok, err
+}
+
+func (s *silentFromDecision) CollectStop(ctx context.Context, turnID string, c StopCollection) (PendingRun, bool,
+	error) {
+	if s.isSilent() {
+		return PendingRun{}, false, fmt.Errorf("sandbox: record stopped run %s: %w", turnID, errStoreUnanswered)
+	}
+	return s.PendingStore.CollectStop(ctx, turnID, c)
+}
+
+// A STOP WHOSE NODE SHARES ITS HOST'S STORE SILENCE IS KEPT, AND NEVER SAID
+// ENDED. Where this node's own store does not answer either, nothing the stop's
+// ending writes would land, so the bound a host that alone cannot read the box
+// is held to never ends it: past the box timeout too, the stop is kept, its
+// spend still on the box and charged once the stores answer. Nor does its log
+// say it was ended all the same on any attempt, which the record's write,
+// failing, would then belie. The attempt staged here is the one that meets it:
+// the retry read the row and decided the ending again, and the silence began
+// as that decision landed, so the attempt's own read of the row is the first
+// step this node's store does not answer, and the next attempt's read of the
+// row keeps the stop before any read of the box.
+//
+// Mutation: bound the host's store's silence whatever the attempt's own read of
+// the row met (readStopped), or hand readStopped a read that answered whatever
+// it met (finishEnding), and the stop is said ended while its record keeps it.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *testing.T) {
+	logs := captureLogs(t)
 	rig := newCoordRig(t)
 	spies := watchStops(rig)
-	store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
-	rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, &nudges{})
+	hostStore := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
+	rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", hostStore)}, &nudges{})
+	ownStore := &silentFromDecision{PendingStore: rig.pending}
+	rig.coordinator.pending = ownStore
 	rig.launchedBy("t1", "node-a")
 	rig.runner.Finish(Result{Text: "halfway", InputTokens: 4000})
 
 	rig.stop(t)
-	for _, when := range []string{"at once", "past the box timeout since the stop"} {
+	rig.now = rig.now.Add(DefaultBoxTimeout)
+	ownStore.arm()
+	for range 2 {
 		rig.fireRetries()
-		kept := rig.get("t1")
-		if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
-			t.Fatalf("%s, the stop on a silent store reads ending %+v stop %+v; want it kept, unread", when,
-				kept.Ending, kept.Stop)
-		}
-		if rig.accountant.asked() != 0 || len(rig.stopAnnouncements()) != 0 || len(spies.closedTurns()) != 0 {
-			t.Fatalf("%s, the stop charged, announced or closed its turn while the store was silent", when)
-		}
-		if !slices.Contains(spies.endedRuns(), "t1") {
-			t.Fatalf("%s, the kept stop left the run's session open", when)
-		}
-		rig.now = rig.now.Add(DefaultBoxTimeout)
+	}
+	kept := rig.get("t1")
+	if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
+		t.Fatalf("past the box timeout, the stop on a silence both nodes share reads ending %+v stop %+v; "+
+			"want it kept, unread", kept.Ending, kept.Stop)
+	}
+	if rig.accountant.asked() != 0 || len(rig.stopAnnouncements()) != 0 || len(spies.closedTurns()) != 0 {
+		t.Fatal("the stop charged, announced or closed its turn while both stores were silent")
+	}
+	line := logs.String()
+	if strings.Contains(line, "sandbox_stop_unread") {
+		t.Fatalf("the stop kept on a shared silence was said ended all the same: %q", line)
+	}
+	if !strings.Contains(line, "sandbox_stop_read_waits") || !strings.Contains(line, "waits_for=store") {
+		t.Fatalf("nothing said the stop waits for the store: %q", line)
 	}
 
-	store.answer()
+	hostStore.answer()
+	ownStore.answer()
 	rig.fireRetries()
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
-		t.Fatal("the stop was not finished once the store answered")
+		t.Fatal("the stop was not finished once both stores answered")
 	}
 	if got := rig.accountant.total(); got != 4000 {
-		t.Fatalf("charged %d tokens, want the 4000 the host read once the store answered", got)
+		t.Fatalf("charged %d tokens, want the 4000 the host read once the stores answered", got)
 	}
 	if len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
 		t.Fatal("the finished stop was not announced once with its turn closed once")

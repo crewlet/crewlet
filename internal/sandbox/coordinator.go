@@ -5126,6 +5126,11 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 	// before this one may have owed the turn's end, or recorded it, since —
 	// and a step decided off a stale copy is a step made twice. A row that is
 	// gone, or holds another ending, was finished by whoever got there first.
+	//
+	// AND WHETHER THIS NODE'S STORE ANSWERED IT, which a stop's read of a box
+	// whose host's store is silent is judged by ([Coordinator.readStopped]):
+	// that silence is the host's alone only where this node's is not.
+	rowRead := false
 	switch current, found, err := c.pending.Get(ctx, run.TurnID); {
 	case err != nil:
 		// Read as the caller handed it: every step below is one a repeat
@@ -5133,7 +5138,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 	case !found || current.Ending == nil || current.Ending.ID != run.Ending.ID:
 		return nil
 	default:
-		run = current
+		run, rowRead = current, true
 	}
 	var handed []string
 	reclaimed, announced, ended, named := false, false, false, false
@@ -5172,7 +5177,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if !mayAsk && run.SandboxID != "" && run.CommandID != "" {
 				return errAskAway
 			}
-			collected, err := c.collectStopped(ctx, run)
+			collected, err := c.collectStopped(ctx, run, rowRead)
 			if err != nil {
 				return err
 			}
