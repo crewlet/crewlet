@@ -75,12 +75,20 @@ type APIError struct {
 	Code    string
 	Message string
 	Reasons []string
+
+	// RetryAfter is how long a 429 asked the call to wait, zero otherwise.
+	RetryAfter time.Duration
+	// Unwaited is why a read handed a 429 back rather than waiting it out.
+	Unwaited string
 }
 
 func (e *APIError) Error() string {
 	s := fmt.Sprintf("googlecloud: %s %s: %s", e.Method, e.Path, e.answer())
 	if len(e.Reasons) > 0 {
 		s += " [" + strings.Join(e.Reasons, ", ") + "]"
+	}
+	if e.Unwaited != "" {
+		s += fmt.Sprintf(" (asked to wait %s; %s)", e.RetryAfter, e.Unwaited)
 	}
 	return s
 }
@@ -415,9 +423,30 @@ func (c *Client) call(ctx context.Context, method, address string, body, out any
 	return c.authorized(ctx, func(bearer string) error { return c.do(ctx, method, address, bearer, body, out) })
 }
 
-// do makes one call and decodes its answer into out. It is the only place a
-// request is built.
+// do makes one call, waiting out a short 429 on a read as Google asks. A
+// write's 429 is handed back as it came: a create Google refuses for a quota
+// answers the same status, and a wait clears no quota.
 func (c *Client) do(ctx context.Context, method, address, bearer string, body, out any) error {
+	for attempt := 0; ; attempt++ {
+		err := c.once(ctx, method, address, bearer, body, out)
+		api, ok := errors.AsType[*APIError](err)
+		if !ok || api.Status != http.StatusTooManyRequests || method != http.MethodGet {
+			return err
+		}
+		limit := httpx.VendorRateLimit()
+		limit.Wait = c.clock.sleep
+		unwaited := limit.WaitOut(ctx, attempt, api.RetryAfter)
+		if unwaited == nil {
+			continue
+		}
+		api.Unwaited = unwaited.Error()
+		return api
+	}
+}
+
+// once sends one request and decodes its answer into out. It is the only
+// place a request is built.
+func (c *Client) once(ctx context.Context, method, address, bearer string, body, out any) error {
 	var reader io.Reader
 	contentType := ""
 	switch b := body.(type) {
@@ -455,7 +484,16 @@ func (c *Client) do(ctx context.Context, method, address, bearer string, body, o
 		return fmt.Errorf("googlecloud: read %s %s: %w", method, pathOf(address), err)
 	}
 	if res.StatusCode >= http.StatusMultipleChoices {
-		return refusalOf(method, pathOf(address), res, payload)
+		api := refusalOf(method, pathOf(address), res, payload)
+		if res.StatusCode == http.StatusTooManyRequests {
+			// GOOGLE NAMES A WAIT ON SOME LIMITS AND NONE ON OTHERS.
+			wait, named := httpx.RetryAfter(res.Header, c.clock.now())
+			if !named {
+				wait = httpx.DefaultRetryAfter
+			}
+			api.RetryAfter = wait
+		}
+		return api
 	}
 	if out != nil && len(bytes.TrimSpace(payload)) > 0 {
 		if err := json.Unmarshal(payload, out); err != nil {

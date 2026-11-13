@@ -56,7 +56,10 @@ type fakeScaleway struct {
 	keys     map[string]*fakeKey
 	sets     map[string]string
 	projects []scaleway.Project
-	seq      int
+	// projectFields is what every project's row carries beside its ID and
+	// name: the fields a read of the projects never decodes.
+	projectFields map[string]any
+	seq           int
 	// now is the fake's clock, which a test moves through [fakeScaleway.edit].
 	now time.Time
 
@@ -433,7 +436,9 @@ func (f *fakeScaleway) serve(w http.ResponseWriter, r *http.Request) {
 	case "projects":
 		rows := make([]any, 0, len(f.projects))
 		for _, p := range f.projects {
-			rows = append(rows, p)
+			row := map[string]any{"id": p.ID, "name": p.Name}
+			maps.Copy(row, f.projectFields)
+			rows = append(rows, row)
 		}
 		f.page(w, r, "projects", rows)
 	}

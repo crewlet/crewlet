@@ -12,6 +12,9 @@
 // to the worker by the engine rather than registered, since it runs commands
 // through the node's SSH runner. Its fifth reads GitLab (ADR-0135): every
 // project of the company's group, its pipeline and its environments.
+// Its sixth and seventh read Google Cloud and Scaleway (ADR-0137): every
+// project as an account, and what a Google Cloud project's enabled APIs say
+// it is used for.
 //
 // # Its own duty, never the reconcile loop
 //
