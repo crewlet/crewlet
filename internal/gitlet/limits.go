@@ -200,13 +200,13 @@ const (
 	// this log whether or not the company hosts code, and prices what this
 	// log takes a day at the reference company, each push priced
 	// as a coding box's, the most a seat's push takes: 3 000 pushes at the
-	// MEASURED 1 625 bytes a seat's coding box's push alone in its record
-	// (BenchmarkPushLogBytes), 4.9 MB, the compactions that merge their
+	// MEASURED 1 667 bytes a seat's coding box's push alone in its record
+	// (BenchmarkPushLogBytes), 5.0 MB, the compactions that merge their
 	// packs and the sweeps of what those retired at the MEASURED 108 and 44
 	// bytes a push (internal/gitlet/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
 	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
-	// records, 14.5–86.4 MB (each MEASURED as its writer forms it,
+	// records, 14.6–86.5 MB (each MEASURED as its writer forms it,
 	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
 	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
 	// record in its signed frame. Two thirds is below that day: a company
