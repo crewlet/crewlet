@@ -388,8 +388,10 @@ type EndedNote struct {
 	Read *NoteRead
 
 	// Serve is the hook's serve the outcome is at, where it is one: for a note
-	// unconfirmed, its live serve ([RunNote.LiveServe]); for one missed that
-	// no read marked, the last of its serves, every one of them lost. Nil
+	// unconfirmed, the serve that was live before every read of it that handed
+	// nothing over, a take marked unanswered or the brief of a job that never
+	// started ([RunNote.LiveServe] of the note unread); for one missed that no
+	// read marked, the last of its serves, every one of them lost. Nil
 	// otherwise.
 	Serve *HookServed
 }
@@ -406,9 +408,10 @@ type EndedNote struct {
 //     step that handed it over: still waiting, or read only by a take marked
 //     unanswered or by the brief of a job that never started. The session it
 //     was handed into may hold it, and nothing says it does; a note that may
-//     have reached the run is never said to have reached nothing. At its live
-//     hook serve, where a hook was served it ([EndedNote.Serve]), the step it
-//     was handed over at; else at the job a poll served it to.
+//     have reached the run is never said to have reached nothing. At the hook's
+//     serve that was live before those reads, where a hook was served it
+//     ([EndedNote.Serve]), the step it was handed over at; else at the job a
+//     poll served it to.
 //   - MISSED: read by a take marked UNANSWERED ([NoteRead.Unanswered]), and
 //     told again by no launch whose job started: the take's write landed, its
 //     answer never reached its reader, and no later write records the note
@@ -467,8 +470,11 @@ func (r PendingRun) EndedNotes() []EndedNote {
 // of a note that brief read is what it knew before the brief: that nothing
 // read it, where the brief was the first to tell it, and that a take whose
 // answer was lost read it, where the brief told it again — the take's read
-// the brief kept ([NoteRead.Retold]). So a hook's serve that was live before
-// that brief read the note is live still.
+// the brief kept ([NoteRead.Retold]). NOR DID A TAKE MARKED UNANSWERED, whose
+// answer never reached its reader ([NoteRead.Unanswered]). So a hook's serve
+// that was live before every read of the note that handed nothing over is
+// live still, and a note unconfirmed is reported at it: the step its hook
+// answered, never a poll's.
 func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	if n.For != "" {
 		return EndedNote{}, false
@@ -477,8 +483,6 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	if r.briefNeverRan(n) {
 		read = read.Retold
 	}
-	before := n
-	before.Read = read
 	lost := lostServe(n)
 	end := EndedNote{Note: n}
 	switch {
@@ -487,8 +491,13 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	case read != nil && !read.Unanswered:
 		return EndedNote{}, false
 	case n.Served != "":
+		// EVERY READ OF THE NOTE HANDED NOTHING OVER here: none read it, or a
+		// take marked unanswered did, or the brief of a job that never
+		// started, so its serve is asked of the note as it stood unread.
 		end.Outcome = types.SteerUnconfirmed
-		if live, ok := before.LiveServe(); ok {
+		unread := n
+		unread.Read = nil
+		if live, ok := unread.LiveServe(); ok {
 			end.Serve = &live
 		}
 	case read != nil:

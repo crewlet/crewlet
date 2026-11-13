@@ -2519,6 +2519,60 @@ func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 	}
 }
 
+// A NOTE A HOOK WAS SERVED IS REPORTED AT THAT SERVE, WHATEVER TAKE THAT HANDED
+// NOTHING OVER READ IT AFTER. A note a run's hook was served and its job's
+// session never confirmed is taken by the review's round of the segment that
+// resumes the turn, through a write that lands with its answer lost and a
+// settle the store does not answer, and the segment's end marks that take
+// unanswered: it never reached its reader, so it handed nothing over, as a
+// brief whose job never started hands nothing over. The ending reports the
+// note unconfirmed at the step the hook answered, of the job it served and at
+// the iteration the serve kept, never at a poll's step.
+//
+// Mutation: read the serve's liveness off the note with the marked read kept,
+// and the case goes red.
+func TestAnEndingReportsAHookServedNoteAMarkedTakeReadAtItsServe(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, &lostAnswerStore{PendingStore: store, failSettles: 1})
+	runs.stopped = ctx.Done()
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "deploy to prod", By: "founder"})
+	if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: []string{"n-1"}, Launch: launch,
+		Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "take-1",
+			Boundary: string(types.SteerBoundaryToolBatch), Iteration: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	source := claimedSource(t, store, runs, launch)
+	if got := source.Take(ctx, reviewRound(1)); len(got) != 0 {
+		t.Fatalf("the review's round was handed %+v by a take whose answer and settle were lost", got)
+	}
+	source.Close(ctx)
+	if read := readOn(ctx, store, "run-1", "n-1"); read == nil || !read.Unanswered ||
+		read.Boundary != string(types.SteerBoundaryRound) {
+		t.Fatalf("the premise: the note is read %+v, want the review's take's read, marked unanswered", read)
+	}
+	run := mustRow(t, store, "run-1")
+	if run.Launch.Iteration == 3 {
+		t.Fatal("the premise: the record keeps the serve's own iteration for its job")
+	}
+	run.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)}
+	if err := runs.ended(ctx, run); err != nil {
+		t.Fatalf("ended: %v", err)
+	}
+	recs := steered(p)
+	if len(recs) != 1 {
+		t.Fatalf("the ending reported %+v, want the one note", recs)
+	}
+	if rec := recs[0]; rec.NoteID != "n-1" || rec.Outcome != types.SteerUnconfirmed ||
+		rec.Phase != types.PhaseExecute || rec.Round != 1 || rec.Boundary != types.SteerBoundaryToolBatch ||
+		rec.Iteration != 3 || rec.LaunchID != launch {
+		t.Errorf("the note a hook served and a marked take read was reported %+v, want it unconfirmed at the "+
+			"tool batch, iteration 3, of job %s", rec, launch)
+	}
+}
+
 // AN ITEM FOR A JOB NEVER LEAVES IT. An item for one job (sandbox.RunNote.For)
 // is that job's alone. On an OpenCode job its poll serves it and its
 // confirmation reads it, as a person's note; and nothing outside the job takes,
