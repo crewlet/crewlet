@@ -129,7 +129,9 @@ import (
 //  3. EVERY LEG ANSWERED, LIVE IN THE MAIN THREAD. Its legs are the call that
 //     started it, and every SendMessage call of the main thread to it, but one
 //     its own result refused (`success`, the literal false); a SendMessage
-//     whose result is missing stays a leg. The call that started it is
+//     whose result is missing stays a leg, and one sent under an id the log
+//     keeps none of is a leg nothing can answer ([holdingsWalk.leg]). The
+//     call that started it is
 //     answered by its own result's record (`status` "completed" naming it,
 //     no error, of a subagent its metadata says the call waited for), or by a
 //     task notification of it; a SendMessage only by a task notification of
@@ -182,9 +184,14 @@ import (
 // line's raw keys and its message's decode, each at most a line; what the
 // message's calls keep (a line of the smallest results keeps about three
 // times the line); one result's text; a metadata; and its facts: a few words
-// for each asked call, each leg and each notification, and for each subagent
-// a few more and a description of at most [holdingsDescriptionBytes], about 2
-// MiB at the bounds. About 75 MiB in all, inside the hundred or so one of the
+// and an id of at most [sandbox.MaxBridgeCallIDBytes] for each asked call,
+// each leg and each notification, and for each subagent a few more and a
+// description of at most [holdingsDescriptionBytes], about 2 MiB at the
+// bounds. EVERY ID IT KEEPS IS ONE THE CALL-ID RULE HOLDS: a call under any
+// other is kept as no leg ([holdingsWalk.leg]), and a metadata naming one
+// keeps none ([subagentMetaOf]), since an id is the box's word, as long as a
+// line, and nothing can link, answer or notice a call under one. About 75 MiB
+// in all, inside the hundred or so one of the
 // process's transcript slots is sized for ([TranscriptReadsAtOnce]). MEASURED
 // on two cores (BenchmarkAReadingAtItsBounds): its worst is a line at the
 // line's bound of the smallest results a message holds, 67 MiB live, read in
@@ -216,12 +223,14 @@ const holdingsWriterFloor = "2.1.310"
 const holdingsMaxAgents = 1024
 
 // holdingsMaxLegs is the most legs a reading keeps of the main thread: its
-// Agent, Task and SendMessage calls, and each task notification it files
-// under one.
+// Agent, Task and SendMessage calls, each task notification it files under
+// one, and each subagent sent a message under an id the call-id rule refuses.
 //
 // FOUR FOR EACH SUBAGENT A READING READS ([holdingsMaxAgents]): a real
 // corpus's main threads (probe P6) made 50 Agent calls in all. Each costs a
-// reading a few words. Past it, no reading.
+// reading a few words and ids the call-id rule holds, at most
+// [sandbox.MaxBridgeCallIDBytes] each: a call under any other id is kept as no
+// leg ([holdingsWalk.leg]). Past it, no reading.
 const holdingsMaxLegs = 4 * holdingsMaxAgents
 
 // holdingsMetaMaxBytes is the most of a subagent's metadata a reading reads.
@@ -356,10 +365,13 @@ type holdingsWalk struct {
 	// agents are the subagents whose members the reading read, by agent id.
 	agents map[string]*subagentFacts
 	// legs are the main thread's legs of subagents' work, by the id of the
-	// call each is; notices the task notifications filed under one, each the
-	// line of the last; and kept how many of the two the reading keeps.
+	// call each is, an id the call-id rule holds; notices the task
+	// notifications filed under one, each the line of the last; unnamed the
+	// subagents the main thread sent a message under an id that rule refuses
+	// ([holdingsWalk.leg]); and kept how many of the three the reading keeps.
 	legs    map[string]*legFact
 	notices map[legNotice]int
+	unnamed map[string]bool
 	kept    int
 }
 
@@ -448,7 +460,7 @@ func newHoldingsWalk(session string, ask sandbox.HoldingsAsk, bounds scrubBounds
 	main, _ := claudeMainThread(session)
 	w := &holdingsWalk{session: session, main: main, bounds: bounds, read: map[string]bool{},
 		calls: map[string]*callFacts{}, agents: map[string]*subagentFacts{}, legs: map[string]*legFact{},
-		notices: map[legNotice]int{}}
+		notices: map[legNotice]int{}, unnamed: map[string]bool{}}
 	for _, c := range ask.Calls {
 		if c.Asked {
 			w.calls[c.ID] = &callFacts{}
@@ -629,11 +641,27 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int) {
 
 // leg files call, a model's call in the main thread, as a leg of subagents'
 // work where it is one: an Agent or Task call, or a SendMessage call.
+//
+// ONLY UNDER AN ID THE LOG KEEPS ([sandbox.ValidCallID]), the rule a
+// metadata's `toolUseId` and a notification's leg are held to, so a leg under
+// any other id is one nothing can link, answer or notice; and an id is the
+// box's word, as long as a line, which a leg filed under it would hold until
+// the walk ends. So an Agent or Task call under such an id is kept as nothing,
+// its subagent linked to no call; and a SendMessage under one keeps only the
+// subagent it was sent to ([holdingsWalk.sentUnnamed]), which it leaves
+// unreported: its result is filed under that id too, so not even a refusal of
+// it is read, and that subagent's calls stay told, the safe direction.
 func (w *holdingsWalk) leg(call threadCall) error {
 	switch call.Name {
 	case claudeToolAgent, claudeToolTask, claudeToolSendMessage:
 	default:
 		return nil
+	}
+	if !sandbox.ValidCallID(call.ID) {
+		if call.Name != claudeToolSendMessage {
+			return nil
+		}
+		return w.sentUnnamed(sendTarget(call.Input))
 	}
 	leg := w.legs[call.ID]
 	if leg == nil {
@@ -654,8 +682,25 @@ func (w *holdingsWalk) leg(call threadCall) error {
 	return nil
 }
 
-// keep takes one more of the legs and notifications a reading keeps, or says
-// the main thread holds more than [holdingsMaxLegs].
+// sentUnnamed files a SendMessage the main thread sent under an id the call-id
+// rule refuses, to subagent to, "" where its input names none
+// ([holdingsWalk.leg]): that subagent is one a reading does not report. Each
+// subagent filed so is one more of what a reading keeps ([holdingsWalk.keep]).
+func (w *holdingsWalk) sentUnnamed(to string) error {
+	if to == "" || w.unnamed[to] {
+		return nil
+	}
+	if err := w.keep(); err != nil {
+		return err
+	}
+	w.unnamed[to] = true
+	return nil
+}
+
+// keep takes one more of what a reading keeps of the main thread's legs (a
+// leg's call, a notification filed under one, and a subagent sent a message
+// under an id the call-id rule refuses), or says the main thread holds more
+// than [holdingsMaxLegs].
 func (w *holdingsWalk) keep() error {
 	if w.kept == holdingsMaxLegs {
 		return &holdingsError{why: fmt.Sprintf("the session's main thread holds more than %d legs of "+
@@ -874,9 +919,13 @@ func subagentMetaOf(raw []byte) (subagentMeta, string) {
 		return subagentMeta{}, whyOf("its metadata's description is no string", err)
 	}
 	meta.description = cutDescription(meta.description)
+	// AN ID THE CALL-ID RULE REFUSES IS NOT KEPT: it links nothing, and a
+	// metadata's is up to its bound long, which every subagent's kept until
+	// the walk ends would hold a thousand times over.
 	if meta.call, err = wireRequiredString("toolUseId", wire.ToolUseID); err != nil ||
 		!sandbox.ValidCallID(meta.call) {
-		return meta, "its metadata names the call that started it by no id the log keeps"
+		return subagentMeta{description: meta.description},
+			"its metadata names the call that started it by no id the log keeps"
 	}
 	if !bytes.Equal(wire.SpawnDepth, []byte("1")) {
 		return meta, "its metadata says no depth of 1"
@@ -1094,6 +1143,10 @@ func (w *holdingsWalk) unreported(agent string, a *subagentFacts, sends []string
 		a.meta.foreground && start.line > w.lastRestart
 	if !own && !w.noticed(agent, a.meta.call) {
 		return fmt.Sprintf("the call that started it, %s, has no live answer in the main thread", a.meta.call)
+	}
+	if w.unnamed[agent] {
+		return "a message sent to it under an id the log keeps none of has no live answer in the main thread: " +
+			"no notification can name it"
 	}
 	for _, send := range sends {
 		if !w.noticed(agent, send) {

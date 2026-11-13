@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1688,6 +1689,88 @@ func TestEveryKeyTheReadingDecodesIsExactAndLastWins(t *testing.T) {
 			t.Parallel()
 			hsReports(t, tc.session(t), tc.why)
 		})
+	}
+}
+
+// NO ID THE CALL-ID RULE REFUSES IS KEPT: an id is the box's word, as long as a
+// line, and nothing can link, answer or notice a call under one, so a leg filed
+// under it would hold the box's bytes until the walk ends, a hundred mebibytes
+// of them in a hundred lines. An Agent call under an id a mebibyte long and a
+// Task call under one holding a space are kept as nothing; a SendMessage under
+// an id one byte past the rule's bound keeps the subagent it was sent to alone;
+// a call under an id the rule holds is kept as its leg; and a metadata naming
+// the call that started its subagent by an id most of the metadata's bound
+// long keeps no id at all.
+//
+// Mutation: file a leg under its call's id whatever it is, or keep the id of a
+// metadata that links nothing, and the walk holds the box's id.
+func TestNoIDTheCallIDRuleRefusesIsKept(t *testing.T) {
+	t.Parallel()
+	w := newHoldingsWalk(ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)), hsBounds())
+	for _, call := range []threadCall{
+		{Kind: blockToolUse, ID: "toolu_" + strings.Repeat("l", 1<<20), Name: claudeToolAgent,
+			Input: json.RawMessage(hsAgentInput)},
+		{Kind: blockToolUse, ID: "toolu test task", Name: claudeToolTask, Input: json.RawMessage(hsAgentInput)},
+		{Kind: blockToolUse, ID: strings.Repeat("s", sandbox.MaxBridgeCallIDBytes+1), Name: claudeToolSendMessage,
+			Input: json.RawMessage(hsSendInput)},
+		{Kind: blockToolUse, ID: hsStarted, Name: claudeToolAgent, Input: json.RawMessage(hsAgentInput)},
+	} {
+		if err := w.leg(call); err != nil {
+			t.Fatalf("filing a call of %s: %v", call.Name, err)
+		}
+	}
+	longest := 0
+	for id := range w.legs {
+		longest = max(longest, len(id))
+	}
+	if len(w.legs) != 1 || w.legs[hsStarted] == nil || len(w.unnamed) != 1 || !w.unnamed[ctAgent] || w.kept != 2 ||
+		longest > sandbox.MaxBridgeCallIDBytes {
+		t.Errorf("the walk keeps %d legs, the longest id %d bytes, %t of them %s's, and %d subagents sent a message "+
+			"under an id the rule refuses, %t of them %s, %d in all; want the one leg of %s, and %s alone, 2 in all",
+			len(w.legs), longest, w.legs[hsStarted] != nil, hsStarted, len(w.unnamed), w.unnamed[ctAgent], ctAgent,
+			w.kept, hsStarted, ctAgent)
+	}
+	long := strings.Repeat("t", holdingsMetaMaxBytes-1<<10)
+	meta, why := subagentMetaOf([]byte(ctReplace(t, ctMeta, `"toolUseId":"`+hsStarted+`"`, `"toolUseId":"`+long+`"`)))
+	if meta.call != "" || meta.description != "the subagent's task" || !strings.Contains(why, "no id the log keeps") {
+		t.Errorf("a metadata naming its call by %d bytes keeps a call of %d bytes and the description %q, saying "+
+			"%.80q; want no call, its description, and that it names no id the log keeps", len(long), len(meta.call),
+			meta.description, why)
+	}
+}
+
+// A SUBAGENT SENT A MESSAGE UNDER AN ID THE LOG KEEPS NONE OF IS NOT REPORTED:
+// no notification can name such a leg, so nothing in the main thread can
+// answer it, and its result is filed under that id too, so not even a refusal
+// of it is read. Its subagent's calls are told under its heading, whatever that
+// result says, and its thread recording no second leg; and what it says why
+// quotes no such id: a send under an id one byte past the rule's bound, one
+// holding a space and one a mebibyte long each leave a few words of the
+// reading's own.
+//
+// Mutation: read such a send as no leg at all, and its subagent is reported;
+// or file it under its id, and the subagent's why quotes the mebibyte.
+func TestASubagentSentAMessageUnderAnIDTheLogKeepsNoneOfIsNotReported(t *testing.T) {
+	t.Parallel()
+	for name, id := range map[string]string{
+		"an id past the rule's bound": strings.Repeat("s", sandbox.MaxBridgeCallIDBytes+1),
+		"an id holding a space":       "toolu test send",
+		"an id a mebibyte long":       "toolu_" + strings.Repeat("m", 1<<20),
+	} {
+		for outcome, success := range map[string]string{"that its result took": "true", "that its result refused": "false"} {
+			t.Run(name+", "+outcome, func(t *testing.T) {
+				t.Parallel()
+				s := hsForeground(t)
+				s.main = append(s.main,
+					ctAssistant(ctUUID(3), ctUUID(5), hsCallOf(id, claudeToolSendMessage, hsSendInput)),
+					hsAnswerOf(t, ctUUID(5), ctUUID(6), id, `{"success":`+success+`}`, hsSendResult(success)))
+				hsReports(t, s, hsUnanswered)
+				if why := hsSubagentRead(t, s).Subagents[ctAgent].Why; len(why) > 1<<8 || strings.Contains(why, id) {
+					t.Errorf("its subagent's why is %d bytes, %.80q, quoting the send's id %t; want a few words of "+
+						"the reading's own", len(why), why, strings.Contains(why, id))
+				}
+			})
+		}
 	}
 }
 

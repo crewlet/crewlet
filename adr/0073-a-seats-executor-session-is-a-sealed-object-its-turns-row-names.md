@@ -2358,11 +2358,13 @@ measured on; a writer below it, unknown or unreadable, is no reading);
 subagents to `holdingsMaxAgents` (1,024), legs to `holdingsMaxLegs` (4,096), a
 metadata to `holdingsMetaMaxBytes` (64 KiB), a description to
 `holdingsDescriptionBytes` (1 KiB); and the ask to `sandbox.MaxBridgeCalls`
-(200). It reads in the seats' one transcript slot, inside the process's two,
-with no pool of its own (`SeatTranscriptReadsAtOnce`), and waits for it inside
-its wait. Measured (`BenchmarkAReadingAtItsBounds`, run once on two cores): an
-ordinary session, 1.6 MiB sealed and 5.6 MiB of lines, reads in 48 ms holding 1
-MiB live; one at the archive's bound, 118 MiB of lines, in 1.0 s; 255 MiB of
+(200). Every id it keeps is one the log's call-id rule holds: an id is the
+box's word, as long as a line, and a call under any other is one nothing can
+link, answer or notice. It reads in the seats' one transcript slot, inside the
+process's two, with no pool of its own (`SeatTranscriptReadsAtOnce`), and waits
+for it inside its wait. Measured (`BenchmarkAReadingAtItsBounds`, run once on
+two cores): an ordinary session, 1.6 MiB sealed and 5.6 MiB of lines, reads in
+48 ms holding 1 MiB live; one at the archive's bound, 118 MiB of lines, in 1.0 s; 255 MiB of
 lines, the plaintext's bound, in 2.0 s holding 3 MiB live; 1,024 subagents in
 76 ms; 248 MiB of lines at the line's bound in 1.2 s holding 26 MiB live; and
 its worst, a line at that bound of the smallest results a message holds, every
@@ -2391,7 +2393,8 @@ exactly one Agent or Task call of the main thread; its thread is whole and
 never restarts; each leg (that call, and each SendMessage to it its own result
 did not refuse) has a live answer in the main thread, the call's own completed
 foreground answer or a task notification, which a continuation hands its model
-verbatim (probe T, T10); its thread starts no more legs than that; and each leg
+verbatim (probe T, T10), and a SendMessage under an id the log keeps none of is
+a leg nothing answers; its thread starts no more legs than that; and each leg
 ends on a finished reply. A call in an unreported subagent's thread is told
 under that subagent's heading. A seat server's call needs no rule of its own:
 every continuation probe T made carried the call and its result whether its
