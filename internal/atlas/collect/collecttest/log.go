@@ -1,5 +1,6 @@
 // Package collecttest holds what the tests of the atlas's readers share: the
-// atlas log as a reader writes it, kept in memory. One copy, so a vendor's
+// atlas log as a reader writes it, kept in memory, and a read said as figures
+// alone ([Counts]), for a probe of a real account. One copy, so a vendor's
 // test and the reader's own judge a record the same way.
 package collecttest
 

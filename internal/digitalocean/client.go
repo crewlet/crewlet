@@ -149,8 +149,15 @@ func (c *Client) Revoke(ctx context.Context) error {
 // waiting out a short 429 as DigitalOcean asks. It is the only place a
 // request is built.
 func (c *Client) call(ctx context.Context, method, address, body, contentType string, out any) (int, error) {
+	return c.callWithin(ctx, method, address, body, contentType, maxResponse, out)
+}
+
+// callWithin is [Client.call] reading an answer of at most limit bytes.
+func (c *Client) callWithin(
+	ctx context.Context, method, address, body, contentType string, limit int64, out any,
+) (int, error) {
 	for attempt := 0; ; attempt++ {
-		status, err := c.once(ctx, method, address, body, contentType, out)
+		status, err := c.once(ctx, method, address, body, contentType, limit, out)
 		api, ok := errors.AsType[*APIError](err)
 		if ok && api.Status == http.StatusTooManyRequests &&
 			c.limit.WaitOut(ctx, attempt, api.RetryAfter) == nil {
@@ -161,7 +168,9 @@ func (c *Client) call(ctx context.Context, method, address, body, contentType st
 }
 
 // once sends one request and reads its answer.
-func (c *Client) once(ctx context.Context, method, address, body, contentType string, out any) (int, error) {
+func (c *Client) once(
+	ctx context.Context, method, address, body, contentType string, limit int64, out any,
+) (int, error) {
 	path := address
 	if u, err := url.Parse(address); err == nil {
 		path = u.Path
@@ -184,10 +193,11 @@ func (c *Client) once(ctx context.Context, method, address, body, contentType st
 		return 0, fmt.Errorf("digitalocean: %s %s: %w", method, path, err)
 	}
 	defer func() { _ = res.Body.Close() }()
-	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
+	payload, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	if err != nil {
 		return res.StatusCode, fmt.Errorf("digitalocean: read %s %s: %w", method, path, err)
 	}
+
 	if res.StatusCode >= http.StatusMultipleChoices {
 		api := &APIError{Method: method, Path: path, Status: res.StatusCode}
 		var refusal struct {
@@ -210,6 +220,10 @@ func (c *Client) once(ctx context.Context, method, address, body, contentType st
 		return res.StatusCode, api
 	}
 	if out != nil {
+		if int64(len(payload)) > limit {
+			// CUT SHORT IS NOT AN ANSWER: half a listing is not a short one.
+			return res.StatusCode, fmt.Errorf("digitalocean: %s %s answered more than %d bytes", method, path, limit)
+		}
 		if err := json.Unmarshal(payload, out); err != nil {
 			return res.StatusCode, fmt.Errorf("digitalocean: decode %s %s: %w", method, path, err)
 		}

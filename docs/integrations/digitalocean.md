@@ -2,7 +2,7 @@
 
 DigitalOcean gives each agent its **own personal access token** in the company's DigitalOcean team, at the level you choose. An agent reads Droplets, volumes, networking, DNS, databases, Kubernetes clusters, apps and monitoring and, where its level allows it, creates, changes and deletes them, through `doctl` in its own container and DigitalOcean's own MCP server.
 
-DigitalOcean lets no API create a token, so **you create each agent's token in the control panel in a few clicks and paste it**. Crewlet proves the token's scopes, seals it, and from then on reads everything with that token. Crewlet holds no DigitalOcean token of its own, and revokes an agent's token itself when you turn the agent off or replace its token. Nothing here receives events from DigitalOcean yet; see [What is not supported yet](#what-is-not-supported-yet).
+DigitalOcean lets no API create a token, so **you create each agent's token in the control panel in a few clicks and paste it**. Crewlet proves the token's scopes, seals it, and from then on reads everything with that token. Crewlet holds no DigitalOcean token for provisioning, and revokes an agent's token itself when you turn the agent off or replace its token. Nothing here receives events from DigitalOcean yet; see [What is not supported yet](#what-is-not-supported-yet).
 
 ## What agents get
 
@@ -18,7 +18,7 @@ No level holds billing, team or role management, the team's stored secrets, its 
 
 ## Setting it up from the dashboard
 
-Company › Integrations › DigitalOcean asks one thing: the **team**, by its name as the team menu at the top of the control panel shows it. There is nothing to test at this point. The first agent's token proves the team, and its Team ID is shown when the token is accepted, to compare with Account › Settings › Team.
+Company › Integrations › DigitalOcean asks one thing: the **team**, by its name as the team menu at the top of the control panel shows it. Its one other field, the **Atlas read token**, is optional ([let the atlas read the team](#let-the-atlas-read-the-team)). There is nothing to test about the team at this point. The first agent's token proves the team, and its Team ID is shown when the token is accepted, to compare with Account › Settings › Team.
 
 See [Setting an integration up](../reference/api-endpoints.md#setting-an-integration-up) for the routes behind it.
 
@@ -142,6 +142,35 @@ Each pass reads every agent's token with the token itself, and proves its level 
 
 Disconnecting turns every agent off, revokes their tokens at DigitalOcean and clears them. If a revoke fails then, the row says which token to delete in the control panel.
 
+## Let the atlas read the team
+
+Optional. With nothing more than the team's name, the company's [atlas](../concepts/atlas.md#what-integrations-read) shows DigitalOcean as one account. To see what runs there, give the atlas a read-only token of its own. No agent needs it, nothing waits on it, and no agent's token is ever used for it.
+
+**The one step.** In the control panel, switch to the team, open **API › Tokens › Generate New Token**, name the token `crewlet-atlas`, choose **Custom Scopes**, and tick these eight scopes and no other:
+
+| Scope | What the atlas reads with it |
+|---|---|
+| `account:read` | which team the token acts in, so a token of another team is refused. The account's user and email are not read |
+| `droplet:read` | each Droplet as a server: its name, region and addresses (a private address is marked internal) |
+| `kubernetes:read` | each Kubernetes cluster as a server: its name and region. Its endpoint, its node pools and its credentials are not read |
+| `database:read` | each managed database as a database (a Kafka cluster as a queue): its name, engine, version and region. Its connection details, its users and its passwords are not read |
+| `load_balancer:read` | each load balancer as a server: its name, region and addresses |
+| `domain:read` | each domain, and each name its A, AAAA and CNAME records give with what it points at. Records are asked for by those three types, so a TXT record is never sent |
+| `app:read` | each App Platform app as a service: its name, its addresses, the GitHub and GitLab repositories it is built from, and the managed databases it is attached to. Its environment variables are not read |
+| `project:read` | each Spaces bucket by its name, from the resources its project lists. DigitalOcean lists buckets themselves to a Spaces access key alone, which the atlas never holds |
+
+Then paste the token under **Company › Integrations › DigitalOcean › Atlas read token** and press **Test**. Crewlet seals it as `DIGITALOCEAN_ATLAS_TOKEN` and reads the team within a minute, then every hour (the company's `atlas.refresh_interval_seconds`).
+
+**A token that can change anything is refused.** A token cannot read its own scopes, so Crewlet proves them, when you press Test and again before every read, with the same requests that prove an agent's token: each is refused by DigitalOcean with a `403` before it can have an effect. A token that can create, change or delete a resource, read billing, the team's stored secrets, registry credentials or Spaces keys, download cluster credentials, read database passwords or open a console reads nothing, and the atlas's Sources page says which scope to remove. A Full Access or Read Only token is refused for that reason. The proof covers the scopes the checks can see, the same ones as for an agent, so a write scope no check reaches is not noticed: tick only the eight above.
+
+**A scope you leave out is a part left unread.** The read completes with the rest, the Sources page names the scope to tick, and what an earlier read recorded of that part stays. DigitalOcean cannot change a token's scopes, so widening it means creating the token again.
+
+**What DigitalOcean shows.** The token acts as the person who created it, as every personal access token does, and its name, `crewlet-atlas`, is what tells its reads from an agent's in the team's token list.
+
+**To undo it.** Delete the token `crewlet-atlas` in the control panel and clear the field (or remove `integrations.digitalocean.atlas` from the company configuration). The atlas stops reading the team. What it recorded stays, each entry showing when it was last seen, until a person retires it.
+
+**Cost.** One read is about thirty requests that prove the token, one listing per kind (a hundred rows a page, twenty for apps), three per domain and one per project, far inside the 5,000 an hour DigitalOcean allows a token. A `429` is waited out; a listing that fails part way stops the read, which records nothing and is made again five minutes later.
+
 ## Configuration
 
 ```yaml
@@ -150,6 +179,8 @@ integrations:
     enabled: true
     provisioning:
       team: Example Team
+    atlas:
+      token: ${DIGITALOCEAN_ATLAS_TOKEN}
 ```
 
 | Field | Required | Meaning |
@@ -158,7 +189,10 @@ integrations:
 | `provisioning` | yes | The team the agents' tokens act in. Required when enabled. |
 | `provisioning.team` | yes | The team's name as the control panel's team menu shows it, on one line with no leading or trailing space, or a `${VAR}`. Every agent's token must be made in this team. After the first token, later tokens must also be in the same team by its Team ID, so a second team with the same name is refused. |
 
-The block holds no credential. Each agent's token is its own, pasted on the Agents tab.
+| `atlas` | no | The atlas's own read of the team. Leave it out and the atlas shows the DigitalOcean account alone. |
+| `atlas.token` | no | A `${VAR}` naming the sealed personal access token made for the atlas, with the eight read scopes of [Let the atlas read the team](#let-the-atlas-read-the-team). The dashboard seals it as `DIGITALOCEAN_ATLAS_TOKEN`. A token that can change anything, and any agent's own token, is refused. |
+
+The block holds no agent's credential. Each agent's token is its own, pasted on the Agents tab.
 
 ## What DigitalOcean records
 
