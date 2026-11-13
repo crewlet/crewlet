@@ -910,10 +910,15 @@ func (s *suite) runCore(t *testing.T) {
 				return queue.Ack()
 			})
 
-		var wg sync.WaitGroup
+		var (
+			wg        sync.WaitGroup
+			published atomic.Int64
+		)
 		wg.Go(func() {
 			for i := range overlapRounds {
-				_ = q.Publish(ctx, "topic.overlap", newEvent(fmt.Sprintf("m%d", i)))
+				if q.Publish(ctx, "topic.overlap", newEvent(fmt.Sprintf("m%d", i))) == nil {
+					published.Add(1)
+				}
 			}
 		})
 		wg.Go(func() {
@@ -933,6 +938,16 @@ func (s *suite) runCore(t *testing.T) {
 			t.Fatalf("the in-flight count went negative (%d), so a drain would "+
 				"never converge", got)
 		}
+		// EVERYTHING FINISHED IS EVERY MESSAGE HANDLED, not the publisher
+		// and the waiter returning: the consumer may still be working
+		// through the backlog then, and a wait begun there can wake on the
+		// moment between two deliveries and read the count after the next
+		// one began — a drain that reports one in flight, rightly, for a
+		// handler that started after it woke. Only once nothing is left to
+		// start is a non-zero answer a handler the count failed to end.
+		awaitState(t, "every published message to be handled", func() bool {
+			return handled.Load() >= published.Load()
+		})
 		remaining, err := q.WaitForHandlers(ctx, settleFor)
 		if err != nil {
 			t.Fatalf("WaitForHandlers after the overlap: %v", err)
