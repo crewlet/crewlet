@@ -60,16 +60,22 @@ import (
 // a node of the build that reads it — the only build that gets that far —
 // since the copy, never dropped, was handled again at the next.
 //
-// # Two nodes starting together may both deliver one copy, and that is safe
+// # A copy delivered twice is one wake
 //
-// Every parser that defers a newer record derives its wakes' ids from the
-// record's change and the recipient ([Routed.WakeID], changefeed.WakeID), so a
-// second copy of a wake carries the first's id, and its seat collapses it as it
-// collapses any redelivered wake: within one drain by the inbox's same-id
-// dedupe (internal/agent/inbox's Screen), and across drains by the fleet's
-// completion ledger (internal/engine's Dispatcher, which drops a worked
-// trigger). A held wake is recorded under an id derived from that one
-// ([HeldID]), and collapses alike.
+// Two nodes' replays can read one copy before either drops it, and a copy
+// whose drop failed is replayed again at the next start — a vendor's as much
+// as a first-party feed's, since a hand-back can spend any delivery's budget.
+// That is safe because EVERY wake's id is derived ([Routed.WakeID]): a parser
+// that defers a newer record derives its wakes' from the record's change and
+// the recipient (changefeed.WakeID), and a wake whose parser derived none —
+// every vendor's — takes one derived from the delivery's own id and the
+// recipient ([DeliveryWakeID]), which the copy carries. So a second copy of a
+// wake carries the first's id, and its seat collapses it as it collapses any
+// redelivered wake: within one drain by the inbox's same-id dedupe
+// (internal/agent/inbox's Screen), and across drains by the fleet's completion
+// ledger (internal/engine's Dispatcher, which drops a worked trigger). A held
+// wake is recorded under an id derived from that one ([HeldID]), and collapses
+// alike.
 //
 // # What waits
 //

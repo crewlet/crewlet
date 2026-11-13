@@ -69,10 +69,16 @@ type Routed struct {
 
 	// WakeID makes this wake RECOGNISABLE as a duplicate of itself.
 	//
-	// Nil takes a fresh random id, which is right for a webhook edge: a
-	// redelivery is collapsed by the inbound-delivery claim before a parser
-	// ever sees it, and there is nothing deterministic in most vendors'
-	// payloads to derive a stable id from anyway.
+	// Nil takes an id derived from the DELIVERY's own and the recipient's
+	// ([DeliveryWakeID]), under the delivery's own instant: what a vendor's
+	// parser leaves it at, since there is nothing deterministic in most
+	// vendors' payloads to derive a stable id from. A webhook's redelivery
+	// by its vendor is collapsed by the inbound-delivery claim before a
+	// parser ever sees it, but the delivery itself is handled again — by
+	// the group, when one of its wakes failed and the queue redelivers it,
+	// and by a replay of its copy, which a replay whose drop failed, or two
+	// nodes' replays reading it together, handle twice — and a random id
+	// woke its seat once for each.
 	//
 	// The ENGINE'S OWN producers set it, and so does the Mattermost socket
 	// (every node reads every seat's socket and claims each post), because
@@ -103,8 +109,9 @@ type Routed struct {
 	// The record's instant is the same on every copy, and it is earlier
 	// than the wake, which is the safe side for a lower bound.
 	//
-	// Zero keeps the delivery's own instant, which is right for a vendor
-	// edge's random id and for a record that carries no instant.
+	// Zero keeps the wake's own instant, which is right only for a record
+	// that carries none; a wake whose id is derived from its delivery's
+	// takes the delivery's instant.
 	WakeAt time.Time
 
 	// Held is a recipient the change told and does not wake: nothing is
@@ -675,6 +682,12 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		s.skip(ctx, r.Source, r.To.Handle, ReasonNoSeat, nil)
 		return nil
 	}
+	// EVERY WAKE CARRIES A DERIVED ID — see [Routed.WakeID]: one its parser
+	// derived, or else one derived here from the delivery's own and the
+	// recipient's, under the delivery's own instant.
+	if r.WakeID == uuid.Nil {
+		r.WakeID, r.WakeAt = DeliveryWakeID(ev.ID, party.Handle), ev.Timestamp
+	}
 	if r.Held {
 		return s.held(ctx, ev, r, party)
 	}
@@ -807,18 +820,15 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	wake := events.New(out, events.TraceContext{
 		TraceID: ev.TraceID, ParentSpanID: ev.SpanID,
 	})
-	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
-	// REPLACES the random one events.New minted rather than riding beside
-	// it, because the id is what the inbox and the fleet completion ledger
-	// key on, and a second field would be a second thing to remember to
-	// check.
-	if r.WakeID != uuid.Nil {
-		wake.ID = r.WakeID
-		// AND ITS INSTANT, which a producer retry must reproduce exactly
-		// as it reproduces the id — see [Routed.WakeAt].
-		if !r.WakeAt.IsZero() {
-			wake.Timestamp = r.WakeAt.UTC()
-		}
+	// THE DERIVED ID — see [Routed.WakeID]. It REPLACES the random one
+	// events.New minted rather than riding beside it, because the id is
+	// what the inbox and the fleet completion ledger key on, and a second
+	// field would be a second thing to remember to check.
+	wake.ID = r.WakeID
+	// AND ITS INSTANT, which a producer retry must reproduce exactly as it
+	// reproduces the id — see [Routed.WakeAt].
+	if !r.WakeAt.IsZero() {
+		wake.Timestamp = r.WakeAt.UTC()
 	}
 	wake.Source = "notify." + r.Source
 	// AND ONTO THE ENVELOPE, which is what every reader actually uses. The
@@ -864,6 +874,21 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		"agent_id", party.AgentID.String())
 	return nil
 }
+
+// DeliveryWakeID is the id of the wake delivery makes for the seat handle
+// where its parser derived none ([Routed.WakeID]): the same on every node, on
+// every redelivery of the delivery and on every replay of its copy, so the
+// seat's inbox and the fleet's completion ledger collapse a second wake of one
+// delivery as they collapse any redelivered wake. PER RECIPIENT, as
+// changefeed.WakeID is, because one delivery legitimately wakes several seats.
+func DeliveryWakeID(delivery uuid.UUID, handle string) uuid.UUID {
+	return uuid.NewSHA1(deliveryWakeNamespace, []byte(delivery.String()+"\x00"+handle))
+}
+
+// deliveryWakeNamespace scopes the wake ids derived from a delivery's own
+// ([DeliveryWakeID]). Fixed for the life of the deployment: a new one would
+// make every redelivery a fresh wake.
+var deliveryWakeNamespace = uuid.MustParse("7c4e9a12-3b5d-4f6e-8a90-1b2c3d4e5f60")
 
 // HeldID is the id a held wake is recorded under: name-based on the id its
 // wake would have had, the same on every node and redelivery, never that id.

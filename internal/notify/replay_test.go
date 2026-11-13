@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -579,6 +580,59 @@ func TestAReplayedCopyASheddingNodeDefersIsKept(t *testing.T) {
 	if left := inboundLetters(t, newer.q, notify.UnhandledSubject()); len(left) != 1 || left[0].Seq != at {
 		t.Fatalf("after a shedding node's replay the unhandled subject holds %d entries, want "+
 			"the copy it deferred, kept", len(left))
+	}
+}
+
+// dropFailsOnce is a queue's dead-letter verbs whose first drop fails.
+type dropFailsOnce struct {
+	queue.EventQueue
+	failed atomic.Bool
+}
+
+func (d *dropFailsOnce) DropDeadLetter(ctx context.Context, subject string, seq uint64) error {
+	if d.failed.CompareAndSwap(false, true) {
+		return errors.New("the dead-letter stream did not answer the drop")
+	}
+	return d.EventQueue.DropDeadLetter(ctx, subject, seq)
+}
+
+// A VENDOR'S COPY REPLAYED TWICE WAKES ITS SEAT UNDER ONE ID.
+//
+// Every copy kept with the group's unhandled deliveries is replayed, a vendor's
+// as much as a first-party feed's — a hand-back can spend any delivery's
+// budget — and a copy whose drop failed is replayed again at the next start.
+// A vendor's parser derives no wake id, so each replay minted a fresh one and
+// the seat worked a turn for each. Derived from the copy's own delivery, the
+// second replay's wake is the first's, and the seat's inbox and the completion
+// ledger collapse it.
+//
+// Mutation: leave a parser's nil id to a random one, and the two replays'
+// wakes differ.
+func TestAVendorCopyReplayedTwiceWakesItsSeatUnderOneID(t *testing.T) {
+	var letters *dropFailsOnce
+	vendor := newService(t, func(o *notify.Options, h *harness) {
+		letters = &dropFailsOnce{EventQueue: h.q}
+		o.DeadLetters = letters
+	})
+	vendor.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+	d := delivery("tracker")
+	at := staged(t, vendor, "a vendor's copy", d)
+
+	vendor.svc.ReplayNow(t.Context())
+	if left := inboundLetters(t, vendor.q, notify.UnhandledSubject()); len(left) != 1 || left[0].Seq != at {
+		t.Fatalf("after a replay whose drop failed the unhandled subject holds %d entries, want "+
+			"the copy, kept", len(left))
+	}
+	vendor.svc.ReplayNow(t.Context())
+
+	woken := vendor.settledN(t, inbox("engineering-lead"), 2)
+	if len(woken) != 2 || woken[0].ID != woken[1].ID ||
+		woken[0].ID != notify.DeliveryWakeID(d.ID, "engineering-lead") {
+		t.Fatalf("the two replays woke the seat under %v, want one id, derived from the delivery",
+			[]any{woken[0].ID, woken[len(woken)-1].ID})
+	}
+	if left := inboundLetters(t, vendor.q, notify.UnhandledSubject()); len(left) != 0 {
+		t.Errorf("after the second replay the unhandled subject holds %d entries, want none", len(left))
 	}
 }
 

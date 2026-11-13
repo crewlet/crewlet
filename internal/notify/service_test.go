@@ -1023,6 +1023,45 @@ func (p failingPublisher) Publish(ctx context.Context, topic string, ev *events.
 	return p.Queue.Publish(ctx, topic, ev)
 }
 
+// A WAKE WHOSE PARSER DERIVED NO ID TAKES ONE DERIVED FROM ITS DELIVERY.
+//
+// A vendor's parser derives no wake id — its payload holds nothing stable to
+// derive one from — and the delivery is still handled more than once: the
+// group redelivers one whose wakes partly failed, and a replay handles a kept
+// copy again. Each handling minted a fresh random id, so the seat's inbox and
+// the fleet's completion ledger saw two wakes and the seat worked two turns
+// for one delivery. Derived from the delivery's own id and the recipient, under
+// the delivery's own instant, every handling's wake is the same wake.
+//
+// Mutation: leave a parser's nil id to events.New's random one, and the two
+// handlings' wakes differ.
+func TestAWakeWhoseParserDerivedNoIDTakesOneFromItsDelivery(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+	d := delivery("tracker")
+
+	for range 2 {
+		if got := h.svc.Handle(t.Context(), d); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("Handle = %+v, want an ack", got)
+		}
+	}
+	woken := h.settledN(t, inbox("engineering-lead"), 2)
+	want := notify.DeliveryWakeID(d.ID, "engineering-lead")
+	for i, w := range woken {
+		if w.ID != want {
+			t.Errorf("handling %d woke the seat under %s, want %s, derived from the delivery",
+				i+1, w.ID, want)
+		}
+		if !w.Timestamp.Equal(d.Timestamp) {
+			t.Errorf("handling %d's wake is stamped %v, want the delivery's own %v", i+1,
+				w.Timestamp, d.Timestamp)
+		}
+	}
+	if notify.DeliveryWakeID(d.ID, "backend-engineer") == want {
+		t.Error("two recipients of one delivery share a wake id: the second would be deduplicated away")
+	}
+}
+
 // A WAKE THIS NODE COULD NOT PUBLISH IS THE NODE'S FAILURE, NOT THE
 // DELIVERY'S.
 //
