@@ -1269,12 +1269,14 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 // is its only completion signal and the poll reads nothing of the stream.
 //
 // THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; the two
-// variables that switch hooks and the bridge off, and the two that switch its
-// compaction off, UNSET before the harness starts ([claudeSwitchesOff],
-// [claudeCompactionOff]), for [ClaudeCode.Pins] to pin the session's layout over.
+// variables that switch hooks and the bridge off, the one that starts the
+// harness in its hosted mode, and the four that switch its compaction off or
+// move the point it compacts at, UNSET before the harness starts
+// ([claudeSwitchesOff], [claudeHostedOff], [claudeCompactionOff]), for
+// [ClaudeCode.Pins] to pin the session's layout over.
 func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
-		BriefOnStdin: true, Unset: append(append([]string(nil), claudeSwitchesOff...), claudeCompactionOff...)}
+		BriefOnStdin: true, Unset: slices.Concat(claudeSwitchesOff, claudeHostedOff, claudeCompactionOff)}
 }
 
 // Pins is the session's layout ([claudeSessionLayout]) under the window of the
@@ -1576,6 +1578,30 @@ func (ClaudeCode) Continues(box, writer string) (bool, string) {
 // --mcp-config server. See [ClaudeCode] for why they are unset rather than
 // refused.
 var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
+
+// claudeHostedOff is every variable that, set in a run's environment, starts
+// Claude Code in the mode of Anthropic's own hosted environment (Claude Code on
+// the web), which no box is: CLAUDE_CODE_REMOTE. Switched on, with
+// CLAUDE_CODE_ENVIRONMENT_KIND absent or `byoc`, it changes what a resume hands
+// its model: unless a flag the harness fetches turns it off, the resume's load
+// gives a record whose parent the transcript does not hold another parent, an
+// earlier record it picks by timestamp, up to 16 times a load, so the run
+// continues a conversation its session never recorded; and 2.1.322 can take
+// another of the conversation's ends as the one it continues. 2.1.322 also
+// raises its heap (`--max-old-space-size=8192`) and admits its coordinator and
+// hermetic modes, which other variables ask for (read in 2.1.310's and
+// 2.1.322's shipped code). No settings file can set it: both releases ignore
+// it in a settings file's `env`, so only the environment the harness starts
+// in can.
+//
+// UNSET RATHER THAN REFUSED, as [claudeSwitchesOff] is: it can arrive from the
+// seat's role.sandbox.env, the image or a profile the login shell sources, and
+// only the wrapper, running after all three, reaches every one. AND ON EVERY
+// RUN, not only on a resume, whose load it moves: a relaunch continues the
+// session its job ran, and unset on the resume alone, it would leave a job
+// started in the hosted mode to be continued outside it, by a run that does
+// not run as the job it continues, wherever an operator set the variable.
+var claudeHostedOff = []string{"CLAUDE_CODE_REMOTE"}
 
 // claudeCompactionOff is every variable that, set in a run's environment,
 // switches its harness's compaction off or moves the point it compacts at:

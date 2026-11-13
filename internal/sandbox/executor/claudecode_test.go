@@ -199,8 +199,8 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 			t.Parallel()
 			runner := executor.NewClaudeCode()
 			script := startAndScript(t, runner, box(t, runner), req)
-			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT "+
-				"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
+			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE CLAUDE_CODE_REMOTE "+
+				"DISABLE_AUTO_COMPACT DISABLE_COMPACT CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
 			launch := strings.Index(script, "claude -p")
 			if unset < 0 || launch < 0 || unset > launch {
 				t.Fatalf("the variables are not unset before the harness starts (unset at %d, harness at %d):\n%s",
@@ -212,6 +212,59 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 	if script := startAndScript(t, runner, box(t, runner), sandbox.RunRequest{Brief: "x"}); strings.Contains(script, "CLAUDE_CODE_") {
 		t.Errorf("an OpenCode run unsets Claude Code's variables:\n%s", script)
 	}
+}
+
+// EVERY CLAUDE CODE RUN STARTS OUTSIDE ITS HOSTED MODE, a fresh one and a
+// resumed one alike, under every sh a box may run the script with.
+// CLAUDE_CODE_REMOTE marks Anthropic's own hosted environment, which no box
+// is: switched on, a resume's load gives a record whose parent the transcript
+// does not hold an earlier record as its parent, picked by timestamp, so the
+// run would continue a conversation its session never recorded. It can come
+// from the seat's environment, the image or a profile the login shell sources,
+// and the wrapper unsets it after all three, on every run: unset on a resume
+// alone, a relaunch would not run as the job it continues ran. Played on a
+// real box whose seat's environment and profile both switch it on, the harness
+// a stand-in that records the environment it started with.
+//
+// Mutation: drop CLAUDE_CODE_REMOTE from the wrapper's unsets and both runs
+// start with it; unset it on the resume alone, and the fresh run does; unset
+// it around the login shell rather than in it, and the profile's value reaches
+// both.
+func TestEveryClaudeCodeRunStartsOutsideItsHostedMode(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		runner, b := realBoxUnder(t, sh)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", sessionHarness("2.1.310"))
+		if err := b.WriteFile(t.Context(), b.Home()+"/.profile", []byte("export CLAUDE_CODE_REMOTE=true\n")); err != nil {
+			t.Fatalf("write the profile: %v", err)
+		}
+		seat := map[string]string{"CLAUDE_CODE_REMOTE": "true"}
+		// outside reads the environment the run's harness started with, which
+		// the stand-in records afresh on every run, and clears the record for
+		// the next one, so a harness that never started reads as none.
+		outside := func(run string) {
+			t.Helper()
+			env := boxFile(t, b, b.Home()+"/env")
+			if env == "" {
+				t.Fatalf("the %s run's harness recorded no environment:\n%s", run, boxFile(t, b, paths(b).Err()))
+			}
+			for kv := range strings.SplitSeq(env, "\n") {
+				if strings.HasPrefix(kv, "CLAUDE_CODE_REMOTE=") {
+					t.Errorf("the %s run's harness started with %s, in its hosted mode", run, kv)
+				}
+			}
+			if err := b.WriteFile(t.Context(), b.Home()+"/env", nil); err != nil {
+				t.Fatalf("clear the recorded environment: %v", err)
+			}
+		}
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin", Env: seat})
+		outside("fresh")
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID, Env: seat})
+		if !res.Continued {
+			t.Fatalf("the run did not continue its session:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		outside("resumed")
+	})
 }
 
 // THE SETTINGS FILES ARE THE MEASURED SHAPES, and nothing more. Every run's
