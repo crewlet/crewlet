@@ -69,7 +69,6 @@ func severityOf(phase integration.Phase) Severity {
 }
 
 // SurfaceName is how a sentence names a surface, from the catalogue of tools.
-
 func SurfaceName(kind integration.Kind) string {
 	for _, tool := range integration.Tools {
 		for _, s := range tool.Surfaces {
