@@ -430,9 +430,10 @@ func expirableBefore(ctx context.Context, tx *sql.Tx, before int64) (bool, error
 // ---- an integration's read ---------------------------------------------- //
 
 // ReadInput is one integration's read of one entry, as the collect duty hands
-// it to the log (ADR-0129): the voice it speaks in, the entry, the claims the
-// read holds on it that are new or changed, the slots of the voice's earlier
-// claims it no longer holds, and when the read saw it.
+// it to the log (ADR-0129), or one repository's files' as the code scan does
+// (ADR-0133): the voice it speaks in, the entry, the claims the read holds on
+// it that are new or changed, the slots of the voice's earlier claims it no
+// longer holds, and when the read saw it.
 type ReadInput struct {
 	Source     atlas.Source
 	Entry      atlas.Ref
@@ -441,8 +442,9 @@ type ReadInput struct {
 	ObservedAt time.Time
 }
 
-// Read writes one integration's read of one entry. The caller is the engine's
-// own duty, never a person or an agent; the source is an integration's; every
+// Read writes one read of one entry. The caller is the engine's own duty,
+// never a person or an agent; the source is an integration's or a
+// repository's files'; every
 // claim is on the entry, in the read's voice, judged by the vocabulary's
 // grammar with credentials refused in its value and in every key it names;
 // and a slot is withdrawn or claimed, never both. A read on, naming or
@@ -455,8 +457,9 @@ func (w *Writer) Read(ctx context.Context, c Call, in ReadInput) (statelog.Resul
 		return statelog.Result{}, invalid("an integration's read is the engine's own record: a %s records a claim",
 			c.By.Kind)
 	}
-	if in.Source.Kind != atlas.SourceIntegration {
-		return statelog.Result{}, invalid("a read speaks as an integration, not as a %s", in.Source.Kind)
+	if in.Source.Kind != atlas.SourceIntegration && in.Source.Kind != atlas.SourceCode {
+		return statelog.Result{}, invalid("a read speaks as an integration or as a repository's files, "+
+			"not as a %s", in.Source.Kind)
 	}
 	if _, err := atlas.Exists(in.Entry, in.Source, w.now()); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)

@@ -672,7 +672,9 @@ func TestOnlyTheEngineRecordsAnIntegrationsRead(t *testing.T) {
 		t.Errorf("a person's read: %v, want ErrInvalid", err)
 	}
 	for name, bad := range map[string]atlasdomain.ReadInput{
-		"a person's voice":      {Source: asPerson, Entry: apiHost, Claims: []atlas.Claim{exists}},
+		"a person's voice": {Source: asPerson, Entry: apiHost, Claims: []atlas.Claim{exists}},
+		"an agent's voice": {Source: atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall), Entry: apiHost,
+			Claims: []atlas.Claim{exists}},
 		"another entry's claim": {Source: cloudflare, Entry: acmeZone, Claims: []atlas.Claim{exists}},
 		"a credential as a key": {Source: cloudflare, Entry: apiHost, Claims: []atlas.Claim{
 			m(atlas.Relates(apiHost, atlas.RelationResolvesTo, atlas.Ref{Kind: atlas.KindHostname, Key: tokenHost()},
@@ -691,6 +693,51 @@ func TestOnlyTheEngineRecordsAnIntegrationsRead(t *testing.T) {
 	n.drain()
 	if _, err := n.writer.Read(t.Context(), engineCall(), in); !errors.Is(err, atlasdomain.ErrPurged) {
 		t.Errorf("a read of a purged entry: %v, want ErrPurged", err)
+	}
+}
+
+// A REPOSITORY'S FILES ARE READ IN THEIR OWN VOICE (ADR-0133): what they
+// declare lands on every node as an integration's read does, reads as likely,
+// and is gone, never retired, once the files stop saying it; a denial in the
+// voice is refused.
+//
+// Mutation: refuse a code source in Writer.Read, and nothing a file declares
+// is ever recorded.
+func TestARepositorysFilesAreReadInTheirOwnVoice(t *testing.T) {
+	t.Parallel()
+	log := openAtlasLog(t)
+	a, b := newWriteNode(t, log, "data-1"), newWriteNode(t, log, "data-2")
+	m := must(t)
+	code := atlas.CodeSource("shop")
+	svc := atlas.MustRef(atlas.KindService, "shop-api")
+	repo := atlas.MustRef(atlas.KindRepository, "gitlet/shop")
+	exists := m(atlas.Exists(svc, code, writerClock))
+	built := m(atlas.Relates(svc, atlas.RelationBuiltFrom, repo, code, writerClock))
+	a.readAs(code, svc, writerClock, nil, exists, built)
+	a.drain()
+	b.drain()
+	if got, want := a.dump(), b.dump(); !maps.EqualFunc(got, want, func(x, y []string) bool {
+		return strings.Join(x, "\n") == strings.Join(y, "\n")
+	}) {
+		t.Fatalf("two nodes on one log hold different rows:\n%v\n%v", got, want)
+	}
+	if e, ok := b.view().Find(svc.ID()); !ok || e.Word != atlas.WordLikely || e.State != atlas.StateDiscovered {
+		t.Fatalf("what the files declare reads as %+v, want a likely, discovered service", e)
+	}
+	mine, err := a.reader().LiveOf(t.Context(), code, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil || len(mine.Claims) != 2 {
+		t.Fatalf("LiveOf(code/shop) = %d claims, %v; want the two the files made", len(mine.Claims), err)
+	}
+	gone := exists
+	gone.Denied = true
+	if _, err := a.writer.Read(t.Context(), engineCall(), atlasdomain.ReadInput{Source: code, Entry: svc,
+		Claims: []atlas.Claim{gone}}); !errors.Is(err, atlasdomain.ErrInvalid) {
+		t.Errorf("a denial in the code voice: %v, want ErrInvalid", err)
+	}
+	a.readAs(code, svc, writerClock.Add(time.Hour), []string{exists.Slot(), built.Slot()})
+	a.drain()
+	if e, ok := a.view().Find(svc.ID()); ok {
+		t.Errorf("a service the files stopped declaring still reads as %+v", e)
 	}
 }
 

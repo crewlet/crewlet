@@ -27,6 +27,9 @@ const (
 	SourceRecords SourceKind = "records"
 	// SourceIntegration is an integration's read with the company's credential.
 	SourceIntegration SourceKind = "integration"
+	// SourceCode is a repository's deploy and dependency files, read at its
+	// default branch: declared in code, never seen running.
+	SourceCode SourceKind = "code"
 	// SourceAgent is an agent in a named turn.
 	SourceAgent SourceKind = "agent"
 	// SourcePerson is a person.
@@ -34,7 +37,7 @@ const (
 )
 
 // SourceKinds is every source kind.
-var SourceKinds = []SourceKind{SourceSettings, SourceRecords, SourceIntegration, SourceAgent, SourcePerson}
+var SourceKinds = []SourceKind{SourceSettings, SourceRecords, SourceIntegration, SourceCode, SourceAgent, SourcePerson}
 
 // Valid reports whether k is a member of the closed set.
 func (k SourceKind) Valid() bool { return slices.Contains(SourceKinds, k) }
@@ -66,8 +69,9 @@ var Evidences = []Evidence{EvidenceCall, EvidenceFile, EvidenceNone}
 func (e Evidence) Valid() bool { return slices.Contains(Evidences, e) }
 
 // Source is who or what made one claim. Name is what within its kind: a
-// [Record] word for the engine's records, an integration's kind, an agent's
-// seat handle, a person's handle; empty for the settings, named by Revision.
+// [Record] word for the engine's records, an integration's kind, the id of
+// the repository whose files were read, an agent's seat handle, a person's
+// handle; empty for the settings, named by Revision.
 type Source struct {
 	Kind     SourceKind `json:"kind"`
 	Name     string     `json:"name,omitempty"`
@@ -118,6 +122,10 @@ func AgentSource(seat, turn string, evidence Evidence) Source {
 // IntegrationSource is the source of a claim an integration's read made.
 func IntegrationSource(kind string) Source { return Source{Kind: SourceIntegration, Name: kind} }
 
+// CodeSource is the source of a claim the deploy and dependency files of the
+// repository with this id make. One repository is one voice.
+func CodeSource(repository string) Source { return Source{Kind: SourceCode, Name: repository} }
+
 // Confidence is how far a claim can be trusted, DERIVED from its source and
 // the evidence the engine checked, never chosen by whoever made the claim: a
 // value a writer chooses is a channel content can steer.
@@ -129,6 +137,10 @@ func (s Source) Confidence() Confidence {
 		return ConfidenceAsserted
 	case SourceIntegration:
 		return ConfidenceVerified
+	case SourceCode:
+		// DECLARED IN CODE IS INTENT, NOT RUNNING STATE: as far as an agent
+		// that read the same file, and never confirmed until a person says so.
+		return ConfidenceInferred
 	case SourceAgent:
 		switch s.Evidence {
 		case EvidenceCall:
@@ -223,7 +235,8 @@ var Words = []Word{WordConfirmed, WordLikely, WordUnconfirmed}
 
 // Display is the word a reader is shown: confirmed for the settings, the
 // engine's records, a person and an integration; likely for an agent backed by
-// a call or a file; unconfirmed for an agent with nothing to check.
+// a call or a file and for what a repository's files declare; unconfirmed for
+// an agent with nothing to check.
 func (c Confidence) Display() Word {
 	switch c.Rank() {
 	case 0, 1:
@@ -378,7 +391,7 @@ func checked(c Claim) (Claim, error) {
 // wrongly, a denial from an integration of anything but the entry itself (a
 // person denies any claim, and an agent's denial is a dispute the fold never
 // lets win), a "not the same" from anybody but a person, and a fact of meaning
-// or an owner from an agent.
+// or an owner from an agent or from a repository's files.
 func (c Claim) Validate() error {
 	if err := c.validate(); err != nil {
 		return fmt.Errorf("atlas: claim on %s: %w", c.Subject, err)
@@ -484,6 +497,9 @@ func (c Claim) validateFact() error {
 	if c.Source.Kind == SourceAgent && f.Spec().Meaning {
 		return fmt.Errorf("an agent never sets %s: a person decides it", f)
 	}
+	if c.Source.Kind == SourceCode && f.Spec().Meaning {
+		return fmt.Errorf("a repository's files never set %s: a person decides it", f)
+	}
 	v, err := f.Value(c.Value.Text)
 	if err != nil {
 		return err
@@ -511,6 +527,9 @@ func (c Claim) validateRelation() error {
 		case RelationDependsOn:
 			return errors.New("an agent never sets what depends on what: a person decides it")
 		}
+	}
+	if c.Source.Kind == SourceCode && r == RelationOwnedBy {
+		return errors.New("a repository's files never set an owner: a person decides it")
 	}
 	if t.External != "" {
 		if t.Entry != (Ref{}) || !r.Names(c.Subject.Kind, t.External) {
