@@ -5,3 +5,4 @@ export { AtlasPeek } from "./AtlasPeek.tsx";
 export { ChangesPage } from "./ChangesPage.tsx";
 export { EntryPage } from "./EntryPage.tsx";
 export { Review } from "./Review.tsx";
+export { SourcesPage } from "./Sources.tsx";
