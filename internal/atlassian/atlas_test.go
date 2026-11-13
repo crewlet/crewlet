@@ -357,8 +357,8 @@ func TestAnAtlassianSiteTwoReadsMissIsRetired(t *testing.T) {
 // itself in the read, and what the mapped fields refused is counted.
 //
 // Mutation: say a product's key as it came, keep an address's user
-// information or its path, or skip the builder's grammar on a key, and a
-// shape reaches the read.
+// information or its path, lower a host before the builder judges it, or
+// skip the builder's grammar on a key, and a shape reaches the read.
 func TestNoCredentialShapeReachesTheAtlasFromAtlassian(t *testing.T) {
 	t.Parallel()
 	for _, shape := range redacttest.Shapes() {
@@ -379,9 +379,11 @@ func TestNoCredentialShapeReachesTheAtlasFromAtlassian(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// In any case: a host is lowered on its way to a key, and a shape
+		// lowered is still the credential's body.
+		lowered := strings.ToLower(string(out))
 		for _, piece := range []string{s[len(s)/2:], s[len(s)/4 : len(s)/4+12]} {
-			if strings.Contains(string(out), piece) {
-				at := strings.Index(string(out), piece)
+			if at := strings.Index(lowered, strings.ToLower(piece)); at >= 0 {
 				t.Errorf("%s: a piece of the shape reached the read near %q", shape.Name,
 					string(out)[max(0, at-120):at])
 			}

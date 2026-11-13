@@ -78,27 +78,27 @@ func openAtlas(in collect.Input) (atlasAccess, error) {
 		named: map[string]bool{}}
 	if j := in.Config.Integrations.Jira; j != nil {
 		_, host := siteOf(j.ShareableBaseURL())
-		access.named[host] = true
+		access.named[strings.ToLower(host)] = true
 	}
 	if f := in.Config.Integrations.Confluence; f != nil {
 		_, host := siteOf(cmp.Or(f.SiteURL, f.URL))
-		access.named[host] = true
+		access.named[strings.ToLower(host)] = true
 	}
 	return access, nil
 }
 
 // siteOf is a site's address as the atlas keeps it, its scheme and host and
-// nothing else, and that host in lowercase, which is what the settings key a
-// site's account by; both "" where the address names no host. A site has no
-// path, and a path, a query or user information is where a copy of an
-// address carries what it should not.
+// nothing else, and that host; both "" where the address names no host. A
+// site has no path, and a path, a query or user information is where a copy
+// of an address carries what it should not. THE HOST IS AS IT WAS WRITTEN,
+// for the builder to judge before the grammar lowers it: a credential's
+// shape can live in its case.
 func siteOf(address string) (site, host string) {
 	u, err := url.Parse(strings.TrimSpace(address))
 	if err != nil || u.Hostname() == "" {
 		return "", ""
 	}
-	host = strings.ToLower(u.Hostname())
-	return cmp.Or(u.Scheme, "https") + "://" + strings.ToLower(u.Host), host
+	return cmp.Or(u.Scheme, "https") + "://" + u.Host, u.Hostname()
 }
 
 // Collect reads the organization's products and reports them as claims in
@@ -164,8 +164,9 @@ func readWorkspaces(b *collect.Builder, org atlas.Ref, named map[string]bool, wo
 		// THE SETTINGS NAME THE SITES THE ENGINE WORKS IN, and two names
 		// would be a disagreement for a person to settle; any other site is
 		// named and placed here.
-		if host != "" && !named[host] {
-			b.Says(where+".hostUrl", site, atlas.FactName, host)
+		if host != "" && !named[strings.ToLower(host)] {
+			// THE KEY'S OWN HOST, which the grammar has judged and lowered.
+			b.Says(where+".hostUrl", site, atlas.FactName, strings.TrimPrefix(site.Key, accountKeyPrefix))
 			b.Says(where+".hostUrl", site, atlas.FactSite, address)
 		}
 	}
