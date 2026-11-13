@@ -164,17 +164,18 @@ func (f *fakeCloud) admit(w http.ResponseWriter, action, region string, jsonShap
 	refuse := f.refuse[action] || f.refuse[action+"@"+region]
 	fail := f.fail[action] || f.fail[action+"@"+region]
 	f.mu.Unlock()
-	status, code := 0, ""
-	switch {
-	case refuse:
-		status, code = http.StatusForbidden, "AccessDenied"
-		if strings.HasPrefix(action, "ec2:") {
-			code = "UnauthorizedOperation"
-		}
-	case fail:
-		status, code = http.StatusBadRequest, "ValidationError"
-	default:
+	if !refuse && !fail {
 		return true
+	}
+	var status int
+	var code string
+	switch {
+	case !refuse:
+		status, code = http.StatusBadRequest, "ValidationError"
+	case strings.HasPrefix(action, "ec2:"):
+		status, code = http.StatusForbidden, "UnauthorizedOperation"
+	default:
+		status, code = http.StatusForbidden, "AccessDenied"
 	}
 	w.WriteHeader(status)
 	if jsonShape {
