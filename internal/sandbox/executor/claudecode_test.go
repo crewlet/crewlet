@@ -840,7 +840,7 @@ var claudeSettingsSince = map[string]string{
 	// Declared ("Environment variables to set for Claude Code sessions") in the
 	// shipped schema of 2.1.310, the oldest read for it, and 2.1.322. Only the
 	// pinned copies hold it, which are handed from 2.1.310 alone
-	// (executor.ClaudeCompactionPinFloor), so no older release needs reading.
+	// (executor.ClaudeSettingsPinFloor), so no older release needs reading.
 	"env": "2.1.310",
 }
 
@@ -870,10 +870,10 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 	// A pinned copy is handed from the later of its file's own floor and the
 	// pin's ([claudePinGate] runs after the gates that choose the file).
 	pinned := func(floor string) string {
-		if executor.ReleaseAtLeast(floor, executor.ClaudeCompactionPinFloor) {
+		if executor.ReleaseAtLeast(floor, executor.ClaudeSettingsPinFloor) {
 			return floor
 		}
-		return executor.ClaudeCompactionPinFloor
+		return executor.ClaudeSettingsPinFloor
 	}
 	oldest := map[string]string{
 		p.ClaudeSettings():             "1.0.61",
@@ -961,14 +961,15 @@ func pinnedOf(p executor.Paths, file string) string {
 // CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE would move the point the run compacts at
 // after the wrapper pinned it. So each settings file the configuration writes
 // (every run's, the skills' and the notes') has a pinned copy holding the same
-// settings and an `env` block of exactly those three: the window the wrapper
-// pins for the run's model, and the two overrides blank, which the harness
-// reads as none. The file itself holds no `env`, since a release older than
-// the pin's floor is handed it.
+// settings and an `env` block of exactly the pin: those three, the window the
+// wrapper pins for the run's model and the two overrides blank, which the
+// harness reads as none, and the two switches a resume is started without,
+// blank too (the next case's). The file itself holds no `env`, since a release
+// older than the pin's floor is handed it.
 //
 // Mutation: write one file's pinned copy without the block or with another
-// window, leave an override out rather than blank, or write the block into
-// the file itself, and this goes red.
+// window, leave an override or a switch out rather than blank, or write the
+// block into the file itself, and this goes red.
 func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *testing.T) {
 	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
@@ -982,6 +983,8 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens),
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
+		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
+		"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "",
 	}
 	read := func(file string) map[string]any {
 		raw, err := b.ReadFile(t.Context(), file)
@@ -1009,6 +1012,51 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 			got, _ := json.Marshal(pinned)
 			want, _ := json.Marshal(plain)
 			t.Errorf("%s's pinned copy holds %s beside its env, want the file's own settings %s", file, got, want)
+		}
+	}
+}
+
+// EVERY PINNED SETTINGS COPY BLANKS WHAT MOVES WHAT A RESUME HANDS ITS MODEL.
+// A resumed run's script unsets CLAUDE_CODE_RESUME_INTERRUPTED_TURN and
+// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP before its harness starts, but Claude Code
+// assigns every settings source's `env` block to its own environment before
+// print mode resumes the session, a checkout's own `.claude/settings.json`
+// among them, so a repository that sets either would switch it on again: the
+// turn its last process was cut off in run again before the brief, or a
+// transcript past 5 MiB read by another rule. So every pinned copy the
+// configuration writes (every run's, the skills' and the notes') names both in
+// its `env` block, each as the empty string: a name left out leaves the
+// repository's value standing, and both releases read the empty string as off.
+//
+// Mutation: leave either name out of the pin, or write it with a value of its
+// own, and this goes red.
+func TestEveryPinnedSettingsCopyBlanksWhatMovesWhatAResumeHandsItsModel(t *testing.T) {
+	t.Parallel()
+	b := sandbox.NewFakeSandbox("box-1")
+	p := executor.PathsFor(b)
+	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Steer: steerWiring,
+		Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	for _, file := range []string{p.ClaudeSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNotesSettingsPinned()} {
+		raw, err := b.ReadFile(t.Context(), file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		var doc struct {
+			Env map[string]string `json:"env"`
+		}
+		if err = json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s is not settings with a string env block: %v\n%s", file, err, raw)
+		}
+		for _, name := range []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP"} {
+			switch value, set := doc.Env[name]; {
+			case !set:
+				t.Errorf("%s leaves %s out of its env, so a repository's own settings can switch it on for a "+
+					"resume", file, name)
+			case value != "":
+				t.Errorf("%s sets %s to %q, want it blank", file, name, value)
+			}
 		}
 	}
 }
