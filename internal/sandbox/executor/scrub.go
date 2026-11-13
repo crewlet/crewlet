@@ -908,12 +908,22 @@ func withoutDefinitions(line string, list lineSpan) string {
 }
 
 // brokenDefinition reports whether a loaded tool definition is one no request
-// may carry: not an object, or named by nothing [providerToolName] takes.
+// may carry: not an object, or named by nothing [providerToolName] takes. The
+// name is the one Claude Code sends the definition under, read as Claude
+// Code reads it ([wireDecode]): the key `name` exactly, the last written
+// where it is written twice.
+//
+// NOT encoding/json's decode, which fills a field from a key that differs
+// from its name only in case, the last such key winning: a definition
+// holding a renamed `name` and then a sound `NAME` was read as sound and
+// kept, and sent under the renamed name (2.1.310 and 2.1.322 key every
+// definition they send again by its `name`), which had every request of the
+// restored session refused.
 func brokenDefinition(definition []byte) bool {
 	var named struct {
 		Name string `json:"name"`
 	}
-	return json.Unmarshal(definition, &named) != nil || !providerToolName(named.Name)
+	return wireDecode(definition, &named) != nil || !providerToolName(named.Name)
 }
 
 // rewriteDocument streams one JSON value from src to dst a token at a time,

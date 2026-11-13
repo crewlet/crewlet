@@ -842,6 +842,43 @@ func TestALineTheCutHasNothingToTakeFromIsHandedOnAsItCame(t *testing.T) {
 	}
 }
 
+// A LOADED TOOL DEFINITION IS JUDGED BY THE NAME CLAUDE CODE SENDS IT UNDER:
+// its `name`, that key exactly and the last written of it, as JSON.parse
+// reads one, since 2.1.310 and 2.1.322 key each definition they send again by
+// it. A renamed `name` beside a sound `NAME` is cut, a renamed `Name` beside a
+// sound `name` is not, and a definition named only by a `Name` names nothing
+// Claude Code reads and is cut, as one with no name is; of a `name` written
+// twice, the last is the one judged.
+//
+// Mutation: read the name with encoding/json's decode, which fills it from a
+// key in any case, and three cases go red.
+func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
+	t.Parallel()
+	renamed := "mcp__" + scrubMarker + "__backup_list"
+	described := `{"name":"mcp__seat__echo","description":"was ` + scrubMarker + `"}`
+	for name, tc := range map[string]struct {
+		definition string
+		cut        bool
+	}{
+		"a renamed name, then a sound NAME": {`{"name":"` + renamed + `","NAME":"mcp__seat__later"}`, true},
+		"a sound name, then a renamed Name": {`{"name":"mcp__seat__later","Name":"` + renamed + `"}`, false},
+		"a Name alone":                      {`{"Name":"mcp__seat__later"}`, true},
+		"no name":                           {`{"description":"later"}`, true},
+		"a sound name, then a renamed one":  {`{"name":"mcp__seat__later","name":"` + renamed + `"}`, true},
+		"a renamed name, then a sound one":  {`{"name":"` + renamed + `","name":"mcp__seat__later"}`, false},
+	} {
+		line := `{"parentUuid":null,"isSidechain":false,"attachment":{"type":"deferred_tools_record","entries":[` +
+			described + `,` + tc.definition + `]},"type":"attachment"}`
+		want := line
+		if tc.cut {
+			want = strings.Replace(line, `,`+tc.definition, "", 1)
+		}
+		if got := withoutBrokenDefinitions(line); got != want {
+			t.Errorf("%s: kept\n%s\nwant\n%s", name, got, want)
+		}
+	}
+}
+
 // THE SCRUB KEEPS EVERY RECORD WHERE CLAUDE CODE FINDS IT, whatever it takes
 // out of a session: each transcript keeps every line, and each line's record
 // its uuid, its parentUuid and its type as written and every key, at every
