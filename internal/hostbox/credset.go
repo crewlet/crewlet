@@ -79,12 +79,12 @@ import (
 // power loss keeps, which no kill reaches. So a writer killed at every step has
 // been killed at every instant that matters, and a write reports each step to
 // the observer its caller hands it ([CredentialSteps]). That observer is nil in
-// every write the engine makes; in the suites it is the kill matrix, which
-// parks the writer's process at one step at a time and kills it there. A
-// READER FINISHING a write reports none: what it puts in place is what the
-// write it finishes would have, in the same order, skipping what is already
-// there, so a reader killed part way leaves a directory the write killed at
-// one of its own steps leaves.
+// every write the engine makes; in the suites it is the kill matrix
+// (internal/hostbox/hostboxtest), which parks the writer's process at one step
+// at a time and kills it there. A READER FINISHING a write reports none: what
+// it puts in place is what the write it finishes would have, in the same
+// order, skipping what is already there, so a reader killed part way leaves a
+// directory the write killed at one of its own steps leaves.
 
 // CredentialJournal is the journal of the shared credential directory dir
 // ([WriteCredentials]): dir + ".pending", BESIDE the directory for the reason
@@ -189,7 +189,7 @@ func (s CredentialStep) Valid() bool {
 // on the writing goroutine, under the caller's hold of the directory's lock,
 // after the step has happened, so an observer that does not return holds the
 // write, and the lock, at that step: which is how a suite parks a writer's
-// process there to kill it.
+// process there to kill it (internal/hostbox/hostboxtest).
 //
 // NIL OBSERVES NOTHING, and nil is every write the engine makes. A file
 // already holding what the write puts there, a removal of a file that is not
