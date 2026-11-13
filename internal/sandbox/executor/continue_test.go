@@ -639,65 +639,108 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 	}
 }
 
-// A RESUME UNSETS WHAT MOVES WHAT IT HANDS ITS MODEL, and the settings it is
-// handed blank the same, under every sh a box may run the script with. Its
-// harness starts without CLAUDE_CODE_RESUME_INTERRUPTED_TURN, which would have
-// the resume run the turn its last process was cut off in again before it
-// reads this run's brief, repeating a call that may have run already; without
+// A RESUME UNSETS WHAT MOVES WHAT IT HANDS ITS MODEL, on every release, and
+// the settings a release that takes the pin is handed blank the same, under
+// every sh a box may run the script with. Its harness starts without
+// CLAUDE_CODE_RESUME_INTERRUPTED_TURN, which would have the resume run the turn
+// its last process was cut off in again before it reads this run's brief,
+// repeating a call that may have run already; without
 // CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP, which would have the resume of a
 // transcript past 5 MiB read it by another rule, one that can hand the model
 // other records; and without CLAUDE_CODE_REMOTE, which no run starts with:
 // whatever the seat's environment set. And since a repository's own settings
 // could switch either of the first two on again before the session is
-// resumed, the settings its harness is handed (2.1.310's: the pinned copy)
-// name both, blank. Played on a real box whose seat's environment sets all
-// three, the harness a stand-in that records its argv and its environment.
+// resumed, the settings 2.1.310 is handed, the pinned copy, name both, blank.
+// 2.1.309, older than the pin's floor, is handed the settings with no `env`
+// block, and still resumes the session its box holds, which no release floor
+// gates: the script's unset is all that keeps the seat's switches from that
+// resume. Played on a real box whose seat's environment sets all three, the
+// harness a stand-in of each release that records its argv and its
+// environment.
 //
-// Mutation: drop either switch from the resume's unsets, or unset them on a
-// fresh start alone, and the resumed harness starts with it; leave either out
-// of the pin, and the settings it is handed leave it to the repository.
+// Mutation: drop either switch from the resume's unsets, unset them on a
+// fresh start alone, or unset them only on a release that takes the pin, and a
+// resumed harness starts with it; leave either out of the pin, and the
+// settings 2.1.310 is handed leave it to the repository.
 func TestAResumeUnsetsWhatMovesWhatItHandsItsModel(t *testing.T) {
 	t.Parallel()
 	seat := map[string]string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "1",
 		"CLAUDE_CODE_REMOTE": "true"}
+	// ONE RELEASE ON EACH SIDE OF THE PIN'S FLOOR, held to it here, so a floor
+	// that moves past either fails this case rather than leave a side unplayed.
+	releases := []struct {
+		release string
+		pinned  bool
+	}{{release: "2.1.310", pinned: true}, {release: "2.1.309", pinned: false}}
+	for _, r := range releases {
+		if executor.ReleaseAtLeast(r.release, executor.ClaudeSettingsPinFloor) != r.pinned {
+			t.Fatalf("%s is no longer on the side of the pin's floor, %s, this case plays it on (takes the pin: %v)",
+				r.release, executor.ClaudeSettingsPinFloor, r.pinned)
+		}
+	}
 	forEachShell(t, func(t *testing.T, sh boxShell) {
-		runner, b := realBoxUnder(t, sh)
-		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", sessionHarness("2.1.310"))
-		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin", Env: seat})
-		// THE FRESH RUN'S RECORD CLEARED, so the resumed run's own is read and
-		// a harness that never started reads as none.
-		for _, file := range []string{b.Home() + "/env", b.Home() + "/argv"} {
-			if err := b.WriteFile(t.Context(), file, nil); err != nil {
-				t.Fatalf("clear %s: %v", file, err)
-			}
-		}
-		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID, Env: seat})
-		if !res.Continued {
-			t.Fatalf("the run did not continue its session:\n%s", boxFile(t, b, paths(b).Err()))
-		}
-		env := boxFile(t, b, b.Home()+"/env")
-		if env == "" {
-			t.Fatalf("the resumed run's harness recorded no environment:\n%s", boxFile(t, b, paths(b).Err()))
-		}
-		for kv := range strings.SplitSeq(env, "\n") {
-			for name := range seat {
-				if strings.HasPrefix(kv, name+"=") {
-					t.Errorf("the resumed harness started with %s, which moves what its resume hands its model", kv)
+		for _, r := range releases {
+			t.Run(r.release, func(t *testing.T) {
+				t.Parallel()
+				runner, b := realBoxUnder(t, sh)
+				p := paths(b)
+				writeBoxStandIn(t, b, p.BinDir()+"/claude", sessionHarness(r.release))
+				_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin", Env: seat})
+				// THE FRESH RUN'S RECORD CLEARED, so the resumed run's own is read
+				// and a harness that never started reads as none.
+				for _, file := range []string{b.Home() + "/env", b.Home() + "/argv"} {
+					if err := b.WriteFile(t.Context(), file, nil); err != nil {
+						t.Fatalf("clear %s: %v", file, err)
+					}
 				}
-			}
-		}
-		named := after(argvOf(t, b), "--settings")
-		var settings struct {
-			Env map[string]string `json:"env"`
-		}
-		if err := json.Unmarshal([]byte(boxFile(t, b, named)), &settings); err != nil {
-			t.Fatalf("the settings the resumed harness was handed, %q, do not read: %v", named, err)
-		}
-		for _, name := range []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP"} {
-			if value, set := settings.Env[name]; !set || value != "" {
-				t.Errorf("the settings the resumed harness was handed, %q, hold %s as %q (named: %v), want it "+
-					"named and blank, over a repository's own", named, name, value, set)
-			}
+				_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+					Env: seat})
+				if !res.Continued {
+					t.Fatalf("the run did not continue its session:\n%s", boxFile(t, b, p.Err()))
+				}
+				env := boxFile(t, b, b.Home()+"/env")
+				if env == "" {
+					t.Fatalf("the resumed run's harness recorded no environment:\n%s", boxFile(t, b, p.Err()))
+				}
+				for kv := range strings.SplitSeq(env, "\n") {
+					for name := range seat {
+						if strings.HasPrefix(kv, name+"=") {
+							t.Errorf("the resumed harness started with %s, which moves what its resume hands "+
+								"its model", kv)
+						}
+					}
+				}
+				named, want := after(argvOf(t, b), "--settings"), p.ClaudeSettings()
+				if r.pinned {
+					want = p.ClaudeSettingsPinned()
+				}
+				if named != want {
+					t.Fatalf("the resumed harness was handed the settings %q, want %q", named, want)
+				}
+				var settings struct {
+					Env map[string]string `json:"env"`
+				}
+				if err := json.Unmarshal([]byte(boxFile(t, b, named)), &settings); err != nil {
+					t.Fatalf("the settings the resumed harness was handed, %q, do not read: %v", named, err)
+				}
+				if !r.pinned {
+					// NO PIN BEHIND THE UNSET: these settings name no variable, so
+					// the environment above is all that holds the switches off.
+					if settings.Env != nil {
+						got, _ := json.Marshal(settings.Env)
+						t.Errorf("the settings %s was handed, %q, hold env %s, which a release older than the "+
+							"pin's floor is not handed", r.release, named, got)
+					}
+					return
+				}
+				for _, name := range []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN",
+					"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP"} {
+					if value, set := settings.Env[name]; !set || value != "" {
+						t.Errorf("the settings the resumed harness was handed, %q, hold %s as %q (named: %v), want it "+
+							"named and blank, over a repository's own", named, name, value, set)
+					}
+				}
+			})
 		}
 	})
 }
