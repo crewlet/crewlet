@@ -6,10 +6,11 @@ package prefetch
 import (
 	"context"
 	"errors"
-	"github.com/google/uuid"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
