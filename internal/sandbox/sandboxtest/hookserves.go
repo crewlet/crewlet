@@ -830,9 +830,14 @@ func testEveryReadOfAPlacedNoteTakesItsPlace(t *testing.T, s sandbox.PendingStor
 // model at the step it answered: so a note a hook's live serve handed to the
 // record's job leaves room, a note whose serve was lost counts again, and a
 // note a poll served counts until its harness confirms it at its next step.
+// AND ONLY THE RECORD'S OWN JOB'S SERVE: a note an earlier job's hook was
+// served, which nothing read before the record moved on, was never handed to
+// the record's job, so it waits for that job's next step, whose hook serves
+// it again, and counts.
 //
-// Mutation: count a note live-served to the job, or stop counting one whose
-// serve was lost, and a filing goes wrong.
+// Mutation: count a note live-served to the job, stop counting one whose
+// serve was lost, or let a live serve to any job leave room, and a filing
+// goes wrong.
 func testAFilingCountsNoHookServedNoteAsWaiting(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-full-served"
@@ -864,6 +869,29 @@ func testAFilingCountsNoHookServedNoteAsWaiting(t *testing.T, s sandbox.PendingS
 	}
 	if filed, _, err := file(ctx, s, polled, "n-6"); err != nil || filed != sandbox.NoteFull {
 		t.Errorf("a note filed behind five a poll served = %s, %v, want full", filed, err)
+	}
+
+	// FIVE AN EARLIER JOB'S HOOKS WERE SERVED, waiting into the next job: the
+	// relaunch's brief names none of them.
+	const earlier = "t-full-earlier-job"
+	first := mustLaunched(t, s, run(earlier))
+	for i := range maxWaiting {
+		id := fmt.Sprintf("n-%d", i+1)
+		mustFile(t, s, earlier, id)
+		mustServe(t, s, earlier, hookServe(first, "take-"+id, callNo(i+1), id), id)
+	}
+	mustClaim(t, s, earlier)
+	if next := mustBeginLaunch(t, s, run(earlier)); next == first {
+		t.Fatal("the premise: the relaunch kept the first job")
+	}
+	for id, n := range notesByID(t, s, earlier) {
+		if live, ok := n.LiveServe(); !ok || live.Launch != first {
+			t.Fatalf("the premise: note %s is %+v after the relaunch, want it waiting, the first job's serve live",
+				id, n)
+		}
+	}
+	if filed, _, err := file(ctx, s, earlier, "n-6"); err != nil || filed != sandbox.NoteFull {
+		t.Errorf("a note filed behind five an earlier job's hooks were served = %s, %v, want full", filed, err)
 	}
 }
 
