@@ -98,36 +98,32 @@ func start(t *testing.T, svc *notify.Service) {
 	}
 }
 
-// inboundLetters is what the inbound group's dead-letter subject holds.
-func inboundLetters(t *testing.T, q queue.EventQueue) []queue.Kept {
+// inboundLetters is what one of the inbound group's dead-letter subjects
+// holds.
+func inboundLetters(t *testing.T, q queue.EventQueue, subject string) []queue.Kept {
 	t.Helper()
-	kept, err := q.DeadLettersOn(t.Context(), notify.DeadLetterSubject())
+	kept, err := q.DeadLettersOn(t.Context(), subject)
 	if err != nil {
 		t.Fatalf("DeadLettersOn: %v", err)
 	}
 	return kept
 }
 
-// passedOff is the inbound group's one passed copy after an older node passed
-// ev until its budget was spent: kept under the header naming the pass for a
-// newer record, its body ev's own bytes.
+// inboundPoison is the inbound group's other dead-letter subject: what a
+// failure, never a pass or a hand-back, retires there.
+var inboundPoison = topics.DeadLetter(topics.NotificationsInbound, notify.InboundGroup)
+
+// passedOff is the inbound group's one unhandled copy after an older node
+// passed ev until its budget was spent: kept on the group's unhandled
+// subject, its body ev's own bytes.
 func passedOff(t *testing.T, h *harness, ev *events.Event) queue.Kept {
 	t.Helper()
-	letters := inboundLetters(t, h.q)
-	var passed []queue.Kept
-	for _, k := range letters {
-		if _, ok := queue.PassedReason(k.Header); ok {
-			passed = append(passed, k)
-		}
-	}
+	passed := inboundLetters(t, h.q, notify.UnhandledSubject())
 	if len(passed) != 1 {
-		t.Fatalf("the inbound group holds %d passed copies among %d dead letters, want the "+
-			"one the older node's passes retired", len(passed), len(letters))
+		t.Fatalf("the inbound group holds %d unhandled copies, want the one the older "+
+			"node's passes retired", len(passed))
 	}
-	if reason, _ := queue.PassedReason(passed[0].Header); reason != string(notify.DeferNewerRecord) {
-		t.Fatalf("the copy was passed for %q, want %q", reason, notify.DeferNewerRecord)
-	}
-	frame, held, err := h.q.DeadLetterFrame(t.Context(), notify.DeadLetterSubject(), passed[0].Seq)
+	frame, held, err := h.q.DeadLetterFrame(t.Context(), notify.UnhandledSubject(), passed[0].Seq)
 	if err != nil || !held {
 		t.Fatalf("DeadLetterFrame: held %v, %v", held, err)
 	}
@@ -144,13 +140,13 @@ func passedOff(t *testing.T, h *harness, ev *events.Event) queue.Kept {
 // Nothing steers a pass to a node that can read it: every delivery of a newer
 // record's wake can go to older nodes, early in a roll, until the group's
 // budget is spent. So what delivers it is the dead letter the queue keeps of
-// it, under the header naming the pass (queue.PassedLetter), and the replay a
+// it, on the group's unhandled subject (queue.RetiredTo), and the replay a
 // node's start makes of it (crewlet#993). End to end on one broker, through
 // the real service and the queue's own budget:
 //
 //   - an older node, whose parser refuses the record as newer than it reads,
 //     passes the delivery until the budget is spent, and the queue keeps its
-//     copy under the pass's reason;
+//     copy with the group's unhandled deliveries;
 //   - another older node starting reads it no better, delivers nothing and
 //     keeps the copy;
 //   - a newer node starting delivers the wake to the seat it names, under the
@@ -159,7 +155,7 @@ func passedOff(t *testing.T, h *harness, ev *events.Event) queue.Kept {
 //
 // Mutation: replay nothing at Start, and the seat is never woken; drop a copy
 // this node still defers, and the second older node's start empties the
-// subject; dead-letter a spent pass as a failure's, with no header, and no
+// subject; dead-letter a spent pass as a failure's, with the poison, and no
 // node replays it.
 func TestAPassedWakeNoNodeTookIsReplayedByTheFirstNodeThatReadsIt(t *testing.T) {
 	ctx := t.Context()
@@ -169,13 +165,13 @@ func TestAPassedWakeNoNodeTookIsReplayedByTheFirstNodeThatReadsIt(t *testing.T) 
 	start(t, older.svc)
 	lead := inbox("engineering-lead")
 
-	// POISON BESIDE IT: a delivery a failure retired, which carries no
-	// pass's header — a wake a newer node would deliver, were it replayed.
+	// POISON BESIDE IT: a delivery a failure retired, kept on the group's
+	// poison subject — a wake a newer node would deliver, were it replayed.
 	poison, err := json.Marshal(relayed("1", "op-poison"))
 	if err != nil {
 		t.Fatalf("encode the poison: %v", err)
 	}
-	if _, err := older.q.KeepDeadLetter(ctx, notify.DeadLetterSubject(), "the poison", nil, poison); err != nil {
+	if _, err := older.q.KeepDeadLetter(ctx, inboundPoison, "the poison", nil, poison); err != nil {
 		t.Fatalf("KeepDeadLetter: %v", err)
 	}
 
@@ -202,10 +198,13 @@ func TestAPassedWakeNoNodeTookIsReplayedByTheFirstNodeThatReadsIt(t *testing.T) 
 		t.Fatalf("the seat was woken %d time(s), want once, by the wake derived from op-7",
 			len(woken))
 	}
-	letters := inboundLetters(t, older.q)
-	if len(letters) != 1 || len(letters[0].Header) != 0 {
-		t.Fatalf("after the replay the inbound group holds %d dead letter(s), want the "+
-			"poison alone: the replayed copy dropped, the poison left", len(letters))
+	if left := inboundLetters(t, older.q, notify.UnhandledSubject()); len(left) != 0 {
+		t.Fatalf("after the replay the inbound group holds %d unhandled copies, want none: "+
+			"the replayed copy is dropped", len(left))
+	}
+	if left := inboundLetters(t, older.q, inboundPoison); len(left) != 1 {
+		t.Fatalf("after the replay the inbound group's poison subject holds %d entries, want "+
+			"the poison, left alone", len(left))
 	}
 }
 

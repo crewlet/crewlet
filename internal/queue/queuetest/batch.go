@@ -442,17 +442,17 @@ func (s *suite) runBatch(t *testing.T) {
 	// batch path owes what the single path owes a pass (Core's
 	// a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent):
 	// the passed conversation comes back until its budget is spent and is then
-	// dead-lettered, under the header naming the pass and the partition's
-	// reason, the other conversation of the same flush is handled once, and
-	// the attachment is never quiesced.
+	// dead-lettered with the group's unhandled deliveries, the other
+	// conversation of the same flush is handled once, and the attachment is
+	// never quiesced.
 	//
 	// QUEUED BEFORE THE ATTACHMENT, so the two conversations are one flush,
 	// for failing_partition_redelivers_only_itself's reason.
 	//
 	// Mutation: leave the pass out of a backend's partition outcomes, and c1
 	// is never returned or dead-lettered; quiesce on a passed partition, and
-	// c2 is never handled; dead-letter a passed partition without its
-	// reason, and its copy lists as poison.
+	// c2 is never handled; dead-letter a passed partition as a failure's, and
+	// its copy is kept with the group's poison.
 	t.Run("a_passed_partition_returns_for_a_peer_and_the_rest_of_its_drain_runs", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)
@@ -461,17 +461,13 @@ func (s *suite) runBatch(t *testing.T) {
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 		queueBacklog(ctx, t, q, "t", "g", newConvEvent("a", "c1"), newConvEvent("b", "c2"))
 
-		// A REASON THAT HAS TO BE QUOTED to ride as one line of a header,
-		// which reads back whole off either backend's wire.
-		const passedFor = `a "newer" record, written past this build`
-
 		attempts := newJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",
 			func(_ context.Context, evs []*events.Event) queue.Result {
 				conv := firstConv(t, evs)
 				attempts.record(conv)
 				if conv == "c1" {
-					return queue.Pass(passedFor, errors.New("a peer on a newer build reads it"))
+					return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
 				}
 				return queue.Ack()
 			}, convKey, queue.NewBatchOptions(lingerFor.Seconds(), 20)); err != nil {
@@ -498,7 +494,7 @@ func (s *suite) runBatch(t *testing.T) {
 		awaitState(t, "c1's event to reach the dead-letter subject", func() bool {
 			return equalStrings(labelsOf(deadLetters(q, "t", "g")), []string{"a"})
 		})
-		keptAsPassed(ctx, t, q, "t", "g", passedFor, "a")
+		keptUnhandled(ctx, t, q, "t", "g", "a")
 	})
 
 	t.Run("batch_key_failure_falls_back_to_unique_key", func(t *testing.T) {

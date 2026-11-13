@@ -2047,16 +2047,16 @@ func (q *Queue) attachmentsLocked() []*attachment {
 	return out
 }
 
-// deadLetter publishes a message the delivery budget has exhausted, to a
-// subject outside the crewlet.* space so the dashboard's crewlet.events.>
-// stream cannot resurface poison as live traffic, and answers why it could
-// not, which its caller logs ([attachment.deadLetter]).
+// deadLetter publishes a message the delivery budget has exhausted to subject,
+// one of its pair's two dead-letter subjects ([queue.RetiredTo]) — outside the
+// crewlet.* space, so the dashboard's crewlet.events.> stream cannot resurface
+// poison as live traffic — and answers why it could not, which its caller logs
+// ([attachment.deadLetter]).
 //
 // AS THE MESSAGE'S OWN BYTES AND NOTHING BESIDE THEM, as it always was: a
 // header block costs room that a copy at the transport's ceiling does not
-// have. The one copy kept with a header is a passed message's that has the
-// room, which its attachment keeps through the contract's own keep instead
-// ([attachment.deadLetter]).
+// have, which is why the subject, and never a header, says whether a copy is
+// poison or a delivery its group never handled.
 //
 // WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([Queue.write]), as every
 // write of this queue's whose caller set no deadline is: the consume loop's
@@ -2072,9 +2072,10 @@ func (q *Queue) attachmentsLocked() []*attachment {
 // that delivery goes unacknowledged (nats-server v2.15.2,
 // server/consumer.go:2430-2457, hasMaxDeliveries, asked as the
 // acknowledgement window lapses at :6185-6191) — a window of thirty minutes
-// besides ([DefaultAckWait]), past the longest a keep waits.
-func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) error {
-	subject := topics.DeadLetter(topic, group)
+// besides ([DefaultAckWait]), past the longest a keep waits. Nor can a send
+// store it twice: a write sends again only where no stream heard it
+// ([sendWithin]).
+func (q *Queue) deadLetter(ctx context.Context, subject string, data []byte) error {
 	if _, err := q.streamFor(ctx, subject); err != nil {
 		return err
 	}

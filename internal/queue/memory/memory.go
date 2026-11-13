@@ -1359,19 +1359,23 @@ func (q *Queue) Waiting(_ context.Context, topic, group string) (queue.Waiting, 
 	return w, nil
 }
 
-// DeadLetters reports the events a subscription gave up on. They live at
-// topics.DeadLetter(topic, group), deliberately OUTSIDE the crewlet.* subject
-// space so the dashboard's crewlet.events.> stream cannot re-surface a poison
-// event as if it were live.
+// DeadLetters reports the events a subscription gave up on, in the order they
+// were kept. They live on the pair's two dead-letter subjects, its poison's
+// and its unhandled deliveries' ([queue.RetiredTo]), deliberately OUTSIDE the
+// crewlet.* subject space so the dashboard's crewlet.events.> stream cannot
+// re-surface a poison event as if it were live.
 //
-// DECODED FROM WHAT THE SUBJECT KEEPS, the bodies [Queue.DeadLetterFrame]
+// DECODED FROM WHAT THE SUBJECTS KEEP, the bodies [Queue.DeadLetterFrame]
 // reads of the entries [Queue.DeadLettersOn] lists, so a dead letter dropped or
 // let go is gone from both readings at once.
 func (q *Queue) DeadLetters(topic, group string) []*events.Event {
 	q.broker.mu.Lock()
 	defer q.broker.mu.Unlock()
+	kept := slices.Concat(q.broker.lettersLocked(topics.DeadLetter(topic, group)),
+		q.broker.lettersLocked(topics.Unhandled(topic, group)))
+	slices.SortFunc(kept, func(a, b letter) int { return cmp.Compare(a.seq, b.seq) })
 	var out []*events.Event
-	for _, l := range q.broker.lettersLocked(topics.DeadLetter(topic, group)) {
+	for _, l := range kept {
 		var ev events.Event
 		if err := json.Unmarshal(l.body, &ev); err != nil {
 			// NOT AN EVENT, which only a KeepDeadLetter on this pair's

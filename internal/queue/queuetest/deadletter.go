@@ -320,40 +320,39 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		}
 	})
 
-	t.Run("a_passed_copy_with_no_room_for_its_header_is_kept_bare_and_whole", func(t *testing.T) {
+	t.Run("a_passed_copy_at_the_transports_ceiling_is_kept_whole_where_its_group_finds_it", func(t *testing.T) {
 		t.Parallel()
-		// A PASS RETIRES ITS COPY UNDER THE HEADER NAMING IT WHERE THE
-		// TRANSPORT HAS ROOM BESIDE THE COPY, AND BARE WHERE IT HAS NONE
-		// (queue.PassedLetter, queue.LetterFits). A delivery is as large as
-		// the transport carries, so a copy within a few hundred bytes of the
-		// ceiling cannot carry the header; every backend then keeps every
-		// byte of it with none, rather than lose the copy to its own mark.
+		// A COPY A PASS RETIRED IS KEPT ON ITS GROUP'S UNHANDLED SUBJECT
+		// WHATEVER ITS SIZE (queue.RetiredTo). A delivery is as large as the
+		// transport carries, so a copy at that ceiling has no room for a
+		// header beside it: marked by a header, it was kept with none, read
+		// as the group's poison and never replayed. Marked by where it is
+		// kept, every byte of it is where a reader of the group's unhandled
+		// deliveries lists it, reads it and drops it.
 		//
-		// A PROBE MEASURES THE BYTES A COPY CARRIES beside the case's own pad
-		// — its kept frame, exactly what the backend keeps, whatever it
-		// stamps on a delivery — so the large event lands inside that gap on
-		// every backend: more than the room the header leaves, and no more
-		// than the transport carries. One timestamp for both, so the two
-		// encode alike but for the pad.
+		// THE PAD fills the copy to within half the framing of the ceiling:
+		// past the room a header and its framing would have needed, and no
+		// more than the transport carries. A probe measures the bytes a copy
+		// carries beside the pad — its kept frame, exactly what the backend
+		// keeps, whatever it stamps on a delivery — so the large event lands
+		// there on every backend. One timestamp for both, so the two encode
+		// alike but for the pad.
 		//
-		// THE LARGE COPY IS READ BACK AS THE SUBSCRIPTION'S DEAD LETTER
-		// (DeadLetters), not by its frame: what is held here is how the copy
-		// is KEPT. A frame this large is read back across a leaf's link too,
-		// raw where the leader's reply would not cross it, which the
-		// JetStream backend's own cases hold at the keep's ceiling
-		// (TestADeadLetterAtTheKeepCeilingIsReadAndDroppedThroughALeafItsLinkUp).
+		// READ BACK BY ITS FRAME AND DROPPED, as the reader that replays it
+		// reads and drops it: on the JetStream backend's run through a leaf,
+		// across the leaf's link, raw where the leader's reply would not
+		// cross it (internal/queue/jetstream's copyread.go).
 		//
-		// Mutation: keep a passed copy under its header whatever its size,
-		// and the broker refuses it, keeping nothing, while the twin keeps
-		// it marked.
+		// Mutation: keep a passed copy with the pair's poison (RetiredTo
+		// answering topics.DeadLetter for a pass), and the unhandled subject
+		// holds nothing.
 		newQueueWithAttempts := s.needAttempts(t)
-		deadLetters := s.needDeadLetters(t)
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 1))
-		const topic, group, reason = "passed.large", "grp", "newer_record"
+		const topic, group = "passed.large", "grp"
 		subscribe(ctx, t, q, topic, group, func(context.Context, *events.Event) queue.Result {
-			return queue.Pass(reason, errors.New("a peer on a newer build reads it"))
+			return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
 		})
-		subject := topics.DeadLetter(topic, group)
+		unhandled, poison := topics.Unhandled(topic, group), topics.DeadLetter(topic, group)
 		under := topics.DeadLettersUnder("passed")
 		at := time.Now().UTC()
 		padded := func(label string, pad int) *events.Event {
@@ -366,14 +365,10 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		publish(ctx, t, q, topic, padded("probe", 0))
 		var probe []queue.Kept
 		awaitState(t, "the passed probe to be dead-lettered", func() bool {
-			probe = listedAsMarked(ctx, t, q, under, subject)
+			probe = listedAsMarked(ctx, t, q, under, unhandled)
 			return len(probe) == 1
 		})
-		if passed, ok := queue.PassedReason(probe[0].Header); !ok || passed != reason {
-			t.Fatalf("the passed probe, a copy with room beside it, is kept under %q, want %q",
-				probe[0].Header, queue.PassedLetter(reason))
-		}
-		carried := len(frameOf(ctx, t, q, subject, probe[0].Seq))
+		carried := len(frameOf(ctx, t, q, unhandled, probe[0].Seq))
 		// HALF THE FRAMING SHORT OF THE CEILING: a header and the framing
 		// need more room than that, and the transport carries it.
 		pad := queue.MaxPayloadBytes - queue.LetterFraming/2 - carried
@@ -381,21 +376,33 @@ func (s *suite) runDeadLetters(t *testing.T) {
 
 		var got []queue.Kept
 		awaitState(t, "the passed large copy to be dead-lettered", func() bool {
-			got = listedAsMarked(ctx, t, q, under, subject)
+			got = listedAsMarked(ctx, t, q, under, unhandled)
 			return len(got) == 2
 		})
 		if len(got[1].Header) != 0 {
-			t.Errorf("a passed copy with no room for its header is kept under %q, want none: "+
-				"the transport cannot carry the two together", got[1].Header)
+			t.Errorf("a passed copy is kept under %q, want none: its subject says what it is, "+
+				"and the transport has no room beside it", got[1].Header)
 		}
-		retired := deadLetters(q, topic, group)
-		if !equalStrings(labelsOf(retired), []string{"probe", "large"}) {
-			t.Fatalf("the subscription's dead letters are %q, want the probe and then the "+
-				"large copy", labelsOf(retired))
+		var large events.Event
+		if err := json.Unmarshal(frameOf(ctx, t, q, unhandled, got[1].Seq), &large); err != nil ||
+			labelOf(&large) != "large" {
+			t.Fatalf("the large copy reads back as no event labelled large (%v)", err)
 		}
-		if kept, _ := retired[1].Payload["pad"].(string); len(kept) != pad {
-			t.Errorf("the bare copy kept %d bytes of its %d-byte pad: a copy is kept whole",
+		if kept, _ := large.Payload["pad"].(string); len(kept) != pad {
+			t.Errorf("the large copy kept %d bytes of its %d-byte pad: a copy is kept whole",
 				len(kept), pad)
+		}
+		if held := listedAsMarked(ctx, t, q, under, poison); len(held) != 0 {
+			t.Errorf("the pair's poison subject holds %d entries, want none: a passed copy "+
+				"kept there is read as a failure's", len(held))
+		}
+
+		if err := q.DropDeadLetter(ctx, unhandled, got[1].Seq); err != nil {
+			t.Fatalf("DropDeadLetter: %v", err)
+		}
+		if left := listedAsMarked(ctx, t, q, under, unhandled); len(left) != 1 || left[0].Seq != probe[0].Seq {
+			t.Errorf("after the large copy's drop the unhandled subject lists %d entries, want "+
+				"the probe alone", len(left))
 		}
 	})
 
@@ -639,32 +646,35 @@ func frameOf(ctx context.Context, t *testing.T, q queue.EventQueue, subject stri
 	return frame
 }
 
-// keptAsPassed holds the dead letters of topic and group to one passed copy:
-// the entry kept under the header naming the pass and reason
-// ([queue.PassedLetter]), whose body reads back as the event labelled label —
-// the header being what a reader that can handle the copy now finds it again
-// by, and the body what it handles.
-func keptAsPassed(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group,
-	reason, label string) {
-
+// keptUnhandled holds the dead letters of topic and group to one unhandled
+// copy: kept with no header on the pair's unhandled subject
+// ([queue.RetiredTo]), and none on its poison subject, its body reading back
+// as the event labelled label — the subject being what a reader that can
+// handle the copy now finds it by, and the body what it handles.
+func keptUnhandled(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group, label string) {
 	t.Helper()
-	subject := topics.DeadLetter(topic, group)
+	unhandled := topics.Unhandled(topic, group)
 	head, _, _ := strings.Cut(topic, ".")
-	got := listedAsMarked(ctx, t, q, topics.DeadLettersUnder(head), subject)
+	under := topics.DeadLettersUnder(head)
+	got := listedAsMarked(ctx, t, q, under, unhandled)
 	if len(got) != 1 {
-		t.Fatalf("%s lists %d entries, want the one passed copy: %q", subject, len(got),
+		t.Fatalf("%s lists %d entries, want the one unhandled copy: %q", unhandled, len(got),
 			headersOf(got))
 	}
-	if passed, ok := queue.PassedReason(got[0].Header); !ok || passed != reason {
-		t.Errorf("the passed copy is kept under %q, want %q, the header naming its pass and "+
-			"its reason: a reader that could handle it now would take it for poison",
-			got[0].Header, queue.PassedLetter(reason))
+	if len(got[0].Header) != 0 {
+		t.Errorf("the unhandled copy is kept under %q, want no header: its subject says "+
+			"what it is", got[0].Header)
 	}
 	var ev events.Event
-	if err := json.Unmarshal(frameOf(ctx, t, q, subject, got[0].Seq), &ev); err != nil ||
+	if err := json.Unmarshal(frameOf(ctx, t, q, unhandled, got[0].Seq), &ev); err != nil ||
 		labelOf(&ev) != label {
-		t.Errorf("the passed copy reads back as no event labelled %s (%v): a reader that "+
+		t.Errorf("the unhandled copy reads back as no event labelled %s (%v): a reader that "+
 			"found it would have nothing to handle", label, err)
+	}
+	if poison := listedAsMarked(ctx, t, q, under, topics.DeadLetter(topic, group)); len(poison) != 0 {
+		t.Errorf("the pair's poison subject holds %d entries, want none: a copy no failure "+
+			"retired, kept with the poison, is read as a failure's and never replayed",
+			len(poison))
 	}
 }
 

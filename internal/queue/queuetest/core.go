@@ -617,7 +617,7 @@ func (s *suite) runCore(t *testing.T) {
 	// A PASS HANDS A MESSAGE BACK TO ITS GROUP AND KEEPS CONSUMING: the
 	// fourth outcome, for a delivery THIS node will not handle and a peer may
 	// (an older build during a roll, meeting a record a newer one wrote).
-	// Three things are owed, on every backend:
+	// Four things are owed, on every backend:
 	//
 	//   - it comes back, and BEHIND the mail that was waiting, as a failure
 	//     does: the shipped broker spaces it on the failure path's backoff;
@@ -627,8 +627,8 @@ func (s *suite) runCore(t *testing.T) {
 	//   - it spends a delivery like every return, and is dead-lettered with
 	//     its copy once the budget is spent: a message no node reads must not
 	//     circle its group for ever;
-	//   - and that dead letter is kept UNDER A HEADER NAMING THE PASS AND ITS
-	//     REASON (queue.PassedLetter), where a failure's is kept with none
+	//   - and that dead letter is kept WITH THE GROUP'S UNHANDLED DELIVERIES
+	//     (queue.RetiredTo), where a failure's is kept with its poison
 	//     (a_subscriptions_retired_event_is_one_more_dead_letter): nothing
 	//     steers a pass to a node that can handle it, so the dead letter is
 	//     what a reader that can handle it now finds it again by.
@@ -641,7 +641,8 @@ func (s *suite) runCore(t *testing.T) {
 	// return a pass at the head as a deferral's, and e1 comes back ahead of
 	// e2; return it without the budget's check, and it is never
 	// dead-lettered; ack it, and it never comes back; keep its dead letter
-	// with no header, as a failure's, and it lists as poison.
+	// with the group's poison, as a failure's, and the unhandled subject
+	// holds nothing.
 	t.Run("a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)
@@ -678,7 +679,48 @@ func (s *suite) runCore(t *testing.T) {
 		awaitState(t, "the passed e1 to be dead-lettered once its budget is spent", func() bool {
 			return equalStrings(labelsOf(deadLetters(q, topic, group)), []string{"e1"})
 		})
-		keptAsPassed(ctx, t, q, topic, group, "newer_record", "e1")
+		keptUnhandled(ctx, t, q, topic, group, "e1")
+	})
+
+	// A MESSAGE PASSED UNTIL A HAND-BACK SPENT ITS LAST DELIVERY IS KEPT WITH
+	// ITS GROUP'S UNHANDLED DELIVERIES, where its passes would have kept it.
+	// Only the return that spends the budget decides where the copy goes, and
+	// no earlier pass leaves a trace on the message, so a hand-back has to
+	// keep it there itself: it is no failure either (queue.OutcomeDefer). A
+	// newer record's wake that the older nodes of a roll passed round, whose
+	// last delivery met a node that sheds or stops, is the delivery a reader
+	// that can handle it replays; kept with the poison, it was read as a
+	// failure's and never delivered (crewlet#993). A failure's copy still
+	// goes with the poison (a_subscriptions_retired_event_is_one_more_dead_letter).
+	//
+	// Mutation: keep a hand-back's copy with the pair's poison (RetiredTo
+	// answering topics.DeadLetter for a Defer), and the unhandled subject
+	// holds nothing.
+	t.Run("a_pass_then_a_hand_back_is_kept_with_the_unhandled_deliveries", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		quiescing := s.needQuiescing(t)
+		const topic, group = "topic.passed_then_handed", "grp"
+		// Three attempts in all: two passes, and the hand-back that spends
+		// the last.
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		seen := newJournal()
+		var deliveries atomic.Int32
+		subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			seen.record(labelOf(ev))
+			if deliveries.Add(1) < 3 {
+				return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+			}
+			return queue.Defer(queue.DeferShedding, "the node sheds")
+		})
+		publish(ctx, t, q, topic, newEvent("e1"))
+
+		seen.awaitLabels(t, "two passes and the hand-back that spends the budget", "e1", "e1", "e1")
+		awaitState(t, "the hand-back to quiesce the attachment", func() bool {
+			return quiescing(q, topic, group)
+		})
+		keptUnhandled(ctx, t, q, topic, group, "e1")
 	})
 
 	t.Run("pause_topic_buffers_then_resume_flushes", func(t *testing.T) {

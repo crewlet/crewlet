@@ -536,9 +536,42 @@ func DeadLetter(topic, group string) string {
 	return DeadLetterPrefix + subjectSafe(topic) + "." + subjectSafe(group) + "." + id
 }
 
+// Unhandled returns the dead-letter subject for a (topic, group) pair's
+// UNHANDLED deliveries: the copies of messages whose delivery budget a return
+// that was no failure spent — a pass, a deferral, the backend's own hand-back
+// of a delivery it would not hand over — so that no member of the group ever
+// handled them. [DeadLetter] is the pair's other subject, for a FAILURE's copy:
+// poison, which nothing replays.
+//
+// TWO SUBJECTS RATHER THAN ONE MARKED BY A HEADER, because a delivery is as
+// large as the transport carries and a copy at that ceiling has no room for a
+// header beside it. Marked by where it is kept, every unhandled copy is found
+// by the reader that replays the pair's unhandled deliveries
+// (internal/notify), whatever its size, and no poison is ever among them.
+//
+// [DeadLetter]'s form with one segment more, `unhandled`, before a digest of
+// its own: under the topic's head as every dead letter of the topic is
+// ([DeadLettersUnder]), greppable by the topic as DeadLetter is, and injective
+// as DeadLetter is, by its digest alone. The digest is taken over the pair
+// behind a NUL of its own, so its input holds two NULs where DeadLetter's holds
+// one — neither half can hold one — and no pair's unhandled digest is any
+// pair's poison digest.
+func Unhandled(topic, group string) string {
+	sum := sha256.Sum256([]byte("\x00" + group + "\x00" + topic))
+	id := hex.EncodeToString(sum[:deadLetterDigestBytes])
+	return DeadLetterPrefix + subjectSafe(topic) + "." + subjectSafe(group) + "." +
+		unhandledSegment + "." + id
+}
+
+// unhandledSegment is the segment that tells an operator reading a subject
+// that it holds a pair's unhandled deliveries ([Unhandled]) rather than its
+// poison ([DeadLetter]). For people only: the digest after it is the identity.
+const unhandledSegment = "unhandled"
+
 // DeadLettersUnder is the literal subject the dead letters of every topic
-// under head lie beneath: [DeadLetter] of any `head.…` topic and any group is
-// a subject `DeadLettersUnder(head).…`, and no other topic's is.
+// under head lie beneath: [DeadLetter] and [Unhandled] of any `head.…` topic
+// and any group are subjects `DeadLettersUnder(head).…`, and no other topic's
+// are.
 //
 // THE HEAD [DeadLetter] READS, segment for segment: the head is rewritten as
 // each segment of a topic is, so the subtree a reader counts is exactly the

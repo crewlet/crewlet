@@ -862,10 +862,13 @@ The consequences worth stating plainly:
   steers those deliveries to a node of the newer build: early in a roll, one
   newer node among many older ones, every one of them can go to an older
   node. One that no node has taken by then is dead-lettered with its copy
-  under `dlq.crewlet.notifications.inbound.notify-inbound.{digest}`, marked
-  as passed (`dead_lettered` at `ERROR`, with `passed=newer_record`), and the
-  first node of the newer build to start afterwards delivers its wake and
-  drops it (`inbound_dead_letters_replayed`), so a roll that takes longer
+  among the group's unhandled deliveries,
+  `dlq.crewlet.notifications.inbound.notify-inbound.unhandled.{digest}`
+  (`dead_lettered` at `ERROR`, with `returned=pass` and
+  `reason=newer_record`), as is one whose last delivery a node that sheds or
+  stops handed back after the passes, and the first node of the newer build
+  to start afterwards delivers its wake and drops it
+  (`inbound_dead_letters_replayed`), so a roll that takes longer
   than ten minutes loses no wake. A roll that pauses with a newer node among
   older ones delivers those wakes as it goes on, at each next node's start;
   one paused for good keeps them for `stream.event_retention_hours`, and

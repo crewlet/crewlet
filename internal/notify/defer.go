@@ -41,12 +41,12 @@ func (r DeferReason) Valid() bool { return r == DeferNewerRecord }
 // broker hands each return to whichever member asks next, so all of the
 // group's 25 deliveries, about ten minutes, can go to older nodes while one
 // node of the newer build sits among them. One no node parsed by then is
-// dead-lettered with its copy under the header naming its pass and this
-// reason ([queue.PassedLetter]), and the first node that reads it to start
-// afterwards replays it and drops the letter (replay.go) — the change feed's
-// dead letters' own shape (internal/changefeed). The group's own budget is
-// enough for that reason: a dead letter follows, not a drop, so a roll longer
-// than ten minutes loses no wake.
+// dead-lettered with its copy on the group's unhandled subject
+// ([queue.RetiredTo]), and the first node that reads it to start afterwards
+// replays it and drops the letter (replay.go) — the change feed's dead
+// letters' own shape (internal/changefeed). The group's own budget is enough
+// for that reason: a dead letter follows, not a drop, so a roll longer than
+// ten minutes loses no wake.
 type Deferral struct {
 	Reason DeferReason
 	// Err is what the parser met, for the log line.

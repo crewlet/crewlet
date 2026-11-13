@@ -435,8 +435,9 @@ func (s *Service) Sources() []string {
 // failure's are, so the older nodes of a roll cannot spin it between them. The
 // group's 25 deliveries offer it to the fleet for about ten minutes, and
 // nothing steers them to a node that reads it; one no node handled by then is
-// dead-lettered with its copy under its pass's reason, and the next node that
-// reads it replays it at its start (replay.go), through this same handling.
+// dead-lettered with its copy among the group's unhandled deliveries, and the
+// next node that reads it replays it at its start (replay.go), through this
+// same handling.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	if s.admits != nil && !s.admits() {
 		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,

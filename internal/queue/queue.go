@@ -55,9 +55,11 @@
 //     sequence (DeadLetterFrame), what a whole subtree of subjects holds is
 //     counted without listing it (DeadLetterMarks), and an entry is removed
 //     one at a time (DropDeadLetter). A subscription's entry is the
-//     message's copy, kept with no header — except one a PASS retired,
-//     whose header names the pass and its reason (PassedLetter), so a
-//     reader that can handle it now finds it again (PassedReason).
+//     message's copy with no header, kept by the return that spent its
+//     budget (RetiredTo): a failure's on the pair's dead-letter subject,
+//     poison, and a pass's or a hand-back's on its UNHANDLED subject, a
+//     healthy delivery no member handled, where a reader that can handle it
+//     now finds it again.
 //   - A failed verb is MARKED with one of three sentinels when the failure is
 //     one a caller acts on, and nothing else about it may be branched on:
 //     ErrTooLarge (the event can never fit — permanent), ErrNotLive (this
@@ -69,13 +71,11 @@
 package queue
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +83,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 var log = logging.Get("queue.contract")
@@ -238,6 +239,14 @@ const (
 	// That is answered by sizing the budget so handoffs cannot exhaust it,
 	// not by making the handoff free.
 	//
+	// AND AN EVENT WHOSE BUDGET HAND-BACKS DID SPEND IS STILL A HEALTHY ONE,
+	// so its copy is kept on its group's UNHANDLED subject ([RetiredTo]),
+	// never with the group's poison: a reader that can handle it now finds
+	// it there. A pass is no failure either, so a message passed until a
+	// hand-back spent its last delivery — a newer record's wake older nodes
+	// passed round during a roll, whose last delivery met a node that sheds
+	// or stops — is kept where its passes would have kept it.
+	//
 	// IT RETURNS AT THE HEAD, on every backend: a hand-back is a plain,
 	// unspaced Nak, and the broker serves a redelivery before new mail —
 	// so a deferred message keeps its place ahead of its conversation's
@@ -279,20 +288,20 @@ const (
 	// (internal/queue/jetstream's maxDeliver), so a passed message is
 	// offered to its group for about ten minutes — 1, 2, 4, 8 and 16
 	// seconds, then thirty for each of the nineteen returns after those —
-	// and is then dead-lettered with its copy, under a header naming the
-	// pass and its reason ([PassedLetter]), never circling for ever. The
-	// ack window (internal/queue/jetstream's DefaultAckWait, thirty
-	// minutes) does not delay it: a pass is a delayed Nak, not a timeout.
+	// and is then dead-lettered with its copy on its group's UNHANDLED
+	// subject ([RetiredTo]), never circling for ever. The ack window
+	// (internal/queue/jetstream's DefaultAckWait, thirty minutes) does not
+	// delay it: a pass is a delayed Nak, not a timeout.
 	//
 	// NOTHING STEERS A PASS TO A NODE THAT CAN HANDLE IT. The broker hands
 	// each return to whichever member of the group asks next, so every one
 	// of a message's deliveries can go to nodes that pass it — early in a
 	// roll, while one node of the newer build sits among many older ones.
-	// What delivers it is the DEAD LETTER: its header tells a reader that
-	// it was passed and why ([PassedReason]), and a reader that can handle
-	// it now lists its group's dead letters and handles each passed copy
-	// as a delivery. internal/notify's Service does that at every start,
-	// which is when what makes a copy readable — a newer build — arrives.
+	// What delivers it is the DEAD LETTER: its copy is kept on the group's
+	// unhandled subject, apart from the group's poison, and a reader that
+	// can handle it now lists that subject and handles each copy as a
+	// delivery. internal/notify's Service does that at every start, which
+	// is when what makes a copy readable — a newer build — arrives.
 	//
 	// SO THE GROUP'S OWN BUDGET AND BACKOFF, AND NOT A LONGER WINDOW OF ITS
 	// OWN. A dead letter follows, not a drop, so the budget bounds only how
@@ -319,7 +328,7 @@ const (
 	//
 	// The in-memory twin redelivers it as it redelivers a Nak, behind the
 	// mail that was waiting with no timer, and spends and dead-letters it
-	// alike, under the same header.
+	// alike, on the same subject.
 	OutcomePass
 )
 
@@ -395,10 +404,9 @@ func Defer(cause DeferCause, reason string) Result {
 }
 
 // Pass hands the delivery back to its group for a peer and goes on consuming
-// ([OutcomePass]): reason is why, and err what this node met, both logged.
-// reason is also the one a pass that spends the delivery's budget keeps its
-// dead letter under ([PassedLetter]), which is how a reader that can handle
-// the copy finds it again, so it is a word that reader matches, whole.
+// ([OutcomePass]): reason is why, and err what this node met, both logged —
+// reason on the dead letter's line too, should this pass spend the delivery's
+// budget, whose copy is kept on its group's unhandled subject ([RetiredTo]).
 //
 // The group's own budget, about ten minutes, is all a pass gets, and enough:
 // a dead letter follows, not a drop, and the replay at the next start of a node
@@ -609,9 +617,9 @@ type Kept struct {
 
 	// Header is the line the keeper kept the entry under, exactly as it was
 	// handed to [EventQueue.KeepDeadLetter]; empty for an entry kept with
-	// none — a subscription's poison, which its backend keeps as the
-	// message's own bytes and nothing beside them. A subscription's copy a
-	// pass retired is the one it marks, under [PassedLetter].
+	// none — every subscription's copy, its poison and its unhandled
+	// deliveries alike ([RetiredTo]), which its backend keeps as the
+	// message's own bytes and nothing beside them.
 	Header []byte
 }
 
@@ -664,63 +672,38 @@ const LetterFraming = 256
 // LetterFits reports whether a dead letter of header and body can be kept: the
 // two within [LetterFraming] of [MaxPayloadBytes]. It is the one ceiling every
 // keep is held to — [EventQueue.KeepDeadLetter] refuses an entry past it with
-// [ErrTooLarge] on every backend — and the one a backend holds the header of a
-// passed delivery's dead letter to ([PassedLetter]).
+// [ErrTooLarge] on every backend.
 func LetterFits(header, body []byte) bool {
 	return len(header)+len(body)+LetterFraming <= MaxPayloadBytes
 }
 
-// PassedLetter is the header a backend keeps the dead letter of a PASSED
-// delivery under — one whose budget a pass ([OutcomePass]) spent — beside its
-// copy: `pass ` and reason. Every other dead letter of a subscription, a
-// failure's or a hand-back's, is its copy with no header at all.
+// RetiredTo is the dead-letter subject a subscription keeps its message on
+// once a return spent the message's delivery budget, by that return's outcome,
+// spent — a Nak, a Defer or a Pass. A FAILURE's copy is kept on the pair's
+// dead-letter subject ([topics.DeadLetter]): poison, which an operator
+// investigates and nothing replays. Every other return's is kept on the pair's
+// UNHANDLED subject ([topics.Unhandled]): a pass's, a deferral's, or the
+// backend's own hand-back of a delivery it would not hand over (a hold, a
+// pause, a stop), which it retires as a deferral. Each of those is a HEALTHY
+// delivery that no member of the group handled — [OutcomeDefer] and
+// [OutcomePass] both say so of what they return — so a reader that can handle
+// one now lists that subject and handles each copy as a delivery
+// (internal/notify, at every start), and finds no poison among them.
 //
-// WHY A PASSED COPY IS MARKED. A pass is a delivery this node would not
-// handle and a peer may, and one that spent its budget is one no member of
-// its group handled in the ten minutes the budget spans: during a roll, a
-// delivery the older nodes kept passing while no node of the newer build won
-// it. Its copy is a delivery a node of that build CAN handle, so a reader of
-// the group lists its dead letters, finds the passed ones by this header
-// ([PassedReason]) and handles each copy as a delivery, dropping the entry
-// once it has (internal/notify, at every start). A failure's dead letter is
-// poison, which nothing replays, and an unmarked entry is one.
+// THE SUBJECT SAYS WHICH, AND NEVER A HEADER. A delivery is as large as the
+// transport carries, so a copy at that ceiling has no room for a header beside
+// it, and a copy marked by its header was lost to its own reader there: kept
+// with none, read as poison and never replayed. Both are kept bare, as the
+// message's own bytes and nothing beside them, wherever they are kept.
 //
-// THE REASON IS QUOTED, as an ASCII literal (strconv.QuoteToASCII), so the
-// header is one line of printable ASCII ([LetterHeader]) whatever the reason
-// holds — a quote, a line ending, a rune past the ASCII — and reads back
-// whole.
-//
-// AND IT HAS TO FIT BESIDE THE COPY ([LetterFits]). A delivery is as large as
-// the transport carries ([MaxPayloadBytes]), so a copy within a few hundred
-// bytes of that ceiling leaves its header no room: a backend keeps that copy
-// with no header — every byte of it still kept for whoever investigates — and
-// logs that it did, since no reader of the group will find it as a pass.
-func PassedLetter(reason string) []byte {
-	return []byte(passedPrefix + strconv.QuoteToASCII(reason))
-}
-
-// PassedReason is the reason a dead letter kept under header was passed for
-// ([PassedLetter]), and whether header is a passed delivery's at all: false
-// for an entry kept with no header — a failure's, a hand-back's, or a passed
-// copy that left its header no room — and for every other keeper's.
-func PassedReason(header []byte) (string, bool) {
-	quoted, ok := bytes.CutPrefix(header, []byte(passedPrefix))
-	// A DOUBLE-QUOTED literal and nothing else: strconv.Unquote also reads a
-	// raw string and a rune, which PassedLetter never writes.
-	if !ok || len(quoted) == 0 || quoted[0] != '"' {
-		return "", false
+// THE CONTRACT'S RULE, which both backends call, so the twin keeps a copy
+// where the broker does.
+func RetiredTo(topic, group string, spent Outcome) string {
+	if spent == OutcomeNak {
+		return topics.DeadLetter(topic, group)
 	}
-	reason, err := strconv.Unquote(string(quoted))
-	if err != nil {
-		return "", false
-	}
-	return reason, true
+	return topics.Unhandled(topic, group)
 }
-
-// passedPrefix begins every passed delivery's dead-letter header
-// ([PassedLetter]): a word no other keeper's header begins with — a wake
-// feed's is a JSON object (internal/changefeed's EncodeDeadLetter).
-const passedPrefix = "pass "
 
 // DeadLetterWindow is how long a backend remembers the identity a dead letter
 // was kept under ([EventQueue.KeepDeadLetter]): a keep of the same identity on

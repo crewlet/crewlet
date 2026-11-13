@@ -75,11 +75,11 @@ func (q *Queue) SubscribeBatch(
 			// top of this loop already answers with `continue`, ten lines
 			// up, which is what it should have said here too.
 			if ctx.Err() != nil {
-				a.nakAll(ctx, batch)
+				a.nakAll(ctx, batch, handBackStopping)
 				return
 			}
 			if a.blocked() {
-				a.nakAll(ctx, batch)
+				a.nakAll(ctx, batch, a.blockedBy())
 				continue
 			}
 			a.dispatchBatch(ctx, batch, h, key)
@@ -246,7 +246,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// internal/queue/memory, whose mailbox is a slice and therefore
 		// has to charge a take deliberately.
 		if a.blocked() {
-			a.nakAll(ctx, part.Items)
+			a.nakAll(ctx, part.Items, a.blockedBy())
 			continue
 		}
 
@@ -304,7 +304,7 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 			}
 		}
 	case queue.OutcomeDefer:
-		a.nakAll(ctx, items)
+		a.nakAll(ctx, items, res.Reason)
 		a.setQuiesced(true)
 	case queue.OutcomeNak:
 		for _, d := range items {
@@ -321,7 +321,8 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 }
 
 // nakAll hands a whole batch back — a deferral, a hold or a pause that landed
-// mid-drain, or teardown. Nothing is wrong with any of these messages.
+// mid-drain, or teardown — for reason. Nothing is wrong with any of these
+// messages.
 //
 // THROUGH THE BUDGET CHECK, because a Nak spends a delivery whatever it means.
 // Handing a batch back is not a failure, but JetStream counts it as one
@@ -331,8 +332,8 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 // `dead_lettered` line, no advisory consumer anywhere in this package to
 // notice. A healthy inbox event, silently gone. The boundary is the same one
 // the failure path already honours; what differs is only how it got there.
-func (a *attachment) nakAll(ctx context.Context, items []delivery) {
+func (a *attachment) nakAll(ctx context.Context, items []delivery, reason string) {
 	for _, d := range items {
-		a.handBack(ctx, d.msg)
+		a.handBack(ctx, d.msg, reason)
 	}
 }
