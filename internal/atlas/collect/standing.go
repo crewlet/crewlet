@@ -1,7 +1,6 @@
 package collect
 
 import (
-	"cmp"
 	"slices"
 	"time"
 
@@ -102,7 +101,7 @@ func Describe(kinds []integration.Kind, standings map[integration.Kind]Status,
 	asked map[integration.Kind]Request, interval time.Duration, now time.Time) Report {
 
 	kinds = slices.Clone(kinds)
-	slices.SortFunc(kinds, func(a, b integration.Kind) int { return cmp.Compare(a, b) })
+	slices.Sort(kinds)
 	out := Report{
 		Sources:                make([]Standing, 0, len(kinds)),
 		RefreshIntervalSeconds: int(interval / time.Second),
