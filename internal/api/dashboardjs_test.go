@@ -2328,7 +2328,7 @@ const (
 	// The SSH integration's Servers section (each server's "Read for Atlas"
 	// switch and the dialog that lists the commands first) and the atlas's
 	// workload kind, image and open ports, named in the atlas words, took
-	// it to 5899.1 KiB (6,040,660 bytes, +3,554, all script): 5900 KiB.
+	// it to 5899.1 KiB (6,040,678 bytes, +3,572, all script): 5900 KiB.
 	treeBudget = 5<<20 + 780<<10
 )
 
